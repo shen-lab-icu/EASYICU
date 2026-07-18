@@ -42,6 +42,11 @@ from .intake.materialized_metadata import (
     MaterializedMetadataError,
     load_verified_materialized_cohort_authority,
 )
+from .intake.materialized_trajectory import (
+    MaterializedTrajectoryAuthorityRef,
+    MaterializedTrajectoryError,
+    load_verified_materialized_trajectory_authority,
+)
 
 _SELECTION_SYSTEM = (
     "You are the data-foundation step of an ICU research agent. You are given "
@@ -171,6 +176,30 @@ class AcquisitionResult:
     selection_model: Optional[str] = None
     cohort_authority_path: Optional[Path] = None
     cohort_authority_ref: Optional[MaterializedCohortAuthorityRef] = None
+    trajectory_path: Optional[Path] = None
+    trajectory_provenance_path: Optional[Path] = None
+    trajectory_authority_path: Optional[Path] = None
+    trajectory_authority_ref: Optional[MaterializedTrajectoryAuthorityRef] = None
+
+    def __post_init__(self) -> None:
+        if (self.cohort_authority_path is None) != (self.cohort_authority_ref is None):
+            raise MaterializedMetadataError(
+                "cohort authority path and reference must be present together"
+            )
+        if (self.trajectory_path is None) != (self.trajectory_provenance_path is None):
+            raise MaterializedTrajectoryError(
+                "trajectory path and provenance must be present together"
+            )
+        if (self.trajectory_authority_path is None) != (
+            self.trajectory_authority_ref is None
+        ):
+            raise MaterializedTrajectoryError(
+                "trajectory authority path and reference must be present together"
+            )
+        if self.trajectory_authority_ref is not None and self.trajectory_path is None:
+            raise MaterializedTrajectoryError(
+                "trajectory authority requires the selected trajectory artifact"
+            )
 
     def to_dict(self) -> Dict[str, Any]:
         payload = {
@@ -194,6 +223,14 @@ class AcquisitionResult:
         if self.cohort_authority_path is not None:
             payload["cohort_authority_path"] = str(self.cohort_authority_path)
             payload["cohort_authority_ref"] = self.cohort_authority_ref.to_dict()
+        if self.trajectory_path is not None:
+            payload["trajectory_path"] = str(self.trajectory_path)
+            payload["trajectory_provenance_path"] = str(self.trajectory_provenance_path)
+        if self.trajectory_authority_path is not None:
+            payload["trajectory_authority_path"] = str(self.trajectory_authority_path)
+            payload["trajectory_authority_ref"] = (
+                self.trajectory_authority_ref.to_dict()
+            )
         return payload
 
 
@@ -411,6 +448,30 @@ def acquire_universe_for_question(
             "typed materializer declared an authority but acquisition could not "
             "verify it"
         )
+    trajectory_path = Path(paths["trajectory"]) if "trajectory" in paths else None
+    verified_trajectory = (
+        load_verified_materialized_trajectory_authority(
+            trajectory_path,
+            expected_universe_authority=(
+                verified_authority.reference if verified_authority is not None else None
+            ),
+        )
+        if trajectory_path is not None
+        else None
+    )
+    if "trajectory_authority" in paths and verified_trajectory is None:
+        raise MaterializedTrajectoryError(
+            "typed materializer declared a trajectory authority but acquisition "
+            "could not verify it"
+        )
+    if (
+        verified_authority is not None
+        and trajectory_path is not None
+        and (verified_trajectory is None)
+    ):
+        raise MaterializedTrajectoryError(
+            "typed acquisition trajectory is missing its sealed authority"
+        )
     note = ""
     if followup_provenance is not None:
         note = (
@@ -434,6 +495,20 @@ def acquire_universe_for_question(
         ),
         cohort_authority_ref=(
             verified_authority.reference if verified_authority is not None else None
+        ),
+        trajectory_path=trajectory_path,
+        trajectory_provenance_path=(
+            Path(paths["trajectory_provenance"])
+            if trajectory_path is not None
+            else None
+        ),
+        trajectory_authority_path=(
+            trajectory_path.parent / verified_trajectory.reference.file
+            if verified_trajectory is not None and trajectory_path is not None
+            else None
+        ),
+        trajectory_authority_ref=(
+            verified_trajectory.reference if verified_trajectory is not None else None
         ),
         selection=selection,
         materialized_concepts=feature_concepts,

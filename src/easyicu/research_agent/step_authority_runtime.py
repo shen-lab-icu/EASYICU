@@ -548,7 +548,13 @@ def execution_context_sha256(
     requested_network_policy: str,
     runtime_environment_sha256: Optional[str] = None,
     runner_configuration_sha256: Optional[str] = None,
+    trajectory_sha256: Optional[str] = None,
+    trajectory_authority_sha256: Optional[str] = None,
 ) -> str:
+    if trajectory_authority_sha256 is not None and trajectory_sha256 is None:
+        raise StepAuthorityRuntimeError(
+            "trajectory authority cannot be bound without trajectory bytes"
+        )
     runtime_digest = (
         str(runtime_environment_sha256)
         if runtime_environment_sha256 is not None
@@ -559,20 +565,27 @@ def execution_context_sha256(
         if runner_configuration_sha256 is not None
         else _canonical_sha256({"runner_identity": runner_identity})
     )
-    return _canonical_sha256(
-        {
-            "schema": "easyicu.step_execution_context/1",
-            "code_sha256": code_sha256,
-            "resolved_inputs_sha256": resolved_inputs_sha256,
-            "cohort_sha256": cohort_sha256,
-            "universe_sha256": universe_sha256,
-            "runner_identity": runner_identity,
-            "timeout_seconds": float(timeout_seconds),
-            "requested_network_policy": requested_network_policy,
-            "runtime_environment_sha256": runtime_digest,
-            "runner_configuration_sha256": runner_digest,
-        }
-    )
+    payload = {
+        "schema": "easyicu.step_execution_context/1",
+        "code_sha256": code_sha256,
+        "resolved_inputs_sha256": resolved_inputs_sha256,
+        "cohort_sha256": cohort_sha256,
+        "universe_sha256": universe_sha256,
+        "runner_identity": runner_identity,
+        "timeout_seconds": float(timeout_seconds),
+        "requested_network_policy": requested_network_policy,
+        "runtime_environment_sha256": runtime_digest,
+        "runner_configuration_sha256": runner_digest,
+    }
+    # Preserve the exact v1 payload for historical executions without a
+    # trajectory.  When a trajectory is present it is a scientific execution
+    # input and must invalidate replay if either its bytes or typed selector
+    # changes.
+    if trajectory_sha256 is not None:
+        payload["trajectory_sha256"] = str(trajectory_sha256)
+    if trajectory_authority_sha256 is not None:
+        payload["trajectory_authority_sha256"] = str(trajectory_authority_sha256)
+    return _canonical_sha256(payload)
 
 
 def current_execution_runtime_sha256() -> str:

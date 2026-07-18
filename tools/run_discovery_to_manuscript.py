@@ -205,17 +205,11 @@ def main(argv: Optional[list[str]] = None) -> int:
     if acquisition.blocked or acquisition.universe_path is None:
         raise SystemExit(f"data foundation blocked: {acquisition.note}")
 
-    # Declare the long-format trajectory in the JSONL handoff. The bench keeps
-    # the cohort as a path and forwards only these explicit input paths through
-    # runner_kwargs, so both CodeRunner and DockerRunner can expose it without
-    # inheriting the launcher's ambient environment.
-    trajectory_path = Path(acquisition.universe_path).with_name(
-        f"{Path(acquisition.universe_path).stem}_trajectory.parquet"
-    )
-    if trajectory_path.exists():
+    # The trajectory is selected by AcquisitionResult authority coordinates;
+    # never infer a mutable sibling by naming convention for a typed cohort.
+    trajectory_path = acquisition.trajectory_path
+    if trajectory_path is not None:
         print(f"[discovery] trajectory: {trajectory_path}")
-    else:
-        trajectory_path = None
 
     jsonl_path = _write_ehrflowbench_row(
         out_root=out_root,
@@ -228,6 +222,12 @@ def main(argv: Optional[list[str]] = None) -> int:
             else None
         ),
         trajectory_path=trajectory_path,
+        trajectory_authority_path=acquisition.trajectory_authority_path,
+        trajectory_authority_ref=(
+            acquisition.trajectory_authority_ref.to_dict()
+            if acquisition.trajectory_authority_ref is not None
+            else None
+        ),
     )
     bench_root = out_root / "bench"
     cmd = [
@@ -565,11 +565,19 @@ def _write_ehrflowbench_row(
     cohort_authority_path: Optional[Path] = None,
     cohort_authority_ref: Optional[Mapping[str, object]] = None,
     trajectory_path: Optional[Path] = None,
+    trajectory_authority_path: Optional[Path] = None,
+    trajectory_authority_ref: Optional[Mapping[str, object]] = None,
 ) -> Path:
     if (cohort_authority_path is None) != (cohort_authority_ref is None):
         raise ValueError(
             "cohort authority path and reference must be handed off together"
         )
+    if (trajectory_authority_path is None) != (trajectory_authority_ref is None):
+        raise ValueError(
+            "trajectory authority path and reference must be handed off together"
+        )
+    if trajectory_authority_ref is not None and trajectory_path is None:
+        raise ValueError("trajectory authority requires a trajectory path")
     row: Dict[str, Any] = {
         "key": f"discovery_{handoff.literature_idea_id}",
         "name": handoff.candidate_topic[:120],
@@ -587,6 +595,12 @@ def _write_ehrflowbench_row(
         row["cohort_authority_ref"] = dict(cohort_authority_ref)
     if trajectory_path is not None:
         row["trajectory_path"] = str(Path(trajectory_path).resolve())
+    if trajectory_authority_path is not None and trajectory_authority_ref is not None:
+        row["trajectory_authority_required"] = True
+        row["trajectory_authority_path"] = str(
+            Path(trajectory_authority_path).resolve()
+        )
+        row["trajectory_authority_ref"] = dict(trajectory_authority_ref)
     path = out_root / "discovery_ehrflowbench.jsonl"
     path.write_text(json.dumps(row, ensure_ascii=False) + "\n", encoding="utf-8")
     return path

@@ -16,9 +16,10 @@ cross-file core-execution boundary. Holds:
   (``_sealed_renderer_source_digests`` / ``_sealed_renderer_implementation_digest``
   / ``_sealed_parent_planner_anchors`` / ``_sealed_typed_figure_products``).
 
-Imports only leaf modules (schema / step_worker_state / declared_product_contract
-/ pipeline / figure_contract_preparation / repair_registry / evidence / stdlib) —
-none of which import ``pipeline_execute`` — so there is no import cycle. The
+This module does not directly import ``pipeline_execute``; the extraction therefore
+removes that direct reverse edge.  It still imports ``pipeline`` and other legacy
+dependencies that participate in the residual pipeline strongly connected
+component, so it does not claim to make the wider import graph acyclic.  The
 generator takes all of its former ``_execute_one_step`` closure reads as explicit
 keyword-only params. ``pipeline_execute`` re-exports every public name here for
 back-compat.

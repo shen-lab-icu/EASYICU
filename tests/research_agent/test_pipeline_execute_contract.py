@@ -26,6 +26,7 @@ break shows up in the next ``pytest --collect-only``.
 
 from __future__ import annotations
 
+import ast
 import inspect
 import json
 from concurrent.futures import ThreadPoolExecutor
@@ -1386,23 +1387,74 @@ def test_primary_cohort_raw_runner_is_scoped_and_authority_hashes_are_rechecked(
     assert "current_cohort_sha256 = sha256_of_file(cohort_path)" in authority_source
     assert '"status": "blocked_input_authority_mutation"' in source
     assert "or has_primary_cohort_universe_producer" in source
-    assert source.count('if run_input_authority_state["corrupted"]:') == 2
+    assert source.count("if run_input_authority_state.corrupted:") == 2
     assert '"remaining_steps_suppressed": True' in source
 
     runner_call = source.index("run_result = step_executor.execute(")
-    authority_check = source.index(
-        "authority_finding = _execution_input_authority_integrity_finding(",
+    cohort_authority_check = source.index(
+        "cohort_authority_finding = _execution_input_authority_integrity_finding(",
         runner_call,
+    )
+    trajectory_authority_check = source.index(
+        "trajectory_authority_finding = (",
+        cohort_authority_check,
+    )
+    authority_gate = source.index(
+        "if authority_findings:",
+        trajectory_authority_check,
     )
     unsafe_output_exit = source.index(
         "if not run_result.outputs_safe_to_collect:", runner_call
     )
-    authority_latch = source.index("run_input_authority_state.update(", authority_check)
-    assert runner_call < authority_check < authority_latch < unsafe_output_exit
+    authority_latch = source.index(
+        "run_input_authority_state.mark_corrupted(", authority_gate
+    )
+    assert (
+        runner_call
+        < cohort_authority_check
+        < trajectory_authority_check
+        < authority_gate
+        < authority_latch
+        < unsafe_output_exit
+    )
     assert (
         "if run_result.outputs_safe_to_collect:"
-        in source[authority_check:unsafe_output_exit]
+        in source[authority_gate:unsafe_output_exit]
     )
+    assert (
+        "_clear_output_dir(run_result.out_dir)"
+        in source[authority_gate:unsafe_output_exit]
+    )
+    assert (
+        "_seal_actual_execution_result()"
+        not in source[authority_gate:unsafe_output_exit]
+    )
+
+
+def test_every_runner_build_receives_the_selected_trajectory_authority():
+    from easyicu.research_agent import pipeline_execute
+
+    tree = ast.parse(inspect.getsource(pipeline_execute.run_execute_phase))
+    runner_builds = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and isinstance(node.func.value, ast.Name)
+        and node.func.value.id == "pipeline"
+        and node.func.attr == "_build_runner"
+    ]
+
+    assert len(runner_builds) == 4
+    for call in runner_builds:
+        starred = [keyword.value for keyword in call.keywords if keyword.arg is None]
+        assert len(starred) == 1
+        binding_call = starred[0]
+        assert isinstance(binding_call, ast.Call)
+        assert isinstance(binding_call.func, ast.Attribute)
+        assert isinstance(binding_call.func.value, ast.Name)
+        assert binding_call.func.value.id == "run_input_authority_state"
+        assert binding_call.func.attr == "runner_bindings"
 
 
 def test_execution_input_authority_check_detects_unsafe_runner_mutation(tmp_path):

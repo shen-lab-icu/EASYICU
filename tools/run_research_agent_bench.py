@@ -82,11 +82,43 @@ _REQUIRED_KINDS = {"code", "log", "table", "figure", "statistic"}
 _ARM_ORDER = ("naive", "aware")
 _ARM_LABELS = {"naive": "Naive", "aware": "ICU-aware"}
 _DEFAULT_SUBMISSION_PROFILE_REF = "npj_dm/20260611"
-_TRAJECTORY_ENV_KEYS = (
-    "TRAJECTORY_PARQUET",
-    "EASYICU_TRAJECTORY_PARQUET",
-    "COHORT_TRAJECTORY_PARQUET",
-)
+
+
+class _JSONLObjectDecodeError(ValueError):
+    """Raised when one benchmark JSONL row is not a strict JSON object."""
+
+
+def _reject_jsonl_duplicate_pairs(
+    pairs: Sequence[tuple[str, object]],
+) -> Dict[str, object]:
+    decoded: Dict[str, object] = {}
+    for key, value in pairs:
+        if key in decoded:
+            raise _JSONLObjectDecodeError(f"duplicate JSON key: {key!r}")
+        decoded[key] = value
+    return decoded
+
+
+def _reject_jsonl_nonfinite_constant(value: str) -> object:
+    raise _JSONLObjectDecodeError(f"non-finite JSON constant is forbidden: {value}")
+
+
+def _decode_jsonl_object(line: str) -> Dict[str, Any]:
+    """Decode one handoff row without JSON's duplicate/non-finite extensions."""
+
+    try:
+        decoded = json.loads(
+            line,
+            object_pairs_hook=_reject_jsonl_duplicate_pairs,
+            parse_constant=_reject_jsonl_nonfinite_constant,
+        )
+    except _JSONLObjectDecodeError:
+        raise
+    except (json.JSONDecodeError, TypeError, ValueError) as exc:
+        raise _JSONLObjectDecodeError(str(exc)) from exc
+    if not isinstance(decoded, dict):
+        raise _JSONLObjectDecodeError("benchmark JSONL row must be an object")
+    return decoded
 
 
 def _normalize_arms(arms: Optional[Sequence[str]]) -> List[str]:
@@ -999,6 +1031,9 @@ def _run_one_arm(
         cohort=cohort,
         cohort_authority_path=getattr(item, "cohort_authority_path", None),
         cohort_authority_ref=getattr(item, "cohort_authority_ref", None),
+        trajectory_path=getattr(item, "trajectory_path", None),
+        trajectory_authority_path=getattr(item, "trajectory_authority_path", None),
+        trajectory_authority_ref=getattr(item, "trajectory_authority_ref", None),
         cohort_name=f"bench_{item.key}",
         database=database,
         target_outcome=item.target_outcome,
@@ -2604,35 +2639,6 @@ def _write_stability_report(
     print(f"  -> {base_out_root / 'stability_report.json'}")
 
 
-def _pipeline_options_with_trajectory(
-    pipeline_options: Optional[Dict[str, Any]],
-    *,
-    trajectory_path: Optional[Path],
-) -> Dict[str, Any]:
-    """Pass one declared trajectory through the runner's explicit env surface."""
-
-    options = dict(pipeline_options or {})
-    if trajectory_path is None:
-        return options
-    resolved = Path(trajectory_path).resolve()
-    runner_kwargs = dict(options.get("runner_kwargs") or {})
-    extra_env = dict(runner_kwargs.get("extra_env") or {})
-    for key in _TRAJECTORY_ENV_KEYS:
-        existing = extra_env.get(key)
-        if (
-            existing is not None
-            and Path(str(existing)).expanduser().resolve() != resolved
-        ):
-            raise ValueError(
-                f"Conflicting {key}: {existing!r} does not match "
-                f"declared trajectory_path {str(resolved)!r}"
-            )
-        extra_env[key] = str(resolved)
-    runner_kwargs["extra_env"] = extra_env
-    options["runner_kwargs"] = runner_kwargs
-    return options
-
-
 _EXTERNAL_DIFFICULTY_ALIASES = {
     "easy": "basic",
     "medium": "intermediate",
@@ -2685,6 +2691,9 @@ def _external_item_from_row(
     cohort_size: int,
     cohort_authority_path: Optional[Path] = None,
     cohort_authority_ref: Optional[Mapping[str, object]] = None,
+    trajectory_path: Optional[Path] = None,
+    trajectory_authority_path: Optional[Path] = None,
+    trajectory_authority_ref: Optional[Mapping[str, object]] = None,
 ) -> SimpleNamespace:
     """Build one external item from structured protocol fields.
 
@@ -2847,9 +2856,13 @@ def _external_item_from_row(
 
     protocol_adapter = {
         "schema_version": (
-            "easyicu.external_benchmark_adapter/2"
-            if cohort_authority_ref is not None
-            else "easyicu.external_benchmark_adapter/1"
+            "easyicu.external_benchmark_adapter/3"
+            if trajectory_authority_ref is not None
+            else (
+                "easyicu.external_benchmark_adapter/2"
+                if cohort_authority_ref is not None
+                else "easyicu.external_benchmark_adapter/1"
+            )
         ),
         "database": {
             "value": database,
@@ -2925,6 +2938,13 @@ def _external_item_from_row(
         cohort_authority_ref=(
             dict(cohort_authority_ref) if cohort_authority_ref is not None else None
         ),
+        trajectory_path=trajectory_path,
+        trajectory_authority_path=trajectory_authority_path,
+        trajectory_authority_ref=(
+            dict(trajectory_authority_ref)
+            if trajectory_authority_ref is not None
+            else None
+        ),
     )
 
 
@@ -2952,6 +2972,11 @@ def _run_ehrflowbench_jsonl(
         MaterializedMetadataError,
         load_verified_materialized_cohort_authority,
     )
+    from easyicu.research_agent.intake.materialized_trajectory import (
+        MaterializedTrajectoryAuthorityRef,
+        MaterializedTrajectoryError,
+        load_verified_materialized_trajectory_authority,
+    )
 
     _enforce_mock_aware_provider(
         arms,
@@ -2963,15 +2988,25 @@ def _run_ehrflowbench_jsonl(
         return 2
     out_root.mkdir(parents=True, exist_ok=True)
     rows: List[Dict[str, Any]] = []
-    for line in jsonl_path.read_text(encoding="utf-8").splitlines():
+    invalid_row_indices: set[int] = set()
+    for line_number, line in enumerate(
+        jsonl_path.read_text(encoding="utf-8").splitlines(),
+        start=1,
+    ):
         line = line.strip()
         if not line or line.startswith("#"):
             continue
         try:
-            rows.append(json.loads(line))
-        except json.JSONDecodeError as exc:
+            rows.append(_decode_jsonl_object(line))
+        except _JSONLObjectDecodeError as exc:
+            invalid_row_indices.add(len(rows))
             rows.append(
-                {"status": "invalid_json", "error": str(exc), "raw": line[:200]}
+                {
+                    "status": "invalid_json",
+                    "error": str(exc),
+                    "raw": line[:200],
+                    "line": line_number,
+                }
             )
     if resume_run_id and len(rows) != 1:
         raise SystemExit(
@@ -2983,6 +3018,9 @@ def _run_ehrflowbench_jsonl(
     pending: List[Dict[str, Any]] = []
     for idx, row in enumerate(rows):
         key = str(row.get("key") or row.get("id") or f"ehrflowbench_{idx:03d}")
+        if idx in invalid_row_indices:
+            pending.append({"key": key, **row})
+            continue
         cohort_path = row.get("cohort_path") or row.get("cohort")
         question = row.get("question") or row.get("research_question")
         target = row.get("target_outcome") or row.get("outcome")
@@ -3095,28 +3133,110 @@ def _run_ehrflowbench_jsonl(
             )
             continue
         raw_trajectory_path = row.get("trajectory_path")
+        raw_trajectory_authority_path = row.get("trajectory_authority_path")
+        raw_trajectory_authority_ref = row.get("trajectory_authority_ref")
+        trajectory_authority_required = row.get("trajectory_authority_required")
+        trajectory_authority_declared = (
+            raw_trajectory_authority_path is not None
+            or raw_trajectory_authority_ref is not None
+        )
+        if trajectory_authority_required is not None and not isinstance(
+            trajectory_authority_required, bool
+        ):
+            pending.append(
+                {"key": key, "status": "invalid_trajectory_authority_marker"}
+            )
+            continue
+        if (raw_trajectory_authority_path is None) != (
+            raw_trajectory_authority_ref is None
+        ) or (
+            trajectory_authority_required is True and not trajectory_authority_declared
+        ):
+            pending.append(
+                {
+                    "key": key,
+                    "status": "incomplete_trajectory_authority_declaration",
+                }
+            )
+            continue
         trajectory_path: Optional[Path] = None
+        trajectory_authority_path: Optional[Path] = None
+        trajectory_authority_ref: Optional[MaterializedTrajectoryAuthorityRef] = None
         if raw_trajectory_path:
-            trajectory_path = Path(str(raw_trajectory_path)).expanduser().resolve()
-            if not trajectory_path.is_file():
+            trajectory_candidate = Path(str(raw_trajectory_path)).expanduser()
+            if trajectory_candidate.is_symlink() or not trajectory_candidate.is_file():
                 pending.append(
                     {
                         "key": key,
                         "status": "pending_missing_trajectory",
-                        "trajectory_path": str(trajectory_path),
+                        "trajectory_path": str(trajectory_candidate.absolute()),
                     }
                 )
                 continue
-            if trajectory_path.suffix.lower() not in {".parquet", ".pq"}:
+            if trajectory_candidate.suffix.lower() not in {".parquet", ".pq"}:
                 pending.append(
                     {
                         "key": key,
                         "status": "unsupported_trajectory_format",
-                        "trajectory_path": str(trajectory_path),
+                        "trajectory_path": str(trajectory_candidate.absolute()),
                     }
                 )
                 continue
-            if cohort_authority_ref is not None:
+            trajectory_path = trajectory_candidate.resolve(strict=True)
+            if trajectory_authority_declared:
+                if cohort_authority_ref is None or not isinstance(
+                    raw_trajectory_authority_ref, Mapping
+                ):
+                    pending.append(
+                        {"key": key, "status": "invalid_trajectory_authority_reference"}
+                    )
+                    continue
+                try:
+                    trajectory_authority_ref = (
+                        MaterializedTrajectoryAuthorityRef.from_dict(
+                            raw_trajectory_authority_ref
+                        )
+                    )
+                    trajectory_authority_path = Path(
+                        str(raw_trajectory_authority_path)
+                    ).expanduser()
+                    expected_path = trajectory_path.parent / (
+                        trajectory_authority_ref.file
+                    )
+                    if (
+                        trajectory_authority_path.is_symlink()
+                        or trajectory_authority_path.resolve()
+                        != expected_path.resolve()
+                    ):
+                        raise MaterializedTrajectoryError(
+                            "trajectory authority path does not match its reference"
+                        )
+                    verified_trajectory = (
+                        load_verified_materialized_trajectory_authority(
+                            trajectory_path,
+                            expected_authority=trajectory_authority_ref,
+                            expected_universe_authority=cohort_authority_ref,
+                        )
+                    )
+                    if verified_trajectory is None:
+                        raise MaterializedTrajectoryError(
+                            "declared typed trajectory lost its authority"
+                        )
+                except (
+                    OSError,
+                    MaterializedTrajectoryError,
+                    ValueError,
+                    TypeError,
+                ) as exc:
+                    pending.append(
+                        {
+                            "key": key,
+                            "status": "invalid_trajectory_authority",
+                            "error": f"{type(exc).__name__}: {exc}",
+                        }
+                    )
+                    continue
+            elif cohort_authority_ref is not None:
                 pending.append(
                     {
                         "key": key,
@@ -3125,6 +3245,11 @@ def _run_ehrflowbench_jsonl(
                     }
                 )
                 continue
+        elif trajectory_authority_declared:
+            pending.append(
+                {"key": key, "status": "trajectory_authority_without_artifact"}
+            )
+            continue
         item = _external_item_from_row(
             row=row,
             key=key,
@@ -3136,6 +3261,13 @@ def _run_ehrflowbench_jsonl(
             cohort_authority_ref=(
                 cohort_authority_ref.to_dict()
                 if cohort_authority_ref is not None
+                else None
+            ),
+            trajectory_path=trajectory_path,
+            trajectory_authority_path=trajectory_authority_path,
+            trajectory_authority_ref=(
+                trajectory_authority_ref.to_dict()
+                if trajectory_authority_ref is not None
                 else None
             ),
         )
@@ -3155,10 +3287,7 @@ def _run_ehrflowbench_jsonl(
                 cohort=(path if cohort_authority_ref is not None else cohort),
                 out_root=out_root,
                 arms=arms,
-                pipeline_options=_pipeline_options_with_trajectory(
-                    pipeline_options,
-                    trajectory_path=trajectory_path,
-                ),
+                pipeline_options=dict(pipeline_options or {}),
                 provider=provider,
                 model=model,
                 request_timeout=request_timeout,

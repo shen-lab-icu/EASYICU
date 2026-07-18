@@ -124,9 +124,11 @@ from .cohort_schema import (
     materialize_locked_analysis_cohort,
     write_locked_cohort_definition,
 )
-from .authority.analysis_cohort import bind_execution_cohort_authority
-from .intake.materialized_metadata import (
-    MaterializedMetadataError,
+from .authority.execution_input import ExecutionInputAuthorityState
+from .intake.materialized_metadata import MaterializedMetadataError
+from .intake.materialized_trajectory import (
+    MaterializedTrajectoryError,
+    StagedTrajectoryBinding,
 )
 from .contracts import ValidationFinding, _ExecutePhaseResult, _PlanPhaseResult
 from .deterministic_descriptive import absolute_risk_context_code
@@ -344,6 +346,7 @@ from .run_input_capsule import (
     build_environment_identity,
     canonical_sha256,
     engine_code_sha256,
+    verify_legacy_trajectory_capsule_receipt,
     validator_code_sha256,
 )
 from .run_coordination import RunCoordinator, RunExecutionState, RunTransition
@@ -3424,6 +3427,7 @@ def run_execute_phase(
     *,
     plan_result: _PlanPhaseResult,
     cohort_path: Path,
+    trajectory_binding: Optional[StagedTrajectoryBinding],
     run_dir: Path,
     run_id: str,
     skill_obj: Optional[ClinicalSkill],
@@ -3550,19 +3554,20 @@ def run_execute_phase(
     # consistently, instead of being silently re-implemented (or skipped) by
     # each generated step. The full universe stays reachable via the runner's
     # EASYICU_UNIVERSE_PARQUET env for explicit robustness steps.
-    run_input_authority_state: Dict[str, Any] = {
-        "corrupted": False,
-        "step_id": None,
-    }
     universe_path = cohort_path
-    _analysis_cohort_path = run_dir / "cohort_analysis.parquet"
-    run_input_authority_state["cohort_authority"] = bind_execution_cohort_authority(
+    run_input_authority_state = ExecutionInputAuthorityState.bind(
         universe_path=universe_path,
-        analysis_path=_analysis_cohort_path,
+        analysis_path=run_dir / "cohort_analysis.parquet",
+        trajectory_binding=trajectory_binding,
+        run_dir=run_dir,
+        legacy_trajectory_verifier=verify_legacy_trajectory_capsule_receipt,
         plan=plan,
         context=context,
     )
-    cohort_path = run_input_authority_state["cohort_authority"].selected_path
+    cohort_path = run_input_authority_state.selected_path
+    run_input_authority_state.require_trajectory_integrity(
+        step_id="execute_phase_initialization",
+    )
 
     # Validator/code drift is resolved before ResumeController decides which
     # prior successes to skip and before any coder, runner, analyzer, or LLM
@@ -3619,9 +3624,7 @@ def run_execute_phase(
         cohort_path=cohort_path,
         target_outcome=context.target_outcome,
         universe_path=universe_path,
-        universe_is_typed=run_input_authority_state[
-            "cohort_authority"
-        ].universe_is_typed,
+        **run_input_authority_state.runner_bindings(),
     )
     step_executor = StepExecutor(clear_output_dir=_clear_output_dir)
     run_coordinator = RunCoordinator()
@@ -3801,7 +3804,7 @@ def run_execute_phase(
         )
 
     def _universe_columns() -> list:
-        typed_columns = run_input_authority_state["cohort_authority"].universe_columns
+        typed_columns = run_input_authority_state.cohort_authority.universe_columns
         if typed_columns is not None:
             return list(typed_columns)
         try:
@@ -3832,7 +3835,7 @@ def run_execute_phase(
         nonlocal cohort_path, runner
         if _replan_state["cohort_materialized"]:
             return True
-        if _analysis_cohort_path.exists():
+        if run_input_authority_state.analysis_path.exists():
             return True
         if not _no_analysis_step_has_run():
             return False
@@ -3933,21 +3936,17 @@ def run_execute_phase(
             return False
         if result.get("status") != "applied":
             return False
-        run_input_authority_state["cohort_authority"] = bind_execution_cohort_authority(
-            universe_path=universe_path,
-            analysis_path=_analysis_cohort_path,
+        run_input_authority_state.rebind_cohort(
             plan=candidate_plan,
             context=context,
         )
-        cohort_path = run_input_authority_state["cohort_authority"].selected_path
+        cohort_path = run_input_authority_state.selected_path
         runner = pipeline._build_runner(
             run_dir=run_dir,
             cohort_path=cohort_path,
             target_outcome=context.target_outcome,
             universe_path=universe_path,
-            universe_is_typed=run_input_authority_state[
-                "cohort_authority"
-            ].universe_is_typed,
+            **run_input_authority_state.runner_bindings(),
         )
         cohort_product_steps = [
             step
@@ -4103,7 +4102,7 @@ def run_execute_phase(
         """
         if _replan_state["cohort_contract_emitted"]:
             return
-        if _analysis_cohort_path.exists():
+        if run_input_authority_state.analysis_path.exists():
             return
         if not (
             _plan_expects_analysis_cohort(candidate_plan)
@@ -7868,9 +7867,7 @@ def run_execute_phase(
                     cohort_path=step_execution_cohort_path,
                     target_outcome=context.target_outcome,
                     universe_path=universe_path,
-                    universe_is_typed=run_input_authority_state[
-                        "cohort_authority"
-                    ].universe_is_typed,
+                    **run_input_authority_state.runner_bindings(),
                     timeout_seconds=execution_timeout_seconds,
                 )
             elif worker_progress.deterministic_standard_executor_used:
@@ -7885,11 +7882,12 @@ def run_execute_phase(
                     cohort_path=cohort_path,
                     target_outcome=context.target_outcome,
                     universe_path=universe_path,
-                    universe_is_typed=run_input_authority_state[
-                        "cohort_authority"
-                    ].universe_is_typed,
+                    **run_input_authority_state.runner_bindings(),
                     timeout_seconds=execution_timeout_seconds,
                 )
+            run_input_authority_state.require_trajectory_integrity(
+                step_id=step.step_id,
+            )
             runner_identity = (
                 f"{type(execution_runner).__module__}."
                 f"{type(execution_runner).__qualname__}"
@@ -7944,6 +7942,10 @@ def run_execute_phase(
                             )
                         ),
                     }
+                ),
+                trajectory_sha256=run_input_authority_state.trajectory_sha256,
+                trajectory_authority_sha256=(
+                    run_input_authority_state.trajectory_authority_sha256
                 ),
             )
             replay_execution = (
@@ -8061,8 +8063,9 @@ def run_execute_phase(
             step_record["outputs_safe_to_collect"] = bool(
                 run_result.outputs_safe_to_collect
             )
+            authority_findings: List[ValidationFinding] = []
             if primary_cohort_uses_universe:
-                authority_finding = _execution_input_authority_integrity_finding(
+                cohort_authority_finding = _execution_input_authority_integrity_finding(
                     step_id=step.step_id,
                     universe_path=universe_path,
                     cohort_path=cohort_path,
@@ -8071,34 +8074,41 @@ def run_execute_phase(
                         "authoritative_analysis_cohort_sha256"
                     ),
                 )
-                if authority_finding is not None:
-                    if run_result.outputs_safe_to_collect:
-                        _clear_output_dir(run_result.out_dir)
-                    step_record.update(
-                        {
-                            "status": "blocked_input_authority_mutation",
-                            "input_authority_findings": [
-                                authority_finding.model_dump()
-                            ],
-                        }
-                    )
-                    with shared_lock:
-                        run_input_authority_state.update(
-                            {"corrupted": True, "step_id": step.step_id}
-                        )
-                        findings.append(authority_finding)
-                        _append_terminal_step_record(per_step_records, step_record)
-                        _flush_partial_manifest()
-                    emit_progress(
-                        "audit",
-                        f"Rejected mutated execution authority for {step.step_id}.",
-                        status="error",
-                        run_id=run_id,
-                        step_id=step.step_id,
-                        current_step=step_current,
-                        total_steps=total_steps,
-                    )
-                    return step_record
+                if cohort_authority_finding is not None:
+                    authority_findings.append(cohort_authority_finding)
+            trajectory_authority_finding = (
+                run_input_authority_state.trajectory_integrity_finding(
+                    step_id=step.step_id
+                )
+            )
+            if trajectory_authority_finding is not None:
+                authority_findings.append(trajectory_authority_finding)
+            if authority_findings:
+                if run_result.outputs_safe_to_collect:
+                    _clear_output_dir(run_result.out_dir)
+                step_record.update(
+                    {
+                        "status": "blocked_input_authority_mutation",
+                        "input_authority_findings": [
+                            item.model_dump() for item in authority_findings
+                        ],
+                    }
+                )
+                with shared_lock:
+                    run_input_authority_state.mark_corrupted(step_id=step.step_id)
+                    findings.extend(authority_findings)
+                    _append_terminal_step_record(per_step_records, step_record)
+                    _flush_partial_manifest()
+                emit_progress(
+                    "audit",
+                    f"Rejected mutated execution authority for {step.step_id}.",
+                    status="error",
+                    run_id=run_id,
+                    step_id=step.step_id,
+                    current_step=step_current,
+                    total_steps=total_steps,
+                )
+                return step_record
             if not run_result.outputs_safe_to_collect:
                 # The backend could not prove that a process/container with a
                 # writable output mount was stopped.  Those outputs remain
@@ -10823,13 +10833,13 @@ def run_execute_phase(
             record: Dict[str, Any],
             has_remaining: bool,
         ) -> RunTransition:
-            if run_input_authority_state["corrupted"]:
+            if run_input_authority_state.corrupted:
                 emit_progress(
                     "audit",
                     "Stopped the run after execution input authority corruption.",
                     status="error",
                     run_id=run_id,
-                    step_id=str(run_input_authority_state.get("step_id") or ""),
+                    step_id=str(run_input_authority_state.step_id or ""),
                 )
                 return RunTransition.stop("input_authority_corrupted")
             if step.step_id == requested_stop_after_step_id:
@@ -10913,12 +10923,12 @@ def run_execute_phase(
             on_worker_error=_record_parallel_worker_error,
         )
 
-    if run_input_authority_state["corrupted"]:
+    if run_input_authority_state.corrupted:
         _flush_partial_manifest(
             {
                 "run_input_authority_corrupted": True,
                 "run_input_authority_corrupted_step_id": (
-                    run_input_authority_state.get("step_id")
+                    run_input_authority_state.step_id
                 ),
                 "remaining_steps_suppressed": True,
             }

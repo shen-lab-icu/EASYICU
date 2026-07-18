@@ -29,6 +29,7 @@ from typing import Any, Callable, Dict, Literal, Mapping, Optional, Sequence, Un
 import pandas as pd
 from pydantic import BaseModel, ConfigDict, Field
 
+from .authority_fs import AnchoredDirectory, AuthorityFilesystemError
 from .evidence import EvidenceStore, sha256_of_file
 from .evidence_authority import (
     EvidenceAuthorityIntegrityError,
@@ -38,6 +39,13 @@ from .intake.materialized_metadata import (
     MaterializedCohortAuthorityRef,
     MaterializedMetadataError,
     load_verified_materialized_cohort_authority,
+)
+from .intake.materialized_trajectory import (
+    MaterializedTrajectoryAuthorityRef,
+    MaterializedTrajectoryError,
+    StagedTrajectoryBinding,
+    VerifiedLegacyTrajectoryCapsuleReceipt,
+    load_verified_materialized_trajectory_authority,
 )
 from .prompts import PROMPT_PACK_VERSION, prompt_pack_files
 from .runtime_artifacts import (
@@ -51,7 +59,9 @@ RUN_INPUT_CAPSULE_FILENAME = "run_input_capsule.json"
 RUN_INPUT_CAPSULE_EVIDENCE_ID = "run_input_capsule"
 RUN_INPUT_CAPSULE_SCHEMA_VERSION = "easyicu.run_input_capsule/1"
 RUN_INPUT_CAPSULE_SCHEMA_VERSION_V2 = "easyicu.run_input_capsule/2"
+RUN_INPUT_CAPSULE_SCHEMA_VERSION_V3 = "easyicu.run_input_capsule/3"
 RESUME_ENVIRONMENT_SCHEMA_VERSION = "easyicu.resume_environment_receipt/1"
+_MAX_RUN_INPUT_CAPSULE_BYTES = 64 * 1024 * 1024
 
 
 class RunInputIdentityError(ValueError):
@@ -91,7 +101,19 @@ class RunInputCapsuleV2(RunInputCapsule):
     materialized_cohort_authority_ref: Dict[str, Any]
 
 
-RunInputCapsuleAuthority = Union[RunInputCapsule, RunInputCapsuleV2]
+class RunInputCapsuleV3(RunInputCapsuleV2):
+    """Typed cohort plus exact staged trajectory authority."""
+
+    schema_version: Literal["easyicu.run_input_capsule/3"] = (
+        RUN_INPUT_CAPSULE_SCHEMA_VERSION_V3
+    )
+    trajectory_relative_path: Literal["cohort_trajectory.parquet"]
+    trajectory_sha256: str
+    materialized_trajectory_authority_required: Literal[True]
+    materialized_trajectory_authority_ref: Dict[str, Any]
+
+
+RunInputCapsuleAuthority = Union[RunInputCapsule, RunInputCapsuleV2, RunInputCapsuleV3]
 
 
 @dataclass(frozen=True)
@@ -112,6 +134,7 @@ class PreparedResumeInput:
     input_verified: bool
     context_evidence_path: Optional[Path]
     cohort_path: Optional[Path]
+    trajectory_binding: Optional[StagedTrajectoryBinding]
     experiment_spec_path: Optional[Path]
 
 
@@ -146,6 +169,48 @@ def _canonical_json_bytes(value: Any) -> bytes:
 
 def canonical_sha256(value: Any) -> str:
     return hashlib.sha256(_canonical_json_bytes(value)).hexdigest()
+
+
+def _scientific_trajectory_envelope(
+    scientific_identity: Mapping[str, Any],
+) -> Optional[Dict[str, Any]]:
+    top_level = scientific_identity.get("trajectory")
+    cohort_identity = scientific_identity.get("cohort")
+    nested = (
+        cohort_identity.get("trajectory")
+        if isinstance(cohort_identity, Mapping)
+        else None
+    )
+    raw = top_level if top_level is not None else nested
+    if raw is None:
+        return None
+    if not isinstance(raw, Mapping):
+        raise RunInputIdentityError("Scientific trajectory identity must be an object.")
+    sha256 = raw.get("sha256")
+    size = raw.get("size_bytes")
+    if (
+        not isinstance(sha256, str)
+        or len(sha256) != 64
+        or not isinstance(size, int)
+        or isinstance(size, bool)
+        or size < 0
+    ):
+        raise RunInputIdentityError(
+            "Scientific trajectory identity has invalid byte coordinates."
+        )
+    envelope = {"sha256": sha256, "size_bytes": size}
+    if top_level is not None and nested is not None:
+        if not isinstance(nested, Mapping):
+            raise RunInputIdentityError(
+                "Nested scientific trajectory identity must be an object."
+            )
+        nested_sha256 = nested.get("sha256")
+        nested_size = nested.get("size_bytes")
+        if nested_sha256 != sha256 or nested_size != size:
+            raise RunInputIdentityError(
+                "Scientific trajectory identities select conflicting bytes."
+            )
+    return envelope
 
 
 def _dataframe_content_sha256(frame: pd.DataFrame) -> str:
@@ -286,6 +351,8 @@ def build_scientific_identity(
     source_files: Optional[Sequence[Any]],
     disable_icu_context: bool,
     materialized_cohort_authority_ref: Optional[Mapping[str, Any]] = None,
+    trajectory_path: Optional[Path] = None,
+    materialized_trajectory_authority_ref: Optional[Mapping[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Canonical scientific request; execution-only knobs are excluded."""
 
@@ -322,6 +389,45 @@ def build_scientific_identity(
     if materialized_cohort_authority_ref is not None:
         payload["materialized_cohort_authority_ref"] = dict(
             materialized_cohort_authority_ref
+        )
+    if trajectory_path is not None:
+        raw_selected_trajectory = Path(trajectory_path).expanduser()
+        if (
+            raw_selected_trajectory.is_symlink()
+            or not raw_selected_trajectory.is_file()
+        ):
+            raise RunInputIdentityError(
+                "Scientific trajectory input is missing or unsafe."
+            )
+        selected_trajectory = raw_selected_trajectory.resolve(strict=True)
+        canonical_sibling = None
+        if isinstance(cohort, (str, Path)):
+            cohort_path = Path(cohort).expanduser().resolve()
+            canonical_sibling = cohort_path.with_name(
+                f"{cohort_path.stem}_trajectory.parquet"
+            )
+        # Historical v1/v2 identities already bind the canonical sibling under
+        # ``cohort.trajectory``.  Do not add a second top-level coordinate for
+        # the same bytes; doing so would make archived capsules impossible to
+        # resume.  A non-sibling trajectory needs its own coordinate.
+        if canonical_sibling is None or selected_trajectory != canonical_sibling:
+            # ``cohort_input_identity`` records an ambient canonical sibling for
+            # historical v1/v2 compatibility.  When the caller explicitly
+            # selects a different trajectory, that sibling is *not* a science
+            # input and must not survive as a second conflicting coordinate.
+            cohort_identity = payload.get("cohort")
+            if isinstance(cohort_identity, Mapping) and "trajectory" in cohort_identity:
+                selected_cohort_identity = dict(cohort_identity)
+                selected_cohort_identity.pop("trajectory", None)
+                payload["cohort"] = selected_cohort_identity
+            payload["trajectory"] = {
+                "format": selected_trajectory.suffix.lower(),
+                "size_bytes": int(selected_trajectory.stat().st_size),
+                "sha256": sha256_of_file(selected_trajectory),
+            }
+    if materialized_trajectory_authority_ref is not None:
+        payload["materialized_trajectory_authority_ref"] = dict(
+            materialized_trajectory_authority_ref
         )
     return _jsonable(payload)
 
@@ -454,6 +560,18 @@ def seal_run_input_capsule(
         )
     experiment_record = evidence.get("experiment_spec")
     trajectory_path = Path(run_dir) / "cohort_trajectory.parquet"
+    trajectory_envelope = _scientific_trajectory_envelope(scientific_identity)
+    if trajectory_path.is_file() != (trajectory_envelope is not None):
+        raise RunInputIdentityError(
+            "Scientific trajectory identity and staged trajectory presence differ."
+        )
+    if trajectory_envelope is not None and (
+        sha256_of_file(trajectory_path) != trajectory_envelope["sha256"]
+        or int(trajectory_path.stat().st_size) != trajectory_envelope["size_bytes"]
+    ):
+        raise RunInputIdentityError(
+            "Staged trajectory bytes do not match scientific identity."
+        )
     staged_materialized_authority = load_verified_materialized_cohort_authority(
         cohort_path
     )
@@ -484,6 +602,16 @@ def seal_run_input_capsule(
         "initial_environment": initial_environment,
         "legacy_adopted": legacy_adopted,
     }
+    staged_trajectory_authority = None
+    if trajectory_path.is_file():
+        try:
+            staged_trajectory_authority = (
+                load_verified_materialized_trajectory_authority(trajectory_path)
+            )
+        except MaterializedTrajectoryError as exc:
+            raise RunInputIdentityError(
+                "Staged trajectory authority is invalid."
+            ) from exc
     if staged_materialized_authority is not None:
         raw_source_ref = scientific_identity.get("materialized_cohort_authority_ref")
         if not isinstance(raw_source_ref, Mapping):
@@ -503,13 +631,89 @@ def seal_run_input_capsule(
             raise RunInputIdentityError(
                 "Staged cohort does not descend from the scientific source authority."
             )
-        capsule = RunInputCapsuleV2(
-            **capsule_fields,
-            materialized_cohort_authority_ref=(
-                staged_materialized_authority.reference.to_dict()
-            ),
+        raw_source_trajectory_ref = scientific_identity.get(
+            "materialized_trajectory_authority_ref"
         )
+        if trajectory_path.is_file() and staged_trajectory_authority is None:
+            raise RunInputIdentityError(
+                "Typed staged trajectory lacks a sealed authority."
+            )
+        if staged_trajectory_authority is not None:
+            if not isinstance(raw_source_trajectory_ref, Mapping):
+                raise RunInputIdentityError(
+                    "Typed staged trajectory is absent from scientific identity."
+                )
+            try:
+                source_trajectory_ref = MaterializedTrajectoryAuthorityRef.from_dict(
+                    raw_source_trajectory_ref
+                )
+            except (MaterializedTrajectoryError, TypeError, ValueError) as exc:
+                raise RunInputIdentityError(
+                    "Typed scientific identity contains an invalid trajectory "
+                    "authority."
+                ) from exc
+            try:
+                staged_trajectory_authority = (
+                    load_verified_materialized_trajectory_authority(
+                        trajectory_path,
+                        expected_authority=staged_trajectory_authority.reference,
+                        expected_universe_authority=(
+                            staged_materialized_authority.reference
+                        ),
+                        expected_parent_universe_authority=source_ref,
+                    )
+                )
+            except MaterializedTrajectoryError as exc:
+                raise RunInputIdentityError(
+                    "Staged trajectory parent does not match its scientific cohort."
+                ) from exc
+            if staged_trajectory_authority is None:  # pragma: no cover
+                raise RunInputIdentityError(
+                    "Staged trajectory authority disappeared during sealing."
+                )
+            if (
+                staged_trajectory_authority.authority.parent_trajectory_authority
+                != source_trajectory_ref
+                or staged_trajectory_authority.authority.bound_universe_authority
+                != staged_materialized_authority.reference
+                or staged_trajectory_authority.authority.trajectory_file
+                != trajectory_path.name
+                or staged_trajectory_authority.authority.trajectory_sha256
+                != capsule_fields["trajectory_sha256"]
+            ):
+                raise RunInputIdentityError(
+                    "Staged trajectory does not close its source/cohort authority."
+                )
+            capsule = RunInputCapsuleV3(
+                **capsule_fields,
+                materialized_trajectory_authority_required=True,
+                materialized_cohort_authority_ref=(
+                    staged_materialized_authority.reference.to_dict()
+                ),
+                materialized_trajectory_authority_ref=(
+                    staged_trajectory_authority.reference.to_dict()
+                ),
+            )
+        else:
+            if raw_source_trajectory_ref is not None:
+                raise RunInputIdentityError(
+                    "Typed scientific identity trajectory was not staged."
+                )
+            capsule = RunInputCapsuleV2(
+                **capsule_fields,
+                materialized_cohort_authority_ref=(
+                    staged_materialized_authority.reference.to_dict()
+                ),
+            )
     else:
+        if staged_trajectory_authority is not None:
+            raise RunInputIdentityError(
+                "Typed staged trajectory cannot bind an untyped cohort."
+            )
+        if scientific_identity.get("materialized_trajectory_authority_ref") is not None:
+            raise RunInputIdentityError(
+                "Typed trajectory source authority cannot bind an untyped cohort."
+            )
         capsule = RunInputCapsule(**capsule_fields)
     capsule_path.write_text(capsule.model_dump_json(indent=2), encoding="utf-8")
     evidence.register_file(
@@ -740,6 +944,8 @@ def load_verified_run_input_capsule(
             )
         elif schema_version == RUN_INPUT_CAPSULE_SCHEMA_VERSION_V2:
             capsule = RunInputCapsuleV2.model_validate(capsule_payload)
+        elif schema_version == RUN_INPUT_CAPSULE_SCHEMA_VERSION_V3:
+            capsule = RunInputCapsuleV3.model_validate(capsule_payload)
         else:
             raise ValueError("unsupported run input capsule schema")
     except (OSError, ValueError, TypeError) as exc:
@@ -761,6 +967,19 @@ def load_verified_run_input_capsule(
         raise RunInputIdentityError(
             "Resume request belongs to a different scientific input identity; "
             f"changed fields: {', '.join(keys) or 'unknown'}."
+        )
+    trajectory_envelope = _scientific_trajectory_envelope(capsule.scientific_identity)
+    if (capsule.trajectory_relative_path is not None) != (
+        trajectory_envelope is not None
+    ):
+        raise RunInputIdentityError(
+            "Cannot resume safely: trajectory identity and capsule presence differ."
+        )
+    if trajectory_envelope is not None and (
+        capsule.trajectory_sha256 != trajectory_envelope["sha256"]
+    ):
+        raise RunInputIdentityError(
+            "Cannot resume safely: trajectory capsule digest is inconsistent."
         )
 
     context_evidence_path = _verified_record_path(
@@ -822,14 +1041,70 @@ def load_verified_run_input_capsule(
                 "Cannot resume safely: staged cohort has the wrong source authority."
             )
     if capsule.trajectory_relative_path is not None:
+        if (
+            Path(capsule.trajectory_relative_path).name
+            != capsule.trajectory_relative_path
+        ):
+            raise RunInputIdentityError(
+                "Cannot resume safely: trajectory path escapes the run root."
+            )
         trajectory_path = run_dir / capsule.trajectory_relative_path
         if (
             not trajectory_path.is_file()
             or trajectory_path.is_symlink()
             or sha256_of_file(trajectory_path) != capsule.trajectory_sha256
+            or int(trajectory_path.stat().st_size) != trajectory_envelope["size_bytes"]
         ):
             raise RunInputIdentityError(
                 "Cannot resume safely: staged trajectory bytes are missing or changed."
+            )
+    if isinstance(capsule, RunInputCapsuleV3):
+        if capsule.trajectory_relative_path is None:
+            raise RunInputIdentityError(
+                "Cannot resume safely: typed trajectory path is absent."
+            )
+        try:
+            staged_trajectory_ref = MaterializedTrajectoryAuthorityRef.from_dict(
+                capsule.materialized_trajectory_authority_ref
+            )
+            staged_trajectory = load_verified_materialized_trajectory_authority(
+                run_dir / capsule.trajectory_relative_path,
+                expected_authority=staged_trajectory_ref,
+                expected_universe_authority=MaterializedCohortAuthorityRef.from_dict(
+                    capsule.materialized_cohort_authority_ref
+                ),
+                expected_parent_universe_authority=source_ref,
+            )
+            raw_source_trajectory_ref = capsule.scientific_identity.get(
+                "materialized_trajectory_authority_ref"
+            )
+            if not isinstance(raw_source_trajectory_ref, Mapping):
+                raise MaterializedTrajectoryError(
+                    "typed source trajectory authority is absent"
+                )
+            source_trajectory_ref = MaterializedTrajectoryAuthorityRef.from_dict(
+                raw_source_trajectory_ref
+            )
+        except (
+            MaterializedMetadataError,
+            MaterializedTrajectoryError,
+            TypeError,
+            ValueError,
+        ) as exc:
+            raise RunInputIdentityError(
+                "Cannot resume safely: staged trajectory authority is invalid."
+            ) from exc
+        if (
+            staged_trajectory is None
+            or staged_trajectory.authority.parent_trajectory_authority
+            != source_trajectory_ref
+            or staged_trajectory.authority.trajectory_sha256
+            != capsule.trajectory_sha256
+            or staged_trajectory.authority.bound_universe_file
+            != capsule.cohort_relative_path
+        ):
+            raise RunInputIdentityError(
+                "Cannot resume safely: staged trajectory has the wrong authority."
             )
 
     experiment_path: Optional[Path] = None
@@ -1714,6 +1989,145 @@ def write_resume_environment_receipt(
     return path
 
 
+def verify_legacy_trajectory_capsule_receipt(
+    *,
+    run_dir: Path,
+    trajectory_path: Path,
+    receipt: VerifiedLegacyTrajectoryCapsuleReceipt,
+    expected_universe_authority: MaterializedCohortAuthorityRef,
+) -> tuple[str, int]:
+    """Recheck the one compatibility exception for a typed v2 resume.
+
+    A v2 capsule could seal a typed cohort while its trajectory was still a
+    digest-bound raw sibling. Modern fresh runs may not create that shape, but
+    an archived v2 run must remain executable after its full capsule has been
+    verified. This check reads the explicitly selected capsule and never scans
+    for an alternate authority.
+    """
+
+    if not isinstance(receipt, VerifiedLegacyTrajectoryCapsuleReceipt):
+        raise RunInputIdentityError("legacy trajectory receipt is invalid")
+    run_dir = Path(run_dir).expanduser().absolute()
+    selected_trajectory = Path(trajectory_path).expanduser().absolute()
+    expected_trajectory = run_dir / receipt.trajectory_relative_path
+    try:
+        records = _records_from_index(run_dir)
+        capsule_record = records.get(RUN_INPUT_CAPSULE_EVIDENCE_ID)
+        if (
+            capsule_record is None
+            or str(capsule_record.get("sha256") or "") != receipt.capsule_sha256
+        ):
+            raise RunInputIdentityError(
+                "legacy trajectory receipt is not selected by evidence authority"
+            )
+        sealed_capsule_path = _verified_record_path(
+            run_dir=run_dir,
+            records=records,
+            evidence_id=RUN_INPUT_CAPSULE_EVIDENCE_ID,
+            expected_sha256=receipt.capsule_sha256,
+        )
+        with AnchoredDirectory.open(sealed_capsule_path.parent) as evidence_root:
+            sealed_capsule_bytes = evidence_root.read_bytes(
+                sealed_capsule_path.name,
+                max_bytes=_MAX_RUN_INPUT_CAPSULE_BYTES,
+                expected_sha256=receipt.capsule_sha256,
+            )
+            evidence_root.assert_still_selected()
+        with AnchoredDirectory.open(run_dir) as run_root:
+            capsule_bytes = run_root.read_bytes(
+                RUN_INPUT_CAPSULE_FILENAME,
+                max_bytes=_MAX_RUN_INPUT_CAPSULE_BYTES,
+                expected_size=len(sealed_capsule_bytes),
+                expected_sha256=receipt.capsule_sha256,
+            )
+            if capsule_bytes != sealed_capsule_bytes:
+                raise RunInputIdentityError(
+                    "legacy trajectory capsule differs from sealed evidence"
+                )
+            trajectory_bytes = run_root.read_bytes(
+                receipt.trajectory_relative_path,
+                max_bytes=max(receipt.trajectory_size, 1),
+                expected_size=receipt.trajectory_size,
+                expected_sha256=receipt.trajectory_sha256,
+            )
+            run_root.assert_still_selected()
+        if len(trajectory_bytes) != receipt.trajectory_size:
+            raise RunInputIdentityError(
+                "legacy trajectory receipt size changed during verification"
+            )
+        records_after = _records_from_index(run_dir)
+        if records_after.get(RUN_INPUT_CAPSULE_EVIDENCE_ID) != capsule_record:
+            raise RunInputIdentityError(
+                "legacy trajectory evidence selection changed during verification"
+            )
+        raw = json.loads(capsule_bytes.decode("utf-8"))
+        capsule = RunInputCapsuleV2.model_validate(raw)
+        trajectory_envelope = _scientific_trajectory_envelope(
+            capsule.scientific_identity
+        )
+        universe_ref = MaterializedCohortAuthorityRef.from_dict(
+            capsule.materialized_cohort_authority_ref
+        )
+        if (
+            canonical_sha256(capsule.scientific_identity)
+            != capsule.scientific_identity_sha256
+        ):
+            raise RunInputIdentityError(
+                "legacy trajectory capsule scientific identity is invalid"
+            )
+        if universe_ref != expected_universe_authority:
+            raise RunInputIdentityError(
+                "legacy trajectory capsule selected a different staged universe"
+            )
+        staged_cohort = load_verified_materialized_cohort_authority(
+            run_dir / capsule.cohort_relative_path,
+            expected_authority=universe_ref,
+        )
+        raw_source_ref = capsule.scientific_identity.get(
+            "materialized_cohort_authority_ref"
+        )
+        if staged_cohort is None or not isinstance(raw_source_ref, Mapping):
+            raise RunInputIdentityError(
+                "legacy trajectory capsule lost typed cohort lineage"
+            )
+        source_ref = MaterializedCohortAuthorityRef.from_dict(raw_source_ref)
+        if (
+            staged_cohort.authority.cohort_sha256 != capsule.cohort_sha256
+            or staged_cohort.authority.parent_authority_sha256 != source_ref.sha256
+        ):
+            raise RunInputIdentityError(
+                "legacy trajectory capsule has invalid typed cohort lineage"
+            )
+    except RunInputIdentityError:
+        raise
+    except (
+        AuthorityFilesystemError,
+        EvidenceAuthorityIntegrityError,
+        OSError,
+        UnicodeError,
+        ValueError,
+        TypeError,
+        MaterializedMetadataError,
+    ) as exc:
+        raise RunInputIdentityError(
+            "legacy trajectory receipt references an invalid v2 capsule"
+        ) from exc
+    if (
+        selected_trajectory != expected_trajectory
+        or capsule.trajectory_relative_path != receipt.trajectory_relative_path
+        or capsule.trajectory_sha256 != receipt.trajectory_sha256
+        or trajectory_envelope is None
+        or trajectory_envelope["sha256"] != receipt.trajectory_sha256
+        or trajectory_envelope["size_bytes"] != receipt.trajectory_size
+        or universe_ref != expected_universe_authority
+        or universe_ref.sha256 != receipt.universe_authority_sha256
+    ):
+        raise RunInputIdentityError(
+            "legacy trajectory receipt coordinates do not match the selected inputs"
+        )
+    return receipt.trajectory_sha256, receipt.trajectory_size
+
+
 def prepare_existing_resume_input(
     *,
     run_dir: Path,
@@ -1792,6 +2206,7 @@ def prepare_existing_resume_input(
             input_verified=False,
             context_evidence_path=None,
             cohort_path=None,
+            trajectory_binding=None,
             experiment_spec_path=None,
         )
 
@@ -1879,11 +2294,48 @@ def prepare_existing_resume_input(
                 authority.experiment_spec_evidence_path,
                 experiment_spec_path,
             )
+    trajectory_binding = None
+    if authority.capsule.trajectory_relative_path is not None:
+        trajectory_path = run_dir / authority.capsule.trajectory_relative_path
+        legacy_receipt = None
+        if type(authority.capsule) is RunInputCapsuleV2:
+            capsule_record = authority.evidence_records.get(
+                RUN_INPUT_CAPSULE_EVIDENCE_ID
+            )
+            capsule_sha256 = (
+                str(capsule_record.get("sha256") or "")
+                if isinstance(capsule_record, Mapping)
+                else ""
+            )
+            staged_universe_ref = MaterializedCohortAuthorityRef.from_dict(
+                authority.capsule.materialized_cohort_authority_ref
+            )
+            legacy_receipt = VerifiedLegacyTrajectoryCapsuleReceipt(
+                capsule_sha256=capsule_sha256,
+                trajectory_relative_path=(authority.capsule.trajectory_relative_path),
+                trajectory_sha256=str(authority.capsule.trajectory_sha256),
+                trajectory_size=int(trajectory_path.stat().st_size),
+                universe_authority_sha256=staged_universe_ref.sha256,
+            )
+        trajectory_binding = StagedTrajectoryBinding(
+            path=trajectory_path,
+            sha256=str(authority.capsule.trajectory_sha256),
+            size=int(trajectory_path.stat().st_size),
+            authority_ref=(
+                MaterializedTrajectoryAuthorityRef.from_dict(
+                    authority.capsule.materialized_trajectory_authority_ref
+                )
+                if isinstance(authority.capsule, RunInputCapsuleV3)
+                else None
+            ),
+            legacy_capsule_receipt=legacy_receipt,
+        )
     return PreparedResumeInput(
         resume_state=prepared_state,
         input_verified=True,
         context_evidence_path=authority.context_evidence_path,
         cohort_path=run_dir / authority.capsule.cohort_relative_path,
+        trajectory_binding=trajectory_binding,
         experiment_spec_path=experiment_spec_path,
     )
 
@@ -1893,6 +2345,7 @@ __all__ = [
     "RUN_INPUT_CAPSULE_EVIDENCE_ID",
     "RunInputCapsule",
     "RunInputCapsuleV2",
+    "RunInputCapsuleV3",
     "RunInputIdentityError",
     "ResumeInputAuthority",
     "PreparedResumeInput",
@@ -1904,5 +2357,6 @@ __all__ = [
     "load_verified_run_input_capsule",
     "prepare_existing_resume_input",
     "seal_run_input_capsule",
+    "verify_legacy_trajectory_capsule_receipt",
     "write_resume_environment_receipt",
 ]

@@ -536,6 +536,16 @@ def test_execution_context_binds_runtime_and_runner_configuration() -> None:
         runtime_environment_sha256=SHA_A,
         runner_configuration_sha256=SHA_B,
     )
+    assert (
+        baseline == "72f6b213bcb83e309de2c5366fdea27ce28f84ffd3906d7bfce1fa6492b33b08"
+    )
+    assert baseline == execution_context_sha256(
+        **common,
+        runtime_environment_sha256=SHA_A,
+        runner_configuration_sha256=SHA_B,
+        trajectory_sha256=None,
+        trajectory_authority_sha256=None,
+    )
     assert baseline != execution_context_sha256(
         **common,
         runtime_environment_sha256=SHA_C,
@@ -546,6 +556,38 @@ def test_execution_context_binds_runtime_and_runner_configuration() -> None:
         runtime_environment_sha256=SHA_A,
         runner_configuration_sha256=SHA_D,
     )
+    with_trajectory = execution_context_sha256(
+        **common,
+        runtime_environment_sha256=SHA_A,
+        runner_configuration_sha256=SHA_B,
+        trajectory_sha256=SHA_C,
+        trajectory_authority_sha256=SHA_D,
+    )
+    assert baseline != with_trajectory
+    assert with_trajectory != execution_context_sha256(
+        **common,
+        runtime_environment_sha256=SHA_A,
+        runner_configuration_sha256=SHA_B,
+        trajectory_sha256=SHA_E,
+        trajectory_authority_sha256=SHA_D,
+    )
+    assert with_trajectory != execution_context_sha256(
+        **common,
+        runtime_environment_sha256=SHA_A,
+        runner_configuration_sha256=SHA_B,
+        trajectory_sha256=SHA_C,
+        trajectory_authority_sha256=SHA_E,
+    )
+    with pytest.raises(
+        StepAuthorityRuntimeError,
+        match="authority cannot be bound without trajectory bytes",
+    ):
+        execution_context_sha256(
+            **common,
+            runtime_environment_sha256=SHA_A,
+            runner_configuration_sha256=SHA_B,
+            trajectory_authority_sha256=SHA_D,
+        )
 
 
 def test_concept_audit_identity_can_supersede_without_rewriting_execution(

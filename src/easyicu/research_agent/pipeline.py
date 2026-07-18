@@ -158,6 +158,16 @@ from .intake.materialized_metadata import (
     load_verified_materialized_cohort_authority,
     stage_materialized_cohort_authority,
 )
+from .intake.materialized_trajectory import (
+    MaterializedTrajectoryAuthorityRef,
+    MaterializedTrajectoryError,
+    StagedTrajectoryBinding,
+    VerifiedLegacyTrajectoryCapsuleReceipt,
+    VerifiedMaterializedTrajectoryAuthority,
+    load_verified_materialized_trajectory_authority,
+    stage_legacy_trajectory_exact,
+    stage_materialized_trajectory_authority,
+)
 from .robustness_panel import (
     ensure_robustness_specs,
     load_locked_robustness_specs,
@@ -377,6 +387,7 @@ from .run_input_capsule import (
     build_scientific_identity,
     prepare_existing_resume_input,
     seal_run_input_capsule,
+    verify_legacy_trajectory_capsule_receipt,
 )
 from .run_lock import current_locked_run_id, exclusive_run_execution
 from .audits.validators import (
@@ -2140,6 +2151,12 @@ class ResearchAgentPipeline:
         target_outcome: Optional[str] = None,
         universe_path: Optional[Path] = None,
         universe_is_typed: bool = False,
+        universe_authority_ref: Optional[MaterializedCohortAuthorityRef] = None,
+        trajectory_path: Optional[Path] = None,
+        trajectory_authority_ref: Optional[MaterializedTrajectoryAuthorityRef] = None,
+        trajectory_legacy_capsule_receipt: Optional[
+            VerifiedLegacyTrajectoryCapsuleReceipt
+        ] = None,
         timeout_seconds: Optional[float] = None,
     ):
         """Return the configured runner backend for a single ``run()``.
@@ -2165,25 +2182,6 @@ class ResearchAgentPipeline:
             "EASYICU_TRAJECTORY_PARQUET",
             "COHORT_TRAJECTORY_PARQUET",
         )
-        declared_trajectory_values = {
-            str(extra_env.pop(key)).strip()
-            for key in trajectory_aliases
-            if key in extra_env and str(extra_env[key]).strip()
-        }
-        if len(declared_trajectory_values) > 1:
-            raise ValueError(
-                "declared trajectory aliases must select one identical path"
-            )
-        declared_trajectory_path: Optional[Path] = None
-        if declared_trajectory_values:
-            candidate = Path(next(iter(declared_trajectory_values))).expanduser()
-            if (
-                candidate.is_symlink()
-                or not candidate.is_file()
-                or candidate.suffix.lower() not in {".parquet", ".pq"}
-            ):
-                raise ValueError("declared trajectory must be a regular parquet file")
-            declared_trajectory_path = candidate.resolve(strict=True)
         pipeline_owned_env = {
             *HOST_OWNED_RUNNER_ENV_KEYS,
             "OUTCOME_COL",
@@ -2199,34 +2197,61 @@ class ResearchAgentPipeline:
             extra_env["OUTCOME_COL"] = target_outcome
         if universe_path is not None:
             extra_env["EASYICU_UNIVERSE_PARQUET"] = str(universe_path)
-            # Auto-discover the optional long-format trajectory written next to
-            # the universe (``<universe_stem>_trajectory.parquet``). When present
-            # it is exposed as ``TRAJECTORY_PARQUET`` so a step can construct
-            # threshold-crossing onsets, incident-after-exposure endpoints, and
-            # landmark / time-varying designs that the wide per-stay summary
-            # cannot express. Keyed by stay_id, so it is valid regardless of any
-            # later cohort 纳排 re-pointing of COHORT_PARQUET.
-            discovered_trajectory_path = Path(universe_path).with_name(
-                f"{Path(universe_path).stem}_trajectory.parquet"
-            )
-            if discovered_trajectory_path.exists():
-                if declared_trajectory_path is not None and (
-                    discovered_trajectory_path.resolve(strict=True)
-                    != declared_trajectory_path
-                ):
-                    raise ValueError(
-                        "declared trajectory conflicts with the universe sibling"
-                    )
-                declared_trajectory_path = discovered_trajectory_path.resolve(
-                    strict=True
+        if trajectory_path is not None:
+            candidate = Path(trajectory_path).expanduser()
+            if (
+                candidate.is_symlink()
+                or not candidate.is_file()
+                or candidate.suffix.lower() not in {".parquet", ".pq"}
+            ):
+                raise MaterializedTrajectoryError(
+                    "staged trajectory must be a regular parquet file"
                 )
-        if declared_trajectory_path is not None:
+            selected_trajectory_path = candidate.resolve(strict=True)
             if universe_is_typed:
-                raise MaterializedMetadataError(
-                    "typed cohort trajectory requires a separate sealed authority"
+                if universe_authority_ref is None:
+                    raise MaterializedTrajectoryError(
+                        "typed cohort trajectory lost its cohort authority"
+                    )
+                if trajectory_authority_ref is not None:
+                    verified_trajectory = (
+                        load_verified_materialized_trajectory_authority(
+                            selected_trajectory_path,
+                            expected_authority=trajectory_authority_ref,
+                            expected_universe_authority=universe_authority_ref,
+                        )
+                    )
+                    if verified_trajectory is None:  # pragma: no cover - exact ref
+                        raise MaterializedTrajectoryError(
+                            "typed trajectory authority is missing"
+                        )
+                elif trajectory_legacy_capsule_receipt is not None:
+                    verify_legacy_trajectory_capsule_receipt(
+                        run_dir=run_dir,
+                        trajectory_path=selected_trajectory_path,
+                        receipt=trajectory_legacy_capsule_receipt,
+                        expected_universe_authority=universe_authority_ref,
+                    )
+                else:
+                    raise MaterializedTrajectoryError(
+                        "typed cohort trajectory requires an exact sealed authority"
+                    )
+            elif (
+                trajectory_authority_ref is not None
+                or trajectory_legacy_capsule_receipt is not None
+            ):
+                raise MaterializedTrajectoryError(
+                    "typed or legacy capsule trajectory authority requires a typed universe"
                 )
             for traj_alias in trajectory_aliases:
-                extra_env[traj_alias] = str(declared_trajectory_path)
+                extra_env[traj_alias] = str(selected_trajectory_path)
+        elif (
+            trajectory_authority_ref is not None
+            or trajectory_legacy_capsule_receipt is not None
+        ):
+            raise MaterializedTrajectoryError(
+                "trajectory authority cannot be supplied without a staged trajectory"
+            )
         effective_timeout_seconds = (
             self._timeout_seconds if timeout_seconds is None else float(timeout_seconds)
         )
@@ -3500,6 +3525,7 @@ class ResearchAgentPipeline:
         *,
         plan_result: _PlanPhaseResult,
         cohort_path: Path,
+        trajectory_binding: Optional[StagedTrajectoryBinding],
         run_dir: Path,
         run_id: str,
         skill_obj: Optional[ClinicalSkill],
@@ -3521,6 +3547,7 @@ class ResearchAgentPipeline:
             self,
             plan_result=plan_result,
             cohort_path=cohort_path,
+            trajectory_binding=trajectory_binding,
             run_dir=run_dir,
             run_id=run_id,
             skill_obj=skill_obj,
@@ -3720,6 +3747,11 @@ class ResearchAgentPipeline:
         cohort_authority_ref: Optional[
             Union[MaterializedCohortAuthorityRef, Mapping[str, object]]
         ] = None,
+        trajectory_path: Optional[Union[str, Path]] = None,
+        trajectory_authority_path: Optional[Union[str, Path]] = None,
+        trajectory_authority_ref: Optional[
+            Union[MaterializedTrajectoryAuthorityRef, Mapping[str, object]]
+        ] = None,
         cohort_name: str = "cohort",
         database: str = "miiv",
         target_outcome: Optional[str] = None,
@@ -3853,6 +3885,95 @@ class ResearchAgentPipeline:
                 raise MaterializedMetadataError(
                     "typed cohort source class policy does not match host registry"
                 )
+        verified_source_trajectory: Optional[
+            VerifiedMaterializedTrajectoryAuthority
+        ] = None
+        expected_trajectory_authority: Optional[MaterializedTrajectoryAuthorityRef] = (
+            None
+        )
+        selected_trajectory_path: Optional[Path] = None
+        trajectory_authority_declared = (
+            trajectory_authority_path is not None
+            or trajectory_authority_ref is not None
+        )
+        if trajectory_authority_declared and (
+            trajectory_authority_path is None
+            or trajectory_authority_ref is None
+            or trajectory_path is None
+        ):
+            raise MaterializedTrajectoryError(
+                "trajectory path, authority path, and authority reference must be "
+                "declared together"
+            )
+        raw_trajectory_path: Optional[Path] = None
+        if trajectory_path is not None:
+            raw_trajectory_path = Path(trajectory_path).expanduser()
+        elif isinstance(cohort, (str, Path)):
+            raw_cohort_path = Path(cohort).expanduser()
+            candidate = raw_cohort_path.with_name(
+                f"{raw_cohort_path.stem}_trajectory.parquet"
+            )
+            if candidate.exists():
+                raw_trajectory_path = candidate
+        if raw_trajectory_path is not None:
+            if (
+                raw_trajectory_path.is_symlink()
+                or not raw_trajectory_path.is_file()
+                or raw_trajectory_path.suffix.lower() not in {".parquet", ".pq"}
+            ):
+                raise MaterializedTrajectoryError(
+                    "trajectory input must be a regular parquet file"
+                )
+            selected_trajectory_path = raw_trajectory_path.resolve(strict=True)
+        if trajectory_authority_declared:
+            if verified_source_authority is None:
+                raise MaterializedTrajectoryError(
+                    "typed trajectory authority requires a typed cohort authority"
+                )
+            expected_trajectory_authority = (
+                trajectory_authority_ref
+                if isinstance(
+                    trajectory_authority_ref, MaterializedTrajectoryAuthorityRef
+                )
+                else MaterializedTrajectoryAuthorityRef.from_dict(
+                    trajectory_authority_ref
+                )
+            )
+            assert selected_trajectory_path is not None
+            declared_trajectory_authority_path = Path(
+                trajectory_authority_path
+            ).expanduser()
+            expected_trajectory_authority_path = (
+                selected_trajectory_path.parent / expected_trajectory_authority.file
+            )
+            if (
+                declared_trajectory_authority_path.is_symlink()
+                or declared_trajectory_authority_path.resolve()
+                != expected_trajectory_authority_path.resolve()
+            ):
+                raise MaterializedTrajectoryError(
+                    "trajectory authority path does not match the declared reference"
+                )
+        if (
+            selected_trajectory_path is not None
+            and verified_source_authority is not None
+        ):
+            verified_source_trajectory = (
+                load_verified_materialized_trajectory_authority(
+                    selected_trajectory_path,
+                    expected_authority=expected_trajectory_authority,
+                    expected_universe_authority=verified_source_authority.reference,
+                )
+            )
+            if verified_source_trajectory is None:
+                raise MaterializedTrajectoryError(
+                    "typed cohort trajectory requires a sealed trajectory authority"
+                )
+            expected_trajectory_authority = verified_source_trajectory.reference
+        elif expected_trajectory_authority is not None:
+            raise MaterializedTrajectoryError(
+                "typed trajectory authority requires a typed cohort authority"
+            )
         run_language = self._normalise_manuscript_language(
             manuscript_language or self._manuscript_language
         )
@@ -3928,6 +4049,17 @@ class ResearchAgentPipeline:
                 if expected_cohort_authority is not None
                 else None
             ),
+            trajectory_path=(
+                selected_trajectory_path
+                if trajectory_path is not None
+                or expected_trajectory_authority is not None
+                else None
+            ),
+            materialized_trajectory_authority_ref=(
+                expected_trajectory_authority.to_dict()
+                if expected_trajectory_authority is not None
+                else None
+            ),
         )
         run_environment_identity = build_environment_identity(
             llm_signature=self._llm_signature(llm)
@@ -3936,6 +4068,7 @@ class ResearchAgentPipeline:
         resume_state: Optional[Dict[str, Any]] = None
         resume_context_evidence_path: Optional[Path] = None
         resume_input_verified = False
+        resume_trajectory_binding: Optional[StagedTrajectoryBinding] = None
         experiment_spec_path: Optional[Path] = None
         run_id = current_locked_run_id()
         if resume_run_id:
@@ -4014,6 +4147,7 @@ class ResearchAgentPipeline:
                     resume_state = prepared_resume.resume_state
                     resume_input_verified = prepared_resume.input_verified
                     resume_context_evidence_path = prepared_resume.context_evidence_path
+                    resume_trajectory_binding = prepared_resume.trajectory_binding
                     experiment_spec_path = prepared_resume.experiment_spec_path
                     if prepared_resume.cohort_path is not None:
                         cohort_path = prepared_resume.cohort_path
@@ -4040,7 +4174,42 @@ class ResearchAgentPipeline:
                 run_id=run_id,
                 path=str(cohort_path),
             )
+            staged_trajectory_binding: Optional[StagedTrajectoryBinding] = None
+            if selected_trajectory_path is not None:
+                trajectory_identity = run_scientific_identity.get("trajectory")
+                if not isinstance(trajectory_identity, Mapping):
+                    cohort_identity = run_scientific_identity.get("cohort")
+                    trajectory_identity = (
+                        cohort_identity.get("trajectory")
+                        if isinstance(cohort_identity, Mapping)
+                        else None
+                    )
+                if not isinstance(trajectory_identity, Mapping):
+                    raise MaterializedTrajectoryError(
+                        "trajectory scientific identity is missing"
+                    )
+                staged_trajectory_binding = self._materialise_trajectory(
+                    source_path=selected_trajectory_path,
+                    target_path=run_dir / "cohort_trajectory.parquet",
+                    source_cohort_path=(
+                        Path(cohort).expanduser().resolve()
+                        if verified_source_trajectory is not None
+                        and isinstance(cohort, (str, Path))
+                        else None
+                    ),
+                    target_cohort_path=cohort_path,
+                    source_authority=verified_source_trajectory,
+                    expected_sha256=str(trajectory_identity.get("sha256") or ""),
+                    expected_size=int(trajectory_identity.get("size_bytes") or -1),
+                )
+                _emit_progress(
+                    "cohort",
+                    "Trajectory staged with exact input authority.",
+                    run_id=run_id,
+                    path=str(staged_trajectory_binding.path),
+                )
         else:
+            staged_trajectory_binding = resume_trajectory_binding
             _emit_progress(
                 "cohort",
                 "Verified immutable staged cohort for resume.",
@@ -4151,6 +4320,7 @@ class ResearchAgentPipeline:
             return self._run_execute_phase(
                 plan_result=plan_result,
                 cohort_path=cohort_path,
+                trajectory_binding=staged_trajectory_binding,
                 run_dir=run_dir,
                 run_id=run_id,
                 skill_obj=skill_obj,
@@ -4553,12 +4723,6 @@ class ResearchAgentPipeline:
                     src,
                     expected_authority=expected_source_authority,
                 )
-                src_trajectory = src.with_name(f"{src.stem}_trajectory.parquet")
-                if typed_source is not None and src_trajectory.exists():
-                    raise MaterializedMetadataError(
-                        "typed trajectory input requires a sealed trajectory "
-                        "authority before it can enter the research-agent run"
-                    )
                 staged = stage_materialized_cohort_authority(
                     src,
                     target,
@@ -4577,16 +4741,6 @@ class ResearchAgentPipeline:
                 if staged is None and src.resolve() != target.resolve():
                     df = pd.read_parquet(src)
                     df.to_parquet(target, index=False)
-                # Carry the optional long-format trajectory written next to the
-                # source universe (``<src_stem>_trajectory.parquet``) alongside
-                # the staged cohort as ``cohort_trajectory.parquet`` so the
-                # runner's sibling auto-discovery exposes TRAJECTORY_PARQUET.
-                # Without this the trajectory is stranded in the universe dir and
-                # timing/onset/incident steps cannot reach the row-level series.
-                if src_trajectory.exists():
-                    traj_target = run_dir / "cohort_trajectory.parquet"
-                    if src_trajectory.resolve() != traj_target.resolve():
-                        shutil.copy2(src_trajectory, traj_target)
             elif src.suffix.lower() in {".csv", ".tsv"}:
                 if expected_source_authority is not None:
                     raise MaterializedMetadataError(
@@ -4610,6 +4764,65 @@ class ResearchAgentPipeline:
             cohort.to_parquet(target, index=False)
             return target
         raise TypeError("cohort must be a path or a pandas DataFrame")
+
+    def _materialise_trajectory(
+        self,
+        *,
+        source_path: Path,
+        target_path: Path,
+        source_cohort_path: Optional[Path],
+        target_cohort_path: Path,
+        source_authority: Optional[VerifiedMaterializedTrajectoryAuthority],
+        expected_sha256: str,
+        expected_size: int,
+    ) -> StagedTrajectoryBinding:
+        """Stage a trajectory exactly; typed inputs also rebind cohort lineage."""
+
+        if source_authority is None:
+            staged_path = stage_legacy_trajectory_exact(
+                source_path,
+                target_path,
+                expected_sha256=expected_sha256,
+                expected_size=expected_size,
+            )
+            return StagedTrajectoryBinding(
+                path=staged_path,
+                sha256=expected_sha256,
+                size=expected_size,
+            )
+        if source_cohort_path is None:
+            raise MaterializedTrajectoryError(
+                "typed trajectory requires its source cohort path"
+            )
+        target_cohort = load_verified_materialized_cohort_authority(target_cohort_path)
+        if target_cohort is None:
+            raise MaterializedTrajectoryError(
+                "typed trajectory target cohort lost its authority"
+            )
+        staged = stage_materialized_trajectory_authority(
+            source_path,
+            target_path,
+            source_universe_path=source_cohort_path,
+            target_universe_path=target_cohort_path,
+            expected_source_authority=source_authority.reference,
+            expected_target_universe_authority=target_cohort.reference,
+            producer_implementation_sha256=(
+                materialized_implementation_bundle_sha256(
+                    (
+                        Path(__file__),
+                        Path(__file__).resolve().parent
+                        / "intake"
+                        / "materialized_trajectory.py",
+                    )
+                )
+            ),
+        )
+        return StagedTrajectoryBinding(
+            path=target_path,
+            sha256=staged.authority.trajectory_sha256,
+            size=staged.authority.trajectory_size,
+            authority_ref=staged.reference,
+        )
 
     def _postprocess_paper_replication(
         self,
