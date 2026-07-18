@@ -3568,6 +3568,9 @@ def _patch_export_api(
 ) -> None:
     from contextlib import contextmanager
     import easyicu.api as api_module
+    from easyicu.resources import load_dictionary
+
+    dictionary = load_dictionary(include_sofa2=True)
 
     @contextmanager
     def fake_keep_cache(**_: object):
@@ -3576,7 +3579,14 @@ def _patch_export_api(
     def fake_load_concepts(concepts, **kwargs):
         loaded.append({"concepts": concepts, "kwargs": kwargs})
         ids = (kwargs.get("patient_ids") or {}).get("stay_id", [])
-        return pd.DataFrame({"stay_id": ids, "anchor_age": [65] * len(ids)})
+        payload: dict[str, object] = {"stay_id": ids}
+        for concept in concepts:
+            definition = dictionary.get(concept)
+            if definition is not None and definition.class_name == "lgl_cncpt":
+                payload[concept] = [index % 2 for index in range(len(ids))]
+            else:
+                payload[concept] = [65.0] * len(ids)
+        return pd.DataFrame(payload)
 
     monkeypatch.setattr(api_module, "keep_cache", fake_keep_cache)
     monkeypatch.setattr(api_module, "load_concepts", fake_load_concepts)
@@ -3763,6 +3773,105 @@ def test_export_runner_honors_module_specific_concept_selection(
     assert "Concepts selected: `3`" in readme
 
 
+@pytest.mark.parametrize("include_feature_definitions", [True, False])
+def test_export_runner_writes_digest_bound_column_metadata_sidecar(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    include_feature_definitions: bool,
+) -> None:
+    import easyicu.api as api_module
+    from easyicu.concept.metadata_projection import ConceptColumnRole
+    from easyicu.concept.metadata_sidecar import read_content_addressed_sidecar
+    from easyicu.research_agent.intake.export_package import open_export_package
+
+    loaded: list[dict[str, object]] = []
+    _patch_export_api(monkeypatch, loaded)
+
+    def exact_age_export(_concepts, **kwargs):
+        ids = (kwargs.get("patient_ids") or {}).get("stay_id", [])
+        return pd.DataFrame({"stay_id": ids, "age": [65] * len(ids)})
+
+    monkeypatch.setattr(api_module, "load_concepts", exact_age_export)
+    monkeypatch.setattr(
+        api_module, "get_all_patient_ids", lambda *_, **__: ([1, 2], "stay_id")
+    )
+    out = tmp_path / "out"
+    runner = dataio.make_export_runner(
+        data_path=str(tmp_path),
+        database="miiv",
+        modules=["demographics"],
+        concepts={"demographics": ["age"]},
+        export_format="csv",
+        out_dir=str(out),
+        include_feature_definitions=include_feature_definitions,
+    )
+
+    result = runner(_ExportJob())
+    manifest = json.loads((out / "_manifest.json").read_text(encoding="utf-8"))
+    descriptor = manifest["column_metadata"]
+
+    assert result["column_metadata"] == descriptor["file"]
+    assert result["column_metadata_sha256"] == descriptor["sha256"]
+    assert descriptor["file"] == (f"column_metadata.sha256-{descriptor['sha256']}.json")
+    assert manifest["schema_version"] == "easyicu_native_export_v2"
+    assert manifest["files"][0]["column_metadata_columns"] == ["age"]
+    sidecar = read_content_addressed_sidecar(
+        out / descriptor["file"],
+        expected_sha256=descriptor["sha256"],
+        expected_size=descriptor["size"],
+    )
+    assert sidecar.source_database == "miiv"
+    assert sidecar.record_count == descriptor["record_count"] == 1
+    file_binding = sidecar.files[0]
+    assert file_binding.relative_path == "demographics.csv"
+    assert file_binding.identity_column == "stay_id"
+    age = file_binding.columns["age"]
+    assert age.metadata.source_concept == "age"
+    assert age.metadata.role is ConceptColumnRole.VALUE
+    assert age.representation_transform is None
+    assert manifest["feature_definitions"]["included"] is bool(
+        include_feature_definitions
+    )
+    with open_export_package(out) as package:
+        assert package.column_metadata_sha256 == descriptor["sha256"]
+        assert set(package.concept_index) == {"age"}
+
+
+def test_export_runner_does_not_publish_v2_without_selected_primary_bindings(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import easyicu.api as api_module
+
+    loaded: list[dict[str, object]] = []
+    _patch_export_api(monkeypatch, loaded)
+
+    def unrelated_output(_concepts, **kwargs):
+        ids = (kwargs.get("patient_ids") or {}).get("stay_id", [])
+        return pd.DataFrame({"stay_id": ids, "height": [180.0] * len(ids)})
+
+    monkeypatch.setattr(api_module, "load_concepts", unrelated_output)
+    monkeypatch.setattr(
+        api_module, "get_all_patient_ids", lambda *_, **__: ([1, 2], "stay_id")
+    )
+    out = tmp_path / "out"
+    runner = dataio.make_export_runner(
+        data_path=str(tmp_path),
+        database="miiv",
+        modules=["demographics"],
+        concepts={"demographics": ["age"]},
+        export_format="csv",
+        out_dir=str(out),
+        include_feature_definitions=False,
+    )
+
+    with pytest.raises(dataio.ExportCohortError) as exc_info:
+        runner(_ExportJob())
+    assert exc_info.value.detail["error"] == "column_metadata_primary_binding_missing"
+    assert exc_info.value.detail["concepts"] == ["age"]
+    assert not (out / "_manifest.json").exists()
+
+
 def test_export_runner_rejects_unknown_selected_concepts(
     tmp_path: Path,
 ) -> None:
@@ -3895,6 +4004,7 @@ def test_export_runner_applies_concept_derived_cohort_prefilter(
     from contextlib import contextmanager
     import easyicu.api as api_module
     import easyicu.patient_filter as patient_filter_module
+    from easyicu.resources import load_dictionary
 
     class FakePatientFilter:
         def __init__(
@@ -3906,6 +4016,7 @@ def test_export_runner_applies_concept_derived_cohort_prefilter(
             return pd.DataFrame({"patient_id": [1, 2, 3]})
 
     loaded: list[dict[str, object]] = []
+    dictionary = load_dictionary(include_sofa2=True)
 
     @contextmanager
     def fake_keep_cache(**_: object):
@@ -3916,7 +4027,14 @@ def test_export_runner_applies_concept_derived_cohort_prefilter(
         if concepts == loaded_concepts:
             return pd.DataFrame({"stay_id": [1, 2, 3], positive_column: [0, 1, True]})
         ids = (kwargs.get("patient_ids") or {}).get("stay_id", [])
-        return pd.DataFrame({"stay_id": ids, "anchor_age": [65] * len(ids)})
+        payload: dict[str, object] = {"stay_id": ids}
+        for concept in concepts:
+            definition = dictionary.get(concept)
+            if definition is not None and definition.class_name == "lgl_cncpt":
+                payload[concept] = [index % 2 for index in range(len(ids))]
+            else:
+                payload[concept] = [65.0] * len(ids)
+        return pd.DataFrame(payload)
 
     loaded_concepts = list(concepts)
     monkeypatch.setattr(patient_filter_module, "PatientFilter", FakePatientFilter)

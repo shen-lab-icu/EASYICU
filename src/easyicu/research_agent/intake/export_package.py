@@ -36,6 +36,15 @@ from typing import (
 import pandas as pd
 import pyarrow.parquet as pq
 
+from easyicu.concept.metadata_sidecar import (
+    COLUMN_METADATA_SIDECAR_SCHEMA,
+    EXPORT_PHYSICAL_SCOPE,
+    ColumnMetadataFileBinding,
+    ColumnMetadataSidecar,
+    MetadataSidecarError,
+    SidecarRef,
+    read_content_addressed_sidecar,
+)
 from easyicu.database_config import ID_COLUMNS as HOST_DATABASE_ID_COLUMNS
 from easyicu.database_config import END_TIME_COLUMNS as HOST_DATABASE_END_TIME_COLUMNS
 from easyicu.database_config import (
@@ -84,6 +93,7 @@ TIME_COLUMNS = frozenset(
 )
 NATIVE_MANIFEST = "_manifest.json"
 LEGACY_MANIFEST = "easyicu_export_manifest.json"
+NATIVE_MANIFEST_SCHEMA_V2 = "easyicu_native_export_v2"
 FEATURE_DEFINITION_SCHEMA = "easyicu_feature_definitions_v1"
 _MAX_JSON_BYTES = 32 * 1024 * 1024
 _FORMAT_BY_SUFFIX = {
@@ -532,6 +542,10 @@ class ExportPackage:
     missing_selected_concepts: Tuple[str, ...]
     feature_definitions: Mapping[str, Mapping[str, object]]
     feature_definitions_sha256: Optional[str]
+    column_metadata_by_file: Mapping[str, ColumnMetadataFileBinding]
+    column_metadata_sha256: Optional[str]
+    column_metadata_file: Optional[str]
+    column_metadata_scope: Optional[str]
 
     def index_dict(self) -> Dict[str, Dict[str, object]]:
         """Return the compatibility index shape used by existing callers."""
@@ -990,6 +1004,245 @@ def _load_feature_definitions(
     )
 
 
+def _column_metadata_error_code(exc: MetadataSidecarError) -> str:
+    message = str(exc).lower()
+    if "digest" in message or "sha256" in message:
+        return "column_metadata_digest_mismatch"
+    if "size/type" in message or "cannot read" in message:
+        return "column_metadata_inventory_invalid"
+    if "record_count" in message:
+        return "column_metadata_count_mismatch"
+    if "source" in message or "resolution chain" in message:
+        return "column_metadata_source_mismatch"
+    if "role" in message or "allowed_values" in message:
+        return "column_metadata_role_invalid"
+    return "column_metadata_schema_invalid"
+
+
+def _feature_definition_member_names(manifest: Mapping[str, Any]) -> set[str]:
+    descriptor = manifest.get("feature_definitions")
+    if not isinstance(descriptor, Mapping):
+        return set()
+    raw_files = descriptor.get("files")
+    if not isinstance(raw_files, list):
+        return set()
+    return {
+        Path(str(item.get("file"))).as_posix()
+        for item in raw_files
+        if isinstance(item, Mapping)
+        and isinstance(item.get("file"), str)
+        and str(item.get("file")).strip()
+    }
+
+
+def _orphan_column_metadata_members(root: Path) -> tuple[str, ...]:
+    prefix = "column_metadata.sha256-"
+    suffix = ".json"
+    members: list[str] = []
+    try:
+        children = tuple(root.iterdir())
+    except OSError as exc:
+        raise ExportPackageError(
+            "cannot inspect export root for column metadata authority",
+            code="column_metadata_inventory_invalid",
+        ) from exc
+    for child in children:
+        name = child.name
+        if not name.startswith(prefix) or not name.endswith(suffix):
+            continue
+        digest = name[len(prefix) : -len(suffix)]
+        if len(digest) == 64 and all(ch in "0123456789abcdef" for ch in digest):
+            members.append(name)
+    return tuple(sorted(members))
+
+
+def _load_column_metadata_sidecar(
+    *,
+    root: Path,
+    manifest: Mapping[str, Any],
+    manifest_kind: str,
+    database: str,
+    selected_by_module: Mapping[str, set[str]],
+    physical_files: Sequence[ExportPhysicalFile],
+    entries: Sequence[Mapping[str, Any]],
+) -> tuple[
+    Mapping[str, ColumnMetadataFileBinding],
+    Optional[SidecarRef],
+    Optional[ColumnMetadataSidecar],
+]:
+    """Load a native v2 sidecar without weakening v1 package semantics."""
+
+    if "column_metadata" not in manifest:
+        orphan_members = (
+            _orphan_column_metadata_members(root) if manifest_kind == "native" else ()
+        )
+        if orphan_members:
+            raise ExportPackageError(
+                "native manifest omits an existing content-addressed column "
+                "metadata authority",
+                code="column_metadata_inventory_invalid",
+                member=orphan_members[0],
+            )
+        return MappingProxyType({}), None, None
+    descriptor = manifest["column_metadata"]
+    if manifest_kind != "native":
+        raise ExportPackageError(
+            "column metadata sidecars are supported only by native manifests",
+            code="column_metadata_inventory_invalid",
+        )
+    if not isinstance(descriptor, Mapping):
+        raise ExportPackageError(
+            "column_metadata manifest entry must be an object",
+            code="column_metadata_inventory_invalid",
+        )
+    try:
+        reference = SidecarRef.from_dict(descriptor)
+    except MetadataSidecarError as exc:
+        raise ExportPackageError(
+            str(exc), code=_column_metadata_error_code(exc)
+        ) from exc
+    expected_name = f"column_metadata.sha256-{reference.sha256}.json"
+    if reference.file != expected_name:
+        raise ExportPackageError(
+            "column metadata filename is not bound to its content digest",
+            code="column_metadata_digest_mismatch",
+            member=reference.file,
+        )
+    data_members = {item.relative_path for item in physical_files}
+    if (
+        reference.file in data_members
+        or reference.file in _feature_definition_member_names(manifest)
+    ):
+        raise ExportPackageError(
+            "column metadata authority collides with another manifest role",
+            code="column_metadata_inventory_invalid",
+            member=reference.file,
+        )
+    sidecar_path = _safe_manifest_file(
+        root, reference.file, label="column metadata sidecar"
+    )
+    try:
+        sidecar = read_content_addressed_sidecar(
+            sidecar_path,
+            expected_sha256=reference.sha256,
+            expected_size=reference.size,
+        )
+    except MetadataSidecarError as exc:
+        raise ExportPackageError(
+            str(exc),
+            code=_column_metadata_error_code(exc),
+            member=reference.file,
+        ) from exc
+    if reference.record_count != sidecar.record_count:
+        raise ExportPackageError(
+            "column metadata descriptor count does not match sidecar",
+            code="column_metadata_count_mismatch",
+            member=reference.file,
+        )
+    if sidecar.schema_version != COLUMN_METADATA_SIDECAR_SCHEMA:
+        raise ExportPackageError(
+            "column metadata schema does not match the host contract",
+            code="column_metadata_schema_invalid",
+        )
+    normalized_database = database.strip().lower()
+    if sidecar.source_database != normalized_database:
+        raise ExportPackageError(
+            "column metadata source database does not match export manifest",
+            code="column_metadata_source_mismatch",
+        )
+    from easyicu.config import load_src_cfg
+
+    expected_prefixes = tuple(
+        str(value).strip().lower()
+        for value in load_src_cfg(normalized_database).class_prefix
+        if str(value).strip()
+    )
+    if sidecar.source_database_class_prefixes != expected_prefixes:
+        raise ExportPackageError(
+            "column metadata source class chain does not match host registry",
+            code="column_metadata_source_mismatch",
+        )
+    if sidecar.scope != EXPORT_PHYSICAL_SCOPE:
+        raise ExportPackageError(
+            "native export requires export_physical_columns metadata scope",
+            code="column_metadata_schema_invalid",
+        )
+
+    physical_by_path = {item.relative_path: item for item in physical_files}
+    sidecar_by_path = {item.relative_path: item for item in sidecar.files}
+    if set(sidecar_by_path) != set(physical_by_path):
+        raise ExportPackageError(
+            "column metadata file inventory does not match data files",
+            code="column_metadata_inventory_invalid",
+        )
+    entry_by_path: dict[str, Mapping[str, Any]] = {}
+    for entry in entries:
+        raw_file = entry.get("file")
+        if isinstance(raw_file, str) and raw_file.strip():
+            entry_by_path[Path(raw_file).as_posix()] = entry
+
+    for relative_path, file_binding in sidecar_by_path.items():
+        physical = physical_by_path[relative_path]
+        entry = entry_by_path.get(relative_path)
+        if entry is None:
+            raise ExportPackageError(
+                "column metadata file lacks a manifest data entry",
+                code="column_metadata_inventory_invalid",
+                member=relative_path,
+            )
+        if file_binding.module != physical.module:
+            raise ExportPackageError(
+                "column metadata module does not match data file",
+                code="column_metadata_column_mismatch",
+                member=relative_path,
+            )
+        if file_binding.identity_column != physical.id_column:
+            raise ExportPackageError(
+                "column metadata identity column does not match data file",
+                code="column_metadata_column_mismatch",
+                member=relative_path,
+            )
+        coordinate_names = tuple(item.column for item in file_binding.time_coordinates)
+        if coordinate_names != physical.time_columns:
+            raise ExportPackageError(
+                "column metadata time coordinates do not match data file",
+                code="column_metadata_column_mismatch",
+                member=relative_path,
+            )
+        raw_columns = entry.get("column_metadata_columns")
+        if (
+            not isinstance(raw_columns, list)
+            or any(not isinstance(value, str) or not value for value in raw_columns)
+            or len(set(raw_columns)) != len(raw_columns)
+            or raw_columns != sorted(raw_columns)
+            or tuple(raw_columns) != tuple(file_binding.columns)
+        ):
+            raise ExportPackageError(
+                "manifest column metadata coverage does not match sidecar",
+                code="column_metadata_column_mismatch",
+                member=relative_path,
+            )
+        selected = selected_by_module.get(file_binding.module, set())
+        for column, binding in file_binding.columns.items():
+            if (
+                column not in physical.columns
+                or column in IDENTIFIER_COLUMNS
+                or column in TIME_COLUMNS
+            ):
+                raise ExportPackageError(
+                    "column metadata binds an absent or structural column",
+                    code="column_metadata_column_mismatch",
+                    member=relative_path,
+                )
+            if binding.metadata.source_concept not in selected:
+                raise ExportPackageError(
+                    "column metadata source concept is not selected for its module",
+                    code="column_metadata_source_mismatch",
+                    member=relative_path,
+                )
+    return MappingProxyType(sidecar_by_path), reference, sidecar
+
+
 def is_export_package(path: Union[str, Path]) -> bool:
     """Return whether ``path`` carries a native or legacy root marker."""
 
@@ -1196,10 +1449,37 @@ def _open_export_package_impl(
             "native manifest has an unsupported or missing format",
             code="manifest_format_invalid",
         )
+    native_schema = (
+        manifest.get("schema_version") if manifest_kind == "native" else None
+    )
+    if native_schema not in {None, NATIVE_MANIFEST_SCHEMA_V2}:
+        raise ExportPackageError(
+            f"unsupported native export schema: {native_schema!r}",
+            code="manifest_schema_invalid",
+        )
+    if native_schema == NATIVE_MANIFEST_SCHEMA_V2 and "column_metadata" not in manifest:
+        raise ExportPackageError(
+            "native v2 manifests require column metadata authority",
+            code="column_metadata_inventory_invalid",
+        )
+    if native_schema is None and "column_metadata" in manifest:
+        raise ExportPackageError(
+            "column metadata authority requires the native v2 manifest schema",
+            code="column_metadata_inventory_invalid",
+        )
 
     physical_files: list[ExportPhysicalFile] = []
     concept_index: dict[str, Mapping[str, object]] = {}
     entries = _manifest_file_entries(manifest, manifest_kind=manifest_kind)
+    if (
+        manifest_kind == "native"
+        and native_schema is None
+        and any("column_metadata_columns" in entry for entry in entries)
+    ):
+        raise ExportPackageError(
+            "legacy native manifests cannot partially declare v2 column metadata",
+            code="column_metadata_inventory_invalid",
+        )
     if manifest_kind == "native":
         selected_concepts, selected_by_module = _native_selection(manifest, entries)
     else:
@@ -1282,55 +1562,99 @@ def _open_export_package_impl(
             excel_sheet=excel_sheet,
         )
         physical_files.append(physical_file)
+
+    column_metadata_by_file, column_metadata_ref, column_metadata_sidecar = (
+        _load_column_metadata_sidecar(
+            root=root,
+            manifest=manifest,
+            manifest_kind=manifest_kind,
+            database=database,
+            selected_by_module=selected_by_module,
+            physical_files=physical_files,
+            entries=entries,
+        )
+    )
+    for physical_file in physical_files:
+        common_info: dict[str, object] = {
+            "file": str(physical_file.path),
+            "file_name": physical_file.path.name,
+            "relative_path": physical_file.relative_path,
+            "rows": physical_file.rows,
+            "columns": list(physical_file.columns),
+            "format": physical_file.file_format,
+            "module": physical_file.module,
+            "id_column": physical_file.id_column,
+            "time_column": physical_file.time_column,
+            "time_columns": list(physical_file.time_columns),
+            "sha256": physical_file.identity.sha256,
+        }
+        typed_file = column_metadata_by_file.get(physical_file.relative_path)
+        if typed_file is not None:
+            for column, binding in typed_file.columns.items():
+                if column in concept_index:
+                    raise ExportPackageError(
+                        f"concept {column!r} appears in more than one manifest-listed file"
+                    )
+                concept_index[column] = MappingProxyType(
+                    {
+                        **common_info,
+                        "column_metadata_v2": True,
+                        "source_concept": binding.metadata.source_concept,
+                        "column_metadata_role": binding.metadata.role.value,
+                        "column_metadata_binding": binding,
+                        "column_metadata_time_coordinates": tuple(
+                            item.to_dict() for item in typed_file.time_coordinates
+                        ),
+                    }
+                )
+            continue
+
         value_columns = (
-            _authorized_native_value_columns(columns, concepts)
+            _authorized_native_value_columns(
+                physical_file.columns, physical_file.declared_concepts
+            )
             if manifest_kind == "native"
             else {
                 column
-                for column in columns
+                for column in physical_file.columns
                 if column not in IDENTIFIER_COLUMNS and column not in TIME_COLUMNS
             }
         )
-        for column in columns:
+        for column in physical_file.columns:
             if column not in value_columns:
                 continue
             if column in concept_index:
                 raise ExportPackageError(
                     f"concept {column!r} appears in more than one manifest-listed file"
                 )
-            concept_index[column] = MappingProxyType(
-                {
-                    "file": str(path),
-                    "file_name": path.name,
-                    "relative_path": relative_path,
-                    "rows": physical_file.rows,
-                    "columns": list(columns),
-                    "format": file_format,
-                    "module": physical_file.module,
-                    "id_column": id_column,
-                    "time_column": time_column,
-                    "time_columns": list(time_columns),
-                    "sha256": identity.sha256,
-                }
-            )
+            concept_index[column] = MappingProxyType(common_info)
 
     missing_selected_concepts: tuple[str, ...] = ()
     if manifest_kind == "native":
-        missing_selected_concepts = tuple(
-            sorted(
-                concept
-                for concept in selected_concepts
-                if concept not in concept_index
-                and len(
-                    [
-                        column
-                        for column in concept_index
-                        if column.startswith(concept + "_")
-                    ]
+        if column_metadata_sidecar is not None:
+            missing_selected_concepts = tuple(
+                sorted(
+                    concept
+                    for concept in selected_concepts
+                    if resolve_exported_concept(concept_index, concept) is None
                 )
-                != 1
             )
-        )
+        else:
+            missing_selected_concepts = tuple(
+                sorted(
+                    concept
+                    for concept in selected_concepts
+                    if concept not in concept_index
+                    and len(
+                        [
+                            column
+                            for column in concept_index
+                            if column.startswith(concept + "_")
+                        ]
+                    )
+                    != 1
+                )
+            )
 
     if len(detected_formats) != 1:
         raise ExportPackageError(
@@ -1368,6 +1692,15 @@ def _open_export_package_impl(
             for item in physical_files
         ],
     }
+    if column_metadata_ref is not None and column_metadata_sidecar is not None:
+        authority_payload["column_metadata"] = {
+            **column_metadata_ref.to_dict(),
+            "scope": column_metadata_sidecar.scope,
+            "file_payload_sha256": {
+                item.relative_path: item.metadata_payload_sha256
+                for item in column_metadata_sidecar.files
+            },
+        }
     authority_sha256 = hashlib.sha256(
         json.dumps(authority_payload, sort_keys=True, separators=(",", ":")).encode(
             "utf-8"
@@ -1386,6 +1719,18 @@ def _open_export_package_impl(
         missing_selected_concepts=missing_selected_concepts,
         feature_definitions=feature_definitions,
         feature_definitions_sha256=feature_sha,
+        column_metadata_by_file=column_metadata_by_file,
+        column_metadata_sha256=(
+            column_metadata_ref.sha256 if column_metadata_ref is not None else None
+        ),
+        column_metadata_file=(
+            column_metadata_ref.file if column_metadata_ref is not None else None
+        ),
+        column_metadata_scope=(
+            column_metadata_sidecar.scope
+            if column_metadata_sidecar is not None
+            else None
+        ),
     )
 
 
@@ -1429,12 +1774,49 @@ def index_export_package(export_dir: Union[str, Path]) -> Dict[str, Dict[str, ob
 def resolve_exported_concept(
     index: Mapping[str, Mapping[str, object]], concept: str
 ) -> Optional[str]:
-    """Resolve exact or one unambiguous ``<concept>_<suffix>`` column."""
+    """Resolve a typed source owner or the legacy unambiguous prefix alias."""
 
+    typed = [
+        (column, info)
+        for column, info in index.items()
+        if info.get("column_metadata_v2") is True
+    ]
+    if typed:
+        owned = [
+            (column, info)
+            for column, info in typed
+            if info.get("source_concept") == concept
+        ]
+        primary = [
+            (column, info)
+            for column, info in owned
+            if info.get("column_metadata_role") in {"value", "event_status"}
+        ]
+        exact = [column for column, _info in primary if column == concept]
+        if len(exact) == 1:
+            return exact[0]
+        if len(primary) == 1:
+            return primary[0][0]
+        return None
     if concept in index:
         return concept
     candidates = sorted(value for value in index if value.startswith(concept + "_"))
     return candidates[0] if len(candidates) == 1 else None
+
+
+def require_column_metadata(package: ExportPackage) -> None:
+    """Require a verified native-v2 typed column-metadata authority."""
+
+    if (
+        package.column_metadata_sha256 is None
+        or not package.column_metadata_by_file
+        or package.missing_selected_concepts
+    ):
+        raise ExportPackageError(
+            "typed column metadata is required for this consumer",
+            code="column_metadata_required",
+            manifest_path=package.manifest_path,
+        )
 
 
 def require_canonical_time_projection(package: ExportPackage, concept: str) -> None:
@@ -1444,6 +1826,21 @@ def require_canonical_time_projection(package: ExportPackage, concept: str) -> N
     if resolved is None:
         return
     info = package.concept_index[resolved]
+    if info.get("column_metadata_v2") is True:
+        coordinates = tuple(info.get("column_metadata_time_coordinates") or ())
+        if len(coordinates) > 1 or any(
+            not isinstance(item, Mapping)
+            or item.get("origin") != "icu_admission"
+            or item.get("unit") != "h"
+            for item in coordinates
+        ):
+            raise ExportPackageError(
+                "typed export time coordinates are not a unique ICU-hour axis",
+                code="export_time_projection_required",
+                manifest_path=package.manifest_path,
+                member=str(info.get("relative_path") or ""),
+            )
+        return
     raw_time_columns = tuple(
         str(value)
         for value in (info.get("time_columns") or [info.get("time_column")])
@@ -1547,6 +1944,7 @@ __all__ = [
     "open_export_package",
     "read_exported_concept",
     "require_canonical_time_projection",
+    "require_column_metadata",
     "resolve_exported_concept",
     "verify_export_package",
 ]

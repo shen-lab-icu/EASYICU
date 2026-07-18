@@ -8,6 +8,7 @@ from .export_package import (
     open_export_package,
     read_exported_concept,
     require_canonical_time_projection,
+    require_column_metadata,
     resolve_exported_concept,
     verify_export_package,
 )
@@ -20,6 +21,7 @@ __all__ = [
     "open_export_package",
     "read_exported_concept",
     "require_canonical_time_projection",
+    "require_column_metadata",
     "resolve_exported_concept",
     "verify_export_package",
 ]
