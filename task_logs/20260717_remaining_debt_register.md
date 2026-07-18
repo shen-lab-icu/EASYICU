@@ -1,7 +1,7 @@
 # research_agent 架构总控板 / 剩余债务台账 — 当前单一执行视图
 
-> 更新：2026-07-18 06:20 EDT
-> 分支 / 生产代码基线：`refactor/agent-control-plane@dfb76b6`
+> 更新：2026-07-18 06:41 EDT
+> 分支 / 生产代码基线：`refactor/agent-control-plane@e54f675`
 > 当前策略：**先完成有边界的 Track B-Core 架构整理，再 fresh 重跑 E3/H2/E2，随后执行 3–6 个 held-out 全流程。**
 
 ## 文档权威关系
@@ -17,14 +17,14 @@
 
 ## 当前量化快照
 
-| 指标 | 冻结基线 | 当前 `dfb76b6` | 变化 |
+| 指标 | 冻结基线 | 当前 `e54f675` | 变化 |
 |---|---:|---:|---:|
 | `_execute_one_step` 行数 | 6,694 | 6,029 | −665（−9.9%） |
-| `run_execute_phase` 行数 | 8,451 | 7,710 | −741（−8.8%） |
-| `pipeline_execute.py` 行数 | 14,631 | 11,275 | −3,356（−22.9%） |
-| `pipeline_execute.py + authority/typed_binding.py` | — | 12,538 | resolver 接线后总 LOC 比 2/3 阶段 12,502 小幅 +36；不把职责迁移冒充为代码删除 |
-| `research_agent` 模块 / 顶层兼容路径 | — | 213 / 157 | canonical 实现已归入 3 个职责子包；旧顶层 façade 为归档/API 兼容而保留 |
-| package / import edge | 8 / 674 | 11 / 697 | 新增 `gates/`、`execution/`、`authority/`；由自动 graph gate 约束 |
+| `run_execute_phase` 行数 | 8,451 | 7,631 | −820（−9.7%） |
+| `pipeline_execute.py` 行数 | 14,631 | 11,048 | −3,583（−24.5%） |
+| `pipeline_execute.py + authority/{typed_binding,plan_authority}.py` | — | 12,613 | 新职责模块带来净 +75 行显式类型/边界/兼容代码；这是职责迁移，不冒充代码删除 |
+| `research_agent` 模块 / 顶层兼容路径 | — | 214 / 157 | canonical 实现已归入 3 个职责子包；旧顶层 façade 为归档/API 兼容而保留 |
+| package / import edge | 8 / 674 | 11 / 704 | 新增 `gates/`、`execution/`、`authority/`；由自动 graph gate 约束 |
 | 潜在 import SCC / 循环模块 | 1 个・最大 103 / 103 | 3 个・最大 24 / 31 | parent-artifact cycle cut 将 103 模块巨环拆为 24/5/2；该静态图含 lazy/local import，不能冒充 import-time SCC 全消除 |
 | E3 Step02 性能验收 | 旧 6 calls / 373.5s | 1 call / 0 repair / 26.8s | active wall −92.8% |
 | fresh E3/H2/E2 | — | 未启动 | Track B-Core freeze 后执行 |
@@ -47,9 +47,9 @@
 | RepairCoordinator | **完成限定职责** | `repair_coordination.py` 只承接 patch→可选 rewrite transport；事务/分类属于 provider ledger/A1 | 不把 gate/science 塞进 coordinator；名称按限定职责理解 |
 | Execution state | **部分完成** | `StepWorkerProgress`、`ConceptQuarantineState`、`SealedRendererState` | 只在真实跨边界读写集需要时继续值对象化；不造万能 state bag |
 | StepExecutor / RunCoordinator | **部分完成** | 已有 seam/coordination 模块，核心 orchestration 仍在 `pipeline_execute.py` | 继续从主体直线控制流提取可测职责，不以“新建文件”冒充完成 |
-| PlanAuthority | **待做（当前下一边界）** | 完整 replanning 边界仍捕获 25 个外围名并写 plan/cohort/runner，不宜整块搬迁 | 先抽纯 candidate normalize/validate typed result，provider/注册/cohort mutation 留 orchestrator |
+| PlanAuthority | **完成（纯 candidate authority 边界）** | `authority/plan_authority.py` 用冻结 typed result 承接 completed-step snapshot、estimand/figure 保留、plan cap、robustness lock 投影、typed/trajectory/companion shaping 与 scientific no-op 判定；`e54f675` 独立对抗审阅 ACCEPT | provider 调用、revision/evidence 注册、cohort mutation、runner 重建、replan budget 继续由 orchestrator 单一持有；不得扩成第二个 Planner |
 | TypedBindingResolver | **完成（3/3）** | `authority/plan_scope.py` + `authority/typed_binding.py` 承接 scientific signature、lineage/binding/schema receipt/manifest/resume 与 resolver；`dfb76b6` 用单一 resolver 替换 step 内闭包，每次显式传当前 plan，旧路径 identity 不变 | 保持 evidence fail-close、exact unpublished ID/alias 边界和 Planner 科学所有权；不再为凑 LOC 继续切本职责 |
-| 目录 / import cycle 治理 | **当前批完成，持续门禁** | 7 个稳定实现归入职责子包；parent artifact authority 进 `authority/parent_artifact.py`，distribution seal 回 renderer；graph gate 当前 213 modules / 157 top-level / 697 edges / SCC 24/5/2 / 0 literal dynamic import | 后续模块随真实职责提取归位；每批以 cyclic-module count + largest SCC 为风险门，SCC 个数仅报告；不机械降低顶层文件数 |
+| 目录 / import cycle 治理 | **当前批完成，持续门禁** | 7 个稳定实现及 PlanAuthority 归入职责子包；parent artifact authority 进 `authority/parent_artifact.py`，distribution seal 回 renderer；graph gate 当前 214 modules / 157 top-level / 704 edges / SCC 24/5/2 / 0 literal dynamic import | 后续模块随真实职责提取归位；每批以 cyclic-module count + largest SCC 为风险门，SCC 个数仅报告；不机械降低顶层文件数 |
 | B2 canonical 跨-run memory | **完成** | `a9cb05c`；新 profile 显式 off，旧 profile canonical JSON 不变 | canonical 永不重开；非 canonical 才允许显式 opt-in |
 | B3 step 并发 | **关闭，无需实现** | canonical 三题因 replanning + primary cohort + typed deps 被正确强制串行 | 保留 serial-gate 契约；不拆安全守卫追求伪加速。跨库 replicate 另属非关键路径 |
 | B6 跨库 metadata 契约 | **blocked（数据会话）** | 数据字典/回调仍有并行 dirty 修改 | 等数据层提交并 re-lock profile；不得把 extraction bounds 混成 physiological `valid_range` |
@@ -60,9 +60,9 @@
 
 ## 接下来三个可验收 bundle
 
-1. **PlanAuthority 的纯决策边界**：只抽 replanner candidate normalize/validate typed result；provider 调用、revision 注册和 cohort mutation 留 orchestrator。TypedBinding 阶段原定的 `run_execute_phase ≤7,660` / `_execute_one_step ≤5,980` 分别还差 50/49 行，由这个真边界自然承接，不为凑数字做无意义抽取。
-2. **B6 → 冻结门**：数据层提交后 re-lock metadata 契约；最后串行分片回归 + meta/capability + capsule/resume/provider/evidence authority + arch/graph diff，随后 freeze 并 fresh 跑三题。
-3. **fresh 三题 + held-out**：唯一 freeze commit/profile/dictionary/model/prompt/rubric 下 fresh 跑 E3/H2/E2，再跑 3–6 个未参与修复的全流程任务；结果不得反向诱导 shared-engine case patch。
+1. **剩余控制面关账 + B6**：只读审计仍标“部分完成”的 Execution state 与 StepExecutor/RunCoordinator；freeze 前必须把每项变成“完成”或有测试支持的“必要 orchestrator 剩余”，不得把 partial 静默带过。同时等待并行数据会话提交干净字典/profile，只核验/补齐 source-concept、单位、来源库/表、伴随列与 native export intake，不把 extraction bounds 混成 physiological `valid_range`。
+2. **冻结门**：串行分片回归 + meta/capability + capsule/resume/provider/evidence authority + arch/graph diff，并锁定唯一 commit/profile/dictionary/model/prompt/rubric/retry policy。PlanAuthority 已令 `run_execute_phase` 达到原 `≤7,660` 结构目标；`_execute_one_step` 仍比诊断目标 `5,980` 高 49 行，但没有新的职责边界时不为凑数抽取。
+3. **fresh 三题 + held-out**：唯一 freeze 版本 fresh 跑 E3/H2/E2，再跑 3–6 个未参与修复的全流程任务；结果不得反向诱导 shared-engine case patch。
 
 ## 架构 freeze 的完成定义
 
@@ -71,6 +71,7 @@
 - 没有新增 import SCC；现有 SCC 数量/最大规模不回退，并有自动基线。
 - 旧 import 路径、sealed replay/public API 保持兼容；fresh run **不等于**可以删除 shim 或 legacy migration。
 - `test_meta_benchmark_spec.py`、capability drift、evidence authority、resume/revalidation、golden 全绿。
+- scoreboard 不得残留未解释的“部分完成”：要么完成职责边界，要么明确证明剩余逻辑是 orchestrator 必需胶水并写入契约测试。
 - 性能不回退：E3 Step02 仍为 1 call / 0 repair / active wall 约 26.8s 量级；架构整理不承诺再复制 93% 提速。
 - freeze 后 fresh 跑 E3/H2/E2；再跑 3–6 个未参与修复的 held-out 全流程。meta lint 不能替代 held-out。
 
