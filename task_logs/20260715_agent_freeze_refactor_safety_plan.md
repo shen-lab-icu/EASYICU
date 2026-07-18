@@ -75,7 +75,7 @@ EasyICU 已把 **validator / engine implementation SHA** 用于 audit cache 键�
 
 | 组件 | 职责 | 明确不做 |
 |---|---|---|
-| **PlanAuthority** | Planner/Replanner、plan revision、max-step cap、figure-step 保留、科学签名与计划版本 | — |
+| **PlanAuthority** | 对 Planner/Replanner 返回的 candidate plan 应用 completed-step immutable snapshot、max-step cap、estimand/figure 保留、锁定规格投影与科学签名/no-op 判定 | 不调用 provider、不注册 revision/evidence、不修改 cohort/runner/budget，也不替 Planner 选择暴露、结局、方法、队列或 estimand |
 | **TypedBindingResolver** | typed product → 精确 evidence/path/SHA、权威列与 companion metadata、row identity/alignment、consumption receipt | 不选科学设计 |
 | **StepExecutor** | 在 sandbox 执行**已锁定**的分析 | 不决定模型/暴露/结局/队列 |
 | **RepairCoordinator** | 聚合 RepairTicket、管理 patch/预算/quarantine | 不按错误文案关键词路由科学方法 |
