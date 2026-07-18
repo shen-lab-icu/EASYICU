@@ -14,6 +14,7 @@ authors = [
 license = { text = "MIT" }
 dependencies = [
   "pandas>=1.5",
+  "openpyxl>=3.1",
   "pyarrow>=23.0.0",
   "numpy>=1.23",
   "matplotlib>=3.7",

@@ -17,12 +17,19 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Iterable, List, Mapping, Optional, Sequence, Tuple, Union
+from typing import Dict, Iterable, List, Optional, Sequence, Tuple, Union
 
 import pandas as pd
 
-from easyicu.io.parquet_reader import parquet_metadata, read_parquet
-
+from .intake.export_package import (
+    ExportPackageError,
+    index_export_package,
+    open_export_package,
+    read_exported_concept,
+    require_canonical_time_projection,
+    resolve_exported_concept,
+    verify_export_package,
+)
 
 ID_COL = "stay_id"
 TIME_COL = "charttime"
@@ -50,82 +57,6 @@ class EasyICUCasePackage:
             encoding="utf-8",
         )
         return {"csv": csv_path, "parquet": parquet_path, "manifest": manifest_path}
-
-
-def index_export_package(export_dir: Union[str, Path]) -> Dict[str, Dict[str, object]]:
-    """Return concept-name -> parquet metadata for an EasyICU export dir."""
-    root = Path(export_dir)
-    if not root.exists():
-        raise FileNotFoundError(f"EasyICU export directory not found: {root}")
-
-    index: Dict[str, Dict[str, object]] = {}
-    for path in sorted(root.glob("*.parquet")):
-        meta = parquet_metadata(path)
-        for col in meta.get("columns", []):
-            if col in {ID_COL, TIME_COL, "time"}:
-                continue
-            index[str(col)] = {
-                "file": str(path),
-                "file_name": path.name,
-                "rows": int(meta.get("nrow", 0)),
-                "columns": list(meta.get("columns", [])),
-            }
-    return index
-
-
-def resolve_exported_concept(
-    index: Mapping[str, Dict[str, object]], concept: str
-) -> Optional[str]:
-    """Resolve ``concept`` to an actual export column name, or ``None``.
-
-    Exact match wins. Otherwise a **conservative** alias is allowed: if the
-    export stored the concept under a single score-variant column name (e.g.
-    ``sep3`` exported as ``sep3_sofa2``), and there is *exactly one* column of
-    the form ``<concept>_<suffix>``, that column is used. Ambiguous cases
-    (e.g. ``los`` -> ``los_icu``/``los_hosp``) deliberately do NOT resolve, so
-    the caller must name the concept explicitly rather than risk a silent
-    wrong match.
-    """
-    if concept in index:
-        return concept
-    candidates = sorted(c for c in index if c.startswith(concept + "_"))
-    return candidates[0] if len(candidates) == 1 else None
-
-
-def read_exported_concept(
-    export_dir: Union[str, Path],
-    concept: str,
-    *,
-    extra_columns: Optional[Sequence[str]] = None,
-) -> pd.DataFrame:
-    """Read one concept from an EasyICU export package.
-
-    ``extra_columns`` lets callers request sibling concepts from the same
-    parquet file, for example ``norepi_equiv`` next to ``vaso_ind``.
-
-    A conservative alias is applied (see :func:`resolve_exported_concept`): if
-    ``concept`` is not an exact column but maps unambiguously to a single
-    score-variant column (e.g. ``sep3`` -> ``sep3_sofa2``), that column is read
-    and renamed to ``concept`` so downstream code sees the requested name.
-    """
-    index = index_export_package(export_dir)
-    resolved = resolve_exported_concept(index, concept)
-    if resolved is None:
-        raise KeyError(
-            f"Concept {concept!r} is not present in {Path(export_dir)}. "
-            f"Available concepts include: {sorted(index)[:20]}"
-        )
-    path = Path(index[resolved]["file"])
-    available = set(index[resolved]["columns"])
-    columns = [
-        c
-        for c in [ID_COL, TIME_COL, resolved, *(extra_columns or [])]
-        if c in available
-    ]
-    df = read_parquet(path, columns=columns)
-    if resolved != concept:
-        df = df.rename(columns={resolved: concept})
-    return df
 
 
 def _window(df: pd.DataFrame, start_hour: float, end_hour: float) -> pd.DataFrame:
@@ -291,6 +222,7 @@ def build_lactate_map_vaso_cohort_from_export(
     *,
     window: Tuple[float, float] = (0.0, 24.0),
     include_unmeasured_lactate: bool = True,
+    expected_database: Optional[str] = None,
 ) -> EasyICUCasePackage:
     """Build the shock physiology case cohort from an EasyICU export.
 
@@ -300,21 +232,34 @@ def build_lactate_map_vaso_cohort_from_export(
     """
     start_hour, end_hour = window
     root = Path(export_dir)
-    index = index_export_package(root)
+    package = open_export_package(root)
+    if (
+        expected_database is not None
+        and package.database.strip().lower() != str(expected_database).strip().lower()
+    ):
+        raise ExportPackageError(
+            "export package database does not match requested replication target: "
+            f"{package.database!r} != {expected_database!r}",
+            code="export_package_database_mismatch",
+            manifest_path=package.manifest_path,
+        )
+    index = package.index_dict()
     required = ["age", "sex", "death", "los_icu", "lact", "map", "vaso_ind"]
     missing = [c for c in required if c not in index]
     if missing:
         raise KeyError(f"EasyICU export is missing required concepts: {missing}")
+    for concept in required:
+        require_canonical_time_projection(package, concept)
 
     demo = read_exported_concept(
-        root, "age", extra_columns=["sex", "adm", "bmi", "weight"]
+        package, "age", extra_columns=["sex", "adm", "bmi", "weight"]
     )
     outcome = read_exported_concept(
-        root, "death", extra_columns=["los_icu", "los_hosp"]
+        package, "death", extra_columns=["los_icu", "los_hosp"]
     )
-    lact = read_exported_concept(root, "lact")
-    vitals = read_exported_concept(root, "map")
-    vaso = read_exported_concept(root, "vaso_ind", extra_columns=["norepi_equiv"])
+    lact = read_exported_concept(package, "lact")
+    vitals = read_exported_concept(package, "map")
+    vaso = read_exported_concept(package, "vaso_ind", extra_columns=["norepi_equiv"])
 
     base_cols = [
         c for c in [ID_COL, "age", "sex", "adm", "bmi", "weight"] if c in demo.columns
@@ -335,10 +280,14 @@ def build_lactate_map_vaso_cohort_from_export(
     ]
 
     if "circ_failure" in index:
-        circ = read_exported_concept(root, "circ_failure", extra_columns=["circ_event"])
+        require_canonical_time_projection(package, "circ_failure")
+        circ = read_exported_concept(
+            package, "circ_failure", extra_columns=["circ_event"]
+        )
         agg_frames.append(_aggregate_circ(circ, start_hour, end_hour))
     if "sep3_sofa2" in index:
-        sep3 = read_exported_concept(root, "sep3_sofa2")
+        require_canonical_time_projection(package, "sep3_sofa2")
+        sep3 = read_exported_concept(package, "sep3_sofa2")
         agg_frames.append(_aggregate_sep3(sep3, start_hour, end_hour))
 
     cohort = _merge_left(base, agg_frames)
@@ -383,6 +332,7 @@ def build_lactate_map_vaso_cohort_from_export(
     manifest = {
         "builder": "easyicu.research_agent.easyicu_case_builder.build_lactate_map_vaso_cohort_from_export",
         "export_dir": str(root),
+        "source_database": package.database,
         "window_hours": {
             "start": start_hour,
             "end": end_hour,
@@ -401,6 +351,7 @@ def build_lactate_map_vaso_cohort_from_export(
             "MAP is summarized by minimum/median/mean; the clinical discordance analysis uses minimum MAP >= 65 mmHg as apparent hemodynamic adequacy.",
         ],
     }
+    verify_export_package(package)
     return EasyICUCasePackage(
         cohort=cohort.reset_index(drop=True),
         source_manifest=manifest,

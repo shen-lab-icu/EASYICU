@@ -28,7 +28,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Mapping, Optional, Sequence, Union
 
-from .easyicu_case_builder import index_export_package, resolve_exported_concept
+from .intake.export_package import index_export_package, resolve_exported_concept
 
 
 @dataclass
