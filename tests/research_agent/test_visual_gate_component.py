@@ -231,3 +231,147 @@ def test_collect_visual_gate_result_no_numeric_expectations_when_absent(
     )
     # No expected numerics -> None (never an empty dict), matching the original.
     assert captured["expected"] is None
+
+
+# =====================================================================
+# Commit 2 — VisualRepairDecision / decide_visual_repair
+# =====================================================================
+
+
+def _errors_result():
+    """A VisualGateResult with one cosmetic + one hard error (one blocking)."""
+    from easyicu.research_agent.pipeline_execute import (
+        VisualGateResult,
+        _demote_cosmetic_visual_findings,
+    )
+
+    cosmetic, hard = _cosmetic_error(), _hard_error()
+    demoted, blocking = _demote_cosmetic_visual_findings([cosmetic, hard])
+    return VisualGateResult(
+        ran=True,
+        findings=(cosmetic, hard),
+        error_findings=(cosmetic, hard),
+        demoted_findings=tuple(demoted),
+        blocking_errors=tuple(blocking),
+    )
+
+
+def test_decide_visual_repair_none_when_no_errors():
+    from easyicu.research_agent.pipeline_execute import (
+        VisualGateResult,
+        decide_visual_repair,
+    )
+
+    warn = _warning()
+    result = VisualGateResult(
+        ran=True,
+        findings=(warn,),
+        error_findings=(),
+        demoted_findings=(warn,),
+        blocking_errors=(),
+    )
+    assert (
+        decide_visual_repair(
+            result, sealed=False, attempts_exhausted=False, budget_available=True
+        )
+        is None
+    )
+
+
+def test_decide_visual_repair_sealed_suppress_carries_no_llm_payload():
+    from easyicu.research_agent.pipeline_execute import (
+        VisualRepairAction,
+        decide_visual_repair,
+    )
+
+    # Sealed renderer wins even with budget available and attempts not exhausted.
+    decision = decide_visual_repair(
+        _errors_result(), sealed=True, attempts_exhausted=False, budget_available=True
+    )
+    assert decision.action is VisualRepairAction.SEALED_SUPPRESS
+    assert decision.repair_ticket == ()
+    assert decision.host_guidance is None
+    assert decision.repair_log == ""
+
+
+def test_decide_visual_repair_sealed_precedence_over_exhausted():
+    from easyicu.research_agent.pipeline_execute import (
+        VisualRepairAction,
+        decide_visual_repair,
+    )
+
+    decision = decide_visual_repair(
+        _errors_result(), sealed=True, attempts_exhausted=True, budget_available=False
+    )
+    assert decision.action is VisualRepairAction.SEALED_SUPPRESS
+
+
+def test_decide_visual_repair_exhausted_when_attempts_maxed():
+    from easyicu.research_agent.pipeline_execute import (
+        VisualRepairAction,
+        decide_visual_repair,
+    )
+
+    decision = decide_visual_repair(
+        _errors_result(), sealed=False, attempts_exhausted=True, budget_available=True
+    )
+    assert decision.action is VisualRepairAction.EXHAUSTED
+    assert decision.repair_ticket == ()
+
+
+def test_decide_visual_repair_exhausted_when_no_budget():
+    from easyicu.research_agent.pipeline_execute import (
+        VisualRepairAction,
+        decide_visual_repair,
+    )
+
+    decision = decide_visual_repair(
+        _errors_result(), sealed=False, attempts_exhausted=False, budget_available=False
+    )
+    assert decision.action is VisualRepairAction.EXHAUSTED
+
+
+def test_decide_visual_repair_exhausted_reason_is_auditable():
+    from easyicu.research_agent.pipeline_execute import (
+        VisualRepairAction,
+        decide_visual_repair,
+    )
+
+    maxed = decide_visual_repair(
+        _errors_result(), sealed=False, attempts_exhausted=True, budget_available=True
+    )
+    no_budget = decide_visual_repair(
+        _errors_result(), sealed=False, attempts_exhausted=False, budget_available=False
+    )
+    both = decide_visual_repair(
+        _errors_result(), sealed=False, attempts_exhausted=True, budget_available=False
+    )
+    assert all(
+        d.action is VisualRepairAction.EXHAUSTED for d in (maxed, no_budget, both)
+    )
+    # Distinct, human-readable reasons — the branch is identical, the label is not.
+    assert maxed.reason != no_budget.reason
+
+
+def test_decide_visual_repair_llm_repair_builds_recommendation():
+    from easyicu.research_agent.pipeline_execute import (
+        VisualRepairAction,
+        decide_visual_repair,
+    )
+    from easyicu.research_agent.repair_reasons import typed_repair_ticket
+
+    result = _errors_result()
+    decision = decide_visual_repair(
+        result, sealed=False, attempts_exhausted=False, budget_available=True
+    )
+    assert decision.action is VisualRepairAction.LLM_REPAIR
+    # host guidance: layout-only, preserve data/statistics, forbid science changes.
+    assert decision.host_guidance["layout_only"] is True
+    assert "preserve" in decision.host_guidance
+    assert "forbid" in decision.host_guidance
+    # repair log preserves the exact operator preamble + structured findings mirror.
+    assert decision.repair_log.startswith("Visual QA rejected")
+    assert "STRUCTURED VISUAL FINDINGS" in decision.repair_log
+    # base repair ticket == typed_repair_ticket(findings); the monotonic-concept
+    # constraints are appended by the orchestration layer, not the decision.
+    assert list(decision.repair_ticket) == typed_repair_ticket(list(result.findings))

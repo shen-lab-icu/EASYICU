@@ -268,12 +268,14 @@ def test_visual_repair_log_keeps_structured_collision_detail() -> None:
 def test_visual_qa_stays_before_contract_gate() -> None:
     # Batch 1a-2: the VisualQA audit + classification is now invoked through the
     # typed ``collect_visual_gate_result(...)`` gate (the raw
-    # ``VisualQAAuditor().audit_with_expected`` call moved into that helper), and
-    # the exception path reads its cosmetic-demotion projection off the result
-    # (``visual_gate.demoted_findings``) instead of re-calling the demoter inline.
-    # The GUARANTEE is unchanged: the visual gate runs before the contract gate,
-    # and cosmetic demotion precedes the terminal ``visual_qa_repair_failed``
-    # fallback in the repair-exception handler.
+    # ``VisualQAAuditor().audit_with_expected`` call moved into that helper), the
+    # branch selection + LLM-repair recommendation come from
+    # ``decide_visual_repair(...)`` (its ``repair_log`` replaces the inline
+    # ``qa_log`` assembly), and the exception path reads the cosmetic-demotion
+    # projection off the result (``visual_gate.demoted_findings``) instead of
+    # re-calling the demoter inline. The GUARANTEE is unchanged: the visual gate
+    # runs before the contract gate, and cosmetic demotion precedes the terminal
+    # ``visual_qa_repair_failed`` fallback in the repair-exception handler.
     from easyicu.research_agent import pipeline_execute
 
     source = inspect.getsource(pipeline_execute.run_execute_phase)
@@ -281,8 +283,13 @@ def test_visual_qa_stays_before_contract_gate() -> None:
     assert source.index("collect_visual_gate_result(") < source.index(
         "early_contract_findings = _step_deterministic_contract_findings"
     )
+    # Disambiguate the visual-repair ``except`` block via the decision's repair
+    # log, which sits in the LLM_REPAIR branch just above that handler.
     visual_except = source[
-        source.index("except Exception as exc:", source.index("qa_log =")) :
+        source.index(
+            "except Exception as exc:",
+            source.index("visual_repair_decision.repair_log"),
+        ) :
     ]
     assert visual_except.index("visual_gate.demoted_findings") < visual_except.index(
         "visual_qa_repair_failed"
