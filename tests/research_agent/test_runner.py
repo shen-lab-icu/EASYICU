@@ -63,6 +63,32 @@ def test_runner_records_real_duration(ra, tmp_path: Path):
     assert "duration_seconds:" in log_text
 
 
+def test_code_runner_never_collects_generated_output_symlinks(ra, tmp_path: Path):
+    cohort_path = tmp_path / "cohort.parquet"
+    pd.DataFrame({"stay_id": [1], "death": [0]}).to_parquet(cohort_path, index=False)
+    runner = ra.CodeRunner(
+        workdir=tmp_path / "run",
+        cohort_parquet=cohort_path,
+        timeout_seconds=10,
+        network_policy="allow",
+        allow_unsafe_host_fallback=True,
+    )
+    result = runner.run(
+        step_id="symlink_output",
+        code=(
+            "import os\n"
+            "from pathlib import Path\n"
+            "Path(os.environ['STEP_OUT_DIR'], 'forged.parquet').symlink_to("
+            "os.environ['COHORT_PARQUET'])\n"
+        ),
+    )
+
+    assert result.succeeded
+    assert all(path.name != "forged.parquet" for path in result.artefacts)
+    assert not (result.out_dir / "forged.parquet").exists()
+    assert cohort_path.is_file()
+
+
 def test_code_runner_authority_binds_extra_inputs_and_isolation(ra, tmp_path: Path):
     cohort_path = tmp_path / "cohort.parquet"
     pd.DataFrame({"stay_id": [1]}).to_parquet(cohort_path, index=False)
@@ -609,7 +635,7 @@ def test_pipeline_runner_no_trajectory_env_when_sibling_absent(ra, tmp_path: Pat
     assert "TRAJECTORY_PARQUET" not in runner.extra_env
 
 
-def test_pipeline_runner_preserves_explicit_outcome_env_override(ra, tmp_path: Path):
+def test_pipeline_runner_rejects_explicit_outcome_env_override(ra, tmp_path: Path):
     cohort_path = tmp_path / "cohort.parquet"
     pd.DataFrame({"stay_id": [1], "endpoint_x": [0]}).to_parquet(
         cohort_path, index=False
@@ -620,13 +646,88 @@ def test_pipeline_runner_preserves_explicit_outcome_env_override(ra, tmp_path: P
         runner_kwargs={"extra_env": {"OUTCOME_COL": "manual_endpoint"}},
     )
 
-    runner = pipeline._build_runner(
-        run_dir=tmp_path / "run",
-        cohort_path=cohort_path,
-        target_outcome="endpoint_x",
+    with pytest.raises(ValueError, match="OUTCOME_COL"):
+        pipeline._build_runner(
+            run_dir=tmp_path / "run",
+            cohort_path=cohort_path,
+            target_outcome="endpoint_x",
+        )
+
+
+def test_pipeline_runner_rejects_universe_authority_override(ra, tmp_path: Path):
+    cohort_path = tmp_path / "cohort.parquet"
+    pd.DataFrame({"stay_id": [1], "endpoint_x": [0]}).to_parquet(
+        cohort_path, index=False
+    )
+    pipeline = ra.ResearchAgentPipeline(
+        workdir=tmp_path / "work",
+        enable_memory=False,
+        runner_kwargs={
+            "extra_env": {"EASYICU_UNIVERSE_PARQUET": str(tmp_path / "forged")}
+        },
     )
 
-    assert runner.extra_env["OUTCOME_COL"] == "manual_endpoint"
+    with pytest.raises(ValueError, match="EASYICU_UNIVERSE_PARQUET"):
+        pipeline._build_runner(
+            run_dir=tmp_path / "run",
+            cohort_path=cohort_path,
+            universe_path=cohort_path,
+        )
+
+
+def test_pipeline_runner_rejects_unsealed_typed_trajectory(ra, tmp_path: Path):
+    from easyicu.research_agent.intake.materialized_metadata import (
+        MaterializedMetadataError,
+    )
+
+    cohort_path = tmp_path / "cohort.parquet"
+    pd.DataFrame({"stay_id": [1], "endpoint_x": [0]}).to_parquet(
+        cohort_path, index=False
+    )
+    (tmp_path / "cohort_trajectory.parquet").write_bytes(b"unsealed")
+    pipeline = ra.ResearchAgentPipeline(workdir=tmp_path / "work", enable_memory=False)
+
+    with pytest.raises(MaterializedMetadataError, match="separate sealed authority"):
+        pipeline._build_runner(
+            run_dir=tmp_path / "run",
+            cohort_path=cohort_path,
+            universe_path=cohort_path,
+            universe_is_typed=True,
+        )
+
+
+def test_code_runner_rejects_host_owned_output_override(ra, tmp_path: Path):
+    cohort_path = tmp_path / "cohort.parquet"
+    pd.DataFrame({"stay_id": [1], "endpoint_x": [0]}).to_parquet(
+        cohort_path, index=False
+    )
+
+    with pytest.raises(ValueError, match="STEP_OUT_DIR"):
+        ra.CodeRunner(
+            workdir=tmp_path / "run",
+            cohort_parquet=cohort_path,
+            extra_env={"STEP_OUT_DIR": str(tmp_path / "forged")},
+        )
+
+
+@pytest.mark.parametrize(
+    "key",
+    ["COHORT_PARQUET=forged", "BAD-KEY", "9INVALID", "BAD\nKEY"],
+)
+def test_code_runner_rejects_invalid_extra_env_keys(
+    ra,
+    tmp_path: Path,
+    key: str,
+):
+    cohort_path = tmp_path / "cohort.parquet"
+    pd.DataFrame({"stay_id": [1]}).to_parquet(cohort_path, index=False)
+
+    with pytest.raises(ValueError, match="invalid environment key"):
+        ra.CodeRunner(
+            workdir=tmp_path / "run",
+            cohort_parquet=cohort_path,
+            extra_env={key: "yes"},
+        )
 
 
 def test_runner_retries_without_unshare_when_linux_namespace_is_unavailable(
