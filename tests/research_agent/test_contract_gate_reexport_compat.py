@@ -61,7 +61,7 @@ def test_compat_table_is_nonempty_and_covers_both_modules():
     # Guards against the test silently passing if __all__ ever disappears.
     covered = {m.__name__.rsplit(".", 1)[-1] for m, _ in _compat_table()}
     assert covered == {
-        "contract_gate",
+        "contract",
         "figure_contract_preparation",
         "publication_figure_execution",
     }

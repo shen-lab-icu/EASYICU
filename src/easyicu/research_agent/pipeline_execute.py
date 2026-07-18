@@ -150,7 +150,7 @@ from .authority.registration import (
     StepEvidenceCommit,
     filter_success_alias_bindings as _filter_success_alias_bindings,
 )
-from .contract_gate import (  # re-export the full contract_gate.__all__ for old-path back-compat
+from .gates.contract import (  # re-export the full contract gate API for old-path back-compat
     _AGENT_OWNED_ROBUSTNESS_RESULT_METHODS,
     _AGENT_OWNED_ROBUSTNESS_RESULT_PRODUCTS,
     _AUXILIARY_OUTPUT_KINDS,
@@ -184,7 +184,7 @@ from .publication_figure_execution import (
     _sealed_renderer_source_digests,
     _sealed_typed_figure_products,
 )
-from .gate_evaluator import (
+from .gates.visual import (
     VisualGateResult,
     VisualRepairAction,
     VisualRepairDecision,
