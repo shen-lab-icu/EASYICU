@@ -19,7 +19,7 @@ import json
 import logging
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Mapping, Optional
 
 import pandas as pd
 
@@ -200,6 +200,7 @@ def finalise_success(
     target_outcome: Optional[str],
     stop_after_analysis: bool,
     cache_key: Optional[str],
+    scientific_identity: Mapping[str, Any],
     experiment_spec_path: Optional[Path],
     audit_logger: Optional[AuditLogger],
     emit_progress: Callable[..., None],
@@ -937,7 +938,11 @@ def finalise_success(
     except Exception as exc:  # pragma: no cover — defence in depth
         logger.warning("experience-bank write-back failed (non-fatal): %s", exc)
     if cache_key is not None:
-        pipeline._cache.record_hit(cache_key, result)
+        pipeline._cache.record_hit(
+            cache_key,
+            result,
+            scientific_identity=scientific_identity,
+        )
     emit_progress(
         "run",
         "Research-agent run complete.",
