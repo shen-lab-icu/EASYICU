@@ -1,7 +1,7 @@
 # B6 export-intake / concept-metadata freeze plan
 
-> 状态：2026-07-18 08:16 EDT；**B6-A core + snapshot/performance 已完成，B6-B 未开始**。
-> 当前代码：`acc874c`（intake core）+ `1481f09`（verified snapshot/performance）；
+> 状态：2026-07-18 08:48 EDT；**B6-A 已完成，B6-B 共享 projector 已完成（五步 1/5）**。
+> 当前代码：`acc874c`/`1481f09`（B6-A）+ `7ee66fd`/`7e8c16f`（typed metadata projector + source-resolution hardening）；
 > packaged concept baseline：`8e97d31`。
 > 边界：B6-B 不混入新的 concept-dict 科学内容编辑；只建立共享、可摘要绑定的 metadata 投影。
 
@@ -11,7 +11,7 @@
 |---|---|---|---|
 | B6-A manifest-authoritative intake | **完成** | `acc874c`；native-first + legacy、Parquet/CSV/XLSX、containment、feature definitions、cohort/catalog/replication 共用 adapter | 保持兼容与 fail-close，不扩 case-specific intake |
 | B6-A snapshot/performance | **完成** | `1481f09`；read-only mmap verified snapshot、CSV/XLSX 单会话解析缓存、Parquet 列裁剪、四 consumer 显式 close；105 项主回归 + 64 项独立复审 | 超大 CSV/XLSX 的内存阈值/临时列式缓存是后续预算优化，非 freeze blocker |
-| B6-B typed metadata / replay identity | **待做** | 下述五提交设计已冻结 | 完成后进入 freeze shards |
+| B6-B typed metadata / replay identity | **进行中（1/5）** | `7ee66fd` + `7e8c16f`；leaf projector 33 项专项、79 项聚合回归、两路 adversarial ACCEPT | 实施 intake/materializer v2 content-addressed sidecar |
 
 ## 为什么 B6 不能后置
 
@@ -53,7 +53,7 @@ drift。诚实边界：重复 path-form 调用会各自建立 session；超大 C
 并明确区分：
 
 - `source_database`：本次真实数据来源；
-- `available_databases`：词典支持范围；
+- `available_databases`：词典声明的 database keys（可含空 source key），不得单独解读为已验证可提取；
 - `extraction_bounds`：提取/filter 阶段边界；
 - `analysis_plausibility_range`：分析期 flag-only 生理合理域；
 - raw table/value/unit/time/item-ID lineage；
@@ -69,7 +69,7 @@ replay identity；规则变化触发选择性重审，而不是静默复用旧 s
 
 ### B6-B 五个独立提交
 
-1. **共享 leaf projector**：新增 `easyicu/concept/metadata_projection.py`；Web 与 Agent 都只能消费这一投影，不从 concept 层反向 import `research_agent`。
+1. **共享 leaf projector（已完成：`7ee66fd` + `7e8c16f`）**：新增 `easyicu/concept/metadata_projection.py`；Web 与 Agent 后续只消费这一投影，不从 concept 层反向 import `research_agent`。已锁 actual database 与 dictionary source resolution chain、class-prefix most-specific 继承、可执行 source anchor、显式 time coordinates、双范围和 canonical digest。
 2. **intake/materializer v2**：生成 content-addressed column-level metadata sidecar；明确 `source_database`、物理列角色、时间 origin/unit 与 sidecar digest。
 3. **ResearchContext v2 bridge**：只给新 payload 增加 typed metadata；旧 v1/封存字节继续可读，旧科学身份不得因新增 `None` 键漂移。
 4. **authority / coder / replay binding**：将 projector、sidecar、ICU-rule implementation digest 纳入已有 resolved-input/context/environment identity；不新增第二套 StepAuthorityCapsule schema。
