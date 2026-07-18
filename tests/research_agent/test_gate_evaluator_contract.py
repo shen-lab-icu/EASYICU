@@ -8,7 +8,10 @@ most this file's semantic assertions, not a scatter of fragile string offsets.
 
 It locks three GateEvaluator invariants:
   1. the gate pipeline runs in a fixed ORDER inside run_execute_phase;
-  2. the gate components carry NO orchestration side effects / loop control flow;
+  2. the gate components reference NONE of a fixed deny-list of orchestration
+     primitives (a boundary SENTINEL — not a complete "no side effects / pure
+     component" proof; it catches the specific control-flow/authority leaks we
+     care about);
   3. the orchestrator KEEPS the authority + control-flow primitives (they did not
      leak into the components).
 
@@ -82,8 +85,10 @@ GATE_COMPONENTS = (
     "_post_canonicalization_figure_findings",
 )
 
-# Orchestration primitives a pure gate component must never touch. If one shows
-# up inside a component, control flow / authority has leaked out of the caller.
+# A fixed deny-list of orchestration primitives a gate component must never
+# reference. This is a boundary SENTINEL over known names — NOT a proof of
+# purity or of "no side effects"; it catches the specific control-flow/authority
+# leaks that would mean a component started driving the run instead of reporting.
 FORBIDDEN_ORCHESTRATION = {
     "_consume_llm_repair_budget",
     "_repair_with_capsule",
@@ -123,7 +128,10 @@ def test_gate_pipeline_runs_in_canonical_order():
     )
 
 
-def test_gate_components_carry_no_orchestration_side_effects():
+def test_gate_components_reference_no_orchestration_primitives():
+    # Boundary sentinel, NOT a full side-effect/purity proof: each gate component
+    # must reference none of the fixed deny-list of orchestration primitives and
+    # must not drive loop control flow.
     for name in GATE_COMPONENTS:
         func = getattr(pe, name)
         leaked = component_identifiers(func) & FORBIDDEN_ORCHESTRATION
