@@ -62,6 +62,8 @@ def test_projects_lact_value_with_separate_extraction_analysis_and_run_authoriti
     assert metadata.extraction_bounds == NumericBounds(0, 50)
     assert metadata.analysis_plausibility_range == NumericBounds(0, 30)
     assert metadata.source_database == "miiv"
+    assert metadata.dictionary_source_database == "miiv"
+    assert metadata.source_resolution_chain == ("miiv",)
     assert metadata.source_declared_for_database is True
     assert metadata.availability_basis == "direct_source"
     assert set(metadata.available_databases) == {
@@ -225,6 +227,14 @@ def test_projection_rejects_ambiguous_or_inconsistent_specs():
             time_origin="icu_admission",
             time_unit="h",
         )
+    with pytest.raises(MetadataProjectionError, match="time_origin must be a string"):
+        ColumnProjectionSpec(
+            column_name="charttime",
+            source_concept="lact",
+            role=ConceptColumnRole.EVENT_TIME,
+            time_origin={"kind": "absolute"},  # type: ignore[arg-type]
+            time_unit="timestamp",
+        )
     with pytest.raises(MetadataProjectionError, match="source_concept"):
         project_concept_column_metadata(
             definition,
@@ -253,6 +263,25 @@ def test_projection_rejects_ambiguous_or_inconsistent_specs():
             source_database="miiv",
             analysis_plausibility_range=NumericBounds(0, 30),
         )
+    with pytest.raises(MetadataProjectionError, match="must be NumericBounds"):
+        project_concept_column_metadata(
+            definition,
+            spec=_spec("lact", ConceptColumnRole.VALUE),
+            source_database="miiv",
+            analysis_plausibility_range={"minimum": 0},  # type: ignore[arg-type]
+        )
+    with pytest.raises(MetadataProjectionError, match="source_database must be"):
+        project_concept_column_metadata(
+            definition,
+            spec=_spec("lact", ConceptColumnRole.VALUE),
+            source_database=False,  # type: ignore[arg-type]
+        )
+    with pytest.raises(MetadataProjectionError, match="must be non-empty"):
+        project_concept_column_metadata(
+            definition,
+            spec=_spec("lact", ConceptColumnRole.VALUE),
+            source_database="  ",
+        )
 
 
 def test_actual_source_and_cross_database_availability_are_not_conflated():
@@ -270,10 +299,14 @@ def test_actual_source_and_cross_database_availability_are_not_conflated():
 
     assert "miiv" in unavailable.available_databases
     assert unavailable.source_database == "unknown_db"
+    assert unavailable.dictionary_source_database is None
+    assert unavailable.source_resolution_chain == ("unknown_db",)
     assert unavailable.source_declared_for_database is False
     assert unavailable.availability_basis == "source_not_declared"
     assert unavailable.source_lineage == ()
     assert unspecified.source_database is None
+    assert unspecified.dictionary_source_database is None
+    assert unspecified.source_resolution_chain == ()
     assert unspecified.source_declared_for_database is None
     assert unspecified.availability_basis == "source_database_not_supplied"
 
@@ -404,6 +437,123 @@ def test_empty_declared_source_for_derived_concept_is_not_called_undeclared():
     assert metadata.source_lineage == ()
 
 
+def test_database_class_inheritance_preserves_actual_and_dictionary_source_identity():
+    metadata = project_concept_column_metadata(
+        _definition("rrt"),
+        spec=_spec("rrt", ConceptColumnRole.VALUE, source_concept="rrt"),
+        source_database="eicu_demo",
+        source_database_class_prefixes=("eicu",),
+    )
+
+    assert metadata.source_database == "eicu_demo"
+    assert metadata.dictionary_source_database == "eicu"
+    assert metadata.source_resolution_chain == ("eicu_demo", "eicu")
+    assert metadata.source_declared_for_database is True
+    assert metadata.availability_basis == "inherited_direct_source"
+    assert len(metadata.source_lineage) == 3
+    assert {entry.database for entry in metadata.source_lineage} == {"eicu"}
+
+
+def test_most_specific_empty_source_does_not_fall_through_to_parent():
+    definition = ConceptDefinition.from_name_and_payload(
+        "derived_demo",
+        {
+            "depends_on": ["component"],
+            "sources": {
+                "eicu_demo": [],
+                "eicu": [{"table": "events", "ids": [1]}],
+            },
+        },
+    )
+    metadata = project_concept_column_metadata(
+        definition,
+        spec=_spec(
+            "derived_demo",
+            ConceptColumnRole.VALUE,
+            source_concept="derived_demo",
+        ),
+        source_database="eicu_demo",
+        source_database_class_prefixes=("eicu",),
+    )
+
+    assert metadata.dictionary_source_database == "eicu_demo"
+    assert metadata.availability_basis == "declared_derived_or_unresolved"
+    assert metadata.source_lineage == ()
+
+
+def test_empty_comment_only_source_entry_is_not_direct_lineage():
+    definition = ConceptDefinition.from_name_and_payload(
+        "comment_only",
+        {
+            "sources": {
+                "miiv": [{"_comment": "not an extraction binding"}],
+            }
+        },
+    )
+    metadata = project_concept_column_metadata(
+        definition,
+        spec=_spec(
+            "comment_only",
+            ConceptColumnRole.VALUE,
+            source_concept="comment_only",
+        ),
+        source_database="miiv",
+    )
+
+    assert metadata.source_declared_for_database is True
+    assert metadata.availability_basis == "declared_without_direct_source"
+    assert metadata.source_lineage == ()
+
+
+@pytest.mark.parametrize(
+    "attachment",
+    [
+        {"unit": "valueuom"},
+        {"interval": "6h"},
+        {"grp_var": "stay_id"},
+        {"ids": [1], "sub_var": "itemid"},
+    ],
+)
+def test_source_attachments_without_executable_anchor_are_not_direct_lineage(
+    attachment: dict[str, object],
+):
+    definition = ConceptDefinition.from_name_and_payload(
+        "unanchored",
+        {"sources": {"miiv": [attachment]}},
+    )
+    metadata = project_concept_column_metadata(
+        definition,
+        spec=_spec(
+            "unanchored",
+            ConceptColumnRole.VALUE,
+            source_concept="unanchored",
+        ),
+        source_database="miiv",
+    )
+
+    assert metadata.source_declared_for_database is True
+    assert metadata.availability_basis == "declared_without_direct_source"
+    assert metadata.source_lineage == ()
+
+
+def test_source_resolution_prefixes_are_typed_and_require_an_actual_database():
+    definition = _definition("rrt")
+    with pytest.raises(MetadataProjectionError, match="must be a sequence"):
+        project_concept_column_metadata(
+            definition,
+            spec=_spec("rrt", ConceptColumnRole.VALUE, source_concept="rrt"),
+            source_database="eicu_demo",
+            source_database_class_prefixes="eicu",  # type: ignore[arg-type]
+        )
+    with pytest.raises(MetadataProjectionError, match="require source_database"):
+        project_concept_column_metadata(
+            definition,
+            spec=_spec("rrt", ConceptColumnRole.VALUE, source_concept="rrt"),
+            source_database=None,
+            source_database_class_prefixes=("eicu",),
+        )
+
+
 def test_source_lineage_includes_semantic_interval_and_params_but_not_comments():
     definition = ConceptDefinition.from_name_and_payload(
         "parameterized",
@@ -443,6 +593,44 @@ def test_source_lineage_includes_semantic_interval_and_params_but_not_comments()
         "unit_val": {"L": 1000, "mL": 1},
     }
     assert "_comment" not in lineage["semantic_parameters"]
+
+
+def test_negative_zero_is_canonicalized_in_bounds_ids_and_parameters():
+    negative = ConceptDefinition.from_name_and_payload(
+        "signed_zero",
+        {
+            "min": -0.0,
+            "max": 1,
+            "sources": {"miiv": [{"table": "events", "ids": [-0.0], "scale": -0.0}]},
+        },
+    )
+    positive = ConceptDefinition.from_name_and_payload(
+        "signed_zero",
+        {
+            "min": 0.0,
+            "max": 1,
+            "sources": {"miiv": [{"table": "events", "ids": [0.0], "scale": 0.0}]},
+        },
+    )
+    spec = _spec(
+        "signed_zero",
+        ConceptColumnRole.VALUE,
+        source_concept="signed_zero",
+    )
+
+    assert metadata_sha256(
+        project_concept_column_metadata(
+            negative,
+            spec=spec,
+            source_database="miiv",
+        )
+    ) == metadata_sha256(
+        project_concept_column_metadata(
+            positive,
+            spec=spec,
+            source_database="miiv",
+        )
+    )
 
 
 def test_leaf_projector_has_no_web_or_research_agent_dependency():
