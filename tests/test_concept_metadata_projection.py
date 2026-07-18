@@ -164,6 +164,90 @@ def test_range_preserving_aggregate_inherits_ranges_but_sum_does_not():
     assert total.analysis_plausibility_range is None
 
 
+def test_event_status_and_fraction_are_typed_without_physiological_metadata():
+    definition = _definition("lact")
+    status = project_concept_column_metadata(
+        definition,
+        spec=_spec(
+            "lact_max",
+            ConceptColumnRole.EVENT_STATUS,
+            aggregation="max",
+        ),
+        source_database="miiv",
+    )
+    fraction = project_concept_column_metadata(
+        definition,
+        spec=_spec(
+            "lact_mean",
+            ConceptColumnRole.EVENT_FRACTION,
+            aggregation="mean",
+        ),
+        source_database="miiv",
+    )
+
+    assert status.allowed_values == (0, 1)
+    assert status.canonical_unit is None
+    assert status.extraction_bounds is None
+    assert fraction.allowed_values is None
+    assert fraction.canonical_unit is None
+    assert fraction.extraction_bounds is None
+
+
+@pytest.mark.parametrize(
+    ("role", "aggregation"),
+    [
+        (ConceptColumnRole.EVENT_FRACTION, None),
+        (ConceptColumnRole.EVENT_FRACTION, "max"),
+        (ConceptColumnRole.EVENT_STATUS, "mean"),
+    ],
+)
+def test_event_projection_rejects_inconsistent_aggregations(role, aggregation):
+    with pytest.raises(MetadataProjectionError):
+        _spec("event_projection", role, aggregation=aggregation)
+
+
+def test_strict_metadata_parser_round_trips_projector_output():
+    original = project_concept_column_metadata(
+        _definition("lact"),
+        spec=_spec(
+            "lact_first_time",
+            ConceptColumnRole.FIRST_OBSERVATION_TIME,
+            time_origin="icu_admission",
+            time_unit="h",
+        ),
+        source_database="miiv",
+    )
+
+    parsed = type(original).from_dict(original.to_dict())
+
+    assert parsed == original
+    assert canonical_metadata_bytes(parsed) == canonical_metadata_bytes(original)
+
+
+@pytest.mark.parametrize(
+    ("field", "replacement"),
+    [
+        ("schema_version", "easyicu.concept_column_metadata/999"),
+        ("source_database", "eicu"),
+        ("accepted_units", ["mmol/L", "mmol/L"]),
+        ("allowed_values", [1, 0]),
+    ],
+)
+def test_strict_metadata_parser_rejects_noncanonical_or_inconsistent_payloads(
+    field, replacement
+):
+    metadata = project_concept_column_metadata(
+        _definition("lact"),
+        spec=_spec("lact_measured", ConceptColumnRole.MEASUREMENT_STATUS),
+        source_database="miiv",
+    )
+    payload = metadata.to_dict()
+    payload[field] = replacement
+
+    with pytest.raises(MetadataProjectionError):
+        type(metadata).from_dict(payload)
+
+
 @pytest.mark.parametrize(
     "bounds",
     [

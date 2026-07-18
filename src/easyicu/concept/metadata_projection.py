@@ -45,6 +45,8 @@ class ConceptColumnRole(str, Enum):
     NUMERIC_AGGREGATE = "numeric_aggregate"
     COUNT = "count"
     MEASUREMENT_STATUS = "measurement_status"
+    EVENT_STATUS = "event_status"
+    EVENT_FRACTION = "event_fraction"
     FIRST_OBSERVATION_TIME = "first_observation_time"
     LAST_OBSERVATION_TIME = "last_observation_time"
     EVENT_TIME = "event_time"
@@ -86,6 +88,11 @@ class NumericBounds:
             "minimum": None if self.minimum is None else float(self.minimum),
             "maximum": None if self.maximum is None else float(self.maximum),
         }
+
+    @classmethod
+    def from_dict(cls, payload: Mapping[str, object]) -> "NumericBounds":
+        _require_exact_keys(payload, {"minimum", "maximum"}, label="numeric bounds")
+        return cls(payload["minimum"], payload["maximum"])  # type: ignore[arg-type]
 
 
 @dataclass(frozen=True, slots=True)
@@ -134,9 +141,33 @@ class ColumnProjectionSpec:
             raise MetadataProjectionError(
                 f"unsupported numeric aggregation: {normalized!r}"
             )
-        if self.role is not ConceptColumnRole.NUMERIC_AGGREGATE and normalized:
+        if self.role is ConceptColumnRole.EVENT_FRACTION and normalized != "mean":
             raise MetadataProjectionError(
-                "aggregation is only valid for numeric aggregate projections"
+                "event-fraction projections require aggregation='mean'"
+            )
+        if self.role is ConceptColumnRole.EVENT_STATUS and normalized not in {
+            None,
+            "all",
+            "any",
+            "first",
+            "last",
+            "max",
+            "min",
+        }:
+            raise MetadataProjectionError(
+                f"unsupported event-status aggregation: {normalized!r}"
+            )
+        if (
+            self.role
+            not in {
+                ConceptColumnRole.NUMERIC_AGGREGATE,
+                ConceptColumnRole.EVENT_STATUS,
+                ConceptColumnRole.EVENT_FRACTION,
+            }
+            and normalized
+        ):
+            raise MetadataProjectionError(
+                "aggregation is only valid for aggregate or event projections"
             )
         time_like = self.role in {
             ConceptColumnRole.FIRST_OBSERVATION_TIME,
@@ -197,6 +228,104 @@ class SourceLineage:
                 for name, value_json in self.semantic_parameters
             },
         }
+
+    @classmethod
+    def from_dict(cls, payload: Mapping[str, object]) -> "SourceLineage":
+        expected = {
+            "database",
+            "table",
+            "selector_variable",
+            "selector_regex",
+            "item_ids",
+            "value_variable",
+            "unit_variable",
+            "time_variable",
+            "duration_variable",
+            "source_class_name",
+            "target",
+            "callback",
+            "interval_iso8601",
+            "semantic_parameters",
+        }
+        _require_exact_keys(payload, expected, label="source lineage")
+        database = _required_string(payload["database"], label="lineage database")
+        item_ids = payload["item_ids"]
+        parameters = payload["semantic_parameters"]
+        if not isinstance(item_ids, list):
+            raise MetadataProjectionError("lineage item_ids must be a list")
+        if not isinstance(parameters, Mapping):
+            raise MetadataProjectionError(
+                "lineage semantic_parameters must be an object"
+            )
+        if any(not isinstance(key, str) for key in parameters):
+            raise MetadataProjectionError(
+                "lineage semantic parameter names must be strings"
+            )
+        canonical_item_ids = tuple(
+            sorted(
+                json.dumps(
+                    _canonical_json_value(value, path="lineage.item_ids"),
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                    allow_nan=False,
+                )
+                for value in item_ids
+            )
+        )
+        if len(set(canonical_item_ids)) != len(canonical_item_ids):
+            raise MetadataProjectionError(
+                "lineage item_ids must not contain duplicates"
+            )
+        parsed = cls(
+            database=database,
+            table=_optional_string(payload["table"], label="lineage table"),
+            selector_variable=_optional_string(
+                payload["selector_variable"], label="lineage selector_variable"
+            ),
+            selector_regex=_optional_string(
+                payload["selector_regex"], label="lineage selector_regex"
+            ),
+            item_ids_json=canonical_item_ids,
+            value_variable=_optional_string(
+                payload["value_variable"], label="lineage value_variable"
+            ),
+            unit_variable=_optional_string(
+                payload["unit_variable"], label="lineage unit_variable"
+            ),
+            time_variable=_optional_string(
+                payload["time_variable"], label="lineage time_variable"
+            ),
+            duration_variable=_optional_string(
+                payload["duration_variable"], label="lineage duration_variable"
+            ),
+            source_class_name=_optional_string(
+                payload["source_class_name"], label="lineage source_class_name"
+            ),
+            target=_optional_string(payload["target"], label="lineage target"),
+            callback=_optional_string(payload["callback"], label="lineage callback"),
+            interval_iso8601=_optional_string(
+                payload["interval_iso8601"], label="lineage interval_iso8601"
+            ),
+            semantic_parameters=tuple(
+                (
+                    key,
+                    json.dumps(
+                        _canonical_json_value(
+                            parameters[key], path=f"lineage.semantic_parameters.{key}"
+                        ),
+                        ensure_ascii=False,
+                        sort_keys=True,
+                        separators=(",", ":"),
+                        allow_nan=False,
+                    ),
+                )
+                for key in sorted(parameters)
+            ),
+        )
+        if parsed.to_dict() != dict(payload):
+            raise MetadataProjectionError("source lineage is not canonical")
+        return parsed
 
 
 @dataclass(frozen=True, slots=True)
@@ -268,10 +397,286 @@ class ConceptColumnMetadata:
             "derived_from_concepts": list(self.derived_from_concepts),
         }
 
+    @classmethod
+    def from_dict(cls, payload: Mapping[str, object]) -> "ConceptColumnMetadata":
+        """Parse one strict canonical metadata record from an authority payload."""
+
+        expected = {
+            "schema_version",
+            "column_name",
+            "source_concept",
+            "role",
+            "aggregation",
+            "canonical_unit",
+            "accepted_units",
+            "extraction_bounds",
+            "analysis_plausibility_range",
+            "allowed_values",
+            "time_origin",
+            "time_unit",
+            "source_database",
+            "dictionary_source_database",
+            "source_resolution_chain",
+            "available_databases",
+            "source_declared_for_database",
+            "availability_basis",
+            "source_lineage",
+            "description",
+            "category",
+            "class_name",
+            "derived_from_concepts",
+        }
+        _require_exact_keys(payload, expected, label="concept column metadata")
+        if payload["schema_version"] != METADATA_SCHEMA_VERSION:
+            raise MetadataProjectionError("unsupported concept metadata schema")
+        try:
+            role = ConceptColumnRole(payload["role"])
+        except (TypeError, ValueError) as exc:
+            raise MetadataProjectionError("invalid concept column role") from exc
+        spec = ColumnProjectionSpec(
+            column_name=_required_string(
+                payload["column_name"], label="metadata column_name"
+            ),
+            source_concept=_required_string(
+                payload["source_concept"], label="metadata source_concept"
+            ),
+            role=role,
+            aggregation=_optional_string(
+                payload["aggregation"], label="metadata aggregation"
+            ),
+            time_origin=_optional_string(
+                payload["time_origin"], label="metadata time_origin"
+            ),
+            time_unit=_optional_string(
+                payload["time_unit"], label="metadata time_unit"
+            ),
+        )
+        accepted_units = _canonical_string_list(
+            payload["accepted_units"], label="metadata accepted_units", sorted_=False
+        )
+        source_chain = _canonical_string_list(
+            payload["source_resolution_chain"],
+            label="metadata source_resolution_chain",
+            sorted_=False,
+        )
+        available_databases = _canonical_string_list(
+            payload["available_databases"],
+            label="metadata available_databases",
+            sorted_=True,
+        )
+        derived = _canonical_string_list(
+            payload["derived_from_concepts"],
+            label="metadata derived_from_concepts",
+            sorted_=True,
+        )
+        raw_allowed = payload["allowed_values"]
+        if raw_allowed is None:
+            allowed_values = None
+        else:
+            if not isinstance(raw_allowed, list) or any(
+                not isinstance(value, int) or isinstance(value, bool)
+                for value in raw_allowed
+            ):
+                raise MetadataProjectionError(
+                    "metadata allowed_values must be an integer list or null"
+                )
+            if len(set(raw_allowed)) != len(raw_allowed):
+                raise MetadataProjectionError(
+                    "metadata allowed_values must not contain duplicates"
+                )
+            allowed_values = tuple(raw_allowed)
+        raw_lineage = payload["source_lineage"]
+        if not isinstance(raw_lineage, list) or not all(
+            isinstance(value, Mapping) for value in raw_lineage
+        ):
+            raise MetadataProjectionError("metadata source_lineage must be a list")
+        source_declared = payload["source_declared_for_database"]
+        if source_declared is not None and not isinstance(source_declared, bool):
+            raise MetadataProjectionError(
+                "metadata source_declared_for_database must be boolean or null"
+            )
+        parsed = cls(
+            column_name=spec.column_name,
+            source_concept=spec.source_concept,
+            role=role,
+            aggregation=spec.aggregation,
+            canonical_unit=_optional_string(
+                payload["canonical_unit"], label="metadata canonical_unit"
+            ),
+            accepted_units=accepted_units,
+            extraction_bounds=_optional_bounds(payload["extraction_bounds"]),
+            analysis_plausibility_range=_optional_bounds(
+                payload["analysis_plausibility_range"]
+            ),
+            allowed_values=allowed_values,
+            time_origin=spec.time_origin,
+            time_unit=spec.time_unit,
+            source_database=_optional_string(
+                payload["source_database"], label="metadata source_database"
+            ),
+            dictionary_source_database=_optional_string(
+                payload["dictionary_source_database"],
+                label="metadata dictionary_source_database",
+            ),
+            source_resolution_chain=source_chain,
+            available_databases=available_databases,
+            source_declared_for_database=source_declared,
+            availability_basis=_required_string(
+                payload["availability_basis"], label="metadata availability_basis"
+            ),
+            source_lineage=tuple(
+                SourceLineage.from_dict(value) for value in raw_lineage
+            ),
+            description=_optional_string(
+                payload["description"], label="metadata description"
+            ),
+            category=_optional_string(payload["category"], label="metadata category"),
+            class_name=_optional_string(
+                payload["class_name"], label="metadata class_name"
+            ),
+            derived_from_concepts=derived,
+        )
+        _validate_metadata_role(parsed)
+        if parsed.to_dict() != dict(payload):
+            raise MetadataProjectionError("concept column metadata is not canonical")
+        return parsed
+
 
 def _clean_optional(value: object) -> Optional[str]:
     text = str(value or "").strip()
     return text or None
+
+
+def _require_exact_keys(
+    payload: Mapping[str, object], expected: set[str], *, label: str
+) -> None:
+    if not isinstance(payload, Mapping) or any(
+        not isinstance(key, str) for key in payload
+    ):
+        raise MetadataProjectionError(f"{label} must be an object with string keys")
+    actual = set(payload)
+    if actual != expected:
+        missing = sorted(expected - actual)
+        extra = sorted(actual - expected)
+        raise MetadataProjectionError(
+            f"{label} keys do not match schema (missing={missing}, extra={extra})"
+        )
+
+
+def _required_string(value: object, *, label: str) -> str:
+    if not isinstance(value, str) or not value.strip() or value != value.strip():
+        raise MetadataProjectionError(f"{label} must be a canonical non-empty string")
+    return value
+
+
+def _optional_string(value: object, *, label: str) -> Optional[str]:
+    if value is None:
+        return None
+    return _required_string(value, label=label)
+
+
+def _canonical_string_list(
+    value: object, *, label: str, sorted_: bool
+) -> tuple[str, ...]:
+    if not isinstance(value, list):
+        raise MetadataProjectionError(f"{label} must be a list")
+    parsed = tuple(_required_string(item, label=label) for item in value)
+    if len(set(parsed)) != len(parsed):
+        raise MetadataProjectionError(f"{label} must not contain duplicates")
+    if sorted_ and list(parsed) != sorted(parsed):
+        raise MetadataProjectionError(f"{label} must be canonically sorted")
+    return parsed
+
+
+def _optional_bounds(value: object) -> Optional[NumericBounds]:
+    if value is None:
+        return None
+    if not isinstance(value, Mapping):
+        raise MetadataProjectionError("metadata bounds must be an object or null")
+    return NumericBounds.from_dict(value)
+
+
+def _validate_metadata_role(metadata: ConceptColumnMetadata) -> None:
+    role = metadata.role
+    time_roles = {
+        ConceptColumnRole.FIRST_OBSERVATION_TIME,
+        ConceptColumnRole.LAST_OBSERVATION_TIME,
+        ConceptColumnRole.EVENT_TIME,
+    }
+    physiological = (
+        metadata.canonical_unit is not None
+        or bool(metadata.accepted_units)
+        or metadata.extraction_bounds is not None
+        or metadata.analysis_plausibility_range is not None
+    )
+    if (
+        role
+        in {
+            ConceptColumnRole.COUNT,
+            ConceptColumnRole.MEASUREMENT_STATUS,
+            ConceptColumnRole.EVENT_STATUS,
+            ConceptColumnRole.EVENT_FRACTION,
+            *time_roles,
+        }
+        and physiological
+    ):
+        raise MetadataProjectionError(
+            f"{role.value} metadata must not inherit physiological unit or ranges"
+        )
+    if role in time_roles:
+        if metadata.time_origin is None or metadata.time_unit is None:
+            raise MetadataProjectionError("time metadata requires origin and unit")
+        if metadata.allowed_values is not None:
+            raise MetadataProjectionError("time metadata cannot declare allowed_values")
+    elif metadata.time_origin is not None or metadata.time_unit is not None:
+        raise MetadataProjectionError(
+            "non-time metadata cannot declare time coordinates"
+        )
+    if role in {
+        ConceptColumnRole.MEASUREMENT_STATUS,
+        ConceptColumnRole.EVENT_STATUS,
+    }:
+        if metadata.allowed_values != (0, 1):
+            raise MetadataProjectionError(
+                f"{role.value} metadata requires allowed_values [0, 1]"
+            )
+    elif metadata.allowed_values is not None:
+        raise MetadataProjectionError(
+            f"{role.value} metadata must not declare allowed_values"
+        )
+    if metadata.canonical_unit is None and metadata.accepted_units:
+        raise MetadataProjectionError("accepted_units require a canonical_unit")
+    if metadata.canonical_unit is not None and (
+        not metadata.accepted_units
+        or metadata.accepted_units[0] != metadata.canonical_unit
+    ):
+        raise MetadataProjectionError("canonical_unit must be the first accepted unit")
+    if metadata.source_database is None:
+        if metadata.source_resolution_chain:
+            raise MetadataProjectionError(
+                "source resolution chain requires source_database"
+            )
+    elif (
+        not metadata.source_resolution_chain
+        or metadata.source_resolution_chain[0] != metadata.source_database
+    ):
+        raise MetadataProjectionError(
+            "source resolution chain must start with source_database"
+        )
+    if metadata.dictionary_source_database is not None and (
+        metadata.dictionary_source_database not in metadata.source_resolution_chain
+        or metadata.dictionary_source_database not in metadata.available_databases
+    ):
+        raise MetadataProjectionError(
+            "dictionary source database is not authorized by metadata"
+        )
+    if any(
+        entry.database != metadata.dictionary_source_database
+        for entry in metadata.source_lineage
+    ):
+        raise MetadataProjectionError(
+            "source lineage database does not match dictionary source"
+        )
 
 
 def _canonical_json_value(value: object, *, path: str) -> object:
@@ -567,7 +972,13 @@ def project_concept_column_metadata(
             analysis_plausibility_range if range_preserving else None
         ),
         allowed_values=(
-            (0, 1) if spec.role is ConceptColumnRole.MEASUREMENT_STATUS else None
+            (0, 1)
+            if spec.role
+            in {
+                ConceptColumnRole.MEASUREMENT_STATUS,
+                ConceptColumnRole.EVENT_STATUS,
+            }
+            else None
         ),
         time_origin=(spec.time_origin if time_like else None),
         time_unit=(spec.time_unit if time_like else None),
