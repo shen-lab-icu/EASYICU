@@ -922,8 +922,13 @@ def load_concepts(
     _need_micro = _requested & _MICRO_OUTPUTS
     _special = (_need_kdigo | _need_circ | _need_comorb
                 | _need_outcome | _need_micro)
+    # Keep the FULL requested list (incl. special concepts) for the batched path.
+    # When batching triggers, the code returns before the special re-attach (~L1480),
+    # so the batch loader must receive the specials and re-run their loaders per batch
+    # (each patient-id batch carries complete per-patient histories -> baselines compute).
+    _concepts_all = list(concepts_list)
     if _special:
-        # Pull special concepts out of the list passed to the resolver.
+        # Pull special concepts out of the list passed to the standard resolver.
         concepts_list = [c for c in concepts_list if c not in _special]
 
     # 防御性检查: 检测常见的位置参数误用 (load_concepts(['hr'], 'miiv') 应为 database='miiv')
@@ -1307,6 +1312,15 @@ def load_concepts(
     #   - 非 daemon: multiprocessing.Process
     # 因此不再需要在 Windows daemon 中禁用 subprocess 模式。
     
+    # 🔧 FIX: special concepts (KDIGO/circ/comorb/outcome/micro) were stripped from
+    # concepts_list above and are only re-attached on the non-batched path (~L1480).
+    # When batching triggers we route through subprocess_batch_load with the FULL list
+    # (_concepts_all) so each per-batch api.load_concepts re-runs the special loaders.
+    # inprocess_batch_load calls the *base* loader (no special routing), so specials
+    # MUST take the subprocess path here.
+    if _special and effective_batch_size is not None:
+        use_subprocess = True
+
     # 执行分批处理
     if effective_batch_size is not None and _id_col is not None and _all_ids is not None:
         if _total_patients > effective_batch_size:
@@ -1333,7 +1347,7 @@ def load_concepts(
                 _explicit_keys = {'merge', 'r_compatible', 'verbose'}
                 subprocess_kwargs = {k: v for k, v in load_kwargs.items() if k not in _explicit_keys}
                 final_result = subprocess_batch_load(
-                    concepts=concepts_list,
+                    concepts=(_concepts_all if _special else concepts_list),
                     database=loader.database,
                     all_patient_ids={_id_col: _all_ids},
                     batch_size=effective_batch_size,
@@ -1389,7 +1403,7 @@ def load_concepts(
                 _id_col = list(patient_ids.keys())[0]
                 _all_ids = list(patient_ids.values())[0]
                 return subprocess_batch_load(
-                    concepts=concepts_list,
+                    concepts=(_concepts_all if _special else concepts_list),
                     database=loader.database,
                     all_patient_ids={_id_col: _all_ids},
                     batch_size=effective_batch_size,
