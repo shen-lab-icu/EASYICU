@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 
@@ -241,26 +242,164 @@ def test_submission_profile_registry_is_versioned() -> None:
         get_submission_profile("npj_dm/main")
 
 
-def test_submission_profile_as_pipeline_options_matches_canonical() -> None:
-    opts = CANONICAL_PROFILE.as_pipeline_options()
-    assert opts == {
+def test_pre_existing_profile_options_are_immutable_three_keys() -> None:
+    # (d), not (a): the archival replay contracts must be byte-identical to
+    # before the memory fields existed — exactly the original three keys, with
+    # NO enable_memory / enable_experience_bank. Changing an old profile's
+    # option bundle would silently change how its archived runs replay.
+    for profile in (
+        NPJ_DM_2026_05,
+        NPJ_DM_2026_06,
+        NPJ_DM_2026_07,
+        NPJ_DM_2026_07_16,
+    ):
+        assert profile.as_pipeline_options() == {
+            "evidence_enforcement_mode": "strict",
+            "writer_digest_widened": True,
+            "enable_reproducibility_envelope": True,
+        }, profile.ref
+
+
+def test_new_canonical_profile_pins_cross_run_memory_off() -> None:
+    # Only the new profile pins cross-run memory OFF as a submission-defining
+    # option — exactly five keys.
+    assert NPJ_DM_2026_07_17.as_pipeline_options() == {
         "evidence_enforcement_mode": "strict",
         "writer_digest_widened": True,
         "enable_reproducibility_envelope": True,
-        # Cross-run agent memory is submission-defining: a paper-facing run is
-        # never steered by prior-run StrategyCards / ExperienceBank cards.
         "enable_memory": False,
         "enable_experience_bank": False,
     }
+    # The default profile is the one that pins it off.
+    assert DEFAULT_SUBMISSION_PROFILE_REF == NPJ_DM_2026_07_17.ref
 
 
-def test_every_submission_profile_pins_cross_run_memory_off() -> None:
-    # Structural, not per-tool: the guarantee must hold for EVERY entrypoint
-    # that applies a profile, and for every registered (incl. archival) profile.
+def test_every_profile_either_omits_or_pins_memory_off_never_on() -> None:
+    # Structural guard: no registered profile may ever emit enable_memory=True.
     for ref, profile in SUBMISSION_PROFILE_REGISTRY.items():
         opts = profile.as_pipeline_options()
-        assert opts["enable_memory"] is False, ref
-        assert opts["enable_experience_bank"] is False, ref
+        assert opts.get("enable_memory", False) is False, ref
+        assert opts.get("enable_experience_bank", False) is False, ref
+
+
+def test_pre_existing_profile_to_dict_omits_memory_fields() -> None:
+    # (d), not (a), at the PUBLIC-serialization layer too: to_dict() is the
+    # public replay representation. Adding two Optional dataclass fields must NOT
+    # leak "enable_memory": null / "enable_experience_bank": null into an
+    # archival profile's to_dict() — that would silently change its serialized
+    # form even though the value is unset. Old profiles keep exactly the
+    # original field set (the ten dataclass fields + ref), with neither
+    # memory key present.
+    expected_keys = {
+        "name",
+        "version",
+        "locked_at",
+        "evidence_enforcement_mode",
+        "writer_digest_widened",
+        "enable_reproducibility_envelope",
+        "requires_arm",
+        "requires_runner",
+        "expected_concept_dict_sha",
+        "expected_sofa2_dict_sha",
+        "ref",
+    }
+    for profile in (
+        NPJ_DM_2026_05,
+        NPJ_DM_2026_06,
+        NPJ_DM_2026_07,
+        NPJ_DM_2026_07_16,
+    ):
+        payload = profile.to_dict()
+        assert set(payload) == expected_keys, profile.ref
+        assert "enable_memory" not in payload, profile.ref
+        assert "enable_experience_bank" not in payload, profile.ref
+
+
+def test_new_canonical_profile_to_dict_surfaces_pinned_memory_fields() -> None:
+    # The only profile that pins cross-run memory DOES surface both keys in its
+    # public serialization — explicitly False, not absent.
+    payload = NPJ_DM_2026_07_17.to_dict()
+    assert payload["enable_memory"] is False
+    assert payload["enable_experience_bank"] is False
+
+
+# Frozen canonical to_dict() snapshots for the archival profiles. Key-set
+# equality alone would miss a field-VALUE change; these lock the full public
+# replay representation so "byte-identical" is actually enforced (canonical JSON
+# with sort_keys makes the comparison order-independent and diffable).
+_ARCHIVAL_TO_DICT_SNAPSHOTS = {
+    "npj_dm/20260527": {
+        "enable_reproducibility_envelope": True,
+        "evidence_enforcement_mode": "strict",
+        "expected_concept_dict_sha": "9ef52ed3ec51652f235c92a1394d4f4b91318cbd46e3915a5eacbbed2754e179",
+        "expected_sofa2_dict_sha": "e1844deafad9151aa5069824ff335bf59e228b97040a8bd884d23e0457047b25",
+        "locked_at": "2026-05-27T00:00:00Z",
+        "name": "npj_dm",
+        "ref": "npj_dm/20260527",
+        "requires_arm": "aware",
+        "requires_runner": "docker",
+        "version": "20260527",
+        "writer_digest_widened": True,
+    },
+    "npj_dm/20260611": {
+        "enable_reproducibility_envelope": True,
+        "evidence_enforcement_mode": "strict",
+        "expected_concept_dict_sha": "4b9c55bf9ec5dc92c39d6c14b036f0b19d4da684d9808618833b83d6b53c9ed2",
+        "expected_sofa2_dict_sha": "b26e36b6ef5ea947027c8f7cd514fc5174545aa658187d6bdb8ec43f2a80b6aa",
+        "locked_at": "2026-06-11T00:00:00Z",
+        "name": "npj_dm",
+        "ref": "npj_dm/20260611",
+        "requires_arm": "aware",
+        "requires_runner": "docker",
+        "version": "20260611",
+        "writer_digest_widened": True,
+    },
+    "npj_dm/20260708": {
+        "enable_reproducibility_envelope": True,
+        "evidence_enforcement_mode": "strict",
+        "expected_concept_dict_sha": "bc377779ce0f6b7983b2f8f527a37c1c394cc38e4a64055c9d9268b5f4d451ea",
+        "expected_sofa2_dict_sha": "b26e36b6ef5ea947027c8f7cd514fc5174545aa658187d6bdb8ec43f2a80b6aa",
+        "locked_at": "2026-07-08T00:25:43-04:00",
+        "name": "npj_dm",
+        "ref": "npj_dm/20260708",
+        "requires_arm": "aware",
+        "requires_runner": "docker",
+        "version": "20260708",
+        "writer_digest_widened": True,
+    },
+    "npj_dm/20260716": {
+        "enable_reproducibility_envelope": True,
+        "evidence_enforcement_mode": "strict",
+        "expected_concept_dict_sha": "095350e3d897ed6824673b229435941932bd8270b75667826e8b32538e5de146",
+        "expected_sofa2_dict_sha": "b26e36b6ef5ea947027c8f7cd514fc5174545aa658187d6bdb8ec43f2a80b6aa",
+        "locked_at": "2026-07-16T10:17:17-04:00",
+        "name": "npj_dm",
+        "ref": "npj_dm/20260716",
+        "requires_arm": "aware",
+        "requires_runner": "docker",
+        "version": "20260716",
+        "writer_digest_widened": True,
+    },
+}
+
+
+def test_archival_profile_to_dict_matches_frozen_canonical_snapshot() -> None:
+    # Value-level lock (not just key set): any change to a field value of an
+    # archival profile — including accidentally surfacing a memory field — breaks
+    # this, because the frozen snapshots have neither memory key and pin every
+    # SHA / flag.
+    for profile in (
+        NPJ_DM_2026_05,
+        NPJ_DM_2026_06,
+        NPJ_DM_2026_07,
+        NPJ_DM_2026_07_16,
+    ):
+        expected = _ARCHIVAL_TO_DICT_SNAPSHOTS[profile.ref]
+        assert profile.to_dict() == expected, profile.ref
+        # Canonical-JSON equality makes the "byte-identical" claim literal.
+        assert json.dumps(profile.to_dict(), sort_keys=True) == json.dumps(
+            expected, sort_keys=True
+        ), profile.ref
 
 
 def test_benchmark_options_merges_profile_overrides() -> None:

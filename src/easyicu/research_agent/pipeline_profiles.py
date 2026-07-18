@@ -32,6 +32,12 @@ class SubmissionProfile:
     requires_runner: str = "docker"
     expected_concept_dict_sha: Optional[str] = None
     expected_sofa2_dict_sha: Optional[str] = None
+    # Cross-run agent-memory policy. ``None`` = the profile does not pin it (so
+    # ``as_pipeline_options`` omits the key and the pre-existing profiles are
+    # byte-identical replay contracts). Only a profile that explicitly sets these
+    # to ``False`` pins cross-run memory OFF as a submission-defining option.
+    enable_memory: Optional[bool] = None
+    enable_experience_bank: Optional[bool] = None
 
     @property
     def ref(self) -> str:
@@ -44,22 +50,30 @@ class SubmissionProfile:
         knobs such as ``max_total_steps`` and ``llm_seed`` remain caller-owned.
         """
 
-        return {
+        options: Dict[str, Any] = {
             "evidence_enforcement_mode": self.evidence_enforcement_mode,
             "writer_digest_widened": self.writer_digest_widened,
             "enable_reproducibility_envelope": self.enable_reproducibility_envelope,
-            # Cross-run agent memory is submission-DEFINING, not a run-shape knob.
-            # A paper-facing run must not be steered by StrategyCards distilled
-            # from a prior run of the same workdir (every resume reuses it) nor by
-            # ExperienceBank cards: that is unvalidated procedural memory and it
-            # makes the run irreproducible. Pinning it on the PROFILE rather than
-            # on one CLI is what makes the guarantee hold for every entrypoint
-            # that applies a profile — a per-tool default is silently bypassed by
-            # the next entrypoint. Within-run authority (StepAuthorityCapsule /
-            # checkpoints / EvidenceStore) does not use RunMemory and is unaffected.
-            "enable_memory": False,
-            "enable_experience_bank": False,
         }
+        # Cross-run agent memory is submission-DEFINING, not a run-shape knob: a
+        # paper-facing run must not be steered by StrategyCards distilled from a
+        # prior run of the same workdir (every resume reuses it) nor by
+        # ExperienceBank cards — that is unvalidated procedural memory and it
+        # makes the run irreproducible. Pinning it on the PROFILE is what makes
+        # the guarantee hold for every entrypoint that applies a profile; a
+        # per-tool default is silently bypassed by the next entrypoint. Within-run
+        # authority (StepAuthorityCapsule / checkpoints / EvidenceStore) does not
+        # use RunMemory and is unaffected.
+        #
+        # A profile that leaves these ``None`` does NOT pin them, so its option
+        # bundle is byte-identical to before this field existed — the pre-existing
+        # profiles remain immutable replay contracts. Only a profile that
+        # explicitly sets ``enable_memory=False`` emits the key.
+        if self.enable_memory is not None:
+            options["enable_memory"] = self.enable_memory
+        if self.enable_experience_bank is not None:
+            options["enable_experience_bank"] = self.enable_experience_bank
+        return options
 
     def pipeline_options(self) -> Dict[str, Any]:
         """Return PipelineConfig overrides, including manifest profile metadata."""
@@ -75,6 +89,14 @@ class SubmissionProfile:
 
     def to_dict(self) -> Dict[str, object]:
         payload = asdict(self)
+        # The cross-run memory fields are additive: a profile that does not pin
+        # them (value ``None``) must serialize byte-identically to before the
+        # fields existed, so its PUBLIC replay representation is unchanged. Only
+        # a profile that explicitly pins them (``True``/``False``) surfaces the
+        # keys. Mirrors ``as_pipeline_options`` — both are replay contracts.
+        for field_name in ("enable_memory", "enable_experience_bank"):
+            if payload.get(field_name) is None:
+                payload.pop(field_name, None)
         payload["ref"] = self.ref
         return payload
 
@@ -170,6 +192,11 @@ NPJ_DM_2026_07_17 = SubmissionProfile(
     # See concept-dict.LOCK.json. Older profiles stay immutable replay contracts.
     expected_concept_dict_sha="b930e4384a07df16bc642a1e7df48d9fb5248c6bdac27f60fd78882ce612df54",
     expected_sofa2_dict_sha="65075a691ef103112d9df0df452601299c37603c1c075742fe211bb75d2f92cc",
+    # This profile pins cross-run agent memory OFF as a submission-defining
+    # option (the older profiles leave it None → their option bundles stay
+    # byte-identical immutable replay contracts).
+    enable_memory=False,
+    enable_experience_bank=False,
 )
 
 DEFAULT_SUBMISSION_PROFILE_REF = NPJ_DM_2026_07_17.ref
