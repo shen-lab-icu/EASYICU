@@ -442,9 +442,17 @@ def test_statistical_validator_delegates_to_locked_cohort_numeric_replay(
 def test_numeric_replay_is_wired_before_the_existing_in_run_repair_gate() -> None:
     from easyicu.research_agent import pipeline_execute
 
-    source = inspect.getsource(pipeline_execute)
+    # The ordered-stratified numeric replay now runs inside
+    # _post_canonicalization_figure_findings, which the early gate calls before
+    # the in-run repair gate (so a replay error still routes to the repair loop).
+    helper_source = inspect.getsource(
+        pipeline_execute._post_canonicalization_figure_findings
+    )
+    assert "ordered_stratified_numeric_findings(" in helper_source
+
+    source = inspect.getsource(pipeline_execute.run_execute_phase)
     replay = source.index(
-        "early_contract_findings += ordered_stratified_numeric_findings"
+        "early_contract_findings += _post_canonicalization_figure_findings"
     )
     repair_gate = source.index("early_contract_errors =", replay)
     typed_ticket = source.index(

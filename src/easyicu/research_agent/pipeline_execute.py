@@ -5396,6 +5396,57 @@ def _step_deterministic_contract_findings(
     return findings
 
 
+def _post_canonicalization_figure_findings(
+    *,
+    step: AnalysisStep,
+    out_dir: Path,
+    run_dir: Path,
+    step_summary: Dict[str, Any],
+    completed_step_records: Sequence[Mapping[str, Any]],
+    resolved_input_bindings: Mapping[str, Mapping[str, Any]],
+    execution_cohort_path: Path,
+    figure_contract_validator: FigureContractQualityValidator,
+    figure_source_validator: FigureSourceDataValidator,
+) -> List[ValidationFinding]:
+    """Figure-contract / figure-source / ordered-stratified findings evaluated
+    AFTER the early figure-contract canonicalization repair.
+
+    These are kept OUT of ``_step_deterministic_contract_findings`` on purpose:
+    the early pre-registration gate must interleave the figure-contract
+    canonicalization repair BETWEEN the shared contract sequence and these figure
+    audits (the audits must see the already-canonicalized contracts). So the
+    early gate calls the shared contract sequence, then runs the canonicalization
+    repair inline, then calls this — preserving that hard ordering while still
+    lifting the figure-audit block out of the execution loop.
+    """
+
+    findings: List[ValidationFinding] = figure_contract_validator.audit(
+        step=step,
+        out_dir=out_dir,
+        run_dir=run_dir,
+        step_summary=step_summary,
+    )
+    findings += figure_source_validator.audit(
+        step=step,
+        out_dir=out_dir,
+        run_dir=run_dir,
+        step_summary=step_summary,
+        completed_step_records=completed_step_records,
+        resolved_input_bindings=resolved_input_bindings,
+    )
+    # For the controlled ordered-stratified method, replay the agent-authored
+    # tables from the locked cohort before evidence registration. Numeric/method
+    # errors therefore return to the existing coder repair loop instead of
+    # becoming a late warning.
+    findings += ordered_stratified_numeric_findings(
+        cohort_path=execution_cohort_path,
+        step=step,
+        out_dir=out_dir,
+        step_summary=step_summary,
+    )
+    return findings
+
+
 def _evaluate_final_deterministic_gates(
     *,
     context: ResearchContext,
@@ -12282,29 +12333,19 @@ else:
                         before_code=before_contract,
                         after_code=after_contract,
                     )
-                early_contract_findings += figure_contract_validator.audit(
-                    step=step,
-                    out_dir=run_result.out_dir,
-                    run_dir=run_dir,
-                    step_summary=visual_step_summary,
-                )
-                early_contract_findings += figure_source_validator.audit(
+                # Figure-contract canonicalization repair (above) must run before
+                # these figure audits; keep the ordering by calling the post-canon
+                # figure findings helper here, after the repair.
+                early_contract_findings += _post_canonicalization_figure_findings(
                     step=step,
                     out_dir=run_result.out_dir,
                     run_dir=run_dir,
                     step_summary=visual_step_summary,
                     completed_step_records=completed_records_snapshot,
                     resolved_input_bindings=resolved_input_bindings,
-                )
-                # For the controlled ordered-stratified method, replay the
-                # agent-authored tables from the locked cohort before evidence
-                # registration. Numeric/method errors therefore return to the
-                # existing coder repair loop instead of becoming a late warning.
-                early_contract_findings += ordered_stratified_numeric_findings(
-                    cohort_path=step_execution_cohort_path,
-                    step=step,
-                    out_dir=run_result.out_dir,
-                    step_summary=visual_step_summary,
+                    execution_cohort_path=step_execution_cohort_path,
+                    figure_contract_validator=figure_contract_validator,
+                    figure_source_validator=figure_source_validator,
                 )
                 unowned_sealed_markers = _unowned_sealed_authority_markers(
                     visual_step_summary,

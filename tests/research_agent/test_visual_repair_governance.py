@@ -298,17 +298,20 @@ def test_figure_canonicalization_repair_stays_between_gate_and_figure_audits() -
     canonicalization_repair = source.index(
         "_install_figure_contract_source_data_canonicalization("
     )
-    figure_contract_audit = source.index(
-        "early_contract_findings += figure_contract_validator.audit"
+    # The figure audits now live in _post_canonicalization_figure_findings, called
+    # after the canonicalization repair — so the repair still precedes the audits.
+    post_canon_figure_audits = source.index(
+        "early_contract_findings += _post_canonicalization_figure_findings"
     )
-    figure_source_audit = source.index(
-        "early_contract_findings += figure_source_validator.audit"
+    assert shared_gate < canonicalization_repair < post_canon_figure_audits
+
+    # Inside that helper the figure-contract audit still precedes the
+    # figure-source audit (both see the canonicalized contracts).
+    helper_source = inspect.getsource(
+        pipeline_execute._post_canonicalization_figure_findings
     )
-    assert (
-        shared_gate
-        < canonicalization_repair
-        < figure_contract_audit
-        < figure_source_audit
+    assert helper_source.index("figure_contract_validator.audit") < helper_source.index(
+        "figure_source_validator.audit"
     )
 
 
