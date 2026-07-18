@@ -1,7 +1,7 @@
 # B6 export-intake / concept-metadata freeze plan
 
-> 状态：2026-07-18 15:16 EDT；**B6-A 已完成，B6-B 正式里程碑仍为五步 2/5；ResearchContext v2 所需的 typed materialized cohort/trajectory authority 与 replay bridge 已由 `7cc215e` 完成**。
-> 当前代码：`acc874c`/`1481f09`（B6-A）+ `7ee66fd`/`7e8c16f`（projector/source authority）+ `987bdc5`/`7674814`（sidecar/native export→Agent binding）；
+> 状态：2026-07-18 17:25 EDT；**B6-A 与 B6-B 五步均已完成；ResearchContext v2、step-scoped Coder authority、cache/resume implementation identity 与 drift/freeze gate 由 `f99e676` 收口**。
+> 当前代码：`acc874c`/`1481f09`（B6-A）+ `7ee66fd`/`7e8c16f`（projector/source authority）+ `987bdc5`/`7674814`（sidecar/native export→Agent binding）+ `7cc215e`（typed cohort/trajectory authority）+ `f99e676`（ResearchContext v2 与 freeze identity）；
 > packaged concept baseline：`8e97d31`。
 > 边界：B6-B 不混入新的 concept-dict 科学内容编辑；只建立共享、可摘要绑定的 metadata 投影。
 
@@ -11,7 +11,7 @@
 |---|---|---|---|
 | B6-A manifest-authoritative intake | **完成** | `acc874c`；native-first + legacy、Parquet/CSV/XLSX、containment、feature definitions、cohort/catalog/replication 共用 adapter | 保持兼容与 fail-close，不扩 case-specific intake |
 | B6-A snapshot/performance | **完成** | `1481f09`；read-only mmap verified snapshot、CSV/XLSX 单会话解析缓存、Parquet 列裁剪、四 consumer 显式 close；105 项主回归 + 64 项独立复审 | 超大 CSV/XLSX 的内存阈值/临时列式缓存是后续预算优化，非 freeze blocker |
-| B6-B typed metadata / replay identity | **进行中（2/5 + v2 bridge 前置）** | `7ee66fd` + `7e8c16f` projector/source authority；`987bdc5` + `7674814` sidecar/native export→Agent strict binding；`7cc215e` typed cohort/trajectory authority、RunInputCapsule v3、legacy v2 verified receipt 与 runner pre/post integrity；202 + 95 项最终回归 | 实施 ResearchContext v2 与 scoped Planner/Coder/repair 投影 |
+| B6-B typed metadata / replay identity | **完成（5/5）** | `7ee66fd`/`7e8c16f` projector；`987bdc5`/`7674814` sidecar；`7cc215e` typed cohort/trajectory authority；`f99e676` ResearchContext v2、4 KiB step-scoped facts、implementation identity、cache/resume drift gate。最终 208 core + 207 prompt/meta + 244 resume/cache + 34 production-wiring + 28 meta/capability 全绿 | 进入完整 freeze shards；不再扩 B6 shared engine |
 
 ## 为什么 B6 不能后置
 
@@ -71,9 +71,9 @@ replay identity；规则变化触发选择性重审，而不是静默复用旧 s
 
 1. **共享 leaf projector（已完成：`7ee66fd` + `7e8c16f`）**：新增 `easyicu/concept/metadata_projection.py`；Web 与 Agent 后续只消费这一投影，不从 concept 层反向 import `research_agent`。已锁 actual database 与 dictionary source resolution chain、class-prefix most-specific 继承、可执行 source anchor、显式 time coordinates、双范围和 canonical digest。
 2. **intake/native export v2（已完成：`987bdc5` + `7674814`）**：生成 content-addressed column-level metadata sidecar；明确 `source_database`、物理列角色、时间 origin/unit 与 sidecar digest。Web 生产者在包级别先证明每个选定 concept 有唯一 primary binding，Agent intake 对 schema/digest/coverage/source-selection 做 exact join；v1 权威不变。
-3. **ResearchContext v2 bridge**：只给新 payload 增加 typed metadata；旧 v1/封存字节继续可读，旧科学身份不得因新增 `None` 键漂移。
-4. **authority / coder / replay binding**：将 projector、sidecar、ICU-rule implementation digest 纳入已有 resolved-input/context/environment identity；不新增第二套 StepAuthorityCapsule schema。
-5. **drift / freeze gate**：metadata/rule drift 触发 sealed artifact 选择性重审；补 companion、来源、范围双轨、旧 payload 兼容与 Web/Agent 同投影回归。
+3. **ResearchContext v2 bridge（已完成：`f99e676`）**：新 typed payload 使用严格 `/2` authority；旧 `/1` 字节、JSON 语义与科学身份保持；cohort/trajectory metadata 原子随变量范围投影。
+4. **authority / coder / replay binding（已完成：`f99e676`）**：step-scoped host facts 绑定 initial/repair 共用 `HostCoderAuthority`；projector、sidecar、ICU-rule implementation digest 进入 cache/capsule/resume 环境坐标，未新增第二套 current authority。
+5. **drift / freeze gate（已完成：`f99e676`）**：fresh typed join 从 verified snapshot 与 sealed derivation receipts 重建 dtype/observed-domain/source-files 并 fail-close；resume 保留 sealed fallback range、current implementation drift 触发重审；数据库 alias、4 KiB 压力、V1 compatibility 与 Agent 科学所有权反例全绿。
 
 投影红线：`source_database` 是真实来源，不等于 `available_databases`；dictionary
 `extraction_bounds` 不等于 ICU `analysis_plausibility_range`；`*_n` 无生理单位，
@@ -91,5 +91,5 @@ replay identity；规则变化触发选择性重审，而不是静默复用旧 s
 - metadata/rule digest 改变会改变 replay identity；
 - meta benchmark、capability drift、capsule/resume/provider/evidence authority 常绿。
 
-完成剩余 B6-B 后才进入完整 freeze shards；不以 legacy Parquet 三题“还能跑”
-替代 native export 端到端通用性。
+B6-B 已完成，下一步是完整 freeze shards 与唯一冻结坐标；不以 legacy Parquet
+三题“还能跑”替代 native export 端到端通用性，也不因三题结果反向扩 shared engine。
