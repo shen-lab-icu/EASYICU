@@ -1,0 +1,459 @@
+from __future__ import annotations
+
+import ast
+import json
+from pathlib import Path
+
+import pytest
+
+from easyicu.concept.metadata_projection import (
+    METADATA_SCHEMA_VERSION,
+    ColumnProjectionSpec,
+    ConceptColumnRole,
+    MetadataProjectionError,
+    NumericBounds,
+    canonical_metadata_bytes,
+    metadata_payload_sha256,
+    metadata_sha256,
+    project_concept_column_metadata,
+)
+from easyicu.concept.schema import ConceptDefinition
+
+ROOT = Path(__file__).resolve().parents[1]
+DICT_PATH = ROOT / "src" / "easyicu" / "data" / "concept-dict.json"
+MODULE_PATH = ROOT / "src" / "easyicu" / "concept" / "metadata_projection.py"
+
+
+def _definition(name: str) -> ConceptDefinition:
+    payload = json.loads(DICT_PATH.read_text(encoding="utf-8"))[name]
+    return ConceptDefinition.from_name_and_payload(name, payload)
+
+
+def _spec(
+    column_name: str,
+    role: ConceptColumnRole,
+    *,
+    source_concept: str = "lact",
+    aggregation: str | None = None,
+    time_origin: str | None = None,
+    time_unit: str | None = None,
+) -> ColumnProjectionSpec:
+    return ColumnProjectionSpec(
+        column_name=column_name,
+        source_concept=source_concept,
+        role=role,
+        aggregation=aggregation,
+        time_origin=time_origin,
+        time_unit=time_unit,
+    )
+
+
+def test_projects_lact_value_with_separate_extraction_analysis_and_run_authorities():
+    metadata = project_concept_column_metadata(
+        _definition("lact"),
+        spec=_spec("lact_mean", ConceptColumnRole.VALUE),
+        source_database="MIIV",
+        analysis_plausibility_range=NumericBounds(0, 30),
+    )
+
+    assert metadata.schema_version == METADATA_SCHEMA_VERSION
+    assert metadata.canonical_unit == "mmol/L"
+    assert metadata.accepted_units == ("mmol/L",)
+    assert metadata.extraction_bounds == NumericBounds(0, 50)
+    assert metadata.analysis_plausibility_range == NumericBounds(0, 30)
+    assert metadata.source_database == "miiv"
+    assert metadata.source_declared_for_database is True
+    assert metadata.availability_basis == "direct_source"
+    assert set(metadata.available_databases) == {
+        "aumc",
+        "eicu",
+        "eicu_demo",
+        "hirid",
+        "miiv",
+        "mimic",
+        "mimic_demo",
+        "sic",
+    }
+    assert len(metadata.source_lineage) == 1
+    lineage = metadata.source_lineage[0]
+    assert lineage.database == "miiv"
+    assert lineage.table == "labevents"
+    assert lineage.selector_variable == "itemid"
+    assert lineage.to_dict()["item_ids"] == [50813, 52442, 53154]
+
+
+@pytest.mark.parametrize(
+    ("role", "column_name", "allowed_values", "time_origin", "time_unit"),
+    [
+        (ConceptColumnRole.COUNT, "lact_n", None, None, None),
+        (ConceptColumnRole.MEASUREMENT_STATUS, "lact_measured", (0, 1), None, None),
+        (
+            ConceptColumnRole.FIRST_OBSERVATION_TIME,
+            "lact_first_time",
+            None,
+            "icu_admission",
+            "h",
+        ),
+        (
+            ConceptColumnRole.LAST_OBSERVATION_TIME,
+            "lact_last_time",
+            None,
+            "icu_admission",
+            "h",
+        ),
+    ],
+)
+def test_structural_companions_do_not_inherit_physiological_units_or_ranges(
+    role: ConceptColumnRole,
+    column_name: str,
+    allowed_values: tuple[int, ...] | None,
+    time_origin: str | None,
+    time_unit: str | None,
+):
+    metadata = project_concept_column_metadata(
+        _definition("lact"),
+        spec=_spec(
+            column_name,
+            role,
+            time_origin=time_origin,
+            time_unit=time_unit,
+        ),
+        source_database="miiv",
+    )
+
+    assert metadata.canonical_unit is None
+    assert metadata.accepted_units == ()
+    assert metadata.extraction_bounds is None
+    assert metadata.analysis_plausibility_range is None
+    assert metadata.allowed_values == allowed_values
+    assert metadata.time_origin == time_origin
+    assert metadata.time_unit == time_unit
+    assert metadata.source_concept == "lact"
+    assert metadata.source_database == "miiv"
+
+
+def test_range_preserving_aggregate_inherits_ranges_but_sum_does_not():
+    definition = _definition("lact")
+    maximum = project_concept_column_metadata(
+        definition,
+        spec=_spec(
+            "lact_max",
+            ConceptColumnRole.NUMERIC_AGGREGATE,
+            aggregation="MAX",
+        ),
+        source_database="miiv",
+        analysis_plausibility_range=NumericBounds(0, 30),
+    )
+    total = project_concept_column_metadata(
+        definition,
+        spec=_spec(
+            "lact_sum",
+            ConceptColumnRole.NUMERIC_AGGREGATE,
+            aggregation="sum",
+        ),
+        source_database="miiv",
+    )
+
+    assert maximum.aggregation == "max"
+    assert maximum.extraction_bounds == NumericBounds(0, 50)
+    assert maximum.analysis_plausibility_range == NumericBounds(0, 30)
+    assert total.canonical_unit == "mmol/L"
+    assert total.extraction_bounds is None
+    assert total.analysis_plausibility_range is None
+
+
+@pytest.mark.parametrize(
+    "bounds",
+    [
+        NumericBounds(None, 1),
+        NumericBounds(0, None),
+        NumericBounds(-1.5, 2.5),
+    ],
+)
+def test_numeric_bounds_support_finite_one_sided_or_two_sided_ranges(bounds):
+    assert bounds.to_dict() == {
+        "minimum": None if bounds.minimum is None else float(bounds.minimum),
+        "maximum": None if bounds.maximum is None else float(bounds.maximum),
+    }
+
+
+@pytest.mark.parametrize(
+    "args",
+    [
+        (float("nan"), 1),
+        (0, float("inf")),
+        (2, 1),
+        (True, 1),
+        ("not-a-number", 1),
+    ],
+)
+def test_numeric_bounds_reject_invalid_ranges(args):
+    with pytest.raises(MetadataProjectionError):
+        NumericBounds(*args)
+
+
+def test_projection_rejects_ambiguous_or_inconsistent_specs():
+    definition = _definition("lact")
+    with pytest.raises(MetadataProjectionError, match="require an explicit"):
+        _spec("lact_mean", ConceptColumnRole.NUMERIC_AGGREGATE)
+    with pytest.raises(MetadataProjectionError, match="unsupported"):
+        _spec(
+            "lact_slope",
+            ConceptColumnRole.NUMERIC_AGGREGATE,
+            aggregation="slope",
+        )
+    with pytest.raises(MetadataProjectionError, match="only valid"):
+        _spec("lact_n", ConceptColumnRole.COUNT, aggregation="sum")
+    with pytest.raises(MetadataProjectionError, match="ConceptColumnRole"):
+        ColumnProjectionSpec(
+            column_name="lact",
+            source_concept="lact",
+            role="value",  # type: ignore[arg-type]
+        )
+    with pytest.raises(MetadataProjectionError, match="must be strings"):
+        ColumnProjectionSpec(
+            column_name=1,  # type: ignore[arg-type]
+            source_concept="lact",
+            role=ConceptColumnRole.VALUE,
+        )
+    with pytest.raises(MetadataProjectionError, match="explicit time_origin"):
+        _spec("lact_first_time", ConceptColumnRole.FIRST_OBSERVATION_TIME)
+    with pytest.raises(MetadataProjectionError, match="only valid for time"):
+        _spec(
+            "lact",
+            ConceptColumnRole.VALUE,
+            time_origin="icu_admission",
+            time_unit="h",
+        )
+    with pytest.raises(MetadataProjectionError, match="source_concept"):
+        project_concept_column_metadata(
+            definition,
+            spec=_spec(
+                "crea_mean",
+                ConceptColumnRole.VALUE,
+                source_concept="crea",
+            ),
+            source_database="miiv",
+        )
+    with pytest.raises(MetadataProjectionError, match="value-like"):
+        project_concept_column_metadata(
+            definition,
+            spec=_spec("lact_n", ConceptColumnRole.COUNT),
+            source_database="miiv",
+            analysis_plausibility_range=NumericBounds(0, 30),
+        )
+    with pytest.raises(MetadataProjectionError, match="range-preserving"):
+        project_concept_column_metadata(
+            definition,
+            spec=_spec(
+                "lact_sum",
+                ConceptColumnRole.NUMERIC_AGGREGATE,
+                aggregation="sum",
+            ),
+            source_database="miiv",
+            analysis_plausibility_range=NumericBounds(0, 30),
+        )
+
+
+def test_actual_source_and_cross_database_availability_are_not_conflated():
+    definition = _definition("lact")
+    unavailable = project_concept_column_metadata(
+        definition,
+        spec=_spec("lact", ConceptColumnRole.VALUE),
+        source_database="unknown_db",
+    )
+    unspecified = project_concept_column_metadata(
+        definition,
+        spec=_spec("lact", ConceptColumnRole.VALUE),
+        source_database=None,
+    )
+
+    assert "miiv" in unavailable.available_databases
+    assert unavailable.source_database == "unknown_db"
+    assert unavailable.source_declared_for_database is False
+    assert unavailable.availability_basis == "source_not_declared"
+    assert unavailable.source_lineage == ()
+    assert unspecified.source_database is None
+    assert unspecified.source_declared_for_database is None
+    assert unspecified.availability_basis == "source_database_not_supplied"
+
+
+@pytest.mark.parametrize("derived_field", ["depends_on", "concepts", "callback"])
+def test_derived_concepts_without_direct_sources_do_not_fabricate_availability(
+    derived_field: str,
+):
+    payload: dict[str, object] = {
+        "description": "derived test",
+        "sources": {},
+    }
+    payload[derived_field] = (
+        "compute_derived"
+        if derived_field == "callback"
+        else ["component_a", "component_b"]
+    )
+    definition = ConceptDefinition.from_name_and_payload("derived_test", payload)
+    metadata = project_concept_column_metadata(
+        definition,
+        spec=_spec(
+            "derived_test",
+            ConceptColumnRole.VALUE,
+            source_concept="derived_test",
+        ),
+        source_database="miiv",
+    )
+
+    assert metadata.source_declared_for_database is False
+    assert metadata.availability_basis == "derived_dependencies_not_resolved"
+    assert metadata.source_lineage == ()
+
+
+def test_lineage_and_payload_digests_are_independent_of_mapping_insertion_order():
+    first_payload = {
+        "unit": ["mmol/L", "mmol/l"],
+        "min": 0,
+        "max": 10,
+        "sources": {
+            "miiv": [
+                {
+                    "table": "z_table",
+                    "ids": [2, 1, "1"],
+                    "sub_var": "itemid",
+                    "unit_var": "unit_z",
+                },
+                {
+                    "table": "a_table",
+                    "ids": [4, 3],
+                    "sub_var": "code",
+                    "unit_var": "unit_a",
+                },
+            ],
+            "eicu": [{"table": "lab", "ids": "lactate"}],
+        },
+    }
+    second_payload = {
+        **first_payload,
+        "sources": {
+            "eicu": first_payload["sources"]["eicu"],
+            "miiv": list(reversed(first_payload["sources"]["miiv"])),
+        },
+    }
+    first = project_concept_column_metadata(
+        ConceptDefinition.from_name_and_payload("stable", first_payload),
+        spec=_spec("stable", ConceptColumnRole.VALUE, source_concept="stable"),
+        source_database="miiv",
+    )
+    second = project_concept_column_metadata(
+        ConceptDefinition.from_name_and_payload("stable", second_payload),
+        spec=_spec("stable", ConceptColumnRole.VALUE, source_concept="stable"),
+        source_database="miiv",
+    )
+    companion = project_concept_column_metadata(
+        ConceptDefinition.from_name_and_payload("stable", first_payload),
+        spec=_spec("stable_n", ConceptColumnRole.COUNT, source_concept="stable"),
+        source_database="miiv",
+    )
+
+    assert first.to_dict() == second.to_dict()
+    assert first.source_lineage[1].to_dict()["item_ids"] == ["1", 1, 2]
+    assert canonical_metadata_bytes(first) == canonical_metadata_bytes(second)
+    assert metadata_sha256(first) == metadata_sha256(second)
+    assert metadata_payload_sha256({"stable": first, "stable_n": companion}) == (
+        metadata_payload_sha256({"stable_n": companion, "stable": second})
+    )
+    with pytest.raises(MetadataProjectionError, match="payload key"):
+        metadata_payload_sha256({"wrong_name": first})
+    with pytest.raises(MetadataProjectionError, match="keys must be strings"):
+        metadata_payload_sha256({1: first, "stable": first})  # type: ignore[dict-item]
+
+
+def test_explicit_event_time_coordinates_are_preserved_without_guessing():
+    metadata = project_concept_column_metadata(
+        _definition("lact"),
+        spec=_spec(
+            "charttime",
+            ConceptColumnRole.EVENT_TIME,
+            time_origin="database_native_absolute",
+            time_unit="timestamp",
+        ),
+        source_database="miiv",
+    )
+
+    assert metadata.time_origin == "database_native_absolute"
+    assert metadata.time_unit == "timestamp"
+    assert metadata.canonical_unit is None
+    assert metadata.extraction_bounds is None
+
+
+def test_empty_declared_source_for_derived_concept_is_not_called_undeclared():
+    definition = _definition("rrt_criteria")
+    assert "miiv" in definition.sources
+    assert definition.sources["miiv"] == []
+    metadata = project_concept_column_metadata(
+        definition,
+        spec=_spec(
+            "rrt_criteria",
+            ConceptColumnRole.VALUE,
+            source_concept="rrt_criteria",
+        ),
+        source_database="miiv",
+    )
+
+    assert "miiv" in metadata.available_databases
+    assert metadata.source_declared_for_database is True
+    assert metadata.availability_basis == "declared_derived_or_unresolved"
+    assert metadata.source_lineage == ()
+
+
+def test_source_lineage_includes_semantic_interval_and_params_but_not_comments():
+    definition = ConceptDefinition.from_name_and_payload(
+        "parameterized",
+        {
+            "unit": "mL",
+            "sources": {
+                "miiv": [
+                    {
+                        "table": "events",
+                        "sub_var": "itemid",
+                        "ids": [1],
+                        "interval": "6h",
+                        "stop_var": "endtime",
+                        "grp_var": "stay_id",
+                        "unit_val": {"mL": 1, "L": 1000},
+                        "_comment": "non-semantic prose must not affect authority",
+                    }
+                ]
+            },
+        },
+    )
+    metadata = project_concept_column_metadata(
+        definition,
+        spec=_spec(
+            "parameterized",
+            ConceptColumnRole.VALUE,
+            source_concept="parameterized",
+        ),
+        source_database="miiv",
+    )
+    lineage = metadata.source_lineage[0].to_dict()
+
+    assert lineage["interval_iso8601"] == "P0DT6H0M0S"
+    assert lineage["semantic_parameters"] == {
+        "grp_var": "stay_id",
+        "stop_var": "endtime",
+        "unit_val": {"L": 1000, "mL": 1},
+    }
+    assert "_comment" not in lineage["semantic_parameters"]
+
+
+def test_leaf_projector_has_no_web_or_research_agent_dependency():
+    tree = ast.parse(MODULE_PATH.read_text(encoding="utf-8"))
+    imported = {
+        alias.name
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.Import, ast.ImportFrom))
+        for alias in node.names
+    }
+
+    assert all("research_agent" not in name for name in imported)
+    assert all("webserver" not in name for name in imported)
+    assert all("webapp" not in name for name in imported)
