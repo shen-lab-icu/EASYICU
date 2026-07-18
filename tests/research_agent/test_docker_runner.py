@@ -21,9 +21,12 @@ mock ``subprocess.run`` and ``shutil.which`` to verify:
 from __future__ import annotations
 
 import json
+import os
 import shlex
 import shutil
+import socket
 import subprocess
+import uuid
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
@@ -381,7 +384,7 @@ def test_build_command_passes_through_advanced_flags(
         memory_limit="2g",
         user="1000:1000",
         platform="linux/amd64",
-        extra_mounts=[(str(extra_mount_src), "/extra", "ro")],
+        extra_mounts=[(str(extra_mount_src), "/easyicu-extra/extra", "ro")],
         extra_env={"PUBMED_API_KEY": "abc"},
     )
     step_dir, script_path, out_dir = runner.prepare_step_dir("step_y")
@@ -402,6 +405,145 @@ def test_build_command_passes_through_advanced_flags(
     )
     env_pairs = [cmd[i + 1] for i, tok in enumerate(cmd) if tok == "-e"]
     assert "PUBMED_API_KEY=abc" in env_pairs
+
+
+@pytest.mark.parametrize(
+    "target",
+    [
+        "/cohort.parquet",
+        "/easyicu-run/manifest_partial.json",
+        "/easyicu-inputs/forged",
+        "/easyicu-extra",
+    ],
+)
+def test_docker_runner_rejects_authority_shadowing_extra_mounts(
+    ra,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    target: str,
+):
+    cohort = _make_cohort(tmp_path)
+    _force_docker_present(monkeypatch)
+    source = tmp_path / "forged"
+    source.write_text("x", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="below /easyicu-extra"):
+        ra.DockerRunner(
+            workdir=tmp_path / "run",
+            cohort_parquet=cohort,
+            image="i:1",
+            extra_mounts=[(str(source), target, "ro")],
+        )
+
+
+@pytest.mark.parametrize(
+    ("source_name", "target"),
+    [
+        ("safe", "/easyicu-extra/safe,target=/cohort.parquet"),
+        ("source,with-comma", "/easyicu-extra/safe"),
+        ("source=with-equals", "/easyicu-extra/safe"),
+    ],
+)
+def test_docker_runner_rejects_mount_csv_injection(
+    ra,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    source_name: str,
+    target: str,
+):
+    cohort = _make_cohort(tmp_path)
+    _force_docker_present(monkeypatch)
+    source = tmp_path / source_name
+    source.write_text("x", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="unsafe mount syntax"):
+        ra.DockerRunner(
+            workdir=tmp_path / "run",
+            cohort_parquet=cohort,
+            image="i:1",
+            extra_mounts=[(str(source), target, "ro")],
+        )
+
+
+def test_docker_runner_rejects_invalid_extra_env_key(
+    ra,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    cohort = _make_cohort(tmp_path)
+    _force_docker_present(monkeypatch)
+
+    with pytest.raises(ValueError, match="invalid environment key"):
+        ra.DockerRunner(
+            workdir=tmp_path / "run",
+            cohort_parquet=cohort,
+            image="i:1",
+            extra_env={"COHORT_PARQUET=forged": "yes"},
+        )
+
+
+@pytest.mark.parametrize("kind", ["device", "fifo", "socket", "symlink", "root"])
+def test_docker_runner_rejects_unsafe_auto_mounted_path_env(
+    ra,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    kind: str,
+):
+    cohort = _make_cohort(tmp_path)
+    _force_docker_present(monkeypatch)
+    if kind == "device":
+        candidate = Path("/dev/null")
+    elif kind == "root":
+        candidate = Path("/")
+    elif kind == "fifo":
+        candidate = tmp_path / "input.fifo"
+        os.mkfifo(candidate)
+    elif kind == "socket":
+        candidate = Path("/tmp") / f"easyicu-{uuid.uuid4().hex}.sock"
+        listener = socket.socket(socket.AF_UNIX)
+        listener.bind(str(candidate))
+    else:
+        real = tmp_path / "real.txt"
+        real.write_text("x", encoding="utf-8")
+        candidate = tmp_path / "input-link"
+        candidate.symlink_to(real)
+    try:
+        runner = ra.DockerRunner(
+            workdir=tmp_path / "run",
+            cohort_parquet=cohort,
+            image="i:1",
+            extra_env={"AUX_INPUT": str(candidate)},
+        )
+        _step_dir, script_path, out_dir = runner.prepare_step_dir("probe")
+        script_path.write_text("print('ok')\n", encoding="utf-8")
+        with pytest.raises(ValueError, match="real input|regular file|filesystem root"):
+            runner.build_command(
+                step_id="probe",
+                script_path=script_path,
+                out_dir=out_dir,
+            )
+    finally:
+        if kind == "socket":
+            listener.close()
+            candidate.unlink(missing_ok=True)
+
+
+@pytest.mark.parametrize(
+    "step_id",
+    ["safe,target=cohort.parquet", "safe,readonly", "safe=target", "safe\nline"],
+)
+def test_docker_runner_rejects_step_id_mount_injection(
+    ra,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    step_id: str,
+):
+    cohort = _make_cohort(tmp_path)
+    _force_docker_present(monkeypatch)
+    runner = ra.DockerRunner(workdir=tmp_path / "run", cohort_parquet=cohort)
+
+    with pytest.raises(ValueError, match="unsafe mount syntax"):
+        runner.prepare_step_dir(step_id)
 
 
 # ---------------------------------------------------------------------------

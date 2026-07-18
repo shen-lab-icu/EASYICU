@@ -36,6 +36,7 @@ import glob
 import hashlib
 import json
 import os
+import re
 import shutil
 import stat
 import subprocess
@@ -45,7 +46,7 @@ import threading
 import time
 import uuid
 from dataclasses import dataclass, field
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Dict, List, Optional, Sequence, Tuple
 
 from .code_hygiene import reorder_forward_references
@@ -73,6 +74,127 @@ _RUN_ARTIFACT_AUTHORITY_SNAPSHOT_SHA_ENV = (
 )
 _RUN_ARTIFACT_AUTHORITY_ERROR_ENV = "EASYICU_RUN_ARTIFACT_AUTHORITY_ERROR"
 _ROBUSTNESS_AUTHORITY_ENTRYPOINT = "_run_robustness_preflight_from_env"
+
+# These coordinates are owned by the host runtime.  ``extra_env`` remains a
+# supported extension surface for credentials and auxiliary read-only inputs,
+# but it must never redirect the cohort, outputs, evidence, or replay receipts
+# selected by the pipeline.
+HOST_OWNED_RUNNER_ENV_KEYS = frozenset(
+    {
+        "COHORT_PARQUET",
+        "COHORT_PATH",
+        "EASYICU_COHORT_PATH",
+        "EASYICU_COHORT_PARQUET",
+        "STEP_OUT_DIR",
+        "STEP_OUTPUT_DIR",
+        "STEP_OUTPUT",
+        "OUT_DIR",
+        "OUTPUT_DIR",
+        "EASYICU_OUTPUT_DIR",
+        "EASYICU_STEP_OUT_DIR",
+        "EASYICU_RUN_DIR",
+        "EASYICU_EVIDENCE_DIR",
+        "EASYICU_MANIFEST_PARTIAL",
+        _RUN_ARTIFACT_AUTHORITY_SNAPSHOT_ENV,
+        _RUN_ARTIFACT_AUTHORITY_SNAPSHOT_SHA_ENV,
+        _RUN_ARTIFACT_AUTHORITY_ERROR_ENV,
+        "EASYICU_RESOLVED_INPUTS_JSON",
+        "HOME",
+        "TMPDIR",
+        "TMP",
+        "TEMP",
+        "PYTHONPATH",
+        "PYTHONNOUSERSITE",
+        "PYTHONDONTWRITEBYTECODE",
+        "MPLBACKEND",
+        "MPLCONFIGDIR",
+        "XDG_CACHE_HOME",
+        "PYTHONIOENCODING",
+        "OMP_NUM_THREADS",
+        "MKL_NUM_THREADS",
+        "OPENBLAS_NUM_THREADS",
+        "VECLIB_MAXIMUM_THREADS",
+        "NUMEXPR_NUM_THREADS",
+        "JOBLIB_MULTIPROCESSING",
+        "KMP_INIT_AT_FORK",
+    }
+)
+_RUNNER_ENV_KEY_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\Z")
+
+
+def _reject_docker_mount_field(value: str, *, label: str) -> None:
+    if any(character in value for character in ",=") or any(
+        ord(character) < 32 or ord(character) == 127 for character in value
+    ):
+        raise ValueError(f"DockerRunner {label} contains unsafe mount syntax")
+
+
+def _validated_real_mount_source(raw_source: str, *, label: str) -> Path:
+    """Return one canonical regular-file/real-directory auxiliary input."""
+
+    source = Path(raw_source).expanduser()
+    try:
+        resolved = source.resolve(strict=True)
+        metadata = os.lstat(source)
+    except OSError as exc:
+        raise ValueError(f"DockerRunner {label} must be real input") from exc
+    if not source.is_absolute() or source != resolved or stat.S_ISLNK(metadata.st_mode):
+        raise ValueError(f"DockerRunner {label} must be real input")
+    if stat.S_ISREG(metadata.st_mode):
+        if metadata.st_nlink != 1:
+            raise ValueError(f"DockerRunner {label} must be singly linked")
+    elif stat.S_ISDIR(metadata.st_mode):
+        if resolved == Path(resolved.anchor):
+            raise ValueError(f"DockerRunner {label} cannot expose a filesystem root")
+    else:
+        raise ValueError(
+            f"DockerRunner {label} must be a regular file or real directory"
+        )
+    _reject_docker_mount_field(str(resolved), label=label)
+    return resolved
+
+
+def _docker_mount_entry(source: str, target: str, *, readonly: bool) -> str:
+    _reject_docker_mount_field(source, label="mount source")
+    _reject_docker_mount_field(target, label="mount target")
+    entry = f"type=bind,source={source},target={target}"
+    return f"{entry},readonly" if readonly else entry
+
+
+def _collect_safe_output_artifacts(out_dir: Path) -> List[Path]:
+    """Collect only lexical single-link regular files from generated output."""
+
+    artefacts: List[Path] = []
+    for output_path in out_dir.iterdir():
+        metadata = os.lstat(output_path)
+        if stat.S_ISREG(metadata.st_mode) and metadata.st_nlink == 1:
+            artefacts.append(output_path)
+            continue
+        if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISDIR(metadata.st_mode):
+            output_path.unlink(missing_ok=True)
+    artefacts.sort()
+    return artefacts
+
+
+def reject_reserved_runner_env(
+    extra_env: Dict[str, str],
+    *,
+    reserved: Sequence[str] = tuple(HOST_OWNED_RUNNER_ENV_KEYS),
+    owner: str = "runner",
+) -> None:
+    """Reject caller overrides of host-owned execution coordinates."""
+
+    for key, value in extra_env.items():
+        if not isinstance(key, str) or _RUNNER_ENV_KEY_RE.fullmatch(key) is None:
+            raise ValueError(f"{owner} extra_env contains an invalid environment key")
+        if not isinstance(value, str) or "\x00" in value:
+            raise ValueError(f"{owner} extra_env contains an invalid environment value")
+    conflicts = sorted(set(extra_env).intersection(reserved))
+    if conflicts:
+        raise ValueError(
+            f"{owner} extra_env cannot override host-owned key(s): "
+            + ", ".join(conflicts)
+        )
 
 
 def _canonical_json_bytes(payload: object) -> bytes:
@@ -414,6 +536,7 @@ class CodeRunner:
                 pass
         self.python_executable = selected_python
         self.extra_env = dict(extra_env or {})
+        reject_reserved_runner_env(self.extra_env, owner="CodeRunner")
         self.network_policy = (network_policy or "none").lower()
         self.allow_unsafe_host_fallback = (
             _env_flag("EASYICU_ALLOW_UNSAFE_HOST_FALLBACK")
@@ -1049,7 +1172,7 @@ class CodeRunner:
             encoding="utf-8",
         )
 
-        artefacts = sorted(p for p in out_dir.iterdir() if p.is_file())
+        artefacts = _collect_safe_output_artifacts(out_dir)
         return RunResult(
             step_id=step_id,
             script_path=script_path,
@@ -1112,6 +1235,7 @@ class DockerRunner:
     CONTAINER_RUN_ROOT = "/easyicu-run"
     CONTAINER_COHORT_PATH = "/cohort.parquet"
     CONTAINER_INPUT_ROOT = "/easyicu-inputs"
+    CONTAINER_EXTRA_ROOT = "/easyicu-extra"
 
     def __init__(
         self,
@@ -1134,6 +1258,8 @@ class DockerRunner:
         self.workdir = Path(workdir).expanduser().resolve()
         self.workdir.mkdir(parents=True, exist_ok=True)
         self.cohort_parquet = Path(cohort_parquet).resolve()
+        _reject_docker_mount_field(str(self.workdir), label="workdir")
+        _reject_docker_mount_field(str(self.cohort_parquet), label="cohort path")
         if not self.cohort_parquet.exists():
             raise FileNotFoundError(
                 f"Cohort parquet does not exist: {self.cohort_parquet}"
@@ -1144,8 +1270,9 @@ class DockerRunner:
             docker_executable or os.environ.get("EASYICU_DOCKER_EXECUTABLE") or "docker"
         )
         self.network = network
-        self.extra_mounts = list(extra_mounts or [])
+        self.extra_mounts = self._validated_extra_mounts(extra_mounts or ())
         self.extra_env = dict(extra_env or {})
+        reject_reserved_runner_env(self.extra_env, owner="DockerRunner")
         self.pull_image = bool(pull_image)
         self.cpu_limit = cpu_limit
         self.memory_limit = memory_limit
@@ -1178,8 +1305,49 @@ class DockerRunner:
         # allow-list must come from this image snapshot, never from host packages.
         set_runtime_capability_snapshot_provider(self._method_capability_snapshot)
 
+    @classmethod
+    def _validated_extra_mounts(
+        cls,
+        mounts: Sequence[Tuple[str, str, str]],
+    ) -> List[Tuple[str, str, str]]:
+        """Confine caller mounts to one read-only auxiliary namespace."""
+
+        validated: List[Tuple[str, str, str]] = []
+        targets: List[PurePosixPath] = []
+        extra_root = PurePosixPath(cls.CONTAINER_EXTRA_ROOT)
+        for raw_source, raw_target, raw_mode in mounts:
+            resolved_source = _validated_real_mount_source(
+                raw_source,
+                label="extra mount source",
+            )
+            target = PurePosixPath(str(raw_target))
+            mode = str(raw_mode).strip().lower()
+            _reject_docker_mount_field(str(target), label="mount target")
+            if (
+                not target.is_absolute()
+                or target == extra_root
+                or extra_root not in target.parents
+                or ".." in target.parts
+            ):
+                raise ValueError(
+                    "DockerRunner extra mount target must be below /easyicu-extra"
+                )
+            if mode not in {"ro", "readonly"}:
+                raise ValueError("DockerRunner extra mounts must be read-only")
+            if any(
+                target == existing
+                or target in existing.parents
+                or existing in target.parents
+                for existing in targets
+            ):
+                raise ValueError("DockerRunner extra mount targets must not overlap")
+            targets.append(target)
+            validated.append((str(resolved_source), str(target), "ro"))
+        return validated
+
     def _container_step_dir(self, step_id: str) -> str:
         safe_step_id = _safe_path_component(step_id, label="step_id")
+        _reject_docker_mount_field(safe_step_id, label="step_id")
         return f"{self.CONTAINER_RUN_ROOT}/steps/{safe_step_id}"
 
     def _containerise_extra_env(
@@ -1196,7 +1364,10 @@ class DockerRunner:
             if not candidate.is_absolute() or not candidate.exists():
                 rewritten[key] = value
                 continue
-            resolved = candidate.resolve()
+            resolved = _validated_real_mount_source(
+                value,
+                label="extra_env path source",
+            )
             if resolved == self.cohort_parquet:
                 rewritten[key] = self.CONTAINER_COHORT_PATH
                 continue
@@ -1207,6 +1378,7 @@ class DockerRunner:
                     f"{self.CONTAINER_INPUT_ROOT}/{index:03d}_"
                     f"{resolved.name or 'input'}"
                 )
+                _reject_docker_mount_field(target, label="extra_env path target")
                 mounts.append((str(resolved), target, "ro"))
                 rewritten[key] = target
             else:
@@ -1220,6 +1392,7 @@ class DockerRunner:
     def prepare_step_dir(self, step_id: str) -> Tuple[Path, Path, Path]:
         """Lay out the per-step directory and return the key paths."""
         step_id = _safe_path_component(step_id, label="step_id")
+        _reject_docker_mount_field(step_id, label="step_id")
         steps_dir = self.workdir / "steps"
         self._ensure_real_directory(steps_dir, replace_unsafe=False)
         step_dir = steps_dir / step_id
@@ -1348,27 +1521,32 @@ class DockerRunner:
         cmd.extend(
             [
                 "--mount",
-                (
-                    f"type=bind,source={str(self.workdir.resolve())},"
-                    f"target={self.CONTAINER_RUN_ROOT},readonly"
+                _docker_mount_entry(
+                    str(self.workdir.resolve()),
+                    self.CONTAINER_RUN_ROOT,
+                    readonly=True,
                 ),
                 "--mount",
-                (
-                    f"type=bind,source={str(out_dir.resolve())},"
-                    f"target={container_step_dir}/outputs"
+                _docker_mount_entry(
+                    str(out_dir.resolve()),
+                    f"{container_step_dir}/outputs",
+                    readonly=False,
                 ),
                 "--mount",
-                (
-                    f"type=bind,source={str(self.cohort_parquet)},"
-                    f"target={self.CONTAINER_COHORT_PATH},readonly"
+                _docker_mount_entry(
+                    str(self.cohort_parquet),
+                    self.CONTAINER_COHORT_PATH,
+                    readonly=True,
                 ),
             ]
         )
         rewritten_extra_env, path_mounts = self._containerise_extra_env()
         for source, target, mode in [*self.extra_mounts, *path_mounts]:
-            entry = f"type=bind,source={source},target={target}"
-            if mode and "ro" in mode.lower():
-                entry += ",readonly"
+            entry = _docker_mount_entry(
+                source,
+                target,
+                readonly=bool(mode and "ro" in mode.lower()),
+            )
             cmd.extend(["--mount", entry])
 
         # Env. The container sees absolute container paths; the host
@@ -1890,12 +2068,7 @@ class DockerRunner:
                 provenance_path,
                 json.dumps(runtime_provenance, indent=2, ensure_ascii=False) + "\n",
             )
-            artefacts = []
-            for output_path in out_dir.iterdir():
-                metadata = os.lstat(output_path)
-                if stat.S_ISREG(metadata.st_mode) and metadata.st_nlink == 1:
-                    artefacts.append(output_path)
-            artefacts.sort()
+            artefacts = _collect_safe_output_artifacts(out_dir)
             for control_path in (cidfile, sentinel, control_script_path):
                 control_path.unlink(missing_ok=True)
         else:
