@@ -162,6 +162,14 @@ def test_registrar_propagates_store_failure_without_local_authority(
 
 
 def test_execute_phase_uses_extracted_registrar_after_success_gate() -> None:
+    # Batch 1c: the numeric-claim registration + alias promotion are no longer
+    # inlined in run_execute_phase — they are delegated to
+    # StepEvidenceCommit.commit_validated_step, which opens the store's
+    # success_publication_transaction. The "numeric + alias commit as one
+    # generation" guarantee is now locked by the AST structural contract in
+    # test_step_evidence_commit.py; here we only lock the CALLER wiring: after the
+    # status gate, the ok path routes through the commit boundary, and the failure
+    # path stays fail-closed.
     from easyicu.research_agent import pipeline_execute
 
     module_source = inspect.getsource(pipeline_execute)
@@ -169,30 +177,36 @@ def test_execute_phase_uses_extracted_registrar_after_success_gate() -> None:
 
     assert "def _filter_success_alias_bindings(" not in module_source
     assert "evidence.publish_step_success_aliases(" not in execute_source
-    promotion = execute_source.rindex("evidence_registrar.promote_validated_step(")
+    # The transaction is delegated, not inlined in the orchestrator anymore.
+    assert "evidence.success_publication_transaction()" not in execute_source
+    assert "evidence_registrar.promote_validated_step(" not in execute_source
+
+    commit = execute_source.rindex("step_evidence_commit.commit_validated_step(")
     status_resolution = execute_source.rindex(
         'step_record["status"] = _step_status_from_contract_findings(',
         0,
-        promotion,
+        commit,
     )
     success_guard = execute_source.rindex(
         'if step_record["status"] == "ok":',
         status_resolution,
-        promotion,
+        commit,
     )
-    numeric_authority = execute_source.rindex("_register_current_step_numeric_claims()")
+    # The numeric registration is handed to the commit boundary as a thunk (a bare
+    # reference, invoked inside the transaction — see the component contract test).
+    assert "register_numeric_claims=_register_current_step_numeric_claims" in (
+        execute_source[success_guard:commit] + execute_source[commit : commit + 400]
+    )
     terminal_checkpoint = execute_source.rindex(
         "_append_terminal_step_record(per_step_records, step_record)"
     )
     publication_failure = execute_source.index(
-        'validator="result_evidence_authority"', promotion
+        'validator="result_evidence_authority"', commit
     )
 
-    assert status_resolution < success_guard < numeric_authority
-    assert numeric_authority < promotion < terminal_checkpoint
+    assert status_resolution < success_guard < commit < terminal_checkpoint
     assert (
-        "EvidenceAuthorityIntegrityError"
-        in execute_source[numeric_authority:publication_failure]
+        "EvidenceAuthorityIntegrityError" in execute_source[commit:publication_failure]
     )
     assert (
         "if not store_unavailable:"

@@ -962,6 +962,11 @@ def test_execute_phase_routes_figure_contracts_through_early_repair_loop():
 
 
 def test_figure_repair_precedes_output_evidence_and_numeric_claim_seal():
+    # Batch 1c: the numeric-claim + alias seal is delegated to
+    # StepEvidenceCommit.commit_validated_step (the "both in one generation"
+    # guarantee is locked by test_step_evidence_commit.py's AST contract). Here we
+    # keep the caller-side ordering: figure repair -> output-artifact registration
+    # (aliases deferred) -> status resolution -> the commit boundary.
     from easyicu.research_agent import pipeline_execute
 
     source = inspect.getsource(pipeline_execute.run_execute_phase)
@@ -973,19 +978,11 @@ def test_figure_repair_precedes_output_evidence_and_numeric_claim_seal():
     status_resolution = source.index(
         'step_record["status"] = _step_status_from_contract_findings('
     )
-    numeric_authority_publish = source.rindex("_register_current_step_numeric_claims()")
-    result_authority_publish = source.rindex(
-        "evidence_registrar.promote_validated_step("
-    )
+    commit = source.rindex("step_evidence_commit.commit_validated_step(")
     final_repair = source.rindex("_repair_publication_figure_in_staging(")
 
     assert final_repair < seal < artifact_registration < numeric_registration
-    assert (
-        numeric_registration
-        < status_resolution
-        < numeric_authority_publish
-        < result_authority_publish
-    )
+    assert numeric_registration < status_resolution < commit
     assert "publish_aliases=False" in source[artifact_registration:status_resolution]
     assert (
         "_repair_publication_figure_in_staging(" not in source[artifact_registration:]
