@@ -21,6 +21,7 @@ place.
 This works with any provider (DeepSeek, OpenRouter, …): the selection is a
 plain plan/JSON call, so there is no per-model integration.
 """
+
 from __future__ import annotations
 
 import json
@@ -36,7 +37,11 @@ from .data_catalog import (
     build_available_catalog,
 )
 from .llm import LLMClient, LLMMessage
-
+from .intake.materialized_metadata import (
+    MaterializedCohortAuthorityRef,
+    MaterializedMetadataError,
+    load_verified_materialized_cohort_authority,
+)
 
 _SELECTION_SYSTEM = (
     "You are the data-foundation step of an ICU research agent. You are given "
@@ -107,11 +112,15 @@ class DataFoundationAgent:
     ) -> ConceptSelection:
         user = (
             f"RESEARCH QUESTION:\n{question}\n\n"
-            + (f"TARGET OUTCOME concept: {target_outcome}\n\n" if target_outcome else "")
+            + (
+                f"TARGET OUTCOME concept: {target_outcome}\n\n"
+                if target_outcome
+                else ""
+            )
             + catalog.render_for_prompt()
-            + "\n\nReturn JSON: {\"selected_concepts\": [concept_id, ...], "
-            "\"inclusion_exclusion\": [\"plain-text criterion\", ...], "
-            "\"rationale\": \"why these concepts\"}. "
+            + '\n\nReturn JSON: {"selected_concepts": [concept_id, ...], '
+            '"inclusion_exclusion": ["plain-text criterion", ...], '
+            '"rationale": "why these concepts"}. '
             "selected_concepts MUST be a subset of the catalog above."
         )
         raw = self.llm.complete(
@@ -125,8 +134,12 @@ class DataFoundationAgent:
             temperature=0.1,
         )
         data = _extract_json(raw) or {}
-        selected = [str(c) for c in (data.get("selected_concepts") or []) if str(c).strip()]
-        incl = [str(x) for x in (data.get("inclusion_exclusion") or []) if str(x).strip()]
+        selected = [
+            str(c) for c in (data.get("selected_concepts") or []) if str(c).strip()
+        ]
+        incl = [
+            str(x) for x in (data.get("inclusion_exclusion") or []) if str(x).strip()
+        ]
         rationale = str(data.get("rationale") or "")
         coverage = assess_coverage(selected, catalog)
         return ConceptSelection(
@@ -156,11 +169,15 @@ class AcquisitionResult:
     selection_usage: Optional[Dict[str, int]] = None
     selection_cost_usd: Optional[float] = None
     selection_model: Optional[str] = None
+    cohort_authority_path: Optional[Path] = None
+    cohort_authority_ref: Optional[MaterializedCohortAuthorityRef] = None
 
     def to_dict(self) -> Dict[str, Any]:
-        return {
+        payload = {
             "universe_path": str(self.universe_path) if self.universe_path else None,
-            "provenance_path": str(self.provenance_path) if self.provenance_path else None,
+            "provenance_path": (
+                str(self.provenance_path) if self.provenance_path else None
+            ),
             "selection": self.selection.to_dict(),
             "materialized_concepts": list(self.materialized_concepts),
             "coverage": self.coverage.to_dict(),
@@ -170,6 +187,14 @@ class AcquisitionResult:
             "selection_cost_usd": self.selection_cost_usd,
             "selection_model": self.selection_model,
         }
+        if (self.cohort_authority_path is None) != (self.cohort_authority_ref is None):
+            raise MaterializedMetadataError(
+                "cohort authority path and reference must be present together"
+            )
+        if self.cohort_authority_path is not None:
+            payload["cohort_authority_path"] = str(self.cohort_authority_path)
+            payload["cohort_authority_ref"] = self.cohort_authority_ref.to_dict()
+        return payload
 
 
 def _selection_cost(llm: LLMClient) -> tuple:
@@ -221,6 +246,13 @@ def _augment_certified_followup_columns(parquet_path: Path) -> Optional[Dict[str
     universes (which carry no ``death_time``) are untouched. Returns a small
     provenance dict, or None when the columns are absent.
     """
+    # A typed-v2 cohort must remain an exact, sealed data-layer product.  The
+    # choice and definition of a survival estimand belongs to the research
+    # Agent, so this legacy convenience transform must not append untyped
+    # columns or invalidate the selected materialized authority.
+    if load_verified_materialized_cohort_authority(parquet_path) is not None:
+        return None
+
     import pandas as pd  # local import: pandas is a project dependency
 
     try:
@@ -318,6 +350,16 @@ def acquire_universe_for_question(
         for c in available_selected
         if c not in set(outcome_concepts) | set(static_concepts)
     ]
+    typed_catalog = any(item.typed_metadata for item in catalog.concepts)
+    if typed_catalog:
+        static_coverage = assess_coverage(list(static_concepts), catalog)
+        effective_static_concepts = [
+            concept
+            for concept in static_concepts
+            if concept in static_coverage.available
+        ]
+    else:
+        effective_static_concepts = list(static_concepts)
 
     # Hard block only when the outcome itself cannot be sourced — every other
     # gap is advisory (re-extract) and we proceed on what is present.
@@ -346,7 +388,7 @@ def acquire_universe_for_question(
         database=database,
         data_path=str(export_dir),
         outcome_concepts=list(outcome_concepts),
-        static_concepts=list(static_concepts),
+        static_concepts=effective_static_concepts,
         cohort_window=cohort_window,
         # no cohort_definition => wide universe; agent does 纳排 in-sandbox
         # Also emit the long-format trajectory for the analysis concepts so the
@@ -361,6 +403,14 @@ def acquire_universe_for_question(
     # Certify an ICU-anchored survival follow-up column when the universe carries
     # a time-to-event outcome (death + death_time + los_hosp). No-op otherwise.
     followup_provenance = _augment_certified_followup_columns(Path(paths["parquet"]))
+    verified_authority = load_verified_materialized_cohort_authority(
+        Path(paths["parquet"])
+    )
+    if "cohort_authority" in paths and verified_authority is None:
+        raise MaterializedMetadataError(
+            "typed materializer declared an authority but acquisition could not "
+            "verify it"
+        )
     note = ""
     if followup_provenance is not None:
         note = (
@@ -372,12 +422,19 @@ def acquire_universe_for_question(
     if not coverage.sufficient:
         note = (
             "Some agent-requested concepts are not in the provided data; "
-            "proceeding on the available subset. Advice: "
-            + " ".join(coverage.advice)
+            "proceeding on the available subset. Advice: " + " ".join(coverage.advice)
         )
     return AcquisitionResult(
         universe_path=Path(paths["parquet"]),
         provenance_path=Path(paths["provenance"]),
+        cohort_authority_path=(
+            Path(paths["parquet"]).parent / verified_authority.reference.file
+            if verified_authority is not None
+            else None
+        ),
+        cohort_authority_ref=(
+            verified_authority.reference if verified_authority is not None else None
+        ),
         selection=selection,
         materialized_concepts=feature_concepts,
         coverage=coverage,

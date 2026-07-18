@@ -13,6 +13,7 @@ from easyicu.concept.metadata_projection import (
     MetadataProjectionError,
     NumericBounds,
     canonical_metadata_bytes,
+    derive_concept_column_metadata,
     metadata_payload_sha256,
     metadata_sha256,
     project_concept_column_metadata,
@@ -191,6 +192,189 @@ def test_event_status_and_fraction_are_typed_without_physiological_metadata():
     assert fraction.allowed_values is None
     assert fraction.canonical_unit is None
     assert fraction.extraction_bounds is None
+
+
+def test_derived_materialized_metadata_preserves_source_authority_without_lookup():
+    source = project_concept_column_metadata(
+        _definition("lact"),
+        spec=_spec("lact", ConceptColumnRole.VALUE),
+        source_database="miiv",
+        analysis_plausibility_range=NumericBounds(0, 30),
+    )
+
+    derived = derive_concept_column_metadata(
+        source,
+        spec=_spec(
+            "lact_max",
+            ConceptColumnRole.NUMERIC_AGGREGATE,
+            aggregation="max",
+        ),
+    )
+
+    assert derived.column_name == "lact_max"
+    assert derived.role is ConceptColumnRole.NUMERIC_AGGREGATE
+    assert derived.aggregation == "max"
+    assert derived.extraction_bounds == NumericBounds(0, 50)
+    assert derived.analysis_plausibility_range == NumericBounds(0, 30)
+    for field in (
+        "source_concept",
+        "source_database",
+        "dictionary_source_database",
+        "source_resolution_chain",
+        "available_databases",
+        "source_declared_for_database",
+        "availability_basis",
+        "source_lineage",
+        "derived_from_concepts",
+    ):
+        assert getattr(derived, field) == getattr(source, field)
+
+
+@pytest.mark.parametrize(
+    ("role", "column_name", "aggregation", "time_origin", "time_unit"),
+    [
+        (ConceptColumnRole.COUNT, "lact_n", None, None, None),
+        (
+            ConceptColumnRole.MEASUREMENT_STATUS,
+            "lact_measured",
+            None,
+            None,
+            None,
+        ),
+        (
+            ConceptColumnRole.FIRST_OBSERVATION_TIME,
+            "lact_first_time",
+            None,
+            "icu_admission",
+            "h",
+        ),
+    ],
+)
+def test_derived_structural_metadata_strips_source_physiology(
+    role, column_name, aggregation, time_origin, time_unit
+):
+    source = project_concept_column_metadata(
+        _definition("lact"),
+        spec=_spec("lact", ConceptColumnRole.VALUE),
+        source_database="miiv",
+        analysis_plausibility_range=NumericBounds(0, 30),
+    )
+
+    derived = derive_concept_column_metadata(
+        source,
+        spec=_spec(
+            column_name,
+            role,
+            aggregation=aggregation,
+            time_origin=time_origin,
+            time_unit=time_unit,
+        ),
+    )
+
+    assert derived.canonical_unit is None
+    assert derived.accepted_units == ()
+    assert derived.extraction_bounds is None
+    assert derived.analysis_plausibility_range is None
+    assert derived.source_lineage == source.source_lineage
+
+
+def test_derived_metadata_rejects_source_concept_rebinding():
+    source = project_concept_column_metadata(
+        _definition("lact"),
+        spec=_spec("lact", ConceptColumnRole.VALUE),
+        source_database="miiv",
+    )
+
+    with pytest.raises(MetadataProjectionError):
+        derive_concept_column_metadata(
+            source,
+            spec=_spec(
+                "decoy_max",
+                ConceptColumnRole.NUMERIC_AGGREGATE,
+                source_concept="decoy",
+                aggregation="max",
+            ),
+        )
+
+
+@pytest.mark.parametrize(
+    ("source_role", "derived_role", "aggregation", "time_origin", "time_unit"),
+    [
+        (
+            ConceptColumnRole.VALUE,
+            ConceptColumnRole.EVENT_STATUS,
+            "any",
+            None,
+            None,
+        ),
+        (
+            ConceptColumnRole.VALUE,
+            ConceptColumnRole.EVENT_FRACTION,
+            "mean",
+            None,
+            None,
+        ),
+        (
+            ConceptColumnRole.EVENT_STATUS,
+            ConceptColumnRole.NUMERIC_AGGREGATE,
+            "max",
+            None,
+            None,
+        ),
+        (
+            ConceptColumnRole.COUNT,
+            ConceptColumnRole.VALUE,
+            None,
+            None,
+            None,
+        ),
+        (
+            ConceptColumnRole.FIRST_OBSERVATION_TIME,
+            ConceptColumnRole.VALUE,
+            None,
+            None,
+            None,
+        ),
+    ],
+)
+def test_derived_metadata_rejects_role_escalation(
+    source_role,
+    derived_role,
+    aggregation,
+    time_origin,
+    time_unit,
+):
+    source = project_concept_column_metadata(
+        _definition("lact"),
+        spec=_spec(
+            "lact_source",
+            source_role,
+            aggregation=(
+                "max" if source_role is ConceptColumnRole.NUMERIC_AGGREGATE else None
+            ),
+            time_origin=(
+                "icu_admission"
+                if source_role is ConceptColumnRole.FIRST_OBSERVATION_TIME
+                else None
+            ),
+            time_unit=(
+                "h" if source_role is ConceptColumnRole.FIRST_OBSERVATION_TIME else None
+            ),
+        ),
+        source_database="miiv",
+    )
+
+    with pytest.raises(MetadataProjectionError, match="not authorized"):
+        derive_concept_column_metadata(
+            source,
+            spec=_spec(
+                "derived",
+                derived_role,
+                aggregation=aggregation,
+                time_origin=time_origin,
+                time_unit=time_unit,
+            ),
+        )
 
 
 @pytest.mark.parametrize(

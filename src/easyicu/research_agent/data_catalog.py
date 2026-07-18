@@ -28,6 +28,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Mapping, Optional, Sequence, Union
 
+from easyicu.concept.metadata_sidecar import ColumnMetadataBinding
+
 from .intake.export_package import index_export_package, resolve_exported_concept
 
 
@@ -43,6 +45,8 @@ class CatalogConcept:
     # Compact advisory methodology tag (derived from concept structure), e.g.
     # "treatment: confounder vs mediator?". Empty for a plain-safe concept.
     methodology: str = ""
+    resolved_column: str = ""
+    typed_metadata: bool = False
 
 
 @dataclass
@@ -179,18 +183,54 @@ def build_available_catalog(export_dir: Union[str, Path]) -> AvailableCatalog:
     from.
     """
     index = index_export_package(export_dir)
-    meta = _concept_dict_meta()
     concepts: List[CatalogConcept] = []
-    for cid, info in index.items():
-        m = meta.get(cid, {})
-        category = m.get("category", "")
+    typed_index = any(info.get("column_metadata_v2") is True for info in index.values())
+    # A typed package already sealed its prompt-facing semantics.  Re-reading
+    # the mutable packaged dictionary here would create a second authority and
+    # allow descriptions/categories to drift after export.
+    meta = {} if typed_index else _concept_dict_meta()
+    if typed_index:
+        primary_by_source: Dict[str, List[tuple[str, Mapping[str, object]]]] = {}
+        for column, info in index.items():
+            source_concept = info.get("source_concept")
+            if (
+                not isinstance(source_concept, str)
+                or not source_concept
+                or info.get("column_metadata_role") not in {"value", "event_status"}
+            ):
+                continue
+            primary_by_source.setdefault(source_concept, []).append((column, info))
+        catalog_rows = [
+            (source_concept, owned[0][0], owned[0][1], True)
+            for source_concept, owned in sorted(primary_by_source.items())
+            if len(owned) == 1
+        ]
+    else:
+        # Preserve legacy manifest insertion order exactly.
+        catalog_rows = [(cid, cid, info, False) for cid, info in index.items()]
+
+    for cid, resolved_column, info, typed_metadata in catalog_rows:
+        if typed_metadata:
+            binding = info.get("column_metadata_binding")
+            if not isinstance(binding, ColumnMetadataBinding):
+                raise ValueError(
+                    f"typed catalog concept {cid!r} lacks sealed column metadata"
+                )
+            description = binding.metadata.description or ""
+            category = binding.metadata.category or ""
+        else:
+            m = meta.get(cid, {})
+            description = m.get("description", "")
+            category = m.get("category", "")
         concepts.append(
             CatalogConcept(
                 concept_id=cid,
-                description=m.get("description", ""),
+                description=description,
                 category=category,
                 file_name=str(info.get("file_name", "")),
                 n_rows=int(info.get("rows", 0) or 0),
+                resolved_column=resolved_column,
+                typed_metadata=typed_metadata,
                 methodology=_methodology_tag(cid, category),
             )
         )
@@ -215,7 +255,19 @@ def assess_coverage(
     export index (e.g. columns already in a provided cohort parquet) as
     present, so a pre-filtered cohort is judged against its own columns.
     """
-    index = {c.concept_id: {"columns": [c.concept_id]} for c in catalog.concepts}
+    index = {
+        c.concept_id: (
+            {
+                "column_metadata_v2": True,
+                "source_concept": c.concept_id,
+                "column_metadata_role": "value",
+            }
+            if c.typed_metadata
+            else {"columns": [c.concept_id]}
+        )
+        for c in catalog.concepts
+    }
+    by_id = {c.concept_id: c for c in catalog.concepts}
     extra = set(extra_available or [])
     resolved: Dict[str, str] = {}
     available: List[str] = []
@@ -232,7 +284,8 @@ def assess_coverage(
             continue
         hit = resolve_exported_concept(index, concept)
         if hit is not None:
-            resolved[concept] = hit
+            catalog_entry = by_id[hit]
+            resolved[concept] = catalog_entry.resolved_column or hit
             available.append(concept)
         else:
             missing.append(concept)

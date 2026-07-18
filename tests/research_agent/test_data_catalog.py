@@ -6,6 +6,13 @@ import json
 
 import pandas as pd
 
+from easyicu.concept.metadata_projection import (
+    ColumnProjectionSpec,
+    ConceptColumnRole,
+    project_concept_column_metadata,
+)
+from easyicu.concept.metadata_sidecar import ColumnMetadataBinding
+from easyicu.resources import load_dictionary
 from easyicu.research_agent.data_catalog import (
     AvailableCatalog,
     CatalogConcept,
@@ -13,6 +20,24 @@ from easyicu.research_agent.data_catalog import (
     assess_coverage,
     build_available_catalog,
 )
+
+
+def _typed_binding(
+    concept: str, column: str, role: ConceptColumnRole
+) -> ColumnMetadataBinding:
+    definition = load_dictionary(include_sofa2=True).get(concept)
+    assert definition is not None
+    return ColumnMetadataBinding(
+        metadata=project_concept_column_metadata(
+            definition,
+            spec=ColumnProjectionSpec(
+                column_name=column,
+                source_concept=concept,
+                role=role,
+            ),
+            source_database="miiv",
+        )
+    )
 
 
 def _catalog(*ids: str) -> AvailableCatalog:
@@ -94,6 +119,110 @@ def test_build_available_catalog_from_export_dir(tmp_path):
     ids = set(cat.ids())
     assert {"lact", "sofa2"} <= ids
     assert "stay_id" not in ids and "charttime" not in ids
+
+
+def test_typed_catalog_exposes_source_owner_not_physical_companions(monkeypatch):
+    monkeypatch.setattr(
+        "easyicu.research_agent.data_catalog.index_export_package",
+        lambda _root: {
+            "lact": {
+                "column_metadata_v2": True,
+                "source_concept": "lact",
+                "column_metadata_role": "value",
+                "file_name": "labs.parquet",
+                "rows": 2,
+                "column_metadata_binding": _typed_binding(
+                    "lact", "lact", ConceptColumnRole.VALUE
+                ),
+            },
+            "lact_n": {
+                "column_metadata_v2": True,
+                "source_concept": "lact",
+                "column_metadata_role": "count",
+                "file_name": "labs.parquet",
+                "rows": 2,
+            },
+            "lact_measured": {
+                "column_metadata_v2": True,
+                "source_concept": "lact",
+                "column_metadata_role": "measurement_status",
+                "file_name": "labs.parquet",
+                "rows": 2,
+            },
+            "death": {
+                "column_metadata_v2": True,
+                "source_concept": "death",
+                "column_metadata_role": "event_status",
+                "file_name": "outcomes.parquet",
+                "rows": 2,
+                "column_metadata_binding": _typed_binding(
+                    "death", "death", ConceptColumnRole.EVENT_STATUS
+                ),
+            },
+        },
+    )
+
+    catalog = build_available_catalog("unused")
+
+    assert catalog.ids() == ["death", "lact"]
+    assert {item.concept_id: item.resolved_column for item in catalog.concepts} == {
+        "death": "death",
+        "lact": "lact",
+    }
+    assert assess_coverage(["lact", "death"], catalog).sufficient
+    companion = assess_coverage(["lact_n"], catalog)
+    assert companion.sufficient is False
+    assert companion.missing == ["lact_n"]
+
+
+def test_typed_catalog_omits_ambiguous_primary_owner(monkeypatch):
+    monkeypatch.setattr(
+        "easyicu.research_agent.data_catalog.index_export_package",
+        lambda _root: {
+            "signal_a": {
+                "column_metadata_v2": True,
+                "source_concept": "signal",
+                "column_metadata_role": "value",
+            },
+            "signal_b": {
+                "column_metadata_v2": True,
+                "source_concept": "signal",
+                "column_metadata_role": "event_status",
+            },
+        },
+    )
+
+    catalog = build_available_catalog("unused")
+
+    assert catalog.ids() == []
+    assert assess_coverage(["signal"], catalog).sufficient is False
+
+
+def test_typed_catalog_uses_sealed_metadata_not_mutable_dictionary(monkeypatch):
+    binding = _typed_binding("lact", "lact", ConceptColumnRole.VALUE)
+    monkeypatch.setattr(
+        "easyicu.research_agent.data_catalog.index_export_package",
+        lambda _root: {
+            "lact": {
+                "column_metadata_v2": True,
+                "source_concept": "lact",
+                "column_metadata_role": "value",
+                "column_metadata_binding": binding,
+                "file_name": "labs.parquet",
+                "rows": 2,
+            }
+        },
+    )
+    monkeypatch.setattr(
+        "easyicu.research_agent.data_catalog._concept_dict_meta",
+        lambda: {"lact": {"description": "MUTABLE DECOY", "category": "decoy"}},
+    )
+
+    catalog = build_available_catalog("unused")
+
+    assert catalog.concepts[0].description == (binding.metadata.description or "")
+    assert catalog.concepts[0].category == (binding.metadata.category or "")
+    assert catalog.concepts[0].description != "MUTABLE DECOY"
 
 
 def test_render_for_prompt_groups_by_category_and_lists_ids():

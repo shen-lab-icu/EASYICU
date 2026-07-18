@@ -39,10 +39,14 @@ inclusion/exclusion (纳排) deterministically and auditably.
 from __future__ import annotations
 
 import hashlib
+import inspect
 import json
+import os
+import re
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
+from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple, Union
+import uuid
 
 import numpy as np
 import pandas as pd
@@ -64,9 +68,18 @@ from .intake.export_package import (
     require_canonical_time_projection,
     verify_export_package,
 )
+from .intake.materialized_metadata import MaterializedColumnMetadataCollector
+from .intake.materialized_metadata import (
+    MaterializedMetadataError,
+    implementation_bundle_sha256,
+    prepare_real_directory,
+)
+from easyicu.concept.metadata_projection import ConceptColumnRole
 
 Window = Tuple[float, float]
 _FALSE_TOKENS = {"", "0", "false", "f", "no", "n", "none", "nan", "na", "null", "off"}
+_STRICT_EVENT_FALSE_TOKENS = {"0", "false", "f", "no", "n", "off"}
+_STRICT_EVENT_TRUE_TOKENS = {"1", "true", "t", "yes", "y", "on"}
 
 
 def _truthy_series(values: pd.Series) -> pd.Series:
@@ -87,6 +100,213 @@ def _truthy_series(values: pd.Series) -> pd.Series:
     return out
 
 
+def _strict_event_status_series(values: pd.Series, *, concept: str) -> pd.Series:
+    """Decode a typed event status without laundering arbitrary values.
+
+    The legacy path intentionally remains permissive.  A typed
+    ``EVENT_STATUS`` binding, however, is an authority claim that the physical
+    values are binary.  Accept only booleans, exact numeric 0/1, and canonical
+    textual spellings of those two levels; preserve physical nulls as ``False``
+    for the existing whole-stay/event-summary callers.
+    """
+
+    out = pd.Series(False, index=values.index, dtype=bool)
+    for index, value in values.items():
+        if pd.isna(value):
+            continue
+        if isinstance(value, (bool, np.bool_)):
+            out.at[index] = bool(value)
+            continue
+        if isinstance(value, (int, float, np.integer, np.floating)):
+            numeric = float(value)
+            if np.isfinite(numeric) and numeric in {0.0, 1.0}:
+                out.at[index] = bool(int(numeric))
+                continue
+            raise MaterializedMetadataError(
+                f"typed event concept {concept!r} contains a non-binary numeric value"
+            )
+        token = str(value).strip().lower()
+        if token in _STRICT_EVENT_TRUE_TOKENS:
+            out.at[index] = True
+            continue
+        if token in _STRICT_EVENT_FALSE_TOKENS:
+            out.at[index] = False
+            continue
+        raise MaterializedMetadataError(
+            f"typed event concept {concept!r} contains an unrecognised status value"
+        )
+    return out
+
+
+def _require_finite_numeric(
+    values: pd.Series,
+    *,
+    original: pd.Series,
+    concept: str,
+    purpose: str,
+) -> pd.Series:
+    """Fail closed on lossy or non-finite typed numeric conversion."""
+
+    newly_invalid = original.notna() & values.isna()
+    if bool(newly_invalid.any()):
+        raise MaterializedMetadataError(
+            f"typed value {purpose} {concept!r} has lossy numeric coercion"
+        )
+    nonfinite = values.notna() & ~np.isfinite(values.astype(float))
+    if bool(nonfinite.any()):
+        raise MaterializedMetadataError(
+            f"typed value {purpose} {concept!r} contains a non-finite value"
+        )
+    return values
+
+
+def _enforce_sealed_numeric_bounds(
+    values: pd.Series,
+    *,
+    bounds: object,
+    concept: str,
+    label: str,
+) -> None:
+    """Fail closed when a range-preserving value leaves sealed bounds."""
+
+    if bounds is None:
+        return
+    minimum = getattr(bounds, "minimum", None)
+    maximum = getattr(bounds, "maximum", None)
+    outside = pd.Series(False, index=values.index)
+    if minimum is not None:
+        outside |= values.notna() & (values < float(minimum))
+    if maximum is not None:
+        outside |= values.notna() & (values > float(maximum))
+    if bool(outside.any()):
+        raise MaterializedMetadataError(
+            f"typed value {concept!r} is outside sealed {label}"
+        )
+
+
+def _bounded_typed_numeric(
+    values: pd.Series,
+    *,
+    original: pd.Series,
+    metadata: object,
+    concept: str,
+    purpose: str,
+) -> pd.Series:
+    numeric = _require_finite_numeric(
+        values,
+        original=original,
+        concept=concept,
+        purpose=purpose,
+    )
+    _enforce_sealed_numeric_bounds(
+        numeric,
+        bounds=getattr(metadata, "extraction_bounds", None),
+        concept=concept,
+        label="extraction bounds",
+    )
+    return numeric
+
+
+def _normalize_typed_output_domain(
+    frame: pd.DataFrame,
+    *,
+    collector: MaterializedColumnMetadataCollector,
+) -> tuple[pd.DataFrame, List[str]]:
+    """Validate every typed output against its sealed physical-role contract."""
+
+    event_columns: List[str] = []
+    for column in collector.owned_columns:
+        if column not in frame.columns:
+            continue
+        binding = collector.binding_for_output(column)
+        if binding is None:  # pragma: no cover - owned_columns comes from bindings
+            raise MaterializedMetadataError(
+                f"typed output {column!r} lost its metadata binding"
+            )
+        metadata = binding.metadata
+        role = metadata.role
+        values = frame[column]
+        if role is ConceptColumnRole.EVENT_STATUS:
+            decoded = _strict_event_status_series(values, concept=column)
+            frame[column] = decoded.astype(int)
+            event_columns.append(column)
+            continue
+        if role is ConceptColumnRole.MEASUREMENT_STATUS:
+            numeric = _require_finite_numeric(
+                pd.to_numeric(values, errors="coerce"),
+                original=values,
+                concept=column,
+                purpose="measurement-status output",
+            ).fillna(0)
+            if bool((~numeric.isin([0, 1])).any()):
+                raise MaterializedMetadataError(
+                    f"typed measurement-status output {column!r} is not binary"
+                )
+            frame[column] = numeric.astype(int)
+            continue
+        if role is ConceptColumnRole.EVENT_FRACTION:
+            numeric = _require_finite_numeric(
+                pd.to_numeric(values, errors="coerce"),
+                original=values,
+                concept=column,
+                purpose="event-fraction output",
+            ).fillna(0.0)
+            if bool(((numeric < 0) | (numeric > 1)).any()):
+                raise MaterializedMetadataError(
+                    f"typed event-fraction output {column!r} is outside [0, 1]"
+                )
+            frame[column] = numeric.astype(float)
+            event_columns.append(column)
+            continue
+        if role is ConceptColumnRole.COUNT:
+            numeric = _require_finite_numeric(
+                pd.to_numeric(values, errors="coerce"),
+                original=values,
+                concept=column,
+                purpose="count output",
+            ).fillna(0)
+            if bool(((numeric < 0) | (numeric % 1 != 0)).any()):
+                raise MaterializedMetadataError(
+                    f"typed count output {column!r} is not a non-negative integer"
+                )
+            frame[column] = numeric.astype("int64")
+            continue
+        if role is ConceptColumnRole.NUMERIC_AGGREGATE:
+            frame[column] = _bounded_typed_numeric(
+                pd.to_numeric(values, errors="coerce"),
+                original=values,
+                metadata=metadata,
+                concept=column,
+                purpose="numeric aggregate output",
+            )
+            continue
+        if role in {
+            ConceptColumnRole.FIRST_OBSERVATION_TIME,
+            ConceptColumnRole.LAST_OBSERVATION_TIME,
+            ConceptColumnRole.EVENT_TIME,
+        }:
+            frame[column] = _require_finite_numeric(
+                pd.to_numeric(values, errors="coerce"),
+                original=values,
+                concept=column,
+                purpose="numeric output",
+            )
+            continue
+        if role is ConceptColumnRole.VALUE and (
+            metadata.canonical_unit is not None
+            or metadata.extraction_bounds is not None
+            or metadata.analysis_plausibility_range is not None
+        ):
+            frame[column] = _bounded_typed_numeric(
+                pd.to_numeric(values, errors="coerce"),
+                original=values,
+                metadata=metadata,
+                concept=column,
+                purpose="physical value output",
+            )
+    return frame, event_columns
+
+
 def _is_positive_only_boolean(series: pd.Series) -> bool:
     """True iff every non-NA value is boolean ``True`` (the positive level).
 
@@ -105,6 +325,34 @@ def _is_positive_only_boolean(series: pd.Series) -> bool:
 
 # Summary suffixes emitted by `_summarize_timeseries` for a time-series concept.
 _EVENT_SUMMARY_SUFFIXES = ("_max", "_min", "_mean", "_first")
+_SEMANTIC_PROVENANCE_KEYS = (
+    "schema_version",
+    "source_mode",
+    "export_authority",
+    "database",
+    "cohort_window_hours",
+    "feature_concepts",
+    "outcome_concepts",
+    "static_concepts",
+    "cohort_definition",
+    "n_stays_extracted",
+    "n_stays_after_inclusion_exclusion",
+    "unavailable_concepts",
+    "event_indicator_columns_normalized",
+    "columns",
+    "cohort_sha256",
+)
+
+
+def _semantic_materialization_provenance(
+    provenance: Mapping[str, object],
+) -> dict[str, object]:
+    missing = [key for key in _SEMANTIC_PROVENANCE_KEYS if key not in provenance]
+    if missing:
+        raise MaterializedMetadataError(
+            "materialization provenance lacks semantic keys: " + ", ".join(missing)
+        )
+    return {key: provenance[key] for key in _SEMANTIC_PROVENANCE_KEYS}
 
 
 def _normalize_event_indicator_columns(wide: pd.DataFrame) -> List[str]:
@@ -182,8 +430,41 @@ _AGG_FUNCS = {
 def _coerce_int_stay(df: pd.DataFrame) -> pd.DataFrame:
     if df is None or ID_COL not in df.columns:
         return df
+
+    def parse(value: object) -> int:
+        if isinstance(value, (bool, np.bool_)) or pd.isna(value):
+            raise MaterializedMetadataError("stay identity must be an exact integer")
+        if isinstance(value, (int, np.integer)):
+            parsed = int(value)
+        elif isinstance(value, str):
+            if re.fullmatch(r"-?(0|[1-9][0-9]*)", value) is None or value == "-0":
+                raise MaterializedMetadataError(
+                    "stay identity string must be a canonical integer"
+                )
+            parsed = int(value)
+        elif isinstance(value, (float, np.floating)):
+            numeric = float(value)
+            if (
+                not np.isfinite(numeric)
+                or not numeric.is_integer()
+                or abs(numeric) >= 2**53
+            ):
+                raise MaterializedMetadataError(
+                    "floating stay identity is not exactly representable"
+                )
+            parsed = int(numeric)
+        else:
+            raise MaterializedMetadataError("stay identity must be an exact integer")
+        if parsed < np.iinfo(np.int64).min or parsed > np.iinfo(np.int64).max:
+            raise MaterializedMetadataError("stay identity exceeds int64 bounds")
+        return parsed
+
     out = df.copy()
-    out[ID_COL] = out[ID_COL].astype("float").astype("Int64").astype("int64")
+    out[ID_COL] = pd.Series(
+        (parse(value) for value in out[ID_COL].tolist()),
+        index=out.index,
+        dtype="int64",
+    )
     return out
 
 
@@ -308,9 +589,24 @@ def _summarize_timeseries(
     df: pd.DataFrame, concept: str, window: Window
 ) -> pd.DataFrame:
     """Per-stay summary columns for one time-series concept over ``window``."""
+    out, _presence_encoded = _summarize_timeseries_with_representation(
+        df, concept, window
+    )
+    return out
+
+
+def _summarize_timeseries_with_representation(
+    df: pd.DataFrame,
+    concept: str,
+    window: Window,
+    *,
+    source_role: Optional[ConceptColumnRole] = None,
+) -> tuple[pd.DataFrame, bool]:
+    """Return the summary plus whether values were encoded as event presence."""
+
     w = _window(df, window[0], window[1])
     if w.empty or concept not in w.columns:
-        return pd.DataFrame(columns=[ID_COL])
+        return pd.DataFrame(columns=[ID_COL]), False
     # Timing (onset/last-record time) is taken from the RAW non-null values
     # before the presence-coercion below, so a categorical event keeps its true
     # onset charttime rather than the window start.
@@ -323,12 +619,40 @@ def _summarize_timeseries(
     # event concept and we summarise its PRESENCE (1 = recorded in window), so
     # `_max` reads as "ever" and `_mean` as the within-window event fraction.
     col = w[concept]
-    if not pd.api.types.is_numeric_dtype(col) and not pd.api.types.is_bool_dtype(col):
+    if source_role is ConceptColumnRole.EVENT_STATUS:
+        encoded = pd.Series(np.nan, index=col.index, dtype=float)
+        nonnull = col.notna()
+        encoded.loc[nonnull] = _strict_event_status_series(
+            col.loc[nonnull], concept=concept
+        ).astype(float)
+        w = w.assign(**{concept: encoded})
+        presence_encoded = True
+    elif source_role is ConceptColumnRole.VALUE:
+        if pd.api.types.is_bool_dtype(col):
+            raise MaterializedMetadataError(
+                f"typed value concept {concept!r} cannot be summarized as a boolean"
+            )
+        numeric = _require_finite_numeric(
+            pd.to_numeric(col, errors="coerce"),
+            original=col,
+            concept=concept,
+            purpose="concept",
+        )
+        w = w.assign(**{concept: numeric})
+        presence_encoded = False
+    else:
+        presence_encoded = bool(pd.api.types.is_bool_dtype(col))
+    if (
+        source_role is None
+        and not pd.api.types.is_numeric_dtype(col)
+        and not pd.api.types.is_bool_dtype(col)
+    ):
         numeric = pd.to_numeric(col, errors="coerce")
         if numeric.notna().any():
             w = w.assign(**{concept: numeric})
         else:
             w = w.assign(**{concept: _truthy_series(col).astype(float)})
+            presence_encoded = True
     grp = w.groupby(ID_COL)[concept]
     out = grp.agg(["max", "min", "mean", "count"]).reset_index()
     out.columns = [
@@ -349,11 +673,16 @@ def _summarize_timeseries(
     out[f"{concept}_measured"] = (out[f"{concept}_n"].fillna(0) > 0).astype(int)
     if not timing.empty:
         out = out.merge(timing, on=ID_COL, how="left")
-    return out
+    return out, presence_encoded
 
 
 def _predicate_column(
-    df: pd.DataFrame, concept: str, window: Window, aggregation: str
+    df: pd.DataFrame,
+    concept: str,
+    window: Window,
+    aggregation: str,
+    *,
+    source_role: Optional[ConceptColumnRole] = None,
 ) -> pd.DataFrame:
     """A bare ``<concept>`` column carrying the CTAS-declared aggregation."""
     if TIME_COL not in df.columns:
@@ -367,6 +696,35 @@ def _predicate_column(
     if agg_key not in _AGG_FUNCS:
         raise ValueError(f"unsupported cohort predicate aggregation: {aggregation!r}")
     fn = _AGG_FUNCS[agg_key]
+    if source_role is ConceptColumnRole.VALUE:
+        if agg_key in {"any", "all"}:
+            raise MaterializedMetadataError(
+                f"typed value predicate {concept!r} cannot use {agg_key!r}"
+            )
+        if agg_key != "count":
+            if pd.api.types.is_bool_dtype(w[concept]):
+                raise MaterializedMetadataError(
+                    f"typed value predicate {concept!r} cannot aggregate a boolean"
+                )
+            numeric = _require_finite_numeric(
+                pd.to_numeric(w[concept], errors="coerce"),
+                original=w[concept],
+                concept=concept,
+                purpose="predicate",
+            )
+            w = w.assign(**{concept: numeric})
+    elif source_role is ConceptColumnRole.EVENT_STATUS:
+        if agg_key in {"median", "sum"}:
+            raise MaterializedMetadataError(
+                f"typed event predicate {concept!r} cannot use {agg_key!r}"
+            )
+        if agg_key != "count":
+            encoded = pd.Series(np.nan, index=w.index, dtype=float)
+            nonnull = w[concept].notna()
+            encoded.loc[nonnull] = _strict_event_status_series(
+                w.loc[nonnull, concept], concept=concept
+            ).astype(float)
+            w = w.assign(**{concept: encoded})
     if TIME_COL in w.columns:
         w = w.sort_values([ID_COL, TIME_COL])
     out = w.groupby(ID_COL)[concept].apply(fn).reset_index()
@@ -374,23 +732,58 @@ def _predicate_column(
     return out
 
 
-def _static_column(df: pd.DataFrame, concept: str) -> pd.DataFrame:
+def _static_column(
+    df: pd.DataFrame,
+    concept: str,
+    *,
+    source_role: Optional[ConceptColumnRole] = None,
+) -> pd.DataFrame:
     cols = [ID_COL, concept] if concept in df.columns else [ID_COL]
-    return df[cols].drop_duplicates(ID_COL).copy()
+    selected = df[cols].copy()
+    if source_role is None or concept not in selected.columns:
+        return selected.drop_duplicates(ID_COL).copy()
+    conflicts = selected.groupby(ID_COL, dropna=True)[concept].nunique(dropna=True)
+    if bool((conflicts > 1).any()):
+        raise MaterializedMetadataError(
+            f"typed static concept {concept!r} has conflicting stay-level values"
+        )
+    return (
+        selected.groupby(ID_COL, dropna=True)[concept]
+        .apply(_first_nonnull)
+        .reset_index()
+    )
 
 
-def _binary_event_column(df: pd.DataFrame, concept: str) -> pd.DataFrame:
+def _binary_event_column(
+    df: pd.DataFrame,
+    concept: str,
+    *,
+    source_role: Optional[ConceptColumnRole] = None,
+) -> pd.DataFrame:
     """Whole-stay binary: 1 if the stay has any event for ``concept`` (e.g. death)."""
     if ID_COL not in df.columns:
         return pd.DataFrame(columns=[ID_COL, concept])
     if concept not in df.columns:
+        if source_role is not None:
+            raise MaterializedMetadataError(
+                f"typed outcome source {concept!r} is missing its physical column"
+            )
         ids = pd.Series(df[ID_COL].dropna().unique(), name=ID_COL)
         return pd.DataFrame({ID_COL: ids, concept: 1})
+
+    if source_role is not None and source_role is not ConceptColumnRole.EVENT_STATUS:
+        raise MaterializedMetadataError(
+            f"typed outcome {concept!r} is not authorized as an event status"
+        )
 
     work = df[[ID_COL, concept]].dropna(subset=[ID_COL]).copy()
     if work.empty:
         return pd.DataFrame(columns=[ID_COL, concept])
-    event = _truthy_series(work[concept])
+    event = (
+        _strict_event_status_series(work[concept], concept=concept)
+        if source_role is ConceptColumnRole.EVENT_STATUS
+        else _truthy_series(work[concept])
+    )
     out = (
         pd.DataFrame({ID_COL: work[ID_COL], concept: event.astype(int)})
         .groupby(ID_COL, dropna=True)[concept]
@@ -400,7 +793,12 @@ def _binary_event_column(df: pd.DataFrame, concept: str) -> pd.DataFrame:
     return out
 
 
-def _event_time_column(df: pd.DataFrame, concept: str) -> pd.DataFrame:
+def _event_time_column(
+    df: pd.DataFrame,
+    concept: str,
+    *,
+    source_role: Optional[ConceptColumnRole] = None,
+) -> pd.DataFrame:
     """Per-stay ``<concept>_time``: the ``charttime`` of the event itself.
 
     ``_binary_event_column`` collapses an outcome to a whole-stay 0/1 and drops
@@ -414,6 +812,10 @@ def _event_time_column(df: pd.DataFrame, concept: str) -> pd.DataFrame:
     Symmetric to ``_timing_columns`` for features. Returns an empty frame when
     the source has no usable time index (purely stay-level derived flags).
     """
+    if source_role is not None and source_role is not ConceptColumnRole.EVENT_STATUS:
+        raise MaterializedMetadataError(
+            f"typed outcome {concept!r} cannot produce an event time"
+        )
     if (
         TIME_COL not in df.columns
         or concept not in df.columns
@@ -423,7 +825,11 @@ def _event_time_column(df: pd.DataFrame, concept: str) -> pd.DataFrame:
     work = df[[ID_COL, TIME_COL, concept]].dropna(subset=[ID_COL]).copy()
     if work.empty:
         return pd.DataFrame(columns=[ID_COL])
-    event = _truthy_series(work[concept])
+    event = (
+        _strict_event_status_series(work[concept], concept=concept)
+        if source_role is ConceptColumnRole.EVENT_STATUS
+        else _truthy_series(work[concept])
+    )
     work = work[event & work[TIME_COL].notna()]
     if work.empty:
         return pd.DataFrame(columns=[ID_COL])
@@ -441,6 +847,82 @@ def _hash_df(df: pd.DataFrame) -> str:
     return hashlib.sha256(
         pd.util.hash_pandas_object(df, index=False).values.tobytes()
     ).hexdigest()
+
+
+def _atomic_write_parquet(frame: pd.DataFrame, path: Path) -> None:
+    temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+    try:
+        frame.to_parquet(temporary, index=False)
+        with temporary.open("rb") as handle:
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+        directory_fd = os.open(path.parent, os.O_RDONLY)
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
+    finally:
+        try:
+            temporary.unlink()
+        except FileNotFoundError:
+            pass
+
+
+def _canonical_stem(value: str) -> str:
+    if (
+        not isinstance(value, str)
+        or not value
+        or value != value.strip()
+        or Path(value).name != value
+        or value in {".", ".."}
+        or "/" in value
+        or "\\" in value
+    ):
+        raise MaterializedMetadataError(
+            "materialization stem must be one path component"
+        )
+    return value
+
+
+def _atomic_write_provenance(
+    path: Path,
+    payload: Mapping[str, object],
+    *,
+    canonical: bool,
+) -> None:
+    temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+    raw = json.dumps(
+        dict(payload),
+        indent=2,
+        ensure_ascii=False,
+        sort_keys=canonical,
+        allow_nan=not canonical,
+    ).encode("utf-8")
+    fd: Optional[int] = None
+    try:
+        fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        view = memoryview(raw)
+        while view:
+            written = os.write(fd, view)
+            if written <= 0:
+                raise OSError("short write while publishing cohort provenance")
+            view = view[written:]
+        os.fsync(fd)
+        os.close(fd)
+        fd = None
+        os.replace(temporary, path)
+        directory_fd = os.open(path.parent, os.O_RDONLY)
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
+    finally:
+        if fd is not None:
+            os.close(fd)
+        try:
+            temporary.unlink()
+        except FileNotFoundError:
+            pass
 
 
 def materialize_cohort(
@@ -461,6 +943,32 @@ def materialize_cohort(
     after applying ``cohort_definition`` (纳入排除); ``provenance`` records the
     source mode, concept list, window, attrition counts and hashes for audit.
     """
+    cohort, provenance, _collector = _materialize_cohort_with_metadata(
+        feature_concepts=feature_concepts,
+        database=database,
+        data_path=data_path,
+        cohort_definition=cohort_definition,
+        cohort_window=cohort_window,
+        outcome_concepts=outcome_concepts,
+        static_concepts=static_concepts,
+        patient_ids=patient_ids,
+        prefer_existing=prefer_existing,
+    )
+    return cohort, provenance
+
+
+def _materialize_cohort_with_metadata(
+    *,
+    feature_concepts: Sequence[str],
+    database: str,
+    data_path: Union[str, Path],
+    cohort_definition: Optional[CohortDefinition],
+    cohort_window: Window,
+    outcome_concepts: Sequence[str],
+    static_concepts: Sequence[str],
+    patient_ids: Optional[Sequence[int]],
+    prefer_existing: bool,
+) -> tuple[pd.DataFrame, Dict[str, Any], MaterializedColumnMetadataCollector]:
     t0 = time.time()
     source_mode, root = _resolve_source(data_path, prefer_existing)
     common = dict(
@@ -500,7 +1008,7 @@ def _materialize_cohort_from_resolved_source(
     root: Path,
     export_package: Optional[ExportPackage],
     t0: float,
-) -> Tuple[pd.DataFrame, Dict[str, Any]]:
+) -> tuple[pd.DataFrame, Dict[str, Any], MaterializedColumnMetadataCollector]:
     """Materialize from one already-resolved, explicitly owned source."""
 
     if (
@@ -514,16 +1022,50 @@ def _materialize_cohort_from_resolved_source(
             manifest_path=export_package.manifest_path,
         )
     source_handle: Union[Path, ExportPackage] = export_package or root
+    metadata_collector = MaterializedColumnMetadataCollector(export_package)
 
     unavailable: List[str] = []
 
     def load(concept: str) -> pd.DataFrame:
-        return _load_concept(
+        loaded = _load_concept(
             source_mode, source_handle, concept, database, patient_ids, unavailable
         )
+        if not metadata_collector.enabled or loaded.empty:
+            return loaded
+        loaded = loaded.copy()
+        if TIME_COL in loaded.columns:
+            loaded[TIME_COL] = _require_finite_numeric(
+                pd.to_numeric(loaded[TIME_COL], errors="coerce"),
+                original=loaded[TIME_COL],
+                concept=concept,
+                purpose="source time coordinate",
+            )
+        source_binding = metadata_collector.source_binding(concept)
+        if source_binding is None:
+            raise MaterializedMetadataError(
+                f"typed materialization concept {concept!r} lost its source binding"
+            )
+        source_metadata = source_binding.metadata
+        if source_metadata.role is ConceptColumnRole.EVENT_STATUS:
+            # Validate every consumed status before any aggregation, but keep
+            # physical nulls intact so ``count`` remains a measurement count.
+            _strict_event_status_series(loaded[concept], concept=concept)
+        elif source_metadata.role is ConceptColumnRole.VALUE and (
+            source_metadata.canonical_unit is not None
+            or source_metadata.extraction_bounds is not None
+            or source_metadata.analysis_plausibility_range is not None
+        ):
+            loaded[concept] = _bounded_typed_numeric(
+                pd.to_numeric(loaded[concept], errors="coerce"),
+                original=loaded[concept],
+                metadata=source_metadata,
+                concept=concept,
+                purpose="source physical value",
+            )
+        return loaded
 
     # concepts required by the CTAS cohort predicates (for 纳排)
-    pred_specs: List[Tuple[str, Window, str]] = []
+    pred_specs: List[Tuple[str, Window, str, str]] = []
     if cohort_definition is not None:
         for pred in (*cohort_definition.inclusion, *cohort_definition.exclusion):
             tw = getattr(pred, "time_window", None)
@@ -533,7 +1075,30 @@ def _materialize_cohort_from_resolved_source(
                 else cohort_window
             )
             pred_specs.append(
-                (pred.concept_id, win, getattr(pred, "aggregation", "max"))
+                (
+                    pred.concept_id,
+                    win,
+                    getattr(pred, "aggregation", "max"),
+                    str(getattr(tw, "anchor", "icu_admission")),
+                )
+            )
+    if metadata_collector.enabled:
+        by_concept: dict[str, tuple[Window, str, str]] = {}
+        for concept, window, aggregation, anchor in pred_specs:
+            spec = (window, str(aggregation), anchor)
+            previous = by_concept.get(concept)
+            if previous is not None and previous != spec:
+                raise MaterializedMetadataError(
+                    f"typed predicate {concept!r} has multiple incompatible derivations"
+                )
+            by_concept[concept] = spec
+        bounded_outcome_predicates = sorted(
+            concept for concept in by_concept if concept in set(outcome_concepts)
+        )
+        if bounded_outcome_predicates:
+            raise MaterializedMetadataError(
+                "typed timed predicates cannot reuse whole-stay outcome columns: "
+                + ", ".join(bounded_outcome_predicates)
             )
 
     static_set = list(dict.fromkeys(static_concepts))
@@ -545,7 +1110,10 @@ def _materialize_cohort_from_resolved_source(
     static_frames: List[pd.DataFrame] = []
     for c in static_set:
         df = load(c)
-        static_frames.append(_static_column(df, c))
+        source_role = metadata_collector.require_source_role(c)
+        static_frame = _static_column(df, c, source_role=source_role)
+        static_frames.append(static_frame)
+        metadata_collector.add_static(c, output_columns=static_frame.columns)
         if base is None and ID_COL in df.columns:
             base = df[[ID_COL]].drop_duplicates().copy()
     if base is None:
@@ -556,10 +1124,24 @@ def _materialize_cohort_from_resolved_source(
     # ---- time-series features -> wide per-stay summaries (over cohort_window)
     for c in feature_set:
         df = load(c)
+        source_role = metadata_collector.require_source_role(c)
         if TIME_COL in df.columns:
-            frames.append(_summarize_timeseries(df, c, cohort_window))
+            summary, _presence_encoded = _summarize_timeseries_with_representation(
+                df,
+                c,
+                cohort_window,
+                source_role=source_role,
+            )
+            frames.append(summary)
+            metadata_collector.add_timeseries(
+                c,
+                output_columns=summary.columns,
+                window=cohort_window,
+            )
         else:
-            frames.append(_static_column(df, c))
+            static_frame = _static_column(df, c, source_role=source_role)
+            frames.append(static_frame)
+            metadata_collector.add_static(c, output_columns=static_frame.columns)
 
     # ---- outcomes -> whole-stay binary (a death after 24h still counts), plus
     # the event time (<c>_time, e.g. death_time = time-of-death hours from ICU
@@ -567,38 +1149,68 @@ def _materialize_cohort_from_resolved_source(
     # (immortal-time guards, survival models) are possible.
     for c in outcome_set:
         loaded = load(c)
-        frames.append(_binary_event_column(loaded, c))
-        event_time = _event_time_column(loaded, c)
+        source_role = metadata_collector.require_source_role(c)
+        event_column = _binary_event_column(
+            loaded,
+            c,
+            source_role=source_role,
+        )
+        frames.append(event_column)
+        event_time = _event_time_column(
+            loaded,
+            c,
+            source_role=source_role,
+        )
         if not event_time.empty:
             frames.append(event_time)
+        metadata_collector.add_outcome(
+            c,
+            output_columns=tuple(event_column.columns) + tuple(event_time.columns),
+        )
 
     # ---- bare predicate columns for 纳排 (skip concepts already materialised bare)
     produced_bare = set(static_set) | set(outcome_set)
-    for concept, win, agg in pred_specs:
+    for concept, win, agg, anchor in pred_specs:
         if concept in produced_bare:
             continue
-        frames.append(_predicate_column(load(concept), concept, win, agg))
+        loaded = load(concept)
+        source_role = metadata_collector.require_source_role(concept)
+        predicate_frame = _predicate_column(
+            loaded,
+            concept,
+            win,
+            agg,
+            source_role=source_role,
+        )
+        frames.append(predicate_frame)
+        metadata_collector.add_predicate(
+            concept,
+            output_columns=predicate_frame.columns,
+            source_has_time=TIME_COL in loaded.columns,
+            aggregation=agg,
+            window=win,
+            anchor=anchor,
+        )
         produced_bare.add(concept)
 
     wide = _merge_left(base, frames)
-    for c in outcome_set:
-        if c in wide.columns:
-            wide[c] = wide[c].fillna(0).astype(int)
-    # A stay absent from a (sparse-event) concept's data has 0 measurements, not
-    # an unknown count: fill `<c>_n` / `<c>_measured` with 0 so a sparse binary
-    # event (e.g. sep3 onset) becomes a clean 0/1 cohort indicator rather than
-    # NaN. Without this, non-event stays drop out of complete-case models and a
-    # presence predictor collapses to a constant (singular design matrix).
-    for col in wide.columns:
-        if col.endswith("_n") or col.endswith("_measured"):
-            wide[col] = wide[col].fillna(0)
-            if col.endswith("_measured"):
-                wide[col] = wide[col].astype(int)
-    # Decode sparse boolean event concepts (e.g. sep3_sofa2): NA = event did
-    # not occur -> 0, not measurement-missing. Prevents a downstream consumer
-    # from misreading a structural absence as missing data and discarding the
-    # exposure.
-    event_indicator_columns = _normalize_event_indicator_columns(wide)
+    if metadata_collector.enabled:
+        wide, event_indicator_columns = _normalize_typed_output_domain(
+            wide,
+            collector=metadata_collector,
+        )
+    else:
+        for c in outcome_set:
+            if c in wide.columns:
+                wide[c] = wide[c].fillna(0).astype(int)
+        # A stay absent from a sparse concept has zero measurements in the
+        # legacy representation. Typed-v2 applies this only to owned columns.
+        for col in wide.columns:
+            if col.endswith("_n") or col.endswith("_measured"):
+                wide[col] = wide[col].fillna(0)
+                if col.endswith("_measured"):
+                    wide[col] = wide[col].astype(int)
+        event_indicator_columns = _normalize_event_indicator_columns(wide)
     n_all = int(len(wide))
 
     # ---- apply CTAS inclusion/exclusion (纳排), deterministic + auditable
@@ -629,7 +1241,7 @@ def _materialize_cohort_from_resolved_source(
         "cohort_sha256": _hash_df(cohort.reset_index(drop=True)),
         "build_seconds": round(time.time() - t0, 2),
     }
-    return cohort.reset_index(drop=True), provenance
+    return cohort.reset_index(drop=True), provenance, metadata_collector
 
 
 def build_trajectory_long(
@@ -779,31 +1391,107 @@ def materialize_to_parquet(
     agent can build onsets / incident endpoints / landmark designs that the wide
     summary cannot express. Default off — existing callers are unaffected.
     """
-    out = Path(output_dir)
-    out.mkdir(parents=True, exist_ok=True)
-    cohort, provenance = materialize_cohort(**kwargs)
+    # Keep the public ``materialize_cohort`` argument contract.  This used to
+    # forward ``**kwargs`` directly, so unknown/missing options failed rather
+    # than silently selecting defaults after the typed-metadata bridge was
+    # introduced.
+    bound = inspect.signature(materialize_cohort).bind(**kwargs)
+    bound.apply_defaults()
+    materialize_args = bound.arguments
+    stem = _canonical_stem(stem)
+    out = prepare_real_directory(
+        Path(output_dir).expanduser(), label="materialization output directory"
+    )
     parquet_path = out / f"{stem}.parquet"
     prov_path = out / f"{stem}_provenance.json"
-    cohort.to_parquet(parquet_path, index=False)
-    prov_path.write_text(
-        json.dumps(provenance, indent=2, ensure_ascii=False), encoding="utf-8"
+    cohort, provenance, metadata_collector = _materialize_cohort_with_metadata(
+        feature_concepts=materialize_args["feature_concepts"],
+        database=materialize_args["database"],
+        data_path=materialize_args["data_path"],
+        cohort_definition=materialize_args["cohort_definition"],
+        cohort_window=materialize_args["cohort_window"],
+        outcome_concepts=materialize_args["outcome_concepts"],
+        static_concepts=materialize_args["static_concepts"],
+        patient_ids=materialize_args["patient_ids"],
+        prefer_existing=materialize_args["prefer_existing"],
+    )
+    producer_parameters = {
+        "database": materialize_args["database"],
+        "cohort_window": list(materialize_args["cohort_window"]),
+        "feature_concepts": list(materialize_args["feature_concepts"]),
+        "outcome_concepts": list(materialize_args["outcome_concepts"]),
+        "static_concepts": list(materialize_args["static_concepts"]),
+        "cohort_definition": (
+            materialize_args["cohort_definition"].to_dict()
+            if materialize_args["cohort_definition"] is not None
+            else None
+        ),
+        "patient_ids": (
+            list(materialize_args["patient_ids"])
+            if materialize_args["patient_ids"] is not None
+            else None
+        ),
+        "prefer_existing": bool(materialize_args["prefer_existing"]),
+    }
+    if metadata_collector.enabled:
+        _atomic_write_provenance(
+            prov_path,
+            {
+                "schema_version": "easyicu.materialized_cohort_transaction/1",
+                "materialized_authority_required": True,
+                "column_metadata": None,
+                "authority_transaction_state": "prepared",
+            },
+            canonical=True,
+        )
+    _atomic_write_parquet(cohort, parquet_path)
+    descriptor = metadata_collector.seal_existing_cohort(
+        cohort_path=parquet_path,
+        identity_column=ID_COL,
+        source_database=materialize_args["database"],
+        producer="cohort_materializer",
+        producer_implementation_sha256=implementation_bundle_sha256(
+            (
+                Path(__file__),
+                Path(__file__).resolve().parent / "intake" / "materialized_metadata.py",
+                Path(__file__).resolve().parents[1]
+                / "concept"
+                / "metadata_projection.py",
+            )
+        ),
+        producer_parameters=producer_parameters,
+        semantic_provenance=_semantic_materialization_provenance(provenance),
+    )
+    if descriptor is not None:
+        provenance["column_metadata"] = descriptor
+        provenance["materialized_authority_required"] = True
+    _atomic_write_provenance(
+        prov_path,
+        provenance,
+        canonical=descriptor is not None,
     )
     paths = {"parquet": parquet_path, "provenance": prov_path}
+    if descriptor is not None:
+        sidecar = descriptor["sidecar"]
+        authority = descriptor["authority"]
+        assert isinstance(sidecar, dict) and isinstance(authority, dict)
+        paths["column_metadata"] = out / str(sidecar["file"])
+        paths["cohort_authority"] = out / str(authority["file"])
 
     if emit_trajectory:
         concepts = trajectory_concepts
         if concepts is None:
             concepts = [
-                *kwargs.get("outcome_concepts", ("death",)),
-                *kwargs.get("feature_concepts", ()),
+                *materialize_args["outcome_concepts"],
+                *materialize_args["feature_concepts"],
             ]
         long_df, traj_prov = build_trajectory_long(
-            data_path=kwargs["data_path"],
+            data_path=materialize_args["data_path"],
             concepts=concepts,
-            database=kwargs.get("database", "miiv"),
+            database=materialize_args["database"],
             window=trajectory_window,
-            patient_ids=kwargs.get("patient_ids"),
-            prefer_existing=kwargs.get("prefer_existing", True),
+            patient_ids=materialize_args["patient_ids"],
+            prefer_existing=materialize_args["prefer_existing"],
         )
         traj_path = out / f"{stem}_trajectory.parquet"
         traj_prov_path = out / f"{stem}_trajectory_provenance.json"
