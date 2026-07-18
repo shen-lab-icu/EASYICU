@@ -537,6 +537,32 @@ def _extract_cohort_definition_with_provider_budget(
     }
 
 
+class SealedRendererState:
+    """Mutable value object for the sealed-renderer figure-repair state.
+
+    The deterministic publication-figure generator produces this state (repair id,
+    implementation digest, parent digests, authorized product slots) and the
+    downstream visual-revalidation gate consumes it. It replaces four ``nonlocal``
+    closure variables in ``_execute_one_step`` so the generator can be lifted out
+    of that god function: the generator mutates the object's attributes in place
+    (identical semantics to the old nonlocal writes) instead of rebinding closure
+    names. Defaults match the old inline initialisers exactly (None / None / {} / {}).
+    """
+
+    __slots__ = (
+        "repair_id",
+        "implementation_sha256",
+        "parent_digests",
+        "authorized_product_slots",
+    )
+
+    def __init__(self) -> None:
+        self.repair_id: Optional[str] = None
+        self.implementation_sha256: Optional[str] = None
+        self.parent_digests: Dict[str, str] = {}
+        self.authorized_product_slots: Dict[str, str] = {}
+
+
 def _deterministic_gate_stamp() -> Dict[str, str]:
     """Return the current host-owned deterministic gate identity.
 
@@ -6898,11 +6924,8 @@ def run_execute_phase(
             ]
         worker_progress.preexecution_runner_repair_name = None
         worker_progress.runner_repair_name = None
-        sealed_renderer_repair_id: Optional[str] = None
+        sealed_renderer_state = SealedRendererState()
         sealed_renderer_authorized_code_sha256: Optional[str] = None
-        sealed_renderer_implementation_sha256: Optional[str] = None
-        sealed_renderer_parent_digests: Dict[str, str] = {}
-        sealed_renderer_authorized_product_slots: Dict[str, str] = {}
         step_current = step_order.get(step.step_id, 0) + 1
         dependency_record = _failed_dependency_record(step)
         if dependency_record is not None:
@@ -7835,10 +7858,6 @@ def run_execute_phase(
         def _deterministic_publication_figure_code(
             reason: str,
         ) -> Optional[str]:
-            nonlocal sealed_renderer_repair_id
-            nonlocal sealed_renderer_implementation_sha256
-            nonlocal sealed_renderer_parent_digests
-            nonlocal sealed_renderer_authorized_product_slots
             exact_repair_id = deterministic_figure_repair_id_for_upstream(
                 run_dir, step.step_id
             )
@@ -8051,12 +8070,14 @@ else:
             worker_progress.deterministic_fallback_used = True
             worker_progress.preexecution_runner_repair_name = repair_id
             if sealed_renderer:
-                sealed_renderer_repair_id = repair_id
-                sealed_renderer_implementation_sha256 = sealed_implementation_digest
-                sealed_renderer_parent_digests = dict(
+                sealed_renderer_state.repair_id = repair_id
+                sealed_renderer_state.implementation_sha256 = (
+                    sealed_implementation_digest
+                )
+                sealed_renderer_state.parent_digests = dict(
                     sorted((sealed_parent_digests or {}).items())
                 )
-                sealed_renderer_authorized_product_slots = dict(
+                sealed_renderer_state.authorized_product_slots = dict(
                     sorted(sealed_product_slots.items())
                 )
                 step_record["sealed_renderer_repair"] = repair_id
@@ -8068,10 +8089,10 @@ else:
                     sealed_implementation_digest
                 )
                 step_record["sealed_renderer_parent_digests"] = dict(
-                    sealed_renderer_parent_digests
+                    sealed_renderer_state.parent_digests
                 )
                 step_record["sealed_renderer_authorized_product_slots"] = dict(
-                    sealed_renderer_authorized_product_slots
+                    sealed_renderer_state.authorized_product_slots
                 )
                 step_record["planner_product_slot_binding_source"] = (
                     "planner_parent_typed_product_prefix_v2"
@@ -9021,7 +9042,7 @@ else:
                 step_record["concept_approved_code_sha256"] = (
                     concept_approved_code_digest
                 )
-                if sealed_renderer_repair_id is not None:
+                if sealed_renderer_state.repair_id is not None:
                     sealed_renderer_authorized_code_sha256 = (
                         concept_approved_code_digest
                     )
@@ -9039,7 +9060,7 @@ else:
                     findings.extend(usage_findings)
                 break
 
-            if sealed_renderer_repair_id is not None:
+            if sealed_renderer_state.repair_id is not None:
                 terminal_finding = ValidationFinding(
                     validator="sealed_renderer_authority",
                     severity="error",
@@ -9050,7 +9071,7 @@ else:
                     ),
                     detail={
                         "step_id": step.step_id,
-                        "repair_id": sealed_renderer_repair_id,
+                        "repair_id": sealed_renderer_state.repair_id,
                         "reason": "preexecution_concept_gate_failed",
                     },
                 )
@@ -9714,7 +9735,7 @@ else:
                     ),
                     detail={
                         "step_id": step.step_id,
-                        "repair_id": sealed_renderer_repair_id,
+                        "repair_id": sealed_renderer_state.repair_id,
                         "authorized_code_sha256": (
                             sealed_renderer_authorized_code_sha256
                         ),
@@ -11195,7 +11216,7 @@ else:
                             ),
                             detail={
                                 "step_id": step.step_id,
-                                "repair_id": sealed_renderer_repair_id,
+                                "repair_id": sealed_renderer_state.repair_id,
                                 "reported_rendering_only": visual_step_summary.get(
                                     "rendering_only"
                                 ),
@@ -11220,7 +11241,7 @@ else:
                     try:
                         read_digest_bound_artifact_snapshot(
                             parent_out=parent_out,
-                            artifact_digests=sealed_renderer_parent_digests,
+                            artifact_digests=sealed_renderer_state.parent_digests,
                         )
                         step_record["sealed_renderer_parent_receipt_verified"] = True
                     except ValueError:
@@ -11235,19 +11256,19 @@ else:
                                 ),
                                 detail={
                                     "step_id": step.step_id,
-                                    "repair_id": sealed_renderer_repair_id,
+                                    "repair_id": sealed_renderer_state.repair_id,
                                 },
                             )
                         )
                 if sealed_renderer_authorized_code_sha256 is not None and (
                     visual_step_summary.get("sealed_renderer_repair")
-                    != sealed_renderer_repair_id
+                    != sealed_renderer_state.repair_id
                     or visual_step_summary.get("sealed_renderer_implementation_sha256")
-                    != sealed_renderer_implementation_sha256
+                    != sealed_renderer_state.implementation_sha256
                     or visual_step_summary.get("sealed_renderer_parent_digests")
-                    != sealed_renderer_parent_digests
+                    != sealed_renderer_state.parent_digests
                     or reported_product_slots
-                    != sealed_renderer_authorized_product_slots
+                    != sealed_renderer_state.authorized_product_slots
                 ):
                     early_contract_findings.append(
                         ValidationFinding(
@@ -11259,12 +11280,12 @@ else:
                             ),
                             detail={
                                 "step_id": step.step_id,
-                                "expected_repair_id": sealed_renderer_repair_id,
+                                "expected_repair_id": sealed_renderer_state.repair_id,
                                 "reported_repair_id": visual_step_summary.get(
                                     "sealed_renderer_repair"
                                 ),
                                 "expected_implementation_sha256": (
-                                    sealed_renderer_implementation_sha256
+                                    sealed_renderer_state.implementation_sha256
                                 ),
                                 "reported_implementation_sha256": (
                                     visual_step_summary.get(
@@ -11272,13 +11293,13 @@ else:
                                     )
                                 ),
                                 "expected_parent_digests": (
-                                    sealed_renderer_parent_digests
+                                    sealed_renderer_state.parent_digests
                                 ),
                                 "reported_parent_digests": visual_step_summary.get(
                                     "sealed_renderer_parent_digests"
                                 ),
                                 "expected_product_slots": (
-                                    sealed_renderer_authorized_product_slots
+                                    sealed_renderer_state.authorized_product_slots
                                 ),
                                 "reported_product_slots": reported_product_slots,
                             },
@@ -11746,7 +11767,7 @@ else:
                     ),
                     detail={
                         "step_id": step.step_id,
-                        "repair_id": sealed_renderer_repair_id,
+                        "repair_id": sealed_renderer_state.repair_id,
                         "returncode": run_result.returncode,
                         "timed_out": run_result.timed_out,
                     },
