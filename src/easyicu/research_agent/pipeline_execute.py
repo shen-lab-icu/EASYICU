@@ -137,7 +137,7 @@ from .evidence import (
     sha256_of_file,
 )
 from .evidence_registration import (
-    EvidenceRegistrar,
+    StepEvidenceCommit,
     filter_success_alias_bindings as _filter_success_alias_bindings,
 )
 from .gate_semantics import blocking_validator_findings as _blocking_validator_findings
@@ -6492,7 +6492,7 @@ def run_execute_phase(
     # typed side channel so user prose can never be elevated to host authority.
     coder_base_context = agent_context.model_copy(update={"notes": context.notes})
     evidence = plan_result.evidence
-    evidence_registrar = EvidenceRegistrar(evidence)
+    step_evidence_commit = StepEvidenceCommit(evidence)
     findings = plan_result.findings
     plan = plan_result.plan
     plan_path = plan_result.plan_path
@@ -14293,15 +14293,15 @@ else:
         if step_record["status"] == "ok":
             try:
                 # Numeric provenance and result aliases must share one durable
-                # commit. The full-state transaction exposes both together; an alias
-                # collision or I/O failure rolls the staged claims back too.
-                with evidence.success_publication_transaction():
-                    _register_current_step_numeric_claims()
-                    promotion = evidence_registrar.promote_validated_step(
-                        step_id=step.step_id,
-                        pending_aliases=pending_success_aliases,
-                        allowed_evidence_ids=evidence_ids_for_step,
-                    )
+                # commit. StepEvidenceCommit opens the store's transaction so both
+                # go current as one generation; an alias collision or I/O failure
+                # rolls the staged claims back too.
+                promotion = step_evidence_commit.commit_validated_step(
+                    step_id=step.step_id,
+                    pending_aliases=pending_success_aliases,
+                    allowed_evidence_ids=evidence_ids_for_step,
+                    register_numeric_claims=_register_current_step_numeric_claims,
+                )
                 if promotion.retained_cross_step_aliases:
                     step_record["retained_cross_step_aliases"] = (
                         promotion.retained_cross_step_aliases

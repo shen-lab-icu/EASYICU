@@ -17,7 +17,18 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Mapping, Optional, Protocol, Sequence, Set, Tuple
+from typing import (
+    Any,
+    Callable,
+    Dict,
+    List,
+    Mapping,
+    Optional,
+    Protocol,
+    Sequence,
+    Set,
+    Tuple,
+)
 
 
 class _EvidencePromotionStore(Protocol):
@@ -34,6 +45,10 @@ class _EvidencePromotionStore(Protocol):
         step_id: str,
         suppressed_basename_evidence_ids: Sequence[str] = (),
     ) -> Dict[str, Dict[str, str]]: ...
+
+    def success_publication_transaction(self) -> Any:
+        """The store's existing seal→single-commit / rollback-on-exception CM."""
+        ...
 
 
 @dataclass(frozen=True)
@@ -263,8 +278,69 @@ class EvidenceRegistrar:
         )
 
 
+class StepEvidenceCommit:
+    """Commit one validated step's claims and aliases as a single generation.
+
+    Batch 1c — the typed commit boundary lifted out of ``_execute_one_step``. It
+    opens the EvidenceStore's EXISTING ``success_publication_transaction`` (so it
+    is NOT a second evidence authority), registers the step's numeric/derived
+    claims through a caller-supplied thunk, and delegates alias promotion to
+    ``EvidenceRegistrar`` — all inside that one transaction, so an alias
+    collision or I/O failure rolls the staged claims back too.
+
+    What it deliberately does NOT do (all of this stays with the caller): choose
+    aliases, evaluate any validator/gate/critic, scan for ``current``, decide the
+    ``status == "ok"`` guard, mutate the step record, or emit the failure
+    finding. It also does not change WHEN output/script/critique records commit —
+    those keep their pre-gate ``register_file(..., publish_aliases=False)``
+    registration; whether they should also defer is a separate future change.
+    """
+
+    __slots__ = ("_store", "_registrar")
+
+    def __init__(
+        self,
+        evidence_store: _EvidencePromotionStore,
+        registrar: Optional[EvidenceRegistrar] = None,
+    ) -> None:
+        self._store = evidence_store
+        self._registrar = registrar or EvidenceRegistrar(evidence_store)
+
+    def commit_validated_step(
+        self,
+        *,
+        step_id: str,
+        pending_aliases: Mapping[str, Sequence[str]],
+        allowed_evidence_ids: Sequence[str],
+        register_numeric_claims: Callable[[], None],
+    ) -> EvidencePromotionResult:
+        """Register numeric/derived claims and promote aliases atomically.
+
+        Mirrors the original inline sequence from ``_execute_one_step``::
+
+            with evidence.success_publication_transaction():
+                _register_current_step_numeric_claims()
+                evidence_registrar.promote_validated_step(...)
+
+        — same order, same single durable generation. Numeric provenance and
+        result aliases share ONE commit: any exception (attempt-bound rejection,
+        alias collision, I/O) propagates so the caller's handler marks the step
+        failed, and the store rolls back to its entry state. The caller must only
+        invoke this once the step's status is already ``ok``.
+        """
+
+        with self._store.success_publication_transaction():
+            register_numeric_claims()
+            return self._registrar.promote_validated_step(
+                step_id=step_id,
+                pending_aliases=pending_aliases,
+                allowed_evidence_ids=allowed_evidence_ids,
+            )
+
+
 __all__ = [
     "EvidencePromotionResult",
     "EvidenceRegistrar",
+    "StepEvidenceCommit",
     "filter_success_alias_bindings",
 ]
