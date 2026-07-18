@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import math
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Set, Tuple
 
@@ -32,6 +33,7 @@ from .plan_scope import (
 )
 
 __all__ = [
+    "TypedBindingResolver",
     "_EvidenceLineageResolutionError",
     "_assignment_model_authority_context_block",
     "_coder_authority_with_typed_parent_schema_receipts",
@@ -39,6 +41,7 @@ __all__ = [
     "_declared_typed_product_paths",
     "_evidence_kind_matches_typed_product",
     "_evidence_record_field",
+    "_current_verified_evidence_record",
     "_lineage_failure_product_fields",
     "_normalise_typed_product_name",
     "_registered_source_name",
@@ -110,6 +113,23 @@ def _evidence_record_field(record: Any, name: str) -> Any:
     if isinstance(record, Mapping):
         return record.get(name)
     return getattr(record, name, None)
+
+
+def _current_verified_evidence_record(
+    evidence_store: Any,
+    name: str,
+    per_step_records: Sequence[Mapping[str, Any]],
+) -> Any:
+    """Resolve an alias only when its producer is current and successful."""
+
+    record = evidence_store.get(name)
+    if record is None:
+        return None
+    current_ids = {
+        item.evidence_id
+        for item in evidence_store.current_verified_records(per_step_records)
+    }
+    return record if record.evidence_id in current_ids else None
 
 
 def _registered_source_name(record: Any, verified_path: Path) -> Optional[str]:
@@ -1135,3 +1155,109 @@ def _resume_typed_input_bindings_fingerprint(
             "bindings": durable_bindings,
         }
     )
+
+
+@dataclass(frozen=True)
+class TypedBindingResolver:
+    """Resolve step inputs against current evidence and checkpoint authority.
+
+    The caller retains the Planner-owned plan and passes its current revision to
+    each resolution. This component owns no scientific choice, provider call,
+    checkpoint mutation, or evidence promotion. The shared record lock preserves
+    the execute loop's original per-input snapshot semantics under parallel
+    auxiliary steps.
+    """
+
+    evidence_store: Any
+    per_step_records: Sequence[Mapping[str, Any]]
+    records_lock: Any
+    run_dir: Path
+    authoritative_cohort_path: Path
+
+    def _records_snapshot(self) -> List[Mapping[str, Any]]:
+        with self.records_lock:
+            return list(self.per_step_records)
+
+    def resolve_names(
+        self,
+        names: Sequence[str],
+        *,
+        plan: AnalysisPlan,
+        allow_unpublished_direct_ids: bool = False,
+    ) -> Tuple[List[EvidenceRef], List[str], Dict[str, Dict[str, Any]]]:
+        """Return exact evidence refs, typed ids, and host-owned bindings."""
+
+        refs: List[EvidenceRef] = []
+        typed_evidence_ids: List[str] = []
+        typed_bindings: Dict[str, Dict[str, Any]] = {}
+        seen: Set[str] = set()
+        failures: List[Dict[str, Any]] = []
+        for name in names:
+            value = str(name)
+            if _typed_input_product(value) is not None:
+                records_snapshot = self._records_snapshot()
+                evidence_snapshot = self.evidence_store.records()
+                ref, failure = _resolve_typed_input_evidence(
+                    input_name=value,
+                    plan=plan,
+                    evidence_records=evidence_snapshot,
+                    per_step_records=records_snapshot,
+                    run_dir=self.run_dir,
+                )
+                if failure is not None:
+                    failures.append(failure)
+                    continue
+                if ref is not None and ref.evidence_id not in seen:
+                    refs.append(ref)
+                    seen.add(ref.evidence_id)
+                    typed_evidence_ids.append(ref.evidence_id)
+                if ref is not None:
+                    binding = _resolved_typed_input_binding(
+                        input_name=value,
+                        evidence_ref=ref,
+                        evidence_records=evidence_snapshot,
+                        run_dir=self.run_dir,
+                        producer_step_records=records_snapshot,
+                        authoritative_cohort_path=self.authoritative_cohort_path,
+                    )
+                    if binding is None:
+                        failures.append(
+                            {
+                                "input": value,
+                                "reason": "verified_binding_unavailable",
+                            }
+                        )
+                    else:
+                        typed_bindings[value] = binding
+                continue
+
+            direct_record = self.evidence_store.get(value)
+            if (
+                allow_unpublished_direct_ids
+                and direct_record is not None
+                and direct_record.evidence_id == value
+            ):
+                # The Critic reviews evidence registered by the in-flight
+                # attempt before that attempt can be promoted to ``ok``.
+                # Permit only its exact evidence IDs here; aliases remain
+                # subject to current-success authority below.
+                record = direct_record
+            else:
+                record = _current_verified_evidence_record(
+                    self.evidence_store,
+                    value,
+                    self._records_snapshot(),
+                )
+            if record is not None and record.evidence_id not in seen:
+                refs.append(
+                    EvidenceRef(
+                        evidence_id=record.evidence_id,
+                        kind=record.kind,
+                        description=record.description,
+                        relative_path=record.relative_path,
+                    )
+                )
+                seen.add(record.evidence_id)
+        if failures:
+            raise _EvidenceLineageResolutionError(failures)
+        return refs, typed_evidence_ids, typed_bindings

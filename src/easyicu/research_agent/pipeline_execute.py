@@ -159,6 +159,7 @@ from .authority.plan_scope import (
     _step_scientific_signature,
 )
 from .authority.typed_binding import (
+    TypedBindingResolver,
     _EvidenceLineageResolutionError,
     _assignment_model_authority_context_block,
     _coder_authority_with_typed_parent_schema_receipts,
@@ -166,6 +167,7 @@ from .authority.typed_binding import (
     _declared_typed_product_paths,
     _evidence_kind_matches_typed_product,
     _evidence_record_field,
+    _current_verified_evidence_record,
     _lineage_failure_product_fields,
     _normalise_typed_product_name,
     _registered_source_name,
@@ -1120,23 +1122,6 @@ def _step_snapshot_requires_provider_receipt(
         or record.get("capsule_pending_initial_transport_id")
         or record.get("step_provider_call_receipt")
     )
-
-
-def _current_verified_evidence_record(
-    evidence_store: Any,
-    name: str,
-    per_step_records: Sequence[Mapping[str, Any]],
-) -> Any:
-    """Resolve an alias only when its producer is current and successful."""
-
-    record = evidence_store.get(name)
-    if record is None:
-        return None
-    current_ids = {
-        item.evidence_id
-        for item in evidence_store.current_verified_records(per_step_records)
-    }
-    return record if record.evidence_id in current_ids else None
 
 
 def _append_terminal_step_record(
@@ -4621,6 +4606,13 @@ def run_execute_phase(
         )
 
     shared_lock = threading.Lock()
+    typed_binding_resolver = TypedBindingResolver(
+        evidence_store=evidence,
+        per_step_records=per_step_records,
+        records_lock=shared_lock,
+        run_dir=run_dir,
+        authoritative_cohort_path=cohort_path,
+    )
     run_input_authority_state: Dict[str, Any] = {
         "corrupted": False,
         "step_id": None,
@@ -4804,89 +4796,6 @@ def run_execute_phase(
                 finding_messages=messages,
                 metadata=metadata,
             )
-
-    def _evidence_refs_for_names(
-        names: Sequence[str],
-        *,
-        allow_unpublished_direct_ids: bool = False,
-    ) -> Tuple[List[EvidenceRef], List[str], Dict[str, Dict[str, Any]]]:
-        refs: List[EvidenceRef] = []
-        typed_evidence_ids: List[str] = []
-        typed_bindings: Dict[str, Dict[str, Any]] = {}
-        seen: set[str] = set()
-        failures: List[Dict[str, Any]] = []
-        for name in names:
-            value = str(name)
-            if _typed_input_product(value) is not None:
-                with shared_lock:
-                    records_snapshot = list(per_step_records)
-                evidence_snapshot = evidence.records()
-                ref, failure = _resolve_typed_input_evidence(
-                    input_name=value,
-                    plan=plan,
-                    evidence_records=evidence_snapshot,
-                    per_step_records=records_snapshot,
-                    run_dir=run_dir,
-                )
-                if failure is not None:
-                    failures.append(failure)
-                    continue
-                if ref is not None and ref.evidence_id not in seen:
-                    refs.append(ref)
-                    seen.add(ref.evidence_id)
-                    typed_evidence_ids.append(ref.evidence_id)
-                if ref is not None:
-                    binding = _resolved_typed_input_binding(
-                        input_name=value,
-                        evidence_ref=ref,
-                        evidence_records=evidence_snapshot,
-                        run_dir=run_dir,
-                        producer_step_records=records_snapshot,
-                        authoritative_cohort_path=cohort_path,
-                    )
-                    if binding is None:
-                        failures.append(
-                            {
-                                "input": value,
-                                "reason": "verified_binding_unavailable",
-                            }
-                        )
-                    else:
-                        typed_bindings[value] = binding
-                continue
-
-            direct_record = evidence.get(value)
-            if (
-                allow_unpublished_direct_ids
-                and direct_record is not None
-                and direct_record.evidence_id == value
-            ):
-                # The Critic reviews evidence registered by the in-flight
-                # attempt before that attempt can be promoted to ``ok``.
-                # Permit only its exact evidence IDs here; aliases remain
-                # subject to current-success authority below.
-                rec = direct_record
-            else:
-                with shared_lock:
-                    records_snapshot = list(per_step_records)
-                rec = _current_verified_evidence_record(
-                    evidence,
-                    value,
-                    records_snapshot,
-                )
-            if rec is not None and rec.evidence_id not in seen:
-                refs.append(
-                    EvidenceRef(
-                        evidence_id=rec.evidence_id,
-                        kind=rec.kind,
-                        description=rec.description,
-                        relative_path=rec.relative_path,
-                    )
-                )
-                seen.add(rec.evidence_id)
-        if failures:
-            raise _EvidenceLineageResolutionError(failures)
-        return refs, typed_evidence_ids, typed_bindings
 
     def _validator_messages(
         *finding_groups: Sequence[ValidationFinding],
@@ -5461,7 +5370,7 @@ def run_execute_phase(
                 existing_refs,
                 resolved_input_evidence_ids,
                 resolved_input_bindings,
-            ) = _evidence_refs_for_names(step.inputs)
+            ) = typed_binding_resolver.resolve_names(step.inputs, plan=plan)
         except _EvidenceLineageResolutionError as exc:
             step_record.update(
                 {
@@ -10611,8 +10520,9 @@ def run_execute_phase(
             if side_findings:
                 step_record["side_findings"] = side_findings
         step_record["step_summary"] = step_summary
-        evidence_refs_for_step, _, _ = _evidence_refs_for_names(
+        evidence_refs_for_step, _, _ = typed_binding_resolver.resolve_names(
             evidence_ids_for_step,
+            plan=plan,
             allow_unpublished_direct_ids=True,
         )
         validator_messages = _validator_messages(
