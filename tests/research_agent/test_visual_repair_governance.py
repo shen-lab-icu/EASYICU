@@ -266,19 +266,27 @@ def test_visual_repair_log_keeps_structured_collision_detail() -> None:
 
 
 def test_visual_qa_stays_before_contract_gate() -> None:
+    # Batch 1a-2: the VisualQA audit + classification is now invoked through the
+    # typed ``collect_visual_gate_result(...)`` gate (the raw
+    # ``VisualQAAuditor().audit_with_expected`` call moved into that helper), and
+    # the exception path reads its cosmetic-demotion projection off the result
+    # (``visual_gate.demoted_findings``) instead of re-calling the demoter inline.
+    # The GUARANTEE is unchanged: the visual gate runs before the contract gate,
+    # and cosmetic demotion precedes the terminal ``visual_qa_repair_failed``
+    # fallback in the repair-exception handler.
     from easyicu.research_agent import pipeline_execute
 
     source = inspect.getsource(pipeline_execute.run_execute_phase)
 
-    assert source.index("VisualQAAuditor().audit_with_expected") < source.index(
+    assert source.index("collect_visual_gate_result(") < source.index(
         "early_contract_findings = _step_deterministic_contract_findings"
     )
     visual_except = source[
         source.index("except Exception as exc:", source.index("qa_log =")) :
     ]
-    assert visual_except.index(
-        "_demote_cosmetic_visual_findings"
-    ) < visual_except.index("visual_qa_repair_failed")
+    assert visual_except.index("visual_gate.demoted_findings") < visual_except.index(
+        "visual_qa_repair_failed"
+    )
 
 
 def test_figure_canonicalization_repair_stays_between_gate_and_figure_audits() -> None:

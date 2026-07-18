@@ -3651,6 +3651,97 @@ def _demote_cosmetic_visual_findings(
     return demoted, blocking_errors
 
 
+@dataclass(frozen=True)
+class VisualGateResult:
+    """Side-effect-free outcome of the figure Visual-QA audit for one step.
+
+    Batch 1a-2 — the first typed slice of the execute-phase GateEvaluator. It
+    holds the raw audit findings, the error subset, and the cosmetic-demotion
+    projection, and NOTHING about control flow. ``_execute_one_step`` maps this
+    onto continue / return / step-status / budget / lock / evidence; the gate
+    only reports.
+    """
+
+    ran: bool
+    findings: Tuple[ValidationFinding, ...]
+    error_findings: Tuple[ValidationFinding, ...]
+    demoted_findings: Tuple[ValidationFinding, ...]
+    blocking_errors: Tuple[ValidationFinding, ...]
+
+    @property
+    def has_errors(self) -> bool:
+        return bool(self.error_findings)
+
+    @property
+    def has_blocking_errors(self) -> bool:
+        return bool(self.blocking_errors)
+
+    @property
+    def was_demoted(self) -> bool:
+        """True when at least one hard error was demoted to a warning."""
+        return any(
+            original.severity == "error" and demoted.severity == "warning"
+            for original, demoted in zip(self.findings, self.demoted_findings)
+        )
+
+
+def collect_visual_gate_result(
+    *,
+    enabled: bool,
+    step_figures: Sequence[Path],
+    step: Any,
+    step_summary: Mapping[str, Any],
+) -> VisualGateResult:
+    """Run the figure Visual-QA audit and classify it without side effects.
+
+    Mirrors the original inline ``VisualQAAuditor().audit_with_expected`` +
+    ``visual_errors`` + ``_demote_cosmetic_visual_findings`` sequence from
+    ``_execute_one_step``. Returns ``ran=False`` with empty finding tuples when
+    Visual QA is disabled or the step produced no figures — exactly the guard
+    the orchestrator used to spell inline. The cosmetic-demotion projection is
+    computed eagerly; on the clean (no-error) path it is a pure no-op that
+    leaves ``demoted_findings == findings``.
+    """
+
+    if not (enabled and step_figures):
+        return VisualGateResult(
+            ran=False,
+            findings=(),
+            error_findings=(),
+            demoted_findings=(),
+            blocking_errors=(),
+        )
+
+    expected_numeric = _expected_numeric_annotations_for_step(
+        step=step,
+        step_summary=step_summary,
+    )
+    numeric_expectations = (
+        {
+            str(path): expected_numeric
+            for path in step_figures
+            if path.suffix.lower() == ".svg"
+        }
+        if expected_numeric
+        else None
+    )
+    visual_findings = VisualQAAuditor().audit_with_expected(
+        figure_paths=step_figures,
+        expected_numeric_by_path=numeric_expectations,
+    )
+    error_findings = [f for f in visual_findings if f.severity == "error"]
+    demoted_findings, blocking_errors = _demote_cosmetic_visual_findings(
+        visual_findings
+    )
+    return VisualGateResult(
+        ran=True,
+        findings=tuple(visual_findings),
+        error_findings=tuple(error_findings),
+        demoted_findings=tuple(demoted_findings),
+        blocking_errors=tuple(blocking_errors),
+    )
+
+
 def _max_finding_severity(
     findings_for_step: Sequence[ValidationFinding],
 ) -> Optional[str]:
@@ -11917,48 +12008,28 @@ else:
                     for art in run_result.artefacts
                     if art.suffix.lower() in {".png", ".svg", ".tiff", ".tif"}
                 ]
-                if pipeline._enable_visual_qa and step_figures:
-                    expected_numeric = _expected_numeric_annotations_for_step(
-                        step=step,
-                        step_summary=visual_step_summary,
-                    )
-                    numeric_expectations = (
-                        {
-                            str(path): expected_numeric
-                            for path in step_figures
-                            if path.suffix.lower() == ".svg"
-                        }
-                        if expected_numeric
-                        else None
-                    )
-                    visual_findings = VisualQAAuditor().audit_with_expected(
-                        figure_paths=step_figures,
-                        expected_numeric_by_path=numeric_expectations,
-                    )
+                visual_gate = collect_visual_gate_result(
+                    enabled=pipeline._enable_visual_qa,
+                    step_figures=step_figures,
+                    step=step,
+                    step_summary=visual_step_summary,
+                )
+                if visual_gate.ran:
+                    visual_findings = list(visual_gate.findings)
                     step_record["visual_findings"] = [
                         f.model_dump() for f in visual_findings
                     ]
-                    visual_errors = [
-                        f for f in visual_findings if f.severity == "error"
-                    ]
-                    if visual_errors:
+                    if visual_gate.has_errors:
                         if sealed_renderer_authorized_code_sha256 is not None:
-                            demoted_findings, blocking_visual_errors = (
-                                _demote_cosmetic_visual_findings(visual_findings)
-                            )
+                            demoted_findings = list(visual_gate.demoted_findings)
+                            blocking_visual_errors = list(visual_gate.blocking_errors)
                             step_record["visual_findings"] = [
                                 finding.model_dump() for finding in demoted_findings
                             ]
                             step_record["sealed_renderer_visual_repair_suppressed"] = (
                                 True
                             )
-                            step_record["visual_qa_demoted"] = any(
-                                original.severity == "error"
-                                and demoted.severity == "warning"
-                                for original, demoted in zip(
-                                    visual_findings, demoted_findings
-                                )
-                            )
+                            step_record["visual_qa_demoted"] = visual_gate.was_demoted
                             with shared_lock:
                                 findings.extend(demoted_findings)
                             if blocking_visual_errors:
@@ -12016,21 +12087,14 @@ else:
                                 code = fallback_code
                                 _clear_output_dir(run_result.out_dir)
                                 continue
-                            demoted_findings, blocking_visual_errors = (
-                                _demote_cosmetic_visual_findings(visual_findings)
-                            )
+                            demoted_findings = list(visual_gate.demoted_findings)
+                            blocking_visual_errors = list(visual_gate.blocking_errors)
                             step_record["visual_findings"] = [
                                 finding.model_dump() for finding in demoted_findings
                             ]
                             with shared_lock:
                                 findings.extend(demoted_findings)
-                            step_record["visual_qa_demoted"] = any(
-                                original.severity == "error"
-                                and demoted.severity == "warning"
-                                for original, demoted in zip(
-                                    visual_findings, demoted_findings
-                                )
-                            )
+                            step_record["visual_qa_demoted"] = visual_gate.was_demoted
                             if blocking_visual_errors:
                                 step_record["status"] = "execution_failed"
                                 with shared_lock:
@@ -12166,8 +12230,9 @@ else:
                                 raise
                             except Exception as exc:
                                 _sync_provider_budget()
-                                demoted_findings, blocking_visual_errors = (
-                                    _demote_cosmetic_visual_findings(visual_findings)
+                                demoted_findings = list(visual_gate.demoted_findings)
+                                blocking_visual_errors = list(
+                                    visual_gate.blocking_errors
                                 )
                                 if not blocking_visual_errors:
                                     provider_finding = ValidationFinding(
