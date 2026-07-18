@@ -990,12 +990,15 @@ def test_figure_repair_precedes_output_evidence_and_numeric_claim_seal():
 
 
 def test_execute_phase_deterministically_requires_typed_exposure_consumption():
-    from easyicu.research_agent import pipeline_execute
+    from easyicu.research_agent import concept_audit_execution, pipeline_execute
 
     shared_source = inspect.getsource(
         pipeline_execute._deterministic_code_gate_findings
     )
     execute_source = inspect.getsource(pipeline_execute.run_execute_phase)
+    concept_execution_source = inspect.getsource(
+        concept_audit_execution.ConceptAuditCoordinator.findings_for_code
+    )
     replay_source = inspect.getsource(
         pipeline_execute._selectively_revalidate_resume_successes
     )
@@ -1004,8 +1007,63 @@ def test_execute_phase_deterministically_requires_typed_exposure_consumption():
     assert "_verified_authoritative_exposure_flow(" in shared_source
     assert 'validator="typed_input_authority_flow"' in shared_source
     assert '"typed_primary_exposure_not_consumed"' in shared_source
-    assert "_deterministic_code_gate_findings(" in execute_source
+    assert "ConceptAuditCoordinator(" in execute_source
+    assert "concept_audit.findings_for_code(" in execute_source
+    assert "deterministic_code_gate_findings(" in concept_execution_source
     assert "_deterministic_code_gate_findings(" in replay_source
+
+
+def test_concept_audit_execution_is_cycle_free_and_old_state_path_is_compatible():
+    import ast
+
+    from easyicu.research_agent import concept_audit_execution, pipeline_execute
+
+    tree = ast.parse(inspect.getsource(concept_audit_execution))
+    imported_modules = {
+        alias.name
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Import)
+        for alias in node.names
+    }
+    imported_modules.update(
+        str(node.module or "")
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom)
+    )
+
+    assert not any(name.endswith("pipeline_execute") for name in imported_modules)
+    assert (
+        pipeline_execute.ConceptQuarantineState
+        is concept_audit_execution.ConceptQuarantineState
+    )
+
+
+def test_concept_gate_is_read_only_and_keeps_old_function_identity():
+    from easyicu.research_agent import concept_gate, pipeline_execute
+
+    source = inspect.getsource(concept_gate)
+    compatibility_exports = {
+        "_deterministic_code_gate_findings": (
+            concept_gate.deterministic_code_gate_findings
+        ),
+        "_deterministic_gate_stamp": concept_gate.deterministic_gate_stamp,
+        "_finding_detail_without_source_positions": (
+            concept_gate.finding_detail_without_source_positions
+        ),
+        "_finding_occurrence_identity": concept_gate.finding_occurrence_identity,
+        "_quarantined_deterministic_errors_resolved_by_current_gate": (
+            concept_gate.quarantined_deterministic_errors_resolved_by_current_gate
+        ),
+        "_quarantined_errors_superseded_by_current_policy": (
+            concept_gate.quarantined_errors_superseded_by_current_policy
+        ),
+    }
+
+    assert "LLMConceptAuditor" not in source
+    assert "StepProviderCallBudget" not in source
+    assert "store_quarantined_concept_draft" not in source
+    for old_name, canonical_function in compatibility_exports.items():
+        assert getattr(pipeline_execute, old_name) is canonical_function
 
 
 def test_fresh_execution_uses_the_authoritative_final_gate_evaluator_once():
