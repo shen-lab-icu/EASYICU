@@ -82,6 +82,8 @@ class PipelineConfig:
     manuscript_language: str = "en"
 
     # --- context / ablation knobs ---------------------------------------
+    # Historical untyped ablation only. Typed materialized exports require the
+    # ICU-aware ResearchContext v2 authority path and fail closed at run entry.
     disable_icu_context: bool = False
     context_top_k: Optional[int] = None
 

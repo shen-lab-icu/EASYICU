@@ -22,6 +22,7 @@ from easyicu.research_agent.schema import (
     ResearchContext,
     ValidationFinding,
 )
+from easyicu.research_agent.research_context_v2 import ResearchContextV2
 from easyicu.research_agent.step_authority_capsule import (
     StepAuthorityCapsuleError,
     load_verified_step_authority_capsule,
@@ -40,6 +41,9 @@ from easyicu.research_agent.step_authority_runtime import (
     seal_initial_generation_candidate,
     seal_legacy_candidate,
     seal_repair_candidate_from_receipt,
+)
+from tests.research_agent.test_research_context_v2_authority_join import (
+    _prepare_typed_run,
 )
 
 SHA_A = "a" * 64
@@ -788,6 +792,46 @@ def test_frozen_scoped_context_accepts_only_memory_metadata_drift(
         scoped_coder_context=changed_science.model_dump(mode="json"),
     )
     assert adopt_frozen_scoped_coder_context(verified, changed_coordinates) is None
+
+
+def test_frozen_scoped_v2_context_preserves_typed_authority_on_adoption(
+    tmp_path: Path,
+) -> None:
+    run_dir, _cohort_path, context, _identity, _cohort, _trajectory = (
+        _prepare_typed_run(tmp_path)
+    )
+    first_context = context.model_copy(
+        update={
+            "notes": "first run memory",
+            "created_at": datetime(2026, 7, 16, 10, tzinfo=timezone.utc),
+        }
+    )
+    coordinates, _code, candidate_ref, _budget, _receipt = _initial_candidate(
+        run_dir,
+        scoped_coder_context=first_context.model_dump(mode="json"),
+    )
+    verified = load_verified_step_authority_capsule(run_dir, ref=candidate_ref)
+    resumed_context = first_context.model_copy(
+        update={
+            "notes": "newly appended run memory",
+            "created_at": datetime(2026, 7, 16, 11, tzinfo=timezone.utc),
+        }
+    )
+    resumed_coordinates = _coordinates(
+        run_dir,
+        scoped_coder_context=resumed_context.model_dump(mode="json"),
+    )
+
+    adopted = adopt_frozen_scoped_coder_context(verified, resumed_coordinates)
+
+    assert adopted is not None
+    frozen_context, frozen_coordinates = adopted
+    assert isinstance(frozen_context, ResearchContextV2)
+    assert (
+        frozen_context.materialized_inputs.model_dump(mode="json")
+        == first_context.materialized_inputs.model_dump(mode="json")
+    )
+    assert frozen_coordinates.scoped_coder_context == coordinates.scoped_coder_context
 
 
 def test_frozen_scoped_context_binds_host_authority_outside_user_notes(

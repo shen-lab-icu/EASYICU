@@ -24,6 +24,7 @@ from .schema import (
     AnalysisStep,
     ResearchContext,
 )
+from .research_context_v2 import project_research_context_variables
 from .trajectory_plan_contract import trajectory_step_roles
 
 _COMPANION_SUFFIXES = (
@@ -467,7 +468,11 @@ def scoped_coder_context(
     selected = list(priority)
     if len(selected) < cap:
         selected.extend(referenced[: cap - len(selected)])
-    return context.model_copy(update={"variables": selected})
+    return project_research_context_variables(
+        context,
+        selected,
+        additional_concept_ids=tuple(sorted(declared)),
+    )
 
 
 __all__ = [

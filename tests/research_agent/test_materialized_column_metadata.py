@@ -14,6 +14,7 @@ import pytest
 from easyicu.concept.metadata_projection import (
     ColumnProjectionSpec,
     ConceptColumnRole,
+    NumericBounds,
     project_concept_column_metadata,
 )
 from easyicu.concept.metadata_sidecar import (
@@ -24,13 +25,17 @@ from easyicu.concept.metadata_sidecar import (
     ColumnMetadataSidecar,
     SidecarRef,
     TimeCoordinate,
+    binding_payload_sha256,
     read_content_addressed_sidecar,
     write_content_addressed_sidecar,
 )
 from easyicu.resources import load_dictionary
 from easyicu.research_agent import cohort_materializer
 from easyicu.research_agent.authority_fs import AnchoredDirectory
-from easyicu.research_agent.context import build_research_context
+from easyicu.research_agent.context import (
+    build_research_context,
+    build_retrieved_research_context,
+)
 from easyicu.research_agent.cohort_schema import (
     CohortDefinition,
     ConceptPredicate,
@@ -48,12 +53,20 @@ from easyicu.research_agent.intake.materialized_metadata import (
 )
 from easyicu.research_agent.evidence import EvidenceStore
 from easyicu.research_agent.llm import MockLLMClient
+from easyicu.research_agent import pipeline as pipeline_module
 from easyicu.research_agent.pipeline import ResearchAgentPipeline
 from easyicu.research_agent.run_input_capsule import (
     RUN_INPUT_CAPSULE_SCHEMA_VERSION_V2,
     RunInputIdentityError,
     load_verified_run_input_capsule,
     seal_run_input_capsule,
+)
+from easyicu.research_agent.research_context_v2 import (
+    CanonicalColumnBinding,
+    ResearchContextV2,
+    binding_preserves_analysis_range,
+    effective_analysis_plausibility_range,
+    materialized_input_prompt_attachment,
 )
 
 
@@ -81,9 +94,11 @@ def _typed_export(
     roles: dict[str, ConceptColumnRole] | None = None,
     labs: pd.DataFrame | None = None,
     outcomes: pd.DataFrame | None = None,
+    binding_overrides: dict[str, ColumnMetadataBinding] | None = None,
 ) -> Path:
     root.mkdir()
     roles = roles or {}
+    binding_overrides = binding_overrides or {}
     labs = (
         labs
         if labs is not None
@@ -112,11 +127,12 @@ def _typed_export(
             TimeCoordinate(column="charttime", origin="icu_admission", unit="h"),
         ),
         columns={
-            "age": _binding("age", "age", roles.get("age", ConceptColumnRole.VALUE)),
-            "lact": _binding(
-                "lact", "lact", roles.get("lact", ConceptColumnRole.VALUE)
-            ),
-            "mech_vent": _binding(
+            "age": binding_overrides.get("age")
+            or _binding("age", "age", roles.get("age", ConceptColumnRole.VALUE)),
+            "lact": binding_overrides.get("lact")
+            or _binding("lact", "lact", roles.get("lact", ConceptColumnRole.VALUE)),
+            "mech_vent": binding_overrides.get("mech_vent")
+            or _binding(
                 "mech_vent",
                 "mech_vent",
                 roles.get("mech_vent", ConceptColumnRole.EVENT_STATUS),
@@ -129,7 +145,8 @@ def _typed_export(
         identity_column="stay_id",
         time_coordinates=(),
         columns={
-            "death": _binding(
+            "death": binding_overrides.get("death")
+            or _binding(
                 "death", "death", roles.get("death", ConceptColumnRole.EVENT_STATUS)
             )
         },
@@ -198,6 +215,38 @@ def _resign_selected_authority(
         file_binding=file_binding,
     )
     materialized._atomic_write_json(provenance_path, provenance)
+
+
+def _build_v2_context(
+    tmp_path: Path,
+    *,
+    binding_overrides: dict[str, ColumnMetadataBinding] | None = None,
+    id_columns: tuple[str, ...] = ("stay_id",),
+) -> ResearchContextV2:
+    source = _typed_export(
+        tmp_path / "export",
+        binding_overrides=binding_overrides,
+    )
+    paths = cohort_materializer.materialize_to_parquet(
+        tmp_path / "materialized",
+        data_path=source,
+        database="miiv",
+        static_concepts=("age",),
+        feature_concepts=("lact", "mech_vent"),
+        outcome_concepts=("death",),
+    )
+    context = build_research_context(
+        research_question="Describe age while retaining the declared effect model.",
+        cohort=paths["parquet"],
+        cohort_name="typed_context",
+        database="miiv",
+        target_outcome="death",
+        primary_exposure="lact_max",
+        id_columns=id_columns,
+        outcome_columns=("death",),
+    )
+    assert isinstance(context, ResearchContextV2)
+    return context
 
 
 def test_materialized_cohort_publishes_exact_typed_sidecar(tmp_path: Path) -> None:
@@ -598,6 +647,122 @@ def test_pipeline_rejects_database_label_mismatching_typed_authority(
     assert not list(workdir.glob("run_*"))
 
 
+def test_pipeline_rejects_typed_authority_in_historical_naive_ablation(
+    tmp_path: Path,
+) -> None:
+    source = _typed_export(tmp_path / "export")
+    paths = cohort_materializer.materialize_to_parquet(
+        tmp_path / "materialized",
+        data_path=source,
+        database="miiv",
+        static_concepts=("age",),
+        feature_concepts=("lact",),
+        outcome_concepts=("death",),
+    )
+    workdir = tmp_path / "agent"
+    pipeline = ResearchAgentPipeline(
+        workdir=workdir,
+        llm=MockLLMClient(),
+        disable_icu_context=True,
+        enable_literature=False,
+        enable_memory=False,
+        enable_latex=False,
+    )
+
+    with pytest.raises(
+        MaterializedMetadataError,
+        match="require ICU-aware ResearchContext v2",
+    ):
+        pipeline.run(
+            question="Is the declared exposure associated with the outcome?",
+            cohort=paths["parquet"],
+            cohort_name="typed_naive_boundary",
+            database="miiv",
+            target_outcome="death",
+            primary_exposure="lact_max",
+            stop_after_analysis=True,
+        )
+
+    assert not list(workdir.glob("run_*"))
+
+
+def test_typed_pipeline_normalizes_database_alias_before_context_authority(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = _typed_export(tmp_path / "export")
+    paths = cohort_materializer.materialize_to_parquet(
+        tmp_path / "materialized",
+        data_path=source,
+        database="miiv",
+        static_concepts=("age",),
+        feature_concepts=("lact",),
+        outcome_concepts=("death",),
+    )
+    workdir = tmp_path / "agent"
+    pipeline = ResearchAgentPipeline(
+        workdir=workdir,
+        llm=MockLLMClient(),
+        enable_literature=False,
+        enable_memory=False,
+        enable_latex=False,
+    )
+
+    class _IdentityProbeComplete(Exception):
+        pass
+
+    observed: dict[str, str] = {}
+
+    def capture_scientific_identity(**kwargs):
+        observed["database"] = kwargs["database"]
+        raise _IdentityProbeComplete
+
+    monkeypatch.setattr(
+        pipeline_module,
+        "build_scientific_identity",
+        capture_scientific_identity,
+    )
+    with pytest.raises(_IdentityProbeComplete):
+        pipeline.run(
+            question="Summarize the typed cohort.",
+            cohort=paths["parquet"],
+            cohort_name="typed_database_alias",
+            database="mimiciv",
+            target_outcome="death",
+            primary_exposure="lact_max",
+        )
+
+    assert observed == {"database": "miiv"}
+    assert not list(workdir.glob("run_*"))
+
+
+def test_typed_context_builder_normalizes_database_alias(
+    tmp_path: Path,
+) -> None:
+    source = _typed_export(tmp_path / "export")
+    paths = cohort_materializer.materialize_to_parquet(
+        tmp_path / "materialized",
+        data_path=source,
+        database="miiv",
+        static_concepts=("age",),
+        feature_concepts=("lact",),
+        outcome_concepts=("death",),
+    )
+
+    context = build_research_context(
+        research_question="Summarize the typed cohort.",
+        cohort=paths["parquet"],
+        cohort_name="typed_database_alias",
+        database="mimiciv",
+        target_outcome="death",
+        primary_exposure="lact_max",
+    )
+
+    assert isinstance(context, ResearchContextV2)
+    assert context.cohort.database == "miiv"
+    assert context.materialized_inputs.cohort.source_database == "miiv"
+
+
 def test_typed_run_input_capsule_binds_exact_staged_authority(
     tmp_path: Path,
 ) -> None:
@@ -684,6 +849,238 @@ def test_typed_run_input_capsule_binds_exact_staged_authority(
             run_dir=run_dir,
             scientific_identity=scientific_identity,
         )
+
+
+def test_verified_materialized_cohort_builds_scopable_v2_context(
+    tmp_path: Path,
+) -> None:
+    source = _typed_export(tmp_path / "export")
+    paths = cohort_materializer.materialize_to_parquet(
+        tmp_path / "materialized",
+        data_path=source,
+        database="miiv",
+        static_concepts=("age",),
+        feature_concepts=("lact", "mech_vent"),
+        outcome_concepts=("death",),
+    )
+    verified = load_verified_materialized_cohort_authority(paths["parquet"])
+    assert verified is not None
+    context = build_research_context(
+        research_question="Describe age while retaining the declared effect model.",
+        cohort=paths["parquet"],
+        cohort_name="typed_context",
+        database="miiv",
+        target_outcome="death",
+        primary_exposure="lact_max",
+        id_columns=("stay_id",),
+        outcome_columns=("death",),
+    )
+    assert isinstance(context, ResearchContextV2)
+    typed = context.materialized_inputs.cohort
+    assert typed.authority_ref == verified.reference.to_dict()
+    assert typed.row_identity_sha256 == verified.authority.row_identity_sha256
+    assert typed.source_database == "miiv"
+    assert typed.projection_scope == "full"
+
+    lact = typed.column_bindings["lact_max"]
+    metadata = lact.binding["metadata"]
+    assert metadata["role"] == "numeric_aggregate"
+    assert metadata["source_database"] == "miiv"
+    assert "eicu" in metadata["available_databases"]
+    assert metadata["extraction_bounds"] == {"minimum": 0.0, "maximum": 50.0}
+    assert metadata["analysis_plausibility_range"] is None
+    assert lact.analysis_plausibility_range == {
+        "minimum": 0.0,
+        "maximum": 30.0,
+    }
+    assert context.variable("lact_max").valid_range == [0.0, 30.0]
+    assert context.variable("lact_n").unit is None
+    assert context.variable("lact_n").valid_range is None
+
+    scoped = build_retrieved_research_context(context, query="age", top_k=1)
+    assert isinstance(scoped, ResearchContextV2)
+    assert scoped.materialized_inputs.cohort.projection_scope == "scoped"
+    selected = {item.name for item in scoped.variables}
+    assert {"stay_id", "age", "death", "lact_max"}.issubset(selected)
+    scoped_bindings = scoped.materialized_inputs.cohort.column_bindings
+    assert "mech_vent" not in scoped_bindings
+    assert "mech_vent_n" not in scoped_bindings
+    assert {"lact_max", "lact_n", "lact_measured"}.issubset(scoped_bindings)
+    assert context.materialized_inputs.cohort.projection_scope == "full"
+
+
+def test_v2_scoped_context_cannot_drop_selected_typed_bindings(
+    tmp_path: Path,
+) -> None:
+    context = _build_v2_context(tmp_path)
+    payload = context.model_dump(mode="python")
+    cohort = payload["materialized_inputs"]["cohort"]
+    cohort["projection_scope"] = "scoped"
+    cohort["column_bindings"] = {}
+    cohort["column_binding_payload_sha256"] = binding_payload_sha256({})
+
+    with pytest.raises(ValueError, match="lack typed cohort bindings"):
+        ResearchContextV2.model_validate(payload)
+
+
+def test_v2_rejects_coerced_numeric_authority_fields(tmp_path: Path) -> None:
+    context = _build_v2_context(tmp_path)
+    payload = context.model_dump(mode="python")
+    payload["materialized_inputs"]["cohort"]["cohort_rows"] = "2"
+
+    with pytest.raises(ValueError):
+        ResearchContextV2.model_validate(payload)
+
+    payload = context.model_dump(mode="python")
+    payload["materialized_inputs"]["cohort"]["cohort_size"] = True
+    with pytest.raises(ValueError):
+        ResearchContextV2.model_validate(payload)
+
+
+def test_v2_prompt_revalidates_nested_authority_and_is_bounded(
+    tmp_path: Path,
+) -> None:
+    context = _build_v2_context(tmp_path)
+    attachment = materialized_input_prompt_attachment(context)
+    assert len(attachment.encode("utf-8")) <= 4 * 1024
+    payload = json.loads(attachment.split("\n", 1)[1])
+    assert payload["schema_version"] == "easyicu.materialized_input_prompt_facts/2"
+    columns = payload["cohort"]["column_bindings"]
+    assert any(item["column"] == "lact_max" for item in columns)
+    assert all(
+        key not in payload
+        for key in ("primary_exposure", "target_outcome", "method", "estimand")
+    )
+    context.materialized_inputs.cohort.column_bindings.clear()
+    with pytest.raises(ValueError):
+        materialized_input_prompt_attachment(context)
+
+
+def test_typed_allowed_values_do_not_promote_event_status_to_ordinal(
+    tmp_path: Path,
+) -> None:
+    context = _build_v2_context(tmp_path)
+
+    assert context.variable("death").is_ordinal is False
+    assert context.variable("death").ordinal_levels is None
+    assert context.materialized_inputs.cohort.column_bindings["death"].binding[
+        "metadata"
+    ]["allowed_values"] == [0, 1]
+
+
+def test_one_sided_analysis_plausibility_range_is_preserved(
+    tmp_path: Path,
+) -> None:
+    base = _binding("age", "age", ConceptColumnRole.VALUE)
+    one_sided = ColumnMetadataBinding(
+        metadata=replace(
+            base.metadata,
+            analysis_plausibility_range=NumericBounds(minimum=0.0),
+        )
+    )
+    context = _build_v2_context(
+        tmp_path,
+        binding_overrides={"age": one_sided},
+    )
+
+    assert context.materialized_inputs.cohort.column_bindings[
+        "age"
+    ].analysis_plausibility_range == {"minimum": 0.0, "maximum": None}
+    assert context.variable("age").valid_range is None
+
+
+def test_typed_range_fallback_uses_sealed_source_concept() -> None:
+    definition = load_dictionary(include_sofa2=True).get("lact")
+    assert definition is not None
+    binding = ColumnMetadataBinding(
+        metadata=project_concept_column_metadata(
+            definition,
+            spec=ColumnProjectionSpec(
+                column_name="opaque_signal",
+                source_concept="lact",
+                role=ConceptColumnRole.NUMERIC_AGGREGATE,
+                aggregation="max",
+            ),
+            source_database="miiv",
+        )
+    )
+
+    assert effective_analysis_plausibility_range(binding) == {
+        "minimum": 0.0,
+        "maximum": 30.0,
+    }
+
+
+def test_non_range_preserving_sum_does_not_inherit_icu_range() -> None:
+    definition = load_dictionary(include_sofa2=True).get("lact")
+    assert definition is not None
+    binding = ColumnMetadataBinding(
+        metadata=project_concept_column_metadata(
+            definition,
+            spec=ColumnProjectionSpec(
+                column_name="lact_total",
+                source_concept="lact",
+                role=ConceptColumnRole.NUMERIC_AGGREGATE,
+                aggregation="sum",
+            ),
+            source_database="miiv",
+        )
+    )
+    payload = binding.to_dict()
+
+    assert binding_preserves_analysis_range(binding) is False
+    assert effective_analysis_plausibility_range(binding) is None
+    CanonicalColumnBinding(
+        binding=payload,
+        binding_sha256=binding_payload_sha256({"lact_total": binding}),
+        analysis_plausibility_range=None,
+    )
+    with pytest.raises(ValueError, match="range-preserving binding"):
+        CanonicalColumnBinding(
+            binding=payload,
+            binding_sha256=binding_payload_sha256({"lact_total": binding}),
+            analysis_plausibility_range={"minimum": 0.0, "maximum": 30.0},
+        )
+
+
+def test_v2_rejects_context_identity_that_disagrees_with_typed_cohort(
+    tmp_path: Path,
+) -> None:
+    with pytest.raises(ValueError, match="typed cohort identity"):
+        _build_v2_context(tmp_path, id_columns=("age",))
+
+
+def test_v2_builder_reads_through_verified_snapshot_not_plain_parquet(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = _typed_export(tmp_path / "export")
+    paths = cohort_materializer.materialize_to_parquet(
+        tmp_path / "materialized",
+        data_path=source,
+        database="miiv",
+        static_concepts=("age",),
+        feature_concepts=("lact",),
+        outcome_concepts=("death",),
+    )
+    from easyicu.research_agent import context as context_module
+
+    monkeypatch.setattr(
+        context_module.pd,
+        "read_parquet",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("plain parquet reopen is forbidden for typed context")
+        ),
+    )
+    context = build_research_context(
+        research_question="Use verified typed bytes.",
+        cohort=paths["parquet"],
+        cohort_name="typed_context",
+        database="miiv",
+        id_columns=("stay_id",),
+        outcome_columns=("death",),
+    )
+    assert isinstance(context, ResearchContextV2)
 
 
 def test_initial_authority_binds_exact_export_source_coordinates(

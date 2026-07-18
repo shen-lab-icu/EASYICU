@@ -277,6 +277,16 @@ def test_cache_key_binds_science_inputs_and_runtime_hashes(ra, tmp_path: Path) -
         cohort_path,
         identity_hashes={"engine_code_sha256": "engine-b"},
     )
+    changed_metadata = _compute_unit_key(
+        cache,
+        cohort_path,
+        identity_hashes={
+            "metadata_projection_sha256": "projector-b",
+            "metadata_sidecar_sha256": "sidecar-b",
+            "icu_rules_sha256": "icu-rules-b",
+            "metadata_implementation_bundle_sha256": "metadata-bundle-b",
+        },
+    )
     assert (
         len(
             {
@@ -286,9 +296,10 @@ def test_cache_key_binds_science_inputs_and_runtime_hashes(ra, tmp_path: Path) -
                 changed_prompt,
                 changed_concept,
                 changed_engine,
+                changed_metadata,
             }
         )
-        == 6
+        == 7
     )
 
 

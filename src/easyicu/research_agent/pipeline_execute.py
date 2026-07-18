@@ -117,6 +117,7 @@ from .gates.concept import (
     quarantined_errors_superseded_by_current_policy as _quarantined_errors_superseded_by_current_policy,
 )
 from .coder_authority_notes import HostCoderAuthority
+from .coder_context import scoped_coder_context
 from .cohort_repair import extract_cohort_definition_from_prose
 from .cohort_schema import (
     CohortDefinition,
@@ -130,6 +131,7 @@ from .intake.materialized_trajectory import (
     MaterializedTrajectoryError,
     StagedTrajectoryBinding,
 )
+from .research_context_v2 import materialized_input_prompt_attachment
 from .contracts import ValidationFinding, _ExecutePhaseResult, _PlanPhaseResult
 from .deterministic_descriptive import absolute_risk_context_code
 from .deterministic_missingness import missingness_measurement_audit_code
@@ -1262,6 +1264,22 @@ def _coder_authority_with_locked_robustness_specs(
             )
         )
     return authority.append(attachment)
+
+
+def _bind_materialized_coder_authority(
+    *,
+    context: ResearchContext,
+    step: AnalysisStep,
+    authority: HostCoderAuthority,
+) -> tuple[ResearchContext, HostCoderAuthority]:
+    """Bind one step-scoped V2 fact attachment to every coder call path."""
+
+    scoped_context = scoped_coder_context(context, step)
+    attachment = materialized_input_prompt_attachment(scoped_context)
+    if not attachment:
+        # Preserve the archived V1 context and authority coordinates exactly.
+        return context, authority
+    return scoped_context, authority.append(attachment)
 
 
 # Max directed full-replans fired when a model/estimation step self-blocks on a
@@ -4947,6 +4965,11 @@ def run_execute_phase(
             context=coder_base_context,
             step=step,
             run_dir=run_dir,
+        )
+        coder_context, coder_authority = _bind_materialized_coder_authority(
+            context=coder_base_context,
+            step=step,
+            authority=coder_authority,
         )
         if primary_cohort_uses_universe:
             locked_cohort_payload = _planner_locked_cohort_prompt_payload(plan)

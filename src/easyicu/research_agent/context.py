@@ -38,6 +38,28 @@ from .schema import (
     UserPreferences,
     VariableRole,
 )
+from .intake.materialized_metadata import (
+    MaterializedMetadataError,
+    VerifiedMaterializedCohortAuthority,
+    load_verified_materialized_cohort_authority,
+    read_verified_materialized_cohort_table,
+)
+from .intake.materialized_trajectory import (
+    MaterializedTrajectoryError,
+    StagedTrajectoryBinding,
+    VerifiedMaterializedTrajectoryAuthority,
+    load_verified_materialized_trajectory_authority,
+)
+from .cohort_artifact_facts import observed_domain_for_series
+from .research_context_v2 import (
+    canonical_column_binding,
+    ResearchContextAuthority,
+    ResearchContextV2,
+    descriptor_physical_updates,
+    materialized_research_inputs_from_authority,
+    project_research_context_variables,
+)
+from .concept_availability import normalize_database_name
 from .temporal_semantics import (
     ConceptValidationLayer,
     ICUEpisodeResolver,
@@ -283,6 +305,57 @@ def _allowed_aggregations(role: VariableRole, kind: VariableKind) -> List[Aggreg
     return aggregation_rule_for(role, kind)
 
 
+def _apply_materialized_column_metadata(
+    *,
+    descriptors: Sequence[ConceptDescriptor],
+    verified: VerifiedMaterializedCohortAuthority,
+) -> List[ConceptDescriptor]:
+    """Overlay only verified physical facts onto inferred descriptors.
+
+    Physical column roles are deliberately not converted into analysis roles:
+    a source ``value`` can still be a covariate, exposure, outcome, or audit
+    input depending on the study.  The host owns lineage/unit/range facts;
+    Planner/Coder retain those scientific assignments.
+    """
+
+    file_binding = verified.sidecar.files[0]
+    derivations = {
+        item.output_column: item for item in verified.authority.output_derivations
+    }
+    projected: List[ConceptDescriptor] = []
+    for descriptor in descriptors:
+        binding = file_binding.columns.get(descriptor.name)
+        if binding is None:
+            projected.append(descriptor)
+            continue
+        derivation = derivations.get(descriptor.name)
+        source_files = sorted(
+            {source.file for source in derivation.sources}
+            if derivation is not None
+            else set()
+        )
+        canonical = canonical_column_binding(descriptor.name, binding)
+        # ConceptDescriptor only supports a closed two-sided interval.  When
+        # the typed sidecar publishes a one-sided range, leave this legacy view
+        # empty instead of displaying a conflicting ICU fallback; V2 exposes
+        # the exact one-sided authority in materialized_inputs.
+        projected.append(
+            descriptor.model_copy(
+                update={
+                    **descriptor_physical_updates(canonical),
+                    # A physical allowed-value set does not establish an
+                    # ordered scientific scale. Preserve the descriptor's
+                    # independently inferred semantics; the V2 typed facts
+                    # expose allowed values without promoting nominal data.
+                    "is_ordinal": descriptor.is_ordinal,
+                    "ordinal_levels": descriptor.ordinal_levels,
+                    "source_files": source_files,
+                }
+            )
+        )
+    return projected
+
+
 # ---------------------------------------------------------------------------
 # Public builder
 # ---------------------------------------------------------------------------
@@ -306,7 +379,8 @@ def build_research_context(
     time_windows: Optional[Sequence[TimeWindow]] = None,
     user_preferences: Optional[Union[UserPreferences, Dict[str, Any]]] = None,
     notes: Optional[str] = None,
-) -> ResearchContext:
+    trajectory_binding: Optional[StagedTrajectoryBinding] = None,
+) -> ResearchContextAuthority:
     """Build a :class:`ResearchContext` from a cohort dataframe.
 
     Parameters
@@ -339,9 +413,40 @@ def build_research_context(
         summarise which databases were promised vs. actually run.
     """
     # --- normalise cohort input
+    verified_cohort: Optional[VerifiedMaterializedCohortAuthority] = None
+    verified_trajectory: Optional[VerifiedMaterializedTrajectoryAuthority] = None
     if isinstance(cohort, (str, Path)):
-        cohort_path = str(Path(cohort).resolve())
-        df = pd.read_parquet(cohort_path)
+        cohort_path_obj = Path(cohort).resolve()
+        cohort_path = str(cohort_path_obj)
+        verified_cohort = load_verified_materialized_cohort_authority(cohort_path_obj)
+        if verified_cohort is not None:
+            normalized_database = normalize_database_name(database)
+            if verified_cohort.sidecar.source_database != normalized_database:
+                raise MaterializedMetadataError(
+                    "ResearchContext database does not match materialized authority"
+                )
+            database = normalized_database
+            if trajectory_binding is not None and trajectory_binding.authority_ref:
+                verified_trajectory = load_verified_materialized_trajectory_authority(
+                    trajectory_binding.path,
+                    expected_authority=trajectory_binding.authority_ref,
+                    expected_universe_authority=verified_cohort.reference,
+                )
+                if verified_trajectory is None:  # pragma: no cover - expected ref
+                    raise MaterializedTrajectoryError(
+                        "typed trajectory authority is missing"
+                    )
+        elif trajectory_binding is not None and trajectory_binding.authority_ref:
+            raise MaterializedTrajectoryError(
+                "typed trajectory cannot bind an untyped ResearchContext cohort"
+            )
+        if verified_cohort is not None:
+            df = read_verified_materialized_cohort_table(
+                cohort_path_obj,
+                verified=verified_cohort,
+            ).to_pandas()
+        else:
+            df = pd.read_parquet(cohort_path)
     else:
         cohort_path = None
         df = cohort
@@ -405,6 +510,11 @@ def build_research_context(
         research_question=research_question,
         target_outcome=target_outcome,
     )
+    if verified_cohort is not None:
+        descriptors = _apply_materialized_column_metadata(
+            descriptors=descriptors,
+            verified=verified_cohort,
+        )
 
     prefs_obj = (
         user_preferences
@@ -420,7 +530,7 @@ def build_research_context(
     )
     windows = list(time_windows) if time_windows else inferred_windows or default_time_windows()
 
-    return ResearchContext(
+    base_context = ResearchContext(
         research_question=research_question,
         cohort=cohort_desc,
         variables=descriptors,
@@ -433,61 +543,23 @@ def build_research_context(
         user_preferences=prefs_obj,
         notes=notes,
     )
+    if verified_cohort is None:
+        return base_context
+    return ResearchContextV2.model_validate(
+        {
+            **base_context.model_dump(mode="python"),
+            "schema_version": "easyicu.research_context/2",
+            "materialized_inputs": materialized_research_inputs_from_authority(
+                cohort=verified_cohort,
+                trajectory=verified_trajectory,
+            ).model_dump(mode="python"),
+        }
+    )
 
 
 # ---------------------------------------------------------------------------
 # Column-level reasoning
 # ---------------------------------------------------------------------------
-
-
-def _observed_domain(series: "pd.Series") -> Optional[Dict[str, Any]]:
-    """Facts about a column's ACTUAL values in the provided cohort.
-
-    Returns ``{n_unique, is_constant, is_binary[, min, max]}`` or ``None`` when
-    the column is empty. This is deliberately interpretation-free: it states
-    what values are present so the planner reads a column by its data rather
-    than guessing a scale from its name. The motivating failure: a column named
-    ``sep3_sofa2_max`` (the within-window max of a BINARY sepsis criterion) was
-    misread as a 0-24 SOFA score and thresholded ``>= 2``, yielding a degenerate
-    (all-zero) exposure. Surfacing ``is_binary``/observed values prevents that
-    without ever telling the agent which derivation to use.
-    """
-    nonnull = series.dropna()
-    if len(nonnull) == 0:
-        return None
-    n_unique = int(nonnull.nunique())
-    domain: Dict[str, Any] = {
-        "n_unique": n_unique,
-        "is_constant": n_unique <= 1,
-        # is_binary means a NUMERIC {0,1} indicator only — never a 2-level
-        # categorical like sex {Male, Female}, which must keep its own labels.
-        "is_binary": False,
-    }
-    is_numeric = bool(pd.api.types.is_numeric_dtype(nonnull))
-    if is_numeric:
-        try:
-            lo = float(nonnull.min())
-            hi = float(nonnull.max())
-            domain["min"] = lo
-            domain["max"] = hi
-        except (TypeError, ValueError):
-            pass
-        # numeric binary = at most two distinct values drawn from {0, 1}.
-        if n_unique <= 2:
-            try:
-                vals = set(int(v) for v in nonnull.unique() if float(v).is_integer())
-                domain["is_binary"] = vals.issubset({0, 1}) and len(vals) >= 1
-            except (TypeError, ValueError):
-                domain["is_binary"] = False
-    elif n_unique <= 8:
-        # low-cardinality categorical: surface the ACTUAL levels so the planner
-        # encodes them as-is (e.g. sex {Male, Female}) rather than assuming a
-        # numeric {0,1} coding it then "cleans" into NaN.
-        try:
-            domain["levels"] = sorted(str(v) for v in nonnull.unique())
-        except (TypeError, ValueError):
-            pass
-    return domain
 
 
 def _describe_column(
@@ -542,9 +614,7 @@ def _describe_column(
         source_tables = meta.get("source_tables") or []
         item_ids = meta.get("item_ids") or []
         unit_normalization = meta.get("unit_normalization")
-        raw_analysis_window = meta.get("analysis_window") or info.get(
-            "analysis_window"
-        )
+        raw_analysis_window = meta.get("analysis_window") or info.get("analysis_window")
         analysis_window = (
             str(raw_analysis_window).strip()
             if isinstance(raw_analysis_window, str) and raw_analysis_window.strip()
@@ -580,7 +650,7 @@ def _describe_column(
         dtype=str(series.dtype),
         unit=hint.unit,
         valid_range=list(hint.valid_range) if hint.valid_range else None,
-        observed_domain=_observed_domain(series),
+        observed_domain=observed_domain_for_series(series),
         allowed_aggregations=allowed,
         aggregation_default=hint.aggregation_default,
         is_ordinal=hint.is_ordinal,
@@ -975,6 +1045,8 @@ def retrieve_context_variables(
             score += 4.0
         if context.target_outcome and v.name == context.target_outcome:
             score += 3.0
+        if context.primary_exposure and v.name == context.primary_exposure:
+            score += 3.0
         if v.role in {VariableRole.OUTCOME, VariableRole.COMPOSITE_SCORE, VariableRole.ORDINAL_SCORE}:
             score += 1.0
         if v.pitfalls:
@@ -990,6 +1062,8 @@ def retrieve_context_variables(
     required = set(context.cohort.id_columns + context.cohort.time_columns + context.cohort.outcome_columns)
     if context.target_outcome:
         required.add(context.target_outcome)
+    if context.primary_exposure:
+        required.add(context.primary_exposure)
     by_name = {v.name: v for v in context.variables}
     selected_names = {v.name for v in selected}
     for name in required:
@@ -1024,7 +1098,8 @@ def build_retrieved_research_context(
         f"Selected variables: {selected_names}."
     )
     notes = f"{context.notes}\n\n{retrieval_note}" if context.notes else retrieval_note
-    return context.model_copy(update={"variables": selected, "notes": notes})
+    projected = project_research_context_variables(context, selected)
+    return projected.model_copy(update={"notes": notes})
 
 
 def _tokens(text: str) -> set:

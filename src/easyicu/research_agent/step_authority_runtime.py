@@ -33,6 +33,7 @@ from .provider_budget import ProviderCallBudgetReceiptState
 from .runner import RunResult
 from .runtime_artifacts import current_step_records, load_run_artifact_authority
 from .schema import ResearchContext, ValidationFinding
+from .research_context_v2 import parse_research_context
 from .step_authority_capsule import (
     CandidateOrigin,
     ConceptAuditSeal,
@@ -955,7 +956,7 @@ def adopt_frozen_scoped_coder_context(
         )
         if not contexts_match:
             return None
-        frozen_context = ResearchContext.model_validate(frozen_context_payload)
+        frozen_context = parse_research_context(frozen_context_payload)
     except (UnicodeDecodeError, ValueError, TypeError, ValidationError) as exc:
         raise StepAuthorityRuntimeError(
             "checkpoint-selected scoped coder context is invalid"
@@ -1002,7 +1003,7 @@ def adopt_candidate_for_control_plane_revalidation(
         )
         if not contexts_match:
             return None
-        frozen_context = ResearchContext.model_validate(frozen_context_payload)
+        frozen_context = parse_research_context(frozen_context_payload)
     except (UnicodeDecodeError, ValueError, TypeError, ValidationError) as exc:
         raise StepAuthorityRuntimeError(
             "checkpoint-selected scoped coder context is invalid"
