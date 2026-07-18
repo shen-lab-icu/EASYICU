@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 import pandas as pd
 
 from easyicu.research_agent.data_catalog import (
@@ -68,6 +70,26 @@ def test_build_available_catalog_from_export_dir(tmp_path):
         {"stay_id": [1, 2], "charttime": [0, 1], "lact": [1.0, 2.0], "sofa2": [3, 4]}
     )
     df.to_parquet(tmp_path / "labs.parquet", index=False)
+    (tmp_path / "_manifest.json").write_text(
+        json.dumps(
+            {
+                "database": "miiv",
+                "format": "parquet",
+                "concept_selection": {"modules": {"labs": ["lact", "sofa2"]}},
+                "files": [
+                    {
+                        "file": "labs.parquet",
+                        "module": "labs",
+                        "concepts": 2,
+                        "concept_ids": ["lact", "sofa2"],
+                        "rows": 2,
+                    }
+                ],
+                "feature_definitions": {"included": False},
+            }
+        ),
+        encoding="utf-8",
+    )
     cat = build_available_catalog(tmp_path)
     ids = set(cat.ids())
     assert {"lact", "sofa2"} <= ids
@@ -132,14 +154,47 @@ def test_catalog_annotates_methodology_for_hazard_concepts():
     assert "methodological cautions" in rendered
 
 
-def test_build_available_catalog_populates_methodology(tmp_path):
+def test_build_available_catalog_populates_methodology(tmp_path, monkeypatch):
     import pandas as pd
 
-    pd.DataFrame({"stay_id": [1], "value": [1.0]}).to_parquet(
+    monkeypatch.setattr(
+        "easyicu.research_agent.data_catalog._concept_dict_meta",
+        lambda: {
+            "norepi": {
+                "description": "norepinephrine exposure",
+                "category": "medications",
+            }
+        },
+    )
+
+    # Native manifests authorize only the selected concept (and its declared
+    # companion columns).  Keep the fixture physically consistent with that
+    # contract instead of relying on the legacy generic ``value`` column.
+    pd.DataFrame({"stay_id": [1], "norepi": [1.0]}).to_parquet(
         tmp_path / "norepi.parquet"
+    )
+    (tmp_path / "_manifest.json").write_text(
+        json.dumps(
+            {
+                "database": "miiv",
+                "format": "parquet",
+                "concept_selection": {"modules": {"vasopressors": ["norepi"]}},
+                "files": [
+                    {
+                        "file": "norepi.parquet",
+                        "module": "vasopressors",
+                        "concepts": 1,
+                        "concept_ids": ["norepi"],
+                        "rows": 1,
+                    }
+                ],
+                "feature_definitions": {"included": False},
+            }
+        ),
+        encoding="utf-8",
     )
     cat = build_available_catalog(tmp_path)
     by_id = {c.concept_id: c for c in cat.concepts}
     # norepi is a medication -> treatment caution attached from the dictionary.
-    if "norepi" in by_id and by_id["norepi"].category == "medications":
-        assert "treatment" in by_id["norepi"].methodology
+    assert by_id["norepi"].category == "medications"
+    assert "treatment" in by_id["norepi"].methodology

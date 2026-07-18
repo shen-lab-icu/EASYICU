@@ -19,8 +19,16 @@ from typing import Dict, List, Mapping, Optional, Sequence, Tuple, Union
 
 import pandas as pd
 
-from ..easyicu_case_builder import EasyICUCasePackage, build_lactate_map_vaso_cohort_from_export
-
+from ..easyicu_case_builder import (
+    EasyICUCasePackage,
+    build_lactate_map_vaso_cohort_from_export,
+)
+from ..intake.export_package import (
+    LEGACY_MANIFEST,
+    NATIVE_MANIFEST,
+    index_export_package,
+    open_export_package,
+)
 
 PathLike = Union[str, Path]
 
@@ -51,7 +59,9 @@ class ReplicationTarget:
     label: Optional[str] = None
 
 
-def _rate_ci(events: int, n: int, z: float = 1.959963984540054) -> Tuple[float, float, float]:
+def _rate_ci(
+    events: int, n: int, z: float = 1.959963984540054
+) -> Tuple[float, float, float]:
     """Wilson binomial interval returned as (rate, lower, upper)."""
     if n <= 0:
         return (math.nan, math.nan, math.nan)
@@ -118,24 +128,30 @@ def discover_easyicu_exports(
 ) -> Dict[str, Path]:
     """Find EasyICU concept-export directories under one or more roots.
 
-    Discovery prefers directories with ``easyicu_export_manifest.json``
-    and verifies that required shock-case concepts are present in the
-    parquet files before returning a candidate.
+    Discovery accepts native ``_manifest.json`` and legacy
+    ``easyicu_export_manifest.json`` packages and verifies required concepts
+    against the selected manifest inventory before returning a candidate.
     """
     found: Dict[str, Path] = {}
     for root_like in roots:
         root = Path(root_like).expanduser()
         if not root.exists():
             continue
-        manifests = list(root.rglob("easyicu_export_manifest.json"))
-        if root.name == "easyicu_export_manifest.json":
-            manifests.append(root)
-        for manifest_path in sorted(set(manifests)):
-            export_dir = manifest_path.parent
+        export_dirs: set[Path] = set()
+        if root.is_file() and root.name in {NATIVE_MANIFEST, LEGACY_MANIFEST}:
+            export_dirs.add(root.parent)
+        elif root.is_dir():
+            if (root / NATIVE_MANIFEST).exists() or (root / LEGACY_MANIFEST).exists():
+                export_dirs.add(root)
+            for marker in (NATIVE_MANIFEST, LEGACY_MANIFEST):
+                export_dirs.update(path.parent for path in root.rglob(marker))
+        for export_dir in sorted(export_dirs):
             try:
-                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-                database = str(manifest.get("database") or _guess_database_from_path(export_dir) or "")
-                index = build_export_index(export_dir)
+                package = open_export_package(export_dir)
+                database = str(
+                    package.database or _guess_database_from_path(export_dir) or ""
+                )
+                index = package.concept_index
                 if not set(required_concepts).issubset(index):
                     continue
             except Exception:
@@ -147,8 +163,6 @@ def discover_easyicu_exports(
 
 def build_export_index(export_dir: PathLike) -> Dict[str, Dict[str, object]]:
     """Thin wrapper used by discovery to avoid importing case-builder names elsewhere."""
-    from ..easyicu_case_builder import index_export_package
-
     return index_export_package(export_dir)
 
 
@@ -177,7 +191,13 @@ def _normalise_easyicu_frame(
     if id_col in work.columns and id_col != "stay_id":
         work = work.rename(columns={id_col: "stay_id"})
     elif "stay_id" not in work.columns:
-        for candidate in ["icustay_id", "patientunitstayid", "admissionid", "patientid", "CaseID"]:
+        for candidate in [
+            "icustay_id",
+            "patientunitstayid",
+            "admissionid",
+            "patientid",
+            "CaseID",
+        ]:
             if candidate in work.columns:
                 work = work.rename(columns={candidate: "stay_id"})
                 break
@@ -248,10 +268,23 @@ def _load_easyicu_group(
         frame = pieces[0] if pieces else pd.DataFrame()
         for part in pieces[1:]:
             id_candidates = [
-                c for c in ["stay_id", "icustay_id", "patientunitstayid", "admissionid", "patientid", "CaseID", "charttime"]
+                c
+                for c in [
+                    "stay_id",
+                    "icustay_id",
+                    "patientunitstayid",
+                    "admissionid",
+                    "patientid",
+                    "CaseID",
+                    "charttime",
+                ]
                 if c in frame.columns and c in part.columns
             ]
-            frame = frame.merge(part, on=id_candidates, how="outer") if id_candidates else pd.concat([frame, part], ignore_index=True)
+            frame = (
+                frame.merge(part, on=id_candidates, how="outer")
+                if id_candidates
+                else pd.concat([frame, part], ignore_index=True)
+            )
 
     normalised = _normalise_easyicu_frame(frame, database=database, concepts=concepts)
     for concept in concepts:
@@ -330,14 +363,22 @@ def export_lactate_map_vaso_concepts_from_easyicu(
 
 def _mortality_for(frame: pd.DataFrame) -> Tuple[int, int, float, float, float]:
     n = int(len(frame))
-    deaths = int(pd.to_numeric(frame["death"], errors="coerce").fillna(0).sum()) if n else 0
+    deaths = (
+        int(pd.to_numeric(frame["death"], errors="coerce").fillna(0).sum()) if n else 0
+    )
     rate, lo, hi = _rate_ci(deaths, n)
     return n, deaths, rate, lo, hi
 
 
 def shock_strata(cohort: pd.DataFrame, *, database: str) -> pd.DataFrame:
     """Return lactate-MAP-vasopressor strata for one cohort."""
-    required = {"death", "lactate_measured_24h", "lactate_max_24h", "map_min_24h", "vaso_any_24h"}
+    required = {
+        "death",
+        "lactate_measured_24h",
+        "lactate_max_24h",
+        "map_min_24h",
+        "vaso_any_24h",
+    }
     missing = sorted(required.difference(cohort.columns))
     if missing:
         raise KeyError(f"cohort is missing required shock-strata columns: {missing}")
@@ -349,7 +390,9 @@ def shock_strata(cohort: pd.DataFrame, *, database: str) -> pd.DataFrame:
     ).fillna(0)
     work["lactate_max_24h"] = pd.to_numeric(work["lactate_max_24h"], errors="coerce")
     work["map_min_24h"] = pd.to_numeric(work["map_min_24h"], errors="coerce")
-    work["vaso_any_24h"] = pd.to_numeric(work["vaso_any_24h"], errors="coerce").fillna(0)
+    work["vaso_any_24h"] = pd.to_numeric(work["vaso_any_24h"], errors="coerce").fillna(
+        0
+    )
 
     measured = work[work["lactate_measured_24h"] == 1].copy()
     strata = [
@@ -374,23 +417,31 @@ def shock_strata(cohort: pd.DataFrame, *, database: str) -> pd.DataFrame:
     rows: List[Dict[str, object]] = []
     for stratum, mask in strata:
         n, deaths, rate, lo, hi = _mortality_for(measured[mask])
-        rows.append({
-            "database": database,
-            "stratum": stratum,
-            "n": n,
-            "deaths": deaths,
-            "mortality_rate": rate,
-            "ci_lower": lo,
-            "ci_upper": hi,
-        })
+        rows.append(
+            {
+                "database": database,
+                "stratum": stratum,
+                "n": n,
+                "deaths": deaths,
+                "mortality_rate": rate,
+                "ci_lower": lo,
+                "ci_upper": hi,
+            }
+        )
     return pd.DataFrame(rows)
 
 
-def summarize_lactate_map_vaso_cohort(cohort: pd.DataFrame, *, database: str) -> Dict[str, object]:
+def summarize_lactate_map_vaso_cohort(
+    cohort: pd.DataFrame, *, database: str
+) -> Dict[str, object]:
     """Create one manuscript-facing summary row for a shock cohort."""
     n, deaths, mortality, mortality_lo, mortality_hi = _mortality_for(cohort)
-    measured = cohort[pd.to_numeric(cohort["lactate_measured_24h"], errors="coerce").fillna(0) == 1]
-    unmeasured = cohort[pd.to_numeric(cohort["lactate_measured_24h"], errors="coerce").fillna(0) == 0]
+    measured = cohort[
+        pd.to_numeric(cohort["lactate_measured_24h"], errors="coerce").fillna(0) == 1
+    ]
+    unmeasured = cohort[
+        pd.to_numeric(cohort["lactate_measured_24h"], errors="coerce").fillna(0) == 0
+    ]
     strata = shock_strata(cohort, database=database).set_index("stratum")
 
     def _stratum_rate(name: str) -> float:
@@ -423,7 +474,9 @@ def _normalise_targets(
 ) -> List[ReplicationTarget]:
     if isinstance(targets, Mapping):
         return [
-            ReplicationTarget(database=str(database), export_dir=Path(path) if path else None)
+            ReplicationTarget(
+                database=str(database), export_dir=Path(path) if path else None
+            )
             for database, path in targets.items()
         ]
     return [
@@ -474,19 +527,21 @@ def _write_appendix(
             "planned cross-database design, but no compatible EasyICU export was available "
             "or buildable in this local run."
         )
-    lines.extend([
-        "",
-        "## Output Files",
-        "",
-        "- `tables/replication_summary.csv`",
-        "- `tables/shock_strata_by_database.csv`",
-        "- `replication_manifest.json`",
-        "",
-        "## Traceability",
-        "",
-        f"Run manifest records {len(manifest.get('targets', []))} target(s) and "
-        f"{len(manifest.get('cohort_outputs', {}))} completed cohort package(s).",
-    ])
+    lines.extend(
+        [
+            "",
+            "## Output Files",
+            "",
+            "- `tables/replication_summary.csv`",
+            "- `tables/shock_strata_by_database.csv`",
+            "- `replication_manifest.json`",
+            "",
+            "## Traceability",
+            "",
+            f"Run manifest records {len(manifest.get('targets', []))} target(s) and "
+            f"{len(manifest.get('cohort_outputs', {}))} completed cohort package(s).",
+        ]
+    )
     path = output_dir / "replication_appendix.md"
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
     return path
@@ -525,7 +580,11 @@ def run_lactate_map_vaso_replication(
     manifest: Dict[str, object] = {
         "builder": "easyicu.research_agent.replication.run_lactate_map_vaso_replication",
         "case": "lactate_map_vaso_shock_mortality",
-        "window_hours": {"start": window[0], "end": window[1], "anchor": "icu_admission"},
+        "window_hours": {
+            "start": window[0],
+            "end": window[1],
+            "anchor": "icu_admission",
+        },
         "targets": [],
         "cohort_outputs": {},
     }
@@ -533,26 +592,32 @@ def run_lactate_map_vaso_replication(
     for target in _normalise_targets(targets):
         db = target.database
         export_dir = target.export_dir
-        manifest["targets"].append({
-            "database": db,
-            "export_dir": str(export_dir) if export_dir is not None else None,
-        })
+        manifest["targets"].append(
+            {
+                "database": db,
+                "export_dir": str(export_dir) if export_dir is not None else None,
+            }
+        )
 
         if export_dir is None:
-            summary_rows.append(_status_row(
-                database=db,
-                status="pending",
-                export_dir=None,
-                message="no EasyICU export directory supplied",
-            ))
+            summary_rows.append(
+                _status_row(
+                    database=db,
+                    status="pending",
+                    export_dir=None,
+                    message="no EasyICU export directory supplied",
+                )
+            )
             continue
         if not export_dir.exists():
-            summary_rows.append(_status_row(
-                database=db,
-                status="pending",
-                export_dir=export_dir,
-                message="EasyICU export directory does not exist",
-            ))
+            summary_rows.append(
+                _status_row(
+                    database=db,
+                    status="pending",
+                    export_dir=export_dir,
+                    message="EasyICU export directory does not exist",
+                )
+            )
             continue
 
         try:
@@ -560,6 +625,7 @@ def run_lactate_map_vaso_replication(
                 export_dir,
                 window=window,
                 include_unmeasured_lactate=include_unmeasured_lactate,
+                expected_database=db,
             )
             db_dir = cohort_dir / db
             written = package.write(db_dir, stem=f"{db}_lactate_map_vaso_24h")
@@ -573,16 +639,30 @@ def run_lactate_map_vaso_replication(
             manifest["cohort_outputs"][db] = {k: str(v) for k, v in written.items()}
             manifest["cohort_outputs"][db]["source_manifest"] = str(source_manifest)
         except Exception as exc:  # pragma: no cover - exercised by integration use
-            summary_rows.append(_status_row(
-                database=db,
-                status="error",
-                export_dir=export_dir,
-                message=f"{type(exc).__name__}: {exc}",
-            ))
+            summary_rows.append(
+                _status_row(
+                    database=db,
+                    status="error",
+                    export_dir=export_dir,
+                    message=f"{type(exc).__name__}: {exc}",
+                )
+            )
 
     summary = pd.DataFrame(summary_rows)
-    strata = pd.concat(strata_frames, ignore_index=True) if strata_frames else pd.DataFrame(
-        columns=["database", "stratum", "n", "deaths", "mortality_rate", "ci_lower", "ci_upper"]
+    strata = (
+        pd.concat(strata_frames, ignore_index=True)
+        if strata_frames
+        else pd.DataFrame(
+            columns=[
+                "database",
+                "stratum",
+                "n",
+                "deaths",
+                "mortality_rate",
+                "ci_lower",
+                "ci_upper",
+            ]
+        )
     )
     summary_path = table_dir / "replication_summary.csv"
     strata_path = table_dir / "shock_strata_by_database.csv"
@@ -591,8 +671,12 @@ def run_lactate_map_vaso_replication(
     strata.to_csv(strata_path, index=False)
     manifest["summary_table"] = str(summary_path)
     manifest["shock_strata_table"] = str(strata_path)
-    manifest_path.write_text(json.dumps(manifest, indent=2, ensure_ascii=False), encoding="utf-8")
-    appendix_path = _write_appendix(output_dir=out, summary=summary, strata=strata, manifest=manifest)
+    manifest_path.write_text(
+        json.dumps(manifest, indent=2, ensure_ascii=False), encoding="utf-8"
+    )
+    appendix_path = _write_appendix(
+        output_dir=out, summary=summary, strata=strata, manifest=manifest
+    )
 
     return {
         "summary": summary_path,

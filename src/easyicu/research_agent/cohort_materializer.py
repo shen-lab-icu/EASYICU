@@ -11,10 +11,10 @@ Two sources, auto-detected:
 * **converted database** (a ``data_path`` to a ricu-style prepared MIMIC/eICU
   directory) -> concepts are extracted for all patients via
   :func:`easyicu.api.load_concepts`;
-* **existing EasyICU export package** (a directory holding
-  ``easyicu_export_manifest.json`` + one parquet per concept group) -> concepts
-  are read from disk, *no re-extraction* (the "user already has the data, just
-  filter" path).
+* **existing EasyICU export package** (native ``_manifest.json`` or legacy
+  ``easyicu_export_manifest.json`` with manifest-listed Parquet/CSV/XLSX
+  members) -> concepts are read from disk, *no re-extraction* (the "user
+  already has the data, just filter" path).
 
 For every time-series concept it emits a wide per-stay summary
 (``<c>_max/_min/_mean/_first/_n/_measured``) over a window, matching the
@@ -35,6 +35,7 @@ bare ``<concept_id>`` column carrying the predicate's declared aggregation, so
 :func:`easyicu.research_agent.cohort_schema.build_cohort` can apply the
 inclusion/exclusion (纳排) deterministically and auditably.
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -52,9 +53,17 @@ from .easyicu_case_builder import (
     _first_nonnull,
     _merge_left,
     _window,
-    read_exported_concept,
 )
 from .cohort_schema import CohortDefinition, build_cohort
+from .intake.export_package import (
+    ExportPackageError,
+    ExportPackage,
+    is_export_package,
+    open_export_package,
+    read_exported_concept,
+    require_canonical_time_projection,
+    verify_export_package,
+)
 
 Window = Tuple[float, float]
 _FALSE_TOKENS = {"", "0", "false", "f", "no", "n", "none", "nan", "na", "null", "off"}
@@ -90,8 +99,7 @@ def _is_positive_only_boolean(series: pd.Series) -> bool:
     if nonnull.empty:
         return False
     return all(
-        (v is True) or (isinstance(v, np.bool_) and bool(v))
-        for v in nonnull.unique()
+        (v is True) or (isinstance(v, np.bool_) and bool(v)) for v in nonnull.unique()
     )
 
 
@@ -156,6 +164,7 @@ def _all_truthy(values: pd.Series) -> bool:
     truth = _truthy_series(values.dropna())
     return bool(len(truth) > 0 and truth.all())
 
+
 _AGG_FUNCS = {
     "max": lambda s: s.max(),
     "min": lambda s: s.min(),
@@ -179,7 +188,7 @@ def _coerce_int_stay(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def _is_export_dir(path: Path) -> bool:
-    return (path / "easyicu_export_manifest.json").exists()
+    return is_export_package(path)
 
 
 def _resolve_source(
@@ -231,7 +240,7 @@ def _timing_columns(w: pd.DataFrame, concept: str) -> pd.DataFrame:
 
 def _load_concept(
     source_mode: str,
-    root: Path,
+    root: Union[Path, ExportPackage],
     concept: str,
     database: str,
     patient_ids: Optional[Sequence[int]],
@@ -246,14 +255,21 @@ def _load_concept(
     """
     try:
         if source_mode == "export":
+            if isinstance(root, ExportPackage):
+                require_canonical_time_projection(root, concept)
             return _coerce_int_stay(read_exported_concept(root, concept))
         from ..api import load_concepts  # local import: heavy module
 
         return _coerce_int_stay(
             load_concepts(
-                [concept], database=database, data_path=str(root), patient_ids=patient_ids
+                [concept],
+                database=database,
+                data_path=str(root),
+                patient_ids=patient_ids,
             )
         )
+    except ExportPackageError:
+        raise
     except KeyError:
         unavailable.append(concept)
         return pd.DataFrame(columns=[ID_COL])
@@ -261,7 +277,36 @@ def _load_concept(
         raise RuntimeError(f"failed to load concept {concept!r}") from exc
 
 
-def _summarize_timeseries(df: pd.DataFrame, concept: str, window: Window) -> pd.DataFrame:
+def _export_authority_provenance(
+    package: Optional[ExportPackage],
+) -> Optional[Dict[str, Any]]:
+    if package is None:
+        return None
+    return {
+        "manifest": package.manifest_path.name,
+        "manifest_kind": package.manifest_kind,
+        "manifest_sha256": package.manifest_sha256,
+        "authority_sha256": package.authority_sha256,
+        "export_format": package.export_format,
+        "feature_definitions_sha256": package.feature_definitions_sha256,
+        "missing_selected_concepts": list(package.missing_selected_concepts),
+        "files": [
+            {
+                "relative_path": item.relative_path,
+                "sha256": item.identity.sha256,
+                "rows": item.rows,
+                "id_column": item.id_column,
+                "time_column": item.time_column,
+                "time_columns": list(item.time_columns),
+            }
+            for item in package.files
+        ],
+    }
+
+
+def _summarize_timeseries(
+    df: pd.DataFrame, concept: str, window: Window
+) -> pd.DataFrame:
     """Per-stay summary columns for one time-series concept over ``window``."""
     w = _window(df, window[0], window[1])
     if w.empty or concept not in w.columns:
@@ -286,7 +331,13 @@ def _summarize_timeseries(df: pd.DataFrame, concept: str, window: Window) -> pd.
             w = w.assign(**{concept: _truthy_series(col).astype(float)})
     grp = w.groupby(ID_COL)[concept]
     out = grp.agg(["max", "min", "mean", "count"]).reset_index()
-    out.columns = [ID_COL, f"{concept}_max", f"{concept}_min", f"{concept}_mean", f"{concept}_n"]
+    out.columns = [
+        ID_COL,
+        f"{concept}_max",
+        f"{concept}_min",
+        f"{concept}_mean",
+        f"{concept}_n",
+    ]
     first = (
         w.sort_values([ID_COL, TIME_COL])
         .groupby(ID_COL)[concept]
@@ -363,7 +414,11 @@ def _event_time_column(df: pd.DataFrame, concept: str) -> pd.DataFrame:
     Symmetric to ``_timing_columns`` for features. Returns an empty frame when
     the source has no usable time index (purely stay-level derived flags).
     """
-    if TIME_COL not in df.columns or concept not in df.columns or ID_COL not in df.columns:
+    if (
+        TIME_COL not in df.columns
+        or concept not in df.columns
+        or ID_COL not in df.columns
+    ):
         return pd.DataFrame(columns=[ID_COL])
     work = df[[ID_COL, TIME_COL, concept]].dropna(subset=[ID_COL]).copy()
     if work.empty:
@@ -408,12 +463,28 @@ def materialize_cohort(
     """
     t0 = time.time()
     source_mode, root = _resolve_source(data_path, prefer_existing)
+    export_package = (
+        open_export_package(root)
+        if source_mode == "export" and is_export_package(root)
+        else None
+    )
+    if (
+        export_package is not None
+        and export_package.database
+        and export_package.database != database
+    ):
+        raise ExportPackageError(
+            "requested database does not match export package authority",
+            code="export_package_database_mismatch",
+            manifest_path=export_package.manifest_path,
+        )
+    source_handle: Union[Path, ExportPackage] = export_package or root
 
     unavailable: List[str] = []
 
     def load(concept: str) -> pd.DataFrame:
         return _load_concept(
-            source_mode, root, concept, database, patient_ids, unavailable
+            source_mode, source_handle, concept, database, patient_ids, unavailable
         )
 
     # concepts required by the CTAS cohort predicates (for 纳排)
@@ -426,7 +497,9 @@ def materialize_cohort(
                 if tw is not None
                 else cohort_window
             )
-            pred_specs.append((pred.concept_id, win, getattr(pred, "aggregation", "max")))
+            pred_specs.append(
+                (pred.concept_id, win, getattr(pred, "aggregation", "max"))
+            )
 
     static_set = list(dict.fromkeys(static_concepts))
     outcome_set = list(dict.fromkeys(outcome_concepts))
@@ -499,11 +572,14 @@ def materialize_cohort(
     else:
         cohort = wide
     n_after = int(len(cohort))
+    if export_package is not None:
+        verify_export_package(export_package)
 
     provenance = {
         "schema_version": "easyicu.cohort_materializer/1",
         "source_mode": source_mode,
         "source": str(root),
+        "export_authority": _export_authority_provenance(export_package),
         "database": database,
         "cohort_window_hours": list(cohort_window),
         "feature_concepts": list(feature_concepts),
@@ -547,11 +623,34 @@ def build_trajectory_long(
     series; ``None`` keeps the full available trajectory.
     """
     source_mode, root = _resolve_source(data_path, prefer_existing)
+    export_package = (
+        open_export_package(root)
+        if source_mode == "export" and is_export_package(root)
+        else None
+    )
+    if (
+        export_package is not None
+        and export_package.database
+        and export_package.database != database
+    ):
+        raise ExportPackageError(
+            "requested database does not match export package authority",
+            code="export_package_database_mismatch",
+            manifest_path=export_package.manifest_path,
+        )
+    source_handle: Union[Path, ExportPackage] = export_package or root
     unavailable: List[str] = []
     frames: List[pd.DataFrame] = []
     materialized: List[str] = []
     for concept in dict.fromkeys(concepts):
-        df = _load_concept(source_mode, root, concept, database, patient_ids, unavailable)
+        df = _load_concept(
+            source_mode,
+            source_handle,
+            concept,
+            database,
+            patient_ids,
+            unavailable,
+        )
         if TIME_COL not in df.columns or concept not in df.columns:
             continue
         w = _window(df, window[0], window[1]) if window is not None else df
@@ -564,7 +663,9 @@ def build_trajectory_long(
                     ID_COL: sub[ID_COL].to_numpy(),
                     TIME_COL: sub[TIME_COL].to_numpy(),
                     "concept": concept,
-                    "value_num": pd.to_numeric(sub[concept], errors="coerce").to_numpy(),
+                    "value_num": pd.to_numeric(
+                        sub[concept], errors="coerce"
+                    ).to_numpy(),
                     "value_str": sub[concept].astype("string").to_numpy(),
                 }
             )
@@ -580,10 +681,13 @@ def build_trajectory_long(
         long_df = pd.DataFrame(
             columns=[ID_COL, TIME_COL, "concept", "value_num", "value_str"]
         )
+    if export_package is not None:
+        verify_export_package(export_package)
     provenance = {
         "schema_version": "easyicu.cohort_trajectory/1",
         "source_mode": source_mode,
         "source": str(root),
+        "export_authority": _export_authority_provenance(export_package),
         "database": database,
         "trajectory_window_hours": list(window) if window is not None else None,
         "trajectory_concepts_requested": list(dict.fromkeys(concepts)),
@@ -619,7 +723,9 @@ def materialize_to_parquet(
     parquet_path = out / f"{stem}.parquet"
     prov_path = out / f"{stem}_provenance.json"
     cohort.to_parquet(parquet_path, index=False)
-    prov_path.write_text(json.dumps(provenance, indent=2, ensure_ascii=False), encoding="utf-8")
+    prov_path.write_text(
+        json.dumps(provenance, indent=2, ensure_ascii=False), encoding="utf-8"
+    )
     paths = {"parquet": parquet_path, "provenance": prov_path}
 
     if emit_trajectory:
