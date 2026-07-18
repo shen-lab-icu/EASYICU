@@ -24,6 +24,14 @@ MODULE_ALIASES = (
         "easyicu.research_agent.contract_gate",
         "easyicu.research_agent.gates.contract",
     ),
+    (
+        "easyicu.research_agent.concept_gate",
+        "easyicu.research_agent.gates.concept",
+    ),
+    (
+        "easyicu.research_agent.concept_audit_execution",
+        "easyicu.research_agent.execution.concept_audit",
+    ),
 )
 
 
