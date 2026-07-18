@@ -53,7 +53,7 @@
 | 目录 / import cycle 治理 | **当前批完成，持续门禁** | 稳定实现归入职责子包；parent artifact authority 进 `authority/parent_artifact.py`，distribution seal 回 renderer；graph gate 当前 216 modules / 157 top-level / 12 packages / 708 edges / SCC 24/5/2 / 0 literal dynamic import | 后续模块随真实职责提取归位；每批以 cyclic-module count + largest SCC 为风险门，SCC 个数仅报告；不机械降低顶层文件数 |
 | B2 canonical 跨-run memory | **完成** | `a9cb05c`；新 profile 显式 off，旧 profile canonical JSON 不变 | canonical 永不重开；非 canonical 才允许显式 opt-in |
 | B3 step 并发 | **关闭，无需实现** | canonical 三题因 replanning + primary cohort + typed deps 被正确强制串行 | 保留 serial-gate 契约；不拆安全守卫追求伪加速。跨库 replicate 另属非关键路径 |
-| B6 跨库 export / metadata 契约 | **P0，B6-A 完成 / B6-B 待做** | `acc874c` 接通 native-first/legacy-compatible Parquet/CSV/XLSX intake；`1481f09` 完成 verified snapshot、CSV/XLSX 单会话解析缓存、Parquet 列裁剪和四 consumer 生命周期。105 项主回归 + 64 项独立复审全绿 | 以 `8e97d31` 为 packaged concept baseline 落 B6-B typed projector、sidecar/ResearchContext、authority/replay digest 和 drift gate。不得把 extraction bounds 混成 physiological `valid_range` |
+| B6 跨库 export / metadata 契约 | **P0，B6-A 完成 / B6-B 1/5** | `acc874c`/`1481f09` 关账 native intake + verified snapshot；`7ee66fd`/`7e8c16f` 完成共享 typed projector、class-prefix source authority、双范围、companion role 和 canonical digest。33 项专项 + 79 项聚合回归、两路 adversarial ACCEPT | 以 `8e97d31` 为 packaged concept baseline 继续 sidecar/ResearchContext、authority/replay digest 和 drift gate。不得把 extraction bounds 混成 physiological `valid_range` |
 | B7 dormant primary runners | **已达成，不物理删** | `_PRIMARY_DETERMINISTIC_RUNNERS` 空集 + registry lock | 投稿实验前不做化妆性删除；live `figures/*.py` 不得误删 |
 | B7-3 display labels | **后置独立变更** | 会改变 display contract、source SHA 和可见文字 | 单独审稿图合同变更；不得当“零风险清理”顺手做 |
 | B8 middleware/hooks | **待判定，当前不做** | empty middleware 只会增加抽象层 | 只有出现两个以上真实 hook consumer 才引入 |
@@ -61,7 +61,7 @@
 
 ## 接下来三个可验收 bundle
 
-1. **B6-B（B6-A 已完成）**：按五个独立提交落共享 metadata projector、intake/sidecar、ResearchContext v2、authority/replay binding、drift/freeze gate；保持旧 v1/封存字节可读，不给旧 payload 新增 `null` 身份键。
+1. **B6-B（B6-A 已完成；projector 1/5 已完成）**：继续 intake/sidecar、ResearchContext v2、authority/replay binding、drift/freeze gate；保持旧 v1/封存字节可读，不给旧 payload 新增 `null` 身份键。
 2. **冻结门**：串行分片回归 + meta/capability + capsule/resume/provider/evidence authority + arch/graph diff，并锁定唯一 commit/profile/dictionary/model/prompt/rubric/retry policy。PlanAuthority 与职责域 state 已令 `run_execute_phase` 达到原 `≤7,660` 目标；`_execute_one_step` 的剩余主体是必要顺序编排，不为诊断 LOC 目标强拆。
 3. **fresh 三题 + held-out**：唯一 freeze 版本 fresh 跑 E3/H2/E2，再跑 3–6 个未参与修复的全流程任务；结果不得反向诱导 shared-engine case patch。
 
