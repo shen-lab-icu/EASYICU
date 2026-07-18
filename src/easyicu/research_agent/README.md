@@ -75,7 +75,7 @@ mechanically moving every top-level file:
 | --- | --- | --- |
 | `gates/` | read-only contract, visual and concept findings/decisions | provider calls, repair budget, checkpoint/evidence mutation, scientific design |
 | `execution/` | provider-backed concept audit and preparation/rendering of already-authorized figure products | cohort, exposure, outcome, method or estimand selection |
-| `authority/` | typed success-promotion boundaries around the existing EvidenceStore/checkpoint authorities | a second `current` selector or independent evidence ledger |
+| `authority/` | typed success-promotion boundaries and digest-bound direct-parent resolution around the existing EvidenceStore/checkpoint authorities | a second `current` selector, sibling scan, or independent evidence ledger |
 
 `pipeline_execute.py` remains the orchestration caller while the remaining
 PlanAuthority/TypedBindingResolver/StepExecutor boundaries are extracted. The

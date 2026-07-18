@@ -1,7 +1,7 @@
 # research_agent 架构总控板 / 剩余债务台账 — 当前单一执行视图
 
-> 更新：2026-07-18 EDT  
-> 分支 / HEAD：`refactor/agent-control-plane@59decdf`  
+> 更新：2026-07-18 05:51 EDT
+> 分支 / HEAD：`refactor/agent-control-plane@daebd49`
 > 当前策略：**先完成有边界的 Track B-Core 架构整理，再 fresh 重跑 E3/H2/E2，随后执行 3–6 个 held-out 全流程。**
 
 ## 文档权威关系
@@ -17,12 +17,14 @@
 
 ## 当前量化快照
 
-| 指标 | 冻结基线 | 当前 `59decdf` | 变化 |
+| 指标 | 冻结基线 | 当前 `daebd49` | 变化 |
 |---|---:|---:|---:|
 | `_execute_one_step` 行数 | 6,694 | 6,028 | −666（−10.0%） |
 | `run_execute_phase` 行数 | 8,451 | 7,785 | −666（−7.9%） |
 | `pipeline_execute.py` 行数 | 14,631 | 12,527 | −2,104（−14.4%） |
-| 顶层 `research_agent/*.py` | 151（旧测） | 157 | 暂增；新职责模块尚未归入子包 |
+| `research_agent` 模块 / 顶层兼容路径 | — | 211 / 157 | canonical 实现已归入 3 个职责子包；旧顶层 façade 为归档/API 兼容而保留 |
+| package / import edge | 8 / 674 | 11 / 686 | 新增 `gates/`、`execution/`、`authority/`；由自动 graph gate 约束 |
+| 潜在 import SCC / 循环模块 | 1 个・最大 103 / 103 | 3 个・最大 24 / 31 | parent-artifact cycle cut 将 103 模块巨环拆为 24/5/2；该静态图含 lazy/local import，不能冒充 import-time SCC 全消除 |
 | E3 Step02 性能验收 | 旧 6 calls / 373.5s | 1 call / 0 repair / 26.8s | active wall −92.8% |
 | fresh E3/H2/E2 | — | 未启动 | Track B-Core freeze 后执行 |
 | held-out 全流程 | — | 未启动 | fresh 三题后执行 3–6 个 |
@@ -35,18 +37,18 @@
 |---|---|---|---|
 | A1 失败分类 / provider 总账 / repair budget | **完成** | schema-v5 总账、attempt-owned accounting、typed RepairReason、E3 真实 6→1 call | 不扩 case-specific reason；只修真实通用漏洞 |
 | StepAuthorityCapsule / CheckpointAuthority | **完成** | content-addressed capsule、checkpoint 显式选择、resume/revalidation 回归 | 保持 checkpoint 唯一选择器；不得扫描“较新”候选 |
-| Evidence authority / success commit | **部分完成** | EvidenceStore 严格快照 + `StepEvidenceCommit` 真跨文件边界 | 后续只在明确职责批次收口 prepare/seal/commit；不得建立第二套 current authority |
-| Visual GateEvaluator | **完成（逻辑边界）** | `gate_evaluator.py`；typed `VisualGateResult/Decision`；AST 契约 | 归入职责子包，旧路径保留 façade，canonical import 不走 façade |
-| Deterministic / figure contract gate | **完成（逻辑边界）** | `contract_gate.py`；read-only findings；pre/post canonicalization 顺序锁 | 同上；不得把会写文件的 preparation 混回只读 gate |
-| Concept gate / concept audit execution | **完成（逻辑边界）** | `concept_gate.py` + `concept_audit_execution.py`；`59decdf`；287 项分层回归 | 同上；保持确定性 policy 与 provider/cache/receipt 生命周期分离 |
-| Figure contract preparation | **完成（逻辑边界）** | `figure_contract_preparation.py`；8 个写文件/塑形 helper | 归入 execution/figure 职责包；旧路径 façade |
-| Publication figure execution | **完成（逻辑边界）** | `publication_figure_execution.py` + `SealedRendererState`；generator 已移出 god function | 归入 execution/figure 职责包；不改变 rendering-only 科学边界 |
+| Evidence authority / success commit | **完成（当前边界）** | canonical `authority/registration.py` + EvidenceStore 严格快照 + `StepEvidenceCommit`；旧 `evidence_registration` 是同一 module object | 不扩大成第二套 current authority；未来 prepare/seal/commit 变化须单独事务审查 |
+| Visual GateEvaluator | **完成（职责子包）** | canonical `gates/visual.py`；typed `VisualGateResult/Decision`；旧路径同对象 alias | 保持 read-only；不得吸收 provider、repair 或 authority mutation |
+| Deterministic / figure contract gate | **完成（职责子包）** | canonical `gates/contract.py`；read-only findings；pre/post canonicalization 顺序锁 | 不得把会写文件的 preparation 混回只读 gate |
+| Concept gate / concept audit execution | **完成（职责子包）** | `gates/concept.py` + `execution/concept_audit.py`；policy 与 provider/cache/receipt 生命周期分离 | 保持两层分离；旧路径只作同对象 alias |
+| Figure contract preparation | **完成（职责子包）** | `execution/figure_preparation.py`；8 个塑形/规范化 helper | 只处理已授权 figure 产品，不选择科学设计 |
+| Publication figure execution | **完成（职责子包）** | `execution/publication_figure.py` + `SealedRendererState` | 保持 rendering-only 边界；旧路径同对象 alias |
 | RepairCoordinator | **完成限定职责** | `repair_coordination.py` 只承接 patch→可选 rewrite transport；事务/分类属于 provider ledger/A1 | 不把 gate/science 塞进 coordinator；名称按限定职责理解 |
 | Execution state | **部分完成** | `StepWorkerProgress`、`ConceptQuarantineState`、`SealedRendererState` | 只在真实跨边界读写集需要时继续值对象化；不造万能 state bag |
 | StepExecutor / RunCoordinator | **部分完成** | 已有 seam/coordination 模块，核心 orchestration 仍在 `pipeline_execute.py` | 继续从主体直线控制流提取可测职责，不以“新建文件”冒充完成 |
-| PlanAuthority | **待做** | 已划边界，尚无独立 authority 组件 | 在 import/SCC 基线后做依赖测量，确定是否为下一核心 bundle |
-| TypedBindingResolver | **待做** | typed contracts 已有，解析/消费仍散在执行循环 | 与 PlanAuthority 二选一先做；必须验证真实消费，不只字符串出现 |
-| 目录 / import cycle 治理 | **进行中** | 已有稳定 gate/concept/figure 边界；顶层仍 157 个 `.py` | 冻结静态+动态 import/API/SCC 基线；按职责迁移，保留薄 façade；禁止 151/157 文件机械搬家 |
+| PlanAuthority | **待做（Typed binding 后）** | 完整 replanning 边界仍捕获 25 个外围名并写 plan/cohort/runner，当前不宜先搬 | Typed binding 收口后先抽纯 candidate normalize/validate，provider/注册/cohort mutation 留 orchestrator |
+| TypedBindingResolver | **下一核心 bundle** | 约 1.15k LOC 自包含 lineage/binding/manifest 家族、约 101 个直接回归；cycle cut 后反事实图显示 typed module 不再进 SCC | 建 `authority/typed_binding.py` + typed resolver seam；resolved-input JSON 字节一致、唯一 current/path/SHA/identity-row 继续 fail-close |
+| 目录 / import cycle 治理 | **当前批完成，持续门禁** | 7 个稳定实现归入职责子包；parent artifact authority 进 `authority/parent_artifact.py`，distribution seal 回 renderer；graph gate 当前 211 modules / 157 top-level / SCC 24/5/2 / 0 literal dynamic import | 后续模块随真实职责提取归位；每批以 cyclic-module count + largest SCC 为风险门，SCC 个数仅报告；不机械降低顶层文件数 |
 | B2 canonical 跨-run memory | **完成** | `a9cb05c`；新 profile 显式 off，旧 profile canonical JSON 不变 | canonical 永不重开；非 canonical 才允许显式 opt-in |
 | B3 step 并发 | **关闭，无需实现** | canonical 三题因 replanning + primary cohort + typed deps 被正确强制串行 | 保留 serial-gate 契约；不拆安全守卫追求伪加速。跨库 replicate 另属非关键路径 |
 | B6 跨库 metadata 契约 | **blocked（数据会话）** | 数据字典/回调仍有并行 dirty 修改 | 等数据层提交并 re-lock profile；不得把 extraction bounds 混成 physiological `valid_range` |
@@ -57,9 +59,9 @@
 
 ## 接下来三个可验收 bundle
 
-1. **职责子包 + import/API/SCC 门**：冻结当前静态依赖、动态 import 字符串、旧路径导出 identity 和 SCC；迁移稳定 gate/concept/figure execution 模块，旧顶层文件只做 façade；canonical 新代码不得依赖 façade。
-2. **下一核心 authority 边界**：依据依赖测量在 `PlanAuthority` 与 `TypedBindingResolver` 中选择一项，必须让核心函数和跨模块耦合有可量化下降。
-3. **冻结门**：串行分片 research-agent 回归 + meta/capability + capsule/resume/provider/evidence authority + arch diff；等待数据层 re-lock 后补 B6，随后 freeze。
+1. **TypedBindingResolver（已由依赖测量选定）**：先迁共享科学签名 kernel，再迁 lineage/binding/manifest/resume 函数，最后用 typed resolver seam 替换 step 内解析；目标 `pipeline_execute.py ≤11,450`、`run_execute_phase ≤7,660`、`_execute_one_step ≤5,980`，且 resolved-input JSON 字节一致。
+2. **PlanAuthority 的纯决策边界**：只抽 replanner candidate normalize/validate typed result；provider 调用、revision 注册和 cohort mutation 留 orchestrator。
+3. **B6 → 冻结门**：数据层提交后 re-lock metadata 契约；最后串行分片回归 + meta/capability + capsule/resume/provider/evidence authority + arch/graph diff，随后 freeze 并 fresh 跑三题。
 
 ## 架构 freeze 的完成定义
 
