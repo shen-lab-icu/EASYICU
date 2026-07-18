@@ -75,10 +75,15 @@ mechanically moving every top-level file:
 | --- | --- | --- |
 | `gates/` | read-only contract, visual and concept findings/decisions | provider calls, repair budget, checkpoint/evidence mutation, scientific design |
 | `execution/` | provider-backed concept audit and preparation/rendering of already-authorized figure products | cohort, exposure, outcome, method or estimand selection |
-| `authority/` | typed success-promotion boundaries and digest-bound direct-parent resolution around the existing EvidenceStore/checkpoint authorities | a second `current` selector, sibling scan, or independent evidence ledger |
+| `authority/` | replanner-candidate invariants, typed input/evidence binding, typed success-promotion boundaries and digest-bound direct-parent resolution around the existing EvidenceStore/checkpoint authorities | provider calls, scientific plan selection, a second `current` selector, sibling scan, or independent evidence ledger |
 
-`pipeline_execute.py` remains the orchestration caller while the remaining
-PlanAuthority/TypedBindingResolver/StepExecutor boundaries are extracted. The
+`pipeline_execute.py` remains the orchestration caller. PlanAuthority's pure
+candidate projection and TypedBindingResolver are now canonical under
+`authority/`; provider calls, revision/evidence registration, cohort mutation,
+runner rebuilding and repair/replan budgets deliberately remain in the sole
+orchestrator. The remaining ExecutionState and StepExecutor/RunCoordinator
+seams must be either completed or explicitly proven to be necessary
+orchestration glue before the architecture freeze. The
 legacy top-level module paths (`contract_gate`, `concept_gate`,
 `concept_audit_execution`, `gate_evaluator`, `figure_contract_preparation`,
 `publication_figure_execution`, `evidence_registration`) are module-object
