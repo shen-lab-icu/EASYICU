@@ -15,6 +15,8 @@ from easyicu.datasource import (
 from easyicu.resources import load_dictionary
 from easyicu.concept.catalog import (
     COMPOSITE_CONCEPT_OUTPUT_SOURCES,
+    CONCEPT_DB_COVERAGE,
+    CONCEPT_DESCRIPTIONS,
     CONCEPT_DICTIONARY,
     CONCEPT_GROUP_NAMES,
     CONCEPT_GROUPS_INTERNAL,
@@ -25,6 +27,9 @@ from easyicu.concept.catalog import (
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DATA_DIR = REPO_ROOT / "src" / "easyicu" / "data"
 BENCHMARK_DIR = REPO_ROOT / "benchmark"
+STATIC_DATA_CATALOG_JS = (
+    REPO_ROOT / "src" / "easyicu" / "webserver" / "static" / "js" / "data-catalog.js"
+)
 SOURCE_FIELD_KEYS = {
     "amount_var",
     "auom_var",
@@ -129,6 +134,66 @@ def test_web_catalog_groups_are_unique_and_complete() -> None:
     assert set(CONCEPT_GROUP_NAMES) >= set(CONCEPT_GROUPS_INTERNAL)
     assert len(grouped) == len(set(grouped))
     assert set(grouped) == set(CONCEPT_DICTIONARY)
+
+
+def _parse_js_object_block(source: str, var: str) -> dict[str, str]:
+    """Extract ``const <var> = { key: <value>, ... };`` -> {key: raw_value_text}.
+
+    Independent of the generator so a generator bug can't hide drift. Assumes the
+    block bodies contain no nested ``{}`` (true for groupConcepts/dict/cov/desc).
+    """
+    marker = f"const {var} = {{"
+    start = source.index(marker) + len(marker)
+    depth = 1
+    i = start
+    while i < len(source) and depth:
+        if source[i] == "{":
+            depth += 1
+        elif source[i] == "}":
+            depth -= 1
+        i += 1
+    body = source[start : i - 1]
+    out: dict[str, str] = {}
+    for key, value in re.findall(r"(\w+)\s*:\s*(\[[^\]]*\]|\d+)", body):
+        out[key] = value
+    return out
+
+
+def _js_list_items(raw: str) -> list[str]:
+    return re.findall(r"""['"]([^'"]*)['"]""", raw)
+
+
+def test_static_data_catalog_js_matches_python_catalog() -> None:
+    """The static bootstrap (data-catalog.js) must carry the SAME feature set as
+    the Python SSOT that /api/catalog serves. Regenerate with
+    ``python tools/generate_static_catalog.py`` when this fails."""
+    js = STATIC_DATA_CATALOG_JS.read_text(encoding="utf-8")
+
+    web_group_concepts = {
+        module: _js_list_items(raw)
+        for module, raw in _parse_js_object_block(js, "groupConcepts").items()
+    }
+    web_dict = set(_parse_js_object_block(js, "dict"))
+    web_cov = set(_parse_js_object_block(js, "cov"))
+    web_desc = set(_parse_js_object_block(js, "desc"))
+
+    hint = "run: python tools/generate_static_catalog.py"
+
+    # groupConcepts: exact module -> ordered-members parity with the catalog.
+    assert web_group_concepts == {
+        module: list(concepts)
+        for module, concepts in CONCEPT_GROUPS_INTERNAL.items()
+    }, hint
+
+    # dict / cov / desc: same key sets as their Python sources.
+    assert web_dict == set(CONCEPT_DICTIONARY), hint
+    assert web_cov == set(CONCEPT_DB_COVERAGE), hint
+    assert web_desc == set(CONCEPT_DESCRIPTIONS), hint
+
+    # web internal consistency: every grouped concept has a label; no orphan label.
+    grouped = [c for members in web_group_concepts.values() for c in members]
+    assert set(grouped) == web_dict, hint
+    assert len(grouped) == len(set(grouped)), "duplicate concept in web groupConcepts"
 
 
 def test_extract_database_modules_use_the_shared_catalog() -> None:
