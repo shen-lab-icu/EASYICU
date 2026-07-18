@@ -101,6 +101,50 @@ def test_special_loaders_receive_resolved_source_and_patient_filter(
     assert all(call == ("miiv", str(resolved_path), [7]) for call in calls.values())
 
 
+def test_batched_load_routes_special_concepts_through_subprocess_with_full_list(
+    monkeypatch, tmp_path
+):
+    """Regression for the 2026-07 batching data-loss bug.
+
+    When a request mixes special concepts (KDIGO/CIRC/COMORB/OUTCOME/MICRO) with a
+    base concept AND batching triggers, the batched branch used to return before the
+    special re-attach block, silently dropping the whole special group. The fix forces
+    the subprocess batch path and passes the FULL concept list (specials included) so
+    each per-batch child re-runs the dedicated special loaders. This test pins that
+    invariant without forking: it captures what concept list reaches subprocess_batch_load.
+    """
+    import easyicu.runtime.memory_manager as mm
+
+    loader = SimpleNamespace(database="miiv", data_path=tmp_path)
+    monkeypatch.setattr(api, "_get_global_loader", lambda **kwargs: loader)
+
+    captured = {}
+
+    def fake_subprocess_batch_load(concepts, **kwargs):
+        captured["concepts"] = list(concepts)
+        return {c: pd.DataFrame({c: [1]}) for c in concepts}
+
+    monkeypatch.setattr(mm, "subprocess_batch_load", fake_subprocess_batch_load)
+
+    # 200 patients with batch_size 50 -> 4 chunks -> batching triggers.
+    result = api.load_concepts(
+        ["aki", "hr"],
+        patient_ids={"stay_id": list(range(200))},
+        batch_size=50,
+        merge=False,
+        verbose=False,
+    )
+
+    assert "concepts" in captured, "batching must route through subprocess_batch_load"
+    # The special concept 'aki' must survive into the batched subprocess call.
+    assert "aki" in captured["concepts"], (
+        "special concept 'aki' was stripped from the batched path — the KDIGO/CIRC/"
+        "COMORB/OUTCOME/MICRO drop regression is back"
+    )
+    assert "hr" in captured["concepts"]
+    assert "aki" in result
+
+
 def test_concept_cache_isolates_cohort_source_and_data_fingerprint(
     monkeypatch, tmp_path
 ):
