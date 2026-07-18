@@ -17,7 +17,7 @@ import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Mapping, Optional
 
 
 def _bootstrap_imports() -> Path:
@@ -221,6 +221,12 @@ def main(argv: Optional[list[str]] = None) -> int:
         out_root=out_root,
         handoff=handoff,
         cohort_path=acquisition.universe_path,
+        cohort_authority_path=acquisition.cohort_authority_path,
+        cohort_authority_ref=(
+            acquisition.cohort_authority_ref.to_dict()
+            if acquisition.cohort_authority_ref is not None
+            else None
+        ),
         trajectory_path=trajectory_path,
     )
     bench_root = out_root / "bench"
@@ -556,8 +562,14 @@ def _write_ehrflowbench_row(
     out_root: Path,
     handoff,
     cohort_path: Path,
+    cohort_authority_path: Optional[Path] = None,
+    cohort_authority_ref: Optional[Mapping[str, object]] = None,
     trajectory_path: Optional[Path] = None,
 ) -> Path:
+    if (cohort_authority_path is None) != (cohort_authority_ref is None):
+        raise ValueError(
+            "cohort authority path and reference must be handed off together"
+        )
     row: Dict[str, Any] = {
         "key": f"discovery_{handoff.literature_idea_id}",
         "name": handoff.candidate_topic[:120],
@@ -569,6 +581,10 @@ def _write_ehrflowbench_row(
         "kind": "descriptive_association",
         "inclusion_criteria": list(handoff.inclusion_criteria),
     }
+    if cohort_authority_path is not None and cohort_authority_ref is not None:
+        row["cohort_authority_required"] = True
+        row["cohort_authority_path"] = str(Path(cohort_authority_path).resolve())
+        row["cohort_authority_ref"] = dict(cohort_authority_ref)
     if trajectory_path is not None:
         row["trajectory_path"] = str(Path(trajectory_path).resolve())
     path = out_root / "discovery_ehrflowbench.jsonl"

@@ -114,16 +114,12 @@ def test_discovery_jsonl_declares_trajectory_path(tmp_path):
     assert row["trajectory_path"] == str(trajectory.resolve())
 
 
-def test_ehrflowbench_preserves_path_and_whitelists_trajectory(
-    tmp_path, monkeypatch
-):
+def test_ehrflowbench_preserves_path_and_whitelists_trajectory(tmp_path, monkeypatch):
     import tools.run_research_agent_bench as bench
 
     cohort = tmp_path / "universe.parquet"
     trajectory = tmp_path / "universe_trajectory.parquet"
-    pd.DataFrame({"stay_id": [1, 2], "death": [0, 1]}).to_parquet(
-        cohort, index=False
-    )
+    pd.DataFrame({"stay_id": [1, 2], "death": [0, 1]}).to_parquet(cohort, index=False)
     pd.DataFrame(
         {
             "stay_id": [1],
@@ -168,7 +164,11 @@ def test_ehrflowbench_preserves_path_and_whitelists_trajectory(
         == 0
     )
 
-    assert seen["cohort"] == cohort.resolve()
+    assert isinstance(seen["cohort"], pd.DataFrame)
+    pd.testing.assert_frame_equal(
+        seen["cohort"].reset_index(drop=True),
+        pd.read_parquet(cohort).reset_index(drop=True),
+    )
     assert seen["item"].cohort_size == 2
     assert seen["item"].cohort_columns == ["stay_id", "death"]
     extra_env = seen["pipeline_options"]["runner_kwargs"]["extra_env"]
@@ -176,6 +176,42 @@ def test_ehrflowbench_preserves_path_and_whitelists_trajectory(
         "TRAJECTORY_PARQUET": str(trajectory.resolve()),
         "EASYICU_TRAJECTORY_PARQUET": str(trajectory.resolve()),
         "COHORT_TRAJECTORY_PARQUET": str(trajectory.resolve()),
+    }
+
+
+def test_declared_legacy_trajectory_options_reach_runner(ra, tmp_path):
+    import tools.run_research_agent_bench as bench
+
+    cohort = tmp_path / "universe.parquet"
+    trajectory = tmp_path / "universe_trajectory.parquet"
+    pd.DataFrame({"stay_id": [1], "death": [0]}).to_parquet(cohort, index=False)
+    pd.DataFrame(
+        {
+            "stay_id": [1],
+            "charttime": [0.0],
+            "concept": ["sofa2"],
+            "value_num": [3.0],
+        }
+    ).to_parquet(trajectory, index=False)
+    options = bench._pipeline_options_with_trajectory(
+        {"runner_kind": "subprocess"},
+        trajectory_path=trajectory,
+    )
+    pipeline = ra.ResearchAgentPipeline(
+        workdir=tmp_path / "work",
+        llm=ra.MockLLMClient(),
+        enable_memory=False,
+        **options,
+    )
+
+    runner = pipeline._build_runner(
+        run_dir=tmp_path / "run",
+        cohort_path=cohort,
+        universe_path=cohort,
+    )
+
+    assert {runner.extra_env[key] for key in bench._TRAJECTORY_ENV_KEYS} == {
+        str(trajectory.resolve())
     }
 
 
@@ -216,9 +252,7 @@ def test_ehrflowbench_rejects_missing_declared_trajectory(tmp_path, monkeypatch)
         == 0
     )
     payload = json.loads(
-        (tmp_path / "out" / "ehrflowbench_results.json").read_text(
-            encoding="utf-8"
-        )
+        (tmp_path / "out" / "ehrflowbench_results.json").read_text(encoding="utf-8")
     )
     assert payload["pending"] == [
         {

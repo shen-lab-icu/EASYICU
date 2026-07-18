@@ -928,10 +928,7 @@ def _run_one_arm(
     # of its columns in a CTAS predicate without tripping the static dictionary
     # check ("unknown concept_id: <derived column>").
     register_cohort_concept_ids(
-        list(
-            getattr(item, "cohort_columns", None)
-            or getattr(cohort, "columns", [])
-        )
+        list(getattr(item, "cohort_columns", None) or getattr(cohort, "columns", []))
     )
 
     workdir.mkdir(parents=True, exist_ok=True)
@@ -1000,6 +997,8 @@ def _run_one_arm(
     result = pipeline.run(
         question=item.research_question,
         cohort=cohort,
+        cohort_authority_path=getattr(item, "cohort_authority_path", None),
+        cohort_authority_ref=getattr(item, "cohort_authority_ref", None),
         cohort_name=f"bench_{item.key}",
         database=database,
         target_outcome=item.target_outcome,
@@ -2264,9 +2263,7 @@ def main() -> int:
         max_code_repair_attempts=args.max_code_repair_attempts,
         max_step_llm_repair_attempts=max_step_llm_repair_attempts,
         timeout_seconds=float(args.timeout),
-        standard_executor_timeout_seconds=float(
-            args.standard_executor_timeout
-        ),
+        standard_executor_timeout_seconds=float(args.standard_executor_timeout),
         enable_repro_envelope=not bool(getattr(args, "no_repro_envelope", False)),
         enable_cost_tracking=not bool(getattr(args, "no_cost_tracking", False)),
         llm_seed=getattr(args, "llm_seed", None),
@@ -2622,7 +2619,10 @@ def _pipeline_options_with_trajectory(
     extra_env = dict(runner_kwargs.get("extra_env") or {})
     for key in _TRAJECTORY_ENV_KEYS:
         existing = extra_env.get(key)
-        if existing is not None and Path(str(existing)).expanduser().resolve() != resolved:
+        if (
+            existing is not None
+            and Path(str(existing)).expanduser().resolve() != resolved
+        ):
             raise ValueError(
                 f"Conflicting {key}: {existing!r} does not match "
                 f"declared trajectory_path {str(resolved)!r}"
@@ -2683,6 +2683,8 @@ def _external_item_from_row(
     target: str,
     cohort_columns: Sequence[Any],
     cohort_size: int,
+    cohort_authority_path: Optional[Path] = None,
+    cohort_authority_ref: Optional[Mapping[str, object]] = None,
 ) -> SimpleNamespace:
     """Build one external item from structured protocol fields.
 
@@ -2732,9 +2734,7 @@ def _external_item_from_row(
         None,
     )
     operational_exposure = (
-        str(row.get(operational_source) or "").strip()
-        if operational_source
-        else ""
+        str(row.get(operational_source) or "").strip() if operational_source else ""
     )
     if not scoring_predictor and operational_exposure:
         scoring_predictor = operational_exposure
@@ -2840,15 +2840,17 @@ def _external_item_from_row(
     expected_findings = _external_string_list(
         row, "expected_finding_substrings", diagnostics
     )
-    expected_steps = _external_string_list(
-        row, "expected_step_substrings", diagnostics
-    )
+    expected_steps = _external_string_list(row, "expected_step_substrings", diagnostics)
     expected_artifacts = _external_string_list(
         row, "expected_artifact_substrings", diagnostics
     )
 
     protocol_adapter = {
-        "schema_version": "easyicu.external_benchmark_adapter/1",
+        "schema_version": (
+            "easyicu.external_benchmark_adapter/2"
+            if cohort_authority_ref is not None
+            else "easyicu.external_benchmark_adapter/1"
+        ),
         "database": {
             "value": database,
             "source_field": database_source,
@@ -2864,9 +2866,7 @@ def _external_item_from_row(
             "source_field": operational_source,
             "defaulted": operational_source is None,
             "declared_column_present": (
-                operational_column_present
-                if operational_source is not None
-                else None
+                operational_column_present if operational_source is not None else None
             ),
             "resolved_column_present": operational_column_present,
         },
@@ -2893,9 +2893,11 @@ def _external_item_from_row(
         target_databases=_external_string_list(row, "target_databases", diagnostics),
         required_warnings=_external_string_list(row, "required_warnings", diagnostics),
         forbidden_outputs=_external_string_list(row, "forbidden_outputs", diagnostics),
-        numeric_targets=dict(row.get("numeric_targets") or {})
-        if isinstance(row.get("numeric_targets"), Mapping)
-        else {},
+        numeric_targets=(
+            dict(row.get("numeric_targets") or {})
+            if isinstance(row.get("numeric_targets"), Mapping)
+            else {}
+        ),
         gold_answer=dict(gold_answer) if isinstance(gold_answer, Mapping) else None,
         gold_answer_status=gold_status,
         gold_derivation=str(row.get("gold_derivation") or ""),
@@ -2913,14 +2915,16 @@ def _external_item_from_row(
         evidence_basis=str(row.get("evidence_basis") or "external_import"),
         claim_scope=str(row.get("claim_scope") or "external_import_only"),
         notes=(str(row.get("notes") or "").strip() or None),
-        interpretation_note=(
-            str(row.get("interpretation_note") or "").strip() or None
-        ),
+        interpretation_note=(str(row.get("interpretation_note") or "").strip() or None),
         protocol_version=(str(row.get("protocol_version") or "").strip() or None),
         rubric_version=(str(row.get("rubric_version") or "").strip() or None),
         protocol_adapter=protocol_adapter,
         cohort_size=int(cohort_size),
         cohort_columns=[str(column) for column in cohort_columns],
+        cohort_authority_path=cohort_authority_path,
+        cohort_authority_ref=(
+            dict(cohort_authority_ref) if cohort_authority_ref is not None else None
+        ),
     )
 
 
@@ -2943,6 +2947,11 @@ def _run_ehrflowbench_jsonl(
 ) -> int:
     """Run an external EHRFlowBench-style JSONL export when available."""
     import pandas as pd
+    from easyicu.research_agent.intake.materialized_metadata import (
+        MaterializedCohortAuthorityRef,
+        MaterializedMetadataError,
+        load_verified_materialized_cohort_authority,
+    )
 
     _enforce_mock_aware_provider(
         arms,
@@ -2996,6 +3005,80 @@ def _run_ehrflowbench_jsonl(
                 }
             )
             continue
+        raw_authority_path = row.get("cohort_authority_path")
+        raw_authority_ref = row.get("cohort_authority_ref")
+        authority_required = row.get("cohort_authority_required")
+        authority_declared = (
+            raw_authority_path is not None or raw_authority_ref is not None
+        )
+        if authority_required is not None and not isinstance(authority_required, bool):
+            pending.append({"key": key, "status": "invalid_cohort_authority_marker"})
+            continue
+        if (raw_authority_path is None) != (raw_authority_ref is None) or (
+            authority_required is True and not authority_declared
+        ):
+            pending.append(
+                {"key": key, "status": "incomplete_cohort_authority_declaration"}
+            )
+            continue
+        cohort_authority_path: Optional[Path] = None
+        cohort_authority_ref: Optional[MaterializedCohortAuthorityRef] = None
+        if authority_declared:
+            if not isinstance(raw_authority_ref, Mapping):
+                pending.append(
+                    {"key": key, "status": "invalid_cohort_authority_reference"}
+                )
+                continue
+            try:
+                cohort_authority_ref = MaterializedCohortAuthorityRef.from_dict(
+                    raw_authority_ref
+                )
+                cohort_authority_path = Path(str(raw_authority_path)).expanduser()
+                expected_path = path.parent / cohort_authority_ref.file
+                if (
+                    cohort_authority_path.is_symlink()
+                    or cohort_authority_path.resolve() != expected_path.resolve()
+                ):
+                    raise MaterializedMetadataError(
+                        "authority path does not match the declared reference"
+                    )
+                verified = load_verified_materialized_cohort_authority(
+                    path,
+                    expected_authority=cohort_authority_ref,
+                )
+                if verified is None:  # pragma: no cover - exact ref forbids legacy
+                    raise MaterializedMetadataError(
+                        "declared typed cohort lost its authority"
+                    )
+            except (OSError, MaterializedMetadataError, ValueError, TypeError) as exc:
+                pending.append(
+                    {
+                        "key": key,
+                        "status": "invalid_cohort_authority",
+                        "error": f"{type(exc).__name__}: {exc}",
+                    }
+                )
+                continue
+        elif path.suffix.lower() in {".parquet", ".pq"}:
+            try:
+                discovered_authority = load_verified_materialized_cohort_authority(path)
+            except MaterializedMetadataError as exc:
+                pending.append(
+                    {
+                        "key": key,
+                        "status": "invalid_cohort_authority",
+                        "error": f"{type(exc).__name__}: {exc}",
+                    }
+                )
+                continue
+            if discovered_authority is not None:
+                pending.append(
+                    {
+                        "key": key,
+                        "status": "typed_cohort_authority_not_declared",
+                    }
+                )
+                continue
         if path.suffix.lower() in {".parquet", ".pq"}:
             cohort = pd.read_parquet(path)
         elif path.suffix.lower() in {".csv", ".tsv"}:
@@ -3033,6 +3116,15 @@ def _run_ehrflowbench_jsonl(
                     }
                 )
                 continue
+            if cohort_authority_ref is not None:
+                pending.append(
+                    {
+                        "key": key,
+                        "status": "typed_trajectory_authority_required",
+                        "trajectory_path": str(trajectory_path),
+                    }
+                )
+                continue
         item = _external_item_from_row(
             row=row,
             key=key,
@@ -3040,6 +3132,12 @@ def _run_ehrflowbench_jsonl(
             target=str(target),
             cohort_size=int(len(cohort)),
             cohort_columns=list(cohort.columns),
+            cohort_authority_path=cohort_authority_path,
+            cohort_authority_ref=(
+                cohort_authority_ref.to_dict()
+                if cohort_authority_ref is not None
+                else None
+            ),
         )
         # Resume support: skip items that already finished cleanly so a quota
         # 502 mid-batch never forces a full redo. An item counts as "done" only
@@ -3054,7 +3152,7 @@ def _run_ehrflowbench_jsonl(
         try:
             score = _run_one_item_from_cohort(
                 item=item,
-                cohort=path,
+                cohort=(path if cohort_authority_ref is not None else cohort),
                 out_root=out_root,
                 arms=arms,
                 pipeline_options=_pipeline_options_with_trajectory(

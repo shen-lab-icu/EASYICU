@@ -151,6 +151,13 @@ from .cohort_schema import (
     materialize_locked_analysis_cohort,
     write_locked_cohort_definition,
 )
+from .intake.materialized_metadata import (
+    MaterializedCohortAuthorityRef,
+    MaterializedMetadataError,
+    implementation_bundle_sha256 as materialized_implementation_bundle_sha256,
+    load_verified_materialized_cohort_authority,
+    stage_materialized_cohort_authority,
+)
 from .robustness_panel import (
     ensure_robustness_specs,
     load_locked_robustness_specs,
@@ -310,8 +317,16 @@ from .llm import (
 )
 from .memory import RunMemory
 from .prompts import PROMPT_PACK_VERSION, prompt_pack_files
-from .runner import CodeRunner, DockerRunner, RunResult, select_safe_runner_kind
+from .runner import (
+    HOST_OWNED_RUNNER_ENV_KEYS,
+    CodeRunner,
+    DockerRunner,
+    RunResult,
+    reject_reserved_runner_env,
+    select_safe_runner_kind,
+)
 from .method_capabilities import set_runtime_capability_snapshot_provider
+from .concept_availability import normalize_database_name
 from .schema import (
     AgentRuntimeState,
     AnalysisManifest,
@@ -2124,6 +2139,7 @@ class ResearchAgentPipeline:
         cohort_path: Path,
         target_outcome: Optional[str] = None,
         universe_path: Optional[Path] = None,
+        universe_is_typed: bool = False,
         timeout_seconds: Optional[float] = None,
     ):
         """Return the configured runner backend for a single ``run()``.
@@ -2144,10 +2160,45 @@ class ResearchAgentPipeline:
         set_runtime_capability_snapshot_provider(None)
         runner_kwargs = dict(self._runner_kwargs)
         extra_env = dict(runner_kwargs.pop("extra_env", {}) or {})
+        trajectory_aliases = (
+            "TRAJECTORY_PARQUET",
+            "EASYICU_TRAJECTORY_PARQUET",
+            "COHORT_TRAJECTORY_PARQUET",
+        )
+        declared_trajectory_values = {
+            str(extra_env.pop(key)).strip()
+            for key in trajectory_aliases
+            if key in extra_env and str(extra_env[key]).strip()
+        }
+        if len(declared_trajectory_values) > 1:
+            raise ValueError(
+                "declared trajectory aliases must select one identical path"
+            )
+        declared_trajectory_path: Optional[Path] = None
+        if declared_trajectory_values:
+            candidate = Path(next(iter(declared_trajectory_values))).expanduser()
+            if (
+                candidate.is_symlink()
+                or not candidate.is_file()
+                or candidate.suffix.lower() not in {".parquet", ".pq"}
+            ):
+                raise ValueError("declared trajectory must be a regular parquet file")
+            declared_trajectory_path = candidate.resolve(strict=True)
+        pipeline_owned_env = {
+            *HOST_OWNED_RUNNER_ENV_KEYS,
+            "OUTCOME_COL",
+            "EASYICU_UNIVERSE_PARQUET",
+            *trajectory_aliases,
+        }
+        reject_reserved_runner_env(
+            extra_env,
+            reserved=tuple(pipeline_owned_env),
+            owner="ResearchAgentPipeline",
+        )
         if target_outcome:
-            extra_env.setdefault("OUTCOME_COL", target_outcome)
+            extra_env["OUTCOME_COL"] = target_outcome
         if universe_path is not None:
-            extra_env.setdefault("EASYICU_UNIVERSE_PARQUET", str(universe_path))
+            extra_env["EASYICU_UNIVERSE_PARQUET"] = str(universe_path)
             # Auto-discover the optional long-format trajectory written next to
             # the universe (``<universe_stem>_trajectory.parquet``). When present
             # it is exposed as ``TRAJECTORY_PARQUET`` so a step can construct
@@ -2155,16 +2206,27 @@ class ResearchAgentPipeline:
             # landmark / time-varying designs that the wide per-stay summary
             # cannot express. Keyed by stay_id, so it is valid regardless of any
             # later cohort 纳排 re-pointing of COHORT_PARQUET.
-            trajectory_path = Path(universe_path).with_name(
+            discovered_trajectory_path = Path(universe_path).with_name(
                 f"{Path(universe_path).stem}_trajectory.parquet"
             )
-            if trajectory_path.exists():
-                for traj_alias in (
-                    "TRAJECTORY_PARQUET",
-                    "EASYICU_TRAJECTORY_PARQUET",
-                    "COHORT_TRAJECTORY_PARQUET",
+            if discovered_trajectory_path.exists():
+                if declared_trajectory_path is not None and (
+                    discovered_trajectory_path.resolve(strict=True)
+                    != declared_trajectory_path
                 ):
-                    extra_env.setdefault(traj_alias, str(trajectory_path))
+                    raise ValueError(
+                        "declared trajectory conflicts with the universe sibling"
+                    )
+                declared_trajectory_path = discovered_trajectory_path.resolve(
+                    strict=True
+                )
+        if declared_trajectory_path is not None:
+            if universe_is_typed:
+                raise MaterializedMetadataError(
+                    "typed cohort trajectory requires a separate sealed authority"
+                )
+            for traj_alias in trajectory_aliases:
+                extra_env[traj_alias] = str(declared_trajectory_path)
         effective_timeout_seconds = (
             self._timeout_seconds if timeout_seconds is None else float(timeout_seconds)
         )
@@ -3378,6 +3440,12 @@ class ResearchAgentPipeline:
                         detail={
                             "n_universe": analysis_cohort["n_universe"],
                             "n_analysis_cohort": analysis_cohort["n_cohort"],
+                            "cohort_definition_sha256": analysis_cohort[
+                                "cohort_definition_sha256"
+                            ],
+                            "materialized_cohort_authority_ref": analysis_cohort[
+                                "authority_ref"
+                            ],
                         },
                     )
                 )
@@ -3646,6 +3714,10 @@ class ResearchAgentPipeline:
         *,
         question: Optional[str] = None,
         cohort: Union[str, Path, pd.DataFrame],
+        cohort_authority_path: Optional[Union[str, Path]] = None,
+        cohort_authority_ref: Optional[
+            Union[MaterializedCohortAuthorityRef, Mapping[str, object]]
+        ] = None,
         cohort_name: str = "cohort",
         database: str = "miiv",
         target_outcome: Optional[str] = None,
@@ -3701,6 +3773,84 @@ class ResearchAgentPipeline:
                 "client. Pass MockLLMClient() only for tests or deterministic "
                 "demo runs; the pipeline no longer falls back to mock silently."
             )
+        verified_source_authority = None
+        authority_declared = (
+            cohort_authority_path is not None or cohort_authority_ref is not None
+        )
+        if authority_declared and (
+            cohort_authority_path is None or cohort_authority_ref is None
+        ):
+            raise MaterializedMetadataError(
+                "cohort authority path and reference must be declared together"
+            )
+        expected_cohort_authority: Optional[MaterializedCohortAuthorityRef] = None
+        if authority_declared:
+            if not isinstance(cohort, (str, Path)):
+                raise MaterializedMetadataError(
+                    "materialized cohort authority requires a parquet path input"
+                )
+            source_cohort_path = Path(cohort).expanduser()
+            if source_cohort_path.suffix.lower() not in {".parquet", ".pq"}:
+                raise MaterializedMetadataError(
+                    "materialized cohort authority requires a parquet path input"
+                )
+            expected_cohort_authority = (
+                cohort_authority_ref
+                if isinstance(cohort_authority_ref, MaterializedCohortAuthorityRef)
+                else MaterializedCohortAuthorityRef.from_dict(cohort_authority_ref)
+            )
+            declared_authority_path = Path(cohort_authority_path).expanduser()
+            expected_authority_path = (
+                source_cohort_path.parent / expected_cohort_authority.file
+            )
+            if (
+                declared_authority_path.is_symlink()
+                or declared_authority_path.resolve()
+                != expected_authority_path.resolve()
+            ):
+                raise MaterializedMetadataError(
+                    "cohort authority path does not match the declared reference"
+                )
+            verified_source_authority = load_verified_materialized_cohort_authority(
+                source_cohort_path,
+                expected_authority=expected_cohort_authority,
+            )
+            if verified_source_authority is None:  # pragma: no cover - exact ref
+                raise MaterializedMetadataError(
+                    "declared typed cohort lost its selected authority"
+                )
+        elif isinstance(cohort, (str, Path)):
+            source_cohort_path = Path(cohort).expanduser()
+            if source_cohort_path.suffix.lower() in {".parquet", ".pq"}:
+                # Classify and bind typed inputs before scientific identity,
+                # cache lookup, resume comparison, or any run-directory write.
+                # This keeps the direct Python API safe without requiring every
+                # caller to manually rediscover the sibling selector.
+                verified_source_authority = load_verified_materialized_cohort_authority(
+                    source_cohort_path
+                )
+                if verified_source_authority is not None:
+                    expected_cohort_authority = verified_source_authority.reference
+        if verified_source_authority is not None:
+            normalized_database = normalize_database_name(database)
+            if verified_source_authority.sidecar.source_database != normalized_database:
+                raise MaterializedMetadataError(
+                    "declared database does not match typed cohort authority"
+                )
+            from easyicu.config import load_src_cfg
+
+            expected_prefixes = tuple(
+                str(value).strip().lower()
+                for value in load_src_cfg(normalized_database).class_prefix
+                if str(value).strip()
+            )
+            if (
+                verified_source_authority.sidecar.source_database_class_prefixes
+                != expected_prefixes
+            ):
+                raise MaterializedMetadataError(
+                    "typed cohort source class policy does not match host registry"
+                )
         run_language = self._normalise_manuscript_language(
             manuscript_language or self._manuscript_language
         )
@@ -3771,6 +3921,11 @@ class ResearchAgentPipeline:
             experiment_spec=spec_obj,
             source_files=source_files,
             disable_icu_context=self._disable_icu_context,
+            materialized_cohort_authority_ref=(
+                expected_cohort_authority.to_dict()
+                if expected_cohort_authority is not None
+                else None
+            ),
         )
         run_environment_identity = build_environment_identity(
             llm_signature=self._llm_signature(llm)
@@ -3791,6 +3946,51 @@ class ResearchAgentPipeline:
                         "non-empty but has no readable checkpoint."
                     )
                 if resume_state is not None:
+                    if expected_cohort_authority is not None:
+                        staged_authority = load_verified_materialized_cohort_authority(
+                            run_dir / "cohort.parquet"
+                        )
+                        if (
+                            staged_authority is None
+                            or staged_authority.authority.parent_authority_sha256
+                            != expected_cohort_authority.sha256
+                        ):
+                            raise MaterializedMetadataError(
+                                "resume cohort no longer descends from the declared "
+                                "source authority"
+                            )
+                        source_authority = verified_source_authority
+                        if (
+                            source_authority is None
+                        ):  # pragma: no cover - declared above
+                            raise MaterializedMetadataError(
+                                "declared source authority was not verified"
+                            )
+                        staged_binding = staged_authority.sidecar.files[0]
+                        source_binding = source_authority.sidecar.files[0]
+                        if (
+                            staged_authority.authority.cohort_sha256
+                            != source_authority.authority.cohort_sha256
+                            or staged_authority.authority.cohort_size
+                            != source_authority.authority.cohort_size
+                            or staged_authority.authority.cohort_rows
+                            != source_authority.authority.cohort_rows
+                            or staged_authority.authority.cohort_columns
+                            != source_authority.authority.cohort_columns
+                            or staged_authority.authority.cohort_schema_sha256
+                            != source_authority.authority.cohort_schema_sha256
+                            or staged_authority.authority.row_identity_sha256
+                            != source_authority.authority.row_identity_sha256
+                            or staged_binding.identity_column
+                            != source_binding.identity_column
+                            or staged_binding.time_coordinates
+                            != source_binding.time_coordinates
+                            or staged_binding.columns != source_binding.columns
+                        ):
+                            raise MaterializedMetadataError(
+                                "resume cohort is not an exact typed copy of the "
+                                "declared source authority"
+                            )
                     # Dictionary identity is part of the interrupted run's
                     # provenance authority.  Check the checkpoint-selected
                     # manifest before prepare_existing_resume_input writes a
@@ -3827,7 +4027,11 @@ class ResearchAgentPipeline:
             )
 
         if not resume_input_verified:
-            cohort_path = self._materialise_cohort(cohort, run_dir)
+            cohort_path = self._materialise_cohort(
+                cohort,
+                run_dir,
+                expected_source_authority=expected_cohort_authority,
+            )
             _emit_progress(
                 "cohort",
                 "Cohort materialised to parquet.",
@@ -4330,6 +4534,8 @@ class ResearchAgentPipeline:
         self,
         cohort: Union[str, Path, pd.DataFrame],
         run_dir: Path,
+        *,
+        expected_source_authority: Optional[MaterializedCohortAuthorityRef] = None,
     ) -> Path:
         if isinstance(cohort, (str, Path)):
             src = Path(cohort).resolve()
@@ -4337,7 +4543,32 @@ class ResearchAgentPipeline:
                 raise FileNotFoundError(f"Cohort path not found: {src}")
             target = run_dir / "cohort.parquet"
             if src.suffix.lower() in {".parquet", ".pq"}:
-                if src.resolve() != target.resolve():
+                typed_source = load_verified_materialized_cohort_authority(
+                    src,
+                    expected_authority=expected_source_authority,
+                )
+                src_trajectory = src.with_name(f"{src.stem}_trajectory.parquet")
+                if typed_source is not None and src_trajectory.exists():
+                    raise MaterializedMetadataError(
+                        "typed trajectory input requires a sealed trajectory "
+                        "authority before it can enter the research-agent run"
+                    )
+                staged = stage_materialized_cohort_authority(
+                    src,
+                    target,
+                    producer_implementation_sha256=(
+                        materialized_implementation_bundle_sha256(
+                            (
+                                Path(__file__),
+                                Path(__file__).resolve().parent
+                                / "intake"
+                                / "materialized_metadata.py",
+                            )
+                        )
+                    ),
+                    expected_source_authority=expected_source_authority,
+                )
+                if staged is None and src.resolve() != target.resolve():
                     df = pd.read_parquet(src)
                     df.to_parquet(target, index=False)
                 # Carry the optional long-format trajectory written next to the
@@ -4346,12 +4577,15 @@ class ResearchAgentPipeline:
                 # runner's sibling auto-discovery exposes TRAJECTORY_PARQUET.
                 # Without this the trajectory is stranded in the universe dir and
                 # timing/onset/incident steps cannot reach the row-level series.
-                src_trajectory = src.with_name(f"{src.stem}_trajectory.parquet")
                 if src_trajectory.exists():
                     traj_target = run_dir / "cohort_trajectory.parquet"
                     if src_trajectory.resolve() != traj_target.resolve():
                         shutil.copy2(src_trajectory, traj_target)
             elif src.suffix.lower() in {".csv", ".tsv"}:
+                if expected_source_authority is not None:
+                    raise MaterializedMetadataError(
+                        "materialized cohort authority cannot bind CSV/TSV input"
+                    )
                 sep = "\t" if src.suffix.lower() == ".tsv" else ","
                 df = pd.read_csv(src, sep=sep)
                 df.to_parquet(target, index=False)
@@ -4362,6 +4596,10 @@ class ResearchAgentPipeline:
                 )
             return target
         if isinstance(cohort, pd.DataFrame):
+            if expected_source_authority is not None:
+                raise MaterializedMetadataError(
+                    "materialized cohort authority cannot bind DataFrame input"
+                )
             target = run_dir / "cohort.parquet"
             cohort.to_parquet(target, index=False)
             return target

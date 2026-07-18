@@ -24,7 +24,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, Callable, Dict, Mapping, Optional, Sequence, Union
+from typing import Any, Callable, Dict, Literal, Mapping, Optional, Sequence, Union
 
 import pandas as pd
 from pydantic import BaseModel, ConfigDict, Field
@@ -33,6 +33,11 @@ from .evidence import EvidenceStore, sha256_of_file
 from .evidence_authority import (
     EvidenceAuthorityIntegrityError,
     load_current_evidence_snapshot,
+)
+from .intake.materialized_metadata import (
+    MaterializedCohortAuthorityRef,
+    MaterializedMetadataError,
+    load_verified_materialized_cohort_authority,
 )
 from .prompts import PROMPT_PACK_VERSION, prompt_pack_files
 from .runtime_artifacts import (
@@ -45,6 +50,7 @@ from .schema import ResearchContext, TimeWindow
 RUN_INPUT_CAPSULE_FILENAME = "run_input_capsule.json"
 RUN_INPUT_CAPSULE_EVIDENCE_ID = "run_input_capsule"
 RUN_INPUT_CAPSULE_SCHEMA_VERSION = "easyicu.run_input_capsule/1"
+RUN_INPUT_CAPSULE_SCHEMA_VERSION_V2 = "easyicu.run_input_capsule/2"
 RESUME_ENVIRONMENT_SCHEMA_VERSION = "easyicu.resume_environment_receipt/1"
 
 
@@ -75,11 +81,24 @@ class RunInputCapsule(BaseModel):
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
+class RunInputCapsuleV2(RunInputCapsule):
+    """Fresh typed-input capsule with an exact staged authority selector."""
+
+    schema_version: Literal["easyicu.run_input_capsule/2"] = (
+        RUN_INPUT_CAPSULE_SCHEMA_VERSION_V2
+    )
+    materialized_cohort_authority_required: Literal[True] = True
+    materialized_cohort_authority_ref: Dict[str, Any]
+
+
+RunInputCapsuleAuthority = Union[RunInputCapsule, RunInputCapsuleV2]
+
+
 @dataclass(frozen=True)
 class ResumeInputAuthority:
     """Verified paths and records returned without changing the run directory."""
 
-    capsule: RunInputCapsule
+    capsule: RunInputCapsuleAuthority
     context_evidence_path: Path
     experiment_spec_evidence_path: Optional[Path]
     evidence_records: Dict[str, Dict[str, Any]]
@@ -266,41 +285,45 @@ def build_scientific_identity(
     experiment_spec: Optional[BaseModel],
     source_files: Optional[Sequence[Any]],
     disable_icu_context: bool,
+    materialized_cohort_authority_ref: Optional[Mapping[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Canonical scientific request; execution-only knobs are excluded."""
 
-    return _jsonable(
-        {
-            "cohort": cohort_input_identity(cohort),
-            "question": question,
-            "cohort_name": cohort_name,
-            "database": database,
-            "target_outcome": target_outcome,
-            "primary_exposure": primary_exposure,
-            "cross_database_validation": list(cross_database_validation or []),
-            "inclusion_criteria": list(inclusion_criteria or []),
-            "exclusion_criteria": list(exclusion_criteria or []),
-            "id_columns": list(id_columns or []),
-            "time_columns": list(time_columns or []),
-            "outcome_columns": list(outcome_columns or []),
-            "time_windows": (
-                [window.model_dump(mode="json") for window in time_windows]
-                if time_windows is not None
-                else None
-            ),
-            "concept_descriptions": dict(concept_descriptions or {}),
-            "user_preferences": dict(user_preferences or {}),
-            "notes": notes,
-            "skill_key": skill_key,
-            "experiment_spec": (
-                experiment_spec.model_dump(mode="json")
-                if experiment_spec is not None
-                else None
-            ),
-            "source_files": _source_file_identities(source_files),
-            "disable_icu_context": bool(disable_icu_context),
-        }
-    )
+    payload: Dict[str, Any] = {
+        "cohort": cohort_input_identity(cohort),
+        "question": question,
+        "cohort_name": cohort_name,
+        "database": database,
+        "target_outcome": target_outcome,
+        "primary_exposure": primary_exposure,
+        "cross_database_validation": list(cross_database_validation or []),
+        "inclusion_criteria": list(inclusion_criteria or []),
+        "exclusion_criteria": list(exclusion_criteria or []),
+        "id_columns": list(id_columns or []),
+        "time_columns": list(time_columns or []),
+        "outcome_columns": list(outcome_columns or []),
+        "time_windows": (
+            [window.model_dump(mode="json") for window in time_windows]
+            if time_windows is not None
+            else None
+        ),
+        "concept_descriptions": dict(concept_descriptions or {}),
+        "user_preferences": dict(user_preferences or {}),
+        "notes": notes,
+        "skill_key": skill_key,
+        "experiment_spec": (
+            experiment_spec.model_dump(mode="json")
+            if experiment_spec is not None
+            else None
+        ),
+        "source_files": _source_file_identities(source_files),
+        "disable_icu_context": bool(disable_icu_context),
+    }
+    if materialized_cohort_authority_ref is not None:
+        payload["materialized_cohort_authority_ref"] = dict(
+            materialized_cohort_authority_ref
+        )
+    return _jsonable(payload)
 
 
 def _tree_sha256(root: Path, *, relative_paths: Optional[Sequence[Path]] = None) -> str:
@@ -431,33 +454,63 @@ def seal_run_input_capsule(
         )
     experiment_record = evidence.get("experiment_spec")
     trajectory_path = Path(run_dir) / "cohort_trajectory.parquet"
-    capsule = RunInputCapsule(
-        scientific_identity=scientific_identity,
-        scientific_identity_sha256=canonical_sha256(scientific_identity),
-        context_sha256=str(context_record.sha256),
-        cohort_sha256=sha256_of_file(cohort_path),
-        trajectory_relative_path=(
+    staged_materialized_authority = load_verified_materialized_cohort_authority(
+        cohort_path
+    )
+    capsule_fields: Dict[str, Any] = {
+        "scientific_identity": scientific_identity,
+        "scientific_identity_sha256": canonical_sha256(scientific_identity),
+        "context_sha256": str(context_record.sha256),
+        "cohort_sha256": sha256_of_file(cohort_path),
+        "trajectory_relative_path": (
             trajectory_path.name if trajectory_path.is_file() else None
         ),
-        trajectory_sha256=(
+        "trajectory_sha256": (
             sha256_of_file(trajectory_path) if trajectory_path.is_file() else None
         ),
-        experiment_spec_evidence_id=(
+        "experiment_spec_evidence_id": (
             str(experiment_record.evidence_id)
             if experiment_record is not None
             else None
         ),
-        experiment_spec_sha256=(
+        "experiment_spec_sha256": (
             str(experiment_record.sha256) if experiment_record is not None else None
         ),
-        experiment_spec_relative_path=(
+        "experiment_spec_relative_path": (
             str(experiment_spec_path.relative_to(run_dir))
             if experiment_record is not None and experiment_spec_path is not None
             else None
         ),
-        initial_environment=initial_environment,
-        legacy_adopted=legacy_adopted,
-    )
+        "initial_environment": initial_environment,
+        "legacy_adopted": legacy_adopted,
+    }
+    if staged_materialized_authority is not None:
+        raw_source_ref = scientific_identity.get("materialized_cohort_authority_ref")
+        if not isinstance(raw_source_ref, Mapping):
+            raise RunInputIdentityError(
+                "Typed staged cohort is absent from scientific identity."
+            )
+        try:
+            source_ref = MaterializedCohortAuthorityRef.from_dict(raw_source_ref)
+        except (MaterializedMetadataError, TypeError, ValueError) as exc:
+            raise RunInputIdentityError(
+                "Typed scientific identity contains an invalid source authority."
+            ) from exc
+        if (
+            staged_materialized_authority.authority.parent_authority_sha256
+            != source_ref.sha256
+        ):
+            raise RunInputIdentityError(
+                "Staged cohort does not descend from the scientific source authority."
+            )
+        capsule = RunInputCapsuleV2(
+            **capsule_fields,
+            materialized_cohort_authority_ref=(
+                staged_materialized_authority.reference.to_dict()
+            ),
+        )
+    else:
+        capsule = RunInputCapsule(**capsule_fields)
     capsule_path.write_text(capsule.model_dump_json(indent=2), encoding="utf-8")
     evidence.register_file(
         kind="log",
@@ -676,9 +729,19 @@ def load_verified_run_input_capsule(
             "Cannot resume safely: capsule working copy differs from sealed evidence."
         )
     try:
-        capsule = RunInputCapsule.model_validate_json(
-            capsule_evidence_path.read_text(encoding="utf-8")
-        )
+        capsule_raw = capsule_evidence_path.read_text(encoding="utf-8")
+        capsule_payload = json.loads(capsule_raw)
+        if not isinstance(capsule_payload, Mapping):
+            raise ValueError("capsule must be an object")
+        schema_version = capsule_payload.get("schema_version")
+        if schema_version == RUN_INPUT_CAPSULE_SCHEMA_VERSION:
+            capsule: RunInputCapsuleAuthority = RunInputCapsule.model_validate(
+                capsule_payload
+            )
+        elif schema_version == RUN_INPUT_CAPSULE_SCHEMA_VERSION_V2:
+            capsule = RunInputCapsuleV2.model_validate(capsule_payload)
+        else:
+            raise ValueError("unsupported run input capsule schema")
     except (OSError, ValueError, TypeError) as exc:
         raise RunInputIdentityError(
             "Cannot resume safely: run input capsule is invalid."
@@ -724,6 +787,40 @@ def load_verified_run_input_capsule(
         raise RunInputIdentityError(
             "Cannot resume safely: staged cohort bytes are missing or changed."
         )
+    if isinstance(capsule, RunInputCapsuleV2):
+        try:
+            expected_staged_ref = MaterializedCohortAuthorityRef.from_dict(
+                capsule.materialized_cohort_authority_ref
+            )
+            staged_authority = load_verified_materialized_cohort_authority(
+                cohort_path,
+                expected_authority=expected_staged_ref,
+            )
+        except (MaterializedMetadataError, TypeError, ValueError) as exc:
+            raise RunInputIdentityError(
+                "Cannot resume safely: staged cohort authority is missing or changed."
+            ) from exc
+        if staged_authority is None:  # pragma: no cover - exact ref forbids legacy
+            raise RunInputIdentityError(
+                "Cannot resume safely: staged cohort authority is missing."
+            )
+        raw_source_ref = capsule.scientific_identity.get(
+            "materialized_cohort_authority_ref"
+        )
+        if not isinstance(raw_source_ref, Mapping):
+            raise RunInputIdentityError(
+                "Cannot resume safely: typed source authority is absent."
+            )
+        try:
+            source_ref = MaterializedCohortAuthorityRef.from_dict(raw_source_ref)
+        except (MaterializedMetadataError, TypeError, ValueError) as exc:
+            raise RunInputIdentityError(
+                "Cannot resume safely: typed source authority is invalid."
+            ) from exc
+        if staged_authority.authority.parent_authority_sha256 != source_ref.sha256:
+            raise RunInputIdentityError(
+                "Cannot resume safely: staged cohort has the wrong source authority."
+            )
     if capsule.trajectory_relative_path is not None:
         trajectory_path = run_dir / capsule.trajectory_relative_path
         if (
@@ -1011,6 +1108,77 @@ def _host_cohort_materializer_authority_error(
             f"{prefix} canonical cohort row count {actual_rows} does not match "
             f"checkpoint {n_cohort}"
         )
+
+    raw_materialized_ref = step_summary.get("materialized_cohort_authority_ref")
+    cohort_definition_sha256 = str(
+        step_summary.get("cohort_definition_sha256") or ""
+    ).strip()
+    metadata_ref = (
+        metadata.get("materialized_cohort_authority_ref")
+        if isinstance(metadata, Mapping)
+        else None
+    )
+    metadata_definition_sha256 = str(
+        metadata.get("cohort_definition_sha256") or ""
+        if isinstance(metadata, Mapping)
+        else ""
+    ).strip()
+    from .cohort_schema import (
+        CohortSchemaError,
+        _load_locked_cohort_definition,
+        cohort_definition_sha,
+    )
+
+    try:
+        from .intake.materialized_metadata import (
+            MaterializedCohortAuthorityRef,
+            MaterializedMetadataError,
+            load_verified_materialized_cohort_authority,
+        )
+
+        if raw_materialized_ref is not None:
+            if not isinstance(raw_materialized_ref, Mapping):
+                return f"{prefix} typed authority reference is not an object"
+            typed_ref = MaterializedCohortAuthorityRef.from_dict(raw_materialized_ref)
+            if metadata_ref != raw_materialized_ref:
+                return f"{prefix} evidence does not bind the typed authority reference"
+            if (
+                not cohort_definition_sha256
+                or metadata_definition_sha256 != cohort_definition_sha256
+            ):
+                return f"{prefix} typed cohort definition digest is not sealed"
+            locked_definition_sha256 = cohort_definition_sha(
+                _load_locked_cohort_definition(run_dir)
+            )
+            if locked_definition_sha256 != cohort_definition_sha256:
+                return f"{prefix} typed cohort does not match the locked definition"
+            verified_materialized = load_verified_materialized_cohort_authority(
+                canonical_path,
+                expected_authority=typed_ref,
+            )
+            if verified_materialized is None:  # pragma: no cover - expected ref
+                return f"{prefix} typed cohort authority is missing"
+            typed_authority = verified_materialized.authority
+            if (
+                typed_authority.producer != "analysis_cohort_ordered_subset"
+                or typed_authority.cohort_rows != n_cohort
+                or typed_authority.cohort_sha256 != expected_digest
+                or typed_authority.producer_parameters.get("cohort_definition_sha256")
+                != cohort_definition_sha256
+                or typed_authority.semantic_provenance.get("cohort_sha256")
+                != cohort_definition_sha256
+            ):
+                return f"{prefix} typed cohort authority does not match the receipt"
+        else:
+            verified_materialized = load_verified_materialized_cohort_authority(
+                canonical_path
+            )
+            if verified_materialized is not None:
+                return f"{prefix} checkpoint omits its typed cohort authority"
+            if metadata_ref is not None or metadata_definition_sha256:
+                return f"{prefix} legacy receipt contains partial typed authority"
+    except (MaterializedMetadataError, CohortSchemaError) as exc:
+        return f"{prefix} typed cohort authority is invalid: {exc}"
     return None
 
 
@@ -1655,6 +1823,23 @@ def prepare_existing_resume_input(
                 "at or before: " + ", ".join(earlier_invalid)
             )
 
+    # Evidence revalidation can be arbitrarily expensive and may invoke legacy
+    # migration hooks.  Re-read the complete input authority immediately before
+    # the first resume write so a selector/artifact swap during that interval
+    # cannot be followed by an authoritative resume receipt.
+    reverified_authority = load_verified_run_input_capsule(
+        run_dir=run_dir,
+        scientific_identity=scientific_identity,
+    )
+    if (
+        reverified_authority.capsule != authority.capsule
+        or reverified_authority.evidence_records != authority.evidence_records
+    ):
+        raise RunInputIdentityError(
+            "Cannot resume safely: input authority changed during revalidation."
+        )
+    authority = reverified_authority
+
     receipt_store = EvidenceStore(root=run_dir, enforcement_mode=enforcement_mode)
     receipt_path = write_resume_environment_receipt(
         run_dir=run_dir,
@@ -1664,6 +1849,18 @@ def prepare_existing_resume_input(
         invalidated_step_ids=tuple(invalidated),
     )
     receipt_payload = json.loads(receipt_path.read_text(encoding="utf-8"))
+    # The receipt itself legitimately advances evidence authority.  Verify the
+    # selected capsule and all sealed input bytes once more before returning any
+    # path to the caller; corruption is therefore never reported as verified.
+    post_receipt_authority = load_verified_run_input_capsule(
+        run_dir=run_dir,
+        scientific_identity=scientific_identity,
+    )
+    if post_receipt_authority.capsule != authority.capsule:
+        raise RunInputIdentityError(
+            "Cannot resume safely: input authority changed while recording resume."
+        )
+    authority = post_receipt_authority
     prepared_state = {
         **prepared_state,
         "resume_environment_receipt_path": receipt_path.name,
@@ -1695,6 +1892,7 @@ __all__ = [
     "RUN_INPUT_CAPSULE_FILENAME",
     "RUN_INPUT_CAPSULE_EVIDENCE_ID",
     "RunInputCapsule",
+    "RunInputCapsuleV2",
     "RunInputIdentityError",
     "ResumeInputAuthority",
     "PreparedResumeInput",
