@@ -9,6 +9,8 @@ import pytest
 
 from easyicu.research_agent.schema import ValidationFinding
 
+from .test_gate_evaluator_contract import gate_call_order
+
 
 def test_mixed_overlap_and_clipping_visual_error_is_not_cosmetic() -> None:
     from easyicu.research_agent.pipeline_execute import _is_cosmetic_visual_finding
@@ -266,59 +268,49 @@ def test_visual_repair_log_keeps_structured_collision_detail() -> None:
 
 
 def test_visual_qa_stays_before_contract_gate() -> None:
-    # Batch 1a-2: the VisualQA audit + classification is now invoked through the
-    # typed ``collect_visual_gate_result(...)`` gate (the raw
-    # ``VisualQAAuditor().audit_with_expected`` call moved into that helper), the
-    # branch selection + LLM-repair recommendation come from
-    # ``decide_visual_repair(...)`` (its ``repair_log`` replaces the inline
-    # ``qa_log`` assembly), and the exception path reads the cosmetic-demotion
-    # projection off the result (``visual_gate.demoted_findings``) instead of
-    # re-calling the demoter inline. The GUARANTEE is unchanged: the visual gate
-    # runs before the contract gate, and cosmetic demotion precedes the terminal
-    # ``visual_qa_repair_failed`` fallback in the repair-exception handler.
+    # Converged onto the AST GateEvaluator contract (test_gate_evaluator_contract):
+    # the visual gate runs before the shared deterministic contract gate. This
+    # used to be a brittle ``source.index("literal") < source.index("literal")``
+    # pair that broke every time a gate implementation moved; it is now a
+    # first-call-lineno ordering over the parsed AST. The former second assertion
+    # (cosmetic demotion precedes the terminal ``visual_qa_repair_failed`` in the
+    # repair-exception handler) is retired on purpose: demotion is now PRECOMPUTED
+    # in collect_visual_gate_result (VisualGateResult.demoted_findings), so it no
+    # longer depends on statement order — that guarantee is locked by
+    # test_visual_gate_component + the gate-purity contract.
     from easyicu.research_agent import pipeline_execute
 
-    source = inspect.getsource(pipeline_execute.run_execute_phase)
-
-    assert source.index("collect_visual_gate_result(") < source.index(
-        "early_contract_findings = _step_deterministic_contract_findings"
+    order = gate_call_order(
+        pipeline_execute.run_execute_phase,
+        {"collect_visual_gate_result", "_step_deterministic_contract_findings"},
     )
-    # Disambiguate the visual-repair ``except`` block via the decision's repair
-    # log, which sits in the LLM_REPAIR branch just above that handler.
-    visual_except = source[
-        source.index(
-            "except Exception as exc:",
-            source.index("visual_repair_decision.repair_log"),
-        ) :
-    ]
-    assert visual_except.index("visual_gate.demoted_findings") < visual_except.index(
-        "visual_qa_repair_failed"
+    assert (
+        order["collect_visual_gate_result"]
+        < order["_step_deterministic_contract_findings"]
     )
 
 
 def test_figure_canonicalization_repair_stays_between_gate_and_figure_audits() -> None:
     # Batch 1a-0 ordering guard (the boundary the dedup must never reorder): the
     # early figure-contract canonicalization REPAIR runs after the shared
-    # deterministic contract gate and BEFORE the figure-contract / figure-source
-    # audits, so those validators audit the already-canonicalized contracts.
-    # Extracting the shared 14-validator contract sequence left this hard
-    # sequence intact; lock it so a later gate extraction cannot silently move
-    # the repair past the audits (which would fail-open on stale contracts).
+    # deterministic contract gate and BEFORE the figure audits, so those
+    # validators audit the already-canonicalized contracts. Converged onto the AST
+    # contract (was three brittle source.index anchors).
     from easyicu.research_agent import pipeline_execute
 
-    source = inspect.getsource(pipeline_execute.run_execute_phase)
-    shared_gate = source.index(
-        "early_contract_findings = _step_deterministic_contract_findings"
+    order = gate_call_order(
+        pipeline_execute.run_execute_phase,
+        {
+            "_step_deterministic_contract_findings",
+            "_install_figure_contract_source_data_canonicalization",
+            "_post_canonicalization_figure_findings",
+        },
     )
-    canonicalization_repair = source.index(
-        "_install_figure_contract_source_data_canonicalization("
+    assert (
+        order["_step_deterministic_contract_findings"]
+        < order["_install_figure_contract_source_data_canonicalization"]
+        < order["_post_canonicalization_figure_findings"]
     )
-    # The figure audits now live in _post_canonicalization_figure_findings, called
-    # after the canonicalization repair — so the repair still precedes the audits.
-    post_canon_figure_audits = source.index(
-        "early_contract_findings += _post_canonicalization_figure_findings"
-    )
-    assert shared_gate < canonicalization_repair < post_canon_figure_audits
 
     # Inside that helper the figure-contract audit still precedes the
     # figure-source audit (both see the canonicalized contracts).
