@@ -4914,11 +4914,7 @@ def run_execute_phase(
             )
             coder_authority = coder_authority.append(role_note)
         worker_progress = StepWorkerProgress()
-        resumed_quarantined_draft_used = False
         quarantine_state = ConceptQuarantineState()
-        quarantined_repair_materially_changed = False
-        quarantined_repair_succeeded = False
-        quarantine_superseded_by_fallback = False
         step_attempt_state = StepAttemptState()
         checkpoint_authority = CheckpointAuthority(
             run_dir=run_dir,
@@ -5608,9 +5604,9 @@ def run_execute_phase(
             )
 
         def _use_quarantined_draft(draft: QuarantinedConceptDraft) -> str:
-            nonlocal resumed_quarantined_draft_used
-            resumed_quarantined_draft_used = True
+            quarantine_state.resumed_draft_used = True
             quarantine_state.draft_active = True
+            quarantine_state.repair_succeeded = False
             quarantine_state.pending_errors = [
                 ValidationFinding.model_validate(payload) for payload in draft.findings
             ]
@@ -6619,11 +6615,11 @@ def run_execute_phase(
                         sealed_renderer_authorized_code_sha256
                     )
                 if (
-                    resumed_quarantined_draft_used
-                    and quarantined_repair_materially_changed
-                    and not quarantine_superseded_by_fallback
+                    quarantine_state.resumed_draft_used
+                    and quarantine_state.repair_materially_changed
+                    and not quarantine_state.superseded_by_fallback
                 ):
-                    quarantined_repair_succeeded = True
+                    quarantine_state.repair_succeeded = True
                     step_record["quarantined_repair_succeeded"] = True
                 with shared_lock:
                     findings.extend(usage_findings)
@@ -6802,7 +6798,7 @@ def run_execute_phase(
                         # digest.  Re-audit that digest from scratch just as the
                         # LLM-repair path below does.
                         quarantine_state.draft_active = False
-                        quarantined_repair_materially_changed = True
+                        quarantine_state.repair_materially_changed = True
                         quarantine_state.pending_errors = []
                         step_record["quarantined_repair_materially_changed"] = True
                     continue
@@ -6822,7 +6818,7 @@ def run_execute_phase(
                 fallback_code = _deterministic_fallback_code("concept_audit")
                 if fallback_code is not None:
                     fallback_checkpoint_error: Optional[Exception] = None
-                    if resumed_quarantined_draft_used:
+                    if quarantine_state.resumed_draft_used:
                         try:
                             checkpoint = store_quarantined_concept_draft(
                                 run_dir=run_dir,
@@ -6880,18 +6876,18 @@ def run_execute_phase(
                                     }
                                 )
                             findings.append(f)
-                    if resumed_quarantined_draft_used:
+                    if quarantine_state.resumed_draft_used:
                         quarantine_state.draft_active = False
                         quarantine_state.pending_errors = []
-                        quarantined_repair_succeeded = False
-                        quarantine_superseded_by_fallback = True
+                        quarantine_state.repair_succeeded = False
+                        quarantine_state.superseded_by_fallback = True
                         step_record["quarantined_repair_succeeded"] = False
                         step_record["quarantine_superseded_by_fallback"] = True
                     code = fallback_code
                     continue
                 step_record["status"] = "blocked_by_concept_audit"
                 checkpoint_error: Optional[Exception] = None
-                if not quarantine_superseded_by_fallback:
+                if not quarantine_state.superseded_by_fallback:
                     try:
                         checkpoint = store_quarantined_concept_draft(
                             run_dir=run_dir,
@@ -7111,13 +7107,14 @@ def run_execute_phase(
                     step_record["quarantined_repair_noop_count"] = (
                         int(step_record.get("quarantined_repair_noop_count") or 0) + 1
                     )
+                    quarantine_state.repair_succeeded = False
                     step_record["quarantined_repair_succeeded"] = False
                     continue
                 code = repaired_code
                 worker_progress.llm_repair_used = True
                 if quarantine_state.draft_active:
                     quarantine_state.draft_active = False
-                    quarantined_repair_materially_changed = True
+                    quarantine_state.repair_materially_changed = True
                     quarantine_state.pending_errors = []
                     step_record["quarantined_repair_materially_changed"] = True
             except (
@@ -7149,9 +7146,9 @@ def run_execute_phase(
                 if fallback_code is not None:
                     quarantine_state.draft_active = False
                     quarantine_state.pending_errors = []
-                    quarantined_repair_succeeded = False
-                    if resumed_quarantined_draft_used:
-                        quarantine_superseded_by_fallback = True
+                    quarantine_state.repair_succeeded = False
+                    if quarantine_state.resumed_draft_used:
+                        quarantine_state.superseded_by_fallback = True
                         step_record["quarantined_repair_succeeded"] = False
                         step_record["quarantine_superseded_by_fallback"] = True
                     code = fallback_code
@@ -7194,7 +7191,7 @@ def run_execute_phase(
                 )
                 return step_record
 
-        if quarantine_state.draft_active and not quarantined_repair_succeeded:
+        if quarantine_state.draft_active and not quarantine_state.repair_succeeded:
             hard_gate_finding = ValidationFinding(
                 validator="resume",
                 severity="error",
@@ -7226,7 +7223,7 @@ def run_execute_phase(
             return step_record
 
         if (
-            quarantined_repair_succeeded
+            quarantine_state.repair_succeeded
             or quarantine_state.policy_superseded
             or quarantine_state.deterministic_revalidated
         ):
@@ -8246,11 +8243,11 @@ def run_execute_phase(
                     "resumed_code_evidence_generation_mode": step_record.get(
                         "resumed_code_evidence_generation_mode"
                     ),
-                    "resumed_quarantined_draft": resumed_quarantined_draft_used,
+                    "resumed_quarantined_draft": quarantine_state.resumed_draft_used,
                     "quarantined_draft_sha256": step_record.get(
                         "quarantined_draft_sha256"
                     ),
-                    "quarantined_repair_succeeded": quarantined_repair_succeeded,
+                    "quarantined_repair_succeeded": quarantine_state.repair_succeeded,
                     "quarantine_policy_superseded": quarantine_state.policy_superseded,
                     "quarantine_policy_superseded_findings": step_record.get(
                         "quarantine_policy_superseded_findings"
@@ -10509,10 +10506,10 @@ def run_execute_phase(
                     run_dir=run_dir,
                     step_id=step.step_id,
                 )
-                if resumed_quarantined_draft_used:
+                if quarantine_state.resumed_draft_used:
                     step_record["quarantined_requires_repair"] = False
                     step_record["quarantine_retired"] = True
-                    if quarantine_superseded_by_fallback:
+                    if quarantine_state.superseded_by_fallback:
                         step_record["quarantine_retired_by"] = (
                             "successful_deterministic_fallback"
                         )
