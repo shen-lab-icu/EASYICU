@@ -23,9 +23,14 @@ from easyicu.research_agent import (
     contract_gate,
     figure_contract_preparation,
     pipeline_execute,
+    publication_figure_execution,
 )
 
-_COMPAT_MODULES = (contract_gate, figure_contract_preparation)
+_COMPAT_MODULES = (
+    contract_gate,
+    figure_contract_preparation,
+    publication_figure_execution,
+)
 
 
 def _compat_table():
@@ -55,6 +60,11 @@ def test_pipeline_execute_reexports_every_all_symbol_with_identity(module, name)
 def test_compat_table_is_nonempty_and_covers_both_modules():
     # Guards against the test silently passing if __all__ ever disappears.
     covered = {m.__name__.rsplit(".", 1)[-1] for m, _ in _compat_table()}
-    assert covered == {"contract_gate", "figure_contract_preparation"}
+    assert covered == {
+        "contract_gate",
+        "figure_contract_preparation",
+        "publication_figure_execution",
+    }
     assert len(contract_gate.__all__) >= 14
     assert len(figure_contract_preparation.__all__) == 8
+    assert len(publication_figure_execution.__all__) == 6
