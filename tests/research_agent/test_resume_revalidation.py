@@ -958,17 +958,23 @@ def test_checkpoint_write_failure_never_retires_aliases(
 def test_replay_uses_shared_gates_and_never_constructs_llm_auditor():
     import inspect
 
-    from easyicu.research_agent import pipeline_execute
+    from easyicu.research_agent import concept_audit_execution, pipeline_execute
 
     replay_source = inspect.getsource(
         pipeline_execute._selectively_revalidate_resume_successes
     )
     fresh_source = inspect.getsource(pipeline_execute.run_execute_phase)
+    concept_execution_source = inspect.getsource(
+        concept_audit_execution.ConceptAuditCoordinator.findings_for_code
+    )
 
     assert "_deterministic_code_gate_findings(" in replay_source
     assert "_evaluate_final_deterministic_gates(" in replay_source
     assert "LLMConceptAuditor(" not in replay_source
-    assert "_deterministic_code_gate_findings(" in fresh_source
+    assert "ConceptAuditCoordinator(" in fresh_source
+    assert "concept_audit.findings_for_code(" in fresh_source
+    assert "deterministic_code_gate_findings(" in concept_execution_source
+    assert "LLMConceptAuditor(" not in fresh_source
     assert "_evaluate_final_deterministic_gates(" in fresh_source
 
 

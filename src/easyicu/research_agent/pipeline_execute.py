@@ -86,8 +86,6 @@ from .audits.validators import (
     StatisticalGuard,
     StatisticalValidator,
     StepSummaryFractionValidator,
-    _reclassify_llm_concept_findings,
-    _verified_authoritative_exposure_flow,
 )
 from .audits.patterns import AnalysisPatternAuditor
 from .audits.step_summary_integrity import StepSummaryIntegrityValidator
@@ -97,13 +95,27 @@ from .code_repair import (
     deterministic_contract_repair,
 )
 from .code_hygiene import reorder_forward_references
-from .code_preflight import audit_mechanical_code_contracts
 from .repair_coordination import (
     RepairAuthorityBinding,
     StepRepairBudget,
     authorized_deterministic_concept_repair,
 )
 from .concept_audit_cache import LLMConceptAuditCache
+from .concept_audit_execution import (
+    ConceptAuditAuthority,
+    ConceptAuditCoordinator,
+    ConceptAuditRuntime,
+    ConceptQuarantineState,
+)
+from .concept_gate import (
+    DETERMINISTIC_CODE_GATE_VALIDATORS as _DETERMINISTIC_CODE_GATE_VALIDATORS,
+    deterministic_code_gate_findings as _deterministic_code_gate_findings,
+    deterministic_gate_stamp as _deterministic_gate_stamp,
+    finding_detail_without_source_positions as _finding_detail_without_source_positions,
+    finding_occurrence_identity as _finding_occurrence_identity,
+    quarantined_deterministic_errors_resolved_by_current_gate as _quarantined_deterministic_errors_resolved_by_current_gate,
+    quarantined_errors_superseded_by_current_policy as _quarantined_errors_superseded_by_current_policy,
+)
 from .coder_authority_notes import HostCoderAuthority
 from .cohort_repair import extract_cohort_definition_from_prose
 from .cohort_schema import (
@@ -184,10 +196,6 @@ from .gate_evaluator import (
 )
 from .gate_semantics import blocking_validator_findings as _blocking_validator_findings
 from .llm import MockLLMClient
-from .method_compatibility import (
-    detect_forbidden_pattern_usage,
-    format_violation_message,
-)
 from .ordered_stratified_contract import ordered_stratified_numeric_findings
 from .pipeline import (
     _build_probe_summary,
@@ -380,18 +388,8 @@ _STANDARD_EXECUTOR_INTERNAL_PENDING_ARTIFACTS = frozenset(
     {".cluster_stability_assignments.pending.csv"}
 )
 _FIGURE_CONTRACT_SOURCE_DATA_SCHEMA_REPAIR_ID = "figure_contract_source_data_schema_v1"
-_DETERMINISTIC_GATE_SCHEMA_VERSION = "easyicu.deterministic_step_gate/1"
 _RESUME_TYPED_INPUT_BINDING_FINGERPRINT_SCHEMA_VERSION = (
     "easyicu.resume_typed_input_bindings/1"
-)
-_DETERMINISTIC_CODE_GATE_VALIDATORS = frozenset(
-    {
-        "analysis_pattern_auditor",
-        "concept_usage_auditor",
-        "mechanical_code_preflight",
-        "method_compatibility",
-        "typed_input_authority_flow",
-    }
 )
 _COHORT_TRANSLATION_PROVIDER_CATEGORY = "cohort_definition_translation"
 _HOST_COHORT_TRANSLATION_BUDGET_STEP_ID = "host_cohort_definition_translation"
@@ -543,234 +541,6 @@ def _extract_cohort_definition_with_provider_budget(
         ),
         "step_provider_call_receipt": str(receipt_path.relative_to(run_dir)),
     }
-
-
-class ConceptQuarantineState:
-    """Mutable value object for the per-step concept-audit quarantine state.
-
-    Groups the four flags/list that the concept-findings generator
-    (``_concept_findings_for_code``), the quarantined-draft adopter, and the
-    ``_execute_one_step`` body all share: whether a quarantined draft is active,
-    whether the quarantine policy was superseded, whether the deterministic
-    revalidation ran, and the list of pending quarantined findings. It replaces
-    four ``nonlocal`` closure variables so the concept generator can be lifted out
-    of ``_execute_one_step``: collaborators mutate the object's attributes in place
-    (identical semantics to the old nonlocal rebinds). Defaults match the old
-    inline initialisers exactly (False / False / False / []).
-    """
-
-    __slots__ = (
-        "draft_active",
-        "policy_superseded",
-        "deterministic_revalidated",
-        "pending_errors",
-    )
-
-    def __init__(self) -> None:
-        self.draft_active: bool = False
-        self.policy_superseded: bool = False
-        self.deterministic_revalidated: bool = False
-        self.pending_errors: List[ValidationFinding] = []
-
-
-def _deterministic_gate_stamp() -> Dict[str, str]:
-    """Return the current host-owned deterministic gate identity.
-
-    The full engine digest is intentionally included.  This safely
-    over-invalidates when unrelated engine code changes, but never reuses a
-    success reviewed under an older deterministic implementation.
-    """
-
-    engine_digest = engine_code_sha256()
-    fingerprint = canonical_sha256(
-        {
-            "schema_version": _DETERMINISTIC_GATE_SCHEMA_VERSION,
-            "engine_code_sha256": engine_digest,
-        }
-    )
-    return {
-        "deterministic_gate_schema_version": _DETERMINISTIC_GATE_SCHEMA_VERSION,
-        "deterministic_gate_engine_code_sha256": engine_digest,
-        "deterministic_gate_fingerprint": fingerprint,
-    }
-
-
-def _deterministic_code_gate_findings(
-    *,
-    context: ResearchContext,
-    step: AnalysisStep,
-    script_text: str,
-    usage_auditor: Optional[ConceptUsageAuditor] = None,
-    pattern_auditor: Optional[AnalysisPatternAuditor] = None,
-) -> List[ValidationFinding]:
-    """Run the shared deterministic pre-execution code gate.
-
-    Fresh execution may add the optional LLM concept audit after this prefix.
-    Resume drift replay deliberately stops here: it rechecks deterministic
-    semantics and mechanics without invoking an LLM or mutating the script.
-    """
-
-    usage = usage_auditor if usage_auditor is not None else ConceptUsageAuditor()
-    patterns = (
-        pattern_auditor if pattern_auditor is not None else AnalysisPatternAuditor()
-    )
-    findings = usage.audit(
-        context=context,
-        script_text=script_text,
-        step=step,
-    )
-    findings.extend(
-        patterns.audit(
-            context=context,
-            script_text=script_text,
-            step=step,
-        )
-    )
-    compatibility_violations = detect_forbidden_pattern_usage(
-        script_text,
-        context,
-        step,
-    )
-    if compatibility_violations:
-        findings.append(
-            ValidationFinding(
-                validator="method_compatibility",
-                severity="error",
-                message=format_violation_message(compatibility_violations),
-                detail={
-                    "step_id": step.step_id,
-                    "violations": compatibility_violations,
-                },
-            )
-        )
-    findings.extend(audit_mechanical_code_contracts(script_text, step))
-    requires_primary_exposure_artifact = any(
-        str(value).strip().casefold() == "artifact:primary_exposure_definition"
-        for value in step.inputs or []
-    )
-    if (
-        requires_primary_exposure_artifact
-        and str(context.primary_exposure or "").strip()
-        and not _verified_authoritative_exposure_flow(
-            script_text,
-            primary_exposure=str(context.primary_exposure),
-        )
-    ):
-        findings.append(
-            ValidationFinding(
-                validator="typed_input_authority_flow",
-                severity="error",
-                message=(
-                    f"Step {step.step_id} does not prove that the exact host-bound "
-                    "primary exposure reaches its result-bearing model or figure "
-                    "after finite/domain validation."
-                ),
-                detail={
-                    "step_id": step.step_id,
-                    "input_key": "artifact:primary_exposure_definition",
-                    "issue": "typed_primary_exposure_not_consumed",
-                },
-            )
-        )
-    return findings
-
-
-_POSITIONAL_FINDING_KEYS = {
-    "line",
-    "lines",
-    "lineno",
-    "col_offset",
-    "end_lineno",
-    "end_col_offset",
-    "offset",
-    "offsets",
-}
-
-
-def _finding_detail_without_source_positions(value: Any) -> Any:
-    """Remove transient code coordinates from a persisted repair constraint."""
-
-    if isinstance(value, Mapping):
-        cleaned: Dict[str, Any] = {}
-        for raw_key, raw_value in value.items():
-            key = str(raw_key)
-            normalized = key.casefold()
-            if (
-                normalized in _POSITIONAL_FINDING_KEYS
-                or normalized.endswith("_line")
-                or normalized.endswith("_lines")
-                or normalized.endswith("_lineno")
-                or normalized.endswith("_offset")
-                or normalized.endswith("_offsets")
-            ):
-                continue
-            cleaned[key] = _finding_detail_without_source_positions(raw_value)
-        return cleaned
-    if isinstance(value, (list, tuple)):
-        return [_finding_detail_without_source_positions(item) for item in value]
-    return value
-
-
-def _finding_occurrence_identity(finding: ValidationFinding) -> str:
-    """Return a stable identity for one structured validation occurrence.
-
-    Human messages and source line numbers may change after a minimal patch.
-    A named variable/input/path is the durable locator in that case.  Findings
-    without any stable locator retain their positional detail so two anonymous
-    code locations are not accidentally folded together.
-    """
-
-    detail = dict(finding.detail or {})
-    structured_reason = str(
-        detail.get("reason") or detail.get("kind") or detail.get("issue") or ""
-    ).strip()
-    stable_detail = _finding_detail_without_source_positions(detail)
-    explicit_occurrence = stable_detail.get("occurrence_id")
-    locator_keys = (
-        "scope",
-        "name",
-        "model_id",
-        "requirement_id",
-        "check_id",
-        "term",
-        "term_role",
-        "input",
-        "input_name",
-        "column",
-        "column_name",
-        "source_variable",
-        "field",
-        "variable",
-        "path",
-        "artifact",
-        "product",
-    )
-    if explicit_occurrence not in (None, ""):
-        stable_locator = {"occurrence_id": explicit_occurrence}
-    else:
-        # Validator-owned semantic locators are stable across line shifts and
-        # changing audit counts. Arbitrary detail fields are payload, not
-        # identity: including e.g. invalid_n would retain stale versions of one
-        # occurrence, while deleting scope would fold different functions.
-        stable_locator = {
-            key: stable_detail[key]
-            for key in locator_keys
-            if stable_detail.get(key) not in (None, "", [], {})
-        }
-    payload: Dict[str, Any] = {
-        "validator": finding.validator,
-        "structured_reason": structured_reason,
-        "locator": stable_locator if stable_locator else detail,
-    }
-    if not structured_reason or not stable_locator:
-        payload["message"] = str(finding.message or "")
-    return json.dumps(
-        payload,
-        sort_keys=True,
-        ensure_ascii=False,
-        separators=(",", ":"),
-        default=str,
-    )
 
 
 def _merge_monotonic_concept_constraints(
@@ -2229,116 +1999,6 @@ def _python_repair_is_materially_changed(before: str, after: str) -> bool:
     if before_semantic is not None and before_semantic == after_semantic:
         return False
     return True
-
-
-def _quarantined_deterministic_errors_resolved_by_current_gate(
-    *,
-    prior_errors: Sequence[ValidationFinding],
-    current_findings: Sequence[ValidationFinding],
-    script_text: str,
-    quarantined_script_sha256: str,
-) -> Optional[List[Dict[str, Any]]]:
-    """Prove that exact-digest, host-owned deterministic errors are stale.
-
-    Older execute loops could persist a deterministically repaired script while
-    accidentally retaining the pre-repair finding beside its new digest.  Such
-    a checkpoint has no further code mutation to trigger ordinary quarantine
-    retirement.  Replaying the complete current deterministic gate is a safe
-    migration only for the closed set of validators that gate owns.  LLM,
-    provider-budget, receipt, and mixed-origin errors remain binding.
-    """
-
-    digest = hashlib.sha256(script_text.encode("utf-8")).hexdigest()
-    if digest != str(quarantined_script_sha256 or ""):
-        return None
-    if not prior_errors or any(
-        finding.severity != "error"
-        or finding.validator not in _DETERMINISTIC_CODE_GATE_VALIDATORS
-        for finding in prior_errors
-    ):
-        return None
-    if any(finding.severity == "error" for finding in current_findings):
-        return None
-
-    gate_stamp = _deterministic_gate_stamp()
-    return [
-        {
-            "validator": finding.validator,
-            "message": finding.message,
-            "prior_severity": finding.severity,
-            "quarantined_script_sha256": digest,
-            "revalidated_by": "current_deterministic_code_gate",
-            **gate_stamp,
-        }
-        for finding in prior_errors
-    ]
-
-
-def _quarantined_errors_superseded_by_current_policy(
-    *,
-    prior_errors: Sequence[ValidationFinding],
-    current_findings: Sequence[ValidationFinding],
-    context: ResearchContext,
-    script_text: str,
-    quarantined_script_sha256: str,
-) -> Optional[Tuple[List[ValidationFinding], List[Dict[str, Any]]]]:
-    """Prove that stored errors were retired by a deterministic policy change.
-
-    Absence of a finding from a new optional LLM audit is not evidence that an
-    old quarantine is stale. The only no-code-change exit is to replay the
-    current metadata-supported outcome reclassifier over every stored error,
-    while the complete current audit independently has no errors.
-    """
-
-    if hashlib.sha256(script_text.encode("utf-8")).hexdigest() != str(
-        quarantined_script_sha256 or ""
-    ):
-        return None
-    if not prior_errors or any(
-        finding.severity == "error" for finding in current_findings
-    ):
-        return None
-    if any(finding.severity != "error" for finding in prior_errors):
-        return None
-    reclassified = _reclassify_llm_concept_findings(
-        findings=prior_errors,
-        context=context,
-        script_text=script_text,
-    )
-    if len(reclassified) != len(prior_errors):
-        return None
-
-    provenance: List[Dict[str, Any]] = []
-    for prior, current in zip(prior_errors, reclassified):
-        prior_detail = dict(prior.detail or {})
-        current_detail = dict(current.detail or {})
-        reason = current_detail.get("downgraded_reason")
-        same_finding = (
-            current.validator == prior.validator
-            and current.message == prior.message
-            and current.evidence_ids == prior.evidence_ids
-            and all(
-                current_detail.get(key) == value for key, value in prior_detail.items()
-            )
-        )
-        if (
-            not same_finding
-            or "downgraded_reason" in prior_detail
-            or current.severity != "warning"
-            or not isinstance(reason, str)
-            or not reason.strip()
-        ):
-            return None
-        provenance.append(
-            {
-                "validator": prior.validator,
-                "message": prior.message,
-                "prior_severity": prior.severity,
-                "reclassified_severity": current.severity,
-                "downgraded_reason": reason.strip(),
-            }
-        )
-    return reclassified, provenance
 
 
 def _repair_publication_figure_in_staging(
@@ -8341,350 +8001,40 @@ def run_execute_phase(
                 host_authority=coder_authority,
             )
 
-        llm_concept_audit_completed_digests: set[str] = set()
-        llm_concept_audit_tokens_by_digest: Dict[str, str] = {}
-
-        def _concept_findings_for_code(
-            script_text: str,
-            *,
-            include_llm: bool,
-        ) -> List[ValidationFinding]:
-            """Run deterministic code gates and, when requested, the LLM audit.
-
-            Deterministic semantic/mechanical checks always run before execution.
-            The comparatively expensive LLM audit is reserved for an exact code
-            digest that has already executed successfully and passed the early
-            host-owned output contracts.  Stored quarantine errors remain part of
-            the deterministic pre-execution decision and therefore can never be
-            bypassed by deferring a fresh LLM call.
-            """
-
-            code_findings = _deterministic_code_gate_findings(
+        concept_audit = ConceptAuditCoordinator(
+            authority=ConceptAuditAuthority(
                 context=context,
                 step=step,
-                script_text=script_text,
+                resolved_input_bindings=resolved_input_bindings,
+                environment_sha256=concept_audit_environment_sha256,
+                auditor_implementation_sha256=(
+                    llm_concept_auditor_implementation_sha256
+                ),
+                auditor_identity=(
+                    lambda: pipeline._llm_signature(llm_concept_audit_client)
+                ),
+                enable_llm_audit=pipeline._enable_llm_concept_audit,
+            ),
+            runtime=ConceptAuditRuntime(
                 usage_auditor=usage_auditor,
                 pattern_auditor=pattern_auditor,
-            )
-            deterministic_errors = [
-                finding
-                for finding in code_findings
-                if finding.severity == "error"
-                and finding.validator != "llm_concept_auditor"
-            ]
-            if quarantine_state.pending_errors:
-                deterministic_revalidation = (
-                    _quarantined_deterministic_errors_resolved_by_current_gate(
-                        prior_errors=quarantine_state.pending_errors,
-                        current_findings=code_findings,
-                        script_text=script_text,
-                        quarantined_script_sha256=str(
-                            step_record.get("quarantined_draft_sha256") or ""
-                        ),
-                    )
-                )
-                if deterministic_revalidation is not None:
-                    quarantine_state.deterministic_revalidated = True
-                    quarantine_state.draft_active = False
-                    quarantine_state.pending_errors = []
-                    step_record["quarantine_deterministic_revalidation_succeeded"] = (
-                        True
-                    )
-                    step_record["quarantine_deterministic_revalidated_findings"] = (
-                        deterministic_revalidation
-                    )
-                    emit_progress(
-                        "audit",
-                        (
-                            "Retiring stored deterministic concept errors after "
-                            f"exact-digest revalidation for {step.step_id}."
-                        ),
-                        status="warning",
-                        run_id=run_id,
-                        step_id=step.step_id,
-                        current_step=step_current,
-                        total_steps=total_steps,
-                    )
-                # Policy supersession is a deterministic decision about the
-                # exact quarantined digest.  Make it before the optional LLM
-                # audit so a retired historical error cannot trigger (or be
-                # regenerated by) an unnecessary repair call first.
-                supersession = None
-                if quarantine_state.pending_errors:
-                    supersession = _quarantined_errors_superseded_by_current_policy(
-                        prior_errors=quarantine_state.pending_errors,
-                        current_findings=code_findings,
-                        context=context,
-                        script_text=script_text,
-                        quarantined_script_sha256=str(
-                            step_record.get("quarantined_draft_sha256") or ""
-                        ),
-                    )
-                if supersession is not None:
-                    reclassified_findings, provenance = supersession
-                    existing_keys = {
-                        (finding.severity, _finding_occurrence_identity(finding))
-                        for finding in code_findings
-                    }
-                    code_findings.extend(
-                        finding
-                        for finding in reclassified_findings
-                        if (
-                            finding.severity,
-                            _finding_occurrence_identity(finding),
-                        )
-                        not in existing_keys
-                    )
-                    quarantine_state.policy_superseded = True
-                    quarantine_state.draft_active = False
-                    quarantine_state.pending_errors = []
-                    step_record["quarantine_policy_superseded"] = True
-                    step_record["quarantine_policy_superseded_findings"] = provenance
-                    emit_progress(
-                        "audit",
-                        (
-                            "Retiring stored concept errors under the current "
-                            f"deterministic validator policy for {step.step_id}."
-                        ),
-                        status="warning",
-                        run_id=run_id,
-                        step_id=step.step_id,
-                        current_step=step_current,
-                        total_steps=total_steps,
-                    )
-            try:
-                audited_code_digest = sha256_of_bytes(script_text.encode("utf-8"))
-                sealed_capsule_audit = (
-                    step_attempt_state.capsule_audit_findings_by_digest.get(
-                        audited_code_digest
-                    )
-                )
-                if include_llm and sealed_capsule_audit is not None:
-                    sealed_findings, audit_key = sealed_capsule_audit
-                    if (
-                        provider_budget.snapshot().get("reserved_final_category")
-                        == "concept_audit"
-                    ):
-                        provider_budget.bind_reserved_category(
-                            "concept_audit",
-                            token=audit_key,
-                        )
-                        llm_concept_audit_tokens_by_digest[audited_code_digest] = (
-                            audit_key
-                        )
-                    existing = {
-                        (
-                            finding.validator,
-                            finding.severity,
-                            finding.message,
-                            canonical_sha256(finding.detail or {}),
-                        )
-                        for finding in code_findings
-                    }
-                    code_findings.extend(
-                        finding
-                        for finding in sealed_findings
-                        if (
-                            finding.validator,
-                            finding.severity,
-                            finding.message,
-                            canonical_sha256(finding.detail or {}),
-                        )
-                        not in existing
-                    )
-                    llm_concept_audit_completed_digests.add(audited_code_digest)
-                    step_record["capsule_concept_audit_replayed"] = True
-                elif (
-                    include_llm
-                    and pipeline._enable_llm_concept_audit
-                    and (
-                        worker_progress.deterministic_fallback_used
-                        or worker_progress.deterministic_standard_executor_used
-                    )
-                ):
-                    generation_mode = (
-                        "deterministic_standard"
-                        if worker_progress.deterministic_standard_executor_used
-                        else "deterministic_fallback"
-                    )
-                    code_findings.append(
-                        ValidationFinding(
-                            validator="llm_concept_auditor",
-                            severity="info",
-                            message=(
-                                "Skipped optional LLM concept audit for trusted "
-                                f"{generation_mode} code in step {step.step_id}; "
-                                "deterministic audits still ran."
-                            ),
-                            detail={
-                                "step_id": step.step_id,
-                                "generation_mode": generation_mode,
-                            },
-                        )
-                    )
-                elif (
-                    include_llm
-                    and pipeline._enable_llm_concept_audit
-                    and deterministic_errors
-                ):
-                    code_findings.append(
-                        ValidationFinding(
-                            validator="llm_concept_auditor",
-                            severity="info",
-                            message=(
-                                "Deferred optional LLM concept audit because the "
-                                "deterministic mechanical/concept preflight already "
-                                f"blocked step {step.step_id}. The repaired digest "
-                                "will be audited after deterministic checks pass."
-                            ),
-                            detail={
-                                "step_id": step.step_id,
-                                "deterministic_error_validators": sorted(
-                                    {
-                                        finding.validator
-                                        for finding in deterministic_errors
-                                    }
-                                ),
-                            },
-                        )
-                    )
-                elif include_llm and pipeline._enable_llm_concept_audit:
-                    llm_audit_client = llm_concept_audit_client
-                    if llm_audit_client is not None:
-                        llm_concept_auditor = LLMConceptAuditor(llm_audit_client)
-                        audit_prompt = llm_concept_auditor._prompt(
-                            context=context,
-                            script_text=script_text,
-                            step=step,
-                        )
-                        audit_key = llm_concept_audit_cache.key(
-                            context=context,
-                            step=step,
-                            script_text=script_text,
-                            audit_prompt=audit_prompt,
-                            environment_sha256=(concept_audit_environment_sha256),
-                            auditor_identity=pipeline._llm_signature(llm_audit_client),
-                            authority_bindings=resolved_input_bindings,
-                            validator_implementation_sha256=(
-                                llm_concept_auditor_implementation_sha256
-                            ),
-                        )
-                        provider_budget.bind_reserved_category(
-                            "concept_audit",
-                            token=audit_key,
-                        )
-                        llm_concept_audit_tokens_by_digest[audited_code_digest] = (
-                            audit_key
-                        )
-                        cached_findings = llm_concept_audit_cache.get(audit_key)
-                        reservation_status = provider_budget.reservation_status(
-                            "concept_audit",
-                            token=audit_key,
-                        )
-                        if cached_findings is None and reservation_status in {
-                            "attempted_incomplete",
-                            "completed",
-                            "released",
-                        }:
-                            raise ProviderCallBudgetReceiptError(
-                                "Final concept audit has a durable paid/completed "
-                                "reservation but no matching digest-bound cache; "
-                                "refusing a duplicate provider call."
-                            )
-                        if cached_findings is not None:
-                            # Cache entries preserve the original audit output,
-                            # but deterministic policy reclassifiers are the
-                            # current authority.  Replay them on every cache hit
-                            # so an old ERROR cannot survive a validator-policy
-                            # fix merely because the LLM result was reusable.
-                            cached_findings = _reclassify_llm_concept_findings(
-                                findings=cached_findings,
-                                context=context,
-                                script_text=script_text,
-                            )
-                            code_findings.extend(cached_findings)
-                            llm_concept_audit_completed_digests.add(audited_code_digest)
-                            step_record["llm_concept_audit_cache_hits"] = (
-                                int(
-                                    step_record.get("llm_concept_audit_cache_hits") or 0
-                                )
-                                + 1
-                            )
-                        else:
-                            llm_findings = llm_concept_auditor.audit(
-                                context=context,
-                                script_text=script_text,
-                                step=step,
-                                provider_budget=provider_budget,
-                            )
-                            _sync_provider_budget()
-                            llm_concept_audit_cache.put(audit_key, llm_findings)
-                            code_findings.extend(llm_findings)
-                            llm_concept_audit_completed_digests.add(audited_code_digest)
-            except ProviderCallBudgetError as exc:
-                _sync_provider_budget()
-                receipt_error = isinstance(exc, ProviderCallBudgetReceiptError)
-                code_findings.append(
-                    ValidationFinding(
-                        validator=(
-                            "provider_call_budget_receipt"
-                            if receipt_error
-                            else "provider_call_budget"
-                        ),
-                        severity="error",
-                        message=(
-                            f"Step {step.step_id} could not durably record its "
-                            "provider call before concept approval."
-                            if receipt_error
-                            else f"Step {step.step_id} exhausted its shared LLM "
-                            "provider-call budget before concept approval."
-                        ),
-                        detail={
-                            "step_id": step.step_id,
-                            "category": getattr(exc, "category", None),
-                            "limit": getattr(exc, "limit", provider_budget.limit),
-                            "used": getattr(exc, "used", provider_budget.used),
-                            "reason": str(exc),
-                        },
-                    )
-                )
-            except BaseException:
-                # An operator interrupt must propagate, but a draft already
-                # rejected by deterministic findings remains resumable.
-                error_payloads = _quarantine_error_payloads(code_findings)
-                if error_payloads:
-                    try:
-                        store_quarantined_concept_draft(
-                            run_dir=run_dir,
-                            step_id=step.step_id,
-                            code=script_text,
-                            findings=error_payloads,
-                        )
-                    except Exception:
-                        pass
-                raise
-            if quarantine_state.pending_errors:
-                # The complete current deterministic gate is authoritative for
-                # the current code digest.  Do not mix stale source coordinates
-                # from an older deterministic attempt into its exact repair
-                # ticket.  Nondeterministic/provider findings have no such
-                # replay proof and therefore remain blocking until explicitly
-                # repaired or policy-superseded.
-                existing_keys = {
-                    (finding.severity, _finding_occurrence_identity(finding))
-                    for finding in code_findings
-                }
-                code_findings.extend(
-                    finding
-                    for finding in quarantine_state.pending_errors
-                    if finding.validator not in _DETERMINISTIC_CODE_GATE_VALIDATORS
-                    and (
-                        finding.severity,
-                        _finding_occurrence_identity(finding),
-                    )
-                    not in existing_keys
-                )
-            return code_findings
+                cache=llm_concept_audit_cache,
+                client=llm_concept_audit_client,
+                provider_budget=provider_budget,
+                step_attempt_state=step_attempt_state,
+                worker_progress=worker_progress,
+                quarantine_state=quarantine_state,
+                step_record=step_record,
+                run_dir=run_dir,
+                run_id=run_id,
+                step_current=step_current,
+                total_steps=total_steps,
+                sync_provider_budget=_sync_provider_budget,
+                emit_progress=emit_progress,
+                quarantine_error_payloads=_quarantine_error_payloads,
+                store_quarantined_draft=store_quarantined_concept_draft,
+            ),
+        )
 
         def _authorized_deterministic_concept_repair(
             *,
@@ -8720,7 +8070,10 @@ def run_execute_phase(
             # proof and force an otherwise unnecessary LLM repair.
             if not quarantine_state.draft_active:
                 code = reorder_forward_references(code)
-            usage_findings = _concept_findings_for_code(code, include_llm=False)
+            usage_findings = concept_audit.findings_for_code(
+                code,
+                include_llm=False,
+            )
             step_record["usage_findings"] = [f.model_dump() for f in usage_findings]
             worker_progress.concept_audit_error_count += sum(
                 1
@@ -9465,7 +8818,7 @@ def run_execute_phase(
                 # invoked only for the exact digest whose local run and early
                 # deterministic contracts already passed, preventing runtime- or
                 # contract-broken drafts from consuming repeated audit calls.
-                usage_findings = _concept_findings_for_code(
+                usage_findings = concept_audit.findings_for_code(
                     code,
                     include_llm=final_llm_audit_due,
                 )
@@ -9499,7 +8852,7 @@ def run_execute_phase(
                             or step_record.get("step_authority_audit_cache_miss")
                             == "audit_identity_drift"
                         ):
-                            blocked_audit_key = llm_concept_audit_tokens_by_digest.get(
+                            blocked_audit_key = concept_audit.tokens_by_digest.get(
                                 candidate_code_digest
                             ) or canonical_sha256(
                                 {
@@ -9844,8 +9197,8 @@ def run_execute_phase(
                     step_record["final_concept_gate_approved_code_sha256"] = (
                         final_concept_gate_approved_code_digest
                     )
-                    if candidate_code_digest in llm_concept_audit_completed_digests:
-                        final_audit_token = llm_concept_audit_tokens_by_digest.get(
+                    if candidate_code_digest in concept_audit.completed_digests:
+                        final_audit_token = concept_audit.tokens_by_digest.get(
                             candidate_code_digest
                         )
                         if final_audit_token is not None:
@@ -9884,7 +9237,7 @@ def run_execute_phase(
                             or step_record.get("step_authority_audit_cache_miss")
                             == "audit_identity_drift"
                         ):
-                            audit_key = llm_concept_audit_tokens_by_digest.get(
+                            audit_key = concept_audit.tokens_by_digest.get(
                                 candidate_code_digest
                             ) or canonical_sha256(
                                 {
@@ -12518,9 +11871,7 @@ def run_execute_phase(
             )
         else:
             final_code_digest = sha256_of_bytes(code.encode("utf-8"))
-            final_audit_token = llm_concept_audit_tokens_by_digest.get(
-                final_code_digest
-            )
+            final_audit_token = concept_audit.tokens_by_digest.get(final_code_digest)
             if (
                 pipeline._enable_llm_concept_audit
                 and final_audit_token is not None
