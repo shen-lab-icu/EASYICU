@@ -96,15 +96,15 @@ def test_collect_visual_gate_result_does_not_run_without_figures():
 def test_collect_visual_gate_result_assembles_findings_and_demotion(
     monkeypatch, tmp_path
 ):
-    from easyicu.research_agent import pipeline_execute
+    from easyicu.research_agent import gate_evaluator
     from easyicu.research_agent.pipeline_execute import collect_visual_gate_result
 
     cosmetic, hard, vlm = _cosmetic_error(), _hard_error(), _vlm_error()
     monkeypatch.setattr(
-        pipeline_execute, "_expected_numeric_annotations_for_step", lambda **_: None
+        gate_evaluator, "_expected_numeric_annotations_for_step", lambda **_: None
     )
     monkeypatch.setattr(
-        pipeline_execute.VisualQAAuditor,
+        gate_evaluator.VisualQAAuditor,
         "audit_with_expected",
         lambda self, *, figure_paths, expected_numeric_by_path=None: [
             cosmetic,
@@ -141,15 +141,15 @@ def test_collect_visual_gate_result_assembles_findings_and_demotion(
 
 
 def test_collect_visual_gate_result_clean_when_only_warnings(monkeypatch, tmp_path):
-    from easyicu.research_agent import pipeline_execute
+    from easyicu.research_agent import gate_evaluator
     from easyicu.research_agent.pipeline_execute import collect_visual_gate_result
 
     warn = _warning()
     monkeypatch.setattr(
-        pipeline_execute, "_expected_numeric_annotations_for_step", lambda **_: None
+        gate_evaluator, "_expected_numeric_annotations_for_step", lambda **_: None
     )
     monkeypatch.setattr(
-        pipeline_execute.VisualQAAuditor,
+        gate_evaluator.VisualQAAuditor,
         "audit_with_expected",
         lambda self, *, figure_paths, expected_numeric_by_path=None: [warn],
     )
@@ -172,13 +172,13 @@ def test_collect_visual_gate_result_clean_when_only_warnings(monkeypatch, tmp_pa
 def test_collect_visual_gate_result_passes_numeric_expectations_for_svg_only(
     monkeypatch, tmp_path
 ):
-    from easyicu.research_agent import pipeline_execute
+    from easyicu.research_agent import gate_evaluator
     from easyicu.research_agent.pipeline_execute import collect_visual_gate_result
 
     captured = {}
 
     monkeypatch.setattr(
-        pipeline_execute,
+        gate_evaluator,
         "_expected_numeric_annotations_for_step",
         lambda **_: {"AUROC": 0.76},
     )
@@ -188,7 +188,7 @@ def test_collect_visual_gate_result_passes_numeric_expectations_for_svg_only(
         return []
 
     monkeypatch.setattr(
-        pipeline_execute.VisualQAAuditor, "audit_with_expected", fake_audit
+        gate_evaluator.VisualQAAuditor, "audit_with_expected", fake_audit
     )
 
     svg = tmp_path / "fig.svg"
@@ -208,13 +208,13 @@ def test_collect_visual_gate_result_passes_numeric_expectations_for_svg_only(
 def test_collect_visual_gate_result_no_numeric_expectations_when_absent(
     monkeypatch, tmp_path
 ):
-    from easyicu.research_agent import pipeline_execute
+    from easyicu.research_agent import gate_evaluator
     from easyicu.research_agent.pipeline_execute import collect_visual_gate_result
 
     captured = {}
 
     monkeypatch.setattr(
-        pipeline_execute, "_expected_numeric_annotations_for_step", lambda **_: None
+        gate_evaluator, "_expected_numeric_annotations_for_step", lambda **_: None
     )
 
     def fake_audit(self, *, figure_paths, expected_numeric_by_path=None):
@@ -222,7 +222,7 @@ def test_collect_visual_gate_result_no_numeric_expectations_when_absent(
         return []
 
     monkeypatch.setattr(
-        pipeline_execute.VisualQAAuditor, "audit_with_expected", fake_audit
+        gate_evaluator.VisualQAAuditor, "audit_with_expected", fake_audit
     )
 
     collect_visual_gate_result(
