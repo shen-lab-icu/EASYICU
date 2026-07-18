@@ -16,6 +16,14 @@ MODULE_ALIASES = (
         "easyicu.research_agent.evidence_registration",
         "easyicu.research_agent.authority.registration",
     ),
+    (
+        "easyicu.research_agent.gate_evaluator",
+        "easyicu.research_agent.gates.visual",
+    ),
+    (
+        "easyicu.research_agent.contract_gate",
+        "easyicu.research_agent.gates.contract",
+    ),
 )
 
 
