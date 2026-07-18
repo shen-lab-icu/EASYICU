@@ -343,6 +343,33 @@ def test_resume_environment_drift_is_receipted_without_overwriting_inputs(
     assert (run_dir / RUN_INPUT_CAPSULE_FILENAME).is_file()
 
 
+def test_resume_rechecks_input_authority_immediately_before_receipt(
+    ra,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from easyicu.research_agent import run_input_capsule as capsule_module
+
+    pipeline, run_dir, run_kwargs = _write_capsule_resume_fixture(ra, tmp_path)
+    real_invalidate = capsule_module.invalidate_unverified_successful_steps
+
+    def corrupt_after_initial_verification(**kwargs):
+        result = real_invalidate(**kwargs)
+        (run_dir / "cohort.parquet").write_bytes(b"changed-after-verification")
+        return result
+
+    monkeypatch.setattr(
+        capsule_module,
+        "invalidate_unverified_successful_steps",
+        corrupt_after_initial_verification,
+    )
+
+    with pytest.raises(RunInputIdentityError, match="staged cohort bytes"):
+        pipeline.run(**run_kwargs)
+
+    assert not list(run_dir.glob("resume_environment_receipt_*.json"))
+
+
 def test_legacy_failed_attempt_without_capsule_cannot_mix_new_inputs(
     tmp_path: Path,
 ) -> None:

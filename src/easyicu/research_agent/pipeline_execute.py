@@ -124,6 +124,10 @@ from .cohort_schema import (
     materialize_locked_analysis_cohort,
     write_locked_cohort_definition,
 )
+from .authority.analysis_cohort import bind_execution_cohort_authority
+from .intake.materialized_metadata import (
+    MaterializedMetadataError,
+)
 from .contracts import ValidationFinding, _ExecutePhaseResult, _PlanPhaseResult
 from .deterministic_descriptive import absolute_risk_context_code
 from .deterministic_missingness import missingness_measurement_audit_code
@@ -3546,10 +3550,19 @@ def run_execute_phase(
     # consistently, instead of being silently re-implemented (or skipped) by
     # each generated step. The full universe stays reachable via the runner's
     # EASYICU_UNIVERSE_PARQUET env for explicit robustness steps.
+    run_input_authority_state: Dict[str, Any] = {
+        "corrupted": False,
+        "step_id": None,
+    }
     universe_path = cohort_path
     _analysis_cohort_path = run_dir / "cohort_analysis.parquet"
-    if _analysis_cohort_path.exists():
-        cohort_path = _analysis_cohort_path
+    run_input_authority_state["cohort_authority"] = bind_execution_cohort_authority(
+        universe_path=universe_path,
+        analysis_path=_analysis_cohort_path,
+        plan=plan,
+        context=context,
+    )
+    cohort_path = run_input_authority_state["cohort_authority"].selected_path
 
     # Validator/code drift is resolved before ResumeController decides which
     # prior successes to skip and before any coder, runner, analyzer, or LLM
@@ -3606,6 +3619,9 @@ def run_execute_phase(
         cohort_path=cohort_path,
         target_outcome=context.target_outcome,
         universe_path=universe_path,
+        universe_is_typed=run_input_authority_state[
+            "cohort_authority"
+        ].universe_is_typed,
     )
     step_executor = StepExecutor(clear_output_dir=_clear_output_dir)
     run_coordinator = RunCoordinator()
@@ -3785,6 +3801,9 @@ def run_execute_phase(
         )
 
     def _universe_columns() -> list:
+        typed_columns = run_input_authority_state["cohort_authority"].universe_columns
+        if typed_columns is not None:
+            return list(typed_columns)
         try:
             import pyarrow.parquet as pq  # type: ignore
 
@@ -3897,7 +3916,9 @@ def run_execute_phase(
                 universe_path=universe_path,
                 context=context,
             )
-        except Exception as exc:  # never break the run; fall back to the error
+        except MaterializedMetadataError:
+            raise
+        except Exception as exc:  # legacy translation errors remain recoverable
             findings.append(
                 ValidationFinding(
                     validator="cohort_materializer",
@@ -3912,12 +3933,21 @@ def run_execute_phase(
             return False
         if result.get("status") != "applied":
             return False
-        cohort_path = _analysis_cohort_path
+        run_input_authority_state["cohort_authority"] = bind_execution_cohort_authority(
+            universe_path=universe_path,
+            analysis_path=_analysis_cohort_path,
+            plan=candidate_plan,
+            context=context,
+        )
+        cohort_path = run_input_authority_state["cohort_authority"].selected_path
         runner = pipeline._build_runner(
             run_dir=run_dir,
             cohort_path=cohort_path,
             target_outcome=context.target_outcome,
             universe_path=universe_path,
+            universe_is_typed=run_input_authority_state[
+                "cohort_authority"
+            ].universe_is_typed,
         )
         cohort_product_steps = [
             step
@@ -3928,6 +3958,21 @@ def run_execute_phase(
             cohort_product_steps[0] if len(cohort_product_steps) == 1 else None
         )
         try:
+            materialized_authority_ref = result.get("authority_ref")
+            cohort_definition_sha256 = result.get("cohort_definition_sha256")
+            cohort_metadata = {
+                "llm_signature": llm_signature,
+                "reason": reason,
+            }
+            if materialized_authority_ref is not None:
+                cohort_metadata.update(
+                    {
+                        "materialized_cohort_authority_ref": (
+                            materialized_authority_ref
+                        ),
+                        "cohort_definition_sha256": cohort_definition_sha256,
+                    }
+                )
             cohort_record = evidence.register_file(
                 kind="table",
                 description=(
@@ -3942,7 +3987,7 @@ def run_execute_phase(
                 producer="cohort_repair",
                 generation_mode="llm",
                 prompt_pack_version=prompt_version,
-                metadata={"llm_signature": llm_signature, "reason": reason},
+                metadata=cohort_metadata,
             )
         except ValueError:
             cohort_record = evidence.get("analysis_cohort_execute_repair")
@@ -3968,6 +4013,15 @@ def run_execute_phase(
                 "evidence_ids": [cohort_record.evidence_id],
                 **_deterministic_gate_stamp(),
             }
+            if materialized_authority_ref is not None:
+                cohort_checkpoint["step_summary"].update(
+                    {
+                        "materialized_cohort_authority_ref": (
+                            materialized_authority_ref
+                        ),
+                        "cohort_definition_sha256": cohort_definition_sha256,
+                    }
+                )
             if budget_owner_step_id == cohort_product_step.step_id:
                 cohort_checkpoint.update(
                     {
@@ -4386,10 +4440,6 @@ def run_execute_phase(
         run_dir=run_dir,
         authoritative_cohort_path=cohort_path,
     )
-    run_input_authority_state: Dict[str, Any] = {
-        "corrupted": False,
-        "step_id": None,
-    }
     step_order = {s.step_id: i for i, s in enumerate(plan.steps)}
     total_steps = len(plan.steps)
 
@@ -7818,6 +7868,9 @@ def run_execute_phase(
                     cohort_path=step_execution_cohort_path,
                     target_outcome=context.target_outcome,
                     universe_path=universe_path,
+                    universe_is_typed=run_input_authority_state[
+                        "cohort_authority"
+                    ].universe_is_typed,
                     timeout_seconds=execution_timeout_seconds,
                 )
             elif worker_progress.deterministic_standard_executor_used:
@@ -7832,6 +7885,9 @@ def run_execute_phase(
                     cohort_path=cohort_path,
                     target_outcome=context.target_outcome,
                     universe_path=universe_path,
+                    universe_is_typed=run_input_authority_state[
+                        "cohort_authority"
+                    ].universe_is_typed,
                     timeout_seconds=execution_timeout_seconds,
                 )
             runner_identity = (
