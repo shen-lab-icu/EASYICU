@@ -545,6 +545,34 @@ def _extract_cohort_definition_with_provider_budget(
     }
 
 
+class ConceptQuarantineState:
+    """Mutable value object for the per-step concept-audit quarantine state.
+
+    Groups the four flags/list that the concept-findings generator
+    (``_concept_findings_for_code``), the quarantined-draft adopter, and the
+    ``_execute_one_step`` body all share: whether a quarantined draft is active,
+    whether the quarantine policy was superseded, whether the deterministic
+    revalidation ran, and the list of pending quarantined findings. It replaces
+    four ``nonlocal`` closure variables so the concept generator can be lifted out
+    of ``_execute_one_step``: collaborators mutate the object's attributes in place
+    (identical semantics to the old nonlocal rebinds). Defaults match the old
+    inline initialisers exactly (False / False / False / []).
+    """
+
+    __slots__ = (
+        "draft_active",
+        "policy_superseded",
+        "deterministic_revalidated",
+        "pending_errors",
+    )
+
+    def __init__(self) -> None:
+        self.draft_active: bool = False
+        self.policy_superseded: bool = False
+        self.deterministic_revalidated: bool = False
+        self.pending_errors: List[ValidationFinding] = []
+
+
 def _deterministic_gate_stamp() -> Dict[str, str]:
     """Return the current host-owned deterministic gate identity.
 
@@ -6707,13 +6735,10 @@ def run_execute_phase(
             coder_authority = coder_authority.append(role_note)
         worker_progress = StepWorkerProgress()
         resumed_quarantined_draft_used = False
-        quarantined_draft_active = False
+        quarantine_state = ConceptQuarantineState()
         quarantined_repair_materially_changed = False
         quarantined_repair_succeeded = False
         quarantine_superseded_by_fallback = False
-        quarantine_policy_superseded = False
-        quarantine_deterministic_revalidated = False
-        pending_quarantined_errors: List[ValidationFinding] = []
         step_attempt_state = StepAttemptState()
         checkpoint_authority = CheckpointAuthority(
             run_dir=run_dir,
@@ -7404,17 +7429,15 @@ def run_execute_phase(
 
         def _use_quarantined_draft(draft: QuarantinedConceptDraft) -> str:
             nonlocal resumed_quarantined_draft_used
-            nonlocal quarantined_draft_active
-            nonlocal pending_quarantined_errors
             resumed_quarantined_draft_used = True
-            quarantined_draft_active = True
-            pending_quarantined_errors = [
+            quarantine_state.draft_active = True
+            quarantine_state.pending_errors = [
                 ValidationFinding.model_validate(payload) for payload in draft.findings
             ]
             # Historical errors remain binding regression constraints, but
             # their old source coordinates are not findings on the current
             # digest and must never enter an exact minimal-patch ticket.
-            _remember_concept_constraints(pending_quarantined_errors)
+            _remember_concept_constraints(quarantine_state.pending_errors)
             step_record["resumed_quarantined_draft"] = True
             step_record["quarantined_draft_sha256"] = draft.sha256
             step_record["quarantined_draft_relative_path"] = draft.relative_path
@@ -8336,11 +8359,6 @@ def run_execute_phase(
             bypassed by deferring a fresh LLM call.
             """
 
-            nonlocal quarantined_draft_active
-            nonlocal quarantine_deterministic_revalidated
-            nonlocal quarantine_policy_superseded
-            nonlocal pending_quarantined_errors
-
             code_findings = _deterministic_code_gate_findings(
                 context=context,
                 step=step,
@@ -8354,10 +8372,10 @@ def run_execute_phase(
                 if finding.severity == "error"
                 and finding.validator != "llm_concept_auditor"
             ]
-            if pending_quarantined_errors:
+            if quarantine_state.pending_errors:
                 deterministic_revalidation = (
                     _quarantined_deterministic_errors_resolved_by_current_gate(
-                        prior_errors=pending_quarantined_errors,
+                        prior_errors=quarantine_state.pending_errors,
                         current_findings=code_findings,
                         script_text=script_text,
                         quarantined_script_sha256=str(
@@ -8366,9 +8384,9 @@ def run_execute_phase(
                     )
                 )
                 if deterministic_revalidation is not None:
-                    quarantine_deterministic_revalidated = True
-                    quarantined_draft_active = False
-                    pending_quarantined_errors = []
+                    quarantine_state.deterministic_revalidated = True
+                    quarantine_state.draft_active = False
+                    quarantine_state.pending_errors = []
                     step_record["quarantine_deterministic_revalidation_succeeded"] = (
                         True
                     )
@@ -8392,9 +8410,9 @@ def run_execute_phase(
                 # audit so a retired historical error cannot trigger (or be
                 # regenerated by) an unnecessary repair call first.
                 supersession = None
-                if pending_quarantined_errors:
+                if quarantine_state.pending_errors:
                     supersession = _quarantined_errors_superseded_by_current_policy(
-                        prior_errors=pending_quarantined_errors,
+                        prior_errors=quarantine_state.pending_errors,
                         current_findings=code_findings,
                         context=context,
                         script_text=script_text,
@@ -8417,9 +8435,9 @@ def run_execute_phase(
                         )
                         not in existing_keys
                     )
-                    quarantine_policy_superseded = True
-                    quarantined_draft_active = False
-                    pending_quarantined_errors = []
+                    quarantine_state.policy_superseded = True
+                    quarantine_state.draft_active = False
+                    quarantine_state.pending_errors = []
                     step_record["quarantine_policy_superseded"] = True
                     step_record["quarantine_policy_superseded_findings"] = provenance
                     emit_progress(
@@ -8645,7 +8663,7 @@ def run_execute_phase(
                     except Exception:
                         pass
                 raise
-            if pending_quarantined_errors:
+            if quarantine_state.pending_errors:
                 # The complete current deterministic gate is authoritative for
                 # the current code digest.  Do not mix stale source coordinates
                 # from an older deterministic attempt into its exact repair
@@ -8658,7 +8676,7 @@ def run_execute_phase(
                 }
                 code_findings.extend(
                     finding
-                    for finding in pending_quarantined_errors
+                    for finding in quarantine_state.pending_errors
                     if finding.validator not in _DETERMINISTIC_CODE_GATE_VALIDATORS
                     and (
                         finding.severity,
@@ -8700,7 +8718,7 @@ def run_execute_phase(
             # normalize it before testing deterministic policy supersession;
             # even a semantics-preserving rewrite would break the exact SHA
             # proof and force an otherwise unnecessary LLM repair.
-            if not quarantined_draft_active:
+            if not quarantine_state.draft_active:
                 code = reorder_forward_references(code)
             usage_findings = _concept_findings_for_code(code, include_llm=False)
             step_record["usage_findings"] = [f.model_dump() for f in usage_findings]
@@ -8900,7 +8918,7 @@ def run_execute_phase(
                     )
                     code = _det_code
                     if (
-                        quarantined_draft_active
+                        quarantine_state.draft_active
                         and _python_repair_is_materially_changed(
                             _det_before_code,
                             code,
@@ -8910,9 +8928,9 @@ def run_execute_phase(
                         # but they are not findings on a new, materially repaired
                         # digest.  Re-audit that digest from scratch just as the
                         # LLM-repair path below does.
-                        quarantined_draft_active = False
+                        quarantine_state.draft_active = False
                         quarantined_repair_materially_changed = True
-                        pending_quarantined_errors = []
+                        quarantine_state.pending_errors = []
                         step_record["quarantined_repair_materially_changed"] = True
                     continue
 
@@ -8990,8 +9008,8 @@ def run_execute_phase(
                                 )
                             findings.append(f)
                     if resumed_quarantined_draft_used:
-                        quarantined_draft_active = False
-                        pending_quarantined_errors = []
+                        quarantine_state.draft_active = False
+                        quarantine_state.pending_errors = []
                         quarantined_repair_succeeded = False
                         quarantine_superseded_by_fallback = True
                         step_record["quarantined_repair_succeeded"] = False
@@ -9188,7 +9206,7 @@ def run_execute_phase(
                 )
                 _sync_provider_budget()
                 if (
-                    quarantined_draft_active
+                    quarantine_state.draft_active
                     and not _python_repair_is_materially_changed(code, repaired_code)
                 ):
                     checkpoint_authority.reject_completed_repair_candidate(
@@ -9214,9 +9232,9 @@ def run_execute_phase(
                     )
                     if not any(
                         finding.message == no_op_finding.message
-                        for finding in pending_quarantined_errors
+                        for finding in quarantine_state.pending_errors
                     ):
-                        pending_quarantined_errors.append(no_op_finding)
+                        quarantine_state.pending_errors.append(no_op_finding)
                     step_record["quarantined_repair_noop_count"] = (
                         int(step_record.get("quarantined_repair_noop_count") or 0) + 1
                     )
@@ -9224,10 +9242,10 @@ def run_execute_phase(
                     continue
                 code = repaired_code
                 worker_progress.llm_repair_used = True
-                if quarantined_draft_active:
-                    quarantined_draft_active = False
+                if quarantine_state.draft_active:
+                    quarantine_state.draft_active = False
                     quarantined_repair_materially_changed = True
-                    pending_quarantined_errors = []
+                    quarantine_state.pending_errors = []
                     step_record["quarantined_repair_materially_changed"] = True
             except (
                 ProviderCallBudgetReceiptError,
@@ -9256,8 +9274,8 @@ def run_execute_phase(
                     raise
                 fallback_code = _deterministic_fallback_code("concept_repair_failed")
                 if fallback_code is not None:
-                    quarantined_draft_active = False
-                    pending_quarantined_errors = []
+                    quarantine_state.draft_active = False
+                    quarantine_state.pending_errors = []
                     quarantined_repair_succeeded = False
                     if resumed_quarantined_draft_used:
                         quarantine_superseded_by_fallback = True
@@ -9303,7 +9321,7 @@ def run_execute_phase(
                 )
                 return step_record
 
-        if quarantined_draft_active and not quarantined_repair_succeeded:
+        if quarantine_state.draft_active and not quarantined_repair_succeeded:
             hard_gate_finding = ValidationFinding(
                 validator="resume",
                 severity="error",
@@ -9336,8 +9354,8 @@ def run_execute_phase(
 
         if (
             quarantined_repair_succeeded
-            or quarantine_policy_superseded
-            or quarantine_deterministic_revalidated
+            or quarantine_state.policy_superseded
+            or quarantine_state.deterministic_revalidated
         ):
             try:
                 clear_quarantined_concept_draft(
@@ -9346,11 +9364,11 @@ def run_execute_phase(
                 )
                 step_record["quarantined_requires_repair"] = False
                 step_record["quarantine_retired"] = True
-                if quarantine_policy_superseded:
+                if quarantine_state.policy_superseded:
                     step_record["quarantine_retired_by"] = (
                         "deterministic_validator_policy_supersession"
                     )
-                elif quarantine_deterministic_revalidated:
+                elif quarantine_state.deterministic_revalidated:
                     step_record["quarantine_retired_by"] = (
                         "deterministic_code_gate_revalidation"
                     )
@@ -10360,7 +10378,7 @@ def run_execute_phase(
                         "quarantined_draft_sha256"
                     ),
                     "quarantined_repair_succeeded": quarantined_repair_succeeded,
-                    "quarantine_policy_superseded": quarantine_policy_superseded,
+                    "quarantine_policy_superseded": quarantine_state.policy_superseded,
                     "quarantine_policy_superseded_findings": step_record.get(
                         "quarantine_policy_superseded_findings"
                     ),
