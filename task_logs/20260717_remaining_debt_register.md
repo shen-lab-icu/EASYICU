@@ -1,7 +1,7 @@
 # research_agent 架构总控板 / 剩余债务台账 — 当前单一执行视图
 
-> 更新：2026-07-18 06:41 EDT
-> 分支 / 生产代码基线：`refactor/agent-control-plane@e54f675`
+> 更新：2026-07-18 06:57 EDT
+> 分支 / 生产代码基线：`refactor/agent-control-plane@75e6b88`
 > 当前策略：**先完成有边界的 Track B-Core 架构整理，再 fresh 重跑 E3/H2/E2，随后执行 3–6 个 held-out 全流程。**
 
 ## 文档权威关系
@@ -11,18 +11,19 @@
 | 当前状态 | `项目进度/agent/CURRENT.md` | 现在在哪个 commit、正在做什么、下一步和 blocker；这是日常唯一入口 |
 | **组件总控（本文件）** | `task_logs/20260717_remaining_debt_register.md` | 每个架构组件完成/部分/待做、验收证据和下一动作 |
 | 安全设计 | `task_logs/20260715_agent_freeze_refactor_safety_plan.md` | 规范化等价、单调 authority、职责边界、freeze 不变量 |
+| B6 实施设计 | `task_logs/20260718_b6_export_metadata_freeze_plan.md` | native export intake 与 typed metadata 的两个 freeze-blocker、边界和测试门 |
 | 历史设计细则 | `task_logs/20260716_agent_architecture_optimization_checklist.md` | rev.2 原始设计、测试矩阵和性能口径；**不再用于判断实时进度** |
 
-若四者冲突，按上表从上到下取最新状态；安全不变量不能被进度文档放松。
+若上述文档冲突，按上表从上到下取最新状态；安全不变量不能被进度文档放松。
 
 ## 当前量化快照
 
-| 指标 | 冻结基线 | 当前 `e54f675` | 变化 |
+| 指标 | 冻结基线 | 当前 `75e6b88` | 变化 |
 |---|---:|---:|---:|
-| `_execute_one_step` 行数 | 6,694 | 6,029 | −665（−9.9%） |
-| `run_execute_phase` 行数 | 8,451 | 7,631 | −820（−9.7%） |
-| `pipeline_execute.py` 行数 | 14,631 | 11,048 | −3,583（−24.5%） |
-| `pipeline_execute.py + authority/{typed_binding,plan_authority}.py` | — | 12,613 | 新职责模块带来净 +75 行显式类型/边界/兼容代码；这是职责迁移，不冒充代码删除 |
+| `_execute_one_step` 行数 | 6,694 | 6,026 | −668（−10.0%） |
+| `run_execute_phase` 行数 | 8,451 | 7,628 | −823（−9.7%） |
+| `pipeline_execute.py` 行数 | 14,631 | 11,045 | −3,586（−24.5%） |
+| `pipeline_execute.py + authority/{typed_binding,plan_authority}.py` | — | 12,610 | 新职责模块带来净 +72 行显式类型/边界/兼容代码；这是职责迁移，不冒充代码删除 |
 | `research_agent` 模块 / 顶层兼容路径 | — | 214 / 157 | canonical 实现已归入 3 个职责子包；旧顶层 façade 为归档/API 兼容而保留 |
 | package / import edge | 8 / 674 | 11 / 704 | 新增 `gates/`、`execution/`、`authority/`；由自动 graph gate 约束 |
 | 潜在 import SCC / 循环模块 | 1 个・最大 103 / 103 | 3 个・最大 24 / 31 | parent-artifact cycle cut 将 103 模块巨环拆为 24/5/2；该静态图含 lazy/local import，不能冒充 import-time SCC 全消除 |
@@ -45,14 +46,14 @@
 | Figure contract preparation | **完成（职责子包）** | `execution/figure_preparation.py`；8 个塑形/规范化 helper | 只处理已授权 figure 产品，不选择科学设计 |
 | Publication figure execution | **完成（职责子包）** | `execution/publication_figure.py` + `SealedRendererState` | 保持 rendering-only 边界；旧路径同对象 alias |
 | RepairCoordinator | **完成限定职责** | `repair_coordination.py` 只承接 patch→可选 rewrite transport；事务/分类属于 provider ledger/A1 | 不把 gate/science 塞进 coordinator；名称按限定职责理解 |
-| Execution state | **部分完成** | `StepWorkerProgress`、`ConceptQuarantineState`、`SealedRendererState` | 只在真实跨边界读写集需要时继续值对象化；不造万能 state bag |
-| StepExecutor / RunCoordinator | **部分完成** | 已有 seam/coordination 模块，核心 orchestration 仍在 `pipeline_execute.py` | 继续从主体直线控制流提取可测职责，不以“新建文件”冒充完成 |
+| Execution state | **完成（职责域值对象）** | `RunExecutionState`、`StepAttemptState`、`StepWorkerProgress`、`ConceptQuarantineState`、`SealedRendererState`；`75e6b88` 将最后 4 个 quarantine lifecycle 布尔量归入唯一 step-local state，独立对抗审阅 ACCEPT | 不造万能 state bag；plan/cohort/runner/runtime mutation 继续由有明确 authority 的 orchestrator 持有 |
+| StepExecutor / RunCoordinator | **完成（限定职责）** | `StepExecutor` 恰好执行一次已锁脚本并拥有 cleanup；`RunCoordinator` 只做 queue/stop/continue/replan transition application 与并发错误回传；120 项独立回归全绿 | 不把 PlanAuthority、gate、repair、evidence 或科学决策塞入协调器；剩余主体是必要顺序编排和维护债，不是 freeze blocker |
 | PlanAuthority | **完成（纯 candidate authority 边界）** | `authority/plan_authority.py` 用冻结 typed result 承接 completed-step snapshot、estimand/figure 保留、plan cap、robustness lock 投影、typed/trajectory/companion shaping 与 scientific no-op 判定；`e54f675` 独立对抗审阅 ACCEPT | provider 调用、revision/evidence 注册、cohort mutation、runner 重建、replan budget 继续由 orchestrator 单一持有；不得扩成第二个 Planner |
 | TypedBindingResolver | **完成（3/3）** | `authority/plan_scope.py` + `authority/typed_binding.py` 承接 scientific signature、lineage/binding/schema receipt/manifest/resume 与 resolver；`dfb76b6` 用单一 resolver 替换 step 内闭包，每次显式传当前 plan，旧路径 identity 不变 | 保持 evidence fail-close、exact unpublished ID/alias 边界和 Planner 科学所有权；不再为凑 LOC 继续切本职责 |
 | 目录 / import cycle 治理 | **当前批完成，持续门禁** | 7 个稳定实现及 PlanAuthority 归入职责子包；parent artifact authority 进 `authority/parent_artifact.py`，distribution seal 回 renderer；graph gate 当前 214 modules / 157 top-level / 704 edges / SCC 24/5/2 / 0 literal dynamic import | 后续模块随真实职责提取归位；每批以 cyclic-module count + largest SCC 为风险门，SCC 个数仅报告；不机械降低顶层文件数 |
 | B2 canonical 跨-run memory | **完成** | `a9cb05c`；新 profile 显式 off，旧 profile canonical JSON 不变 | canonical 永不重开；非 canonical 才允许显式 opt-in |
 | B3 step 并发 | **关闭，无需实现** | canonical 三题因 replanning + primary cohort + typed deps 被正确强制串行 | 保留 serial-gate 契约；不拆安全守卫追求伪加速。跨库 replicate 另属非关键路径 |
-| B6 跨库 metadata 契约 | **blocked（数据会话）** | 数据字典/回调仍有并行 dirty 修改 | 等数据层提交并 re-lock profile；不得把 extraction bounds 混成 physiological `valid_range` |
+| B6 跨库 export / metadata 契约 | **P0，实施中** | 只读审计确认两个独立 blocker：native `_manifest.json`/CSV/XLSX 尚未进入 manifest-authoritative Agent intake；伴随列/实际来源/可用性/两类范围尚未 typed 分栏。设计见 `20260718_b6_export_metadata_freeze_plan.md` | 先做不碰脏字典的 B6-A leaf intake；数据会话交付干净基线后做 B6-B typed projection + replay digest。不得把 extraction bounds 混成 physiological `valid_range` |
 | B7 dormant primary runners | **已达成，不物理删** | `_PRIMARY_DETERMINISTIC_RUNNERS` 空集 + registry lock | 投稿实验前不做化妆性删除；live `figures/*.py` 不得误删 |
 | B7-3 display labels | **后置独立变更** | 会改变 display contract、source SHA 和可见文字 | 单独审稿图合同变更；不得当“零风险清理”顺手做 |
 | B8 middleware/hooks | **待判定，当前不做** | empty middleware 只会增加抽象层 | 只有出现两个以上真实 hook consumer 才引入 |
@@ -60,8 +61,8 @@
 
 ## 接下来三个可验收 bundle
 
-1. **剩余控制面关账 + B6**：只读审计仍标“部分完成”的 Execution state 与 StepExecutor/RunCoordinator；freeze 前必须把每项变成“完成”或有测试支持的“必要 orchestrator 剩余”，不得把 partial 静默带过。同时等待并行数据会话提交干净字典/profile，只核验/补齐 source-concept、单位、来源库/表、伴随列与 native export intake，不把 extraction bounds 混成 physiological `valid_range`。
-2. **冻结门**：串行分片回归 + meta/capability + capsule/resume/provider/evidence authority + arch/graph diff，并锁定唯一 commit/profile/dictionary/model/prompt/rubric/retry policy。PlanAuthority 已令 `run_execute_phase` 达到原 `≤7,660` 结构目标；`_execute_one_step` 仍比诊断目标 `5,980` 高 49 行，但没有新的职责边界时不为凑数抽取。
+1. **B6-A / B6-B**：先落 manifest-authoritative native/legacy export intake（三格式、containment、metadata fail-close）；再在干净字典基线上落 typed metadata projection、companion roles 与 replay digest。两批独立审、独立提交。
+2. **冻结门**：串行分片回归 + meta/capability + capsule/resume/provider/evidence authority + arch/graph diff，并锁定唯一 commit/profile/dictionary/model/prompt/rubric/retry policy。PlanAuthority 与职责域 state 已令 `run_execute_phase` 达到原 `≤7,660` 目标；`_execute_one_step` 的剩余主体是必要顺序编排，不为诊断 LOC 目标强拆。
 3. **fresh 三题 + held-out**：唯一 freeze 版本 fresh 跑 E3/H2/E2，再跑 3–6 个未参与修复的全流程任务；结果不得反向诱导 shared-engine case patch。
 
 ## 架构 freeze 的完成定义

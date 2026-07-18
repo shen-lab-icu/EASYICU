@@ -82,8 +82,11 @@ candidate projection and TypedBindingResolver are now canonical under
 `authority/`; provider calls, revision/evidence registration, cohort mutation,
 runner rebuilding and repair/replan budgets deliberately remain in the sole
 orchestrator. The remaining ExecutionState and StepExecutor/RunCoordinator
-seams must be either completed or explicitly proven to be necessary
-orchestration glue before the architecture freeze. The
+boundaries are now closed as domain-specific state objects and deliberately
+narrow coordination components: they do not absorb plan authority, gates,
+repair, evidence mutation, or scientific decisions. The remaining execute-loop
+body is sequence-sensitive orchestration and maintenance debt, not a reason to
+create a universal state bag or inflate the executor. The
 legacy top-level module paths (`contract_gate`, `concept_gate`,
 `concept_audit_execution`, `gate_evaluator`, `figure_contract_preparation`,
 `publication_figure_execution`, `evidence_registration`) are module-object
