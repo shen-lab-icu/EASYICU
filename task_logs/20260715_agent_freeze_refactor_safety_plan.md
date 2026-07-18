@@ -1,5 +1,7 @@
 # research_agent · 行为保持的 vNext 结构提取 · 安全计划 · 2026-07-15
 
+> **状态说明（2026-07-18）**：§1–5 的规范化等价、单调 authority、职责边界与 characterization 要求仍是当前安全规范；本文件中“现在不拆、先跑实验”的执行顺序已被用户 2026-07-17 的 **先完成有边界架构整理、再 fresh 跑 E3/H2/E2** 决定取代。实时状态看 `项目进度/agent/CURRENT.md`，组件台账看 `task_logs/20260717_remaining_debt_register.md`。
+
 > **这是一份「行为保持的 vNext 结构提取计划」——不是 canonical 引擎重设计计划,也不是 LangGraph 迁移计划。**
 >
 > 由 Claude↔Codex 2026-07-15 架构讨论收敛而来。它是叠在打包/目录拆分计划
