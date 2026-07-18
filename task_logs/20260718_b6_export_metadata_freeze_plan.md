@@ -1,7 +1,7 @@
 # B6 export-intake / concept-metadata freeze plan
 
-> 状态：2026-07-18 08:48 EDT；**B6-A 已完成，B6-B 共享 projector 已完成（五步 1/5）**。
-> 当前代码：`acc874c`/`1481f09`（B6-A）+ `7ee66fd`/`7e8c16f`（typed metadata projector + source-resolution hardening）；
+> 状态：2026-07-18 10:02 EDT；**B6-A 已完成，B6-B projector + native export/intake sidecar 已完成（五步 2/5）**。
+> 当前代码：`acc874c`/`1481f09`（B6-A）+ `7ee66fd`/`7e8c16f`（projector/source authority）+ `987bdc5`/`7674814`（sidecar/native export→Agent binding）；
 > packaged concept baseline：`8e97d31`。
 > 边界：B6-B 不混入新的 concept-dict 科学内容编辑；只建立共享、可摘要绑定的 metadata 投影。
 
@@ -11,7 +11,7 @@
 |---|---|---|---|
 | B6-A manifest-authoritative intake | **完成** | `acc874c`；native-first + legacy、Parquet/CSV/XLSX、containment、feature definitions、cohort/catalog/replication 共用 adapter | 保持兼容与 fail-close，不扩 case-specific intake |
 | B6-A snapshot/performance | **完成** | `1481f09`；read-only mmap verified snapshot、CSV/XLSX 单会话解析缓存、Parquet 列裁剪、四 consumer 显式 close；105 项主回归 + 64 项独立复审 | 超大 CSV/XLSX 的内存阈值/临时列式缓存是后续预算优化，非 freeze blocker |
-| B6-B typed metadata / replay identity | **进行中（1/5）** | `7ee66fd` + `7e8c16f`；leaf projector 33 项专项、79 项聚合回归、两路 adversarial ACCEPT | 实施 intake/materializer v2 content-addressed sidecar |
+| B6-B typed metadata / replay identity | **进行中（2/5）** | `7ee66fd` + `7e8c16f` projector/source authority；`987bdc5` + `7674814` sidecar/native export→Agent strict binding；303 项聚合 + 28 项 meta/capability，两路 adversarial ACCEPT | 实施 materialized cohort / ResearchContext v2 bridge |
 
 ## 为什么 B6 不能后置
 
@@ -70,7 +70,7 @@ replay identity；规则变化触发选择性重审，而不是静默复用旧 s
 ### B6-B 五个独立提交
 
 1. **共享 leaf projector（已完成：`7ee66fd` + `7e8c16f`）**：新增 `easyicu/concept/metadata_projection.py`；Web 与 Agent 后续只消费这一投影，不从 concept 层反向 import `research_agent`。已锁 actual database 与 dictionary source resolution chain、class-prefix most-specific 继承、可执行 source anchor、显式 time coordinates、双范围和 canonical digest。
-2. **intake/materializer v2**：生成 content-addressed column-level metadata sidecar；明确 `source_database`、物理列角色、时间 origin/unit 与 sidecar digest。
+2. **intake/native export v2（已完成：`987bdc5` + `7674814`）**：生成 content-addressed column-level metadata sidecar；明确 `source_database`、物理列角色、时间 origin/unit 与 sidecar digest。Web 生产者在包级别先证明每个选定 concept 有唯一 primary binding，Agent intake 对 schema/digest/coverage/source-selection 做 exact join；v1 权威不变。
 3. **ResearchContext v2 bridge**：只给新 payload 增加 typed metadata；旧 v1/封存字节继续可读，旧科学身份不得因新增 `None` 键漂移。
 4. **authority / coder / replay binding**：将 projector、sidecar、ICU-rule implementation digest 纳入已有 resolved-input/context/environment identity；不新增第二套 StepAuthorityCapsule schema。
 5. **drift / freeze gate**：metadata/rule drift 触发 sealed artifact 选择性重审；补 companion、来源、范围双轨、旧 payload 兼容与 Web/Agent 同投影回归。
