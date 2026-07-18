@@ -1,6 +1,6 @@
 {
-  "tool_version": "1.4.0",
-  "tool_sha256": "8221d879972ad8ff0ecfea304e5540b10ff8bf274326161fe2dece7ae3eb1fed",
+  "tool_version": "1.4.1",
+  "tool_sha256": "ed41bbaad7ee230fb5f27381ca0be9e6a977fa294f025ee4e5b98f2bc471ad31",
   "shim_import_paths": [],
   "files": {
     "pipeline_execute.py": {
@@ -25,6 +25,12 @@
       "loc": 1137,
       "sha256": "745718337a0dd21ef452127a9f9f47f8802fbc51fb2d99af94a252f1fd210863",
       "intra_package_import_edges": 8,
+      "shim_bypass_violations": []
+    },
+    "plan_authority.py": {
+      "loc": 302,
+      "sha256": "95f2f4652463efdaa3385dfa3e54ac67baec258c41be7eeb3ad0743d567c5b8e",
+      "intra_package_import_edges": 6,
       "shim_bypass_violations": []
     }
   },
