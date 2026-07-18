@@ -14,6 +14,7 @@ from easyicu.concept.metadata_projection import (
     NumericBounds,
     canonical_metadata_bytes,
     derive_concept_column_metadata,
+    is_range_preserving_projection,
     metadata_payload_sha256,
     metadata_sha256,
     project_concept_column_metadata,
@@ -47,6 +48,35 @@ def _spec(
         time_origin=time_origin,
         time_unit=time_unit,
     )
+
+
+@pytest.mark.parametrize(
+    ("aggregation", "expected"),
+    [
+        ("first", True),
+        ("last", True),
+        ("max", True),
+        ("mean", True),
+        ("median", True),
+        ("min", True),
+        ("sum", False),
+    ],
+)
+def test_range_preserving_projection_contract_is_public_and_case_neutral(
+    aggregation: str,
+    expected: bool,
+) -> None:
+    assert (
+        is_range_preserving_projection(
+            ConceptColumnRole.NUMERIC_AGGREGATE,
+            aggregation,
+        )
+        is expected
+    )
+
+
+def test_value_projection_always_preserves_range() -> None:
+    assert is_range_preserving_projection(ConceptColumnRole.VALUE, None) is True
 
 
 def test_projects_lact_value_with_separate_extraction_analysis_and_run_authorities():

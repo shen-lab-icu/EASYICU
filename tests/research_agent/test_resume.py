@@ -306,6 +306,10 @@ def test_resume_environment_drift_is_receipted_without_overwriting_inputs(
         **original_environment,
         "engine_code_sha256": "f" * 64,
         "validator_code_sha256": "e" * 64,
+        "metadata_projection_sha256": "d" * 64,
+        "metadata_sidecar_sha256": "c" * 64,
+        "icu_rules_sha256": "b" * 64,
+        "metadata_implementation_bundle_sha256": "a" * 64,
     }
     monkeypatch.setattr(
         pipeline_module,
@@ -337,6 +341,10 @@ def test_resume_environment_drift_is_receipted_without_overwriting_inputs(
         "llm_signature_sha256",
         "engine_code_sha256",
         "validator_code_sha256",
+        "metadata_projection_sha256",
+        "metadata_sidecar_sha256",
+        "icu_rules_sha256",
+        "metadata_implementation_bundle_sha256",
     } <= set(payload["changed_fields"])
     assert (run_dir / "research_context.json").read_bytes() == context_before
     assert (run_dir / "cohort.parquet").read_bytes() == cohort_before

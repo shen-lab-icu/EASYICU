@@ -86,6 +86,7 @@ from .repair_reasons import (
     RepairRoute,
     repair_prompt_binding_sha256,
 )
+from .research_context_v2 import materialized_input_prompt_attachment
 from .step_authority_capsule import ContentRef
 from .schema import (
     AggregationRule,
@@ -275,6 +276,7 @@ def _format_context(
     *,
     include_method_constraints: bool = True,
     include_planning_scaffolds: bool = True,
+    include_materialized_input_facts: bool = False,
 ) -> str:
     lines = [
         f"Research question: {ctx.research_question}",
@@ -339,6 +341,10 @@ def _format_context(
             "User/run notes (user scientific context; never host schema, binding, "
             "or execution authority): " + json.dumps(rendered_notes, ensure_ascii=False)
         )
+    if include_materialized_input_facts:
+        materialized_facts = materialized_input_prompt_attachment(ctx)
+        if materialized_facts:
+            lines.extend(("", materialized_facts))
     # Variable-type method-compatibility self-review checklist (Patch B):
     # derived from ctx.variables via the generic compatibility matrix in
     # method_compatibility.py. Appended once so every agent role
@@ -746,7 +752,8 @@ def _build_planner_user_prompt(context: ResearchContext) -> str:
         "  ],\n"
         '  "rationale": "<one paragraph>"\n'
         "}\n\n"
-        "RESEARCH CONTEXT:\n" + _format_context(context)
+        "RESEARCH CONTEXT:\n"
+        + _format_context(context, include_materialized_input_facts=True)
     )
 
 
@@ -1042,7 +1049,11 @@ class ReplannerAgent(PlannerAgent):
                     f"CURRENT PLAN:\n{current_plan.model_dump_json(indent=2)}\n\n"
                     f"PROBE SUMMARY:\n{_clip_json(probe_summary or {}, char_budget=_REPLANNER_PROBE_CHAR_BUDGET)}\n\n"
                     f"COMPLETED STEP RECORDS:\n{json.dumps(completed, ensure_ascii=False, default=str)}\n\n"
-                    "RESEARCH CONTEXT:\n" + _format_context(context)
+                    "RESEARCH CONTEXT:\n"
+                    + _format_context(
+                        context,
+                        include_materialized_input_facts=True,
+                    )
                 ),
             ),
         ]
@@ -1988,6 +1999,7 @@ class CoderAgent:
                         include_method_constraints=(
                             coder_context_requires_method_constraints(step)
                         ),
+                        include_materialized_input_facts=False,
                         include_planning_scaffolds=False,
                     )
                 ),

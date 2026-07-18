@@ -38,22 +38,35 @@ from .evidence_authority import (
 from .intake.materialized_metadata import (
     MaterializedCohortAuthorityRef,
     MaterializedMetadataError,
+    VerifiedMaterializedCohortAuthority,
     load_verified_materialized_cohort_authority,
+    read_verified_materialized_cohort_table,
 )
 from .intake.materialized_trajectory import (
     MaterializedTrajectoryAuthorityRef,
     MaterializedTrajectoryError,
     StagedTrajectoryBinding,
+    TrajectoryConceptBinding,
     VerifiedLegacyTrajectoryCapsuleReceipt,
+    VerifiedMaterializedTrajectoryAuthority,
     load_verified_materialized_trajectory_authority,
 )
 from .prompts import PROMPT_PACK_VERSION, prompt_pack_files
+from .metadata_implementation_identity import metadata_implementation_identity
 from .runtime_artifacts import (
     current_successful_step_records,
     current_step_records,
     verified_run_evidence_path,
 )
 from .schema import ResearchContext, TimeWindow
+from .research_context_v2 import (
+    MaterializedResearchInputs,
+    ResearchContextV2,
+    binding_preserves_analysis_range,
+    materialized_research_inputs_from_authority,
+    parse_research_context_json,
+)
+from .cohort_artifact_facts import observed_domain_for_series
 
 RUN_INPUT_CAPSULE_FILENAME = "run_input_capsule.json"
 RUN_INPUT_CAPSULE_EVIDENCE_ID = "run_input_capsule"
@@ -66,6 +79,134 @@ _MAX_RUN_INPUT_CAPSULE_BYTES = 64 * 1024 * 1024
 
 class RunInputIdentityError(ValueError):
     """The requested resume cannot be proven to be the same study."""
+
+
+def _validate_v2_context_input_authority(
+    context: ResearchContext,
+    *,
+    cohort_path: Path,
+    cohort: VerifiedMaterializedCohortAuthority,
+    trajectory: Optional[VerifiedMaterializedTrajectoryAuthority],
+    allow_v1: bool,
+    require_current_implementation: bool,
+) -> None:
+    """Join every V2 redundant fact to capsule-selected typed inputs."""
+
+    if not isinstance(context, ResearchContextV2):
+        if allow_v1:
+            # Archived typed capsules may contain an already sealed V1 context.
+            return
+        raise RunInputIdentityError(
+            "Fresh typed inputs require a ResearchContext v2 authority."
+        )
+    typed = context.materialized_inputs
+    if typed.cohort.projection_scope != "full" or (
+        typed.trajectory is not None and typed.trajectory.projection_scope != "full"
+    ):
+        raise RunInputIdentityError(
+            "Sealed ResearchContext typed input authority must be full."
+        )
+    matching_file_bindings = tuple(
+        item
+        for item in cohort.sidecar.files
+        if item.relative_path == cohort.authority.cohort_file
+    )
+    if len(matching_file_bindings) != 1:
+        raise RunInputIdentityError("Typed cohort has no unique sidecar file binding.")
+    file_binding = matching_file_bindings[0]
+    if require_current_implementation:
+        # The V2 typed binding closes lineage/unit/range facts.  Dtype and
+        # observed values live only in the capsule-selected parquet bytes, and
+        # source files live in the sealed derivation receipts.  Reconstruct all
+        # three once here before the first seal; never trust the redundant
+        # legacy descriptor fields as an independent authority.
+        frame = read_verified_materialized_cohort_table(
+            cohort_path,
+            verified=cohort,
+        ).to_pandas()
+        descriptors = {item.name: item for item in context.variables}
+        derivations = {
+            item.output_column: item for item in cohort.authority.output_derivations
+        }
+        for column in cohort.authority.cohort_columns:
+            descriptor = descriptors.get(column)
+            if descriptor is None:
+                raise RunInputIdentityError(
+                    f"ResearchContext descriptor is absent for {column!r}."
+                )
+            derivation = derivations.get(column)
+            expected_source_files = sorted(
+                {source.file for source in derivation.sources}
+                if derivation is not None
+                else set()
+            )
+            expected_facts = {
+                "dtype": str(frame[column].dtype),
+                "observed_domain": observed_domain_for_series(frame[column]),
+                "source_files": expected_source_files,
+            }
+            for field_name, expected_value in expected_facts.items():
+                if getattr(descriptor, field_name) != expected_value:
+                    raise RunInputIdentityError(
+                        "ResearchContext descriptor artifact fact does not match "
+                        f"the staged cohort: {column}.{field_name}"
+                    )
+    expected = materialized_research_inputs_from_authority(
+        cohort=cohort,
+        trajectory=trajectory,
+    )
+    if not require_current_implementation:
+        # Resume must preserve the immutable implementation coordinates sealed
+        # with the old context while recording current drift in the environment
+        # receipt. All artifact/sidecar-derived facts are still reconstructed
+        # and compared below.
+        expected_payload = expected.model_dump(mode="python")
+        expected_payload["cohort"][
+            "metadata_projection_sha256"
+        ] = typed.cohort.metadata_projection_sha256
+        expected_payload["cohort"][
+            "metadata_sidecar_sha256"
+        ] = typed.cohort.metadata_sidecar_sha256
+        expected_payload["cohort"]["icu_rules_sha256"] = typed.cohort.icu_rules_sha256
+        expected_payload["cohort"][
+            "metadata_implementation_bundle_sha256"
+        ] = typed.cohort.metadata_implementation_bundle_sha256
+        # ICU-rule drift must trigger deterministic revalidation, not make an
+        # otherwise immutable run impossible to resume. Preserve only the
+        # fallback ranges sealed by the old implementation. Explicit sidecar
+        # ranges remain reconstructed from the staged authority and therefore
+        # retain exact tamper detection.
+        expected_bindings = expected_payload["cohort"]["column_bindings"]
+        for column, source_binding in file_binding.columns.items():
+            if (
+                source_binding.metadata.analysis_plausibility_range is None
+                and binding_preserves_analysis_range(source_binding)
+            ):
+                expected_bindings[column]["analysis_plausibility_range"] = (
+                    typed.cohort.column_bindings[column].analysis_plausibility_range
+                )
+        if (
+            trajectory is not None
+            and typed.trajectory is not None
+            and expected_payload.get("trajectory") is not None
+        ):
+            expected_ranges = expected_payload["trajectory"][
+                "concept_analysis_plausibility_ranges"
+            ]
+            for concept, raw_binding in typed.trajectory.concept_bindings.items():
+                parsed = TrajectoryConceptBinding.from_dict(raw_binding)
+                if (
+                    parsed.binding.metadata.analysis_plausibility_range is None
+                    and binding_preserves_analysis_range(parsed.binding)
+                ):
+                    expected_ranges[concept] = (
+                        typed.trajectory.concept_analysis_plausibility_ranges[concept]
+                    )
+        expected = MaterializedResearchInputs.model_validate(expected_payload)
+    if typed != expected:
+        raise RunInputIdentityError(
+            "ResearchContext typed input facts do not match staged authority."
+        )
 
 
 class RunInputCapsule(BaseModel):
@@ -455,7 +596,12 @@ def _tree_sha256(root: Path, *, relative_paths: Optional[Sequence[Path]] = None)
 
 @lru_cache(maxsize=1)
 def engine_code_sha256() -> str:
-    return _tree_sha256(Path(__file__).resolve().parent)
+    return canonical_sha256(
+        {
+            "research_agent_tree_sha256": _tree_sha256(Path(__file__).resolve().parent),
+            "metadata_implementation": dict(metadata_implementation_identity()),
+        }
+    )
 
 
 @lru_cache(maxsize=1)
@@ -480,6 +626,7 @@ def build_environment_identity(*, llm_signature: str) -> Dict[str, Any]:
         "prompt_pack_version": PROMPT_PACK_VERSION,
         "prompt_pack_files": prompt_files,
         "prompt_pack_sha256": canonical_sha256(prompt_files),
+        **dict(metadata_implementation_identity()),
     }
 
 
@@ -558,6 +705,18 @@ def seal_run_input_capsule(
         raise RunInputIdentityError(
             "Cannot seal run input capsule without research_context evidence."
         )
+    try:
+        if sha256_of_file(context_path) != str(context_record.sha256):
+            raise RunInputIdentityError(
+                "ResearchContext working copy differs from sealed evidence."
+            )
+        sealed_context = parse_research_context_json(
+            context_path.read_text(encoding="utf-8")
+        )
+    except (OSError, ValueError, TypeError) as exc:
+        raise RunInputIdentityError(
+            "Cannot seal run input capsule with an invalid ResearchContext."
+        ) from exc
     experiment_record = evidence.get("experiment_spec")
     trajectory_path = Path(run_dir) / "cohort_trajectory.parquet"
     trajectory_envelope = _scientific_trajectory_envelope(scientific_identity)
@@ -684,6 +843,14 @@ def seal_run_input_capsule(
                 raise RunInputIdentityError(
                     "Staged trajectory does not close its source/cohort authority."
                 )
+            _validate_v2_context_input_authority(
+                sealed_context,
+                cohort_path=cohort_path,
+                cohort=staged_materialized_authority,
+                trajectory=staged_trajectory_authority,
+                allow_v1=legacy_adopted,
+                require_current_implementation=True,
+            )
             capsule = RunInputCapsuleV3(
                 **capsule_fields,
                 materialized_trajectory_authority_required=True,
@@ -699,6 +866,14 @@ def seal_run_input_capsule(
                 raise RunInputIdentityError(
                     "Typed scientific identity trajectory was not staged."
                 )
+            _validate_v2_context_input_authority(
+                sealed_context,
+                cohort_path=cohort_path,
+                cohort=staged_materialized_authority,
+                trajectory=None,
+                allow_v1=legacy_adopted,
+                require_current_implementation=True,
+            )
             capsule = RunInputCapsuleV2(
                 **capsule_fields,
                 materialized_cohort_authority_ref=(
@@ -760,9 +935,7 @@ def adopt_verified_legacy_run_input_capsule(
         evidence_id="provenance_sources",
     )
     try:
-        context = ResearchContext.model_validate_json(
-            context_path.read_text(encoding="utf-8")
-        )
+        context = parse_research_context_json(context_path.read_text(encoding="utf-8"))
         provenance = json.loads(provenance_path.read_text(encoding="utf-8"))
     except (OSError, ValueError, TypeError) as exc:
         raise RunInputIdentityError(
@@ -989,7 +1162,7 @@ def load_verified_run_input_capsule(
         expected_sha256=capsule.context_sha256,
     )
     try:
-        ResearchContext.model_validate_json(
+        sealed_context = parse_research_context_json(
             context_evidence_path.read_text(encoding="utf-8")
         )
     except (OSError, ValueError, TypeError) as exc:
@@ -1058,6 +1231,7 @@ def load_verified_run_input_capsule(
             raise RunInputIdentityError(
                 "Cannot resume safely: staged trajectory bytes are missing or changed."
             )
+    staged_trajectory: Optional[VerifiedMaterializedTrajectoryAuthority] = None
     if isinstance(capsule, RunInputCapsuleV3):
         if capsule.trajectory_relative_path is None:
             raise RunInputIdentityError(
@@ -1106,6 +1280,25 @@ def load_verified_run_input_capsule(
             raise RunInputIdentityError(
                 "Cannot resume safely: staged trajectory has the wrong authority."
             )
+
+    if isinstance(capsule, RunInputCapsuleV2):
+        try:
+            _validate_v2_context_input_authority(
+                sealed_context,
+                cohort_path=cohort_path,
+                cohort=staged_authority,
+                trajectory=staged_trajectory,
+                allow_v1=True,
+                require_current_implementation=False,
+            )
+        except (
+            MaterializedMetadataError,
+            MaterializedTrajectoryError,
+            ValueError,
+        ) as exc:
+            raise RunInputIdentityError(
+                "Cannot resume safely: ResearchContext typed input authority is invalid."
+            ) from exc
 
     experiment_path: Optional[Path] = None
     if capsule.experiment_spec_evidence_id is not None:
@@ -2173,6 +2366,10 @@ def prepare_existing_resume_input(
             ),
             "prompt_pack_files": legacy_prompt_files,
             "prompt_pack_sha256": canonical_sha256(legacy_prompt_files),
+            "metadata_projection_sha256": "legacy_unknown",
+            "metadata_sidecar_sha256": "legacy_unknown",
+            "icu_rules_sha256": "legacy_unknown",
+            "metadata_implementation_bundle_sha256": "legacy_unknown",
         }
         authority = adopt_verified_legacy_run_input_capsule(
             run_dir=run_dir,

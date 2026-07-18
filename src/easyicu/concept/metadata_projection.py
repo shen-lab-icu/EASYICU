@@ -52,6 +52,25 @@ class ConceptColumnRole(str, Enum):
     EVENT_TIME = "event_time"
 
 
+def is_range_preserving_projection(
+    role: ConceptColumnRole,
+    aggregation: Optional[str],
+) -> bool:
+    """Whether a physical projection preserves single-measurement ranges.
+
+    This is representation semantics only; it does not assign an analysis
+    role.  Callers must pass the already canonical aggregation recorded by the
+    typed projection authority.
+    """
+
+    if not isinstance(role, ConceptColumnRole):
+        raise MetadataProjectionError("role must be a ConceptColumnRole")
+    return role is ConceptColumnRole.VALUE or (
+        role is ConceptColumnRole.NUMERIC_AGGREGATE
+        and aggregation in _RANGE_PRESERVING_AGGREGATIONS
+    )
+
+
 _DERIVED_ROLE_TRANSITIONS = {
     ConceptColumnRole.VALUE: frozenset(
         {
@@ -859,7 +878,7 @@ def project_concept_column_metadata(
     if (
         analysis_plausibility_range is not None
         and spec.role is ConceptColumnRole.NUMERIC_AGGREGATE
-        and spec.aggregation not in _RANGE_PRESERVING_AGGREGATIONS
+        and not is_range_preserving_projection(spec.role, spec.aggregation)
     ):
         raise MetadataProjectionError(
             "analysis plausibility ranges require a range-preserving aggregation"
@@ -876,10 +895,7 @@ def project_concept_column_metadata(
         ConceptColumnRole.VALUE,
         ConceptColumnRole.NUMERIC_AGGREGATE,
     }
-    range_preserving = spec.role is ConceptColumnRole.VALUE or (
-        spec.role is ConceptColumnRole.NUMERIC_AGGREGATE
-        and spec.aggregation in _RANGE_PRESERVING_AGGREGATIONS
-    )
+    range_preserving = is_range_preserving_projection(spec.role, spec.aggregation)
     time_like = spec.role in {
         ConceptColumnRole.FIRST_OBSERVATION_TIME,
         ConceptColumnRole.LAST_OBSERVATION_TIME,
@@ -1054,10 +1070,7 @@ def derive_concept_column_metadata(
         ConceptColumnRole.VALUE,
         ConceptColumnRole.NUMERIC_AGGREGATE,
     }
-    range_preserving = spec.role is ConceptColumnRole.VALUE or (
-        spec.role is ConceptColumnRole.NUMERIC_AGGREGATE
-        and spec.aggregation in _RANGE_PRESERVING_AGGREGATIONS
-    )
+    range_preserving = is_range_preserving_projection(spec.role, spec.aggregation)
     time_like = spec.role in {
         ConceptColumnRole.FIRST_OBSERVATION_TIME,
         ConceptColumnRole.LAST_OBSERVATION_TIME,
@@ -1154,6 +1167,7 @@ __all__ = [
     "SourceLineage",
     "canonical_metadata_bytes",
     "derive_concept_column_metadata",
+    "is_range_preserving_projection",
     "metadata_payload_sha256",
     "metadata_sha256",
     "project_concept_column_metadata",

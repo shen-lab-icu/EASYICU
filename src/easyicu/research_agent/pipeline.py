@@ -127,6 +127,7 @@ from .context import (
     build_research_context,
     build_retrieved_research_context,
 )
+from .research_context_v2 import parse_research_context_json
 from .context_numeric import register_context_numeric_claims
 from . import pipeline_cache as _pipeline_cache
 from .analysis_blueprint import (
@@ -1945,9 +1946,12 @@ class ResearchAgentPipeline:
             evidence_enforcement_mode
         )
         # T1.4 — when set, the pipeline strips the ICU rules out of the
-        # context that drives planning, coding and validation. This is
-        # the "naive" arm of the hero ablation: a generic data agent
-        # sees only column names + dtypes + ANY-aggregation.
+        # context that drives planning, coding and validation. This is the
+        # historical *untyped* naive ablation: a generic data agent sees only
+        # column names + dtypes + ANY-aggregation. Typed export authority is
+        # deliberately rejected at run entry because exposing its V2 physical
+        # facts would contaminate that ablation, while sealing it as V1 would
+        # discard the authority contract.
         self._disable_icu_context = bool(disable_icu_context)
         self._context_top_k = int(context_top_k) if context_top_k else None
         self._max_code_repair_attempts = max(0, int(max_code_repair_attempts))
@@ -2318,6 +2322,7 @@ class ResearchAgentPipeline:
         experiment_spec_path: Optional[Path],
         resume_state: Optional[Dict[str, Any]],
         resume_context_evidence_path: Optional[Path],
+        trajectory_binding: Optional[StagedTrajectoryBinding],
         run_scientific_identity: Dict[str, Any],
         run_environment_identity: Dict[str, Any],
         resume_from_step_id: Optional[str],
@@ -2332,7 +2337,7 @@ class ResearchAgentPipeline:
             # write. Restore a stale mutable working copy only from that sealed
             # authority; do not reserialize it (timestamps/provenance paths are
             # part of the original evidence bytes).
-            context = ResearchContext.model_validate_json(
+            context = parse_research_context_json(
                 resume_context_evidence_path.read_text(encoding="utf-8")
             )
             if not context_path.is_file() or sha256_of_file(
@@ -2345,7 +2350,7 @@ class ResearchAgentPipeline:
                 if self._disable_icu_context
                 else build_research_context
             )
-            context = builder(
+            context_kwargs = dict(
                 research_question=question,
                 cohort=cohort_path,
                 cohort_name=cohort_name,
@@ -2363,6 +2368,9 @@ class ResearchAgentPipeline:
                 user_preferences=user_preferences,
                 notes=notes,
             )
+            if builder is build_research_context:
+                context_kwargs["trajectory_binding"] = trajectory_binding
+            context = builder(**context_kwargs)
             context_path.write_text(
                 context.model_dump_json(indent=2),
                 encoding="utf-8",
@@ -3865,6 +3873,13 @@ class ResearchAgentPipeline:
                 )
                 if verified_source_authority is not None:
                     expected_cohort_authority = verified_source_authority.reference
+        if verified_source_authority is not None and self._disable_icu_context:
+            raise MaterializedMetadataError(
+                "Typed materialized cohorts require ICU-aware ResearchContext v2; "
+                "disable_icu_context=True is reserved for untyped historical "
+                "ablation inputs. Use ICU-aware context/--arms aware, or supply "
+                "an untyped DataFrame or legacy parquet for the naive arm."
+            )
         if verified_source_authority is not None:
             normalized_database = normalize_database_name(database)
             if verified_source_authority.sidecar.source_database != normalized_database:
@@ -3885,6 +3900,11 @@ class ResearchAgentPipeline:
                 raise MaterializedMetadataError(
                     "typed cohort source class policy does not match host registry"
                 )
+            # Typed authority owns the actual source database. Preserve the
+            # public API's accepted aliases (for example ``mimiciv``) while
+            # passing one canonical coordinate into scientific identity,
+            # ResearchContext v2, cache, and resume authority.
+            database = normalized_database
         verified_source_trajectory: Optional[
             VerifiedMaterializedTrajectoryAuthority
         ] = None
@@ -4272,6 +4292,7 @@ class ResearchAgentPipeline:
                 experiment_spec_path=experiment_spec_path,
                 resume_state=resume_state,
                 resume_context_evidence_path=resume_context_evidence_path,
+                trajectory_binding=staged_trajectory_binding,
                 run_scientific_identity=run_scientific_identity,
                 run_environment_identity=run_environment_identity,
                 resume_from_step_id=resume_from_step_id,

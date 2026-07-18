@@ -14,6 +14,8 @@ HR (H1 fix3j: HR 1.82 buried under a near-null ~1.0). These tests lock:
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 
@@ -25,8 +27,12 @@ from easyicu.research_agent.estimators import (
 from easyicu.research_agent.pipeline_primary_effect import (
     _effect_measure_from_scale,
     _extract_primary_effect_payload_from_records,
+    _infer_primary_predictor_from_run_dir,
 )
 from easyicu.research_agent.robustness_panel import default_robustness_specs
+from tests.research_agent.test_research_context_v2_authority_join import (
+    _prepare_typed_run,
+)
 
 
 def _survival_records():
@@ -55,6 +61,18 @@ def _logistic_frame(n: int = 800, seed: int = 3) -> pd.DataFrame:
     p = 1 / (1 + np.exp(-(-0.5 + np.log(1.8) * x)))
     y = rng.binomial(1, p)
     return pd.DataFrame({"x": x, "y": y})
+
+
+def test_primary_predictor_loads_from_v2_research_context(tmp_path: Path) -> None:
+    run_dir, _cohort_path, context, _identity, _cohort, _trajectory = (
+        _prepare_typed_run(tmp_path)
+    )
+    (run_dir / "research_context.json").write_text(
+        context.model_dump_json(),
+        encoding="utf-8",
+    )
+
+    assert _infer_primary_predictor_from_run_dir(run_dir) == "lact_max"
 
 
 # --- extractor -------------------------------------------------------------

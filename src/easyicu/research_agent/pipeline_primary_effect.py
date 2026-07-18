@@ -17,7 +17,7 @@ import math
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-from .context import ResearchContext
+from .research_context_v2 import parse_research_context
 from .plan_utils import (
     _finite_float,
     _infer_primary_predictor_from_context,
@@ -516,7 +516,7 @@ def _infer_primary_predictor_from_run_dir(run_dir: Path) -> Optional[str]:
         )
         if not isinstance(payload, dict):
             return None
-        context = ResearchContext.model_validate(payload)
+        context = parse_research_context(payload)
     except Exception:
         return None
     return _infer_primary_predictor_from_context(context)

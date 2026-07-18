@@ -51,6 +51,7 @@ from easyicu.research_agent.run_input_capsule import (
     seal_run_input_capsule,
     verify_legacy_trajectory_capsule_receipt,
 )
+from easyicu.research_agent.research_context_v2 import ResearchContextV2
 from tests.research_agent.test_materialized_trajectory_authority import (
     _bundle,
     _implementation_sha,
@@ -97,7 +98,12 @@ def _identity(
     )
 
 
-def _context_and_evidence(run_dir: Path, cohort_path: Path):
+def _context_and_evidence(
+    run_dir: Path,
+    cohort_path: Path,
+    *,
+    trajectory_binding: StagedTrajectoryBinding | None = None,
+):
     context = build_research_context(
         research_question=QUESTION,
         cohort=cohort_path,
@@ -107,6 +113,7 @@ def _context_and_evidence(run_dir: Path, cohort_path: Path):
         primary_exposure="lact_max",
         id_columns=("stay_id",),
         outcome_columns=("death",),
+        trajectory_binding=trajectory_binding,
     )
     context_path = run_dir / "research_context.json"
     context_path.write_text(context.model_dump_json(indent=2), encoding="utf-8")
@@ -150,7 +157,16 @@ def _staged_typed_inputs(tmp_path: Path):
         trajectory_path=paths["trajectory"],
         trajectory_ref=source_trajectory.reference,
     )
-    context_path, evidence = _context_and_evidence(run_dir, cohort_path)
+    context_path, evidence = _context_and_evidence(
+        run_dir,
+        cohort_path,
+        trajectory_binding=StagedTrajectoryBinding(
+            path=trajectory_path,
+            sha256=staged_trajectory.authority.trajectory_sha256,
+            size=staged_trajectory.authority.trajectory_size,
+            authority_ref=staged_trajectory.reference,
+        ),
+    )
     return (
         paths,
         source_cohort,
@@ -213,6 +229,96 @@ def test_typed_run_input_capsule_v3_binds_exact_staged_trajectory(tmp_path):
         scientific_identity=identity,
     )
     assert loaded.capsule == capsule
+    context = json.loads(context_path.read_text(encoding="utf-8"))
+    assert context["schema_version"] == "easyicu.research_context/2"
+    trajectory_context = context["materialized_inputs"]["trajectory"]
+    assert trajectory_context["authority_ref"] == staged_trajectory.reference.to_dict()
+    assert trajectory_context["requested_concepts"] == ["lact"]
+    assert trajectory_context["materialized_concepts"] == ["lact"]
+
+
+def test_v2_trajectory_availability_lists_must_be_unique(tmp_path):
+    (
+        _paths,
+        _source_cohort,
+        _source_trajectory,
+        _run_dir,
+        _cohort_path,
+        _staged_cohort,
+        _trajectory_path,
+        _staged_trajectory,
+        _identity_value,
+        context_path,
+        _evidence,
+    ) = _staged_typed_inputs(tmp_path)
+    context = ResearchContextV2.model_validate_json(
+        context_path.read_text(encoding="utf-8")
+    )
+    payload = context.model_dump(mode="python")
+    payload["materialized_inputs"]["trajectory"]["materialized_concepts"] = [
+        "lact",
+        "lact",
+    ]
+
+    with pytest.raises(ValidationError, match="availability states"):
+        ResearchContextV2.model_validate(payload)
+
+
+def test_fresh_typed_capsule_rejects_legacy_v1_context(tmp_path):
+    paths, source_cohort, _source_trajectory = _bundle(tmp_path)
+    run_dir = tmp_path / "fresh_typed_v1_context"
+    run_dir.mkdir()
+    cohort_path = run_dir / "cohort.parquet"
+    staged_cohort = stage_materialized_cohort_authority(
+        paths["parquet"],
+        cohort_path,
+        expected_source_authority=source_cohort.reference,
+        producer_implementation_sha256=_implementation_sha(),
+    )
+    assert staged_cohort is not None
+    legacy_context = build_research_context(
+        research_question=QUESTION,
+        cohort=pd.read_parquet(cohort_path),
+        cohort_name="typed_trajectory_capsule",
+        database="miiv",
+        target_outcome="death",
+        primary_exposure="lact_max",
+        id_columns=("stay_id",),
+        outcome_columns=("death",),
+    )
+    assert not isinstance(legacy_context, ResearchContextV2)
+    context_path = run_dir / "research_context.json"
+    context_path.write_text(
+        legacy_context.model_dump_json(indent=2),
+        encoding="utf-8",
+    )
+    evidence = EvidenceStore(run_dir)
+    evidence.register_file(
+        kind="log",
+        description="Invalid fresh typed V1 context.",
+        source_path=context_path,
+        evidence_id="research_context",
+        producer="pipeline",
+        generation_mode="system",
+    )
+    identity = _identity(
+        cohort_path=paths["parquet"],
+        cohort_ref=source_cohort.reference,
+    )
+    cohort_identity = dict(identity["cohort"])
+    cohort_identity.pop("trajectory", None)
+    identity = {**identity, "cohort": cohort_identity}
+
+    with pytest.raises(RunInputIdentityError, match="require a ResearchContext v2"):
+        seal_run_input_capsule(
+            run_dir=run_dir,
+            evidence=evidence,
+            scientific_identity=identity,
+            initial_environment=build_environment_identity(llm_signature="mock"),
+            context_path=context_path,
+            cohort_path=cohort_path,
+            experiment_spec_path=None,
+        )
 
 
 def test_pipeline_fresh_typed_trajectory_stages_exact_child_before_plan(
@@ -252,6 +358,8 @@ def test_pipeline_fresh_typed_trajectory_stages_exact_child_before_plan(
         assert scientific_identity["materialized_trajectory_authority_ref"] == (
             source_trajectory.reference.to_dict()
         )
+        binding = kwargs["trajectory_binding"]
+        assert binding.authority_ref == staged_trajectory.reference
         raise RuntimeError("staged inputs inspected before plan")
 
     monkeypatch.setattr(pipeline, "_run_plan_phase", inspect_staged_inputs)

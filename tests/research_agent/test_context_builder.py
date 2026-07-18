@@ -440,3 +440,27 @@ def test_retrieved_context_keeps_relevant_and_outcome_variables(ra):
     assert "stay_id" in names
     assert len(names) < len(variables)
     assert "Context retrieval active" in compact.notes
+
+def test_retrieved_context_always_preserves_primary_exposure(ra):
+    schema = ra.schema
+    context = schema.ResearchContext(
+        research_question="Describe age distribution.",
+        cohort=schema.CohortDescriptor(
+            cohort_name="exposure_guard",
+            database="miiv",
+            n_patients=3,
+            n_stays=3,
+            id_columns=["stay_id"],
+            outcome_columns=["death"],
+        ),
+        variables=[
+            schema.ConceptDescriptor(name="stay_id", role="id", dtype="int64"),
+            schema.ConceptDescriptor(name="age", role="demographic", dtype="float64"),
+            schema.ConceptDescriptor(name="lact", role="lab", dtype="float64"),
+            schema.ConceptDescriptor(name="death", role="outcome", dtype="int64"),
+        ],
+        target_outcome="death",
+        primary_exposure="lact",
+    )
+    selected = ra.retrieve_context_variables(context, query="age", top_k=1)
+    assert {item.name for item in selected} >= {"stay_id", "death", "lact"}
