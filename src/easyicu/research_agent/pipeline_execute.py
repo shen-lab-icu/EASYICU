@@ -146,7 +146,7 @@ from .evidence import (
     sha256_of_bytes,
     sha256_of_file,
 )
-from .evidence_registration import (
+from .authority.registration import (
     StepEvidenceCommit,
     filter_success_alias_bindings as _filter_success_alias_bindings,
 )
