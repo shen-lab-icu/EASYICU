@@ -564,7 +564,9 @@ def test_pipeline_runner_receives_target_outcome_env(ra, tmp_path: Path):
     assert runner.extra_env["OUTCOME_COL"] == "endpoint_x"
 
 
-def test_pipeline_runner_auto_discovers_trajectory_sibling(ra, tmp_path: Path):
+def test_pipeline_runner_does_not_discover_unstaged_trajectory_sibling(
+    ra, tmp_path: Path
+):
     cohort_path = tmp_path / "cohort.parquet"
     pd.DataFrame({"stay_id": [1], "endpoint_x": [0]}).to_parquet(
         cohort_path, index=False
@@ -581,17 +583,13 @@ def test_pipeline_runner_auto_discovers_trajectory_sibling(ra, tmp_path: Path):
         target_outcome="endpoint_x",
         universe_path=universe_path,
     )
-    assert runner.extra_env["TRAJECTORY_PARQUET"] == str(
-        tmp_path / "universe_trajectory.parquet"
-    )
+    assert "TRAJECTORY_PARQUET" not in runner.extra_env
 
 
-def test_materialise_cohort_carries_trajectory_sibling_then_runner_exposes_it(
+def test_materialise_cohort_does_not_copy_unverified_trajectory_sibling(
     ra, tmp_path: Path
 ):
-    # End-to-end of the staging fix: a universe parquet with a sibling
-    # trajectory, staged into the run_dir, must carry the trajectory so the
-    # runner's auto-discovery exposes TRAJECTORY_PARQUET.
+    # Cohort staging has no authority to discover/copy a mutable sibling.
     universe_dir = tmp_path / "universe"
     universe_dir.mkdir()
     src = universe_dir / "discovery_universe.parquet"
@@ -605,16 +603,7 @@ def test_materialise_cohort_carries_trajectory_sibling_then_runner_exposes_it(
     run_dir.mkdir()
     cohort_path = pipeline._materialise_cohort(src, run_dir)
 
-    assert (run_dir / "cohort_trajectory.parquet").exists()
-    runner = pipeline._build_runner(
-        run_dir=run_dir,
-        cohort_path=cohort_path,
-        target_outcome="aki",
-        universe_path=cohort_path,  # how pipeline_execute wires it
-    )
-    assert runner.extra_env["TRAJECTORY_PARQUET"] == str(
-        run_dir / "cohort_trajectory.parquet"
-    )
+    assert not (run_dir / "cohort_trajectory.parquet").exists()
 
 
 def test_pipeline_runner_no_trajectory_env_when_sibling_absent(ra, tmp_path: Path):
@@ -677,6 +666,7 @@ def test_pipeline_runner_rejects_universe_authority_override(ra, tmp_path: Path)
 
 def test_pipeline_runner_rejects_unsealed_typed_trajectory(ra, tmp_path: Path):
     from easyicu.research_agent.intake.materialized_metadata import (
+        MaterializedCohortAuthorityRef,
         MaterializedMetadataError,
     )
 
@@ -687,12 +677,18 @@ def test_pipeline_runner_rejects_unsealed_typed_trajectory(ra, tmp_path: Path):
     (tmp_path / "cohort_trajectory.parquet").write_bytes(b"unsealed")
     pipeline = ra.ResearchAgentPipeline(workdir=tmp_path / "work", enable_memory=False)
 
-    with pytest.raises(MaterializedMetadataError, match="separate sealed authority"):
+    with pytest.raises(MaterializedMetadataError, match="exact sealed authority"):
         pipeline._build_runner(
             run_dir=tmp_path / "run",
             cohort_path=cohort_path,
             universe_path=cohort_path,
             universe_is_typed=True,
+            universe_authority_ref=MaterializedCohortAuthorityRef(
+                file="materialized_authority.json",
+                sha256="1" * 64,
+                size=1,
+            ),
+            trajectory_path=tmp_path / "cohort_trajectory.parquet",
         )
 
 

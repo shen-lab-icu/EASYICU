@@ -3,7 +3,9 @@
 The functions in this module inspect code and structured findings only.  They
 never call a provider, execute candidate code, write evidence, or select a
 scientific design.  Operational LLM/cache/receipt work belongs to
-``concept_audit_execution``.
+``concept_audit_execution``.  In particular, a new optional LLM audit that does
+not repeat a stored error is not evidence that the old quarantine is stale;
+retirement requires one of the explicit deterministic proofs below.
 """
 
 from __future__ import annotations
@@ -224,7 +226,12 @@ def quarantined_deterministic_errors_resolved_by_current_gate(
     script_text: str,
     quarantined_script_sha256: str,
 ) -> Optional[List[Dict[str, Any]]]:
-    """Prove that exact-digest, host-owned deterministic errors are stale."""
+    """Prove that exact-digest, host-owned deterministic errors are stale.
+
+    Retirement is allowed only by replaying the current host-owned deterministic
+    gate over the exact quarantined script digest.  Silence from a fresh optional
+    LLM audit cannot discharge errors recorded by these deterministic validators.
+    """
 
     digest = hashlib.sha256(script_text.encode("utf-8")).hexdigest()
     if digest != str(quarantined_script_sha256 or ""):
@@ -260,7 +267,13 @@ def quarantined_errors_superseded_by_current_policy(
     script_text: str,
     quarantined_script_sha256: str,
 ) -> Optional[Tuple[List[ValidationFinding], List[Dict[str, Any]]]]:
-    """Prove that stored errors were retired by a deterministic policy change."""
+    """Prove that stored errors were retired by a deterministic policy change.
+
+    Absence of a finding from a new optional LLM audit is not evidence that an
+    old quarantine is stale.  The only no-code-change exit is to replay the
+    current metadata-supported reclassifier over every stored error while the
+    complete current deterministic audit independently has no errors.
+    """
 
     if hashlib.sha256(script_text.encode("utf-8")).hexdigest() != str(
         quarantined_script_sha256 or ""

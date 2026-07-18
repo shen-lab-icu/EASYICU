@@ -72,7 +72,11 @@ from .intake.materialized_metadata import MaterializedColumnMetadataCollector
 from .intake.materialized_metadata import (
     MaterializedMetadataError,
     implementation_bundle_sha256,
+    load_verified_materialized_cohort_authority,
     prepare_real_directory,
+)
+from .intake.materialized_trajectory import (
+    publish_materialized_trajectory_authority,
 )
 from easyicu.concept.metadata_projection import ConceptColumnRole
 
@@ -1314,6 +1318,7 @@ def _build_trajectory_long_from_resolved_source(
         )
     source_handle: Union[Path, ExportPackage] = export_package or root
     unavailable: List[str] = []
+    available_unobserved: List[str] = []
     frames: List[pd.DataFrame] = []
     materialized: List[str] = []
     for concept in dict.fromkeys(concepts):
@@ -1326,10 +1331,13 @@ def _build_trajectory_long_from_resolved_source(
             unavailable,
         )
         if TIME_COL not in df.columns or concept not in df.columns:
+            if concept not in unavailable:
+                unavailable.append(concept)
             continue
         w = _window(df, window[0], window[1]) if window is not None else df
         sub = w.loc[w[concept].notna(), [ID_COL, TIME_COL, concept]]
         if sub.empty:
+            available_unobserved.append(concept)
             continue
         frames.append(
             pd.DataFrame(
@@ -1366,6 +1374,7 @@ def _build_trajectory_long_from_resolved_source(
         "trajectory_window_hours": list(window) if window is not None else None,
         "trajectory_concepts_requested": list(dict.fromkeys(concepts)),
         "trajectory_concepts_materialized": materialized,
+        "available_unobserved_concepts": available_unobserved,
         "unavailable_concepts": unavailable,
         "n_rows": int(len(long_df)),
         "n_stays": int(long_df[ID_COL].nunique()) if len(long_df) else 0,
@@ -1493,12 +1502,86 @@ def materialize_to_parquet(
             patient_ids=materialize_args["patient_ids"],
             prefer_existing=materialize_args["prefer_existing"],
         )
+        # A trajectory bound to this universe may contain only identities the
+        # universe owns.  This matters when the materializer applied a host-
+        # declared cohort definition after reading the raw concept streams.
+        universe_ids = set(cohort[ID_COL].tolist())
+        long_df = long_df.loc[long_df[ID_COL].isin(universe_ids)].reset_index(drop=True)
+        requested_trajectory_concepts = list(dict.fromkeys(concepts))
+        source_available_concepts = {
+            *traj_prov["trajectory_concepts_materialized"],
+            *traj_prov["available_unobserved_concepts"],
+        }
+        observed_concepts = set(long_df["concept"].dropna().astype(str).tolist())
+        materialized_concepts = [
+            concept
+            for concept in requested_trajectory_concepts
+            if concept in observed_concepts
+        ]
+        available_unobserved_concepts = [
+            concept
+            for concept in requested_trajectory_concepts
+            if concept in source_available_concepts and concept not in observed_concepts
+        ]
+        traj_prov["trajectory_concepts_materialized"] = materialized_concepts
+        traj_prov["available_unobserved_concepts"] = available_unobserved_concepts
+        traj_prov["n_rows"] = int(len(long_df))
+        traj_prov["n_stays"] = int(long_df[ID_COL].nunique()) if len(long_df) else 0
+        traj_prov["trajectory_sha256"] = _hash_df(long_df)
         traj_path = out / f"{stem}_trajectory.parquet"
         traj_prov_path = out / f"{stem}_trajectory_provenance.json"
-        long_df.to_parquet(traj_path, index=False)
-        traj_prov_path.write_text(
-            json.dumps(traj_prov, indent=2, ensure_ascii=False), encoding="utf-8"
-        )
+        verified_cohort = load_verified_materialized_cohort_authority(parquet_path)
+        if verified_cohort is not None:
+            trajectory_parameters = {
+                "database": materialize_args["database"],
+                "requested_concepts": list(dict.fromkeys(concepts)),
+                "materialized_concepts": list(
+                    traj_prov["trajectory_concepts_materialized"]
+                ),
+                "available_unobserved_concepts": list(
+                    traj_prov["available_unobserved_concepts"]
+                ),
+                "unavailable_concepts": list(traj_prov["unavailable_concepts"]),
+                "window": list(trajectory_window) if trajectory_window else None,
+                "bound_universe_authority_sha256": (verified_cohort.reference.sha256),
+            }
+            verified_trajectory = publish_materialized_trajectory_authority(
+                long_df,
+                traj_path,
+                bound_universe_path=parquet_path,
+                bound_universe=verified_cohort,
+                requested_concepts=list(dict.fromkeys(concepts)),
+                materialized_concepts=list(
+                    traj_prov["trajectory_concepts_materialized"]
+                ),
+                available_unobserved_concepts=list(
+                    traj_prov["available_unobserved_concepts"]
+                ),
+                unavailable_concepts=list(traj_prov["unavailable_concepts"]),
+                window=trajectory_window,
+                semantic_provenance=traj_prov,
+                producer_implementation_sha256=implementation_bundle_sha256(
+                    (
+                        Path(__file__),
+                        Path(__file__).resolve().parent
+                        / "intake"
+                        / "materialized_trajectory.py",
+                        Path(__file__).resolve().parent
+                        / "intake"
+                        / "materialized_metadata.py",
+                    )
+                ),
+                producer_parameters=trajectory_parameters,
+            )
+            paths["trajectory_authority"] = out / verified_trajectory.reference.file
+        else:
+            # Legacy/untyped materialization keeps its historical path-only
+            # contract.  Typed inputs never take this branch.
+            long_df.to_parquet(traj_path, index=False)
+            traj_prov_path.write_text(
+                json.dumps(traj_prov, indent=2, ensure_ascii=False),
+                encoding="utf-8",
+            )
         paths["trajectory"] = traj_path
         paths["trajectory_provenance"] = traj_prov_path
     return paths
