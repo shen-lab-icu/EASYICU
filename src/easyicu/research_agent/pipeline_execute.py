@@ -3654,12 +3654,14 @@ def _demote_cosmetic_visual_findings(
 
 @dataclass(frozen=True)
 class VisualGateResult:
-    """Side-effect-free outcome of the figure Visual-QA audit for one step.
+    """Inert, typed outcome of the figure Visual-QA audit for one step.
 
-    Batch 1a-2 — the first typed slice of the execute-phase GateEvaluator. It
-    holds the raw audit findings, the error subset, and the cosmetic-demotion
-    projection, and NOTHING about control flow. ``_execute_one_step`` maps this
-    onto continue / return / step-status / budget / lock / evidence; the gate
+    Batch 1a-2 — the first typed slice of the execute-phase GateEvaluator. This
+    frozen value holds the raw audit findings, the error subset, and the
+    cosmetic-demotion projection, and NOTHING about control flow. (Producing it
+    does read figure files + invoke the auditor — see ``collect_visual_gate_result``
+    — but the value itself carries no side effects.) ``_execute_one_step`` maps
+    it onto continue / return / step-status / budget / lock / evidence; the gate
     only reports.
     """
 
@@ -3693,15 +3695,20 @@ def collect_visual_gate_result(
     step: Any,
     step_summary: Mapping[str, Any],
 ) -> VisualGateResult:
-    """Run the figure Visual-QA audit and classify it without side effects.
+    """Run the figure Visual-QA audit and classify it.
+
+    This is NOT a pure function: it reads the step's figure files and invokes
+    ``VisualQAAuditor``. What it has is no *pipeline runtime-state* side
+    effects — it mutates no ``step_record`` / ``findings`` / budget / evidence /
+    lock and drives no control flow; the orchestrator owns all of that.
 
     Mirrors the original inline ``VisualQAAuditor().audit_with_expected`` +
     ``visual_errors`` + ``_demote_cosmetic_visual_findings`` sequence from
     ``_execute_one_step``. Returns ``ran=False`` with empty finding tuples when
     Visual QA is disabled or the step produced no figures — exactly the guard
     the orchestrator used to spell inline. The cosmetic-demotion projection is
-    computed eagerly; on the clean (no-error) path it is a pure no-op that
-    leaves ``demoted_findings == findings``.
+    computed eagerly; on the clean (no-error) path it is a no-op that leaves
+    ``demoted_findings == findings``.
     """
 
     if not (enabled and step_figures):

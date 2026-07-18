@@ -1,10 +1,12 @@
 """Behavior tests for the typed Visual-QA gate component (batch 1a-2).
 
-These lock the PURE, side-effect-free ``VisualGateResult`` /
-``VisualRepairDecision`` seam extracted from the ``_execute_one_step`` VisualQA
-block. The component collects the figure audit + classifies it and recommends a
-repair; it must carry NO control flow — ``continue`` / ``return`` / step status /
-budget / locks / evidence registration stay in the orchestration layer.
+These lock the ``VisualGateResult`` / ``VisualRepairDecision`` seam extracted
+from the ``_execute_one_step`` VisualQA block. Precise terms:
+``decide_visual_repair`` is a pure function; ``collect_visual_gate_result`` is
+NOT pure (it reads figure files + invokes the auditor) but has no pipeline
+runtime-state side effects. Either way the component carries NO control flow —
+``continue`` / ``return`` / step status / budget / locks / evidence registration
+stay in the orchestration layer.
 
 Written before the implementation (Codex constraint: behavior tests + state
 table first). The state table these mirror lives in
