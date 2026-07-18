@@ -67,6 +67,11 @@ from .temporal_semantics import (
 )
 from .trajectory_contract import infer_fixed_window_trajectory_metadata
 
+# Archived callers and the public test surface import this historical private
+# name.  Keep it as an object-identity alias while the canonical implementation
+# lives in the interpretation-free cohort-artifact leaf.
+_observed_domain = observed_domain_for_series
+
 
 # ---------------------------------------------------------------------------
 # Helpers
