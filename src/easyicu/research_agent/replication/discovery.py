@@ -147,13 +147,13 @@ def discover_easyicu_exports(
                 export_dirs.update(path.parent for path in root.rglob(marker))
         for export_dir in sorted(export_dirs):
             try:
-                package = open_export_package(export_dir)
-                database = str(
-                    package.database or _guess_database_from_path(export_dir) or ""
-                )
-                index = package.concept_index
-                if not set(required_concepts).issubset(index):
-                    continue
+                with open_export_package(export_dir) as package:
+                    database = str(
+                        package.database or _guess_database_from_path(export_dir) or ""
+                    )
+                    index = package.concept_index
+                    if not set(required_concepts).issubset(index):
+                        continue
             except Exception:
                 continue
             if database and database not in found:

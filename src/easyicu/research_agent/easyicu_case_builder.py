@@ -22,6 +22,7 @@ from typing import Dict, Iterable, List, Optional, Sequence, Tuple, Union
 import pandas as pd
 
 from .intake.export_package import (
+    ExportPackage,
     ExportPackageError,
     index_export_package,
     open_export_package,
@@ -230,9 +231,28 @@ def build_lactate_map_vaso_cohort_from_export(
     identify mortality risk beyond MAP and vasopressor exposure, including
     patients with apparently adequate MAP?
     """
-    start_hour, end_hour = window
     root = Path(export_dir)
-    package = open_export_package(root)
+    with open_export_package(root) as package:
+        return _build_lactate_map_vaso_cohort_from_open_package(
+            package=package,
+            root=root,
+            window=window,
+            include_unmeasured_lactate=include_unmeasured_lactate,
+            expected_database=expected_database,
+        )
+
+
+def _build_lactate_map_vaso_cohort_from_open_package(
+    *,
+    package: ExportPackage,
+    root: Path,
+    window: Tuple[float, float],
+    include_unmeasured_lactate: bool,
+    expected_database: Optional[str],
+) -> EasyICUCasePackage:
+    """Build the case cohort while the caller owns the verified package."""
+
+    start_hour, end_hour = window
     if (
         expected_database is not None
         and package.database.strip().lower() != str(expected_database).strip().lower()
