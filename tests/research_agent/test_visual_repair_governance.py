@@ -326,7 +326,7 @@ def test_contract_budget_does_not_consume_visual_layout_budget(
     ra, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _ignore_figure_provenance_gates(monkeypatch)
-    from easyicu.research_agent import pipeline_execute
+    from easyicu.research_agent import contract_gate
 
     def controlled_contract(*, step_summary, **kwargs):
         del kwargs
@@ -341,7 +341,7 @@ def test_contract_budget_does_not_consume_visual_layout_budget(
         ]
 
     monkeypatch.setattr(
-        pipeline_execute,
+        contract_gate,
         "_step_contract_findings",
         controlled_contract,
     )
@@ -396,7 +396,7 @@ def test_contract_repair_provider_failure_preserves_contract_observability(
     """A provider outage must not hide the contract that triggered repair."""
 
     _ignore_figure_provenance_gates(monkeypatch)
-    from easyicu.research_agent import pipeline_execute
+    from easyicu.research_agent import contract_gate
 
     finding = ValidationFinding(
         validator="step_contract",
@@ -405,7 +405,7 @@ def test_contract_repair_provider_failure_preserves_contract_observability(
         detail={"missing": ["table:summary"]},
     )
     monkeypatch.setattr(
-        pipeline_execute,
+        contract_gate,
         "_step_contract_findings",
         lambda **kwargs: [finding],
     )

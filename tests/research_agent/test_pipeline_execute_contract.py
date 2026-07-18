@@ -1041,7 +1041,7 @@ def test_final_gate_evaluator_preserves_group_order_and_attempt_binding(
     monkeypatch,
     tmp_path,
 ):
-    from easyicu.research_agent import pipeline_execute
+    from easyicu.research_agent import contract_gate, pipeline_execute
     from easyicu.research_agent.contracts import ValidationFinding
     from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep
 
@@ -1070,33 +1070,36 @@ def test_final_gate_evaluator_preserves_group_order_and_attempt_binding(
 
         return _stub
 
+    # The deterministic contract sequence now lives in ``contract_gate``; the
+    # moved gate looks these collaborators up in THAT module's namespace, so the
+    # stubs must patch ``contract_gate`` (not ``pipeline_execute``).
     monkeypatch.setattr(
-        pipeline_execute,
+        contract_gate,
         "_step_contract_findings",
         stub_function("step_contract"),
     )
     monkeypatch.setattr(
-        pipeline_execute,
+        contract_gate,
         "_cohort_definition_sensitivity_contract_findings",
         stub_function("cohort_sensitivity"),
     )
     monkeypatch.setattr(
-        pipeline_execute,
+        contract_gate,
         "_primary_exposure_contract_findings",
         stub_function("primary_exposure"),
     )
     monkeypatch.setattr(
-        pipeline_execute,
+        contract_gate,
         "_primary_exposure_measurement_filter_findings",
         stub_function("exposure_measurement"),
     )
     monkeypatch.setattr(
-        pipeline_execute,
+        contract_gate,
         "_primary_exposure_overadjustment_findings",
         stub_function("overadjustment"),
     )
     monkeypatch.setattr(
-        pipeline_execute,
+        contract_gate,
         "_primary_model_leakage_findings",
         stub_function("model_leakage"),
     )
