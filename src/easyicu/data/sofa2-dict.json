@@ -1096,13 +1096,13 @@
       ],
       "hirid": [
         {
-          "table": "pharma",
-          "sub_var": "pharmaid",
+          "table": "observations",
+          "sub_var": "variableid",
           "ids": [
             10002508
           ],
-          "callback": "transform_fun(set_val(TRUE))",
-          "_comment": "2026-07-03 full dictionary audit: 10002508 = Haemofiltration in HiRID Pharma reference. HiRID does not separately track CRRT/CVVHD/hemodialysis subtypes."
+          "callback": "transform_fun(comp_na(`>`, 0))",
+          "_comment": "2026-07-18 fix: 10002508 (Haemofiltration) is an OBSERVATIONS variableid, NOT a pharmaid (pharma table has zero rows for it; pharmaids max at ~1,001,198). It is a binary 0/1 flag (112,901 rows / 33,190 pts; value==1 in 1,836 pts). Read from observations.variableid and map value>0 -> TRUE so the 92% explicit-0 rows are not falsely flagged. Prior mapping (table=pharma, sub_var=pharmaid, set_val(TRUE)) produced an empty column. HiRID does not separately track CRRT/CVVHD/hemodialysis subtypes."
         }
       ],
       "mimic_demo": [
