@@ -5722,7 +5722,19 @@
   "depends_on": [
    "fluid_balance"
   ],
-  "callback": "fluid_balance_cumulative"
+  "callback": "fluid_balance_cumulative",
+  "sources": {
+   "hirid": [
+    {
+     "table": "observations",
+     "sub_var": "variableid",
+     "ids": [
+      30005010
+     ],
+     "_comment": "2026-07-18: HiRID observations 30005010 'Fluid balance' IS a direct cumulative net fluid balance (mL, 23.98M rows/33889 pts). Use directly instead of the total_input_ml-urine recursion (HiRID has no per-hour total_input_ml). Concept min/max -100000/100000 clips the int64-overflow sentinel garbage."
+    }
+   ]
+  }
  },
  "furosemide": {
   "class_name": "lgl_cncpt",
