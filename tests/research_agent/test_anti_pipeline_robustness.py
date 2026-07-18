@@ -1445,22 +1445,25 @@ def test_locked_sensitivity_contract_is_wired_into_both_contract_passes() -> Non
         run_execute_phase,
     )
 
+    from easyicu.research_agent.pipeline_execute import (
+        _step_deterministic_contract_findings,
+    )
+
     execute_source = inspect.getsource(run_execute_phase)
     final_gate_source = inspect.getsource(_evaluate_final_deterministic_gates)
+    shared_source = inspect.getsource(_step_deterministic_contract_findings)
     # Figure repair now completes before evidence seal/registration.  The old
     # third pass belonged to the retired post-registration mutation branch;
     # the remaining pre-seal and final read-only passes are the two authorities.
-    # The final pass is shared with resume revalidation, so inspect that typed
-    # gate boundary instead of requiring its implementation to stay duplicated
-    # inside the already-large execution function.
-    assert (
-        execute_source.count("_cohort_definition_sensitivity_contract_findings(") == 1
-    )
+    # Those two passes now evaluate ONE shared deterministic contract sequence
+    # (dedup): the cohort-definition-sensitivity contract lives once inside that
+    # shared sequence, and both the early execution gate and the final read-only
+    # gate wire it in — so the wiring guarantee holds without duplicating the
+    # implementation inside the already-large execution function.
+    assert shared_source.count("_cohort_definition_sensitivity_contract_findings(") == 1
+    assert execute_source.count("_step_deterministic_contract_findings(") == 1
     assert "_evaluate_final_deterministic_gates(" in execute_source
-    assert (
-        final_gate_source.count("_cohort_definition_sensitivity_contract_findings(")
-        == 1
-    )
+    assert final_gate_source.count("_step_deterministic_contract_findings(") == 1
 
 
 def test_later_repairs_receive_prior_concept_findings_as_regression_constraints():

@@ -5267,6 +5267,135 @@ def _resume_success_dependencies(
     return dependencies
 
 
+def _step_deterministic_contract_findings(
+    *,
+    step: AnalysisStep,
+    plan: AnalysisPlan,
+    context: ResearchContext,
+    step_summary: Dict[str, Any],
+    completed_step_records: Sequence[Mapping[str, Any]],
+    resolved_input_bindings: Mapping[str, Mapping[str, Any]],
+    out_dir: Path,
+    run_dir: Path,
+    universe_path: Path,
+    cohort_path: Path,
+    execution_cohort_path: Path,
+    cross_step_cohort_lock_validator: CrossStepCohortLockValidator,
+    cross_step_registered_output_validator: CrossStepRegisteredOutputValidator,
+    cross_step_reconciliation_trace_validator: CrossStepReconciliationTraceValidator,
+    step_summary_integrity_validator: StepSummaryIntegrityValidator,
+    step_summary_fraction_validator: StepSummaryFractionValidator,
+    cross_step_source_status_validator: CrossStepSourceStatusValidator,
+    primary_model_contract_validator: PrimaryModelContractValidator,
+) -> List[ValidationFinding]:
+    """The shared pre-registration deterministic contract-validator sequence.
+
+    Both the early pre-registration gate inside ``_execute_one_step`` and the
+    final deterministic gate ``_evaluate_final_deterministic_gates`` evaluate this
+    IDENTICAL 14-validator sequence in the SAME order — the early gate runs it
+    before evidence registration so contract errors enter the in-run repair loop
+    instead of becoming a terminal record. This is that single reusable sequence.
+
+    It is pure with respect to run state: it returns findings and reads the
+    filesystem via the validators, but does NOT mutate ``step_record``, publish
+    evidence, apply primary-runner/figure demotions, or decide the step status —
+    those, plus the figure-contract/figure-source validators and any
+    canonicalization repair, stay at each call site because they differ between
+    the early and final gates. ``execution_cohort_path`` is the universe-or-cohort
+    path (``universe_path`` when the primary-analysis cohort producer uses the raw
+    universe, else ``cohort_path``); each caller passes its already-resolved value
+    (``step_execution_cohort_path`` in the early gate / ``execution_cohort_path``
+    in the final gate — equal by the same ``primary_analysis_cohort_producer_uses_universe``
+    predicate).
+    """
+
+    findings: List[ValidationFinding] = _step_contract_findings(
+        step=step,
+        step_summary=step_summary,
+        context=context,
+        completed_step_records=completed_step_records,
+        resolved_input_bindings=resolved_input_bindings,
+        out_dir=out_dir,
+    )
+    findings += _cohort_definition_sensitivity_contract_findings(
+        step=step,
+        step_summary=step_summary,
+        out_dir=out_dir,
+        run_dir=run_dir,
+        universe_path=universe_path,
+        cohort_path=cohort_path,
+        context=context,
+        completed_step_records=completed_step_records,
+    )
+    findings += primary_analysis_cohort_integrity_findings(
+        step=step,
+        plan=plan,
+        step_summary=step_summary,
+        out_dir=out_dir,
+        universe_path=universe_path,
+        authoritative_cohort_path=cohort_path,
+    )
+    findings += cross_step_cohort_lock_validator.audit(
+        step=step,
+        step_summary=step_summary,
+        completed_step_records=completed_step_records,
+    )
+    findings += cross_step_registered_output_validator.audit(
+        step=step,
+        step_summary=step_summary,
+        completed_step_records=completed_step_records,
+    )
+    findings += cross_step_reconciliation_trace_validator.audit(
+        step=step,
+        step_summary=step_summary,
+        out_dir=out_dir,
+    )
+    findings += step_summary_integrity_validator.audit(
+        step=step,
+        step_summary=step_summary,
+        resolved_input_bindings=resolved_input_bindings,
+        cohort_path=execution_cohort_path,
+    )
+    findings += step_summary_fraction_validator.audit(
+        step=step,
+        step_summary=step_summary,
+    )
+    findings += cross_step_source_status_validator.audit(
+        step=step,
+        step_summary=step_summary,
+        completed_step_records=completed_step_records,
+    )
+    findings += primary_model_contract_validator.audit(
+        step=step,
+        step_summary=step_summary,
+        context=context,
+        completed_step_records=completed_step_records,
+        out_dir=out_dir,
+        cohort_path=execution_cohort_path,
+    )
+    findings += _primary_exposure_contract_findings(
+        step=step,
+        step_summary=step_summary,
+        context=context,
+    )
+    findings += _primary_exposure_measurement_filter_findings(
+        step=step,
+        step_summary=step_summary,
+        context=context,
+    )
+    findings += _primary_exposure_overadjustment_findings(
+        step=step,
+        context=context,
+        out_dir=out_dir,
+    )
+    findings += _primary_model_leakage_findings(
+        step=step,
+        context=context,
+        out_dir=out_dir,
+    )
+    return findings
+
+
 def _evaluate_final_deterministic_gates(
     *,
     context: ResearchContext,
@@ -5330,115 +5459,27 @@ def _evaluate_final_deterministic_gates(
         out_dir=out_dir,
         step_summary=step_summary,
     )
-    contract_findings = _step_contract_findings(
+    contract_findings = _step_deterministic_contract_findings(
         step=step,
-        step_summary=step_summary,
+        plan=plan,
         context=context,
+        step_summary=step_summary,
         completed_step_records=completed_step_records,
         resolved_input_bindings=resolved_input_bindings,
         out_dir=out_dir,
-    )
-    contract_findings.extend(
-        _cohort_definition_sensitivity_contract_findings(
-            step=step,
-            step_summary=step_summary,
-            out_dir=out_dir,
-            run_dir=run_dir,
-            universe_path=universe_path,
-            cohort_path=cohort_path,
-            context=context,
-            completed_step_records=completed_step_records,
-        )
-    )
-    contract_findings.extend(
-        primary_analysis_cohort_integrity_findings(
-            step=step,
-            plan=plan,
-            step_summary=step_summary,
-            out_dir=out_dir,
-            universe_path=universe_path,
-            authoritative_cohort_path=cohort_path,
-        )
-    )
-    contract_findings.extend(
-        cross_step_cohort_lock_validator.audit(
-            step=step,
-            step_summary=step_summary,
-            completed_step_records=completed_step_records,
-        )
-    )
-    contract_findings.extend(
-        cross_step_registered_output_validator.audit(
-            step=step,
-            step_summary=step_summary,
-            completed_step_records=completed_step_records,
-        )
-    )
-    contract_findings.extend(
-        cross_step_reconciliation_trace_validator.audit(
-            step=step,
-            step_summary=step_summary,
-            out_dir=out_dir,
-        )
-    )
-    contract_findings.extend(
-        step_summary_integrity_validator.audit(
-            step=step,
-            step_summary=step_summary,
-            resolved_input_bindings=resolved_input_bindings,
-            cohort_path=execution_cohort_path,
-        )
-    )
-    contract_findings.extend(
-        step_summary_fraction_validator.audit(
-            step=step,
-            step_summary=step_summary,
-        )
-    )
-    contract_findings.extend(
-        cross_step_source_status_validator.audit(
-            step=step,
-            step_summary=step_summary,
-            completed_step_records=completed_step_records,
-        )
-    )
-    contract_findings.extend(
-        primary_model_contract_validator.audit(
-            step=step,
-            step_summary=step_summary,
-            context=context,
-            completed_step_records=completed_step_records,
-            out_dir=out_dir,
-            cohort_path=execution_cohort_path,
-        )
-    )
-    contract_findings.extend(
-        _primary_exposure_contract_findings(
-            step=step,
-            step_summary=step_summary,
-            context=context,
-        )
-    )
-    contract_findings.extend(
-        _primary_exposure_measurement_filter_findings(
-            step=step,
-            step_summary=step_summary,
-            context=context,
-        )
-    )
-    contract_findings.extend(
-        _primary_exposure_overadjustment_findings(
-            step=step,
-            context=context,
-            out_dir=out_dir,
-        )
-    )
-    contract_findings.extend(
-        _primary_model_leakage_findings(
-            step=step,
-            context=context,
-            out_dir=out_dir,
-        )
+        run_dir=run_dir,
+        universe_path=universe_path,
+        cohort_path=cohort_path,
+        execution_cohort_path=execution_cohort_path,
+        cross_step_cohort_lock_validator=cross_step_cohort_lock_validator,
+        cross_step_registered_output_validator=cross_step_registered_output_validator,
+        cross_step_reconciliation_trace_validator=(
+            cross_step_reconciliation_trace_validator
+        ),
+        step_summary_integrity_validator=step_summary_integrity_validator,
+        step_summary_fraction_validator=step_summary_fraction_validator,
+        cross_step_source_status_validator=cross_step_source_status_validator,
+        primary_model_contract_validator=primary_model_contract_validator,
     )
     contract_findings.extend(
         figure_contract_validator.audit(
@@ -12153,108 +12194,39 @@ else:
                                     return step_record
                 with shared_lock:
                     completed_records_snapshot = list(per_step_records)
-                early_contract_findings = _step_contract_findings(
-                    step=step,
-                    step_summary=visual_step_summary,
-                    context=context,
-                    completed_step_records=completed_records_snapshot,
-                    resolved_input_bindings=resolved_input_bindings,
-                    out_dir=run_result.out_dir,
-                )
-                early_contract_findings += (
-                    _cohort_definition_sensitivity_contract_findings(
-                        step=step,
-                        step_summary=visual_step_summary,
-                        out_dir=run_result.out_dir,
-                        run_dir=run_dir,
-                        universe_path=universe_path,
-                        cohort_path=cohort_path,
-                        context=context,
-                        completed_step_records=completed_records_snapshot,
-                    )
-                )
-                early_contract_findings += primary_analysis_cohort_integrity_findings(
+                # Early pre-registration deterministic contract gate: the SAME
+                # 14-validator sequence the final gate runs
+                # (_evaluate_final_deterministic_gates), evaluated here before
+                # evidence registration so contract errors enter the in-run repair
+                # loop instead of becoming a terminal record. The figure-contract
+                # canonicalization repair and the figure-contract / figure-source /
+                # ordered-stratified validators stay below because the early gate
+                # interleaves the canonicalization repair between them.
+                early_contract_findings = _step_deterministic_contract_findings(
                     step=step,
                     plan=plan,
-                    step_summary=visual_step_summary,
-                    out_dir=run_result.out_dir,
-                    universe_path=universe_path,
-                    authoritative_cohort_path=cohort_path,
-                )
-                early_contract_findings += cross_step_cohort_lock_validator.audit(
-                    step=step,
+                    context=context,
                     step_summary=visual_step_summary,
                     completed_step_records=completed_records_snapshot,
-                )
-                early_contract_findings += cross_step_registered_output_validator.audit(
-                    step=step,
-                    step_summary=visual_step_summary,
-                    completed_step_records=completed_records_snapshot,
-                )
-                early_contract_findings += (
-                    cross_step_reconciliation_trace_validator.audit(
-                        step=step,
-                        step_summary=visual_step_summary,
-                        out_dir=run_result.out_dir,
-                    )
-                )
-                early_contract_findings += step_summary_integrity_validator.audit(
-                    step=step,
-                    step_summary=visual_step_summary,
                     resolved_input_bindings=resolved_input_bindings,
-                    cohort_path=step_execution_cohort_path,
-                )
-                early_contract_findings += step_summary_fraction_validator.audit(
-                    step=step,
-                    step_summary=visual_step_summary,
-                )
-                early_contract_findings += cross_step_source_status_validator.audit(
-                    step=step,
-                    step_summary=visual_step_summary,
-                    completed_step_records=completed_records_snapshot,
-                )
-                early_contract_findings += primary_model_contract_validator.audit(
-                    step=step,
-                    step_summary=visual_step_summary,
-                    context=context,
-                    completed_step_records=completed_records_snapshot,
                     out_dir=run_result.out_dir,
-                    cohort_path=step_execution_cohort_path,
-                )
-                # Exposure-contract audit: if the question names a required
-                # primary exposure and this primary model estimated a clearly
-                # different variable, flag it so the same in-run repair loop
-                # re-fits the step with the correct exposure (no full restart).
-                early_contract_findings += _primary_exposure_contract_findings(
-                    step=step,
-                    step_summary=visual_step_summary,
-                    context=context,
-                )
-                early_contract_findings += (
-                    _primary_exposure_measurement_filter_findings(
-                        step=step,
-                        step_summary=visual_step_summary,
-                        context=context,
-                    )
-                )
-                # Overadjustment hard-block: if the primary exposure is a
-                # composite/derived score and this model conditioned on one of
-                # its constituents, route an error through the same repair loop
-                # so the step re-fits without the offending covariate.
-                early_contract_findings += _primary_exposure_overadjustment_findings(
-                    step=step,
-                    context=context,
-                    out_dir=run_result.out_dir,
-                )
-                # Outcome-leakage hard-block + treatment-mediator / other-endpoint
-                # cautions: the declared outcome appearing among predictors is
-                # target leakage (error → same re-fit loop); a treatment covariate
-                # or a different endpoint as predictor surfaces as a non-gating
-                # caution for the analyst to verify.
-                early_contract_findings += _primary_model_leakage_findings(
-                    step=step,
-                    context=context,
-                    out_dir=run_result.out_dir,
+                    run_dir=run_dir,
+                    universe_path=universe_path,
+                    cohort_path=cohort_path,
+                    execution_cohort_path=step_execution_cohort_path,
+                    cross_step_cohort_lock_validator=cross_step_cohort_lock_validator,
+                    cross_step_registered_output_validator=(
+                        cross_step_registered_output_validator
+                    ),
+                    cross_step_reconciliation_trace_validator=(
+                        cross_step_reconciliation_trace_validator
+                    ),
+                    step_summary_integrity_validator=step_summary_integrity_validator,
+                    step_summary_fraction_validator=step_summary_fraction_validator,
+                    cross_step_source_status_validator=(
+                        cross_step_source_status_validator
+                    ),
+                    primary_model_contract_validator=primary_model_contract_validator,
                 )
                 # Figure quality and source-data errors must enter the same
                 # in-run repair loop as table/model contract errors. Checking
