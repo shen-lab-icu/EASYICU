@@ -532,7 +532,7 @@ def _patch_lossy_numeric_coercion_guard(
     # The existing audit commonly wraps the exact integer count in ``int``.
     # Reuse the conservative namespace proof from the preflight before trusting
     # that wrapper; dynamic or shadowed builtins make this repair ineligible.
-    from .code_preflight import _builtin_int_binding_is_unmodified
+    from .gates.preflight import _builtin_int_binding_is_unmodified
 
     builtin_int_is_safe = _builtin_int_binding_is_unmodified(tree)
     candidates: list[tuple[ast.Assign | ast.AnnAssign, str, str]] = []
@@ -1448,7 +1448,7 @@ def _patch_provenance_loop_coverage_guard(code: str) -> str:
         repaired_tree = ast.parse(repaired)
     except SyntaxError:
         return code
-    from .code_preflight import _provenance_fail_closed_findings
+    from .gates.preflight import _provenance_fail_closed_findings
 
     if _provenance_fail_closed_findings(repaired_tree):
         return code
@@ -1476,12 +1476,12 @@ def _patch_provenance_fail_closed_guard(code: str) -> str:
             candidate_tree = ast.parse(candidate)
         except SyntaxError:
             return code
-        from .code_preflight import _provenance_fail_closed_findings
+        from .gates.preflight import _provenance_fail_closed_findings
 
         return code if _provenance_fail_closed_findings(candidate_tree) else candidate
 
     if _PROVENANCE_GUARD_SENTINEL in code:
-        from .code_preflight import _provenance_fail_closed_findings
+        from .gates.preflight import _provenance_fail_closed_findings
 
         if not _provenance_fail_closed_findings(tree):
             return code
@@ -2421,7 +2421,7 @@ def _patch_scalar_cast_before_reduction(code: str) -> str:
     except SyntaxError:
         return code
 
-    from .code_preflight import _builtin_int_binding_is_unmodified
+    from .gates.preflight import _builtin_int_binding_is_unmodified
 
     if not _builtin_int_binding_is_unmodified(tree):
         return code

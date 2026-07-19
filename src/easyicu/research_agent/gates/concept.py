@@ -20,7 +20,7 @@ from ..audits.validators import (
     _reclassify_llm_concept_findings,
     _verified_authoritative_exposure_flow,
 )
-from ..code_preflight import audit_mechanical_code_contracts
+from .preflight import audit_mechanical_code_contracts
 from ..contracts import ValidationFinding
 from ..method_compatibility import (
     detect_forbidden_pattern_usage,
