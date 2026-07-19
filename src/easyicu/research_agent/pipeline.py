@@ -122,12 +122,12 @@ from .replication.notebook import (
 )
 from .discovery.hypothesis_generator import generate_hypotheses
 from .reporting.pdf_render import render_pdf_for_run
-from .context import (
+from .research_context.builder import (
     build_naive_research_context,
     build_research_context,
     build_retrieved_research_context,
 )
-from .research_context_v2 import parse_research_context_json
+from .research_context.typed import parse_research_context_json
 from .context_numeric import register_context_numeric_claims
 from . import pipeline_cache as _pipeline_cache
 from .analysis_blueprint import (

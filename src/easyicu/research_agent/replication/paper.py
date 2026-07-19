@@ -1166,7 +1166,7 @@ def write_fail_closed_paper_package(
     otherwise be created.
     """
     from ..audits.validators import ReplicationDesignAuditor
-    from ..context import build_naive_research_context
+    from ..research_context.builder import build_naive_research_context
     from ..evidence import EvidenceStore
     from ..llm import MockLLMClient
     from ..pipeline_report import render_report, write_readiness_artifacts

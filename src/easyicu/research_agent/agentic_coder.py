@@ -226,7 +226,7 @@ class AgenticCoderAgent:
         self, context: ResearchContext, step: AnalysisStep, code: str
     ) -> str:
         """Record violations; the central repair coordinator owns any repair."""
-        from .method_compatibility import detect_forbidden_pattern_usage
+        from .gates.method_compatibility import detect_forbidden_pattern_usage
 
         self.last_compatibility_repair_attempts = 0
         self.last_compatibility_violations = detect_forbidden_pattern_usage(

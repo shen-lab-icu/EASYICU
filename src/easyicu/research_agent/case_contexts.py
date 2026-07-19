@@ -15,7 +15,7 @@ from typing import Dict, List, Mapping, Optional, Sequence, Union
 
 import pandas as pd
 
-from .context import build_naive_research_context, build_research_context
+from .research_context.builder import build_naive_research_context, build_research_context
 from .schema import AggregationRule, ConceptDescriptor, ResearchContext, VariableRole
 
 

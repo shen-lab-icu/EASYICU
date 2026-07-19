@@ -81,6 +81,7 @@ mechanically moving every top-level file:
 | `discovery/` | candidate-hypothesis ranking, feasibility and discovery handoff | manuscript authority or autonomous scientific claims |
 | `reporting/` | manuscript binding, article/display contracts, review artifacts and rendering helpers | unverified numeric claims or a second evidence authority |
 | `planning/` | case-neutral analysis families, study-design playbooks, capability/method registries and article figure strategy | case-specific benchmark instructions or execution/evidence mutation |
+| `research_context/` | typed context authority, cohort-aware context construction and step-scoped Coder projection | scientific method selection, provider calls or run authority mutation |
 
 `pipeline_execute.py` remains the orchestration caller. PlanAuthority's pure
 candidate projection and TypedBindingResolver are now canonical under
@@ -96,7 +97,8 @@ legacy top-level module paths (`contract_gate`, `concept_gate`,
 `concept_audit_execution`, `gate_evaluator`, `figure_contract_preparation`,
 `publication_figure_execution`, `evidence_registration`, `provider_budget`,
 `code_preflight`, `code_repair`, `code_repair_helpers`, `repair_reasons`,
-`repair_coordination`, `code_patch`, `summary_repair`, and the moved
+`repair_coordination`, `code_patch`, `summary_repair`, `context`,
+`coder_context`, `research_context_v2`, `method_compatibility`, and the moved
 discovery/reporting/runner modules) are module-object aliases to the canonical
 packages. This is intentional: archived scripts and public imports keep
 working, and monkeypatches through either path reach the same implementation.

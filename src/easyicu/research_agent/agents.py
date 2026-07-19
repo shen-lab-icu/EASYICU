@@ -62,7 +62,7 @@ from .repairs.patch import (
     repair_code_excerpt,
 )
 from .coder_authority_notes import HostCoderAuthority
-from .coder_context import (
+from .research_context.prompt_scope import (
     coder_context_requires_method_constraints,
     coder_guide_for_step,
     coder_rewrite_guide_for_step,
@@ -89,7 +89,7 @@ from .repairs.reasons import (
     RepairRoute,
     repair_prompt_binding_sha256,
 )
-from .research_context_v2 import materialized_input_prompt_attachment
+from .research_context.typed import materialized_input_prompt_attachment
 from .step_authority_capsule import ContentRef
 from .schema import (
     AggregationRule,
@@ -353,7 +353,7 @@ def _format_context(
     # method_compatibility.py. Appended once so every agent role
     # (planner / coder / analyzer / writer) sees the same up-front
     # constraints and the matrix is the single source of truth.
-    from .method_compatibility import render_variable_constraints
+    from .gates.method_compatibility import render_variable_constraints
 
     if include_method_constraints:
         constraints = render_variable_constraints(ctx)
@@ -1946,7 +1946,7 @@ class CoderAgent:
         ] = None,
         on_repair_candidate: Optional[Callable[[ContentRef, str, int], None]] = None,
     ) -> str:
-        from .method_compatibility import (
+        from .gates.method_compatibility import (
             detect_forbidden_pattern_usage,
             format_violation_message,
         )
