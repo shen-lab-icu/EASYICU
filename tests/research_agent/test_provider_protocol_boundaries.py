@@ -30,6 +30,13 @@ def test_mock_annotations_resolve_without_importing_back_from_llm() -> None:
     )
 
 
+def test_renamed_mock_subclass_remains_explicitly_offline() -> None:
+    class InterruptingAnalyzer(llm_mocks.MockLLMClient):
+        name = "interrupting-analyzer"
+
+    assert llm.llm_is_mockish(InterruptingAnalyzer())
+
+
 def test_provider_package_keeps_factory_import_lazy() -> None:
     path = Path(inspect.getsourcefile(providers))
     tree = ast.parse(path.read_text(encoding="utf-8"))
