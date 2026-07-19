@@ -1089,6 +1089,7 @@ def _provenance_fail_closed_findings(tree: ast.Module) -> list[ValidationFinding
         for parent in ast.walk(tree)
         for child in ast.iter_child_nodes(parent)
     }
+    id_parents, statement_positions = _ast_parent_and_statement_positions(tree)
 
     def _nearest_function(node: ast.AST) -> Optional[ast.AST]:
         current = parents.get(node)
@@ -1348,6 +1349,52 @@ def _provenance_fail_closed_findings(tree: ast.Module) -> list[ValidationFinding
         ):
             return None
         return fields, containers
+
+    def _immediate_returned_audit_row(
+        guard: ast.If,
+    ) -> Optional[dict[str, ast.AST]]:
+        """Read one literal audit row returned immediately after a guard."""
+
+        following = _next_statement(guard)
+        if not (
+            isinstance(following, ast.Return)
+            and isinstance(following.value, ast.Dict)
+            and parents.get(following) is parents.get(guard)
+        ):
+            return None
+        outer = following.value
+        outer_fields = {
+            _subscript_key(key): value
+            for key, value in zip(outer.keys, outer.values)
+            if key is not None
+        }
+        checks = outer_fields.get("checks")
+        if not (
+            isinstance(checks, (ast.List, ast.Tuple))
+            and len(checks.elts) == 1
+            and isinstance(checks.elts[0], ast.Dict)
+        ):
+            return None
+        row = checks.elts[0]
+        if any(
+            key is None
+            or not isinstance(key, ast.Constant)
+            or not isinstance(key.value, str)
+            for key in row.keys
+        ):
+            return None
+        keys = [str(key.value) for key in row.keys if isinstance(key, ast.Constant)]
+        if len(keys) != len(set(keys)):
+            return None
+        fields = dict(zip(keys, row.values))
+        role = fields.get("role")
+        if not (
+            _PROVENANCE_FAILURE_KEYS <= fields.keys()
+            and isinstance(role, ast.Constant)
+            and str(role.value).strip().lower() == "audit_only"
+        ):
+            return None
+        return fields
 
     def _post_audit_alias_path_is_pure(
         statements: list[ast.stmt],
@@ -1759,10 +1806,31 @@ def _provenance_fail_closed_findings(tree: ast.Module) -> list[ValidationFinding
         return isinstance(node.ops[0], (ast.Gt, ast.NotEq))
 
     def _branch_all_paths_raise(statements: list[ast.stmt]) -> bool:
-        return _branch_all_paths_exit(statements) and not any(
+        direct_raise = _branch_all_paths_exit(statements) and not any(
             isinstance(node, ast.Return)
             for statement in statements
             for node in ast.walk(statement)
+        )
+        if direct_raise:
+            return True
+        if not statements or any(
+            isinstance(node, ast.Return)
+            for statement in statements
+            for node in ast.walk(statement)
+        ):
+            return False
+        terminal = statements[-1]
+        terminal_position = statement_positions.get(id(terminal))
+        return bool(
+            terminal_position is not None
+            and _block_flow_outcomes(statements[:-1]) == {_FLOW_FALLTHROUGH}
+            and _stable_raise_only_helper_call(
+                terminal,
+                position=terminal_position,
+                tree=tree,
+                parents=id_parents,
+                positions=statement_positions,
+            )
         )
 
     swallowed_exit_issues: dict[tuple[int, int, int], dict[str, object]] = {}
@@ -1877,6 +1945,11 @@ def _provenance_fail_closed_findings(tree: ast.Module) -> list[ValidationFinding
             if row is not None:
                 fields, containers = row
                 audit_rows.append((index, fields, containers))
+        returned_audit_row = None
+        if not audit_rows:
+            returned_audit_row = _immediate_returned_audit_row(guard)
+            if returned_audit_row is not None:
+                audit_rows.append((len(preceding), returned_audit_row, set()))
         if len(audit_rows) != 1:
             return False
 
@@ -1890,7 +1963,8 @@ def _provenance_fail_closed_findings(tree: ast.Module) -> list[ValidationFinding
                     return False
                 bound_names.add(value.id)
                 binding: Optional[ast.AST] = None
-                for statement in preceding[:audit_index]:
+                binding_index: Optional[int] = None
+                for index, statement in enumerate(preceding[:audit_index]):
                     if not isinstance(statement, (ast.Assign, ast.AnnAssign)):
                         continue
                     assignment_value = statement.value
@@ -1906,8 +1980,18 @@ def _provenance_fail_closed_findings(tree: ast.Module) -> list[ValidationFinding
                         for target in targets
                     ):
                         binding = assignment_value
+                        binding_index = index
                 if binding is None or not _builtin_int_call(binding):
                     return False
+                if returned_audit_row is not None and binding_index is not None:
+                    for statement in preceding[binding_index + 1 :]:
+                        if any(
+                            isinstance(candidate, ast.Name)
+                            and candidate.id == value.id
+                            and isinstance(candidate.ctx, (ast.Store, ast.Del))
+                            for candidate in ast.walk(statement)
+                        ):
+                            return False
             post_audit = preceding[audit_index + 1 :]
             if scope is tree:
                 if not _post_audit_alias_path_is_pure(
@@ -2185,7 +2269,10 @@ def _provenance_fail_closed_findings(tree: ast.Module) -> list[ValidationFinding
                 collection_events.setdefault(collection, set()).add(statement.value)
             if (
                 direct_guard
-                and _branch_all_paths_exit(guard.body)
+                and (
+                    _branch_all_paths_exit(guard.body)
+                    or _branch_all_paths_raise(guard.body)
+                )
                 and not _provenance_branch_contains_result_sink(guard.body)
                 and not _result_sink_precedes_guard(guard, parents)
                 and not _failure_exit_may_be_swallowed(guard)
@@ -2433,6 +2520,17 @@ def _provenance_fail_closed_findings(tree: ast.Module) -> list[ValidationFinding
             continue
         if called in self_raising:
             statement = parents.get(call)
+            direct_self_raising_call = bool(
+                isinstance(statement, ast.Expr)
+                and statement.value is call
+                or isinstance(statement, ast.Assign)
+                and statement.value is call
+                and len(statement.targets) == 1
+                and isinstance(statement.targets[0], ast.Name)
+                or isinstance(statement, ast.AnnAssign)
+                and statement.value is call
+                and isinstance(statement.target, ast.Name)
+            )
             returns = [
                 candidate
                 for candidate in _local_nodes(marker_function)
@@ -2458,8 +2556,7 @@ def _provenance_fail_closed_findings(tree: ast.Module) -> list[ValidationFinding
             )
             if (
                 not (
-                    isinstance(statement, ast.Expr)
-                    and statement.value is call
+                    direct_self_raising_call
                     and _direct_execution_statement(statement)
                     and returns_follow_guard
                     and not _result_sink_precedes_call(call)
@@ -5301,16 +5398,75 @@ def _stable_raise_only_helper_call(
     ):
         return False
     helper_name = statement.value.func.id
+
+    def _scope_binds_name(scope: ast.AST, name: str) -> bool:
+        scope_id = id(scope)
+        for node in ast.walk(scope):
+            if (
+                node is scope
+                or _scope_id_for_node(
+                    node,
+                    parents=parents,
+                    tree=tree,
+                )
+                != scope_id
+            ):
+                continue
+            if (
+                isinstance(node, ast.Name)
+                and node.id == name
+                and isinstance(node.ctx, (ast.Store, ast.Del))
+            ):
+                return True
+            if isinstance(node, ast.arg) and node.arg == name:
+                return True
+            if (
+                isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
+                and node.name == name
+            ):
+                return True
+            if isinstance(node, (ast.Import, ast.ImportFrom)) and any(
+                (alias.asname or alias.name.split(".", 1)[0]) == name
+                for alias in node.names
+            ):
+                return True
+            if isinstance(node, ast.ExceptHandler) and node.name == name:
+                return True
+            if isinstance(node, (ast.MatchAs, ast.MatchStar)) and node.name == name:
+                return True
+            if isinstance(node, ast.MatchMapping) and node.rest == name:
+                return True
+        return False
+
+    def _visible_candidate(node: ast.FunctionDef) -> bool:
+        helper_position = positions.get(id(node))
+        if helper_position is None or helper_position.field_name != "body":
+            return False
+        same_scope = bool(
+            helper_position.scope_id == position.scope_id
+            and helper_position.owner is position.scope
+            and int(node.lineno) < int(statement.lineno)
+        )
+        if same_scope:
+            return True
+        caller = position.scope
+        caller_position = positions.get(id(caller))
+        return bool(
+            helper_position.scope is tree
+            and helper_position.owner is tree
+            and isinstance(caller, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and caller_position is not None
+            and caller_position.owner is tree
+            and int(node.lineno) < int(caller.lineno)
+            and not _scope_binds_name(caller, helper_name)
+        )
+
     candidates = [
         node
         for node in ast.walk(tree)
         if isinstance(node, ast.FunctionDef)
         and node.name == helper_name
-        and (helper_position := positions.get(id(node))) is not None
-        and helper_position.scope_id == position.scope_id
-        and helper_position.owner is position.scope
-        and helper_position.field_name == "body"
-        and int(getattr(node, "lineno", 0)) < int(getattr(statement, "lineno", 0))
+        and _visible_candidate(node)
     ]
     if len(candidates) != 1:
         return False
