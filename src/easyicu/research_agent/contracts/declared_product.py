@@ -917,6 +917,59 @@ def primary_analysis_cohort_producer_uses_universe(
     return len(producers) == 1 and producers[0].step_id == step.step_id
 
 
+def _primary_analysis_cohort_product_owner_finding(
+    *,
+    step: AnalysisStep,
+    plan: Any,
+    validator: str,
+) -> ValidationFinding | None:
+    """Return the shared structural owner finding for one cohort step.
+
+    This check uses only the Planner-declared method and typed products.  It is
+    therefore safe to run before code generation as well as inside the later
+    execution-time integrity gate.  Keeping the finding here prevents the two
+    stages from drifting into different definitions of a closed owner.
+    """
+
+    if not _primary_analysis_cohort_attrition_candidate(step):
+        return None
+    if primary_analysis_cohort_producer_uses_universe(step=step, plan=plan):
+        return None
+    return ValidationFinding(
+        validator=validator,
+        severity="error",
+        message=(
+            "A mixed analysis_cohort + attrition step must be the plan's unique "
+            "closed primary-cohort product owner before it may execute."
+        ),
+        detail={
+            "issue": "primary_cohort_product_owner_ambiguous",
+            "step_id": step.step_id,
+        },
+    )
+
+
+def primary_analysis_cohort_plan_findings(*, plan: Any) -> list[ValidationFinding]:
+    """Validate primary-cohort typed-product ownership before Coder execution.
+
+    The host does not select a cohort or edit eligibility here.  It only checks
+    whether a Planner-declared mixed cohort/attrition step is structurally
+    closed and uniquely owns the locked primary cohort.  The probe-aware
+    replanner may then repair declarations without changing scientific choices.
+    """
+
+    findings: list[ValidationFinding] = []
+    for step in getattr(plan, "steps", ()):
+        finding = _primary_analysis_cohort_product_owner_finding(
+            step=step,
+            plan=plan,
+            validator="plan_primary_analysis_cohort_integrity",
+        )
+        if finding is not None:
+            findings.append(finding)
+    return findings
+
+
 def _contained_regular_output_file(out_dir: Path, value: object) -> Path:
     """Return one link-free regular file lexically contained in ``out_dir``.
 
@@ -1698,12 +1751,13 @@ def primary_analysis_cohort_integrity_findings(
             )
         ]
 
-    if not primary_analysis_cohort_producer_uses_universe(step=step, plan=plan):
-        return finding(
-            "primary_cohort_product_owner_ambiguous",
-            "A mixed analysis_cohort + attrition step must be the plan's unique "
-            "closed primary-cohort product owner before it may execute.",
-        )
+    owner_finding = _primary_analysis_cohort_product_owner_finding(
+        step=step,
+        plan=plan,
+        validator="primary_analysis_cohort_integrity",
+    )
+    if owner_finding is not None:
+        return [owner_finding]
 
     try:
         import pandas as pd
