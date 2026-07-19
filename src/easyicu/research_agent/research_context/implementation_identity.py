@@ -25,7 +25,8 @@ def _sha256_file(path: Path) -> str:
 def metadata_implementation_identity() -> Mapping[str, str]:
     """Return the exact code identities that shape typed context facts."""
 
-    easyicu_root = Path(__file__).resolve().parents[1]
+    research_agent_root = Path(__file__).resolve().parents[1]
+    easyicu_root = research_agent_root.parent
     implementation = {
         "metadata_projection_sha256": _sha256_file(
             easyicu_root / "concept" / "metadata_projection.py"
@@ -33,7 +34,7 @@ def metadata_implementation_identity() -> Mapping[str, str]:
         "metadata_sidecar_sha256": _sha256_file(
             easyicu_root / "concept" / "metadata_sidecar.py"
         ),
-        "icu_rules_sha256": _sha256_file(Path(__file__).with_name("icu_rules.py")),
+        "icu_rules_sha256": _sha256_file(research_agent_root / "icu_rules.py"),
     }
     payload = json.dumps(
         implementation,

@@ -30,7 +30,7 @@ from typing import Any, Dict, Mapping, Optional, Sequence
 
 from .evidence_authority import EvidenceAuthorityIntegrityError
 from .providers.mocks import MockLLMClient
-from .metadata_implementation_identity import metadata_implementation_identity
+from .research_context.implementation_identity import metadata_implementation_identity
 from .providers.prompts import PROMPT_PACK_VERSION, prompt_pack_files
 from .run_input_capsule import (
     RunInputIdentityError,

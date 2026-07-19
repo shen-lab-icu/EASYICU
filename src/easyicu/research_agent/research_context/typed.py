@@ -34,7 +34,7 @@ from ..intake.materialized_trajectory import (
     VerifiedMaterializedTrajectoryAuthority,
 )
 from ..icu_rules import ICU_RULES
-from ..metadata_implementation_identity import metadata_implementation_identity
+from .implementation_identity import metadata_implementation_identity
 from ..schema import ConceptDescriptor, ResearchContext
 
 RESEARCH_CONTEXT_V2_SCHEMA_VERSION = "easyicu.research_context/2"
