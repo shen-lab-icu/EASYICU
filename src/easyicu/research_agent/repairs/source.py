@@ -3027,6 +3027,86 @@ def _deterministic_summary_repair(
     return None
 
 
+def _patch_measurement_provenance_summary_mapping(code: str) -> str:
+    """Keep host provenance receipts machine-readable in ``step_summary``.
+
+    A generated script may correctly build a list of host-owned receipt
+    mappings, wrap that list in ``pd.DataFrame.from_records`` for display, and
+    then place the DataFrame in ``measurement_provenance_audit``.  Generic JSON
+    sanitizers stringify the frame, erasing the required ``source``/``checks``
+    contract.  Rewrite only that exact, uniquely bound representation; all
+    receipt values and scientific outputs remain unchanged.
+    """
+
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return code
+
+    summary_values: list[ast.AST] = []
+    for node in tree.body:
+        if not (
+            isinstance(node, ast.Assign)
+            and len(node.targets) == 1
+            and isinstance(node.targets[0], ast.Name)
+            and node.targets[0].id == "step_summary"
+            and isinstance(node.value, ast.Dict)
+        ):
+            continue
+        for key, value in zip(node.value.keys, node.value.values, strict=True):
+            if (
+                isinstance(key, ast.Constant)
+                and key.value == "measurement_provenance_audit"
+            ):
+                summary_values.append(value)
+    if len(summary_values) != 1 or not isinstance(summary_values[0], ast.Name):
+        return code
+    audit_name = summary_values[0].id
+
+    assignments = [
+        node
+        for node in tree.body
+        if isinstance(node, ast.Assign)
+        and len(node.targets) == 1
+        and isinstance(node.targets[0], ast.Name)
+        and node.targets[0].id == audit_name
+    ]
+    audit_loads = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Name)
+        and isinstance(node.ctx, ast.Load)
+        and node.id == audit_name
+    ]
+    if len(assignments) != 1 or len(audit_loads) != 1:
+        return code
+    value = assignments[0].value
+    if not (
+        isinstance(value, ast.Call)
+        and isinstance(value.func, ast.Attribute)
+        and value.func.attr == "from_records"
+        and isinstance(value.func.value, ast.Attribute)
+        and value.func.value.attr == "DataFrame"
+        and isinstance(value.func.value.value, ast.Name)
+        and value.func.value.value.id == "pd"
+        and len(value.args) == 1
+        and isinstance(value.args[0], ast.Name)
+        and not value.keywords
+    ):
+        return code
+    receipts_name = value.args[0].id
+    value_source = ast.get_source_segment(code, value)
+    if not value_source or code.count(value_source) != 1:
+        return code
+    replacement = '{"source": "COHORT_PARQUET", "checks": ' + receipts_name + "}"
+    repaired = code.replace(value_source, replacement, 1)
+    try:
+        ast.parse(repaired)
+    except SyntaxError:
+        return code
+    return repaired
+
+
 def deterministic_contract_repair(
     *,
     code: str,
@@ -3034,6 +3114,29 @@ def deterministic_contract_repair(
     previous_repair: Optional[str] = None,
 ) -> Optional[tuple[str, str]]:
     """Patch objective contract/audit failures before asking the LLM to repair."""
+
+    provenance_source_findings = []
+    for finding in findings:
+        validator = getattr(finding, "validator", None)
+        detail = getattr(finding, "detail", None)
+        if isinstance(finding, dict):
+            validator = finding.get("validator")
+            detail = finding.get("detail")
+        if (
+            validator == "step_summary_integrity"
+            and isinstance(detail, dict)
+            and detail.get("issue") == "measurement_provenance_source_invalid"
+            and detail.get("reported_source") is None
+        ):
+            provenance_source_findings.append(finding)
+    provenance_repair_name = "measurement_provenance_summary_mapping_v1"
+    if (
+        len(provenance_source_findings) == 1
+        and previous_repair != provenance_repair_name
+    ):
+        repaired = _patch_measurement_provenance_summary_mapping(code)
+        if repaired != code:
+            return provenance_repair_name, repaired
 
     for finding in findings:
         validator = getattr(finding, "validator", None)
