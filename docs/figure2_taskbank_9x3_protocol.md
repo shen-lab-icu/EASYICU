@@ -103,6 +103,26 @@ tokens, and wall time.
 This sequence gives early feedback without consuming the final confirmation set
 or turning all 27 questions into architecture-tuning cases.
 
+## Development computation policy
+
+All current A-task debugging runs use a deterministic sample of **1,000 stays**
+created after the Agent locks, filters, materializes, and quality-controls the
+analysis cohort. Any longitudinal trajectory is filtered to the same stay
+identities. Sampling may not use exposure, outcome, cluster membership, or result
+direction, and the complete parent cohort remains immutable.
+
+These runs prove workflow capability and expose shared-engine defects; their
+scientific estimates are not paper authority. A sampled result cannot enter the
+frozen Figure 2 scorecard. After the engine/task coordinates are frozen, the
+paper-facing run omits development sampling and uses the full locked cohort.
+
+For H3 trajectory clustering, the sampled run must still pass the ordinary
+trajectory-alignment, stability, and degeneracy gates. The runtime must not
+silently change the Planner-owned features, window, clustering method, cluster
+count, cohort, or estimand because a sample is inconvenient. See
+`docs/research_agent_development_execution_policy.md` for the database and
+method-package rules shared by all tasks.
+
 ## Figure and reporting contract
 
 - The current exact 9 × 5 Figure 2 evaluator v2 remains immutable.
@@ -124,5 +144,8 @@ or turning all 27 questions into architecture-tuning cases.
   currently no valid claim of 18 held-out tasks.
 - The previously discussed Extension3 paths are not a machine-readable sealed
   taskbank and must not be reported as completed validation.
-- Architecture work remains frozen ahead of new experiments; this protocol does
-  not authorize case-specific shared-engine changes.
+- The pre-v1 responsibility architecture is frozen. A real E3 post-QC sample
+  selected 1,000 of 74,714 eligible stays; its resumed Table 1 step completed
+  with a 0.908-second Docker execution and no contract, statistical, clinical,
+  or usage error. This is development evidence only, not a paper result.
+- This protocol does not authorize case-specific shared-engine changes.
