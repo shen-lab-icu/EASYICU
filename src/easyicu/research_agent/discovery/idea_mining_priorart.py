@@ -69,7 +69,7 @@ _CONCEPT_SET_FAMILY_NOVELTY_TERM = {
 def _build_concept_set_prior_art_queries(
     idea: LiteratureIdeaCandidate,
 ) -> Dict[str, str]:
-    from ..analysis_types import normalize_analysis_family
+    from ..planning.analysis_types import normalize_analysis_family
 
     family = normalize_analysis_family(idea.analysis_family)
     concept_phrases = [

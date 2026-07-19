@@ -24,7 +24,7 @@ import re
 import textwrap
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Sequence
 
-from .analysis_types import infer_analysis_type
+from .planning.analysis_types import infer_analysis_type
 from .skills import build_dynamic_core_plan_steps
 from .schema import (
     AnalysisPlan,

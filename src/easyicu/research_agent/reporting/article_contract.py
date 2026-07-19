@@ -28,13 +28,13 @@ from ..runtime_artifacts import (
     current_successful_step_records,
 )
 from ..schema import AnalysisPlan, AnalysisStep, ResearchContext, ValidationFinding
-from ..study_design import (
+from ..planning.study_design import (
     StudyDesignBrief,
     _declaration_matches_term,
     _structured_plan_declarations,
     build_study_design_brief,
 )
-from ..study_design_playbook import (
+from ..planning.study_design_playbook import (
     DisplayModuleSpec,
     DisplayTier,
     StudyDesignFamily,

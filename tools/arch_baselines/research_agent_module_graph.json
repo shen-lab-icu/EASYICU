@@ -1,7 +1,17 @@
 {
   "cyclic_sccs": [
     [
-      "easyicu.research_agent.analysis_types",
+      "easyicu.research_agent.audits.manuscript_claims",
+      "easyicu.research_agent.execution.publication_figure",
+      "easyicu.research_agent.pipeline",
+      "easyicu.research_agent.pipeline_execute",
+      "easyicu.research_agent.pipeline_write"
+    ],
+    [
+      "easyicu.research_agent.audits.validators",
+      "easyicu.research_agent.replication.paper"
+    ],
+    [
       "easyicu.research_agent.authority.parent_artifact",
       "easyicu.research_agent.cohort_schema",
       "easyicu.research_agent.declared_product_contract",
@@ -14,6 +24,7 @@
       "easyicu.research_agent.ordered_stratified_contract",
       "easyicu.research_agent.pipeline_primary_effect",
       "easyicu.research_agent.plan_utils",
+      "easyicu.research_agent.planning.analysis_types",
       "easyicu.research_agent.publication_figures",
       "easyicu.research_agent.research_context_v2",
       "easyicu.research_agent.robustness_panel",
@@ -24,17 +35,6 @@
       "easyicu.research_agent.trajectory_contract",
       "easyicu.research_agent.trajectory_plan_contract",
       "easyicu.research_agent.visual_qa"
-    ],
-    [
-      "easyicu.research_agent.audits.manuscript_claims",
-      "easyicu.research_agent.execution.publication_figure",
-      "easyicu.research_agent.pipeline",
-      "easyicu.research_agent.pipeline_execute",
-      "easyicu.research_agent.pipeline_write"
-    ],
-    [
-      "easyicu.research_agent.audits.validators",
-      "easyicu.research_agent.replication.paper"
     ]
   ],
   "dynamic_literal_imports": [],
@@ -42,10 +42,6 @@
     [
       "easyicu.research_agent",
       "easyicu.research_agent.agents"
-    ],
-    [
-      "easyicu.research_agent",
-      "easyicu.research_agent.analysis_types"
     ],
     [
       "easyicu.research_agent",
@@ -197,6 +193,10 @@
     ],
     [
       "easyicu.research_agent",
+      "easyicu.research_agent.planning.analysis_types"
+    ],
+    [
+      "easyicu.research_agent",
       "easyicu.research_agent.prompts"
     ],
     [
@@ -301,10 +301,6 @@
     ],
     [
       "easyicu.research_agent.agents",
-      "easyicu.research_agent.analysis_types"
-    ],
-    [
-      "easyicu.research_agent.agents",
       "easyicu.research_agent.authority.provider_budget"
     ],
     [
@@ -342,6 +338,10 @@
     [
       "easyicu.research_agent.agents",
       "easyicu.research_agent.plan_utils"
+    ],
+    [
+      "easyicu.research_agent.agents",
+      "easyicu.research_agent.planning.analysis_types"
     ],
     [
       "easyicu.research_agent.agents",
@@ -389,7 +389,15 @@
     ],
     [
       "easyicu.research_agent.analysis_blueprint",
-      "easyicu.research_agent.figure_strategy"
+      "easyicu.research_agent.planning.figure_strategy"
+    ],
+    [
+      "easyicu.research_agent.analysis_blueprint",
+      "easyicu.research_agent.planning.study_design"
+    ],
+    [
+      "easyicu.research_agent.analysis_blueprint",
+      "easyicu.research_agent.planning.study_design_playbook"
     ],
     [
       "easyicu.research_agent.analysis_blueprint",
@@ -400,24 +408,12 @@
       "easyicu.research_agent.schema"
     ],
     [
-      "easyicu.research_agent.analysis_blueprint",
-      "easyicu.research_agent.study_design"
-    ],
-    [
-      "easyicu.research_agent.analysis_blueprint",
-      "easyicu.research_agent.study_design_playbook"
-    ],
-    [
       "easyicu.research_agent.analysis_method_suite",
-      "easyicu.research_agent.capability_registry"
-    ],
-    [
-      "easyicu.research_agent.analysis_method_suite",
-      "easyicu.research_agent.study_design_playbook"
+      "easyicu.research_agent.planning.analysis_method_suite"
     ],
     [
       "easyicu.research_agent.analysis_types",
-      "easyicu.research_agent.schema"
+      "easyicu.research_agent.planning.analysis_types"
     ],
     [
       "easyicu.research_agent.article_contract",
@@ -485,10 +481,6 @@
     ],
     [
       "easyicu.research_agent.audits.validators",
-      "easyicu.research_agent.analysis_method_suite"
-    ],
-    [
-      "easyicu.research_agent.audits.validators",
       "easyicu.research_agent.audits.outcome_semantics"
     ],
     [
@@ -506,6 +498,10 @@
     [
       "easyicu.research_agent.audits.validators",
       "easyicu.research_agent.ordered_stratified_contract"
+    ],
+    [
+      "easyicu.research_agent.audits.validators",
+      "easyicu.research_agent.planning.analysis_method_suite"
     ],
     [
       "easyicu.research_agent.audits.validators",
@@ -621,7 +617,7 @@
     ],
     [
       "easyicu.research_agent.capability_registry",
-      "easyicu.research_agent.study_design_playbook"
+      "easyicu.research_agent.planning.capability_registry"
     ],
     [
       "easyicu.research_agent.case_contexts",
@@ -661,15 +657,15 @@
     ],
     [
       "easyicu.research_agent.coder_context",
-      "easyicu.research_agent.analysis_types"
-    ],
-    [
-      "easyicu.research_agent.coder_context",
       "easyicu.research_agent.ordered_stratified_contract"
     ],
     [
       "easyicu.research_agent.coder_context",
       "easyicu.research_agent.plan_utils"
+    ],
+    [
+      "easyicu.research_agent.coder_context",
+      "easyicu.research_agent.planning.analysis_types"
     ],
     [
       "easyicu.research_agent.coder_context",
@@ -957,10 +953,6 @@
     ],
     [
       "easyicu.research_agent.discovery.idea_mining",
-      "easyicu.research_agent.analysis_types"
-    ],
-    [
-      "easyicu.research_agent.discovery.idea_mining",
       "easyicu.research_agent.concept_availability"
     ],
     [
@@ -1005,6 +997,10 @@
     ],
     [
       "easyicu.research_agent.discovery.idea_mining",
+      "easyicu.research_agent.planning.analysis_types"
+    ],
+    [
+      "easyicu.research_agent.discovery.idea_mining",
       "easyicu.research_agent.schema"
     ],
     [
@@ -1037,10 +1033,6 @@
     ],
     [
       "easyicu.research_agent.discovery.idea_mining_priorart",
-      "easyicu.research_agent.analysis_types"
-    ],
-    [
-      "easyicu.research_agent.discovery.idea_mining_priorart",
       "easyicu.research_agent.concept_availability"
     ],
     [
@@ -1054,6 +1046,10 @@
     [
       "easyicu.research_agent.discovery.idea_mining_priorart",
       "easyicu.research_agent.literature"
+    ],
+    [
+      "easyicu.research_agent.discovery.idea_mining_priorart",
+      "easyicu.research_agent.planning.analysis_types"
     ],
     [
       "easyicu.research_agent.discovery.idea_mining_pubmed",
@@ -1197,15 +1193,15 @@
     ],
     [
       "easyicu.research_agent.execution.figure_preparation",
+      "easyicu.research_agent.planning.study_design"
+    ],
+    [
+      "easyicu.research_agent.execution.figure_preparation",
       "easyicu.research_agent.publication_figures"
     ],
     [
       "easyicu.research_agent.execution.figure_preparation",
       "easyicu.research_agent.schema"
-    ],
-    [
-      "easyicu.research_agent.execution.figure_preparation",
-      "easyicu.research_agent.study_design"
     ],
     [
       "easyicu.research_agent.execution.publication_figure",
@@ -1305,6 +1301,10 @@
     ],
     [
       "easyicu.research_agent.figure_skill",
+      "easyicu.research_agent.planning.study_design"
+    ],
+    [
+      "easyicu.research_agent.figure_skill",
       "easyicu.research_agent.publication_figures"
     ],
     [
@@ -1316,24 +1316,8 @@
       "easyicu.research_agent.schema"
     ],
     [
-      "easyicu.research_agent.figure_skill",
-      "easyicu.research_agent.study_design"
-    ],
-    [
       "easyicu.research_agent.figure_strategy",
-      "easyicu.research_agent.figure_contracts"
-    ],
-    [
-      "easyicu.research_agent.figure_strategy",
-      "easyicu.research_agent.schema"
-    ],
-    [
-      "easyicu.research_agent.figure_strategy",
-      "easyicu.research_agent.study_design"
-    ],
-    [
-      "easyicu.research_agent.figure_strategy",
-      "easyicu.research_agent.study_design_playbook"
+      "easyicu.research_agent.planning.figure_strategy"
     ],
     [
       "easyicu.research_agent.figures",
@@ -1361,11 +1345,11 @@
     ],
     [
       "easyicu.research_agent.figures",
-      "easyicu.research_agent.schema"
+      "easyicu.research_agent.planning.study_design_playbook"
     ],
     [
       "easyicu.research_agent.figures",
-      "easyicu.research_agent.study_design_playbook"
+      "easyicu.research_agent.schema"
     ],
     [
       "easyicu.research_agent.figures.absolute_risk",
@@ -1661,15 +1645,15 @@
     ],
     [
       "easyicu.research_agent.llm",
-      "easyicu.research_agent.analysis_types"
-    ],
-    [
-      "easyicu.research_agent.llm",
       "easyicu.research_agent.authority.provider_budget"
     ],
     [
       "easyicu.research_agent.llm",
       "easyicu.research_agent.llm_mocks"
+    ],
+    [
+      "easyicu.research_agent.llm",
+      "easyicu.research_agent.planning.analysis_types"
     ],
     [
       "easyicu.research_agent.llm",
@@ -1681,11 +1665,11 @@
     ],
     [
       "easyicu.research_agent.llm_mocks",
-      "easyicu.research_agent.analysis_types"
+      "easyicu.research_agent.llm"
     ],
     [
       "easyicu.research_agent.llm_mocks",
-      "easyicu.research_agent.llm"
+      "easyicu.research_agent.planning.analysis_types"
     ],
     [
       "easyicu.research_agent.llm_mocks",
@@ -1773,11 +1757,11 @@
     ],
     [
       "easyicu.research_agent.methodological_rigor",
-      "easyicu.research_agent.schema"
+      "easyicu.research_agent.planning.study_design"
     ],
     [
       "easyicu.research_agent.methodological_rigor",
-      "easyicu.research_agent.study_design"
+      "easyicu.research_agent.schema"
     ],
     [
       "easyicu.research_agent.methods.multiple_testing",
@@ -1889,10 +1873,6 @@
     ],
     [
       "easyicu.research_agent.pipeline",
-      "easyicu.research_agent.figure_strategy"
-    ],
-    [
-      "easyicu.research_agent.pipeline",
       "easyicu.research_agent.figures.absolute_risk"
     ],
     [
@@ -1982,6 +1962,14 @@
     [
       "easyicu.research_agent.pipeline",
       "easyicu.research_agent.plan_utils"
+    ],
+    [
+      "easyicu.research_agent.pipeline",
+      "easyicu.research_agent.planning.figure_strategy"
+    ],
+    [
+      "easyicu.research_agent.pipeline",
+      "easyicu.research_agent.planning.study_design"
     ],
     [
       "easyicu.research_agent.pipeline",
@@ -2086,10 +2074,6 @@
     [
       "easyicu.research_agent.pipeline",
       "easyicu.research_agent.structured_retry"
-    ],
-    [
-      "easyicu.research_agent.pipeline",
-      "easyicu.research_agent.study_design"
     ],
     [
       "easyicu.research_agent.pipeline",
@@ -2489,15 +2473,7 @@
     ],
     [
       "easyicu.research_agent.pipeline_report",
-      "easyicu.research_agent.capability_registry"
-    ],
-    [
-      "easyicu.research_agent.pipeline_report",
       "easyicu.research_agent.evidence"
-    ],
-    [
-      "easyicu.research_agent.pipeline_report",
-      "easyicu.research_agent.figure_strategy"
     ],
     [
       "easyicu.research_agent.pipeline_report",
@@ -2506,6 +2482,18 @@
     [
       "easyicu.research_agent.pipeline_report",
       "easyicu.research_agent.plan_utils"
+    ],
+    [
+      "easyicu.research_agent.pipeline_report",
+      "easyicu.research_agent.planning.capability_registry"
+    ],
+    [
+      "easyicu.research_agent.pipeline_report",
+      "easyicu.research_agent.planning.figure_strategy"
+    ],
+    [
+      "easyicu.research_agent.pipeline_report",
+      "easyicu.research_agent.planning.study_design"
     ],
     [
       "easyicu.research_agent.pipeline_report",
@@ -2530,10 +2518,6 @@
     [
       "easyicu.research_agent.pipeline_report",
       "easyicu.research_agent.schema"
-    ],
-    [
-      "easyicu.research_agent.pipeline_report",
-      "easyicu.research_agent.study_design"
     ],
     [
       "easyicu.research_agent.pipeline_resume",
@@ -2698,6 +2682,50 @@
     [
       "easyicu.research_agent.plan_utils",
       "easyicu.research_agent.trajectory_plan_contract"
+    ],
+    [
+      "easyicu.research_agent.planning.analysis_method_suite",
+      "easyicu.research_agent.planning.capability_registry"
+    ],
+    [
+      "easyicu.research_agent.planning.analysis_method_suite",
+      "easyicu.research_agent.planning.study_design_playbook"
+    ],
+    [
+      "easyicu.research_agent.planning.analysis_types",
+      "easyicu.research_agent.schema"
+    ],
+    [
+      "easyicu.research_agent.planning.capability_registry",
+      "easyicu.research_agent.planning.study_design_playbook"
+    ],
+    [
+      "easyicu.research_agent.planning.figure_strategy",
+      "easyicu.research_agent.figure_contracts"
+    ],
+    [
+      "easyicu.research_agent.planning.figure_strategy",
+      "easyicu.research_agent.planning.study_design"
+    ],
+    [
+      "easyicu.research_agent.planning.figure_strategy",
+      "easyicu.research_agent.planning.study_design_playbook"
+    ],
+    [
+      "easyicu.research_agent.planning.figure_strategy",
+      "easyicu.research_agent.schema"
+    ],
+    [
+      "easyicu.research_agent.planning.study_design",
+      "easyicu.research_agent.planning.analysis_types"
+    ],
+    [
+      "easyicu.research_agent.planning.study_design",
+      "easyicu.research_agent.planning.study_design_playbook"
+    ],
+    [
+      "easyicu.research_agent.planning.study_design",
+      "easyicu.research_agent.schema"
     ],
     [
       "easyicu.research_agent.projection",
@@ -2869,19 +2897,19 @@
     ],
     [
       "easyicu.research_agent.reporting.article_contract",
+      "easyicu.research_agent.planning.study_design"
+    ],
+    [
+      "easyicu.research_agent.reporting.article_contract",
+      "easyicu.research_agent.planning.study_design_playbook"
+    ],
+    [
+      "easyicu.research_agent.reporting.article_contract",
       "easyicu.research_agent.runtime_artifacts"
     ],
     [
       "easyicu.research_agent.reporting.article_contract",
       "easyicu.research_agent.schema"
-    ],
-    [
-      "easyicu.research_agent.reporting.article_contract",
-      "easyicu.research_agent.study_design"
-    ],
-    [
-      "easyicu.research_agent.reporting.article_contract",
-      "easyicu.research_agent.study_design_playbook"
     ],
     [
       "easyicu.research_agent.reporting.bibtex",
@@ -2897,15 +2925,15 @@
     ],
     [
       "easyicu.research_agent.reporting.display_suite",
+      "easyicu.research_agent.planning.study_design"
+    ],
+    [
+      "easyicu.research_agent.reporting.display_suite",
       "easyicu.research_agent.runtime_artifacts"
     ],
     [
       "easyicu.research_agent.reporting.display_suite",
       "easyicu.research_agent.schema"
-    ],
-    [
-      "easyicu.research_agent.reporting.display_suite",
-      "easyicu.research_agent.study_design"
     ],
     [
       "easyicu.research_agent.reporting.latex",
@@ -3069,7 +3097,7 @@
     ],
     [
       "easyicu.research_agent.skills",
-      "easyicu.research_agent.analysis_types"
+      "easyicu.research_agent.planning.analysis_types"
     ],
     [
       "easyicu.research_agent.skills",
@@ -3145,15 +3173,11 @@
     ],
     [
       "easyicu.research_agent.study_design",
-      "easyicu.research_agent.analysis_types"
+      "easyicu.research_agent.planning.study_design"
     ],
     [
-      "easyicu.research_agent.study_design",
-      "easyicu.research_agent.schema"
-    ],
-    [
-      "easyicu.research_agent.study_design",
-      "easyicu.research_agent.study_design_playbook"
+      "easyicu.research_agent.study_design_playbook",
+      "easyicu.research_agent.planning.study_design_playbook"
     ],
     [
       "easyicu.research_agent.summary_repair",
@@ -3237,6 +3261,16 @@
     ]
   ],
   "legacy_surfaces": {
+    "easyicu.research_agent.analysis_method_suite": {
+      "exists": true,
+      "literal_all": null,
+      "relative_path": "analysis_method_suite.py"
+    },
+    "easyicu.research_agent.analysis_types": {
+      "exists": true,
+      "literal_all": null,
+      "relative_path": "analysis_types.py"
+    },
     "easyicu.research_agent.article_contract": {
       "exists": true,
       "literal_all": null,
@@ -3246,6 +3280,11 @@
       "exists": true,
       "literal_all": null,
       "relative_path": "bibtex.py"
+    },
+    "easyicu.research_agent.capability_registry": {
+      "exists": true,
+      "literal_all": null,
+      "relative_path": "capability_registry.py"
     },
     "easyicu.research_agent.code_patch": {
       "exists": true,
@@ -3404,6 +3443,11 @@
       ],
       "relative_path": "figure_contract_preparation.py"
     },
+    "easyicu.research_agent.figure_strategy": {
+      "exists": true,
+      "literal_all": null,
+      "relative_path": "figure_strategy.py"
+    },
     "easyicu.research_agent.gate_evaluator": {
       "exists": true,
       "literal_all": null,
@@ -3526,6 +3570,16 @@
       "literal_all": null,
       "relative_path": "reviewer.py"
     },
+    "easyicu.research_agent.study_design": {
+      "exists": true,
+      "literal_all": null,
+      "relative_path": "study_design.py"
+    },
+    "easyicu.research_agent.study_design_playbook": {
+      "exists": true,
+      "literal_all": null,
+      "relative_path": "study_design_playbook.py"
+    },
     "easyicu.research_agent.summary_repair": {
       "exists": true,
       "literal_all": null,
@@ -3540,10 +3594,10 @@
   "metrics": {
     "cyclic_module_count": 30,
     "cyclic_scc_count": 3,
-    "edge_count": 799,
+    "edge_count": 805,
     "largest_scc_size": 23,
-    "module_count": 271,
-    "package_count": 16,
+    "module_count": 278,
+    "package_count": 17,
     "top_level_module_count": 161
   },
   "modules": {
@@ -3747,6 +3801,13 @@
     "easyicu.research_agent.pipeline_write": "pipeline_write.py",
     "easyicu.research_agent.pipeline_writer_aux": "pipeline_writer_aux.py",
     "easyicu.research_agent.plan_utils": "plan_utils.py",
+    "easyicu.research_agent.planning": "planning/__init__.py",
+    "easyicu.research_agent.planning.analysis_method_suite": "planning/analysis_method_suite.py",
+    "easyicu.research_agent.planning.analysis_types": "planning/analysis_types.py",
+    "easyicu.research_agent.planning.capability_registry": "planning/capability_registry.py",
+    "easyicu.research_agent.planning.figure_strategy": "planning/figure_strategy.py",
+    "easyicu.research_agent.planning.study_design": "planning/study_design.py",
+    "easyicu.research_agent.planning.study_design_playbook": "planning/study_design_playbook.py",
     "easyicu.research_agent.projection": "projection.py",
     "easyicu.research_agent.prompts": "prompts.py",
     "easyicu.research_agent.provenance": "provenance.py",
@@ -3833,12 +3894,13 @@
     "easyicu.research_agent.gates",
     "easyicu.research_agent.intake",
     "easyicu.research_agent.methods",
+    "easyicu.research_agent.planning",
     "easyicu.research_agent.providers",
     "easyicu.research_agent.repairs",
     "easyicu.research_agent.replication",
     "easyicu.research_agent.reporting"
   ],
   "schema_version": 2,
-  "tool_sha256": "11f7b0f9508987d8b47bae8f44bed52dd0d924aab2b6986a9ef49f26161b90be",
+  "tool_sha256": "e9ccd2dfc6f190bb9d81eaf08e7c38b1b346fbea9807cd35d1e21c90a10b3a4d",
   "tool_version": "1.1.0"
 }

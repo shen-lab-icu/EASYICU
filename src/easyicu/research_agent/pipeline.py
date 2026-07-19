@@ -139,7 +139,7 @@ from .reporting.article_contract import (
     build_article_analysis_contract,
     validate_plan_against_article_contract,
 )
-from .figure_strategy import build_article_figure_strategy
+from .planning.figure_strategy import build_article_figure_strategy
 from .pipeline_config import PipelineConfig
 from .contracts import _ExecutePhaseResult, _PlanPhaseResult, _WritePhaseResult
 from .concept_dict_audit import (
@@ -364,7 +364,7 @@ from .schema import (
     PLANNED_MODEL_REQUIREMENTS_STEP_METHOD,
     PlannedModelRequirement,
 )
-from .study_design import (
+from .planning.study_design import (
     build_study_design_brief,
     validate_plan_against_study_design_brief,
 )

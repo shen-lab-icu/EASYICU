@@ -37,7 +37,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 
-from .analysis_types import (
+from .planning.analysis_types import (
     canonical_analysis_family,
     infer_analysis_type,
     locked_analysis_type_guide,

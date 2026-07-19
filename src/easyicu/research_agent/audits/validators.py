@@ -36,7 +36,7 @@ from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Set, 
 
 import pandas as pd
 
-from ..analysis_method_suite import figure_product_source_obligations
+from ..planning.analysis_method_suite import figure_product_source_obligations
 from ..declared_product_contract import (
     effect_adjustment_family,
     effect_bearing_product,

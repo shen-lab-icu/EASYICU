@@ -33,7 +33,7 @@ from typing import Callable, Dict, List, Optional, Sequence
 
 import pandas as pd
 
-from .analysis_types import get_analysis_type, infer_analysis_type
+from .planning.analysis_types import get_analysis_type, infer_analysis_type
 from .schema import (
     AnalysisPlan,
     AnalysisStep,

@@ -80,6 +80,7 @@ mechanically moving every top-level file:
 | `repairs/` | typed repair reasons, exact patch/full-rewrite transport, deterministic source repair and summary salvage | scientific redesign, silent gate relaxation or case-specific repair rules |
 | `discovery/` | candidate-hypothesis ranking, feasibility and discovery handoff | manuscript authority or autonomous scientific claims |
 | `reporting/` | manuscript binding, article/display contracts, review artifacts and rendering helpers | unverified numeric claims or a second evidence authority |
+| `planning/` | case-neutral analysis families, study-design playbooks, capability/method registries and article figure strategy | case-specific benchmark instructions or execution/evidence mutation |
 
 `pipeline_execute.py` remains the orchestration caller. PlanAuthority's pure
 candidate projection and TypedBindingResolver are now canonical under
