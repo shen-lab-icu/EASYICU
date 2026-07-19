@@ -1433,6 +1433,8 @@ class ResearchAgentPipeline:
         hypothesis_generator_top_k: int = 5,
         enable_pdf_render: bool = False,
         max_concurrent_steps: int = 1,
+        development_sample_size: Optional[int] = None,
+        development_sample_seed: int = 20260719,
         enable_probe_step: bool = True,
         enable_replanning: bool = True,
         max_total_steps: int = 12,
@@ -1627,6 +1629,25 @@ class ResearchAgentPipeline:
         # in. EvidenceStore guards its mutators with an RLock so a
         # higher value is safe.
         self._max_concurrent_steps = max(1, int(max_concurrent_steps))
+        self._development_sample_size = (
+            int(development_sample_size)
+            if development_sample_size is not None
+            else None
+        )
+        if (
+            self._development_sample_size is not None
+            and self._development_sample_size <= 0
+        ):
+            raise ValueError("development_sample_size must be positive")
+        self._development_sample_seed = int(development_sample_seed)
+        if (
+            self._development_sample_size is not None
+            and submission_profile_name is not None
+        ):
+            raise ValueError(
+                "development cohort sampling is non-paper authority and cannot "
+                "be combined with a submission profile"
+            )
         self._enable_probe_step = bool(enable_probe_step)
         self._enable_replanning = bool(enable_replanning)
         # 0 / None means "no cap". Anything positive enforces the cap in
@@ -1702,6 +1723,8 @@ class ResearchAgentPipeline:
         self._runner_network = runner_network
         self._runner_factory = runner_factory
         self._runner_kwargs = dict(runner_kwargs or {})
+        self._validated_runtime_capabilities: Optional[Tuple[str, ...]] = None
+        self._validated_runtime_bundle: Optional[Dict[str, object]] = None
         self._memory = RunMemory(self.workdir) if enable_memory else None
 
     def _build_runner(
@@ -1820,37 +1843,109 @@ class ResearchAgentPipeline:
             # A user-supplied factory (OpenHands, firecracker, ...) also needs
             # the run's outcome column so deterministic repairs resolve it from
             # OUTCOME_COL rather than guessing a column name.
-            return self._runner_factory(
+            runner = self._runner_factory(
                 workdir=run_dir,
                 cohort_parquet=cohort_path,
                 timeout_seconds=effective_timeout_seconds,
                 extra_env=extra_env,
                 **runner_kwargs,
             )
-        runner_kind = self._runner_kind
-        if runner_kind == "auto":
-            runner_kind = select_safe_runner_kind(
-                image=self._runner_image,
-                docker_executable=runner_kwargs.get("docker_executable"),
+        else:
+            runner_kind = self._runner_kind
+            if runner_kind == "auto":
+                runner_kind = select_safe_runner_kind(
+                    image=self._runner_image,
+                    docker_executable=runner_kwargs.get("docker_executable"),
+                )
+            if runner_kind == "docker":
+                runner = DockerRunner(
+                    workdir=run_dir,
+                    cohort_parquet=cohort_path,
+                    timeout_seconds=effective_timeout_seconds,
+                    image=self._runner_image,
+                    network=self._runner_network,
+                    extra_env=extra_env,
+                    **runner_kwargs,
+                )
+            else:
+                runner = CodeRunner(
+                    workdir=run_dir,
+                    cohort_parquet=cohort_path,
+                    timeout_seconds=effective_timeout_seconds,
+                    python_executable=self._python_executable,
+                    extra_env=extra_env,
+                    **runner_kwargs,
+                )
+        # ``_build_runner`` intentionally clears any previous ContextVar at
+        # entry.  After the pre-plan probe, every later runner rebuild (for
+        # example after cohort materialization) must restore that exact
+        # verified snapshot before the Coder prompt is rendered.  Otherwise a
+        # host CodeRunner would silently fall back to probing the Codex process
+        # rather than the configured execution interpreter.
+        if self._validated_runtime_bundle is not None:
+            adopt_runtime = getattr(
+                runner, "adopt_validated_runtime_bundle", None
             )
-        if runner_kind == "docker":
-            return DockerRunner(
-                workdir=run_dir,
-                cohort_parquet=cohort_path,
-                timeout_seconds=effective_timeout_seconds,
-                image=self._runner_image,
-                network=self._runner_network,
-                extra_env=extra_env,
-                **runner_kwargs,
-            )
-        return CodeRunner(
-            workdir=run_dir,
-            cohort_parquet=cohort_path,
-            timeout_seconds=effective_timeout_seconds,
-            python_executable=self._python_executable,
-            extra_env=extra_env,
-            **runner_kwargs,
+            if not callable(adopt_runtime):
+                raise RuntimeError(
+                    "Execution runner changed after runtime preflight and cannot "
+                    "adopt the verified environment receipt."
+                )
+            adopt_runtime(self._validated_runtime_bundle)
+        if self._validated_runtime_capabilities is not None:
+            frozen_snapshot = self._validated_runtime_capabilities
+            set_runtime_capability_snapshot_provider(lambda: frozen_snapshot)
+        return runner
+
+    def _preflight_execution_runtime(
+        self,
+        *,
+        run_dir: Path,
+        cohort_path: Path,
+        target_outcome: Optional[str],
+    ) -> Tuple[str, ...]:
+        """Validate the real execution environment before Planner spend.
+
+        A stale Docker tag or incomplete custom backend used to be discovered
+        only after planning. Built-in and custom runners now expose one small
+        capability contract so that failure happens before the first planning
+        provider call and the Coder sees the exact sandbox allow-list.
+        """
+
+        runner = self._build_runner(
+            run_dir=run_dir,
+            cohort_path=cohort_path,
+            target_outcome=target_outcome,
+            universe_path=cohort_path,
         )
+        validate = getattr(runner, "validate_runtime_capabilities", None)
+        if not callable(validate):
+            raise RuntimeError(
+                "Custom research-agent runners must implement "
+                "validate_runtime_capabilities() and return the import names "
+                "available in their immutable execution environment."
+            )
+        raw_snapshot = validate()
+        if isinstance(raw_snapshot, (str, bytes)):
+            raise RuntimeError(
+                "Runner validate_runtime_capabilities() must return a collection "
+                "of import names, not a string."
+            )
+        snapshot = tuple(
+            sorted({str(name).strip() for name in raw_snapshot if str(name).strip()})
+        )
+        if not snapshot:
+            raise RuntimeError(
+                "Runner capability validation returned an empty package snapshot."
+            )
+        frozen_snapshot = tuple(snapshot)
+        self._validated_runtime_capabilities = frozen_snapshot
+        export_runtime = getattr(runner, "export_validated_runtime_bundle", None)
+        self._validated_runtime_bundle = (
+            dict(export_runtime()) if callable(export_runtime) else None
+        )
+        set_runtime_capability_snapshot_provider(lambda: frozen_snapshot)
+        return frozen_snapshot
 
     def _run_plan_phase(
         self,
@@ -3683,6 +3778,18 @@ class ResearchAgentPipeline:
             experiment_spec=spec_obj,
             source_files=source_files,
             disable_icu_context=self._disable_icu_context,
+            development_sampling=(
+                {
+                    "schema": "easyicu.development_execution_sample/1",
+                    "paper_authority": False,
+                    "stage": "after_locked_cohort_materialization_and_qc",
+                    "algorithm": "sha256_identity_rank_v1",
+                    "target_rows": self._development_sample_size,
+                    "seed": self._development_sample_seed,
+                }
+                if self._development_sample_size is not None
+                else None
+            ),
             materialized_cohort_authority_ref=(
                 expected_cohort_authority.to_dict()
                 if expected_cohort_authority is not None
@@ -3884,6 +3991,18 @@ class ResearchAgentPipeline:
                     run_id=cached.run_id,
                 )
                 return cached
+
+        runtime_capabilities = self._preflight_execution_runtime(
+            run_dir=run_dir,
+            cohort_path=cohort_path,
+            target_outcome=target_outcome,
+        )
+        _emit_progress(
+            "runtime",
+            "Execution runtime validated before planning.",
+            run_id=run_id,
+            method_capabilities=list(runtime_capabilities),
+        )
 
         def _plan_invoker():
             return self._run_plan_phase(

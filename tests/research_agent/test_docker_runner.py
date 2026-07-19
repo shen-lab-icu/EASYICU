@@ -21,6 +21,7 @@ mock ``subprocess.run`` and ``shutil.which`` to verify:
 from __future__ import annotations
 
 import json
+import inspect
 import os
 import shlex
 import shutil
@@ -1197,6 +1198,201 @@ def test_pipeline_unknown_runner_kind_raises(ra, tmp_path: Path):
         ra.ResearchAgentPipeline(
             workdir=tmp_path / "ra",
             runner_kind="firecracker",
+        )
+
+
+def test_code_runner_validates_baseline_capabilities(ra, tmp_path: Path):
+    cohort = _make_cohort(tmp_path)
+    runner = ra.CodeRunner(
+        workdir=tmp_path / "run",
+        cohort_parquet=cohort,
+        allow_unsafe_host_fallback=True,
+    )
+
+    snapshot = runner.validate_runtime_capabilities()
+
+    assert {"numpy", "pandas", "sklearn", "statsmodels"} <= set(snapshot)
+
+
+def test_docker_runner_public_capability_preflight_uses_verified_image(
+    ra,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    cohort = _make_cohort(tmp_path)
+    _force_docker_present(monkeypatch)
+    _install_fake_subprocess(monkeypatch)
+    runner = ra.DockerRunner(workdir=tmp_path / "run", cohort_parquet=cohort)
+
+    snapshot = runner.validate_runtime_capabilities()
+
+    assert {"numpy", "pandas", "sklearn", "statsmodels"} <= set(snapshot)
+
+
+def test_pipeline_preflight_requires_custom_runner_capability_contract(
+    ra,
+    tmp_path: Path,
+):
+    cohort = _make_cohort(tmp_path)
+    pipe = ra.ResearchAgentPipeline(
+        workdir=tmp_path / "ra",
+        runner_factory=lambda **_kwargs: object(),
+    )
+
+    with pytest.raises(RuntimeError, match="validate_runtime_capabilities"):
+        pipe._preflight_execution_runtime(
+            run_dir=tmp_path / "ra" / "run",
+            cohort_path=cohort,
+            target_outcome="death",
+        )
+
+
+def test_pipeline_runtime_preflight_precedes_plan_invocation(ra):
+    pipeline_source = inspect.getsource(ra.ResearchAgentPipeline.run)
+
+    assert pipeline_source.index("self._preflight_execution_runtime(") < (
+        pipeline_source.index("def _plan_invoker()")
+    )
+
+
+def test_runtime_preflight_failure_spends_zero_llm_calls(
+    ra,
+    synthetic_cohort,
+    tmp_path: Path,
+):
+    class CountingLLM(ra.MockLLMClient):
+        def __init__(self) -> None:
+            super().__init__()
+            self.calls = 0
+
+        def complete(self, messages, **kwargs):
+            self.calls += 1
+            return super().complete(messages, **kwargs)
+
+    class MissingRuntime:
+        def validate_runtime_capabilities(self):
+            raise RuntimeError("required runtime package is missing")
+
+    llm = CountingLLM()
+    pipe = ra.ResearchAgentPipeline(
+        workdir=tmp_path / "ra",
+        llm=llm,
+        runner_factory=lambda **_kwargs: MissingRuntime(),
+    )
+
+    with pytest.raises(RuntimeError, match="required runtime package is missing"):
+        pipe.run(
+            question="Is exposure associated with mortality?",
+            cohort=synthetic_cohort,
+            cohort_name="runtime_preflight",
+            database="synthetic",
+            target_outcome="death",
+        )
+
+    assert llm.calls == 0
+
+
+def test_runner_rebuild_restores_preflighted_capability_snapshot(
+    ra,
+    tmp_path: Path,
+):
+    from easyicu.research_agent.execution.method_capabilities import (
+        runtime_capability_snapshot,
+    )
+
+    cohort = _make_cohort(tmp_path)
+    pipe = ra.ResearchAgentPipeline(
+        workdir=tmp_path / "ra",
+        runner_kind="subprocess",
+    )
+    expected = pipe._preflight_execution_runtime(
+        run_dir=tmp_path / "ra" / "preflight",
+        cohort_path=cohort,
+        target_outcome="death",
+    )
+
+    pipe._build_runner(
+        run_dir=tmp_path / "ra" / "execution",
+        cohort_path=cohort,
+        target_outcome="death",
+    )
+
+    assert runtime_capability_snapshot() == frozenset(expected)
+
+
+def test_docker_runner_rebuild_reuses_preflight_receipt_without_second_freeze(
+    ra,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    cohort = _make_cohort(tmp_path)
+    captured: List[List[str]] = []
+    _force_docker_present(monkeypatch)
+    _install_fake_subprocess(monkeypatch, captured=captured)
+    pipe = ra.ResearchAgentPipeline(
+        workdir=tmp_path / "ra",
+        runner_kind="docker",
+    )
+
+    pipe._preflight_execution_runtime(
+        run_dir=tmp_path / "ra" / "preflight",
+        cohort_path=cohort,
+        target_outcome="death",
+    )
+    rebuilt = pipe._build_runner(
+        run_dir=tmp_path / "ra" / "execution",
+        cohort_path=cohort,
+        target_outcome="death",
+    )
+    rebuilt.runtime_capability_report()
+
+    freeze_calls = [cmd for cmd in captured if "pip" in cmd and "freeze" in cmd]
+    assert len(freeze_calls) == 1
+
+
+def test_docker_runner_rebuild_rejects_image_change_after_preflight(
+    ra,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    cohort = _make_cohort(tmp_path)
+    _force_docker_present(monkeypatch)
+    image_id = ["sha256:" + "a" * 64]
+
+    def fake_run(cmd, *args, **kwargs):
+        if len(cmd) >= 3 and cmd[1:3] == ["image", "inspect"]:
+            return _FakeProc(
+                stdout=json.dumps({"Id": image_id[0], "RepoDigests": []})
+            )
+        if "pip" in cmd and "freeze" in cmd:
+            return _FakeProc(
+                stdout=(
+                    "numpy==2.0.0\npandas==2.2.0\nscipy==1.14.0\n"
+                    "matplotlib==3.9.0\nstatsmodels==0.14.0\n"
+                    "scikit-learn==1.5.0\npyarrow==23.0.0\n"
+                )
+            )
+        return _FakeProc(stdout="ok\n")
+
+    import easyicu.research_agent.execution.runner as runner_mod
+
+    monkeypatch.setattr(runner_mod.subprocess, "run", fake_run)
+    pipe = ra.ResearchAgentPipeline(
+        workdir=tmp_path / "ra",
+        runner_kind="docker",
+    )
+    pipe._preflight_execution_runtime(
+        run_dir=tmp_path / "ra" / "preflight",
+        cohort_path=cohort,
+        target_outcome="death",
+    )
+    image_id[0] = "sha256:" + "c" * 64
+
+    with pytest.raises(RuntimeError, match="changed after preflight"):
+        pipe._build_runner(
+            run_dir=tmp_path / "ra" / "execution",
+            cohort_path=cohort,
+            target_outcome="death",
         )
 
 

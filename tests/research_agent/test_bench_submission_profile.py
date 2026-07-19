@@ -103,6 +103,36 @@ def test_benchmark_options_record_runner_kind() -> None:
     assert "runner_kind" not in CANONICAL_PROFILE.as_pipeline_options()
 
 
+def test_benchmark_options_enable_post_qc_development_sample_explicitly() -> None:
+    full_data = _benchmark_pipeline_options(
+        max_total_steps=None,
+        disable_replanning=False,
+        max_code_repair_attempts=None,
+    )
+    assert "development_sample_size" not in full_data
+
+    development = _benchmark_pipeline_options(
+        max_total_steps=None,
+        disable_replanning=False,
+        max_code_repair_attempts=None,
+        development_sample_size=1000,
+        development_sample_seed=17,
+    )
+    assert development["development_sample_size"] == 1000
+    assert development["development_sample_seed"] == 17
+
+
+def test_submission_profile_rejects_development_sample() -> None:
+    with pytest.raises(SystemExit, match="non-paper authority"):
+        _benchmark_pipeline_options(
+            max_total_steps=None,
+            disable_replanning=False,
+            max_code_repair_attempts=None,
+            submission_profile=CANONICAL_PROFILE,
+            development_sample_size=1000,
+        )
+
+
 def test_benchmark_options_keep_execution_timeouts_independent() -> None:
     options = _benchmark_pipeline_options(
         max_total_steps=None,

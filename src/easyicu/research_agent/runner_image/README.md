@@ -17,7 +17,20 @@ From the repository root:
 
 ```bash
 docker build \
-    -t easyicu-research-agent:latest \
+    -t easyicu-research-agent:1.0.0 \
+    -f src/easyicu/research_agent/runner_image/Dockerfile \
+    .
+```
+
+The public default downloads from official PyPI. On a slow route, select a
+trusted mirror at build time without changing the locked package set:
+
+```bash
+docker build \
+    --build-arg PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple \
+    --build-arg DEBIAN_MIRROR=https://mirrors.tuna.tsinghua.edu.cn/debian \
+    --build-arg DEBIAN_SECURITY_MIRROR=https://mirrors.tuna.tsinghua.edu.cn/debian-security \
+    -t easyicu-research-agent:1.0.0 \
     -f src/easyicu/research_agent/runner_image/Dockerfile \
     .
 ```
@@ -34,20 +47,36 @@ pipe = ResearchAgentPipeline(
 )
 ```
 
+Validate the exact image before starting a run:
+
+```bash
+python tools/check_agent_runtime.py \
+    --image easyicu-research-agent:1.0.0
+```
+
 You can also set the `EASYICU_RUNNER_IMAGE` environment variable to
 override the default tag without touching code.
+
+Before a Planner call, EasyICU verifies the selected image's immutable id and
+baseline package set. A stale or incomplete image therefore fails without
+spending an LLM call.
 
 ## What's installed
 
 The image pins:
 
 * Python 3.11-slim
-* numpy, pandas, pyarrow
-* scipy, statsmodels (for the T1.6 logistic-regression step)
-* matplotlib (set to the `Agg` backend, no display required)
+The direct scientific stack is pinned in `requirements.lock`. It includes the
+baseline numpy/pandas/pyarrow/scipy/statsmodels/scikit-learn/matplotlib stack and
+the curated optional method packages declared in
+`contracts/method_packages.py`. DockerRunner records the fully resolved
+transitive `pip freeze` and immutable image id for every run.
 
-If your pipeline emits scripts that need anything else, fork the
-Dockerfile and rebuild.
+If a new method needs another package, add it to the host-owned curated package
+registry and the lock file, build a new versioned image tag, run the capability
+check, and select that image with `EASYICU_RUNNER_IMAGE`. Generated code cannot
+install packages at analysis time; an unavailable package must use its declared
+fallback or fail closed.
 
 ## Determinism switches
 

@@ -155,6 +155,12 @@ class PipelineConfig:
 
     # --- execution shape -------------------------------------------------
     max_concurrent_steps: int = 1
+    # Non-paper development acceleration. The full cohort is used for context,
+    # planning, locked cohort selection, and QC; only then is the selected
+    # analysis cohort deterministically sampled for execution. ``None`` keeps
+    # the full cohort. Submission profiles must never enable this option.
+    development_sample_size: Optional[int] = None
+    development_sample_seed: int = 20260719
     enable_probe_step: bool = True
     enable_replanning: bool = True
     # Hard cap on plan size after any replanner revision. The replanner

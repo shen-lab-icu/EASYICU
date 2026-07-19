@@ -2,7 +2,7 @@
 #
 # Build from the repository root:
 #
-#     docker build -t easyicu-research-agent:latest \
+#     docker build -t easyicu-research-agent:1.0.0 \
 #         -f src/easyicu/research_agent/runner_image/Dockerfile .
 #
 # Then point the pipeline at it:
@@ -10,7 +10,7 @@
 #     pipe = ResearchAgentPipeline(
 #         workdir="./research_output",
 #         runner_kind="docker",
-#         runner_image="easyicu-research-agent:latest",
+#         runner_image="easyicu-research-agent:1.0.0",
 #     )
 #
 # The container is invoked with `--network none` by default, so the
@@ -27,6 +27,13 @@
 
 FROM python:3.11-slim
 
+# Official PyPI remains the reproducible public default. Builders on a slow
+# route may override it without changing the image contract, for example:
+#   --build-arg PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
+ARG PIP_INDEX_URL=https://pypi.org/simple
+ARG DEBIAN_MIRROR=http://deb.debian.org/debian
+ARG DEBIAN_SECURITY_MIRROR=http://deb.debian.org/debian-security
+
 LABEL org.opencontainers.image.title="easyicu-research-agent runner"
 LABEL org.opencontainers.image.description="Sandbox image for the EasyICU research-agent code runner (T3.1)."
 LABEL org.opencontainers.image.source="https://github.com/your-org/EASYICU"
@@ -38,33 +45,22 @@ ENV PYTHONUNBUFFERED=1 \
     MPLBACKEND=Agg
 
 # Minimal native deps for pyarrow / scipy wheels.
-RUN apt-get update \
+RUN sed -i \
+        -e "s|http://deb.debian.org/debian-security|${DEBIAN_SECURITY_MIRROR}|g" \
+        -e "s|http://deb.debian.org/debian|${DEBIAN_MIRROR}|g" \
+        /etc/apt/sources.list.d/debian.sources \
+    && apt-get update \
     && apt-get install -y --no-install-recommends \
         libstdc++6 \
         libgomp1 \
     && rm -rf /var/lib/apt/lists/*
 
-# Install the complete package set declared by contracts/method_packages.py.
-# The image is network-disabled at execution time, so a package advertised to
-# the coder must already be importable here. Keep this list aligned with the
-# project core dependencies plus the ``methods`` extra.
-RUN pip install --no-cache-dir \
-        "numpy>=1.26,<3" \
-        "pandas>=2.0,<3" \
-        "pyarrow>=23,<24" \
-        "scipy>=1.11,<2" \
-        "statsmodels>=0.14,<1" \
-        "matplotlib>=3.7,<4" \
-        "seaborn>=0.12,<1" \
-        "scikit-learn>=1.3,<2" \
-        "lifelines>=0.27,<1" \
-        "shap>=0.44,<1" \
-        "xgboost>=2.0,<4" \
-        "pydantic>=2,<3" \
-        "pyyaml>=6,<7" \
-        "requests>=2.28,<3" \
-        "tqdm>=4.65,<5" \
-        "duckdb>=0.9,<2"
+# Install the complete, version-locked package set declared by
+# contracts/method_packages.py. The image is network-disabled at execution
+# time, so a package advertised to the coder must already be importable here.
+COPY src/easyicu/research_agent/runner_image/requirements.lock /opt/easyicu-runner/
+RUN pip install --no-cache-dir --index-url "${PIP_INDEX_URL}" \
+        -r /opt/easyicu-runner/requirements.lock
 
 # Generated analysis imports EasyICU's publication-figure and audit helpers.
 # Install the repository package itself without resolving dependencies again;

@@ -35,6 +35,9 @@ from easyicu.research_agent.authority.filesystem import AnchoredDirectory
 from easyicu.research_agent.authority.analysis_cohort import (
     bind_execution_cohort_authority,
 )
+from easyicu.research_agent.execution.development_sample import (
+    materialize_development_execution_sample,
+)
 from easyicu.research_agent.research_context.builder import (
     build_research_context,
     build_retrieved_research_context,
@@ -1311,6 +1314,36 @@ def test_ordered_analysis_subset_seals_exact_parent_bound_child(
         derivation.transform_id for derivation in child.authority.output_derivations
     } == {"ordered_row_subset"}
     assert load_verified_materialized_cohort_authority(child_path) is not None
+
+
+def test_typed_development_sample_is_child_of_locked_analysis_authority(
+    tmp_path: Path,
+) -> None:
+    _parent_path, _parent, child_path, child = _publish_typed_analysis_subset(tmp_path)
+
+    binding = materialize_development_execution_sample(
+        run_dir=child_path.parent,
+        target_rows=1,
+        seed=20260719,
+        declared_id_columns=("stay_id",),
+        trajectory_binding=None,
+    )
+
+    sampled = load_verified_materialized_cohort_authority(binding.cohort_path)
+    assert sampled is not None
+    assert binding.cohort_authority_ref == sampled.reference
+    assert sampled.authority.parent_authority_sha256 == child.reference.sha256
+    assert sampled.provenance["paper_authority"] is False
+    assert (
+        materialize_development_execution_sample(
+            run_dir=child_path.parent,
+            target_rows=1,
+            seed=20260719,
+            declared_id_columns=("stay_id",),
+            trajectory_binding=None,
+        )
+        == binding
+    )
 
 
 def test_ordered_analysis_subset_rejects_same_parent_and_target_without_mutation(
