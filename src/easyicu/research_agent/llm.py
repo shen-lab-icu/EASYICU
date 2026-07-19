@@ -33,7 +33,7 @@ from types import SimpleNamespace
 from typing import Any, Dict, List, Optional, Protocol, Sequence
 
 from .analysis_types import infer_analysis_type
-from .provider_budget import (
+from .authority.provider_budget import (
     active_provider_retry_available,
     consume_active_transport_attempt,
 )

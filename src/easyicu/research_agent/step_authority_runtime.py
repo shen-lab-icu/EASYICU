@@ -29,7 +29,7 @@ from .method_capabilities import (
     CURATED_METHOD_PACKAGES,
     OPTIONAL_BASELINE_PACKAGES,
 )
-from .provider_budget import ProviderCallBudgetReceiptState
+from .authority.provider_budget import ProviderCallBudgetReceiptState
 from .runner import RunResult
 from .runtime_artifacts import current_step_records, load_run_artifact_authority
 from .schema import ResearchContext, ValidationFinding
