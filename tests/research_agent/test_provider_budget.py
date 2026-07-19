@@ -27,7 +27,7 @@ from easyicu.research_agent.pipeline_execute import (
     _cohort_translation_budget_owner_step_id,
     _extract_cohort_definition_with_provider_budget,
 )
-from easyicu.research_agent.pipeline_config import PipelineConfig
+from easyicu.research_agent.orchestration.config import PipelineConfig
 from easyicu.research_agent.schema import (
     AnalysisStep,
     CohortDescriptor,

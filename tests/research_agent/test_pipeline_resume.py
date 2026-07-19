@@ -8,8 +8,8 @@ from pathlib import Path
 
 import pytest
 
-import easyicu.research_agent.pipeline_resume as pipeline_resume
-from easyicu.research_agent.pipeline_resume import (
+import easyicu.research_agent.orchestration.resume as pipeline_resume
+from easyicu.research_agent.orchestration.resume import (
     ResumeController,
     clear_quarantined_concept_draft,
     load_quarantined_concept_draft,
@@ -122,7 +122,7 @@ def test_resume_controller_drops_requested_step_and_stale_findings(tmp_path: Pat
 
 
 def test_pipeline_resume_entrypoints_are_importable() -> None:
-    from easyicu.research_agent.pipeline_resume import ResumeApplication
+    from easyicu.research_agent.orchestration.resume import ResumeApplication
 
     assert ResumeController.__name__ == "ResumeController"
     assert ResumeApplication.__name__ == "ResumeApplication"
@@ -274,7 +274,8 @@ def test_pipeline_resume_is_a_leaf_module() -> None:
         / "src"
         / "easyicu"
         / "research_agent"
-        / "pipeline_resume.py"
+        / "orchestration"
+        / "resume.py"
     )
     tree = ast.parse(path.read_text(encoding="utf-8"))
     forbidden = {

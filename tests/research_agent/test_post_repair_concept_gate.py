@@ -365,7 +365,7 @@ def test_quarantine_persists_repaired_constraints_across_later_repairs(
         PrimaryModelContractValidator,
     )
     from easyicu.research_agent.contracts.runtime import ValidationFinding
-    from easyicu.research_agent.pipeline_resume import load_quarantined_concept_draft
+    from easyicu.research_agent.orchestration.resume import load_quarantined_concept_draft
 
     def concept_audit(self, *, context, script_text, step):
         del self, context
@@ -724,7 +724,7 @@ def test_keyboard_interrupt_during_concept_repair_saves_draft_and_reraises(
 ) -> None:
     from easyicu.research_agent.audits.validators import ConceptUsageAuditor
     from easyicu.research_agent.contracts.runtime import ValidationFinding
-    from easyicu.research_agent.pipeline_resume import load_quarantined_concept_draft
+    from easyicu.research_agent.orchestration.resume import load_quarantined_concept_draft
 
     def reject_draft(self, *, context, script_text, step):
         del self, context, script_text

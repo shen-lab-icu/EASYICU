@@ -28,7 +28,7 @@ REPAIR_CONSUMERS = (
     "easyicu.research_agent.agents.core",
     "easyicu.research_agent.pipeline",
     "easyicu.research_agent.pipeline_execute",
-    "easyicu.research_agent.pipeline_resume",
+    "easyicu.research_agent.orchestration.resume",
     "easyicu.research_agent.gates.visual",
 )
 

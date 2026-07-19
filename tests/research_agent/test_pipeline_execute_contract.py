@@ -1501,13 +1501,13 @@ def test_execution_input_authority_check_detects_unsafe_runner_mutation(tmp_path
 
 
 def test_plan_and_execute_result_dataclass_shapes_match_contracts_module():
-    """Pin the two dataclasses that flow through run_execute_phase.
+    """Pin the three dataclasses that flow through the pipeline phases.
 
     The pipeline phases exchange ``_PlanPhaseResult``,
     ``_ExecutePhaseResult`` and ``_WritePhaseResult``. They are defined in
-    ``contracts.py`` and re-exported by ``pipeline.py`` / ``pipeline_state.py``
-    for compatibility. If any shape drifts, a phase silently misreads its
-    input or produces a malformed handoff to the next phase.
+    ``contracts.runtime`` and re-exported by ``pipeline.py``. If any shape
+    drifts, a phase silently misreads its input or produces a malformed handoff
+    to the next phase.
     """
     from easyicu.research_agent.contracts.runtime import (
         _PlanPhaseResult,
@@ -1519,18 +1519,10 @@ def test_plan_and_execute_result_dataclass_shapes_match_contracts_module():
         _ExecutePhaseResult as PipelineExecutePhaseResult,
         _WritePhaseResult as PipelineWritePhaseResult,
     )
-    from easyicu.research_agent.pipeline_state import (
-        PlanPhaseState,
-        ExecutePhaseState,
-        WritePhaseState,
-    )
 
     assert PipelinePlanPhaseResult is _PlanPhaseResult
     assert PipelineExecutePhaseResult is _ExecutePhaseResult
     assert PipelineWritePhaseResult is _WritePhaseResult
-    assert PlanPhaseState is _PlanPhaseResult
-    assert ExecutePhaseState is _ExecutePhaseResult
-    assert WritePhaseState is _WritePhaseResult
 
     plan_fields = {f.name for f in fields(_PlanPhaseResult)}
     # Names the execute phase actually reads off plan_result, verified

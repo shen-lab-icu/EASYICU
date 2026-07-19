@@ -24,7 +24,7 @@ column-name guessing.
 
 Code examples: `schema.py`, `research_context/builder.py`,
 `research_context/typed.py`, `concept_availability.py`,
-`temporal_semantics.py`, `case_contexts.py`.
+`research_context/temporal_semantics.py`, `case_plugins/contexts.py`.
 
 ## Layer 2: LLM Orchestration
 
@@ -72,7 +72,7 @@ artifact or formula-derived numeric claim. In submission mode, untraced
 numbers fail the run.
 
 Code examples: `authority/evidence_store.py`, `pipeline_writer_aux.py`,
-`manuscript_post.py`, `replication/envelope.py`.
+`reporting/manuscript_post.py`, `replication/envelope.py`.
 
 ## Layer 5: Evaluation And Submission Scaffold
 
@@ -88,7 +88,7 @@ not a mutable leaderboard or a generic agent score.
 
 Code examples: `tools/run_research_agent_bench.py`,
 `evaluation/cross_model_panel.py`, `evaluation/tier2_jury.py`,
-`baselines/REGISTRY.md`, `baselines/LOCK.json`, `pipeline_profiles.py`.
+`baselines/REGISTRY.md`, `baselines/LOCK.json`, `orchestration/profiles.py`.
 
 ## Naming Rules
 

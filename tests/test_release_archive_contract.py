@@ -213,6 +213,11 @@ def test_release_archives_preserve_reviewer_contract_and_package_data(
             "src/easyicu/research_agent/figures/skill.py",
             "src/easyicu/research_agent/gates/visual_qa.py",
             "src/easyicu/research_agent/gates/semantics.py",
+            "src/easyicu/research_agent/orchestration/__init__.py",
+            "src/easyicu/research_agent/orchestration/config.py",
+            "src/easyicu/research_agent/orchestration/experiment_spec.py",
+            "src/easyicu/research_agent/orchestration/profiles.py",
+            "src/easyicu/research_agent/orchestration/resume.py",
             "src/easyicu/research_agent/planning/cohort_contract.py",
             "src/easyicu/research_agent/planning/analysis_blueprint.py",
             "src/easyicu/research_agent/planning/robustness_contract.py",
@@ -301,6 +306,11 @@ def test_release_archives_preserve_reviewer_contract_and_package_data(
             "easyicu/research_agent/figures/skill.py",
             "easyicu/research_agent/gates/visual_qa.py",
             "easyicu/research_agent/gates/semantics.py",
+            "easyicu/research_agent/orchestration/__init__.py",
+            "easyicu/research_agent/orchestration/config.py",
+            "easyicu/research_agent/orchestration/experiment_spec.py",
+            "easyicu/research_agent/orchestration/profiles.py",
+            "easyicu/research_agent/orchestration/resume.py",
             "easyicu/research_agent/planning/cohort_contract.py",
             "easyicu/research_agent/planning/analysis_blueprint.py",
             "easyicu/research_agent/planning/robustness_contract.py",
@@ -405,6 +415,10 @@ for name in (
     'easyicu.research_agent.figures.skill',
     'easyicu.research_agent.gates.visual_qa',
     'easyicu.research_agent.gates.semantics',
+    'easyicu.research_agent.orchestration.config',
+    'easyicu.research_agent.orchestration.experiment_spec',
+    'easyicu.research_agent.orchestration.profiles',
+    'easyicu.research_agent.orchestration.resume',
     'easyicu.research_agent.planning.analysis_blueprint',
     'easyicu.research_agent.providers.cost',
     'easyicu.research_agent.trajectory.bundle',
@@ -420,6 +434,14 @@ for name in (
 ):
     module = importlib.import_module(name)
     assert Path(module.__file__).resolve().is_relative_to(root), module.__file__
+
+agent = importlib.import_module('easyicu.research_agent')
+config = importlib.import_module('easyicu.research_agent.orchestration.config')
+profiles = importlib.import_module('easyicu.research_agent.orchestration.profiles')
+spec = importlib.import_module('easyicu.research_agent.orchestration.experiment_spec')
+assert agent.PipelineConfig is config.PipelineConfig
+assert agent.SubmissionProfile is profiles.SubmissionProfile
+assert agent.ExperimentSpec is spec.ExperimentSpec
 
 from easyicu.research_agent.providers.prompts import load_prompt_pack
 assert set(load_prompt_pack()) == {'system', 'coder', 'replanner', 'writer'}

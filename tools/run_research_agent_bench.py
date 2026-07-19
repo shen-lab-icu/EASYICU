@@ -62,7 +62,7 @@ from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any, Dict, List, Mapping, Optional, Sequence
 
 if TYPE_CHECKING:
-    from easyicu.research_agent.pipeline_profiles import SubmissionProfile
+    from easyicu.research_agent.orchestration.profiles import SubmissionProfile
 
 
 def _bootstrap_imports():
@@ -155,7 +155,7 @@ def _normalize_arms(arms: Optional[Sequence[str]]) -> List[str]:
 
 def _resolve_submission_profile(profile_ref: Optional[str]):
     _bootstrap_imports()
-    from easyicu.research_agent.pipeline_profiles import get_submission_profile
+    from easyicu.research_agent.orchestration.profiles import get_submission_profile
 
     try:
         return get_submission_profile(profile_ref)
@@ -167,7 +167,7 @@ def _default_submission_profile_ref() -> str:
     """Resolve the benchmark CLI default from the canonical registry."""
 
     _bootstrap_imports()
-    from easyicu.research_agent.pipeline_profiles import (
+    from easyicu.research_agent.orchestration.profiles import (
         DEFAULT_SUBMISSION_PROFILE_REF,
     )
 

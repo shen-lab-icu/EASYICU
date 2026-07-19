@@ -13,7 +13,8 @@ protocol is [`docs/figure2_taskbank_9x3_protocol.md`](../../../docs/figure2_task
 ## What this layer adds
 
 EasyICU's distinct contribution is the **ICU-aware research context**
-(`schema.py`, `icu_rules.py`, `context.py`, `case_contexts.py`) and
+(`schema.py`, `icu_rules.py`, `research_context/builder.py`,
+`case_plugins/contexts.py`) and
 the **deterministic hashed evidence store** (`authority/evidence_store.py`,
 `validators.py`) that every agent output must pass through before it
 can affect the manuscript.
@@ -92,6 +93,7 @@ mechanically moving every top-level file:
 | `cohort/` | typed cohort schema, deterministic materialization, artifact facts and case-neutral dataframe primitives | outcome choice, censoring rules or case-specific cohort criteria |
 | `acquisition/` | export catalog, coverage checks and materialization handoff for caller-declared concepts | hidden outcome/static-variable defaults or estimand construction |
 | `contracts/` | dependency-neutral runtime handoffs and deterministic declared-product, ordered-group and robustness execution contracts | provider calls, scientific design selection or evidence mutation |
+| `orchestration/` | run configuration, immutable submission profiles, experiment specifications and resume/checkpoint policy | scientific analysis choices, provider execution, evidence registration or compatibility wrappers |
 | `evaluation/` | optional cross-model concordance and Tier-2 jury/rubric adapters over completed artifacts | primary scientific adjudication or hidden manuscript benchmark authority |
 | `review/` | deterministic post-analysis causal-claim and method-appropriateness review | exposure, outcome, cohort, method or estimand selection |
 

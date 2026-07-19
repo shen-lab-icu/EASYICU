@@ -20,9 +20,9 @@ Before the retirement patch, the 161 top-level Python files comprised:
 | Real top-level implementations | 93 | 98,530 | Canonical/public/frozen/dormant implementations requiring individual review |
 
 The cleanup has now removed the old facade layer rather than retaining hundreds
-of tiny forwarding files.  The current tree has **37 top-level Python files
-including `__init__.py`**, with 226 modules in 27 responsibility packages and
-758 static import edges.  The graph remains at **zero cyclic
+of tiny forwarding files.  The current tree has **31 top-level Python files
+including `__init__.py`**, with 225 modules in 28 responsibility packages and
+753 static import edges.  The graph remains at **zero cyclic
 modules / zero SCCs**.  The former 23-module control-plane SCC,
 validator/replication pair, and final pipeline/execute/publication-figure cycle
 are gone.
@@ -32,8 +32,7 @@ The execution-runtime bundle moved `runner.py`, `code_hygiene.py`,
 `execution/` and retired their old root paths.  Runtime boundary types now live
 in dependency-neutral `contracts/runtime.py`; declared-product, ordered-group
 and robustness execution contracts share the same package, while fail-closed
-finding semantics live under `gates/semantics.py`.  Authority code therefore
-does not reverse-import the execution layer.
+finding semantics live under `gates/semantics.py`.
 
 The trajectory, publication-figure, cohort and acquisition bundles now own
 their domain implementations under `trajectory/`, `figures/`, `cohort/` and
@@ -46,6 +45,13 @@ Analysis blueprints now live with planning, runtime method capabilities with
 execution, temporal interpretation with `research_context/`, and context-derived
 numeric claim registration with `authority/`. Their former root paths are retired;
 current code and tests import only the responsibility-owned modules.
+
+Run construction, submission profiles, experiment specifications, and resume
+policy now live in the import-cold `orchestration/` package.  The unused phase
+runner wrappers and phase-state aliases were deleted rather than retained as
+pre-v1 compatibility files.  The installed CLI and root convenience API resolve
+to the canonical orchestration modules, while fresh pipeline execution still
+calls its live phase methods directly.
 
 This is the AST-visible, module-top-level static import graph. Sealed-renderer
 digest selection uses a controlled registry-mediated dynamic import of current
@@ -147,6 +153,10 @@ method, or estimand.
    remain roughly 11k lines each, and the package root exports hundreds of
    symbols. Responsibility packages are real progress, but they do not by
    themselves complete orchestration/API reduction.
+6. **Method-package declaration layering.** `authority/step_runtime.py` still
+   reads package declarations from `execution/method_capabilities.py`.  This is
+   acyclic, but the immutable declarations should move to a dependency-neutral
+   contract module so authority does not reverse-depend on execution policy.
 
 ## Next retirement gates
 
