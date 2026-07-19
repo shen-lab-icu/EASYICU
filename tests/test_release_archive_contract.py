@@ -85,20 +85,20 @@ def test_release_archives_preserve_reviewer_contract_and_package_data(
 ) -> None:
     pytest.importorskip("build.__main__")
 
-    out_dir = tmp_path / "dist"
+    sdist_out_dir = tmp_path / "sdist-dist"
+    wheel_out_dir = tmp_path / "wheel-dist"
     env = os.environ.copy()
     env["PYTHONDONTWRITEBYTECODE"] = "1"
 
     try:
-        result = subprocess.run(
+        sdist_result = subprocess.run(
             [
                 sys.executable,
                 "-m",
                 "build",
                 "--sdist",
-                "--wheel",
                 "--outdir",
-                str(out_dir),
+                str(sdist_out_dir),
             ],
             cwd=REPO_ROOT,
             env=env,
@@ -106,15 +106,43 @@ def test_release_archives_preserve_reviewer_contract_and_package_data(
             text=True,
             check=False,
         )
-        assert result.returncode == 0, result.stdout + result.stderr
+        assert sdist_result.returncode == 0, sdist_result.stdout + sdist_result.stderr
 
-        sdist_path = next(out_dir.glob("easyicu-*.tar.gz"))
-        wheel_path = next(out_dir.glob("easyicu-*.whl"))
+        sdist_path = next(sdist_out_dir.glob("easyicu-*.tar.gz"))
+        unpacked_dir = tmp_path / "unpacked-sdist"
 
         with tarfile.open(sdist_path, "r:gz") as archive:
             sdist_names = {
                 _strip_sdist_root(member.name) for member in archive.getmembers()
             }
+            archive.extractall(unpacked_dir, filter="data")
+
+        unpacked_roots = [path for path in unpacked_dir.iterdir() if path.is_dir()]
+        assert len(unpacked_roots) == 1, (
+            "sdist must contain exactly one project root before the wheel build: "
+            f"{unpacked_roots}"
+        )
+        unpacked_root = unpacked_roots[0]
+        assert (unpacked_root / "pyproject.toml").is_file()
+
+        wheel_result = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "build",
+                "--wheel",
+                "--outdir",
+                str(wheel_out_dir),
+            ],
+            cwd=unpacked_root,
+            env=env,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert wheel_result.returncode == 0, wheel_result.stdout + wheel_result.stderr
+
+        wheel_path = next(wheel_out_dir.glob("easyicu-*.whl"))
 
         with zipfile.ZipFile(wheel_path) as archive:
             wheel_names = set(archive.namelist())
@@ -140,6 +168,10 @@ def test_release_archives_preserve_reviewer_contract_and_package_data(
             "src/easyicu/data/concept-dict.json",
             "src/easyicu/data/data-sources.json",
             "src/easyicu/research_agent/README.md",
+            "src/easyicu/research_agent/planning/cohort_contract.py",
+            "src/easyicu/research_agent/planning/robustness_contract.py",
+            "src/easyicu/research_agent/providers/protocol.py",
+            "src/easyicu/research_agent/replication/metrics.py",
             "src/easyicu/webserver/static/index.html",
             "src/easyicu/webserver/static/css/app.css",
             "src/easyicu/webserver/static/js/app.js",
@@ -170,6 +202,20 @@ def test_release_archives_preserve_reviewer_contract_and_package_data(
         assert "easyicu/webserver/static/js/app.js" in wheel_names
         assert any(name.endswith(".dist-info/entry_points.txt") for name in wheel_names)
 
+        required_canonical_modules = {
+            "easyicu/research_agent/planning/cohort_contract.py",
+            "easyicu/research_agent/planning/robustness_contract.py",
+            "easyicu/research_agent/providers/protocol.py",
+            "easyicu/research_agent/replication/metrics.py",
+        }
+        missing_canonical_modules = sorted(required_canonical_modules - wheel_names)
+        assert not missing_canonical_modules, (
+            "wheel built from the sdist is missing canonical research-agent modules: "
+            f"{missing_canonical_modules}"
+        )
+
+        assert "src/easyicu/research_agent/projection.py" not in sdist_names
+        assert "easyicu/research_agent/projection.py" not in wheel_names
         assert not any(
             name.startswith(("tests/", "examples/", "docs/", "benchmarks/"))
             for name in wheel_names
