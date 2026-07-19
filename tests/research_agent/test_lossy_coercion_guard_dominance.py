@@ -41,6 +41,61 @@ if loss_n > 0:
     assert _lossy_findings(asserted, ra) == []
 
 
+def test_stable_raise_only_helper_is_a_fail_closed_guard(ra):
+    script = """
+import pandas as pd
+
+def halt(message):
+    'Terminal host-independent script error.'
+    raise RuntimeError(message)
+
+raw = cohort["declared_exposure"]
+coerced = pd.to_numeric(raw, errors="coerce")
+loss_n = int((raw.notna() & coerced.isna()).sum())
+if loss_n > 0:
+    halt(f"numeric coercion lost {loss_n} observed values")
+"""
+
+    assert _lossy_findings(script, ra) == []
+
+
+def test_helper_with_a_successful_path_is_not_a_fail_closed_guard(ra):
+    script = """
+import pandas as pd
+
+def maybe_halt(message):
+    if strict:
+        raise RuntimeError(message)
+    return None
+
+raw = cohort["declared_exposure"]
+coerced = pd.to_numeric(raw, errors="coerce")
+loss_n = int((raw.notna() & coerced.isna()).sum())
+if loss_n > 0:
+    maybe_halt("numeric coercion lost observed values")
+"""
+
+    assert _lossy_findings(script, ra)
+
+
+def test_rebound_raise_only_helper_is_not_a_fail_closed_guard(ra):
+    script = """
+import pandas as pd
+
+def halt(message):
+    raise RuntimeError(message)
+
+halt = lambda message: None
+raw = cohort["declared_exposure"]
+coerced = pd.to_numeric(raw, errors="coerce")
+loss_n = int((raw.notna() & coerced.isna()).sum())
+if loss_n > 0:
+    halt("numeric coercion lost observed values")
+"""
+
+    assert _lossy_findings(script, ra)
+
+
 def test_direct_tuple_receipt_guard_remains_valid(ra):
     script = """
 import pandas as pd
