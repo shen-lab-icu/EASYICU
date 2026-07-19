@@ -20,14 +20,24 @@ live in :mod:`.source`.
 from __future__ import annotations
 
 import json
+import os
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Mapping, Optional
 
 import pandas as pd
 
 from ..contracts.runtime import RunResult
+from ..contracts.declared_product import (
+    _descriptor_path_is_compatible,
+    typed_product,
+)
 from ..schema import AnalysisStep
+
+_OUTPUT_REGISTRY_CANONICALIZATION_REPAIR_ID = (
+    "summary_output_registry_canonicalization_v1"
+)
 
 
 def _extract_last_json_object(text: str) -> Optional[Dict[str, Any]]:
@@ -242,6 +252,132 @@ def _salvage_minimal_contract_step_summary(
     return True
 
 
+def _canonicalize_exact_declared_output_registry(
+    *,
+    step: AnalysisStep,
+    out_dir: Path,
+) -> bool:
+    """Promote one exact legacy ``outputs`` map to typed ``output_files``.
+
+    This is a representation-only compatibility repair.  It is deliberately
+    narrower than the declared-product validator: every declared product must
+    have a unique bare product name, the legacy map must contain exactly those
+    names, and every value must identify a distinct, regular, output-local file
+    whose physical suffix is compatible with the Planner-declared kind.  The
+    host never guesses a missing product, chooses among files, or changes any
+    scientific value.
+
+    Container runtimes often write an absolute path such as
+    ``/easyicu-run/steps/.../outputs/result.csv`` into the summary.  The host
+    binds only its basename and only when that exact regular file already
+    exists in ``out_dir``.  Parent traversal, links, duplicate inodes, extra
+    keys, and ambiguous same-name typed products all fail closed.
+    """
+
+    summary_path = out_dir / "step_summary.json"
+    if not summary_path.exists() or summary_path.is_symlink():
+        return False
+    try:
+        summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    except Exception:
+        return False
+    if not isinstance(summary, dict) or "output_files" in summary:
+        return False
+    legacy_outputs = summary.get("outputs")
+    if not isinstance(legacy_outputs, Mapping) or not legacy_outputs:
+        return False
+
+    declared = [
+        product
+        for raw in (step.expected_outputs or [])
+        if (product := typed_product(raw)) is not None
+    ]
+    if not declared:
+        return False
+    declared_names = [name for _kind, name in declared]
+    if len(set(declared)) != len(declared) or len(set(declared_names)) != len(
+        declared_names
+    ):
+        return False
+    if not all(isinstance(key, str) for key in legacy_outputs):
+        return False
+    if set(legacy_outputs) != set(declared_names):
+        return False
+
+    try:
+        root = out_dir.resolve(strict=True)
+    except OSError:
+        return False
+    output_files: dict[str, str] = {}
+    file_identities: set[tuple[int, int]] = set()
+    for kind, name in declared:
+        raw_path = legacy_outputs.get(name)
+        if not isinstance(raw_path, str) or not raw_path.strip():
+            return False
+        supplied = Path(raw_path.strip())
+        if ".." in supplied.parts or not supplied.name:
+            return False
+        candidate = out_dir / supplied.name
+        try:
+            if candidate.is_symlink():
+                return False
+            resolved = candidate.resolve(strict=True)
+            resolved.relative_to(root)
+            stat = resolved.stat()
+        except (OSError, ValueError):
+            return False
+        if not resolved.is_file() or not _descriptor_path_is_compatible(
+            kind=kind,
+            path=resolved.name,
+        ):
+            return False
+        identity = (stat.st_dev, stat.st_ino)
+        if identity in file_identities:
+            return False
+        file_identities.add(identity)
+        output_files[f"{kind}:{name}"] = resolved.name
+
+    summary["output_files"] = output_files
+    summary["output_registry_repair"] = {
+        "repair_id": _OUTPUT_REGISTRY_CANONICALIZATION_REPAIR_ID,
+        "source_container": "outputs",
+        "selection_rule": (
+            "exact declared product-name bijection plus output-local regular "
+            "file and physical-kind verification"
+        ),
+    }
+    payload = json.dumps(summary, indent=2, ensure_ascii=False, default=str)
+    temporary_fd = -1
+    temporary_name = ""
+    try:
+        temporary_fd, temporary_name = tempfile.mkstemp(
+            dir=out_dir,
+            prefix=".step_summary.output_registry.",
+            suffix=".tmp",
+            text=True,
+        )
+        with os.fdopen(temporary_fd, "w", encoding="utf-8") as handle:
+            temporary_fd = -1
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary_name, summary_path)
+        temporary_name = ""
+        directory_fd = os.open(out_dir, os.O_RDONLY)
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
+    except OSError:
+        return False
+    finally:
+        if temporary_fd >= 0:
+            os.close(temporary_fd)
+        if temporary_name:
+            Path(temporary_name).unlink(missing_ok=True)
+    return True
+
+
 @dataclass(frozen=True)
 class SummarySalvageOutcome:
     """Describes which step-summary salvage fired, so the caller can record it.
@@ -296,7 +432,25 @@ def salvage_step_summary(
                 reset_artefacts=True,
             )
         return None
-    del step
+    if _canonicalize_exact_declared_output_registry(
+        step=step,
+        out_dir=run_result.out_dir,
+    ):
+        return SummarySalvageOutcome(
+            repair_id=_OUTPUT_REGISTRY_CANONICALIZATION_REPAIR_ID,
+            trigger_reason=(
+                "step_summary used an exact untyped outputs map for all "
+                "Planner-declared products"
+            ),
+            transformation=(
+                "Added a typed output_files registry from the step's exact "
+                "legacy outputs map after verifying every output-local file."
+            ),
+            selection_rule=(
+                "exact declared product-name bijection plus output-local regular "
+                "file and physical-kind verification"
+            ),
+        )
     return None
 
 
@@ -305,6 +459,7 @@ __all__ = [
     "_salvage_stdout_json_step_summary",
     "_salvage_named_json_step_summary",
     "_salvage_minimal_contract_step_summary",
+    "_canonicalize_exact_declared_output_registry",
     "SummarySalvageOutcome",
     "salvage_step_summary",
 ]

@@ -1,5 +1,12 @@
 Code contract:
 - Read the cohort from os.environ["COHORT_PARQUET"].
+- Register every Planner-declared `kind:product` in
+  `step_summary["output_files"]` using the complete typed token as the key and
+  an output-local basename as the value, for example
+  `{"table:cohort_flow": "cohort_flow.csv"}`. The keys must cover every entry
+  in the current step's `expected_outputs` exactly. A bare-name `outputs` map,
+  an absolute container path, or a file that merely exists in `STEP_OUT_DIR`
+  is not a typed product registration.
 - When the formatted ResearchContext names a singular primary exposure, only
   its model is primary. Fit related or alternate representations as separately
   labelled secondary/corroborative models; never mutually adjust separate
