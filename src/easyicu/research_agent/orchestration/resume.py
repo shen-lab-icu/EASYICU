@@ -390,7 +390,7 @@ class ResumeController:
             # compatible plan and the execute phase re-evaluates its trajectory
             # DAG immediately. Carrying pending/errors from an older revision
             # can otherwise block a now-valid plan before the selected step.
-            if finding.validator == "plan_contract_pending":
+            if finding.validator in {"plan_contract_pending", "plan_typed_dag"}:
                 continue
             if finding.validator == "plan_contract" and str(
                 detail.get("kind") or ""

@@ -250,6 +250,15 @@ def test_resume_recomputes_plan_revision_findings_instead_of_carrying_them(
                 },
             ).model_dump(mode="json"),
             ValidationFinding(
+                validator="plan_typed_dag",
+                severity="error",
+                message="An older plan revision had an ambiguous typed producer.",
+                detail={
+                    "reason": "typed_input_producer_ambiguous",
+                    "typed_product": "table:result",
+                },
+            ).model_dump(mode="json"),
+            ValidationFinding(
                 validator="statistical_validator",
                 severity="warning",
                 message="Independent analytical warning remains relevant.",
