@@ -1676,6 +1676,7 @@ def primary_analysis_cohort_integrity_findings(
     out_dir: Path,
     universe_path: Path,
     authoritative_cohort_path: Path,
+    context: Any = None,
 ) -> list[ValidationFinding]:
     """Verify one Agent-produced primary cohort against host-locked authority.
 
@@ -1709,6 +1710,8 @@ def primary_analysis_cohort_integrity_findings(
 
         from ..cohort.schema import (
             CohortDefinition,
+            _planner_declared_context_column_bindings,
+            _resolve_predicate_column,
             build_cohort,
             coerce_cohort_definition,
         )
@@ -1722,21 +1725,48 @@ def primary_analysis_cohort_integrity_findings(
         expected_remaining_counts = [int(len(replayed))]
         expected_exclusion_counts = [0]
         expected_criterion_ids: list[str] = []
+        accepted_criterion_ids: list[tuple[str, ...]] = []
         if definition is not None:
+            column_bindings = _planner_declared_context_column_bindings(
+                definition=definition,
+                plan=plan,
+                context=context,
+                columns=replayed.columns,
+            )
             ordered_predicates = [
                 ("include", predicate) for predicate in definition.inclusion
             ] + [("exclude", predicate) for predicate in definition.exclusion]
             for order, (kind, predicate) in enumerate(ordered_predicates, start=1):
                 before_n = int(len(replayed))
+                resolved_column = _resolve_predicate_column(
+                    replayed.columns,
+                    predicate.concept_id,
+                    predicate.aggregation,
+                    column_bindings=column_bindings,
+                )
+                if resolved_column is None:
+                    raise ValueError(
+                        "locked cohort predicate has no host-resolved materialized "
+                        f"column: {predicate.concept_id!r}"
+                    )
                 one = CohortDefinition(
                     name=f"criterion_{order}",
                     inclusion=(predicate,) if kind == "include" else (),
                     exclusion=(predicate,) if kind == "exclude" else (),
                 )
-                replayed = build_cohort(one, replayed).reset_index(drop=True)
+                replayed = build_cohort(
+                    one,
+                    replayed,
+                    column_bindings=column_bindings,
+                ).reset_index(drop=True)
                 after_n = int(len(replayed))
                 concept = _normalise(predicate.concept_id)
-                expected_criterion_ids.append(f"{kind}_{order:02d}_{concept}")
+                canonical_id = f"{kind}_{order:02d}_{concept}"
+                resolved_id = f"{kind}_{order:02d}_{_normalise(resolved_column)}"
+                expected_criterion_ids.append(canonical_id)
+                accepted_criterion_ids.append(
+                    tuple(dict.fromkeys((canonical_id, resolved_id)))
+                )
                 expected_remaining_counts.append(after_n)
                 expected_exclusion_counts.append(before_n - after_n)
     except Exception as exc:
@@ -1747,6 +1777,34 @@ def primary_analysis_cohort_integrity_findings(
             error_type=type(exc).__name__,
             error=str(exc)[:300],
         )
+
+    criterion_alias_to_canonical: dict[str, str] = {}
+    for canonical_id, aliases in zip(
+        expected_criterion_ids,
+        accepted_criterion_ids,
+        strict=True,
+    ):
+        for alias in aliases:
+            existing = criterion_alias_to_canonical.setdefault(alias, canonical_id)
+            if existing != canonical_id:
+                return finding(
+                    "attrition_rule_identity_ambiguous",
+                    "Host-resolved cohort predicate columns do not provide a "
+                    "unique attrition-rule identity.",
+                    ambiguous_alias=alias,
+                    canonical_criterion_ids=[existing, canonical_id],
+                )
+
+    def canonicalise_reported_rule_ids(
+        reported: Sequence[str],
+    ) -> list[str] | None:
+        canonical: list[str] = []
+        for rule_id in reported:
+            resolved = criterion_alias_to_canonical.get(rule_id)
+            if resolved is None:
+                return None
+            canonical.append(resolved)
+        return canonical
 
     raw_n = int(len(universe))
     locked_n = int(len(authoritative))
@@ -2208,6 +2266,12 @@ def primary_analysis_cohort_integrity_findings(
                 reported_predicate_ids = (
                     reported_rule_ids[:-1] if has_terminal_row else reported_rule_ids
                 )
+                reported_boundary_id = (
+                    reported_predicate_ids[0] if reported_predicate_ids else None
+                )
+                canonical_reported_predicates = canonicalise_reported_rule_ids(
+                    reported_predicate_ids[1:]
+                )
                 allowed_terminal_ids = {
                     "analysis_cohort",
                     "final_analysis_cohort",
@@ -2218,7 +2282,11 @@ def primary_analysis_cohort_integrity_findings(
                     not has_terminal_row
                     or reported_rule_ids[-1] in allowed_terminal_ids
                 )
-                if reported_predicate_ids != expected_rule_ids or not terminal_id_valid:
+                if (
+                    reported_boundary_id != "universe"
+                    or canonical_reported_predicates != expected_criterion_ids
+                    or not terminal_id_valid
+                ):
                     return finding(
                         "attrition_sequence_rule_ids_mismatch",
                         f"The declared {product} canonical identity sequence does "
@@ -2227,6 +2295,10 @@ def primary_analysis_cohort_integrity_findings(
                         product=product,
                         identity_column=canonical_identity_column,
                         expected_criterion_ids=expected_rule_ids,
+                        accepted_criterion_ids=[
+                            ["universe"],
+                            *[list(aliases) for aliases in accepted_criterion_ids],
+                        ],
                         reported_criterion_ids=reported_rule_ids,
                     )
             start_column = (
@@ -2383,19 +2455,32 @@ def primary_analysis_cohort_integrity_findings(
                 _normalise(table.iloc[index][category_column])
                 for index in excluded_rows
             ]
-            if len(reported_rule_ids) != len(set(reported_rule_ids)) or set(
+            canonical_reported_rule_ids = canonicalise_reported_rule_ids(
                 reported_rule_ids
-            ) != set(expected_criterion_ids):
+            )
+            if (
+                canonical_reported_rule_ids is None
+                or len(canonical_reported_rule_ids)
+                != len(set(canonical_reported_rule_ids))
+                or set(canonical_reported_rule_ids) != set(expected_criterion_ids)
+            ):
                 return finding(
                     "attrition_partition_rule_ids_mismatch",
                     f"The declared {product} excluded partitions do not identify "
                     "each Planner-locked cohort predicate exactly once.",
                     product=product,
                     expected_criterion_ids=expected_criterion_ids,
+                    accepted_criterion_ids=[
+                        list(aliases) for aliases in accepted_criterion_ids
+                    ],
                     reported_criterion_ids=reported_rule_ids,
                 )
             reported_by_rule = dict(
-                zip(reported_rule_ids, reported_excluded_counts, strict=True)
+                zip(
+                    canonical_reported_rule_ids,
+                    reported_excluded_counts,
+                    strict=True,
+                )
             )
             expected_by_rule = dict(
                 zip(

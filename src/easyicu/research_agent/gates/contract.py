@@ -712,6 +712,7 @@ def _step_deterministic_contract_findings(
     findings += primary_analysis_cohort_integrity_findings(
         step=step,
         plan=plan,
+        context=context,
         step_summary=step_summary,
         out_dir=out_dir,
         # ``execution_cohort_path`` is normally the raw universe for the
