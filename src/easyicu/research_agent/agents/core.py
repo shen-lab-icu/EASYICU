@@ -666,6 +666,13 @@ def _build_planner_user_prompt(context: ResearchContext) -> str:
         "for survival, prediction, "
         "mixed-effects, clustering, and every other analysis family; those use "
         "their own family-specific planning and validation contracts.\n\n"
+        "When a plan requests a manuscript-facing figure, declare a top-level "
+        "`display_labels` object for every variable, contrast, endpoint, or "
+        "robustness spec id whose human-facing wording matters. Labels are "
+        "presentation metadata only: they must describe the already-selected "
+        "scientific object and must not change its exposure, outcome, method, "
+        "cohort, or estimand. The renderer will not infer that a token such as "
+        "`death` means ICU, hospital, or fixed-day mortality.\n\n"
         + _format_concept_id_allowlist()
         + "\n\n"
         + _format_ctas_schema_constraints()
@@ -707,6 +714,7 @@ def _build_planner_user_prompt(context: ResearchContext) -> str:
         "any example concept unless the ResearchContext supports it.\n"
         "{\n"
         '  "research_question": "<copy from context>",\n'
+        '  "display_labels": {"<exact variable or spec id>": "<human-facing label>"},\n'
         '  "cohort": {\n'
         '    "name": "primary",\n'
         '    "inclusion": [\n'
@@ -3225,6 +3233,7 @@ def _normalise_plan_payload(
         "cohort",
         "steps",
         "robustness_specs",
+        "display_labels",
         "rationale",
         "revision",
     }

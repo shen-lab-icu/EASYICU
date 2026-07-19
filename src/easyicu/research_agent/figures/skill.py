@@ -16,7 +16,7 @@ import shutil
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 
 import pandas as pd
 
@@ -251,6 +251,7 @@ class PublicationFigureSkill:
                 try:
                     return self._render_robustness_panel(
                         context=context,
+                        plan=plan,
                         evidence=evidence,
                         run_dir=run_dir,
                         source_record=robustness_record,
@@ -375,6 +376,7 @@ class PublicationFigureSkill:
             try:
                 return self._render_robustness_panel(
                     context=context,
+                    plan=plan,
                     evidence=evidence,
                     run_dir=run_dir,
                     source_record=robustness_record,
@@ -543,6 +545,7 @@ class PublicationFigureSkill:
         plot_df = _normalise_association_frame(
             frame,
             primary_exposure=context.primary_exposure,
+            display_labels=plan.display_labels,
         )
         if plot_df.empty:
             raise ValueError("primary association table has no plottable rows")
@@ -563,7 +566,8 @@ class PublicationFigureSkill:
         if strata_record is not None:
             try:
                 strata_df = _normalise_strata_frame(
-                    _read_table(run_dir / strata_record.relative_path)
+                    _read_table(run_dir / strata_record.relative_path),
+                    display_labels=plan.display_labels,
                 )
                 if not strata_df.empty:
                     source_records.append(strata_record)
@@ -576,7 +580,8 @@ class PublicationFigureSkill:
         if missingness_record is not None:
             try:
                 missingness_df = _normalise_missingness_frame(
-                    _read_table(run_dir / missingness_record.relative_path)
+                    _read_table(run_dir / missingness_record.relative_path),
+                    display_labels=plan.display_labels,
                 )
                 if not missingness_df.empty:
                     source_records.append(missingness_record)
@@ -723,7 +728,9 @@ class PublicationFigureSkill:
                 fontsize=6.5,
                 color=palette.get("baseline", "#272727"),
             )
-        outcome_label = _prettify_label(context.target_outcome or "target outcome")
+        outcome_label = _display_label(
+            context.target_outcome or "target outcome", plan.display_labels
+        )
         ax.set_title(f"Adjusted estimate for {outcome_label}", loc="left", pad=4)
         add_panel_label(ax, "A", x=-0.08)
         ax.margins(x=0.08)
@@ -744,7 +751,9 @@ class PublicationFigureSkill:
                     side_ax,
                     strata_df,
                     palette=palette,
-                    outcome=context.target_outcome or "outcome",
+                    outcome_label=_display_label(
+                        context.target_outcome or "outcome", plan.display_labels
+                    ),
                 )
             elif kind == "missingness":
                 _draw_missingness_panel(side_ax, missingness_df, palette=palette)
@@ -880,6 +889,7 @@ class PublicationFigureSkill:
         self,
         *,
         context: ResearchContext,
+        plan: AnalysisPlan,
         evidence: EvidenceStore,
         run_dir: Path,
         source_record: EvidenceRecord,
@@ -915,7 +925,7 @@ class PublicationFigureSkill:
             [
                 {
                     "spec_id": row.spec_id,
-                    "display_label": _robustness_spec_label(row.spec_id),
+                    "display_label": _display_label(row.spec_id, plan.display_labels),
                     "axis": row.axis,
                     "n": row.n,
                     "point_estimate": row.point_estimate,
@@ -2668,6 +2678,7 @@ def _normalise_association_frame(
     frame: pd.DataFrame,
     *,
     primary_exposure: Optional[str] = None,
+    display_labels: Optional[Mapping[str, str]] = None,
 ) -> pd.DataFrame:
     if frame.empty:
         return pd.DataFrame(columns=["label", "estimate", "lower", "upper"])
@@ -2790,7 +2801,9 @@ def _normalise_association_frame(
 
     out = pd.DataFrame(
         {
-            "label": frame[label_col].astype(str).map(_prettify_label),
+            "label": frame[label_col]
+            .astype(str)
+            .map(lambda value: _display_label(value, display_labels)),
             "estimate": pd.to_numeric(frame[estimate_col], errors="coerce"),
         }
     )
@@ -2923,7 +2936,11 @@ def _association_axis_metadata(frame: pd.DataFrame) -> Dict[str, Any]:
     return _association_axis_from_token("")
 
 
-def _normalise_strata_frame(frame: pd.DataFrame) -> pd.DataFrame:
+def _normalise_strata_frame(
+    frame: pd.DataFrame,
+    *,
+    display_labels: Optional[Mapping[str, str]] = None,
+) -> pd.DataFrame:
     if frame.empty:
         return pd.DataFrame(columns=["score", "rate"])
     cols = {str(c).lower(): c for c in frame.columns}
@@ -3006,7 +3023,11 @@ def _normalise_strata_frame(frame: pd.DataFrame) -> pd.DataFrame:
     score_values = (
         numeric_score
         if score_is_numeric
-        else raw_score.map(lambda value: _score_category_label(score_col, value))
+        else raw_score.map(
+            lambda value: _score_category_label(
+                score_col, value, display_labels=display_labels
+            )
+        )
     )
     score_order = (
         numeric_score
@@ -3031,7 +3052,9 @@ def _normalise_strata_frame(frame: pd.DataFrame) -> pd.DataFrame:
         .drop(columns=["_score_order"])
         .reset_index(drop=True)
     )
-    result.attrs["score_label"] = _score_axis_label(score_col)
+    result.attrs["score_label"] = _score_axis_label(
+        score_col, display_labels=display_labels
+    )
     result.attrs["score_is_numeric"] = score_is_numeric
     return result
 
@@ -3052,20 +3075,27 @@ def _score_column_is_semantic_category(column: Any) -> bool:
     }
 
 
-def _score_category_label(column: Any, value: Any) -> str:
+def _score_category_label(
+    column: Any,
+    value: Any,
+    *,
+    display_labels: Optional[Mapping[str, str]] = None,
+) -> str:
     normalized_col = (
         str(column or "").strip().lower().replace("-", "_").replace(" ", "_")
     )
     state = _binary_state_label(value)
-    if normalized_col in {"sepsis3", "sepsis_3"} and state is not None:
-        return f"Sepsis-3 {state}"
+    column_label = _display_label(column, display_labels)
+    value_label = _display_label(value, display_labels)
+    if state is not None and _label_lookup(column, display_labels) is not None:
+        return f"{column_label} {state}"
     if normalized_col in {"exposure", "exposure_status"} and state is not None:
         return "Exposed" if state == "positive" else "Unexposed"
     if normalized_col == "status" and state is not None:
         return state.capitalize()
     if normalized_col in {"group", "group_label"}:
-        return f"Group {_prettify_label(value)}"
-    return _prettify_label(value)
+        return f"Group {value_label}"
+    return value_label
 
 
 def _binary_state_label(value: Any) -> Optional[str]:
@@ -3077,7 +3107,11 @@ def _binary_state_label(value: Any) -> Optional[str]:
     return None
 
 
-def _normalise_missingness_frame(frame: pd.DataFrame) -> pd.DataFrame:
+def _normalise_missingness_frame(
+    frame: pd.DataFrame,
+    *,
+    display_labels: Optional[Mapping[str, str]] = None,
+) -> pd.DataFrame:
     if frame.empty:
         return pd.DataFrame(columns=["variable", "missing_fraction"])
     cols = {str(c).lower(): c for c in frame.columns}
@@ -3099,7 +3133,9 @@ def _normalise_missingness_frame(frame: pd.DataFrame) -> pd.DataFrame:
     raw_variable = frame[variable_col].astype(str)
     out = pd.DataFrame(
         {
-            "source_variable": raw_variable.map(_prettify_label),
+            "source_variable": raw_variable.map(
+                lambda value: _display_label(value, display_labels)
+            ),
             "measurement_family": raw_variable.map(_missingness_family_label),
         }
     )
@@ -3129,9 +3165,9 @@ def _normalise_missingness_frame(frame: pd.DataFrame) -> pd.DataFrame:
     )
     grouped["variable"] = grouped.apply(
         lambda row: (
-            row["measurement_family"]
+            _display_label(row["measurement_family"], display_labels)
             if int(row["feature_count"]) > 1
-            else row["source_variable"]
+            else _display_label(row["source_variable"], display_labels)
         ),
         axis=1,
     )
@@ -3165,31 +3201,13 @@ def _missingness_family_label(value: Any) -> str:
     while len(tokens) > 1 and tokens[-1] in suffixes:
         tokens.pop()
     if not tokens:
-        return _prettify_label(raw)
+        return _display_label(raw)
     base = "_".join(tokens)
-    family_labels = {
-        "lact": "Lactate",
-        "lactate": "Lactate",
-        "temp": "Temperature",
-        "temperature": "Temperature",
-        "bun": "BUN",
-        "creat": "Creatinine",
-        "creatinine": "Creatinine",
-        "wbc": "WBC",
-        "hr": "Heart rate",
-        "heart_rate": "Heart rate",
-        "rr": "Resp. rate",
-        "resp": "Resp. rate",
-        "resp_rate": "Resp. rate",
-        "spo2": "SpO2",
-    }
-    if base in family_labels:
-        return family_labels[base]
-    return _prettify_label(base)
+    return _display_label(base)
 
 
 def _draw_strata_panel(
-    ax: Any, frame: pd.DataFrame, *, palette: Dict[str, str], outcome: str
+    ax: Any, frame: pd.DataFrame, *, palette: Dict[str, str], outcome_label: str
 ) -> None:
     import matplotlib.ticker as mticker
     import numpy as np
@@ -3207,7 +3225,7 @@ def _draw_strata_panel(
             markersize=3.4,
         )
         ax.set_xlabel(score_label)
-        ax.set_ylabel(f"{_prettify_label(outcome)} rate")
+        ax.set_ylabel(f"{outcome_label} rate")
         ymax = max(
             0.05, min(1.0, float(y_values.max()) * 1.25 if len(y_values) else 0.05)
         )
@@ -3237,7 +3255,7 @@ def _draw_strata_panel(
         )
         ax.set_yticks(y, frame["score"].astype(str).tolist())
         ax.invert_yaxis()
-        ax.set_xlabel(f"{_prettify_label(outcome)} rate")
+        ax.set_xlabel(f"{outcome_label} rate")
         xmax = max(
             0.05, min(1.0, float(y_values.max()) * 1.35 if len(y_values) else 0.05)
         )
@@ -3259,20 +3277,24 @@ def _strata_score_label(frame: pd.DataFrame) -> str:
     return "Score"
 
 
-def _score_axis_label(column: Any) -> str:
+def _score_axis_label(
+    column: Any, *, display_labels: Optional[Mapping[str, str]] = None
+) -> str:
     raw = str(column or "").strip()
     normalized = raw.lower().replace("-", "_").replace(" ", "_")
+    declared = _label_lookup(raw, display_labels)
+    if declared is not None:
+        if _score_column_is_semantic_category(column) and not any(
+            word in declared.casefold()
+            for word in ("status", "category", "group", "stratum")
+        ):
+            return f"{declared} status"
+        return declared
     mapping = {
         "score": "Score",
         "stratum": "Stratum",
         "severity_score": "Severity score",
         "risk_score": "Risk score",
-        "sofa2": "SOFA-2 score",
-        "sofa_2": "SOFA-2 score",
-        "gcs": "GCS score",
-        "gcs_score": "GCS score",
-        "kdigo": "KDIGO stage",
-        "kdigo_stage": "KDIGO stage",
         "exposure": "Exposure group",
         "exposure_label": "Exposure group",
         "group": "Group",
@@ -3280,13 +3302,11 @@ def _score_axis_label(column: Any) -> str:
         "status": "Status",
         "category": "Category",
         "level": "Level",
-        "sepsis3": "Sepsis-3 status",
-        "sepsis_3": "Sepsis-3 status",
         "exposure_status": "Exposure status",
     }
     if normalized in mapping:
         return mapping[normalized]
-    pretty = _prettify_label(raw)
+    pretty = _display_label(raw)
     if any(
         word in pretty.lower()
         for word in ("score", "stratum", "stage", "group", "status", "category")
@@ -3370,58 +3390,6 @@ def _same_float(left: Any, right: Any, *, tolerance: float = 1e-9) -> bool:
         return False
 
 
-def _robustness_spec_label(spec_id: Any) -> str:
-    raw = str(spec_id or "").strip()
-    if not raw:
-        return "Variant"
-    lowered = raw.lower()
-    explicit = {
-        "primary": "Primary",
-        "alt_cohort_no_los_restriction": "No ICU LOS restriction",
-        "cohort_no_los_restriction": "No ICU LOS restriction",
-        "alt_cohort_stricter_los_2d": "ICU LOS >=2 d",
-        "cohort_los_ge_2d": "ICU LOS >=2 d",
-        "alt_cohort_core_physiology_present": "Core physiology present",
-        "cohort_core_physiology_present": "Core physiology present",
-        "alt_missing_complete_case": "Complete-case",
-        "missing_raw_complete_case": "Complete-case",
-        "missing_drop_lactate": "Drop lactate",
-        "alt_outcome_rr_scale": "Risk-ratio scale",
-        "effect_robust_poisson_rr": "Risk-ratio scale",
-        "alt_outcome_rd_scale": "Risk-difference scale",
-        "effect_marginal_standardized_rd": "Risk-difference scale",
-        "primary_los_ge_1d": "Primary ICU LOS >=1 d",
-    }
-    if lowered in explicit:
-        return explicit[lowered]
-    replacements = {
-        "adult": "Adult",
-        "any": "any",
-        "los": "ICU LOS",
-        "ge": ">=",
-        "1d": "1 day",
-        "2": "2",
-        "cc": "complete case",
-        "frozen": "locked",
-        "lact": "lactate",
-        "lactate": "lactate",
-        "measured": "measured",
-        "missing": "missing",
-        "indicator": "indicator",
-        "offprotocol": "off-protocol",
-        "primary": "primary",
-        "cohort": "cohort",
-    }
-    tokens = [token for token in lowered.replace("-", "_").split("_") if token]
-    if not tokens:
-        return _prettify_label(raw)
-    words = [replacements.get(token, token) for token in tokens]
-    label = " ".join(words)
-    label = label.replace("ICU LOS >= 1 day", "ICU LOS >=1 d")
-    label = label.replace("ICU LOS >= 2", "ICU LOS >=2 d")
-    return label[0].upper() + label[1:] if label else _prettify_label(raw)
-
-
 def _robustness_axis_label(axis: Any) -> str:
     mapping = {
         "primary": "Primary",
@@ -3430,29 +3398,54 @@ def _robustness_axis_label(axis: Any) -> str:
         "outcome": "Outcome",
         "unspecified": "Unspecified",
     }
-    return mapping.get(str(axis or "").strip().lower(), _prettify_label(axis))
+    return mapping.get(str(axis or "").strip().lower(), _display_label(axis))
 
 
-def _prettify_label(value: Any) -> str:
+def _normalise_display_key(value: Any) -> str:
+    return re.sub(r"[^a-z0-9]+", "_", str(value or "").casefold()).strip("_")
+
+
+def _label_lookup(
+    value: Any, display_labels: Optional[Mapping[str, str]] = None
+) -> Optional[str]:
+    """Return the Planner-owned label for an exact/normalized identifier.
+
+    ``AnalysisPlan`` rejects conflicting normalized keys.  This renderer may
+    therefore accept punctuation/case variants without inventing endpoint or
+    measurement semantics of its own.
+    """
+
+    if not display_labels:
+        return None
+    raw = str(value or "").strip()
+    exact = display_labels.get(raw)
+    if exact is not None and str(exact).strip():
+        return str(exact).strip()
+    normalized = _normalise_display_key(raw)
+    if not normalized:
+        return None
+    for key, label in display_labels.items():
+        if _normalise_display_key(key) == normalized and str(label).strip():
+            return str(label).strip()
+    return None
+
+
+def _display_label(
+    value: Any, display_labels: Optional[Mapping[str, str]] = None
+) -> str:
+    """Render a declared label, otherwise apply case-neutral title casing.
+
+    The fallback is deliberately mechanical: a name such as ``death`` must not
+    be silently reinterpreted as ICU, hospital, or fixed-day mortality.
+    """
+
+    declared = _label_lookup(value, display_labels)
+    if declared is not None:
+        return declared
     token = str(value or "").strip()
-    mapping = {
-        "sofa2": "SOFA-2",
-        "sepsis3": "Sepsis-3",
-        "sepsis_3": "Sepsis-3",
-        "sex_m": "Male sex",
-        "death": "ICU mortality",
-        "icu_mortality": "ICU mortality",
-        "lact": "Lactate",
-        "creat": "Creatinine",
-        "resp": "Respiratory rate",
-        "map": "MAP",
-        "los_icu": "ICU LOS",
-        "stay_id": "ICU stay",
-    }
-    lower = token.lower()
-    if lower in mapping:
-        return mapping[lower]
-    return token.replace("_", " ").strip().title()
+    if not token:
+        return "Value"
+    return re.sub(r"[_-]+", " ", token).strip().title()
 
 
 def _first_col(cols: Dict[str, str], candidates: Sequence[str]) -> Optional[str]:

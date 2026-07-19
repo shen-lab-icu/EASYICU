@@ -141,6 +141,11 @@ def test_robustness_panel_publication_figure_has_no_header_title_overlap(
     )
     result = PublicationFigureSkill()._render_robustness_panel(
         context=context,
+        plan=ra.AnalysisPlan(
+            research_question=context.research_question,
+            steps=[],
+            display_labels={"death": "In-hospital mortality"},
+        ),
         evidence=evidence,
         run_dir=tmp_path,
         source_record=source_record,
@@ -1596,6 +1601,7 @@ def test_association_frame_filters_to_primary_exposure_and_point_estimate(ra):
             }
         ),
         primary_exposure="sepsis3",
+        display_labels={"sepsis3": "Sepsis-3"},
     )
 
     assert frame["label"].tolist() == ["Sepsis-3"]
@@ -1698,6 +1704,13 @@ def test_publication_figure_skill_e1_like_layout_has_no_svg_overlap_errors(
     )
     plan = ra.AnalysisPlan(
         research_question=context.research_question,
+        display_labels={
+            "icu_mortality": "ICU mortality",
+            "sepsis3": "Sepsis-3",
+            "lact": "Lactate",
+            "temp": "Temperature",
+            "resp": "Resp. rate",
+        },
         steps=[
             ra.AnalysisStep(
                 step_id="03_primary_results",
@@ -1888,7 +1901,8 @@ def test_missingness_frame_deduplicates_variable_labels(ra):
                 "variable": ["lact_max", "lact_max", "bun_max"],
                 "missing_fraction": [0.41, 0.39, 0.02],
             }
-        )
+        ),
+        display_labels={"lact": "Lactate", "temp": "Temperature"},
     )
 
     assert frame["variable"].tolist() == ["Lact Max", "Bun Max"]
@@ -1910,7 +1924,8 @@ def test_missingness_frame_groups_measurement_summary_features(ra):
                 ],
                 "missing_fraction": [0.407, 0.407, 0.407, 0.407, 0.027, 0.027],
             }
-        )
+        ),
+        display_labels={"lact": "Lactate", "temp": "Temperature"},
     )
 
     assert frame["variable"].tolist() == ["Lactate", "Temperature"]
@@ -1925,7 +1940,8 @@ def test_strata_axis_label_comes_from_score_column(ra):
     )
 
     kdigo_frame = _normalise_strata_frame(
-        pd.DataFrame({"kdigo_stage": [1, 2, 3], "outcome_rate": [0.1, 0.2, 0.3]})
+        pd.DataFrame({"kdigo_stage": [1, 2, 3], "outcome_rate": [0.1, 0.2, 0.3]}),
+        display_labels={"kdigo_stage": "KDIGO stage"},
     )
     assert _strata_score_label(kdigo_frame) == "KDIGO stage"
 
@@ -1941,7 +1957,8 @@ def test_strata_axis_label_comes_from_score_column(ra):
                 "death_pct": [8.5, 12.2],
                 "n": [46600, 28229],
             }
-        )
+        ),
+        display_labels={"sepsis3": "Sepsis-3"},
     )
     assert _strata_score_label(exposure_frame) == "Sepsis-3 status"
     assert exposure_frame["rate"].round(3).tolist() == [0.085, 0.122]
@@ -1950,6 +1967,18 @@ def test_strata_axis_label_comes_from_score_column(ra):
         "Sepsis-3 positive",
     ]
     assert exposure_frame.attrs["score_is_numeric"] is False
+
+
+def test_display_labels_are_planner_owned_and_fallback_is_nonsemantic(ra):
+    from easyicu.research_agent.figures.skill import _display_label
+
+    assert _display_label("death") == "Death"
+    assert _display_label("death", {"death": "In-hospital mortality"}) == (
+        "In-hospital mortality"
+    )
+    assert _display_label("DEATH-HOSP", {"death_hosp": "Hospital mortality"}) == (
+        "Hospital mortality"
+    )
 
 
 def test_strata_frame_matches_predictor_named_group_column(ra):

@@ -113,6 +113,40 @@ def test_planner_parse_recovers_fenced_json(ra):
     assert plan.steps and plan.steps[0].step_id == "01_table_one"
 
 
+def test_planner_parse_preserves_declared_display_labels(ra):
+    raw = (
+        '{"research_question":"Estimate an association.",'
+        '"display_labels":{"death":"In-hospital mortality",'
+        '"primary":"Primary analysis"},'
+        '"steps":[{"step_id":"01_model",'
+        '"planned_analysis_role":"primary","intent":"fit",'
+        '"inputs":[],"expected_outputs":["statistic:adjusted_effect"]}]}'
+    )
+    schema = ra.schema
+    ctx = schema.ResearchContext(
+        research_question="Estimate an association.",
+        cohort=schema.CohortDescriptor(
+            cohort_name="c", database="d", n_patients=1, n_stays=1
+        ),
+        variables=[],
+    )
+
+    class _DummyLLM:
+        name = "dummy"
+
+        def complete(self, messages, **kwargs):
+            return raw
+
+    from easyicu.research_agent.agents.core import PlannerAgent
+
+    plan = PlannerAgent(_DummyLLM())._parse(raw, ctx)
+
+    assert plan.display_labels == {
+        "death": "In-hospital mortality",
+        "primary": "Primary analysis",
+    }
+
+
 def test_planner_parse_drops_extra_step_fields(ra):
     raw = (
         '{"research_question": "Is sofa2 -> death?", "extra": "drop me", "steps":'
