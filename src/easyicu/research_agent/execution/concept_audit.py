@@ -37,7 +37,7 @@ from ..authority.provider_budget import (
 )
 from ..run_input_capsule import canonical_sha256
 from ..schema import AnalysisStep, ResearchContext
-from ..step_attempt_authority import StepAttemptState
+from ..authority.step_attempt import StepAttemptState
 from ..step_worker_state import StepWorkerProgress
 
 

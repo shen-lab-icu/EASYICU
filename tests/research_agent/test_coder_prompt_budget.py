@@ -30,7 +30,7 @@ from easyicu.research_agent.schema import (
     TemporalConstraint,
     UserPreferences,
 )
-from easyicu.research_agent.step_authority_capsule import (
+from easyicu.research_agent.authority.step_capsule import (
     ContentRef,
     StepAuthorityCapsuleError,
 )

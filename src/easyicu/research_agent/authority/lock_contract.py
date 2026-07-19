@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-from .evidence_authority import (
+from ..evidence_authority import (
     EVIDENCE_AUTHORITY_FILENAME,
     EVIDENCE_AUTHORITY_HEAD_FILENAME,
     EVIDENCE_AUTHORITY_MARKER_FILENAME,
@@ -91,7 +91,7 @@ def verified_unique_lock_anchor(
         raise LockAuthorityError(f"{label} has no unique plan-time evidence anchor")
 
     # Lazy import avoids schema/lock module cycles during model initialisation.
-    from .runtime_artifacts import verified_run_evidence_path
+    from ..runtime_artifacts import verified_run_evidence_path
 
     record = dict(anchors[0])
     anchor_path = verified_run_evidence_path(run_root, record)
@@ -175,7 +175,7 @@ def rehydrate_timestamp_only_legacy_lock(
     if live_without_time != anchor_without_time:
         return None
 
-    from .evidence import _atomic_write_bytes
+    from ..evidence import _atomic_write_bytes
 
     _atomic_write_bytes(
         lock_path,

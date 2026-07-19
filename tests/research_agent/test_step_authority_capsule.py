@@ -8,8 +8,8 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from easyicu.research_agent import step_authority_capsule as capsule_store
-from easyicu.research_agent.step_authority_capsule import (
+from easyicu.research_agent.authority import step_capsule as capsule_store
+from easyicu.research_agent.authority.step_capsule import (
     ConceptAuditSeal,
     ContentRef,
     ExecutionOutput,

@@ -23,11 +23,11 @@ from easyicu.research_agent.schema import (
     ValidationFinding,
 )
 from easyicu.research_agent.research_context.typed import ResearchContextV2
-from easyicu.research_agent.step_authority_capsule import (
+from easyicu.research_agent.authority.step_capsule import (
     StepAuthorityCapsuleError,
     load_verified_step_authority_capsule,
 )
-from easyicu.research_agent.step_authority_runtime import (
+from easyicu.research_agent.authority.step_runtime import (
     StepAuthorityRuntimeError,
     adopt_frozen_scoped_coder_context,
     execution_context_sha256,

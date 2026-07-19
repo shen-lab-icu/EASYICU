@@ -24,7 +24,7 @@ from easyicu.concept.metadata_sidecar import (
 )
 from easyicu.resources import load_dictionary
 from easyicu.research_agent import cohort_materializer
-from easyicu.research_agent.authority_fs import AnchoredDirectory
+from easyicu.research_agent.authority.filesystem import AnchoredDirectory
 from easyicu.research_agent.cohort_schema import (
     CohortDefinition,
     ConceptPredicate,

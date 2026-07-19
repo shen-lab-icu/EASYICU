@@ -22,19 +22,19 @@ from typing import Any, Mapping, Optional, Sequence
 
 from pydantic import ValidationError
 
-from .authority.coder_authority import HostCoderAuthority
-from .gate_semantics import blocking_validator_findings
-from .method_capabilities import (
+from .coder_authority import HostCoderAuthority
+from ..gate_semantics import blocking_validator_findings
+from ..method_capabilities import (
     BASELINE_PACKAGES,
     CURATED_METHOD_PACKAGES,
     OPTIONAL_BASELINE_PACKAGES,
 )
-from .authority.provider_budget import ProviderCallBudgetReceiptState
-from .runner import RunResult
-from .runtime_artifacts import current_step_records, load_run_artifact_authority
-from .schema import ResearchContext, ValidationFinding
-from .research_context.typed import parse_research_context
-from .step_authority_capsule import (
+from .provider_budget import ProviderCallBudgetReceiptState
+from ..runner import RunResult
+from ..runtime_artifacts import current_step_records, load_run_artifact_authority
+from ..schema import ResearchContext, ValidationFinding
+from ..research_context.typed import parse_research_context
+from .step_capsule import (
     CandidateOrigin,
     ConceptAuditSeal,
     ContentRef,

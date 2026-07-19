@@ -19,7 +19,7 @@ from easyicu.research_agent.evidence_authority import (
     EvidenceAuthorityIntegrityError,
     load_current_evidence_snapshot,
 )
-from easyicu.research_agent.lock_authority import (
+from easyicu.research_agent.authority.lock_contract import (
     LockAuthorityError,
     verified_unique_lock_anchor,
 )

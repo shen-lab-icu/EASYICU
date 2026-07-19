@@ -12,18 +12,18 @@ import hashlib
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Mapping, MutableMapping, Optional, Tuple
 
-from .authority.provider_budget import (
+from .provider_budget import (
     ProviderCallBudgetReceiptError,
     ProviderCallBudgetReceiptState,
 )
-from .schema import ValidationFinding
-from .step_authority_capsule import (
+from ..schema import ValidationFinding
+from .step_capsule import (
     ContentRef,
     StepAuthorityCapsuleError,
     StepAuthorityCapsuleRef,
     VerifiedStepAuthorityCapsule,
 )
-from .step_authority_runtime import (
+from .step_runtime import (
     StepAuthorityCoordinates,
     StepAuthorityRuntimeError,
 )

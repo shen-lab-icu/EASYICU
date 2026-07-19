@@ -7,12 +7,12 @@ import threading
 
 import pytest
 
-from easyicu.research_agent.step_attempt_authority import (
+from easyicu.research_agent.authority.step_attempt import (
     CheckpointAuthority,
     StepAttemptState,
     StepAuthorityOperations,
 )
-from easyicu.research_agent.step_authority_capsule import (
+from easyicu.research_agent.authority.step_capsule import (
     ContentRef,
     StepAuthorityCapsuleRef,
 )

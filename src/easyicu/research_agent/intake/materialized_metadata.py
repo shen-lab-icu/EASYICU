@@ -39,7 +39,7 @@ from easyicu.concept.metadata_sidecar import (
     read_content_addressed_sidecar,
 )
 
-from ..authority_fs import AnchoredDirectory, AuthorityFilesystemError
+from ..authority.filesystem import AnchoredDirectory, AuthorityFilesystemError
 from .export_package import ExportPackage, resolve_exported_concept
 
 _PRIMARY_ROLES = {ConceptColumnRole.VALUE, ConceptColumnRole.EVENT_STATUS}
