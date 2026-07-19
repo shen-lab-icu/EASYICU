@@ -127,7 +127,7 @@ def migrate_legacy_publication_helper_adapter_v1(code: str) -> str:
         repaired_tree = ast.parse(repaired)
     except SyntaxError:
         return code
-    from .code_preflight import _builtin_int_binding_is_unmodified
+    from .gates.preflight import _builtin_int_binding_is_unmodified
 
     return repaired if _builtin_int_binding_is_unmodified(repaired_tree) else code
 

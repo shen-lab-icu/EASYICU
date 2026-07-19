@@ -15,6 +15,10 @@ REPAIR_CONTROL_MODULE_ALIASES = (
         "easyicu.research_agent.provider_budget",
         "easyicu.research_agent.authority.provider_budget",
     ),
+    (
+        "easyicu.research_agent.code_preflight",
+        "easyicu.research_agent.gates.preflight",
+    ),
 )
 
 

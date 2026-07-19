@@ -608,7 +608,7 @@ def engine_code_sha256() -> str:
 def validator_code_sha256() -> str:
     root = Path(__file__).resolve().parent
     paths = [
-        root / "code_preflight.py",
+        root / "gates" / "preflight.py",
         root / "declared_product_contract.py",
         root / "audits" / "validators.py",
         root / "audits" / "step_summary_integrity.py",

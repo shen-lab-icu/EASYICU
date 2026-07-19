@@ -103,7 +103,7 @@ def runtime_identity() -> Dict[str, Any]:
     package_root = Path(__file__).resolve().parent
     engine_paths = list(package_root.rglob("*.py"))
     validator_paths = [
-        package_root / "code_preflight.py",
+        package_root / "gates" / "preflight.py",
         package_root / "declared_product_contract.py",
         package_root / "audits" / "base.py",
         package_root / "audits" / "patterns.py",
