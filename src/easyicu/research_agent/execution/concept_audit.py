@@ -72,6 +72,87 @@ class ConceptQuarantineState:
 
 
 @dataclass(frozen=True, slots=True)
+class QuarantineRetirementDecision:
+    """Exact-digest retirement result for heterogeneous stored findings."""
+
+    remaining_errors: tuple[ValidationFinding, ...]
+    deterministic_provenance: tuple[Mapping[str, Any], ...] = ()
+    policy_reclassified_findings: tuple[ValidationFinding, ...] = ()
+    policy_provenance: tuple[Mapping[str, Any], ...] = ()
+
+
+def _quarantine_retirement_decision(
+    *,
+    prior_errors: Sequence[ValidationFinding],
+    current_findings: Sequence[ValidationFinding],
+    context: ResearchContext,
+    script_text: str,
+    quarantined_script_sha256: str,
+) -> QuarantineRetirementDecision:
+    """Retire independently provable subsets without discarding the rest.
+
+    A quarantine can contain findings from several validator generations.  A
+    current deterministic gate can retire its own stale findings while the
+    host policy reclassifier independently retires an LLM finding.  Requiring
+    every stored finding to belong to one family makes that mixed checkpoint
+    impossible to retire and can incorrectly send already-approved code back
+    into an exhausted repair loop.
+
+    Each proof remains exact-digest and fail-closed.  An unproved subset stays
+    in ``remaining_errors`` and therefore continues to block execution.
+    """
+
+    deterministic_errors = tuple(
+        finding
+        for finding in prior_errors
+        if finding.validator in DETERMINISTIC_CODE_GATE_VALIDATORS
+    )
+    policy_errors = tuple(
+        finding
+        for finding in prior_errors
+        if finding.validator not in DETERMINISTIC_CODE_GATE_VALIDATORS
+    )
+
+    deterministic_provenance: tuple[Mapping[str, Any], ...] = ()
+    if deterministic_errors:
+        resolved = quarantined_deterministic_errors_resolved_by_current_gate(
+            prior_errors=deterministic_errors,
+            current_findings=current_findings,
+            script_text=script_text,
+            quarantined_script_sha256=quarantined_script_sha256,
+        )
+        if resolved is not None:
+            deterministic_provenance = tuple(resolved)
+
+    policy_reclassified: tuple[ValidationFinding, ...] = ()
+    policy_provenance: tuple[Mapping[str, Any], ...] = ()
+    if policy_errors:
+        supersession = quarantined_errors_superseded_by_current_policy(
+            prior_errors=policy_errors,
+            current_findings=current_findings,
+            context=context,
+            script_text=script_text,
+            quarantined_script_sha256=quarantined_script_sha256,
+        )
+        if supersession is not None:
+            reclassified, provenance = supersession
+            policy_reclassified = tuple(reclassified)
+            policy_provenance = tuple(provenance)
+
+    remaining: list[ValidationFinding] = []
+    if deterministic_errors and not deterministic_provenance:
+        remaining.extend(deterministic_errors)
+    if policy_errors and not policy_provenance:
+        remaining.extend(policy_errors)
+    return QuarantineRetirementDecision(
+        remaining_errors=tuple(remaining),
+        deterministic_provenance=deterministic_provenance,
+        policy_reclassified_findings=policy_reclassified,
+        policy_provenance=policy_provenance,
+    )
+
+
+@dataclass(frozen=True, slots=True)
 class ConceptAuditAuthority:
     """Immutable scientific and audit identity for one planned step."""
 
@@ -152,25 +233,22 @@ class ConceptAuditCoordinator:
             and finding.validator != "llm_concept_auditor"
         ]
         if quarantine.pending_errors:
-            deterministic_revalidation = (
-                quarantined_deterministic_errors_resolved_by_current_gate(
-                    prior_errors=quarantine.pending_errors,
-                    current_findings=code_findings,
-                    script_text=script_text,
-                    quarantined_script_sha256=str(
-                        runtime.step_record.get("quarantined_draft_sha256") or ""
-                    ),
-                )
+            retirement = _quarantine_retirement_decision(
+                prior_errors=quarantine.pending_errors,
+                current_findings=code_findings,
+                context=authority.context,
+                script_text=script_text,
+                quarantined_script_sha256=str(
+                    runtime.step_record.get("quarantined_draft_sha256") or ""
+                ),
             )
-            if deterministic_revalidation is not None:
+            if retirement.deterministic_provenance:
                 quarantine.deterministic_revalidated = True
-                quarantine.draft_active = False
-                quarantine.pending_errors = []
                 runtime.step_record[
                     "quarantine_deterministic_revalidation_succeeded"
                 ] = True
                 runtime.step_record["quarantine_deterministic_revalidated_findings"] = (
-                    deterministic_revalidation
+                    list(retirement.deterministic_provenance)
                 )
                 runtime.emit_progress(
                     "audit",
@@ -184,29 +262,14 @@ class ConceptAuditCoordinator:
                     current_step=runtime.step_current,
                     total_steps=runtime.total_steps,
                 )
-            # Policy supersession is a deterministic decision about the exact
-            # quarantined digest. Make it before the optional LLM audit so a
-            # retired historical error cannot trigger an unnecessary call.
-            supersession = None
-            if quarantine.pending_errors:
-                supersession = quarantined_errors_superseded_by_current_policy(
-                    prior_errors=quarantine.pending_errors,
-                    current_findings=code_findings,
-                    context=authority.context,
-                    script_text=script_text,
-                    quarantined_script_sha256=str(
-                        runtime.step_record.get("quarantined_draft_sha256") or ""
-                    ),
-                )
-            if supersession is not None:
-                reclassified_findings, provenance = supersession
+            if retirement.policy_provenance:
                 existing_keys = {
                     (finding.severity, finding_occurrence_identity(finding))
                     for finding in code_findings
                 }
                 code_findings.extend(
                     finding
-                    for finding in reclassified_findings
+                    for finding in retirement.policy_reclassified_findings
                     if (
                         finding.severity,
                         finding_occurrence_identity(finding),
@@ -214,11 +277,9 @@ class ConceptAuditCoordinator:
                     not in existing_keys
                 )
                 quarantine.policy_superseded = True
-                quarantine.draft_active = False
-                quarantine.pending_errors = []
                 runtime.step_record["quarantine_policy_superseded"] = True
-                runtime.step_record["quarantine_policy_superseded_findings"] = (
-                    provenance
+                runtime.step_record["quarantine_policy_superseded_findings"] = list(
+                    retirement.policy_provenance
                 )
                 runtime.emit_progress(
                     "audit",
@@ -232,6 +293,11 @@ class ConceptAuditCoordinator:
                     current_step=runtime.step_current,
                     total_steps=runtime.total_steps,
                 )
+            quarantine.pending_errors = list(retirement.remaining_errors)
+            if not quarantine.pending_errors and (
+                retirement.deterministic_provenance or retirement.policy_provenance
+            ):
+                quarantine.draft_active = False
         try:
             audited_code_digest = sha256_of_bytes(script_text.encode("utf-8"))
             sealed_capsule_audit = (
