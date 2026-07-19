@@ -305,7 +305,7 @@
     ],
     [
       "easyicu.research_agent.agents",
-      "easyicu.research_agent.code_patch"
+      "easyicu.research_agent.authority.provider_budget"
     ],
     [
       "easyicu.research_agent.agents",
@@ -349,15 +349,15 @@
     ],
     [
       "easyicu.research_agent.agents",
-      "easyicu.research_agent.provider_budget"
+      "easyicu.research_agent.repairs.coordination"
     ],
     [
       "easyicu.research_agent.agents",
-      "easyicu.research_agent.repair_coordination"
+      "easyicu.research_agent.repairs.patch"
     ],
     [
       "easyicu.research_agent.agents",
-      "easyicu.research_agent.repair_reasons"
+      "easyicu.research_agent.repairs.reasons"
     ],
     [
       "easyicu.research_agent.agents",
@@ -493,6 +493,10 @@
     ],
     [
       "easyicu.research_agent.audits.validators",
+      "easyicu.research_agent.authority.provider_budget"
+    ],
+    [
+      "easyicu.research_agent.audits.validators",
       "easyicu.research_agent.declared_product_contract"
     ],
     [
@@ -502,10 +506,6 @@
     [
       "easyicu.research_agent.audits.validators",
       "easyicu.research_agent.ordered_stratified_contract"
-    ],
-    [
-      "easyicu.research_agent.audits.validators",
-      "easyicu.research_agent.provider_budget"
     ],
     [
       "easyicu.research_agent.audits.validators",
@@ -645,39 +645,19 @@
     ],
     [
       "easyicu.research_agent.code_patch",
-      "easyicu.research_agent.repair_reasons"
+      "easyicu.research_agent.repairs.patch"
     ],
     [
       "easyicu.research_agent.code_preflight",
-      "easyicu.research_agent.coder_context"
-    ],
-    [
-      "easyicu.research_agent.code_preflight",
-      "easyicu.research_agent.schema"
+      "easyicu.research_agent.gates.preflight"
     ],
     [
       "easyicu.research_agent.code_repair",
-      "easyicu.research_agent.code_preflight"
+      "easyicu.research_agent.repairs.source"
     ],
     [
-      "easyicu.research_agent.code_repair",
-      "easyicu.research_agent.code_repair_helpers"
-    ],
-    [
-      "easyicu.research_agent.code_repair",
-      "easyicu.research_agent.legacy_code_migrations"
-    ],
-    [
-      "easyicu.research_agent.code_repair",
-      "easyicu.research_agent.repair_reasons"
-    ],
-    [
-      "easyicu.research_agent.code_repair",
-      "easyicu.research_agent.scalar_utils"
-    ],
-    [
-      "easyicu.research_agent.code_repair",
-      "easyicu.research_agent.schema"
+      "easyicu.research_agent.code_repair_helpers",
+      "easyicu.research_agent.repairs.helpers"
     ],
     [
       "easyicu.research_agent.coder_context",
@@ -1177,6 +1157,10 @@
     ],
     [
       "easyicu.research_agent.execution.concept_audit",
+      "easyicu.research_agent.authority.provider_budget"
+    ],
+    [
+      "easyicu.research_agent.execution.concept_audit",
       "easyicu.research_agent.concept_audit_cache"
     ],
     [
@@ -1190,10 +1174,6 @@
     [
       "easyicu.research_agent.execution.concept_audit",
       "easyicu.research_agent.gates.concept"
-    ],
-    [
-      "easyicu.research_agent.execution.concept_audit",
-      "easyicu.research_agent.provider_budget"
     ],
     [
       "easyicu.research_agent.execution.concept_audit",
@@ -1501,11 +1481,11 @@
     ],
     [
       "easyicu.research_agent.gates.concept",
-      "easyicu.research_agent.code_preflight"
+      "easyicu.research_agent.contracts"
     ],
     [
       "easyicu.research_agent.gates.concept",
-      "easyicu.research_agent.contracts"
+      "easyicu.research_agent.gates.preflight"
     ],
     [
       "easyicu.research_agent.gates.concept",
@@ -1564,12 +1544,20 @@
       "easyicu.research_agent.schema"
     ],
     [
+      "easyicu.research_agent.gates.preflight",
+      "easyicu.research_agent.coder_context"
+    ],
+    [
+      "easyicu.research_agent.gates.preflight",
+      "easyicu.research_agent.schema"
+    ],
+    [
       "easyicu.research_agent.gates.visual",
       "easyicu.research_agent.contracts"
     ],
     [
       "easyicu.research_agent.gates.visual",
-      "easyicu.research_agent.repair_reasons"
+      "easyicu.research_agent.repairs.reasons"
     ],
     [
       "easyicu.research_agent.gates.visual",
@@ -1657,7 +1645,7 @@
     ],
     [
       "easyicu.research_agent.legacy_code_migrations",
-      "easyicu.research_agent.code_preflight"
+      "easyicu.research_agent.gates.preflight"
     ],
     [
       "easyicu.research_agent.literature",
@@ -1677,11 +1665,11 @@
     ],
     [
       "easyicu.research_agent.llm",
-      "easyicu.research_agent.llm_mocks"
+      "easyicu.research_agent.authority.provider_budget"
     ],
     [
       "easyicu.research_agent.llm",
-      "easyicu.research_agent.provider_budget"
+      "easyicu.research_agent.llm_mocks"
     ],
     [
       "easyicu.research_agent.llm",
@@ -1834,10 +1822,6 @@
     [
       "easyicu.research_agent.pipeline",
       "easyicu.research_agent.causal_audit"
-    ],
-    [
-      "easyicu.research_agent.pipeline",
-      "easyicu.research_agent.code_repair"
     ],
     [
       "easyicu.research_agent.pipeline",
@@ -2017,6 +2001,14 @@
     ],
     [
       "easyicu.research_agent.pipeline",
+      "easyicu.research_agent.repairs.source"
+    ],
+    [
+      "easyicu.research_agent.pipeline",
+      "easyicu.research_agent.repairs.summary"
+    ],
+    [
+      "easyicu.research_agent.pipeline",
       "easyicu.research_agent.replication.envelope"
     ],
     [
@@ -2101,10 +2093,6 @@
     ],
     [
       "easyicu.research_agent.pipeline",
-      "easyicu.research_agent.summary_repair"
-    ],
-    [
-      "easyicu.research_agent.pipeline",
       "easyicu.research_agent.trajectory_plan_contract"
     ],
     [
@@ -2181,6 +2169,10 @@
     ],
     [
       "easyicu.research_agent.pipeline_execute",
+      "easyicu.research_agent.authority.provider_budget"
+    ],
+    [
+      "easyicu.research_agent.pipeline_execute",
       "easyicu.research_agent.authority.registration"
     ],
     [
@@ -2190,10 +2182,6 @@
     [
       "easyicu.research_agent.pipeline_execute",
       "easyicu.research_agent.code_hygiene"
-    ],
-    [
-      "easyicu.research_agent.pipeline_execute",
-      "easyicu.research_agent.code_repair"
     ],
     [
       "easyicu.research_agent.pipeline_execute",
@@ -2305,19 +2293,23 @@
     ],
     [
       "easyicu.research_agent.pipeline_execute",
-      "easyicu.research_agent.provider_budget"
-    ],
-    [
-      "easyicu.research_agent.pipeline_execute",
-      "easyicu.research_agent.repair_coordination"
-    ],
-    [
-      "easyicu.research_agent.pipeline_execute",
-      "easyicu.research_agent.repair_reasons"
-    ],
-    [
-      "easyicu.research_agent.pipeline_execute",
       "easyicu.research_agent.repair_registry"
+    ],
+    [
+      "easyicu.research_agent.pipeline_execute",
+      "easyicu.research_agent.repairs.coordination"
+    ],
+    [
+      "easyicu.research_agent.pipeline_execute",
+      "easyicu.research_agent.repairs.reasons"
+    ],
+    [
+      "easyicu.research_agent.pipeline_execute",
+      "easyicu.research_agent.repairs.source"
+    ],
+    [
+      "easyicu.research_agent.pipeline_execute",
+      "easyicu.research_agent.repairs.summary"
     ],
     [
       "easyicu.research_agent.pipeline_execute",
@@ -2382,10 +2374,6 @@
     [
       "easyicu.research_agent.pipeline_execute",
       "easyicu.research_agent.step_worker_state"
-    ],
-    [
-      "easyicu.research_agent.pipeline_execute",
-      "easyicu.research_agent.summary_repair"
     ],
     [
       "easyicu.research_agent.pipeline_execute",
@@ -2549,15 +2537,15 @@
     ],
     [
       "easyicu.research_agent.pipeline_resume",
-      "easyicu.research_agent.code_patch"
-    ],
-    [
-      "easyicu.research_agent.pipeline_resume",
       "easyicu.research_agent.contracts"
     ],
     [
       "easyicu.research_agent.pipeline_resume",
       "easyicu.research_agent.evidence_authority"
+    ],
+    [
+      "easyicu.research_agent.pipeline_resume",
+      "easyicu.research_agent.repairs.patch"
     ],
     [
       "easyicu.research_agent.pipeline_resume",
@@ -2716,6 +2704,10 @@
       "easyicu.research_agent.audits.validators"
     ],
     [
+      "easyicu.research_agent.provider_budget",
+      "easyicu.research_agent.authority.provider_budget"
+    ],
+    [
       "easyicu.research_agent.providers",
       "easyicu.research_agent.providers.factory"
     ],
@@ -2737,26 +2729,70 @@
     ],
     [
       "easyicu.research_agent.repair_coordination",
-      "easyicu.research_agent.code_patch"
-    ],
-    [
-      "easyicu.research_agent.repair_coordination",
-      "easyicu.research_agent.code_repair"
-    ],
-    [
-      "easyicu.research_agent.repair_coordination",
-      "easyicu.research_agent.provider_budget"
-    ],
-    [
-      "easyicu.research_agent.repair_coordination",
-      "easyicu.research_agent.repair_reasons"
-    ],
-    [
-      "easyicu.research_agent.repair_coordination",
-      "easyicu.research_agent.schema"
+      "easyicu.research_agent.repairs.coordination"
     ],
     [
       "easyicu.research_agent.repair_reasons",
+      "easyicu.research_agent.repairs.reasons"
+    ],
+    [
+      "easyicu.research_agent.repairs.coordination",
+      "easyicu.research_agent.authority.provider_budget"
+    ],
+    [
+      "easyicu.research_agent.repairs.coordination",
+      "easyicu.research_agent.repairs.patch"
+    ],
+    [
+      "easyicu.research_agent.repairs.coordination",
+      "easyicu.research_agent.repairs.reasons"
+    ],
+    [
+      "easyicu.research_agent.repairs.coordination",
+      "easyicu.research_agent.repairs.source"
+    ],
+    [
+      "easyicu.research_agent.repairs.coordination",
+      "easyicu.research_agent.schema"
+    ],
+    [
+      "easyicu.research_agent.repairs.patch",
+      "easyicu.research_agent.repairs.reasons"
+    ],
+    [
+      "easyicu.research_agent.repairs.reasons",
+      "easyicu.research_agent.schema"
+    ],
+    [
+      "easyicu.research_agent.repairs.source",
+      "easyicu.research_agent.gates.preflight"
+    ],
+    [
+      "easyicu.research_agent.repairs.source",
+      "easyicu.research_agent.legacy_code_migrations"
+    ],
+    [
+      "easyicu.research_agent.repairs.source",
+      "easyicu.research_agent.repairs.helpers"
+    ],
+    [
+      "easyicu.research_agent.repairs.source",
+      "easyicu.research_agent.repairs.reasons"
+    ],
+    [
+      "easyicu.research_agent.repairs.source",
+      "easyicu.research_agent.scalar_utils"
+    ],
+    [
+      "easyicu.research_agent.repairs.source",
+      "easyicu.research_agent.schema"
+    ],
+    [
+      "easyicu.research_agent.repairs.summary",
+      "easyicu.research_agent.runner"
+    ],
+    [
+      "easyicu.research_agent.repairs.summary",
       "easyicu.research_agent.schema"
     ],
     [
@@ -3041,7 +3077,7 @@
     ],
     [
       "easyicu.research_agent.step_attempt_authority",
-      "easyicu.research_agent.provider_budget"
+      "easyicu.research_agent.authority.provider_budget"
     ],
     [
       "easyicu.research_agent.step_attempt_authority",
@@ -3065,6 +3101,10 @@
     ],
     [
       "easyicu.research_agent.step_authority_runtime",
+      "easyicu.research_agent.authority.provider_budget"
+    ],
+    [
+      "easyicu.research_agent.step_authority_runtime",
       "easyicu.research_agent.coder_authority_notes"
     ],
     [
@@ -3074,10 +3114,6 @@
     [
       "easyicu.research_agent.step_authority_runtime",
       "easyicu.research_agent.method_capabilities"
-    ],
-    [
-      "easyicu.research_agent.step_authority_runtime",
-      "easyicu.research_agent.provider_budget"
     ],
     [
       "easyicu.research_agent.step_authority_runtime",
@@ -3121,11 +3157,7 @@
     ],
     [
       "easyicu.research_agent.summary_repair",
-      "easyicu.research_agent.runner"
-    ],
-    [
-      "easyicu.research_agent.summary_repair",
-      "easyicu.research_agent.schema"
+      "easyicu.research_agent.repairs.summary"
     ],
     [
       "easyicu.research_agent.temporal_features",
@@ -3214,6 +3246,26 @@
       "exists": true,
       "literal_all": null,
       "relative_path": "bibtex.py"
+    },
+    "easyicu.research_agent.code_patch": {
+      "exists": true,
+      "literal_all": null,
+      "relative_path": "code_patch.py"
+    },
+    "easyicu.research_agent.code_preflight": {
+      "exists": true,
+      "literal_all": null,
+      "relative_path": "code_preflight.py"
+    },
+    "easyicu.research_agent.code_repair": {
+      "exists": true,
+      "literal_all": null,
+      "relative_path": "code_repair.py"
+    },
+    "easyicu.research_agent.code_repair_helpers": {
+      "exists": true,
+      "literal_all": null,
+      "relative_path": "code_repair_helpers.py"
     },
     "easyicu.research_agent.concept_audit_execution": {
       "exists": true,
@@ -3432,6 +3484,11 @@
       "literal_all": null,
       "relative_path": "pdf_render.py"
     },
+    "easyicu.research_agent.provider_budget": {
+      "exists": true,
+      "literal_all": null,
+      "relative_path": "provider_budget.py"
+    },
     "easyicu.research_agent.publication_figure_execution": {
       "exists": true,
       "literal_all": [
@@ -3443,6 +3500,16 @@
         "_sealed_typed_figure_products"
       ],
       "relative_path": "publication_figure_execution.py"
+    },
+    "easyicu.research_agent.repair_coordination": {
+      "exists": true,
+      "literal_all": null,
+      "relative_path": "repair_coordination.py"
+    },
+    "easyicu.research_agent.repair_reasons": {
+      "exists": true,
+      "literal_all": null,
+      "relative_path": "repair_reasons.py"
     },
     "easyicu.research_agent.reporting_checklist": {
       "exists": true,
@@ -3459,6 +3526,11 @@
       "literal_all": null,
       "relative_path": "reviewer.py"
     },
+    "easyicu.research_agent.summary_repair": {
+      "exists": true,
+      "literal_all": null,
+      "relative_path": "summary_repair.py"
+    },
     "easyicu.research_agent.trajectory_stability_executor": {
       "exists": true,
       "literal_all": null,
@@ -3468,10 +3540,10 @@
   "metrics": {
     "cyclic_module_count": 30,
     "cyclic_scc_count": 3,
-    "edge_count": 791,
+    "edge_count": 799,
     "largest_scc_size": 23,
-    "module_count": 262,
-    "package_count": 15,
+    "module_count": 271,
+    "package_count": 16,
     "top_level_module_count": 161
   },
   "modules": {
@@ -3496,6 +3568,7 @@
     "easyicu.research_agent.authority.parent_artifact": "authority/parent_artifact.py",
     "easyicu.research_agent.authority.plan_authority": "authority/plan_authority.py",
     "easyicu.research_agent.authority.plan_scope": "authority/plan_scope.py",
+    "easyicu.research_agent.authority.provider_budget": "authority/provider_budget.py",
     "easyicu.research_agent.authority.registration": "authority/registration.py",
     "easyicu.research_agent.authority.typed_binding": "authority/typed_binding.py",
     "easyicu.research_agent.authority_fs": "authority_fs.py",
@@ -3606,6 +3679,7 @@
     "easyicu.research_agent.gates": "gates/__init__.py",
     "easyicu.research_agent.gates.concept": "gates/concept.py",
     "easyicu.research_agent.gates.contract": "gates/contract.py",
+    "easyicu.research_agent.gates.preflight": "gates/preflight.py",
     "easyicu.research_agent.gates.visual": "gates/visual.py",
     "easyicu.research_agent.graph": "graph.py",
     "easyicu.research_agent.hypothesis_generator": "hypothesis_generator.py",
@@ -3684,6 +3758,13 @@
     "easyicu.research_agent.repair_coordination": "repair_coordination.py",
     "easyicu.research_agent.repair_reasons": "repair_reasons.py",
     "easyicu.research_agent.repair_registry": "repair_registry.py",
+    "easyicu.research_agent.repairs": "repairs/__init__.py",
+    "easyicu.research_agent.repairs.coordination": "repairs/coordination.py",
+    "easyicu.research_agent.repairs.helpers": "repairs/helpers.py",
+    "easyicu.research_agent.repairs.patch": "repairs/patch.py",
+    "easyicu.research_agent.repairs.reasons": "repairs/reasons.py",
+    "easyicu.research_agent.repairs.source": "repairs/source.py",
+    "easyicu.research_agent.repairs.summary": "repairs/summary.py",
     "easyicu.research_agent.replication": "replication/__init__.py",
     "easyicu.research_agent.replication.discovery": "replication/discovery.py",
     "easyicu.research_agent.replication.envelope": "replication/envelope.py",
@@ -3753,10 +3834,11 @@
     "easyicu.research_agent.intake",
     "easyicu.research_agent.methods",
     "easyicu.research_agent.providers",
+    "easyicu.research_agent.repairs",
     "easyicu.research_agent.replication",
     "easyicu.research_agent.reporting"
   ],
   "schema_version": 2,
-  "tool_sha256": "df855eed26bdcb815b6b33e0aed42cd0ce8f269ead7f1d29c2ea372d5b01cde9",
+  "tool_sha256": "11f7b0f9508987d8b47bae8f44bed52dd0d924aab2b6986a9ef49f26161b90be",
   "tool_version": "1.1.0"
 }
