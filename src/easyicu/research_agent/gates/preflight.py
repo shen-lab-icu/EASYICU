@@ -5704,6 +5704,208 @@ def _notna_gated_domain_checks(
     return list(dict.fromkeys(checks))
 
 
+_HOST_HELPER_CALL_CONTRACTS: dict[tuple[str, str], dict[str, object]] = {
+    (
+        "easyicu.research_agent.methods.descriptive_inputs",
+        "measurement_provenance_receipt",
+    ): {
+        "max_positional": 1,
+        "required_keywords": ("measured_column", "count_column"),
+        "allowed_keywords": ("frame", "measured_column", "count_column"),
+    },
+}
+
+
+def _host_helper_call_signature_findings(
+    tree: ast.Module,
+) -> list[ValidationFinding]:
+    """Validate calls to imported, stable host helpers before execution.
+
+    This is a small explicit host-API registry, not runtime introspection and
+    not a guess based on a helper-like name. Only an exact import from a
+    registered module grants host authority. Calls through locally shadowed
+    bindings are ignored here and remain ordinary generated code.
+    """
+
+    parents = {
+        id(child): parent
+        for parent in ast.walk(tree)
+        for child in ast.iter_child_nodes(parent)
+    }
+    imported_calls: dict[
+        int,
+        dict[str, list[tuple[int, str, dict[str, object], ast.AST]]],
+    ] = {}
+    for node in ast.walk(tree):
+        scope_id = _scope_id_for_node(node, parents=parents, tree=tree)
+        if isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+            for alias in node.names:
+                contract = _HOST_HELPER_CALL_CONTRACTS.get((node.module, alias.name))
+                if contract is not None:
+                    call_name = alias.asname or alias.name
+                    imported_calls.setdefault(scope_id, {}).setdefault(
+                        call_name, []
+                    ).append((int(node.lineno), alias.name, contract, node))
+        elif isinstance(node, ast.Import):
+            for alias in node.names:
+                matching = [
+                    (symbol, contract)
+                    for (
+                        module,
+                        symbol,
+                    ), contract in _HOST_HELPER_CALL_CONTRACTS.items()
+                    if module == alias.name
+                ]
+                for symbol, contract in matching:
+                    module_name = alias.asname or alias.name
+                    call_name = f"{module_name}.{symbol}"
+                    imported_calls.setdefault(scope_id, {}).setdefault(
+                        call_name, []
+                    ).append((int(node.lineno), symbol, contract, node))
+    if not imported_calls:
+        return []
+
+    def _scope_chain(node: ast.AST) -> list[int]:
+        chain: list[int] = []
+        current: Optional[ast.AST] = node
+        while current is not None:
+            current = parents.get(id(current))
+            if isinstance(current, _LEXICAL_SCOPE_NODES):
+                chain.append(id(current))
+        if id(tree) not in chain:
+            chain.append(id(tree))
+        return chain
+
+    def _scope_binds_root(scope_id: int, root: str) -> bool:
+        for node in ast.walk(tree):
+            if _scope_id_for_node(node, parents=parents, tree=tree) != scope_id:
+                continue
+            if isinstance(node, ast.Name) and isinstance(
+                node.ctx, (ast.Store, ast.Del)
+            ):
+                if node.id == root:
+                    return True
+            if isinstance(node, ast.arg) and node.arg == root:
+                return True
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                if node.name == root:
+                    return True
+            if isinstance(node, (ast.Import, ast.ImportFrom)):
+                if any(
+                    (alias.asname or alias.name.split(".", 1)[0]) == root
+                    for alias in node.names
+                ):
+                    return True
+        return False
+
+    def _binding_for_call(
+        call: ast.Call,
+        call_name: str,
+    ) -> tuple[str, dict[str, object]] | None:
+        root = call_name.split(".", 1)[0]
+        call_line = int(call.lineno)
+        chain = _scope_chain(call)
+        for index, scope_id in enumerate(chain):
+            candidates = [
+                item
+                for item in imported_calls.get(scope_id, {}).get(call_name, [])
+                if item[0] <= call_line
+            ]
+            if candidates:
+                import_line, helper_name, contract, import_node = max(
+                    candidates,
+                    key=lambda item: item[0],
+                )
+                rebound = False
+                for node in ast.walk(tree):
+                    if node is import_node or not hasattr(node, "lineno"):
+                        continue
+                    if _scope_id_for_node(
+                        node, parents=parents, tree=tree
+                    ) != scope_id or not (import_line < int(node.lineno) <= call_line):
+                        continue
+                    if (
+                        isinstance(node, ast.Name)
+                        and isinstance(node.ctx, (ast.Store, ast.Del))
+                        and node.id == root
+                    ):
+                        rebound = True
+                        break
+                    if (
+                        isinstance(
+                            node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
+                        )
+                        and node.name == root
+                    ):
+                        rebound = True
+                        break
+                    if isinstance(node, (ast.Import, ast.ImportFrom)) and any(
+                        (alias.asname or alias.name.split(".", 1)[0]) == root
+                        for alias in node.names
+                    ):
+                        rebound = True
+                        break
+                if not rebound:
+                    return helper_name, contract
+                return None
+            if index + 1 < len(chain) and _scope_binds_root(scope_id, root):
+                return None
+        return None
+
+    findings: list[ValidationFinding] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        call_name = _call_name(node.func)
+        imported = _binding_for_call(node, call_name)
+        if imported is None:
+            continue
+        helper_name, contract = imported
+        max_positional = int(contract["max_positional"])
+        required_keywords = tuple(contract["required_keywords"])
+        allowed_keywords = set(contract["allowed_keywords"])
+        keyword_names = [keyword.arg for keyword in node.keywords]
+        violations: list[str] = []
+        if any(isinstance(argument, ast.Starred) for argument in node.args):
+            violations.append("starred_positional_arguments_unverifiable")
+        if len(node.args) > max_positional:
+            violations.append("keyword_only_parameters_passed_positionally")
+        if any(name is None for name in keyword_names):
+            violations.append("expanded_keyword_arguments_unverifiable")
+        explicit_keywords = [name for name in keyword_names if name is not None]
+        if len(explicit_keywords) != len(set(explicit_keywords)):
+            violations.append("duplicate_keyword_arguments")
+        if any(name not in allowed_keywords for name in explicit_keywords):
+            violations.append("unknown_keyword_argument")
+        if node.args and "frame" in explicit_keywords:
+            violations.append("frame_bound_more_than_once")
+        if not node.args and "frame" not in explicit_keywords:
+            violations.append("frame_argument_missing")
+        if not set(required_keywords) <= set(explicit_keywords):
+            violations.append("required_keyword_only_argument_missing")
+        if not violations:
+            continue
+        findings.append(
+            ValidationFinding(
+                validator="mechanical_code_preflight",
+                severity="error",
+                message=(
+                    "A call to a registered host-owned helper violates its stable "
+                    "argument contract and would fail only after sandbox launch."
+                ),
+                detail={
+                    "reason": "host_helper_call_signature_invalid",
+                    "helper_name": helper_name,
+                    "line": int(node.lineno),
+                    "max_positional": max_positional,
+                    "required_keywords": list(required_keywords),
+                    "violations": sorted(set(violations)),
+                },
+            )
+        )
+    return findings
+
+
 def _host_helper_runtime_introspection_findings(
     tree: ast.Module,
 ) -> list[ValidationFinding]:
@@ -5917,6 +6119,7 @@ def audit_mechanical_code_contracts(
     findings.extend(_ordinal_rounding_findings(tree))
     findings.extend(_scalar_cast_before_reduction_findings(tree))
     findings.extend(_first_time_companion_findings(tree))
+    findings.extend(_host_helper_call_signature_findings(tree))
     findings.extend(_host_helper_runtime_introspection_findings(tree))
     findings.extend(_lossy_numeric_coercion_findings(tree))
     return findings
