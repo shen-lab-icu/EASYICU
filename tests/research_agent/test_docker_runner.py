@@ -84,7 +84,7 @@ def _install_fake_subprocess(
                 returncode=container_inspect_returncode,
                 stderr=container_inspect_stderr,
             )
-        if "pip" in cmd and "freeze" in cmd:
+        if "importlib.metadata" in " ".join(cmd):
             return _FakeProc(
                 stdout=(
                     "numpy==2.0.0\n"
@@ -573,9 +573,9 @@ def test_run_invokes_subprocess_and_writes_log(
     )
     result = runner.run(step_id="probe", code="print('hi')\n")
 
-    assert len(captured) == 3, "inspect, freeze, then docker run are required"
+    assert len(captured) == 3, "inspect, metadata capture, then run are required"
     assert captured[0][1:3] == ["image", "inspect"]
-    assert "freeze" in captured[1]
+    assert "importlib.metadata" in " ".join(captured[1])
     immutable_id = "sha256:" + "a" * 64
     assert immutable_id in captured[1]
     assert "img:0" not in captured[1]
@@ -599,12 +599,16 @@ def test_run_invokes_subprocess_and_writes_log(
         (result.out_dir / "runner_provenance.json").read_text(encoding="utf-8")
     )
     assert provenance["image_id"] == "sha256:" + "a" * 64
+    assert provenance["dependency_capture_method"] == (
+        "importlib.metadata.distributions"
+    )
     assert "lifelines" in provenance["method_capabilities"]
     assert "shap" not in provenance["method_capabilities"]
     requirements_text = (result.out_dir / "runner_requirements.lock.txt").read_text(
         encoding="utf-8"
     )
     assert "numpy==2.0.0" in requirements_text
+    assert "# capture_method=importlib.metadata.distributions" in requirements_text
     assert (
         "# generated_by=easyicu.research_agent.execution.runner.DockerRunner"
         in requirements_text
@@ -637,7 +641,7 @@ def test_docker_coder_capabilities_use_image_snapshot_before_first_step(
 
     assert len(captured) == 2
     assert captured[0][1:3] == ["image", "inspect"]
-    assert "freeze" in captured[1]
+    assert "importlib.metadata" in " ".join(captured[1])
     assert "sha256:" + "a" * 64 in captured[1]
     assert "img:tag" not in captured[1]
     assert "* lifelines" in block
@@ -660,7 +664,7 @@ def test_runtime_provenance_timeout_tears_down_named_probe(
             return _FakeProc(
                 stdout=json.dumps({"Id": "sha256:" + "a" * 64, "RepoDigests": []})
             )
-        if "pip" in cmd and "freeze" in cmd:
+        if "importlib.metadata" in " ".join(cmd):
             raise subprocess.TimeoutExpired(
                 cmd=cmd,
                 timeout=kwargs.get("timeout", 0),
@@ -681,12 +685,12 @@ def test_runtime_provenance_timeout_tears_down_named_probe(
     ):
         runner._capture_runtime_provenance()
 
-    freeze_cmd = captured[1]
-    assert freeze_cmd[1] == "run"
-    assert any(token.startswith("--cidfile=") for token in freeze_cmd)
+    capture_cmd = captured[1]
+    assert capture_cmd[1] == "run"
+    assert any(token.startswith("--cidfile=") for token in capture_cmd)
     container_name = next(
         token.removeprefix("--name=")
-        for token in freeze_cmd
+        for token in capture_cmd
         if token.startswith("--name=")
     )
     assert captured[2][1:3] == ["stop", "--timeout=5"]
@@ -1113,7 +1117,7 @@ def test_pull_image_invoked_when_requested(
     assert captured[0][:2] == [runner.docker_executable, "pull"]
     assert captured[0][2] == "img:1"
     assert captured[1][1:3] == ["image", "inspect"]
-    assert "freeze" in captured[2]
+    assert "importlib.metadata" in " ".join(captured[2])
     assert captured[3][:2] == [runner.docker_executable, "run"]
 
 
@@ -1138,7 +1142,7 @@ def test_pull_precedes_and_binds_authority_image_identity(
             return _FakeProc(
                 stdout=json.dumps({"Id": "sha256:" + image * 64, "RepoDigests": []})
             )
-        if "pip" in cmd and "freeze" in cmd:
+        if "importlib.metadata" in " ".join(cmd):
             return _FakeProc(
                 stdout=(
                     "numpy==2\npandas==2\nscipy==1\nmatplotlib==3\n"
@@ -1372,7 +1376,7 @@ def test_runner_rebuild_restores_preflighted_capability_snapshot(
     assert runtime_capability_snapshot() == frozenset(expected)
 
 
-def test_docker_runner_rebuild_reuses_preflight_receipt_without_second_freeze(
+def test_docker_runner_rebuild_reuses_preflight_receipt_without_second_capture(
     ra,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -1398,8 +1402,8 @@ def test_docker_runner_rebuild_reuses_preflight_receipt_without_second_freeze(
     )
     rebuilt.runtime_capability_report()
 
-    freeze_calls = [cmd for cmd in captured if "pip" in cmd and "freeze" in cmd]
-    assert len(freeze_calls) == 1
+    capture_calls = [cmd for cmd in captured if "importlib.metadata" in " ".join(cmd)]
+    assert len(capture_calls) == 1
 
 
 def test_docker_runner_rebuild_rejects_image_change_after_preflight(
@@ -1413,10 +1417,8 @@ def test_docker_runner_rebuild_rejects_image_change_after_preflight(
 
     def fake_run(cmd, *args, **kwargs):
         if len(cmd) >= 3 and cmd[1:3] == ["image", "inspect"]:
-            return _FakeProc(
-                stdout=json.dumps({"Id": image_id[0], "RepoDigests": []})
-            )
-        if "pip" in cmd and "freeze" in cmd:
+            return _FakeProc(stdout=json.dumps({"Id": image_id[0], "RepoDigests": []}))
+        if "importlib.metadata" in " ".join(cmd):
             return _FakeProc(
                 stdout=(
                     "numpy==2.0.0\npandas==2.2.0\nscipy==1.14.0\n"

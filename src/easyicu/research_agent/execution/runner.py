@@ -1710,8 +1710,8 @@ class DockerRunner:
         immutable environment snapshot.  Failure is fatal: a Docker run without
         an image identity and execution-runtime lockfile is not submission-grade.
         The short-lived probe is named and tracked just like an analysis
-        container so a host-side timeout cannot strand an anonymous ``pip
-        freeze`` container and stall later resumes.
+        container so a host-side timeout cannot strand an anonymous metadata
+        probe and stall later resumes.
         """
 
         with self._provenance_lock:
@@ -1731,7 +1731,17 @@ class DockerRunner:
             sentinel = cidfile.with_suffix(".sentinel")
             container_name = f"easyicu-ra-{attempt_id}"
             self._write_regular_file(sentinel, f"name:{container_name}\n")
-            freeze_cmd = [
+            distribution_script = (
+                "from importlib.metadata import distributions\n"
+                "rows = {}\n"
+                "for dist in distributions():\n"
+                "    name = str(dist.metadata.get('Name') or '').strip()\n"
+                "    version = str(dist.version or '').strip()\n"
+                "    if name and version:\n"
+                "        rows[name.casefold()] = f'{name}=={version}'\n"
+                "print('\\n'.join(rows[key] for key in sorted(rows)))\n"
+            )
+            capture_cmd = [
                 self.docker_executable,
                 "run",
                 f"--cidfile={cidfile}",
@@ -1747,17 +1757,15 @@ class DockerRunner:
                 "HOME=/tmp",
                 image_id,
                 "python",
-                "-m",
-                "pip",
-                "freeze",
-                "--disable-pip-version-check",
+                "-c",
+                distribution_script,
             ]
             try:
-                freeze_proc = subprocess.run(  # noqa: S603 - argv list, no shell
-                    freeze_cmd,
+                capture_proc = subprocess.run(  # noqa: S603 - argv list, no shell
+                    capture_cmd,
                     capture_output=True,
                     text=True,
-                    timeout=max(60.0, min(self.timeout_seconds, 180.0)),
+                    timeout=max(15.0, min(self.timeout_seconds, 60.0)),
                     encoding="utf-8",
                     errors="replace",
                 )
@@ -1779,11 +1787,11 @@ class DockerRunner:
                 ) from exc
             sentinel.unlink(missing_ok=True)
             cidfile.unlink(missing_ok=True)
-            requirements = freeze_proc.stdout.strip()
-            if freeze_proc.returncode != 0 or not requirements:
+            requirements = capture_proc.stdout.strip()
+            if capture_proc.returncode != 0 or not requirements:
                 raise RuntimeError(
                     "Docker execution-runtime dependency capture failed: "
-                    f"{freeze_proc.stderr.strip() or 'empty pip freeze output'}"
+                    f"{capture_proc.stderr.strip() or 'empty metadata output'}"
                 )
             installed_distributions = _distributions_from_freeze(requirements)
             import_to_distribution = {
@@ -1815,6 +1823,7 @@ class DockerRunner:
                 f"# docker_image_reference={self.image}\n"
                 f"# docker_image_id={image_id}\n"
                 f"# docker_repo_digests={','.join(repo_digests)}\n"
+                "# capture_method=importlib.metadata.distributions\n"
                 "# generated_by=easyicu.research_agent.execution.runner.DockerRunner\n"
                 f"{requirements}\n"
             )
@@ -1824,6 +1833,7 @@ class DockerRunner:
                 "image_id": image_id,
                 "repo_digests": list(repo_digests),
                 "network": self.network,
+                "dependency_capture_method": "importlib.metadata.distributions",
                 "requirements_sha256": hashlib.sha256(
                     requirements_text.encode("utf-8")
                 ).hexdigest(),
@@ -1856,31 +1866,30 @@ class DockerRunner:
         """Export the preflighted immutable-image receipt for runner rebuilds.
 
         A pipeline may need to rebuild its runner after the Agent materializes
-        a locked analysis cohort.  Re-running ``pip freeze`` at that point is
-        redundant and can be slow on a cold Docker daemon.  The bundle is safe
-        to reuse only for the exact immutable image id and runner network
-        policy; :meth:`adopt_validated_runtime_bundle` rechecks those bindings.
+        a locked analysis cohort.  Re-running the distribution metadata probe
+        at that point is redundant.  The bundle is safe to reuse only for the
+        exact immutable image id and runner network policy;
+        :meth:`adopt_validated_runtime_bundle` rechecks those bindings.
         """
 
         provenance, requirements = self._capture_runtime_provenance()
         return {
-            "schema": "easyicu.docker_runtime_preflight/1",
+            "schema": "easyicu.docker_runtime_preflight/2",
             "provenance": dict(provenance),
             "requirements": requirements,
         }
 
     def adopt_validated_runtime_bundle(self, bundle: Mapping[str, object]) -> None:
-        """Reuse one digest-bound preflight receipt without another freeze."""
+        """Reuse one digest-bound preflight receipt without another probe."""
 
-        if set(bundle) != {"schema", "provenance", "requirements"} or bundle.get(
-            "schema"
-        ) != "easyicu.docker_runtime_preflight/1":
+        if (
+            set(bundle) != {"schema", "provenance", "requirements"}
+            or bundle.get("schema") != "easyicu.docker_runtime_preflight/2"
+        ):
             raise RuntimeError("Docker runtime preflight bundle schema mismatch")
         raw_provenance = bundle.get("provenance")
         requirements = bundle.get("requirements")
-        if not isinstance(raw_provenance, Mapping) or not isinstance(
-            requirements, str
-        ):
+        if not isinstance(raw_provenance, Mapping) or not isinstance(requirements, str):
             raise RuntimeError("Docker runtime preflight bundle is incomplete")
         provenance = dict(raw_provenance)
         if set(provenance) != {
@@ -1889,6 +1898,7 @@ class DockerRunner:
             "image_id",
             "repo_digests",
             "network",
+            "dependency_capture_method",
             "requirements_sha256",
             "method_capabilities",
         }:
@@ -1903,14 +1913,18 @@ class DockerRunner:
             or provenance.get("image_id") != image_id
             or provenance.get("repo_digests") != list(repo_digests)
             or provenance.get("network") != self.network
+            or provenance.get("dependency_capture_method")
+            != "importlib.metadata.distributions"
             or provenance.get("requirements_sha256") != expected_requirements_sha
         ):
             raise RuntimeError(
                 "Docker runtime changed after preflight; refusing cached receipt"
             )
         capabilities = provenance.get("method_capabilities")
-        if not isinstance(capabilities, list) or not capabilities or not all(
-            isinstance(name, str) and name for name in capabilities
+        if (
+            not isinstance(capabilities, list)
+            or not capabilities
+            or not all(isinstance(name, str) and name for name in capabilities)
         ):
             raise RuntimeError(
                 "Docker runtime preflight lacks verified method capabilities"
