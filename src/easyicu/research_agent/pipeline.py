@@ -1445,7 +1445,7 @@ def _verified_legacy_stability_migration_profile(
     ):
         return None
     try:
-        from .trajectory_stability_executor import (
+        from .execution.runners.trajectory_stability_executor import (
             validate_trajectory_stability_schema_pair,
             validate_trajectory_stability_upstream,
         )
