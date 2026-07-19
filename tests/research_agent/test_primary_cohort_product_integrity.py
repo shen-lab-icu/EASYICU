@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
 
 import pandas as pd
 import pytest
@@ -1198,6 +1199,105 @@ def test_detailed_remaining_rows_schema_is_verified(tmp_path: Path) -> None:
         )
         == []
     )
+
+
+def test_detailed_attrition_accepts_host_bound_materialized_column_name(
+    tmp_path: Path,
+) -> None:
+    """A proven concept-to-column binding may name the actual column in QC."""
+
+    window = TimeWindow(
+        anchor="icu_admit",
+        start_offset_hours=0,
+        end_offset_hours=24,
+    )
+    definition = CohortDefinition(
+        name="primary",
+        inclusion=(
+            ConceptPredicate(
+                concept_id="age",
+                time_window=window,
+                aggregation="first",
+                op=">=",
+                value=18,
+            ),
+        ),
+    )
+    step = _cohort_step().model_copy(
+        update={"inputs": ["stay_id", "age_baseline_first"]}
+    )
+    plan = AnalysisPlan(
+        research_question="Test one host-bound cohort predicate.",
+        cohort=definition,
+        steps=[step],
+    )
+    context = SimpleNamespace(
+        primary_exposure="age_baseline_first",
+        target_outcome=None,
+        variables=[
+            SimpleNamespace(
+                name="age_baseline_first",
+                source_concept="age",
+                role=SimpleNamespace(value="exposure"),
+                analysis_window="icu_admit_0_24h",
+            )
+        ],
+    )
+    universe = pd.DataFrame(
+        {
+            "stay_id": [1, 2, 3, 4],
+            "age_baseline_first": [17, 18, 30, 16],
+        }
+    )
+    authoritative = universe.loc[universe["age_baseline_first"] >= 18].copy()
+    universe_path = tmp_path / "cohort.parquet"
+    authoritative_path = tmp_path / "cohort_analysis.parquet"
+    universe.to_parquet(universe_path, index=False)
+    authoritative.to_parquet(authoritative_path, index=False)
+    out_dir = tmp_path / "outputs"
+    summary = _write_outputs(
+        out_dir,
+        produced=authoritative,
+        universe_n=4,
+        final_n=2,
+    )
+    detailed = pd.DataFrame(
+        {
+            "criterion_id": ["universe", "include_01_age_baseline_first"],
+            "n_remaining_rows": [4, 2],
+            "n_excluded_rows": [0, 2],
+        }
+    )
+    detailed.to_csv(out_dir / "cohort_flow.csv", index=False)
+    detailed.to_csv(out_dir / "cohort_attrition.csv", index=False)
+
+    assert (
+        primary_analysis_cohort_integrity_findings(
+            step=step,
+            plan=plan,
+            context=context,
+            step_summary=summary,
+            out_dir=out_dir,
+            universe_path=universe_path,
+            authoritative_cohort_path=authoritative_path,
+        )
+        == []
+    )
+
+    detailed["criterion_id"] = ["universe", "include_01_unrelated_column"]
+    detailed.to_csv(out_dir / "cohort_flow.csv", index=False)
+    detailed.to_csv(out_dir / "cohort_attrition.csv", index=False)
+    findings = primary_analysis_cohort_integrity_findings(
+        step=step,
+        plan=plan,
+        context=context,
+        step_summary=summary,
+        out_dir=out_dir,
+        universe_path=universe_path,
+        authoritative_cohort_path=authoritative_path,
+    )
+
+    assert findings[0].detail["issue"] == "attrition_sequence_rule_ids_mismatch"
 
 
 def test_sequential_attrition_cannot_swap_planner_predicate_ids(
