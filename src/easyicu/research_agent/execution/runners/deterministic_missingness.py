@@ -1,7 +1,6 @@
 """Deterministic missingness / measurement-process audit runner.
 
-The audit counterpart of :mod:`deterministic_ordinal` /
-:mod:`deterministic_survival`: a per-concept measurement-missingness table that
+This auxiliary runner emits a per-concept measurement-missingness table that
 distinguishes **structural no-source** (the concept is not sourced for the stay
 at all) from **measurement missingness** (the concept is sourced but was not
 measured in the window). It returns a self-contained runner script that computes

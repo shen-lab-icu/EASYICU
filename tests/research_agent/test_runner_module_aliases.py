@@ -11,16 +11,19 @@ import pytest
 
 
 RUNNER_MODULES = (
+    "deterministic_descriptive",
+    "deterministic_missingness",
+    "deterministic_robustness",
+    "trajectory_stability_executor",
+)
+
+RETIRED_PRIMARY_RUNNER_MODULES = (
     "deterministic_causal",
     "deterministic_clustering",
     "deterministic_cohort_flow",
-    "deterministic_descriptive",
-    "deterministic_missingness",
     "deterministic_ordinal",
-    "deterministic_robustness",
     "deterministic_sensitivity",
     "deterministic_survival",
-    "trajectory_stability_executor",
 )
 
 
@@ -31,6 +34,14 @@ def test_runner_has_one_canonical_home(leaf: str) -> None:
     )
     assert module.__name__.endswith(f"execution.runners.{leaf}")
     assert "/execution/runners/" in Path(module.__file__).as_posix()
+
+
+@pytest.mark.parametrize("leaf", RETIRED_PRIMARY_RUNNER_MODULES)
+def test_retired_primary_runner_has_no_importable_implementation(leaf: str) -> None:
+    assert (
+        importlib.util.find_spec(f"easyicu.research_agent.execution.runners.{leaf}")
+        is None
+    )
 
 
 def test_host_pipeline_imports_runner_implementations_from_canonical_package() -> None:

@@ -30,21 +30,9 @@ from easyicu.research_agent.pipeline_report import (
 )
 from easyicu.research_agent.planning.study_design_playbook import StudyDesignFamily
 
-# runner name -> (module, code-string entrypoint) for the importability check
-_RUNNER_ENTRYPOINTS = {
-    "survival_primary_cox": (
-        "execution.runners.deterministic_survival",
-        "survival_primary_analysis_code",
-    ),
-    "causal_primary_iptw": (
-        "execution.runners.deterministic_causal",
-        "causal_primary_analysis_code",
-    ),
-    "ordinal_dose_response": (
-        "execution.runners.deterministic_ordinal",
-        "ordinal_dose_response_analysis_code",
-    ),
-}
+# No deterministic primary-analysis runner is shipped. Primary science remains
+# LLM-coded; only the auxiliary, planner-scoped runners in the registry are live.
+_RUNNER_ENTRYPOINTS: dict[str, tuple[str, str]] = {}
 
 
 def _registry_primary_runners() -> set:
