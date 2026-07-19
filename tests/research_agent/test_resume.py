@@ -65,7 +65,11 @@ def _run_full(ra, synthetic_cohort, workdir: Path):
     )
 
 
-def _write_bench_resume_checkpoint(run_dir: Path, *, complete: bool = False) -> None:
+def _write_bench_resume_checkpoint(
+    run_dir: Path,
+    *,
+    run_status_claims_complete: bool = False,
+) -> None:
     run_dir.mkdir(parents=True, exist_ok=True)
     (run_dir / "analysis_plan.json").write_text(
         json.dumps({"steps": []}), encoding="utf-8"
@@ -73,7 +77,7 @@ def _write_bench_resume_checkpoint(run_dir: Path, *, complete: bool = False) -> 
     (run_dir / "manifest_partial.json").write_text(
         json.dumps({"per_step_records": []}), encoding="utf-8"
     )
-    if complete:
+    if run_status_claims_complete:
         (run_dir / "run_status.json").write_text(
             json.dumps({"gates": {"execution_complete": True}}),
             encoding="utf-8",
@@ -1513,11 +1517,40 @@ def test_bench_runner_explicit_resume_id_wins_over_auto_discovery(tmp_path: Path
     )
 
 
-def test_bench_runner_auto_resume_ignores_complete_runs(tmp_path: Path):
+def test_bench_runner_auto_resume_does_not_trust_run_status_only_completion(
+    tmp_path: Path,
+):
+    interrupted = tmp_path / "run_20260701T010000_interrupted"
+    unverified_latest = tmp_path / "run_20260701T999999_unverified"
+    _write_bench_resume_checkpoint(interrupted)
+    _write_bench_resume_checkpoint(
+        unverified_latest,
+        run_status_claims_complete=True,
+    )
+
+    assert (
+        _resolve_resume_run_id(
+            workdir=tmp_path,
+            reuse_existing=True,
+            resume_run_id=None,
+        )
+        == unverified_latest.name
+    )
+
+
+def test_bench_runner_auto_resume_ignores_authoritatively_complete_runs(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
     interrupted = tmp_path / "run_20260701T010000_interrupted"
     complete_latest = tmp_path / "run_20260701T999999_complete"
     _write_bench_resume_checkpoint(interrupted)
-    _write_bench_resume_checkpoint(complete_latest, complete=True)
+    _write_bench_resume_checkpoint(complete_latest)
+    (complete_latest / "manifest.json").write_text("{}\n", encoding="utf-8")
+    monkeypatch.setattr(
+        "tools.run_research_agent_bench._run_reached_execution_complete",
+        lambda run_dir: run_dir == complete_latest,
+    )
 
     assert (
         _resolve_resume_run_id(
