@@ -52,8 +52,9 @@ Reviewer-facing claim: generated analysis code is executed and checked by
 software gates. A failed or unsafe analysis path is demoted or blocked
 rather than trusted because an LLM said it was valid.
 
-Code examples: `pipeline_execute.py`, `code_repair.py`, `code_hygiene.py`,
-`audits/validators.py`, `visual_qa.py`, `causal_audit.py`.
+Code examples: `pipeline_execute.py`, `repairs/source.py`,
+`repairs/coordination.py`, `gates/preflight.py`, `code_hygiene.py`,
+`audits/validators.py`, `gates/visual.py`, `causal_audit.py`.
 
 ## Layer 4: Evidence And Provenance
 
