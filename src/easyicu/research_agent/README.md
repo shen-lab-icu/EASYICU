@@ -14,7 +14,7 @@ protocol is [`docs/figure2_taskbank_9x3_protocol.md`](../../../docs/figure2_task
 
 EasyICU's distinct contribution is the **ICU-aware research context**
 (`schema.py`, `icu_rules.py`, `context.py`, `case_contexts.py`) and
-the **deterministic hashed evidence store** (`evidence.py`,
+the **deterministic hashed evidence store** (`authority/evidence_store.py`,
 `validators.py`) that every agent output must pass through before it
 can affect the manuscript.
 

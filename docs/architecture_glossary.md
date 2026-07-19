@@ -71,7 +71,7 @@ Reviewer-facing claim: every reported result is linked to a registered
 artifact or formula-derived numeric claim. In submission mode, untraced
 numbers fail the run.
 
-Code examples: `evidence.py`, `pipeline_writer_aux.py`,
+Code examples: `authority/evidence_store.py`, `pipeline_writer_aux.py`,
 `manuscript_post.py`, `replication/envelope.py`.
 
 ## Layer 5: Evaluation And Submission Scaffold

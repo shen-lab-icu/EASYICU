@@ -1,7 +1,9 @@
 # Research-agent Module Inventory and Retirement Audit
 
-Baseline: `refactor/agent-control-plane@c2df928`; current architecture measured
-at `c411ed0`/`00c962d` after the retirement and dependency-inversion patches.
+Baseline: `refactor/agent-control-plane@c2df928`; current architecture is the
+pre-v1 breaking-cleanup line after the responsibility-package and authority
+relocation bundles.  Archived diagnostic runs will be rerun from fresh inputs;
+they no longer constrain import-path compatibility.
 
 This inventory explains why `src/easyicu/research_agent/` still appears flat
 after responsibility packages were introduced, and distinguishes safe cleanup
@@ -17,12 +19,11 @@ Before the retirement patch, the 161 top-level Python files comprised:
 | Non-exact archive compatibility shims | 3 | 65 | `figure_contract.py`, `temporal_features.py`, `step_summary.py` |
 | Real top-level implementations | 93 | 98,530 | Canonical/public/frozen/dormant implementations requiring individual review |
 
-The first safe retirement removed one never-wired implementation and its test,
-plus one unused function/import. The current tree therefore has 160 top-level
-files and 92 real top-level implementations (approximately 97.9k LOC). After
-the planning-contract, provider-protocol, replication-metric, and execute-host
-service cuts, the module graph reports 295 modules, 20 packages, 822 edges, and
-**zero cyclic modules / zero SCCs**. The former 23-module control-plane SCC,
+The cleanup has now removed the old facade layer rather than retaining hundreds
+of tiny forwarding files.  The current tree has **65 top-level Python files
+including `__init__.py` (75,933 LOC)**, with 222 modules in 23 responsibility
+packages and 759 static import edges.  The graph remains at **zero cyclic
+modules / zero SCCs**.  The former 23-module control-plane SCC,
 validator/replication pair, and final pipeline/execute/publication-figure cycle
 are gone.
 
@@ -31,9 +32,9 @@ digest and archived-candidate compatibility still use a controlled registry-
 mediated dynamic import of legacy implementation modules; that runtime
 compatibility surface is not an import-time SCC and is not classified as dead.
 
-The visible file count is therefore partly intentional compatibility surface,
-but the remaining 92 real top-level implementations and the two ~11k-line
-pipeline modules show that the architecture is not yet fully organized.
+The remaining visible file count is now implementation work, not compatibility
+surface.  The two ~11k-line pipeline modules and the remaining top-level domain
+modules show that the architecture is not yet fully organized.
 
 ## Retirement decision method
 
@@ -62,26 +63,19 @@ even when current production dispatch is empty.
 These removals do not change the active figure provenance gate or Agent-owned
 scientific choices.
 
-## Compatibility aliases that must remain
+## Retired compatibility surface
 
-The 65 exact aliases are deliberately locked by module-identity and graph tests.
-They cover moved gate/execution/authority, runner, discovery, reporting, repair,
-planning, context, evaluation, and review modules. They let archived scripts,
-third-party imports, and monkeypatches through either old or canonical paths
-reach the same module object.
+The pre-v1 alias files and the three non-exact archive shims
+(`figure_contract.py`, `temporal_features.py`, and `step_summary.py`) have been
+deleted.  Current code and tests import responsibility packages directly.
+`legacy_code_migrations.py` and its exact publication-helper rewrite were also
+deleted; current invalid helper introspection still fails closed and is routed
+through the normal typed repair path.  The pre-cleanup state remains available
+from the archive tag rather than from runtime shims.
 
-New production code must use the responsibility package; the alias is not the
-canonical implementation. Removing aliases requires an explicit public API and
-archive-retirement policy, not a cosmetic cleanup commit.
+## Retired deterministic primary runners
 
-The three non-exact archive shims (`figure_contract.py`,
-`temporal_features.py`, and `step_summary.py`) also remain. Likewise,
-`legacy_code_migrations.py` is live through `repairs/source.py` and is not dead
-code.
-
-## Parked deterministic primary runners
-
-The following canonical implementations live under `execution/runners/`:
+The following unowned implementations were deleted from `execution/runners/`:
 
 - `deterministic_causal.py`
 - `deterministic_clustering.py`
@@ -90,11 +84,10 @@ The following canonical implementations live under `execution/runners/`:
 - `deterministic_sensitivity.py`
 - `deterministic_survival.py`
 
-They currently own no production step: both primary-runner sets are empty and
-the capability registry declares `llm_coded` with `primary_runner=None`.
-However, direct-import compatibility tests/public paths remain. They are marked
-**parked/deprecated**, not deleted. Their headers must no longer imply that they
-currently own primary science.
+They owned no production step: both primary-runner sets were empty and the
+capability registry declared `llm_coded` with `primary_runner=None`.  Their
+implementation-only tests and old import paths were retired with them.  This
+removes 3,486 lines without changing any live analysis route.
 
 The live auxiliary deterministic paths are descriptive, missingness,
 robustness, and trajectory-stability execution. They compute or render an
@@ -115,9 +108,10 @@ method, or estimand.
 
 1. **Paper semantics in installed core.** `evaluation_scorecard.py`,
    `validity_signals.py`, and `icu_agent_bench.py` still participate in the
-   current Figure 2 evaluator/scorer authority. They cannot be moved as an
-   ordinary refactor: use additive evaluator v3, preserve v1/v2 bytes and
-   digests, then leave compatibility shims.
+   current Figure 2 evaluator/scorer authority.  The additive evaluator v3 now
+   binds the relocated authority modules while preserving the frozen v1/v2
+   protocol bytes; later scorer-core moves require another explicit authority
+   version rather than an invisible path change.
 2. **Case/showcase leaves.** `case_contexts.py` and
    `easyicu_case_builder.py` encode lactate/MAP/vasopressor showcase material.
    Move these toward examples/replication only after consumer and archive
@@ -139,9 +133,10 @@ method, or estimand.
 
 1. Keep the import graph acyclic: execute/publication consumers receive fresh,
    immutable host-service snapshots and may not reverse-import `pipeline`.
-2. Add explicit deprecation metadata/tests for parked primary runners; remove
-   them only under an archive/public API retirement version.
-3. Design additive evaluator v3 before moving scorer-bound files.
+2. Keep deleted primary runners absent and keep the registry's primary science
+   owner set empty.
+3. Re-authorize scorer-bound moves additively; never rewrite frozen v1/v2
+   evaluator bytes.
 4. Audit display labels and mock/learning examples as protocol changes, not
    mechanical file moves.
 5. Run release archive, wheel old/new import smoke, module graph, meta/capability,

@@ -18,7 +18,7 @@ in EasyICU pilots:
   ``03_complete_case_robustness`` failed with 502 after the
   reproducibility_envelope was registered; if you see ``Error code:
   502`` on a step that also writes the envelope, the resume path
-  expects ``on_sha_change='new_id'`` (see evidence.py)." Emitted by
+  expects ``on_sha_change='new_id'`` (see ``authority/evidence_store.py``)." Emitted by
   the reflector after the supersession partition surfaces a
   previously-failing step that succeeded on retry.
 
