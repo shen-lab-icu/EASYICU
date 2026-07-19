@@ -10,7 +10,7 @@ import ast
 import builtins
 import re
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Optional, Sequence
 
 from ..research_context.prompt_scope import normalised_method_head
 from ..schema import AnalysisStep, ValidationFinding
@@ -4704,7 +4704,7 @@ def _builtin_int_binding_is_unmodified(tree: ast.Module) -> bool:
 def _scalar_cast_before_reduction_findings(
     tree: ast.Module,
 ) -> list[ValidationFinding]:
-    """Reject the mechanically invalid built-in ``int(value).sum()`` form."""
+    """Reject mechanically invalid integer casts around array-like counts."""
 
     if not _builtin_int_binding_is_unmodified(tree):
         return []
@@ -4726,6 +4726,10 @@ def _scalar_cast_before_reduction_findings(
             continue
         unsafe_lines.append(int(node.lineno))
 
+    unsafe_lines.extend(
+        int(node.lineno) for node in _unreduced_boolean_mask_count_casts(tree)
+    )
+
     if not unsafe_lines:
         return []
     return [
@@ -4733,9 +4737,9 @@ def _scalar_cast_before_reduction_findings(
             validator="mechanical_code_preflight",
             severity="error",
             message=(
-                "A built-in integer cast is applied before a zero-argument sum "
-                "reduction; reduce the array-like expression before converting "
-                "the resulting scalar."
+                "A built-in integer cast is applied to an unreduced array-like "
+                "count; reduce the boolean mask before converting the resulting "
+                "scalar."
             ),
             detail={
                 "reason": "scalar_cast_before_reduction",
@@ -4743,6 +4747,133 @@ def _scalar_cast_before_reduction_findings(
             },
         )
     ]
+
+
+_ARRAY_BOOLEAN_PREDICATE_METHODS = frozenset(
+    {
+        "between",
+        "duplicated",
+        "isna",
+        "isin",
+        "notna",
+    }
+)
+
+
+def _is_array_boolean_predicate(node: ast.AST) -> bool:
+    """Return whether ``node`` is structurally an array-like boolean predicate."""
+
+    if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.Invert):
+        return _is_array_boolean_predicate(node.operand)
+    if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
+        return node.func.attr in _ARRAY_BOOLEAN_PREDICATE_METHODS
+    if isinstance(node, ast.Compare):
+        operands = [node.left, *node.comparators]
+        return any(
+            any(
+                isinstance(candidate, ast.Subscript)
+                or (
+                    isinstance(candidate, ast.Call)
+                    and isinstance(candidate.func, ast.Attribute)
+                )
+                for candidate in ast.walk(operand)
+            )
+            for operand in operands
+        )
+    if isinstance(node, ast.BinOp) and isinstance(node.op, (ast.BitAnd, ast.BitOr)):
+        return _is_array_boolean_predicate(node.left) and _is_array_boolean_predicate(
+            node.right
+        )
+    return False
+
+
+def _is_numeric_zero(value: ast.AST) -> bool:
+    return (
+        isinstance(value, ast.Constant)
+        and isinstance(value.value, (int, float))
+        and not isinstance(value.value, bool)
+        and float(value.value) == 0.0
+    )
+
+
+def _name_has_numeric_zero_guard(
+    name: str,
+    *,
+    after_line: int,
+    nodes: Sequence[ast.AST],
+) -> bool:
+    for node in nodes:
+        if (
+            not isinstance(node, ast.Compare)
+            or int(getattr(node, "lineno", 0)) <= after_line
+            or len(node.ops) != 1
+            or len(node.comparators) != 1
+        ):
+            continue
+        if isinstance(node.left, ast.Name) and node.left.id == name:
+            if _is_numeric_zero(node.comparators[0]):
+                return True
+        if isinstance(node.comparators[0], ast.Name) and node.comparators[0].id == name:
+            if _is_numeric_zero(node.left):
+                return True
+    return False
+
+
+def _unreduced_boolean_mask_count_casts(tree: ast.Module) -> list[ast.Call]:
+    """Find ``count = int(mask)`` only when later control flow proves count use.
+
+    The deliberately narrow proof requires a simple, uniquely assigned name,
+    an array-like boolean expression joined by ``&``/``|``, and a later
+    comparison of that name with numeric zero in the same lexical scope.  This
+    avoids rewriting scalar bitwise expressions or guessing from variable
+    names.
+    """
+
+    scopes: list[list[ast.stmt]] = [tree.body]
+    scopes.extend(
+        node.body
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    )
+    candidates: list[ast.Call] = []
+    for statements in scopes:
+        nodes = _scope_nodes(statements)
+        assignments_by_name: dict[str, list[ast.AST]] = {}
+        candidate_by_name: dict[str, tuple[ast.Assign | ast.AnnAssign, ast.Call]] = {}
+        for node in nodes:
+            if not isinstance(node, (ast.Assign, ast.AnnAssign)) or node.value is None:
+                continue
+            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+            for target in targets:
+                if isinstance(target, ast.Name):
+                    assignments_by_name.setdefault(target.id, []).append(node)
+            if len(targets) != 1 or not isinstance(targets[0], ast.Name):
+                continue
+            value = node.value
+            if not (
+                isinstance(value, ast.Call)
+                and isinstance(value.func, ast.Name)
+                and value.func.id == "int"
+                and len(value.args) == 1
+                and not value.keywords
+                and isinstance(value.args[0], ast.BinOp)
+                and isinstance(value.args[0].op, (ast.BitAnd, ast.BitOr))
+                and _is_array_boolean_predicate(value.args[0])
+            ):
+                continue
+            candidate_by_name[targets[0].id] = (node, value)
+
+        for name, (assignment, cast) in candidate_by_name.items():
+            if len(assignments_by_name.get(name, ())) != 1:
+                continue
+            if not _name_has_numeric_zero_guard(
+                name,
+                after_line=int(assignment.lineno),
+                nodes=nodes,
+            ):
+                continue
+            candidates.append(cast)
+    return candidates
 
 
 def _first_time_companion_findings(tree: ast.Module) -> list[ValidationFinding]:
