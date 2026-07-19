@@ -261,7 +261,6 @@ _SYNTACTIC_REPAIRS = {
     "restore_shadowed_json_module_v1",
     "replace_hallucinated_figure_utils_import_v1",
     "prediction_calibration_import_fix_v1",
-    "legacy_publication_helper_adapter_v1",
     "scalar_cast_before_reduction_v1",
 }
 
