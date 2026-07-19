@@ -381,7 +381,7 @@ def test_blueprint_and_agent_context_honor_explicit_primary_exposure(ra):
         primary_exposure="lab",
     )
 
-    from easyicu.research_agent.agents import _format_context
+    from easyicu.research_agent.agents.core import _format_context
     from easyicu.research_agent.literature import _pick_blueprint_predictor
 
     assert _pick_blueprint_predictor(ctx) == "lab"

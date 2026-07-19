@@ -12,8 +12,8 @@ import subprocess
 from pathlib import Path
 from types import SimpleNamespace
 
-import easyicu.research_agent.agentic_coder as ac_mod
-from easyicu.research_agent.agentic_coder import (
+import easyicu.research_agent.agents.agentic_coder as ac_mod
+from easyicu.research_agent.agents.agentic_coder import (
     AgenticCoderAgent,
     maybe_wrap_coder,
 )

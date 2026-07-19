@@ -37,61 +37,61 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 
-from .planning.analysis_types import (
+from ..planning.analysis_types import (
     canonical_analysis_family,
     infer_analysis_type,
     locked_analysis_type_guide,
     planner_analysis_type_guide,
 )
-from .trajectory_contract import trajectory_phenotyping_code_contract
-from .trajectory_plan_contract import (
+from ..trajectory_contract import trajectory_phenotyping_code_contract
+from ..trajectory_plan_contract import (
     trajectory_planner_contract_guide,
     trajectory_role_code_contract,
 )
-from .method_capabilities import coder_method_capability_block
-from .cohort_schema import ALLOWED_CTAS_AGGREGATIONS, known_concept_ids
-from .icu_rules import (
+from ..method_capabilities import coder_method_capability_block
+from ..cohort_schema import ALLOWED_CTAS_AGGREGATIONS, known_concept_ids
+from ..icu_rules import (
     GENERAL_ICU_ANALYSIS_PRINCIPLES,
     VariableKind,
     default_time_windows,
 )
-from .providers.protocol import LLMClient, LLMMessage
-from .repairs.patch import (
+from ..providers.protocol import LLMClient, LLMMessage
+from ..repairs.patch import (
     PATCH_FORMAT,
     looks_like_executable_python,
     repair_code_excerpt,
 )
-from .authority.coder_authority import HostCoderAuthority
-from .research_context.prompt_scope import (
+from ..authority.coder_authority import HostCoderAuthority
+from ..research_context.prompt_scope import (
     coder_context_requires_method_constraints,
     coder_guide_for_step,
     coder_rewrite_guide_for_step,
     scoped_coder_context,
 )
-from .declared_product_contract import (
+from ..declared_product_contract import (
     RUNTIME_BINDABLE_TYPED_INPUT_KINDS,
     typed_product as _canonical_typed_product,
 )
-from .plan_utils import (
+from ..plan_utils import (
     _cohort_predicate_partition_safety_rules,
     _primary_analysis_cohort_canonical_schema_rules,
     effect_output_authorized,
 )
-from .providers.prompts import PROMPT_PACK_VERSION, load_prompt_pack
-from .authority.provider_budget import (
+from ..providers.prompts import PROMPT_PACK_VERSION, load_prompt_pack
+from ..authority.provider_budget import (
     StepProviderCallBudget,
     complete_with_provider_budget,
 )
-from .repairs.coordination import RepairCoordinator
-from .repairs.reasons import (
+from ..repairs.coordination import RepairCoordinator
+from ..repairs.reasons import (
     RepairPromptAuthority,
     RepairReason,
     RepairRoute,
     repair_prompt_binding_sha256,
 )
-from .research_context.typed import materialized_input_prompt_attachment
-from .step_authority_capsule import ContentRef
-from .schema import (
+from ..research_context.typed import materialized_input_prompt_attachment
+from ..step_authority_capsule import ContentRef
+from ..schema import (
     AggregationRule,
     AgentRuntimeState,
     AnalysisPlan,
@@ -113,7 +113,7 @@ from .schema import (
     VisualizationRequest,
     VisualizationResult,
 )
-from .temporal_semantics import (
+from ..temporal_semantics import (
     ConceptValidationLayer,
     ICUEpisodeResolver,
     TemporalAlignmentEngine,
@@ -353,7 +353,7 @@ def _format_context(
     # method_compatibility.py. Appended once so every agent role
     # (planner / coder / analyzer / writer) sees the same up-front
     # constraints and the matrix is the single source of truth.
-    from .gates.method_compatibility import render_variable_constraints
+    from ..gates.method_compatibility import render_variable_constraints
 
     if include_method_constraints:
         constraints = render_variable_constraints(ctx)
@@ -810,7 +810,7 @@ class PlannerAgent:
             LLMMessage(role="system", content=_SYSTEM_GUIDE + _PRINCIPLES_GUIDE),
             LLMMessage(role="user", content=_build_planner_user_prompt(context)),
         ]
-        from .providers.structured_retry import call_llm_with_structured_retry
+        from ..providers.structured_retry import call_llm_with_structured_retry
 
         return call_llm_with_structured_retry(
             self.llm,
@@ -1060,7 +1060,7 @@ class ReplannerAgent(PlannerAgent):
                 ),
             ),
         ]
-        from .providers.structured_retry import call_llm_with_structured_retry
+        from ..providers.structured_retry import call_llm_with_structured_retry
 
         revised = call_llm_with_structured_retry(
             self.llm,
@@ -1946,7 +1946,7 @@ class CoderAgent:
         ] = None,
         on_repair_candidate: Optional[Callable[[ContentRef, str, int], None]] = None,
     ) -> str:
-        from .gates.method_compatibility import (
+        from ..gates.method_compatibility import (
             detect_forbidden_pattern_usage,
             format_violation_message,
         )

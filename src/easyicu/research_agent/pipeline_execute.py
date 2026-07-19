@@ -56,7 +56,7 @@ from typing import (
     Tuple,
 )
 
-from .agents import (
+from .agents.core import (
     AnalyzerAgent,
     ClinicalSemanticsAgent,
     CoderAgent,
@@ -3599,7 +3599,7 @@ def run_execute_phase(
     # coding-agent CLI when EASYICU_AGENTIC_CODER_BACKEND is set. Off by default;
     # degrades back to ``coder`` when the CLI is unavailable. The script it
     # returns is still executed + evidence-bound by the instrumented runtime.
-    from .agentic_coder import AgenticCoderAgent, maybe_wrap_coder
+    from .agents.agentic_coder import AgenticCoderAgent, maybe_wrap_coder
 
     coder = maybe_wrap_coder(coder)
     coder_provider_identity_sha256 = (

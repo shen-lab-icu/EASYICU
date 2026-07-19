@@ -6,7 +6,7 @@ import json
 
 import pytest
 
-from easyicu.research_agent.agents import CoderAgent, _looks_like_python_script
+from easyicu.research_agent.agents.core import CoderAgent, _looks_like_python_script
 from easyicu.research_agent.gates.preflight import audit_mechanical_code_contracts
 from easyicu.research_agent.repairs.source import deterministic_concept_audit_repair
 from easyicu.research_agent.research_context.prompt_scope import (
@@ -182,7 +182,7 @@ def test_step_scoped_context_never_truncates_an_authoritative_companion_family(r
 
 
 def test_figure_coder_guide_excludes_unrelated_method_families(ra):
-    from easyicu.research_agent.agents import _CODER_GUIDE
+    from easyicu.research_agent.agents.core import _CODER_GUIDE
 
     guide = coder_guide_for_step(_CODER_GUIDE, _figure_step(ra))
 
@@ -194,7 +194,7 @@ def test_figure_coder_guide_excludes_unrelated_method_families(ra):
 
 
 def test_table_coder_guide_loads_host_owned_descriptive_input_contract(ra):
-    from easyicu.research_agent.agents import _CODER_GUIDE
+    from easyicu.research_agent.agents.core import _CODER_GUIDE
 
     step = ra.AnalysisStep(
         step_id="describe",

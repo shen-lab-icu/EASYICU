@@ -494,7 +494,7 @@ def test_exact_capsule_resume_skips_generation_audit_and_execution_but_reruns_ga
     ra, tmp_path: Path, monkeypatch
 ) -> None:
     from easyicu.research_agent import pipeline_execute
-    from easyicu.research_agent.agents import RuntimeSupervisor
+    from easyicu.research_agent.agents.core import RuntimeSupervisor
     from easyicu.research_agent.runner import RunResult
     from easyicu.research_agent.schema import ValidationFinding
     from easyicu.research_agent.step_authority_capsule import (
@@ -822,7 +822,7 @@ def test_exact_capsule_resume_skips_generation_audit_and_execution_but_reruns_ga
     )
     assert "01_summary" not in current_successful_step_ids(partial["per_step_records"])
 
-    from easyicu.research_agent import agentic_coder
+    from easyicu.research_agent.agents import agentic_coder
 
     agentic_calls = {"n": 0}
 
@@ -874,7 +874,7 @@ def test_resume_seals_completed_repair_after_capsule_checkpoint_crash(
     ra, tmp_path: Path, monkeypatch
 ) -> None:
     from easyicu.research_agent import pipeline_execute
-    from easyicu.research_agent.agents import RuntimeSupervisor
+    from easyicu.research_agent.agents.core import RuntimeSupervisor
     from easyicu.research_agent.audits.validators import PrimaryModelContractValidator
     from easyicu.research_agent.runner import RunResult
     from easyicu.research_agent.schema import ValidationFinding

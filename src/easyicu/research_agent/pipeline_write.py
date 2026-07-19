@@ -19,7 +19,7 @@ import hashlib
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
-from .agents import CriticAgent, ManuscriptAgent
+from .agents.core import CriticAgent, ManuscriptAgent
 from .audits.manuscript_claims import audit_manuscript_numeric_claims
 from .reporting.bibtex import render_bibtex
 from .review.causal_audit import run_causal_audit

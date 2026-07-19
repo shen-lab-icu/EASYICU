@@ -266,7 +266,7 @@ def _strip_manuscript_noise(text: str) -> str:
     ("metrics.auroc") followed by content-addressed step IDs whose leading digit
     can be parsed as a spurious bare ``0``/``1`` AUROC/Brier claim — an
     intermittent false positive that fires only when the sha happens to start
-    with a digit. The critic already skips these lines (see agents.py); the
+    with a digit. The critic already skips these lines (see agents/core.py); the
     numeric auditor must too.
     """
     clean = re.sub(r"\[[^\]]+\]\([^)]*\)", "", text or "")

@@ -19,7 +19,7 @@ from easyicu.concept.metadata_sidecar import (
     ColumnMetadataBinding,
     binding_payload_sha256,
 )
-from easyicu.research_agent.agents import (
+from easyicu.research_agent.agents.core import (
     AnalyzerAgent,
     PlannerAgent,
     ReplannerAgent,

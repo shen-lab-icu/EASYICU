@@ -495,7 +495,7 @@ def test_planner_prompt_suggests_inferred_family(ra):
     """The planner sees a focused suggestion plus the full catalog."""
     import importlib
 
-    agents = importlib.import_module("easyicu.research_agent.agents")
+    agents = importlib.import_module("easyicu.research_agent.agents.core")
 
     def _ctx(question: str):
         return ra.ResearchContext(
@@ -539,7 +539,7 @@ def test_parse_fills_inferred_analysis_type_only_when_agent_omits_it(ra):
     import importlib
     import json
 
-    agents = importlib.import_module("easyicu.research_agent.agents")
+    agents = importlib.import_module("easyicu.research_agent.agents.core")
 
     ctx = ra.ResearchContext(
         research_question="Cox proportional hazards survival of 28-day mortality.",
@@ -578,7 +578,7 @@ def test_parse_fills_inferred_analysis_type_only_when_agent_omits_it(ra):
 def test_parse_preserves_agent_selected_family_and_rationale(ra):
     import importlib
 
-    agents = importlib.import_module("easyicu.research_agent.agents")
+    agents = importlib.import_module("easyicu.research_agent.agents.core")
     ctx = ra.ResearchContext(
         research_question=(
             "Estimate a binary mortality association at 28 days after follow-up "
@@ -621,7 +621,7 @@ def test_parse_preserves_agent_selected_family_and_rationale(ra):
 def test_parse_rejects_unknown_analysis_type_instead_of_bypassing_contract(ra):
     import importlib
 
-    agents = importlib.import_module("easyicu.research_agent.agents")
+    agents = importlib.import_module("easyicu.research_agent.agents.core")
     ctx = ra.ResearchContext(
         research_question="Estimate a time-to-event association.",
         cohort=ra.CohortDescriptor(

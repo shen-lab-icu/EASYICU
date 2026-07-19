@@ -523,7 +523,7 @@ def test_robustness_lock_resume_rehydrates_only_legacy_timestamp_drift(
 
 
 def test_plan_payload_normalizer_drops_extra_robustness_spec_keys(ra) -> None:
-    from easyicu.research_agent.agents import _normalise_plan_payload
+    from easyicu.research_agent.agents.core import _normalise_plan_payload
     from easyicu.research_agent.robustness_panel import default_robustness_specs
     from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep
 

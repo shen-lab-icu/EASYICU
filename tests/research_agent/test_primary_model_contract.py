@@ -608,7 +608,7 @@ def test_primary_model_contract_blocks_planner_requirement_field_drift(
 
 
 def test_plan_normalizer_preserves_typed_model_requirements() -> None:
-    from easyicu.research_agent.agents import _normalise_plan_payload
+    from easyicu.research_agent.agents.core import _normalise_plan_payload
 
     payload, dropped = _normalise_plan_payload(
         {
@@ -1746,6 +1746,7 @@ def test_coder_prompt_declares_primary_model_canonical_enums() -> None:
         / "src"
         / "easyicu"
         / "research_agent"
+        / "providers"
         / "prompts"
         / "v1"
         / "coder.txt"
@@ -1763,7 +1764,7 @@ def test_coder_prompt_declares_primary_model_canonical_enums() -> None:
 
 
 def test_planner_prompt_declares_typed_model_requirements() -> None:
-    from easyicu.research_agent.agents import _build_planner_user_prompt
+    from easyicu.research_agent.agents.core import _build_planner_user_prompt
 
     prompt = _build_planner_user_prompt(_context())
 
@@ -1781,6 +1782,7 @@ def test_replanner_preserves_requirements_without_cross_family_drift() -> None:
         / "src"
         / "easyicu"
         / "research_agent"
+        / "providers"
         / "prompts"
         / "v1"
         / "replanner.txt"

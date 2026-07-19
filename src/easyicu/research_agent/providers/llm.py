@@ -497,7 +497,7 @@ class OpenAIClient:
         # Swap in the fresh client with a plain reference assignment (atomic in
         # CPython). Do NOT close the old client synchronously: the single
         # OpenAIClient is shared across the writer's 8-way ThreadPoolExecutor
-        # (agents.py), and a peer thread may be mid-request on the old client.
+        # (agents/core.py), and a peer thread may be mid-request on the old client.
         # Closing its httpx pool here tears that in-flight request down -- which
         # itself surfaces as a "connection reset" that re-enters this same
         # transient branch and triggers cascading rebuilds across all writers.

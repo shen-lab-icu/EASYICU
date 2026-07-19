@@ -51,7 +51,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 logger = logging.getLogger(__name__)
 
-from .agents import (
+from .agents.core import (
     AnalyzerAgent,
     ClinicalSemanticsAgent,
     CoderAgent,

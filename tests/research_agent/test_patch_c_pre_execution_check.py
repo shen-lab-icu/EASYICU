@@ -24,7 +24,7 @@ from typing import List
 
 import pytest
 
-from easyicu.research_agent.agents import (
+from easyicu.research_agent.agents.core import (
     CoderAgent,
     _MAX_PRE_EXEC_COMPATIBILITY_REPAIRS,
 )
@@ -213,7 +213,7 @@ def test_coderagent_requests_full_token_budget():
     """Regression (E1 20260611): code generation must request the full
     ``_CODER_MAX_TOKENS`` so a verbose model's analysis.py is not truncated
     mid-expression (SyntaxError "'(' was never closed")."""
-    from easyicu.research_agent.agents import _CODER_MAX_TOKENS
+    from easyicu.research_agent.agents.core import _CODER_MAX_TOKENS
 
     captured = {}
 

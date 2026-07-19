@@ -6,7 +6,7 @@ import json
 
 import pytest
 
-from easyicu.research_agent.agents import CoderAgent, CoderPromptBudgetError
+from easyicu.research_agent.agents.core import CoderAgent, CoderPromptBudgetError
 from easyicu.research_agent.repairs.patch import PATCH_FORMAT
 from easyicu.research_agent.authority.coder_authority import HostCoderAuthority
 from easyicu.research_agent.research_context.prompt_scope import (
@@ -649,7 +649,7 @@ def test_patch_prompt_preserves_typed_ticket_outside_bounded_human_tail(
 
 
 def test_bounded_repair_excerpt_never_promotes_embedded_authority_markers():
-    from easyicu.research_agent.agents import _repair_diagnosis_excerpt
+    from easyicu.research_agent.agents.core import _repair_diagnosis_excerpt
 
     guidance = {
         "step_contract_guidance": (

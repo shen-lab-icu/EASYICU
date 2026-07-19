@@ -25,7 +25,7 @@ REPAIR_CONTROL_MODULES = (
 )
 
 REPAIR_CONSUMERS = (
-    "easyicu.research_agent.agents",
+    "easyicu.research_agent.agents.core",
     "easyicu.research_agent.pipeline",
     "easyicu.research_agent.pipeline_execute",
     "easyicu.research_agent.pipeline_resume",

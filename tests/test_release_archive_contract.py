@@ -171,6 +171,8 @@ def test_release_archives_preserve_reviewer_contract_and_package_data(
             "src/easyicu/data/concept-dict.json",
             "src/easyicu/data/data-sources.json",
             "src/easyicu/research_agent/README.md",
+            "src/easyicu/research_agent/agents/agentic_coder.py",
+            "src/easyicu/research_agent/agents/core.py",
             "src/easyicu/research_agent/planning/cohort_contract.py",
             "src/easyicu/research_agent/planning/robustness_contract.py",
             "src/easyicu/research_agent/providers/cost.py",
@@ -211,6 +213,9 @@ def test_release_archives_preserve_reviewer_contract_and_package_data(
         assert any(name.endswith(".dist-info/entry_points.txt") for name in wheel_names)
 
         required_canonical_modules = {
+            "easyicu/research_agent/agents/__init__.py",
+            "easyicu/research_agent/agents/agentic_coder.py",
+            "easyicu/research_agent/agents/core.py",
             "easyicu/research_agent/planning/cohort_contract.py",
             "easyicu/research_agent/planning/robustness_contract.py",
             "easyicu/research_agent/providers/cost.py",
@@ -243,6 +248,8 @@ def test_release_archives_preserve_reviewer_contract_and_package_data(
         }
         assert retired_sdist.isdisjoint(sdist_names)
         assert retired_wheel.isdisjoint(wheel_names)
+        assert "src/easyicu/research_agent/agents.py" not in sdist_names
+        assert "easyicu/research_agent/agents.py" not in wheel_names
 
         wheel_extract_dir = tmp_path / "installed-wheel"
         with zipfile.ZipFile(wheel_path) as archive:
@@ -255,6 +262,9 @@ from pathlib import Path
 
 root = Path(__import__('os').environ['EASYICU_WHEEL_ROOT']).resolve()
 for name in (
+    'easyicu.research_agent.agents',
+    'easyicu.research_agent.agents.agentic_coder',
+    'easyicu.research_agent.agents.core',
     'easyicu.research_agent.providers.cost',
     'easyicu.research_agent.providers.llm',
     'easyicu.research_agent.providers.mocks',

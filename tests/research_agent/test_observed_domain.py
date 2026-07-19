@@ -18,7 +18,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from easyicu.research_agent.agents import _format_observed_domain
+from easyicu.research_agent.agents.core import _format_observed_domain
 from easyicu.research_agent.cohort_artifact_facts import observed_domain_for_series
 from easyicu.research_agent.research_context.builder import _observed_domain
 

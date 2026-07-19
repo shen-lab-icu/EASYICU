@@ -240,7 +240,7 @@ def test_replanner_injects_runtime_directive_into_prompt(ra):
         ResearchContext,
         VariableRole,
     )
-    from easyicu.research_agent.agents import ReplannerAgent
+    from easyicu.research_agent.agents.core import ReplannerAgent
 
     captured: dict = {}
 
@@ -283,7 +283,7 @@ def test_replanner_without_directive_has_no_directive_block(ra):
         ResearchContext,
         VariableRole,
     )
-    from easyicu.research_agent.agents import ReplannerAgent
+    from easyicu.research_agent.agents.core import ReplannerAgent
 
     captured: dict = {}
 

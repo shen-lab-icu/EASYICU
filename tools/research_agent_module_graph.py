@@ -37,6 +37,8 @@ DEFAULT_PACKAGE_DIR = REPO_ROOT / "src" / "easyicu" / "research_agent"
 DEFAULT_PACKAGE_NAME = "easyicu.research_agent"
 
 SUPPORTED_CANONICAL_MODULES: Tuple[str, ...] = (
+    "easyicu.research_agent.agents.core",
+    "easyicu.research_agent.agents.agentic_coder",
     "easyicu.research_agent.providers.protocol",
     "easyicu.research_agent.providers.factory",
     "easyicu.research_agent.providers.llm",
