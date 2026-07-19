@@ -3619,6 +3619,94 @@ model.fit(frame[['marker_first']], assignment)
     assert "downgraded_reason" not in conditional_findings[0].detail
 
 
+def test_llm_concept_auditor_accepts_direct_self_raising_host_receipts(ra):
+    class _FalsePositiveLLM:
+        def complete(self, messages, *, max_tokens=1024, temperature=0.0):
+            return json.dumps({"findings": [{
+                "severity": "error",
+                "message": "The receipt status is not inspected.",
+                "detail": {
+                    "issue_code": "audit_only_companion_row_gating_required",
+                    "variables": ["marker_first"],
+                },
+            }]})
+
+    script = """
+from easyicu.research_agent.methods.descriptive_inputs import measurement_provenance_receipt
+
+def main():
+    receipts = [measurement_provenance_receipt(
+        frame,
+        measured_column="marker_measured",
+        count_column="marker_n",
+    )]
+    model.fit(frame[["marker_first"]], assignment)
+
+if __name__ == "__main__":
+    main()
+"""
+    findings = ra.LLMConceptAuditor(_FalsePositiveLLM()).audit(
+        context=ra.build_research_context(
+            research_question="Model assignment from early physiology.",
+            cohort=pd.DataFrame({
+                "stay_id": [1, 2],
+                "marker_first": [1.0, 2.0],
+                "marker_measured": [1, 1],
+                "marker_n": [1, 1],
+            }),
+            cohort_name="c",
+            database="synthetic",
+        ),
+        script_text=script,
+        step=None,
+    )
+
+    assert findings[0].severity == "warning"
+    assert "self-raising" in findings[0].detail["downgraded_reason"]
+
+
+def test_llm_concept_auditor_does_not_accept_unused_host_receipt_decoy(ra):
+    class _FindingLLM:
+        def complete(self, messages, *, max_tokens=1024, temperature=0.0):
+            return json.dumps({"findings": [{
+                "severity": "error",
+                "message": "Provenance is not fail-closed.",
+                "detail": {
+                    "issue_code": "audit_only_companion_row_gating_required",
+                    "variables": ["marker_first"],
+                },
+            }]})
+
+    script = """
+from easyicu.research_agent.methods.descriptive_inputs import measurement_provenance_receipt
+
+def unused():
+    measurement_provenance_receipt(
+        frame, measured_column="marker_measured", count_column="marker_n"
+    )
+
+model.fit(frame[["marker_first"]], assignment)
+"""
+    findings = ra.LLMConceptAuditor(_FindingLLM()).audit(
+        context=ra.build_research_context(
+            research_question="Model assignment from early physiology.",
+            cohort=pd.DataFrame({
+                "stay_id": [1, 2],
+                "marker_first": [1.0, 2.0],
+                "marker_measured": [1, 1],
+                "marker_n": [1, 1],
+            }),
+            cohort_name="c",
+            database="synthetic",
+        ),
+        script_text=script,
+        step=None,
+    )
+
+    assert findings[0].severity == "error"
+    assert "downgraded_reason" not in findings[0].detail
+
+
 def test_llm_concept_auditor_does_not_downgrade_unused_provenance_flag(ra):
     class _CompanionGatingFindingLLM:
         def complete(self, messages, *, max_tokens=1024, temperature=0.0):
