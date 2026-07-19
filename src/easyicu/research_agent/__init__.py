@@ -674,7 +674,7 @@ def __getattr__(name: str):
         "context_information_summary",
         "write_research_context",
     }:
-        from . import case_contexts as _case_contexts
+        from .case_plugins import contexts as _case_contexts
 
         return getattr(_case_contexts, name)
     if name in {
@@ -783,7 +783,7 @@ def __getattr__(name: str):
         "read_exported_concept",
         "build_lactate_map_vaso_cohort_from_export",
     }:
-        from . import easyicu_case_builder as _case_builder
+        from .case_plugins import builder as _case_builder
 
         return getattr(_case_builder, name)
     if name in {
@@ -855,7 +855,7 @@ def __getattr__(name: str):
         "MemoryScoreBreakdown",
         "MemoryRetrievalAuditEntry",
     }:
-        from . import memory as _memory
+        from .learning import memory as _memory
 
         return getattr(_memory, name)
     if name in {"scaffold_to_latex", "latex_template_preamble"}:

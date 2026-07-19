@@ -17,7 +17,7 @@ from easyicu.research_agent.agentic_coder import (
     AgenticCoderAgent,
     maybe_wrap_coder,
 )
-from easyicu.research_agent.coder_authority_notes import HostCoderAuthority
+from easyicu.research_agent.authority.coder_authority import HostCoderAuthority
 
 
 class _FakeCoder:

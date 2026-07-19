@@ -237,7 +237,7 @@ class PipelineConfig:
     #
     # The mined records are produced by a deterministic reflector
     # (no LLM call): see
-    # ``easyicu.research_agent.experience.mine_experience_from_run``.
+    # ``easyicu.research_agent.learning.experience.mine_experience_from_run``.
     # The bank is opt-in because (i) it changes the planner's input
     # surface and (ii) the npj DM submission run does not depend on
     # experience-bank behaviour.

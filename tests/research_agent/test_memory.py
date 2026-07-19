@@ -131,7 +131,7 @@ def test_run_memory_distills_strategy_cards(ra, tmp_path: Path):
 
 
 def test_strategy_cards_hide_blocked_concept_dependencies(ra, tmp_path: Path, monkeypatch):
-    from easyicu.research_agent import memory as memory_module
+    from easyicu.research_agent.learning import memory as memory_module
 
     mem = ra.RunMemory(root=tmp_path)
     now = "2026-01-01T00:00:00+00:00"

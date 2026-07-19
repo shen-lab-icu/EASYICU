@@ -8,7 +8,7 @@ import pytest
 
 from easyicu.research_agent.agents import CoderAgent, CoderPromptBudgetError
 from easyicu.research_agent.repairs.patch import PATCH_FORMAT
-from easyicu.research_agent.coder_authority_notes import HostCoderAuthority
+from easyicu.research_agent.authority.coder_authority import HostCoderAuthority
 from easyicu.research_agent.research_context.prompt_scope import (
     coder_context_requires_method_constraints,
     coder_guide_for_step,

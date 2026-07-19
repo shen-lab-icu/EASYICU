@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Set, Tuple
 
 from ..audits.step_summary_integrity import StepSummaryIntegrityValidator
-from ..coder_authority_notes import HostCoderAuthority
+from .coder_authority import HostCoderAuthority
 from ..declared_product_contract import (
     RUNTIME_BINDABLE_TYPED_INPUT_KINDS,
     RUNTIME_TYPED_INPUT_EVIDENCE_KINDS,

@@ -227,7 +227,7 @@ from .evidence import (
     sha256_of_file,
 )
 from .evidence_authority import load_current_evidence_snapshot
-from .experience import (
+from .learning.experience import (
     ExperienceBank,
     ExperienceRecord,
     mine_experience_from_run,
@@ -330,7 +330,7 @@ from .llm import (
     llm_supports_vision,
     resolve_role_client,
 )
-from .memory import RunMemory
+from .learning.memory import RunMemory
 from .prompts import PROMPT_PACK_VERSION, prompt_pack_files
 from .runner import (
     HOST_OWNED_RUNNER_ENV_KEYS,

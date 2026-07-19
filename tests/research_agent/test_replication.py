@@ -135,7 +135,7 @@ def test_discover_easyicu_exports_requires_case_concepts(ra, tmp_path: Path):
 
 
 def test_replication_builder_fail_closes_on_database_native_time(tmp_path: Path):
-    from easyicu.research_agent.easyicu_case_builder import (
+    from easyicu.research_agent.case_plugins.builder import (
         build_lactate_map_vaso_cohort_from_export,
     )
 

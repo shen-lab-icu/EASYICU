@@ -30,7 +30,7 @@ from pathlib import Path
 
 import pytest
 
-from easyicu.research_agent.experience import (
+from easyicu.research_agent.learning.experience import (
     ExperienceBank,
     ExperienceRecord,
     jaccard_similarity,

@@ -10,7 +10,7 @@ import pandas as pd
 import pytest
 
 from easyicu.research_agent import cohort_materializer
-from easyicu.research_agent.easyicu_case_builder import (
+from easyicu.research_agent.case_plugins.builder import (
     build_lactate_map_vaso_cohort_from_export,
 )
 from easyicu.research_agent.data_catalog import build_available_catalog
@@ -416,7 +416,7 @@ def test_replication_discovery_accepts_native_and_legacy_packages(
 
 def test_case_builder_compatibility_exports_are_the_shared_intake_functions() -> None:
     import easyicu.research_agent as research_agent
-    from easyicu.research_agent import easyicu_case_builder
+    from easyicu.research_agent.case_plugins import builder as easyicu_case_builder
 
     assert easyicu_case_builder.index_export_package is intake.index_export_package
     assert easyicu_case_builder.read_exported_concept is intake.read_exported_concept
