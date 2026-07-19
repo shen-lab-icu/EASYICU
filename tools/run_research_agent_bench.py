@@ -2021,9 +2021,22 @@ def _enforce_mock_aware_provider(
     *,
     provider: str,
     allow_mock_aware: bool = False,
+    submission_profile: Optional["SubmissionProfile"] = None,
 ) -> None:
     """Reject mock-provider aware runs unless they are explicit smoke tests."""
     selected_arms = _normalize_arms(arms)
+    if (
+        "aware" in selected_arms
+        and provider == "mock"
+        and submission_profile is not None
+        and submission_profile.requires_real_provider is True
+    ):
+        raise SystemExit(
+            f"Submission profile '{submission_profile.ref}' requires a real "
+            "provider. The mock aware arm is fixture-only and cannot receive "
+            "paper-facing authority; drop --submission-profile for an offline "
+            "plumbing smoke test."
+        )
     # The MockLLMClient returns canned responses, so an "aware" arm run on
     # the mock provider reports fixture output rather than a genuine
     # ICU-aware analysis. Paper-facing results must use a real provider.
@@ -2495,6 +2508,12 @@ def main() -> int:
     args.arms = _enforce_submission_profile_arms(
         args.arms,
         profile=submission_profile,
+    )
+    _enforce_mock_aware_provider(
+        args.arms,
+        provider=args.provider,
+        allow_mock_aware=bool(args.allow_mock_aware),
+        submission_profile=submission_profile,
     )
     explicit_resume_run_id = _normalize_resume_run_id(
         getattr(args, "resume_run_id", None)
