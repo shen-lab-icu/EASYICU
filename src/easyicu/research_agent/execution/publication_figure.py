@@ -16,13 +16,11 @@ cross-file core-execution boundary. Holds:
   (``_sealed_renderer_source_digests`` / ``_sealed_renderer_implementation_digest``
   / ``_sealed_parent_planner_anchors`` / ``_sealed_typed_figure_products``).
 
-This module does not directly import ``pipeline_execute``; the extraction therefore
-removes that direct reverse edge.  It still imports ``pipeline`` and other legacy
-dependencies that participate in the residual pipeline strongly connected
-component, so it does not claim to make the wider import graph acyclic.  The
-generator takes all of its former ``_execute_one_step`` closure reads as explicit
-keyword-only params. ``pipeline_execute`` re-exports every public name here for
-back-compat.
+This module imports neither ``pipeline_execute`` nor ``pipeline``.  Host-owned
+authority functions arrive through an immutable service object, while the
+generator takes all former ``_execute_one_step`` closure reads as explicit
+keyword-only parameters. ``pipeline_execute`` re-exports every public name here
+for back-compat.
 """
 
 from __future__ import annotations
@@ -30,7 +28,7 @@ from __future__ import annotations
 import importlib
 import json
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Dict, List, Mapping, Optional, Sequence
+from typing import Any, Dict, List, Mapping, Optional, Sequence
 
 from ..declared_product_contract import (
     authorize_declared_figure_product_slots,
@@ -38,16 +36,9 @@ from ..declared_product_contract import (
 )
 from ..authority.parent_artifact import _resolve_upstream_manifest_step
 
-if TYPE_CHECKING:
-    from ..pipeline import ResearchAgentPipeline
 from ..evidence import sha256_of_bytes, sha256_of_file
 from .figure_preparation import _step_has_figure_only_output_contract
-from ..pipeline import (
-    _distribution_availability_figure_step_matches_parent,
-    _sealed_renderer_figure_step_matches_parent,
-    _sealed_renderer_parent_digest_seal,
-    deterministic_figure_repair_id_for_upstream,
-)
+from .host_services import ExecutePhaseHost, PublicationFigureAuthorityServices
 from ..repair_registry import is_sealed_renderer_repair, repair_metadata_for
 from ..schema import AnalysisStep, ResearchContext
 from ..step_worker_state import StepWorkerProgress
@@ -159,14 +150,17 @@ def _deterministic_publication_figure_code(
     run_dir: Path,
     step: AnalysisStep,
     worker_progress: StepWorkerProgress,
-    pipeline: "ResearchAgentPipeline",
+    pipeline: ExecutePhaseHost,
+    authority_services: PublicationFigureAuthorityServices,
     agent_context: ResearchContext,
     step_record: Dict[str, Any],
     sealed_renderer_state: SealedRendererState,
     _authorize_automatic_repair,
     _record_repair,
 ) -> Optional[str]:
-    exact_repair_id = deterministic_figure_repair_id_for_upstream(run_dir, step.step_id)
+    exact_repair_id = authority_services.deterministic_repair_id_for_upstream(
+        run_dir, step.step_id
+    )
     if (
         worker_progress.deterministic_fallback_used
         or not pipeline._enable_deterministic_runner_repair
@@ -195,7 +189,7 @@ def _deterministic_publication_figure_code(
             )
         except (ImportError, OSError, ValueError):
             return None
-        if not _sealed_renderer_figure_step_matches_parent(
+        if not authority_services.sealed_renderer_step_matches_parent(
             run_dir,
             step,
             exact_repair_id,
@@ -203,7 +197,7 @@ def _deterministic_publication_figure_code(
             return None
     sealed_parent_digests: Optional[Dict[str, str]] = None
     if sealed_renderer:
-        sealed_parent_digests = _sealed_renderer_parent_digest_seal(
+        sealed_parent_digests = authority_services.sealed_renderer_parent_digest_seal(
             run_dir,
             step.step_id,
             exact_repair_id,
@@ -243,7 +237,9 @@ def _deterministic_publication_figure_code(
     if exact_repair_id == (
         "distribution_availability_publication_bundle_from_parent_outputs_v1"
     ):
-        if not _distribution_availability_figure_step_matches_parent(run_dir, step):
+        if not authority_services.distribution_availability_step_matches_parent(
+            run_dir, step
+        ):
             return None
     candidate_code = """
 import hashlib

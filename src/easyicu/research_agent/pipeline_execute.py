@@ -231,6 +231,8 @@ from .execution.publication_figure import (
     _sealed_renderer_source_digests,
     _sealed_typed_figure_products,
 )
+from .execution.host_services import ExecutePhaseHost
+from .execution.output_files import _clear_output_dir, _has_figure_exports
 from .gates.visual import (
     VisualGateResult,
     VisualRepairAction,
@@ -244,20 +246,6 @@ from .gates.visual import (
 from .gate_semantics import blocking_validator_findings as _blocking_validator_findings
 from .llm import MockLLMClient
 from .ordered_stratified_contract import ordered_stratified_numeric_findings
-from .pipeline import (
-    _build_probe_summary,
-    _clear_output_dir,
-    _distribution_availability_figure_step_matches_parent,
-    _sealed_renderer_figure_step_matches_parent,
-    _sealed_renderer_parent_digest_seal,
-    deterministic_figure_family_supported_for_upstream,
-    deterministic_figure_repair_id_for_upstream,
-    _has_figure_exports,
-    _promote_prior_publication_bundle,
-    _promote_sibling_figure_exports,
-    _render_publication_bundle_from_prior_outputs_for_step,
-    _semantic_aliases_for,
-)
 from .repairs.reasons import (
     RepairPromptAuthority,
     RepairReason,
@@ -886,10 +874,8 @@ def _repair_publication_figure_in_staging(
     current_step_id: str,
     out_dir: Path,
     authorizer: Callable[[str], bool],
+    renderer: Callable[..., Optional[str]],
     step_text: str = "",
-    renderer: Callable[..., Optional[str]] = (
-        _render_publication_bundle_from_prior_outputs_for_step
-    ),
 ) -> Optional[str]:
     """Render into staging and replace agent exports only after success.
 
@@ -1489,10 +1475,6 @@ def _should_attempt_detached_figure_binding(
     return sealed_renderer_authorized_code_sha256 is None and _has_figure_exports(
         out_dir
     )
-
-
-if TYPE_CHECKING:
-    from .pipeline import ResearchAgentPipeline
 
 
 _SEALED_AUTHORITY_SUMMARY_MARKERS = (
@@ -3441,7 +3423,7 @@ def _execution_input_authority_integrity_finding(
 
 
 def run_execute_phase(
-    pipeline: "ResearchAgentPipeline",
+    pipeline: ExecutePhaseHost,
     *,
     plan_result: _PlanPhaseResult,
     cohort_path: Path,
@@ -3455,6 +3437,18 @@ def run_execute_phase(
     stop_after_step_id: Optional[str] = None,
 ) -> _ExecutePhaseResult:
     """Execute probe + per-step analysis loop, with optional replanning."""
+    services = pipeline._execute_phase_services()
+    _build_probe_summary = services.build_probe_summary
+    deterministic_figure_family_supported_for_upstream = (
+        services.deterministic_figure_family_supported_for_upstream
+    )
+    _promote_prior_publication_bundle = services.promote_prior_publication_bundle
+    _promote_sibling_figure_exports = services.promote_sibling_figure_exports
+    _render_publication_bundle_from_prior_outputs_for_step = (
+        services.render_publication_bundle_from_prior_outputs_for_step
+    )
+    _semantic_aliases_for = services.semantic_aliases_for
+    publication_figure_authority_services = services.publication_figure_authority
     context = plan_result.context
     agent_context = plan_result.agent_context
     # Planner memory, retrieval narration, hypothesis notes, and article
@@ -6206,6 +6200,7 @@ def run_execute_phase(
                 step=step,
                 worker_progress=worker_progress,
                 pipeline=pipeline,
+                authority_services=publication_figure_authority_services,
                 agent_context=agent_context,
                 step_record=step_record,
                 sealed_renderer_state=sealed_renderer_state,
@@ -6383,6 +6378,7 @@ def run_execute_phase(
                 step=step,
                 worker_progress=worker_progress,
                 pipeline=pipeline,
+                authority_services=publication_figure_authority_services,
                 agent_context=agent_context,
                 step_record=step_record,
                 sealed_renderer_state=sealed_renderer_state,
@@ -6537,6 +6533,9 @@ def run_execute_phase(
                             step=step,
                             worker_progress=worker_progress,
                             pipeline=pipeline,
+                            authority_services=(
+                                publication_figure_authority_services
+                            ),
                             agent_context=agent_context,
                             step_record=step_record,
                             sealed_renderer_state=sealed_renderer_state,
@@ -9733,6 +9732,9 @@ def run_execute_phase(
                         run_dir=run_dir,
                         current_step_id=step.step_id,
                         out_dir=run_result.out_dir,
+                        renderer=(
+                            _render_publication_bundle_from_prior_outputs_for_step
+                        ),
                         step_text=f"{step.intent} {step.method}",
                         authorizer=lambda repair_id: _automatic_repair_authorized(
                             repair_id,
@@ -9955,6 +9957,7 @@ def run_execute_phase(
                 run_dir=run_dir,
                 current_step_id=step.step_id,
                 out_dir=run_result.out_dir,
+                renderer=_render_publication_bundle_from_prior_outputs_for_step,
                 step_text=f"{step.intent} {step.method}",
                 authorizer=lambda repair_id: _automatic_repair_authorized(
                     repair_id,
