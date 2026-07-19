@@ -19,17 +19,17 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from easyicu.research_agent.estimators import (
+from easyicu.research_agent.robustness.estimators import (
     _primary_effect_measure_from_records,
     _primary_row_from_step_records,
     fit_robustness_rows_from_records,
 )
-from easyicu.research_agent.pipeline_primary_effect import (
+from easyicu.research_agent.robustness.primary_effect import (
     _effect_measure_from_scale,
     _extract_primary_effect_payload_from_records,
     _infer_primary_predictor_from_run_dir,
 )
-from easyicu.research_agent.robustness_panel import default_robustness_specs
+from easyicu.research_agent.robustness.panel import default_robustness_specs
 from tests.research_agent.test_research_context_v2_authority_join import (
     _prepare_typed_run,
 )

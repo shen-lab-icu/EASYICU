@@ -9,7 +9,7 @@ from easyicu.research_agent.pipeline import (
 from easyicu.research_agent.pipeline_execute import (
     _preserve_locked_robustness_specs_after_replan,
 )
-from easyicu.research_agent.robustness_panel import (
+from easyicu.research_agent.robustness.panel import (
     default_robustness_specs,
     robustness_specs_sha,
     write_locked_robustness_specs,

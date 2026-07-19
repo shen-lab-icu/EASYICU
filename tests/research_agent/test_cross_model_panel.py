@@ -19,7 +19,7 @@ from easyicu.research_agent.evaluation.cross_model_panel import (
     compare_plans,
     write_cross_model_report,
 )
-from easyicu.research_agent.robustness_panel import (
+from easyicu.research_agent.robustness.panel import (
     PRIMARY_SPEC_ID,
     RobustnessPanel,
     RobustnessPanelRow,

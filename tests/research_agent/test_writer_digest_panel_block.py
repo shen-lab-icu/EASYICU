@@ -7,7 +7,7 @@ from pathlib import Path
 
 
 def _write_panel(ra, tmp_path: Path, rows):
-    from easyicu.research_agent.robustness_panel import (
+    from easyicu.research_agent.robustness.panel import (
         RobustnessPanel,
         RobustnessSpec,
         default_robustness_specs,
@@ -84,7 +84,7 @@ def test_digest_contains_panel_block_when_panel_populated(ra, tmp_path: Path) ->
     from easyicu.research_agent.reporting.writer_evidence import (
         _render_writer_evidence_digest,
     )
-    from easyicu.research_agent.robustness_panel import RobustnessPanelRow
+    from easyicu.research_agent.robustness.panel import RobustnessPanelRow
 
     _write_panel(
         ra,
@@ -117,7 +117,7 @@ def test_digest_suppresses_generated_primary_effect_when_panel_is_canonical(
     from easyicu.research_agent.reporting.writer_evidence import (
         _render_writer_evidence_digest,
     )
-    from easyicu.research_agent.robustness_panel import RobustnessPanelRow
+    from easyicu.research_agent.robustness.panel import RobustnessPanelRow
 
     _write_panel(
         ra,
@@ -153,7 +153,7 @@ def test_digest_panel_block_shows_range_not_rows(ra, tmp_path: Path) -> None:
     from easyicu.research_agent.reporting.writer_evidence import (
         _render_writer_evidence_digest,
     )
-    from easyicu.research_agent.robustness_panel import RobustnessPanelRow
+    from easyicu.research_agent.robustness.panel import RobustnessPanelRow
 
     _write_panel(
         ra,
@@ -183,7 +183,7 @@ def test_digest_panel_block_handles_zero_converged(ra, tmp_path: Path) -> None:
     from easyicu.research_agent.reporting.writer_evidence import (
         _render_writer_evidence_digest,
     )
-    from easyicu.research_agent.robustness_panel import RobustnessPanelRow
+    from easyicu.research_agent.robustness.panel import RobustnessPanelRow
 
     _write_panel(
         ra,
@@ -256,7 +256,7 @@ def test_digest_suppresses_robustness_effect_when_outcome_gate_blocked(
     from easyicu.research_agent.reporting.writer_evidence import (
         _render_writer_evidence_digest,
     )
-    from easyicu.research_agent.robustness_panel import RobustnessPanelRow
+    from easyicu.research_agent.robustness.panel import RobustnessPanelRow
 
     _write_panel(
         ra,
@@ -293,7 +293,7 @@ def test_digest_panel_block_lists_worst_per_axis(ra, tmp_path: Path) -> None:
     from easyicu.research_agent.reporting.writer_evidence import (
         _render_writer_evidence_digest,
     )
-    from easyicu.research_agent.robustness_panel import RobustnessPanelRow
+    from easyicu.research_agent.robustness.panel import RobustnessPanelRow
 
     _write_panel(
         ra,

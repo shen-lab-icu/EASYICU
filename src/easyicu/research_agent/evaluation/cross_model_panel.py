@@ -15,7 +15,7 @@ from typing import Any, Dict, Mapping, Optional, Sequence
 
 from pydantic import BaseModel
 
-from ..robustness_panel import RobustnessPanel
+from ..robustness.panel import RobustnessPanel
 from ..schema import AnalysisPlan
 
 

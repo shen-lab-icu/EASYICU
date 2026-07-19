@@ -1780,7 +1780,7 @@ def _deterministic_primary_estimate_bound(per_step_records: Any) -> bool:
     compatibility predicate therefore stays false even when an old run record
     carries a historical runner marker and a finite estimate.
     """
-    from ..pipeline_primary_effect import (
+    from ..robustness.primary_effect import (
         _extract_primary_effect_payload_from_records,
     )
 

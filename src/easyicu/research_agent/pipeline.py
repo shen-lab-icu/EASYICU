@@ -179,7 +179,7 @@ from .intake.materialized_trajectory import (
     stage_legacy_trajectory_exact,
     stage_materialized_trajectory_authority,
 )
-from .robustness_panel import (
+from .robustness.panel import (
     ensure_robustness_specs,
     load_locked_robustness_specs,
     robustness_specs_sha,
@@ -274,7 +274,7 @@ from .replication.report import (
     _render_cross_database_summary_markdown,
     _render_cross_database_validation_report,
 )
-from .pipeline_primary_effect import (
+from .robustness.primary_effect import (
     _extract_primary_effect_row,
     _infer_primary_predictor_from_run_dir,
     _primary_effect_candidate_score,

@@ -21,7 +21,7 @@ from easyicu.research_agent.cohort.schema import (
 from easyicu.research_agent.execution.runners.deterministic_robustness import (
     robustness_sensitivity_preflight_code,
 )
-from easyicu.research_agent.robustness_panel import (
+from easyicu.research_agent.robustness.panel import (
     RobustnessSpec,
     robustness_specs_sha,
 )
@@ -996,7 +996,7 @@ def test_structured_primary_headline_blocks_manifest_scalar_forgery(
         _find_structured_primary_model_source,
         _structured_primary_effect_payload,
     )
-    from easyicu.research_agent.pipeline_primary_effect import (
+    from easyicu.research_agent.robustness.primary_effect import (
         _extract_primary_effect_payload_from_records,
     )
 

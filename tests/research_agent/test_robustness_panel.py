@@ -35,7 +35,7 @@ def test_planner_emits_minimum_axes() -> None:
 
 
 def test_default_outcome_specs_are_case_neutral_placeholders() -> None:
-    from easyicu.research_agent.robustness_panel import default_robustness_specs
+    from easyicu.research_agent.robustness.panel import default_robustness_specs
 
     outcome_specs = [
         spec for spec in default_robustness_specs() if spec.axis == "outcome"
@@ -59,7 +59,7 @@ def test_default_outcome_specs_are_case_neutral_placeholders() -> None:
 
 
 def test_panel_freezes_after_plan(ra, tmp_path: Path) -> None:
-    from easyicu.research_agent.robustness_panel import (
+    from easyicu.research_agent.robustness.panel import (
         assert_robustness_specs_locked,
         default_robustness_specs,
         write_locked_robustness_specs,
@@ -96,7 +96,7 @@ def test_panel_freezes_after_plan(ra, tmp_path: Path) -> None:
 def test_locked_robustness_specs_restore_after_replan_drop(ra, tmp_path: Path) -> None:
     from types import SimpleNamespace
 
-    from easyicu.research_agent.robustness_panel import (
+    from easyicu.research_agent.robustness.panel import (
         default_robustness_specs,
         robustness_specs_for_execution,
         write_locked_robustness_specs,
@@ -139,7 +139,7 @@ def test_execution_rejects_replanned_specs_that_drift_from_lock(
 ) -> None:
     from types import SimpleNamespace
 
-    from easyicu.research_agent.robustness_panel import (
+    from easyicu.research_agent.robustness.panel import (
         default_robustness_specs,
         robustness_specs_for_execution,
         write_locked_robustness_specs,
@@ -168,7 +168,7 @@ def test_execution_rejects_replanned_specs_that_drift_from_lock(
 def test_execution_rejects_tampered_lock_hash(ra, tmp_path: Path) -> None:
     from types import SimpleNamespace
 
-    from easyicu.research_agent.robustness_panel import (
+    from easyicu.research_agent.robustness.panel import (
         default_robustness_specs,
         robustness_specs_for_execution,
         write_locked_robustness_specs,
@@ -205,7 +205,7 @@ def test_execution_rejects_self_rehashed_lock_against_evidence_anchor(
 ) -> None:
     from types import SimpleNamespace
 
-    from easyicu.research_agent.robustness_panel import (
+    from easyicu.research_agent.robustness.panel import (
         RobustnessSpec,
         default_robustness_specs,
         robustness_specs_for_execution,
@@ -241,7 +241,7 @@ def test_execution_rejects_self_rehashed_lock_against_evidence_anchor(
 
 
 def test_panel_ignores_old_success_after_newer_step_failure() -> None:
-    from easyicu.research_agent.robustness_panel import (
+    from easyicu.research_agent.robustness.panel import (
         build_robustness_panel_from_records,
     )
 
@@ -272,7 +272,7 @@ def test_panel_ignores_old_success_after_newer_step_failure() -> None:
 
 
 def test_panel_excludes_variant_outside_plan_time_lock() -> None:
-    from easyicu.research_agent.robustness_panel import (
+    from easyicu.research_agent.robustness.panel import (
         build_robustness_panel_from_records,
         default_robustness_specs,
     )
@@ -314,7 +314,7 @@ def test_panel_writer_rejects_nonprimary_rows_without_verified_lock(
     ra,
     tmp_path: Path,
 ) -> None:
-    from easyicu.research_agent.robustness_panel import (
+    from easyicu.research_agent.robustness.panel import (
         RobustnessPanel,
         RobustnessPanelRow,
         write_robustness_panel,
@@ -378,7 +378,7 @@ def test_panel_writer_rejects_nonexistent_or_stale_summary_evidence(
     tmp_path: Path,
     evidence_state: str,
 ) -> None:
-    from easyicu.research_agent.robustness_panel import (
+    from easyicu.research_agent.robustness.panel import (
         build_robustness_panel_from_records,
         write_robustness_panel,
     )
@@ -442,7 +442,7 @@ def test_write_locked_robustness_specs_reuses_existing_lock_on_resume(
 ) -> None:
     from types import SimpleNamespace
 
-    from easyicu.research_agent.robustness_panel import (
+    from easyicu.research_agent.robustness.panel import (
         default_robustness_specs,
         write_locked_robustness_specs,
     )
@@ -489,7 +489,7 @@ def test_robustness_lock_resume_rehydrates_only_legacy_timestamp_drift(
 ) -> None:
     from types import SimpleNamespace
 
-    from easyicu.research_agent.robustness_panel import (
+    from easyicu.research_agent.robustness.panel import (
         default_robustness_specs,
         write_locked_robustness_specs,
     )
@@ -524,7 +524,7 @@ def test_robustness_lock_resume_rehydrates_only_legacy_timestamp_drift(
 
 def test_plan_payload_normalizer_drops_extra_robustness_spec_keys(ra) -> None:
     from easyicu.research_agent.agents.core import _normalise_plan_payload
-    from easyicu.research_agent.robustness_panel import default_robustness_specs
+    from easyicu.research_agent.robustness.panel import default_robustness_specs
     from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep
 
     specs = []
@@ -561,7 +561,7 @@ def test_plan_payload_normalizer_drops_extra_robustness_spec_keys(ra) -> None:
 
 
 def test_each_spec_produces_panel_row() -> None:
-    from easyicu.research_agent.robustness_panel import (
+    from easyicu.research_agent.robustness.panel import (
         build_robustness_panel_from_records,
         default_robustness_specs,
     )
@@ -620,8 +620,8 @@ def test_panel_primary_row_comes_from_step_validated_primary_not_refit() -> None
     import numpy as np
     import pandas as pd
 
-    from easyicu.research_agent.estimators import fit_robustness_rows_from_records
-    from easyicu.research_agent.robustness_panel import (
+    from easyicu.research_agent.robustness.estimators import fit_robustness_rows_from_records
+    from easyicu.research_agent.robustness.panel import (
         PRIMARY_SPEC_ID,
         default_robustness_specs,
     )
@@ -698,8 +698,8 @@ def test_primary_row_prefers_final_repaired_effect_over_synthesis_collision() ->
     import numpy as np
     import pandas as pd
 
-    from easyicu.research_agent.estimators import fit_robustness_rows_from_records
-    from easyicu.research_agent.robustness_panel import (
+    from easyicu.research_agent.robustness.estimators import fit_robustness_rows_from_records
+    from easyicu.research_agent.robustness.panel import (
         PRIMARY_SPEC_ID,
         default_robustness_specs,
     )
@@ -764,7 +764,7 @@ def test_primary_row_prefers_nested_frozen_primary_reconciliation() -> None:
     it explicitly names the locked/frozen primary specification, while retaining
     the off-protocol estimate as a disclosed variant.
     """
-    from easyicu.research_agent.robustness_panel import (
+    from easyicu.research_agent.robustness.panel import (
         PRIMARY_SPEC_ID,
         build_robustness_panel_from_records,
     )
@@ -829,8 +829,8 @@ def test_robustness_variants_adjust_for_primary_covariates(tmp_path: Path) -> No
     import numpy as np
     import pandas as pd
 
-    from easyicu.research_agent.estimators import fit_robustness_rows_from_records
-    from easyicu.research_agent.robustness_panel import (
+    from easyicu.research_agent.robustness.estimators import fit_robustness_rows_from_records
+    from easyicu.research_agent.robustness.panel import (
         PRIMARY_SPEC_ID,
         default_robustness_specs,
     )
@@ -894,7 +894,7 @@ def test_effect_summary_terms_are_not_recovered_as_primary_covariates(
     robustness variants condition on measurement status rather than the primary
     model's adjustment set.
     """
-    from easyicu.research_agent.estimators import _recover_primary_covariates
+    from easyicu.research_agent.robustness.estimators import _recover_primary_covariates
 
     outputs = tmp_path / "steps" / "05_contract_repair" / "outputs"
     outputs.mkdir(parents=True)
@@ -929,7 +929,7 @@ def test_effect_summary_terms_are_not_recovered_as_primary_covariates(
 
 
 def test_non_convergence_does_not_abort() -> None:
-    from easyicu.research_agent.robustness_panel import (
+    from easyicu.research_agent.robustness.panel import (
         build_robustness_panel_from_records,
         default_robustness_specs,
     )
@@ -969,7 +969,7 @@ def test_non_convergence_does_not_abort() -> None:
 
 
 def test_panel_range_correctness() -> None:
-    from easyicu.research_agent.robustness_panel import (
+    from easyicu.research_agent.robustness.panel import (
         RobustnessPanel,
         RobustnessPanelRow,
     )
@@ -990,7 +990,7 @@ def test_panel_range_correctness() -> None:
 
 
 def test_panel_numeric_digest_deduplicates_repeated_panel_values() -> None:
-    from easyicu.research_agent.robustness_panel import (
+    from easyicu.research_agent.robustness.panel import (
         RobustnessPanel,
         RobustnessPanelRow,
         numeric_digest_for_panel,
@@ -1023,7 +1023,7 @@ def test_panel_numeric_digest_deduplicates_repeated_panel_values() -> None:
 def test_writer_digest_contains_panel_block(ra, tmp_path: Path) -> None:
     from types import SimpleNamespace
 
-    from easyicu.research_agent.robustness_panel import (
+    from easyicu.research_agent.robustness.panel import (
         RobustnessPanel,
         RobustnessPanelRow,
         default_robustness_specs,
@@ -1190,7 +1190,7 @@ def test_manifest_records_panel_artifact(tmp_path: Path) -> None:
 def test_panel_numerics_registered_in_evidence_store(ra, tmp_path: Path) -> None:
     from types import SimpleNamespace
 
-    from easyicu.research_agent.robustness_panel import (
+    from easyicu.research_agent.robustness.panel import (
         RobustnessPanel,
         RobustnessPanelRow,
         default_robustness_specs,
@@ -1277,7 +1277,7 @@ def test_panel_numerics_registered_in_evidence_store(ra, tmp_path: Path) -> None
 
 
 def test_panel_json_exposes_row_count_and_primary_point_estimate() -> None:
-    from easyicu.research_agent.robustness_panel import (
+    from easyicu.research_agent.robustness.panel import (
         RobustnessPanel,
         RobustnessPanelRow,
     )
@@ -1301,7 +1301,7 @@ def test_primary_only_panel_does_not_register_duplicate_range_claims(
     ra,
     tmp_path: Path,
 ) -> None:
-    from easyicu.research_agent.robustness_panel import (
+    from easyicu.research_agent.robustness.panel import (
         RobustnessPanel,
         RobustnessPanelRow,
         write_robustness_panel,

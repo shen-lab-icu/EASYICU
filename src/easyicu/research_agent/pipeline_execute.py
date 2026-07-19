@@ -150,7 +150,7 @@ from .contracts.declared_product import (
     typed_product_schema_receipt,
     typed_product as _canonical_typed_product,
 )
-from .estimators import fit_robustness_rows_from_records
+from .robustness.estimators import fit_robustness_rows_from_records
 from .authority.evidence_store import (
     EvidenceAuthorityIntegrityError,
     sha256_of_bytes,
@@ -287,7 +287,7 @@ from .contracts.robustness_execution import (
     ROBUSTNESS_EXECUTION_CONTRACT_GUIDANCE,
     _executed_robustness_result_issues,
 )
-from .robustness_panel import (
+from .robustness.panel import (
     RobustnessSpec,
     assert_robustness_specs_locked,
     build_robustness_panel_from_records,

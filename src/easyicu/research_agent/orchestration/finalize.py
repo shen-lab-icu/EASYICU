@@ -55,7 +55,7 @@ from ..authority.runtime_artifacts import (
     write_json_artifact,
     write_run_checkpoint,
 )
-from ..robustness_panel import PANEL_FILENAME, load_robustness_panel
+from ..robustness.panel import PANEL_FILENAME, load_robustness_panel
 from ..schema import AnalysisManifest, PipelineResult, ResearchContext
 from ..reporting.side_findings import collect_side_findings, write_side_findings
 
