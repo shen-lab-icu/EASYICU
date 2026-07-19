@@ -2391,7 +2391,10 @@ def write_readiness_artifacts(
 
     claim_ledger_path = run_dir / "claim_ledger.csv"
     claim_rows = _extract_claim_ledger_rows(
-        manuscript_path=manuscript_path, gates=gates
+        manuscript_path=manuscript_path,
+        gates=gates,
+        evidence=evidence,
+        per_step_records=per_step_records,
     )
     with claim_ledger_path.open("w", newline="", encoding="utf-8") as fh:
         writer = csv.DictWriter(
@@ -2542,8 +2545,61 @@ def write_readiness_artifacts(
     return gates, artifact_paths
 
 
+_MARKDOWN_LINK_TARGET_RE = re.compile(
+    r"\[[^\]\r\n]+\]\(\s*(?:<(?P<angle>[^>\r\n]+)>|"
+    r"(?P<bare>[^\s)\r\n]+))(?:\s+(?:\"[^\"\r\n]*\"|"
+    r"'[^'\r\n]*'|\([^()\r\n]*\)))?\s*\)"
+)
+
+
+def _current_evidence_href_owners(
+    *,
+    evidence: EvidenceStore,
+    per_step_records: Optional[Sequence[Mapping[str, Any]]],
+) -> Dict[str, set[str]]:
+    """Return exact href spellings mapped to current evidence owners.
+
+    Markdown labels are presentation text and never carry authority.  A target
+    can bind only through an exact current evidence ID, published alias, or
+    stored relative path.  Sets deliberately retain collisions so callers can
+    fail closed rather than silently apply direct-ID or first-write priority.
+    """
+
+    records = evidence.current_verified_records(per_step_records)
+    current_ids = {record.evidence_id for record in records}
+    owners: Dict[str, set[str]] = {}
+
+    def add(target: str, evidence_id: str) -> None:
+        normalized = str(target or "").strip()
+        if normalized:
+            owners.setdefault(normalized, set()).add(evidence_id)
+
+    for record in records:
+        add(record.evidence_id, record.evidence_id)
+        add(f"evidence/{record.evidence_id}", record.evidence_id)
+        add(record.relative_path, record.evidence_id)
+    for alias, evidence_id in evidence.aliases().items():
+        if evidence_id not in current_ids:
+            continue
+        add(alias, evidence_id)
+        if "/" not in alias and "\\" not in alias:
+            add(f"evidence/{alias}", evidence_id)
+    return owners
+
+
+def _markdown_link_targets(text: str) -> List[str]:
+    return [
+        str(match.group("angle") or match.group("bare") or "").strip()
+        for match in _MARKDOWN_LINK_TARGET_RE.finditer(text)
+    ]
+
+
 def _extract_claim_ledger_rows(
-    *, manuscript_path: Path, gates: Dict[str, Any]
+    *,
+    manuscript_path: Path,
+    gates: Dict[str, Any],
+    evidence: EvidenceStore,
+    per_step_records: Optional[Sequence[Mapping[str, Any]]] = None,
 ) -> List[Dict[str, str]]:
     if not manuscript_path.exists():
         return [
@@ -2566,22 +2622,46 @@ def _extract_claim_ledger_rows(
                 "note": "Strict fail-closed gate blocked writer output.",
             }
         ]
+    href_owners = _current_evidence_href_owners(
+        evidence=evidence,
+        per_step_records=per_step_records,
+    )
     rows: List[Dict[str, str]] = []
     for line in text.splitlines():
         stripped = line.strip()
         if not stripped or stripped.startswith("#") or stripped.startswith("|"):
             continue
-        evidence_refs = re.findall(r"\[([^\]]+)\]\((?:evidence/)?[^)]+\)", stripped)
+        link_targets = _markdown_link_targets(stripped)
+        evidence_refs: List[str] = []
+        unresolved_targets: List[str] = []
+        for target in link_targets:
+            owners = href_owners.get(target, set())
+            if len(owners) == 1:
+                evidence_refs.append(next(iter(owners)))
+            else:
+                unresolved_targets.append(target)
         missing = _count_missing_evidence_markers(stripped)
-        if not evidence_refs and not missing:
+        if not link_targets and not missing:
             continue
+        notes: List[str] = []
+        if missing:
+            notes.append("Unresolved evidence marker present.")
+        if unresolved_targets:
+            notes.append(
+                "Unresolved or ambiguous evidence href(s): "
+                + ";".join(unresolved_targets)
+            )
         rows.append(
             {
                 "claim_id": f"claim_{len(rows) + 1:03d}",
                 "claim_text": re.sub(r"\s+", " ", stripped)[:1000],
                 "evidence_refs": ";".join(evidence_refs),
-                "status": "missing_evidence" if missing else "bound",
-                "note": "" if not missing else "Unresolved evidence marker present.",
+                "status": (
+                    "missing_evidence"
+                    if missing or unresolved_targets
+                    else "bound"
+                ),
+                "note": " ".join(notes),
             }
         )
     if not rows:
