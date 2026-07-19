@@ -7,7 +7,7 @@ trajectory bytes around sandbox execution, and carries the corruption latch
 used to stop the remainder of a run.
 
 This module must remain below orchestration.  In particular, it must not import
-``pipeline`` or ``pipeline_execute``.
+``pipeline`` or ``execution.phase``.
 """
 
 from __future__ import annotations

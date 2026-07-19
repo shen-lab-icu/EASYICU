@@ -7,7 +7,7 @@ import inspect
 
 import pytest
 
-from easyicu.research_agent import pipeline_execute
+from easyicu.research_agent.execution import phase as pipeline_execute
 from easyicu.research_agent.authority import plan_authority
 from easyicu.research_agent.schema import (
     AnalysisPlan,

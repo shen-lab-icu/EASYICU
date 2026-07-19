@@ -444,7 +444,7 @@ def test_quarantine_persists_repaired_constraints_across_later_repairs(
 
 
 def test_unfinished_step_record_restores_only_binding_concept_errors() -> None:
-    from easyicu.research_agent.pipeline_execute import (
+    from easyicu.research_agent.execution.phase import (
         _persisted_monotonic_concept_constraints,
     )
 
@@ -479,7 +479,7 @@ def test_unfinished_step_record_restores_only_binding_concept_errors() -> None:
 
 def test_monotonic_constraints_keep_distinct_locals_and_refresh_line_numbers() -> None:
     from easyicu.research_agent.contracts.runtime import ValidationFinding
-    from easyicu.research_agent.pipeline_execute import (
+    from easyicu.research_agent.execution.phase import (
         _merge_monotonic_concept_constraints,
     )
 
@@ -516,7 +516,7 @@ def test_monotonic_constraints_keep_distinct_locals_and_refresh_line_numbers() -
 
 def test_monotonic_constraints_preserve_existing_warning_history() -> None:
     from easyicu.research_agent.contracts.runtime import ValidationFinding
-    from easyicu.research_agent.pipeline_execute import (
+    from easyicu.research_agent.execution.phase import (
         _merge_monotonic_concept_constraints,
     )
 
@@ -534,7 +534,7 @@ def test_monotonic_constraints_preserve_existing_warning_history() -> None:
 
 def test_monotonic_constraints_keep_same_local_from_distinct_scopes(ra) -> None:
     from easyicu.research_agent.gates.preflight import audit_mechanical_code_contracts
-    from easyicu.research_agent.pipeline_execute import (
+    from easyicu.research_agent.execution.phase import (
         _merge_monotonic_concept_constraints,
     )
 
@@ -574,7 +574,7 @@ def second():
 
 def test_branch_local_occurrence_ids_distinguish_identical_sibling_tries(ra) -> None:
     from easyicu.research_agent.gates.preflight import audit_mechanical_code_contracts
-    from easyicu.research_agent.pipeline_execute import (
+    from easyicu.research_agent.execution.phase import (
         _merge_monotonic_concept_constraints,
     )
 
@@ -643,7 +643,7 @@ def analyze():
 
 def test_monotonic_constraint_identity_ignores_changing_audit_counts() -> None:
     from easyicu.research_agent.contracts.runtime import ValidationFinding
-    from easyicu.research_agent.pipeline_execute import (
+    from easyicu.research_agent.execution.phase import (
         _merge_monotonic_concept_constraints,
     )
 
@@ -667,7 +667,7 @@ def test_monotonic_constraint_identity_ignores_changing_audit_counts() -> None:
 
 def test_monotonic_constraint_identity_unions_changing_evidence_support() -> None:
     from easyicu.research_agent.contracts.runtime import ValidationFinding
-    from easyicu.research_agent.pipeline_execute import (
+    from easyicu.research_agent.execution.phase import (
         _merge_monotonic_concept_constraints,
     )
 

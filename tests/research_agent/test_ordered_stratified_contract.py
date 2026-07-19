@@ -440,7 +440,7 @@ def test_statistical_validator_delegates_to_locked_cohort_numeric_replay(
 
 
 def test_numeric_replay_is_wired_before_the_existing_in_run_repair_gate() -> None:
-    from easyicu.research_agent import pipeline_execute
+    from easyicu.research_agent.execution import phase as pipeline_execute
 
     # The ordered-stratified numeric replay now runs inside
     # _post_canonicalization_figure_findings, which the early gate calls before

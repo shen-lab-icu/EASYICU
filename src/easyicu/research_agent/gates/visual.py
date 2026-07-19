@@ -1,16 +1,16 @@
 """GateEvaluator — the execute-phase figure Visual-QA gate as a real module.
 
-Extracted from ``pipeline_execute.py`` (batch: real cross-file GateEvaluator
+Extracted from ``execution/phase.py`` (batch: real cross-file GateEvaluator
 module). This owns the typed Visual-QA gate: the cosmetic-demotion predicate,
 the ``VisualGateResult`` collection, and the ``VisualRepairDecision`` — all
 side-effect-free w.r.t. pipeline runtime state (they read figure files / call
 the auditor but mutate no step_record / findings / budget / evidence / lock and
-drive no control flow). ``pipeline_execute`` re-exports every public name here so
+drive no control flow). ``execution.phase`` re-exports every public name here so
 existing imports keep working; the AST contract in
 ``tests/research_agent/test_gate_evaluator_contract.py`` locks the boundary.
 
 Imports only leaf modules (contracts / repairs.reasons / scalar_utils /
-visual_qa) so there is no import cycle with pipeline_execute.
+visual_qa) so there is no import cycle with execution.phase.
 """
 
 from __future__ import annotations

@@ -493,7 +493,7 @@ def test_noop_runtime_repair_is_retried_without_reexecution(
 def test_exact_capsule_resume_skips_generation_audit_and_execution_but_reruns_gates(
     ra, tmp_path: Path, monkeypatch
 ) -> None:
-    from easyicu.research_agent import pipeline_execute
+    from easyicu.research_agent.execution import phase as pipeline_execute
     from easyicu.research_agent.agents.core import RuntimeSupervisor
     from easyicu.research_agent.contracts.runtime import RunResult
     from easyicu.research_agent.schema import ValidationFinding
@@ -875,7 +875,7 @@ def test_exact_capsule_resume_skips_generation_audit_and_execution_but_reruns_ga
 def test_resume_seals_completed_repair_after_capsule_checkpoint_crash(
     ra, tmp_path: Path, monkeypatch
 ) -> None:
-    from easyicu.research_agent import pipeline_execute
+    from easyicu.research_agent.execution import phase as pipeline_execute
     from easyicu.research_agent.agents.core import RuntimeSupervisor
     from easyicu.research_agent.audits.validators import PrimaryModelContractValidator
     from easyicu.research_agent.contracts.runtime import RunResult

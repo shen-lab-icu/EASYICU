@@ -19,10 +19,10 @@ from pathlib import Path
 import textwrap
 from typing import get_args
 
-from easyicu.research_agent import pipeline_execute
+from easyicu.research_agent.execution import phase as pipeline_execute
 from easyicu.research_agent.figures import FAMILY_RENDERERS
 from easyicu.research_agent.planning import capability_registry as cr
-from easyicu.research_agent.pipeline_execute import (
+from easyicu.research_agent.execution.phase import (
     _PRIMARY_DETERMINISTIC_RUNNERS as EXEC_RUNNERS,
 )
 from easyicu.research_agent.reporting.readiness import (

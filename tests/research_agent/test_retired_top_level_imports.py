@@ -102,6 +102,7 @@ RETIRED_TOP_LEVEL_MODULES: dict[str, str | None] = {
     "pdf_render": "reporting.pdf_render",
     "pipeline_config": "orchestration.config",
     "pipeline_cross_db": "replication.report",
+    "pipeline_execute": "execution.phase",
     "pipeline_primary_effect": "robustness.primary_effect",
     "pipeline_package": "orchestration.finalize",
     "pipeline_phases": None,

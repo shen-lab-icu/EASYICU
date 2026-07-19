@@ -47,7 +47,7 @@ def test_retired_primary_runner_has_no_importable_implementation(leaf: str) -> N
 def test_host_pipeline_imports_runner_implementations_from_canonical_package() -> None:
     for module_name in (
         "easyicu.research_agent.pipeline",
-        "easyicu.research_agent.pipeline_execute",
+        "easyicu.research_agent.execution.phase",
         "easyicu.research_agent.gates.contract",
     ):
         tree = ast.parse(inspect.getsource(importlib.import_module(module_name)))

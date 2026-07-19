@@ -282,7 +282,7 @@ def test_pipeline_resume_is_a_leaf_module() -> None:
         "pipeline",
         "pipeline_execute",
         "easyicu.research_agent.pipeline",
-        "easyicu.research_agent.pipeline_execute",
+        "easyicu.research_agent.execution.phase",
     }
     assert not any(
         isinstance(node, ast.ImportFrom) and node.module in forbidden
@@ -290,13 +290,13 @@ def test_pipeline_resume_is_a_leaf_module() -> None:
     )
 
 
-def test_pipeline_execute_delegates_resume_policy_to_resume_controller() -> None:
+def test_execution_phase_delegates_resume_policy_to_resume_controller() -> None:
     path = (
         Path(__file__).resolve().parents[2]
         / "src"
         / "easyicu"
         / "research_agent"
-        / "pipeline_execute.py"
+        / "execution/phase.py"
     )
     source = path.read_text(encoding="utf-8")
 

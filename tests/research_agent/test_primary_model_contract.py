@@ -8,7 +8,7 @@ import pytest
 
 from easyicu.research_agent.audits.validators import PrimaryModelContractValidator
 from easyicu.research_agent.contracts.runtime import ValidationFinding
-from easyicu.research_agent.pipeline_execute import _contract_repair_log
+from easyicu.research_agent.execution.phase import _contract_repair_log
 from easyicu.research_agent.schema import (
     AnalysisPlan,
     AnalysisStep,
@@ -741,7 +741,7 @@ def test_primary_and_secondary_model_requirements_cannot_be_optional(
 
 
 def test_plan_signature_treats_model_requirement_change_as_substantive() -> None:
-    from easyicu.research_agent.pipeline_execute import _plan_signature
+    from easyicu.research_agent.execution.phase import _plan_signature
 
     _contracts_payload, requirements = _contracts_with_requirements()
     base = AnalysisPlan(
@@ -1092,7 +1092,7 @@ def test_primary_model_contract_is_wired_into_all_contract_passes() -> None:
     import ast
     import inspect
 
-    from easyicu.research_agent import pipeline_execute
+    from easyicu.research_agent.execution import phase as pipeline_execute
 
     def _audit_calls(function, validator_name: str) -> list[ast.Call]:
         tree = ast.parse(inspect.getsource(function))

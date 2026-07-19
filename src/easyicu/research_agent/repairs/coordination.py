@@ -1,7 +1,7 @@
 """Step-level repair coordination for the A2 control-plane split.
 
 This module is a LINE-FOR-LINE extraction of four accounting closures that
-lived inside ``pipeline_execute.run_execute_phase``'s step worker, plus the
+lived inside ``execution.phase.run_execute_phase``'s step worker, plus the
 authorized deterministic concept-repair helper.  Behavior preservation is the
 contract:
 

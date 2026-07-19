@@ -55,6 +55,7 @@ SUPPORTED_CANONICAL_MODULES: Tuple[str, ...] = (
     "easyicu.research_agent.gates.concept",
     "easyicu.research_agent.execution.concept_audit",
     "easyicu.research_agent.execution.code_hygiene",
+    "easyicu.research_agent.execution.phase",
     "easyicu.research_agent.execution.figure_preparation",
     "easyicu.research_agent.execution.publication_figure",
     "easyicu.research_agent.execution.run_coordination",

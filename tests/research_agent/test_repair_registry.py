@@ -185,7 +185,7 @@ def test_all_method_substitutions_are_auto_denied() -> None:
 
 def test_every_generic_repair_entrypoint_crosses_central_authorization_gate() -> None:
     research_agent_root = Path(code_repair.__file__).resolve().parents[1]
-    source = (research_agent_root / "pipeline_execute.py").read_text(encoding="utf-8")
+    source = (research_agent_root / "execution/phase.py").read_text(encoding="utf-8")
     publication_figure_source = (
         research_agent_root / "execution" / "publication_figure.py"
     ).read_text(encoding="utf-8")

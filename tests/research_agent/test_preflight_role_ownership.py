@@ -6,11 +6,11 @@ from pathlib import Path
 
 import pytest
 
-from easyicu.research_agent import pipeline_execute
+from easyicu.research_agent.execution import phase as pipeline_execute
 from easyicu.research_agent.pipeline import _sealed_renderer_figure_step_matches_parent
 from easyicu.research_agent.schema import AnalysisStep
 
-from easyicu.research_agent.pipeline_execute import (
+from easyicu.research_agent.execution.phase import (
     _absolute_risk_context_runner_owns_step,
     _cohort_definition_overlap_runner_owns_step,
     _cohort_definition_sensitivity_runner_owns_step,

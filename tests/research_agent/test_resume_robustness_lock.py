@@ -6,7 +6,7 @@ from easyicu.research_agent.authority.evidence_store import EvidenceStore
 from easyicu.research_agent.pipeline import (
     _restore_resume_plan_robustness_lock,
 )
-from easyicu.research_agent.pipeline_execute import (
+from easyicu.research_agent.execution.phase import (
     _preserve_locked_robustness_specs_after_replan,
 )
 from easyicu.research_agent.robustness.panel import (

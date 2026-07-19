@@ -16,7 +16,7 @@ still block, and non-panel-count figure errors still block everywhere.
 
 from __future__ import annotations
 
-from easyicu.research_agent.pipeline_execute import (
+from easyicu.research_agent.execution.phase import (
     _demote_result_figure_shape_for_family_renderer,
     _family_has_deterministic_figure_renderer,
     _is_too_few_panels_figure_finding,

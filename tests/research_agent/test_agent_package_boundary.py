@@ -64,7 +64,7 @@ def test_flat_agent_implementation_files_are_absent() -> None:
 def test_production_pipeline_imports_agent_implementations_directly() -> None:
     for module_name in (
         "easyicu.research_agent.pipeline",
-        "easyicu.research_agent.pipeline_execute",
+        "easyicu.research_agent.execution.phase",
         "easyicu.research_agent.reporting.write_phase",
     ):
         module = importlib.import_module(module_name)

@@ -1203,7 +1203,7 @@ print(json.dumps(summary))
                 return "The planned descriptive audit completed."
             return "{}"
 
-    from easyicu.research_agent import pipeline_execute
+    from easyicu.research_agent.execution import phase as pipeline_execute
     from easyicu.research_agent.gates import visual as visual_gate_module
 
     class ControlledVisualAuditor:

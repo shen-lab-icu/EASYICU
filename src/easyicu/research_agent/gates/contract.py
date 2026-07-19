@@ -1,13 +1,13 @@
 """Contract gates — deterministic-contract / figure-contract findings, as a module.
 
 Real cross-file extraction of the deterministic contract-gate family out of the
-``pipeline_execute`` orchestration loop (Codex-ordered, after the visual
+``execution.phase`` orchestration loop (Codex-ordered, after the visual
 ``gate_evaluator`` move). Every function here only READS step state (via injected
 validators + the filesystem) and RETURNS findings; control flow, repair,
 demotions, step-status decisions, and evidence authority all stay in the
-execution layer (``pipeline_execute``).
+execution layer (``execution.phase``).
 
-Two public gate entrypoints, both re-exported by ``pipeline_execute`` for
+Two public gate entrypoints, both re-exported by ``execution.phase`` for
 back-compat (so existing imports and monkeypatch call sites that target the
 execution loop keep resolving):
 
@@ -18,7 +18,7 @@ execution loop keep resolving):
   ``_primary_exposure_*`` / cohort-definition-sensitivity / cross-step validator
   sequence. NOTE: it looks its collaborators up in THIS module's namespace, so a
   test that stubs one of them must ``monkeypatch.setattr`` on ``contract_gate``
-  (not ``pipeline_execute``) — same rule the ``gate_evaluator`` move established.
+  (not ``execution.phase``) — same rule the ``gate_evaluator`` move established.
 * ``_post_canonicalization_figure_findings`` — the figure-contract / figure-source
   / ordered-stratified findings evaluated AFTER the early figure-contract
   canonicalization repair (kept separate on purpose; see its docstring).
@@ -31,7 +31,7 @@ read-only-gate vs writes-files boundary is deliberate (Codex-ordered split).
 Imports only leaf modules (schema / contracts / audits / plan_utils /
 declared_product_contract / robustness_* / runtime_artifacts /
 deterministic_robustness / ordered_stratified_contract) so there is no import
-cycle with ``pipeline_execute``.
+cycle with ``execution.phase``.
 """
 
 from __future__ import annotations

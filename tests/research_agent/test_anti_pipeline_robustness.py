@@ -191,7 +191,7 @@ def _write_valid_executed_results(out_dir, *, identifier_column="definition_id")
 def test_executed_sensitivity_accepts_model_spec_identifier_alias(
     tmp_path, identifier_column
 ) -> None:
-    from easyicu.research_agent.pipeline_execute import (
+    from easyicu.research_agent.execution.phase import (
         _executed_robustness_result_issues,
     )
 
@@ -213,7 +213,7 @@ def test_executed_sensitivity_accepts_model_spec_identifier_alias(
 def test_executed_sensitivity_rejects_conflicting_model_identifier_aliases(
     tmp_path,
 ) -> None:
-    from easyicu.research_agent.pipeline_execute import (
+    from easyicu.research_agent.execution.phase import (
         _executed_robustness_result_issues,
     )
 
@@ -243,7 +243,7 @@ def test_executed_sensitivity_rejects_conflicting_model_identifier_aliases(
 
 
 def test_executed_sensitivity_rejects_duplicate_model_rows(tmp_path) -> None:
-    from easyicu.research_agent.pipeline_execute import (
+    from easyicu.research_agent.execution.phase import (
         _executed_robustness_result_issues,
     )
 
@@ -275,7 +275,7 @@ def test_executed_sensitivity_rejects_duplicate_model_rows(tmp_path) -> None:
 def test_executed_sensitivity_rejects_ambiguous_model_result_tables(
     tmp_path,
 ) -> None:
-    from easyicu.research_agent.pipeline_execute import (
+    from easyicu.research_agent.execution.phase import (
         _executed_robustness_result_issues,
     )
 
@@ -302,7 +302,7 @@ def test_executed_sensitivity_rejects_ambiguous_model_result_tables(
 def test_long_coefficient_table_with_model_metadata_is_not_a_second_model_table(
     tmp_path,
 ) -> None:
-    from easyicu.research_agent.pipeline_execute import (
+    from easyicu.research_agent.execution.phase import (
         _executed_robustness_result_issues,
     )
 
@@ -671,7 +671,7 @@ def test_pipeline_finalization_never_infers_relaxed_variant_from_locked_cohort(
         for warning in warnings
     )
 
-    from easyicu.research_agent.pipeline_execute import run_execute_phase
+    from easyicu.research_agent.execution.phase import run_execute_phase
     from easyicu.research_agent.execution.runners.deterministic_robustness import (
         _run_robustness_preflight,
     )
@@ -701,7 +701,7 @@ def test_logistic_adapter_rejects_nonbinary_outcome_before_statsmodels() -> None
 def test_locked_sensitivity_gate_blocks_missing_extra_ids_and_wrong_universe(
     tmp_path,
 ) -> None:
-    from easyicu.research_agent.pipeline_execute import (
+    from easyicu.research_agent.execution.phase import (
         _cohort_definition_sensitivity_contract_findings,
     )
 
@@ -763,7 +763,7 @@ def test_locked_sensitivity_gate_blocks_missing_extra_ids_and_wrong_universe(
 def test_locked_sensitivity_gate_rejects_ids_without_membership_replay_fields(
     tmp_path,
 ) -> None:
-    from easyicu.research_agent.pipeline_execute import (
+    from easyicu.research_agent.execution.phase import (
         _cohort_definition_sensitivity_contract_findings,
     )
 
@@ -803,7 +803,7 @@ def test_locked_sensitivity_gate_rejects_ids_without_membership_replay_fields(
 def test_locked_sensitivity_gate_rejects_reused_primary_membership_under_locked_id(
     tmp_path,
 ) -> None:
-    from easyicu.research_agent.pipeline_execute import (
+    from easyicu.research_agent.execution.phase import (
         _cohort_definition_sensitivity_contract_findings,
     )
 
@@ -849,7 +849,7 @@ def test_locked_sensitivity_gate_rejects_reused_primary_membership_under_locked_
 
 
 def test_locked_sensitivity_declaration_only_does_not_prove_execution(tmp_path) -> None:
-    from easyicu.research_agent.pipeline_execute import (
+    from easyicu.research_agent.execution.phase import (
         _cohort_definition_sensitivity_contract_findings,
     )
 
@@ -907,7 +907,7 @@ def test_locked_sensitivity_declaration_only_does_not_prove_execution(tmp_path) 
 
 
 def test_locked_sensitivity_gate_accepts_typed_overlap_table_names(tmp_path) -> None:
-    from easyicu.research_agent.pipeline_execute import (
+    from easyicu.research_agent.execution.phase import (
         _cohort_definition_sensitivity_contract_findings,
     )
 
@@ -957,7 +957,7 @@ def test_locked_sensitivity_gate_accepts_typed_overlap_table_names(tmp_path) -> 
 
 
 def test_executed_sensitivity_rejects_wrong_outcome_model(tmp_path) -> None:
-    from easyicu.research_agent.pipeline_execute import (
+    from easyicu.research_agent.execution.phase import (
         _executed_robustness_result_issues,
     )
 
@@ -980,7 +980,7 @@ def test_executed_sensitivity_rejects_wrong_outcome_model(tmp_path) -> None:
 
 
 def test_executed_sensitivity_rejects_forged_summary_estimate(tmp_path) -> None:
-    from easyicu.research_agent.pipeline_execute import (
+    from easyicu.research_agent.execution.phase import (
         _executed_robustness_result_issues,
     )
 
@@ -1010,7 +1010,7 @@ def test_executed_sensitivity_rejects_forged_summary_estimate(tmp_path) -> None:
 def test_reportable_robustness_must_retain_primary_estimator_contract(
     tmp_path,
 ) -> None:
-    from easyicu.research_agent.pipeline_execute import (
+    from easyicu.research_agent.execution.phase import (
         _executed_robustness_result_issues,
     )
 
@@ -1047,7 +1047,7 @@ def test_reportable_robustness_must_retain_primary_estimator_contract(
 def test_nonindependent_locked_variant_is_an_honest_null_disclosure(
     tmp_path,
 ) -> None:
-    from easyicu.research_agent.pipeline_execute import (
+    from easyicu.research_agent.execution.phase import (
         _executed_robustness_result_issues,
     )
 
@@ -1098,7 +1098,7 @@ def test_nonindependent_locked_variant_is_an_honest_null_disclosure(
 def test_executed_sensitivity_rejects_missing_indicator_on_complete_case_model(
     tmp_path,
 ) -> None:
-    from easyicu.research_agent.pipeline_execute import (
+    from easyicu.research_agent.execution.phase import (
         _executed_robustness_result_issues,
     )
 
@@ -1120,7 +1120,7 @@ def test_executed_sensitivity_rejects_missing_indicator_on_complete_case_model(
 
 
 def test_missing_indicator_accepts_structured_availability_term_role(tmp_path) -> None:
-    from easyicu.research_agent.pipeline_execute import (
+    from easyicu.research_agent.execution.phase import (
         _executed_robustness_result_issues,
     )
 
@@ -1171,7 +1171,7 @@ def test_missing_indicator_accepts_structured_availability_term_role(tmp_path) -
 
 
 def test_penalized_point_only_sensitivity_must_be_nonreportable(tmp_path) -> None:
-    from easyicu.research_agent.pipeline_execute import (
+    from easyicu.research_agent.execution.phase import (
         _executed_robustness_result_issues,
     )
 
@@ -1243,7 +1243,7 @@ def test_penalized_point_only_sensitivity_must_be_nonreportable(tmp_path) -> Non
 
 
 def test_sensitivity_figure_step_is_not_subject_to_result_spec_gate(tmp_path) -> None:
-    from easyicu.research_agent.pipeline_execute import (
+    from easyicu.research_agent.execution.phase import (
         _cohort_definition_sensitivity_contract_findings,
     )
 
@@ -1263,7 +1263,7 @@ def test_coder_context_receives_locked_spec_definitions_and_universe_contract(
     tmp_path,
 ) -> None:
     from easyicu.research_agent.authority.coder_authority import HostCoderAuthority
-    from easyicu.research_agent.pipeline_execute import (
+    from easyicu.research_agent.execution.phase import (
         _coder_authority_with_locked_robustness_specs,
     )
     from easyicu.research_agent.contracts.robustness_execution import (
@@ -1367,7 +1367,7 @@ def test_prespecified_robustness_alias_receives_locked_execution_contract(
     tmp_path,
 ) -> None:
     from easyicu.research_agent.authority.coder_authority import HostCoderAuthority
-    from easyicu.research_agent.pipeline_execute import (
+    from easyicu.research_agent.execution.phase import (
         _coder_authority_with_locked_robustness_specs,
     )
     from easyicu.research_agent.schema import CohortDescriptor, ResearchContext
@@ -1404,7 +1404,7 @@ def test_prespecified_robustness_alias_receives_locked_execution_contract(
 def test_prespecified_robustness_alias_is_gated_but_mixed_contract_is_not(
     tmp_path,
 ) -> None:
-    from easyicu.research_agent.pipeline_execute import (
+    from easyicu.research_agent.execution.phase import (
         _cohort_definition_sensitivity_contract_findings,
     )
 
@@ -1440,12 +1440,12 @@ def test_prespecified_robustness_alias_is_gated_but_mixed_contract_is_not(
 
 
 def test_locked_sensitivity_contract_is_wired_into_both_contract_passes() -> None:
-    from easyicu.research_agent.pipeline_execute import (
+    from easyicu.research_agent.execution.phase import (
         _evaluate_final_deterministic_gates,
         run_execute_phase,
     )
 
-    from easyicu.research_agent.pipeline_execute import (
+    from easyicu.research_agent.execution.phase import (
         _step_deterministic_contract_findings,
     )
 
@@ -1467,7 +1467,7 @@ def test_locked_sensitivity_contract_is_wired_into_both_contract_passes() -> Non
 
 
 def test_later_repairs_receive_prior_concept_findings_as_regression_constraints():
-    from easyicu.research_agent.pipeline_execute import run_execute_phase
+    from easyicu.research_agent.execution.phase import run_execute_phase
 
     source = inspect.getsource(run_execute_phase)
     assert "def _monotonic_concept_constraint_ticket" in source
@@ -1477,7 +1477,7 @@ def test_later_repairs_receive_prior_concept_findings_as_regression_constraints(
 
 def test_untrusted_runtime_diagnostics_can_authorize_syntactic_repairs_only():
     from easyicu.research_agent.repairs.source import _deterministic_runner_repair
-    from easyicu.research_agent.pipeline_execute import (
+    from easyicu.research_agent.execution.phase import (
         _untrusted_runtime_repair_allowed,
     )
 

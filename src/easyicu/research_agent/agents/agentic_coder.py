@@ -17,7 +17,7 @@ gives us better *code*, not unverified results. See the engine-agnostic gate in
 ``manuscript_post.bind_numeric_values``.
 
 **Opt-in and degrading.** Nothing constructs this by default. When wired in
-(env ``EASYICU_AGENTIC_CODER_BACKEND`` at the single ``pipeline_execute``
+(env ``EASYICU_AGENTIC_CODER_BACKEND`` at the single ``execution.phase``
 construction site) it falls back to the wrapped LLM ``CoderAgent`` whenever the
 CLI backend is unavailable or fails to produce a script — the same capability
 ladder as :func:`easyicu.research_agent.providers.llm.build_llm_client`.

@@ -13,7 +13,7 @@ from .test_gate_evaluator_contract import gate_call_order
 
 
 def test_mixed_overlap_and_clipping_visual_error_is_not_cosmetic() -> None:
-    from easyicu.research_agent.pipeline_execute import _is_cosmetic_visual_finding
+    from easyicu.research_agent.execution.phase import _is_cosmetic_visual_finding
     from easyicu.research_agent.reporting.readiness import _is_cosmetic_visual_error
 
     finding = ValidationFinding(
@@ -30,7 +30,7 @@ def test_mixed_overlap_and_clipping_visual_error_is_not_cosmetic() -> None:
 
 
 def test_closed_overlap_spacing_reason_remains_cosmetic() -> None:
-    from easyicu.research_agent.pipeline_execute import _is_cosmetic_visual_finding
+    from easyicu.research_agent.execution.phase import _is_cosmetic_visual_finding
     from easyicu.research_agent.reporting.readiness import _is_cosmetic_visual_error
 
     finding = ValidationFinding(
@@ -231,7 +231,7 @@ def _ignore_figure_provenance_gates(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_visual_repair_log_keeps_structured_collision_detail() -> None:
-    from easyicu.research_agent.pipeline_execute import _visual_repair_request_log
+    from easyicu.research_agent.execution.phase import _visual_repair_request_log
 
     finding = ValidationFinding(
         validator="visual_qa",
@@ -278,7 +278,7 @@ def test_visual_qa_stays_before_contract_gate() -> None:
     # in collect_visual_gate_result (VisualGateResult.demoted_findings), so it no
     # longer depends on statement order — that guarantee is locked by
     # test_visual_gate_component + the gate-purity contract.
-    from easyicu.research_agent import pipeline_execute
+    from easyicu.research_agent.execution import phase as pipeline_execute
 
     order = gate_call_order(
         pipeline_execute.run_execute_phase,
@@ -296,7 +296,7 @@ def test_figure_canonicalization_repair_stays_between_gate_and_figure_audits() -
     # deterministic contract gate and BEFORE the figure audits, so those
     # validators audit the already-canonicalized contracts. Converged onto the AST
     # contract (was three brittle source.index anchors).
-    from easyicu.research_agent import pipeline_execute
+    from easyicu.research_agent.execution import phase as pipeline_execute
 
     order = gate_call_order(
         pipeline_execute.run_execute_phase,

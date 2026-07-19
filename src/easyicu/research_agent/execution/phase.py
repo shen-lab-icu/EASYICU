@@ -12,7 +12,8 @@ delegate) so:
   free-function entry point to wrap, rather than a method buried in a
   god-object.
 
-The function is intentionally a free function, not a class. All state
+This module is the canonical owner of execute-phase orchestration.  The
+function is intentionally a free function, not a class. All state
 that the execute phase mutates (``runtime_state``, ``per_step_records``,
 ``probe_summary``, ``findings``, ``plan``) is local to one call; nothing
 needs to survive across calls. The pipeline instance is passed in only
@@ -56,7 +57,7 @@ from typing import (
     Tuple,
 )
 
-from .agents.core import (
+from ..agents.core import (
     AnalyzerAgent,
     ClinicalSemanticsAgent,
     CoderAgent,
@@ -67,12 +68,12 @@ from .agents.core import (
     StatisticalAnalysisAgent,
     VisualizationAgent,
 )
-from .reporting.article_contract import (
+from ..reporting.article_contract import (
     article_contract_audit_payload,
     summarize_article_contract_coverage,
     validate_run_against_article_contract,
 )
-from .audits.validators import (
+from ..audits.validators import (
     ClinicalConstraintValidator,
     ConceptUsageAuditor,
     CrossStepCohortLockValidator,
@@ -87,27 +88,27 @@ from .audits.validators import (
     StatisticalValidator,
     StepSummaryFractionValidator,
 )
-from .audits.patterns import AnalysisPatternAuditor
-from .audits.step_summary_integrity import StepSummaryIntegrityValidator
-from .repairs.source import (
+from ..audits.patterns import AnalysisPatternAuditor
+from ..audits.step_summary_integrity import StepSummaryIntegrityValidator
+from ..repairs.source import (
     _deterministic_runner_repair,
     _deterministic_summary_repair,
     deterministic_contract_repair,
 )
-from .execution.code_hygiene import reorder_forward_references
-from .repairs.coordination import (
+from .code_hygiene import reorder_forward_references
+from ..repairs.coordination import (
     RepairAuthorityBinding,
     StepRepairBudget,
     authorized_deterministic_concept_repair,
 )
-from .execution.concept_audit_cache import LLMConceptAuditCache
-from .execution.concept_audit import (
+from .concept_audit_cache import LLMConceptAuditCache
+from .concept_audit import (
     ConceptAuditAuthority,
     ConceptAuditCoordinator,
     ConceptAuditRuntime,
     ConceptQuarantineState,
 )
-from .gates.concept import (
+from ..gates.concept import (
     DETERMINISTIC_CODE_GATE_VALIDATORS as _DETERMINISTIC_CODE_GATE_VALIDATORS,
     deterministic_code_gate_findings as _deterministic_code_gate_findings,
     deterministic_gate_stamp as _deterministic_gate_stamp,
@@ -116,31 +117,31 @@ from .gates.concept import (
     quarantined_deterministic_errors_resolved_by_current_gate as _quarantined_deterministic_errors_resolved_by_current_gate,
     quarantined_errors_superseded_by_current_policy as _quarantined_errors_superseded_by_current_policy,
 )
-from .authority.coder_authority import HostCoderAuthority
-from .research_context.prompt_scope import scoped_coder_context
-from .cohort.repair import extract_cohort_definition_from_prose
-from .cohort.schema import (
+from ..authority.coder_authority import HostCoderAuthority
+from ..research_context.prompt_scope import scoped_coder_context
+from ..cohort.repair import extract_cohort_definition_from_prose
+from ..cohort.schema import (
     CohortDefinition,
     assert_cohort_definition_locked,
     materialize_locked_analysis_cohort,
     write_locked_cohort_definition,
 )
-from .authority.execution_input import ExecutionInputAuthorityState
-from .intake.materialized_metadata import MaterializedMetadataError
-from .intake.materialized_trajectory import (
+from ..authority.execution_input import ExecutionInputAuthorityState
+from ..intake.materialized_metadata import MaterializedMetadataError
+from ..intake.materialized_trajectory import (
     MaterializedTrajectoryError,
     StagedTrajectoryBinding,
 )
-from .research_context.typed import materialized_input_prompt_attachment
-from .contracts.runtime import ValidationFinding, _ExecutePhaseResult, _PlanPhaseResult
-from .execution.runners.deterministic_descriptive import absolute_risk_context_code
-from .execution.runners.deterministic_missingness import (
+from ..research_context.typed import materialized_input_prompt_attachment
+from ..contracts.runtime import ValidationFinding, _ExecutePhaseResult, _PlanPhaseResult
+from .runners.deterministic_descriptive import absolute_risk_context_code
+from .runners.deterministic_missingness import (
     missingness_measurement_audit_code,
 )
-from .execution.runners.deterministic_robustness import (
+from .runners.deterministic_robustness import (
     robustness_sensitivity_preflight_code,
 )
-from .contracts.declared_product import (
+from ..contracts.declared_product import (
     RUNTIME_BINDABLE_TYPED_INPUT_KINDS,
     RUNTIME_TYPED_INPUT_EVIDENCE_KINDS,
     authorize_declared_figure_product_slots,
@@ -150,31 +151,31 @@ from .contracts.declared_product import (
     typed_product_schema_receipt,
     typed_product as _canonical_typed_product,
 )
-from .robustness.estimators import fit_robustness_rows_from_records
-from .authority.evidence_store import (
+from ..robustness.estimators import fit_robustness_rows_from_records
+from ..authority.evidence_store import (
     EvidenceAuthorityIntegrityError,
     sha256_of_bytes,
     sha256_of_file,
 )
-from .authority.registration import (
+from ..authority.registration import (
     StepEvidenceCommit,
     filter_success_alias_bindings as _filter_success_alias_bindings,
 )
-from .authority.parent_artifact import _resolve_upstream_manifest_step
-from .authority.plan_authority import (
+from ..authority.parent_artifact import _resolve_upstream_manifest_step
+from ..authority.plan_authority import (
     NormalizedPlanCandidate as NormalizedPlanCandidate,
     _preserve_completed_step_snapshots_after_replan,
     _preserve_locked_robustness_specs_after_replan,
     normalize_replan_candidate,
 )
-from .authority.plan_scope import (
+from ..authority.plan_scope import (
     _normalise_scientific_text,
     _plan_scientific_scope_signature,
     _plan_signature,
     _serializable_plan_scientific_scope_signature,
     _step_scientific_signature,
 )
-from .authority.typed_binding import (
+from ..authority.typed_binding import (
     TypedBindingResolver,
     _EvidenceLineageResolutionError,
     _assignment_model_authority_context_block,
@@ -199,7 +200,7 @@ from .authority.typed_binding import (
     _write_host_input_binding_receipts,
     _write_resolved_inputs_manifest,
 )
-from .gates.contract import (  # execute-layer collaborators use the canonical gate API
+from ..gates.contract import (  # execute-layer collaborators use the canonical gate API
     _AGENT_OWNED_ROBUSTNESS_RESULT_METHODS,
     _AGENT_OWNED_ROBUSTNESS_RESULT_PRODUCTS,
     _AUXILIARY_OUTPUT_KINDS,
@@ -215,7 +216,7 @@ from .gates.contract import (  # execute-layer collaborators use the canonical g
     _sensitivity_csv_rows,
     _step_deterministic_contract_findings,
 )
-from .execution.figure_preparation import (
+from .figure_preparation import (
     _ensure_step_figure_contract,
     _family_has_deterministic_figure_renderer,
     _figure_contract_source_data_canonicalization_candidate,
@@ -225,7 +226,7 @@ from .execution.figure_preparation import (
     _step_has_figure_only_output_contract,
     _step_summary_paths,
 )
-from .execution.publication_figure import (
+from .publication_figure import (
     SealedRendererState,
     _deterministic_publication_figure_code,
     _sealed_parent_planner_anchors,
@@ -233,9 +234,9 @@ from .execution.publication_figure import (
     _sealed_renderer_source_digests,
     _sealed_typed_figure_products,
 )
-from .execution.host_services import ExecutePhaseHost
-from .execution.output_files import _clear_output_dir, _has_figure_exports
-from .gates.visual import (
+from .host_services import ExecutePhaseHost
+from .output_files import _clear_output_dir, _has_figure_exports
+from ..gates.visual import (
     VisualGateResult,
     VisualRepairAction,
     VisualRepairDecision,
@@ -245,17 +246,17 @@ from .gates.visual import (
     collect_visual_gate_result,
     decide_visual_repair,
 )
-from .gates.semantics import blocking_validator_findings as _blocking_validator_findings
-from .providers.mocks import MockLLMClient
-from .contracts.ordered_stratified import ordered_stratified_numeric_findings
-from .repairs.reasons import (
+from ..gates.semantics import blocking_validator_findings as _blocking_validator_findings
+from ..providers.mocks import MockLLMClient
+from ..contracts.ordered_stratified import ordered_stratified_numeric_findings
+from ..repairs.reasons import (
     RepairPromptAuthority,
     RepairReason,
     repair_prompt_binding_sha256,
     repair_reason_for_finding,
     typed_repair_ticket,
 )
-from .plan_utils import (
+from ..plan_utils import (
     _augment_measurement_companion_inputs,
     _augment_report_typed_product_inputs,
     _cap_plan_preserving_figure_steps,
@@ -274,20 +275,20 @@ from .plan_utils import (
     _step_expects_figure,
     _typed_plan_dag_findings,
 )
-from .orchestration.resume import (
+from ..orchestration.resume import (
     QuarantinedConceptDraft,
     ResumeController,
     clear_quarantined_concept_draft,
     store_quarantined_concept_draft,
     upsert_step_record,
 )
-from .schema import AnalysisPlan, AnalysisStep, EvidenceRef, ResearchContext
-from .contracts.robustness_execution import (
+from ..schema import AnalysisPlan, AnalysisStep, EvidenceRef, ResearchContext
+from ..contracts.robustness_execution import (
     ROBUSTNESS_COHORT_MEMBERSHIP_ALIASES,
     ROBUSTNESS_EXECUTION_CONTRACT_GUIDANCE,
     _executed_robustness_result_issues,
 )
-from .robustness.panel import (
+from ..robustness.panel import (
     RobustnessSpec,
     assert_robustness_specs_locked,
     build_robustness_panel_from_records,
@@ -295,17 +296,17 @@ from .robustness.panel import (
     robustness_specs_sha,
     write_robustness_panel,
 )
-from .trajectory.bundle import trajectory_bundle_findings
-from .trajectory.plan_contract import (
+from ..trajectory.bundle import trajectory_bundle_findings
+from ..trajectory.plan_contract import (
     augment_trajectory_plan_products,
     trajectory_plan_contract_applies,
     trajectory_plan_dag_findings,
 )
-from .execution.runners.trajectory_stability_executor import (
+from .runners.trajectory_stability_executor import (
     trajectory_stability_executor_code,
     trajectory_stability_executor_owns_step,
 )
-from .repair_registry import (
+from ..repair_registry import (
     InvariantStatus,
     RepairClass,
     RepairLedger,
@@ -314,7 +315,7 @@ from .repair_registry import (
     is_sealed_renderer_repair,
     repair_metadata_for,
 )
-from .authority.provider_budget import (
+from ..authority.provider_budget import (
     PROVIDER_CALL_BUDGET_RECEIPT_SCHEMA_VERSION,
     ProviderCallBudgetError,
     ProviderCallBudgetReceiptError,
@@ -323,7 +324,7 @@ from .authority.provider_budget import (
     load_provider_call_budget_state,
     provider_call_budget_receipt_path,
 )
-from .authority.run_input import (
+from ..authority.run_input import (
     RUN_INPUT_CAPSULE_EVIDENCE_ID,
     RUN_INPUT_CAPSULE_FILENAME,
     RunInputIdentityError,
@@ -340,21 +341,21 @@ from .authority.run_input import (
     verify_legacy_trajectory_capsule_receipt,
     validator_code_sha256,
 )
-from .execution.run_coordination import RunCoordinator, RunExecutionState, RunTransition
-from .authority.runtime_artifacts import (
+from .run_coordination import RunCoordinator, RunExecutionState, RunTransition
+from ..authority.runtime_artifacts import (
     current_step_records,
     current_successful_step_records,
     verified_run_evidence_path,
     write_run_checkpoint,
 )
-from .scalar_utils import _expected_numeric_annotations_for_step
-from .reporting.side_findings import SideFinding
-from .skills import ClinicalSkill
-from .authority.step_capsule import (
+from ..scalar_utils import _expected_numeric_annotations_for_step
+from ..reporting.side_findings import SideFinding
+from ..skills import ClinicalSkill
+from ..authority.step_capsule import (
     StepAuthorityCapsuleError,
     load_verified_step_authority_capsule,
 )
-from .authority.step_runtime import (
+from ..authority.step_runtime import (
     StepAuthorityRuntimeError,
     adopt_candidate_for_control_plane_revalidation,
     adopt_frozen_scoped_coder_context,
@@ -376,21 +377,21 @@ from .authority.step_runtime import (
     seal_legacy_candidate,
     seal_repair_candidate_from_receipt,
 )
-from .authority.step_attempt import (
+from ..authority.step_attempt import (
     CheckpointAuthority,
     StepAttemptState,
     StepAuthorityOperations,
 )
-from .execution.step_execution import LockedStepExecutionRequest, StepExecutor
-from .execution.step_worker_state import StepWorkerProgress
-from .repairs.summary import salvage_step_summary
-from .viability import (
+from .step_execution import LockedStepExecutionRequest, StepExecutor
+from .step_worker_state import StepWorkerProgress
+from ..repairs.summary import salvage_step_summary
+from ..viability import (
     CohortViability,
     assess_cohort_viability,
     step_requires_model_performance,
     step_summary_block_signal,
 )
-from .gates.visual_qa import VLMVisualQAAdapter, VisualQAAuditor
+from ..gates.visual_qa import VLMVisualQAAdapter, VisualQAAuditor
 
 logger = logging.getLogger(__name__)
 
@@ -3598,7 +3599,7 @@ def run_execute_phase(
     # coding-agent CLI when EASYICU_AGENTIC_CODER_BACKEND is set. Off by default;
     # degrades back to ``coder`` when the CLI is unavailable. The script it
     # returns is still executed + evidence-bound by the instrumented runtime.
-    from .agents.agentic_coder import AgenticCoderAgent, maybe_wrap_coder
+    from ..agents.agentic_coder import AgenticCoderAgent, maybe_wrap_coder
 
     coder = maybe_wrap_coder(coder)
     coder_provider_identity_sha256 = (

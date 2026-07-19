@@ -7,7 +7,7 @@ because a summary contains an estimate-shaped value.
 
 from __future__ import annotations
 
-from easyicu.research_agent.pipeline_execute import (
+from easyicu.research_agent.execution.phase import (
     _demote_step_contract_for_primary_runner,
     _primary_runner_core_estimate_present,
 )

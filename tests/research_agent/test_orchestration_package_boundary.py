@@ -124,6 +124,6 @@ def test_orchestration_policy_does_not_reverse_import_pipeline(target: str) -> N
             )
     forbidden = {
         "easyicu.research_agent.pipeline",
-        "easyicu.research_agent.pipeline_execute",
+        "easyicu.research_agent.execution.phase",
     }
     assert imported.isdisjoint(forbidden)

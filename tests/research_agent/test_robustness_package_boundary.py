@@ -63,14 +63,14 @@ def test_robustness_runtime_does_not_reverse_import_pipeline(leaf: str) -> None:
             )
     forbidden = {
         "easyicu.research_agent.pipeline",
-        "easyicu.research_agent.pipeline_execute",
+        "easyicu.research_agent.execution.phase",
     }
     assert imported.isdisjoint(forbidden)
 
 
 def test_pipeline_consumers_use_canonical_robustness_modules() -> None:
     pipeline = importlib.import_module("easyicu.research_agent.pipeline")
-    execute = importlib.import_module("easyicu.research_agent.pipeline_execute")
+    execute = importlib.import_module("easyicu.research_agent.execution.phase")
     panel = importlib.import_module("easyicu.research_agent.robustness.panel")
     estimators = importlib.import_module("easyicu.research_agent.robustness.estimators")
     primary_effect = importlib.import_module(

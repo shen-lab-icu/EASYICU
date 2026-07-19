@@ -26,7 +26,7 @@ import ast
 import inspect
 import textwrap
 
-from easyicu.research_agent import pipeline_execute as pe
+from easyicu.research_agent.execution import phase as pe
 
 # --- reusable AST helpers (shared with test_visual_repair_governance) ---
 

@@ -50,8 +50,8 @@ Out of scope (measured elsewhere, by design)
 
 Usage
 -----
-    python tools/arch_measure.py --emit tools/arch_baselines/pipeline_execute.json
-    python tools/arch_measure.py --diff tools/arch_baselines/pipeline_execute.json
+    python tools/arch_measure.py --emit tools/arch_baselines/execution_phase.json
+    python tools/arch_measure.py --diff tools/arch_baselines/execution_phase.json
     python tools/arch_measure.py            # print current metrics as JSON
 """
 
@@ -65,7 +65,7 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
-TOOL_VERSION = "1.4.2"
+TOOL_VERSION = "1.4.4"
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 RA = REPO_ROOT / "src" / "easyicu" / "research_agent"
@@ -73,7 +73,7 @@ RA = REPO_ROOT / "src" / "easyicu" / "research_agent"
 # Whole-file LOC + dependency edges. Append-only across batches so baselines stay
 # comparable.
 TARGET_FILES: List[Path] = [
-    RA / "pipeline_execute.py",
+    RA / "execution/phase.py",
     RA / "pipeline.py",
     RA / "reporting" / "readiness.py",
     RA / "authority" / "typed_binding.py",
@@ -81,13 +81,12 @@ TARGET_FILES: List[Path] = [
 ]
 # (file, function name) — first match by name (top-level or nested).
 TARGET_FUNCTIONS: List[Tuple[str, str]] = [
-    ("pipeline_execute.py", "_execute_one_step"),
-    ("pipeline_execute.py", "run_execute_phase"),
+    ("execution/phase.py", "_execute_one_step"),
+    ("execution/phase.py", "run_execute_phase"),
 ]
 # Compatibility-shim import paths a future batch may introduce. While empty the
-# shim-bypass check is a no-op; populate with e.g. "easyicu.research_agent.pipeline_execute"
-# once a seam moves and the OLD path becomes a forwarding shim that canonical code
-# must not import.
+# shim-bypass check is a no-op. The pre-v1 cleanup deliberately retires old paths
+# instead of adding a forwarding shim.
 SHIM_IMPORT_PATHS: Set[str] = set()
 
 _FUNC_SCOPE_NODES = (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)
@@ -416,7 +415,7 @@ def measure() -> Dict[str, Any]:
             files[p.name] = {"missing": True}
             continue
         tree = ast.parse(p.read_text())
-        files[p.name] = {
+        files[p.relative_to(RA).as_posix()] = {
             "loc": len(p.read_text().splitlines()),
             "sha256": _sha256(p),
             "intra_package_import_edges": len(_intra_package_imports(tree)),

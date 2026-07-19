@@ -481,7 +481,7 @@ class _HybridTrajectoryRunner:
 
 
 def _disable_unrelated_audits(monkeypatch: pytest.MonkeyPatch) -> None:
-    from easyicu.research_agent import pipeline_execute
+    from easyicu.research_agent.execution import phase as pipeline_execute
 
     monkeypatch.setattr(pipeline_execute, "trajectory_bundle_findings", lambda **_: [])
     monkeypatch.setattr(
@@ -510,7 +510,7 @@ def test_typed_trajectory_stability_success_is_evidence_bound_and_continues(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from easyicu.research_agent import pipeline_execute
+    from easyicu.research_agent.execution import phase as pipeline_execute
     from easyicu.research_agent.authority.runtime_artifacts import (
         verified_run_evidence_path,
     )

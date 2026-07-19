@@ -98,7 +98,7 @@ mechanically moving every top-level file:
 | `evaluation/` | optional cross-model concordance and Tier-2 jury/rubric adapters over completed artifacts | primary scientific adjudication or hidden manuscript benchmark authority |
 | `review/` | deterministic post-analysis causal-claim and method-appropriateness review | exposure, outcome, cohort, method or estimand selection |
 
-`pipeline_execute.py` remains the orchestration caller. PlanAuthority's pure
+`execution/phase.py` is the canonical execute-phase orchestrator. PlanAuthority's pure
 candidate projection and TypedBindingResolver are now canonical under
 `authority/`; provider calls, revision/evidence registration, cohort mutation,
 runner rebuilding and repair/replan budgets deliberately remain in the sole
@@ -112,7 +112,7 @@ breaking-cleanup line: retired top-level module paths are absent rather than
 retained as façades. Fresh runs import responsibility packages directly, and
 the archive tag preserves the former diagnostic state.
 
-The production module-top-level static import graph is now acyclic. `pipeline_execute` and
+The production module-top-level static import graph is now acyclic. `execution.phase` and
 `execution.publication_figure` receive host-owned compatibility helpers through
 a fresh immutable `execution.host_services.ExecutePhaseServices` snapshot; they
 do not statically reverse-import `pipeline`. Sealed-renderer digest selection

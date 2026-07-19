@@ -3,7 +3,7 @@ Write phase for the EasyICU research-agent pipeline.
 
 This module is callable as ``run_write_phase(pipeline, ...)``. It reads
 configuration and collaborators from the pipeline instance, matching the
-``pipeline_execute.py`` free-function pattern, and returns the existing
+``execution/phase.py`` free-function pattern, and returns the existing
 ``_WritePhaseResult`` boundary object.
 
 Boundary contract: consumes ``_PlanPhaseResult`` + ``_ExecutePhaseResult``

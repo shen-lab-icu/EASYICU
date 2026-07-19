@@ -169,7 +169,7 @@ def test_sequential_worker_exception_propagates_unchanged() -> None:
 
 
 def test_parallel_workers_use_supplied_context_submitter_and_report_errors() -> None:
-    from easyicu.research_agent.pipeline_execute import _submit_in_current_context
+    from easyicu.research_agent.execution.phase import _submit_in_current_context
     from easyicu.research_agent.execution.run_coordination import RunCoordinator
 
     marker: ContextVar[str] = ContextVar("run_coordinator_marker", default="missing")
@@ -197,7 +197,7 @@ def test_parallel_workers_use_supplied_context_submitter_and_report_errors() -> 
 
 
 def test_run_coordinator_is_science_neutral_and_pipeline_owns_transitions() -> None:
-    import easyicu.research_agent.pipeline_execute as pipeline_execute
+    import easyicu.research_agent.execution.phase as pipeline_execute
     import easyicu.research_agent.execution.run_coordination as run_coordination
 
     module_source = inspect.getsource(run_coordination)
