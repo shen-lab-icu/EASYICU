@@ -1573,6 +1573,8 @@ def llm_is_mockish(client: Any) -> bool:
 
     if client is None:
         return False
+    if getattr(client, "__easyicu_mock_client__", False) is True:
+        return True
     if hasattr(client, "for_role"):
         try:
             analyzer_client = client.for_role("analyzer")
