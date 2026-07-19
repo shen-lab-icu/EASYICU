@@ -27,13 +27,13 @@ for p in (str(REPO_ROOT / "src"), str(REPO_ROOT / "tools")):
     if p not in sys.path:
         sys.path.insert(0, p)
 
-from easyicu.research_agent.concept_proposal import (  # noqa: E402
+from easyicu.research_agent.discovery.concept_proposal import (  # noqa: E402
     DistributionStat,
     gather_candidate_rows,
     propose_concept_selection,
     validate_concept_proposal,
 )
-from easyicu.research_agent.idea_mining_feasibility_tier import (  # noqa: E402
+from easyicu.research_agent.discovery.idea_mining_feasibility_tier import (  # noqa: E402
     SourceItemIndex,
 )
 from easyicu.research_agent.llm import LLMMessage  # noqa: E402

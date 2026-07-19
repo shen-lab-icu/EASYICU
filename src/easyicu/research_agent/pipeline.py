@@ -120,7 +120,7 @@ from .replication.notebook import (
     build_requirements_lockfile,
     write_notebook,
 )
-from .hypothesis_generator import generate_hypotheses
+from .discovery.hypothesis_generator import generate_hypotheses
 from .pdf_render import render_pdf_for_run
 from .context import (
     build_naive_research_context,

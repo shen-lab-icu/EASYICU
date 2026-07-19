@@ -57,7 +57,7 @@ from easyicu.research_agent.idea_mining_funnel import (  # noqa: E402
     LiteratureFunnelSpec,
     fetch_literature_funnel_corpus,
 )
-from easyicu.research_agent.idea_scope import (  # noqa: E402
+from easyicu.research_agent.discovery.idea_scope import (  # noqa: E402
     JOURNAL_PRESETS,
     LiteratureScopeSpec,
     resolve_journals,

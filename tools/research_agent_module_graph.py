@@ -53,6 +53,14 @@ LEGACY_TARGET_MODULES: Tuple[str, ...] = (
     "easyicu.research_agent.deterministic_sensitivity",
     "easyicu.research_agent.deterministic_survival",
     "easyicu.research_agent.trajectory_stability_executor",
+    "easyicu.research_agent.idea_mining_schema",
+    "easyicu.research_agent.idea_mining_pubmed",
+    "easyicu.research_agent.idea_scope",
+    "easyicu.research_agent.idea_registry",
+    "easyicu.research_agent.hypothesis_generator",
+    "easyicu.research_agent.idea_mining_data_first",
+    "easyicu.research_agent.idea_mining_feasibility_tier",
+    "easyicu.research_agent.concept_proposal",
 )
 
 
