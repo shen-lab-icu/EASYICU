@@ -1683,6 +1683,7 @@ _CODER_MAX_TOKENS = 8192
 _CODER_INITIAL_PROMPT_BYTE_LIMIT = 42_000
 _CODER_PATCH_PROMPT_BYTE_LIMIT = 30_000
 _CODER_REWRITE_PROMPT_BYTE_LIMIT = 65_000
+_CODER_TYPED_PATCH_DIAGNOSTIC_BYTE_LIMIT = 768
 
 
 class CoderPromptBudgetError(RuntimeError):
@@ -2293,7 +2294,19 @@ class CoderAgent:
             include_scientific_authority=True,
             user_notes=_coder_relevant_notes(scoped_context.notes),
         )
-        patch_diagnosis = _repair_diagnosis_excerpt(run_log, byte_limit=2_500)
+        # A typed repair authority already carries every routing reason and
+        # occurrence as host-owned data.  Keep only a small diagnostic mirror
+        # beside it so traceback/prose cannot crowd the exact code blocks or
+        # immutable authority coordinates out of the minimal-patch transport.
+        # Legacy untyped repairs retain the wider mirror for compatibility.
+        patch_diagnosis = _repair_diagnosis_excerpt(
+            run_log,
+            byte_limit=(
+                _CODER_TYPED_PATCH_DIAGNOSTIC_BYTE_LIMIT
+                if not repair_authority.is_empty
+                else 2_500
+            ),
+        )
         rewrite_diagnosis = _repair_diagnosis_excerpt(run_log, byte_limit=8_000)
         step_contract_header = (
             f"Analysis-family context: {family.key} ({family.name}). Use this only "
