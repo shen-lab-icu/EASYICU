@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
-from .code_patch import looks_like_executable_python
+from .repairs.patch import looks_like_executable_python
 from .contracts import ValidationFinding
 from .evidence_authority import load_current_evidence_snapshot
 from .runtime_artifacts import current_step_records, verified_run_evidence_path

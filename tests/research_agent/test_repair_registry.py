@@ -18,6 +18,7 @@ from easyicu.research_agent.repair_registry import (
     make_repair_provenance,
     repair_metadata_for,
 )
+from easyicu.research_agent.repairs import coordination as repair_coordination
 
 
 def test_repair_registry_invariants_hold() -> None:
@@ -183,11 +184,11 @@ def test_all_method_substitutions_are_auto_denied() -> None:
 
 
 def test_every_generic_repair_entrypoint_crosses_central_authorization_gate() -> None:
-    source = (
-        Path(code_repair.__file__)
-        .with_name("pipeline_execute.py")
-        .read_text(encoding="utf-8")
-    )
+    research_agent_root = Path(code_repair.__file__).resolve().parents[1]
+    source = (research_agent_root / "pipeline_execute.py").read_text(encoding="utf-8")
+    publication_figure_source = (
+        research_agent_root / "execution" / "publication_figure.py"
+    ).read_text(encoding="utf-8")
 
     assert source.count("_deterministic_summary_repair(") == 3
     assert source.count("deterministic_contract_repair(") == 1
@@ -198,11 +199,7 @@ def test_every_generic_repair_entrypoint_crosses_central_authorization_gate() ->
     # ``authorize`` callback. pipeline_execute must never call the raw
     # repair directly again.
     assert source.count("deterministic_concept_audit_repair(") == 0
-    coordination_source = (
-        Path(code_repair.__file__)
-        .with_name("repair_coordination.py")
-        .read_text(encoding="utf-8")
-    )
+    coordination_source = Path(repair_coordination.__file__).read_text(encoding="utf-8")
     assert coordination_source.count("deterministic_concept_audit_repair(") == 1
     assert "authorize(" in coordination_source
     assert "authorize=_authorize_automatic_repair" in source
@@ -210,7 +207,13 @@ def test_every_generic_repair_entrypoint_crosses_central_authorization_gate() ->
     # helper, the rendering-only adapter, plus the local helper definition.
     # Case-plugin candidates share the runner boundary and therefore cannot
     # bypass it.
-    assert source.count("_authorize_automatic_repair(") == 7
+    assert source.count("_authorize_automatic_repair(") == 6
+    assert publication_figure_source.count("_authorize_automatic_repair(") == 1
+    assert (
+        source.count("_authorize_automatic_repair(")
+        + publication_figure_source.count("_authorize_automatic_repair(")
+        == 7
+    )
     assert "authorizer=lambda repair_id: _automatic_repair_authorized(" in source
 
 

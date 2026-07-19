@@ -89,13 +89,13 @@ from .audits.validators import (
 )
 from .audits.patterns import AnalysisPatternAuditor
 from .audits.step_summary_integrity import StepSummaryIntegrityValidator
-from .code_repair import (
+from .repairs.source import (
     _deterministic_runner_repair,
     _deterministic_summary_repair,
     deterministic_contract_repair,
 )
 from .code_hygiene import reorder_forward_references
-from .repair_coordination import (
+from .repairs.coordination import (
     RepairAuthorityBinding,
     StepRepairBudget,
     authorized_deterministic_concept_repair,
@@ -258,7 +258,7 @@ from .pipeline import (
     _render_publication_bundle_from_prior_outputs_for_step,
     _semantic_aliases_for,
 )
-from .repair_reasons import (
+from .repairs.reasons import (
     RepairPromptAuthority,
     RepairReason,
     repair_prompt_binding_sha256,
@@ -394,7 +394,7 @@ from .step_attempt_authority import (
 )
 from .step_execution import LockedStepExecutionRequest, StepExecutor
 from .step_worker_state import StepWorkerProgress
-from .summary_repair import salvage_step_summary
+from .repairs.summary import salvage_step_summary
 from .viability import (
     CohortViability,
     assess_cohort_viability,
