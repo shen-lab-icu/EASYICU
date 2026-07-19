@@ -15,6 +15,9 @@ step checkpoint.
 
 from __future__ import annotations
 
+import hashlib
+import json
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import (
@@ -58,6 +61,49 @@ class EvidencePromotionResult:
     published_aliases: Dict[str, Dict[str, str]]
     retained_cross_step_aliases: Dict[str, str]
     suppressed_basename_evidence_ids: Set[str]
+
+
+def step_owned_artifact_evidence_id(
+    *,
+    kind: str,
+    step_id: str,
+    source_name: str,
+    artifact_sha256: str,
+    script_evidence_id: str,
+) -> str:
+    """Return a deterministic identity for one step-owned sealed artifact.
+
+    Artifact bytes alone are not an authority identity: two steps commonly
+    emit identical environment receipts or empty tables.  Binding the ID to
+    the producing step and script prevents a content-address collision from
+    returning another step's first-written evidence record during success
+    promotion.  The artifact SHA remains part of the identity and is still
+    verified by :class:`EvidenceStore`.
+    """
+
+    normalized_kind = re.sub(r"[^a-z0-9]+", "_", str(kind).casefold()).strip("_")
+    step_id = str(step_id or "").strip()
+    source_name = Path(str(source_name or "")).name
+    artifact_sha256 = str(artifact_sha256 or "").strip().lower()
+    script_evidence_id = str(script_evidence_id or "").strip()
+    if not normalized_kind or not step_id or not source_name or not script_evidence_id:
+        raise ValueError("step-owned artifact identity requires complete authority")
+    if not re.fullmatch(r"[0-9a-f]{64}", artifact_sha256):
+        raise ValueError("step-owned artifact identity requires a SHA-256 digest")
+    authority = json.dumps(
+        {
+            "artifact_sha256": artifact_sha256,
+            "kind": normalized_kind,
+            "script_evidence_id": script_evidence_id,
+            "source_name": source_name,
+            "step_id": step_id,
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    token = hashlib.sha256(authority.encode("utf-8")).hexdigest()[:16]
+    return f"{normalized_kind}_step_artifact_{token}"
 
 
 def _record_field(record: Any, name: str) -> Any:

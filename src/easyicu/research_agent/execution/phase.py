@@ -166,6 +166,7 @@ from ..authority.evidence_store import (
 from ..authority.registration import (
     StepEvidenceCommit,
     filter_success_alias_bindings as _filter_success_alias_bindings,
+    step_owned_artifact_evidence_id,
 )
 from ..authority.parent_artifact import _resolve_upstream_manifest_step
 from ..authority.plan_authority import (
@@ -10225,6 +10226,25 @@ def run_execute_phase(
                 continue
             step_aliases = services.semantic_aliases_for(step, art)
             generation_mode = worker_progress.generation_mode()
+            artifact_evidence_id = step_owned_artifact_evidence_id(
+                kind=(
+                    "table"
+                    if art.suffix.lower() in {".csv", ".tsv", ".parquet", ".feather"}
+                    else (
+                        "figure"
+                        if art.suffix.lower()
+                        in {".png", ".svg", ".pdf", ".tiff", ".tif", ".pptx"}
+                        else "log"
+                    )
+                ),
+                step_id=step.step_id,
+                source_name=art.name,
+                artifact_sha256=sealed_result_digests.get(
+                    art.name,
+                    sha256_of_file(art),
+                ),
+                script_evidence_id=script_record.evidence_id,
+            )
             if art.name == "step_summary.json":
                 summary_authority = "\0".join(
                     (
@@ -10271,6 +10291,7 @@ def run_execute_phase(
                     aliases=step_aliases,
                     producer="runner",
                     generation_mode=generation_mode,
+                    evidence_id=artifact_evidence_id,
                     publish_aliases=False,
                     metadata={
                         "script_evidence_id": script_record.evidence_id,
@@ -10296,6 +10317,7 @@ def run_execute_phase(
                     aliases=step_aliases,
                     producer="runner",
                     generation_mode=generation_mode,
+                    evidence_id=artifact_evidence_id,
                     publish_aliases=False,
                     metadata={
                         "script_evidence_id": script_record.evidence_id,
@@ -10315,6 +10337,7 @@ def run_execute_phase(
                     aliases=step_aliases,
                     producer="runner",
                     generation_mode=generation_mode,
+                    evidence_id=artifact_evidence_id,
                     publish_aliases=False,
                     metadata={
                         "script_evidence_id": script_record.evidence_id,
