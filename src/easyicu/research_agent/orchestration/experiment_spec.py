@@ -9,7 +9,7 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 import yaml
 from pydantic import BaseModel, ConfigDict, Field
 
-from .schema import TimeWindow
+from ..schema import TimeWindow
 
 
 class CohortInputSpec(BaseModel):

@@ -274,7 +274,7 @@ from .plan_utils import (
     _step_expects_figure,
     _typed_plan_dag_findings,
 )
-from .pipeline_resume import (
+from .orchestration.resume import (
     QuarantinedConceptDraft,
     ResumeController,
     clear_quarantined_concept_draft,

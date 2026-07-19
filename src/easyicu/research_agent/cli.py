@@ -189,7 +189,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     from .providers.llm import OpenAIClient
     from .providers.mocks import MockLLMClient
     from .pipeline import ResearchAgentPipeline
-    from .experiment_spec import load_experiment_spec
+    from .orchestration.experiment_spec import load_experiment_spec
 
     if args.llm is None:
         raise SystemExit("Choose an explicit --llm backend (`mock` or `openai`).")

@@ -1765,7 +1765,7 @@ def test_implicit_resume_offers_only_latest_contract_failed_code_once(
         _failed_contract_code_can_be_reused_before_coder,
         _serializable_plan_scientific_scope_signature,
     )
-    from easyicu.research_agent.pipeline_resume import ResumeController
+    from easyicu.research_agent.orchestration.resume import ResumeController
 
     step = AnalysisStep(
         step_id="01_summary",
@@ -2577,7 +2577,7 @@ with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as f:
         stop_after_step_id="01_summary",
         stop_after_analysis=True,
     )
-    from easyicu.research_agent.pipeline_resume import (
+    from easyicu.research_agent.orchestration.resume import (
         load_quarantined_concept_draft,
     )
 
@@ -3154,7 +3154,7 @@ if __name__ == "__main__":
     assert durable_budget.reserve_logical_repair("concept", max_repairs=2) == 2
 
     if legacy_stale_checkpoint:
-        from easyicu.research_agent.pipeline_resume import (
+        from easyicu.research_agent.orchestration.resume import (
             load_quarantined_concept_draft,
             store_quarantined_concept_draft,
         )

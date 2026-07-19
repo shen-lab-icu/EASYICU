@@ -15,8 +15,8 @@ from easyicu.research_agent.concept_dict_audit import (
     verify_recorded_dict_match,
     verify_replay_dict_match,
 )
-from easyicu.research_agent.pipeline_profiles import NPJ_DM_2026_05
-from easyicu.research_agent.pipeline_profiles import (
+from easyicu.research_agent.orchestration.profiles import NPJ_DM_2026_05
+from easyicu.research_agent.orchestration.profiles import (
     DEFAULT_SUBMISSION_PROFILE_REF,
     get_submission_profile,
 )

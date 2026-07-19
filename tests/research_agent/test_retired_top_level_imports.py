@@ -65,6 +65,7 @@ RETIRED_TOP_LEVEL_MODULES: dict[str, str | None] = {
     "evidence": "authority.evidence_store",
     "evidence_authority": "authority.evidence_snapshot",
     "evidence_registration": "authority.registration",
+    "experiment_spec": "orchestration.experiment_spec",
     "experience": "learning.experience",
     "figure_contract": "figures.publication",
     "figure_contracts": "figures.contracts",
@@ -98,6 +99,11 @@ RETIRED_TOP_LEVEL_MODULES: dict[str, str | None] = {
     "method_capabilities": "execution.method_capabilities",
     "ordered_stratified_contract": "contracts.ordered_stratified",
     "pdf_render": "reporting.pdf_render",
+    "pipeline_config": "orchestration.config",
+    "pipeline_phases": None,
+    "pipeline_profiles": "orchestration.profiles",
+    "pipeline_resume": "orchestration.resume",
+    "pipeline_state": None,
     "pipeline_cache": "authority.pipeline_cache",
     "provider_budget": "authority.provider_budget",
     "prompts": "providers.prompts",
@@ -186,7 +192,19 @@ def test_root_figure_api_preserves_canonical_object_identity(
     assert getattr(root, name) is getattr(canonical, name)
 
 
-@pytest.mark.parametrize("name", ["os_environ", "step_summary"])
+@pytest.mark.parametrize(
+    "name",
+    [
+        "os_environ",
+        "step_summary",
+        "PlanPhaseState",
+        "ExecutePhaseState",
+        "WritePhaseState",
+        "PlanPhaseRunner",
+        "ExecutePhaseRunner",
+        "WritePhaseRunner",
+    ],
+)
 def test_retired_root_attribute_is_absent(name: str) -> None:
     root = importlib.import_module("easyicu.research_agent")
     assert not hasattr(root, name)

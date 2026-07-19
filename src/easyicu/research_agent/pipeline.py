@@ -140,7 +140,7 @@ from .reporting.article_contract import (
     validate_plan_against_article_contract,
 )
 from .planning.figure_strategy import build_article_figure_strategy
-from .pipeline_config import PipelineConfig
+from .orchestration.config import PipelineConfig
 from .contracts.runtime import (
     RunResult,
     _ExecutePhaseResult,
@@ -313,7 +313,7 @@ from .plan_utils import (
     _step_produces_figure,
     effect_output_authorized,
 )
-from .experiment_spec import ExperimentSpec, dump_experiment_spec
+from .orchestration.experiment_spec import ExperimentSpec, dump_experiment_spec
 from .figures.skill import PublicationFigureSkill
 from .reporting.bibtex import render_bibtex
 from .reporting.latex import scaffold_to_latex

@@ -656,7 +656,7 @@ def __getattr__(name: str):
         "dump_experiment_spec",
         "build_pipeline_from_spec",
     }:
-        from . import experiment_spec as _spec
+        from .orchestration import experiment_spec as _spec
 
         return getattr(_spec, name)
     if name in {
@@ -1018,7 +1018,7 @@ def __getattr__(name: str):
 
         return ResearchAgentPipeline
     if name == "PipelineConfig":
-        from .pipeline_config import PipelineConfig
+        from .orchestration.config import PipelineConfig
 
         return PipelineConfig
     if name in {
@@ -1033,15 +1033,7 @@ def __getattr__(name: str):
         "SUBMISSION_PROFILE_REGISTRY",
         "get_submission_profile",
     }:
-        from . import pipeline_profiles as _profiles
+        from .orchestration import profiles as _profiles
 
         return getattr(_profiles, name)
-    if name in {"PlanPhaseState", "ExecutePhaseState", "WritePhaseState"}:
-        from . import pipeline_state as _ps
-
-        return getattr(_ps, name)
-    if name in {"PlanPhaseRunner", "ExecutePhaseRunner", "WritePhaseRunner"}:
-        from . import pipeline_phases as _pp
-
-        return getattr(_pp, name)
     raise AttributeError(f"module 'easyicu.research_agent' has no attribute {name!r}")

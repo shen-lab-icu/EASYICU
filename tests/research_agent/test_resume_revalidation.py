@@ -982,7 +982,7 @@ def test_replay_uses_shared_gates_and_never_constructs_llm_auditor():
 
 
 def test_resume_application_preserves_append_only_revalidation_history(tmp_path):
-    from easyicu.research_agent.pipeline_resume import ResumeController
+    from easyicu.research_agent.orchestration.resume import ResumeController
 
     step = AnalysisStep(step_id="01_model", intent="Fit the planned model.")
     history = [

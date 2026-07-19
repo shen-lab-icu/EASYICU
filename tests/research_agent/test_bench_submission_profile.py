@@ -22,7 +22,7 @@ try:
 finally:
     sys.path.pop(0)
 
-from easyicu.research_agent.pipeline_profiles import (
+from easyicu.research_agent.orchestration.profiles import (
     DEFAULT_SUBMISSION_PROFILE_REF,
     NPJ_DM_2026_05,
     NPJ_DM_2026_06,
