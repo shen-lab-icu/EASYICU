@@ -23,7 +23,7 @@ from typing import Any, Dict, Iterable, List, Literal, Mapping, Optional, Sequen
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from .schema import ValidationFinding
+from ..schema import ValidationFinding
 
 
 PUBLICATION_FIGURE_SKILL_POLICY_VERSION = "publication_figure_skill_policy_v6"
@@ -204,39 +204,6 @@ class FigureContract(BaseModel):
         return self.model_dump_json(indent=indent)
 
 
-class AuditFindingList(list[ValidationFinding]):
-    """List-like findings container that tolerates ad hoc metadata writes.
-
-    Some generated scripts still treat the audit return value as a dict
-    and attach extra keys such as ``audit_results["figure_contract"]``.
-    We keep the list semantics for existing callers while swallowing
-    those metadata writes instead of crashing the whole step.
-    """
-
-    def __init__(
-        self,
-        iterable: Iterable[ValidationFinding] = (),
-        *,
-        metadata: Optional[Dict[str, Any]] = None,
-    ) -> None:
-        super().__init__(iterable)
-        self.metadata: Dict[str, Any] = dict(metadata or {})
-
-    def __getitem__(self, key: object) -> Any:
-        if isinstance(key, str):
-            return self.metadata[key]
-        return super().__getitem__(key)
-
-    def __setitem__(self, key: object, value: Any) -> None:
-        if isinstance(key, str):
-            self.metadata[key] = value
-            return
-        super().__setitem__(key, value)
-
-    def get(self, key: str, default: Any = None) -> Any:
-        return self.metadata.get(key, default)
-
-
 PALETTE_CLINICAL: Dict[str, str] = {
     "baseline": "#272727",
     "blue": "#0F4D92",
@@ -249,56 +216,6 @@ PALETTE_CLINICAL: Dict[str, str] = {
     "neutral_light": "#D8D8D8",
     "band": "#F3F0EA",
 }
-
-
-# Okabe-Ito colourblind-safe palette (T1.8). Used by the codex-grade
-# SOFA2AuditSkill's mock figures so manuscript-ready output matches
-# what an external Codex-style agent emits when asked for publication
-# figures. Order is stable — generators index into it by panel.
-PALETTE_OKABE_ITO: List[str] = [
-    "#0072B2",  # blue
-    "#D55E00",  # vermillion
-    "#009E73",  # bluish green
-    "#E69F00",  # orange
-    "#CC79A7",  # reddish purple
-    "#56B4E9",  # sky blue
-    "#6F6F6F",  # neutral grey
-    "#F0E442",  # yellow
-]
-
-
-def apply_codex_publication_style(
-    *,
-    font_size: float = 8.0,
-) -> List[str]:
-    """Apply the codex-grade publication rcParams and return Okabe-Ito.
-
-    Mirrors the rcParams the standalone codex-led independent analysis
-    used (sans-serif Arial 8pt, fonttype 42 for editable PDF/PS,
-    no top/right spines, savefig DPI 300). Returns the 8-colour
-    Okabe-Ito palette so callers can index into it directly.
-    """
-    import matplotlib.pyplot as plt
-
-    plt.rcParams.update({
-        "font.family": "sans-serif",
-        "font.sans-serif": ["Arial", "Helvetica", "DejaVu Sans"],
-        "font.size": font_size,
-        "axes.labelsize": font_size,
-        "axes.titlesize": font_size + 1.0,
-        "xtick.labelsize": max(font_size - 1.0, 6.0),
-        "ytick.labelsize": max(font_size - 1.0, 6.0),
-        "legend.fontsize": max(font_size - 1.0, 6.0),
-        "axes.spines.top": False,
-        "axes.spines.right": False,
-        "savefig.dpi": 300,
-        "pdf.fonttype": 42,
-        "ps.fonttype": 42,
-        "svg.fonttype": "none",
-        "figure.facecolor": "white",
-        "savefig.facecolor": "white",
-    })
-    return list(PALETTE_OKABE_ITO)
 
 
 def _normalise_statistics_note(
@@ -1031,49 +948,16 @@ def _xml_escape(text: str) -> str:
 
 
 def audit_publication_exports(
-    paths: Mapping[str, Path] | Iterable[Path] | str | Path | None = None,
-    *legacy_args: str | Path,
-    output_dir: Optional[str | Path] = None,
-    stem: Optional[str] = None,
+    paths: Mapping[str, Path] | Iterable[Path] | str | Path,
+    *,
     min_bytes: int = 1024,
     require_svg_text: bool = True,
-) -> AuditFindingList:
+) -> List[ValidationFinding]:
     """Audit exported figure files for basic journal-readiness."""
     figure_suffixes = {".svg", ".pdf", ".png", ".tiff", ".tif", ".pptx"}
-    if legacy_args:
-        if output_dir is None:
-            output_dir = legacy_args[0]
-        if len(legacy_args) > 1 and stem is None:
-            stem = str(legacy_args[1])
-
-    contract_like = isinstance(paths, FigureContract) or (
-        paths is not None
-        and not isinstance(paths, (str, Path, Mapping))
-        and hasattr(paths, "figure_id")
-        and hasattr(paths, "panels")
-    )
-    if contract_like:
-        if stem is None:
-            stem = str(getattr(paths, "figure_id", "") or "publication_figure")
-        paths = output_dir
-
-    if paths is None and output_dir is not None:
-        paths = output_dir
     if isinstance(paths, (str, Path)):
         base = Path(paths)
-        if stem is not None:
-            stem_path = base / stem
-            path_list = [
-                stem_path.with_suffix(suffix)
-                for suffix in [".svg", ".pdf", ".png", ".tiff", ".tif", ".pptx"]
-                if stem_path.with_suffix(suffix).exists()
-            ]
-            if not path_list and base.is_dir():
-                path_list = [
-                    p for p in sorted(base.iterdir())
-                    if p.suffix.lower() in figure_suffixes
-                ]
-        elif base.is_dir():
+        if base.is_dir():
             path_list = [
                 p for p in sorted(base.iterdir())
                 if p.suffix.lower() in figure_suffixes
@@ -1091,7 +975,7 @@ def audit_publication_exports(
             if Path(p).suffix.lower() in figure_suffixes
         ]
 
-    findings: AuditFindingList = AuditFindingList()
+    findings: List[ValidationFinding] = []
     for path in path_list:
         if not path.exists():
             findings.append(ValidationFinding(
@@ -1121,7 +1005,7 @@ def audit_publication_exports(
                     detail={"path": str(path)},
                 ))
             else:
-                from .visual_qa import audit_svg_text_layout
+                from ..gates.visual_qa import audit_svg_text_layout
 
                 findings.extend(audit_svg_text_layout(
                     path,

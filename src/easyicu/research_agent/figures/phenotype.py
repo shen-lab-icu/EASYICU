@@ -286,7 +286,7 @@ def render_phenotype_figure(
     import matplotlib.pyplot as plt
     import numpy as np
 
-    from ..publication_figures import add_panel_label, apply_publication_style
+    from .publication import add_panel_label, apply_publication_style
 
     palette = apply_publication_style()
     # Height 82 -> 96mm and wider inter-panel gaps give the 40-degree rotated

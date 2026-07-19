@@ -488,11 +488,11 @@ def test_survival_figure_forest_labels_do_not_overlap_with_many_covariates(
     blocker). The forest is capped to a readable row count."""
 
     from easyicu.research_agent.figures import render_family_figure
-    from easyicu.research_agent.publication_figures import (
+    from easyicu.research_agent.figures.publication import (
         make_figure_contract,
         save_publication_figure,
     )
-    from easyicu.research_agent.visual_qa import _audit_svg_text_layout
+    from easyicu.research_agent.gates.visual_qa import _audit_svg_text_layout
 
     evidence = ra.EvidenceStore(tmp_path)
     n = 20

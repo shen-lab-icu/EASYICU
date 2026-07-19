@@ -1,6 +1,6 @@
 """Study-design-aware publication figure renderers.
 
-The base :mod:`figure_skill` deterministically renders the association-family
+The base :mod:`.skill` deterministically renders the association-family
 publication figure (forest + strata + missingness). That single template is
 correct for association / descriptive studies but is scientifically wrong for
 the other study-design families in ``figure_strategy``: a survival question

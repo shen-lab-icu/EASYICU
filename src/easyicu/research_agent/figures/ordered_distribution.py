@@ -19,7 +19,7 @@ from typing import Any, Dict, Mapping, Optional, Sequence, Tuple
 
 import pandas as pd
 
-from ..publication_figures import (
+from .publication import (
     add_panel_label,
     apply_publication_style,
     make_figure_contract,

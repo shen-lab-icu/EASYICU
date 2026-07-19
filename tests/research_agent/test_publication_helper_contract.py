@@ -25,7 +25,7 @@ def _findings(script: str, ra):
 def test_preflight_emits_typed_host_helper_signature_reason(ra) -> None:
     script = """
 import inspect
-from easyicu.research_agent.publication_figures import save_publication_figure
+from easyicu.research_agent.figures.publication import save_publication_figure
 signature = inspect.signature(save_publication_figure)
 """
 
@@ -48,20 +48,16 @@ signature = inspect.signature(save_publication_figure)
     [
         """
 import inspect as ins
-from easyicu.research_agent.publication_figures import save_publication_figure
+from easyicu.research_agent.figures.publication import save_publication_figure
 signature = ins.signature(save_publication_figure)
 """,
         """
 from inspect import signature as inspect_signature
-from easyicu.research_agent.publication_figures import save_publication_figure as save_fig
+from easyicu.research_agent.figures.publication import save_publication_figure as save_fig
 signature = inspect_signature(save_fig)
 """,
         """
-import easyicu.research_agent.publication_figures as publication_helpers
-signature = publication_helpers.save_publication_figure.__signature__
-""",
-        """
-from easyicu.research_agent import publication_figures as publication_helpers
+import easyicu.research_agent.figures.publication as publication_helpers
 signature = publication_helpers.save_publication_figure.__signature__
 """,
     ],
@@ -95,7 +91,7 @@ def run(inspect, save_publication_figure):
 
 def test_stable_direct_helper_api_writes_declared_bundle(tmp_path) -> None:
     plt = pytest.importorskip("matplotlib.pyplot")
-    from easyicu.research_agent.publication_figures import (
+    from easyicu.research_agent.figures.publication import (
         make_figure_contract,
         save_publication_figure,
     )

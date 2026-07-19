@@ -37,7 +37,7 @@ def test_visual_qa_vlm_adapter_appends_findings(ra, tmp_path: Path):
                 '"detail":{"panel":"main"}}]}'
             )
 
-    from easyicu.research_agent.visual_qa import VLMVisualQAAdapter, VisualQAAuditor
+    from easyicu.research_agent.gates.visual_qa import VLMVisualQAAdapter, VisualQAAuditor
 
     llm = _VisionLLM()
     findings = VisualQAAuditor(
@@ -109,7 +109,7 @@ def test_parse_vlm_visual_qa_response_tolerates_json_fence(ra, tmp_path: Path):
 {"findings":[{"path":"a.png","severity":"error","message":"Blank panel."}]}
 ```"""
 
-    from easyicu.research_agent.visual_qa import parse_vlm_visual_qa_response
+    from easyicu.research_agent.gates.visual_qa import parse_vlm_visual_qa_response
 
     findings = parse_vlm_visual_qa_response(raw, known_paths=[fig_path])
     assert len(findings) == 1
@@ -134,7 +134,7 @@ def test_visual_qa_flags_svg_text_overlap(ra, tmp_path: Path):
         encoding="utf-8",
     )
 
-    from easyicu.research_agent.visual_qa import VisualQAAuditor
+    from easyicu.research_agent.gates.visual_qa import VisualQAAuditor
 
     findings = VisualQAAuditor(min_bytes=1).audit(figure_paths=[fig_path])
 
@@ -158,7 +158,7 @@ def test_visual_qa_downgrades_panel_label_title_overlap(ra, tmp_path: Path):
         encoding="utf-8",
     )
 
-    from easyicu.research_agent.visual_qa import VisualQAAuditor
+    from easyicu.research_agent.gates.visual_qa import VisualQAAuditor
 
     findings = VisualQAAuditor(min_bytes=1).audit(figure_paths=[fig_path])
 
@@ -180,7 +180,7 @@ def test_visual_qa_flags_svg_cropped_text(ra, tmp_path: Path):
         encoding="utf-8",
     )
 
-    from easyicu.research_agent.visual_qa import VisualQAAuditor
+    from easyicu.research_agent.gates.visual_qa import VisualQAAuditor
 
     findings = VisualQAAuditor(min_bytes=1).audit(figure_paths=[fig_path])
 
@@ -201,7 +201,7 @@ def test_visual_qa_svg_numeric_consistency_passes_when_value_is_present(ra, tmp_
         encoding="utf-8",
     )
 
-    from easyicu.research_agent.visual_qa import VisualQAAuditor
+    from easyicu.research_agent.gates.visual_qa import VisualQAAuditor
 
     findings = VisualQAAuditor(min_bytes=1).audit_with_expected(
         figure_paths=[fig_path],
@@ -225,7 +225,7 @@ def test_visual_qa_svg_numeric_consistency_warns_when_value_is_missing(ra, tmp_p
         encoding="utf-8",
     )
 
-    from easyicu.research_agent.visual_qa import VisualQAAuditor
+    from easyicu.research_agent.gates.visual_qa import VisualQAAuditor
 
     findings = VisualQAAuditor(min_bytes=1).audit_with_expected(
         figure_paths=[fig_path],

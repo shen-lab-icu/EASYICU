@@ -5643,7 +5643,7 @@ def _host_helper_runtime_introspection_findings(
                 if alias.name == "inspect":
                     inspect_modules.add(alias.asname or "inspect")
                 elif (
-                    alias.name == "easyicu.research_agent.publication_figures"
+                    alias.name == "easyicu.research_agent.figures.publication"
                     and alias.asname
                 ):
                     helper_modules.add(alias.asname)
@@ -5654,17 +5654,11 @@ def _host_helper_runtime_introspection_findings(
                     for alias in node.names
                     if alias.name == "signature"
                 )
-            elif node.module == "easyicu.research_agent.publication_figures":
+            elif node.module == "easyicu.research_agent.figures.publication":
                 helper_names.update(
                     alias.asname or alias.name
                     for alias in node.names
                     if alias.name == "save_publication_figure"
-                )
-            elif node.module == "easyicu.research_agent":
-                helper_modules.update(
-                    alias.asname or alias.name
-                    for alias in node.names
-                    if alias.name == "publication_figures"
                 )
     if not (helper_names or helper_modules):
         return []

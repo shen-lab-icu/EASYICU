@@ -390,7 +390,7 @@ from .viability import (
     step_requires_model_performance,
     step_summary_block_signal,
 )
-from .visual_qa import VLMVisualQAAdapter, VisualQAAuditor
+from .gates.visual_qa import VLMVisualQAAdapter, VisualQAAuditor
 
 logger = logging.getLogger(__name__)
 

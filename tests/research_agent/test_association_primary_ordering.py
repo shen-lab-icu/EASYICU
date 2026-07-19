@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import pandas as pd
 
-from easyicu.research_agent.figure_skill import (
+from easyicu.research_agent.figures.skill import (
     _normalise_association_frame,
     _primary_match_rank,
     _order_primary_first,

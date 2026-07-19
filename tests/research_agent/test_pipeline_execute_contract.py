@@ -230,7 +230,7 @@ def test_consistent_local_figure_source_descriptor_is_canonicalized_for_consumer
     tmp_path,
 ):
     from easyicu.research_agent.discovery.discovery_package import _string_list
-    from easyicu.research_agent.figure_skill import (
+    from easyicu.research_agent.figures.skill import (
         _contract_payload_source_references,
     )
     from easyicu.research_agent.pipeline_execute import (

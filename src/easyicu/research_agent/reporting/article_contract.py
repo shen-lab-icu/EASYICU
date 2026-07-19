@@ -22,7 +22,7 @@ from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Set
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from ..figure_contracts import figure_contract_paths
+from ..figures.contracts import figure_contract_paths
 from ..authority.runtime_artifacts import (
     current_evidence_records,
     current_successful_step_records,
@@ -330,7 +330,7 @@ def _step_summary_text(record: Mapping[str, Any]) -> str:
     return _normalise_space(json.dumps(identity, ensure_ascii=False, default=str))
 
 
-# Shared with figure_strategy / display_suite via figure_contracts so all
+# Shared with figure_strategy / display_suite via figures.contracts so all
 # article-level audits see the identical contract list.
 _figure_contract_paths = figure_contract_paths
 

@@ -7,7 +7,7 @@ import zipfile
 import pandas as pd
 import pytest
 
-from easyicu.research_agent.publication_figures import (
+from easyicu.research_agent.figures.publication import (
     PUBLICATION_FIGURE_SKILL_POLICY_VERSION,
     PanelSpec,
     apply_publication_style,
@@ -83,7 +83,7 @@ def test_robustness_panel_publication_figure_has_no_header_title_overlap(
     ra, tmp_path: Path, variant_count: int
 ):
     from easyicu.research_agent.authority.evidence_store import EvidenceStore
-    from easyicu.research_agent.figure_skill import PublicationFigureSkill
+    from easyicu.research_agent.figures.skill import PublicationFigureSkill
     from easyicu.research_agent.robustness_panel import (
         RobustnessPanel,
         RobustnessPanelRow,
@@ -177,7 +177,7 @@ def test_publication_figure_skill_rebuilds_stale_single_panel_bundle(
     tmp_path: Path,
 ):
     from easyicu.research_agent.authority.evidence_store import EvidenceStore
-    from easyicu.research_agent.figure_skill import PublicationFigureSkill
+    from easyicu.research_agent.figures.skill import PublicationFigureSkill
     from easyicu.research_agent.robustness_panel import (
         RobustnessPanel,
         RobustnessPanelRow,
@@ -293,7 +293,7 @@ def test_publication_figure_skill_rebuilds_stale_single_panel_bundle(
 
 def test_curated_publication_bundle_requires_current_policy_version(ra, tmp_path: Path):
     from easyicu.research_agent.authority.evidence_store import EvidenceStore
-    from easyicu.research_agent.figure_skill import (
+    from easyicu.research_agent.figures.skill import (
         _has_curated_publication_figure_bundle,
         _source_fingerprint_metadata,
     )
@@ -1290,7 +1290,7 @@ def test_publication_export_audit_accepts_output_dir_and_stem(tmp_path: Path):
     paths = save_publication_figure(fig, tmp_path / "figure_audit", formats=["svg", "png"])
     plt.close(fig)
 
-    findings = audit_publication_exports(output_dir=tmp_path, stem="figure_audit", min_bytes=1)
+    findings = audit_publication_exports(tmp_path, min_bytes=1)
     assert findings == []
     assert paths["svg"].exists()
 
@@ -1431,38 +1431,16 @@ def test_runner_synthesizes_contract_for_step_figure_exports(tmp_path: Path):
     assert [finding for finding in findings if finding.severity == "error"] == []
 
 
-def test_audit_publication_exports_tolerates_metadata_assignment(tmp_path: Path):
+def test_audit_publication_exports_returns_plain_findings_list(tmp_path: Path):
     svg = tmp_path / "ok.svg"
     svg.write_text(
         '<svg xmlns="http://www.w3.org/2000/svg"><text x="10" y="10">ok</text></svg>',
         encoding="utf-8",
     )
     findings = audit_publication_exports([svg], min_bytes=1)
-    findings["figure_contract"] = {"figure_id": "Figure1"}
-    assert findings["figure_contract"]["figure_id"] == "Figure1"
-
-
-def test_audit_publication_exports_accepts_legacy_contract_and_output_dir_call(tmp_path: Path):
-    svg = tmp_path / "primary_association_curve.svg"
-    svg.write_text(
-        '<svg xmlns="http://www.w3.org/2000/svg"><text x="10" y="10">ok</text></svg>',
-        encoding="utf-8",
-    )
-    contract = make_figure_contract(
-        figure_id="primary_association_curve",
-        core_claim="Legacy audit call should inspect exported files.",
-        panels=[{
-            "panel_id": "a",
-            "title": "Association",
-            "role": "association",
-            "claim": "Association figure exists.",
-            "evidence_ids": ["primary_association"],
-        }],
-    )
-
-    findings = audit_publication_exports(contract, tmp_path, min_bytes=1)
-
-    assert findings == []
+    assert isinstance(findings, list)
+    with pytest.raises(TypeError):
+        findings["figure_contract"] = {"figure_id": "Figure1"}
 
 
 def test_publication_figure_skill_renders_from_registered_association_table(ra, tmp_path: Path):
@@ -1533,7 +1511,7 @@ def test_publication_figure_skill_renders_from_registered_association_table(ra, 
 
 
 def test_association_forest_axis_metadata_tracks_effect_measure(ra):
-    from easyicu.research_agent.figure_skill import _normalise_association_frame
+    from easyicu.research_agent.figures.skill import _normalise_association_frame
 
     hr_frame = _normalise_association_frame(
         pd.DataFrame(
@@ -1567,7 +1545,7 @@ def test_association_forest_axis_metadata_tracks_effect_measure(ra):
 
 
 def test_association_frame_filters_to_primary_exposure_and_point_estimate(ra):
-    from easyicu.research_agent.figure_skill import _normalise_association_frame
+    from easyicu.research_agent.figures.skill import _normalise_association_frame
 
     frame = _normalise_association_frame(
         pd.DataFrame(
@@ -1710,7 +1688,7 @@ def test_publication_figure_skill_e1_like_layout_has_no_svg_overlap_errors(
 
 def test_primary_association_selector_prefers_single_primary_estimand(ra, tmp_path: Path):
     from easyicu.research_agent.authority.evidence_store import EvidenceStore
-    from easyicu.research_agent.figure_skill import _select_primary_association_record
+    from easyicu.research_agent.figures.skill import _select_primary_association_record
 
     run_dir = tmp_path / "run"
     run_dir.mkdir()
@@ -1766,7 +1744,7 @@ def test_primary_association_selector_prefers_single_primary_estimand(ra, tmp_pa
 
 
 def test_missingness_frame_deduplicates_variable_labels(ra):
-    from easyicu.research_agent.figure_skill import _normalise_missingness_frame
+    from easyicu.research_agent.figures.skill import _normalise_missingness_frame
 
     frame = _normalise_missingness_frame(
         pd.DataFrame(
@@ -1781,7 +1759,7 @@ def test_missingness_frame_deduplicates_variable_labels(ra):
 
 
 def test_missingness_frame_groups_measurement_summary_features(ra):
-    from easyicu.research_agent.figure_skill import _normalise_missingness_frame
+    from easyicu.research_agent.figures.skill import _normalise_missingness_frame
 
     frame = _normalise_missingness_frame(
         pd.DataFrame(
@@ -1805,7 +1783,7 @@ def test_missingness_frame_groups_measurement_summary_features(ra):
 
 
 def test_strata_axis_label_comes_from_score_column(ra):
-    from easyicu.research_agent.figure_skill import (
+    from easyicu.research_agent.figures.skill import (
         _normalise_strata_frame,
         _strata_score_label,
     )
@@ -1843,7 +1821,7 @@ def test_strata_frame_matches_predictor_named_group_column(ra):
     (``lactate_group``, ``sofa2_stratum``). The exact-name candidate list can
     never enumerate these, so a general grouping-suffix fallback must still
     resolve the score column instead of returning an empty frame."""
-    from easyicu.research_agent.figure_skill import _normalise_strata_frame
+    from easyicu.research_agent.figures.skill import _normalise_strata_frame
 
     frame = _normalise_strata_frame(
         pd.DataFrame(
@@ -1868,7 +1846,7 @@ def test_association_frame_uses_model_label_for_row_labels(ra):
     """When the model table carries ``model_label`` (e.g. primary vs
     complete-case comparator), the forest rows must read as those labels,
     not as the raw odds-ratio floats."""
-    from easyicu.research_agent.figure_skill import _normalise_association_frame
+    from easyicu.research_agent.figures.skill import _normalise_association_frame
 
     frame = _normalise_association_frame(
         pd.DataFrame(

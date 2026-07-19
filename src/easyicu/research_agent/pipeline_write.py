@@ -34,7 +34,7 @@ from .authority.evidence_store import (
     EvidenceEnforcementMode,
     sha256_of_file,
 )
-from .figure_skill import PublicationFigureSkill
+from .figures.skill import PublicationFigureSkill
 from .reporting.latex import scaffold_to_latex
 from .literature import LiteratureAgent, LiteratureBundle
 from .providers.mocks import MockLLMClient
@@ -67,7 +67,7 @@ from .reporting.reporting_checklist import (
 from .reporting.reviewer import run_reviewer_round
 from .schema import CritiqueReport, EvidenceRef, ManuscriptDraftPacket
 from .side_findings import collect_side_findings
-from .visual_qa import VLMVisualQAAdapter, VisualQAAuditor
+from .gates.visual_qa import VLMVisualQAAdapter, VisualQAAuditor
 from .reporting.pdf_render import render_pdf_for_run
 
 

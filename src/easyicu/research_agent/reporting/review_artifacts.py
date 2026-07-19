@@ -18,7 +18,7 @@ import base64
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
 
-from ..figure_contracts import (
+from ..figures.contracts import (
     EXPORT_SUFFIXES,
     figure_contract_export_paths,
     figure_contract_label,

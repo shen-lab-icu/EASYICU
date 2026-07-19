@@ -18,7 +18,7 @@ and RETURN a canonicalization code candidate:
 The DECISION to install a canonicalization and the demotion that consumes
 ``_family_has_deterministic_figure_renderer`` stay in ``pipeline_execute``; only
 the preparation helpers live here. Imports only leaf modules (schema /
-publication_figures / stdlib) so there is no import cycle with ``pipeline_execute``
+figures.publication / stdlib) so there is no import cycle with ``pipeline_execute``
 or ``contract_gate``. ``pipeline_execute`` re-exports every name here for
 back-compat.
 """
@@ -32,7 +32,7 @@ import tempfile
 from pathlib import Path
 from typing import Any, List, Mapping, Optional, Sequence, Tuple
 
-from ..publication_figures import make_figure_contract
+from ..figures.publication import make_figure_contract
 from ..schema import AnalysisStep
 
 

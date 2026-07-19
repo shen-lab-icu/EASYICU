@@ -286,7 +286,7 @@ Code contract:
 - For publication / Nature-style figures, default to EasyICU's
   built-in Nature-compatible publication figure path instead of ad
   hoc `fig.savefig` calls:
-  `from easyicu.research_agent.publication_figures import
+  `from easyicu.research_agent.figures.publication import
   make_figure_contract, apply_publication_style, add_panel_label,
   save_publication_figure, audit_publication_exports`. Define a
   claim-first `FigureContract`, map each panel to source evidence,

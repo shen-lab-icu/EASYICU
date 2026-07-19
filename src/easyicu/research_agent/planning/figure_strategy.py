@@ -16,7 +16,7 @@ from typing import Any, Dict, List, Mapping, Optional, Sequence, Set
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from ..figure_contracts import figure_contract_paths, panel_chart_type, panel_text
+from ..figures.contracts import figure_contract_paths, panel_chart_type, panel_text
 from ..schema import ResearchContext, ValidationFinding
 from .study_design import infer_study_design_family
 from .study_design_playbook import StudyDesignFamily
@@ -372,7 +372,7 @@ def _normalise(text: Any) -> str:
     return re.sub(r"\s+", " ", str(text or "").strip().lower())
 
 
-# Shared with display_suite / review_artifacts via figure_contracts so the
+# Shared with display_suite / review_artifacts via figures.contracts so the
 # audits cannot disagree about which contracts exist.
 _contract_paths = figure_contract_paths
 

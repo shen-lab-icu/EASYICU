@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Sequence
 
 from ..authority.evidence_store import EvidenceStore
-from ..figure_contracts import (
+from ..figures.contracts import (
     figure_contract_paths,
     figure_contract_text,
     figure_contract_tier,

@@ -11893,7 +11893,7 @@ class FigureContractQualityValidator:
     ) -> bool:
         """True when the CONTRACT itself identifies a supporting audit/QC figure.
 
-        The real figure_skill call sites do not thread the step, so an exact
+        The real figures.skill call sites do not thread the step, so an exact
         normalized figure_id remains as a compatibility signal for separately
         registered supporting artifacts. Panel roles are handled structurally
         by :meth:`_is_result_like_contract`; titles, claims, and identifier

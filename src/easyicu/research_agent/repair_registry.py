@@ -406,7 +406,7 @@ _COMMON_SEALED_RENDERER_MODULES = (
     "easyicu.research_agent.pipeline",
     "easyicu.research_agent.declared_product_contract",
     "easyicu.research_agent.repair_registry",
-    "easyicu.research_agent.publication_figures",
+    "easyicu.research_agent.figures.publication",
 )
 _SEALED_RENDERER_IMPLEMENTATION_MODULES: Dict[str, Tuple[str, ...]] = {
     "ordered_category_distribution_publication_bundle_v1": (
