@@ -1388,9 +1388,13 @@ def test_primary_cohort_raw_runner_is_scoped_and_authority_hashes_are_rechecked(
     authority_source = inspect.getsource(
         pipeline_execute._execution_input_authority_integrity_finding
     )
+    routing_source = inspect.getsource(pipeline_execute._step_execution_cohort_path)
 
-    assert "step_execution_cohort_path = (" in source
-    assert "universe_path if primary_cohort_uses_universe else cohort_path" in source
+    assert "step_execution_cohort_path = _step_execution_cohort_path(" in source
+    assert "primary_analysis_cohort_producer_uses_universe" in routing_source
+    assert "development_sample_selected" in routing_source
+    assert "return universe_path" in routing_source
+    assert "return cohort_path" in routing_source
     assert "cohort_path=step_execution_cohort_path" in source
     assert '"execution_cohort_sha256": sha256_of_file(universe_path)' in source
     assert (
