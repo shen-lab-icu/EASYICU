@@ -22,7 +22,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import pandas as pd
 
-from ..evidence import EvidenceStore
+from ..authority.evidence_store import EvidenceStore
 from ..schema import AnalysisPlan, EvidenceRecord, ResearchContext
 from .base import RenderedFigure, load_table, numeric_series, resolve_column
 
@@ -44,9 +44,9 @@ _EFFECT_NAMES = [
 ]
 
 
-# Effect-scale classification. The deterministic causal runner writes the
-# CANONICAL full name ``scale="odds_ratio"`` (deterministic_causal.py:363), not
-# the abbreviation ``or``, so a naive ``scale in ("or","hr","rr")`` test
+# Effect-scale classification. The typed-product contract uses the canonical
+# full name ``scale="odds_ratio"``, not the abbreviation ``or``, so a naive
+# ``scale in ("or","hr","rr")`` test
 # misclassifies the primary effect as a DIFFERENCE measure -> null reference at 0
 # (should be 1), linear axis (should be log), mislabeled panel. Map both spellings.
 _RATIO_SCALES = {
@@ -118,9 +118,9 @@ def _load_effect(
     )
     if est_col is None:
         return None
-    # The deterministic runner writes ci_low / ci_high (deterministic_causal.py:359);
-    # the old candidate lists (lower/ci_lower/...) did not match, so the CI silently
-    # collapsed to the point estimate. ci_low/ci_high are listed first (exact match).
+    # The typed-product contract prefers ci_low / ci_high. The old candidate
+    # lists (lower/ci_lower/...) did not match, so the CI silently collapsed to
+    # the point estimate. ci_low/ci_high are listed first (exact match).
     lo_col = resolve_column(
         frame, ["ci_low", "lower", "ci_lower", "lower_95", "conf_lower", "lcl"]
     )

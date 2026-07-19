@@ -780,7 +780,7 @@ def _find_structured_primary_model_source(
     coefficient table, and the registered analysis script.
     """
 
-    from ...runtime_artifacts import current_successful_step_records
+    from ...authority.runtime_artifacts import current_successful_step_records
 
     run_root = Path(run_dir).resolve()
     steps_root = run_root / "steps"

@@ -10,8 +10,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Dict, Mapping, Optional
 
-from ..evidence import sha256_of_file
-from ..runtime_artifacts import (
+from ..authority.evidence_store import sha256_of_file
+from ..authority.runtime_artifacts import (
     current_step_records,
     load_run_artifact_authority,
     verified_run_evidence_path,

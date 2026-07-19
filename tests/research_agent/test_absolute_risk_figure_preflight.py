@@ -14,7 +14,7 @@ from easyicu.research_agent.declared_product_contract import (
     authorize_declared_figure_product_slots,
     bind_declared_figure_products,
 )
-from easyicu.research_agent.evidence import EvidenceStore
+from easyicu.research_agent.authority.evidence_store import EvidenceStore
 from easyicu.research_agent.figures.absolute_risk import (
     REPAIR_ID,
     prepare_absolute_risk_inputs,

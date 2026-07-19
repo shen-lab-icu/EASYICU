@@ -23,9 +23,9 @@ from ..declared_product_contract import (
     typed_product_schema_receipt,
     typed_product as _canonical_typed_product,
 )
-from ..evidence import sha256_of_file
-from ..run_input_capsule import canonical_sha256
-from ..runtime_artifacts import current_step_records, verified_run_evidence_path
+from ..authority.evidence_store import sha256_of_file
+from ..authority.run_input import canonical_sha256
+from ..authority.runtime_artifacts import current_step_records, verified_run_evidence_path
 from ..schema import AnalysisPlan, AnalysisStep, EvidenceRef
 from .plan_scope import (
     _serializable_plan_scientific_scope_signature,

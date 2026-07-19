@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from easyicu.research_agent.evidence import EvidenceStore
+from easyicu.research_agent.authority.evidence_store import EvidenceStore
 from easyicu.research_agent.pipeline import (
     _migrate_legacy_resume_figure_render_edges,
 )

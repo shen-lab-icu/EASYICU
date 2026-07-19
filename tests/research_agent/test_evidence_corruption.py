@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from easyicu.research_agent.evidence_authority import (
+from easyicu.research_agent.authority.evidence_snapshot import (
     EvidenceAuthorityIntegrityError,
 )
 

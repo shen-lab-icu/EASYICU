@@ -76,7 +76,7 @@ from .outcome_semantics import (
     _script_has_conflicting_mortality_semantics,
     _script_uses_bound_outcome,
 )
-from ..runtime_artifacts import (
+from ..authority.runtime_artifacts import (
     current_run_evidence_records,
     current_successful_step_records,
     verified_run_evidence_path,

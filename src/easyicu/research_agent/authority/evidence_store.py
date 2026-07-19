@@ -65,7 +65,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
-from .evidence_authority import (
+from .evidence_snapshot import (
     EVIDENCE_AUTHORITY_FILENAME,
     EVIDENCE_AUTHORITY_HEAD_FILENAME,
     EVIDENCE_AUTHORITY_MARKER_FILENAME,
@@ -88,7 +88,7 @@ from .evidence_authority import (
     projection_sha256,
     validate_evidence_authority_root_marker,
 )
-from .schema import EvidenceRecord
+from ..schema import EvidenceRecord
 
 try:  # pragma: no cover - available on production POSIX platforms
     import fcntl

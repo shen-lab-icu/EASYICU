@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple
 
 from .cohort_schema import CohortDefinition, ConceptPredicate, TimeWindow
-from .evidence import NumericClaim
+from .authority.evidence_store import NumericClaim
 from .robustness_panel import RobustnessPanel, RobustnessPanelRow, RobustnessSpec
 from .schema import EvidenceRecord as EvidenceArtifact
 from .schema import ValidationFinding
@@ -28,7 +28,7 @@ DerivedClaim = NumericClaim
 
 if TYPE_CHECKING:
     from .providers.cost import CostMeter
-    from .evidence import EvidenceStore
+    from .authority.evidence_store import EvidenceStore
     from .literature import LiteratureBundle
     from .replication.envelope import ReproEnvelope
     from .schema import (

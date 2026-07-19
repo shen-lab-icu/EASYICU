@@ -27,7 +27,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import List, Optional, Sequence
 
-from ..evidence import EvidenceStore
+from ..authority.evidence_store import EvidenceStore
 from ..planning.study_design import infer_study_design_family
 from ..schema import EvidenceRecord, ResearchContext, ValidationFinding
 

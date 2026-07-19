@@ -24,7 +24,7 @@ from .plan_utils import (
     _predictor_tokens,
     _primary_effect_from_summary,
 )
-from .runtime_artifacts import (
+from .authority.runtime_artifacts import (
     current_successful_step_records,
     load_run_artifact_authority,
 )

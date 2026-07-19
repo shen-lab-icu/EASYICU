@@ -7,9 +7,9 @@ from pathlib import Path
 
 import pytest
 
-from easyicu.research_agent import evidence as evidence_module
-from easyicu.research_agent.evidence import DerivedFormulaError, EvidenceStore
-from easyicu.research_agent.evidence_authority import (
+from easyicu.research_agent.authority import evidence_store as evidence_module
+from easyicu.research_agent.authority.evidence_store import DerivedFormulaError, EvidenceStore
+from easyicu.research_agent.authority.evidence_snapshot import (
     EVIDENCE_AUTHORITY_FILENAME,
     EVIDENCE_AUTHORITY_HEAD_FILENAME,
     EVIDENCE_AUTHORITY_MARKER_FILENAME,

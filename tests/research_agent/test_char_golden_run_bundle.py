@@ -104,7 +104,7 @@ def _install_authority_order_observer(monkeypatch: pytest.MonkeyPatch):
     """Observe, without replacing, the current validate/seal/register order."""
 
     from easyicu.research_agent import pipeline_execute
-    from easyicu.research_agent.evidence import EvidenceStore
+    from easyicu.research_agent.authority.evidence_store import EvidenceStore
 
     events: list[tuple[str, str]] = []
 
@@ -386,8 +386,8 @@ def _readiness_bundle(run_dir: Path) -> dict[str, Any]:
 
 
 def _build_bundle(*, run_dir: Path, observed_events: list[tuple[str, str]]):
-    from easyicu.research_agent.evidence import EvidenceStore
-    from easyicu.research_agent.runtime_artifacts import (
+    from easyicu.research_agent.authority.evidence_store import EvidenceStore
+    from easyicu.research_agent.authority.runtime_artifacts import (
         current_step_records,
         load_run_artifact_authority,
     )
@@ -638,8 +638,8 @@ def test_numeric_authority_failure_prevents_current_alias_publication(
 ):
     """A broken numeric ledger must fail the step before aliases become current."""
 
-    from easyicu.research_agent.evidence import EvidenceStore
-    from easyicu.research_agent.runtime_artifacts import (
+    from easyicu.research_agent.authority.evidence_store import EvidenceStore
+    from easyicu.research_agent.authority.runtime_artifacts import (
         current_step_records,
         load_run_artifact_authority,
     )

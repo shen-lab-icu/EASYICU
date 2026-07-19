@@ -151,7 +151,7 @@ from .declared_product_contract import (
     typed_product as _canonical_typed_product,
 )
 from .estimators import fit_robustness_rows_from_records
-from .evidence import (
+from .authority.evidence_store import (
     EvidenceAuthorityIntegrityError,
     sha256_of_bytes,
     sha256_of_file,
@@ -324,7 +324,7 @@ from .authority.provider_budget import (
     load_provider_call_budget_state,
     provider_call_budget_receipt_path,
 )
-from .run_input_capsule import (
+from .authority.run_input import (
     RUN_INPUT_CAPSULE_EVIDENCE_ID,
     RUN_INPUT_CAPSULE_FILENAME,
     RunInputIdentityError,
@@ -342,7 +342,7 @@ from .run_input_capsule import (
     validator_code_sha256,
 )
 from .run_coordination import RunCoordinator, RunExecutionState, RunTransition
-from .runtime_artifacts import (
+from .authority.runtime_artifacts import (
     current_step_records,
     current_successful_step_records,
     verified_run_evidence_path,

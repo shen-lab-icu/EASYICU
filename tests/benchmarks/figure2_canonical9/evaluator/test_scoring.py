@@ -15,8 +15,8 @@ from benchmarks.figure2_canonical9.evaluator import input_binding_v2, scoring
 from benchmarks.figure2_canonical9.evaluator import (
     scoring_inputs as scoring_inputs_module,
 )
-from easyicu.research_agent.evidence import EvidenceStore
-from easyicu.research_agent.evidence_authority import (
+from easyicu.research_agent.authority.evidence_store import EvidenceStore
+from easyicu.research_agent.authority.evidence_snapshot import (
     load_current_evidence_snapshot,
 )
 from benchmarks.figure2_canonical9.evaluator.suite import (
@@ -27,7 +27,7 @@ from benchmarks.figure2_canonical9.evaluator.rubric_v1 import (
     FIGURE2_TASK_IDS,
     figure2_suite_projection_sha256,
 )
-from benchmarks.figure2_canonical9.evaluator.paper_rubric_v2 import (
+from benchmarks.figure2_canonical9.evaluator.paper_rubric_v3 import (
     FIGURE2_PAPER_RUBRIC_REF,
     Figure2PaperRubricManifest,
     Figure2PaperScorecard,
@@ -730,7 +730,7 @@ def test_request_and_receipt_bind_manifest_provider_and_model(tmp_path: Path) ->
         Path(__file__).resolve().parents[4]
         / "benchmarks"
         / "figure2_canonical9"
-        / "figure2_paper_rubric_v2.json"
+        / "figure2_paper_rubric_v3.json"
     )
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     receipt = issue_figure2_safety_receipt(

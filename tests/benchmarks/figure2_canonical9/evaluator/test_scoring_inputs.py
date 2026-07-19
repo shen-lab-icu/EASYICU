@@ -14,11 +14,11 @@ from benchmarks.figure2_canonical9.evaluator import (
     input_binding_v2,
     scoring_inputs as scoring_inputs_module,
 )
-from easyicu.research_agent.evidence import EvidenceStore
-from easyicu.research_agent.evidence_authority import (
+from easyicu.research_agent.authority.evidence_store import EvidenceStore
+from easyicu.research_agent.authority.evidence_snapshot import (
     load_current_evidence_snapshot,
 )
-from benchmarks.figure2_canonical9.evaluator.paper_rubric_v2 import (
+from benchmarks.figure2_canonical9.evaluator.paper_rubric_v3 import (
     FIGURE2_PAPER_RUBRIC_REF,
     paper_rubric_manifest_sha256,
 )

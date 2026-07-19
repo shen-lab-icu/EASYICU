@@ -14,8 +14,8 @@ from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from .architecture import SystemLayer
-from .schema import AnalysisPlan, ResearchContext, ValidationFinding
+from ..architecture import SystemLayer
+from ..schema import AnalysisPlan, ResearchContext, ValidationFinding
 
 
 def _record_field(record: Any, name: str) -> Any:
@@ -493,7 +493,7 @@ def _git_field(args: List[str], *, preserve_empty: bool = False) -> Optional[str
     try:
         out = subprocess.run(
             ["git", *args],
-            cwd=str(Path(__file__).resolve().parent),
+            cwd=str(Path(__file__).resolve().parents[1]),
             capture_output=True,
             text=True,
             timeout=5,

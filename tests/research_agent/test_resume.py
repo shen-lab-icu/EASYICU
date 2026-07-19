@@ -32,10 +32,10 @@ from easyicu.research_agent.pipeline import (
     _load_compatible_resume_plan,
     _load_resume_state,
 )
-from easyicu.research_agent.evidence import EvidenceStore
+from easyicu.research_agent.authority.evidence_store import EvidenceStore
 from easyicu.research_agent.plan_utils import _render_only_figure_step_intent
 from easyicu.research_agent.research_context.builder import build_research_context
-from easyicu.research_agent.run_input_capsule import (
+from easyicu.research_agent.authority.run_input import (
     RUN_INPUT_CAPSULE_FILENAME,
     RunInputIdentityError,
     build_environment_identity,
@@ -45,7 +45,7 @@ from easyicu.research_agent.run_input_capsule import (
     prepare_existing_resume_input,
     seal_run_input_capsule,
 )
-from easyicu.research_agent.runtime_artifacts import verified_run_evidence_path
+from easyicu.research_agent.authority.runtime_artifacts import verified_run_evidence_path
 from easyicu.research_agent.authority.provider_budget import (
     StepProviderCallBudget,
     load_provider_call_budget_state,
@@ -360,7 +360,7 @@ def test_resume_rechecks_input_authority_immediately_before_receipt(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from easyicu.research_agent import run_input_capsule as capsule_module
+    from easyicu.research_agent.authority import run_input as capsule_module
 
     pipeline, run_dir, run_kwargs = _write_capsule_resume_fixture(ra, tmp_path)
     real_invalidate = capsule_module.invalidate_unverified_successful_steps
@@ -2302,7 +2302,7 @@ def test_concept_repair_failure_resumes_quarantined_draft_fail_closed(
     from easyicu.research_agent.audits.validators import LLMConceptAuditor
     from easyicu.research_agent.contracts import ValidationFinding
     from easyicu.research_agent.runner import CodeRunner
-    from easyicu.research_agent.runtime_artifacts import (
+    from easyicu.research_agent.authority.runtime_artifacts import (
         current_evidence_records,
         current_successful_step_ids,
     )

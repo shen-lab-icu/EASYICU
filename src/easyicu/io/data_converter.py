@@ -3216,7 +3216,7 @@ class DataConverter:
         path.write_text(json.dumps(manifest, indent=2, ensure_ascii=False), encoding="utf-8")
         if evidence_root is not None:
             try:
-                from easyicu.research_agent.evidence import EvidenceStore
+                from easyicu.research_agent.authority.evidence_store import EvidenceStore
 
                 store = EvidenceStore(Path(evidence_root))
                 store.register_file(

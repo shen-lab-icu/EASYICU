@@ -13,7 +13,14 @@ import sys
 
 MOVED_AUTHORITY_MODULES = {
     "authority_fs": "authority.filesystem",
+    "evidence": "authority.evidence_store",
+    "evidence_authority": "authority.evidence_snapshot",
     "lock_authority": "authority.lock_contract",
+    "pipeline_cache": "authority.pipeline_cache",
+    "provenance": "authority.provenance",
+    "run_input_capsule": "authority.run_input",
+    "run_lock": "authority.run_lock",
+    "runtime_artifacts": "authority.runtime_artifacts",
     "step_attempt_authority": "authority.step_attempt",
     "step_authority_capsule": "authority.step_capsule",
     "step_authority_runtime": "authority.step_runtime",

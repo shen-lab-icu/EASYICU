@@ -23,7 +23,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, TextIO, Tuple
 
-from ..runtime_artifacts import verified_run_evidence_path
+from ..authority.runtime_artifacts import verified_run_evidence_path
 
 
 # Exact, normalised names for an *unadjusted* p-value.  Substring matching is

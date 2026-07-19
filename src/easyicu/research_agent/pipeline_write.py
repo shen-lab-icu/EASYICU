@@ -29,7 +29,7 @@ from .contracts import (
     _PlanPhaseResult,
     _WritePhaseResult,
 )
-from .evidence import (
+from .authority.evidence_store import (
     EvidenceEnforcementError,
     EvidenceEnforcementMode,
     sha256_of_file,

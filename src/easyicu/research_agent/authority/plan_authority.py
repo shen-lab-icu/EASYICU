@@ -25,7 +25,7 @@ from ..robustness_panel import (
     robustness_specs_for_execution,
     robustness_specs_sha,
 )
-from ..runtime_artifacts import current_successful_step_records
+from ..authority.runtime_artifacts import current_successful_step_records
 from ..schema import AnalysisPlan, AnalysisStep, ResearchContext, ValidationFinding
 from ..trajectory_plan_contract import augment_trajectory_plan_products
 from .plan_scope import _plan_scientific_scope_signature, _plan_signature

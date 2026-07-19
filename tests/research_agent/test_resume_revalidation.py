@@ -9,7 +9,7 @@ from types import SimpleNamespace
 import pytest
 
 from easyicu.research_agent.contracts import ValidationFinding
-from easyicu.research_agent.evidence import EvidenceStore
+from easyicu.research_agent.authority.evidence_store import EvidenceStore
 from easyicu.research_agent.schema import (
     AnalysisPlan,
     AnalysisStep,
@@ -412,7 +412,7 @@ def test_missing_or_tampered_summary_fails_closed(
         evidence=evidence,
         step=step,
     )
-    from easyicu.research_agent.runtime_artifacts import verified_run_evidence_path
+    from easyicu.research_agent.authority.runtime_artifacts import verified_run_evidence_path
 
     summary_path = verified_run_evidence_path(run_dir, summary)
     assert summary_path is not None
@@ -440,7 +440,7 @@ def test_missing_or_tampered_summary_fails_closed(
 
 def test_historical_invalid_upstream_blocks_later_explicit_cut(tmp_path):
     from easyicu.research_agent import pipeline_execute
-    from easyicu.research_agent.run_input_capsule import RunInputIdentityError
+    from easyicu.research_agent.authority.run_input import RunInputIdentityError
 
     upstream = AnalysisStep(step_id="01_upstream", intent="Produce inputs.")
     downstream = AnalysisStep(step_id="02_downstream", intent="Consume inputs.")

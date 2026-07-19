@@ -815,7 +815,7 @@ def test_exact_capsule_resume_skips_generation_audit_and_execution_but_reruns_ga
         "executed_pending_review",
     }
     assert interrupted_record["status"] != "ok"
-    from easyicu.research_agent.runtime_artifacts import current_successful_step_ids
+    from easyicu.research_agent.authority.runtime_artifacts import current_successful_step_ids
 
     partial = json.loads(
         (successful_dir / "manifest_partial.json").read_text(encoding="utf-8")

@@ -794,7 +794,7 @@ def postprocess_paper_replication(
         ReplicationDesignAuditor,
         ReplicationResultComparator,
     )
-    from ..evidence import EvidenceStore
+    from ..authority.evidence_store import EvidenceStore
     from ..schema import PipelineResult
 
     run_dir = Path(result.workdir)
@@ -1118,7 +1118,7 @@ def write_fail_closed_paper_package(
     """
     from ..audits.validators import ReplicationDesignAuditor
     from ..research_context.builder import build_naive_research_context
-    from ..evidence import EvidenceStore
+    from ..authority.evidence_store import EvidenceStore
     from ..providers.mocks import MockLLMClient
     from ..pipeline_report import render_report, write_readiness_artifacts
     from ..providers.prompts import PROMPT_PACK_VERSION, prompt_pack_files

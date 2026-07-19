@@ -83,7 +83,7 @@ def test_cache_invalidates_on_question_change(ra, synthetic_cohort, tmp_path: Pa
 
 
 def test_cache_invalidates_on_skill_change(ra, synthetic_cohort, tmp_path: Path):
-    from easyicu.research_agent.pipeline_cache import PipelineCache
+    from easyicu.research_agent.authority.pipeline_cache import PipelineCache
 
     cohort_path = tmp_path / "cohort.parquet"
     cohort_path.write_bytes(b"cohort")
@@ -240,7 +240,7 @@ def _write_cache_candidate(
 
 
 def test_cache_key_binds_science_inputs_and_runtime_hashes(ra, tmp_path: Path) -> None:
-    from easyicu.research_agent.pipeline_cache import PipelineCache
+    from easyicu.research_agent.authority.pipeline_cache import PipelineCache
 
     cohort_path = tmp_path / "cohort.parquet"
     cohort_path.write_bytes(b"cohort")
@@ -304,7 +304,7 @@ def test_cache_key_binds_science_inputs_and_runtime_hashes(ra, tmp_path: Path) -
 
 
 def test_cache_key_binds_materialised_experiment_spec(ra, tmp_path: Path) -> None:
-    from easyicu.research_agent.pipeline_cache import PipelineCache
+    from easyicu.research_agent.authority.pipeline_cache import PipelineCache
 
     cohort_path = tmp_path / "cohort.parquet"
     cohort_path.write_bytes(b"cohort")
@@ -320,7 +320,7 @@ def test_cache_key_binds_materialised_experiment_spec(ra, tmp_path: Path) -> Non
 def test_cache_rejects_manifest_only_completed_run_without_authority(
     ra, tmp_path: Path
 ) -> None:
-    from easyicu.research_agent.pipeline_cache import PipelineCache
+    from easyicu.research_agent.authority.pipeline_cache import PipelineCache
 
     cache = PipelineCache(tmp_path / ".cache")
     result = _write_cache_candidate(ra, tmp_path)
@@ -339,7 +339,7 @@ def test_cache_rejects_valid_run_under_wrong_scientific_identity(
     synthetic_cohort,
     tmp_path: Path,
 ) -> None:
-    from easyicu.research_agent.pipeline_cache import PipelineCache
+    from easyicu.research_agent.authority.pipeline_cache import PipelineCache
 
     result = _run(
         ra,
@@ -366,7 +366,7 @@ def test_cache_rejects_mutated_root_status_even_when_manifest_is_ready(
     synthetic_cohort,
     tmp_path: Path,
 ) -> None:
-    from easyicu.research_agent.pipeline_cache import PipelineCache
+    from easyicu.research_agent.authority.pipeline_cache import PipelineCache
 
     result = _run(
         ra,
@@ -399,7 +399,7 @@ def test_cache_rejects_mutated_selected_evidence(
     synthetic_cohort,
     tmp_path: Path,
 ) -> None:
-    from easyicu.research_agent.pipeline_cache import PipelineCache
+    from easyicu.research_agent.authority.pipeline_cache import PipelineCache
 
     result = _run(
         ra,
@@ -449,7 +449,7 @@ def test_cache_rejects_partial_paused_blocked_or_superseded_runs(
     final_sequence: int,
     partial_sequence: int,
 ) -> None:
-    from easyicu.research_agent.pipeline_cache import PipelineCache
+    from easyicu.research_agent.authority.pipeline_cache import PipelineCache
 
     cache = PipelineCache(tmp_path / ".cache")
     result = _write_cache_candidate(

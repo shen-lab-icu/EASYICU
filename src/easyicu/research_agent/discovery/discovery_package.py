@@ -23,7 +23,7 @@ from .discovery_handoff import (
     ANALYSIS_READY_DECISIONS,
     DiscoveryHandoffPacket,
 )
-from ..evidence_authority import load_current_evidence_snapshot
+from ..authority.evidence_snapshot import load_current_evidence_snapshot
 
 DISCOVERY_PACKAGE_SCHEMA_VERSION = "easyicu.discovery_manuscript_package/1"
 

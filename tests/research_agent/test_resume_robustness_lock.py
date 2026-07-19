@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from easyicu.research_agent.evidence import EvidenceStore
+from easyicu.research_agent.authority.evidence_store import EvidenceStore
 from easyicu.research_agent.pipeline import (
     _restore_resume_plan_robustness_lock,
 )

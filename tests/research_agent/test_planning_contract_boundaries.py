@@ -43,10 +43,10 @@ def test_schema_uses_the_pure_robustness_contract() -> None:
 def test_robustness_contract_has_no_runtime_or_evidence_dependency() -> None:
     imported = _imports(robustness_contract)
     forbidden = {
-        "easyicu.research_agent.evidence",
+        "easyicu.research_agent.authority.evidence_store",
         "easyicu.research_agent.authority.lock_contract",
         "easyicu.research_agent.robustness_panel",
-        "easyicu.research_agent.runtime_artifacts",
+        "easyicu.research_agent.authority.runtime_artifacts",
     }
     assert not imported & forbidden
     assert all(not name.endswith("pipeline") for name in imported)

@@ -8,8 +8,8 @@ from pathlib import Path
 
 import pandas as pd
 
-from easyicu.research_agent import pipeline_cache
-from easyicu.research_agent import run_input_capsule
+from easyicu.research_agent.authority import pipeline_cache
+from easyicu.research_agent.authority import run_input as run_input_capsule
 from easyicu.research_agent.research_context.implementation_identity import (
     metadata_implementation_identity,
 )

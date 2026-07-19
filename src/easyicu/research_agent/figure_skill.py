@@ -21,7 +21,7 @@ from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 import pandas as pd
 
 from .audits.validators import FigureContractQualityValidator
-from .evidence import EvidenceStore
+from .authority.evidence_store import EvidenceStore
 from .publication_figures import (
     PUBLICATION_FIGURE_SKILL_POLICY_VERSION,
     add_panel_label,

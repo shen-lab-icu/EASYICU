@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from easyicu.research_agent.evidence import EvidenceStore
+from easyicu.research_agent.authority.evidence_store import EvidenceStore
 from easyicu.research_agent.pipeline_report import (
     _latest_publication_figure_audit_status,
     _publication_figure_bundle_ready,

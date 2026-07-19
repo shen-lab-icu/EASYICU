@@ -26,14 +26,16 @@ from typing import Annotated, Any, Literal, Mapping
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from easyicu.research_agent.evidence_authority import load_current_evidence_snapshot
-from easyicu.research_agent.runtime_artifacts import (
+from easyicu.research_agent.authority.evidence_snapshot import (
+    load_current_evidence_snapshot,
+)
+from easyicu.research_agent.authority.runtime_artifacts import (
     current_evidence_records,
     current_successful_step_records,
     load_run_artifact_authority,
     verified_run_evidence_path,
 )
-from easyicu.research_agent.run_input_capsule import (
+from easyicu.research_agent.authority.run_input import (
     RUN_INPUT_CAPSULE_EVIDENCE_ID,
     RUN_INPUT_CAPSULE_SCHEMA_VERSION_V2,
     RUN_INPUT_CAPSULE_SCHEMA_VERSION_V3,
@@ -43,10 +45,10 @@ from easyicu.research_agent.run_input_capsule import (
     canonical_sha256,
     load_verified_run_input_capsule,
 )
-from easyicu.research_agent.run_lock import acquire_run_execution_lock
+from easyicu.research_agent.authority.run_lock import acquire_run_execution_lock
 from easyicu.research_agent.schema import AnalysisManifest, AnalysisPlan
 
-from .paper_rubric_v2 import (
+from .paper_rubric_v3 import (
     FIGURE2_PAPER_RUBRIC_REF,
     load_figure2_paper_rubric,
     paper_rubric_manifest_sha256,
@@ -204,7 +206,7 @@ class Figure2RunTaskAuthority(_StrictFrozenModel):
     checkpoint_payload_sha256: Sha256
     suite_ref: Literal["easyicu_evaluation_protocol_suite/v2"]
     suite_projection_sha256: Sha256
-    paper_rubric_ref: Literal["easyicu.figure2_paper_rubric/20260719-v2"]
+    paper_rubric_ref: Literal["easyicu.figure2_paper_rubric/20260719-v3"]
     paper_rubric_sha256: Sha256
     research_question_sha256: Sha256
     exposure_concept: str | None = Field(max_length=256)
@@ -261,7 +263,7 @@ class Figure2ScoringInputAuthority(_StrictFrozenModel):
     task_id: str = Field(min_length=1, max_length=128)
     suite_ref: Literal["easyicu_evaluation_protocol_suite/v2"]
     suite_projection_sha256: Sha256
-    paper_rubric_ref: Literal["easyicu.figure2_paper_rubric/20260719-v2"]
+    paper_rubric_ref: Literal["easyicu.figure2_paper_rubric/20260719-v3"]
     paper_rubric_sha256: Sha256
     research_question_sha256: Sha256
     exposure_concept: str | None = Field(max_length=256)

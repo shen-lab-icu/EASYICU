@@ -157,7 +157,7 @@ def test_near_zero_literal_does_not_match_zero_claim(ra, tmp_path: Path):
 def test_numeric_binder_rejects_claim_from_latest_failed_attempt(
     ra, tmp_path: Path
 ) -> None:
-    from easyicu.research_agent.evidence import (
+    from easyicu.research_agent.authority.evidence_store import (
         EvidenceEnforcementError,
         EvidenceEnforcementMode,
     )
@@ -232,7 +232,7 @@ def test_manuscript_numeric_audit_ignores_retired_summary(ra, tmp_path: Path) ->
 def test_numeric_binder_keeps_registered_run_level_context_claim(
     ra, tmp_path: Path
 ) -> None:
-    from easyicu.research_agent.evidence import (
+    from easyicu.research_agent.authority.evidence_store import (
         EvidenceEnforcementError,
         EvidenceEnforcementMode,
     )
@@ -285,7 +285,7 @@ def test_numeric_binder_keeps_registered_run_level_context_claim(
 def test_numeric_binder_rejects_tampered_current_evidence_blob(
     ra, tmp_path: Path
 ) -> None:
-    from easyicu.research_agent.evidence import (
+    from easyicu.research_agent.authority.evidence_store import (
         EvidenceEnforcementError,
         EvidenceEnforcementMode,
     )
@@ -332,7 +332,7 @@ def test_numeric_binder_rejects_tampered_current_evidence_blob(
 def test_numeric_binder_rejects_arbitrary_run_level_self_owner(
     ra, tmp_path: Path
 ) -> None:
-    from easyicu.research_agent.evidence import (
+    from easyicu.research_agent.authority.evidence_store import (
         EvidenceEnforcementError,
         EvidenceEnforcementMode,
     )

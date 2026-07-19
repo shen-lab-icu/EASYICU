@@ -21,7 +21,7 @@ from typing import Annotated, Any, Literal, Union
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from easyicu.research_agent.run_input_capsule import (
+from easyicu.research_agent.authority.run_input import (
     RUN_INPUT_CAPSULE_SCHEMA_VERSION_V2,
     RUN_INPUT_CAPSULE_SCHEMA_VERSION_V3,
 )

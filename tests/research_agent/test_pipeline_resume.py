@@ -17,7 +17,7 @@ from easyicu.research_agent.pipeline_resume import (
     upsert_step_record,
 )
 from easyicu.research_agent.contracts import ValidationFinding
-from easyicu.research_agent.evidence import EvidenceStore
+from easyicu.research_agent.authority.evidence_store import EvidenceStore
 from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep
 
 

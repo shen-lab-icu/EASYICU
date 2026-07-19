@@ -37,7 +37,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Dict, List
 
-from easyicu.research_agent.evidence import EvidenceStore
+from easyicu.research_agent.authority.evidence_store import EvidenceStore
 from easyicu.research_agent.pipeline_report import (
     _compute_readiness_gates,
     _partition_findings_by_supersession,

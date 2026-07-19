@@ -37,7 +37,7 @@ import pytest
 
 
 def test_llm_authority_signature_binds_endpoint_options_and_fallback_order() -> None:
-    from easyicu.research_agent.pipeline_cache import llm_signature
+    from easyicu.research_agent.authority.pipeline_cache import llm_signature
 
     def client(endpoint: str, *, effort: str = "high"):
         return SimpleNamespace(
@@ -64,7 +64,7 @@ def test_capsule_checkpoint_upsert_never_overwrites_prior_terminal_attempt() -> 
         _append_terminal_step_record,
         _upsert_current_capsule_checkpoint,
     )
-    from easyicu.research_agent.runtime_artifacts import current_step_records
+    from easyicu.research_agent.authority.runtime_artifacts import current_step_records
 
     records = [
         {
@@ -131,7 +131,7 @@ def test_provider_receipt_requirement_covers_legacy_and_initial_pending(
 
 
 def test_non_typed_alias_requires_current_successful_step_authority(tmp_path) -> None:
-    from easyicu.research_agent.evidence import EvidenceStore
+    from easyicu.research_agent.authority.evidence_store import EvidenceStore
     from easyicu.research_agent.pipeline_execute import (
         _current_verified_evidence_record,
     )
@@ -168,11 +168,11 @@ def test_non_typed_alias_requires_current_successful_step_authority(tmp_path) ->
 
 
 def test_step_run_input_capsule_must_match_sealed_evidence(tmp_path) -> None:
-    from easyicu.research_agent.evidence import EvidenceStore
+    from easyicu.research_agent.authority.evidence_store import EvidenceStore
     from easyicu.research_agent.pipeline_execute import (
         _verified_run_input_capsule_digest,
     )
-    from easyicu.research_agent.run_input_capsule import RunInputIdentityError
+    from easyicu.research_agent.authority.run_input import RunInputIdentityError
 
     capsule = tmp_path / "run_input_capsule.json"
     capsule.write_text('{"schema_version":"test"}\n', encoding="utf-8")
@@ -1466,7 +1466,7 @@ def test_every_runner_build_receives_the_selected_trajectory_authority():
 
 
 def test_execution_input_authority_check_detects_unsafe_runner_mutation(tmp_path):
-    from easyicu.research_agent.evidence import sha256_of_file
+    from easyicu.research_agent.authority.evidence_store import sha256_of_file
     from easyicu.research_agent.pipeline_execute import (
         _execution_input_authority_integrity_finding,
     )

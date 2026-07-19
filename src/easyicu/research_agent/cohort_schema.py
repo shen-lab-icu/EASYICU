@@ -210,7 +210,7 @@ def write_locked_cohort_definition(
                     "supersedes_evidence_id": "cohort_locked",
                 },
             )
-            from .evidence import _atomic_write_bytes
+            from .authority.evidence_store import _atomic_write_bytes
 
             _atomic_write_bytes(
                 path,

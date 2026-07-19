@@ -29,13 +29,13 @@ from ..gates.concept import (
     quarantined_errors_superseded_by_current_policy,
 )
 from ..contracts import ValidationFinding
-from ..evidence import sha256_of_bytes
+from ..authority.evidence_store import sha256_of_bytes
 from ..authority.provider_budget import (
     ProviderCallBudgetError,
     ProviderCallBudgetReceiptError,
     StepProviderCallBudget,
 )
-from ..run_input_capsule import canonical_sha256
+from ..authority.run_input import canonical_sha256
 from ..schema import AnalysisStep, ResearchContext
 from ..authority.step_attempt import StepAttemptState
 from ..step_worker_state import StepWorkerProgress

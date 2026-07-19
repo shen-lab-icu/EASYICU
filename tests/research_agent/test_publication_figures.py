@@ -82,7 +82,7 @@ def _prepare_robustness_authority(ra, run_dir: Path, evidence, rows) -> None:
 def test_robustness_panel_publication_figure_has_no_header_title_overlap(
     ra, tmp_path: Path, variant_count: int
 ):
-    from easyicu.research_agent.evidence import EvidenceStore
+    from easyicu.research_agent.authority.evidence_store import EvidenceStore
     from easyicu.research_agent.figure_skill import PublicationFigureSkill
     from easyicu.research_agent.robustness_panel import (
         RobustnessPanel,
@@ -176,7 +176,7 @@ def test_publication_figure_skill_rebuilds_stale_single_panel_bundle(
     ra,
     tmp_path: Path,
 ):
-    from easyicu.research_agent.evidence import EvidenceStore
+    from easyicu.research_agent.authority.evidence_store import EvidenceStore
     from easyicu.research_agent.figure_skill import PublicationFigureSkill
     from easyicu.research_agent.robustness_panel import (
         RobustnessPanel,
@@ -292,7 +292,7 @@ def test_publication_figure_skill_rebuilds_stale_single_panel_bundle(
 
 
 def test_curated_publication_bundle_requires_current_policy_version(ra, tmp_path: Path):
-    from easyicu.research_agent.evidence import EvidenceStore
+    from easyicu.research_agent.authority.evidence_store import EvidenceStore
     from easyicu.research_agent.figure_skill import (
         _has_curated_publication_figure_bundle,
         _source_fingerprint_metadata,
@@ -1709,7 +1709,7 @@ def test_publication_figure_skill_e1_like_layout_has_no_svg_overlap_errors(
 
 
 def test_primary_association_selector_prefers_single_primary_estimand(ra, tmp_path: Path):
-    from easyicu.research_agent.evidence import EvidenceStore
+    from easyicu.research_agent.authority.evidence_store import EvidenceStore
     from easyicu.research_agent.figure_skill import _select_primary_association_record
 
     run_dir = tmp_path / "run"

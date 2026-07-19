@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any, Dict, Mapping, Optional, Sequence
 
 from .discovery_handoff import DiscoveryHandoffPacket
-from ..evidence import EvidenceStore
+from ..authority.evidence_store import EvidenceStore
 from ..schema import EvidenceRecord
 from ..publication_figures import (
     add_panel_label,

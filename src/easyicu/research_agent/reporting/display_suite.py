@@ -11,7 +11,7 @@ import json
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Sequence
 
-from ..evidence import EvidenceStore
+from ..authority.evidence_store import EvidenceStore
 from ..figure_contracts import (
     figure_contract_paths,
     figure_contract_text,
@@ -20,7 +20,7 @@ from ..figure_contracts import (
     panel_text,
     relative_contract_paths,
 )
-from ..runtime_artifacts import current_evidence_records
+from ..authority.runtime_artifacts import current_evidence_records
 from ..schema import AnalysisPlan, ResearchContext
 from ..planning.study_design import infer_study_design_family
 

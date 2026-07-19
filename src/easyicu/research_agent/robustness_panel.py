@@ -68,7 +68,7 @@ def _successful_step_records(
 
     # Imported lazily because runtime_artifacts owns schema models; this module
     # is a runtime consumer of the pure planning contract, not its owner.
-    from .runtime_artifacts import current_successful_step_records
+    from .authority.runtime_artifacts import current_successful_step_records
 
     return [
         record
@@ -763,7 +763,7 @@ def _assert_claimable_panel_rows_match_evidence(
         if str(getattr(record, "evidence_id", "")).strip()
     }
     aliases = evidence.aliases()
-    from .runtime_artifacts import verified_run_evidence_path
+    from .authority.runtime_artifacts import verified_run_evidence_path
 
     for row in panel.rows:
         if row.converged and not _row_has_claimable_estimate(row):

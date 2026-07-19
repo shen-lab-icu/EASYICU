@@ -7,7 +7,7 @@ import re
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Sequence
 
-from .runtime_artifacts import current_successful_step_records
+from .authority.runtime_artifacts import current_successful_step_records
 
 
 EXPORT_SUFFIXES = ("png", "svg", "pdf", "tiff", "tif")

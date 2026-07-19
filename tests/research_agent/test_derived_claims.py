@@ -27,13 +27,13 @@ from pathlib import Path
 
 import pytest
 
-from easyicu.research_agent.evidence import (
+from easyicu.research_agent.authority.evidence_store import (
     DerivedFormulaError,
     EvidenceStore,
     NumericClaim,
     _evaluate_derived_formula,
 )
-from easyicu.research_agent.evidence_authority import (
+from easyicu.research_agent.authority.evidence_snapshot import (
     load_current_evidence_snapshot,
 )
 

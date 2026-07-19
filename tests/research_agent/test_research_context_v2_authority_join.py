@@ -13,7 +13,7 @@ import pytest
 
 from easyicu.concept.metadata_projection import NumericBounds
 from easyicu.research_agent.research_context.builder import build_research_context
-from easyicu.research_agent.evidence import EvidenceStore
+from easyicu.research_agent.authority.evidence_store import EvidenceStore
 from easyicu.research_agent.intake.materialized_metadata import (
     stage_materialized_cohort_authority,
 )
@@ -26,7 +26,7 @@ from easyicu.research_agent.research_context.typed import (
     ResearchContextV2,
     materialized_research_inputs_from_authority,
 )
-from easyicu.research_agent.run_input_capsule import (
+from easyicu.research_agent.authority.run_input import (
     RUN_INPUT_CAPSULE_FILENAME,
     RunInputIdentityError,
     _validate_v2_context_input_authority,
@@ -342,7 +342,7 @@ def test_fresh_authority_join_reads_the_verified_cohort_snapshot_once(
     _run_dir, cohort_path, context, _identity, cohort, trajectory = _prepare_typed_run(
         tmp_path
     )
-    from easyicu.research_agent import run_input_capsule as capsule_module
+    from easyicu.research_agent.authority import run_input as capsule_module
 
     original = capsule_module.read_verified_materialized_cohort_table
     reads = 0

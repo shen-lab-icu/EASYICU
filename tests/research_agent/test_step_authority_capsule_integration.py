@@ -16,7 +16,7 @@ from easyicu.research_agent.authority.provider_budget import (
 from easyicu.research_agent.pipeline import _load_resume_state
 from easyicu.research_agent.repairs.coordination import RepairAuthorityBinding
 from easyicu.research_agent.runner import RunResult
-from easyicu.research_agent.runtime_artifacts import write_run_checkpoint
+from easyicu.research_agent.authority.runtime_artifacts import write_run_checkpoint
 from easyicu.research_agent.schema import (
     CohortDescriptor,
     ResearchContext,

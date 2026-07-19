@@ -29,7 +29,7 @@ import pytest
 
 def test_evidence_store_concurrent_registers_preserve_every_record(ra, tmp_path):
     """Hammer ``register_file`` from N threads; expect every record to land."""
-    from easyicu.research_agent.evidence import EvidenceStore
+    from easyicu.research_agent.authority.evidence_store import EvidenceStore
 
     store = EvidenceStore(root=tmp_path)
     n_threads = 8
