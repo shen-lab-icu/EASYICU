@@ -25,6 +25,14 @@ def _signature_findings(script: str, ra):
     ]
 
 
+def _unpack_findings(script: str, ra):
+    return [
+        finding
+        for finding in audit_mechanical_code_contracts(script, _step(ra))
+        if (finding.detail or {}).get("reason") == "local_helper_unpack_arity_mismatch"
+    ]
+
+
 def test_positional_keyword_only_host_arguments_fail_before_execution(ra):
     script = """
 from easyicu.research_agent.methods.descriptive_inputs import measurement_provenance_receipt
@@ -148,5 +156,114 @@ first = measurement_provenance_receipt(frame, measured_a, count_a); second = mea
     )
 
     assert len(findings) == 2
+    assert repaired == script
+    assert names == []
+
+
+def test_fixed_local_return_arity_must_match_direct_unpack(ra):
+    script = """
+def collect(frame):
+    left = frame["left"]
+    right = frame["right"]
+    return left, right
+
+def main(frame):
+    receipt, left, right = collect(frame)
+"""
+
+    findings = _unpack_findings(script, ra)
+
+    assert len(findings) == 1
+    assert findings[0].detail == {
+        "reason": "local_helper_unpack_arity_mismatch",
+        "function_name": "collect",
+        "call_line": 8,
+        "return_lines": [5],
+        "return_arity": 2,
+        "target_arity": 3,
+    }
+    assert repair_reason_for_finding(findings[0]).value == ("INVALID_HELPER_SIGNATURE")
+
+
+def test_dynamic_or_matching_local_returns_are_not_claimed(ra):
+    matching = """
+def collect(frame):
+    return frame["left"], frame["right"]
+
+def main(frame):
+    left, right = collect(frame)
+"""
+    dynamic = """
+def collect(frame):
+    return make_result(frame)
+
+def main(frame):
+    left, right, extra = collect(frame)
+"""
+
+    assert _unpack_findings(matching, ra) == []
+    assert _unpack_findings(dynamic, ra) == []
+
+
+def test_deterministic_repair_threads_discarded_host_receipt(ra):
+    script = """
+def collect(frame, measured_column, count_column):
+    from easyicu.research_agent.methods.descriptive_inputs import (
+        measurement_provenance_receipt,
+    )
+    measurement_provenance_receipt(
+        frame,
+        measured_column=measured_column,
+        count_column=count_column,
+    )
+    measured = frame[measured_column]
+    count = frame[count_column]
+    return measured, count
+
+def main(frame, measured_column, count_column):
+    receipt, measured, count = collect(frame, measured_column, count_column)
+"""
+    findings = _unpack_findings(script, ra)
+
+    repaired, names = deterministic_concept_audit_repair(
+        script,
+        [finding.message for finding in findings],
+        repair_reasons=[repair_reason_for_finding(finding) for finding in findings],
+        repair_findings=findings,
+    )
+
+    assert names == ["local_helper_unpack_receipt_v1"]
+    assert "receipt = measurement_provenance_receipt(" in repaired
+    assert "return receipt, measured, count" in repaired
+    assert _unpack_findings(repaired, ra) == []
+
+
+def test_discarded_receipt_repair_refuses_unaligned_unpack_tail(ra):
+    script = """
+def collect(frame, measured_column, count_column):
+    from easyicu.research_agent.methods.descriptive_inputs import (
+        measurement_provenance_receipt,
+    )
+    measurement_provenance_receipt(
+        frame,
+        measured_column=measured_column,
+        count_column=count_column,
+    )
+    measured = frame[measured_column]
+    count = frame[count_column]
+    return measured, count
+
+def main(frame, measured_column, count_column):
+    receipt, count, measured = collect(frame, measured_column, count_column)
+"""
+    findings = _unpack_findings(script, ra)
+
+    repaired, names = deterministic_concept_audit_repair(
+        script,
+        [finding.message for finding in findings],
+        repair_reasons=[repair_reason_for_finding(finding) for finding in findings],
+        repair_findings=findings,
+    )
+
     assert repaired == script
     assert names == []
