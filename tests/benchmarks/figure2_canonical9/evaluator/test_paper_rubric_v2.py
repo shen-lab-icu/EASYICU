@@ -1,3 +1,5 @@
+"""Frozen paper-rubric v2 authority contracts."""
+
 from __future__ import annotations
 
 import copy
@@ -8,23 +10,26 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from easyicu.research_agent import figure2_paper_rubric as paper_rubric
+from benchmarks.figure2_canonical9.evaluator import paper_rubric_v2 as paper_rubric
 from easyicu.research_agent.evaluation_scorecard import (
     DimensionScore,
     FiveDimensionScorecard,
 )
-from easyicu.research_agent.figure2_paper_rubric import (
+from benchmarks.figure2_canonical9.evaluator.paper_rubric_v2 import (
     FIGURE2_PAPER_RUBRIC_REF,
     FIGURE2_PAPER_SCORECARD_SCHEMA,
+    PAPER_SCORER_CORE_FILES,
+    SCORER_EVALUATOR_ROOT,
     Figure2ExactFiveScorecard,
     Figure2PaperScorecard,
+    Figure2ValidityBinding,
     build_figure2_paper_scorecard,
     default_figure2_paper_rubric_path,
     load_figure2_paper_rubric,
     scorer_tree_rows,
     scorer_tree_sha256,
 )
-from easyicu.research_agent.figure2_rubric import (
+from benchmarks.figure2_canonical9.evaluator.rubric_v1 import (
     FIGURE2_DIMENSIONS,
     FIGURE2_TASK_IDS,
     default_figure2_rubric_path,
@@ -32,7 +37,7 @@ from easyicu.research_agent.figure2_rubric import (
     load_figure2_rubric,
     rubric_manifest_sha256,
 )
-from easyicu.research_agent.figure2_safety_protocol import (
+from benchmarks.figure2_canonical9.evaluator.safety_protocol_v1 import (
     FIGURE2_SAFETY_PROTOCOL_REF,
     safety_protocol_sha256,
 )
@@ -43,12 +48,20 @@ _EXPECTED_V1_MANIFEST_FILE_SHA256 = (
 _EXPECTED_V1_MANIFEST_SHA256 = (
     "b78907ef6692031cb70698cb41933b1d76407414431a646f53581786f4c08da9"
 )
-_EXPECTED_V1_DECODER_SOURCE_SHA256 = (
-    "d8ebdf4ef22dad477ef14374c80ae358e723f6773536b65bc83af43abcae7edc"
-)
 _EXPECTED_SAFETY_PROTOCOL_SHA256 = (
     "76b4a20b39c76ce785d73fc9405954ed450bd2e6954b571621370699b3e9eb73"
 )
+_EXPECTED_VALIDITY_BINDINGS = {
+    "e1_sepsis3_prevalence_mortality": ("sepsis3", "death"),
+    "e2_lactate_mortality": ("lactate", "death"),
+    "e3_kdigo_gradient": ("kdigo", "death"),
+    "m1_hepatobiliary_missingness": ("bili", "death"),
+    "m2_mortality_prediction": (None, "death"),
+    "m3_sepsis_subphenotype": (None, "death"),
+    "h1_ventilation_survival": ("vent_24h_any", "death"),
+    "h2_vasopressor_causal": ("vasopressor", "death"),
+    "h3_trajectory_clustering": (None, "death"),
+}
 
 
 def _read_v2_payload() -> dict[str, object]:
@@ -104,21 +117,16 @@ def _patch_default_manifest(monkeypatch: pytest.MonkeyPatch, path: Path) -> None
     )
 
 
-def test_v1_manifest_and_decoder_are_byte_frozen() -> None:
-    """The additive v2 authority must not rewrite the historical v1 decoder."""
+def test_v1_manifest_and_semantic_authority_are_frozen() -> None:
+    """Relocation may change imports, but the historical v1 contract may not."""
 
     manifest = load_figure2_rubric()
-    decoder_path = Path(paper_rubric.__file__).with_name("figure2_rubric.py")
 
     assert (
         hashlib.sha256(default_figure2_rubric_path().read_bytes()).hexdigest()
         == _EXPECTED_V1_MANIFEST_FILE_SHA256
     )
     assert rubric_manifest_sha256(manifest) == _EXPECTED_V1_MANIFEST_SHA256
-    assert (
-        hashlib.sha256(decoder_path.read_bytes()).hexdigest()
-        == _EXPECTED_V1_DECODER_SOURCE_SHA256
-    )
 
 
 def test_committed_v2_manifest_binds_the_current_full_scorer_tree() -> None:
@@ -157,6 +165,73 @@ def test_v2_manifest_is_exactly_nine_tasks_by_five_dimensions(tmp_path: Path) ->
         }
         for task in manifest.tasks
     )
+    assert {
+        task.task_id: (
+            task.validity_binding.exposure_concept,
+            task.validity_binding.outcome_concept,
+        )
+        for task in manifest.tasks
+    } == _EXPECTED_VALIDITY_BINDINGS
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {
+            "exposure_applicability": "required",
+            "exposure_concept": None,
+            "outcome_applicability": "required",
+            "outcome_concept": "death",
+        },
+        {
+            "exposure_applicability": "not_applicable",
+            "exposure_concept": "invented_predictor",
+            "outcome_applicability": "required",
+            "outcome_concept": "death",
+        },
+        {
+            "exposure_applicability": "not_applicable",
+            "exposure_concept": None,
+            "outcome_applicability": "required",
+            "outcome_concept": None,
+        },
+    ],
+)
+def test_validity_binding_rejects_missing_or_contradictory_coordinates(
+    payload: dict[str, object],
+) -> None:
+    with pytest.raises(ValidationError):
+        Figure2ValidityBinding.model_validate(payload, strict=True)
+
+
+def test_validity_binding_fields_are_required_even_when_explicitly_na() -> None:
+    payload = {
+        "exposure_applicability": "not_applicable",
+        "exposure_concept": None,
+        "outcome_applicability": "required",
+        "outcome_concept": "death",
+    }
+    for field in tuple(payload):
+        incomplete = dict(payload)
+        del incomplete[field]
+        with pytest.raises(ValidationError):
+            Figure2ValidityBinding.model_validate(incomplete, strict=True)
+
+
+@pytest.mark.parametrize("false_null", [False, 0, [], {}])
+def test_not_applicable_exposure_requires_literal_json_null(
+    false_null: object,
+) -> None:
+    with pytest.raises(ValidationError):
+        Figure2ValidityBinding.model_validate(
+            {
+                "exposure_applicability": "not_applicable",
+                "exposure_concept": false_null,
+                "outcome_applicability": "required",
+                "outcome_concept": "death",
+            },
+            strict=True,
+        )
 
 
 def test_paper_scorecard_is_exact_five_and_drops_extended_dimensions(
@@ -317,20 +392,29 @@ def test_safety_protocol_ref_and_digest_are_frozen(tmp_path: Path) -> None:
     assert safety_protocol_sha256() == _EXPECTED_SAFETY_PROTOCOL_SHA256
 
 
-def test_scorer_tree_covers_every_research_agent_python_file_exactly_once() -> None:
-    repository_root = Path(__file__).resolve().parents[2]
-    source_root = repository_root / "src/easyicu/research_agent"
+def test_scorer_tree_covers_evaluator_and_explicit_core_exactly_once() -> None:
+    repository_root = Path(__file__).resolve().parents[4]
+    evaluator_root = repository_root / SCORER_EVALUATOR_ROOT
     expected_paths = tuple(
-        str(path.relative_to(repository_root))
-        for path in sorted(source_root.rglob("*.py"))
-        if "__pycache__" not in path.parts
+        sorted(
+            {
+                *(
+                    str(path.relative_to(repository_root))
+                    for path in evaluator_root.rglob("*.py")
+                ),
+                *PAPER_SCORER_CORE_FILES,
+            }
+        )
     )
     rows = scorer_tree_rows()
     actual_paths = tuple(row["path"] for row in rows)
 
     assert actual_paths == expected_paths
     assert len(actual_paths) == len(set(actual_paths))
-    assert all(path.startswith("src/easyicu/research_agent/") for path in actual_paths)
+    assert all(
+        path.startswith(f"{SCORER_EVALUATOR_ROOT}/") or path in PAPER_SCORER_CORE_FILES
+        for path in actual_paths
+    )
     assert all(len(row["sha256"]) == 64 for row in rows)
 
 

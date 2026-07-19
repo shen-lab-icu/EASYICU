@@ -14,9 +14,13 @@ import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from .evaluation_scorecard import DimensionScore, score_run_from_dir
-from .figure2_scoring_inputs import LoadedFigure2ScoringInputs
-from .icu_agent_bench import ICUAgentBenchTask
+from easyicu.research_agent.evaluation_scorecard import (
+    DimensionScore,
+    score_run_from_dir,
+)
+from easyicu.research_agent.icu_agent_bench import ICUAgentBenchTask
+
+from .scoring_inputs import LoadedFigure2ScoringInputs
 
 
 def _canonical_json_bytes(value: object) -> bytes:

@@ -13,44 +13,49 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+import stat
 from pathlib import Path
 from typing import Annotated, Any, Literal, TypeVar
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from .evaluation_scorecard import (
+from easyicu.research_agent.evaluation_scorecard import (
     DimensionScore,
     compute_tristate,
     score_evidence_binding,
     score_run,
 )
-from .figure2_paper_rubric import (
+from .paper_rubric_v2 import (
     FIGURE2_PAPER_RUBRIC_REF,
     Figure2PaperScorecard,
     Figure2PaperTaskRubric,
     build_figure2_paper_scorecard,
     load_figure2_paper_rubric,
-    paper_rubric_manifest_sha256,
 )
-from .figure2_rubric import FIGURE2_TASK_IDS
-from .figure2_safety_issuer import (
+from .safety_issuer import (
     Figure2SafetyReceipt,
     Figure2SafetyRequest,
     build_figure2_safety_request,
     verify_figure2_safety_receipt,
 )
-from .figure2_scoring_inputs import (
+from .scoring_inputs import (
     Figure2ScoringInputAuthority,
     Figure2TaskAuthorityMismatch,
     LoadedFigure2ScoringInputs,
-    load_figure2_scoring_inputs,
+    _load_figure2_scoring_inputs_locked,
 )
-from .figure2_validity import score_verified_result_validity
-from .icu_agent_bench import easyicu_evaluation_protocol_suite
-from .run_lock import RunExecutionLockError, acquire_run_execution_lock
+from .suite import easyicu_evaluation_protocol_suite
+from easyicu.research_agent.run_lock import (
+    RunExecutionLockError,
+    acquire_run_execution_lock,
+)
+
+from .validity import score_verified_result_validity
 
 FIGURE2_PAPER_ENVELOPE_SCHEMA = "easyicu.figure2_paper_scorecard_envelope/2"
 FIGURE2_EVALUATION_ATTEMPT_SCHEMA = "easyicu.figure2_evaluation_attempt/2"
+_FIGURE2_SAFETY_RECEIPT_MAX_BYTES = 2 * 1024 * 1024
 
 Sha256 = Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
 ModelT = TypeVar("ModelT", bound=BaseModel)
@@ -437,7 +442,7 @@ def _evaluate_locked(
             detail=str(exc),
         )
     try:
-        loaded = load_figure2_scoring_inputs(root, expected_task_id=task_id)
+        loaded = _load_figure2_scoring_inputs_locked(root, expected_task_id=task_id)
         run_id = loaded.authority.run_id
         request = build_figure2_safety_request(manifest, task_rubric, loaded)
     except Figure2TaskAuthorityMismatch as exc:
@@ -543,7 +548,7 @@ def _evaluate_locked(
             safety_receipt_canonical_json=receipt_bytes.decode("utf-8"),
             scorecard=paper_scorecard,
         )
-        reloaded = load_figure2_scoring_inputs(root, expected_task_id=task_id)
+        reloaded = _load_figure2_scoring_inputs_locked(root, expected_task_id=task_id)
         if _authority_bytes(reloaded) != authority_bytes:
             return _invalid_attempt(
                 task_id=task_id,
@@ -592,6 +597,69 @@ def evaluate_figure2_run(
         )
 
 
+def evaluate_figure2_run_from_receipt_path(
+    run_dir: Path | str,
+    *,
+    task_id: str,
+) -> Figure2EvaluationAttempt:
+    """Evaluate one run from its fixed posthoc safety-receipt artifact.
+
+    Missing and malformed receipts are represented as structured invalid
+    attempts so a paper evaluator can never abort an otherwise expensive bench
+    run.  The evaluator provider remains outside the research-agent call ledger.
+    """
+
+    root = Path(run_dir).expanduser().resolve()
+    receipt_path = root / "figure2_safety_receipt.json"
+    try:
+        flags = (
+            os.O_RDONLY
+            | getattr(os, "O_CLOEXEC", 0)
+            | getattr(os, "O_NONBLOCK", 0)
+            | getattr(os, "O_NOFOLLOW", 0)
+        )
+        descriptor = os.open(receipt_path, flags)
+        try:
+            metadata = os.fstat(descriptor)
+            if not stat.S_ISREG(metadata.st_mode):
+                raise ValueError("Figure 2 safety receipt is not a regular run file")
+            if metadata.st_size > _FIGURE2_SAFETY_RECEIPT_MAX_BYTES:
+                raise ValueError("Figure 2 safety receipt exceeds 2 MiB")
+            chunks: list[bytes] = []
+            total = 0
+            while True:
+                chunk = os.read(descriptor, 1024 * 1024)
+                if not chunk:
+                    break
+                total += len(chunk)
+                if total > _FIGURE2_SAFETY_RECEIPT_MAX_BYTES:
+                    raise ValueError("Figure 2 safety receipt exceeds 2 MiB")
+                chunks.append(chunk)
+            payload = b"".join(chunks)
+        finally:
+            os.close(descriptor)
+    except FileNotFoundError:
+        return evaluate_figure2_run(root, task_id=task_id, safety_receipt=None)
+    except Exception as exc:
+        return _invalid_attempt(
+            task_id=task_id,
+            run_id=root.name or None,
+            reason="SAFETY_ADJUDICATION_INVALID",
+            detail=str(exc),
+        )
+    try:
+        _strict_json_loads(payload)
+        receipt = Figure2SafetyReceipt.model_validate_json(payload, strict=True)
+    except Exception as exc:
+        return _invalid_attempt(
+            task_id=task_id,
+            run_id=root.name or None,
+            reason="SAFETY_ADJUDICATION_INVALID",
+            detail=str(exc),
+        )
+    return evaluate_figure2_run(root, task_id=task_id, safety_receipt=receipt)
+
+
 def build_figure2_safety_request_for_run(
     run_dir: Path | str,
     *,
@@ -603,7 +671,7 @@ def build_figure2_safety_request_for_run(
     with acquire_run_execution_lock(workdir=root.parent, run_id=root.name):
         manifest = load_figure2_paper_rubric()
         task_rubric = _task_rubric(manifest.tasks, task_id)
-        loaded = load_figure2_scoring_inputs(root, expected_task_id=task_id)
+        loaded = _load_figure2_scoring_inputs_locked(root, expected_task_id=task_id)
         return build_figure2_safety_request(manifest, task_rubric, loaded)
 
 
@@ -636,5 +704,6 @@ __all__ = [
     "Figure2PaperScorecardEnvelope",
     "build_figure2_safety_request_for_run",
     "evaluate_figure2_run",
+    "evaluate_figure2_run_from_receipt_path",
     "verify_figure2_evaluation_attempt",
 ]

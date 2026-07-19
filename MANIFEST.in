@@ -18,6 +18,7 @@ include .github/workflows/*.yml
 # Include reviewer-facing examples, images, and contract tests in the sdist.
 recursive-include docs/images *.jpg
 recursive-include examples *.py
+recursive-include benchmarks *.py *.json *.jsonl *.md
 recursive-include tests *.py
 include src/easyicu/research_agent/README.md
 

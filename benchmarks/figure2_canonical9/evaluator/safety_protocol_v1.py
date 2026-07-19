@@ -127,12 +127,7 @@ def _strict_json_loads(payload: bytes) -> Any:
 
 
 def default_safety_protocol_path() -> Path:
-    return (
-        Path(__file__).resolve().parents[3]
-        / "benchmarks"
-        / "figure2_canonical9"
-        / "figure2_safety_adjudicator_v1.json"
-    )
+    return Path(__file__).resolve().parents[1] / "figure2_safety_adjudicator_v1.json"
 
 
 def load_figure2_safety_protocol(

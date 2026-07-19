@@ -1,3 +1,5 @@
+"""Host-issued Figure 2 safety-receipt contracts."""
+
 from __future__ import annotations
 
 import hashlib
@@ -8,17 +10,18 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from easyicu.research_agent.figure2_paper_rubric import (
+from benchmarks.figure2_canonical9.evaluator.paper_rubric_v2 import (
     Figure2PaperRubricManifest,
     paper_rubric_manifest_sha256,
 )
-from easyicu.research_agent.figure2_safety_issuer import (
+from benchmarks.figure2_canonical9.evaluator.safety_issuer import (
     Figure2SafetyReceipt,
     build_figure2_safety_request,
     issue_figure2_safety_receipt,
     verify_figure2_safety_receipt,
 )
-from easyicu.research_agent.figure2_scoring_inputs import (
+from benchmarks.figure2_canonical9.evaluator.scoring_inputs import (
+    FIGURE2_SCORING_INPUT_AUTHORITY_SCHEMA,
     Figure2ArtifactAuthority,
     Figure2ReviewDocument,
     Figure2ScoringInputAuthority,
@@ -42,7 +45,7 @@ def _canonical(value: object) -> bytes:
 
 def _manifest() -> Figure2PaperRubricManifest:
     path = (
-        Path(__file__).resolve().parents[2]
+        Path(__file__).resolve().parents[4]
         / "benchmarks"
         / "figure2_canonical9"
         / "figure2_paper_rubric_v2.json"
@@ -98,15 +101,37 @@ def _loaded_inputs() -> LoadedFigure2ScoringInputs:
     )
     manifest = _manifest()
     authority = Figure2ScoringInputAuthority(
-        schema_version="easyicu.figure2_scoring_input_authority/3",
+        schema_version=FIGURE2_SCORING_INPUT_AUTHORITY_SCHEMA,
         task_id=manifest.tasks[0].task_id,
         suite_ref=manifest.suite_ref,
         suite_projection_sha256=manifest.suite_projection_sha256,
         paper_rubric_ref=manifest.rubric_ref,
         paper_rubric_sha256=paper_rubric_manifest_sha256(manifest),
         research_question_sha256=_sha(b"frozen safety test research question"),
-        exposure_concept=None,
-        outcome_concept=None,
+        exposure_concept=manifest.tasks[0].validity_binding.exposure_concept,
+        outcome_concept=manifest.tasks[0].validity_binding.outcome_concept,
+        benchmark_input_binding_sha256="3" * 64,
+        run_input_capsule_sha256="4" * 64,
+        run_scientific_identity_sha256="5" * 64,
+        run_input_capsule_schema_version="easyicu.run_input_capsule/2",
+        run_primary_exposure=manifest.tasks[0].validity_binding.exposure_concept,
+        run_target_outcome=manifest.tasks[0].validity_binding.outcome_concept,
+        canonical_input_manifest_ref=(
+            "figure2_canonical9/run_input_bindings/20260718-v2"
+        ),
+        canonical_input_manifest_sha256="6" * 64,
+        canonical_input_case_sha256="7" * 64,
+        submission_profile_ref="npj_dm/20260718",
+        concept_dict_sha256="8" * 64,
+        sofa2_dict_sha256="9" * 64,
+        source_cohort_authority_sha256="a" * 64,
+        source_trajectory_authority_sha256=None,
+        staged_cohort_authority_sha256="b" * 64,
+        staged_trajectory_authority_sha256=None,
+        run_status_evidence_sha256="c" * 64,
+        readiness_sha256="d" * 64,
+        task_authority_sha256="e" * 64,
+        task_authority_byte_count=1024,
         run_id="run-safety-001",
         checkpoint_sequence=7,
         checkpoint_payload_sha256="1" * 64,

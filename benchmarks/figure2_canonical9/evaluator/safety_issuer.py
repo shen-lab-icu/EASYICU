@@ -19,13 +19,13 @@ from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from .figure2_paper_rubric import (
+from .paper_rubric_v2 import (
     FIGURE2_PAPER_RUBRIC_REF,
     Figure2PaperRubricManifest,
     Figure2PaperTaskRubric,
     paper_rubric_manifest_sha256,
 )
-from .figure2_safety_protocol import (
+from .safety_protocol_v1 import (
     FIGURE2_SAFETY_PROTOCOL_REF,
     Figure2ForbiddenClaimResponse,
     Figure2HazardResponse,
@@ -33,7 +33,7 @@ from .figure2_safety_protocol import (
     parse_figure2_safety_response,
     safety_protocol_sha256,
 )
-from .figure2_scoring_inputs import (
+from .scoring_inputs import (
     Figure2ReviewDocument,
     LoadedFigure2ScoringInputs,
 )
