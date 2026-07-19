@@ -23,7 +23,7 @@ from ..authority.parent_artifact import (
     _resolve_upstream_manifest_step,
     _verified_direct_parent_artifact_digests,
 )
-from ..declared_product_contract import (
+from ..contracts.declared_product import (
     read_digest_bound_artifact_snapshot,
     typed_product,
 )

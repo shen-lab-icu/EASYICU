@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from easyicu.research_agent.declared_product_contract import (
+from easyicu.research_agent.contracts.declared_product import (
     declared_product_contract_findings,
 )
 from easyicu.research_agent.gates.method_compatibility import (

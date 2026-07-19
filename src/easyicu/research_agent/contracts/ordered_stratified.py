@@ -19,13 +19,13 @@ from typing import Any, Iterable, Mapping, Sequence
 import numpy as np
 import pandas as pd
 
-from .methods.ordered_trends import (
+from ..methods.ordered_trends import (
     OrderedTrendResult,
     cochran_armitage_trend,
     jonckheere_terpstra_trend,
     wilson_interval,
 )
-from .schema import AnalysisStep, ValidationFinding
+from ..schema import AnalysisStep, ValidationFinding
 
 CONTROLLED_METHOD = "ordinal_stratified_descriptive_analysis"
 CONTRACT_KEY = "ordered_stratified_contract"

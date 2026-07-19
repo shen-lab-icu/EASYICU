@@ -2302,7 +2302,7 @@ def test_concept_repair_failure_resumes_quarantined_draft_fail_closed(
     """A rejected draft is repaired on resume, never reused as executable code."""
 
     from easyicu.research_agent.audits.validators import LLMConceptAuditor
-    from easyicu.research_agent.contracts import ValidationFinding
+    from easyicu.research_agent.contracts.runtime import ValidationFinding
     from easyicu.research_agent.execution.runner import CodeRunner
     from easyicu.research_agent.authority.runtime_artifacts import (
         current_evidence_records,
@@ -2593,7 +2593,7 @@ def test_resume_repair_ticket_uses_only_current_deterministic_coordinates(
     ra, tmp_path: Path, monkeypatch
 ):
     from easyicu.research_agent.audits.validators import ConceptUsageAuditor
-    from easyicu.research_agent.contracts import ValidationFinding
+    from easyicu.research_agent.contracts.runtime import ValidationFinding
 
     coordinate = {"call_line": 10}
 
@@ -2793,7 +2793,7 @@ def test_resume_retires_unchanged_draft_after_deterministic_policy_supersession(
     """A validator-policy fix may retire its own stale error without code churn."""
 
     from easyicu.research_agent.audits.validators import LLMConceptAuditor
-    from easyicu.research_agent.contracts import ValidationFinding
+    from easyicu.research_agent.contracts.runtime import ValidationFinding
     from easyicu.research_agent.execution.runner import CodeRunner
 
     audit_state = {"old_policy": True}
@@ -3284,7 +3284,7 @@ if __name__ == "__main__":
 
 
 def test_quarantine_deterministic_revalidation_is_fail_closed() -> None:
-    from easyicu.research_agent.contracts import ValidationFinding
+    from easyicu.research_agent.contracts.runtime import ValidationFinding
     from easyicu.research_agent.pipeline_execute import (
         _quarantined_deterministic_errors_resolved_by_current_gate,
     )
@@ -3338,7 +3338,7 @@ def test_quarantine_deterministic_revalidation_is_fail_closed() -> None:
 def test_quarantine_deterministic_revalidation_never_retires_foreign_or_mixed_errors(
     foreign_validator: str,
 ) -> None:
-    from easyicu.research_agent.contracts import ValidationFinding
+    from easyicu.research_agent.contracts.runtime import ValidationFinding
     from easyicu.research_agent.pipeline_execute import (
         _quarantined_deterministic_errors_resolved_by_current_gate,
     )
@@ -3403,7 +3403,7 @@ y = df["death"]
 
 def _stored_horizon_error(ra):
     del ra
-    from easyicu.research_agent.contracts import ValidationFinding
+    from easyicu.research_agent.contracts.runtime import ValidationFinding
 
     return ValidationFinding(
         validator="llm_concept_auditor",
@@ -3467,7 +3467,7 @@ def test_quarantine_policy_supersession_reclassifies_the_stored_error(ra) -> Non
 def test_quarantine_policy_supersession_reclassifies_isolated_raw_branch_false_override(
     ra,
 ) -> None:
-    from easyicu.research_agent.contracts import ValidationFinding
+    from easyicu.research_agent.contracts.runtime import ValidationFinding
     from easyicu.research_agent.pipeline_execute import (
         _quarantined_errors_superseded_by_current_policy,
     )
@@ -3528,7 +3528,7 @@ model = sm.Logit(outcome, pd.DataFrame({'treatment': treatment}))
 
 
 def test_quarantine_policy_does_not_trust_artifact_literal_decoy_flow(ra) -> None:
-    from easyicu.research_agent.contracts import ValidationFinding
+    from easyicu.research_agent.contracts.runtime import ValidationFinding
     from easyicu.research_agent.pipeline_execute import (
         _quarantined_errors_superseded_by_current_policy,
     )
@@ -3572,7 +3572,7 @@ treatment = consume()
 
 
 def test_quarantine_policy_does_not_trust_uncalled_return_as_consumption(ra) -> None:
-    from easyicu.research_agent.contracts import ValidationFinding
+    from easyicu.research_agent.contracts.runtime import ValidationFinding
     from easyicu.research_agent.pipeline_execute import (
         _quarantined_errors_superseded_by_current_policy,
     )
@@ -3616,7 +3616,7 @@ treatment = helper_result.values
 
 
 def test_quarantine_policy_does_not_trust_audit_only_authority_flow(ra) -> None:
-    from easyicu.research_agent.contracts import ValidationFinding
+    from easyicu.research_agent.contracts.runtime import ValidationFinding
     from easyicu.research_agent.pipeline_execute import (
         _quarantined_errors_superseded_by_current_policy,
     )
@@ -3687,7 +3687,7 @@ model = sm.Logit(outcome, pd.DataFrame({'treatment': raw_wrong}))
 def test_quarantine_policy_supersession_does_not_trust_fresh_audit_absence_or_warnings(
     ra, current_findings
 ) -> None:
-    from easyicu.research_agent.contracts import ValidationFinding
+    from easyicu.research_agent.contracts.runtime import ValidationFinding
     from easyicu.research_agent.pipeline_execute import (
         _quarantined_errors_superseded_by_current_policy,
     )
@@ -3712,7 +3712,7 @@ def test_quarantine_policy_supersession_does_not_trust_fresh_audit_absence_or_wa
 
 
 def test_quarantine_policy_supersession_requires_zero_current_errors(ra) -> None:
-    from easyicu.research_agent.contracts import ValidationFinding
+    from easyicu.research_agent.contracts.runtime import ValidationFinding
     from easyicu.research_agent.pipeline_execute import (
         _quarantined_errors_superseded_by_current_policy,
     )

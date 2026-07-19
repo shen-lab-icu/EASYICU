@@ -34,7 +34,7 @@ from typing import Any, Dict, List, Mapping, Optional, Sequence, Set, Tuple
 
 from pydantic import ValidationError
 
-from .declared_product_contract import (
+from .contracts.declared_product import (
     PLAN_MATERIALIZABLE_TYPED_OUTPUT_KINDS,
     RUNTIME_BINDABLE_TYPED_INPUT_KINDS,
     _primary_analysis_cohort_attrition_candidate,
@@ -55,7 +55,7 @@ from .icu_rules import (
     overadjustment_caution,
     treatment_mediator_caution,
 )
-from .ordered_stratified_contract import (
+from .contracts.ordered_stratified import (
     is_ordered_stratified_analysis_step,
     ordered_stratified_structure_findings,
 )

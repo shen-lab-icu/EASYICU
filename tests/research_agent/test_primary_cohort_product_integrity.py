@@ -13,7 +13,7 @@ from easyicu.research_agent.cohort.schema import (
     ConceptPredicate,
     TimeWindow,
 )
-from easyicu.research_agent.declared_product_contract import (
+from easyicu.research_agent.contracts.declared_product import (
     primary_analysis_cohort_integrity_findings,
     primary_analysis_cohort_producer_uses_universe,
 )

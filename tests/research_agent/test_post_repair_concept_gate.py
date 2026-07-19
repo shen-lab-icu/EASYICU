@@ -240,7 +240,7 @@ def test_contract_repair_reenters_concept_gate_before_runner(
         ConceptUsageAuditor,
         PrimaryModelContractValidator,
     )
-    from easyicu.research_agent.contracts import ValidationFinding
+    from easyicu.research_agent.contracts.runtime import ValidationFinding
 
     audited_scripts: list[str] = []
 
@@ -312,7 +312,7 @@ def test_contract_repair_mechanical_error_uses_remaining_step_budget(
     ra, tmp_path: Path, monkeypatch
 ) -> None:
     from easyicu.research_agent.audits.validators import PrimaryModelContractValidator
-    from easyicu.research_agent.contracts import ValidationFinding
+    from easyicu.research_agent.contracts.runtime import ValidationFinding
 
     def contract_audit(self, *, step, step_summary, **kwargs):
         del self, kwargs
@@ -364,7 +364,7 @@ def test_quarantine_persists_repaired_constraints_across_later_repairs(
         ConceptUsageAuditor,
         PrimaryModelContractValidator,
     )
-    from easyicu.research_agent.contracts import ValidationFinding
+    from easyicu.research_agent.contracts.runtime import ValidationFinding
     from easyicu.research_agent.pipeline_resume import load_quarantined_concept_draft
 
     def concept_audit(self, *, context, script_text, step):
@@ -478,7 +478,7 @@ def test_unfinished_step_record_restores_only_binding_concept_errors() -> None:
 
 
 def test_monotonic_constraints_keep_distinct_locals_and_refresh_line_numbers() -> None:
-    from easyicu.research_agent.contracts import ValidationFinding
+    from easyicu.research_agent.contracts.runtime import ValidationFinding
     from easyicu.research_agent.pipeline_execute import (
         _merge_monotonic_concept_constraints,
     )
@@ -515,7 +515,7 @@ def test_monotonic_constraints_keep_distinct_locals_and_refresh_line_numbers() -
 
 
 def test_monotonic_constraints_preserve_existing_warning_history() -> None:
-    from easyicu.research_agent.contracts import ValidationFinding
+    from easyicu.research_agent.contracts.runtime import ValidationFinding
     from easyicu.research_agent.pipeline_execute import (
         _merge_monotonic_concept_constraints,
     )
@@ -642,7 +642,7 @@ def analyze():
 
 
 def test_monotonic_constraint_identity_ignores_changing_audit_counts() -> None:
-    from easyicu.research_agent.contracts import ValidationFinding
+    from easyicu.research_agent.contracts.runtime import ValidationFinding
     from easyicu.research_agent.pipeline_execute import (
         _merge_monotonic_concept_constraints,
     )
@@ -666,7 +666,7 @@ def test_monotonic_constraint_identity_ignores_changing_audit_counts() -> None:
 
 
 def test_monotonic_constraint_identity_unions_changing_evidence_support() -> None:
-    from easyicu.research_agent.contracts import ValidationFinding
+    from easyicu.research_agent.contracts.runtime import ValidationFinding
     from easyicu.research_agent.pipeline_execute import (
         _merge_monotonic_concept_constraints,
     )
@@ -723,7 +723,7 @@ def test_keyboard_interrupt_during_concept_repair_saves_draft_and_reraises(
     ra, tmp_path: Path, monkeypatch
 ) -> None:
     from easyicu.research_agent.audits.validators import ConceptUsageAuditor
-    from easyicu.research_agent.contracts import ValidationFinding
+    from easyicu.research_agent.contracts.runtime import ValidationFinding
     from easyicu.research_agent.pipeline_resume import load_quarantined_concept_draft
 
     def reject_draft(self, *, context, script_text, step):

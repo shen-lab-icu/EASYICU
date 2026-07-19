@@ -413,7 +413,7 @@ def test_run_execute_phase_is_exported():
 
 
 def test_critic_messages_keep_only_blocking_errors():
-    from easyicu.research_agent.contracts import ValidationFinding
+    from easyicu.research_agent.contracts.runtime import ValidationFinding
     from easyicu.research_agent.pipeline_execute import (
         _actionable_validator_messages,
     )
@@ -442,8 +442,8 @@ def test_critic_messages_keep_only_blocking_errors():
 
 
 def test_code_repair_findings_keep_only_blocking_errors():
-    from easyicu.research_agent.contracts import ValidationFinding
-    from easyicu.research_agent.gate_semantics import blocking_validator_findings
+    from easyicu.research_agent.contracts.runtime import ValidationFinding
+    from easyicu.research_agent.gates.semantics import blocking_validator_findings
     from easyicu.research_agent.pipeline_execute import (
         _blocking_validator_findings,
     )
@@ -495,7 +495,7 @@ def test_success_replanning_requires_an_exact_agent_request(record, expected):
 
 
 def test_required_model_contract_error_fail_closes_outer_step_and_run():
-    from easyicu.research_agent.contracts import ValidationFinding
+    from easyicu.research_agent.contracts.runtime import ValidationFinding
     from easyicu.research_agent.pipeline_execute import (
         _step_status_from_contract_findings,
     )
@@ -537,7 +537,7 @@ def test_required_model_contract_error_fail_closes_outer_step_and_run():
 
 
 def test_every_deterministic_statistical_error_fails_outer_step():
-    from easyicu.research_agent.contracts import ValidationFinding
+    from easyicu.research_agent.contracts.runtime import ValidationFinding
     from easyicu.research_agent.pipeline_execute import (
         _step_status_from_contract_findings,
     )
@@ -696,7 +696,7 @@ def test_negative_critic_review_fail_closes_outer_step(critique_status):
 
 
 def test_locked_measurement_data_quality_classifier_is_structural():
-    from easyicu.research_agent.contracts import ValidationFinding
+    from easyicu.research_agent.contracts.runtime import ValidationFinding
     from easyicu.research_agent.pipeline_execute import (
         _locked_measurement_data_quality_issues,
     )
@@ -1109,7 +1109,7 @@ def test_final_gate_evaluator_preserves_group_order_and_attempt_binding(
 ):
     from easyicu.research_agent import pipeline_execute
     from easyicu.research_agent.gates import contract as contract_gate
-    from easyicu.research_agent.contracts import ValidationFinding
+    from easyicu.research_agent.contracts.runtime import ValidationFinding
     from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep
 
     calls = []
@@ -1509,7 +1509,7 @@ def test_plan_and_execute_result_dataclass_shapes_match_contracts_module():
     for compatibility. If any shape drifts, a phase silently misreads its
     input or produces a malformed handoff to the next phase.
     """
-    from easyicu.research_agent.contracts import (
+    from easyicu.research_agent.contracts.runtime import (
         _PlanPhaseResult,
         _ExecutePhaseResult,
         _WritePhaseResult,

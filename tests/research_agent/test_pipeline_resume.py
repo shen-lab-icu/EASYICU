@@ -16,7 +16,7 @@ from easyicu.research_agent.pipeline_resume import (
     store_quarantined_concept_draft,
     upsert_step_record,
 )
-from easyicu.research_agent.contracts import ValidationFinding
+from easyicu.research_agent.contracts.runtime import ValidationFinding
 from easyicu.research_agent.authority.evidence_store import EvidenceStore
 from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep
 

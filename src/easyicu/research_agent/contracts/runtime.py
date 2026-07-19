@@ -1,4 +1,4 @@
-"""Public boundary types for the EasyICU research-agent pipeline.
+"""Runtime boundary types for the EasyICU research-agent pipeline.
 
 This module re-exports canonical runtime types so phase modules and future
 consumers can import the public API from one place without creating shadow
@@ -16,12 +16,12 @@ from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple
 
-from .cohort.schema import CohortDefinition, ConceptPredicate, TimeWindow
-from .authority.evidence_store import NumericClaim
-from .robustness_panel import RobustnessPanel, RobustnessPanelRow, RobustnessSpec
-from .schema import EvidenceRecord as EvidenceArtifact
-from .schema import ValidationFinding
-from .side_findings import SideFinding
+from ..cohort.schema import CohortDefinition, ConceptPredicate, TimeWindow
+from ..authority.evidence_store import NumericClaim
+from ..robustness_panel import RobustnessPanel, RobustnessPanelRow, RobustnessSpec
+from ..schema import EvidenceRecord as EvidenceArtifact
+from ..schema import ValidationFinding
+from ..side_findings import SideFinding
 
 DerivedClaim = NumericClaim
 
@@ -57,11 +57,11 @@ class RunResult:
 
 
 if TYPE_CHECKING:
-    from .providers.cost import CostMeter
-    from .authority.evidence_store import EvidenceStore
-    from .literature import LiteratureBundle
-    from .replication.envelope import ReproEnvelope
-    from .schema import (
+    from ..providers.cost import CostMeter
+    from ..authority.evidence_store import EvidenceStore
+    from ..literature import LiteratureBundle
+    from ..replication.envelope import ReproEnvelope
+    from ..schema import (
         AgentRuntimeState,
         AnalysisPlan,
         CritiqueReport,

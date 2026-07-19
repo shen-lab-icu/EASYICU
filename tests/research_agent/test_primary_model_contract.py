@@ -7,7 +7,7 @@ import pandas as pd
 import pytest
 
 from easyicu.research_agent.audits.validators import PrimaryModelContractValidator
-from easyicu.research_agent.contracts import ValidationFinding
+from easyicu.research_agent.contracts.runtime import ValidationFinding
 from easyicu.research_agent.pipeline_execute import _contract_repair_log
 from easyicu.research_agent.schema import (
     AnalysisPlan,

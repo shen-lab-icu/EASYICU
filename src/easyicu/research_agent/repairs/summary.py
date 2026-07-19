@@ -26,7 +26,7 @@ from typing import Any, Dict, Optional
 
 import pandas as pd
 
-from ..contracts import RunResult
+from ..contracts.runtime import RunResult
 from ..schema import AnalysisStep
 
 

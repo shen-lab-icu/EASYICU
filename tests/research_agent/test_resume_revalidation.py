@@ -8,7 +8,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from easyicu.research_agent.contracts import ValidationFinding
+from easyicu.research_agent.contracts.runtime import ValidationFinding
 from easyicu.research_agent.authority.evidence_store import EvidenceStore
 from easyicu.research_agent.schema import (
     AnalysisPlan,
@@ -226,7 +226,7 @@ def test_replay_projects_only_digest_bound_absolute_output_paths(
     replay_environment,
     tmp_path,
 ):
-    from easyicu.research_agent.declared_product_contract import (
+    from easyicu.research_agent.contracts.declared_product import (
         declared_product_contract_findings,
     )
 

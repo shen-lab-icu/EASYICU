@@ -14,7 +14,7 @@ import pytest
 
 def test_run_result_has_one_dependency_neutral_contract_owner():
     import easyicu.research_agent as research_agent
-    from easyicu.research_agent.contracts import RunResult as ContractRunResult
+    from easyicu.research_agent.contracts.runtime import RunResult as ContractRunResult
     from easyicu.research_agent.execution.runner import RunResult as RunnerRunResult
 
     assert research_agent.RunResult is ContractRunResult

@@ -21,7 +21,7 @@ from ..audits.validators import (
     _verified_authoritative_exposure_flow,
 )
 from .preflight import audit_mechanical_code_contracts
-from ..contracts import ValidationFinding
+from ..contracts.runtime import ValidationFinding
 from .method_compatibility import (
     detect_forbidden_pattern_usage,
     format_violation_message,

@@ -1266,7 +1266,7 @@ def test_coder_context_receives_locked_spec_definitions_and_universe_contract(
     from easyicu.research_agent.pipeline_execute import (
         _coder_authority_with_locked_robustness_specs,
     )
-    from easyicu.research_agent.robustness_execution_contract import (
+    from easyicu.research_agent.contracts.robustness_execution import (
         ROBUSTNESS_EXECUTION_CONTRACT_GUIDANCE,
         ROBUSTNESS_RESULT_REQUIRED_FIELDS,
     )

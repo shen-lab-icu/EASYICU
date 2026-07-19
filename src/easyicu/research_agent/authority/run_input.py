@@ -611,7 +611,7 @@ def validator_code_sha256() -> str:
     root = Path(__file__).resolve().parents[1]
     paths = [
         root / "gates" / "preflight.py",
-        root / "declared_product_contract.py",
+        root / "contracts" / "declared_product.py",
         root / "audits" / "validators.py",
         root / "audits" / "step_summary_integrity.py",
     ]

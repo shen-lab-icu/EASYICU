@@ -132,7 +132,7 @@ from .intake.materialized_trajectory import (
     StagedTrajectoryBinding,
 )
 from .research_context.typed import materialized_input_prompt_attachment
-from .contracts import ValidationFinding, _ExecutePhaseResult, _PlanPhaseResult
+from .contracts.runtime import ValidationFinding, _ExecutePhaseResult, _PlanPhaseResult
 from .execution.runners.deterministic_descriptive import absolute_risk_context_code
 from .execution.runners.deterministic_missingness import (
     missingness_measurement_audit_code,
@@ -140,7 +140,7 @@ from .execution.runners.deterministic_missingness import (
 from .execution.runners.deterministic_robustness import (
     robustness_sensitivity_preflight_code,
 )
-from .declared_product_contract import (
+from .contracts.declared_product import (
     RUNTIME_BINDABLE_TYPED_INPUT_KINDS,
     RUNTIME_TYPED_INPUT_EVIDENCE_KINDS,
     authorize_declared_figure_product_slots,
@@ -245,9 +245,9 @@ from .gates.visual import (
     collect_visual_gate_result,
     decide_visual_repair,
 )
-from .gate_semantics import blocking_validator_findings as _blocking_validator_findings
+from .gates.semantics import blocking_validator_findings as _blocking_validator_findings
 from .providers.mocks import MockLLMClient
-from .ordered_stratified_contract import ordered_stratified_numeric_findings
+from .contracts.ordered_stratified import ordered_stratified_numeric_findings
 from .repairs.reasons import (
     RepairPromptAuthority,
     RepairReason,
@@ -282,7 +282,7 @@ from .pipeline_resume import (
     upsert_step_record,
 )
 from .schema import AnalysisPlan, AnalysisStep, EvidenceRef, ResearchContext
-from .robustness_execution_contract import (
+from .contracts.robustness_execution import (
     ROBUSTNESS_COHORT_MEMBERSHIP_ALIASES,
     ROBUSTNESS_EXECUTION_CONTRACT_GUIDANCE,
     _executed_robustness_result_issues,

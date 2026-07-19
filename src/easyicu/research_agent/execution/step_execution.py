@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Optional
 
-from ..contracts import RunResult
+from ..contracts.runtime import RunResult
 
 
 @dataclass(frozen=True)

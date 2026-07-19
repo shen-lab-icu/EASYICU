@@ -22,7 +22,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
-from ..contracts import ValidationFinding
+from ..contracts.runtime import ValidationFinding
 from ..repairs.reasons import typed_repair_ticket
 from ..scalar_utils import _expected_numeric_annotations_for_step
 from .visual_qa import VisualQAAuditor

@@ -91,6 +91,7 @@ mechanically moving every top-level file:
 | `research_context/` | typed context authority, cohort-aware context construction and step-scoped Coder projection | scientific method selection, provider calls or run authority mutation |
 | `cohort/` | typed cohort schema, deterministic materialization, artifact facts and case-neutral dataframe primitives | outcome choice, censoring rules or case-specific cohort criteria |
 | `acquisition/` | export catalog, coverage checks and materialization handoff for caller-declared concepts | hidden outcome/static-variable defaults or estimand construction |
+| `contracts/` | dependency-neutral runtime handoffs and deterministic declared-product, ordered-group and robustness execution contracts | provider calls, scientific design selection or evidence mutation |
 | `evaluation/` | optional cross-model concordance and Tier-2 jury/rubric adapters over completed artifacts | primary scientific adjudication or hidden manuscript benchmark authority |
 | `review/` | deterministic post-analysis causal-claim and method-appropriateness review | exposure, outcome, cohort, method or estimand selection |
 

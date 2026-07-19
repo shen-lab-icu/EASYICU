@@ -68,7 +68,7 @@ from ..research_context.prompt_scope import (
     coder_rewrite_guide_for_step,
     scoped_coder_context,
 )
-from ..declared_product_contract import (
+from ..contracts.declared_product import (
     RUNTIME_BINDABLE_TYPED_INPUT_KINDS,
     typed_product as _canonical_typed_product,
 )

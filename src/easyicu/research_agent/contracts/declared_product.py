@@ -23,9 +23,9 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
 
-from .repair_registry import is_sealed_renderer_repair, repair_metadata_for
-from .schema import AnalysisStep, ValidationFinding
-from .trajectory.plan_contract import (
+from ..repair_registry import is_sealed_renderer_repair, repair_metadata_for
+from ..schema import AnalysisStep, ValidationFinding
+from ..trajectory.plan_contract import (
     trajectory_role_result_findings,
     trajectory_role_scope_summary_findings,
 )
@@ -1707,7 +1707,7 @@ def primary_analysis_cohort_integrity_findings(
     try:
         import pandas as pd
 
-        from .cohort.schema import (
+        from ..cohort.schema import (
             CohortDefinition,
             build_cohort,
             coerce_cohort_definition,

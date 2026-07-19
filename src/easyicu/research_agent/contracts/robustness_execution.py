@@ -12,7 +12,7 @@ import re
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Tuple
 
-from .schema import ResearchContext
+from ..schema import ResearchContext
 
 
 ROBUSTNESS_RESULT_REQUIRED_TEXT_FIELDS = (

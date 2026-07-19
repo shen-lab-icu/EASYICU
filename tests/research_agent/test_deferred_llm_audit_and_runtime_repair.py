@@ -64,7 +64,7 @@ def test_llm_concept_audit_runs_once_only_after_local_contracts_pass(
     ra, tmp_path: Path, monkeypatch
 ) -> None:
     from easyicu.research_agent.audits.validators import PrimaryModelContractValidator
-    from easyicu.research_agent.contracts import ValidationFinding
+    from easyicu.research_agent.contracts.runtime import ValidationFinding
     from easyicu.research_agent.execution.runner import CodeRunner
 
     initial_code = _summary_script(phase="INITIAL_CONTRACT_ERROR")
@@ -495,7 +495,7 @@ def test_exact_capsule_resume_skips_generation_audit_and_execution_but_reruns_ga
 ) -> None:
     from easyicu.research_agent import pipeline_execute
     from easyicu.research_agent.agents.core import RuntimeSupervisor
-    from easyicu.research_agent.contracts import RunResult
+    from easyicu.research_agent.contracts.runtime import RunResult
     from easyicu.research_agent.schema import ValidationFinding
     from easyicu.research_agent.authority.step_capsule import (
         StepAuthorityCapsuleRef,
@@ -878,7 +878,7 @@ def test_resume_seals_completed_repair_after_capsule_checkpoint_crash(
     from easyicu.research_agent import pipeline_execute
     from easyicu.research_agent.agents.core import RuntimeSupervisor
     from easyicu.research_agent.audits.validators import PrimaryModelContractValidator
-    from easyicu.research_agent.contracts import RunResult
+    from easyicu.research_agent.contracts.runtime import RunResult
     from easyicu.research_agent.schema import ValidationFinding
     from easyicu.research_agent.authority.step_runtime import (
         StepAuthorityRuntimeError,
