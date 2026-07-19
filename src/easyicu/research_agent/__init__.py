@@ -640,7 +640,7 @@ def __getattr__(name: str):
         "select_discovery_row",
         "write_handoff_packet",
     }:
-        from . import discovery_handoff as _discovery_handoff
+        from .discovery import discovery_handoff as _discovery_handoff
 
         return getattr(_discovery_handoff, name)
     if name in {
@@ -650,11 +650,11 @@ def __getattr__(name: str):
         "validate_discovery_manuscript_package",
         "write_discovery_package_assessment",
     }:
-        from . import discovery_package as _discovery_package
+        from .discovery import discovery_package as _discovery_package
 
         return getattr(_discovery_package, name)
     if name in {"render_discovery_story_figure"}:
-        from . import discovery_story_figure as _discovery_story_figure
+        from .discovery import discovery_story_figure as _discovery_story_figure
 
         return getattr(_discovery_story_figure, name)
     if name in {
