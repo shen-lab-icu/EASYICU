@@ -59,6 +59,47 @@ if loss_n > 0:
     assert _lossy_findings(script, ra) == []
 
 
+def test_module_raise_only_helper_is_visible_inside_numeric_helper(ra):
+    script = """
+import pandas as pd
+
+def fail(message):
+    raise RuntimeError(message)
+
+def strict_numeric(raw):
+    coerced = pd.to_numeric(raw, errors="coerce")
+    loss_n = int((raw.notna() & coerced.isna()).sum())
+    if loss_n > 0:
+        fail(f"numeric coercion lost {loss_n} observed values")
+    return coerced
+
+coerced = strict_numeric(cohort["declared_exposure"])
+"""
+
+    assert _lossy_findings(script, ra) == []
+
+
+def test_shadowed_module_raise_helper_is_not_a_fail_closed_guard(ra):
+    script = """
+import pandas as pd
+
+def fail(message):
+    raise RuntimeError(message)
+
+def strict_numeric(raw):
+    fail = lambda message: None
+    coerced = pd.to_numeric(raw, errors="coerce")
+    loss_n = int((raw.notna() & coerced.isna()).sum())
+    if loss_n > 0:
+        fail(f"numeric coercion lost {loss_n} observed values")
+    return coerced
+
+coerced = strict_numeric(cohort["declared_exposure"])
+"""
+
+    assert _lossy_findings(script, ra)
+
+
 def test_helper_with_a_successful_path_is_not_a_fail_closed_guard(ra):
     script = """
 import pandas as pd

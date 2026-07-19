@@ -883,6 +883,133 @@ model.fit(frame)
     )
 
 
+def test_mechanical_preflight_accepts_self_raising_provenance_helper_assignment(ra):
+    code = """
+def fail(message):
+    raise RuntimeError(message)
+
+def provenance_audit(frame):
+    invalid_pair_n = int(frame['invalid_pair'].sum())
+    discordant_n = int(frame['discordant'].sum())
+    checks = [{
+        'role': 'audit_only',
+        'invalid_pair_n': invalid_pair_n,
+        'discordant_n': discordant_n,
+    }]
+    if invalid_pair_n > 0 or discordant_n > 0:
+        fail('invalid measurement provenance')
+    return {'checks': checks}
+
+def main(frame):
+    audit = provenance_audit(frame)
+    if not audit or not audit.get('checks'):
+        fail('measurement provenance audit returned no checks')
+    model.fit(frame)
+
+main(frame)
+"""
+    findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+
+    assert not any(
+        finding.detail
+        and finding.detail.get("reason") == "provenance_audit_not_fail_closed"
+        for finding in findings
+    )
+
+
+def test_mechanical_preflight_accepts_immediately_returned_provenance_audit_row(ra):
+    code = """
+def fail(message):
+    raise RuntimeError(message)
+
+def provenance_audit(frame):
+    invalid_pair_n = int(frame['invalid_pair'].sum())
+    discordant_n = int(frame['discordant'].sum())
+    if invalid_pair_n > 0 or discordant_n > 0:
+        fail('invalid measurement provenance')
+    return {'checks': [{
+        'role': 'audit_only',
+        'invalid_pair_n': invalid_pair_n,
+        'discordant_n': discordant_n,
+    }]}
+
+def main(frame):
+    audit = provenance_audit(frame)
+    if not audit or not audit.get('checks'):
+        fail('measurement provenance audit returned no checks')
+    model.fit(frame)
+
+main(frame)
+"""
+    findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+
+    assert not any(
+        finding.detail
+        and finding.detail.get("reason") == "provenance_audit_not_fail_closed"
+        for finding in findings
+    )
+
+
+def test_mechanical_preflight_rejects_rebound_returned_provenance_count(ra):
+    code = """
+def fail(message):
+    raise RuntimeError(message)
+
+def provenance_audit(frame):
+    invalid_pair_n = int(frame['invalid_pair'].sum())
+    discordant_n = int(frame['discordant'].sum())
+    invalid_pair_n = 0
+    if invalid_pair_n > 0 or discordant_n > 0:
+        fail('invalid measurement provenance')
+    return {'checks': [{
+        'role': 'audit_only',
+        'invalid_pair_n': invalid_pair_n,
+        'discordant_n': discordant_n,
+    }]}
+
+audit = provenance_audit(frame)
+model.fit(frame)
+"""
+    findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+
+    assert any(
+        finding.detail
+        and finding.detail.get("reason") == "provenance_audit_not_fail_closed"
+        for finding in findings
+    )
+
+
+def test_mechanical_preflight_rejects_nonterminal_provenance_fail_helper(ra):
+    code = """
+def fail(message):
+    if strict:
+        raise RuntimeError(message)
+    return None
+
+def provenance_audit(frame):
+    invalid_pair_n = int(frame['invalid_pair'].sum())
+    discordant_n = int(frame['discordant'].sum())
+    checks = [{
+        'role': 'audit_only',
+        'invalid_pair_n': invalid_pair_n,
+        'discordant_n': discordant_n,
+    }]
+    if invalid_pair_n > 0 or discordant_n > 0:
+        fail('invalid measurement provenance')
+    return {'checks': checks}
+
+audit = provenance_audit(frame)
+model.fit(frame)
+"""
+    findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+
+    assert any(
+        finding.detail
+        and finding.detail.get("reason") == "provenance_audit_not_fail_closed"
+        for finding in findings
+    )
+
+
 def test_mechanical_preflight_blocks_provenance_guard_swallowed_by_handler(ra):
     code = """
 def provenance_audit(frame):
