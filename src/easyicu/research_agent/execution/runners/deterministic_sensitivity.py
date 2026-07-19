@@ -1,4 +1,9 @@
-"""Deterministic code templates for standard sensitivity-analysis steps."""
+"""Parked deterministic sensitivity-analysis script generators.
+
+These templates remain for historical replay, direct-import compatibility, and
+unit fixtures. They are not registered primary runners and must not select a
+cohort definition, exposure, outcome, method, or estimand for the Agent.
+"""
 
 from __future__ import annotations
 

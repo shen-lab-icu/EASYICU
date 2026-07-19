@@ -1,20 +1,9 @@
-"""Deterministic ordinal-exposure dose-response primary-analysis runner.
+"""Parked deterministic ordinal dose-response script generator.
 
-The counterpart of :mod:`deterministic_causal` / :mod:`deterministic_survival`
-for *dose-response* designs: a graded ordinal exposure (e.g. KDIGO AKI stage
-0-3, a severity tier, a quartile) against a binary outcome. It returns a
-self-contained runner script that estimates the primary dose-response gradient
-WITHOUT an LLM coder call, so the reported estimand is reproducible instead of
-varying run-to-run.
-
-Motivation (E3 KDIGO dose-response, 2026-07-07): the case asks to "characterise
-the dose-response gradient of first-24h KDIGO AKI stage against ... in-hospital
-mortality". The single reproducible headline for a graded exposure is the
-covariate-adjusted **odds ratio per +1 stage** (the trend), with the per-stage
-odds ratios (vs the lowest stage) as the figure's forest rows and a
-monotonicity check. An LLM coder left to invent this drifts between per-stage
-contrasts, a continuous slope, and an ordinal-outcome model (the wrong design:
-here the ordinal variable is the EXPOSURE, not the outcome).
+This module is retained for historical replay, direct-import compatibility, and
+unit fixtures. It is intentionally absent from primary-runner dispatch and does
+not own the exposure encoding, model, contrasts, or estimand. New production
+primary analyses remain Planner/Coder-owned.
 
 The generated script:
 

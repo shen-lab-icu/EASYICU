@@ -1,17 +1,10 @@
-"""Deterministic causal (IPTW / propensity) primary-analysis runner.
+"""Parked deterministic causal-analysis script generator.
 
-The counterpart of :mod:`deterministic_survival` for causal-inference designs.
-It returns a self-contained runner script that estimates the primary
-propensity-weighted marginal effect (a stabilised-IPTW marginal structural
-logistic model) WITHOUT an LLM coder call, so the causal estimand is
-reproducible instead of varying run-to-run.
-
-Motivation (H2 vasopressor causal, 2026-07-06): the LLM-generated propensity
-code failed on successive fragile errors (``np.isfinite`` on nullable dtypes,
-then ``arg must be a 1-d array``), leaving ``adjusted_effect=None`` and the
-headline mis-bound to an audit step's junk scalar. A deterministic runner owns
-the causal estimand the same way the deterministic Cox runner owns the survival
-estimand.
+This module is retained for historical replay, direct-import compatibility, and
+unit fixtures. It is intentionally absent from primary-runner dispatch and does
+not own a current analysis family: exposure, outcome, cohort, confounders,
+method, and estimand remain Planner/Coder decisions. New production code must
+not route a primary analysis here.
 
 The generated script:
 

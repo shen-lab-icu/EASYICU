@@ -297,7 +297,6 @@ from .plan_utils import (
     _prediction_contract_applies,
     _predictor_tokens,
     _preserve_figure_steps_after_replan,
-    _question_primary_predictor_is_vasopressor_or_unknown,
     _research_question_implies_figure,
     _render_only_figure_step_intent,
     _split_table_and_figure_outputs_in_plan,
