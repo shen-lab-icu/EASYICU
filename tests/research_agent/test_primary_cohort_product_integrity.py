@@ -16,6 +16,7 @@ from easyicu.research_agent.cohort.schema import (
 )
 from easyicu.research_agent.contracts.declared_product import (
     primary_analysis_cohort_integrity_findings,
+    primary_analysis_cohort_plan_findings,
     primary_analysis_cohort_producer_uses_universe,
 )
 from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep
@@ -125,6 +126,47 @@ def test_unique_closed_primary_cohort_producer_uses_raw_universe() -> None:
     step = _cohort_step()
 
     assert primary_analysis_cohort_producer_uses_universe(step=step, plan=_plan(step))
+    assert primary_analysis_cohort_plan_findings(plan=_plan(step)) == []
+
+
+def test_plan_preflight_rejects_noncanonical_extra_attrition_product() -> None:
+    """Regression for the fresh E3 plan rejected only after three Coder calls."""
+
+    step = _cohort_step(method="cohort_definition_with_attrition").model_copy(
+        update={
+            "expected_outputs": [
+                "dataset:analysis_cohort",
+                "table:cohort_flow",
+                "table:eligibility_attrition",
+            ]
+        }
+    )
+
+    findings = primary_analysis_cohort_plan_findings(plan=_plan(step))
+
+    assert len(findings) == 1
+    assert findings[0].validator == "plan_primary_analysis_cohort_integrity"
+    assert findings[0].severity == "error"
+    assert findings[0].detail == {
+        "issue": "primary_cohort_product_owner_ambiguous",
+        "step_id": step.step_id,
+    }
+
+
+def test_plan_preflight_rejects_multiple_primary_cohort_owners() -> None:
+    primary = _cohort_step()
+    competing = AnalysisStep(
+        step_id="02_other_cohort",
+        intent="Emit a competing primary cohort identity.",
+        inputs=["stay_id"],
+        expected_outputs=["dataset:analysis_cohort"],
+        method="data_preparation",
+    )
+
+    findings = primary_analysis_cohort_plan_findings(plan=_plan(primary, competing))
+
+    assert len(findings) == 1
+    assert findings[0].detail["step_id"] == primary.step_id
 
 
 def test_analysis_set_alias_is_a_closed_primary_cohort_product() -> None:

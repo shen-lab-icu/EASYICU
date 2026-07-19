@@ -151,6 +151,7 @@ from ..contracts.declared_product import (
     RUNTIME_BINDABLE_TYPED_INPUT_KINDS,
     RUNTIME_TYPED_INPUT_EVIDENCE_KINDS,
     authorize_declared_figure_product_slots,
+    primary_analysis_cohort_plan_findings,
     primary_analysis_cohort_producer_uses_universe,
     read_digest_bound_artifact_snapshot,
     typed_product_binding_contract,
@@ -4462,6 +4463,7 @@ def run_execute_phase(
         preexecuted_step_ids.add(probe_step_id)
         _flush_partial_manifest()
         typed_plan_preflight = _typed_plan_dag_findings(plan)
+        primary_cohort_preflight = primary_analysis_cohort_plan_findings(plan=plan)
         trajectory_preflight = trajectory_plan_dag_findings(
             plan=plan,
             context=context,
@@ -4483,6 +4485,27 @@ def run_execute_phase(
                             "detail": finding.detail,
                         }
                         for finding in typed_plan_preflight
+                    ],
+                    ensure_ascii=False,
+                    default=str,
+                )
+            )
+        primary_cohort_directive = None
+        if primary_cohort_preflight:
+            primary_cohort_directive = (
+                "Repair the plan's primary-cohort typed-product ownership "
+                "without changing eligibility, exposure, outcome, estimator, "
+                "or any other scientific choice. A mixed analysis_cohort + "
+                "attrition step must be the unique closed owner: declare one "
+                "primary cohort product and only canonical attrition/flow "
+                "tables in that step. Contract findings: "
+                + json.dumps(
+                    [
+                        {
+                            "message": finding.message,
+                            "detail": finding.detail,
+                        }
+                        for finding in primary_cohort_preflight
                     ],
                     ensure_ascii=False,
                     default=str,
@@ -4516,14 +4539,25 @@ def run_execute_phase(
             completed_records=[probe_record],
             directive="\n\n".join(
                 directive
-                for directive in (typed_plan_directive, trajectory_directive)
+                for directive in (
+                    typed_plan_directive,
+                    primary_cohort_directive,
+                    trajectory_directive,
+                )
                 if directive
             )
             or None,
-            force=bool(typed_plan_preflight or trajectory_preflight),
+            force=bool(
+                typed_plan_preflight
+                or primary_cohort_preflight
+                or trajectory_preflight
+            ),
         )
 
-    final_typed_plan_findings = _typed_plan_dag_findings(plan)
+    final_typed_plan_findings = [
+        *_typed_plan_dag_findings(plan),
+        *primary_analysis_cohort_plan_findings(plan=plan),
+    ]
     if final_typed_plan_findings:
         typed_plan_dag_blocked = True
         findings.extend(final_typed_plan_findings)
