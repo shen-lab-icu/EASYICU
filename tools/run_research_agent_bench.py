@@ -47,11 +47,13 @@ runs reproducible from one entrypoint.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import importlib
 import json
 import math
 import os
 import re
+import stat
 import sys
 import time
 from datetime import datetime, timezone
@@ -85,6 +87,23 @@ _ARM_LABELS = {"naive": "Naive", "aware": "ICU-aware"}
 
 class _JSONLObjectDecodeError(ValueError):
     """Raised when one benchmark JSONL row is not a strict JSON object."""
+
+
+def _is_figure2_task_id(value: object) -> bool:
+    """Return True only for an exact frozen Canonical9 identifier."""
+
+    from benchmarks.figure2_canonical9.evaluator.rubric_v1 import FIGURE2_TASK_IDS
+
+    return type(value) is str and value in FIGURE2_TASK_IDS
+
+
+def _operational_exposure_for_item(item: object) -> object:
+    """Resolve the execution exposure once without laundering falsey values."""
+
+    declared = getattr(item, "operational_exposure", None)
+    if declared is not None:
+        return declared
+    return getattr(item, "primary_predictor", None)
 
 
 def _reject_jsonl_duplicate_pairs(
@@ -749,17 +768,10 @@ def _active_error_count(manifest: Dict[str, Any]) -> Optional[int]:
 def _gate_ladder(run_dir: Path, readiness: Dict[str, Any]) -> Optional[str]:
     """Final gate-ladder status for the run (publication_ready > ... ).
 
-    Prefer run_status.json's own ``status`` string; fall back to the
-    manifest readiness booleans when the file is missing (older runs).
+    The selected manifest readiness is the authority supplied by the caller;
+    mutable run-root summaries are never allowed to override it.
     """
-    rs = run_dir / "run_status.json"
-    if rs.exists():
-        try:
-            status = json.loads(rs.read_text(encoding="utf-8")).get("status")
-            if isinstance(status, str) and status:
-                return status
-        except Exception:
-            pass
+    del run_dir
     if not isinstance(readiness, dict) or not readiness:
         return None
     for key in ("publication_ready", "manuscript_ready", "analysis_validated"):
@@ -807,6 +819,53 @@ def _writer_attempts(run_dir: Path, readiness: Dict[str, Any]) -> Optional[int]:
     return count
 
 
+def _figure2_evaluation_attempt(*, run_dir: Path, item) -> Dict[str, Any]:
+    """Seal and score one exact Canonical9 run without touching Agent calls."""
+
+    from benchmarks.figure2_canonical9.evaluator.scoring import (
+        FIGURE2_EVALUATION_ATTEMPT_SCHEMA,
+        Figure2EvaluationAttempt,
+        evaluate_figure2_run_from_receipt_path,
+    )
+    from benchmarks.figure2_canonical9.evaluator.scoring_inputs import (
+        seal_figure2_run_task_authority,
+    )
+
+    task_id = str(getattr(item, "key", "") or "")
+    try:
+        seal_figure2_run_task_authority(
+            run_dir,
+            task_id=task_id,
+            research_question=str(getattr(item, "research_question", "") or ""),
+            exposure_concept=getattr(item, "primary_predictor", None),
+            outcome_concept=getattr(item, "target_outcome", None),
+            operational_exposure=_operational_exposure_for_item(item),
+        )
+    except Exception as exc:  # evaluator metadata must never abort a bench run
+        return Figure2EvaluationAttempt(
+            schema_version=FIGURE2_EVALUATION_ATTEMPT_SCHEMA,
+            status="invalid",
+            task_id=task_id,
+            run_id=run_dir.name or None,
+            invalid_reason_codes=("SCORING_INPUT_AUTHORITY_INVALID",),
+            invalid_details=(f"posthoc task-authority seal failed: {exc}",),
+        ).model_dump(mode="json")
+    try:
+        return evaluate_figure2_run_from_receipt_path(
+            run_dir,
+            task_id=task_id,
+        ).model_dump(mode="json")
+    except Exception as exc:  # scorer failures are evaluator results, not run failures
+        return Figure2EvaluationAttempt(
+            schema_version=FIGURE2_EVALUATION_ATTEMPT_SCHEMA,
+            status="invalid",
+            task_id=task_id,
+            run_id=run_dir.name or None,
+            invalid_reason_codes=("SCORER_ERROR",),
+            invalid_details=(f"posthoc Figure 2 scorer failed: {exc}",),
+        ).model_dump(mode="json")
+
+
 def _score_arm(*, run_dir: Path, item, label: str) -> Dict[str, Any]:
     manifest = _load_manifest(run_dir)
     historical_error_count = sum(
@@ -821,7 +880,7 @@ def _score_arm(*, run_dir: Path, item, label: str) -> Dict[str, Any]:
         research_question=getattr(item, "research_question", ""),
         manifest=manifest,
     )
-    return {
+    result = {
         "arm": label,
         "run_id": manifest.get("run_id"),
         "workdir": str(run_dir),
@@ -871,6 +930,12 @@ def _score_arm(*, run_dir: Path, item, label: str) -> Dict[str, Any]:
         # the manuscript cost table; {} when cost tracking was off.
         "cost_summary": _load_cost_summary(run_dir),
     }
+    if _is_figure2_task_id(getattr(item, "key", None)):
+        result["figure2_evaluation_attempt"] = _figure2_evaluation_attempt(
+            run_dir=run_dir,
+            item=item,
+        )
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -889,14 +954,10 @@ def _find_resumable_run(workdir: Path) -> Optional[str]:
     candidates = []
     for partial in workdir.glob("run_*/manifest_partial.json"):
         run_dir = partial.parent
-        rs = run_dir / "run_status.json"
-        if rs.exists():
-            try:
-                gates = json.loads(rs.read_text(encoding="utf-8")).get("gates", {})
-                if gates.get("execution_complete"):
-                    continue  # already finished — nothing to resume
-            except (json.JSONDecodeError, OSError):
-                pass
+        if (run_dir / "manifest.json").exists() and _run_reached_execution_complete(
+            run_dir
+        ):
+            continue
         candidates.append(run_dir.name)
     return sorted(candidates)[-1] if candidates else None
 
@@ -1010,11 +1071,7 @@ def _run_one_arm(
         )
     started = time.monotonic()
     database = str(getattr(item, "database", "") or "bench").strip() or "bench"
-    operational_exposure = (
-        getattr(item, "operational_exposure", None)
-        or getattr(item, "primary_predictor", None)
-        or None
-    )
+    operational_exposure = _operational_exposure_for_item(item)
     exposure_display_name = getattr(item, "primary_predictor", None) or None
     normalized_question = re.sub(
         r"[^a-z0-9]+", "_", str(item.research_question or "").lower()
@@ -1130,19 +1187,205 @@ def _run_one_item(
     return payload
 
 
+def _run_reached_execution_complete(run_dir: Path) -> bool:
+    """Return True only when current checkpoint and EvidenceStore status agree."""
+
+    from easyicu.research_agent.run_lock import (
+        RunExecutionLockError,
+        acquire_run_execution_lock,
+    )
+    from easyicu.research_agent.runtime_artifacts import (
+        RunArtifactAuthorityError,
+        current_evidence_records,
+        load_run_artifact_authority,
+        verified_run_evidence_path,
+    )
+    from easyicu.research_agent.evidence_authority import (
+        EvidenceAuthorityIntegrityError,
+        load_current_evidence_snapshot,
+    )
+
+    try:
+        with acquire_run_execution_lock(workdir=run_dir.parent, run_id=run_dir.name):
+            selected = load_run_artifact_authority(run_dir)
+            if selected is None:
+                return False
+
+            def read_regular_object(
+                path: Path, *, expected_sha256: str | None = None
+            ) -> Dict[str, object]:
+                descriptor: int | None = None
+                try:
+                    flags = (
+                        os.O_RDONLY
+                        | getattr(os, "O_CLOEXEC", 0)
+                        | getattr(os, "O_NONBLOCK", 0)
+                        | getattr(os, "O_NOFOLLOW", 0)
+                    )
+                    descriptor = os.open(path, flags)
+                    metadata = os.fstat(descriptor)
+                    if (
+                        not stat.S_ISREG(metadata.st_mode)
+                        or metadata.st_size > 1024 * 1024
+                    ):
+                        raise OSError("run authority document is not a small file")
+                    chunks: list[bytes] = []
+                    total = 0
+                    while True:
+                        chunk = os.read(descriptor, 64 * 1024)
+                        if not chunk:
+                            break
+                        total += len(chunk)
+                        if total > 1024 * 1024:
+                            raise OSError("run authority document exceeds 1 MiB")
+                        chunks.append(chunk)
+                    payload = b"".join(chunks)
+                    if expected_sha256 is not None and (
+                        hashlib.sha256(payload).hexdigest() != expected_sha256
+                    ):
+                        raise OSError("run authority document digest changed")
+                    return _decode_jsonl_object(payload.decode("utf-8"))
+                finally:
+                    if descriptor is not None:
+                        os.close(descriptor)
+
+            final_manifest = read_regular_object(run_dir / "manifest.json")
+            if selected != final_manifest:
+                return False
+            readiness = selected.get("readiness")
+            raw_steps = selected.get("per_step_records")
+            raw_records = selected.get("evidence")
+            if (
+                not isinstance(readiness, dict)
+                or readiness.get("execution_complete") is not True
+                or not isinstance(raw_steps, list)
+                or any(not isinstance(item, dict) for item in raw_steps)
+                or not isinstance(raw_records, list)
+                or any(not isinstance(item, dict) for item in raw_records)
+            ):
+                return False
+            snapshot = load_current_evidence_snapshot(run_dir)
+            if snapshot.source != "authority":
+                return False
+            coordinate_fields = (
+                "evidence_id",
+                "relative_path",
+                "sha256",
+                "kind",
+                "producer",
+                "generation_mode",
+                "produced_by_step",
+            )
+            from collections import Counter
+
+            checkpoint_coordinates = Counter(
+                tuple(record.get(field) for field in coordinate_fields)
+                for record in raw_records
+            )
+            evidence_coordinates = Counter(
+                tuple(record.get(field) for field in coordinate_fields)
+                for record in snapshot.records
+            )
+            if checkpoint_coordinates != evidence_coordinates:
+                return False
+            current_records = [
+                dict(record)
+                for record in current_evidence_records(snapshot.records, raw_steps)
+                if isinstance(record, Mapping)
+            ]
+            status_records = [
+                record
+                for record in current_records
+                if record.get("evidence_id") == "run_status"
+            ]
+            if len(status_records) != 1:
+                return False
+            status_record = status_records[0]
+            status_path = verified_run_evidence_path(run_dir, status_record)
+            if status_path is None:
+                return False
+            status_payload = read_regular_object(
+                status_path,
+                expected_sha256=str(status_record.get("sha256") or ""),
+            )
+            gates = status_payload.get("gates")
+            return (
+                isinstance(gates, dict)
+                and gates.get("execution_complete") is True
+                and gates == readiness
+            )
+    except (
+        OSError,
+        UnicodeDecodeError,
+        _JSONLObjectDecodeError,
+        EvidenceAuthorityIntegrityError,
+        RunArtifactAuthorityError,
+        RunExecutionLockError,
+        ValueError,
+    ):
+        return False
+
+
+def _figure2_run_is_reusable(run_dir: Path, item: object) -> bool:
+    """Require the exact paper sidecar authority before suppressing a new run."""
+
+    if not _run_reached_execution_complete(run_dir):
+        return False
+    from benchmarks.figure2_canonical9.evaluator.scoring_inputs import (
+        load_figure2_scoring_inputs,
+        seal_figure2_run_task_authority,
+    )
+
+    try:
+        seal_figure2_run_task_authority(
+            run_dir,
+            task_id=str(getattr(item, "key", "") or ""),
+            research_question=str(getattr(item, "research_question", "") or ""),
+            exposure_concept=getattr(item, "primary_predictor", None),
+            outcome_concept=getattr(item, "target_outcome", None),
+            operational_exposure=_operational_exposure_for_item(item),
+        )
+        load_figure2_scoring_inputs(
+            run_dir,
+            expected_task_id=str(getattr(item, "key", "") or ""),
+        )
+    except Exception:
+        return False
+    return True
+
+
 def _reuse_arm_if_complete(
     *, arm_dir: Path, item, label: str
 ) -> Optional[Dict[str, Any]]:
     if not arm_dir.exists():
         return None
     runs = sorted(
-        (p for p in arm_dir.glob("run_*") if (p / "manifest.json").exists()),
+        (
+            p
+            for p in arm_dir.glob("run_*")
+            if (p / "manifest.json").exists()
+            and (
+                _figure2_run_is_reusable(p, item)
+                if _is_figure2_task_id(getattr(item, "key", None))
+                else _run_reached_execution_complete(p)
+            )
+        ),
         key=lambda p: p.name,
         reverse=True,
     )
     if not runs:
         return None
-    return _score_arm(run_dir=runs[0], item=item, label=label)
+    result = _score_arm(run_dir=runs[0], item=item, label=label)
+    attempt = result.get("figure2_evaluation_attempt")
+    if (
+        _is_figure2_task_id(getattr(item, "key", None))
+        and isinstance(attempt, dict)
+        and attempt.get("status") == "invalid"
+        and "SCORING_INPUT_AUTHORITY_INVALID"
+        in set(attempt.get("invalid_reason_codes") or ())
+    ):
+        return None
+    return result
 
 
 def _run_one_item_with_reuse(
@@ -2472,12 +2715,8 @@ def _ehrflow_item_done(item_root: Path) -> bool:
     that already finished cleanly. Quota-disrupted (incomplete) runs return
     False so they are redone.
     """
-    for rs in item_root.glob("*/run_*/run_status.json"):
-        try:
-            gates = json.loads(rs.read_text(encoding="utf-8")).get("gates", {})
-        except (json.JSONDecodeError, OSError):
-            continue
-        if gates.get("execution_complete"):
+    for run_dir in item_root.glob("*/run_*"):
+        if _run_reached_execution_complete(run_dir):
             return True
     return False
 
@@ -3286,7 +3525,12 @@ def _run_ehrflowbench_jsonl(
         # 502 mid-batch never forces a full redo. An item counts as "done" only
         # if its latest run reached execution_complete — quota-disrupted
         # diagnostic_only runs are redone.
-        if reuse_existing and not resume_run_id and _ehrflow_item_done(out_root / key):
+        if (
+            reuse_existing
+            and not resume_run_id
+            and not _is_figure2_task_id(key)
+            and _ehrflow_item_done(out_root / key)
+        ):
             print(f"\n=== {key} — reuse existing complete run ===")
             pending.append({"key": key, "status": "reused_complete"})
             continue
@@ -3389,12 +3633,31 @@ def _run_one_item_from_cohort(
     stop_after_step_id: Optional[str] = None,
     force_writer_probe: bool = False,
 ) -> Dict[str, Any]:
-    llm = _make_llm(provider=provider, model=model, request_timeout=request_timeout)
     item_root = out_root / item.key
     selected = set(_normalize_arms(arms))
     naive = _skipped_arm("naive")
     aware = _skipped_arm("aware")
-    if "naive" in selected:
+    if reuse_existing and not resume_run_id:
+        if "naive" in selected:
+            naive = _reuse_arm_if_complete(
+                arm_dir=item_root / "naive",
+                item=item,
+                label="naive",
+            ) or _skipped_arm("naive")
+        if "aware" in selected:
+            aware = _reuse_arm_if_complete(
+                arm_dir=item_root / "aware",
+                item=item,
+                label="aware",
+            ) or _skipped_arm("aware")
+    run_naive = "naive" in selected and not _arm_was_run(naive)
+    run_aware = "aware" in selected and not _arm_was_run(aware)
+    llm = (
+        _make_llm(provider=provider, model=model, request_timeout=request_timeout)
+        if run_naive or run_aware
+        else None
+    )
+    if run_naive:
         naive = _run_one_arm(
             item=item,
             cohort=(cohort if isinstance(cohort, (str, Path)) else cohort.copy()),
@@ -3409,7 +3672,7 @@ def _run_one_item_from_cohort(
             stop_after_step_id=stop_after_step_id,
             force_writer_probe=force_writer_probe,
         )
-    if "aware" in selected:
+    if run_aware:
         aware = _run_one_arm(
             item=item,
             cohort=(cohort if isinstance(cohort, (str, Path)) else cohort.copy()),
