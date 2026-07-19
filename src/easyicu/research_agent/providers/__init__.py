@@ -1,21 +1,39 @@
-"""Canonical construction helpers for external LLM providers."""
+"""Provider contracts plus lazy construction helpers.
 
-from .factory import (
-    DEFAULT_OPENAI_BASE_URL,
-    DEFAULT_OPENROUTER_BASE_URL,
-    LOCAL_OPENAI_DUMMY_API_KEY,
-    ProviderConfigurationError,
-    build_provider_client,
-    is_loopback_openai_base_url,
-    resolve_provider_base_url,
+The factory imports the concrete production client from :mod:`..llm`, while
+that module imports the provider-neutral protocol from this package. Keeping
+factory exports lazy prevents package initialization from turning that legal
+layering into a runtime import cycle.
+"""
+
+from __future__ import annotations
+
+from typing import Any
+
+_FACTORY_EXPORTS = frozenset(
+    {
+        "DEFAULT_OPENAI_BASE_URL",
+        "DEFAULT_OPENROUTER_BASE_URL",
+        "LOCAL_OPENAI_DUMMY_API_KEY",
+        "ProviderConfigurationError",
+        "build_provider_client",
+        "is_loopback_openai_base_url",
+        "resolve_provider_base_url",
+    }
 )
+__all__ = sorted(_FACTORY_EXPORTS)
 
-__all__ = [
-    "DEFAULT_OPENAI_BASE_URL",
-    "DEFAULT_OPENROUTER_BASE_URL",
-    "LOCAL_OPENAI_DUMMY_API_KEY",
-    "ProviderConfigurationError",
-    "build_provider_client",
-    "is_loopback_openai_base_url",
-    "resolve_provider_base_url",
-]
+
+def __getattr__(name: str) -> Any:
+    if name in _FACTORY_EXPORTS:
+        from . import factory as factory_module
+
+        value = getattr(factory_module, name)
+    else:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    globals()[name] = value
+    return value
+
+
+def __dir__() -> list[str]:
+    return sorted(set(globals()) | set(__all__))

@@ -22,9 +22,10 @@ from __future__ import annotations
 import json
 import re
 import textwrap
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, List, Optional, Sequence
 
 from .planning.analysis_types import infer_analysis_type
+from .providers.protocol import LLMMessage
 from .skills import build_dynamic_core_plan_steps
 from .schema import (
     AnalysisPlan,
@@ -33,9 +34,6 @@ from .schema import (
     ResearchContext,
     VariableRole,
 )
-
-if TYPE_CHECKING:
-    from .llm import LLMMessage
 
 
 # ---------------------------------------------------------------------------

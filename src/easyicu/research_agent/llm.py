@@ -30,7 +30,7 @@ import textwrap
 from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, Dict, List, Optional, Protocol, Sequence
+from typing import Any, Dict, List, Optional, Sequence
 
 from .planning.analysis_types import infer_analysis_type
 from .authority.provider_budget import (
@@ -45,26 +45,7 @@ from .schema import (
     ResearchContext,
     VariableRole,
 )
-
-
-@dataclass
-class LLMMessage:
-    role: str  # "system" | "user" | "assistant"
-    content: str
-
-
-class LLMClient(Protocol):
-    """Minimal interface every provider must satisfy."""
-
-    name: str
-
-    def complete(
-        self,
-        messages: Sequence[LLMMessage],
-        *,
-        max_tokens: int = 2048,
-        temperature: float = 0.2,
-    ) -> str: ...
+from .providers.protocol import LLMClient, LLMMessage
 
 
 def _strip_reasoning_blocks(text: str) -> str:
