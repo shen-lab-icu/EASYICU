@@ -2,7 +2,7 @@
   "audit_log_authority_events": [],
   "authoritative_numeric_claims": {
     "count": 28,
-    "set_sha256": "b0cc202c03ebba0e015fdccb0c5c79e85f7e317543551822b62812a3d3fad7fc"
+    "set_sha256": "b21d0276a286e00641e04467ac3874e95afe76edf5e024b58690b071dd10460b"
   },
   "authority_transition_order": {
     "01_representation": [
