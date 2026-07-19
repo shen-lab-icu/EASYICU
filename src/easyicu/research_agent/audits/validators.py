@@ -926,6 +926,12 @@ class LLMConceptAuditor:
             "value column's own missingness and numeric/domain rules determine its "
             "descriptive or modelling availability; the companions audit source "
             "provenance and must not change its row-level denominator. "
+            "A direct, uncaught call imported exactly as "
+            "`measurement_provenance_receipt` from "
+            "`easyicu.research_agent.methods.descriptive_inputs` is already a "
+            "host-owned fail-closed boundary: it raises on missing, invalid, or "
+            "discordant measured/count pairs. Do not demand a second status "
+            "guard or inspection of its successful receipt. "
             "A Step input whose exact ConceptDescriptor names a source_concept, "
             "analysis_window, and aggregation-compatible materialized column is "
             "a host-owned binding. Direct use of that exact input is therefore "
@@ -1268,6 +1274,123 @@ def _downgrade_metadata_supported_outcome_findings(
     return downgraded
 
 
+_MEASUREMENT_RECEIPT_MODULE = "easyicu.research_agent.methods.descriptive_inputs"
+_MEASUREMENT_RECEIPT_HELPER = "measurement_provenance_receipt"
+_MEASUREMENT_VALUE_SUFFIXES = (
+    "_first", "_last", "_max", "_mean", "_median", "_min"
+)
+
+
+def _measurement_concept_root(value: str) -> str:
+    normalized = str(value or "").strip().lower()
+    for suffix in ("_measured", "_n", *_MEASUREMENT_VALUE_SUFFIXES):
+        if normalized.endswith(suffix):
+            return normalized[: -len(suffix)]
+    return normalized
+
+
+def _is_standard_main_guard(node: ast.AST) -> bool:
+    return bool(
+        isinstance(node, ast.Compare)
+        and isinstance(node.left, ast.Name)
+        and node.left.id == "__name__"
+        and len(node.ops) == len(node.comparators) == 1
+        and isinstance(node.ops[0], ast.Eq)
+        and isinstance(node.comparators[0], ast.Constant)
+        and node.comparators[0].value == "__main__"
+    )
+
+
+def _direct_host_measurement_receipt_roots(tree: ast.Module) -> set[str]:
+    """Prove direct execution of exact self-raising host receipt calls."""
+
+    exact_imports = [
+        node for node in tree.body
+        if isinstance(node, ast.ImportFrom)
+        and node.level == 0
+        and node.module == _MEASUREMENT_RECEIPT_MODULE
+        and any(
+            alias.name == _MEASUREMENT_RECEIPT_HELPER and alias.asname is None
+            for alias in node.names
+        )
+    ]
+    if len(exact_imports) != 1:
+        return set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store):
+            if node.id == _MEASUREMENT_RECEIPT_HELPER:
+                return set()
+        if isinstance(node, ast.arg) and node.arg == _MEASUREMENT_RECEIPT_HELPER:
+            return set()
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            if node.name == _MEASUREMENT_RECEIPT_HELPER:
+                return set()
+
+    entrypoints: set[str] = set()
+    for statement in tree.body:
+        if not isinstance(statement, ast.If) or not _is_standard_main_guard(
+            statement.test
+        ):
+            continue
+        entrypoints.update(
+            item.value.func.id for item in statement.body
+            if isinstance(item, ast.Expr)
+            and isinstance(item.value, ast.Call)
+            and isinstance(item.value.func, ast.Name)
+            and not item.value.args and not item.value.keywords
+        )
+    functions = {
+        node.name: node for node in tree.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and not node.decorator_list
+    }
+    parents = {
+        id(child): parent for parent in ast.walk(tree)
+        for child in ast.iter_child_nodes(parent)
+    }
+    roots: set[str] = set()
+    for call in ast.walk(tree):
+        if not (
+            isinstance(call, ast.Call)
+            and isinstance(call.func, ast.Name)
+            and call.func.id == _MEASUREMENT_RECEIPT_HELPER
+        ):
+            continue
+        if len(call.args) != 1 or {kw.arg for kw in call.keywords} != {
+            "measured_column", "count_column"
+        }:
+            return set()
+        values = {kw.arg: kw.value for kw in call.keywords if kw.arg}
+        if not all(
+            isinstance(values[name], ast.Constant)
+            and isinstance(values[name].value, str)
+            for name in ("measured_column", "count_column")
+        ):
+            return set()
+        measured_root = _measurement_concept_root(values["measured_column"].value)
+        count_root = _measurement_concept_root(values["count_column"].value)
+        if not measured_root or measured_root != count_root:
+            return set()
+
+        current: ast.AST = call
+        while not isinstance(current, ast.stmt):
+            parent = parents.get(id(current))
+            if parent is None or isinstance(
+                parent, (ast.comprehension, ast.IfExp, ast.Lambda)
+            ):
+                return set()
+            current = parent
+        scope = parents.get(id(current))
+        if not (
+            isinstance(scope, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and scope.name in entrypoints
+            and functions.get(scope.name) is scope
+        ):
+            return set()
+        roots.add(measured_root)
+    return roots
+
+
 def _downgrade_audit_only_companion_gating_findings(
     *,
     findings: Sequence[ValidationFinding],
@@ -1315,6 +1438,7 @@ def _downgrade_audit_only_companion_gating_findings(
     except SyntaxError:
         tree = None
     ast_tokens = set()
+    host_receipt_roots: set[str] = set()
     if tree is not None:
         for node in ast.walk(tree):
             if isinstance(node, ast.Name):
@@ -1361,6 +1485,7 @@ def _downgrade_audit_only_companion_gating_findings(
                 for target in targets
                 if isinstance(target, ast.Name)
             })
+        host_receipt_roots = _direct_host_measurement_receipt_roots(tree)
     contract_tokens = {
         "measurement_provenance_audit",
         "invalid_pair_n",
@@ -1374,7 +1499,9 @@ def _downgrade_audit_only_companion_gating_findings(
         and isinstance(node.body[0], ast.Raise)
         for node in ast.walk(tree)
     )
-    audit_contract_present = contract_tokens.issubset(ast_tokens) and fail_closed_guard
+    audit_contract_present = bool(host_receipt_roots) or (
+        contract_tokens.issubset(ast_tokens) and fail_closed_guard
+    )
     if not audit_contract_present:
         return list(findings)
 
@@ -1383,12 +1510,28 @@ def _downgrade_audit_only_companion_gating_findings(
         if finding.validator == LLMConceptAuditor.name and finding.severity == "error":
             if str((finding.detail or {}).get("issue_code") or "") == issue_code:
                 detail = dict(finding.detail or {})
+                variables = {
+                    _measurement_concept_root(str(value))
+                    for value in detail.get("variables", [])
+                    if str(value).strip()
+                }
+                if host_receipt_roots and variables and not variables.issubset(
+                    host_receipt_roots
+                ):
+                    downgraded.append(finding)
+                    continue
                 detail.setdefault(
                     "downgraded_reason",
-                    "The script records the canonical audit-only measured/count "
-                    "comparison and fails the whole completed step on invalid or "
-                    "discordant provenance. Companion fields must not gate "
-                    "row-level physiological values.",
+                    (
+                        "The script directly invokes the exact host-owned, "
+                        "self-raising measurement provenance receipt for every "
+                        "reported concept; no second status guard is required."
+                        if host_receipt_roots else
+                        "The script records the canonical audit-only measured/count "
+                        "comparison and fails the whole completed step on invalid or "
+                        "discordant provenance. Companion fields must not gate "
+                        "row-level physiological values."
+                    ),
                 )
                 downgraded.append(
                     finding.model_copy(
