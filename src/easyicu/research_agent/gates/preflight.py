@@ -6316,6 +6316,122 @@ def _lossy_numeric_coercion_findings(tree: ast.Module) -> list[ValidationFinding
     ]
 
 
+def _conditional_nonfinite_guard_findings(
+    tree: ast.Module,
+) -> list[ValidationFinding]:
+    """Reject a non-finite guard narrowed by an unrelated variable branch.
+
+    Generated cohort code sometimes computes one generic non-finite mask inside
+    a loop, but only raises for one named variable.  The other variables then
+    fall through into a missingness/eligibility mask.  This is a mechanical
+    control-flow defect: the host neither chooses the variables nor their
+    scientific domains, it only requires the already-authored non-finite error
+    condition to terminate for every value series to which it is applied.
+
+    The repairable grammar is deliberately narrow: an assignment containing a
+    negated ``isfinite`` call, immediately followed by ``if int(mask.sum()) >
+    0`` whose sole body statement is another conditional around one proven
+    raise-only statement.  More complicated control flow remains fail-closed
+    for agent repair.
+    """
+
+    parents, positions = _ast_parent_and_statement_positions(tree)
+
+    def _negates_isfinite(node: ast.AST) -> bool:
+        return any(
+            isinstance(candidate, ast.UnaryOp)
+            and isinstance(candidate.op, (ast.Invert, ast.Not))
+            and isinstance(candidate.operand, ast.Call)
+            and _call_name(candidate.operand.func).split(".")[-1] == "isfinite"
+            for candidate in ast.walk(node)
+        )
+
+    def _positive_mask_sum(test: ast.AST, mask_name: str) -> bool:
+        if not (
+            isinstance(test, ast.Compare)
+            and len(test.ops) == 1
+            and isinstance(test.ops[0], ast.Gt)
+            and len(test.comparators) == 1
+            and isinstance(test.comparators[0], ast.Constant)
+            and test.comparators[0].value == 0
+        ):
+            return False
+        left = test.left
+        if (
+            isinstance(left, ast.Call)
+            and isinstance(left.func, ast.Name)
+            and left.func.id == "int"
+            and len(left.args) == 1
+            and not left.keywords
+        ):
+            left = left.args[0]
+        return bool(
+            isinstance(left, ast.Call)
+            and not left.args
+            and not left.keywords
+            and isinstance(left.func, ast.Attribute)
+            and left.func.attr == "sum"
+            and isinstance(left.func.value, ast.Name)
+            and left.func.value.id == mask_name
+        )
+
+    findings: list[ValidationFinding] = []
+    for assignment in ast.walk(tree):
+        if not (
+            isinstance(assignment, ast.Assign)
+            and len(assignment.targets) == 1
+            and isinstance(assignment.targets[0], ast.Name)
+            and _negates_isfinite(assignment.value)
+        ):
+            continue
+        position = positions.get(id(assignment))
+        if position is None or position.index + 1 >= len(position.block):
+            continue
+        guard = position.block[position.index + 1]
+        mask_name = assignment.targets[0].id
+        if not (
+            isinstance(guard, ast.If)
+            and not guard.orelse
+            and _positive_mask_sum(guard.test, mask_name)
+            and len(guard.body) == 1
+            and isinstance(guard.body[0], ast.If)
+        ):
+            continue
+        inner = guard.body[0]
+        if inner.orelse or len(inner.body) != 1:
+            continue
+        terminal = inner.body[0]
+        terminal_position = positions.get(id(terminal))
+        if terminal_position is None or not (
+            isinstance(terminal, ast.Raise)
+            or _stable_raise_only_helper_call(
+                terminal,
+                position=terminal_position,
+                tree=tree,
+                parents=parents,
+                positions=positions,
+            )
+        ):
+            continue
+        findings.append(
+            ValidationFinding(
+                validator="mechanical_code_preflight",
+                severity="error",
+                message=(
+                    "A generic non-finite numeric guard terminates only for a "
+                    "conditional subset of the value series it validates."
+                ),
+                detail={
+                    "reason": "conditional_nonfinite_guard",
+                    "assignment_line": int(assignment.lineno),
+                    "guard_line": int(guard.lineno),
+                    "inner_guard_line": int(inner.lineno),
+                },
+            )
+        )
+    return findings
+
+
 def audit_mechanical_code_contracts(
     script_text: str,
     step: AnalysisStep,
@@ -6371,6 +6487,7 @@ def audit_mechanical_code_contracts(
     findings.extend(_local_helper_unpack_arity_findings(tree))
     findings.extend(_host_helper_runtime_introspection_findings(tree))
     findings.extend(_lossy_numeric_coercion_findings(tree))
+    findings.extend(_conditional_nonfinite_guard_findings(tree))
     return findings
 
 
