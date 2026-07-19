@@ -904,7 +904,7 @@ def __getattr__(name: str):
         "run_causal_audit",
         "scan_manuscript_for_causal_language",
     }:
-        from . import causal_audit as _ca
+        from .review import causal_audit as _ca
 
         return getattr(_ca, name)
     if name in {

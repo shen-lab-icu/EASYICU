@@ -61,10 +61,6 @@
     ],
     [
       "easyicu.research_agent",
-      "easyicu.research_agent.causal_audit"
-    ],
-    [
-      "easyicu.research_agent",
       "easyicu.research_agent.concept_availability"
     ],
     [
@@ -242,6 +238,10 @@
     [
       "easyicu.research_agent",
       "easyicu.research_agent.research_context.builder"
+    ],
+    [
+      "easyicu.research_agent",
+      "easyicu.research_agent.review.causal_audit"
     ],
     [
       "easyicu.research_agent",
@@ -628,6 +628,10 @@
       "easyicu.research_agent.schema"
     ],
     [
+      "easyicu.research_agent.causal_audit",
+      "easyicu.research_agent.review.causal_audit"
+    ],
+    [
       "easyicu.research_agent.cli",
       "easyicu.research_agent.experiment_spec"
     ],
@@ -781,11 +785,7 @@
     ],
     [
       "easyicu.research_agent.cross_model_panel",
-      "easyicu.research_agent.robustness_panel"
-    ],
-    [
-      "easyicu.research_agent.cross_model_panel",
-      "easyicu.research_agent.schema"
+      "easyicu.research_agent.evaluation.cross_model_panel"
     ],
     [
       "easyicu.research_agent.data_catalog",
@@ -1050,6 +1050,22 @@
     [
       "easyicu.research_agent.estimators",
       "easyicu.research_agent.robustness_panel"
+    ],
+    [
+      "easyicu.research_agent.evaluation.cross_model_panel",
+      "easyicu.research_agent.robustness_panel"
+    ],
+    [
+      "easyicu.research_agent.evaluation.cross_model_panel",
+      "easyicu.research_agent.schema"
+    ],
+    [
+      "easyicu.research_agent.evaluation.tier2_jury",
+      "easyicu.research_agent.evaluation.tier2_rubric"
+    ],
+    [
+      "easyicu.research_agent.evaluation.tier2_jury",
+      "easyicu.research_agent.llm"
     ],
     [
       "easyicu.research_agent.evaluation_scorecard",
@@ -1705,15 +1721,7 @@
     ],
     [
       "easyicu.research_agent.methodological_rigor",
-      "easyicu.research_agent.evidence"
-    ],
-    [
-      "easyicu.research_agent.methodological_rigor",
-      "easyicu.research_agent.planning.study_design"
-    ],
-    [
-      "easyicu.research_agent.methodological_rigor",
-      "easyicu.research_agent.schema"
+      "easyicu.research_agent.review.methodological_rigor"
     ],
     [
       "easyicu.research_agent.methods.multiple_testing",
@@ -1754,10 +1762,6 @@
     [
       "easyicu.research_agent.pipeline",
       "easyicu.research_agent.authority.parent_artifact"
-    ],
-    [
-      "easyicu.research_agent.pipeline",
-      "easyicu.research_agent.causal_audit"
     ],
     [
       "easyicu.research_agent.pipeline",
@@ -1990,6 +1994,10 @@
     [
       "easyicu.research_agent.pipeline",
       "easyicu.research_agent.research_context.typed"
+    ],
+    [
+      "easyicu.research_agent.pipeline",
+      "easyicu.research_agent.review.causal_audit"
     ],
     [
       "easyicu.research_agent.pipeline",
@@ -2505,10 +2513,6 @@
     ],
     [
       "easyicu.research_agent.pipeline_write",
-      "easyicu.research_agent.causal_audit"
-    ],
-    [
-      "easyicu.research_agent.pipeline_write",
       "easyicu.research_agent.contracts"
     ],
     [
@@ -2526,10 +2530,6 @@
     [
       "easyicu.research_agent.pipeline_write",
       "easyicu.research_agent.llm"
-    ],
-    [
-      "easyicu.research_agent.pipeline_write",
-      "easyicu.research_agent.methodological_rigor"
     ],
     [
       "easyicu.research_agent.pipeline_write",
@@ -2566,6 +2566,14 @@
     [
       "easyicu.research_agent.pipeline_write",
       "easyicu.research_agent.reporting.reviewer"
+    ],
+    [
+      "easyicu.research_agent.pipeline_write",
+      "easyicu.research_agent.review.causal_audit"
+    ],
+    [
+      "easyicu.research_agent.pipeline_write",
+      "easyicu.research_agent.review.methodological_rigor"
     ],
     [
       "easyicu.research_agent.pipeline_write",
@@ -3000,6 +3008,18 @@
       "easyicu.research_agent.research_context.typed"
     ],
     [
+      "easyicu.research_agent.review.methodological_rigor",
+      "easyicu.research_agent.evidence"
+    ],
+    [
+      "easyicu.research_agent.review.methodological_rigor",
+      "easyicu.research_agent.planning.study_design"
+    ],
+    [
+      "easyicu.research_agent.review.methodological_rigor",
+      "easyicu.research_agent.schema"
+    ],
+    [
       "easyicu.research_agent.review_artifacts",
       "easyicu.research_agent.reporting.review_artifacts"
     ],
@@ -3209,11 +3229,11 @@
     ],
     [
       "easyicu.research_agent.tier2_jury",
-      "easyicu.research_agent.llm"
+      "easyicu.research_agent.evaluation.tier2_jury"
     ],
     [
-      "easyicu.research_agent.tier2_jury",
-      "easyicu.research_agent.tier2_rubric"
+      "easyicu.research_agent.tier2_rubric",
+      "easyicu.research_agent.evaluation.tier2_rubric"
     ],
     [
       "easyicu.research_agent.trajectory_bundle",
@@ -3302,6 +3322,11 @@
       "literal_all": null,
       "relative_path": "capability_registry.py"
     },
+    "easyicu.research_agent.causal_audit": {
+      "exists": true,
+      "literal_all": null,
+      "relative_path": "causal_audit.py"
+    },
     "easyicu.research_agent.code_patch": {
       "exists": true,
       "literal_all": null,
@@ -3379,6 +3404,11 @@
         "_AUXILIARY_OUTPUT_KINDS"
       ],
       "relative_path": "contract_gate.py"
+    },
+    "easyicu.research_agent.cross_model_panel": {
+      "exists": true,
+      "literal_all": null,
+      "relative_path": "cross_model_panel.py"
     },
     "easyicu.research_agent.deterministic_causal": {
       "exists": true,
@@ -3554,6 +3584,11 @@
       "literal_all": null,
       "relative_path": "method_compatibility.py"
     },
+    "easyicu.research_agent.methodological_rigor": {
+      "exists": true,
+      "literal_all": null,
+      "relative_path": "methodological_rigor.py"
+    },
     "easyicu.research_agent.pdf_render": {
       "exists": true,
       "literal_all": null,
@@ -3621,6 +3656,16 @@
       "literal_all": null,
       "relative_path": "summary_repair.py"
     },
+    "easyicu.research_agent.tier2_jury": {
+      "exists": true,
+      "literal_all": null,
+      "relative_path": "tier2_jury.py"
+    },
+    "easyicu.research_agent.tier2_rubric": {
+      "exists": true,
+      "literal_all": null,
+      "relative_path": "tier2_rubric.py"
+    },
     "easyicu.research_agent.trajectory_stability_executor": {
       "exists": true,
       "literal_all": null,
@@ -3630,10 +3675,10 @@
   "metrics": {
     "cyclic_module_count": 30,
     "cyclic_scc_count": 3,
-    "edge_count": 809,
+    "edge_count": 814,
     "largest_scc_size": 23,
-    "module_count": 283,
-    "package_count": 18,
+    "module_count": 290,
+    "package_count": 20,
     "top_level_module_count": 161
   },
   "modules": {
@@ -3727,6 +3772,10 @@
     "easyicu.research_agent.display_suite": "display_suite.py",
     "easyicu.research_agent.easyicu_case_builder": "easyicu_case_builder.py",
     "easyicu.research_agent.estimators": "estimators.py",
+    "easyicu.research_agent.evaluation": "evaluation/__init__.py",
+    "easyicu.research_agent.evaluation.cross_model_panel": "evaluation/cross_model_panel.py",
+    "easyicu.research_agent.evaluation.tier2_jury": "evaluation/tier2_jury.py",
+    "easyicu.research_agent.evaluation.tier2_rubric": "evaluation/tier2_rubric.py",
     "easyicu.research_agent.evaluation_scorecard": "evaluation_scorecard.py",
     "easyicu.research_agent.evidence": "evidence.py",
     "easyicu.research_agent.evidence_authority": "evidence_authority.py",
@@ -3885,6 +3934,9 @@
     "easyicu.research_agent.research_context.prompt_scope": "research_context/prompt_scope.py",
     "easyicu.research_agent.research_context.typed": "research_context/typed.py",
     "easyicu.research_agent.research_context_v2": "research_context_v2.py",
+    "easyicu.research_agent.review": "review/__init__.py",
+    "easyicu.research_agent.review.causal_audit": "review/causal_audit.py",
+    "easyicu.research_agent.review.methodological_rigor": "review/methodological_rigor.py",
     "easyicu.research_agent.review_artifacts": "review_artifacts.py",
     "easyicu.research_agent.reviewer": "reviewer.py",
     "easyicu.research_agent.robustness_execution_contract": "robustness_execution_contract.py",
@@ -3928,6 +3980,7 @@
     "easyicu.research_agent.authority",
     "easyicu.research_agent.case_plugins",
     "easyicu.research_agent.discovery",
+    "easyicu.research_agent.evaluation",
     "easyicu.research_agent.execution",
     "easyicu.research_agent.execution.runners",
     "easyicu.research_agent.fallback",
@@ -3940,9 +3993,10 @@
     "easyicu.research_agent.repairs",
     "easyicu.research_agent.replication",
     "easyicu.research_agent.reporting",
-    "easyicu.research_agent.research_context"
+    "easyicu.research_agent.research_context",
+    "easyicu.research_agent.review"
   ],
   "schema_version": 2,
-  "tool_sha256": "4b71f80cd1d0ec0864bc5e565fac06216f82c1aabed0457d6ad751e017a63af7",
+  "tool_sha256": "a9fb3a1c11a4afd8b6e3c34e798d6d461b5bf05fbb710acdf93b3a0a8b386918",
   "tool_version": "1.1.0"
 }

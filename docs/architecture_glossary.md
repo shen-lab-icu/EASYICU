@@ -55,7 +55,8 @@ rather than trusted because an LLM said it was valid.
 
 Code examples: `pipeline_execute.py`, `repairs/source.py`,
 `repairs/coordination.py`, `gates/preflight.py`, `code_hygiene.py`,
-`audits/validators.py`, `gates/visual.py`, `causal_audit.py`.
+`audits/validators.py`, `gates/visual.py`, `review/causal_audit.py`,
+`review/methodological_rigor.py`.
 
 ## Layer 4: Evidence And Provenance
 
@@ -86,8 +87,8 @@ Reviewer-facing claim: the paper reports a versioned evaluation protocol,
 not a mutable leaderboard or a generic agent score.
 
 Code examples: `tools/run_research_agent_bench.py`,
-`baselines/REGISTRY.md`, `baselines/LOCK.json`, future
-`pipeline_profiles.py`.
+`evaluation/cross_model_panel.py`, `evaluation/tier2_jury.py`,
+`baselines/REGISTRY.md`, `baselines/LOCK.json`, `pipeline_profiles.py`.
 
 ## Naming Rules
 

@@ -82,6 +82,8 @@ mechanically moving every top-level file:
 | `reporting/` | manuscript binding, article/display contracts, review artifacts and rendering helpers | unverified numeric claims or a second evidence authority |
 | `planning/` | case-neutral analysis families, study-design playbooks, capability/method registries and article figure strategy | case-specific benchmark instructions or execution/evidence mutation |
 | `research_context/` | typed context authority, cohort-aware context construction and step-scoped Coder projection | scientific method selection, provider calls or run authority mutation |
+| `evaluation/` | optional cross-model concordance and Tier-2 jury/rubric adapters over completed artifacts | primary scientific adjudication or hidden manuscript benchmark authority |
+| `review/` | deterministic post-analysis causal-claim and method-appropriateness review | exposure, outcome, cohort, method or estimand selection |
 
 `pipeline_execute.py` remains the orchestration caller. PlanAuthority's pure
 candidate projection and TypedBindingResolver are now canonical under
@@ -98,7 +100,9 @@ legacy top-level module paths (`contract_gate`, `concept_gate`,
 `publication_figure_execution`, `evidence_registration`, `provider_budget`,
 `code_preflight`, `code_repair`, `code_repair_helpers`, `repair_reasons`,
 `repair_coordination`, `code_patch`, `summary_repair`, `context`,
-`coder_context`, `research_context_v2`, `method_compatibility`, and the moved
+`coder_context`, `research_context_v2`, `method_compatibility`,
+`cross_model_panel`, `tier2_jury`, `tier2_rubric`, `causal_audit`,
+`methodological_rigor`, and the moved
 discovery/reporting/runner modules) are module-object aliases to the canonical
 packages. This is intentional: archived scripts and public imports keep
 working, and monkeypatches through either path reach the same implementation.

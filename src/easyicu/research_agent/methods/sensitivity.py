@@ -17,7 +17,7 @@ importing DoWhy:
 Both functions are pure numpy; no SDK creep. Intended wiring: a
 CausalSkill registers ``identification_strategy`` metadata with
 ``negative_control_outcome`` and ``e_value`` ids, the pipeline runs
-this module, and :mod:`causal_audit` then upgrades the label from
+this module, and :mod:`easyicu.research_agent.review.causal_audit` then upgrades the label from
 ``causal_overclaimed`` to ``causal_explicit``.
 """
 
