@@ -47,7 +47,7 @@ from .concept_availability import (
     concept_database_availability_from_load_record,
     cross_database_concept_availability,
 )
-from .context import build_research_context
+from .research_context.builder import build_research_context
 from .evidence import EvidenceStore
 from .llm import OpenAIClient
 from .pipeline import ResearchAgentPipeline

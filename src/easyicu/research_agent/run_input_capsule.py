@@ -59,7 +59,7 @@ from .runtime_artifacts import (
     verified_run_evidence_path,
 )
 from .schema import ResearchContext, TimeWindow
-from .research_context_v2 import (
+from .research_context.typed import (
     MaterializedResearchInputs,
     ResearchContextV2,
     binding_preserves_analysis_range,

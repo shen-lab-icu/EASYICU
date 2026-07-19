@@ -12,7 +12,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Optional
 
-from ..coder_context import normalised_method_head
+from ..research_context.prompt_scope import normalised_method_head
 from ..schema import AnalysisStep, ValidationFinding
 
 _STRUCTURAL_ACCOUNTING_PRODUCTS = frozenset(

@@ -22,7 +22,8 @@ Reviewer-facing claim: disease cohorts and variables are resolved through
 EasyICU concepts rather than free SQL, ICD-code shortcuts, or ad hoc
 column-name guessing.
 
-Code examples: `schema.py`, `context.py`, `concept_availability.py`,
+Code examples: `schema.py`, `research_context/builder.py`,
+`research_context/typed.py`, `concept_availability.py`,
 `temporal_semantics.py`, `case_contexts.py`.
 
 ## Layer 2: LLM Orchestration

@@ -674,7 +674,7 @@ def __getattr__(name: str):
         "retrieve_context_variables",
         "build_retrieved_research_context",
     }:
-        from . import context as _context
+        from .research_context import builder as _context
 
         return getattr(_context, name)
     if name in {

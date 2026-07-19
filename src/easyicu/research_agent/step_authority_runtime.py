@@ -33,7 +33,7 @@ from .authority.provider_budget import ProviderCallBudgetReceiptState
 from .runner import RunResult
 from .runtime_artifacts import current_step_records, load_run_artifact_authority
 from .schema import ResearchContext, ValidationFinding
-from .research_context_v2 import parse_research_context
+from .research_context.typed import parse_research_context
 from .step_authority_capsule import (
     CandidateOrigin,
     ConceptAuditSeal,

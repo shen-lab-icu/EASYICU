@@ -17,7 +17,7 @@ import math
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-from .research_context_v2 import parse_research_context
+from .research_context.typed import parse_research_context
 from .plan_utils import (
     _finite_float,
     _infer_primary_predictor_from_context,

@@ -22,7 +22,7 @@ from ..audits.validators import (
 )
 from .preflight import audit_mechanical_code_contracts
 from ..contracts import ValidationFinding
-from ..method_compatibility import (
+from .method_compatibility import (
     detect_forbidden_pattern_usage,
     format_violation_message,
 )

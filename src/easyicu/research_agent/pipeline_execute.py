@@ -117,7 +117,7 @@ from .gates.concept import (
     quarantined_errors_superseded_by_current_policy as _quarantined_errors_superseded_by_current_policy,
 )
 from .coder_authority_notes import HostCoderAuthority
-from .coder_context import scoped_coder_context
+from .research_context.prompt_scope import scoped_coder_context
 from .cohort_repair import extract_cohort_definition_from_prose
 from .cohort_schema import (
     CohortDefinition,
@@ -131,7 +131,7 @@ from .intake.materialized_trajectory import (
     MaterializedTrajectoryError,
     StagedTrajectoryBinding,
 )
-from .research_context_v2 import materialized_input_prompt_attachment
+from .research_context.typed import materialized_input_prompt_attachment
 from .contracts import ValidationFinding, _ExecutePhaseResult, _PlanPhaseResult
 from .execution.runners.deterministic_descriptive import absolute_risk_context_code
 from .execution.runners.deterministic_missingness import missingness_measurement_audit_code
