@@ -656,6 +656,22 @@ TABLE-ONE / DESCRIPTIVE SUMMARIES:
   columns are missing; record missing variables under `"skipped"`.
 
 CLINICAL SCORE AND MISSINGNESS SEMANTICS:
+- AUTHORITATIVE-VALUE DENOMINATOR INVARIANT (check before writing any
+  scientific output): once the Planner/typed contract declares a physiological
+  or ordered value column, derive that value's availability, non-missing
+  denominator, categories, and model eligibility only from the authoritative
+  value itself plus its declared finite/domain rules. A `*_measured*`, `*_n*`,
+  source-status, or provenance-receipt field is audit-only: never use it to
+  gate, mask, filter, relabel, or change the denominator of the authoritative
+  value. If an exact companion audit is invalid or discordant, raise for the
+  whole step; do not repair the disagreement by dropping rows.
+- STRICT ORDERED-DOMAIN INTEGRITY: when the typed contract declares a closed
+  ordered/integer level domain, count non-finite, non-integer, and out-of-domain
+  non-missing source values, then raise before writing any scientific output if
+  any count is non-zero. Merely recording an invalid count/status while
+  continuing is not fail-closed. An emitted `invalid` category is allowed only
+  when the Planner/typed product contract explicitly declares that category as
+  a non-blocking scientific level; do not invent that policy in generated code.
 - Many ICU score components, stages, and categories are ordinal rather
   than interval-scale measurements. For ordinal components or stages
   such as organ-score components or clinical staging variables, prefer
