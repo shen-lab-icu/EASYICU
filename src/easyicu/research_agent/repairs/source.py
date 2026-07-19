@@ -64,7 +64,6 @@ from .helpers import (  # noqa: F401  (re-exported for back-compat)
     _statsmodels_repair_allowed_for_family,
     _strip_columns_from_list_literals,
 )
-from ..legacy_code_migrations import migrate_legacy_publication_helper_adapter_v1
 from .reasons import RepairReason
 from ..schema import ValidationFinding
 
@@ -645,16 +644,6 @@ def deterministic_concept_audit_repair(
     )
     repaired = code
     repair_names: List[str] = []
-
-    host_adapter_finding = any(
-        (finding.detail or {}).get("reason") == "host_helper_runtime_introspection"
-        for finding in repair_findings
-    )
-    if host_adapter_finding:
-        migrated = migrate_legacy_publication_helper_adapter_v1(repaired)
-        if migrated != repaired:
-            repaired = migrated
-            repair_names.append("legacy_publication_helper_adapter_v1")
 
     if RepairReason.LOSSY_NUMERIC_COERCION in set(repair_reasons):
         guarded = _patch_lossy_numeric_coercion_guard(
