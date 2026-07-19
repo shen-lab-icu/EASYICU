@@ -5276,12 +5276,74 @@ def _guard_failure_escapes(
     return True
 
 
+def _stable_raise_only_helper_call(
+    statement: ast.stmt,
+    *,
+    position: _StatementPosition,
+    tree: ast.Module,
+    parents: dict[int, ast.AST],
+    positions: dict[int, _StatementPosition],
+) -> bool:
+    """Prove a direct local helper call cannot return successfully.
+
+    Generated scripts often centralize terminal errors in a tiny helper such as
+    ``def stop(message): raise RuntimeError(message)``.  Treating every helper
+    call as terminating would be fail-open, so this proof deliberately accepts
+    only an undecorated, unconditionally defined same-scope function whose sole
+    executable statement is ``raise`` and whose binding is never replaced.
+    The helper name is irrelevant.
+    """
+
+    if not (
+        isinstance(statement, ast.Expr)
+        and isinstance(statement.value, ast.Call)
+        and isinstance(statement.value.func, ast.Name)
+    ):
+        return False
+    helper_name = statement.value.func.id
+    candidates = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.FunctionDef)
+        and node.name == helper_name
+        and (helper_position := positions.get(id(node))) is not None
+        and helper_position.scope_id == position.scope_id
+        and helper_position.owner is position.scope
+        and helper_position.field_name == "body"
+        and int(getattr(node, "lineno", 0)) < int(getattr(statement, "lineno", 0))
+    ]
+    if len(candidates) != 1:
+        return False
+    helper = candidates[0]
+    executable_body = list(helper.body)
+    if (
+        executable_body
+        and isinstance(executable_body[0], ast.Expr)
+        and isinstance(executable_body[0].value, ast.Constant)
+        and isinstance(executable_body[0].value.value, str)
+    ):
+        executable_body = executable_body[1:]
+    return bool(
+        not helper.decorator_list
+        and len(executable_body) == 1
+        and isinstance(executable_body[0], ast.Raise)
+        and _function_binding_is_stable(
+            tree,
+            helper,
+            parents=parents,
+            defining_scope_id=position.scope_id,
+        )
+    )
+
+
 def _statement_is_fail_closed_guard(
     statement: ast.stmt,
     binding: _GuardBinding,
     *,
     position: _StatementPosition,
+    tree: ast.Module,
     parents: dict[int, ast.AST],
+    positions: dict[int, _StatementPosition],
     builtin_int_unmodified: bool,
 ) -> bool:
     if not _guard_failure_escapes(
@@ -5299,7 +5361,16 @@ def _statement_is_fail_closed_guard(
                 builtin_int_unmodified=builtin_int_unmodified,
             )
             and statement.body
-            and isinstance(statement.body[0], ast.Raise)
+            and (
+                isinstance(statement.body[0], ast.Raise)
+                or _stable_raise_only_helper_call(
+                    statement.body[0],
+                    position=position,
+                    tree=tree,
+                    parents=parents,
+                    positions=positions,
+                )
+            )
         )
     return bool(
         isinstance(statement, ast.Assert)
@@ -5316,6 +5387,7 @@ def _immediate_guard_for_statement(
     statement: ast.stmt,
     binding: _GuardBinding,
     *,
+    tree: ast.Module,
     positions: dict[int, _StatementPosition],
     parents: dict[int, ast.AST],
     builtin_int_unmodified: bool,
@@ -5331,7 +5403,9 @@ def _immediate_guard_for_statement(
         following,
         binding,
         position=following_position,
+        tree=tree,
         parents=parents,
+        positions=positions,
         builtin_int_unmodified=builtin_int_unmodified,
     )
 
@@ -5551,6 +5625,7 @@ def _exported_receipt_guard_proves_failure(
         if not _immediate_guard_for_statement(
             assignment,
             caller_binding,
+            tree=tree,
             positions=positions,
             parents=parents,
             builtin_int_unmodified=builtin_int_unmodified,
@@ -5572,6 +5647,7 @@ def _guarded_coercion_roots(
         if _immediate_guard_for_statement(
             binding.statement,
             binding.guard_binding,
+            tree=tree,
             positions=positions,
             parents=parents,
             builtin_int_unmodified=builtin_int_unmodified,
