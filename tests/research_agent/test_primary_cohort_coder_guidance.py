@@ -6,7 +6,7 @@ import json
 
 import pytest
 
-from easyicu.research_agent.agents import (
+from easyicu.research_agent.agents.core import (
     CoderAgent,
     _cohort_predicate_partition_safety_contract,
     _primary_analysis_cohort_output_contract,

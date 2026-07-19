@@ -23,8 +23,8 @@ from pathlib import Path
 
 
 def _load_agents_helpers(ra):
-    """The helpers are private to ``agents`` — load the submodule directly."""
-    return importlib.import_module(ra.__name__ + ".agents")
+    """Load parser helpers from their canonical implementation module."""
+    return importlib.import_module(ra.__name__ + ".agents.core")
 
 
 def test_strip_code_fence_handles_leading_prose(ra):
@@ -103,7 +103,7 @@ def test_planner_parse_recovers_fenced_json(ra):
         def complete(self, messages, **kwargs):
             return raw
 
-    from easyicu.research_agent.agents import PlannerAgent
+    from easyicu.research_agent.agents.core import PlannerAgent
     plan = PlannerAgent(_DummyLLM())._parse(raw, ctx)
     assert plan.steps and plan.steps[0].step_id == "01_table_one"
 
@@ -127,7 +127,7 @@ def test_planner_parse_drops_extra_step_fields(ra):
         def complete(self, messages, **kwargs):
             return raw
 
-    from easyicu.research_agent.agents import PlannerAgent
+    from easyicu.research_agent.agents.core import PlannerAgent
     plan = PlannerAgent(_DummyLLM())._parse(raw, ctx)
     assert plan.steps[0].step_id == "06_cross_database"
     assert not hasattr(plan.steps[0], "note")
@@ -155,7 +155,7 @@ def test_planner_uses_enough_completion_budget(ra):
                 ' [{"step_id":"01_table_one","intent":"t1","inputs":[],"expected_outputs":[]}]}'
             )
 
-    from easyicu.research_agent.agents import PlannerAgent
+    from easyicu.research_agent.agents.core import PlannerAgent
     llm = _CapturingLLM()
     PlannerAgent(llm).run(ctx)
     assert llm.kwargs["max_tokens"] >= 4096
@@ -210,7 +210,7 @@ def test_writer_strips_markdown_fence(ra, tmp_path: Path):
         def complete(self, messages, **kwargs):
             return raw
 
-    from easyicu.research_agent.agents import WriterAgent
+    from easyicu.research_agent.agents.core import WriterAgent
     schema = ra.schema
     ctx = schema.ResearchContext(
         research_question="x",
@@ -234,7 +234,7 @@ def test_writer_language_prompt_preserves_evidence_ids(ra):
             captured["prompt"] = messages[-1].content
             return "# 标题\n\n结果：12 例 {evidence:table_one}。\n"
 
-    from easyicu.research_agent.agents import WriterAgent
+    from easyicu.research_agent.agents.core import WriterAgent
     schema = ra.schema
     ctx = schema.ResearchContext(
         research_question="x",
@@ -267,7 +267,7 @@ def test_writer_prompt_discourages_tbd_and_manifest_narration(ra):
                 captured[msg.role] = captured.get(msg.role, "") + msg.content + "\n"
             return "# Title\n\n## Results\n\nBaseline characteristics are summarised in Table 1 {evidence:table_one}.\n"
 
-    from easyicu.research_agent.agents import WriterAgent
+    from easyicu.research_agent.agents.core import WriterAgent
     schema = ra.schema
     ctx = schema.ResearchContext(
         research_question="x",

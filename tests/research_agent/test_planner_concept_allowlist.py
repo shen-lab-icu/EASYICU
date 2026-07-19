@@ -8,7 +8,7 @@ contract that prevents that failure mode from coming back.
 from __future__ import annotations
 
 from easyicu.research_agent import schema
-from easyicu.research_agent.agents import (
+from easyicu.research_agent.agents.core import (
     PLANNER_MAX_RETRIES,
     _build_planner_user_prompt,
 )

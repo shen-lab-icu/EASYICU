@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import json
 
-from easyicu.research_agent.agentic_coder import AgenticCoderAgent
-from easyicu.research_agent.agents import CoderAgent as _ProductionCoderAgent
+from easyicu.research_agent.agents.agentic_coder import AgenticCoderAgent
+from easyicu.research_agent.agents.core import CoderAgent as _ProductionCoderAgent
 from easyicu.research_agent.authority.coder_authority import HostCoderAuthority
 from easyicu.research_agent.providers.llm import LLMMessage
 from easyicu.research_agent.pipeline_execute import (
@@ -650,7 +650,7 @@ TYPED REPAIR TICKET (authoritative routing):
 
 
 def test_coder_guide_separates_model_failure_from_host_validation_failure() -> None:
-    from easyicu.research_agent.agents import _CODER_GUIDE
+    from easyicu.research_agent.agents.core import _CODER_GUIDE
     from easyicu.research_agent.research_context.prompt_scope import coder_guide_for_step
 
     assert "Run every host-owned input-validation or provenance helper" in _CODER_GUIDE
@@ -1225,7 +1225,7 @@ def test_coder_repair_prompt_forbids_helper_result_name_shadowing(ra):
 
 
 def test_coder_prompt_distinguishes_design_term_from_raw_source_variable(ra):
-    from easyicu.research_agent.agents import _CODER_GUIDE
+    from easyicu.research_agent.agents.core import _CODER_GUIDE
 
     assert "`term` must be the actual encoded or transformed design-matrix term" in (
         _CODER_GUIDE

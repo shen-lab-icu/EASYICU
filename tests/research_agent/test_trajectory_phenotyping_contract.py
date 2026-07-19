@@ -9,7 +9,7 @@ from pathlib import Path
 import pandas as pd
 
 from easyicu.research_agent.audits.patterns import AnalysisPatternAuditor
-from easyicu.research_agent.agentic_coder import AgenticCoderAgent
+from easyicu.research_agent.agents.agentic_coder import AgenticCoderAgent
 from easyicu.research_agent.research_context.builder import build_research_context
 from easyicu.research_agent.gates.method_compatibility import (
     detect_forbidden_pattern_usage,

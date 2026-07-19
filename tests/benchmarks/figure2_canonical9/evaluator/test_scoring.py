@@ -1159,7 +1159,7 @@ def test_paper_scorecard_rejects_gate_reportable_when_safety_failed(
 def test_evaluator_authority_is_absent_from_agent_prompt_surfaces() -> None:
     root = Path(__file__).resolve().parents[4] / "src/easyicu/research_agent"
     protected = [
-        root / "agents.py",
+        root / "agents/core.py",
         root / "providers/prompts/__init__.py",
         *(root / "providers/prompts/v1").glob("*.txt"),
     ]

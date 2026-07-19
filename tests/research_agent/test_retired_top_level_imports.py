@@ -16,6 +16,7 @@ import pytest
 
 
 RETIRED_TOP_LEVEL_MODULES: dict[str, str | None] = {
+    "agentic_coder": "agents.agentic_coder",
     "analysis_method_suite": "planning.analysis_method_suite",
     "analysis_types": "planning.analysis_types",
     "article_contract": "reporting.article_contract",

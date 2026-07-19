@@ -590,7 +590,7 @@ def test_llm_concept_auditor_charges_shared_budget_and_fails_closed_when_empty()
 
 
 def test_analyzer_charges_the_same_step_budget_and_stops_when_exhausted():
-    from easyicu.research_agent.agents import AnalyzerAgent
+    from easyicu.research_agent.agents.core import AnalyzerAgent
 
     llm = _AuditLLM()
     analyzer = AnalyzerAgent(llm)

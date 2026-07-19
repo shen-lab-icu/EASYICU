@@ -31,9 +31,9 @@ import tempfile
 from pathlib import Path
 from typing import Any, List
 
-from .providers.llm import cli_backend_available
-from .schema import AnalysisStep, ResearchContext
-from .authority.coder_authority import HostCoderAuthority
+from ..providers.llm import cli_backend_available
+from ..schema import AnalysisStep, ResearchContext
+from ..authority.coder_authority import HostCoderAuthority
 
 # The filename the CLI is told to save its final, working script as. We read
 # this file back rather than parsing the CLI's chat output for a code fence —
@@ -66,13 +66,13 @@ class AgenticCoderAgent:
 
     # -- prompt -------------------------------------------------------------
     def _build_prompt(self, context: ResearchContext, step: AnalysisStep) -> str:
-        from .agents import (
+        from .core import (
             _declared_output_scope_contract,
             _format_context,
             _typed_input_scope_contract,
         )
-        from .trajectory_contract import trajectory_phenotyping_code_contract
-        from .trajectory_plan_contract import trajectory_role_code_contract
+        from ..trajectory_contract import trajectory_phenotyping_code_contract
+        from ..trajectory_plan_contract import trajectory_role_code_contract
 
         return (
             f"You are authoring ONE self-contained Python analysis script for "
@@ -213,7 +213,7 @@ class AgenticCoderAgent:
                 code = script_path.read_text(encoding="utf-8")
             except OSError:
                 return ""
-        from .agents import _strip_code_fence
+        from .core import _strip_code_fence
 
         return _strip_code_fence(code.strip())
 
@@ -226,7 +226,7 @@ class AgenticCoderAgent:
         self, context: ResearchContext, step: AnalysisStep, code: str
     ) -> str:
         """Record violations; the central repair coordinator owns any repair."""
-        from .gates.method_compatibility import detect_forbidden_pattern_usage
+        from ..gates.method_compatibility import detect_forbidden_pattern_usage
 
         self.last_compatibility_repair_attempts = 0
         self.last_compatibility_violations = detect_forbidden_pattern_usage(
