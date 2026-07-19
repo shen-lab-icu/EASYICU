@@ -244,6 +244,45 @@ def _format_variable(v: ConceptDescriptor) -> str:
     )
 
 
+def _format_companion_variable(v: ConceptDescriptor) -> str:
+    """Render a non-consumed concept companion without repeating full prose.
+
+    The scoped context deliberately retains every registered column sharing a
+    declared ``source_concept`` so the Coder can see measurement/count/time
+    companions.  Those siblings are metadata coordinates, not additional
+    Planner-declared inputs.  Repeating their descriptions, aggregation
+    tutorials, pitfalls, and missingness profiles made wide QC prompts grow in
+    proportion to the physical export schema.  Keep the safety-relevant typed
+    coordinates while leaving the full descriptor on exact consumed columns.
+    """
+
+    fields = [
+        f"- {v.name}",
+        "companion_metadata=true",
+        f"role={v.role.value}",
+        f"dtype={v.dtype}",
+    ]
+    if v.unit:
+        fields.append(f"unit={v.unit}")
+    if v.valid_range:
+        fields.append(f"range={v.valid_range}")
+    if v.observed_domain:
+        fields.append(_format_observed_domain(v.observed_domain).strip())
+    if v.source_concept:
+        fields.append(f"source_concept={v.source_concept}")
+    if v.is_ordinal:
+        fields.append("is_ordinal=true")
+    if v.ordinal_levels:
+        fields.append(f"ordinal_levels={v.ordinal_levels}")
+    if v.analysis_window:
+        fields.append(f"analysis_window={v.analysis_window}")
+    if v.missingness_semantics:
+        fields.append(f"missingness_semantics={v.missingness_semantics!r}")
+    if v.forbidden_transformations:
+        fields.append(f"forbidden_transformations={v.forbidden_transformations!r}")
+    return " | ".join(fields)
+
+
 def _format_observed_domain(domain: Optional[Dict[str, Any]]) -> str:
     """Render the cohort-observed value domain as a compact, fact-only hint.
 
@@ -280,6 +319,7 @@ def _format_context(
     include_method_constraints: bool = True,
     include_planning_scaffolds: bool = True,
     include_materialized_input_facts: bool = False,
+    detailed_variable_names: Optional[set[str]] = None,
 ) -> str:
     lines = [
         f"Research question: {ctx.research_question}",
@@ -303,7 +343,13 @@ def _format_context(
         lines.append(f"  - {w.name}: {w.start_hours}-{w.end_hours}h from {w.anchor}")
     lines.append("Variables:")
     for v in ctx.variables:
-        lines.append(_format_variable(v))
+        if (
+            detailed_variable_names is None
+            or v.name.strip().lower() in detailed_variable_names
+        ):
+            lines.append(_format_variable(v))
+        else:
+            lines.append(_format_companion_variable(v))
     if ctx.cross_database_validation:
         lines.append(
             "Cross-database replication planned: "
@@ -1986,6 +2032,17 @@ class CoderAgent:
         _family = infer_analysis_type(context)
         scoped_context = scoped_coder_context(context, step)
         scoped_guide = coder_guide_for_step(_CODER_GUIDE, step)
+        detailed_variable_names = {
+            str(value or "").strip().lower()
+            for value in (step.inputs or [])
+            if ":" not in str(value or "") and str(value or "").strip()
+        }
+        detailed_variable_names.update(
+            str(value or "").strip().lower()
+            for requirement in (step.model_requirements or [])
+            for value in (requirement.outcome, requirement.exposure_source)
+            if str(value or "").strip()
+        )
         messages = [
             *_coder_system_messages(
                 scoped_guide=scoped_guide,
@@ -2035,6 +2092,7 @@ class CoderAgent:
                         ),
                         include_materialized_input_facts=False,
                         include_planning_scaffolds=False,
+                        detailed_variable_names=detailed_variable_names,
                     )
                 ),
             ),
@@ -2210,7 +2268,6 @@ class CoderAgent:
         repair_metadata = repair_authority.metadata()
         scientific_authority_reasons = {
             RepairReason.SCIENTIFIC_SEMANTICS_VIOLATION.value,
-            RepairReason.PROVENANCE_NOT_FAIL_CLOSED.value,
             RepairReason.ROW_ALIGNMENT_UNVERIFIED.value,
             RepairReason.TYPED_PRODUCT_BINDING_INVALID.value,
             "row_alignment_unverified",

@@ -146,6 +146,21 @@ def test_quality_guide_keeps_runtime_clinical_and_statistics_without_model_famil
     assert coder_context_requires_method_constraints(_quality_step(ra)) is False
 
 
+def test_ordinal_exposure_quality_control_is_scoped_as_qc_not_adjusted_model(ra):
+    step = _quality_step(ra, n_families=1).model_copy(
+        update={"method": "ordinal_exposure_quality_control"}
+    )
+
+    guide = coder_guide_for_step(load_prompt_pack()["coder"], step)
+
+    assert "TABLE-ONE / DESCRIPTIVE SUMMARIES:" in guide
+    assert "CLINICAL SCORE AND MISSINGNESS SEMANTICS:" in guide
+    assert "For a regression step that explicitly requests" not in guide
+    assert "Before fitting, audit every categorical predictor" not in guide
+    assert "Before any complete-case model" not in guide
+    assert coder_context_requires_method_constraints(step) is False
+
+
 def test_exact_method_family_sections_are_loaded_without_intent_routing(ra):
     full = load_prompt_pack()["coder"]
     adjusted = ra.AnalysisStep(
@@ -429,6 +444,30 @@ def test_wide_quality_initial_prompt_stays_under_transport_gate_and_keeps_compan
     assert "VARIABLE-TYPE METHOD COMPATIBILITY" not in payload
 
 
+def test_initial_prompt_compacts_non_consumed_source_concept_companions(ra):
+    context = _wide_context(ra, n_families=4)
+    step = ra.AnalysisStep(
+        step_id="ordered_exposure_qc",
+        intent="Audit the declared ordered exposure representations.",
+        inputs=[f"declared_family_{family}_first" for family in range(4)],
+        expected_outputs=["table:exposure_qc"],
+        method="ordinal_exposure_quality_control",
+    )
+    llm = _CaptureLLM(["import os\nvalue = 1\n"])
+
+    CoderAgent(llm).run(context=context, step=step)
+    messages = llm.calls[0][0]
+    payload = "\n".join(str(message.content or "") for message in messages)
+
+    assert _payload_bytes(messages) <= 42_000
+    assert "description='Registered first companion" in payload
+    assert "description='Registered max companion" not in payload
+    for family in range(4):
+        assert f"declared_family_{family}_max" in payload
+        assert f"source_concept=declared_family_{family}" in payload
+    assert "companion_metadata=true" in payload
+
+
 def test_initial_prompt_runtime_gate_fails_before_provider_without_dropping_contracts(
     ra,
     tmp_path,
@@ -546,6 +585,52 @@ def test_patch_prompt_uses_compact_authority_context_under_transport_gate(ra):
     for family in range(4):
         assert f'"source_concept":"declared_family_{family}"' in payload
         assert f'"name":"declared_family_{family}_measured"' in payload
+
+
+def test_provenance_fail_close_repair_does_not_expand_full_scientific_context(ra):
+    patch = json.dumps(
+        {
+            "format": PATCH_FORMAT,
+            "edits": [{"old": "value = 1", "new": "value = 2", "expected_count": 1}],
+        }
+    )
+    context = _wide_context(ra, n_families=4)
+    step = ra.AnalysisStep(
+        step_id="provenance_repair",
+        intent="Repair fail-closed provenance handling only.",
+        inputs=["declared_family_0_first"],
+        expected_outputs=["table:exposure_qc"],
+        method="ordered_exposure_quality_control",
+    )
+    authority = RepairPromptAuthority.create(
+        typed_ticket=[
+            {
+                "reason": RepairReason.PROVENANCE_NOT_FAIL_CLOSED.value,
+                "validator": "mechanical_code_preflight",
+                "structured_reason": "provenance_audit_not_fail_closed",
+                "detail": {"reason": "provenance_audit_not_fail_closed"},
+                "occurrences": [],
+                "occurrence_count": 1,
+            }
+        ]
+    )
+    llm = _CaptureLLM([patch])
+
+    repaired = CoderAgent(llm).repair(
+        context=context,
+        step=step,
+        code="import os\nvalue = 1\n",
+        run_log="the provenance helper result was not enforced",
+        repair_authority=authority,
+        current_repair_authority=authority,
+    )
+    messages = llm.calls[0][0]
+    payload = "\n".join(str(message.content or "") for message in messages)
+
+    assert repaired == "import os\nvalue = 2\n"
+    assert _payload_bytes(messages) <= 30_000
+    assert '"source_concept":"declared_family_0"' in payload
+    assert '"description":"Registered' not in payload
 
 
 def test_prior_semantic_constraint_does_not_expand_current_mechanical_patch(ra):
