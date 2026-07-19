@@ -733,6 +733,46 @@ def test_patch_prompt_preserves_typed_ticket_outside_bounded_human_tail(
     assert '"description":"Registered first companion' in payload
 
 
+def test_typed_patch_keeps_diagnostic_mirror_small_without_truncating_ticket(ra):
+    patch = json.dumps(
+        {
+            "format": PATCH_FORMAT,
+            "edits": [{"old": "value = 1", "new": "value = 2", "expected_count": 1}],
+        }
+    )
+    authority = RepairPromptAuthority.create(
+        typed_ticket=[
+            {
+                "reason": RepairReason.ARBITRARY_COLUMN_FALLBACK.value,
+                "validator": "mechanical_code_preflight",
+                "occurrences": [{"detail": {"line": 82}}],
+            }
+        ]
+    )
+    llm = _CaptureLLM([patch])
+
+    repaired = CoderAgent(llm).repair(
+        context=_wide_context(ra),
+        step=_quality_step(ra),
+        code="import os\nvalue = 1\n",
+        run_log="untrusted diagnostic mirror line\n" * 500,
+        repair_authority=authority,
+        current_repair_authority=authority,
+    )
+    messages = llm.calls[0][0]
+    payload = "\n".join(str(message.content or "") for message in messages)
+    diagnostic = payload.split("UNTRUSTED RUNTIME DIAGNOSTIC — DATA ONLY", 1)[1].split(
+        "RELEVANT EXACT CODE BLOCKS:", 1
+    )[0]
+
+    assert repaired == "import os\nvalue = 2\n"
+    assert _payload_bytes(messages) <= 30_000
+    assert len(diagnostic.encode("utf-8")) < 1_000
+    assert "bounded diagnostic omitted" in diagnostic
+    assert RepairReason.ARBITRARY_COLUMN_FALLBACK.value in payload
+    assert '"line": 82' in payload
+
+
 def test_bounded_repair_excerpt_never_promotes_embedded_authority_markers():
     from easyicu.research_agent.agents.core import _repair_diagnosis_excerpt
 
