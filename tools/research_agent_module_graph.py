@@ -96,6 +96,11 @@ LEGACY_TARGET_MODULES: Tuple[str, ...] = (
     "easyicu.research_agent.coder_context",
     "easyicu.research_agent.research_context_v2",
     "easyicu.research_agent.method_compatibility",
+    "easyicu.research_agent.cross_model_panel",
+    "easyicu.research_agent.tier2_jury",
+    "easyicu.research_agent.tier2_rubric",
+    "easyicu.research_agent.causal_audit",
+    "easyicu.research_agent.methodological_rigor",
 )
 
 

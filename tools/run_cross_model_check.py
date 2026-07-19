@@ -24,7 +24,7 @@ from easyicu.research_agent.cohort_schema import (  # noqa: E402
     ConceptPredicate,
     TimeWindow,
 )
-from easyicu.research_agent.cross_model_panel import (  # noqa: E402
+from easyicu.research_agent.evaluation.cross_model_panel import (  # noqa: E402
     BackendIdentity,
     compare_panel_primaries,
     compare_plans,

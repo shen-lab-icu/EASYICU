@@ -22,7 +22,7 @@ from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 from .agents import CriticAgent, ManuscriptAgent
 from .audits.manuscript_claims import audit_manuscript_numeric_claims
 from .reporting.bibtex import render_bibtex
-from .causal_audit import run_causal_audit
+from .review.causal_audit import run_causal_audit
 from .contracts import (
     ValidationFinding,
     _ExecutePhaseResult,
@@ -1219,7 +1219,7 @@ def run_write_phase(
     # the readiness gate but a rigor-audit exception never crashes the write
     # phase.
     try:
-        from .methodological_rigor import (
+        from .review.methodological_rigor import (
             MethodologicalRigorAuditor,
             extract_method_signals,
         )

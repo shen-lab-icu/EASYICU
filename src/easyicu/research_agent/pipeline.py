@@ -81,7 +81,7 @@ from .replication.envelope import (
     envelope_role_resolver,
 )
 from .methods.multiple_testing import build_multiple_testing_report
-from .causal_audit import run_causal_audit
+from .review.causal_audit import run_causal_audit
 from .reporting.reporting_checklist import (
     build_strobe_checklist,
     build_tripod_ai_checklist,
