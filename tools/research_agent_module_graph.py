@@ -43,6 +43,16 @@ LEGACY_TARGET_MODULES: Tuple[str, ...] = (
     "easyicu.research_agent.figure_contract_preparation",
     "easyicu.research_agent.publication_figure_execution",
     "easyicu.research_agent.evidence_registration",
+    "easyicu.research_agent.deterministic_causal",
+    "easyicu.research_agent.deterministic_clustering",
+    "easyicu.research_agent.deterministic_cohort_flow",
+    "easyicu.research_agent.deterministic_descriptive",
+    "easyicu.research_agent.deterministic_missingness",
+    "easyicu.research_agent.deterministic_ordinal",
+    "easyicu.research_agent.deterministic_robustness",
+    "easyicu.research_agent.deterministic_sensitivity",
+    "easyicu.research_agent.deterministic_survival",
+    "easyicu.research_agent.trajectory_stability_executor",
 )
 
 

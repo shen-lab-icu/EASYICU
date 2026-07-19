@@ -133,9 +133,9 @@ from .intake.materialized_trajectory import (
 )
 from .research_context_v2 import materialized_input_prompt_attachment
 from .contracts import ValidationFinding, _ExecutePhaseResult, _PlanPhaseResult
-from .deterministic_descriptive import absolute_risk_context_code
-from .deterministic_missingness import missingness_measurement_audit_code
-from .deterministic_robustness import (
+from .execution.runners.deterministic_descriptive import absolute_risk_context_code
+from .execution.runners.deterministic_missingness import missingness_measurement_audit_code
+from .execution.runners.deterministic_robustness import (
     robustness_sensitivity_preflight_code,
 )
 from .declared_product_contract import (
@@ -311,7 +311,7 @@ from .trajectory_plan_contract import (
     trajectory_plan_contract_applies,
     trajectory_plan_dag_findings,
 )
-from .trajectory_stability_executor import (
+from .execution.runners.trajectory_stability_executor import (
     trajectory_stability_executor_code,
     trajectory_stability_executor_owns_step,
 )

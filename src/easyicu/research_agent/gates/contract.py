@@ -55,7 +55,7 @@ from ..audits.validators import (
 )
 from ..contracts import ValidationFinding
 from ..declared_product_contract import primary_analysis_cohort_integrity_findings
-from ..deterministic_robustness import replay_locked_memberships
+from ..execution.runners.deterministic_robustness import replay_locked_memberships
 from ..ordered_stratified_contract import ordered_stratified_numeric_findings
 from ..plan_utils import (
     _normalised_expected_output_names,

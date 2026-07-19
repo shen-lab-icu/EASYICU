@@ -231,21 +231,21 @@ AUXILIARY_DETERMINISTIC_RUNNERS: Tuple[AuxiliaryRunner, ...] = (
     AuxiliaryRunner(
         name="absolute_risk_context",
         entrypoint="absolute_risk_context_code",
-        module="deterministic_descriptive",
+        module="execution.runners.deterministic_descriptive",
         purpose="Render descriptive exposure prevalence and absolute-risk context from an explicit product contract.",
         fail_closed="Declines figure/primary-effect contracts and blocks when the declared descriptive columns are unavailable.",
     ),
     AuxiliaryRunner(
         name="robustness_sensitivity",
         entrypoint="robustness_sensitivity_preflight_code",
-        module="deterministic_robustness",
+        module="execution.runners.deterministic_robustness",
         purpose="Replay an agent-locked primary model across prespecified robustness variants.",
         fail_closed="Requires a locked model/specification contract and never selects the primary exposure, outcome, cohort, or estimator.",
     ),
     AuxiliaryRunner(
         name="missingness_measurement_audit",
         entrypoint="missingness_measurement_audit_code",
-        module="deterministic_missingness",
+        module="execution.runners.deterministic_missingness",
         purpose=(
             "Per-concept measured-vs-missing counts + structural-vs-measurement "
             "split for a missingness / measurement-process audit step (never "
@@ -260,7 +260,7 @@ AUXILIARY_DETERMINISTIC_RUNNERS: Tuple[AuxiliaryRunner, ...] = (
     AuxiliaryRunner(
         name="trajectory_cluster_stability",
         entrypoint="trajectory_stability_executor_code",
-        module="trajectory_stability_executor",
+        module="execution.runners.trajectory_stability_executor",
         purpose=(
             "Compute a complete planner-owned, digest-bound trajectory-cluster "
             "stability specification without selecting the representation, model, "
