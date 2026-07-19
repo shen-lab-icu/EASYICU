@@ -128,9 +128,9 @@ from .research_context.builder import (
     build_retrieved_research_context,
 )
 from .research_context.typed import parse_research_context_json
-from .context_numeric import register_context_numeric_claims
+from .research_context.builder_numeric import register_context_numeric_claims
 from .authority import pipeline_cache as _pipeline_cache
-from .analysis_blueprint import (
+from .planning.analysis_blueprint import (
     build_analysis_blueprint,
     render_analysis_blueprint_for_prompt,
     validate_plan_against_analysis_blueprint,
@@ -340,7 +340,7 @@ from .execution.runner import (
     reject_reserved_runner_env,
     select_safe_runner_kind,
 )
-from .method_capabilities import set_runtime_capability_snapshot_provider
+from .execution.method_capabilities import set_runtime_capability_snapshot_provider
 from .concept_availability import normalize_database_name
 from .schema import (
     AgentRuntimeState,

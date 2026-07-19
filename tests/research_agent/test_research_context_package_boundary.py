@@ -13,7 +13,9 @@ import pytest
 
 CONTEXT_MODULES = (
     "research_context.builder",
+    "research_context.builder_numeric",
     "research_context.prompt_scope",
+    "research_context.temporal_semantics",
     "research_context.typed",
     "gates.method_compatibility",
 )

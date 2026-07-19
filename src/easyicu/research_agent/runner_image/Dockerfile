@@ -44,7 +44,7 @@ RUN apt-get update \
         libgomp1 \
     && rm -rf /var/lib/apt/lists/*
 
-# Install the complete capability set advertised by method_capabilities.py.
+# Install the complete capability set advertised by execution/method_capabilities.py.
 # The image is network-disabled at execution time, so a package advertised to
 # the coder must already be importable here. Keep this list aligned with the
 # project core dependencies plus the ``methods`` extra.

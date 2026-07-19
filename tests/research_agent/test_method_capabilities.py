@@ -14,7 +14,7 @@ import re
 
 
 def _mod():
-    module = importlib.import_module("easyicu.research_agent.method_capabilities")
+    module = importlib.import_module("easyicu.research_agent.execution.method_capabilities")
     module.set_runtime_capability_snapshot_provider(None)
     return module
 

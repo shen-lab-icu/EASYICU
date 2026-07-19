@@ -7,8 +7,8 @@ import re
 from collections import defaultdict
 from typing import Iterable, Optional
 
-from .authority.evidence_store import EvidenceStore, NumericClaim
-from .schema import ConceptDescriptor, ResearchContext
+from ..authority.evidence_store import EvidenceStore, NumericClaim
+from ..schema import ConceptDescriptor, ResearchContext
 
 
 _AGGREGATION_SUFFIX_RE = re.compile(

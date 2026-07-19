@@ -13,7 +13,7 @@ from typing import Any, Dict, List, Optional, Sequence
 
 import pandas as pd
 
-from .schema import TimeWindow, TemporalConstraint
+from ..schema import TimeWindow, TemporalConstraint
 
 
 _WS = r"(?:\s|_)+"

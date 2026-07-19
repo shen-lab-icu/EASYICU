@@ -21,19 +21,19 @@ from typing import List, Optional, Sequence
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from .reporting.article_contract import (
+from ..reporting.article_contract import (
     ArticleAnalysisContract,
     ArticleDisplayRequirement,
     build_article_analysis_contract,
 )
-from .planning.figure_strategy import (
+from .figure_strategy import (
     ArticleFigureStrategy,
     FigureRoleStrategy,
     build_article_figure_strategy,
 )
-from .schema import AnalysisPlan, ResearchContext, ValidationFinding
-from .planning.study_design import StudyDesignBrief, build_study_design_brief
-from .planning.study_design_playbook import DisplayTier, StudyDesignFamily
+from ..schema import AnalysisPlan, ResearchContext, ValidationFinding
+from .study_design import StudyDesignBrief, build_study_design_brief
+from .study_design_playbook import DisplayTier, StudyDesignFamily
 
 
 ANALYSIS_BLUEPRINT_SCHEMA_VERSION = "easyicu.analysis_blueprint/1"

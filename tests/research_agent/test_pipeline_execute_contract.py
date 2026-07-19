@@ -203,7 +203,7 @@ def test_step_run_input_capsule_must_match_sealed_evidence(tmp_path) -> None:
 
 
 def test_parallel_step_worker_inherits_runner_capability_context() -> None:
-    import easyicu.research_agent.method_capabilities as method_capabilities
+    import easyicu.research_agent.execution.method_capabilities as method_capabilities
     from easyicu.research_agent.pipeline_execute import _submit_in_current_context
 
     method_capabilities.set_runtime_capability_snapshot_provider(

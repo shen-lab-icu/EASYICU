@@ -566,7 +566,7 @@ def test_cross_database_context_adds_transportability_module(ra):
 
 
 def test_analysis_blueprint_combines_prior_art_contract_and_figure_strategy(ra):
-    from easyicu.research_agent.analysis_blueprint import (
+    from easyicu.research_agent.planning.analysis_blueprint import (
         build_analysis_blueprint,
         render_analysis_blueprint_for_prompt,
     )
@@ -601,7 +601,7 @@ def test_analysis_blueprint_combines_prior_art_contract_and_figure_strategy(ra):
 
 
 def test_analysis_blueprint_flags_auroc_only_prediction_plan(ra):
-    from easyicu.research_agent.analysis_blueprint import (
+    from easyicu.research_agent.planning.analysis_blueprint import (
         build_analysis_blueprint,
         validate_plan_against_analysis_blueprint,
     )
