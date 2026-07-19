@@ -83,7 +83,7 @@ def _plan_scientific_scope_signature(plan: AnalysisPlan) -> Tuple[Optional[str],
 
     plan_payload = plan.model_dump(
         mode="json",
-        include={"cohort", "robustness_specs"},
+        include={"cohort", "robustness_specs", "display_labels"},
     )
     return (
         _normalise_scientific_text(plan.research_question),
@@ -95,6 +95,11 @@ def _plan_scientific_scope_signature(plan: AnalysisPlan) -> Tuple[Optional[str],
         ),
         json.dumps(
             plan_payload.get("robustness_specs", []),
+            sort_keys=True,
+            separators=(",", ":"),
+        ),
+        json.dumps(
+            plan_payload.get("display_labels", {}),
             sort_keys=True,
             separators=(",", ":"),
         ),

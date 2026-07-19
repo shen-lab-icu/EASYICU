@@ -13,7 +13,7 @@ import pytest
 
 from easyicu.research_agent.execution import phase as execution_phase
 from easyicu.research_agent.authority import plan_scope
-from easyicu.research_agent.schema import AnalysisStep
+from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep
 
 
 def test_execution_phase_uses_plan_scope_objects_with_identity() -> None:
@@ -89,6 +89,38 @@ def test_scientific_signature_changes_only_role_coordinate_for_role_change() -> 
         )
         if left != right
     ] == [6]
+
+
+def test_plan_display_labels_are_part_of_scientific_scope_authority() -> None:
+    base = AnalysisPlan(
+        research_question="Estimate an adjusted association.",
+        steps=[],
+        display_labels={"death": "In-hospital mortality"},
+    )
+    changed = base.model_copy(update={"display_labels": {"death": "28-day mortality"}})
+
+    assert plan_scope._plan_scientific_scope_signature(base) != (
+        plan_scope._plan_scientific_scope_signature(changed)
+    )
+
+
+def test_plan_display_labels_reject_conflicting_normalized_keys() -> None:
+    with pytest.raises(ValueError, match="conflicting normalized keys"):
+        AnalysisPlan(
+            research_question="Estimate an adjusted association.",
+            steps=[],
+            display_labels={
+                "death-hosp": "Hospital mortality",
+                "death_hosp": "In-hospital death",
+            },
+        )
+
+    with pytest.raises(ValueError, match="at least one letter or digit"):
+        AnalysisPlan(
+            research_question="Estimate an adjusted association.",
+            steps=[],
+            display_labels={"---": "Invalid identifier"},
+        )
 
 
 @pytest.mark.parametrize("canonical_first", [True, False])

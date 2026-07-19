@@ -11,7 +11,10 @@ from easyicu.research_agent.contracts.declared_product import (
     typed_product,
     typed_product_schema_receipt,
 )
-from easyicu.research_agent.authority.evidence_store import EvidenceStore, sha256_of_file
+from easyicu.research_agent.authority.evidence_store import (
+    EvidenceStore,
+    sha256_of_file,
+)
 from easyicu.research_agent.execution.phase import (
     _failed_contract_code_can_be_reused_before_coder,
     _plan_scientific_scope_signature,
@@ -116,6 +119,7 @@ def test_replan_restores_completed_execution_snapshot() -> None:
             {
                 "step_id": "producer",
                 "status": "ok",
+                "planned_analysis_role": current.steps[0].planned_analysis_role,
                 "analysis_request": {"step": current.steps[0].model_dump(mode="json")},
             }
         ],
@@ -143,6 +147,7 @@ def test_replan_restores_plan_scientific_scope_after_completed_step() -> None:
         update={
             "analysis_type": "adjusted_association",
             "cohort": CohortDefinition(name="adult_primary"),
+            "display_labels": {"death": "In-hospital mortality"},
             "rationale": "Estimate the prespecified primary association.",
         }
     )
@@ -151,6 +156,7 @@ def test_replan_restores_plan_scientific_scope_after_completed_step() -> None:
             "research_question": "Estimate an unrelated outcome.",
             "analysis_type": "prediction_model",
             "cohort": CohortDefinition(name="different_population"),
+            "display_labels": {"death": "28-day mortality"},
             "rationale": "Replace the original estimand.",
             "revision": current.revision + 1,
         }
@@ -163,6 +169,7 @@ def test_replan_restores_plan_scientific_scope_after_completed_step() -> None:
             {
                 "step_id": "producer",
                 "status": "ok",
+                "planned_analysis_role": current.steps[0].planned_analysis_role,
                 "analysis_request": {"step": current.steps[0].model_dump(mode="json")},
             }
         ],
@@ -172,6 +179,7 @@ def test_replan_restores_plan_scientific_scope_after_completed_step() -> None:
     assert preserved.analysis_type == current.analysis_type
     assert preserved.cohort == current.cohort
     assert preserved.robustness_specs == current.robustness_specs
+    assert preserved.display_labels == current.display_labels
     assert preserved.rationale == current.rationale
     assert preserved.revision == revised.revision
     assert findings[0].detail["restored_plan_scope"] is True
@@ -179,6 +187,7 @@ def test_replan_restores_plan_scientific_scope_after_completed_step() -> None:
         "research_question",
         "analysis_type",
         "cohort",
+        "display_labels",
         "rationale",
     }
 

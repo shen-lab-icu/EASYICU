@@ -801,8 +801,49 @@ class AnalysisPlan(BaseModel):
             "When present, the specs must cover cohort, missingness, and outcome axes."
         ),
     )
+    display_labels: Dict[str, str] = Field(
+        default_factory=dict,
+        description=(
+            "Planner/run-owned human-facing labels keyed by exact variable, "
+            "contrast, or robustness-spec id. Renderers may consume these "
+            "labels but must not invent clinical endpoint semantics from a "
+            "column name."
+        ),
+    )
     rationale: Optional[str] = None
     revision: int = 1
+
+    @field_validator("display_labels", mode="before")
+    @classmethod
+    def _validate_display_labels(cls, value: Any) -> Dict[str, str]:
+        if value is None:
+            return {}
+        if not isinstance(value, dict):
+            raise ValueError("display_labels must be an object mapping ids to labels")
+        labels: Dict[str, str] = {}
+        normalized_keys: Dict[str, str] = {}
+        for raw_key, raw_label in value.items():
+            key = str(raw_key or "").strip()
+            label = " ".join(str(raw_label or "").split())
+            if not key or not label:
+                raise ValueError("display_labels keys and values must be non-empty")
+            if len(key) > 256 or len(label) > 256:
+                raise ValueError(
+                    "display_labels keys and values must be <=256 characters"
+                )
+            normalized = re.sub(r"[^a-z0-9]+", "_", key.casefold()).strip("_")
+            if not normalized:
+                raise ValueError(
+                    "display_labels keys must contain at least one letter or digit"
+                )
+            prior = normalized_keys.get(normalized)
+            if prior is not None and prior != label:
+                raise ValueError(
+                    "display_labels contains conflicting normalized keys: " f"{key!r}"
+                )
+            normalized_keys[normalized] = label
+            labels[key] = label
+        return labels
 
     @field_validator("cohort", mode="before")
     @classmethod
