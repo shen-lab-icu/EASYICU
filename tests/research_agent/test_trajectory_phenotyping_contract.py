@@ -23,7 +23,7 @@ from easyicu.research_agent.schema import (
     TemporalConstraint,
     VariableRole,
 )
-from easyicu.research_agent.trajectory_contract import (
+from easyicu.research_agent.trajectory.contract import (
     TRAJECTORY_PHENOTYPING_REQUIRED_OUTPUTS,
     _stability_findings,
     infer_fixed_window_trajectory_metadata,

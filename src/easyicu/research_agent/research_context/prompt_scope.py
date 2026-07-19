@@ -25,7 +25,7 @@ from ..schema import (
     ResearchContext,
 )
 from .typed import project_research_context_variables
-from ..trajectory_plan_contract import trajectory_step_roles
+from ..trajectory.plan_contract import trajectory_step_roles
 
 _COMPANION_SUFFIXES = (
     "_measured",

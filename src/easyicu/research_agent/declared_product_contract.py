@@ -25,7 +25,7 @@ from typing import Any, Iterable, Mapping, Sequence
 
 from .repair_registry import is_sealed_renderer_repair, repair_metadata_for
 from .schema import AnalysisStep, ValidationFinding
-from .trajectory_plan_contract import (
+from .trajectory.plan_contract import (
     trajectory_role_result_findings,
     trajectory_role_scope_summary_findings,
 )

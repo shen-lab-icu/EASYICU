@@ -16,14 +16,13 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Mapping, Optional, Sequence, Tuple
 
-from .schema import (
+from ..schema import (
     AnalysisPlan,
     AnalysisStep,
     ClusterSelectionManifest,
     ResearchContext,
     ValidationFinding,
 )
-
 
 _ROLE_ORDER = (
     "representation",
@@ -274,7 +273,9 @@ def _method_family_evidence(method: str) -> frozenset[str]:
         families.add("representation")
     if clustering:
         families.add("candidate_selection")
-    if clustering and bool(tokens & {"stability", "consensus", "bootstrap", "resampling"}):
+    if clustering and bool(
+        tokens & {"stability", "consensus", "bootstrap", "resampling"}
+    ):
         families.add("stability_freeze")
     if "characterization" in tokens or (
         "descriptive" in tokens
@@ -354,9 +355,7 @@ def _characterization_product_evidence(
     return _has_product_evidence(
         products,
         required=frozenset({"cluster"}),
-        any_of=frozenset(
-            {"characteristic", "characteristics", "profile", "profiles"}
-        ),
+        any_of=frozenset({"characteristic", "characteristics", "profile", "profiles"}),
         kinds=frozenset({"artifact", "dataset", "table"}),
     )
 
@@ -738,8 +737,7 @@ def evaluate_trajectory_plan_dag(
         candidate_owner = role_owners.get("candidate_selection")
         if (
             local_method_head != TRAJECTORY_STABILITY_METHOD_HEAD
-            or
-            local_roles != frozenset({"stability_freeze"})
+            or local_roles != frozenset({"stability_freeze"})
             or role_owners.get("stability_freeze") != spec_step.step_id
             or candidate_owner is None
             or candidate_owner == spec_step.step_id
@@ -937,7 +935,9 @@ def evaluate_trajectory_plan_dag(
         if not any(count >= 2 for count in direct_family_counts.values()):
             typed_inputs = _step_typed_inputs(representation_step)
             manifest_inputs = sorted(
-                product for product in typed_inputs if _is_window_manifest_product(product)
+                product
+                for product in typed_inputs
+                if _is_window_manifest_product(product)
             )
             manifest_producers = sorted(
                 {
@@ -1150,9 +1150,7 @@ def _normalise_redundant_split_role_outputs(
     input_removals: Dict[str, List[str]] = defaultdict(list)
     characterization_owner = owners["characterization"]
     final_steps: List[AnalysisStep] = []
-    removed_cluster_sizes = "table:cluster_sizes" in removals.get(
-        stability_owner, []
-    )
+    removed_cluster_sizes = "table:cluster_sizes" in removals.get(stability_owner, [])
     removed_cluster_selection = "table:cluster_number_selection" in removals.get(
         stability_owner, []
     )
@@ -1168,9 +1166,9 @@ def _normalise_redundant_split_role_outputs(
             ):
                 input_removals[step.step_id].append(str(raw_input))
                 inputs_changed = True
-            elif (
-                removed_cluster_selection
-                and product == ("table", "cluster_number_selection")
+            elif removed_cluster_selection and product == (
+                "table",
+                "cluster_number_selection",
             ):
                 input_removals[step.step_id].append(str(raw_input))
                 if "manifest:cluster_selection" not in kept_inputs and (
@@ -1181,9 +1179,7 @@ def _normalise_redundant_split_role_outputs(
             else:
                 kept_inputs.append(raw_input)
         final_steps.append(
-            step.model_copy(update={"inputs": kept_inputs})
-            if inputs_changed
-            else step
+            step.model_copy(update={"inputs": kept_inputs}) if inputs_changed else step
         )
     return (
         plan.model_copy(update={"steps": final_steps}),
@@ -1235,9 +1231,7 @@ def augment_trajectory_plan_products(
         if normalized == plan:
             return plan, normalization_findings
         return (
-            normalized.model_copy(
-                update={"revision": max(1, int(plan.revision)) + 1}
-            ),
+            normalized.model_copy(update={"revision": max(1, int(plan.revision)) + 1}),
             normalization_findings,
         )
 
@@ -1262,8 +1256,7 @@ def augment_trajectory_plan_products(
     }
     if (
         declared_products & _CHARACTERIZATION_OUTCOME_PRODUCTS
-        and "table:outcome_by_cluster"
-        not in (characterization.expected_outputs or [])
+        and "table:outcome_by_cluster" not in (characterization.expected_outputs or [])
     ):
         additions[characterization_owner].append("table:outcome_by_cluster")
 
@@ -1309,20 +1302,22 @@ def augment_trajectory_plan_products(
     if not additions and not input_additions and normalized == plan:
         return plan, normalization_findings
     revised_steps = [
-        step.model_copy(
-            update={
-                "expected_outputs": [
-                    *(step.expected_outputs or []),
-                    *additions.get(step.step_id, []),
-                ],
-                "inputs": [
-                    *(step.inputs or []),
-                    *input_additions.get(step.step_id, []),
-                ],
-            }
+        (
+            step.model_copy(
+                update={
+                    "expected_outputs": [
+                        *(step.expected_outputs or []),
+                        *additions.get(step.step_id, []),
+                    ],
+                    "inputs": [
+                        *(step.inputs or []),
+                        *input_additions.get(step.step_id, []),
+                    ],
+                }
+            )
+            if step.step_id in additions or step.step_id in input_additions
+            else step
         )
-        if step.step_id in additions or step.step_id in input_additions
-        else step
         for step in normalized.steps
     ]
     revised = normalized.model_copy(
@@ -1465,9 +1460,7 @@ def trajectory_role_code_contract(
         product for product in products if _is_window_manifest_product(product)
     )
     if window_manifests:
-        manifest_names = ", ".join(
-            f"{name}.json" for _kind, name in window_manifests
-        )
+        manifest_names = ", ".join(f"{name}.json" for _kind, name in window_manifests)
         sections.append(
             "UPSTREAM WINDOW-PANEL ROLE: write the declared manifest JSON "
             f"({manifest_names}) with panel_product and families; each family "
@@ -1514,7 +1507,7 @@ def trajectory_role_code_contract(
             "representation artifact as the clustering model matrix; do not "
             "reconstruct trajectory features from COHORT_PARQUET (the locked "
             "cohort may be used only for identifier reconciliation or audits). "
-            "Treat the representation rows as the upstream owner\'s already-frozen "
+            "Treat the representation rows as the upstream owner's already-frozen "
             "eligible population; do not reapply cohort, anchor, or observed-window "
             "eligibility unless an explicit membership artifact is also a declared "
             "input. When an upstream scaling summary names "
@@ -1639,8 +1632,7 @@ def trajectory_role_code_contract(
             "and n_observed; write cluster_sizes.csv with cluster and n. "
             "Profiles must be recomputed from the original source columns, "
             "preserve their declared scale, and ignore missing cells according "
-            "to the agent-declared policy."
-            + outcome_clause
+            "to the agent-declared policy." + outcome_clause
         )
     if not sections:
         return ""

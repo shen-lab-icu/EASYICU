@@ -11,7 +11,7 @@ from easyicu.research_agent.schema import (
     CohortDescriptor,
     ResearchContext,
 )
-from easyicu.research_agent.trajectory_plan_contract import (
+from easyicu.research_agent.trajectory.plan_contract import (
     trajectory_role_code_contract,
 )
 

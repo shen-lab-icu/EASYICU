@@ -19,7 +19,7 @@ from typing import Any, Iterable, Mapping, Optional
 import pandas as pd
 from pydantic import ValidationError
 
-from .schema import (
+from ..schema import (
     AnalysisStep,
     ClusterSelectionManifest,
     ConceptDescriptor,
@@ -27,7 +27,6 @@ from .schema import (
     ResearchContext,
     ValidationFinding,
 )
-
 
 _FIXED_WINDOW_COLUMN = re.compile(
     r"^(?P<family>[A-Za-z][A-Za-z0-9_]*)_h"
@@ -154,15 +153,6 @@ def infer_fixed_window_trajectory_metadata(
     )
 
 
-def is_raw_ordinal_trajectory_state(variable: ConceptDescriptor) -> bool:
-    metadata = variable.fixed_window_trajectory
-    return bool(
-        metadata is not None
-        and metadata.source_scale == "ordinal"
-        and metadata.representation_kind == "discrete_window_state"
-    )
-
-
 def is_continuous_trajectory_representation(variable: ConceptDescriptor) -> bool:
     metadata = variable.fixed_window_trajectory
     return bool(
@@ -172,7 +162,9 @@ def is_continuous_trajectory_representation(variable: ConceptDescriptor) -> bool
     )
 
 
-def _regex_selects_column(pattern: str, column: str, *, fullmatch: bool = False) -> bool:
+def _regex_selects_column(
+    pattern: str, column: str, *, fullmatch: bool = False
+) -> bool:
     try:
         compiled = re.compile(pattern)
     except re.error:
@@ -180,9 +172,7 @@ def _regex_selects_column(pattern: str, column: str, *, fullmatch: bool = False)
     return bool(compiled.fullmatch(column) if fullmatch else compiled.search(column))
 
 
-def _selector_mentions_trajectory(
-    node: ast.AST, trajectory_columns: set[str]
-) -> bool:
+def _selector_mentions_trajectory(node: ast.AST, trajectory_columns: set[str]) -> bool:
     """Recognize common explicit/dynamic DataFrame column selectors."""
 
     for child in ast.walk(node):
@@ -198,9 +188,11 @@ def _selector_mentions_trajectory(
                 ):
                     token = token_node.value
                     if any(
-                        column.startswith(token)
-                        if operation == "startswith"
-                        else column.endswith(token)
+                        (
+                            column.startswith(token)
+                            if operation == "startswith"
+                            else column.endswith(token)
+                        )
                         for column in trajectory_columns
                     ):
                         return True
@@ -224,9 +216,7 @@ def _selector_mentions_trajectory(
             operation = (
                 child.func.attr
                 if isinstance(child.func, ast.Attribute)
-                else child.func.id
-                if isinstance(child.func, ast.Name)
-                else ""
+                else child.func.id if isinstance(child.func, ast.Name) else ""
             )
             if operation in {"match", "search", "fullmatch"} and child.args:
                 pattern_node = child.args[0]
@@ -248,9 +238,7 @@ def _selector_mentions_trajectory(
             if isinstance(child.left, ast.Constant) and isinstance(
                 child.left.value, str
             ):
-                if any(
-                    child.left.value in column for column in trajectory_columns
-                ):
+                if any(child.left.value in column for column in trajectory_columns):
                     return True
     return False
 
@@ -283,13 +271,15 @@ def selected_trajectory_variables(
         tree = None
     selected: list[ConceptDescriptor] = []
     for variable in trajectory:
-        literal = re.search(
-            rf"(?<![A-Za-z0-9_]){re.escape(variable.name)}(?![A-Za-z0-9_])",
-            code,
-        ) is not None
+        literal = (
+            re.search(
+                rf"(?<![A-Za-z0-9_]){re.escape(variable.name)}(?![A-Za-z0-9_])",
+                code,
+            )
+            is not None
+        )
         dynamically_selected = bool(
-            tree is not None
-            and _selector_mentions_trajectory(tree, {variable.name})
+            tree is not None and _selector_mentions_trajectory(tree, {variable.name})
         )
         if variable.name in input_names or literal or dynamically_selected:
             selected.append(variable)
@@ -297,9 +287,7 @@ def selected_trajectory_variables(
 
 
 def _method_head(value: str) -> str:
-    normalized = re.sub(r"[^a-z0-9]+", "_", str(value or "").strip().lower()).strip(
-        "_"
-    )
+    normalized = re.sub(r"[^a-z0-9]+", "_", str(value or "").strip().lower()).strip("_")
     return normalized.split("_with_", 1)[0]
 
 
@@ -323,10 +311,7 @@ def trajectory_phenotyping_contract_applies(
         if len(ordered) < 2:
             continue
         if len(
-            {
-                (item.window_start_hours, item.window_end_hours)
-                for item in ordered
-            }
+            {(item.window_start_hours, item.window_end_hours) for item in ordered}
         ) != len(ordered):
             continue
         if all(
@@ -368,55 +353,59 @@ def trajectory_phenotyping_code_contract(
         else ""
     )
     return (
-        "\n\nFIXED-WINDOW TRAJECTORY PHENOTYPING CONTRACT (method, k, family, "
-        "threshold, and summaries remain your choices):\n"
-        "- Write trajectory_missingness_policy.json with id_column, "
-        "observation_family, observation_columns, min_observed_windows, "
-        "profile_columns, profile_summary_statistic ('mean' or 'median'), "
-        "clustering_method, n_clusters, time_axis='relative_hours', and "
-        "anchor, anchor_provenance, anchor_source. When ResearchContext has "
-        "one explicit relative-to-anchor task constraint, copy it with "
-        "anchor_provenance='task_contract'; otherwise explicitly use "
-        "anchor_provenance='agent_declared' and name the planning/data source. "
-        "For task-contract provenance, set "
-        "anchor_source='temporal_constraints.relative_to_anchor'. Generic "
-        "default time windows and unrelated outcome/timing constraints are "
-        "not authoritative trajectory-anchor provenance. Then write "
-        "trailing_na_policy={zero_imputation:false, "
-        "eligibility_uses_observed_window_count:true, "
-        "profile_summaries_ignore_missing:true}. Do not infer the anchor from "
-        "trajectory column names. observation_columns must equal (not merely "
-        "overlap or add to) every explicitly selected step input from the "
-        "declared observation_family, ordered by parsed time bin.\n"
-        "- Write cluster_selection.json with criterion, selection_rule "
-        "(minimum/maximum/elbow/multi_criteria), direction "
-        "(minimize/maximize/not_applicable), selected_n_clusters, at least two "
-        "unique candidates [{n_clusters,criterion_value}], and rationale. "
-        "Minimum/maximum must select the corresponding finite optimum; elbow "
-        "or multi_criteria requires a substantive rationale. Repeat the full "
-        "manifest as step_summary.cluster_selection.\n"
-        "- trajectory_membership.csv: one row for EVERY locked-cohort id with "
-        "observed_window_count, meets_min_observed_windows, "
-        "included_in_clustering, exclusion_reason. cluster_assignments.csv: "
-        "exactly one row per included id with cluster.\n"
-        "- trajectory_profiles.csv: cluster, source_column, "
-        "window_start_hours, window_end_hours, summary_statistic, value, "
-        "n_observed. cohort_flow.csv: metric,n for input_cohort, "
-        "meets_min_observed_windows, excluded_insufficient_windows, and "
-        "included_in_clustering. cluster_sizes.csv: cluster,n.\n"
-        "- cluster_stability_assignments.csv: resample_id, the declared id "
-        "column, reference_cluster, resampled_cluster for at least two "
-        "agent-chosen resamples/subsamples. cluster_stability.csv: "
-        "resample_id,n_overlap,adjusted_rand_index,clustering_method,"
-        "refit_model_id,seed,sampling_method,sample_n,sample_id_hash. Use a "
-        "distinct refit_model_id, seed, and sampled membership set for each "
-        "reported refit; repeating the same full sample does not establish "
-        "resampling stability. Hash sorted sampled id tokens joined with "
-        "newline using SHA-256. These are replayable reported-refit fields, "
-        "not independent proof that a fit call executed.\n"
-    ) + outcome_contract + (
-        "Every declared count/value above is independently replayed from the "
-        "locked cohort and assignments; fabricated or incomplete tables block."
+        (
+            "\n\nFIXED-WINDOW TRAJECTORY PHENOTYPING CONTRACT (method, k, family, "
+            "threshold, and summaries remain your choices):\n"
+            "- Write trajectory_missingness_policy.json with id_column, "
+            "observation_family, observation_columns, min_observed_windows, "
+            "profile_columns, profile_summary_statistic ('mean' or 'median'), "
+            "clustering_method, n_clusters, time_axis='relative_hours', and "
+            "anchor, anchor_provenance, anchor_source. When ResearchContext has "
+            "one explicit relative-to-anchor task constraint, copy it with "
+            "anchor_provenance='task_contract'; otherwise explicitly use "
+            "anchor_provenance='agent_declared' and name the planning/data source. "
+            "For task-contract provenance, set "
+            "anchor_source='temporal_constraints.relative_to_anchor'. Generic "
+            "default time windows and unrelated outcome/timing constraints are "
+            "not authoritative trajectory-anchor provenance. Then write "
+            "trailing_na_policy={zero_imputation:false, "
+            "eligibility_uses_observed_window_count:true, "
+            "profile_summaries_ignore_missing:true}. Do not infer the anchor from "
+            "trajectory column names. observation_columns must equal (not merely "
+            "overlap or add to) every explicitly selected step input from the "
+            "declared observation_family, ordered by parsed time bin.\n"
+            "- Write cluster_selection.json with criterion, selection_rule "
+            "(minimum/maximum/elbow/multi_criteria), direction "
+            "(minimize/maximize/not_applicable), selected_n_clusters, at least two "
+            "unique candidates [{n_clusters,criterion_value}], and rationale. "
+            "Minimum/maximum must select the corresponding finite optimum; elbow "
+            "or multi_criteria requires a substantive rationale. Repeat the full "
+            "manifest as step_summary.cluster_selection.\n"
+            "- trajectory_membership.csv: one row for EVERY locked-cohort id with "
+            "observed_window_count, meets_min_observed_windows, "
+            "included_in_clustering, exclusion_reason. cluster_assignments.csv: "
+            "exactly one row per included id with cluster.\n"
+            "- trajectory_profiles.csv: cluster, source_column, "
+            "window_start_hours, window_end_hours, summary_statistic, value, "
+            "n_observed. cohort_flow.csv: metric,n for input_cohort, "
+            "meets_min_observed_windows, excluded_insufficient_windows, and "
+            "included_in_clustering. cluster_sizes.csv: cluster,n.\n"
+            "- cluster_stability_assignments.csv: resample_id, the declared id "
+            "column, reference_cluster, resampled_cluster for at least two "
+            "agent-chosen resamples/subsamples. cluster_stability.csv: "
+            "resample_id,n_overlap,adjusted_rand_index,clustering_method,"
+            "refit_model_id,seed,sampling_method,sample_n,sample_id_hash. Use a "
+            "distinct refit_model_id, seed, and sampled membership set for each "
+            "reported refit; repeating the same full sample does not establish "
+            "resampling stability. Hash sorted sampled id tokens joined with "
+            "newline using SHA-256. These are replayable reported-refit fields, "
+            "not independent proof that a fit call executed.\n"
+        )
+        + outcome_contract
+        + (
+            "Every declared count/value above is independently replayed from the "
+            "locked cohort and assignments; fabricated or incomplete tables block."
+        )
     )
 
 
@@ -478,7 +467,11 @@ def trajectory_zero_imputation_detected(
     for _ in range(3):
         changed = False
         for assignment in assignments:
-            targets = [target.id for target in assignment.targets if isinstance(target, ast.Name)]
+            targets = [
+                target.id
+                for target in assignment.targets
+                if isinstance(target, ast.Name)
+            ]
             if not targets:
                 continue
             if _selector_mentions_trajectory(assignment.value, columns):
@@ -498,13 +491,17 @@ def trajectory_zero_imputation_detected(
         if not isinstance(node, ast.Call):
             continue
         if isinstance(node.func, ast.Attribute) and node.func.attr == "fillna":
-            fill_value = node.args[0] if node.args else next(
-                (
-                    keyword.value
-                    for keyword in node.keywords
-                    if keyword.arg == "value"
-                ),
-                None,
+            fill_value = (
+                node.args[0]
+                if node.args
+                else next(
+                    (
+                        keyword.value
+                        for keyword in node.keywords
+                        if keyword.arg == "value"
+                    ),
+                    None,
+                )
             )
             if (
                 fill_value is not None
@@ -515,9 +512,7 @@ def trajectory_zero_imputation_detected(
         function_name = (
             node.func.id
             if isinstance(node.func, ast.Name)
-            else node.func.attr
-            if isinstance(node.func, ast.Attribute)
-            else ""
+            else node.func.attr if isinstance(node.func, ast.Attribute) else ""
         )
         if function_name == "nan_to_num" and node.args:
             nan_keyword = next(
@@ -663,9 +658,7 @@ def _missing_columns(frame: pd.DataFrame, required: set[str]) -> list[str]:
 
 
 def _normalized_method(value: Any) -> str:
-    return re.sub(r"[^a-z0-9]+", "_", str(value or "").strip().lower()).strip(
-        "_"
-    )
+    return re.sub(r"[^a-z0-9]+", "_", str(value or "").strip().lower()).strip("_")
 
 
 def _task_contract_anchor_state(
@@ -712,12 +705,12 @@ def trajectory_phenotyping_artifact_findings(
         return []
     findings: list[ValidationFinding] = []
     outcome_required = trajectory_outcome_contract_declared(step)
-    paths = {name: out_dir / filename for name, filename in _TRAJECTORY_ARTIFACTS.items()}
+    paths = {
+        name: out_dir / filename for name, filename in _TRAJECTORY_ARTIFACTS.items()
+    }
     if outcome_required:
         paths["outcome"] = out_dir / _OUTCOME_ARTIFACT
-    missing_files = sorted(
-        path.name for path in paths.values() if not path.is_file()
-    )
+    missing_files = sorted(path.name for path in paths.values() if not path.is_file())
     if missing_files:
         return [
             _contract_error(
@@ -904,12 +897,9 @@ def trajectory_phenotyping_artifact_findings(
         )
     except ValidationError:
         summary_selection = None
-        selection_issues.append(
-            "step_summary.cluster_selection is missing or invalid"
-        )
+        selection_issues.append("step_summary.cluster_selection is missing or invalid")
     if summary_selection is not None and (
-        summary_selection.model_dump(mode="json")
-        != selection.model_dump(mode="json")
+        summary_selection.model_dump(mode="json") != selection.model_dump(mode="json")
     ):
         selection_issues.append(
             "step_summary.cluster_selection differs from cluster_selection.json"
@@ -1034,9 +1024,7 @@ def trajectory_phenotyping_artifact_findings(
     if outcome_required:
         artifact_frames[_OUTCOME_ARTIFACT] = outcome
     unreadable = sorted(
-        name
-        for name, frame in artifact_frames.items()
-        if frame is None
+        name for name, frame in artifact_frames.items() if frame is None
     )
     if unreadable:
         return findings + [
@@ -1155,13 +1143,19 @@ def trajectory_phenotyping_artifact_findings(
                 {"id": member_id, "issue": "observed_window_count_mismatch"}
             )
         if reported_meets != expected_meets:
-            membership_issues.append({"id": member_id, "issue": "threshold_flag_mismatch"})
+            membership_issues.append(
+                {"id": member_id, "issue": "threshold_flag_mismatch"}
+            )
         if reported_included != expected_meets:
-            membership_issues.append({"id": member_id, "issue": "included_flag_mismatch"})
+            membership_issues.append(
+                {"id": member_id, "issue": "included_flag_mismatch"}
+            )
         if expected_meets:
             included_ids.add(member_id)
         elif not reason:
-            membership_issues.append({"id": member_id, "issue": "missing_exclusion_reason"})
+            membership_issues.append(
+                {"id": member_id, "issue": "missing_exclusion_reason"}
+            )
         if len(membership_issues) >= 20:
             break
     if membership_issues:
@@ -1309,14 +1303,15 @@ def trajectory_phenotyping_artifact_findings(
             cohort_indexed.loc[cluster_ids, column], errors="coerce"
         ).dropna()
         expected_value = (
-            float(values.mean()) if profile_statistic == "mean" else float(values.median())
+            float(values.mean())
+            if profile_statistic == "mean"
+            else float(values.median())
         )
         reported_value = _as_float(row["value"])
         reported_n = _as_int(row["n_observed"], minimum=0)
         if (
             str(row["summary_statistic"] or "").strip().lower() != profile_statistic
-            or _as_float(row["window_start_hours"])
-            != metadata.window_start_hours
+            or _as_float(row["window_start_hours"]) != metadata.window_start_hours
             or _as_float(row["window_end_hours"]) != metadata.window_end_hours
             or reported_n != len(values)
             or reported_value is None
@@ -1440,9 +1435,7 @@ def _stability_findings(
                 "resamples and matching row-level assignment evidence.",
                 step_id=step.step_id,
                 summary_resample_ids=resample_ids,
-                assignment_resample_ids=sorted(
-                    set(assignment_resample_ids.dropna())
-                ),
+                assignment_resample_ids=sorted(set(assignment_resample_ids.dropna())),
             )
         ]
     if (
@@ -1470,9 +1463,7 @@ def _stability_findings(
             )
         ]
 
-    summary_by_id = {
-        _token(row["resample_id"]): row for _, row in stability.iterrows()
-    }
+    summary_by_id = {_token(row["resample_id"]): row for _, row in stability.iterrows()}
     issues: list[dict[str, Any]] = []
     for resample_id in resample_ids:
         mask = assignment_resample_ids == resample_id
@@ -1488,7 +1479,9 @@ def _stability_findings(
             or len(rows) < 2
             or not set(row_ids).issubset(cluster_by_id)
         ):
-            issues.append({"resample_id": resample_id, "issue": "invalid_assignment_rows"})
+            issues.append(
+                {"resample_id": resample_id, "issue": "invalid_assignment_rows"}
+            )
             continue
         expected_reference = row_ids.map(cluster_by_id)
         if not reference.reset_index(drop=True).equals(
@@ -1634,7 +1627,9 @@ def _outcome_findings(
         )
     for cluster in sorted(set(reported_rows) & set(cluster_counts)):
         row = reported_rows[cluster]
-        ids = [member_id for member_id, label in cluster_by_id.items() if label == cluster]
+        ids = [
+            member_id for member_id, label in cluster_by_id.items() if label == cluster
+        ]
         values = target_values.reindex(ids).dropna()
         reported_n = _as_int(row["n"], minimum=0)
         reported_outcome_n = _as_int(row["outcome_n"], minimum=0)
@@ -1645,9 +1640,8 @@ def _outcome_findings(
             "expected_outcome_n": len(values),
             "reported_outcome_n": reported_outcome_n,
         }
-        mismatch = (
-            reported_n != cluster_counts[cluster]
-            or reported_outcome_n != len(values)
+        mismatch = reported_n != cluster_counts[cluster] or reported_outcome_n != len(
+            values
         )
         if binary:
             expected_events = int(values.sum())
@@ -1662,10 +1656,14 @@ def _outcome_findings(
                     "reported_outcome_rate": reported_rate,
                 }
             )
-            mismatch = mismatch or reported_events != expected_events or (
-                reported_rate is None
-                or not math.isclose(
-                    reported_rate, expected_rate, rel_tol=1e-8, abs_tol=1e-8
+            mismatch = (
+                mismatch
+                or reported_events != expected_events
+                or (
+                    reported_rate is None
+                    or not math.isclose(
+                        reported_rate, expected_rate, rel_tol=1e-8, abs_tol=1e-8
+                    )
                 )
             )
         else:
@@ -1684,10 +1682,14 @@ def _outcome_findings(
                     "reported_value": reported_value,
                 }
             )
-            mismatch = mismatch or reported_statistic != summary_statistic or (
-                reported_value is None
-                or not math.isclose(
-                    reported_value, expected_value, rel_tol=1e-8, abs_tol=1e-8
+            mismatch = (
+                mismatch
+                or reported_statistic != summary_statistic
+                or (
+                    reported_value is None
+                    or not math.isclose(
+                        reported_value, expected_value, rel_tol=1e-8, abs_tol=1e-8
+                    )
                 )
             )
         if mismatch:
@@ -1707,30 +1709,10 @@ def _outcome_findings(
     ]
 
 
-def ordered_family_columns(
-    variables: Iterable[ConceptDescriptor], family: str
-) -> list[ConceptDescriptor]:
-    return sorted(
-        (
-            variable
-            for variable in variables
-            if variable.fixed_window_trajectory is not None
-            and variable.fixed_window_trajectory.family == family
-        ),
-        key=lambda variable: (
-            variable.fixed_window_trajectory.window_start_hours,  # type: ignore[union-attr]
-            variable.fixed_window_trajectory.window_end_hours,  # type: ignore[union-attr]
-            variable.name,
-        ),
-    )
-
-
 __all__ = [
     "TRAJECTORY_PHENOTYPING_REQUIRED_OUTPUTS",
     "infer_fixed_window_trajectory_metadata",
     "is_continuous_trajectory_representation",
-    "is_raw_ordinal_trajectory_state",
-    "ordered_family_columns",
     "selected_trajectory_variables",
     "trajectory_phenotyping_artifact_findings",
     "trajectory_phenotyping_code_contract",

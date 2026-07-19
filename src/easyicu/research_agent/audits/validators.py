@@ -81,7 +81,7 @@ from ..authority.runtime_artifacts import (
     current_successful_step_records,
     verified_run_evidence_path,
 )
-from ..trajectory_contract import trajectory_phenotyping_artifact_findings
+from ..trajectory.contract import trajectory_phenotyping_artifact_findings
 
 
 # ---------------------------------------------------------------------------

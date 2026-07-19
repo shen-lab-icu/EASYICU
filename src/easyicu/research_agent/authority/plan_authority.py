@@ -27,7 +27,7 @@ from ..robustness_panel import (
 )
 from ..authority.runtime_artifacts import current_successful_step_records
 from ..schema import AnalysisPlan, AnalysisStep, ResearchContext, ValidationFinding
-from ..trajectory_plan_contract import augment_trajectory_plan_products
+from ..trajectory.plan_contract import augment_trajectory_plan_products
 from .plan_scope import _plan_scientific_scope_signature, _plan_signature
 
 __all__ = [

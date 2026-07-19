@@ -71,8 +71,8 @@ class AgenticCoderAgent:
             _format_context,
             _typed_input_scope_contract,
         )
-        from ..trajectory_contract import trajectory_phenotyping_code_contract
-        from ..trajectory_plan_contract import trajectory_role_code_contract
+        from ..trajectory.contract import trajectory_phenotyping_code_contract
+        from ..trajectory.plan_contract import trajectory_role_code_contract
 
         return (
             f"You are authoring ONE self-contained Python analysis script for "

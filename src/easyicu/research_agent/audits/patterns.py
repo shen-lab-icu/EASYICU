@@ -48,7 +48,7 @@ from ..schema import (
     ValidationFinding,
     VariableRole,
 )
-from ..trajectory_contract import (
+from ..trajectory.contract import (
     is_continuous_trajectory_representation,
     selected_trajectory_variables,
     trajectory_script_findings,
