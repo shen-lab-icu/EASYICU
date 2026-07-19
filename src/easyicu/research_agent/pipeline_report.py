@@ -49,7 +49,7 @@ from .reporting.article_contract import (
 )
 from .reporting.display_suite import summarize_display_suite_status
 from .evidence import EvidenceStore, sha256_of_file
-from .figure_strategy import summarize_article_figure_strategy_coverage
+from .planning.figure_strategy import summarize_article_figure_strategy_coverage
 from .publication_figures import PUBLICATION_FIGURE_SKILL_POLICY_VERSION
 from .plan_utils import _output_declares_figure, _parent_step_id_for_figure_step
 from .reporting.review_artifacts import build_review_artifact_payloads
@@ -2021,8 +2021,8 @@ def _compute_readiness_gates(
     # Primary science is agent-owned across the registry. Fail safe to the strict
     # rule (False) if the family cannot be inferred.
     try:
-        from .capability_registry import families_without_deterministic_primary
-        from .study_design import infer_study_design_family
+        from .planning.capability_registry import families_without_deterministic_primary
+        from .planning.study_design import infer_study_design_family
 
         _no_det_primary_expected = (
             infer_study_design_family(context)

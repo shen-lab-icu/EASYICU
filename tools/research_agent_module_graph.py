@@ -86,6 +86,12 @@ LEGACY_TARGET_MODULES: Tuple[str, ...] = (
     "easyicu.research_agent.repair_coordination",
     "easyicu.research_agent.code_patch",
     "easyicu.research_agent.summary_repair",
+    "easyicu.research_agent.study_design",
+    "easyicu.research_agent.study_design_playbook",
+    "easyicu.research_agent.capability_registry",
+    "easyicu.research_agent.analysis_method_suite",
+    "easyicu.research_agent.figure_strategy",
+    "easyicu.research_agent.analysis_types",
 )
 
 

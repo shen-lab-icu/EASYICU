@@ -30,7 +30,7 @@ from typing import Optional
 
 from ..evidence import EvidenceStore
 from ..schema import AnalysisPlan, ResearchContext
-from ..study_design_playbook import StudyDesignFamily
+from ..planning.study_design_playbook import StudyDesignFamily
 from .base import RenderedFigure
 from .causal import render_causal_figure
 from .phenotype import render_phenotype_figure

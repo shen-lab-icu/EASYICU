@@ -11,7 +11,7 @@ from __future__ import annotations
 import re
 from typing import Iterable, Optional
 
-from .analysis_types import canonical_analysis_family
+from .planning.analysis_types import canonical_analysis_family
 from .ordered_stratified_contract import is_ordered_stratified_analysis_step
 from .plan_utils import (
     clustering_contract_applies,

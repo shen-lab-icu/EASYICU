@@ -22,7 +22,7 @@ from ..figure_contracts import (
 )
 from ..runtime_artifacts import current_evidence_records
 from ..schema import AnalysisPlan, ResearchContext
-from ..study_design import infer_study_design_family
+from ..planning.study_design import infer_study_design_family
 
 
 # A "result-bearing" figure contract is one whose text carries the study's

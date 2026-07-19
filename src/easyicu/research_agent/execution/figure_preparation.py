@@ -389,7 +389,7 @@ def _family_has_deterministic_figure_renderer(context: Any) -> bool:
     """
     try:
         from ..figures import FAMILY_RENDERERS
-        from ..study_design import infer_study_design_family
+        from ..planning.study_design import infer_study_design_family
 
         return str(infer_study_design_family(context)) in FAMILY_RENDERERS
     except Exception:

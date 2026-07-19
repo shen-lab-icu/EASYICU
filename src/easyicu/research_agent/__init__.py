@@ -835,7 +835,7 @@ def __getattr__(name: str):
         "planner_analysis_type_guide",
         "analysis_type_catalog_markdown",
     }:
-        from . import analysis_types as _analysis_types
+        from .planning import analysis_types as _analysis_types
 
         return getattr(_analysis_types, name)
     if name in {

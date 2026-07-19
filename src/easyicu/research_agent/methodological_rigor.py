@@ -29,7 +29,7 @@ from typing import List, Optional, Sequence
 
 from .evidence import EvidenceStore
 from .schema import EvidenceRecord, ResearchContext, ValidationFinding
-from .study_design import infer_study_design_family
+from .planning.study_design import infer_study_design_family
 
 _VALIDATOR = "methodological_rigor"
 

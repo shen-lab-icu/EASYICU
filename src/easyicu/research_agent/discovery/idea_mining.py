@@ -52,7 +52,7 @@ from .idea_registry import (
     CandidateRegistryEntry,
     IdeaCandidateRegistry,
 )
-from ..analysis_types import is_concept_set_family, normalize_analysis_family
+from ..planning.analysis_types import is_concept_set_family, normalize_analysis_family
 from .idea_scope import LiteratureScopeSpec, build_pubmed_query_from_scope
 from ..literature import CitationRecord
 from .idea_mining_schema import (  # noqa: F401  (re-exported for back-compat)
