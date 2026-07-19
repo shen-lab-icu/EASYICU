@@ -18,7 +18,7 @@ from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple
 
 from ..cohort.schema import CohortDefinition, ConceptPredicate, TimeWindow
 from ..authority.evidence_store import NumericClaim
-from ..robustness_panel import RobustnessPanel, RobustnessPanelRow, RobustnessSpec
+from ..robustness.panel import RobustnessPanel, RobustnessPanelRow, RobustnessSpec
 from ..schema import EvidenceRecord as EvidenceArtifact
 from ..schema import ValidationFinding
 from ..reporting.side_findings import SideFinding

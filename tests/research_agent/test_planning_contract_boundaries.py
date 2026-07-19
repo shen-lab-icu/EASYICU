@@ -21,15 +21,15 @@ def _imports(module) -> set[str]:
     return names
 
 
-def test_robustness_contract_legacy_exports_are_identical() -> None:
-    legacy = importlib.import_module("easyicu.research_agent.robustness_panel")
+def test_robustness_contract_runtime_exports_are_identical() -> None:
+    runtime_panel = importlib.import_module("easyicu.research_agent.robustness.panel")
     for name in (
         "MIN_AXIS_COUNTS",
         "RobustnessPlanError",
         "RobustnessSpec",
         "validate_robustness_specs",
     ):
-        assert getattr(legacy, name) is getattr(robustness_contract, name)
+        assert getattr(runtime_panel, name) is getattr(robustness_contract, name)
 
 
 def test_schema_uses_the_pure_robustness_contract() -> None:
@@ -46,7 +46,7 @@ def test_robustness_contract_has_no_runtime_or_evidence_dependency() -> None:
     forbidden = {
         "easyicu.research_agent.authority.evidence_store",
         "easyicu.research_agent.authority.lock_contract",
-        "easyicu.research_agent.robustness_panel",
+        "easyicu.research_agent.robustness.panel",
         "easyicu.research_agent.authority.runtime_artifacts",
     }
     assert not imported & forbidden

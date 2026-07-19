@@ -20,7 +20,7 @@ from ..plan_utils import (
     _preserve_figure_steps_after_replan,
     _preserve_primary_estimand_step_after_replan,
 )
-from ..robustness_panel import (
+from ..robustness.panel import (
     RobustnessSpec,
     robustness_specs_for_execution,
     robustness_specs_sha,

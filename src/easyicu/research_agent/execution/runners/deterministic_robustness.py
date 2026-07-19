@@ -24,15 +24,15 @@ from types import SimpleNamespace
 from typing import Any, Dict, List, Optional, Sequence
 
 from ...cohort.schema import build_cohort, coerce_cohort_definition
-from ...estimators import (
+from ...robustness.estimators import (
     _data_with_predicate_aliases,
     fit_robustness_rows_from_records,
 )
-from ...pipeline_primary_effect import (
+from ...robustness.primary_effect import (
     _extract_primary_effect_payload_from_records,
     _primary_effect_payload_is_complete,
 )
-from ...robustness_panel import (
+from ...robustness.panel import (
     PRIMARY_SPEC_ID,
     RobustnessPanelRow,
     RobustnessSpec,

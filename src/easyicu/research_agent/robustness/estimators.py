@@ -13,13 +13,13 @@ import re
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional, Sequence, Tuple
 
-from .cohort.schema import CohortDefinition, build_cohort
-from .methods.missing import apply_missing_strategy
-from .pipeline_primary_effect import (
+from ..cohort.schema import CohortDefinition, build_cohort
+from ..methods.missing import apply_missing_strategy
+from .primary_effect import (
     _extract_primary_effect_payload_from_records,
     _primary_effect_payload_is_complete,
 )
-from .robustness_panel import (
+from .panel import (
     PRIMARY_SPEC_ID,
     RobustnessPanelRow,
     RobustnessSpec,
@@ -525,7 +525,7 @@ def _recover_primary_covariates(
     per_step_records = _successful_step_records(per_step_records)
     if run_dir is None:
         return []
-    from .plan_utils import _covariate_names_from_code
+    from ..plan_utils import _covariate_names_from_code
 
     base = Path(run_dir)
     payload = _extract_primary_effect_payload_from_records(per_step_records)

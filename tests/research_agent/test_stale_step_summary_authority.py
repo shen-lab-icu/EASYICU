@@ -11,7 +11,7 @@ from types import SimpleNamespace
 from easyicu.research_agent.evaluation_scorecard import score_run_from_dir
 from easyicu.research_agent.authority.evidence_store import EvidenceStore
 from easyicu.research_agent.icu_agent_bench import ICUAgentBenchTask
-from easyicu.research_agent.pipeline_primary_effect import _extract_primary_effect_row
+from easyicu.research_agent.robustness.primary_effect import _extract_primary_effect_row
 from easyicu.research_agent.reporting.readiness import (
     _blocked_outcome_step_ids,
     _compute_readiness_gates,

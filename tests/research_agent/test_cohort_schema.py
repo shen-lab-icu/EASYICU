@@ -202,7 +202,7 @@ def test_planner_named_cohort_accepted_and_expanded() -> None:
 
 def test_robustness_spec_cohort_override_schema_validated() -> None:
     from easyicu.research_agent.cohort.schema import CohortSchemaError
-    from easyicu.research_agent.robustness_panel import RobustnessSpec
+    from easyicu.research_agent.robustness.panel import RobustnessSpec
 
     with pytest.raises(CohortSchemaError, match="unknown concept_id"):
         RobustnessSpec.from_dict(

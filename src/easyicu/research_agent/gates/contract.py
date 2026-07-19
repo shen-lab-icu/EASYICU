@@ -70,7 +70,7 @@ from ..contracts.robustness_execution import (
     ROBUSTNESS_COHORT_MEMBERSHIP_ALIASES,
     _executed_robustness_result_issues,
 )
-from ..robustness_panel import RobustnessSpec
+from ..robustness.panel import RobustnessSpec
 from ..authority.runtime_artifacts import current_successful_step_records
 from ..schema import AnalysisPlan, AnalysisStep, ResearchContext
 

@@ -31,7 +31,7 @@ from .publication import (
     save_publication_figure,
 )
 from . import RenderedFigure, render_family_figure
-from ..robustness_panel import RobustnessPanel, load_robustness_panel
+from ..robustness.panel import RobustnessPanel, load_robustness_panel
 from ..schema import AnalysisPlan, EvidenceRecord, ResearchContext, ValidationFinding
 from ..planning.study_design import infer_study_design_family
 

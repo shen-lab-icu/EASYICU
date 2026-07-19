@@ -21,13 +21,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence
 
-from .authority.lock_contract import (
+from ..authority.lock_contract import (
     LockAuthorityError,
     assert_lock_matches_evidence_anchor,
     rehydrate_timestamp_only_legacy_lock,
 )
-from .planning.cohort_contract import CohortDefinition
-from .planning.robustness_contract import (
+from ..planning.cohort_contract import CohortDefinition
+from ..planning.robustness_contract import (
     MIN_AXIS_COUNTS,
     RobustnessAxis,
     RobustnessPlanError,
@@ -68,7 +68,7 @@ def _successful_step_records(
 
     # Imported lazily because runtime_artifacts owns schema models; this module
     # is a runtime consumer of the pure planning contract, not its owner.
-    from .authority.runtime_artifacts import current_successful_step_records
+    from ..authority.runtime_artifacts import current_successful_step_records
 
     return [
         record
@@ -625,7 +625,7 @@ def worst_rows_by_axis(panel: RobustnessPanel) -> Dict[str, RobustnessPanelRow]:
 def _primary_row_from_records(
     per_step_records: Sequence[Dict[str, Any]]
 ) -> Optional[RobustnessPanelRow]:
-    from .pipeline_primary_effect import (
+    from .primary_effect import (
         _extract_primary_effect_payload_from_records,
         _primary_effect_payload_is_complete,
     )
@@ -707,7 +707,7 @@ def _row_matches_summary_payload(
     payload: Dict[str, Any],
 ) -> bool:
     if row.spec_id == PRIMARY_SPEC_ID:
-        from .pipeline_primary_effect import (
+        from .primary_effect import (
             _extract_primary_effect_payload_from_summary,
             _primary_effect_payload_is_complete,
         )
@@ -763,7 +763,7 @@ def _assert_claimable_panel_rows_match_evidence(
         if str(getattr(record, "evidence_id", "")).strip()
     }
     aliases = evidence.aliases()
-    from .authority.runtime_artifacts import verified_run_evidence_path
+    from ..authority.runtime_artifacts import verified_run_evidence_path
 
     for row in panel.rows:
         if row.converged and not _row_has_claimable_estimate(row):

@@ -30,7 +30,7 @@ from easyicu.research_agent.evaluation.cross_model_panel import (  # noqa: E402
     compare_plans,
     write_cross_model_report,
 )
-from easyicu.research_agent.robustness_panel import (  # noqa: E402
+from easyicu.research_agent.robustness.panel import (  # noqa: E402
     PRIMARY_SPEC_ID,
     RobustnessPanel,
     RobustnessPanelRow,

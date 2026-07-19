@@ -21,7 +21,7 @@ from easyicu.research_agent.figures.publication import (
 def _prepare_robustness_authority(ra, run_dir: Path, evidence, rows) -> None:
     """Give panel fixtures the same lock + digest-bound row authority as runs."""
     from easyicu.research_agent.cohort.schema import CohortDefinition
-    from easyicu.research_agent.robustness_panel import (
+    from easyicu.research_agent.robustness.panel import (
         RobustnessSpec,
         default_robustness_specs,
         write_locked_robustness_specs,
@@ -84,7 +84,7 @@ def test_robustness_panel_publication_figure_has_no_header_title_overlap(
 ):
     from easyicu.research_agent.authority.evidence_store import EvidenceStore
     from easyicu.research_agent.figures.skill import PublicationFigureSkill
-    from easyicu.research_agent.robustness_panel import (
+    from easyicu.research_agent.robustness.panel import (
         RobustnessPanel,
         RobustnessPanelRow,
     )
@@ -178,7 +178,7 @@ def test_publication_figure_skill_rebuilds_stale_single_panel_bundle(
 ):
     from easyicu.research_agent.authority.evidence_store import EvidenceStore
     from easyicu.research_agent.figures.skill import PublicationFigureSkill
-    from easyicu.research_agent.robustness_panel import (
+    from easyicu.research_agent.robustness.panel import (
         RobustnessPanel,
         RobustnessPanelRow,
     )
@@ -372,7 +372,7 @@ def test_publication_figure_skill_promotes_step_publication_bundle_before_robust
 ):
     from PIL import Image
 
-    from easyicu.research_agent.robustness_panel import (
+    from easyicu.research_agent.robustness.panel import (
         RobustnessPanel,
         RobustnessPanelRow,
         write_robustness_panel,
@@ -1871,7 +1871,7 @@ def test_publication_figure_skill_renders_from_robustness_panel_without_table(
     ra,
     tmp_path: Path,
 ) -> None:
-    from easyicu.research_agent.robustness_panel import (
+    from easyicu.research_agent.robustness.panel import (
         RobustnessPanel,
         RobustnessPanelRow,
         write_robustness_panel,

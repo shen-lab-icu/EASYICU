@@ -351,7 +351,7 @@ def test_primary_effect_never_parses_english_or_conjunction_from_prose() -> None
 
 
 def test_structured_primary_effect_with_ci_remains_available() -> None:
-    from easyicu.research_agent.pipeline_primary_effect import (
+    from easyicu.research_agent.robustness.primary_effect import (
         _extract_primary_effect_payload_from_summary,
         _primary_effect_payload_is_complete,
     )
@@ -380,7 +380,7 @@ def test_structured_primary_effect_with_ci_remains_available() -> None:
     ],
 )
 def test_primary_panel_payload_requires_complete_typed_contract(update: dict) -> None:
-    from easyicu.research_agent.pipeline_primary_effect import (
+    from easyicu.research_agent.robustness.primary_effect import (
         _primary_effect_payload_is_complete,
     )
 
@@ -397,7 +397,7 @@ def test_primary_panel_payload_requires_complete_typed_contract(update: dict) ->
 
 
 def test_incomplete_primary_summary_does_not_create_converged_panel_row() -> None:
-    from easyicu.research_agent.robustness_panel import (
+    from easyicu.research_agent.robustness.panel import (
         build_robustness_panel_from_records,
     )
 
@@ -411,7 +411,7 @@ def test_incomplete_primary_summary_does_not_create_converged_panel_row() -> Non
 
 
 def test_step_owned_robustness_rows_win_and_adapter_only_fills_missing_specs() -> None:
-    from easyicu.research_agent.robustness_panel import (
+    from easyicu.research_agent.robustness.panel import (
         RobustnessPanelRow,
         RobustnessSpec,
         build_robustness_panel_from_records,
@@ -456,7 +456,7 @@ def test_step_owned_robustness_rows_win_and_adapter_only_fills_missing_specs() -
 
 @pytest.mark.parametrize("status", [None, "contract_failed", "execution_failed"])
 def test_unsuccessful_step_rows_cannot_enter_final_robustness_panel(status) -> None:
-    from easyicu.research_agent.robustness_panel import (
+    from easyicu.research_agent.robustness.panel import (
         RobustnessSpec,
         build_robustness_panel_from_records,
     )
@@ -492,8 +492,8 @@ def test_unsuccessful_step_rows_cannot_enter_final_robustness_panel(status) -> N
 def test_unsuccessful_adapter_payload_cannot_trigger_deterministic_refit(
     status,
 ) -> None:
-    from easyicu.research_agent.estimators import fit_robustness_rows_from_records
-    from easyicu.research_agent.robustness_panel import RobustnessSpec
+    from easyicu.research_agent.robustness.estimators import fit_robustness_rows_from_records
+    from easyicu.research_agent.robustness.panel import RobustnessSpec
 
     record = {
         "step_id": "07_sensitivity",
@@ -525,8 +525,8 @@ def test_unsuccessful_adapter_payload_cannot_trigger_deterministic_refit(
 
 @pytest.mark.parametrize("missing_field", ["estimator_kind", "missing_strategy"])
 def test_explicit_adapter_cannot_default_scientific_choices(missing_field) -> None:
-    from easyicu.research_agent.estimators import fit_robustness_rows_from_records
-    from easyicu.research_agent.robustness_panel import RobustnessSpec
+    from easyicu.research_agent.robustness.estimators import fit_robustness_rows_from_records
+    from easyicu.research_agent.robustness.panel import RobustnessSpec
 
     payload = {
         "data": [{"x": index, "y": index % 2} for index in range(20)],
@@ -553,8 +553,8 @@ def test_explicit_adapter_cannot_default_scientific_choices(missing_field) -> No
 
 
 def test_explicit_adapter_cannot_create_missing_primary_estimate() -> None:
-    from easyicu.research_agent.estimators import fit_robustness_rows_from_records
-    from easyicu.research_agent.robustness_panel import RobustnessSpec
+    from easyicu.research_agent.robustness.estimators import fit_robustness_rows_from_records
+    from easyicu.research_agent.robustness.panel import RobustnessSpec
 
     record = {
         "step_id": "07_sensitivity",
@@ -584,7 +584,7 @@ def test_explicit_adapter_cannot_create_missing_primary_estimate() -> None:
 
 
 def test_adapter_primary_row_cannot_enter_panel_or_numeric_digest() -> None:
-    from easyicu.research_agent.robustness_panel import (
+    from easyicu.research_agent.robustness.panel import (
         PRIMARY_SPEC_ID,
         RobustnessPanelRow,
         build_robustness_panel_from_records,
@@ -614,7 +614,7 @@ def test_adapter_primary_row_cannot_enter_panel_or_numeric_digest() -> None:
 
 
 def test_logistic_adapter_does_not_invent_ridge_estimate_on_separation() -> None:
-    from easyicu.research_agent.estimators import fit_estimator
+    from easyicu.research_agent.robustness.estimators import fit_estimator
 
     exposure = pd.DataFrame({"x": [0.0] * 30 + [1.0] * 30})
     outcome = pd.Series([0.0] * 30 + [1.0] * 30)
@@ -635,8 +635,8 @@ def test_pipeline_finalization_never_infers_relaxed_variant_from_locked_cohort(
     tmp_path, monkeypatch
 ) -> None:
     from easyicu.research_agent.cohort.schema import CohortDefinition
-    from easyicu.research_agent.estimators import fit_robustness_rows_from_records
-    from easyicu.research_agent.robustness_panel import RobustnessSpec
+    from easyicu.research_agent.robustness.estimators import fit_robustness_rows_from_records
+    from easyicu.research_agent.robustness.panel import RobustnessSpec
 
     locked_path = tmp_path / "cohort_analysis.parquet"
     pd.DataFrame(
@@ -655,7 +655,7 @@ def test_pipeline_finalization_never_infers_relaxed_variant_from_locked_cohort(
         raise AssertionError("pipeline finalization must not load/refit cohort data")
 
     monkeypatch.setattr(
-        "easyicu.research_agent.estimators._load_direct_dataframe",
+        "easyicu.research_agent.robustness.estimators._load_direct_dataframe",
         _unexpected_load,
     )
     rows, warnings = fit_robustness_rows_from_records(
@@ -683,7 +683,7 @@ def test_pipeline_finalization_never_infers_relaxed_variant_from_locked_cohort(
 
 
 def test_logistic_adapter_rejects_nonbinary_outcome_before_statsmodels() -> None:
-    from easyicu.research_agent.estimators import fit_estimator
+    from easyicu.research_agent.robustness.estimators import fit_estimator
 
     result = fit_estimator(
         cohort=None,
