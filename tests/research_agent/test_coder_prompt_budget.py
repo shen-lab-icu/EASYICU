@@ -334,6 +334,41 @@ def test_production_ordinal_qc_owner_gets_source_and_table_guidance(ra):
     assert coder_context_requires_method_constraints(step) is False
 
 
+def test_ordered_derivation_qc_synonym_does_not_load_model_scaffolds(ra):
+    """Keep a generic Planner synonym inside the ordered-QC prompt family."""
+
+    step = ra.AnalysisStep(
+        step_id="ordered_exposure_derivation",
+        intent="Derive and audit an already selected ordered exposure.",
+        inputs=[
+            "cohort:analysis_set",
+            "ordered_exposure_max",
+            "ordered_exposure_measured",
+            "ordered_exposure_n",
+        ],
+        expected_outputs=[
+            "dataset:ordered_exposure_ready",
+            "table:ordered_distribution",
+            "table:ordered_qc",
+        ],
+        method="ordered_exposure_derivation_and_qc",
+    )
+
+    guide = coder_guide_for_step(load_prompt_pack()["coder"], step)
+
+    assert "TABLE-ONE / DESCRIPTIVE SUMMARIES:" in guide
+    assert "CLINICAL SCORE AND MISSINGNESS SEMANTICS:" in guide
+    assert "For a regression step that explicitly requests" not in guide
+    assert "Before fitting, audit every categorical predictor" not in guide
+    assert "Before any complete-case model" not in guide
+    assert "Exposure/event TIMING" not in guide
+    assert coder_context_requires_method_constraints(step) is False
+
+    llm = _CaptureLLM(["import os\nvalue = 1\n"])
+    CoderAgent(llm).run(context=_wide_context(ra, n_families=2), step=step)
+    assert _payload_bytes(llm.calls[0][0]) <= 42_000
+
+
 def test_typed_figure_owner_does_not_load_model_compatibility_scaffold(ra):
     step = ra.AnalysisStep(
         step_id="publication_figure",
