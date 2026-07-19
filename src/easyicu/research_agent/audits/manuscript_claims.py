@@ -205,9 +205,7 @@ def audit_manuscript_numeric_claims(
 def _first_summary_scalar(
     summaries: Sequence[Dict[str, Any]], keys: Sequence[str]
 ) -> Optional[float]:
-    # Lazy import to avoid a circular dependency with pipeline.py, which
-    # imports `audit_manuscript_numeric_claims` from this module.
-    from ..pipeline import _first_present_scalar
+    from ..scalar_utils import _first_present_scalar
 
     for summary in summaries:
         value = _first_present_scalar(summary, keys)
@@ -232,7 +230,7 @@ def _all_summary_scalars(
     within a step, so a step that registers both ``auroc`` and ``test_auroc``
     contributes its primary value once.
     """
-    from ..pipeline import _first_present_scalar
+    from ..scalar_utils import _first_present_scalar
 
     values: List[float] = []
     for summary in summaries:
