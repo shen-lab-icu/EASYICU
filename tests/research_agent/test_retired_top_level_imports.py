@@ -41,7 +41,7 @@ RETIRED_TOP_LEVEL_MODULES: dict[str, str | None] = {
     "concept_gate": "gates.concept",
     "concept_proposal": "discovery.concept_proposal",
     "context": "research_context.builder",
-    "context_numeric": "research_context.builder_numeric",
+    "context_numeric": "authority.context_numeric_claims",
     "contract_gate": "gates.contract",
     "cost": "providers.cost",
     "cross_model_panel": "evaluation.cross_model_panel",

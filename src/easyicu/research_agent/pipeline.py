@@ -128,7 +128,7 @@ from .research_context.builder import (
     build_retrieved_research_context,
 )
 from .research_context.typed import parse_research_context_json
-from .research_context.builder_numeric import register_context_numeric_claims
+from .authority.context_numeric_claims import register_context_numeric_claims
 from .authority import pipeline_cache as _pipeline_cache
 from .planning.analysis_blueprint import (
     build_analysis_blueprint,
