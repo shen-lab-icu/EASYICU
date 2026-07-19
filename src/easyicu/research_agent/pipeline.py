@@ -420,6 +420,40 @@ from .orchestration.finalize import (
 )
 
 
+def _defer_typed_plan_dag_findings_until_probe(
+    candidate_findings: Sequence[ValidationFinding],
+) -> List[ValidationFinding]:
+    """Mark pre-probe typed-DAG errors as pending, never as current errors.
+
+    Plan shaping happens before the probe-aware replanner gets its one focused
+    chance to repair missing or ambiguous typed edges. Retaining those initial
+    errors after a successful replan makes a repaired plan look blocked. Only
+    ``plan_typed_dag`` errors are deferred; cap failures and every unrelated
+    planner error keep their original severity. The execute phase recomputes
+    the final typed DAG and emits current errors before any Coder call.
+    """
+
+    deferred: List[ValidationFinding] = []
+    for finding in candidate_findings:
+        if finding.validator != "plan_typed_dag" or finding.severity != "error":
+            deferred.append(finding)
+            continue
+        deferred.append(
+            finding.model_copy(
+                update={
+                    "validator": "plan_contract_pending",
+                    "severity": "warning",
+                    "detail": {
+                        **dict(finding.detail or {}),
+                        "pending_probe_replan": True,
+                        "original_validator": "plan_typed_dag",
+                    },
+                }
+            )
+        )
+    return deferred
+
+
 def _resume_plan_candidate_paths(
     *,
     run_dir: Path,
@@ -2967,7 +3001,7 @@ class ResearchAgentPipeline:
 
             cap = self._max_total_steps
             plan, cap_findings = _cap_plan_preserving_figure_steps(plan=plan, cap=cap)
-            findings.extend(cap_findings)
+            findings.extend(_defer_typed_plan_dag_findings_until_probe(cap_findings))
             plan, trajectory_product_findings = augment_trajectory_plan_products(
                 plan=plan,
                 context=context,

@@ -7,7 +7,14 @@ from easyicu.research_agent.plan_utils import (
     _cap_plan_preserving_figure_steps,
     _typed_plan_dag_findings,
 )
-from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep
+from easyicu.research_agent.pipeline import (
+    _defer_typed_plan_dag_findings_until_probe,
+)
+from easyicu.research_agent.schema import (
+    AnalysisPlan,
+    AnalysisStep,
+    ValidationFinding,
+)
 
 
 def _step(
@@ -73,7 +80,9 @@ def test_under_cap_plan_is_stably_topologically_ordered():
     plan = AnalysisPlan(
         research_question="Generic product chain",
         steps=[
-            _step("01_consumer", inputs=["artifact:prepared"], outputs=["table:result"]),
+            _step(
+                "01_consumer", inputs=["artifact:prepared"], outputs=["table:result"]
+            ),
             _step("02_unrelated", outputs=["table:notes"]),
             _step("03_producer", outputs=["artifact:prepared"]),
         ],
@@ -87,8 +96,7 @@ def test_under_cap_plan_is_stably_topologically_ordered():
         "01_consumer",
     ]
     assert any(
-        (finding.detail or {}).get("reason")
-        == "typed_dependency_topological_reorder"
+        (finding.detail or {}).get("reason") == "typed_dependency_topological_reorder"
         for finding in findings
     )
     assert _typed_plan_dag_findings(normalized) == []
@@ -114,6 +122,38 @@ def test_missing_typed_producer_remains_fail_closed():
         (finding.detail or {}).get("reason") == "typed_input_producer_missing"
         for finding in dag_findings
     )
+
+
+def test_preprobe_typed_error_becomes_pending_but_unrelated_error_stays_current():
+    initial = [
+        ValidationFinding(
+            validator="plan_typed_dag",
+            severity="error",
+            message="Multiple declared producers require planner repair.",
+            detail={
+                "reason": "typed_input_producer_ambiguous",
+                "typed_product": "table:result",
+            },
+        ),
+        ValidationFinding(
+            validator="planner",
+            severity="error",
+            message="The plan cap cannot preserve all protected steps.",
+            detail={"reason": "typed_dependency_closure_exceeds_cap"},
+        ),
+    ]
+
+    deferred = _defer_typed_plan_dag_findings_until_probe(initial)
+
+    assert deferred[0].validator == "plan_contract_pending"
+    assert deferred[0].severity == "warning"
+    assert deferred[0].detail == {
+        "reason": "typed_input_producer_ambiguous",
+        "typed_product": "table:result",
+        "pending_probe_replan": True,
+        "original_validator": "plan_typed_dag",
+    }
+    assert deferred[1] == initial[1]
 
 
 @pytest.mark.parametrize("kind", ["feature", "qc"])
