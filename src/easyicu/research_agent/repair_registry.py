@@ -255,6 +255,7 @@ def _meta(
 
 _SYNTACTIC_REPAIRS = {
     "boolean_mask_reduction_precedence_v1",
+    "closed_counts_direct_host_call_v1",
     "figure_contract_source_data_schema_v1",
     "host_helper_keyword_only_call_v1",
     "local_helper_unpack_receipt_v1",
@@ -267,6 +268,7 @@ _SYNTACTIC_REPAIRS = {
 }
 
 _STRUCTURAL_REPAIRS = {
+    "arbitrary_column_fallback_fail_closed_v1",
     "cohort_csv_to_parquet_v1",
     "cohort_file_direct_read_v1",
     "conditional_nonfinite_fail_closed_guard_v1",
@@ -281,6 +283,7 @@ _STRUCTURAL_REPAIRS = {
     "normalize_first_time_companion_v1",
     "primary_predictor_safe_summary_lookup_v1",
     "provenance_bidirectional_pair_scan_v1",
+    "provenance_custom_helper_to_host_receipt_v1",
     "provenance_fail_closed_guard_v1",
     "provenance_helper_reraise_v1",
     "proportion_confint_nobs_keyword_v1",

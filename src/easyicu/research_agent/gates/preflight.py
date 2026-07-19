@@ -6157,12 +6157,11 @@ def _local_helper_unpack_arity_findings(
 def _host_helper_runtime_introspection_findings(
     tree: ast.Module,
 ) -> list[ValidationFinding]:
-    """Identify obsolete runtime adaptation of the publication helper."""
+    """Identify runtime adaptation of stable host-owned helper APIs."""
 
     inspect_modules: set[str] = set()
     inspect_signature_names: set[str] = set()
-    helper_names: set[str] = set()
-    helper_modules: set[str] = set()
+    helper_references: dict[str, str] = {}
     for node in tree.body:
         if isinstance(node, ast.Import):
             for alias in node.names:
@@ -6172,7 +6171,16 @@ def _host_helper_runtime_introspection_findings(
                     alias.name == "easyicu.research_agent.figures.publication"
                     and alias.asname
                 ):
-                    helper_modules.add(alias.asname)
+                    helper_references[f"{alias.asname}.save_publication_figure"] = (
+                        "save_publication_figure"
+                    )
+                elif (
+                    alias.name == "easyicu.research_agent.methods.descriptive_inputs"
+                    and alias.asname
+                ):
+                    helper_references[f"{alias.asname}.closed_categorical_counts"] = (
+                        "closed_categorical_counts"
+                    )
         elif isinstance(node, ast.ImportFrom) and node.level == 0:
             if node.module == "inspect":
                 inspect_signature_names.update(
@@ -6181,52 +6189,60 @@ def _host_helper_runtime_introspection_findings(
                     if alias.name == "signature"
                 )
             elif node.module == "easyicu.research_agent.figures.publication":
-                helper_names.update(
-                    alias.asname or alias.name
-                    for alias in node.names
-                    if alias.name == "save_publication_figure"
+                helper_references.update(
+                    {
+                        alias.asname or alias.name: "save_publication_figure"
+                        for alias in node.names
+                        if alias.name == "save_publication_figure"
+                    }
                 )
-    if not (helper_names or helper_modules):
+            elif node.module == "easyicu.research_agent.methods.descriptive_inputs":
+                helper_references.update(
+                    {
+                        alias.asname or alias.name: "closed_categorical_counts"
+                        for alias in node.names
+                        if alias.name == "closed_categorical_counts"
+                    }
+                )
+    if not helper_references:
         return []
 
     signature_call_names = {
         *(f"{name}.signature" for name in inspect_modules),
         *inspect_signature_names,
     }
-    helper_reference_names = {
-        *helper_names,
-        *(f"{name}.save_publication_figure" for name in helper_modules),
-    }
-    introspection_nodes: list[ast.AST] = []
+    introspection_nodes: list[tuple[ast.AST, str]] = []
     for node in ast.walk(tree):
         if (
             isinstance(node, ast.Call)
             and _call_name(node.func) in signature_call_names
             and node.args
-            and _call_name(node.args[0]) in helper_reference_names
+            and _call_name(node.args[0]) in helper_references
         ):
-            introspection_nodes.append(node)
+            reference = _call_name(node.args[0])
+            introspection_nodes.append((node, helper_references[reference]))
         elif (
             isinstance(node, ast.Attribute)
             and node.attr == "__signature__"
-            and _call_name(node.value) in helper_reference_names
+            and _call_name(node.value) in helper_references
         ):
-            introspection_nodes.append(node)
+            reference = _call_name(node.value)
+            introspection_nodes.append((node, helper_references[reference]))
     return [
         ValidationFinding(
             validator="mechanical_code_preflight",
             severity="error",
             message=(
-                "Generated code must call the stable host-owned publication "
+                "Generated code must call the stable host-owned "
                 "helper API directly instead of adapting its runtime signature."
             ),
             detail={
                 "reason": "host_helper_runtime_introspection",
-                "helper_name": "save_publication_figure",
+                "helper_name": helper_name,
                 "line": int(node.lineno),
             },
         )
-        for node in introspection_nodes
+        for node, helper_name in introspection_nodes
     ]
 
 

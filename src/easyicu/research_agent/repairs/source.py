@@ -373,6 +373,403 @@ def _patch_host_helper_keyword_only_call(
     return repaired
 
 
+def _closed_counts_introspection_line(
+    findings: Sequence[ValidationFinding],
+) -> int | None:
+    """Return one host-authorized closed-counts introspection coordinate."""
+
+    lines = {
+        int(detail["line"])
+        for finding in findings
+        for detail in [finding.detail or {}]
+        if finding.validator == "mechanical_code_preflight"
+        and finding.severity == "error"
+        and detail.get("reason") == "host_helper_runtime_introspection"
+        and detail.get("helper_name") == "closed_categorical_counts"
+        and isinstance(detail.get("line"), int)
+        and not isinstance(detail.get("line"), bool)
+        and int(detail["line"]) > 0
+    }
+    return next(iter(lines)) if len(lines) == 1 else None
+
+
+def _patch_closed_counts_runtime_adapter(
+    code: str,
+    *,
+    introspection_line: int | None,
+) -> str:
+    """Replace one reflective closed-counts adapter with its stable API call.
+
+    The wrapper's two already-authored parameters remain the series and the
+    Agent-declared levels.  The repair changes no value, category, denominator,
+    or statistic; it only binds those parameters to the host helper's declared
+    keyword API and removes the now-unused exact ``import inspect`` statement.
+    """
+
+    if introspection_line is None:
+        return code
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return code
+    exact_imports = [
+        node
+        for node in tree.body
+        if isinstance(node, ast.Import)
+        and len(node.names) == 1
+        and node.names[0].name == "inspect"
+        and node.names[0].asname is None
+    ]
+    helper_imports = [
+        node
+        for node in tree.body
+        if isinstance(node, ast.ImportFrom)
+        and node.level == 0
+        and node.module == "easyicu.research_agent.methods.descriptive_inputs"
+        and any(
+            alias.name == "closed_categorical_counts" and alias.asname is None
+            for alias in node.names
+        )
+    ]
+    signature_calls = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and int(getattr(node, "lineno", 0)) == introspection_line
+        and isinstance(node.func, ast.Attribute)
+        and isinstance(node.func.value, ast.Name)
+        and node.func.value.id == "inspect"
+        and node.func.attr == "signature"
+        and len(node.args) == 1
+        and isinstance(node.args[0], ast.Name)
+        and node.args[0].id == "closed_categorical_counts"
+        and not node.keywords
+    ]
+    if len(exact_imports) != 1 or len(helper_imports) != 1 or len(signature_calls) != 1:
+        return code
+    signature_call = signature_calls[0]
+    parents = {
+        child: parent
+        for parent in ast.walk(tree)
+        for child in ast.iter_child_nodes(parent)
+    }
+    wrapper: ast.AST | None = signature_call
+    while wrapper is not None and not isinstance(
+        wrapper, (ast.FunctionDef, ast.AsyncFunctionDef)
+    ):
+        wrapper = parents.get(wrapper)
+    if not (
+        isinstance(wrapper, ast.FunctionDef)
+        and wrapper in tree.body
+        and not wrapper.decorator_list
+        and not wrapper.args.posonlyargs
+        and len(wrapper.args.args) == 2
+        and not wrapper.args.kwonlyargs
+        and wrapper.args.vararg is None
+        and wrapper.args.kwarg is None
+        and not wrapper.args.defaults
+    ):
+        return code
+    series_name, levels_name = (argument.arg for argument in wrapper.args.args)
+    direct_call_count = sum(
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == wrapper.name
+        for node in ast.walk(tree)
+    )
+    if direct_call_count < 1:
+        return code
+
+    lines = code.splitlines(keepends=True)
+    body_start = int(wrapper.body[0].lineno) - 1
+    body_end = int(wrapper.body[-1].end_lineno or wrapper.body[-1].lineno)
+    wrapper_line = lines[int(wrapper.lineno) - 1]
+    wrapper_indent = wrapper_line[: len(wrapper_line) - len(wrapper_line.lstrip())]
+    body_indent = wrapper_indent + ("\t" if "\t" in wrapper_indent else "    ")
+    lines[body_start:body_end] = [
+        f"{body_indent}return closed_categorical_counts(\n",
+        f"{body_indent}    {series_name}, declared_levels={levels_name}\n",
+        f"{body_indent})\n",
+    ]
+    candidate = "".join(lines)
+    try:
+        candidate_tree = ast.parse(candidate)
+    except SyntaxError:
+        return code
+    if any(
+        isinstance(node, ast.Name)
+        and node.id == "inspect"
+        and isinstance(node.ctx, ast.Load)
+        for node in ast.walk(candidate_tree)
+    ):
+        return code
+    import_node = next(
+        node
+        for node in candidate_tree.body
+        if isinstance(node, ast.Import)
+        and len(node.names) == 1
+        and node.names[0].name == "inspect"
+        and node.names[0].asname is None
+    )
+    candidate_lines = candidate.splitlines(keepends=True)
+    del candidate_lines[
+        int(import_node.lineno) - 1 : int(import_node.end_lineno or import_node.lineno)
+    ]
+    repaired = "".join(candidate_lines)
+    try:
+        ast.parse(repaired)
+    except SyntaxError:
+        return code
+    return repaired
+
+
+def _arbitrary_column_fallback_coordinate(
+    findings: Sequence[ValidationFinding],
+) -> tuple[str, int] | None:
+    coordinates = {
+        (str(detail.get("function") or ""), int(detail["line"]))
+        for finding in findings
+        for detail in [finding.detail or {}]
+        if finding.validator == "mechanical_code_preflight"
+        and finding.severity == "error"
+        and detail.get("reason") == "arbitrary_column_fallback"
+        and isinstance(detail.get("function"), str)
+        and isinstance(detail.get("line"), int)
+        and not isinstance(detail.get("line"), bool)
+        and int(detail["line"]) > 0
+    }
+    if len(coordinates) != 1:
+        return None
+    function_name, line = next(iter(coordinates))
+    return (function_name, line) if function_name else None
+
+
+def _patch_arbitrary_column_fallback_to_raise(
+    code: str,
+    *,
+    coordinate: tuple[str, int] | None,
+) -> str:
+    """Remove one frame-order fallback while preserving its authored raise."""
+
+    if coordinate is None:
+        return code
+    function_name, line = coordinate
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return code
+    functions = [
+        node
+        for node in tree.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and node.name == function_name
+    ]
+    if len(functions) != 1:
+        return code
+    function = functions[0]
+    parents = {
+        child: parent
+        for parent in ast.walk(function)
+        for child in ast.iter_child_nodes(parent)
+    }
+    assignments = [
+        node
+        for node in ast.walk(function)
+        if isinstance(node, (ast.Assign, ast.AnnAssign))
+        and int(getattr(node, "lineno", 0)) == line
+    ]
+    if len(assignments) != 1:
+        return code
+    fallback = parents.get(assignments[0])
+    if not (
+        isinstance(fallback, ast.If)
+        and assignments[0] in fallback.body
+        and len(fallback.orelse) == 1
+        and isinstance(fallback.orelse[0], ast.Raise)
+        and fallback.end_lineno is not None
+    ):
+        return code
+    raise_source = ast.unparse(fallback.orelse[0])
+    lines = code.splitlines(keepends=True)
+    start = int(fallback.lineno) - 1
+    end = int(fallback.end_lineno)
+    original_line = lines[start]
+    indent = original_line[: len(original_line) - len(original_line.lstrip())]
+    replacement = "".join(
+        f"{indent}{source_line}\n" for source_line in raise_source.splitlines()
+    )
+    lines[start:end] = [replacement]
+    repaired = "".join(lines)
+    try:
+        repaired_tree = ast.parse(repaired)
+    except SyntaxError:
+        return code
+    from ..gates.preflight import _function_arbitrary_column_fallback
+
+    if any(
+        _function_arbitrary_column_fallback(node) is not None
+        for node in repaired_tree.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and node.name == function_name
+    ):
+        return code
+    return repaired
+
+
+def _provenance_custom_helper_coordinate(
+    findings: Sequence[ValidationFinding],
+) -> tuple[str, int] | None:
+    """Return one custom provenance helper and its exact reported call count."""
+
+    helper_names: set[str] = set()
+    call_lines: set[int] = set()
+    allowed_modes = {
+        "provenance_helper_result_not_bound",
+        "provenance_helper_result_not_immediately_guarded",
+        "provenance_helper_result_guard_not_fail_closed",
+        "provenance_helper_runtime_binding_ambiguous",
+    }
+    matching_findings = 0
+    for finding in findings:
+        detail = finding.detail or {}
+        if not (
+            finding.validator == "mechanical_code_preflight"
+            and finding.severity == "error"
+            and detail.get("reason") == "provenance_audit_not_fail_closed"
+        ):
+            continue
+        matching_findings += 1
+        issues = detail.get("issues")
+        if not isinstance(issues, list):
+            return None
+        for issue in issues:
+            if (
+                not isinstance(issue, dict)
+                or issue.get("failure_mode") not in allowed_modes
+            ):
+                return None
+            helper_name = issue.get("helper_name")
+            call_line = issue.get("call_line")
+            if not isinstance(helper_name, str) or not helper_name.strip():
+                return None
+            if (
+                isinstance(call_line, bool)
+                or not isinstance(call_line, int)
+                or call_line <= 0
+            ):
+                return None
+            helper_names.add(helper_name)
+            call_lines.add(call_line)
+    if matching_findings != 1 or len(helper_names) != 1 or not call_lines:
+        return None
+    return next(iter(helper_names)), len(call_lines)
+
+
+def _patch_custom_provenance_helper_to_host_receipt(
+    code: str,
+    *,
+    coordinate: tuple[str, int] | None,
+) -> str:
+    """Replace a uniquely bound custom audit with the self-raising host receipt."""
+
+    if coordinate is None:
+        return code
+    helper_name, expected_call_count = coordinate
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return code
+    helper_defs = [
+        node
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef)
+        and node.name == helper_name
+        and not node.decorator_list
+    ]
+    host_imports = [
+        node
+        for node in tree.body
+        if isinstance(node, ast.ImportFrom)
+        and node.level == 0
+        and node.module == "easyicu.research_agent.methods.descriptive_inputs"
+        and any(
+            alias.name == "measurement_provenance_receipt" and alias.asname is None
+            for alias in node.names
+        )
+    ]
+    if len(helper_defs) != 1 or len(host_imports) != 1:
+        return code
+    helper = helper_defs[0]
+    if not (
+        len(helper.args.args) == 3
+        and not helper.args.posonlyargs
+        and not helper.args.kwonlyargs
+        and helper.args.vararg is None
+        and helper.args.kwarg is None
+        and not helper.args.defaults
+    ):
+        return code
+    direct_calls = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == helper_name
+    ]
+    if len(direct_calls) != expected_call_count:
+        return code
+    helper_name_loads = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Name)
+        and node.id == helper_name
+        and isinstance(node.ctx, ast.Load)
+    ]
+    if len(helper_name_loads) != len(direct_calls):
+        return code
+    replacements: list[tuple[str, str]] = []
+    for call in direct_calls:
+        if len(call.args) != 3 or call.keywords:
+            return code
+        sources = [ast.get_source_segment(code, argument) for argument in call.args]
+        call_source = ast.get_source_segment(code, call)
+        if not call_source or any(not source for source in sources):
+            return code
+        frame_source, measured_source, count_source = sources
+        replacement = (
+            f"measurement_provenance_receipt({frame_source}, "
+            f"measured_column={measured_source}, count_column={count_source})"
+        )
+        replacements.append((call_source, replacement))
+    candidate = code
+    for call_source, replacement in replacements:
+        if candidate.count(call_source) != 1:
+            return code
+        candidate = candidate.replace(call_source, replacement, 1)
+    try:
+        candidate_tree = ast.parse(candidate)
+    except SyntaxError:
+        return code
+    candidate_helpers = [
+        node
+        for node in candidate_tree.body
+        if isinstance(node, ast.FunctionDef) and node.name == helper_name
+    ]
+    if len(candidate_helpers) != 1:
+        return code
+    candidate_helper = candidate_helpers[0]
+    lines = candidate.splitlines(keepends=True)
+    start = int(candidate_helper.lineno) - 1
+    end = int(candidate_helper.end_lineno or candidate_helper.lineno)
+    del lines[start:end]
+    repaired = "".join(lines)
+    try:
+        ast.parse(repaired)
+    except SyntaxError:
+        return code
+    return repaired
+
+
 def _local_helper_unpack_repair_coordinate(
     findings: Sequence[ValidationFinding],
 ) -> tuple[str, int, int] | None:
@@ -954,6 +1351,16 @@ def deterministic_concept_audit_repair(
     repaired = code
     repair_names: List[str] = []
 
+    if RepairReason.ARBITRARY_COLUMN_FALLBACK in set(repair_reasons):
+        fail_closed = _patch_arbitrary_column_fallback_to_raise(
+            repaired,
+            coordinate=_arbitrary_column_fallback_coordinate(repair_findings),
+        )
+        if fail_closed != repaired:
+            repair_name = "arbitrary_column_fallback_fail_closed_v1"
+            repaired = fail_closed
+            repair_names.append(repair_name)
+
     if RepairReason.INVALID_HELPER_SIGNATURE in set(repair_reasons):
         keyword_bound = _patch_host_helper_keyword_only_call(
             repaired,
@@ -971,6 +1378,15 @@ def deterministic_concept_audit_repair(
         if receipt_threaded != repaired:
             repair_name = "local_helper_unpack_receipt_v1"
             repaired = receipt_threaded
+            repair_names.append(repair_name)
+
+        closed_counts_bound = _patch_closed_counts_runtime_adapter(
+            repaired,
+            introspection_line=_closed_counts_introspection_line(repair_findings),
+        )
+        if closed_counts_bound != repaired:
+            repair_name = "closed_counts_direct_host_call_v1"
+            repaired = closed_counts_bound
             repair_names.append(repair_name)
 
     if RepairReason.LOSSY_NUMERIC_COERCION in set(repair_reasons):
@@ -991,6 +1407,16 @@ def deterministic_concept_audit_repair(
         if guarded != repaired:
             repair_name = "conditional_nonfinite_fail_closed_guard_v1"
             repaired = guarded
+            repair_names.append(repair_name)
+
+    if RepairReason.PROVENANCE_NOT_FAIL_CLOSED in set(repair_reasons):
+        host_bound = _patch_custom_provenance_helper_to_host_receipt(
+            repaired,
+            coordinate=_provenance_custom_helper_coordinate(repair_findings),
+        )
+        if host_bound != repaired:
+            repair_name = "provenance_custom_helper_to_host_receipt_v1"
+            repaired = host_bound
             repair_names.append(repair_name)
 
     scalar_cast_finding = any(

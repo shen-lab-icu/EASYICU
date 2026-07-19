@@ -46,6 +46,8 @@ from easyicu.research_agent.repairs.source import (
     deterministic_contract_repair,
     deterministic_concept_audit_repair,
 )
+from easyicu.research_agent.repairs.reasons import RepairReason
+from easyicu.research_agent.schema import ValidationFinding
 
 # ---------------------------------------------------------------------------
 # _KEYERROR_NOT_IN_INDEX_RE / _extract_missing_index_columns
@@ -699,6 +701,184 @@ def test_concept_repair_is_idempotent():
     twice, names2 = deterministic_concept_audit_repair(once, ["fillna(0) on lactate"])
     assert names2 == []
     assert twice == once
+
+
+def test_concept_repair_binds_closed_counts_helper_without_runtime_introspection():
+    code = """
+import inspect
+from easyicu.research_agent.methods.descriptive_inputs import closed_categorical_counts
+
+def invoke_counts(series, levels):
+    signature = inspect.signature(closed_categorical_counts)
+    parameters = list(signature.parameters)
+    if "levels" in parameters:
+        return closed_categorical_counts(series, levels=levels)
+    return closed_categorical_counts(series, declared_levels=levels)
+
+result = invoke_counts(series, levels)
+""".lstrip()
+    finding = ValidationFinding(
+        validator="mechanical_code_preflight",
+        severity="error",
+        message="stable helper must not be introspected",
+        detail={
+            "reason": "host_helper_runtime_introspection",
+            "helper_name": "closed_categorical_counts",
+            "line": 5,
+        },
+    )
+
+    out, names = deterministic_concept_audit_repair(
+        code,
+        [finding.message],
+        repair_reasons=[RepairReason.INVALID_HELPER_SIGNATURE],
+        repair_findings=[finding],
+    )
+
+    assert names == ["closed_counts_direct_host_call_v1"]
+    assert "import inspect" not in out
+    assert "inspect.signature" not in out
+    assert (
+        "return closed_categorical_counts(\n        series, declared_levels=levels\n    )"
+        in out
+    )
+    assert deterministic_concept_audit_repair(
+        out,
+        [finding.message],
+        repair_reasons=[RepairReason.INVALID_HELPER_SIGNATURE],
+        repair_findings=[finding],
+    ) == (out, [])
+
+
+def test_concept_repair_does_not_rewrite_aliased_closed_counts_adapter():
+    code = """
+from inspect import signature as inspect_signature
+from easyicu.research_agent.methods.descriptive_inputs import closed_categorical_counts as counts
+
+def invoke_counts(series, levels):
+    inspect_signature(counts)
+    return counts(series, declared_levels=levels)
+
+result = invoke_counts(series, levels)
+""".lstrip()
+    finding = ValidationFinding(
+        validator="mechanical_code_preflight",
+        severity="error",
+        message="stable helper must not be introspected",
+        detail={
+            "reason": "host_helper_runtime_introspection",
+            "helper_name": "closed_categorical_counts",
+            "line": 5,
+        },
+    )
+
+    assert deterministic_concept_audit_repair(
+        code,
+        [finding.message],
+        repair_reasons=[RepairReason.INVALID_HELPER_SIGNATURE],
+        repair_findings=[finding],
+    ) == (code, [])
+
+
+def test_concept_repair_retires_arbitrary_column_fallback_using_authored_raise():
+    code = """
+def extract_count_table(table):
+    level_col = None
+    count_col = None
+    if level_col is None or count_col is None:
+        if table.shape[1] == 2:
+            level_col, count_col = table.columns[0], table.columns[1]
+        else:
+            raise RuntimeError("declared level/count columns are missing")
+    return level_col, count_col
+""".lstrip()
+    finding = ValidationFinding(
+        validator="mechanical_code_preflight",
+        severity="error",
+        message="frame-order fallback is forbidden",
+        detail={
+            "reason": "arbitrary_column_fallback",
+            "line": 6,
+            "function": "extract_count_table",
+        },
+    )
+
+    out, names = deterministic_concept_audit_repair(
+        code,
+        [finding.message],
+        repair_reasons=[RepairReason.ARBITRARY_COLUMN_FALLBACK],
+        repair_findings=[finding],
+    )
+
+    assert names == ["arbitrary_column_fallback_fail_closed_v1"]
+    assert "table.columns[0]" not in out
+    assert "declared level/count columns are missing" in out
+    assert deterministic_concept_audit_repair(
+        out,
+        [finding.message],
+        repair_reasons=[RepairReason.ARBITRARY_COLUMN_FALLBACK],
+        repair_findings=[finding],
+    ) == (out, [])
+
+
+def test_concept_repair_replaces_custom_provenance_helper_with_host_receipt():
+    code = """
+from easyicu.research_agent.methods.descriptive_inputs import measurement_provenance_receipt
+
+def audit_pair(frame, measured_col, count_col):
+    receipt = measurement_provenance_receipt(
+        frame, measured_column=measured_col, count_column=count_col
+    )
+    return {
+        "role": "audit_only",
+        "invalid_pair_n": receipt["invalid_pair_n"],
+        "discordant_n": receipt["discordant_n"],
+    }
+
+checks = [
+    audit_pair(frame, "lactate_measured", "lactate_n"),
+    audit_pair(frame, "creatinine_measured", "creatinine_n"),
+]
+""".lstrip()
+    finding = ValidationFinding(
+        validator="mechanical_code_preflight",
+        severity="error",
+        message="custom provenance helper is not bound fail-closed",
+        detail={
+            "reason": "provenance_audit_not_fail_closed",
+            "issues": [
+                {
+                    "failure_mode": "provenance_helper_result_not_bound",
+                    "helper_name": "audit_pair",
+                    "call_line": 14,
+                },
+                {
+                    "failure_mode": "provenance_helper_result_not_bound",
+                    "helper_name": "audit_pair",
+                    "call_line": 15,
+                },
+            ],
+        },
+    )
+
+    out, names = deterministic_concept_audit_repair(
+        code,
+        [finding.message],
+        repair_reasons=[RepairReason.PROVENANCE_NOT_FAIL_CLOSED],
+        repair_findings=[finding],
+    )
+
+    assert names == ["provenance_custom_helper_to_host_receipt_v1"]
+    assert "def audit_pair" not in out
+    assert out.count("measurement_provenance_receipt(") == 2
+    assert 'measured_column="lactate_measured"' in out
+    assert 'count_column="creatinine_n"' in out
+    assert deterministic_concept_audit_repair(
+        out,
+        [finding.message],
+        repair_reasons=[RepairReason.PROVENANCE_NOT_FAIL_CLOSED],
+        repair_findings=[finding],
+    ) == (out, [])
 
 
 def test_concept_repair_inserts_provenance_fail_closed_guard():

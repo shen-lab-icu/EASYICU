@@ -218,6 +218,36 @@ def test_table_coder_guide_loads_host_owned_descriptive_input_contract(ra):
     assert "percentage denominator" in guide
 
 
+def test_mechanical_preflight_rejects_closed_counts_runtime_introspection(ra):
+    step = ra.AnalysisStep(
+        step_id="describe",
+        intent="Describe an Agent-selected closed category.",
+        inputs=["selected_variable"],
+        expected_outputs=["table:table_one"],
+        method="table_one",
+    )
+    findings = audit_mechanical_code_contracts(
+        """
+import inspect
+from easyicu.research_agent.methods.descriptive_inputs import closed_categorical_counts
+
+def invoke_counts(series, levels):
+    signature = inspect.signature(closed_categorical_counts)
+    return closed_categorical_counts(series, declared_levels=levels)
+""".lstrip(),
+        step,
+    )
+
+    assert any(
+        finding.validator == "mechanical_code_preflight"
+        and finding.severity == "error"
+        and finding.detail
+        and finding.detail.get("reason") == "host_helper_runtime_introspection"
+        and finding.detail.get("helper_name") == "closed_categorical_counts"
+        for finding in findings
+    )
+
+
 def test_coder_repair_applies_minimal_patch_without_full_rewrite(ra):
     patch = json.dumps(
         {
