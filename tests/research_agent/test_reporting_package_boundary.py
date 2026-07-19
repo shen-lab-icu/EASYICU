@@ -26,6 +26,7 @@ REPORTING_MODULE_ALIASES = tuple(
         "article_contract",
         "bibtex",
         "latex",
+        "manuscript_post",
     )
 )
 
