@@ -38,7 +38,7 @@ from ..authority.provider_budget import (
 from ..authority.run_input import canonical_sha256
 from ..schema import AnalysisStep, ResearchContext
 from ..authority.step_attempt import StepAttemptState
-from ..step_worker_state import StepWorkerProgress
+from .step_worker_state import StepWorkerProgress
 
 
 class ConceptQuarantineState:

@@ -14,7 +14,6 @@ from pathlib import Path
 
 import pytest
 
-
 RETIRED_TOP_LEVEL_MODULES: dict[str, str | None] = {
     "agentic_coder": "agents.agentic_coder",
     "analysis_method_suite": "planning.analysis_method_suite",
@@ -25,6 +24,7 @@ RETIRED_TOP_LEVEL_MODULES: dict[str, str | None] = {
     "capability_registry": "planning.capability_registry",
     "case_contexts": "case_plugins.contexts",
     "causal_audit": "review.causal_audit",
+    "code_hygiene": "execution.code_hygiene",
     "code_patch": "repairs.patch",
     "code_preflight": "gates.preflight",
     "code_repair": "repairs.source",
@@ -65,9 +65,7 @@ RETIRED_TOP_LEVEL_MODULES: dict[str, str | None] = {
     "idea_mining": "discovery.idea_mining",
     "idea_mining_data_first": "discovery.idea_mining_data_first",
     "idea_mining_eval": "discovery.idea_mining_eval",
-    "idea_mining_extended_feasibility": (
-        "discovery.idea_mining_extended_feasibility"
-    ),
+    "idea_mining_extended_feasibility": ("discovery.idea_mining_extended_feasibility"),
     "idea_mining_feasibility_tier": "discovery.idea_mining_feasibility_tier",
     "idea_mining_funnel": "discovery.idea_mining_funnel",
     "idea_mining_priorart": "discovery.idea_mining_priorart",
@@ -98,8 +96,11 @@ RETIRED_TOP_LEVEL_MODULES: dict[str, str | None] = {
     "review_artifacts": "reporting.review_artifacts",
     "reviewer": "reporting.reviewer",
     "run_input_capsule": "authority.run_input",
+    "run_coordination": "execution.run_coordination",
     "run_lock": "authority.run_lock",
+    "runner": "execution.runner",
     "runtime_artifacts": "authority.runtime_artifacts",
+    "step_execution": "execution.step_execution",
     "step_summary": None,
     "study_design": "planning.study_design",
     "study_design_playbook": "planning.study_design_playbook",
@@ -107,6 +108,7 @@ RETIRED_TOP_LEVEL_MODULES: dict[str, str | None] = {
     "step_attempt_authority": "authority.step_attempt",
     "step_authority_capsule": "authority.step_capsule",
     "step_authority_runtime": "authority.step_runtime",
+    "step_worker_state": "execution.step_worker_state",
     "summary_repair": "repairs.summary",
     "temporal_features": "methods.temporal_features",
     "tier2_jury": "evaluation.tier2_jury",
@@ -120,10 +122,7 @@ RETIRED_TOP_LEVEL_MODULES: dict[str, str | None] = {
 @pytest.mark.parametrize("leaf", sorted(RETIRED_TOP_LEVEL_MODULES))
 def test_retired_top_level_module_is_absent(leaf: str) -> None:
     package_root = (
-        Path(__file__).resolve().parents[2]
-        / "src"
-        / "easyicu"
-        / "research_agent"
+        Path(__file__).resolve().parents[2] / "src" / "easyicu" / "research_agent"
     )
     assert not (package_root / f"{leaf}.py").exists()
     assert importlib.util.find_spec(f"easyicu.research_agent.{leaf}") is None
@@ -132,9 +131,7 @@ def test_retired_top_level_module_is_absent(leaf: str) -> None:
 @pytest.mark.parametrize(
     "target",
     sorted(
-        target
-        for target in RETIRED_TOP_LEVEL_MODULES.values()
-        if target is not None
+        target for target in RETIRED_TOP_LEVEL_MODULES.values() if target is not None
     ),
 )
 def test_canonical_replacement_is_importable(target: str) -> None:

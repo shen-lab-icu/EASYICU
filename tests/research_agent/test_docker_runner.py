@@ -124,7 +124,7 @@ def _install_fake_subprocess(
 
     # Patch the module-level subprocess (not the global one) so other
     # tests are unaffected.
-    import easyicu.research_agent.runner as runner_mod
+    import easyicu.research_agent.execution.runner as runner_mod
 
     monkeypatch.setattr(runner_mod.subprocess, "run", fake_run)
 
@@ -132,7 +132,7 @@ def _install_fake_subprocess(
 def _force_docker_present(
     monkeypatch: pytest.MonkeyPatch, fake_path: str = "/usr/bin/docker"
 ) -> None:
-    import easyicu.research_agent.runner as runner_mod
+    import easyicu.research_agent.execution.runner as runner_mod
 
     monkeypatch.setattr(runner_mod.shutil, "which", lambda _name: fake_path)
 
@@ -146,7 +146,7 @@ def test_missing_docker_binary_raises(
     ra, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
     cohort = _make_cohort(tmp_path)
-    import easyicu.research_agent.runner as runner_mod
+    import easyicu.research_agent.execution.runner as runner_mod
 
     monkeypatch.setattr(runner_mod.shutil, "which", lambda _n: None)
 
@@ -316,7 +316,7 @@ def test_build_command_maps_digest_bound_authority_snapshot_into_container(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ):
-    from easyicu.research_agent.runner import (
+    from easyicu.research_agent.execution.runner import (
         _capture_run_artifact_authority_snapshot,
     )
 
@@ -600,9 +600,14 @@ def test_run_invokes_subprocess_and_writes_log(
     assert provenance["image_id"] == "sha256:" + "a" * 64
     assert "lifelines" in provenance["method_capabilities"]
     assert "shap" not in provenance["method_capabilities"]
-    assert "numpy==2.0.0" in (
-        result.out_dir / "runner_requirements.lock.txt"
-    ).read_text(encoding="utf-8")
+    requirements_text = (result.out_dir / "runner_requirements.lock.txt").read_text(
+        encoding="utf-8"
+    )
+    assert "numpy==2.0.0" in requirements_text
+    assert (
+        "# generated_by=easyicu.research_agent.execution.runner.DockerRunner"
+        in requirements_text
+    )
     import easyicu.research_agent.method_capabilities as method_capabilities
 
     capability_block = method_capabilities.coder_method_capability_block()
@@ -1089,7 +1094,7 @@ def test_pull_precedes_and_binds_authority_image_identity(
             )
         raise AssertionError(cmd)
 
-    import easyicu.research_agent.runner as runner_module
+    import easyicu.research_agent.execution.runner as runner_module
 
     monkeypatch.setattr(runner_module.subprocess, "run", fake_run)
     runner = ra.DockerRunner(

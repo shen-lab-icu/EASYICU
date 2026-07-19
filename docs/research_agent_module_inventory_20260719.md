@@ -20,12 +20,19 @@ Before the retirement patch, the 161 top-level Python files comprised:
 | Real top-level implementations | 93 | 98,530 | Canonical/public/frozen/dormant implementations requiring individual review |
 
 The cleanup has now removed the old facade layer rather than retaining hundreds
-of tiny forwarding files.  The current tree has **65 top-level Python files
-including `__init__.py` (75,933 LOC)**, with 222 modules in 23 responsibility
-packages and 759 static import edges.  The graph remains at **zero cyclic
+of tiny forwarding files.  The current tree has **60 top-level Python files
+including `__init__.py`**, with 222 modules in 23 responsibility packages and
+761 static import edges.  The graph remains at **zero cyclic
 modules / zero SCCs**.  The former 23-module control-plane SCC,
 validator/replication pair, and final pipeline/execute/publication-figure cycle
 are gone.
+
+The execution-runtime bundle moved `runner.py`, `code_hygiene.py`,
+`run_coordination.py`, `step_execution.py`, and `step_worker_state.py` into
+`execution/` and retired their old root paths.  `RunResult` now lives in the
+dependency-neutral `contracts.py`; both the package root and execution runner
+export that single contract object, so authority code does not reverse-import
+the execution layer.
 
 This is the AST-visible, module-top-level static import graph. Sealed-renderer
 digest and archived-candidate compatibility still use a controlled registry-

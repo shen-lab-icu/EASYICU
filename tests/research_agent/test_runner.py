@@ -12,6 +12,15 @@ import pandas as pd
 import pytest
 
 
+def test_run_result_has_one_dependency_neutral_contract_owner():
+    import easyicu.research_agent as research_agent
+    from easyicu.research_agent.contracts import RunResult as ContractRunResult
+    from easyicu.research_agent.execution.runner import RunResult as RunnerRunResult
+
+    assert research_agent.RunResult is ContractRunResult
+    assert RunnerRunResult is ContractRunResult
+
+
 def _is_python_executable(command: str) -> bool:
     return Path(command).name.startswith("python")
 
@@ -154,7 +163,7 @@ def test_code_runner_authority_probe_failure_is_fail_closed(
         cohort_parquet=cohort_path,
         python_executable=sys.executable,
     )
-    import easyicu.research_agent.runner as runner_module
+    import easyicu.research_agent.execution.runner as runner_module
 
     monkeypatch.setattr(
         runner_module.subprocess,
@@ -404,7 +413,7 @@ def test_code_runner_scrubs_secrets_and_reports_filesystem_degradation(
 def test_code_runner_default_does_not_retry_failed_sandbox_on_host(
     ra, tmp_path: Path, monkeypatch
 ):
-    import easyicu.research_agent.runner as runner_mod
+    import easyicu.research_agent.execution.runner as runner_mod
 
     cohort_path = tmp_path / "cohort.parquet"
     pd.DataFrame({"stay_id": [1], "death": [0]}).to_parquet(cohort_path, index=False)
@@ -441,7 +450,7 @@ def test_code_runner_default_does_not_retry_failed_sandbox_on_host(
 def test_code_runner_default_blocks_direct_host_execution(
     ra, tmp_path: Path, monkeypatch
 ):
-    import easyicu.research_agent.runner as runner_mod
+    import easyicu.research_agent.execution.runner as runner_mod
 
     cohort_path = tmp_path / "cohort.parquet"
     pd.DataFrame({"stay_id": [1], "death": [0]}).to_parquet(cohort_path, index=False)
@@ -731,7 +740,7 @@ def test_runner_retries_without_unshare_when_linux_namespace_is_unavailable(
     tmp_path: Path,
     monkeypatch,
 ):
-    import easyicu.research_agent.runner as runner_mod
+    import easyicu.research_agent.execution.runner as runner_mod
 
     cohort_path = tmp_path / "cohort.parquet"
     pd.DataFrame({"stay_id": [1], "death": [0]}).to_parquet(cohort_path, index=False)
@@ -785,7 +794,7 @@ def test_runner_forces_single_thread_env_for_sandboxed_numeric_stacks(
     tmp_path: Path,
     monkeypatch,
 ):
-    import easyicu.research_agent.runner as runner_mod
+    import easyicu.research_agent.execution.runner as runner_mod
 
     cohort_path = tmp_path / "cohort.parquet"
     pd.DataFrame({"stay_id": [1], "death": [0]}).to_parquet(cohort_path, index=False)
@@ -821,7 +830,7 @@ def test_runner_retries_without_macos_sandbox_when_openmp_shm_is_blocked(
     tmp_path: Path,
     monkeypatch,
 ):
-    import easyicu.research_agent.runner as runner_mod
+    import easyicu.research_agent.execution.runner as runner_mod
 
     cohort_path = tmp_path / "cohort.parquet"
     pd.DataFrame({"stay_id": [1], "death": [0]}).to_parquet(cohort_path, index=False)
@@ -878,7 +887,7 @@ def test_runner_retries_without_macos_sandbox_when_profile_apply_is_denied(
     tmp_path: Path,
     monkeypatch,
 ):
-    import easyicu.research_agent.runner as runner_mod
+    import easyicu.research_agent.execution.runner as runner_mod
 
     cohort_path = tmp_path / "cohort.parquet"
     pd.DataFrame({"stay_id": [1], "death": [0]}).to_parquet(cohort_path, index=False)
@@ -938,7 +947,7 @@ def test_runner_retries_without_macos_sandbox_when_stdio_is_blocked(
     tmp_path: Path,
     monkeypatch,
 ):
-    import easyicu.research_agent.runner as runner_mod
+    import easyicu.research_agent.execution.runner as runner_mod
 
     cohort_path = tmp_path / "cohort.parquet"
     pd.DataFrame({"stay_id": [1], "death": [0]}).to_parquet(cohort_path, index=False)

@@ -41,7 +41,7 @@ from .figure_preparation import _step_has_figure_only_output_contract
 from .host_services import ExecutePhaseHost, PublicationFigureAuthorityServices
 from ..repair_registry import is_sealed_renderer_repair, repair_metadata_for
 from ..schema import AnalysisStep, ResearchContext
-from ..step_worker_state import StepWorkerProgress
+from .step_worker_state import StepWorkerProgress
 
 
 class SealedRendererState:

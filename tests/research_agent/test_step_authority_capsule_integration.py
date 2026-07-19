@@ -15,7 +15,7 @@ from easyicu.research_agent.authority.provider_budget import (
 )
 from easyicu.research_agent.pipeline import _load_resume_state
 from easyicu.research_agent.repairs.coordination import RepairAuthorityBinding
-from easyicu.research_agent.runner import RunResult
+from easyicu.research_agent.contracts import RunResult
 from easyicu.research_agent.authority.runtime_artifacts import write_run_checkpoint
 from easyicu.research_agent.schema import (
     CohortDescriptor,
@@ -827,10 +827,9 @@ def test_frozen_scoped_v2_context_preserves_typed_authority_on_adoption(
     assert adopted is not None
     frozen_context, frozen_coordinates = adopted
     assert isinstance(frozen_context, ResearchContextV2)
-    assert (
-        frozen_context.materialized_inputs.model_dump(mode="json")
-        == first_context.materialized_inputs.model_dump(mode="json")
-    )
+    assert frozen_context.materialized_inputs.model_dump(
+        mode="json"
+    ) == first_context.materialized_inputs.model_dump(mode="json")
     assert frozen_coordinates.scoped_coder_context == coordinates.scoped_coder_context
 
 

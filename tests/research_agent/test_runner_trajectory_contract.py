@@ -13,7 +13,7 @@ from easyicu.research_agent.authority.evidence_store import EvidenceStore
 from easyicu.research_agent.intake.materialized_trajectory import (
     MaterializedTrajectoryError,
 )
-from easyicu.research_agent.runner import RunResult
+from easyicu.research_agent.contracts import RunResult
 from easyicu.research_agent.authority.step_capsule import (
     StepAuthorityCapsuleRef,
     load_verified_step_authority_capsule,
@@ -124,7 +124,7 @@ def _trajectory_test_pipeline(ra, tmp_path, *, runner_factory):
 
 
 def test_safe_auto_runner_prefers_available_docker_image(monkeypatch):
-    import easyicu.research_agent.runner as runner_mod
+    import easyicu.research_agent.execution.runner as runner_mod
 
     seen = []
 
@@ -157,7 +157,7 @@ def test_safe_auto_runner_prefers_available_docker_image(monkeypatch):
 
 
 def test_safe_auto_runner_uses_macos_sandbox_without_docker(monkeypatch):
-    import easyicu.research_agent.runner as runner_mod
+    import easyicu.research_agent.execution.runner as runner_mod
 
     monkeypatch.setattr(runner_mod.sys, "platform", "darwin")
     monkeypatch.setattr(
@@ -170,7 +170,7 @@ def test_safe_auto_runner_uses_macos_sandbox_without_docker(monkeypatch):
 
 
 def test_safe_auto_runner_fails_before_execution_without_safe_backend(monkeypatch):
-    import easyicu.research_agent.runner as runner_mod
+    import easyicu.research_agent.execution.runner as runner_mod
 
     monkeypatch.setattr(runner_mod.sys, "platform", "win32")
     monkeypatch.setattr(runner_mod.shutil, "which", lambda _name: None)
@@ -181,7 +181,7 @@ def test_safe_auto_runner_fails_before_execution_without_safe_backend(monkeypatc
 
 def test_pipeline_default_auto_selects_probed_docker(ra, tmp_path, monkeypatch):
     import easyicu.research_agent.pipeline as pipeline_mod
-    import easyicu.research_agent.runner as runner_mod
+    import easyicu.research_agent.execution.runner as runner_mod
 
     cohort = tmp_path / "cohort.parquet"
     pd.DataFrame({"stay_id": [1], "death": [0]}).to_parquet(cohort, index=False)

@@ -16,7 +16,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from easyicu.research_agent.runner import CodeRunner, _as_text
+from easyicu.research_agent.execution.runner import CodeRunner, _as_text
 
 
 def test_as_text_handles_bytes_str_and_none():

@@ -26,7 +26,7 @@ from typing import Any, Dict, Optional
 
 import pandas as pd
 
-from ..runner import RunResult
+from ..contracts import RunResult
 from ..schema import AnalysisStep
 
 
@@ -139,7 +139,12 @@ def _salvage_minimal_contract_step_summary(
             recovered["table_one_rows"] = frame.to_dict(orient="records")
             recovered["n_rows"] = int(len(frame))
             recovered["variables_reported"] = sorted(
-                {str(value) for value in frame.get("variable", pd.Series(dtype=str)).dropna().astype(str)}
+                {
+                    str(value)
+                    for value in frame.get("variable", pd.Series(dtype=str))
+                    .dropna()
+                    .astype(str)
+                }
             )
         except Exception:
             pass
@@ -165,7 +170,10 @@ def _salvage_minimal_contract_step_summary(
                 working = frame.copy()
                 if "variable" in working.columns:
                     working = working.loc[
-                        ~working["variable"].astype(str).str.lower().isin({"const", "intercept"})
+                        ~working["variable"]
+                        .astype(str)
+                        .str.lower()
+                        .isin({"const", "intercept"})
                     ]
                 row = working.iloc[0] if not working.empty else frame.iloc[0]
                 predictor = row.get("variable")
@@ -215,7 +223,8 @@ def _salvage_minimal_contract_step_summary(
     figure_files = sorted(
         path.name
         for path in out_dir.iterdir()
-        if path.is_file() and path.suffix.lower() in {".png", ".svg", ".pdf", ".tiff", ".tif"}
+        if path.is_file()
+        and path.suffix.lower() in {".png", ".svg", ".pdf", ".tiff", ".tif"}
     )
     if figure_files:
         recovered["figure_files"] = figure_files

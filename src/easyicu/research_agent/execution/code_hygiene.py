@@ -60,9 +60,7 @@ def _find_forward_references(tree: ast.Module) -> List[_ForwardRef]:
     """Return top-level defs that are referenced before they are defined."""
     body = tree.body
     top_defs = {
-        node.name: idx
-        for idx, node in enumerate(body)
-        if isinstance(node, _DEF_TYPES)
+        node.name: idx for idx, node in enumerate(body) if isinstance(node, _DEF_TYPES)
     }
     if not top_defs:
         return []
@@ -126,9 +124,7 @@ def _insertion_line(tree: ast.Module, lines: List[str]) -> int:
     return insert_line
 
 
-def _extract_def_block(
-    node: ast.AST, lines: List[str]
-) -> Tuple[int, int, List[str]]:
+def _extract_def_block(node: ast.AST, lines: List[str]) -> Tuple[int, int, List[str]]:
     """Return (start_line_0based, end_line_0based_exclusive, block_lines)."""
     start = (node.lineno or 1) - 1
     end_inclusive = (node.end_lineno or node.lineno or 1) - 1

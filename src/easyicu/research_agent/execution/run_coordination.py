@@ -11,7 +11,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from typing import Any, Callable, Iterable, Literal, Optional, Sequence
 
-from .schema import AnalysisStep
+from ..schema import AnalysisStep
 
 
 @dataclass(slots=True)

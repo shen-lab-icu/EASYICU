@@ -45,7 +45,9 @@ from easyicu.research_agent.authority.run_input import (
     prepare_existing_resume_input,
     seal_run_input_capsule,
 )
-from easyicu.research_agent.authority.runtime_artifacts import verified_run_evidence_path
+from easyicu.research_agent.authority.runtime_artifacts import (
+    verified_run_evidence_path,
+)
 from easyicu.research_agent.authority.provider_budget import (
     StepProviderCallBudget,
     load_provider_call_budget_state,
@@ -2301,7 +2303,7 @@ def test_concept_repair_failure_resumes_quarantined_draft_fail_closed(
 
     from easyicu.research_agent.audits.validators import LLMConceptAuditor
     from easyicu.research_agent.contracts import ValidationFinding
-    from easyicu.research_agent.runner import CodeRunner
+    from easyicu.research_agent.execution.runner import CodeRunner
     from easyicu.research_agent.authority.runtime_artifacts import (
         current_evidence_records,
         current_successful_step_ids,
@@ -2792,7 +2794,7 @@ def test_resume_retires_unchanged_draft_after_deterministic_policy_supersession(
 
     from easyicu.research_agent.audits.validators import LLMConceptAuditor
     from easyicu.research_agent.contracts import ValidationFinding
-    from easyicu.research_agent.runner import CodeRunner
+    from easyicu.research_agent.execution.runner import CodeRunner
 
     audit_state = {"old_policy": True}
 
@@ -3188,7 +3190,7 @@ if __name__ == "__main__":
         )
 
     repair_enabled["value"] = True
-    from easyicu.research_agent.runner import CodeRunner
+    from easyicu.research_agent.execution.runner import CodeRunner
 
     quarantine_absent_at_runner = []
     original_run = CodeRunner.run

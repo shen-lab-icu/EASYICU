@@ -20,7 +20,9 @@ class _Runner:
 
 
 def _request(tmp_path: Path):
-    from easyicu.research_agent.step_execution import LockedStepExecutionRequest
+    from easyicu.research_agent.execution.step_execution import (
+        LockedStepExecutionRequest,
+    )
 
     return LockedStepExecutionRequest(
         step_id="02_model",
@@ -31,7 +33,7 @@ def _request(tmp_path: Path):
 
 
 def test_unmanaged_runner_is_cleared_before_exact_single_execution(tmp_path) -> None:
-    from easyicu.research_agent.step_execution import StepExecutor
+    from easyicu.research_agent.execution.step_execution import StepExecutor
 
     events: list[object] = []
     runner = _Runner(events, manages_output_cleanup=False)
@@ -57,7 +59,7 @@ def test_unmanaged_runner_is_cleared_before_exact_single_execution(tmp_path) -> 
 
 
 def test_runner_owned_cleanup_is_not_preempted(tmp_path) -> None:
-    from easyicu.research_agent.step_execution import StepExecutor
+    from easyicu.research_agent.execution.step_execution import StepExecutor
 
     events: list[object] = []
     runner = _Runner(events, manages_output_cleanup=True)
@@ -72,7 +74,7 @@ def test_runner_owned_cleanup_is_not_preempted(tmp_path) -> None:
 
 
 def test_clear_failure_propagates_without_running(tmp_path) -> None:
-    from easyicu.research_agent.step_execution import StepExecutor
+    from easyicu.research_agent.execution.step_execution import StepExecutor
 
     expected = RuntimeError("clear failed")
     runner = _Runner([], manages_output_cleanup=False)
@@ -91,7 +93,7 @@ def test_clear_failure_propagates_without_running(tmp_path) -> None:
 
 
 def test_runner_failure_propagates_without_wrapping(tmp_path) -> None:
-    from easyicu.research_agent.step_execution import StepExecutor
+    from easyicu.research_agent.execution.step_execution import StepExecutor
 
     expected = LookupError("runner failed")
 
@@ -111,7 +113,7 @@ def test_runner_failure_propagates_without_wrapping(tmp_path) -> None:
 
 
 def test_step_executor_is_a_mechanical_single_call_boundary() -> None:
-    from easyicu.research_agent import step_execution
+    from easyicu.research_agent.execution import step_execution
 
     tree = ast.parse(
         textwrap.dedent(inspect.getsource(step_execution.StepExecutor.execute))
