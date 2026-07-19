@@ -48,12 +48,12 @@ from ..audits.patterns import (
     _DISTANCE_BASED_ESTIMATORS,
     _LINEAR_PCA_ESTIMATORS,
 )
-from ..trajectory_contract import (
+from ..trajectory.contract import (
     is_continuous_trajectory_representation,
     selected_trajectory_variables,
     trajectory_zero_imputation_detected,
 )
-from ..trajectory_plan_contract import trajectory_step_roles
+from ..trajectory.plan_contract import trajectory_step_roles
 
 
 # ---------------------------------------------------------------------------

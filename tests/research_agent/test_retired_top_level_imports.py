@@ -116,6 +116,10 @@ RETIRED_TOP_LEVEL_MODULES: dict[str, str | None] = {
     "trajectory_stability_executor": (
         "execution.runners.trajectory_stability_executor"
     ),
+    "trajectory_bundle": "trajectory.bundle",
+    "trajectory_contract": "trajectory.contract",
+    "trajectory_plan_contract": "trajectory.plan_contract",
+    "trajectory_resume_schema": None,
 }
 
 

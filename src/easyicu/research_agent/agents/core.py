@@ -43,8 +43,8 @@ from ..planning.analysis_types import (
     locked_analysis_type_guide,
     planner_analysis_type_guide,
 )
-from ..trajectory_contract import trajectory_phenotyping_code_contract
-from ..trajectory_plan_contract import (
+from ..trajectory.contract import trajectory_phenotyping_code_contract
+from ..trajectory.plan_contract import (
     trajectory_planner_contract_guide,
     trajectory_role_code_contract,
 )

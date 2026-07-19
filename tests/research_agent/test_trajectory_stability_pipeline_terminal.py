@@ -11,7 +11,7 @@ import pytest
 from easyicu.research_agent.authority.evidence_store import EvidenceStore
 from easyicu.research_agent.contracts import RunResult
 from easyicu.research_agent.schema import ValidationFinding
-from easyicu.research_agent.trajectory_plan_contract import (
+from easyicu.research_agent.trajectory.plan_contract import (
     STABILITY_EXECUTOR_INPUTS,
     STABILITY_EXECUTOR_OUTPUTS,
 )

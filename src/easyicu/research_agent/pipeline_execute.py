@@ -295,8 +295,8 @@ from .robustness_panel import (
     robustness_specs_sha,
     write_robustness_panel,
 )
-from .trajectory_bundle import trajectory_bundle_findings
-from .trajectory_plan_contract import (
+from .trajectory.bundle import trajectory_bundle_findings
+from .trajectory.plan_contract import (
     augment_trajectory_plan_products,
     trajectory_plan_contract_applies,
     trajectory_plan_dag_findings,
@@ -305,7 +305,6 @@ from .execution.runners.trajectory_stability_executor import (
     trajectory_stability_executor_code,
     trajectory_stability_executor_owns_step,
 )
-from .trajectory_resume_schema import materialize_legacy_trajectory_replay_schemas
 from .repair_registry import (
     InvariantStatus,
     RepairClass,
@@ -3674,16 +3673,6 @@ def run_execute_phase(
         preexecuted_step_ids.update(resumed_step_ids)
         findings.extend(resume_application.findings)
         probe_summary = resume_application.probe_summary
-        findings.extend(
-            materialize_legacy_trajectory_replay_schemas(
-                plan=plan,
-                context=context,
-                run_dir=run_dir,
-                evidence=evidence,
-                per_step_records=per_step_records,
-                prompt_pack_version=prompt_version,
-            )
-        )
         if resumed_step_ids:
             print(
                 f"[research_agent] resume: skipping {len(resumed_step_ids)} "

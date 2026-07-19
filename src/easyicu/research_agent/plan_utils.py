@@ -73,11 +73,11 @@ from .schema import (
     ValidationFinding,
     VariableRole,
 )
-from .trajectory_contract import (
+from .trajectory.contract import (
     TRAJECTORY_PHENOTYPING_REQUIRED_OUTPUTS,
     trajectory_phenotyping_contract_applies,
 )
-from .trajectory_plan_contract import trajectory_plan_contract_applies
+from .trajectory.plan_contract import trajectory_plan_contract_applies
 
 _WIDE_MEASUREMENT_VALUE_SUFFIXES = (
     "_median",

@@ -1862,7 +1862,6 @@ def _benchmark_pipeline_options(
     enable_cross_run_memory: bool = False,
     submission_profile: Optional["SubmissionProfile"] = None,
     runner_kind: Optional[str] = None,
-    enable_retrospective_trajectory_stability_design: bool = False,
 ) -> Dict[str, Any]:
     options: Dict[str, Any] = {}
     if submission_profile:
@@ -1905,8 +1904,6 @@ def _benchmark_pipeline_options(
         options["writer_digest_widened"] = True
     if llm_seed is not None:
         options["llm_seed"] = int(llm_seed)
-    if enable_retrospective_trajectory_stability_design:
-        options["enable_retrospective_trajectory_stability_design"] = True
     # Cross-run RunMemory (StrategyCard) injection is OFF by default for
     # benchmark/canonical runs. Every resume reuses the same workdir, so a prior
     # run's distilled StrategyCards would be re-injected into the planner on the
@@ -2300,15 +2297,6 @@ def main() -> int:
         ),
     )
     parser.add_argument(
-        "--allow-retrospective-stability-design",
-        action="store_true",
-        help=(
-            "Development-only: on an explicit step resume, let PlannerAgent add "
-            "a typed trajectory-stability design to an older saved plan. This "
-            "is forbidden for submission-profile/canonical runs."
-        ),
-    )
-    parser.add_argument(
         "--stop-after-step-id",
         default=None,
         help=(
@@ -2530,21 +2518,6 @@ def main() -> int:
         resume_from_step_id=resume_from_step_id,
         profile=submission_profile,
     )
-    allow_retrospective_stability_design = bool(
-        getattr(args, "allow_retrospective_stability_design", False)
-    )
-    if allow_retrospective_stability_design and (
-        not explicit_resume_run_id or not resume_from_step_id
-    ):
-        raise SystemExit(
-            "--allow-retrospective-stability-design requires both "
-            "--resume-run-id and --resume-from-step-id."
-        )
-    if allow_retrospective_stability_design and submission_profile is not None:
-        raise SystemExit(
-            "--allow-retrospective-stability-design is development-only and "
-            "cannot be used with --submission-profile."
-        )
     if explicit_resume_run_id and args.models and len(args.models) != 1:
         raise SystemExit("--resume-run-id cannot be combined with multiple models.")
     runner_kind = _enforce_submission_profile_runner(
@@ -2576,9 +2549,6 @@ def main() -> int:
         enable_cross_run_memory=bool(getattr(args, "enable_cross_run_memory", False)),
         submission_profile=submission_profile,
         runner_kind=runner_kind,
-        enable_retrospective_trajectory_stability_design=(
-            allow_retrospective_stability_design
-        ),
     )
 
     if args.ehrflowbench_jsonl:

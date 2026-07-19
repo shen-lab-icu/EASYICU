@@ -112,11 +112,6 @@ class PipelineConfig:
     enable_deterministic_code_fallback: bool = False
     enable_deterministic_planner_fallback: bool = False
     enable_deterministic_runner_repair: bool = True
-    # Development-only escape hatch for old interrupted runs whose saved plan
-    # predates the typed trajectory-stability design packet. Never enable for a
-    # fresh or canonical benchmark run.
-    enable_retrospective_trajectory_stability_design: bool = False
-
     # --- literature search backends -------------------------------------
     enable_pubmed: bool = False
     pubmed_email: Optional[str] = None

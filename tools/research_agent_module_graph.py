@@ -110,6 +110,9 @@ SUPPORTED_CANONICAL_MODULES: Tuple[str, ...] = (
     "easyicu.research_agent.evaluation.tier2_rubric",
     "easyicu.research_agent.review.causal_audit",
     "easyicu.research_agent.review.methodological_rigor",
+    "easyicu.research_agent.trajectory.bundle",
+    "easyicu.research_agent.trajectory.contract",
+    "easyicu.research_agent.trajectory.plan_contract",
 )
 
 # Generic callers may still ask the graph tool to characterize compatibility

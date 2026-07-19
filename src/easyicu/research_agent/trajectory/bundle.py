@@ -23,19 +23,18 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
-from .authority.evidence_store import EvidenceStore, sha256_of_file
-from .authority.runtime_artifacts import (
+from ..authority.evidence_store import EvidenceStore, sha256_of_file
+from ..authority.runtime_artifacts import (
     current_evidence_records,
     current_successful_step_records,
     verified_run_evidence_path,
 )
-from .schema import AnalysisPlan, AnalysisStep, ResearchContext, ValidationFinding
-from .trajectory_contract import (
+from ..schema import AnalysisPlan, AnalysisStep, ResearchContext, ValidationFinding
+from .contract import (
     trajectory_phenotyping_artifact_findings,
     trajectory_phenotyping_contract_applies,
 )
-from .trajectory_plan_contract import evaluate_trajectory_plan_dag
-
+from .plan_contract import evaluate_trajectory_plan_dag
 
 _CORE_CANONICAL_FILES: tuple[str, ...] = (
     "trajectory_missingness_policy.json",
@@ -199,8 +198,7 @@ def resolve_trajectory_bundle_plan_authority(
     blocking_plan_findings = [
         item
         for item in evaluation.findings
-        if str((item.detail or {}).get("kind") or "")
-        not in bundle_owner_findings
+        if str((item.detail or {}).get("kind") or "") not in bundle_owner_findings
     ]
     if blocking_plan_findings:
         contributor_step_ids = tuple(

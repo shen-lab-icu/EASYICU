@@ -25,7 +25,7 @@ from scipy.special import logsumexp
 from sklearn.metrics import adjusted_rand_score
 
 from ...schema import AnalysisPlan, AnalysisStep, TrajectoryStabilitySpec
-from ...trajectory_plan_contract import (
+from ...trajectory.plan_contract import (
     STABILITY_EXECUTOR_INPUTS,
     STABILITY_EXECUTOR_OUTPUTS,
     TRAJECTORY_STABILITY_METHOD_HEAD,
