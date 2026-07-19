@@ -269,6 +269,7 @@ _SYNTACTIC_REPAIRS = {
 _STRUCTURAL_REPAIRS = {
     "cohort_csv_to_parquet_v1",
     "cohort_file_direct_read_v1",
+    "conditional_nonfinite_fail_closed_guard_v1",
     "dedupe_predictor_numeric_design_v1",
     "dedupe_required_cols_outcome_v1",
     "include_outcome_in_all_vars_v1",
