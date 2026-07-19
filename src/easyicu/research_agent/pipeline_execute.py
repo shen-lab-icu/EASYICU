@@ -134,7 +134,9 @@ from .intake.materialized_trajectory import (
 from .research_context.typed import materialized_input_prompt_attachment
 from .contracts import ValidationFinding, _ExecutePhaseResult, _PlanPhaseResult
 from .execution.runners.deterministic_descriptive import absolute_risk_context_code
-from .execution.runners.deterministic_missingness import missingness_measurement_audit_code
+from .execution.runners.deterministic_missingness import (
+    missingness_measurement_audit_code,
+)
 from .execution.runners.deterministic_robustness import (
     robustness_sensitivity_preflight_code,
 )
@@ -3438,25 +3440,15 @@ def run_execute_phase(
 ) -> _ExecutePhaseResult:
     """Execute probe + per-step analysis loop, with optional replanning."""
     services = pipeline._execute_phase_services()
-    _build_probe_summary = services.build_probe_summary
-    deterministic_figure_family_supported_for_upstream = (
-        services.deterministic_figure_family_supported_for_upstream
-    )
-    _promote_prior_publication_bundle = services.promote_prior_publication_bundle
-    _promote_sibling_figure_exports = services.promote_sibling_figure_exports
-    _render_publication_bundle_from_prior_outputs_for_step = (
-        services.render_publication_bundle_from_prior_outputs_for_step
-    )
-    _semantic_aliases_for = services.semantic_aliases_for
-    publication_figure_authority_services = services.publication_figure_authority
     context = plan_result.context
-    agent_context = plan_result.agent_context
     # Planner memory, retrieval narration, hypothesis notes, and article
     # blueprints shaped the typed plan but are not Coder authority.  Preserve
     # the Planner's selected variable projection while restoring the original
     # user/run notes. Host execution attachments travel through a separate
     # typed side channel so user prose can never be elevated to host authority.
-    coder_base_context = agent_context.model_copy(update={"notes": context.notes})
+    coder_base_context = plan_result.agent_context.model_copy(
+        update={"notes": context.notes}
+    )
     evidence = plan_result.evidence
     step_evidence_commit = StepEvidenceCommit(evidence)
     findings = plan_result.findings
@@ -4198,7 +4190,7 @@ def run_execute_phase(
         replanner = ReplannerAgent(role_resolver("planner"))
         try:
             revised = replanner.run(
-                context=agent_context,
+                context=plan_result.agent_context,
                 current_plan=current_plan,
                 probe_summary=probe_summary_payload,
                 completed_step_records=completed_records,
@@ -4302,7 +4294,7 @@ def run_execute_phase(
     typed_plan_dag_blocked = False
     probe_step_id = "00_probe"
     if pipeline._enable_probe_step and probe_step_id not in resumed_step_ids:
-        probe_summary, probe_files = _build_probe_summary(
+        probe_summary, probe_files = services.build_probe_summary(
             context=context,
             cohort_path=cohort_path,
             out_dir=run_dir / "steps" / probe_step_id / "outputs",
@@ -6024,7 +6016,7 @@ def run_execute_phase(
             # routing remains available only after an agent figure fails QA.
             if not _step_has_figure_only_output_contract(step):
                 return False
-            return deterministic_figure_family_supported_for_upstream(
+            return services.deterministic_figure_family_supported_for_upstream(
                 run_dir, step.step_id
             )
 
@@ -6200,8 +6192,8 @@ def run_execute_phase(
                 step=step,
                 worker_progress=worker_progress,
                 pipeline=pipeline,
-                authority_services=publication_figure_authority_services,
-                agent_context=agent_context,
+                authority_services=services.publication_figure_authority,
+                agent_context=plan_result.agent_context,
                 step_record=step_record,
                 sealed_renderer_state=sealed_renderer_state,
                 _authorize_automatic_repair=_authorize_automatic_repair,
@@ -6378,8 +6370,8 @@ def run_execute_phase(
                 step=step,
                 worker_progress=worker_progress,
                 pipeline=pipeline,
-                authority_services=publication_figure_authority_services,
-                agent_context=agent_context,
+                authority_services=services.publication_figure_authority,
+                agent_context=plan_result.agent_context,
                 step_record=step_record,
                 sealed_renderer_state=sealed_renderer_state,
                 _authorize_automatic_repair=_authorize_automatic_repair,
@@ -6533,10 +6525,8 @@ def run_execute_phase(
                             step=step,
                             worker_progress=worker_progress,
                             pipeline=pipeline,
-                            authority_services=(
-                                publication_figure_authority_services
-                            ),
-                            agent_context=agent_context,
+                            authority_services=services.publication_figure_authority,
+                            agent_context=plan_result.agent_context,
                             step_record=step_record,
                             sealed_renderer_state=sealed_renderer_state,
                             _authorize_automatic_repair=_authorize_automatic_repair,
@@ -9711,7 +9701,9 @@ def run_execute_phase(
                 step=step,
                 source="publication_figure_sibling_promotion",
             ):
-                promoted = _promote_sibling_figure_exports(out_dir=run_result.out_dir)
+                promoted = services.promote_sibling_figure_exports(
+                    out_dir=run_result.out_dir
+                )
             if promoted is not None:
                 worker_progress.runner_repair_name = promoted
                 step_record["runner_repair"] = promoted
@@ -9725,7 +9717,7 @@ def run_execute_phase(
                 rescued = None
                 if _step_has_figure_only_output_contract(
                     step
-                ) and deterministic_figure_family_supported_for_upstream(
+                ) and services.deterministic_figure_family_supported_for_upstream(
                     run_dir, step.step_id
                 ):
                     rescued = _repair_publication_figure_in_staging(
@@ -9733,7 +9725,7 @@ def run_execute_phase(
                         current_step_id=step.step_id,
                         out_dir=run_result.out_dir,
                         renderer=(
-                            _render_publication_bundle_from_prior_outputs_for_step
+                            services.render_publication_bundle_from_prior_outputs_for_step
                         ),
                         step_text=f"{step.intent} {step.method}",
                         authorizer=lambda repair_id: _automatic_repair_authorized(
@@ -9767,7 +9759,7 @@ def run_execute_phase(
                             source="publication_figure_prior_bundle_promotion",
                         )
                     ):
-                        promoted = _promote_prior_publication_bundle(
+                        promoted = services.promote_prior_publication_bundle(
                             run_dir=run_dir,
                             current_step_id=step.step_id,
                             out_dir=run_result.out_dir,
@@ -9948,7 +9940,7 @@ def run_execute_phase(
             publication_step
             and sealed_renderer_authorized_code_sha256 is None
             and _step_has_figure_only_output_contract(step)
-            and deterministic_figure_family_supported_for_upstream(
+            and services.deterministic_figure_family_supported_for_upstream(
                 run_dir, step.step_id
             )
         )
@@ -9957,7 +9949,7 @@ def run_execute_phase(
                 run_dir=run_dir,
                 current_step_id=step.step_id,
                 out_dir=run_result.out_dir,
-                renderer=_render_publication_bundle_from_prior_outputs_for_step,
+                renderer=services.render_publication_bundle_from_prior_outputs_for_step,
                 step_text=f"{step.intent} {step.method}",
                 authorizer=lambda repair_id: _automatic_repair_authorized(
                     repair_id,
@@ -10103,7 +10095,7 @@ def run_execute_phase(
                 _is_standard_executor_internal_artifact(art)
             ):
                 continue
-            step_aliases = _semantic_aliases_for(step, art)
+            step_aliases = services.semantic_aliases_for(step, art)
             generation_mode = worker_progress.generation_mode()
             if art.name == "step_summary.json":
                 summary_authority = "\0".join(
@@ -10498,7 +10490,7 @@ def run_execute_phase(
                 _sync_provider_budget()
             try:
                 interpretation = analyzer.run(
-                    context=agent_context,
+                    context=plan_result.agent_context,
                     step=step,
                     step_summary=step_summary,
                     evidence_ids=evidence_ids_for_step,

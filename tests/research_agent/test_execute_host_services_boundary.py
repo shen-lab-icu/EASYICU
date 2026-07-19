@@ -247,5 +247,7 @@ def test_staging_renderer_is_explicit_and_all_production_calls_supply_it() -> No
         ]
         assert len(renderer_keywords) == 1
         value = renderer_keywords[0].value
-        assert isinstance(value, ast.Name)
-        assert value.id == "_render_publication_bundle_from_prior_outputs_for_step"
+        assert isinstance(value, ast.Attribute)
+        assert value.attr == "render_publication_bundle_from_prior_outputs_for_step"
+        assert isinstance(value.value, ast.Name)
+        assert value.value.id == "services"
