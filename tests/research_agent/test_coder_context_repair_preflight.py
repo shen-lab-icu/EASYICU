@@ -616,6 +616,86 @@ count = int(
     )
 
 
+def test_mechanical_preflight_repairs_unreduced_boolean_mask_count(ra):
+    code = """
+import pandas as pd
+
+original = pd.Series([1.0, float("inf"), None])
+coerced = pd.to_numeric(original, errors="coerce").where(lambda s: s != float("inf"))
+invalid_n = int(
+    original.notna() & coerced.isna()
+)
+if invalid_n > 0:
+    detected = True
+else:
+    detected = False
+"""
+    findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+    messages = [
+        finding.detail.get("reason")
+        for finding in findings
+        if finding.detail
+        and finding.detail.get("reason") == "scalar_cast_before_reduction"
+    ]
+
+    repaired, repair_names = deterministic_concept_audit_repair(code, messages)
+    repaired_again, repair_names_again = deterministic_concept_audit_repair(
+        repaired, messages
+    )
+    namespace = {}
+    exec(repaired, namespace)
+
+    assert messages == ["scalar_cast_before_reduction"]
+    assert repair_names == ["scalar_cast_before_reduction_v1"]
+    assert repair_names_again == []
+    assert repaired_again == repaired
+    assert namespace["invalid_n"] == 1
+    assert namespace["detected"] is True
+
+
+def test_mechanical_preflight_does_not_rewrite_scalar_bitwise_integer_guard(ra):
+    code = """
+left = True
+right = False
+invalid_n = int(left & right)
+if invalid_n > 0:
+    raise RuntimeError("invalid")
+"""
+    findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+    repaired, repair_names = deterministic_concept_audit_repair(
+        code,
+        ["scalar_cast_before_reduction"],
+    )
+
+    assert not any(
+        finding.detail
+        and finding.detail.get("reason") == "scalar_cast_before_reduction"
+        for finding in findings
+    )
+    assert repair_names == []
+    assert repaired == code
+
+
+def test_mechanical_preflight_does_not_guess_unproven_boolean_mask_intent(ra):
+    code = """
+def encode(original, coerced):
+    return int(original.notna() & coerced.isna())
+"""
+    findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+    repaired, repair_names = deterministic_concept_audit_repair(
+        code,
+        ["scalar_cast_before_reduction"],
+    )
+
+    assert not any(
+        finding.detail
+        and finding.detail.get("reason") == "scalar_cast_before_reduction"
+        for finding in findings
+    )
+    assert repair_names == []
+    assert repaired == code
+
+
 def test_mechanical_preflight_preserves_shadowed_int_before_sum(ra):
     code = """
 def int(value):

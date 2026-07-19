@@ -3167,14 +3167,17 @@ def _patch_boolean_mask_reduction_precedence(code: str) -> Optional[str]:
 
 
 def _patch_scalar_cast_before_reduction(code: str) -> str:
-    """Move a zero-argument sum inside an unshadowed built-in ``int`` cast."""
+    """Reduce a proven array-like count before its built-in ``int`` cast."""
 
     try:
         tree = ast.parse(code)
     except SyntaxError:
         return code
 
-    from ..gates.preflight import _builtin_int_binding_is_unmodified
+    from ..gates.preflight import (
+        _builtin_int_binding_is_unmodified,
+        _unreduced_boolean_mask_count_casts,
+    )
 
     if not _builtin_int_binding_is_unmodified(tree):
         return code
@@ -3207,6 +3210,26 @@ def _patch_scalar_cast_before_reduction(code: str) -> str:
         ):
             continue
         expression = ast.get_source_segment(code, node.func.value.args[0])
+        if not expression or not all(
+            isinstance(value, int)
+            for value in (
+                node.lineno,
+                node.col_offset,
+                node.end_lineno,
+                node.end_col_offset,
+            )
+        ):
+            continue
+        replacements.append(
+            (
+                _absolute_offset(node.lineno, node.col_offset),
+                _absolute_offset(node.end_lineno, node.end_col_offset),
+                f"int(({expression}).sum())",
+            )
+        )
+
+    for node in _unreduced_boolean_mask_count_casts(tree):
+        expression = ast.get_source_segment(code, node.args[0])
         if not expression or not all(
             isinstance(value, int)
             for value in (
