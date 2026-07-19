@@ -1,3 +1,5 @@
+"""Frozen historical rubric-v1 authority contracts."""
+
 from __future__ import annotations
 
 import hashlib
@@ -11,7 +13,7 @@ from easyicu.research_agent.evaluation_scorecard import (
     DimensionScore,
     FiveDimensionScorecard,
 )
-from easyicu.research_agent.figure2_rubric import (
+from benchmarks.figure2_canonical9.evaluator.rubric_v1 import (
     FIGURE2_DIMENSIONS,
     FIGURE2_TASK_IDS,
     SCORER_BUNDLE_FILES,
@@ -25,7 +27,7 @@ from easyicu.research_agent.figure2_rubric import (
     scorer_bundle_rows,
     scorer_bundle_sha256,
 )
-from easyicu.research_agent.icu_agent_bench import (
+from benchmarks.figure2_canonical9.evaluator.suite import (
     easyicu_evaluation_protocol_suite,
 )
 
@@ -153,7 +155,7 @@ def test_suite_projection_is_answer_free_reproducible_and_exact() -> None:
         }
 
 
-def test_scorer_bundle_membership_and_source_bytes_are_reproducible() -> None:
+def test_historical_scorer_bundle_rows_and_digest_remain_frozen() -> None:
     rows = scorer_bundle_rows()
 
     assert tuple(row["path"] for row in rows) == SCORER_BUNDLE_FILES
@@ -251,7 +253,7 @@ def test_scorecard_envelope_rejects_payload_or_digest_tampering() -> None:
 
 
 def test_planner_coder_and_shared_prompts_do_not_import_or_expose_rubric() -> None:
-    source_root = Path(__file__).resolve().parents[2] / "src/easyicu/research_agent"
+    source_root = Path(__file__).resolve().parents[4] / "src/easyicu/research_agent"
     protected_paths = [
         source_root / "agents.py",
         source_root / "prompts.py",

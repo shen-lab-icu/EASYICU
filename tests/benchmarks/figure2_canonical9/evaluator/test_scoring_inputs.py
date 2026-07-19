@@ -1,3 +1,5 @@
+"""Figure 2 scoring-input authority and sidecar contracts."""
+
 from __future__ import annotations
 
 import csv
@@ -8,27 +10,37 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from easyicu.research_agent import figure2_scoring_inputs as scoring_inputs_module
+from benchmarks.figure2_canonical9.evaluator import (
+    input_binding_v2,
+    scoring_inputs as scoring_inputs_module,
+)
 from easyicu.research_agent.evidence import EvidenceStore
 from easyicu.research_agent.evidence_authority import (
     load_current_evidence_snapshot,
 )
-from easyicu.research_agent.figure2_paper_rubric import (
+from benchmarks.figure2_canonical9.evaluator.paper_rubric_v2 import (
     FIGURE2_PAPER_RUBRIC_REF,
     paper_rubric_manifest_sha256,
 )
-from easyicu.research_agent.figure2_rubric import (
+from benchmarks.figure2_canonical9.evaluator.rubric_v1 import (
     FIGURE2_TASK_IDS,
     figure2_suite_projection,
     figure2_suite_projection_sha256,
 )
-from easyicu.research_agent.figure2_scoring_inputs import (
+from benchmarks.figure2_canonical9.evaluator.scoring_inputs import (
     FIGURE2_RUN_TASK_AUTHORITY_SCHEMA,
     FIGURE2_SCORING_ARTIFACT_ROLES,
     FIGURE2_SUITE_REF,
     Figure2ArtifactAuthority,
+    Figure2RunTaskAuthority,
     Figure2ScoringInputAuthority,
     load_figure2_scoring_inputs,
+    seal_figure2_run_task_authority,
+)
+from tests.figure2_test_support import (
+    install_ready_input_binding,
+    ready_submission_manifest_fields,
+    seal_test_run_input_capsule,
 )
 
 TASK_ID = "e2_lactate_mortality"
@@ -37,8 +49,27 @@ RESEARCH_QUESTION = next(
     for task in figure2_suite_projection()["tasks"]
     if task["task_id"] == TASK_ID
 )
-EXPOSURE_CONCEPT = "serum_lactate"
-OUTCOME_CONCEPT = "in_hospital_mortality"
+EXPOSURE_CONCEPT = "lactate"
+OUTCOME_CONCEPT = "death"
+OPERATIONAL_EXPOSURE = "lact_max"
+
+
+@pytest.fixture(autouse=True)
+def _isolated_ready_binding(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    selector = tmp_path / "figure2_ready_input_binding.json"
+    monkeypatch.setattr(
+        input_binding_v2,
+        "_canonical_run_input_binding_path",
+        lambda: selector,
+    )
+
+
+def _objective(task_id: str) -> str:
+    return next(
+        str(task["objective"])
+        for task in figure2_suite_projection()["tasks"]
+        if task["task_id"] == task_id
+    )
 
 
 def _write_json(path: Path, payload: object) -> None:
@@ -47,6 +78,12 @@ def _write_json(path: Path, payload: object) -> None:
 
 def _load(run_dir: Path, *, task_id: str = TASK_ID):
     return load_figure2_scoring_inputs(run_dir, expected_task_id=task_id)
+
+
+def _task_authority_sidecar(run_dir: Path) -> Path:
+    matches = sorted(run_dir.glob("figure2_task_authority.sha256-*.json"))
+    assert len(matches) == 1
+    return matches[0]
 
 
 def _fixture_run(
@@ -63,9 +100,12 @@ def _fixture_run(
     research_question: str = RESEARCH_QUESTION,
     exposure_concept: str | None = EXPOSURE_CONCEPT,
     outcome_concept: str | None = OUTCOME_CONCEPT,
+    operational_exposure: str | None = OPERATIONAL_EXPOSURE,
+    operational_target_outcome: str = OUTCOME_CONCEPT,
     claim_alias: str | None = None,
     extra_claim_evidence_id: str | None = None,
     extra_claim_evidence_payload: bytes = b"\x00\x01sealed-binary-evidence",
+    per_step_records: list[dict[str, object]] | None = None,
 ) -> tuple[Path, EvidenceStore]:
     run_dir = tmp_path / "run_authority"
     run_dir.mkdir(parents=True)
@@ -74,6 +114,7 @@ def _fixture_run(
         "required_step_count": 1,
         "completed_step_count": 1,
         "failed_steps": [],
+        "missing_steps": [],
         "manuscript_ready": True,
         "publication_figure_bundle_ready": True,
         "publication_figure_stems": ["primary_result"],
@@ -115,9 +156,9 @@ def _fixture_run(
     )
     evidence_audit: dict[str, object] = {
         "schema_version": "easyicu.evidence_audit/1",
-        "evidence_count": 6 + int(extra_claim_evidence_id is not None),
+        "evidence_count": 8 + int(extra_claim_evidence_id is not None),
         "kinds": {
-            "log": 3,
+            "log": 5,
             "statistic": 2,
             "table": 1,
             **({"figure": 1} if extra_claim_evidence_id is not None else {}),
@@ -234,8 +275,19 @@ def _fixture_run(
                 else None
             ),
         )
-    snapshot = load_current_evidence_snapshot(run_dir)
-    paper_rubric = scoring_inputs_module.load_figure2_paper_rubric()
+    capsule = seal_test_run_input_capsule(
+        run_dir=run_dir,
+        evidence=store,
+        research_question=research_question,
+        primary_exposure=operational_exposure,
+        target_outcome=operational_target_outcome,
+    )
+    install_ready_input_binding(
+        selector=input_binding_v2._canonical_run_input_binding_path(),
+        task_id=task_id,
+        research_question=research_question,
+        capsule=capsule,
+    )
     _write_json(
         run_dir / "manifest.json",
         {
@@ -243,38 +295,38 @@ def _fixture_run(
             "checkpoint_sequence": 1,
             "run_id": "run_authority",
             "research_question": research_question,
-            "figure2_task_authority": {
-                "schema_version": FIGURE2_RUN_TASK_AUTHORITY_SCHEMA,
-                "task_id": task_id,
-                "suite_ref": FIGURE2_SUITE_REF,
-                "suite_projection_sha256": figure2_suite_projection_sha256(),
-                "paper_rubric_ref": FIGURE2_PAPER_RUBRIC_REF,
-                "paper_rubric_sha256": paper_rubric_manifest_sha256(paper_rubric),
-                "research_question_sha256": hashlib.sha256(
-                    research_question.encode("utf-8")
-                ).hexdigest(),
-                "exposure_concept": exposure_concept,
-                "outcome_concept": outcome_concept,
-                "evidence_generation": snapshot.generation,
-                "evidence_payload_sha256": snapshot.payload_sha256,
-            },
+            "started_at": "2026-07-18T00:00:00Z",
+            "context_path": "research_context.json",
+            **ready_submission_manifest_fields(),
             "readiness": gates,
-            "per_step_records": [
-                {
-                    "step_id": "01_primary",
-                    "status": "ok",
-                    "step_summary": {
+            "per_step_records": (
+                per_step_records
+                if per_step_records is not None
+                else [
+                    {
+                        "step_id": "01_primary",
                         "status": "ok",
-                        "primary_model": {
-                            "exposure": exposure_concept,
-                            "outcome": outcome_concept,
+                        "step_summary": {
+                            "status": "ok",
+                            "primary_model": {
+                                "exposure": exposure_concept,
+                                "outcome": outcome_concept,
+                            },
                         },
-                    },
-                    "evidence_ids": [],
-                }
-            ],
+                        "evidence_ids": [],
+                    }
+                ]
+            ),
             "evidence": [record.model_dump(mode="json") for record in store.records()],
         },
+    )
+    seal_figure2_run_task_authority(
+        run_dir,
+        task_id=task_id,
+        research_question=research_question,
+        exposure_concept=exposure_concept,
+        outcome_concept=outcome_concept or "",
+        operational_exposure=operational_exposure,
     )
     return run_dir, store
 
@@ -311,7 +363,13 @@ def test_loads_exact_current_authority_and_review_corpus(tmp_path: Path) -> None
     )
     assert loaded.manuscript_bytes.startswith(b"# Results")
     assert tuple(item.evidence_id for item in loaded.review_documents) == tuple(
-        sorted(FIGURE2_SCORING_ARTIFACT_ROLES)
+        sorted(
+            (
+                *FIGURE2_SCORING_ARTIFACT_ROLES,
+                "research_context",
+                "run_input_capsule",
+            )
+        )
     )
     manuscript = next(
         item
@@ -337,7 +395,7 @@ def test_rejects_requested_task_mismatch_before_scoring(tmp_path: Path) -> None:
     run_dir, _ = _fixture_run(tmp_path)
     wrong_task = next(task_id for task_id in FIGURE2_TASK_IDS if task_id != TASK_ID)
 
-    with pytest.raises(PermissionError, match="does not match requested task"):
+    with pytest.raises(ValueError, match="question does not match"):
         _load(run_dir, task_id=wrong_task)
 
 
@@ -349,10 +407,8 @@ def test_rejects_task_question_cross_wire_against_frozen_suite_objective(
         for task in figure2_suite_projection()["tasks"]
         if task["task_id"] != TASK_ID
     )
-    run_dir, _ = _fixture_run(tmp_path, research_question=wrong_objective)
-
-    with pytest.raises(OSError, match="frozen task objective"):
-        _load(run_dir)
+    with pytest.raises(ValueError, match="frozen task objective"):
+        _fixture_run(tmp_path, research_question=wrong_objective)
 
 
 def test_scoring_authority_rejects_task_outside_frozen_suite(tmp_path: Path) -> None:
@@ -364,42 +420,26 @@ def test_scoring_authority_rejects_task_outside_frozen_suite(tmp_path: Path) -> 
         Figure2ScoringInputAuthority.model_validate(payload, strict=True)
 
 
-@pytest.mark.parametrize(
-    ("field", "value", "match"),
-    [
-        ("suite_projection_sha256", "0" * 64, "suite projection has drifted"),
-        ("paper_rubric_sha256", "0" * 64, "paper rubric has drifted"),
-        ("research_question_sha256", "0" * 64, "research question has drifted"),
-    ],
-)
-def test_rejects_drifted_task_authority_coordinates(
-    tmp_path: Path,
-    field: str,
-    value: str,
-    match: str,
-) -> None:
+def test_rejects_tampered_task_authority_sidecar(tmp_path: Path) -> None:
     run_dir, _ = _fixture_run(tmp_path)
-    manifest_path = run_dir / "manifest.json"
-    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    manifest["figure2_task_authority"][field] = value
-    _write_json(manifest_path, manifest)
+    sidecar = _task_authority_sidecar(run_dir)
+    payload = json.loads(sidecar.read_text(encoding="utf-8"))
+    payload["suite_projection_sha256"] = "0" * 64
+    _write_json(sidecar, payload)
 
-    with pytest.raises(OSError, match=match):
+    with pytest.raises(OSError, match="digest|size|canonical"):
         _load(run_dir)
 
 
 def test_rejects_missing_task_authority(tmp_path: Path) -> None:
     run_dir, _ = _fixture_run(tmp_path)
-    manifest_path = run_dir / "manifest.json"
-    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    del manifest["figure2_task_authority"]
-    _write_json(manifest_path, manifest)
+    _task_authority_sidecar(run_dir).unlink()
 
-    with pytest.raises(ValidationError):
+    with pytest.raises(FileNotFoundError):
         _load(run_dir)
 
 
-def test_optional_concept_coordinates_round_trip_or_may_be_absent(
+def test_required_concept_coordinates_round_trip_and_missing_is_rejected(
     tmp_path: Path,
 ) -> None:
     run_dir, _ = _fixture_run(tmp_path)
@@ -407,30 +447,61 @@ def test_optional_concept_coordinates_round_trip_or_may_be_absent(
     assert loaded.authority.exposure_concept == EXPOSURE_CONCEPT
     assert loaded.authority.outcome_concept == OUTCOME_CONCEPT
 
-    run_dir_none, _ = _fixture_run(
-        tmp_path / "without_concepts",
+    payload = json.loads(_task_authority_sidecar(run_dir).read_text(encoding="utf-8"))
+    payload.pop("exposure_concept")
+
+    with pytest.raises(ValidationError):
+        Figure2RunTaskAuthority.model_validate(payload, strict=True)
+
+
+def test_explicit_not_applicable_exposure_round_trips_for_predictor_set_task(
+    tmp_path: Path,
+) -> None:
+    task_id = "m2_mortality_prediction"
+    run_dir, _ = _fixture_run(
+        tmp_path,
+        task_id=task_id,
+        research_question=_objective(task_id),
         exposure_concept=None,
-        outcome_concept=None,
+        outcome_concept="death",
     )
-    manifest_path = run_dir_none / "manifest.json"
-    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    manifest["figure2_task_authority"].pop("exposure_concept")
-    manifest["figure2_task_authority"].pop("outcome_concept")
-    _write_json(manifest_path, manifest)
-    loaded_none = _load(run_dir_none)
-    assert loaded_none.authority.exposure_concept is None
-    assert loaded_none.authority.outcome_concept is None
+
+    loaded = _load(run_dir, task_id=task_id)
+
+    assert loaded.authority.exposure_concept is None
+    assert loaded.authority.outcome_concept == "death"
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [("exposure_concept", "vasopressor"), ("outcome_concept", "los_icu")],
+)
+def test_manual_cross_task_concept_binding_is_rejected(
+    tmp_path: Path,
+    field: str,
+    value: str,
+) -> None:
+    run_dir, _ = _fixture_run(tmp_path)
+    coordinates = {
+        "task_id": TASK_ID,
+        "research_question": RESEARCH_QUESTION,
+        "exposure_concept": EXPOSURE_CONCEPT,
+        "outcome_concept": OUTCOME_CONCEPT,
+        "operational_exposure": OPERATIONAL_EXPOSURE,
+    }
+    coordinates[field] = value
+
+    with pytest.raises(ValueError, match="concept does not match"):
+        seal_figure2_run_task_authority(run_dir, **coordinates)
 
 
 def test_rejects_blank_optional_concept_coordinate(tmp_path: Path) -> None:
     run_dir, _ = _fixture_run(tmp_path)
-    manifest_path = run_dir / "manifest.json"
-    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    manifest["figure2_task_authority"]["exposure_concept"] = "  "
-    _write_json(manifest_path, manifest)
+    payload = json.loads(_task_authority_sidecar(run_dir).read_text(encoding="utf-8"))
+    payload["exposure_concept"] = "  "
 
-    with pytest.raises(ValidationError, match="nonblank"):
-        _load(run_dir)
+    with pytest.raises(ValidationError, match="canonical nonblank"):
+        Figure2RunTaskAuthority.model_validate(payload, strict=True)
 
 
 def test_claim_alias_resolves_to_exact_current_evidence_id(tmp_path: Path) -> None:
@@ -588,18 +659,22 @@ def test_rejects_alias_or_numeric_only_evidence_generation_drift(
     ]
     assert after_coordinates == before_coordinates
 
-    with pytest.raises(OSError, match="different EvidenceStore generation"):
+    with pytest.raises(FileNotFoundError, match="figure2_task_authority"):
         _load(run_dir)
 
 
 def test_current_step_summaries_use_latest_successful_checkpoint_records(
     tmp_path: Path,
 ) -> None:
-    run_dir, _ = _fixture_run(tmp_path)
-    manifest_path = run_dir / "manifest.json"
-    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    manifest["per_step_records"].extend(
-        [
+    run_dir, _ = _fixture_run(
+        tmp_path,
+        per_step_records=[
+            {
+                "step_id": "01_primary",
+                "status": "ok",
+                "step_summary": {"status": "ok", "role": "superseded"},
+                "evidence_ids": [],
+            },
             {
                 "step_id": "01_primary",
                 "status": "contract_failed",
@@ -612,9 +687,8 @@ def test_current_step_summaries_use_latest_successful_checkpoint_records(
                 "step_summary": {"status": "ok", "role": "supporting"},
                 "evidence_ids": [],
             },
-        ]
+        ],
     )
-    _write_json(manifest_path, manifest)
 
     loaded = _load(run_dir)
 
@@ -648,15 +722,13 @@ def test_rejects_uncheckpointed_evidence_generation(tmp_path: Path) -> None:
         generation_mode="system",
     )
 
-    with pytest.raises(OSError, match="different EvidenceStore generation"):
+    with pytest.raises(OSError, match="EvidenceStore generation disagree"):
         _load(run_dir)
 
 
 def test_rejects_string_false_gate(tmp_path: Path) -> None:
-    run_dir, _ = _fixture_run(tmp_path, execution_complete="false")
-
-    with pytest.raises(ValidationError, match="execution_complete"):
-        _load(run_dir)
+    with pytest.raises(ValueError, match="must be a boolean"):
+        _fixture_run(tmp_path, execution_complete="false")
 
 
 def test_rejects_empty_claim_ledger(tmp_path: Path) -> None:
@@ -744,7 +816,7 @@ def test_rejects_empty_claim_text(tmp_path: Path) -> None:
         ),
         (
             {"kinds": {"log": 2, "statistic": 3, "table": 1}},
-            "kinds disagree",
+            "internally inconsistent",
         ),
     ],
 )
@@ -802,5 +874,5 @@ def test_rejects_current_record_sha_mismatch(tmp_path: Path) -> None:
     record["sha256"] = "0" * 64
     _write_json(manifest_path, manifest)
 
-    with pytest.raises(OSError, match="different evidence coordinates"):
+    with pytest.raises(OSError, match="EvidenceStore generation disagree"):
         _load(run_dir)

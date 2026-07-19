@@ -1,4 +1,4 @@
-"""Fail-closed contracts for the archived E2/E3/H2 input assessment."""
+"""Fail-closed contracts for the archived Figure 2 input assessment."""
 
 from __future__ import annotations
 
@@ -11,9 +11,9 @@ import pyarrow.parquet as pq
 import pytest
 from pydantic import ValidationError
 
-import easyicu.research_agent.canonical_input_freeze as freeze
+from benchmarks.figure2_canonical9.evaluator import input_freeze_v1 as freeze
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
+REPO_ROOT = Path(__file__).resolve().parents[4]
 MANIFEST_PATH = (
     REPO_ROOT / "benchmarks" / "figure2_canonical9" / "canonical_input_freeze_v1.json"
 )

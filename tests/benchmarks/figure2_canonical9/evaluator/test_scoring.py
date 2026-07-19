@@ -1,3 +1,5 @@
+"""Fail-closed Figure 2 paper-scoring contracts."""
+
 from __future__ import annotations
 
 import csv
@@ -9,37 +11,61 @@ from typing import Any
 import pytest
 from pydantic import ValidationError
 
-import easyicu.research_agent.figure2_scoring as scoring
+from benchmarks.figure2_canonical9.evaluator import input_binding_v2, scoring
+from benchmarks.figure2_canonical9.evaluator import (
+    scoring_inputs as scoring_inputs_module,
+)
 from easyicu.research_agent.evidence import EvidenceStore
 from easyicu.research_agent.evidence_authority import (
     load_current_evidence_snapshot,
 )
-from easyicu.research_agent.icu_agent_bench import easyicu_evaluation_protocol_suite
-from easyicu.research_agent.figure2_rubric import (
+from benchmarks.figure2_canonical9.evaluator.suite import (
+    easyicu_evaluation_protocol_suite,
+)
+from benchmarks.figure2_canonical9.evaluator.rubric_v1 import (
     FIGURE2_DIMENSIONS,
     FIGURE2_TASK_IDS,
     figure2_suite_projection_sha256,
 )
-from easyicu.research_agent.figure2_paper_rubric import (
+from benchmarks.figure2_canonical9.evaluator.paper_rubric_v2 import (
     FIGURE2_PAPER_RUBRIC_REF,
     Figure2PaperRubricManifest,
     Figure2PaperScorecard,
     default_figure2_paper_rubric_path,
     paper_rubric_manifest_sha256,
 )
-from easyicu.research_agent.figure2_safety_issuer import (
+from benchmarks.figure2_canonical9.evaluator.safety_issuer import (
     Figure2SafetyReceipt,
     issue_figure2_safety_receipt,
 )
-from easyicu.research_agent.figure2_scoring import (
+from benchmarks.figure2_canonical9.evaluator.scoring import (
     Figure2EvaluationAttempt,
     build_figure2_safety_request_for_run,
     evaluate_figure2_run,
+    evaluate_figure2_run_from_receipt_path,
     verify_figure2_evaluation_attempt,
 )
-from easyicu.research_agent.figure2_scoring_inputs import (
+from benchmarks.figure2_canonical9.evaluator.scoring_inputs import (
     load_figure2_scoring_inputs,
+    seal_figure2_run_task_authority,
 )
+from tests.figure2_test_support import (
+    install_ready_input_binding,
+    ready_submission_manifest_fields,
+    seal_test_run_input_capsule,
+)
+
+_UNSET = object()
+
+
+@pytest.fixture(autouse=True)
+def _isolated_ready_binding(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    selector = tmp_path / "figure2_ready_input_binding.json"
+    monkeypatch.setattr(
+        input_binding_v2,
+        "_canonical_run_input_binding_path",
+        lambda: selector,
+    )
 
 
 def _sha(payload: bytes) -> str:
@@ -74,8 +100,10 @@ def _ready_run(
     extra_json_artifacts: dict[str, dict[str, object]] | None = None,
     extra_csv_artifacts: dict[str, str] | None = None,
     primary_model_evidence_id: str | None = None,
-    exposure_concept: str | None = None,
-    outcome_concept: str | None = None,
+    exposure_concept: str | None | object = _UNSET,
+    outcome_concept: str | None | object = _UNSET,
+    operational_exposure: str | None | object = _UNSET,
+    operational_target_outcome: str | object = _UNSET,
 ) -> tuple[Path, EvidenceStore]:
     """Build the same strict checkpoint/EvidenceStore join used in production."""
 
@@ -94,6 +122,7 @@ def _ready_run(
         "required_step_count": 1,
         "completed_step_count": 1,
         "failed_steps": [],
+        "missing_steps": [],
         "manuscript_ready": True,
         "publication_figure_bundle_ready": True,
         "publication_figure_stems": ["primary_result"],
@@ -145,9 +174,9 @@ def _ready_run(
         run_dir / "evidence_audit.json",
         {
             "schema_version": "easyicu.evidence_audit/1",
-            "evidence_count": 6 + len(extras) + len(csv_extras),
+            "evidence_count": 8 + len(extras) + len(csv_extras),
             "kinds": {
-                "log": 3,
+                "log": 5,
                 "statistic": 2 + len(extras),
                 "table": 1 + len(csv_extras),
             },
@@ -268,10 +297,47 @@ def _ready_run(
             producer=producer,
             generation_mode=generation_mode,
         )
-    snapshot = load_current_evidence_snapshot(run_dir)
     paper_manifest = Figure2PaperRubricManifest.model_validate_json(
         default_figure2_paper_rubric_path().read_text(encoding="utf-8"),
         strict=True,
+    )
+    task_rubric = next(task for task in paper_manifest.tasks if task.task_id == task_id)
+    resolved_exposure = (
+        task_rubric.validity_binding.exposure_concept
+        if exposure_concept is _UNSET
+        else exposure_concept
+    )
+    resolved_outcome = (
+        task_rubric.validity_binding.outcome_concept
+        if outcome_concept is _UNSET
+        else outcome_concept
+    )
+    resolved_operational_exposure = (
+        "lact_max" if operational_exposure is _UNSET else operational_exposure
+    )
+    resolved_operational_outcome = (
+        task_rubric.validity_binding.outcome_concept
+        if operational_target_outcome is _UNSET
+        else operational_target_outcome
+    )
+    if resolved_operational_exposure is not None and not isinstance(
+        resolved_operational_exposure, str
+    ):
+        raise TypeError("operational exposure must be explicit null or text")
+    if not isinstance(resolved_operational_outcome, str):
+        raise TypeError("operational target outcome must be text")
+    capsule = seal_test_run_input_capsule(
+        run_dir=run_dir,
+        evidence=store,
+        research_question=research_question,
+        primary_exposure=resolved_operational_exposure,
+        target_outcome=resolved_operational_outcome,
+    )
+    install_ready_input_binding(
+        selector=input_binding_v2._canonical_run_input_binding_path(),
+        task_id=task_id,
+        research_question=research_question,
+        capsule=capsule,
     )
     _write_json(
         run_dir / "manifest.json",
@@ -280,6 +346,9 @@ def _ready_run(
             "checkpoint_sequence": 1,
             "run_id": run_dir.name,
             "research_question": research_question,
+            "started_at": "2026-07-18T00:00:00Z",
+            "context_path": "research_context.json",
+            **ready_submission_manifest_fields(),
             "readiness": gates,
             "per_step_records": (
                 [
@@ -294,28 +363,15 @@ def _ready_run(
                 else []
             ),
             "evidence": [record.model_dump(mode="json") for record in store.records()],
-            "figure2_task_authority": {
-                "schema_version": "easyicu.figure2_run_task_authority/1",
-                "task_id": task_id,
-                "suite_ref": "easyicu_evaluation_protocol_suite/v2",
-                "suite_projection_sha256": figure2_suite_projection_sha256(),
-                "paper_rubric_ref": FIGURE2_PAPER_RUBRIC_REF,
-                "paper_rubric_sha256": paper_rubric_manifest_sha256(paper_manifest),
-                "research_question_sha256": _sha(research_question.encode("utf-8")),
-                **(
-                    {"exposure_concept": exposure_concept}
-                    if exposure_concept is not None
-                    else {}
-                ),
-                **(
-                    {"outcome_concept": outcome_concept}
-                    if outcome_concept is not None
-                    else {}
-                ),
-                "evidence_generation": snapshot.generation,
-                "evidence_payload_sha256": snapshot.payload_sha256,
-            },
         },
+    )
+    seal_figure2_run_task_authority(
+        run_dir,
+        task_id=task_id,
+        research_question=research_question,
+        exposure_concept=resolved_exposure,
+        outcome_concept=resolved_outcome or "",
+        operational_exposure=resolved_operational_exposure,
     )
     return run_dir, store
 
@@ -456,6 +512,97 @@ def test_no_safety_receipt_is_a_structured_invalid_attempt(tmp_path: Path) -> No
     assert attempt.envelope is None
 
 
+def test_missing_receipt_path_is_a_structured_invalid_attempt(tmp_path: Path) -> None:
+    run_dir, _ = _ready_run(tmp_path)
+
+    attempt = evaluate_figure2_run_from_receipt_path(
+        run_dir,
+        task_id=FIGURE2_TASK_IDS[0],
+    )
+
+    assert attempt.status == "invalid"
+    assert attempt.invalid_reason_codes == ("SAFETY_ADJUDICATION_MISSING",)
+    assert attempt.envelope is None
+
+
+def test_receipt_path_accepts_one_strict_host_receipt(tmp_path: Path) -> None:
+    run_dir, _ = _ready_run(tmp_path)
+    receipt = _receipt(run_dir)
+    (run_dir / "figure2_safety_receipt.json").write_text(
+        receipt.model_dump_json(),
+        encoding="utf-8",
+    )
+
+    attempt = evaluate_figure2_run_from_receipt_path(
+        run_dir,
+        task_id=FIGURE2_TASK_IDS[0],
+    )
+
+    assert attempt.status == "valid", attempt.invalid_details
+    assert attempt.envelope is not None
+
+
+@pytest.mark.parametrize(
+    "payload", [b"{", b'{"schema_version":"x","schema_version":"y"}']
+)
+def test_malformed_receipt_path_is_structured_invalid(
+    tmp_path: Path,
+    payload: bytes,
+) -> None:
+    run_dir, _ = _ready_run(tmp_path)
+    (run_dir / "figure2_safety_receipt.json").write_bytes(payload)
+
+    attempt = evaluate_figure2_run_from_receipt_path(
+        run_dir,
+        task_id=FIGURE2_TASK_IDS[0],
+    )
+
+    assert attempt.status == "invalid"
+    assert attempt.invalid_reason_codes == ("SAFETY_ADJUDICATION_INVALID",)
+    assert attempt.envelope is None
+
+
+def test_symlinked_receipt_path_is_structured_invalid(tmp_path: Path) -> None:
+    run_dir, _ = _ready_run(tmp_path)
+    target = tmp_path / "external_receipt.json"
+    target.write_text(_receipt(run_dir).model_dump_json(), encoding="utf-8")
+    (run_dir / "figure2_safety_receipt.json").symlink_to(target)
+
+    attempt = evaluate_figure2_run_from_receipt_path(
+        run_dir,
+        task_id=FIGURE2_TASK_IDS[0],
+    )
+
+    assert attempt.status == "invalid"
+    assert attempt.invalid_reason_codes == ("SAFETY_ADJUDICATION_INVALID",)
+    assert attempt.envelope is None
+
+
+def test_fifo_receipt_is_opened_nonblocking_and_structured_invalid(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run_dir, _ = _ready_run(tmp_path)
+    receipt_path = run_dir / "figure2_safety_receipt.json"
+    scoring.os.mkfifo(receipt_path)
+    original_open = scoring.os.open
+
+    def asserted_nonblocking_open(path: object, flags: int, *args: object) -> int:
+        assert flags & getattr(scoring.os, "O_NONBLOCK", 0)
+        return original_open(path, flags, *args)
+
+    monkeypatch.setattr(scoring.os, "open", asserted_nonblocking_open)
+
+    attempt = evaluate_figure2_run_from_receipt_path(
+        run_dir,
+        task_id=FIGURE2_TASK_IDS[0],
+    )
+
+    assert attempt.status == "invalid"
+    assert attempt.invalid_reason_codes == ("SAFETY_ADJUDICATION_INVALID",)
+    assert attempt.envelope is None
+
+
 def test_same_run_cannot_be_scored_as_a_different_task_before_receipt(
     tmp_path: Path,
 ) -> None:
@@ -580,7 +727,7 @@ def test_request_and_receipt_bind_manifest_provider_and_model(tmp_path: Path) ->
     run_dir, _ = _ready_run(tmp_path)
     request = build_figure2_safety_request_for_run(run_dir, task_id=FIGURE2_TASK_IDS[0])
     manifest_path = (
-        Path(__file__).resolve().parents[2]
+        Path(__file__).resolve().parents[4]
         / "benchmarks"
         / "figure2_canonical9"
         / "figure2_paper_rubric_v2.json"
@@ -684,7 +831,7 @@ def test_uncheckpointed_newer_evidence_generation_is_rejected(tmp_path: Path) ->
 
     assert attempt.status == "invalid"
     assert attempt.invalid_reason_codes == ("SCORING_INPUT_AUTHORITY_INVALID",)
-    assert "different EvidenceStore generation" in attempt.invalid_details[0]
+    assert "EvidenceStore generation disagree" in attempt.invalid_details[0]
     assert attempt.envelope is None
 
 
@@ -794,11 +941,9 @@ def test_v2_preserves_objective_outcome_leakage_failure(
     run_dir, _ = _ready_run(
         tmp_path,
         task_id=task_id,
-        extra_csv_artifacts={
-            evidence_id: "variable,estimate\nage,0.10\nmortality,0.25\n"
-        },
+        extra_csv_artifacts={evidence_id: "variable,estimate\nage,0.10\ndeath,0.25\n"},
         primary_model_evidence_id=evidence_id,
-        outcome_concept="mortality",
+        outcome_concept="death",
     )
 
     attempt = _valid_attempt(run_dir, task_id=task_id)
@@ -1012,7 +1157,7 @@ def test_paper_scorecard_rejects_gate_reportable_when_safety_failed(
 
 
 def test_evaluator_authority_is_absent_from_agent_prompt_surfaces() -> None:
-    root = Path(__file__).resolve().parents[2] / "src/easyicu/research_agent"
+    root = Path(__file__).resolve().parents[4] / "src/easyicu/research_agent"
     protected = [
         root / "agents.py",
         root / "prompts.py",

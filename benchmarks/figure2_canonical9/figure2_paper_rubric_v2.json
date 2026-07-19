@@ -16,8 +16,21 @@
   "safety_provider_ref": "local-openai-compatible/127.0.0.1:8317/v1",
   "safety_model_ref": "gpt-5.6-luna",
   "schema_version": "easyicu.figure2_paper_rubric_manifest/2",
-  "scorer_tree_root": "src/easyicu/research_agent",
-  "scorer_tree_sha256": "f2bc7a85571c1754a7c9f072c77207ea2fc09868049c12400dd60eb9a806f1c3",
+  "scorer_core_files": [
+    "src/easyicu/research_agent/evaluation_scorecard.py",
+    "src/easyicu/research_agent/evidence_authority.py",
+    "src/easyicu/research_agent/icu_agent_bench.py",
+    "src/easyicu/research_agent/icu_rules.py",
+    "src/easyicu/research_agent/plan_utils.py",
+    "src/easyicu/research_agent/run_input_capsule.py",
+    "src/easyicu/research_agent/run_lock.py",
+    "src/easyicu/research_agent/runtime_artifacts.py",
+    "src/easyicu/research_agent/schema.py",
+    "src/easyicu/research_agent/validity_signals.py",
+    "src/easyicu/research_agent/viability.py"
+  ],
+  "scorer_tree_root": "benchmarks/figure2_canonical9/evaluator",
+  "scorer_tree_sha256": "433535e569f82a8d299c64088aea8e4f0e055b5bbb414a05fd31d69073a0b58f",
   "suite_projection_sha256": "11c39afac69c9a0b560c6aa92be19f05725f04c66b9d2c499cfdb353c40295ab",
   "suite_ref": "easyicu_evaluation_protocol_suite/v2",
   "tasks": [
@@ -39,7 +52,13 @@
         "COHORT_DEFINITION_TRANSPARENCY",
         "ICD_MEMBERSHIP_VS_TIMING"
       ],
-      "task_id": "e1_sepsis3_prevalence_mortality"
+      "task_id": "e1_sepsis3_prevalence_mortality",
+      "validity_binding": {
+        "exposure_applicability": "required",
+        "exposure_concept": "sepsis3",
+        "outcome_applicability": "required",
+        "outcome_concept": "death"
+      }
     },
     {
       "dimension_applicability": {
@@ -59,7 +78,13 @@
         "LACTATE_UNIT_HARMONISATION",
         "SKEWED_DISTRIBUTION_SUMMARY"
       ],
-      "task_id": "e2_lactate_mortality"
+      "task_id": "e2_lactate_mortality",
+      "validity_binding": {
+        "exposure_applicability": "required",
+        "exposure_concept": "lactate",
+        "outcome_applicability": "required",
+        "outcome_concept": "death"
+      }
     },
     {
       "dimension_applicability": {
@@ -78,7 +103,13 @@
         "ORDINAL_OUTCOME_SEMANTICS",
         "STAGE_BOUNDARY_TRANSPARENCY"
       ],
-      "task_id": "e3_kdigo_gradient"
+      "task_id": "e3_kdigo_gradient",
+      "validity_binding": {
+        "exposure_applicability": "required",
+        "exposure_concept": "kdigo",
+        "outcome_applicability": "required",
+        "outcome_concept": "death"
+      }
     },
     {
       "dimension_applicability": {
@@ -97,7 +128,13 @@
         "COMPLETE_CASE_BIAS",
         "MISSINGNESS_DENOMINATOR_TRANSPARENCY"
       ],
-      "task_id": "m1_hepatobiliary_missingness"
+      "task_id": "m1_hepatobiliary_missingness",
+      "validity_binding": {
+        "exposure_applicability": "required",
+        "exposure_concept": "bili",
+        "outcome_applicability": "required",
+        "outcome_concept": "death"
+      }
     },
     {
       "dimension_applicability": {
@@ -123,7 +160,13 @@
         "CALIBRATION",
         "NUMERIC_EVIDENCE_BINDING"
       ],
-      "task_id": "m2_mortality_prediction"
+      "task_id": "m2_mortality_prediction",
+      "validity_binding": {
+        "exposure_applicability": "not_applicable",
+        "exposure_concept": null,
+        "outcome_applicability": "required",
+        "outcome_concept": "death"
+      }
     },
     {
       "dimension_applicability": {
@@ -144,7 +187,13 @@
         "CLUSTER_STABILITY",
         "SUBPHENOTYPE_OVERINTERPRETATION"
       ],
-      "task_id": "m3_sepsis_subphenotype"
+      "task_id": "m3_sepsis_subphenotype",
+      "validity_binding": {
+        "exposure_applicability": "not_applicable",
+        "exposure_concept": null,
+        "outcome_applicability": "required",
+        "outcome_concept": "death"
+      }
     },
     {
       "dimension_applicability": {
@@ -165,7 +214,13 @@
         "INCIDENT_VS_PREVALENT_ELIGIBILITY",
         "PROPORTIONAL_HAZARDS_ASSUMPTION"
       ],
-      "task_id": "h1_ventilation_survival"
+      "task_id": "h1_ventilation_survival",
+      "validity_binding": {
+        "exposure_applicability": "required",
+        "exposure_concept": "vent_24h_any",
+        "outcome_applicability": "required",
+        "outcome_concept": "death"
+      }
     },
     {
       "dimension_applicability": {
@@ -187,7 +242,13 @@
         "POSITIVITY",
         "CAUSAL_ASSUMPTION_TRANSPARENCY"
       ],
-      "task_id": "h2_vasopressor_causal"
+      "task_id": "h2_vasopressor_causal",
+      "validity_binding": {
+        "exposure_applicability": "required",
+        "exposure_concept": "vasopressor",
+        "outcome_applicability": "required",
+        "outcome_concept": "death"
+      }
     },
     {
       "dimension_applicability": {
@@ -211,7 +272,13 @@
         "CLUSTER_COUNT_SELECTION",
         "TRAJECTORY_CAUSAL_OVERINTERPRETATION"
       ],
-      "task_id": "h3_trajectory_clustering"
+      "task_id": "h3_trajectory_clustering",
+      "validity_binding": {
+        "exposure_applicability": "not_applicable",
+        "exposure_concept": null,
+        "outcome_applicability": "required",
+        "outcome_concept": "death"
+      }
     }
   ],
   "thresholds": {

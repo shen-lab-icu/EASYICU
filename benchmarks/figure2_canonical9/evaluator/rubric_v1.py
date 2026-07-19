@@ -20,8 +20,8 @@ from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from .evaluation_scorecard import FiveDimensionScorecard
-from .icu_agent_bench import easyicu_evaluation_protocol_suite
+from easyicu.research_agent.evaluation_scorecard import FiveDimensionScorecard
+from .suite import easyicu_evaluation_protocol_suite
 
 FIGURE2_RUBRIC_REF = "easyicu.figure2_rubric/20260718-v1"
 FIGURE2_RUBRIC_SCHEMA = "easyicu.figure2_rubric_manifest/1"
@@ -258,21 +258,43 @@ def figure2_suite_projection_sha256() -> str:
 
 
 def scorer_bundle_rows() -> list[dict[str, str]]:
-    """Return logical scorer paths and their current source-byte digests."""
+    """Return the immutable historical v1 scorer source-digest rows.
 
-    source_root = Path(__file__).resolve().parents[2]
+    Version 1 bound the then-current installed source paths.  The active tool
+    has since evolved and the paper-only Canonical9 factory moved out of the
+    wheel.  Keep the historical logical paths and digests byte-for-byte frozen
+    in a repository benchmark asset instead of either mutating the v1 manifest
+    or pretending current source bytes still implement that archived scorer.
+    """
+
+    rows_path = (
+        Path(__file__).resolve().parents[1]
+        / "frozen"
+        / "v1"
+        / "scorer_bundle_rows.json"
+    )
+    raw = rows_path.read_bytes()
+    payload = _strict_json_loads(raw)
+    if raw != _canonical_json_bytes(payload) + b"\n":
+        raise ValueError("historical v1 scorer rows must use canonical JSON bytes")
+    if not isinstance(payload, list):
+        raise ValueError("historical v1 scorer rows must be a list")
     rows: list[dict[str, str]] = []
-    for logical_path in SCORER_BUNDLE_FILES:
-        relative = Path(logical_path).relative_to("src")
-        source_path = source_root / relative
-        if not source_path.is_file():
-            raise FileNotFoundError(f"missing Figure 2 scorer source: {source_path}")
-        rows.append(
-            {
-                "path": logical_path,
-                "sha256": _sha256_bytes(source_path.read_bytes()),
-            }
-        )
+    for row in payload:
+        if not isinstance(row, dict) or set(row) != {"path", "sha256"}:
+            raise ValueError("historical v1 scorer row has an invalid shape")
+        path = row.get("path")
+        digest = row.get("sha256")
+        if (
+            not isinstance(path, str)
+            or not isinstance(digest, str)
+            or len(digest) != 64
+            or any(char not in "0123456789abcdef" for char in digest)
+        ):
+            raise ValueError("historical v1 scorer row has invalid coordinates")
+        rows.append({"path": path, "sha256": digest})
+    if tuple(row["path"] for row in rows) != SCORER_BUNDLE_FILES:
+        raise ValueError("historical v1 scorer row membership/order drifted")
     return rows
 
 
@@ -281,12 +303,7 @@ def scorer_bundle_sha256() -> str:
 
 
 def default_figure2_rubric_path() -> Path:
-    return (
-        Path(__file__).resolve().parents[3]
-        / "benchmarks"
-        / "figure2_canonical9"
-        / "figure2_rubric_v1.json"
-    )
+    return Path(__file__).resolve().parents[1] / "figure2_rubric_v1.json"
 
 
 def verify_figure2_rubric(manifest: Figure2RubricManifest) -> None:

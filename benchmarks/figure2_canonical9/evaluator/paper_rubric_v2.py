@@ -16,14 +16,20 @@ from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from .evaluation_scorecard import DimensionScore, FiveDimensionScorecard, Tristate
-from .figure2_rubric import (
+from easyicu.research_agent.evaluation_scorecard import (
+    DimensionScore,
+    FiveDimensionScorecard,
+    Tristate,
+)
+
+from .rubric_v1 import (
     FIGURE2_DIMENSIONS,
     FIGURE2_TASK_IDS,
+    SCORER_BUNDLE_FILES,
     Figure2Thresholds,
     figure2_suite_projection_sha256,
 )
-from .figure2_safety_protocol import (
+from .safety_protocol_v1 import (
     FIGURE2_SAFETY_PROTOCOL_REF,
     safety_protocol_sha256,
 )
@@ -31,6 +37,18 @@ from .figure2_safety_protocol import (
 FIGURE2_PAPER_RUBRIC_REF = "easyicu.figure2_paper_rubric/20260718-v2"
 FIGURE2_PAPER_RUBRIC_SCHEMA = "easyicu.figure2_paper_rubric_manifest/2"
 FIGURE2_PAPER_SCORECARD_SCHEMA = "easyicu.figure2_scorecard_envelope/2"
+SCORER_EVALUATOR_ROOT = "benchmarks/figure2_canonical9/evaluator"
+PAPER_SCORER_CORE_FILES = tuple(
+    sorted(
+        set(SCORER_BUNDLE_FILES)
+        | {
+            "src/easyicu/research_agent/evidence_authority.py",
+            "src/easyicu/research_agent/run_input_capsule.py",
+            "src/easyicu/research_agent/run_lock.py",
+            "src/easyicu/research_agent/schema.py",
+        }
+    )
+)
 
 Sha256 = Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
 DimensionName = Literal[
@@ -57,9 +75,46 @@ class Figure2PaperDimensionApplicability(_StrictFrozenModel):
     ]
 
 
+class Figure2ValidityBinding(_StrictFrozenModel):
+    """Evaluator-only concepts used by the gold-free validity backstop.
+
+    ``None`` is permitted only when the rubric explicitly declares that a
+    single exposure or outcome concept is not applicable.  Keeping the
+    applicability code separate from the value distinguishes a deliberate N/A
+    (for example a predictor-set or clustering task) from an omitted authority
+    coordinate.
+    """
+
+    exposure_applicability: Literal["required", "not_applicable"]
+    exposure_concept: str | None
+    outcome_applicability: Literal["required", "not_applicable"]
+    outcome_concept: str | None
+
+    @model_validator(mode="after")
+    def _validate_applicability(self) -> "Figure2ValidityBinding":
+        for role in ("exposure", "outcome"):
+            applicability = getattr(self, f"{role}_applicability")
+            concept = getattr(self, f"{role}_concept")
+            if applicability == "required":
+                if not isinstance(concept, str) or not concept.strip():
+                    raise ValueError(
+                        f"required Figure 2 {role} concept must be nonblank"
+                    )
+                if concept != concept.strip():
+                    raise ValueError(
+                        f"Figure 2 {role} concept must not contain edge whitespace"
+                    )
+            elif concept is not None:
+                raise ValueError(
+                    f"not-applicable Figure 2 {role} concept must be explicit null"
+                )
+        return self
+
+
 class Figure2PaperTaskRubric(_StrictFrozenModel):
     task_id: str = Field(min_length=1, max_length=128)
     dimension_applicability: Figure2PaperDimensionApplicability
+    validity_binding: Figure2ValidityBinding
     hazard_codes: tuple[str, ...] = Field(min_length=1)
     forbidden_claim_codes: tuple[str, ...] = Field(min_length=1)
 
@@ -80,7 +135,8 @@ class Figure2PaperRubricManifest(_StrictFrozenModel):
     suite_ref: Literal["easyicu_evaluation_protocol_suite/v2"]
     suite_projection_sha256: Sha256
     scorer_tree_sha256: Sha256
-    scorer_tree_root: Literal["src/easyicu/research_agent"]
+    scorer_tree_root: Literal["benchmarks/figure2_canonical9/evaluator"]
+    scorer_core_files: tuple[str, ...]
     safety_protocol_ref: Literal[
         "easyicu.figure2_safety_adjudicator_protocol/20260718-v1"
     ]
@@ -99,6 +155,8 @@ class Figure2PaperRubricManifest(_StrictFrozenModel):
             raise ValueError("Figure 2 paper dimensions or order drifted")
         if tuple(task.task_id for task in self.tasks) != FIGURE2_TASK_IDS:
             raise ValueError("Figure 2 paper task IDs or order drifted")
+        if self.scorer_core_files != PAPER_SCORER_CORE_FILES:
+            raise ValueError("Figure 2 paper scorer core membership drifted")
         return self
 
 
@@ -256,24 +314,32 @@ def _strict_json_loads(payload: bytes) -> Any:
 
 
 def default_figure2_paper_rubric_path() -> Path:
-    return (
-        Path(__file__).resolve().parents[3]
-        / "benchmarks"
-        / "figure2_canonical9"
-        / "figure2_paper_rubric_v2.json"
-    )
+    return Path(__file__).resolve().parents[1] / "figure2_paper_rubric_v2.json"
 
 
 def scorer_tree_rows() -> list[dict[str, str]]:
-    root = Path(__file__).resolve().parent
-    return [
-        {
-            "path": str(path.relative_to(root.parent.parent.parent)),
-            "sha256": _sha256_bytes(path.read_bytes()),
-        }
-        for path in sorted(root.rglob("*.py"))
-        if "__pycache__" not in path.parts
+    repo_root = Path(__file__).resolve().parents[3]
+    evaluator_root = repo_root / SCORER_EVALUATOR_ROOT
+    paths = [
+        path for path in evaluator_root.rglob("*.py") if "__pycache__" not in path.parts
     ]
+    paths.extend(repo_root / logical_path for logical_path in PAPER_SCORER_CORE_FILES)
+    rows: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for path in sorted(paths, key=lambda item: item.relative_to(repo_root).as_posix()):
+        logical_path = path.relative_to(repo_root).as_posix()
+        if logical_path in seen:
+            raise ValueError(f"duplicate Figure 2 scorer source: {logical_path}")
+        if path.is_symlink() or not path.is_file():
+            raise FileNotFoundError(f"invalid Figure 2 scorer source: {path}")
+        seen.add(logical_path)
+        rows.append(
+            {
+                "path": logical_path,
+                "sha256": _sha256_bytes(path.read_bytes()),
+            }
+        )
+    return rows
 
 
 def scorer_tree_sha256() -> str:
@@ -342,11 +408,14 @@ __all__ = [
     "FIGURE2_PAPER_RUBRIC_REF",
     "FIGURE2_PAPER_RUBRIC_SCHEMA",
     "FIGURE2_PAPER_SCORECARD_SCHEMA",
+    "PAPER_SCORER_CORE_FILES",
+    "SCORER_EVALUATOR_ROOT",
     "Figure2ExactFiveScorecard",
     "Figure2PaperDimensionApplicability",
     "Figure2PaperRubricManifest",
     "Figure2PaperScorecard",
     "Figure2PaperTaskRubric",
+    "Figure2ValidityBinding",
     "build_figure2_paper_scorecard",
     "default_figure2_paper_rubric_path",
     "load_figure2_paper_rubric",
