@@ -10,7 +10,8 @@ from pathlib import Path
 
 import pytest
 
-from easyicu.research_agent import pipeline, pipeline_execute
+from easyicu.research_agent import pipeline
+from easyicu.research_agent.execution import phase as pipeline_execute
 from easyicu.research_agent.execution import output_files
 from easyicu.research_agent.execution.host_services import (
     ExecutePhaseServices,
@@ -214,9 +215,9 @@ def test_publication_candidate_template_is_byte_identical() -> None:
     ]
     assert len(templates) == 1
     encoded = templates[0].encode("utf-8")
-    assert len(encoded) == 3007
+    assert len(encoded) == 3008
     assert hashlib.sha256(encoded).hexdigest() == (
-        "175cfd2dbdc2ca5c20ad9b8ecb7d4ed455d1d47ce8b81af9bcd02470da0314e5"
+        "f538a66ce79a426785b258ad701ca30d15bbb534e297dfac09d6f406704d0092"
     )
 
 

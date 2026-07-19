@@ -186,7 +186,7 @@ def _two_step_plan(intent_a: str, *, method: str = "logit"):
 
 def test_plan_signature_normalizes_only_intent_case_and_whitespace():
     """Cosmetic casing/spacing is a no-op; semantic prose is still authority."""
-    from easyicu.research_agent.pipeline_execute import _plan_signature
+    from easyicu.research_agent.execution.phase import _plan_signature
 
     base = _two_step_plan("Define the adult ICU cohort.")
     reworded = _two_step_plan("  DEFINE   THE ADULT ICU COHORT. ")
@@ -195,7 +195,7 @@ def test_plan_signature_normalizes_only_intent_case_and_whitespace():
 
 
 def test_plan_signature_detects_scientific_intent_change():
-    from easyicu.research_agent.pipeline_execute import _plan_signature
+    from easyicu.research_agent.execution.phase import _plan_signature
 
     mortality = _two_step_plan(
         "Use ICU mortality after baseline lactate in the first 24 hours."
@@ -208,7 +208,7 @@ def test_plan_signature_detects_scientific_intent_change():
 
 
 def test_plan_signature_detects_icu_rule_change():
-    from easyicu.research_agent.pipeline_execute import _plan_signature
+    from easyicu.research_agent.execution.phase import _plan_signature
 
     base = _two_step_plan("Define the adult ICU cohort.")
     changed = base.model_copy(deep=True)
@@ -219,7 +219,7 @@ def test_plan_signature_detects_icu_rule_change():
 
 def test_plan_signature_detects_substantive_change():
     """A changed method / outputs is a real revision."""
-    from easyicu.research_agent.pipeline_execute import _plan_signature
+    from easyicu.research_agent.execution.phase import _plan_signature
 
     base = _two_step_plan("Define the cohort.", method="logit")
     changed_method = _two_step_plan("Define the cohort.", method="cox")
@@ -228,7 +228,7 @@ def test_plan_signature_detects_substantive_change():
 
 def test_plan_signature_detects_artifact_edge_or_source_input_change():
     """Repairing a scientific DAG edge/window input is a real revision."""
-    from easyicu.research_agent.pipeline_execute import _plan_signature
+    from easyicu.research_agent.execution.phase import _plan_signature
 
     base = _two_step_plan("Define the cohort.")
     changed = base.model_copy(deep=True)
@@ -239,7 +239,7 @@ def test_plan_signature_detects_artifact_edge_or_source_input_change():
 
 def test_plan_signature_detects_estimand_role_change():
     """Changing a model from primary to secondary is not prose-only."""
-    from easyicu.research_agent.pipeline_execute import _plan_signature
+    from easyicu.research_agent.execution.phase import _plan_signature
     from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep
 
     primary = AnalysisPlan(

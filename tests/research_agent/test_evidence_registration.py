@@ -170,7 +170,7 @@ def test_execute_phase_uses_extracted_registrar_after_success_gate() -> None:
     # test_step_evidence_commit.py; here we only lock the CALLER wiring: after the
     # status gate, the ok path routes through the commit boundary, and the failure
     # path stays fail-closed.
-    from easyicu.research_agent import pipeline_execute
+    from easyicu.research_agent.execution import phase as pipeline_execute
 
     module_source = inspect.getsource(pipeline_execute)
     execute_source = inspect.getsource(pipeline_execute.run_execute_phase)

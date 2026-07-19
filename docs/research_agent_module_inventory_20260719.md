@@ -20,9 +20,9 @@ Before the retirement patch, the 161 top-level Python files comprised:
 | Real top-level implementations | 93 | 98,530 | Canonical/public/frozen/dormant implementations requiring individual review |
 
 The cleanup has now removed the old facade layer rather than retaining hundreds
-of tiny forwarding files.  The current tree has **31 top-level Python files
-including `__init__.py`**, with 225 modules in 28 responsibility packages and
-753 static import edges.  The graph remains at **zero cyclic
+of tiny forwarding files.  The current tree has **21 top-level Python files
+including `__init__.py`**, with 227 modules in 29 responsibility packages and
+750 static import edges.  The graph remains at **zero cyclic
 modules / zero SCCs**.  The former 23-module control-plane SCC,
 validator/replication pair, and final pipeline/execute/publication-figure cycle
 are gone.
@@ -58,8 +58,9 @@ digest selection uses a controlled registry-mediated dynamic import of current
 implementation modules; that runtime surface is not an import-time SCC.
 
 The remaining visible file count is now implementation work, not compatibility
-surface.  The two ~11k-line pipeline modules and the remaining top-level domain
-modules show that the architecture is not yet fully organized.
+surface.  The public `pipeline.py` facade remains top-level while its ~11k-line
+execute-phase owner now lives at `execution/phase.py`; both still require
+further responsibility extraction rather than another cosmetic move.
 
 ## Retirement decision method
 
@@ -149,7 +150,7 @@ method, or estimand.
    `experience.py` contain KDIGO/SOFA/sepsis examples or heuristics. Canonical
    profiles do not consume them, but they should eventually be isolated as
    mock/example or learning-policy data instead of growing in shared logic.
-5. **Large orchestration surfaces.** `pipeline.py` and `pipeline_execute.py`
+5. **Large orchestration surfaces.** `pipeline.py` and `execution/phase.py`
    remain roughly 11k lines each, and the package root exports hundreds of
    symbols. Responsibility packages are real progress, but they do not by
    themselves complete orchestration/API reduction.

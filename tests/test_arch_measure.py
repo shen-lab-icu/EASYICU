@@ -48,9 +48,10 @@ def _captured_metric(src: str, name: str) -> int:
 def test_measure_tracks_current_authority_boundaries() -> None:
     measured = arch_measure.measure()["files"]
 
-    assert "typed_binding.py" in measured
-    assert "plan_authority.py" in measured
-    assert measured["plan_authority.py"].get("missing") is not True
+    assert "execution/phase.py" in measured
+    assert "authority/typed_binding.py" in measured
+    assert "authority/plan_authority.py" in measured
+    assert measured["authority/plan_authority.py"].get("missing") is not True
 
 
 # --------------------------------------------------------------------------- #

@@ -44,22 +44,26 @@ def test_control_component_does_not_import_execute_orchestrator(
 
 
 def test_execute_orchestrator_imports_canonical_control_modules() -> None:
-    tree = ast.parse(
-        inspect.getsource(
-            importlib.import_module("easyicu.research_agent.pipeline_execute")
-        )
-    )
+    module = importlib.import_module("easyicu.research_agent.execution.phase")
+    tree = ast.parse(inspect.getsource(module))
     imported = {
-        node.module
+        (
+            importlib.util.resolve_name(
+                "." * node.level + node.module,
+                module.__package__,
+            )
+            if node.level
+            else node.module
+        )
         for node in ast.walk(tree)
         if isinstance(node, ast.ImportFrom) and node.module
     }
     assert {
-        "authority.registration",
-        "gates.visual",
-        "gates.contract",
-        "gates.concept",
-        "execution.concept_audit",
-        "execution.figure_preparation",
-        "execution.publication_figure",
+        "easyicu.research_agent.authority.registration",
+        "easyicu.research_agent.gates.visual",
+        "easyicu.research_agent.gates.contract",
+        "easyicu.research_agent.gates.concept",
+        "easyicu.research_agent.execution.concept_audit",
+        "easyicu.research_agent.execution.figure_preparation",
+        "easyicu.research_agent.execution.publication_figure",
     }.issubset(imported)

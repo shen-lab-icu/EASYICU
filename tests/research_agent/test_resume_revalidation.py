@@ -83,7 +83,7 @@ def _empty_gates(pipeline_execute):
 
 @pytest.fixture
 def replay_environment(monkeypatch, tmp_path):
-    from easyicu.research_agent import pipeline_execute
+    from easyicu.research_agent.execution import phase as pipeline_execute
 
     run_dir = tmp_path / "run"
     run_dir.mkdir()
@@ -133,7 +133,7 @@ def _revalidate(
 
 
 def test_current_fingerprint_is_a_true_zero_work_fast_path(monkeypatch, tmp_path):
-    from easyicu.research_agent import pipeline_execute
+    from easyicu.research_agent.execution import phase as pipeline_execute
 
     class EvidenceMustNotBeRead:
         def records(self):
@@ -439,7 +439,7 @@ def test_missing_or_tampered_summary_fails_closed(
 
 
 def test_historical_invalid_upstream_blocks_later_explicit_cut(tmp_path):
-    from easyicu.research_agent import pipeline_execute
+    from easyicu.research_agent.execution import phase as pipeline_execute
     from easyicu.research_agent.authority.run_input import RunInputIdentityError
 
     upstream = AnalysisStep(step_id="01_upstream", intent="Produce inputs.")
@@ -958,7 +958,7 @@ def test_checkpoint_write_failure_never_retires_aliases(
 def test_replay_uses_shared_gates_and_never_constructs_llm_auditor():
     import inspect
 
-    from easyicu.research_agent import pipeline_execute
+    from easyicu.research_agent.execution import phase as pipeline_execute
     from easyicu.research_agent.execution import (
         concept_audit as concept_audit_execution,
     )
@@ -1007,7 +1007,7 @@ def test_resume_application_preserves_append_only_revalidation_history(tmp_path)
 def test_execute_phase_writes_resume_audit_history_separately_from_authority_view():
     import inspect
 
-    from easyicu.research_agent import pipeline_execute
+    from easyicu.research_agent.execution import phase as pipeline_execute
 
     source = inspect.getsource(pipeline_execute.run_execute_phase)
 

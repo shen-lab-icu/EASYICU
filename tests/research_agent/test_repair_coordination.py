@@ -17,7 +17,7 @@ import json
 
 import pytest
 
-from easyicu.research_agent import pipeline_execute
+from easyicu.research_agent.execution import phase as pipeline_execute
 from easyicu.research_agent.authority.provider_budget import (
     ProviderCallBudgetReceiptError,
     StepProviderCallBudget,

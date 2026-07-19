@@ -409,7 +409,7 @@ class _TerminalRunner:
 
 
 def _disable_unrelated_step_audits(monkeypatch: pytest.MonkeyPatch) -> None:
-    from easyicu.research_agent import pipeline_execute
+    from easyicu.research_agent.execution import phase as pipeline_execute
     from easyicu.research_agent.gates import contract as contract_gate
 
     # ``_step_contract_findings`` now resolves inside the moved deterministic
@@ -446,7 +446,7 @@ def _run_terminal_case(
 ):
     _disable_unrelated_step_audits(monkeypatch)
     if stability_mode == "preexecution_concept_error":
-        from easyicu.research_agent import pipeline_execute
+        from easyicu.research_agent.execution import phase as pipeline_execute
 
         original_audit = pipeline_execute.ConceptUsageAuditor.audit
 
@@ -633,7 +633,7 @@ def test_standard_executor_pending_file_is_never_registered_during_cleanup_race(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from easyicu.research_agent import pipeline_execute
+    from easyicu.research_agent.execution import phase as pipeline_execute
 
     # Model a writer that recreates its private stream after unlink.  Evidence
     # safety must come from an explicit deny-list at enumeration/registration,
@@ -671,7 +671,7 @@ def test_unsafe_runner_mount_short_circuits_before_any_output_probe(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from easyicu.research_agent import pipeline_execute
+    from easyicu.research_agent.execution import phase as pipeline_execute
 
     real_figure_probe = pipeline_execute._has_figure_exports
 
@@ -720,7 +720,7 @@ def test_ordinary_unsafe_runner_mount_never_enters_repair_or_evidence(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from easyicu.research_agent import pipeline_execute
+    from easyicu.research_agent.execution import phase as pipeline_execute
 
     def forbidden_output_probe(_out_dir: Path) -> bool:
         raise AssertionError("unsafe runner output mount must not be inspected")

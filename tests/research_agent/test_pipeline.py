@@ -1135,7 +1135,7 @@ def test_initial_authority_checkpoint_io_failure_never_enters_code_fallback(
     expected_code_calls: int,
     error_pattern: str,
 ):
-    from easyicu.research_agent import pipeline_execute
+    from easyicu.research_agent.execution import phase as pipeline_execute
     from easyicu.research_agent.authority.step_runtime import (
         StepAuthorityRuntimeError,
     )
@@ -10413,7 +10413,7 @@ def test_advanced_plan_contract_does_not_rewrite_cluster_robust_association(ra):
 def test_terminal_publication_repair_replan_skip_requires_satisfied_bundle(
     ra, tmp_path: Path
 ):
-    from easyicu.research_agent.pipeline_execute import (
+    from easyicu.research_agent.execution.phase import (
         _terminal_publication_repair_replan_skip_detail,
     )
 

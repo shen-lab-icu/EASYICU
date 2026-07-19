@@ -3,7 +3,7 @@ Package/finalise phase for the EasyICU research-agent pipeline.
 
 This module owns run reports, workflow/replay artefacts, manifest writing,
 readiness outputs, cost summaries, and final PipelineResult construction.
-It follows the same free-function pattern as ``pipeline_execute.py`` and
+It follows the same free-function pattern as ``execution/phase.py`` and
 ``reporting.write_phase``: callers pass the pipeline instance first, and the
 function reads existing collaborators from that instance.
 

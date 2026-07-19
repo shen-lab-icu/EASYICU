@@ -26,7 +26,7 @@ from easyicu.research_agent.pipeline import (
     _sealed_renderer_figure_step_matches_parent,
     deterministic_figure_repair_id_for_upstream,
 )
-from easyicu.research_agent.pipeline_execute import _sealed_parent_planner_anchors
+from easyicu.research_agent.execution.phase import _sealed_parent_planner_anchors
 from easyicu.research_agent.schema import AnalysisStep
 
 

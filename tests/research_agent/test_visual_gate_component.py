@@ -63,7 +63,7 @@ def _warning() -> ValidationFinding:
 
 
 def test_collect_visual_gate_result_does_not_run_when_disabled(tmp_path):
-    from easyicu.research_agent.pipeline_execute import collect_visual_gate_result
+    from easyicu.research_agent.execution.phase import collect_visual_gate_result
 
     png = tmp_path / "fig.png"
     result = collect_visual_gate_result(
@@ -81,7 +81,7 @@ def test_collect_visual_gate_result_does_not_run_when_disabled(tmp_path):
 
 
 def test_collect_visual_gate_result_does_not_run_without_figures():
-    from easyicu.research_agent.pipeline_execute import collect_visual_gate_result
+    from easyicu.research_agent.execution.phase import collect_visual_gate_result
 
     result = collect_visual_gate_result(
         enabled=True,
@@ -97,7 +97,7 @@ def test_collect_visual_gate_result_assembles_findings_and_demotion(
     monkeypatch, tmp_path
 ):
     from easyicu.research_agent.gates import visual as gate_evaluator
-    from easyicu.research_agent.pipeline_execute import collect_visual_gate_result
+    from easyicu.research_agent.execution.phase import collect_visual_gate_result
 
     cosmetic, hard, vlm = _cosmetic_error(), _hard_error(), _vlm_error()
     monkeypatch.setattr(
@@ -142,7 +142,7 @@ def test_collect_visual_gate_result_assembles_findings_and_demotion(
 
 def test_collect_visual_gate_result_clean_when_only_warnings(monkeypatch, tmp_path):
     from easyicu.research_agent.gates import visual as gate_evaluator
-    from easyicu.research_agent.pipeline_execute import collect_visual_gate_result
+    from easyicu.research_agent.execution.phase import collect_visual_gate_result
 
     warn = _warning()
     monkeypatch.setattr(
@@ -173,7 +173,7 @@ def test_collect_visual_gate_result_passes_numeric_expectations_for_svg_only(
     monkeypatch, tmp_path
 ):
     from easyicu.research_agent.gates import visual as gate_evaluator
-    from easyicu.research_agent.pipeline_execute import collect_visual_gate_result
+    from easyicu.research_agent.execution.phase import collect_visual_gate_result
 
     captured = {}
 
@@ -209,7 +209,7 @@ def test_collect_visual_gate_result_no_numeric_expectations_when_absent(
     monkeypatch, tmp_path
 ):
     from easyicu.research_agent.gates import visual as gate_evaluator
-    from easyicu.research_agent.pipeline_execute import collect_visual_gate_result
+    from easyicu.research_agent.execution.phase import collect_visual_gate_result
 
     captured = {}
 
@@ -242,7 +242,7 @@ def test_collect_visual_gate_result_no_numeric_expectations_when_absent(
 
 def _errors_result():
     """A VisualGateResult with one cosmetic + one hard error (one blocking)."""
-    from easyicu.research_agent.pipeline_execute import (
+    from easyicu.research_agent.execution.phase import (
         VisualGateResult,
         _demote_cosmetic_visual_findings,
     )
@@ -259,7 +259,7 @@ def _errors_result():
 
 
 def test_decide_visual_repair_none_when_no_errors():
-    from easyicu.research_agent.pipeline_execute import (
+    from easyicu.research_agent.execution.phase import (
         VisualGateResult,
         decide_visual_repair,
     )
@@ -281,7 +281,7 @@ def test_decide_visual_repair_none_when_no_errors():
 
 
 def test_decide_visual_repair_sealed_suppress_carries_no_llm_payload():
-    from easyicu.research_agent.pipeline_execute import (
+    from easyicu.research_agent.execution.phase import (
         VisualRepairAction,
         decide_visual_repair,
     )
@@ -297,7 +297,7 @@ def test_decide_visual_repair_sealed_suppress_carries_no_llm_payload():
 
 
 def test_decide_visual_repair_sealed_precedence_over_exhausted():
-    from easyicu.research_agent.pipeline_execute import (
+    from easyicu.research_agent.execution.phase import (
         VisualRepairAction,
         decide_visual_repair,
     )
@@ -309,7 +309,7 @@ def test_decide_visual_repair_sealed_precedence_over_exhausted():
 
 
 def test_decide_visual_repair_exhausted_when_attempts_maxed():
-    from easyicu.research_agent.pipeline_execute import (
+    from easyicu.research_agent.execution.phase import (
         VisualRepairAction,
         decide_visual_repair,
     )
@@ -322,7 +322,7 @@ def test_decide_visual_repair_exhausted_when_attempts_maxed():
 
 
 def test_decide_visual_repair_exhausted_when_no_budget():
-    from easyicu.research_agent.pipeline_execute import (
+    from easyicu.research_agent.execution.phase import (
         VisualRepairAction,
         decide_visual_repair,
     )
@@ -334,7 +334,7 @@ def test_decide_visual_repair_exhausted_when_no_budget():
 
 
 def test_decide_visual_repair_exhausted_reason_is_auditable():
-    from easyicu.research_agent.pipeline_execute import (
+    from easyicu.research_agent.execution.phase import (
         VisualRepairAction,
         decide_visual_repair,
     )
@@ -356,7 +356,7 @@ def test_decide_visual_repair_exhausted_reason_is_auditable():
 
 
 def test_decide_visual_repair_llm_repair_builds_recommendation():
-    from easyicu.research_agent.pipeline_execute import (
+    from easyicu.research_agent.execution.phase import (
         VisualRepairAction,
         decide_visual_repair,
     )

@@ -376,7 +376,7 @@ def execution_gate_status(
     # assumption the planner never lists it. But the planner *does* sometimes
     # include `00_probe` in the published plan, and a deterministic probe
     # record is appended to per_step_records with status='ok' from
-    # pipeline_execute._build_probe_summary. Excluding it here made the gate
+    # execution.phase._build_probe_summary. Excluding it here made the gate
     # mis-report `00_probe` as a permanently-missing required step. Surfacing
     # the deterministic probe record fixes the false negative.
     status_by_step = {
@@ -665,7 +665,7 @@ def _is_cosmetic_visual_error(finding: ValidationFinding) -> bool:
     """A deterministic SVG text-overlap spacing warning is cosmetic, not a
     manuscript blocker.
 
-    Mirrors ``pipeline_execute._is_cosmetic_visual_finding`` at the readiness
+    Mirrors ``execution.phase._is_cosmetic_visual_finding`` at the readiness
     layer: the step-level demotion runs during execution, but this exact finding
     is re-generated when the FINAL manuscript SVG is audited, after that pass, so
     it leaks into ``analysis_errors`` / the figure-bundle gate and blocks a run
@@ -893,7 +893,7 @@ def _publication_provenance_ready(
 
 
 _STEP_ID_IN_MESSAGE_PATTERNS = (
-    # Matches the in-message tokens written by every pipeline_execute
+    # Matches the in-message tokens written by every execution.phase
     # ValidationFinding site that references a specific step. See
     # ``_step_id_referenced_in_finding`` for the full taxonomy.
     re.compile(r"\bfor step\s+([A-Za-z0-9_./-]+)"),
@@ -910,7 +910,7 @@ def _step_id_referenced_in_finding(finding: ValidationFinding) -> Optional[str]:
        step-tied finding sites going forward).
     2. Regex scan of ``finding.message`` for the canonical
        ``"for step <id>"`` / ``"step <id> failed"`` phrasings used
-       across :mod:`pipeline_execute`. This catches the existing
+       across :mod:`execution.phase`. This catches the existing
        ~14 historical ValidationFinding sites without requiring a
        sweeping rewrite at every emit point.
 

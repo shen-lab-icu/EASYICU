@@ -5,7 +5,7 @@ its primary deliverable?" judgement used in two places:
 
 * post-hoc in :mod:`evaluation_scorecard` (``detect_self_inflicted_block``),
   which reads a finished run directory, and
-* at runtime in :mod:`pipeline_execute`, which decides whether to fire a
+* at runtime in :mod:`execution.phase`, which decides whether to fire a
   *directed* full replan when a prediction/estimation model step emits a
   non-execution stub on a populated cohort.
 

@@ -1,6 +1,6 @@
 """Publication-figure deterministic execution — the sealed-renderer figure repair.
 
-Extracted from ``pipeline_execute`` (Codex-ordered, Bundle 3) as a real
+Extracted from ``execution.phase`` (Codex-ordered, Bundle 3) as a real
 cross-file core-execution boundary. Holds:
 
 * ``SealedRendererState`` — the mutable value object for the sealed-renderer
@@ -16,10 +16,10 @@ cross-file core-execution boundary. Holds:
   (``_sealed_renderer_source_digests`` / ``_sealed_renderer_implementation_digest``
   / ``_sealed_parent_planner_anchors`` / ``_sealed_typed_figure_products``).
 
-This module imports neither ``pipeline_execute`` nor ``pipeline``.  Host-owned
+This module imports neither ``execution.phase`` nor ``pipeline``.  Host-owned
 authority functions arrive through an immutable service object, while the
 generator takes all former ``_execute_one_step`` closure reads as explicit
-keyword-only parameters. ``pipeline_execute`` re-exports every public name here
+keyword-only parameters. ``execution.phase`` re-exports every public name here
 for back-compat.
 """
 

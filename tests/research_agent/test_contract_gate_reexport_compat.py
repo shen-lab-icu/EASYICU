@@ -1,15 +1,13 @@
-"""Old-path re-export compatibility lock (Codex-ordered, bundle2).
+"""Execute-phase collaborator identity lock (Codex-ordered, bundle2).
 
-The contract / figure-contract subsystem was extracted from ``pipeline_execute``
+The contract / figure-contract subsystem was extracted from the execute phase
 into ``contract_gate`` (read-only findings gates) and
-``figure_contract_preparation`` (writes-files shaping/canonicalization). The
-promise of every such extraction is old-path back-compat: everything the sub
-module publishes in ``__all__`` must remain importable from ``pipeline_execute``
-AS THE SAME OBJECT (identity), so existing ``from ...pipeline_execute import X``
-call sites and monkeypatch targets keep resolving.
+``figure_contract_preparation`` (writes-files shaping/canonicalization).
+Everything the submodule publishes in ``__all__`` must be the same object used
+by the canonical execute-phase consumer so monkeypatch targets cannot split.
 
-This is the "compat table identity test": it walks each sub-module's ``__all__``
-and asserts ``pipeline_execute`` re-exports every name with identical identity.
+This is the collaborator identity test: it walks each sub-module's ``__all__``
+and asserts the execution phase uses every name with identical identity.
 It fails closed if a future symbol is added to a sub-module's ``__all__`` but not
 forwarded (the exact gap Codex caught: 3 helpers + 3 constants dropped their old
 path after the figure-shaping move).
@@ -19,7 +17,7 @@ from __future__ import annotations
 
 import pytest
 
-from easyicu.research_agent import pipeline_execute
+from easyicu.research_agent.execution import phase as execution_phase
 from easyicu.research_agent.execution import (
     figure_preparation as figure_contract_preparation,
 )
@@ -46,14 +44,13 @@ def _compat_table():
     [(m, n) for m, n in _compat_table()],
     ids=[f"{m.__name__.rsplit('.', 1)[-1]}.{n}" for m, n in _compat_table()],
 )
-def test_pipeline_execute_reexports_every_all_symbol_with_identity(module, name):
-    assert hasattr(pipeline_execute, name), (
+def test_execution_phase_uses_every_collaborator_with_identity(module, name):
+    assert hasattr(execution_phase, name), (
         f"{name} is in {module.__name__}.__all__ but is NOT re-exported by "
-        f"pipeline_execute — old import path from ...pipeline_execute import "
-        f"{name} would break."
+        f"the canonical execution phase."
     )
-    assert getattr(pipeline_execute, name) is getattr(module, name), (
-        f"pipeline_execute.{name} is not the same object as {module.__name__}."
+    assert getattr(execution_phase, name) is getattr(module, name), (
+        f"execution_phase.{name} is not the same object as {module.__name__}."
         f"{name} — the re-export must preserve identity so monkeypatch and "
         f"isinstance/identity checks keep working."
     )

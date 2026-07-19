@@ -1,8 +1,8 @@
-"""Contract-pinning tests for ``easyicu.research_agent.pipeline_execute``.
+"""Contract-pinning tests for ``easyicu.research_agent.execution.phase``.
 
 Background
 ----------
-``pipeline_execute.py`` (~1,700 LOC) houses the probe → per-step
+``execution/phase.py`` (~1,700 LOC) houses the probe → per-step
 analysis loop with optional replanning. It is a free-function entry
 point (``run_execute_phase``) deliberately split out of
 ``ResearchAgentPipeline._run_execute_phase`` so a future LangGraph-style
@@ -60,7 +60,7 @@ def test_llm_authority_signature_binds_endpoint_options_and_fallback_order() -> 
 
 
 def test_capsule_checkpoint_upsert_never_overwrites_prior_terminal_attempt() -> None:
-    from easyicu.research_agent.pipeline_execute import (
+    from easyicu.research_agent.execution.phase import (
         _append_terminal_step_record,
         _upsert_current_capsule_checkpoint,
     )
@@ -106,7 +106,7 @@ def test_capsule_checkpoint_upsert_never_overwrites_prior_terminal_attempt() -> 
 def test_provider_receipt_requirement_covers_legacy_and_initial_pending(
     version: int,
 ) -> None:
-    from easyicu.research_agent.pipeline_execute import (
+    from easyicu.research_agent.execution.phase import (
         _step_snapshot_requires_provider_receipt,
     )
 
@@ -132,7 +132,7 @@ def test_provider_receipt_requirement_covers_legacy_and_initial_pending(
 
 def test_non_typed_alias_requires_current_successful_step_authority(tmp_path) -> None:
     from easyicu.research_agent.authority.evidence_store import EvidenceStore
-    from easyicu.research_agent.pipeline_execute import (
+    from easyicu.research_agent.execution.phase import (
         _current_verified_evidence_record,
     )
 
@@ -169,7 +169,7 @@ def test_non_typed_alias_requires_current_successful_step_authority(tmp_path) ->
 
 def test_step_run_input_capsule_must_match_sealed_evidence(tmp_path) -> None:
     from easyicu.research_agent.authority.evidence_store import EvidenceStore
-    from easyicu.research_agent.pipeline_execute import (
+    from easyicu.research_agent.execution.phase import (
         _verified_run_input_capsule_digest,
     )
     from easyicu.research_agent.authority.run_input import RunInputIdentityError
@@ -204,7 +204,7 @@ def test_step_run_input_capsule_must_match_sealed_evidence(tmp_path) -> None:
 
 def test_parallel_step_worker_inherits_runner_capability_context() -> None:
     import easyicu.research_agent.execution.method_capabilities as method_capabilities
-    from easyicu.research_agent.pipeline_execute import _submit_in_current_context
+    from easyicu.research_agent.execution.phase import _submit_in_current_context
 
     method_capabilities.set_runtime_capability_snapshot_provider(
         lambda: {"docker-only-capability"}
@@ -233,7 +233,7 @@ def test_consistent_local_figure_source_descriptor_is_canonicalized_for_consumer
     from easyicu.research_agent.figures.skill import (
         _contract_payload_source_references,
     )
-    from easyicu.research_agent.pipeline_execute import (
+    from easyicu.research_agent.execution.phase import (
         _figure_contract_source_data_canonicalization_candidate,
         _install_figure_contract_source_data_canonicalization,
     )
@@ -283,7 +283,7 @@ def test_consistent_local_figure_source_descriptor_is_canonicalized_for_consumer
 def test_figure_contract_canonicalization_does_not_follow_predictable_temp_symlink(
     tmp_path,
 ):
-    from easyicu.research_agent.pipeline_execute import (
+    from easyicu.research_agent.execution.phase import (
         _figure_contract_source_data_canonicalization_candidate,
         _install_figure_contract_source_data_canonicalization,
     )
@@ -330,7 +330,7 @@ def test_figure_contract_canonicalization_does_not_follow_predictable_temp_symli
 def test_figure_contract_canonicalization_rejects_changed_reviewed_contract(
     tmp_path,
 ):
-    from easyicu.research_agent.pipeline_execute import (
+    from easyicu.research_agent.execution.phase import (
         _figure_contract_source_data_canonicalization_candidate,
         _install_figure_contract_source_data_canonicalization,
     )
@@ -379,7 +379,7 @@ def test_figure_source_descriptor_canonicalization_fails_closed(
     tmp_path,
     source_data,
 ):
-    from easyicu.research_agent.pipeline_execute import (
+    from easyicu.research_agent.execution.phase import (
         _figure_contract_source_data_canonicalization_candidate,
     )
 
@@ -403,18 +403,18 @@ def test_figure_source_descriptor_canonicalization_fails_closed(
 
 
 def test_module_is_importable():
-    import easyicu.research_agent.pipeline_execute as pe  # noqa: F401
+    import easyicu.research_agent.execution.phase as pe  # noqa: F401
 
 
 def test_run_execute_phase_is_exported():
-    from easyicu.research_agent.pipeline_execute import run_execute_phase
+    from easyicu.research_agent.execution.phase import run_execute_phase
 
     assert callable(run_execute_phase)
 
 
 def test_critic_messages_keep_only_blocking_errors():
     from easyicu.research_agent.contracts.runtime import ValidationFinding
-    from easyicu.research_agent.pipeline_execute import (
+    from easyicu.research_agent.execution.phase import (
         _actionable_validator_messages,
     )
 
@@ -444,7 +444,7 @@ def test_critic_messages_keep_only_blocking_errors():
 def test_code_repair_findings_keep_only_blocking_errors():
     from easyicu.research_agent.contracts.runtime import ValidationFinding
     from easyicu.research_agent.gates.semantics import blocking_validator_findings
-    from easyicu.research_agent.pipeline_execute import (
+    from easyicu.research_agent.execution.phase import (
         _blocking_validator_findings,
     )
 
@@ -487,7 +487,7 @@ def test_code_repair_findings_keep_only_blocking_errors():
     ],
 )
 def test_success_replanning_requires_an_exact_agent_request(record, expected):
-    from easyicu.research_agent.pipeline_execute import (
+    from easyicu.research_agent.execution.phase import (
         _successful_step_requests_replan,
     )
 
@@ -496,7 +496,7 @@ def test_success_replanning_requires_an_exact_agent_request(record, expected):
 
 def test_required_model_contract_error_fail_closes_outer_step_and_run():
     from easyicu.research_agent.contracts.runtime import ValidationFinding
-    from easyicu.research_agent.pipeline_execute import (
+    from easyicu.research_agent.execution.phase import (
         _step_status_from_contract_findings,
     )
     from easyicu.research_agent.reporting.readiness import execution_gate_status
@@ -538,7 +538,7 @@ def test_required_model_contract_error_fail_closes_outer_step_and_run():
 
 def test_every_deterministic_statistical_error_fails_outer_step():
     from easyicu.research_agent.contracts.runtime import ValidationFinding
-    from easyicu.research_agent.pipeline_execute import (
+    from easyicu.research_agent.execution.phase import (
         _step_status_from_contract_findings,
     )
 
@@ -559,7 +559,7 @@ def test_every_deterministic_statistical_error_fails_outer_step():
 
 
 def test_first_step_checkpoint_selector_preserves_agent_owned_step_id():
-    from easyicu.research_agent.pipeline_execute import (
+    from easyicu.research_agent.execution.phase import (
         _resolve_stop_after_step_selector,
     )
     from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep
@@ -596,7 +596,7 @@ def test_failed_contract_code_reuse_requires_exact_checkpoint_authority():
     import copy
     import hashlib
 
-    from easyicu.research_agent.pipeline_execute import (
+    from easyicu.research_agent.execution.phase import (
         _failed_contract_code_can_be_reused_before_coder,
         _serializable_plan_scientific_scope_signature,
     )
@@ -680,7 +680,7 @@ def test_failed_contract_code_reuse_requires_exact_checkpoint_authority():
 
 @pytest.mark.parametrize("critique_status", ["needs_revision", "blocked"])
 def test_negative_critic_review_fail_closes_outer_step(critique_status):
-    from easyicu.research_agent.pipeline_execute import (
+    from easyicu.research_agent.execution.phase import (
         _step_status_from_contract_findings,
     )
 
@@ -697,7 +697,7 @@ def test_negative_critic_review_fail_closes_outer_step(critique_status):
 
 def test_locked_measurement_data_quality_classifier_is_structural():
     from easyicu.research_agent.contracts.runtime import ValidationFinding
-    from easyicu.research_agent.pipeline_execute import (
+    from easyicu.research_agent.execution.phase import (
         _locked_measurement_data_quality_issues,
     )
 
@@ -749,7 +749,7 @@ def test_locked_measurement_data_quality_classifier_is_structural():
 
 
 def test_locked_measurement_data_quality_terminates_before_code_repair():
-    from easyicu.research_agent import pipeline_execute
+    from easyicu.research_agent.execution import phase as pipeline_execute
 
     source = inspect.getsource(pipeline_execute.run_execute_phase)
     route_start = source.index(
@@ -768,7 +768,7 @@ def test_locked_measurement_data_quality_terminates_before_code_repair():
 
 
 def test_locked_measurement_preflight_runs_before_every_coder_repair():
-    from easyicu.research_agent import pipeline_execute
+    from easyicu.research_agent.execution import phase as pipeline_execute
 
     source = inspect.getsource(pipeline_execute.run_execute_phase)
     preflight = source.index("audit_locked_measurement_data_quality(")
@@ -791,7 +791,7 @@ def test_locked_measurement_preflight_runs_before_every_coder_repair():
     ],
 )
 def test_publication_figure_gate_ignores_name_only_mentions(step_id, intent):
-    from easyicu.research_agent.pipeline_execute import (
+    from easyicu.research_agent.execution.phase import (
         _step_requires_publication_figure_exports,
     )
     from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep
@@ -817,7 +817,7 @@ def test_publication_figure_gate_ignores_name_only_mentions(step_id, intent):
 def test_publication_figure_gate_accepts_structural_figure_contracts(
     method, expected_outputs
 ):
-    from easyicu.research_agent.pipeline_execute import (
+    from easyicu.research_agent.execution.phase import (
         _step_requires_publication_figure_exports,
     )
     from easyicu.research_agent.schema import AnalysisStep
@@ -833,7 +833,7 @@ def test_publication_figure_gate_accepts_structural_figure_contracts(
 
 
 def test_execute_phase_mandatory_publication_gate_uses_structural_predicate():
-    from easyicu.research_agent.pipeline_execute import run_execute_phase
+    from easyicu.research_agent.execution.phase import run_execute_phase
 
     source = inspect.getsource(run_execute_phase)
     gate_start = source.index("publication_step =")
@@ -852,7 +852,7 @@ def test_run_execute_phase_signature_is_stable():
     will fail at import time elsewhere. Catching it as a one-line
     signature diff is far cheaper than the e2e failure.
     """
-    from easyicu.research_agent.pipeline_execute import run_execute_phase
+    from easyicu.research_agent.execution.phase import run_execute_phase
 
     sig = inspect.signature(run_execute_phase)
     params = sig.parameters
@@ -898,7 +898,7 @@ def test_run_execute_phase_does_not_mutate_pipeline_state():
     have a confusing aliasing bug. We re-run the audit in CI.
     """
     import ast
-    from easyicu.research_agent import pipeline_execute
+    from easyicu.research_agent.execution import phase as pipeline_execute
 
     source = inspect.getsource(pipeline_execute.run_execute_phase)
     tree = ast.parse(source)
@@ -929,7 +929,7 @@ def test_run_execute_phase_does_not_mutate_pipeline_state():
 
 def test_execute_phase_preserves_repair_provenance_across_concept_and_runtime():
     """Every LLM mutation must outrank pure resume/runner provenance labels."""
-    from easyicu.research_agent import pipeline_execute
+    from easyicu.research_agent.execution import phase as pipeline_execute
 
     source = inspect.getsource(pipeline_execute.run_execute_phase)
 
@@ -944,7 +944,7 @@ def test_execute_phase_preserves_repair_provenance_across_concept_and_runtime():
 
 
 def test_execute_phase_routes_figure_contracts_through_early_repair_loop():
-    from easyicu.research_agent import pipeline_execute
+    from easyicu.research_agent.execution import phase as pipeline_execute
 
     source = inspect.getsource(pipeline_execute.run_execute_phase)
     early_gate = source.index("early_contract_errors = [")
@@ -968,7 +968,7 @@ def test_figure_repair_precedes_output_evidence_and_numeric_claim_seal():
     # guarantee is locked by test_step_evidence_commit.py's AST contract). Here we
     # keep the caller-side ordering: figure repair -> output-artifact registration
     # (aliases deferred) -> status resolution -> the commit boundary.
-    from easyicu.research_agent import pipeline_execute
+    from easyicu.research_agent.execution import phase as pipeline_execute
 
     source = inspect.getsource(pipeline_execute.run_execute_phase)
     seal = source.index("sealed_result_digests =")
@@ -991,7 +991,7 @@ def test_figure_repair_precedes_output_evidence_and_numeric_claim_seal():
 
 
 def test_execute_phase_deterministically_requires_typed_exposure_consumption():
-    from easyicu.research_agent import pipeline_execute
+    from easyicu.research_agent.execution import phase as pipeline_execute
     from easyicu.research_agent.execution import (
         concept_audit as concept_audit_execution,
     )
@@ -1020,7 +1020,7 @@ def test_execute_phase_deterministically_requires_typed_exposure_consumption():
 def test_concept_audit_execution_is_cycle_free_and_old_state_path_is_compatible():
     import ast
 
-    from easyicu.research_agent import pipeline_execute
+    from easyicu.research_agent.execution import phase as pipeline_execute
     from easyicu.research_agent.execution import (
         concept_audit as concept_audit_execution,
     )
@@ -1046,7 +1046,7 @@ def test_concept_audit_execution_is_cycle_free_and_old_state_path_is_compatible(
 
 
 def test_concept_gate_is_read_only_and_keeps_old_function_identity():
-    from easyicu.research_agent import pipeline_execute
+    from easyicu.research_agent.execution import phase as pipeline_execute
     from easyicu.research_agent.gates import concept as concept_gate
 
     source = inspect.getsource(concept_gate)
@@ -1077,7 +1077,7 @@ def test_concept_gate_is_read_only_and_keeps_old_function_identity():
 def test_fresh_execution_uses_the_authoritative_final_gate_evaluator_once():
     import ast
 
-    from easyicu.research_agent import pipeline_execute
+    from easyicu.research_agent.execution import phase as pipeline_execute
 
     source = inspect.getsource(pipeline_execute.run_execute_phase)
     tree = ast.parse(source)
@@ -1107,7 +1107,7 @@ def test_final_gate_evaluator_preserves_group_order_and_attempt_binding(
     monkeypatch,
     tmp_path,
 ):
-    from easyicu.research_agent import pipeline_execute
+    from easyicu.research_agent.execution import phase as pipeline_execute
     from easyicu.research_agent.gates import contract as contract_gate
     from easyicu.research_agent.contracts.runtime import ValidationFinding
     from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep
@@ -1280,7 +1280,7 @@ def test_final_gate_evaluator_preserves_group_order_and_attempt_binding(
 def test_execute_phase_host_verifies_measurement_provenance_at_every_contract_gate():
     import ast
 
-    from easyicu.research_agent import pipeline_execute
+    from easyicu.research_agent.execution import phase as pipeline_execute
 
     # The early repair gate and the final authority gate now share ONE
     # deterministic contract sequence (dedup): the summary-integrity validator is
@@ -1340,7 +1340,7 @@ def test_primary_cohort_coder_receives_only_exact_locked_cohort_payload():
         ConceptPredicate,
         TimeWindow,
     )
-    from easyicu.research_agent.pipeline_execute import (
+    from easyicu.research_agent.execution.phase import (
         _planner_locked_cohort_prompt_payload,
     )
     from easyicu.research_agent.schema import AnalysisPlan
@@ -1377,7 +1377,7 @@ def test_primary_cohort_coder_receives_only_exact_locked_cohort_payload():
 
 
 def test_primary_cohort_raw_runner_is_scoped_and_authority_hashes_are_rechecked():
-    from easyicu.research_agent import pipeline_execute
+    from easyicu.research_agent.execution import phase as pipeline_execute
 
     source = inspect.getsource(pipeline_execute.run_execute_phase)
     authority_source = inspect.getsource(
@@ -1440,7 +1440,7 @@ def test_primary_cohort_raw_runner_is_scoped_and_authority_hashes_are_rechecked(
 
 
 def test_every_runner_build_receives_the_selected_trajectory_authority():
-    from easyicu.research_agent import pipeline_execute
+    from easyicu.research_agent.execution import phase as pipeline_execute
 
     tree = ast.parse(inspect.getsource(pipeline_execute.run_execute_phase))
     runner_builds = [
@@ -1467,7 +1467,7 @@ def test_every_runner_build_receives_the_selected_trajectory_authority():
 
 def test_execution_input_authority_check_detects_unsafe_runner_mutation(tmp_path):
     from easyicu.research_agent.authority.evidence_store import sha256_of_file
-    from easyicu.research_agent.pipeline_execute import (
+    from easyicu.research_agent.execution.phase import (
         _execution_input_authority_integrity_finding,
     )
 
@@ -1580,7 +1580,7 @@ def test_required_collaborators_are_importable():
     surface when the execute phase actually fires, which in the e2e
     suite is many minutes in. We import them upfront here.
     """
-    from easyicu.research_agent.pipeline_execute import (  # noqa: F401
+    from easyicu.research_agent.execution.phase import (  # noqa: F401
         AnalyzerAgent,
         ClinicalSemanticsAgent,
         CoderAgent,
@@ -1602,7 +1602,7 @@ def test_required_collaborators_are_importable():
 
 
 def test_visual_qa_demotes_only_cosmetic_layout_errors(ra):
-    from easyicu.research_agent.pipeline_execute import (
+    from easyicu.research_agent.execution.phase import (
         _demote_cosmetic_visual_findings,
     )
     from easyicu.research_agent.schema import ValidationFinding
@@ -1639,7 +1639,7 @@ def test_scope_findings_step_global_warning_does_not_taint_records():
     and must NOT taint the citability of the step's output records — otherwise
     one 'immortal-time-bias risk' note makes the primary result table
     uncitable and the manuscript unwinnable."""
-    from easyicu.research_agent.pipeline_execute import scope_findings_to_records
+    from easyicu.research_agent.execution.phase import scope_findings_to_records
     from easyicu.research_agent.schema import ValidationFinding
 
     global_warning = ValidationFinding(
@@ -1656,7 +1656,7 @@ def test_scope_findings_step_global_warning_does_not_taint_records():
 
 def test_scope_findings_targeted_finding_taints_only_named_record():
     """A finding that names specific records taints ONLY those records."""
-    from easyicu.research_agent.pipeline_execute import scope_findings_to_records
+    from easyicu.research_agent.execution.phase import scope_findings_to_records
     from easyicu.research_agent.schema import ValidationFinding
 
     global_warning = ValidationFinding(
@@ -1682,7 +1682,7 @@ def test_scope_findings_targeted_finding_taints_only_named_record():
 def test_scope_findings_step_global_error_stays_fail_closed():
     """A step-global ERROR keeps the blanket taint (fail-closed): a step-level
     error means the step's outputs are not to be trusted."""
-    from easyicu.research_agent.pipeline_execute import scope_findings_to_records
+    from easyicu.research_agent.execution.phase import scope_findings_to_records
     from easyicu.research_agent.schema import ValidationFinding
 
     global_error = ValidationFinding(
@@ -1700,7 +1700,7 @@ def test_scope_findings_step_global_error_stays_fail_closed():
 
 
 def test_success_alias_filter_preserves_parent_role_but_allows_same_step_retry():
-    from easyicu.research_agent.pipeline_execute import (
+    from easyicu.research_agent.execution.phase import (
         _filter_success_alias_bindings,
     )
 
@@ -1740,7 +1740,7 @@ def test_success_alias_filter_assigns_product_role_to_real_product_not_summary(
     kind,
     filename,
 ):
-    from easyicu.research_agent.pipeline_execute import (
+    from easyicu.research_agent.execution.phase import (
         _filter_success_alias_bindings,
     )
 
@@ -1772,7 +1772,7 @@ def test_success_alias_filter_assigns_product_role_to_real_product_not_summary(
 
 
 def test_success_alias_filter_keeps_distinct_real_product_collision_fail_closed():
-    from easyicu.research_agent.pipeline_execute import (
+    from easyicu.research_agent.execution.phase import (
         _filter_success_alias_bindings,
     )
 
@@ -1804,7 +1804,7 @@ def test_success_alias_filter_keeps_distinct_real_product_collision_fail_closed(
 
 
 def test_success_alias_filter_prefers_vector_export_for_one_logical_figure():
-    from easyicu.research_agent.pipeline_execute import (
+    from easyicu.research_agent.execution.phase import (
         _filter_success_alias_bindings,
     )
 

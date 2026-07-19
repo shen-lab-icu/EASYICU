@@ -7,7 +7,7 @@ planned KMeans and declared a closed clustering-product contract.
 
 from __future__ import annotations
 
-from easyicu.research_agent.pipeline_execute import (
+from easyicu.research_agent.execution.phase import (
     _trajectory_clustering_step_matches as _matches,
 )
 from easyicu.research_agent.plan_utils import _step_contract_findings

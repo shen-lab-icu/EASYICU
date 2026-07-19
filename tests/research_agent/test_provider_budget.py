@@ -22,7 +22,7 @@ from easyicu.research_agent.authority.provider_budget import (
     load_provider_call_budget_state,
     provider_call_budget_receipt_path,
 )
-from easyicu.research_agent.pipeline_execute import (
+from easyicu.research_agent.execution.phase import (
     _HOST_COHORT_TRANSLATION_BUDGET_STEP_ID,
     _cohort_translation_budget_owner_step_id,
     _extract_cohort_definition_with_provider_budget,

@@ -30,7 +30,7 @@ from easyicu.research_agent.research_context.typed import (
     materialized_input_prompt_attachment,
 )
 from easyicu.research_agent.authority.coder_authority import HostCoderAuthority
-from easyicu.research_agent.pipeline_execute import _bind_materialized_coder_authority
+from easyicu.research_agent.execution.phase import _bind_materialized_coder_authority
 from tests.research_agent.test_research_context_v2_authority_join import (
     _prepare_typed_run,
 )

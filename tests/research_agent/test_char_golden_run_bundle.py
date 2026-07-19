@@ -103,7 +103,7 @@ def _step_id_from_output_path(path: Any) -> str | None:
 def _install_authority_order_observer(monkeypatch: pytest.MonkeyPatch):
     """Observe, without replacing, the current validate/seal/register order."""
 
-    from easyicu.research_agent import pipeline_execute
+    from easyicu.research_agent.execution import phase as pipeline_execute
     from easyicu.research_agent.authority.evidence_store import EvidenceStore
 
     events: list[tuple[str, str]] = []

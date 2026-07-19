@@ -1598,11 +1598,11 @@ class ResearchAgentPipeline:
         self._enable_probe_step = bool(enable_probe_step)
         self._enable_replanning = bool(enable_replanning)
         # 0 / None means "no cap". Anything positive enforces the cap in
-        # the replanner overflow guard (see pipeline_execute.py).
+        # the replanner overflow guard (see execution/phase.py).
         self._max_total_steps = (
             int(max_total_steps) if max_total_steps and max_total_steps > 0 else 0
         )
-        # Replan convergence guards (see pipeline_config / pipeline_execute).
+        # Replan convergence guards (see pipeline_config / execution.phase).
         # 0 disables the guard.
         self._max_consecutive_noop_replans = (
             int(max_consecutive_noop_replans)
@@ -3057,14 +3057,14 @@ class ResearchAgentPipeline:
         resume_from_step_id: Optional[str] = None,
         stop_after_step_id: Optional[str] = None,
     ) -> "_ExecutePhaseResult":
-        """Delegate to :mod:`pipeline_execute`.
+        """Delegate to :mod:`execution.phase`.
 
-        The 1500-line loop body is in :mod:`pipeline_execute` so this
+        The execute loop body is in :mod:`execution.phase` so this
         file does not have to host both the orchestration shell and the
         execute-phase guts. Late-imported to keep ``import pipeline``
         free of a cycle.
         """
-        from .pipeline_execute import run_execute_phase
+        from .execution.phase import run_execute_phase
 
         return run_execute_phase(
             self,

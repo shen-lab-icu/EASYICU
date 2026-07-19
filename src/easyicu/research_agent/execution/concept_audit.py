@@ -5,7 +5,7 @@ the optional digest-bound LLM audit, provider-budget accounting, and retirement
 of stored quarantine findings.  It does not choose a cohort, exposure, outcome,
 method, or estimand.  Policy functions remain host-owned dependencies supplied
 by the execute layer, which keeps this module independent from
-``pipeline_execute`` and prevents a reverse import cycle.
+``execution.phase`` and prevents a reverse import cycle.
 """
 
 from __future__ import annotations

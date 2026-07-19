@@ -5,7 +5,7 @@ user) will ask: *for a given study-design family, which scientific result is
 agent-produced, which standardized products are rendered or audited
 deterministically, and where does the framework fail closed?* The answer used to
 be implicit, spread across the preflight
-dispatch ladder in ``pipeline_execute``, the ``FAMILY_RENDERERS`` table, and the
+dispatch ladder in ``execution.phase``, the ``FAMILY_RENDERERS`` table, and the
 readiness gates in ``reporting.readiness``. Here it is declared once, rendered to a
 matrix, and kept honest by ``tests/research_agent/test_capability_registry.py``,
 which cross-checks every claim below against the code that is actually wired

@@ -2963,7 +2963,7 @@ def test_digest_bound_snapshot_parses_the_verified_bytes_after_path_mutation(tmp
     ],
 )
 def test_reported_fail_closed_status_fails_outer_step_contract(reported_status):
-    from easyicu.research_agent.pipeline_execute import (
+    from easyicu.research_agent.execution.phase import (
         _step_status_from_contract_findings,
     )
 

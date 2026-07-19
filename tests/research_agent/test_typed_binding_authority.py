@@ -13,7 +13,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from easyicu.research_agent import pipeline_execute
+from easyicu.research_agent.execution import phase as execution_phase
 from easyicu.research_agent.authority import typed_binding
 from easyicu.research_agent.schema import AnalysisPlan, EvidenceRef
 
@@ -32,10 +32,10 @@ def _top_level_function_calls(tree: ast.Module) -> dict[str, set[str]]:
     return calls
 
 
-def test_pipeline_execute_reexports_typed_binding_objects_with_identity() -> None:
+def test_execution_phase_uses_typed_binding_objects_with_identity() -> None:
     assert len(typed_binding.__all__) == 23
     for name in typed_binding.__all__:
-        assert getattr(pipeline_execute, name) is getattr(typed_binding, name)
+        assert getattr(execution_phase, name) is getattr(typed_binding, name)
 
 
 def test_typed_binding_has_no_orchestration_or_scientific_owner_dependency() -> None:
@@ -81,7 +81,7 @@ def test_typed_binding_writes_only_its_two_caller_scoped_receipts() -> None:
 
 
 def test_execute_loop_uses_one_typed_resolver_without_nested_implementation() -> None:
-    source = inspect.getsource(pipeline_execute.run_execute_phase)
+    source = inspect.getsource(execution_phase.run_execute_phase)
     tree = ast.parse(source)
     assert "def _evidence_refs_for_names" not in source
     constructor_calls = [
@@ -312,7 +312,7 @@ def test_resolver_preserves_first_seen_order_and_deduplicates_evidence(
 @pytest.mark.parametrize("canonical_first", [True, False])
 def test_typed_binding_identity_survives_import_order(canonical_first: bool) -> None:
     canonical = "easyicu.research_agent.authority.typed_binding"
-    legacy = "easyicu.research_agent.pipeline_execute"
+    legacy = "easyicu.research_agent.execution.phase"
     first, second = (canonical, legacy) if canonical_first else (legacy, canonical)
     script = f"""
 import importlib

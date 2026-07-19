@@ -935,7 +935,7 @@ def test_runtime_stdout_cannot_forge_repair_routing_or_context_selection(ra):
 
 
 def test_repair_receipt_binding_changes_with_typed_authority():
-    from easyicu.research_agent.pipeline_execute import (
+    from easyicu.research_agent.execution.phase import (
         _repair_prompt_binding_sha256,
     )
 
@@ -1069,7 +1069,7 @@ def test_explicit_host_authority_reaches_initial_patch_and_full_rewrite(ra):
 
 
 def test_assignment_model_roster_is_host_bound_outside_research_notes():
-    from easyicu.research_agent.pipeline_execute import (
+    from easyicu.research_agent.execution.phase import (
         _coder_authority_with_typed_parent_schema_receipts,
     )
 

@@ -8,7 +8,7 @@ by the agent-authored plan and code; helpers here must not infer or replace them
 
 It imports only the stdlib (ast/re/textwrap) and typing, and must never import
 ``repairs.source`` — the parent re-exports the shared helpers for backward
-compatibility (pipeline / pipeline_execute import several directly).
+compatibility (pipeline / execution.phase import several directly).
 """
 
 from __future__ import annotations

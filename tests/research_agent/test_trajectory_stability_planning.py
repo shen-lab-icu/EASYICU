@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from easyicu.research_agent.pipeline_execute import _plan_signature
+from easyicu.research_agent.execution.phase import _plan_signature
 from easyicu.research_agent.schema import (
     AnalysisPlan,
     AnalysisStep,

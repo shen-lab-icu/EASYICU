@@ -1392,7 +1392,7 @@ def test_save_publication_figure_accepts_contract_only_output_dir_call(tmp_path:
 
 def test_runner_synthesizes_contract_for_step_figure_exports(tmp_path: Path):
     from easyicu.research_agent.audits.validators import FigureContractQualityValidator
-    from easyicu.research_agent.pipeline_execute import _ensure_step_figure_contract
+    from easyicu.research_agent.execution.phase import _ensure_step_figure_contract
     from easyicu.research_agent.schema import AnalysisStep
 
     out_dir = tmp_path / "outputs"

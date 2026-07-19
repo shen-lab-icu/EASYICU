@@ -12,7 +12,7 @@ from easyicu.research_agent.contracts.declared_product import (
     typed_product_schema_receipt,
 )
 from easyicu.research_agent.authority.evidence_store import EvidenceStore, sha256_of_file
-from easyicu.research_agent.pipeline_execute import (
+from easyicu.research_agent.execution.phase import (
     _failed_contract_code_can_be_reused_before_coder,
     _plan_scientific_scope_signature,
     _plan_signature,

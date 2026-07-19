@@ -163,7 +163,7 @@ def test_generation_mode_exhaustively_matches_extracted_legacy_projection() -> N
 
 
 def test_worker_progress_is_data_only_and_pipeline_uses_single_seam() -> None:
-    from easyicu.research_agent import pipeline_execute
+    from easyicu.research_agent.execution import phase as pipeline_execute
     from easyicu.research_agent.execution import step_worker_state
 
     module_source = inspect.getsource(step_worker_state)

@@ -16,10 +16,10 @@ and RETURN a canonicalization code candidate:
   consuming demotion stays in the execution layer).
 
 The DECISION to install a canonicalization and the demotion that consumes
-``_family_has_deterministic_figure_renderer`` stay in ``pipeline_execute``; only
+``_family_has_deterministic_figure_renderer`` stay in ``execution.phase``; only
 the preparation helpers live here. Imports only leaf modules (schema /
-figures.publication / stdlib) so there is no import cycle with ``pipeline_execute``
-or ``contract_gate``. ``pipeline_execute`` re-exports every name here for
+figures.publication / stdlib) so there is no import cycle with ``execution.phase``
+or ``contract_gate``. ``execution.phase`` re-exports every name here for
 back-compat.
 """
 
@@ -383,7 +383,7 @@ def _family_has_deterministic_figure_renderer(context: Any) -> bool:
     """True when this study-design family builds its PRIMARY publication figure
     deterministically in the write phase (``render_family_figure``).
 
-    Lazy import keeps ``pipeline_execute`` free of a ``figures`` /
+    Lazy import keeps ``execution.phase`` free of a ``figures`` /
     ``study_design`` import-order dependency and fail-safes to False (strict) if
     the family cannot be inferred.
     """
