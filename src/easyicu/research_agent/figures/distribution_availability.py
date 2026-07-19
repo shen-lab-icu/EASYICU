@@ -27,7 +27,7 @@ from ..declared_product_contract import (
     read_digest_bound_artifact_snapshot,
     typed_product,
 )
-from ..publication_figures import (
+from .publication import (
     add_panel_label,
     apply_publication_style,
     make_figure_contract,

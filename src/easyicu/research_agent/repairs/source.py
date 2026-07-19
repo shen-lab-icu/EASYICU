@@ -3293,7 +3293,7 @@ def _deterministic_runner_repair(
         if previous_repair != repair_name:
             repaired = code.replace(
                 "easyicu.research_output.figure_utils",
-                "easyicu.research_agent.publication_figures",
+                "easyicu.research_agent.figures.publication",
             )
             if repaired != code:
                 return repair_name, repaired
@@ -3735,7 +3735,7 @@ def _deterministic_runner_repair(
                 import matplotlib.pyplot as plt
                 from sklearn.metrics import roc_auc_score, roc_curve
                 from sklearn.calibration import calibration_curve
-                from easyicu.research_agent.publication_figures import (
+                from easyicu.research_agent.figures.publication import (
                     make_figure_contract,
                     apply_publication_style,
                     add_panel_label,

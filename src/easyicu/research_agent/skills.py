@@ -543,7 +543,7 @@ def build_dynamic_core_plan_steps(
                     step_id="05_publication_figure_generation",
                     intent=(
                         "Generate a claim-first, manuscript-ready publication figure for the "
-                        "prediction-model analysis using easyicu.research_agent.publication_figures."
+                        "prediction-model analysis using easyicu.research_agent.figures.publication."
                     ),
                     inputs=variables,
                     expected_outputs=[
@@ -579,7 +579,7 @@ def build_dynamic_core_plan_steps(
                     step_id="05_publication_figure_generation",
                     intent=(
                         "Generate a claim-first, manuscript-ready publication figure for the "
-                        "trajectory clustering analysis using easyicu.research_agent.publication_figures."
+                        "trajectory clustering analysis using easyicu.research_agent.figures.publication."
                     ),
                     inputs=variables,
                     expected_outputs=[

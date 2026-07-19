@@ -314,7 +314,7 @@ from .plan_utils import (
     effect_output_authorized,
 )
 from .experiment_spec import ExperimentSpec, dump_experiment_spec
-from .figure_skill import PublicationFigureSkill
+from .figures.skill import PublicationFigureSkill
 from .reporting.bibtex import render_bibtex
 from .reporting.latex import scaffold_to_latex
 from .literature import (
@@ -406,7 +406,7 @@ from .audits.validators import (
     StatisticalValidator,
     dedupe_findings,
 )
-from .visual_qa import VLMVisualQAAdapter, VisualQAAuditor
+from .gates.visual_qa import VLMVisualQAAdapter, VisualQAAuditor
 
 
 from .pipeline_package import (
@@ -4928,7 +4928,7 @@ def _render_prediction_publication_bundle_from_prior_outputs(
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
-    from easyicu.research_agent.publication_figures import (
+    from easyicu.research_agent.figures.publication import (
         add_panel_label,
         apply_publication_style,
         make_figure_contract,
@@ -5187,7 +5187,7 @@ def _render_cohort_overlap_publication_bundle_from_prior_outputs(
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
-    from easyicu.research_agent.publication_figures import (
+    from easyicu.research_agent.figures.publication import (
         add_panel_label,
         apply_publication_style,
         make_figure_contract,
@@ -5529,7 +5529,7 @@ def _render_cohort_flow_publication_bundle_from_prior_outputs(
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
-    from easyicu.research_agent.publication_figures import (
+    from easyicu.research_agent.figures.publication import (
         add_panel_label,
         apply_publication_style,
         make_figure_contract,
@@ -6186,7 +6186,7 @@ def _render_missingness_publication_bundle_from_prior_outputs(
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
-    from easyicu.research_agent.publication_figures import (
+    from easyicu.research_agent.figures.publication import (
         add_panel_label,
         apply_publication_style,
         make_figure_contract,
@@ -6663,7 +6663,7 @@ def _render_phenotype_publication_bundle_from_prior_outputs(
     import matplotlib.pyplot as plt
     import numpy as np
 
-    from easyicu.research_agent.publication_figures import (
+    from easyicu.research_agent.figures.publication import (
         add_panel_label,
         apply_publication_style,
         make_figure_contract,
@@ -6955,7 +6955,7 @@ def _render_descriptive_publication_bundle_from_prior_outputs(
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
-    from easyicu.research_agent.publication_figures import (
+    from easyicu.research_agent.figures.publication import (
         add_panel_label,
         apply_publication_style,
         make_figure_contract,
@@ -7630,7 +7630,7 @@ def _render_absolute_risk_publication_bundle_from_prior_outputs(
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
-    from easyicu.research_agent.publication_figures import (
+    from easyicu.research_agent.figures.publication import (
         add_panel_label,
         apply_publication_style,
         make_figure_contract,
@@ -8224,7 +8224,7 @@ def _render_association_publication_bundle_from_prior_outputs(
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
-    from easyicu.research_agent.publication_figures import (
+    from easyicu.research_agent.figures.publication import (
         add_panel_label,
         apply_publication_style,
         make_figure_contract,
@@ -8847,7 +8847,7 @@ def _render_sensitivity_publication_bundle_from_prior_outputs(
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
-    from easyicu.research_agent.publication_figures import (
+    from easyicu.research_agent.figures.publication import (
         add_panel_label,
         apply_publication_style,
         make_figure_contract,

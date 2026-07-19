@@ -5,7 +5,7 @@ figures should pass through a small, auditable EasyICU figure skill once the
 analysis evidence is stable. This module sits between analysis and writing:
 it consumes registered tables/statistics, creates a claim-first
 ``FigureContract``, exports journal-friendly formats through
-``publication_figures``, and registers every output in the EvidenceStore.
+``figures.publication``, and registers every output in the EvidenceStore.
 """
 
 from __future__ import annotations
@@ -20,9 +20,9 @@ from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 import pandas as pd
 
-from .audits.validators import FigureContractQualityValidator
-from .authority.evidence_store import EvidenceStore
-from .publication_figures import (
+from ..audits.validators import FigureContractQualityValidator
+from ..authority.evidence_store import EvidenceStore
+from .publication import (
     PUBLICATION_FIGURE_SKILL_POLICY_VERSION,
     add_panel_label,
     apply_publication_style,
@@ -30,10 +30,10 @@ from .publication_figures import (
     make_figure_contract,
     save_publication_figure,
 )
-from .figures import RenderedFigure, render_family_figure
-from .robustness_panel import RobustnessPanel, load_robustness_panel
-from .schema import AnalysisPlan, EvidenceRecord, ResearchContext, ValidationFinding
-from .planning.study_design import infer_study_design_family
+from . import RenderedFigure, render_family_figure
+from ..robustness_panel import RobustnessPanel, load_robustness_panel
+from ..schema import AnalysisPlan, EvidenceRecord, ResearchContext, ValidationFinding
+from ..planning.study_design import infer_study_design_family
 
 
 def _close_leaked_figures() -> None:

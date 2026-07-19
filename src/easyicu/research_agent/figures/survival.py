@@ -336,7 +336,7 @@ def _render_forest_followup_figure(
     import matplotlib.pyplot as plt
     import numpy as np
 
-    from ..publication_figures import add_panel_label, apply_publication_style
+    from .publication import add_panel_label, apply_publication_style
 
     palette = apply_publication_style()
     fig = plt.figure(figsize=(183 / 25.4, 90 / 25.4), constrained_layout=False)
@@ -523,7 +523,7 @@ def render_survival_figure(
     import matplotlib.pyplot as plt
     import numpy as np
 
-    from ..publication_figures import add_panel_label, apply_publication_style
+    from .publication import add_panel_label, apply_publication_style
 
     palette = apply_publication_style()
     fig = plt.figure(figsize=(183 / 25.4, 118 / 25.4), constrained_layout=False)
@@ -822,7 +822,7 @@ def render_survival_bundle_from_prior_outputs(
 
     import matplotlib.pyplot as plt
 
-    from ..publication_figures import make_figure_contract, save_publication_figure
+    from .publication import make_figure_contract, save_publication_figure
 
     contract = make_figure_contract(
         figure_id="publication_figure",

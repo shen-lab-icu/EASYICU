@@ -21,7 +21,7 @@ from typing import Any, Mapping, Optional
 import pandas as pd
 
 from ..declared_product_contract import read_digest_bound_artifact_snapshot
-from ..publication_figures import (
+from .publication import (
     add_panel_label,
     apply_publication_style,
     make_figure_contract,

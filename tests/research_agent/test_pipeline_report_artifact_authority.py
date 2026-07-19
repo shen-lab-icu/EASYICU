@@ -13,7 +13,7 @@ from easyicu.research_agent.pipeline_report import (
     _publication_figure_bundle_ready,
     _publication_provenance_ready,
 )
-from easyicu.research_agent.publication_figures import (
+from easyicu.research_agent.figures.publication import (
     PUBLICATION_FIGURE_SKILL_POLICY_VERSION,
 )
 

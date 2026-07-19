@@ -216,7 +216,7 @@ def render_prediction_figure(
     import matplotlib.pyplot as plt
     import numpy as np
 
-    from ..publication_figures import add_panel_label, apply_publication_style
+    from .publication import add_panel_label, apply_publication_style
 
     palette = apply_publication_style()
     blue = palette.get("blue", "#0F4D92")

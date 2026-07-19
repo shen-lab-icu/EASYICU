@@ -27,8 +27,8 @@ from pathlib import Path
 import xml.etree.ElementTree as ET
 from typing import Any, Dict, Iterable, List, NamedTuple, Optional, Sequence, Set, Tuple
 
-from .providers.protocol import LLMClient, LLMMessage
-from .schema import ValidationFinding
+from ..providers.protocol import LLMClient, LLMMessage
+from ..schema import ValidationFinding
 
 
 class _TextBox(NamedTuple):

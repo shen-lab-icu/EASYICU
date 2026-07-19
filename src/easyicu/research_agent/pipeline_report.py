@@ -50,7 +50,7 @@ from .reporting.article_contract import (
 from .reporting.display_suite import summarize_display_suite_status
 from .authority.evidence_store import EvidenceStore, sha256_of_file
 from .planning.figure_strategy import summarize_article_figure_strategy_coverage
-from .publication_figures import PUBLICATION_FIGURE_SKILL_POLICY_VERSION
+from .figures.publication import PUBLICATION_FIGURE_SKILL_POLICY_VERSION
 from .plan_utils import _output_declares_figure, _parent_step_id_for_figure_step
 from .reporting.review_artifacts import build_review_artifact_payloads
 from .authority.runtime_artifacts import (

@@ -57,7 +57,9 @@ RETIRED_TOP_LEVEL_MODULES: dict[str, str | None] = {
     "evidence_authority": "authority.evidence_snapshot",
     "evidence_registration": "authority.registration",
     "experience": "learning.experience",
-    "figure_contract": "publication_figures",
+    "figure_contract": "figures.publication",
+    "figure_contracts": "figures.contracts",
+    "figure_skill": "figures.skill",
     "figure_contract_preparation": "execution.figure_preparation",
     "figure_strategy": "planning.figure_strategy",
     "gate_evaluator": "gates.visual",
@@ -88,6 +90,7 @@ RETIRED_TOP_LEVEL_MODULES: dict[str, str | None] = {
     "provider_budget": "authority.provider_budget",
     "prompts": "providers.prompts",
     "publication_figure_execution": "execution.publication_figure",
+    "publication_figures": "figures.publication",
     "provenance": "authority.provenance",
     "repair_coordination": "repairs.coordination",
     "repair_reasons": "repairs.reasons",
@@ -120,6 +123,7 @@ RETIRED_TOP_LEVEL_MODULES: dict[str, str | None] = {
     "trajectory_contract": "trajectory.contract",
     "trajectory_plan_contract": "trajectory.plan_contract",
     "trajectory_resume_schema": None,
+    "visual_qa": "gates.visual_qa",
 }
 
 
@@ -141,6 +145,31 @@ def test_retired_top_level_module_is_absent(leaf: str) -> None:
 def test_canonical_replacement_is_importable(target: str) -> None:
     imported = importlib.import_module(f"easyicu.research_agent.{target}")
     assert imported.__name__ == f"easyicu.research_agent.{target}"
+
+
+@pytest.mark.parametrize(
+    ("name", "target"),
+    [
+        ("VisualQAAuditor", "gates.visual_qa"),
+        ("VLMVisualQAAdapter", "gates.visual_qa"),
+        ("PublicationFigureSkill", "figures.skill"),
+        ("PublicationFigureSkillResult", "figures.skill"),
+        ("FigureContract", "figures.publication"),
+        ("PanelSpec", "figures.publication"),
+        ("make_figure_contract", "figures.publication"),
+        ("audit_figure_contract", "figures.publication"),
+        ("apply_publication_style", "figures.publication"),
+        ("save_publication_figure", "figures.publication"),
+        ("audit_publication_exports", "figures.publication"),
+    ],
+)
+def test_root_figure_api_preserves_canonical_object_identity(
+    name: str,
+    target: str,
+) -> None:
+    root = importlib.import_module("easyicu.research_agent")
+    canonical = importlib.import_module(f"easyicu.research_agent.{target}")
+    assert getattr(root, name) is getattr(canonical, name)
 
 
 @pytest.mark.parametrize("name", ["os_environ", "step_summary"])

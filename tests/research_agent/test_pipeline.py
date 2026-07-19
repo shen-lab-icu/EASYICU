@@ -2995,7 +2995,7 @@ contract = make_figure_contract(
     assert repaired is not None
     name, patched = repaired
     assert name == "replace_hallucinated_figure_utils_import_v1"
-    assert "easyicu.research_agent.publication_figures" in patched
+    assert "easyicu.research_agent.figures.publication" in patched
     assert "easyicu.research_output.figure_utils" not in patched
 
 
@@ -3471,7 +3471,7 @@ def test_deterministic_runner_repair_promotes_publication_bundle_script(ra):
     from easyicu.research_agent.pipeline import _deterministic_runner_repair
 
     code = """
-from easyicu.research_agent.publication_figures import make_figure_contract
+from easyicu.research_agent.figures.publication import make_figure_contract
 pub_style = apply_publication_style()
 save_publication_figure(figure_contract, fig)
 """
@@ -6054,7 +6054,7 @@ def _register_publication_bundle_for_readiness(
     contract: dict,
     source_step_id: str | None = None,
 ) -> str:
-    from easyicu.research_agent.publication_figures import (
+    from easyicu.research_agent.figures.publication import (
         PUBLICATION_FIGURE_SKILL_POLICY_VERSION,
     )
 
@@ -7898,7 +7898,7 @@ def test_publication_bundle_ready_groups_hash_suffixed_exports_under_one_stem(
 ):
     from easyicu.research_agent.authority.evidence_store import EvidenceStore
     from easyicu.research_agent.pipeline import _publication_figure_bundle_ready
-    from easyicu.research_agent.publication_figures import (
+    from easyicu.research_agent.figures.publication import (
         PUBLICATION_FIGURE_SKILL_POLICY_VERSION,
     )
 
@@ -7956,7 +7956,7 @@ def test_publication_bundle_requires_sources_from_current_checkpoint(
 ):
     from easyicu.research_agent.authority.evidence_store import EvidenceStore
     from easyicu.research_agent.pipeline import _publication_figure_bundle_ready
-    from easyicu.research_agent.publication_figures import (
+    from easyicu.research_agent.figures.publication import (
         PUBLICATION_FIGURE_SKILL_POLICY_VERSION,
     )
 
@@ -8163,7 +8163,7 @@ def test_publication_bundle_ready_rejects_uncontracted_forest_plot_png_svg(
 def test_publication_bundle_ready_blocks_visual_qa_errors(ra, tmp_path: Path):
     from easyicu.research_agent.authority.evidence_store import EvidenceStore
     from easyicu.research_agent.pipeline import _publication_figure_bundle_ready
-    from easyicu.research_agent.publication_figures import (
+    from easyicu.research_agent.figures.publication import (
         PUBLICATION_FIGURE_SKILL_POLICY_VERSION,
     )
     from easyicu.research_agent.schema import ValidationFinding

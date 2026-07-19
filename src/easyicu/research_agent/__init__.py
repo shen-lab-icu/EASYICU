@@ -768,11 +768,11 @@ def __getattr__(name: str):
 
         return getattr(_runtime_artifacts, name)
     if name in {"VisualQAAuditor", "VLMVisualQAAdapter"}:
-        from . import visual_qa as _visual_qa
+        from .gates import visual_qa as _visual_qa
 
         return getattr(_visual_qa, name)
     if name in {"PublicationFigureSkill", "PublicationFigureSkillResult"}:
-        from . import figure_skill as _figure_skill
+        from .figures import skill as _figure_skill
 
         return getattr(_figure_skill, name)
     if name in {
@@ -784,7 +784,7 @@ def __getattr__(name: str):
         "save_publication_figure",
         "audit_publication_exports",
     }:
-        from . import publication_figures as _pubfig
+        from .figures import publication as _pubfig
 
         return getattr(_pubfig, name)
     if name in {"EvidenceStore", "EvidenceEnforcementMode", "EvidenceEnforcementError"}:

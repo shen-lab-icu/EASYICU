@@ -1502,7 +1502,7 @@ def _mock_code_publication_figure(*, ctx: ResearchContext, step_id: str, outcome
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
-    from easyicu.research_agent.publication_figures import (
+    from easyicu.research_agent.figures.publication import (
         apply_publication_style,
         add_panel_label,
         audit_publication_exports,
