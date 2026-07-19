@@ -56,10 +56,10 @@ def _event_aware_probe(**kwargs):
     )
 
 
-from easyicu.research_agent.idea_mining import (  # noqa: E402
+from easyicu.research_agent.discovery.idea_mining import (  # noqa: E402
     run_idea_mining_dry_run,
 )
-from easyicu.research_agent.idea_mining_feasibility_tier import (  # noqa: E402
+from easyicu.research_agent.discovery.idea_mining_feasibility_tier import (  # noqa: E402
     SourceItemIndex,
 )
 from easyicu.research_agent.schema import ConceptDescriptor, VariableRole  # noqa: E402

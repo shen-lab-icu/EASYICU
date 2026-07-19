@@ -32,7 +32,7 @@ SRC_ROOT = REPO_ROOT / "src"
 if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
-from easyicu.research_agent.idea_mining import (  # noqa: E402
+from easyicu.research_agent.discovery.idea_mining import (  # noqa: E402
     LiteratureIdeaCandidate,
     OutcomeDeterminability,
     SourceMaterial,

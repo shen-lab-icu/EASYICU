@@ -61,6 +61,11 @@ LEGACY_TARGET_MODULES: Tuple[str, ...] = (
     "easyicu.research_agent.idea_mining_data_first",
     "easyicu.research_agent.idea_mining_feasibility_tier",
     "easyicu.research_agent.concept_proposal",
+    "easyicu.research_agent.idea_mining",
+    "easyicu.research_agent.idea_mining_priorart",
+    "easyicu.research_agent.idea_mining_funnel",
+    "easyicu.research_agent.idea_mining_extended_feasibility",
+    "easyicu.research_agent.idea_mining_eval",
 )
 
 

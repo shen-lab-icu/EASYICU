@@ -44,6 +44,7 @@ def test_idea_mining_priorart_is_a_leaf_module() -> None:
         / "src"
         / "easyicu"
         / "research_agent"
+        / "discovery"
         / "idea_mining_priorart.py"
     )
     tree = ast.parse(path.read_text(encoding="utf-8"))

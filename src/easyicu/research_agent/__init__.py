@@ -592,7 +592,7 @@ def __getattr__(name: str):
         "render_discovery_report",
         "run_idea_mining_dry_run",
     }:
-        from . import idea_mining as _idea_mining
+        from .discovery import idea_mining as _idea_mining
 
         return getattr(_idea_mining, name)
     if name in {
@@ -614,7 +614,7 @@ def __getattr__(name: str):
         "fetch_literature_funnel_corpus",
         "fetch_literature_funnel_source_materials",
     }:
-        from . import idea_mining_funnel as _idea_mining_funnel
+        from .discovery import idea_mining_funnel as _idea_mining_funnel
 
         return getattr(_idea_mining_funnel, name)
     if name in {
@@ -629,7 +629,7 @@ def __getattr__(name: str):
         "score_idea_quality_predictions",
         "summarize_idea_quality_eval_set",
     }:
-        from . import idea_mining_eval as _idea_mining_eval
+        from .discovery import idea_mining_eval as _idea_mining_eval
 
         return getattr(_idea_mining_eval, name)
     if name in {
