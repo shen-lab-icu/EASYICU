@@ -2,7 +2,8 @@
 
 ``CodeRunner`` uses this interpreter. The reference ``DockerRunner`` image is
 built from the same baseline and curated lists and captures its own image digest
-plus ``pip freeze`` at execution time. Custom images must preserve that contract.
+plus installed-distribution metadata at execution time. Custom images must
+preserve that contract.
 Neither runner can install packages at analysis time.
 
 The reliability rule this module enforces: inject into the coder prompt ONLY the
