@@ -21,7 +21,7 @@ from typing import List, Optional, Sequence
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from .article_contract import (
+from .reporting.article_contract import (
     ArticleAnalysisContract,
     ArticleDisplayRequirement,
     build_article_analysis_contract,

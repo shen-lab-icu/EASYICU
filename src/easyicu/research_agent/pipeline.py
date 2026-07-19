@@ -135,7 +135,7 @@ from .analysis_blueprint import (
     render_analysis_blueprint_for_prompt,
     validate_plan_against_analysis_blueprint,
 )
-from .article_contract import (
+from .reporting.article_contract import (
     build_article_analysis_contract,
     validate_plan_against_article_contract,
 )
@@ -309,8 +309,8 @@ from .plan_utils import (
 )
 from .experiment_spec import ExperimentSpec, dump_experiment_spec
 from .figure_skill import PublicationFigureSkill
-from .bibtex import render_bibtex
-from .latex import scaffold_to_latex
+from .reporting.bibtex import render_bibtex
+from .reporting.latex import scaffold_to_latex
 from .literature import (
     HypothesisBlueprintAgent,
     LiteratureAgent,

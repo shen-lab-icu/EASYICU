@@ -67,7 +67,7 @@ from .agents import (
     StatisticalAnalysisAgent,
     VisualizationAgent,
 )
-from .article_contract import (
+from .reporting.article_contract import (
     article_contract_audit_payload,
     summarize_article_contract_coverage,
     validate_run_against_article_contract,

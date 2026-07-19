@@ -21,7 +21,7 @@ from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 from .agents import CriticAgent, ManuscriptAgent
 from .audits.manuscript_claims import audit_manuscript_numeric_claims
-from .bibtex import render_bibtex
+from .reporting.bibtex import render_bibtex
 from .causal_audit import run_causal_audit
 from .contracts import (
     ValidationFinding,
@@ -35,7 +35,7 @@ from .evidence import (
     sha256_of_file,
 )
 from .figure_skill import PublicationFigureSkill
-from .latex import scaffold_to_latex
+from .reporting.latex import scaffold_to_latex
 from .literature import LiteratureAgent, LiteratureBundle
 from .llm import MockLLMClient
 from .manuscript_post import (
