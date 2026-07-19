@@ -4,7 +4,7 @@ Package/finalise phase for the EasyICU research-agent pipeline.
 This module owns run reports, workflow/replay artefacts, manifest writing,
 readiness outputs, cost summaries, and final PipelineResult construction.
 It follows the same free-function pattern as ``pipeline_execute.py`` and
-``pipeline_write.py``: callers pass the pipeline instance first, and the
+``reporting.write_phase``: callers pass the pipeline instance first, and the
 function reads existing collaborators from that instance.
 
 Boundary contract: consumes ``_PlanPhaseResult`` + ``_ExecutePhaseResult`` +
@@ -23,27 +23,27 @@ from typing import Any, Callable, Dict, List, Mapping, Optional
 
 import pandas as pd
 
-from .audits.validators import dedupe_findings
-from .cohort.schema import COHORT_LOCK_FILENAME
-from .concept_dict_audit import (
+from ..audits.validators import dedupe_findings
+from ..cohort.schema import COHORT_LOCK_FILENAME
+from ..concept_dict_audit import (
     CONCEPT_DICT_PACKAGE_PATH,
     SOFA2_DICT_PACKAGE_PATH,
     compute_concept_dict_fingerprint,
 )
-from .contracts.runtime import (
+from ..contracts.runtime import (
     ValidationFinding,
     _ExecutePhaseResult,
     _PlanPhaseResult,
     _WritePhaseResult,
 )
-from .providers.cost import CostMeter
-from .authority.evidence_store import EvidenceStore
-from .methods.multiple_testing import build_multiple_testing_report
-from .methods.sensitivity import compute_e_value
-from .pipeline_cross_db import _literature_provenance_note
-from .pipeline_report import render_report, write_readiness_artifacts
-from .providers.prompts import PROMPT_PACK_VERSION, prompt_pack_files
-from .authority.runtime_artifacts import (
+from ..providers.cost import CostMeter
+from ..authority.evidence_store import EvidenceStore
+from ..methods.multiple_testing import build_multiple_testing_report
+from ..methods.sensitivity import compute_e_value
+from ..replication.report import _literature_provenance_note
+from ..reporting.readiness import render_report, write_readiness_artifacts
+from ..providers.prompts import PROMPT_PACK_VERSION, prompt_pack_files
+from ..authority.runtime_artifacts import (
     AuditLogger,
     active_step_evidence_ids,
     build_execution_replay,
@@ -55,9 +55,9 @@ from .authority.runtime_artifacts import (
     write_json_artifact,
     write_run_checkpoint,
 )
-from .robustness_panel import PANEL_FILENAME, load_robustness_panel
-from .schema import AnalysisManifest, PipelineResult, ResearchContext
-from .side_findings import collect_side_findings, write_side_findings
+from ..robustness_panel import PANEL_FILENAME, load_robustness_panel
+from ..schema import AnalysisManifest, PipelineResult, ResearchContext
+from ..reporting.side_findings import collect_side_findings, write_side_findings
 
 logger = logging.getLogger(__name__)
 
@@ -685,7 +685,7 @@ def finalise_success(
                     and outcome_name in cohort_df.columns
                     and candidate_subgroups
                 ):
-                    from .methods.fairness import run_subgroup_analysis
+                    from ..methods.fairness import run_subgroup_analysis
 
                     result = run_subgroup_analysis(
                         cohort_df=cohort_df,

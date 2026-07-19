@@ -10,7 +10,7 @@ the readiness artifacts a run already writes, which is the whole selling
 point of Tier 1 (deterministic checks, *not* an LLM judging another LLM —
 see the writing framework §L2.1 / §M).
 
-Inputs (per run, written by ``pipeline_report.write_readiness_artifacts``):
+Inputs (per run, written by ``reporting.readiness.write_readiness_artifacts``):
 
 * ``run_status.json``     — ``gates`` dict (execution / evidence / numeric).
 * ``evidence_audit.json`` — evidence kinds + completeness.

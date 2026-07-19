@@ -92,7 +92,7 @@ def test_capture_code_version_reports_git_and_package_identity(ra):
 
 
 def test_code_version_manifest_field_wraps_capture(ra):
-    from easyicu.research_agent.pipeline_package import (
+    from easyicu.research_agent.orchestration.finalize import (
         _code_version_manifest_fields,
     )
 
@@ -143,7 +143,9 @@ def test_current_artifact_authority_uses_latest_outer_step_status():
 
 
 def test_current_evidence_requires_its_own_current_producer_binding():
-    from easyicu.research_agent.authority.runtime_artifacts import current_evidence_records
+    from easyicu.research_agent.authority.runtime_artifacts import (
+        current_evidence_records,
+    )
 
     records = [
         {
@@ -168,7 +170,9 @@ def test_current_evidence_requires_its_own_current_producer_binding():
 
 
 def test_newer_final_manifest_supersedes_stale_partial_authority(tmp_path: Path):
-    from easyicu.research_agent.authority.runtime_artifacts import load_run_artifact_authority
+    from easyicu.research_agent.authority.runtime_artifacts import (
+        load_run_artifact_authority,
+    )
 
     partial = tmp_path / "manifest_partial.json"
     final = tmp_path / "manifest.json"
@@ -281,7 +285,9 @@ def test_checkpoint_writer_is_atomic_and_monotonically_sequenced(tmp_path: Path)
 
 
 def test_checkpoint_sequence_outranks_mtime_for_current_authority(tmp_path: Path):
-    from easyicu.research_agent.authority.runtime_artifacts import load_run_artifact_authority
+    from easyicu.research_agent.authority.runtime_artifacts import (
+        load_run_artifact_authority,
+    )
 
     partial = tmp_path / "manifest_partial.json"
     final = tmp_path / "manifest.json"
@@ -298,9 +304,7 @@ def test_checkpoint_sequence_outranks_mtime_for_current_authority(tmp_path: Path
         json.dumps(
             {
                 "checkpoint_sequence": 4,
-                "per_step_records": [
-                    {"step_id": "01", "status": "contract_failed"}
-                ],
+                "per_step_records": [{"step_id": "01", "status": "contract_failed"}],
             }
         ),
         encoding="utf-8",

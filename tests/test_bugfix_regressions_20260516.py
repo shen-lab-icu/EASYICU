@@ -19,6 +19,7 @@ Where possible the tests use tiny synthetic fixtures so they run quickly
 without `--run-real`. Tests that genuinely need a working eicu install carry
 the `needs_real_data` marker and are skipped by default.
 """
+
 from __future__ import annotations
 
 import gzip
@@ -88,17 +89,24 @@ def test_mimic_chartevents_value_stays_varchar(tmp_path):
     converter = DataConverter(str(tmp_path), database="mimic", verbose=False)
     result = converter.convert_all()["CHARTEVENTS.csv.gz"]
     assert result["status"] == ConversionStatus.COMPLETED, result.get("error")
-    assert result["row_count"] == 111, "all rows including the text-value row must be kept"
+    assert (
+        result["row_count"] == 111
+    ), "all rows including the text-value row must be kept"
 
     # Schema sanity: VALUE must be VARCHAR, the text value preserved.
     import duckdb
+
     out = tmp_path / "chartevents.parquet"
     con = duckdb.connect()
-    types = {r[0]: r[1] for r in con.execute(
-        f"DESCRIBE SELECT value FROM read_parquet('{out}') LIMIT 0"
-    ).fetchall()}
-    assert types["value"].upper().startswith("VARCHAR"), \
-        f"value column must stay VARCHAR, got {types['value']}"
+    types = {
+        r[0]: r[1]
+        for r in con.execute(
+            f"DESCRIBE SELECT value FROM read_parquet('{out}') LIMIT 0"
+        ).fetchall()
+    }
+    assert (
+        types["value"].upper().startswith("VARCHAR")
+    ), f"value column must stay VARCHAR, got {types['value']}"
     rows = con.execute(
         f"SELECT value FROM read_parquet('{out}') WHERE value LIKE '%Spontaneously%'"
     ).fetchall()
@@ -151,16 +159,18 @@ def test_expand_tolerates_mixed_numeric_and_datetime():
     """
     from easyicu.io.ts_utils import expand
 
-    df = pd.DataFrame({
-        "stay_id": [1, 1, 2],
-        # numeric hours since admission
-        "charttime": [2.0, 5.0, 1.0],
-        # datetime end — incompatible type, used to crash the comparison
-        "endtime": pd.to_datetime([
-            "2020-01-01 02:00", "2020-01-01 05:00", "2020-01-02 01:00"
-        ]),
-        "delirium_tx": [True, True, True],
-    })
+    df = pd.DataFrame(
+        {
+            "stay_id": [1, 1, 2],
+            # numeric hours since admission
+            "charttime": [2.0, 5.0, 1.0],
+            # datetime end — incompatible type, used to crash the comparison
+            "endtime": pd.to_datetime(
+                ["2020-01-01 02:00", "2020-01-01 05:00", "2020-01-02 01:00"]
+            ),
+            "delirium_tx": [True, True, True],
+        }
+    )
 
     # Should not raise; should return a frame (may be empty after fallback).
     out = expand(
@@ -178,12 +188,12 @@ def test_expand_tolerates_mixed_numeric_and_datetime():
 # Bug #6 (agent layer) — execution gate must count the deterministic 00_probe
 # ---------------------------------------------------------------------------
 def test_execution_gate_counts_deterministic_probe():
-    """Pre-fix: ``pipeline_report.execution_gate_status`` filtered ``00_probe``
+    """Pre-fix: ``reporting.readiness.execution_gate_status`` filtered ``00_probe``
     out of ``status_by_step`` while still keeping it in ``required_step_ids``,
     so the deterministic probe was always reported as a missing required step
     and ``execution_complete`` was forced to False. Pilot
     run_20260516T123840_cc32d5 surfaced this as `00_probe missing`."""
-    from easyicu.research_agent.pipeline_report import execution_gate_status
+    from easyicu.research_agent.reporting.readiness import execution_gate_status
     from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep
 
     plan = AnalysisPlan(
@@ -227,18 +237,23 @@ def test_openai_client_retries_json_decode_error(monkeypatch):
             # Third call succeeds — return a minimal openai-shaped response
             class _Msg:
                 content = "ok"
+
                 def model_dump(self):
                     return {"role": "assistant", "content": "ok"}
+
             class _Choice:
                 message = _Msg()
                 finish_reason = "stop"
+
             class _Resp:
                 choices = [_Choice()]
                 usage = None
+
             return _Resp()
 
     class _StubChat:
         completions = _StubCreate()
+
     class _StubClient:
         chat = _StubChat()
 
@@ -253,11 +268,13 @@ def test_openai_client_retries_json_decode_error(monkeypatch):
 
     # Monkeypatch time.sleep so the retries are instant in the test
     import time
+
     monkeypatch.setattr(time, "sleep", lambda *_a, **_k: None)
 
     out = client.complete(
         [LLMMessage(role="user", content="hi")],
-        max_tokens=8, temperature=0.0,
+        max_tokens=8,
+        temperature=0.0,
     )
     assert out == "ok"
     assert calls["n"] == 3, f"expected 2 retries + 1 success, got {calls['n']} calls"
@@ -288,12 +305,13 @@ def test_step_contract_accepts_skipped_figure_step():
     }
     findings = _step_contract_findings(step=step, step_summary=skipped_summary)
     figure_errors = [
-        f for f in findings
+        f
+        for f in findings
         if "figure" in (f.message or "").lower() and f.severity == "error"
     ]
-    assert not figure_errors, (
-        f"figure-only step that reported `skipped` must not be flagged; got {figure_errors}"
-    )
+    assert (
+        not figure_errors
+    ), f"figure-only step that reported `skipped` must not be flagged; got {figure_errors}"
 
 
 # ---------------------------------------------------------------------------
@@ -310,6 +328,7 @@ def test_openai_client_retries_null_choices(monkeypatch):
 
     class _Msg:
         content = "ok"
+
         def model_dump(self):
             return {"role": "assistant", "content": "ok"}
 
@@ -335,6 +354,7 @@ def test_openai_client_retries_null_choices(monkeypatch):
 
     class _StubChat:
         completions = _StubCreate()
+
     class _StubClient:
         chat = _StubChat()
 
@@ -347,11 +367,13 @@ def test_openai_client_retries_null_choices(monkeypatch):
     client.last_finish_reason = None
 
     import time
+
     monkeypatch.setattr(time, "sleep", lambda *_a, **_k: None)
 
     out = client.complete(
         [LLMMessage(role="user", content="hi")],
-        max_tokens=8, temperature=0.0,
+        max_tokens=8,
+        temperature=0.0,
     )
     assert out == "ok"
     assert calls["n"] == 2, f"expected 1 retry + 1 success, got {calls['n']} calls"
@@ -390,6 +412,7 @@ def test_runner_repair_strips_fake_easyicu_import():
     # The original `from ... import ...` line must be gone (only the comment
     # marker referencing the module path remains for traceability).
     import re as _re
+
     assert not _re.search(
         r"^from\s+easyicu\.research_agent\.rcs\s+import",
         repaired,

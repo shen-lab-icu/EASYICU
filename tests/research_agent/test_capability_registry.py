@@ -25,7 +25,7 @@ from easyicu.research_agent.planning import capability_registry as cr
 from easyicu.research_agent.pipeline_execute import (
     _PRIMARY_DETERMINISTIC_RUNNERS as EXEC_RUNNERS,
 )
-from easyicu.research_agent.pipeline_report import (
+from easyicu.research_agent.reporting.readiness import (
     _PRIMARY_DETERMINISTIC_RUNNERS as REPORT_RUNNERS,
 )
 from easyicu.research_agent.planning.study_design_playbook import StudyDesignFamily
@@ -49,7 +49,7 @@ def _registry_primary_runners() -> set:
 def test_every_registry_runner_is_wired_in_both_pipeline_modules():
     for name in _registry_primary_runners():
         assert name in EXEC_RUNNERS, f"{name} not wired in pipeline_execute"
-        assert name in REPORT_RUNNERS, f"{name} not wired in pipeline_report"
+        assert name in REPORT_RUNNERS, f"{name} not wired in reporting.readiness"
 
 
 def test_every_wired_runner_is_documented_in_the_registry():

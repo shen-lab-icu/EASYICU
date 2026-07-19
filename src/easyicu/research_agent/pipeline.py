@@ -190,7 +190,7 @@ from .trajectory.plan_contract import (
     trajectory_plan_dag_findings,
     trajectory_step_roles,
 )
-from .pipeline_report import (
+from .reporting.readiness import (
     execution_gate_status,
     render_report,
     write_readiness_artifacts,
@@ -198,8 +198,8 @@ from .pipeline_report import (
 
 # Back-compat aliases. Tests (and any downstream code) that imported the
 # leading-underscore names from this module before the readiness/report
-# helpers were moved to ``pipeline_report`` keep working unchanged.
-from .pipeline_report import (
+# helpers were moved to ``reporting.readiness`` keep working unchanged.
+from .reporting.readiness import (
     _publication_figure_bundle_ready,  # noqa: F401
     _compute_readiness_gates,  # noqa: F401
     _count_missing_evidence_markers,  # noqa: F401
@@ -266,7 +266,7 @@ from .scalar_utils import (
     _first_present_scalar,
     _flatten_scalar_dict,
 )
-from .pipeline_cross_db import (
+from .replication.report import (
     _build_replication_notes,
     _extract_cross_database_run_summary,
     _literature_provenance_note,
@@ -279,7 +279,7 @@ from .pipeline_primary_effect import (
     _infer_primary_predictor_from_run_dir,
     _primary_effect_candidate_score,
 )
-from .pipeline_writer_aux import (
+from .reporting.writer_evidence import (
     _preferred_writer_evidence_names,
     _render_writer_evidence_digest,
     _render_writer_evidence_digest_v2,
@@ -409,7 +409,7 @@ from .audits.validators import (
 from .gates.visual_qa import VLMVisualQAAdapter, VisualQAAuditor
 
 
-from .pipeline_package import (
+from .orchestration.finalize import (
     _concept_dictionary_manifest_fields,  # noqa: F401
     _render_cost_summary,  # noqa: F401
 )
@@ -1627,7 +1627,7 @@ class ResearchAgentPipeline:
         # numbers" block enumerating NumericClaim entries outside the
         # ``WRITER_DIGEST_PREFERRED_KEYS`` primary subset. The binder
         # already accepts these; the flag controls only what the
-        # writer SEES. See pipeline_writer_aux._render_writer_evidence_digest_v2.
+        # writer SEES. See reporting.writer_evidence._render_writer_evidence_digest_v2.
         self._writer_digest_widened = bool(writer_digest_widened)
         self._writer_digest_secondary_cap_per_step = max(
             0, int(writer_digest_secondary_cap_per_step)
@@ -3094,8 +3094,8 @@ class ResearchAgentPipeline:
         emit_progress: Callable[..., None],
         force_writer_probe: bool = False,
     ) -> _WritePhaseResult:
-        """Delegate to :mod:`pipeline_write`."""
-        from .pipeline_write import run_write_phase
+        """Delegate to :mod:`reporting.write_phase`."""
+        from .reporting.write_phase import run_write_phase
 
         return run_write_phase(
             self,
@@ -3130,8 +3130,8 @@ class ResearchAgentPipeline:
         audit_logger: Optional[AuditLogger],
         emit_progress: Callable[..., None],
     ) -> PipelineResult:
-        """Delegate to :mod:`pipeline_package`."""
-        from .pipeline_package import finalise_success
+        """Delegate to :mod:`orchestration.finalize`."""
+        from .orchestration.finalize import finalise_success
 
         return finalise_success(
             self,
@@ -4455,8 +4455,8 @@ class ResearchAgentPipeline:
         findings: List[ValidationFinding],
         reason: str,
     ) -> PipelineResult:
-        """Delegate to :mod:`pipeline_package`."""
-        from .pipeline_package import finalise_aborted
+        """Delegate to :mod:`orchestration.finalize`."""
+        from .orchestration.finalize import finalise_aborted
 
         return finalise_aborted(
             self,

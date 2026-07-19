@@ -19,26 +19,26 @@ import hashlib
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
-from .agents.core import CriticAgent, ManuscriptAgent
-from .audits.manuscript_claims import audit_manuscript_numeric_claims
-from .reporting.bibtex import render_bibtex
-from .review.causal_audit import run_causal_audit
-from .contracts.runtime import (
+from ..agents.core import CriticAgent, ManuscriptAgent
+from ..audits.manuscript_claims import audit_manuscript_numeric_claims
+from .bibtex import render_bibtex
+from ..review.causal_audit import run_causal_audit
+from ..contracts.runtime import (
     ValidationFinding,
     _ExecutePhaseResult,
     _PlanPhaseResult,
     _WritePhaseResult,
 )
-from .authority.evidence_store import (
+from ..authority.evidence_store import (
     EvidenceEnforcementError,
     EvidenceEnforcementMode,
     sha256_of_file,
 )
-from .figures.skill import PublicationFigureSkill
-from .reporting.latex import scaffold_to_latex
-from .literature import LiteratureAgent, LiteratureBundle
-from .providers.mocks import MockLLMClient
-from .reporting.manuscript_post import (
+from ..figures.skill import PublicationFigureSkill
+from .latex import scaffold_to_latex
+from ..literature import LiteratureAgent, LiteratureBundle
+from ..providers.mocks import MockLLMClient
+from .manuscript_post import (
     bind_numeric_values,
     enforce_writer_claim_language,
     _demote_unresolved_evidence_placeholders,
@@ -46,29 +46,29 @@ from .reporting.manuscript_post import (
     _repair_common_writer_citation_omissions,
     _repair_common_writer_placeholders,
 )
-from .pipeline_report import execution_gate_status
-from .pipeline_writer_aux import (
+from .readiness import execution_gate_status
+from .writer_evidence import (
     _preferred_writer_evidence_names,
     _render_writer_evidence_digest,
     _render_writer_evidence_digest_v2,
 )
-from .replication.notebook import (
+from ..replication.notebook import (
     NotebookStep,
     build_notebook,
     build_requirements_lockfile,
     write_notebook,
 )
-from .reporting.reporting_checklist import (
+from .reporting_checklist import (
     build_internal_phenotype_checklist,
     build_strobe_checklist,
     build_tripod_ai_checklist,
     choose_checklist,
 )
-from .reporting.reviewer import run_reviewer_round
-from .schema import CritiqueReport, EvidenceRef, ManuscriptDraftPacket
+from .reviewer import run_reviewer_round
+from ..schema import CritiqueReport, EvidenceRef, ManuscriptDraftPacket
 from .side_findings import collect_side_findings
-from .gates.visual_qa import VLMVisualQAAdapter, VisualQAAuditor
-from .reporting.pdf_render import render_pdf_for_run
+from ..gates.visual_qa import VLMVisualQAAdapter, VisualQAAuditor
+from .pdf_render import render_pdf_for_run
 
 
 class RuntimeProvenanceMismatchError(RuntimeError):
@@ -483,7 +483,7 @@ def run_write_phase(
                 lit_client = None
             pubmed_client = None
             if pipeline._enable_pubmed:
-                from .literature import PubMedLiteratureClient
+                from ..literature import PubMedLiteratureClient
 
                 pubmed_client = PubMedLiteratureClient(
                     email=pipeline._pubmed_email,
@@ -491,7 +491,7 @@ def run_write_phase(
                 )
             tavily_client = None
             if pipeline._enable_tavily:
-                from .literature import TavilyLiteratureClient
+                from ..literature import TavilyLiteratureClient
 
                 tavily_client = TavilyLiteratureClient(
                     api_key=pipeline._tavily_api_key,
@@ -1219,7 +1219,7 @@ def run_write_phase(
     # the readiness gate but a rigor-audit exception never crashes the write
     # phase.
     try:
-        from .review.methodological_rigor import (
+        from ..review.methodological_rigor import (
             MethodologicalRigorAuditor,
             extract_method_signals,
         )

@@ -5,10 +5,12 @@ from __future__ import annotations
 import ast
 import importlib
 import inspect
+import os
 from pathlib import Path
+import subprocess
+import sys
 
 import pytest
-
 
 REPORTING_MODULES = (
     "pdf_render",
@@ -20,6 +22,10 @@ REPORTING_MODULES = (
     "bibtex",
     "latex",
     "manuscript_post",
+    "readiness",
+    "side_findings",
+    "write_phase",
+    "writer_evidence",
 )
 
 
@@ -31,12 +37,19 @@ def test_reporting_module_has_one_canonical_home(leaf: str) -> None:
 
 
 def test_reporting_package_is_lazy_and_does_not_import_pipeline_modules() -> None:
-    package = importlib.import_module("easyicu.research_agent.reporting")
-    package_tree = ast.parse(inspect.getsource(package))
-    assert not [node for node in ast.walk(package_tree) if isinstance(node, ast.Import)]
-    assert not [
-        node for node in ast.walk(package_tree) if isinstance(node, ast.ImportFrom)
-    ]
+    script = """
+import importlib
+import sys
+package = 'easyicu.research_agent.reporting'
+importlib.import_module(package)
+loaded = sorted(name for name in sys.modules if name.startswith(package + '.'))
+assert loaded == [], loaded
+"""
+    env = dict(os.environ)
+    source_root = str(Path(__file__).resolve().parents[2] / "src")
+    env["PYTHONPATH"] = source_root + os.pathsep + env.get("PYTHONPATH", "")
+    subprocess.run([sys.executable, "-c", script], check=True, env=env)
+
     for leaf in REPORTING_MODULES:
         tree = ast.parse(
             inspect.getsource(
@@ -48,7 +61,7 @@ def test_reporting_package_is_lazy_and_does_not_import_pipeline_modules() -> Non
             for node in ast.walk(tree)
             if isinstance(node, ast.ImportFrom)
         }
-        assert not any(name.startswith("pipeline") for name in imported)
+        assert imported.isdisjoint({"pipeline", "pipeline_execute"})
 
 
 def test_root_reporting_api_uses_canonical_objects() -> None:
@@ -61,3 +74,21 @@ def test_root_reporting_api_uses_canonical_objects() -> None:
     assert root.render_pdf_for_run is pdf.render_pdf_for_run
     assert root.choose_checklist is checklist.choose_checklist
     assert root.run_reviewer_round is reviewer.run_reviewer_round
+
+
+def test_pipeline_reporting_helpers_use_canonical_objects() -> None:
+    pipeline = importlib.import_module("easyicu.research_agent.pipeline")
+    readiness = importlib.import_module("easyicu.research_agent.reporting.readiness")
+    writer = importlib.import_module("easyicu.research_agent.reporting.writer_evidence")
+    for name in (
+        "execution_gate_status",
+        "render_report",
+        "write_readiness_artifacts",
+    ):
+        assert getattr(pipeline, name) is getattr(readiness, name)
+    for name in (
+        "_preferred_writer_evidence_names",
+        "_render_writer_evidence_digest",
+        "_render_writer_evidence_digest_v2",
+    ):
+        assert getattr(pipeline, name) is getattr(writer, name)

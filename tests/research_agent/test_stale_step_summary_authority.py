@@ -12,7 +12,7 @@ from easyicu.research_agent.evaluation_scorecard import score_run_from_dir
 from easyicu.research_agent.authority.evidence_store import EvidenceStore
 from easyicu.research_agent.icu_agent_bench import ICUAgentBenchTask
 from easyicu.research_agent.pipeline_primary_effect import _extract_primary_effect_row
-from easyicu.research_agent.pipeline_report import (
+from easyicu.research_agent.reporting.readiness import (
     _blocked_outcome_step_ids,
     _compute_readiness_gates,
     primary_result_plausibility_errors,
@@ -103,10 +103,7 @@ def test_failed_current_step_makes_stale_readiness_files_inert(tmp_path: Path):
 
     assert _blocked_outcome_step_ids(tmp_path) == []
     assert primary_result_plausibility_errors(tmp_path) == []
-    assert (
-        primary_survival_estimate_integrity_errors(_survival_plan(), tmp_path)
-        == []
-    )
+    assert primary_survival_estimate_integrity_errors(_survival_plan(), tmp_path) == []
 
     manuscript = tmp_path / "manuscript.md"
     manuscript.write_text(
@@ -158,8 +155,7 @@ def test_blocked_outcome_gate_fails_closed_when_evidence_is_tampered(
     evidence_dir.mkdir()
     gate_path = evidence_dir / "outcome_gate__outcome_gate.csv"
     gate_path.write_text(
-        "status,primary_analysis_authorized,outcome\n"
-        "blocked,false,mortality\n",
+        "status,primary_analysis_authorized,outcome\n" "blocked,false,mortality\n",
         encoding="utf-8",
     )
     evidence_id = "outcome_gate"
@@ -187,12 +183,12 @@ def test_blocked_outcome_gate_fails_closed_when_evidence_is_tampered(
     assert _blocked_outcome_step_ids(tmp_path, records) == [step_id]
 
     gate_path.write_text(
-        "status,primary_analysis_authorized,outcome\n"
-        "ok,true,mortality\n",
+        "status,primary_analysis_authorized,outcome\n" "ok,true,mortality\n",
         encoding="utf-8",
     )
 
     assert _blocked_outcome_step_ids(tmp_path, records) == [step_id]
+
 
 def test_validity_signals_ignore_failed_summary_and_failed_evidence(
     tmp_path: Path,

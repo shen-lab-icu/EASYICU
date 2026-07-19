@@ -65,7 +65,7 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
-TOOL_VERSION = "1.4.1"
+TOOL_VERSION = "1.4.2"
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 RA = REPO_ROOT / "src" / "easyicu" / "research_agent"
@@ -75,7 +75,7 @@ RA = REPO_ROOT / "src" / "easyicu" / "research_agent"
 TARGET_FILES: List[Path] = [
     RA / "pipeline_execute.py",
     RA / "pipeline.py",
-    RA / "pipeline_report.py",
+    RA / "reporting" / "readiness.py",
     RA / "authority" / "typed_binding.py",
     RA / "authority" / "plan_authority.py",
 ]
@@ -104,7 +104,10 @@ def _sha256(path: Path) -> str:
 
 def _find_function(tree: ast.AST, name: str) -> Optional[ast.AST]:
     for node in ast.walk(tree):
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == name:
+        if (
+            isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and node.name == name
+        ):
             return node
     return None
 
@@ -263,7 +266,15 @@ def _scan_scope(scope_node: ast.AST) -> _ScanResult:
 
 
 class _Scope:
-    __slots__ = ("node", "parent", "children", "bound", "loads", "nonlocal_names", "is_class")
+    __slots__ = (
+        "node",
+        "parent",
+        "children",
+        "bound",
+        "loads",
+        "nonlocal_names",
+        "is_class",
+    )
 
     def __init__(
         self, node: ast.AST, parent: Optional["_Scope"], is_class: bool = False
@@ -330,7 +341,11 @@ def _callable_closure_captured(root: _Scope) -> Set[str]:
             deeper = ancestor_bound
         else:
             for name in scope.loads:
-                if name in god and name not in scope.bound and name not in ancestor_bound:
+                if (
+                    name in god
+                    and name not in scope.bound
+                    and name not in ancestor_bound
+                ):
                     captured.add(name)
             deeper = ancestor_bound | scope.bound
         for child in scope.children:
@@ -342,7 +357,9 @@ def _callable_closure_captured(root: _Scope) -> Set[str]:
 
 
 def _function_metrics(fn: ast.AST) -> Dict[str, Any]:
-    direct_nested = [n for n in fn.body if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))]
+    direct_nested = [
+        n for n in fn.body if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
+    ]
     total_nested = [
         x
         for x in ast.walk(fn)
@@ -441,7 +458,9 @@ def diff(baseline: Dict[str, Any], current: Dict[str, Any]) -> int:
         f"  |  current v{current.get('tool_version')} sha {str(current.get('tool_sha256'))[:12]}"
     )
     if baseline.get("tool_sha256") != current.get("tool_sha256"):
-        print("  NOTE: measuring tool changed since baseline — re-emit baseline if metric")
+        print(
+            "  NOTE: measuring tool changed since baseline — re-emit baseline if metric"
+        )
         print("        SEMANTICS changed (not just target code).")
     print()
     print(f"{'metric':<52} {'baseline':>10} {'current':>10} {'delta':>8}")
@@ -453,7 +472,9 @@ def diff(baseline: Dict[str, Any], current: Dict[str, Any]) -> int:
             if b is None or c is None:
                 continue
             delta = c - b
-            flag = "  <-- REGRESSED" if delta > 0 else ("  improved" if delta < 0 else "")
+            flag = (
+                "  <-- REGRESSED" if delta > 0 else ("  improved" if delta < 0 else "")
+            )
             if delta > 0:
                 regressions += 1
             print(f"{key + '.' + m:<52} {b:>10} {c:>10} {delta:>+8}{flag}")
@@ -478,8 +499,12 @@ def diff(baseline: Dict[str, Any], current: Dict[str, Any]) -> int:
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--emit", metavar="PATH", help="write current metrics as a baseline JSON")
-    ap.add_argument("--diff", metavar="PATH", help="diff current metrics against a baseline JSON")
+    ap.add_argument(
+        "--emit", metavar="PATH", help="write current metrics as a baseline JSON"
+    )
+    ap.add_argument(
+        "--diff", metavar="PATH", help="diff current metrics against a baseline JSON"
+    )
     args = ap.parse_args()
 
     current = measure()

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from easyicu.research_agent.pipeline_report import (
+from easyicu.research_agent.reporting.readiness import (
     _legacy_unscoped_finding_owner_step_id,
     _partition_findings_by_supersession,
 )
@@ -195,9 +195,7 @@ def test_current_attempt_error_cannot_be_hidden_by_inconsistent_ok_record() -> N
         [finding],
         success_step_ids={"01_model"},
         latest_attempt_ids={"01_model": "run:01_model:2"},
-        known_attempt_ids={
-            "01_model": {"run:01_model:1", "run:01_model:2"}
-        },
+        known_attempt_ids={"01_model": {"run:01_model:1", "run:01_model:2"}},
         known_step_ids={"01_model"},
     )
 
@@ -217,9 +215,7 @@ def test_only_known_older_attempt_error_is_superseded() -> None:
         [finding],
         success_step_ids={"01_model"},
         latest_attempt_ids={"01_model": "run:01_model:2"},
-        known_attempt_ids={
-            "01_model": {"run:01_model:1", "run:01_model:2"}
-        },
+        known_attempt_ids={"01_model": {"run:01_model:1", "run:01_model:2"}},
         known_step_ids={"01_model"},
     )
 

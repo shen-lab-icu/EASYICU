@@ -499,7 +499,7 @@ def test_required_model_contract_error_fail_closes_outer_step_and_run():
     from easyicu.research_agent.pipeline_execute import (
         _step_status_from_contract_findings,
     )
-    from easyicu.research_agent.pipeline_report import execution_gate_status
+    from easyicu.research_agent.reporting.readiness import execution_gate_status
     from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep
 
     contract_findings = [

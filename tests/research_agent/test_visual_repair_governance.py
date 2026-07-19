@@ -14,7 +14,7 @@ from .test_gate_evaluator_contract import gate_call_order
 
 def test_mixed_overlap_and_clipping_visual_error_is_not_cosmetic() -> None:
     from easyicu.research_agent.pipeline_execute import _is_cosmetic_visual_finding
-    from easyicu.research_agent.pipeline_report import _is_cosmetic_visual_error
+    from easyicu.research_agent.reporting.readiness import _is_cosmetic_visual_error
 
     finding = ValidationFinding(
         validator="visual_qa",
@@ -31,7 +31,7 @@ def test_mixed_overlap_and_clipping_visual_error_is_not_cosmetic() -> None:
 
 def test_closed_overlap_spacing_reason_remains_cosmetic() -> None:
     from easyicu.research_agent.pipeline_execute import _is_cosmetic_visual_finding
-    from easyicu.research_agent.pipeline_report import _is_cosmetic_visual_error
+    from easyicu.research_agent.reporting.readiness import _is_cosmetic_visual_error
 
     finding = ValidationFinding(
         validator="visual_qa",

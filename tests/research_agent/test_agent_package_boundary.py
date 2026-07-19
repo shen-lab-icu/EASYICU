@@ -65,7 +65,7 @@ def test_production_pipeline_imports_agent_implementations_directly() -> None:
     for module_name in (
         "easyicu.research_agent.pipeline",
         "easyicu.research_agent.pipeline_execute",
-        "easyicu.research_agent.pipeline_write",
+        "easyicu.research_agent.reporting.write_phase",
     ):
         module = importlib.import_module(module_name)
         tree = ast.parse(inspect.getsource(module))

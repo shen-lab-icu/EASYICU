@@ -81,7 +81,7 @@ def _write_panel(ra, tmp_path: Path, rows):
 
 
 def test_digest_contains_panel_block_when_panel_populated(ra, tmp_path: Path) -> None:
-    from easyicu.research_agent.pipeline_writer_aux import (
+    from easyicu.research_agent.reporting.writer_evidence import (
         _render_writer_evidence_digest,
     )
     from easyicu.research_agent.robustness_panel import RobustnessPanelRow
@@ -90,8 +90,12 @@ def test_digest_contains_panel_block_when_panel_populated(ra, tmp_path: Path) ->
         ra,
         tmp_path,
         [
-            RobustnessPanelRow("primary", "primary", 100, 1.2, 1.0, 1.4, 0.1, "e1", True),
-            RobustnessPanelRow("cohort_worst", "cohort", 90, 1.1, 0.7, 1.8, 0.2, "e2", True),
+            RobustnessPanelRow(
+                "primary", "primary", 100, 1.2, 1.0, 1.4, 0.1, "e1", True
+            ),
+            RobustnessPanelRow(
+                "cohort_worst", "cohort", 90, 1.1, 0.7, 1.8, 0.2, "e2", True
+            ),
         ],
     )
 
@@ -110,7 +114,7 @@ def test_digest_suppresses_generated_primary_effect_when_panel_is_canonical(
     ra,
     tmp_path: Path,
 ) -> None:
-    from easyicu.research_agent.pipeline_writer_aux import (
+    from easyicu.research_agent.reporting.writer_evidence import (
         _render_writer_evidence_digest,
     )
     from easyicu.research_agent.robustness_panel import RobustnessPanelRow
@@ -119,8 +123,12 @@ def test_digest_suppresses_generated_primary_effect_when_panel_is_canonical(
         ra,
         tmp_path,
         [
-            RobustnessPanelRow("primary", "primary", 100, 1.33, 1.2, 1.47, 0.1, "e1", True),
-            RobustnessPanelRow("cohort_worst", "cohort", 90, 1.1, 0.7, 1.8, 0.2, "e2", True),
+            RobustnessPanelRow(
+                "primary", "primary", 100, 1.33, 1.2, 1.47, 0.1, "e1", True
+            ),
+            RobustnessPanelRow(
+                "cohort_worst", "cohort", 90, 1.1, 0.7, 1.8, 0.2, "e2", True
+            ),
         ],
     )
 
@@ -142,7 +150,7 @@ def test_digest_suppresses_generated_primary_effect_when_panel_is_canonical(
 
 
 def test_digest_panel_block_shows_range_not_rows(ra, tmp_path: Path) -> None:
-    from easyicu.research_agent.pipeline_writer_aux import (
+    from easyicu.research_agent.reporting.writer_evidence import (
         _render_writer_evidence_digest,
     )
     from easyicu.research_agent.robustness_panel import RobustnessPanelRow
@@ -151,9 +159,15 @@ def test_digest_panel_block_shows_range_not_rows(ra, tmp_path: Path) -> None:
         ra,
         tmp_path,
         [
-            RobustnessPanelRow("primary", "primary", 100, 1.2, 1.0, 1.4, 0.1, "e1", True),
-            RobustnessPanelRow("cohort_worst", "cohort", 90, 1.1, 0.7, 1.8, 0.2, "e2", True),
-            RobustnessPanelRow("cohort_hidden", "cohort", 90, 1.777, 1.6, 1.8, 0.2, "e3", True),
+            RobustnessPanelRow(
+                "primary", "primary", 100, 1.2, 1.0, 1.4, 0.1, "e1", True
+            ),
+            RobustnessPanelRow(
+                "cohort_worst", "cohort", 90, 1.1, 0.7, 1.8, 0.2, "e2", True
+            ),
+            RobustnessPanelRow(
+                "cohort_hidden", "cohort", 90, 1.777, 1.6, 1.8, 0.2, "e3", True
+            ),
         ],
     )
 
@@ -166,7 +180,7 @@ def test_digest_panel_block_shows_range_not_rows(ra, tmp_path: Path) -> None:
 
 
 def test_digest_panel_block_handles_zero_converged(ra, tmp_path: Path) -> None:
-    from easyicu.research_agent.pipeline_writer_aux import (
+    from easyicu.research_agent.reporting.writer_evidence import (
         _render_writer_evidence_digest,
     )
     from easyicu.research_agent.robustness_panel import RobustnessPanelRow
@@ -175,7 +189,9 @@ def test_digest_panel_block_handles_zero_converged(ra, tmp_path: Path) -> None:
         ra,
         tmp_path,
         [
-            RobustnessPanelRow("primary", "primary", 100, 1.2, 1.0, 1.4, 0.1, "e1", True),
+            RobustnessPanelRow(
+                "primary", "primary", 100, 1.2, 1.0, 1.4, 0.1, "e1", True
+            ),
             RobustnessPanelRow(
                 "alt_missing",
                 "missing",
@@ -198,7 +214,7 @@ def test_digest_panel_block_handles_zero_converged(ra, tmp_path: Path) -> None:
 
 
 def test_digest_contains_blocked_outcome_gate_guard(tmp_path: Path) -> None:
-    from easyicu.research_agent.pipeline_writer_aux import (
+    from easyicu.research_agent.reporting.writer_evidence import (
         _render_writer_evidence_digest,
     )
 
@@ -237,7 +253,7 @@ def test_digest_suppresses_robustness_effect_when_outcome_gate_blocked(
     ra,
     tmp_path: Path,
 ) -> None:
-    from easyicu.research_agent.pipeline_writer_aux import (
+    from easyicu.research_agent.reporting.writer_evidence import (
         _render_writer_evidence_digest,
     )
     from easyicu.research_agent.robustness_panel import RobustnessPanelRow
@@ -246,7 +262,9 @@ def test_digest_suppresses_robustness_effect_when_outcome_gate_blocked(
         ra,
         tmp_path,
         [
-            RobustnessPanelRow("primary", "primary", 100, 1.2, 1.0, 1.4, 0.1, "e1", True),
+            RobustnessPanelRow(
+                "primary", "primary", 100, 1.2, 1.0, 1.4, 0.1, "e1", True
+            ),
         ],
     )
     step_out = tmp_path / "steps" / "04_outcome_gate" / "outputs"
@@ -272,7 +290,7 @@ def test_digest_suppresses_robustness_effect_when_outcome_gate_blocked(
 
 
 def test_digest_panel_block_lists_worst_per_axis(ra, tmp_path: Path) -> None:
-    from easyicu.research_agent.pipeline_writer_aux import (
+    from easyicu.research_agent.reporting.writer_evidence import (
         _render_writer_evidence_digest,
     )
     from easyicu.research_agent.robustness_panel import RobustnessPanelRow
@@ -281,10 +299,18 @@ def test_digest_panel_block_lists_worst_per_axis(ra, tmp_path: Path) -> None:
         ra,
         tmp_path,
         [
-            RobustnessPanelRow("primary", "primary", 100, 1.2, 1.0, 1.4, 0.1, "e1", True),
-            RobustnessPanelRow("cohort_worst", "cohort", 90, 0.9, 0.6, 1.2, 0.2, "e2", True),
-            RobustnessPanelRow("missing_worst", "missing", 95, 1.0, 0.8, 1.3, 0.2, "e3", True),
-            RobustnessPanelRow("outcome_worst", "outcome", 92, 1.1, 0.9, 1.5, 0.2, "e4", True),
+            RobustnessPanelRow(
+                "primary", "primary", 100, 1.2, 1.0, 1.4, 0.1, "e1", True
+            ),
+            RobustnessPanelRow(
+                "cohort_worst", "cohort", 90, 0.9, 0.6, 1.2, 0.2, "e2", True
+            ),
+            RobustnessPanelRow(
+                "missing_worst", "missing", 95, 1.0, 0.8, 1.3, 0.2, "e3", True
+            ),
+            RobustnessPanelRow(
+                "outcome_worst", "outcome", 92, 1.1, 0.9, 1.5, 0.2, "e4", True
+            ),
         ],
     )
 

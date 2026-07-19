@@ -43,17 +43,17 @@ import textwrap
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Sequence
 
-from .reporting.article_contract import (
+from .article_contract import (
     article_contract_audit_payload,
     summarize_article_contract_coverage,
 )
-from .reporting.display_suite import summarize_display_suite_status
-from .authority.evidence_store import EvidenceStore, sha256_of_file
-from .planning.figure_strategy import summarize_article_figure_strategy_coverage
-from .figures.publication import PUBLICATION_FIGURE_SKILL_POLICY_VERSION
-from .plan_utils import _output_declares_figure, _parent_step_id_for_figure_step
-from .reporting.review_artifacts import build_review_artifact_payloads
-from .authority.runtime_artifacts import (
+from .display_suite import summarize_display_suite_status
+from ..authority.evidence_store import EvidenceStore, sha256_of_file
+from ..planning.figure_strategy import summarize_article_figure_strategy_coverage
+from ..figures.publication import PUBLICATION_FIGURE_SKILL_POLICY_VERSION
+from ..plan_utils import _output_declares_figure, _parent_step_id_for_figure_step
+from .review_artifacts import build_review_artifact_payloads
+from ..authority.runtime_artifacts import (
     active_step_evidence_ids,
     capture_code_version,
     current_evidence_records,
@@ -65,7 +65,7 @@ from .authority.runtime_artifacts import (
     load_run_artifact_authority,
     verified_run_evidence_path,
 )
-from .schema import AnalysisPlan, ResearchContext, ValidationFinding
+from ..schema import AnalysisPlan, ResearchContext, ValidationFinding
 
 
 def _has_figure_only_output_contract(step: Any) -> bool:
@@ -109,9 +109,7 @@ def _figure_steps_satisfied_by_repair(
     if not steps_dir.is_dir():
         return satisfied
     authority = (
-        load_run_artifact_authority(run_dir)
-        if per_step_records is not None
-        else None
+        load_run_artifact_authority(run_dir) if per_step_records is not None else None
     )
     if per_step_records is not None and authority is None:
         # A modern outer ledger cannot gain repair credit from append-only
@@ -174,10 +172,7 @@ def _figure_steps_satisfied_by_repair(
         target_step_id = str(
             (ledger_record or {}).get("repair_target_step_id") or ""
         ).strip()
-        if (
-            not source_step_id
-            or not target_step_id
-        ):
+        if not source_step_id or not target_step_id:
             continue
         if plan is not None:
             target_step = plan_by_step.get(target_step_id)
@@ -191,16 +186,20 @@ def _figure_steps_satisfied_by_repair(
             continue
         source_record = current_by_step.get(source_step_id)
         target_record = current_by_step.get(target_step_id)
-        target_status = str(
-            (target_record or {}).get("status")
-            if isinstance(target_record, Mapping)
-            else ""
-        ).strip().lower()
-        if (
-            not isinstance(target_record, Mapping)
-            or target_status
-            not in {"execution_failed", "contract_failed", "repair_failed"}
-        ):
+        target_status = (
+            str(
+                (target_record or {}).get("status")
+                if isinstance(target_record, Mapping)
+                else ""
+            )
+            .strip()
+            .lower()
+        )
+        if not isinstance(target_record, Mapping) or target_status not in {
+            "execution_failed",
+            "contract_failed",
+            "repair_failed",
+        }:
             continue
 
         if strict_evidence_binding and (
@@ -259,6 +258,7 @@ def _figure_steps_satisfied_by_repair(
                 declared_paths.extend(str(item) for item in value)
             elif value:
                 declared_paths.append(str(value))
+
         def _declared_figure_exists(candidate: str) -> bool:
             path = Path(candidate)
             if not path.is_absolute():
@@ -273,13 +273,18 @@ def _figure_steps_satisfied_by_repair(
                 path.resolve().relative_to(outputs_dir.resolve())
             except ValueError:
                 return False
-            if path.is_symlink() or not path.is_file() or path.suffix.lower() not in {
-                ".png",
-                ".svg",
-                ".pdf",
-                ".tif",
-                ".tiff",
-            }:
+            if (
+                path.is_symlink()
+                or not path.is_file()
+                or path.suffix.lower()
+                not in {
+                    ".png",
+                    ".svg",
+                    ".pdf",
+                    ".tif",
+                    ".tiff",
+                }
+            ):
                 return False
             if not strict_evidence_binding:
                 return True
@@ -398,9 +403,7 @@ def execution_gate_status(
     )
 
     def _step_ok(step_id: str) -> bool:
-        return status_by_step.get(step_id) == "ok" or (
-            step_id in repaired_figures
-        )
+        return status_by_step.get(step_id) == "ok" or (step_id in repaired_figures)
 
     failed_steps = [
         {"step_id": step_id, "status": status_by_step.get(step_id)}
@@ -533,10 +536,13 @@ def _blocked_outcome_step_ids(
         ]
     else:
         gate_files = []
-        for record in current_run_evidence_records(
-            run_dir,
-            per_step_records=per_step_records,
-        ) or []:
+        for record in (
+            current_run_evidence_records(
+                run_dir,
+                per_step_records=per_step_records,
+            )
+            or []
+        ):
             basename = Path(str(record.get("relative_path") or "")).name
             basename = basename.split("__", 1)[-1].lower()
             if "gate" not in basename or not basename.endswith(".csv"):
@@ -930,18 +936,16 @@ _LEGACY_UNSCOPED_STEP_VALIDATOR_METHODS: Dict[str, frozenset[str]] = {
     # unrelated run-level robustness warnings into step-owned state.
     "robustness_spec_lock": frozenset({"cohort_definition_sensitivity"}),
     "robustness_executed_result": frozenset({"cohort_definition_sensitivity"}),
-    "robustness_cohort_membership": frozenset(
-        {"cohort_definition_sensitivity"}
-    ),
+    "robustness_cohort_membership": frozenset({"cohort_definition_sensitivity"}),
 }
 
 
 def _normalised_method_head(method: Any) -> str:
     """Return the exact scientific owner from ``<head>_with_<rider>``."""
 
-    normalized = re.sub(
-        r"[^a-z0-9]+", "_", str(method or "").strip().lower()
-    ).strip("_")
+    normalized = re.sub(r"[^a-z0-9]+", "_", str(method or "").strip().lower()).strip(
+        "_"
+    )
     return normalized.split("_with_", 1)[0]
 
 
@@ -1226,7 +1230,11 @@ def _latest_publication_figure_audit_status(
     current_ids = set(current_by_id)
     record = current_by_id.get(str(latest_record.evidence_id))
     path = verified_run_evidence_path(run_dir, latest_record)
-    if record is None or path is None or not _PUBLICATION_FIGURE_SUMMARY_RE.match(path.name):
+    if (
+        record is None
+        or path is None
+        or not _PUBLICATION_FIGURE_SUMMARY_RE.match(path.name)
+    ):
         return None
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
@@ -1264,8 +1272,7 @@ def _latest_publication_figure_audit_status(
             == "figure_contract"
         )
         or any(
-            str(current_by_id[figure_id].kind) != "figure"
-            for figure_id in figure_ids
+            str(current_by_id[figure_id].kind) != "figure" for figure_id in figure_ids
         )
     ):
         return None
@@ -1470,6 +1477,7 @@ def primary_result_plausibility_errors(
     per_step_records = _step_authority_records(run_dir, per_step_records)
     errors: List[str] = []
     seen: set = set()
+
     def _add(new_errors: List[str]) -> None:
         for err in new_errors:
             if err not in seen:
@@ -1492,10 +1500,13 @@ def primary_result_plausibility_errors(
         ]
     else:
         csv_paths = []
-        for path in current_run_evidence_paths(
-            run_dir,
-            per_step_records=per_step_records,
-        ) or []:
+        for path in (
+            current_run_evidence_paths(
+                run_dir,
+                per_step_records=per_step_records,
+            )
+            or []
+        ):
             basename = path.name.split("__", 1)[-1]
             if basename in _PLAUSIBILITY_RESULT_CSVS:
                 csv_paths.append(path)
@@ -1547,9 +1558,7 @@ def _is_survival_method_step(step: Any) -> bool:
     return "figure" not in step_id
 
 
-def _survival_summary_scalar(
-    payload: Dict[str, Any], *keys: str
-) -> Optional[float]:
+def _survival_summary_scalar(payload: Dict[str, Any], *keys: str) -> Optional[float]:
     containers: List[Dict[str, Any]] = [payload]
     primary_model = payload.get("primary_model")
     if isinstance(primary_model, dict):
@@ -1582,9 +1591,7 @@ def primary_survival_estimate_integrity_errors(
         return []
     per_step_records = _step_authority_records(run_dir, per_step_records)
     errors: List[str] = []
-    active_summaries = dict(
-        _authoritative_step_summaries(run_dir, per_step_records)
-    )
+    active_summaries = dict(_authoritative_step_summaries(run_dir, per_step_records))
     for step in getattr(plan, "steps", None) or []:
         if not _is_survival_method_step(step):
             continue
@@ -1597,9 +1604,7 @@ def primary_survival_estimate_integrity_errors(
         payload = dict(payload)
         if not any(key in payload for key in _SURVIVAL_RESULT_KEYS):
             continue
-        hr = _survival_summary_scalar(
-            payload, "hazard_ratio", "hr", "point_estimate"
-        )
+        hr = _survival_summary_scalar(payload, "hazard_ratio", "hr", "point_estimate")
         if hr is not None and (not math.isfinite(hr) or hr <= 0):
             errors.append(
                 f"primary survival step {step_id} reported an invalid hazard "
@@ -1618,7 +1623,11 @@ def primary_survival_estimate_integrity_errors(
                 or ci_low <= 0
                 or ci_high <= 0
                 or ci_low > ci_high
-                or (hr is not None and math.isfinite(hr) and not (ci_low <= hr <= ci_high))
+                or (
+                    hr is not None
+                    and math.isfinite(hr)
+                    and not (ci_low <= hr <= ci_high)
+                )
             ):
                 errors.append(
                     f"primary survival step {step_id} reported an invalid HR "
@@ -1627,9 +1636,7 @@ def primary_survival_estimate_integrity_errors(
         n_analysis = _survival_summary_scalar(
             payload, "n_analysis", "analysis_n", "n", "cohort_n"
         )
-        n_events = _survival_summary_scalar(
-            payload, "n_events", "events", "event_n"
-        )
+        n_events = _survival_summary_scalar(payload, "n_events", "events", "event_n")
         if n_analysis is not None and n_events is not None:
             if (
                 not math.isfinite(n_analysis)
@@ -1715,8 +1722,7 @@ def _partition_findings_by_supersession(
         legacy_sid = None
         if (
             not explicit_sid
-            and str(f.validator or "")
-            not in unresolved_scoped_error_validators
+            and str(f.validator or "") not in unresolved_scoped_error_validators
         ):
             legacy_sid = _legacy_unscoped_finding_owner_step_id(f, plan=plan)
         sid = explicit_sid or legacy_sid
@@ -1774,7 +1780,7 @@ def _deterministic_primary_estimate_bound(per_step_records: Any) -> bool:
     compatibility predicate therefore stays false even when an old run record
     carries a historical runner marker and a finite estimate.
     """
-    from .pipeline_primary_effect import (
+    from ..pipeline_primary_effect import (
         _extract_primary_effect_payload_from_records,
     )
 
@@ -1873,9 +1879,9 @@ def _compute_readiness_gates(
         if step_id and attempt_id:
             known_attempt_ids.setdefault(step_id, set()).add(attempt_id)
     latest_attempt_ids = {
-        str(record.get("step_id") or "").strip(): str(
-            record.get("attempt_id") or ""
-        ).strip()
+        str(record.get("step_id") or "")
+        .strip(): str(record.get("attempt_id") or "")
+        .strip()
         for record in current_step_records(per_step_records)
         if str(record.get("step_id") or "").strip()
         and str(record.get("attempt_id") or "").strip()
@@ -2021,8 +2027,10 @@ def _compute_readiness_gates(
     # Primary science is agent-owned across the registry. Fail safe to the strict
     # rule (False) if the family cannot be inferred.
     try:
-        from .planning.capability_registry import families_without_deterministic_primary
-        from .planning.study_design import infer_study_design_family
+        from ..planning.capability_registry import (
+            families_without_deterministic_primary,
+        )
+        from ..planning.study_design import infer_study_design_family
 
         _no_det_primary_expected = (
             infer_study_design_family(context)
@@ -2657,9 +2665,7 @@ def _extract_claim_ledger_rows(
                 "claim_text": re.sub(r"\s+", " ", stripped)[:1000],
                 "evidence_refs": ";".join(evidence_refs),
                 "status": (
-                    "missing_evidence"
-                    if missing or unresolved_targets
-                    else "bound"
+                    "missing_evidence" if missing or unresolved_targets else "bound"
                 ),
                 "note": " ".join(notes),
             }

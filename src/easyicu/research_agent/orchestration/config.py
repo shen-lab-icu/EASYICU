@@ -200,7 +200,7 @@ class PipelineConfig:
     max_numeric_claims_per_step: int = 100
     # --- writer namespace breadth ---------------------------------------
     # When False (default), the writer's evidence digest is the curated
-    # ``preferred_keys`` tuple in pipeline_writer_aux. When True, the
+    # ``preferred_keys`` tuple in reporting.writer_evidence. When True, the
     # digest is augmented with a "secondary numbers" block that
     # enumerates every NumericClaim that isn't already covered by the
     # primary block, capped per step. The binder

@@ -22,7 +22,7 @@ def _finding_payload() -> dict:
 
 
 def test_coder_can_emit_side_findings() -> None:
-    from easyicu.research_agent.side_findings import collect_side_findings
+    from easyicu.research_agent.reporting.side_findings import collect_side_findings
 
     findings = collect_side_findings(
         [
@@ -39,7 +39,7 @@ def test_coder_can_emit_side_findings() -> None:
 
 
 def test_side_findings_md_generated_with_zero_count() -> None:
-    from easyicu.research_agent.side_findings import render_side_findings_md
+    from easyicu.research_agent.reporting.side_findings import render_side_findings_md
 
     text = render_side_findings_md([])
 
@@ -47,7 +47,10 @@ def test_side_findings_md_generated_with_zero_count() -> None:
 
 
 def test_side_findings_md_structure() -> None:
-    from easyicu.research_agent.side_findings import SideFinding, render_side_findings_md
+    from easyicu.research_agent.reporting.side_findings import (
+        SideFinding,
+        render_side_findings_md,
+    )
 
     findings = [
         SideFinding.from_dict(_finding_payload()),
@@ -67,7 +70,7 @@ def test_side_findings_md_structure() -> None:
 
 
 def test_side_findings_excluded_from_writer_digest() -> None:
-    from easyicu.research_agent.pipeline_writer_aux import (
+    from easyicu.research_agent.reporting.writer_evidence import (
         _render_writer_evidence_digest_v2,
     )
 
@@ -86,8 +89,10 @@ def test_side_findings_excluded_from_writer_digest() -> None:
 
 
 def test_strict_blocks_side_finding_leak_in_manuscript(ra) -> None:
-    from easyicu.research_agent.reporting.manuscript_post import enforce_writer_claim_language
-    from easyicu.research_agent.side_findings import SideFinding
+    from easyicu.research_agent.reporting.manuscript_post import (
+        enforce_writer_claim_language,
+    )
+    from easyicu.research_agent.reporting.side_findings import SideFinding
 
     finding = SideFinding.from_dict(_finding_payload())
     with pytest.raises(ra.EvidenceEnforcementError) as exc_info:
@@ -101,8 +106,10 @@ def test_strict_blocks_side_finding_leak_in_manuscript(ra) -> None:
 
 
 def test_soft_annotates_side_finding_leak(ra) -> None:
-    from easyicu.research_agent.reporting.manuscript_post import enforce_writer_claim_language
-    from easyicu.research_agent.side_findings import SideFinding
+    from easyicu.research_agent.reporting.manuscript_post import (
+        enforce_writer_claim_language,
+    )
+    from easyicu.research_agent.reporting.side_findings import SideFinding
 
     finding = SideFinding.from_dict(_finding_payload())
     annotated, detail = enforce_writer_claim_language(
@@ -133,7 +140,7 @@ def test_manifest_records_side_findings_artifact(tmp_path: Path) -> None:
 
 
 def test_side_findings_in_repro_envelope(ra, tmp_path: Path) -> None:
-    from easyicu.research_agent.side_findings import (
+    from easyicu.research_agent.reporting.side_findings import (
         SideFinding,
         write_side_findings,
     )

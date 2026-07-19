@@ -30,7 +30,7 @@ from ..authority.evidence_store import (
     _NUMERIC_IN_PROSE_RE,
 )
 from ..schema import ResearchContext
-from ..side_findings import (
+from .side_findings import (
     SideFinding,
     annotate_side_finding_leaks,
     side_finding_leaks,
