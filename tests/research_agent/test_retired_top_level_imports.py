@@ -16,6 +16,7 @@ import pytest
 
 RETIRED_TOP_LEVEL_MODULES: dict[str, str | None] = {
     "agentic_coder": "agents.agentic_coder",
+    "analysis_blueprint": "planning.analysis_blueprint",
     "analysis_method_suite": "planning.analysis_method_suite",
     "analysis_types": "planning.analysis_types",
     "article_contract": "reporting.article_contract",
@@ -40,6 +41,7 @@ RETIRED_TOP_LEVEL_MODULES: dict[str, str | None] = {
     "concept_gate": "gates.concept",
     "concept_proposal": "discovery.concept_proposal",
     "context": "research_context.builder",
+    "context_numeric": "research_context.builder_numeric",
     "contract_gate": "gates.contract",
     "cost": "providers.cost",
     "cross_model_panel": "evaluation.cross_model_panel",
@@ -93,6 +95,7 @@ RETIRED_TOP_LEVEL_MODULES: dict[str, str | None] = {
     "methodological_rigor": "review.methodological_rigor",
     "metadata_implementation_identity": "research_context.implementation_identity",
     "memory": "learning.memory",
+    "method_capabilities": "execution.method_capabilities",
     "ordered_stratified_contract": "contracts.ordered_stratified",
     "pdf_render": "reporting.pdf_render",
     "pipeline_cache": "authority.pipeline_cache",
@@ -123,6 +126,7 @@ RETIRED_TOP_LEVEL_MODULES: dict[str, str | None] = {
     "step_authority_runtime": "authority.step_runtime",
     "step_worker_state": "execution.step_worker_state",
     "summary_repair": "repairs.summary",
+    "temporal_semantics": "research_context.temporal_semantics",
     "temporal_features": "methods.temporal_features",
     "tier2_jury": "evaluation.tier2_jury",
     "tier2_rubric": "evaluation.tier2_rubric",

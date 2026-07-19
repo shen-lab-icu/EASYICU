@@ -50,7 +50,7 @@ from typing import Dict, List, Optional, Sequence, Tuple
 
 from .code_hygiene import reorder_forward_references
 from ..contracts.runtime import RunResult
-from ..method_capabilities import (
+from .method_capabilities import (
     BASELINE_PACKAGES,
     CURATED_METHOD_PACKAGES,
     OPTIONAL_BASELINE_PACKAGES,

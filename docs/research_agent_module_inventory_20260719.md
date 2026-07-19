@@ -20,7 +20,7 @@ Before the retirement patch, the 161 top-level Python files comprised:
 | Real top-level implementations | 93 | 98,530 | Canonical/public/frozen/dormant implementations requiring individual review |
 
 The cleanup has now removed the old facade layer rather than retaining hundreds
-of tiny forwarding files.  The current tree has **41 top-level Python files
+of tiny forwarding files.  The current tree has **37 top-level Python files
 including `__init__.py`**, with 226 modules in 27 responsibility packages and
 758 static import edges.  The graph remains at **zero cyclic
 modules / zero SCCs**.  The former 23-module control-plane SCC,
@@ -41,6 +41,11 @@ their domain implementations under `trajectory/`, `figures/`, `cohort/` and
 dataframe primitives now live in `cohort/primitives.py`, so the materializer no
 longer imports private helpers from a case plugin. The acquisition API requires
 the caller's outcome declaration and carries no default death/censoring science.
+
+Analysis blueprints now live with planning, runtime method capabilities with
+execution, and temporal/numeric context construction with `research_context/`.
+Their former root paths are retired; current code and tests import only the
+responsibility-owned modules.
 
 This is the AST-visible, module-top-level static import graph. Sealed-renderer
 digest selection uses a controlled registry-mediated dynamic import of current

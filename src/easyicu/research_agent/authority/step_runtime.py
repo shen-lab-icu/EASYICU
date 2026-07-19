@@ -24,7 +24,7 @@ from pydantic import ValidationError
 
 from .coder_authority import HostCoderAuthority
 from ..gates.semantics import blocking_validator_findings
-from ..method_capabilities import (
+from ..execution.method_capabilities import (
     BASELINE_PACKAGES,
     CURATED_METHOD_PACKAGES,
     OPTIONAL_BASELINE_PACKAGES,

@@ -518,7 +518,7 @@ def __getattr__(name: str):
         "EpisodeResolution",
         "TimeWindowSemanticParser",
     }:
-        from . import temporal_semantics as _temporal
+        from .research_context import temporal_semantics as _temporal
 
         return getattr(_temporal, name)
     if name in {

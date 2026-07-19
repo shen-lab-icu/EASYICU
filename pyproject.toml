@@ -53,7 +53,7 @@ agentic = [
   "langgraph>=1.0"
 ]
 # Advanced analytical methods the research-agent sandbox may use. Mirrors
-# research_agent/method_capabilities.CURATED_METHOD_PACKAGES — the coder is only
+# research_agent/execution/method_capabilities.CURATED_METHOD_PACKAGES — the coder is only
 # allowed to import a package once it is declared here (reproducible) AND
 # importable at run time (verified by the capability probe).
 methods = [

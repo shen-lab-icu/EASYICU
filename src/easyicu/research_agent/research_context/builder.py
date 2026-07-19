@@ -60,7 +60,7 @@ from .typed import (
     project_research_context_variables,
 )
 from ..concept_availability import normalize_database_name
-from ..temporal_semantics import (
+from .temporal_semantics import (
     ConceptValidationLayer,
     ICUEpisodeResolver,
     TemporalAlignmentEngine,

@@ -608,7 +608,7 @@ def test_run_invokes_subprocess_and_writes_log(
         "# generated_by=easyicu.research_agent.execution.runner.DockerRunner"
         in requirements_text
     )
-    import easyicu.research_agent.method_capabilities as method_capabilities
+    import easyicu.research_agent.execution.method_capabilities as method_capabilities
 
     capability_block = method_capabilities.coder_method_capability_block()
     method_capabilities.set_runtime_capability_snapshot_provider(None)
@@ -622,7 +622,7 @@ def test_run_invokes_subprocess_and_writes_log(
 def test_docker_coder_capabilities_use_image_snapshot_before_first_step(
     ra, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
-    import easyicu.research_agent.method_capabilities as method_capabilities
+    import easyicu.research_agent.execution.method_capabilities as method_capabilities
 
     cohort = _make_cohort(tmp_path)
     _force_docker_present(monkeypatch)
@@ -1165,7 +1165,7 @@ def test_pipeline_runner_factory_overrides_kind(
     ra,
     tmp_path: Path,
 ):
-    import easyicu.research_agent.method_capabilities as method_capabilities
+    import easyicu.research_agent.execution.method_capabilities as method_capabilities
 
     cohort_path = _make_cohort(tmp_path)
     seen: Dict[str, Any] = {}
