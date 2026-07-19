@@ -10,10 +10,8 @@ import sys
 
 import pytest
 
-
 CONTEXT_MODULES = (
     "research_context.builder",
-    "research_context.builder_numeric",
     "research_context.prompt_scope",
     "research_context.temporal_semantics",
     "research_context.typed",
@@ -44,7 +42,20 @@ assert loaded == [], loaded
 
 def test_root_context_api_resolves_to_canonical_builder() -> None:
     root = importlib.import_module("easyicu.research_agent")
-    builder = importlib.import_module(
-        "easyicu.research_agent.research_context.builder"
-    )
+    builder = importlib.import_module("easyicu.research_agent.research_context.builder")
     assert root.build_research_context is builder.build_research_context
+
+
+def test_research_context_does_not_own_evidence_registration() -> None:
+    package_dir = (
+        Path(__file__).resolve().parents[2]
+        / "src"
+        / "easyicu"
+        / "research_agent"
+        / "research_context"
+    )
+    source = "\n".join(
+        path.read_text(encoding="utf-8") for path in sorted(package_dir.glob("*.py"))
+    )
+    assert "authority.evidence_store" not in source
+    assert "register_numeric_claim" not in source

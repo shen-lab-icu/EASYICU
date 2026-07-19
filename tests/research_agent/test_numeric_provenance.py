@@ -366,7 +366,7 @@ def test_numeric_binder_rejects_arbitrary_run_level_self_owner(
 
 
 def test_context_numeric_claims_cover_source_counts_and_missingness(ra, tmp_path: Path):
-    from easyicu.research_agent.research_context.builder_numeric import register_context_numeric_claims
+    from easyicu.research_agent.authority.context_numeric_claims import register_context_numeric_claims
     from easyicu.research_agent.reporting.manuscript_post import bind_numeric_values
 
     schema = ra.schema

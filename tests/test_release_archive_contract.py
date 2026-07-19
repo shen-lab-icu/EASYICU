@@ -226,7 +226,7 @@ def test_release_archives_preserve_reviewer_contract_and_package_data(
             "src/easyicu/research_agent/providers/protocol.py",
             "src/easyicu/research_agent/providers/structured_retry.py",
             "src/easyicu/research_agent/research_context/implementation_identity.py",
-            "src/easyicu/research_agent/research_context/builder_numeric.py",
+            "src/easyicu/research_agent/authority/context_numeric_claims.py",
             "src/easyicu/research_agent/research_context/temporal_semantics.py",
             "src/easyicu/research_agent/replication/metrics.py",
             "src/easyicu/webserver/static/index.html",
@@ -318,7 +318,7 @@ def test_release_archives_preserve_reviewer_contract_and_package_data(
             "easyicu/research_agent/providers/protocol.py",
             "easyicu/research_agent/providers/structured_retry.py",
             "easyicu/research_agent/research_context/implementation_identity.py",
-            "easyicu/research_agent/research_context/builder_numeric.py",
+            "easyicu/research_agent/authority/context_numeric_claims.py",
             "easyicu/research_agent/research_context/temporal_semantics.py",
             "easyicu/research_agent/replication/metrics.py",
         }
@@ -415,7 +415,7 @@ for name in (
     'easyicu.research_agent.providers.prompts',
     'easyicu.research_agent.providers.structured_retry',
     'easyicu.research_agent.research_context.implementation_identity',
-    'easyicu.research_agent.research_context.builder_numeric',
+    'easyicu.research_agent.authority.context_numeric_claims',
     'easyicu.research_agent.research_context.temporal_semantics',
 ):
     module = importlib.import_module(name)

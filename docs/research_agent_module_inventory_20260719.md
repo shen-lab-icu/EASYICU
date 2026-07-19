@@ -43,9 +43,9 @@ longer imports private helpers from a case plugin. The acquisition API requires
 the caller's outcome declaration and carries no default death/censoring science.
 
 Analysis blueprints now live with planning, runtime method capabilities with
-execution, and temporal/numeric context construction with `research_context/`.
-Their former root paths are retired; current code and tests import only the
-responsibility-owned modules.
+execution, temporal interpretation with `research_context/`, and context-derived
+numeric claim registration with `authority/`. Their former root paths are retired;
+current code and tests import only the responsibility-owned modules.
 
 This is the AST-visible, module-top-level static import graph. Sealed-renderer
 digest selection uses a controlled registry-mediated dynamic import of current

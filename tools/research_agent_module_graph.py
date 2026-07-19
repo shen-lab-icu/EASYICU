@@ -77,7 +77,7 @@ SUPPORTED_CANONICAL_MODULES: Tuple[str, ...] = (
     "easyicu.research_agent.contracts.ordered_stratified",
     "easyicu.research_agent.contracts.robustness_execution",
     "easyicu.research_agent.planning.analysis_blueprint",
-    "easyicu.research_agent.research_context.builder_numeric",
+    "easyicu.research_agent.authority.context_numeric_claims",
     "easyicu.research_agent.research_context.temporal_semantics",
     "easyicu.research_agent.execution.runners.deterministic_descriptive",
     "easyicu.research_agent.execution.runners.deterministic_missingness",
