@@ -11,6 +11,8 @@ from types import SimpleNamespace
 import pandas as pd
 import pytest
 
+from easyicu.research_agent.planning import cohort_contract
+
 
 def _age_predicate(start: float, end: float):
     from easyicu.research_agent.cohort_schema import ConceptPredicate, TimeWindow
@@ -685,7 +687,7 @@ def test_materialize_binds_unique_planner_input_by_source_concept(
     from easyicu.research_agent import cohort_schema
 
     monkeypatch.setattr(
-        cohort_schema,
+        cohort_contract,
         "_EXTRA_COHORT_CONCEPT_IDS",
         {"canonical_signal"},
     )
@@ -769,7 +771,7 @@ def test_materialize_exact_column_precedes_context_binding(
     from easyicu.research_agent import cohort_schema
 
     monkeypatch.setattr(
-        cohort_schema,
+        cohort_contract,
         "_EXTRA_COHORT_CONCEPT_IDS",
         {"canonical_signal"},
     )
@@ -822,7 +824,7 @@ def test_materialize_rejects_cross_name_aggregation_or_window_drift(
     from easyicu.research_agent import cohort_schema
 
     monkeypatch.setattr(
-        cohort_schema,
+        cohort_contract,
         "_EXTRA_COHORT_CONCEPT_IDS",
         {"canonical_signal"},
     )
@@ -870,7 +872,7 @@ def test_materialize_rejects_cross_name_window_without_anchor(
     from easyicu.research_agent import cohort_schema
 
     monkeypatch.setattr(
-        cohort_schema,
+        cohort_contract,
         "_EXTRA_COHORT_CONCEPT_IDS",
         {"canonical_signal"},
     )
@@ -913,7 +915,7 @@ def test_materialize_rejects_ambiguous_source_concept_bindings(
     from easyicu.research_agent import cohort_schema
 
     monkeypatch.setattr(
-        cohort_schema,
+        cohort_contract,
         "_EXTRA_COHORT_CONCEPT_IDS",
         {"canonical_signal"},
     )
@@ -966,7 +968,7 @@ def test_materialize_does_not_bind_non_operational_loader_sibling(
     from easyicu.research_agent import cohort_schema
 
     monkeypatch.setattr(
-        cohort_schema,
+        cohort_contract,
         "_EXTRA_COHORT_CONCEPT_IDS",
         {"canonical_signal"},
     )
