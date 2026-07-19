@@ -295,6 +295,84 @@ _FILLNA_ZERO_ASSIGN_RE = re.compile(
 _LOSSY_NUMERIC_COERCION_GUARD_SENTINEL = "_easyicu_lossy_numeric_coercion_guard_v1"
 
 
+def _host_helper_signature_repair_lines(
+    findings: Sequence[ValidationFinding],
+) -> frozenset[int]:
+    """Return exact host-owned helper call lines eligible for repair."""
+
+    return frozenset(
+        int(detail["line"])
+        for finding in findings
+        for detail in [finding.detail or {}]
+        if finding.validator == "mechanical_code_preflight"
+        and finding.severity == "error"
+        and detail.get("reason") == "host_helper_call_signature_invalid"
+        and detail.get("helper_name") == "measurement_provenance_receipt"
+        and isinstance(detail.get("line"), int)
+        and not isinstance(detail.get("line"), bool)
+        and int(detail["line"]) > 0
+    )
+
+
+def _patch_host_helper_keyword_only_call(
+    code: str,
+    *,
+    finding_lines: frozenset[int],
+) -> str:
+    """Bind an exact provenance-helper call to its stable keyword-only API.
+
+    The transformation is intentionally narrower than the detector. It accepts
+    exactly one structured finding and one three-name call on that line, then
+    moves only the already-authored measured/count arguments to their declared
+    keyword slots. No expression, column, row, value, or scientific choice is
+    introduced.
+    """
+
+    if len(finding_lines) != 1:
+        return code
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return code
+    line = next(iter(finding_lines))
+    candidates = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and int(getattr(node, "lineno", 0)) == line
+        and _call_tail(node.func) == "measurement_provenance_receipt"
+        and len(node.args) == 3
+        and all(isinstance(argument, ast.Name) for argument in node.args)
+        and not node.keywords
+    ]
+    if len(candidates) != 1:
+        return code
+    call = candidates[0]
+    call_source = ast.get_source_segment(code, call)
+    function_source = ast.get_source_segment(code, call.func)
+    argument_sources = [
+        ast.get_source_segment(code, argument) for argument in call.args
+    ]
+    if (
+        not call_source
+        or not function_source
+        or any(not source for source in argument_sources)
+        or code.count(call_source) != 1
+    ):
+        return code
+    frame_source, measured_source, count_source = argument_sources
+    replacement = (
+        f"{function_source}({frame_source}, "
+        f"measured_column={measured_source}, count_column={count_source})"
+    )
+    repaired = code.replace(call_source, replacement, 1)
+    try:
+        ast.parse(repaired)
+    except SyntaxError:
+        return code
+    return repaired
+
+
 def _lossy_numeric_coercion_repair_lines(
     findings: Sequence[ValidationFinding],
 ) -> frozenset[int]:
@@ -644,6 +722,16 @@ def deterministic_concept_audit_repair(
     )
     repaired = code
     repair_names: List[str] = []
+
+    if RepairReason.INVALID_HELPER_SIGNATURE in set(repair_reasons):
+        keyword_bound = _patch_host_helper_keyword_only_call(
+            repaired,
+            finding_lines=_host_helper_signature_repair_lines(repair_findings),
+        )
+        if keyword_bound != repaired:
+            repair_name = "host_helper_keyword_only_call_v1"
+            repaired = keyword_bound
+            repair_names.append(repair_name)
 
     if RepairReason.LOSSY_NUMERIC_COERCION in set(repair_reasons):
         guarded = _patch_lossy_numeric_coercion_guard(

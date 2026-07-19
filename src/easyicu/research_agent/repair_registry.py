@@ -256,6 +256,7 @@ def _meta(
 _SYNTACTIC_REPAIRS = {
     "boolean_mask_reduction_precedence_v1",
     "figure_contract_source_data_schema_v1",
+    "host_helper_keyword_only_call_v1",
     "missing_os_import_v1",
     "strip_python_prefix_v1",
     "restore_shadowed_json_module_v1",
