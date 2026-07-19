@@ -142,6 +142,11 @@ from .reporting.article_contract import (
 from .planning.figure_strategy import build_article_figure_strategy
 from .pipeline_config import PipelineConfig
 from .contracts import _ExecutePhaseResult, _PlanPhaseResult, _WritePhaseResult
+from .execution.host_services import (
+    ExecutePhaseServices,
+    PublicationFigureAuthorityServices,
+)
+from .execution.output_files import _clear_output_dir, _has_figure_exports
 from .concept_dict_audit import (
     assert_dict_matches as assert_concept_dict_matches,
     verify_recorded_dict_match,
@@ -3527,6 +3532,36 @@ class ResearchAgentPipeline:
             resume_state=resume_state,
         )
 
+    def _execute_phase_services(self) -> ExecutePhaseServices:
+        """Build a fresh dependency snapshot for one execute-phase call."""
+
+        return ExecutePhaseServices(
+            build_probe_summary=_build_probe_summary,
+            deterministic_figure_family_supported_for_upstream=(
+                deterministic_figure_family_supported_for_upstream
+            ),
+            promote_prior_publication_bundle=_promote_prior_publication_bundle,
+            promote_sibling_figure_exports=_promote_sibling_figure_exports,
+            render_publication_bundle_from_prior_outputs_for_step=(
+                _render_publication_bundle_from_prior_outputs_for_step
+            ),
+            semantic_aliases_for=_semantic_aliases_for,
+            publication_figure_authority=PublicationFigureAuthorityServices(
+                distribution_availability_step_matches_parent=(
+                    _distribution_availability_figure_step_matches_parent
+                ),
+                sealed_renderer_step_matches_parent=(
+                    _sealed_renderer_figure_step_matches_parent
+                ),
+                sealed_renderer_parent_digest_seal=(
+                    _sealed_renderer_parent_digest_seal
+                ),
+                deterministic_repair_id_for_upstream=(
+                    deterministic_figure_repair_id_for_upstream
+                ),
+            ),
+        )
+
     def _run_execute_phase(
         self,
         *,
@@ -5035,14 +5070,6 @@ def _build_probe_summary(
     )
     files.append(summary_path)
     return summary, files
-
-
-def _has_figure_exports(out_dir: Path) -> bool:
-    figure_suffixes = {".png", ".svg", ".pdf", ".tiff", ".tif", ".pptx"}
-    return any(
-        path.is_file() and path.suffix.lower() in figure_suffixes
-        for path in out_dir.iterdir()
-    )
 
 
 def _promote_sibling_figure_exports(*, out_dir: Path) -> Optional[str]:
@@ -10981,23 +11008,6 @@ def _step_summary_has_any_key(path: Path, keys: Sequence[str]) -> bool:
     if not isinstance(payload, dict):
         return False
     return any(key in payload for key in keys)
-
-
-def _clear_output_dir(out_dir: Path) -> None:
-    """Recreate a step output directory without following untrusted symlinks."""
-
-    # Generated code may replace the output leaf itself with a symlink.  Using
-    # ``exists``/``iterdir`` first would follow that link and could delete an
-    # arbitrary host directory during repair.  Remove any non-directory leaf
-    # lexically, then create the expected directory in its place.
-    if out_dir.is_symlink() or (out_dir.exists() and not out_dir.is_dir()):
-        out_dir.unlink()
-    out_dir.mkdir(parents=True, exist_ok=True)
-    for child in out_dir.iterdir():
-        if child.is_symlink() or not child.is_dir():
-            child.unlink(missing_ok=True)
-        else:
-            shutil.rmtree(child)
 
 
 __all__ = ["ResearchAgentPipeline"]

@@ -179,3 +179,11 @@ def test_production_snapshot_keeps_all_named_legacy_targets() -> None:
     snapshot = graph.build_snapshot()
     assert set(snapshot["legacy_surfaces"]) == set(graph.LEGACY_TARGET_MODULES)
     assert all(surface["exists"] for surface in snapshot["legacy_surfaces"].values())
+
+
+def test_production_research_agent_import_graph_is_acyclic() -> None:
+    snapshot = graph.build_snapshot()
+    assert snapshot["cyclic_sccs"] == []
+    assert snapshot["metrics"]["cyclic_scc_count"] == 0
+    assert snapshot["metrics"]["cyclic_module_count"] == 0
+    assert snapshot["metrics"]["largest_scc_size"] == 0
