@@ -121,7 +121,7 @@ def robustness_sensitivity_preflight_code() -> str:
 
     return textwrap.dedent(
         """
-        from easyicu.research_agent.deterministic_robustness import (
+        from easyicu.research_agent.execution.runners.deterministic_robustness import (
             _run_robustness_preflight_from_env,
         )
 

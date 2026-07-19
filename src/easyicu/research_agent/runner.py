@@ -361,7 +361,7 @@ def _code_requests_robustness_authority_snapshot(code: str) -> bool:
         return False
     return any(
         isinstance(node, ast.ImportFrom)
-        and node.module == "easyicu.research_agent.deterministic_robustness"
+        and node.module == "easyicu.research_agent.execution.runners.deterministic_robustness"
         and any(alias.name == _ROBUSTNESS_AUTHORITY_ENTRYPOINT for alias in node.names)
         for node in ast.walk(tree)
     )

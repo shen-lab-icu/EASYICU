@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from easyicu.research_agent.evidence import EvidenceStore
-from easyicu.research_agent.evidence_registration import EvidenceRegistrar
+from easyicu.research_agent.authority.registration import EvidenceRegistrar
 
 
 def _register(

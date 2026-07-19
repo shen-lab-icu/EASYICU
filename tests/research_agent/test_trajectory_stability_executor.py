@@ -11,7 +11,7 @@ import pytest
 from sklearn.metrics import adjusted_rand_score
 
 from easyicu.research_agent.schema import TrajectoryStabilitySpec
-from easyicu.research_agent.trajectory_stability_executor import (
+from easyicu.research_agent.execution.runners.trajectory_stability_executor import (
     run_trajectory_stability,
 )
 
@@ -524,7 +524,7 @@ def test_threshold_failure_fails_closed_without_changing_selected_solution(
         }
 
     monkeypatch.setattr(
-        "easyicu.research_agent.trajectory_stability_executor._fit_observed_data_diag_gmm",
+        "easyicu.research_agent.execution.runners.trajectory_stability_executor._fit_observed_data_diag_gmm",
         deliberately_unstable_refit,
     )
     out_dir = tmp_path / "step_outputs"

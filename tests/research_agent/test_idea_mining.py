@@ -6,8 +6,8 @@ from typing import Sequence
 
 import pytest
 
-import easyicu.research_agent.idea_mining as idea_mining_mod
-from easyicu.research_agent.idea_mining import (
+import easyicu.research_agent.discovery.idea_mining as idea_mining_mod
+from easyicu.research_agent.discovery.idea_mining import (
     ExecutableHypothesisCandidate,
     IdeaExtractionError,
     LiteratureIdeaCandidate,
@@ -22,7 +22,7 @@ from easyicu.research_agent.idea_mining import (
     map_literature_idea_to_executable_candidate,
     run_idea_mining_dry_run,
 )
-from easyicu.research_agent.idea_registry import (
+from easyicu.research_agent.discovery.idea_registry import (
     CandidateNotExecutableError as RegistryCandidateNotExecutableError,
     IdeaCandidateRegistry,
 )
@@ -685,7 +685,7 @@ def test_extract_literature_ideas_truncates_overlong_traceable_quote() -> None:
     # A verbatim-but-over-long quote must not abort the run: it passes the
     # traceability check, then is truncated to the schema bound. The tool is
     # reviewer-facing -- one noisy extraction cannot crash the whole mining pass.
-    from easyicu.research_agent.idea_mining import (
+    from easyicu.research_agent.discovery.idea_mining import (
         _LITERATURE_IDEA_SOURCE_QUOTE_MAX as QUOTE_MAX,
     )
 
@@ -1432,7 +1432,7 @@ def test_dry_run_wires_pairwise_feasibility_registry_and_stops_at_gate(
     assert ledger_by_predictor["crea"]["evidence_map_counts"]["direct_same_topic"] >= 1
     assert ledger_by_predictor["crea"]["direct_same_topic_pmids"] == ["111"]
 
-    import easyicu.research_agent.idea_mining as idea_mining_module
+    import easyicu.research_agent.discovery.idea_mining as idea_mining_module
 
     assert ".pipeline" not in inspect.getsource(idea_mining_module)
 
@@ -1940,8 +1940,8 @@ class FakeScopeSearchClient:
 
 
 def test_fetch_source_materials_from_scope_builds_query_and_wraps_metadata() -> None:
-    from easyicu.research_agent.idea_scope import LiteratureScopeSpec
-    from easyicu.research_agent.idea_mining import fetch_source_materials_from_scope
+    from easyicu.research_agent.discovery.idea_scope import LiteratureScopeSpec
+    from easyicu.research_agent.discovery.idea_mining import fetch_source_materials_from_scope
 
     client = FakeScopeSearchClient(
         [
@@ -1978,7 +1978,7 @@ def test_fetch_source_materials_from_scope_builds_query_and_wraps_metadata() -> 
 
 
 def test_dry_run_scope_retrieves_corpus_and_freezes_query(tmp_path) -> None:
-    from easyicu.research_agent.idea_scope import LiteratureScopeSpec
+    from easyicu.research_agent.discovery.idea_scope import LiteratureScopeSpec
 
     quote = "early vasopressin exposure and intensive-care unit mortality"
     client = FakeScopeSearchClient(
@@ -2050,8 +2050,8 @@ def test_dry_run_scope_retrieves_corpus_and_freezes_query(tmp_path) -> None:
 
 
 def test_dry_run_scope_without_client_or_materials_fails_closed(tmp_path) -> None:
-    from easyicu.research_agent.idea_scope import LiteratureScopeSpec
-    from easyicu.research_agent.idea_mining import IdeaMiningError
+    from easyicu.research_agent.discovery.idea_scope import LiteratureScopeSpec
+    from easyicu.research_agent.discovery.idea_mining import IdeaMiningError
 
     scope = LiteratureScopeSpec(journal_preset="critical_care_top3", last_n_years=2)
     with pytest.raises(IdeaMiningError, match="source_search_client"):
@@ -2261,7 +2261,7 @@ def test_extract_literature_ideas_single_batch_when_corpus_small() -> None:
 def test_label_prior_art_high_broad_count_blocks_false_sparse() -> None:
     # The bug: a heavily-studied pairing returns 0 on the over-specific exact
     # phrase but hundreds on broad recall; it must NOT be called sparse/gap.
-    from easyicu.research_agent.idea_mining_priorart import _label_prior_art
+    from easyicu.research_agent.discovery.idea_mining_priorart import _label_prior_art
 
     label = _label_prior_art(
         broad_count=300,
@@ -2274,7 +2274,7 @@ def test_label_prior_art_high_broad_count_blocks_false_sparse() -> None:
 
 
 def test_label_prior_art_genuinely_sparse_still_sparse() -> None:
-    from easyicu.research_agent.idea_mining_priorart import _label_prior_art
+    from easyicu.research_agent.discovery.idea_mining_priorart import _label_prior_art
 
     # Few broad hits and no exact hits remains a genuine gap/sparse signal.
     gap = _label_prior_art(
@@ -2294,7 +2294,7 @@ def test_label_prior_art_genuinely_sparse_still_sparse() -> None:
 
 
 def test_label_prior_art_direct_hit_still_already_done() -> None:
-    from easyicu.research_agent.idea_mining_priorart import _label_prior_art
+    from easyicu.research_agent.discovery.idea_mining_priorart import _label_prior_art
 
     assert (
         _label_prior_art(broad_count=300, exact_count=10, direct_same_topic_count=2)
@@ -2303,7 +2303,7 @@ def test_label_prior_art_direct_hit_still_already_done() -> None:
 
 
 def test_construct_is_vague_detection() -> None:
-    from easyicu.research_agent.idea_mining_priorart import _construct_is_vague
+    from easyicu.research_agent.discovery.idea_mining_priorart import _construct_is_vague
 
     # vague: decorator/method shells with no substantive clinical noun
     assert _construct_is_vague("robust multiparametric clinical scores") is True
@@ -2317,7 +2317,7 @@ def test_construct_is_vague_detection() -> None:
 
 
 def test_label_prior_art_vague_construct_blocks_false_sparse() -> None:
-    from easyicu.research_agent.idea_mining_priorart import _label_prior_art
+    from easyicu.research_agent.discovery.idea_mining_priorart import _label_prior_art
 
     # Even with 0 broad/exact hits, a vague construct cannot be a sparse gap.
     assert (
@@ -2345,7 +2345,7 @@ def test_label_prior_art_vague_construct_blocks_false_sparse() -> None:
 
 def _minimal_prior_art_assessment() -> object:
     """A neutral assessment; the go/no-go branch under test returns before it is read."""
-    from easyicu.research_agent.idea_mining_priorart import PriorArtAssessment
+    from easyicu.research_agent.discovery.idea_mining_priorart import PriorArtAssessment
 
     return PriorArtAssessment(
         novelty_snapshot_id="novelty-snapshot/sha256:deadbeef",
@@ -2394,7 +2394,7 @@ def test_both_concepts_resolved_but_unknown_determinability_is_hold_not_db_canno
     # is human operationalization of the outcome event -> a "hold", not a
     # database limitation. (This does not fabricate feasibility: the candidate
     # stays non-executable and unranked.)
-    from easyicu.research_agent.idea_mining_priorart import _go_no_go_decision
+    from easyicu.research_agent.discovery.idea_mining_priorart import _go_no_go_decision
 
     candidate = _candidate_with(
         predictor_concept="urine24",
@@ -2417,7 +2417,7 @@ def test_genuinely_absent_concept_stays_db_cannot_do() -> None:
     # The complement: when a concept is genuinely absent (predictor unresolved),
     # the verdict must remain "db-cannot-do" -- the fix must not reclassify a true
     # database limitation as a doable hold.
-    from easyicu.research_agent.idea_mining_priorart import _go_no_go_decision
+    from easyicu.research_agent.discovery.idea_mining_priorart import _go_no_go_decision
 
     candidate = _candidate_with(
         predictor_concept=None,
@@ -2716,7 +2716,7 @@ def _sparse_idea_and_search():
 def test_novelty_judge_duplicate_verdict_tightens_label() -> None:
     # Phase 3: the count screen alone labels this "sparse"; an LLM judge that
     # reads the hits and calls it a duplicate must tighten it to already_done.
-    from easyicu.research_agent.idea_mining_priorart import assess_prior_art_for_idea
+    from easyicu.research_agent.discovery.idea_mining_priorart import assess_prior_art_for_idea
 
     idea, search = _sparse_idea_and_search()
     baseline = assess_prior_art_for_idea(
@@ -2742,7 +2742,7 @@ def test_novelty_judge_duplicate_verdict_tightens_label() -> None:
 def test_novelty_judge_cannot_upgrade_label() -> None:
     # Veto-net: a "differentiated" verdict must NOT make a sparse label look more
     # novel; the count screen remains the ceiling on novelty.
-    from easyicu.research_agent.idea_mining_priorart import assess_prior_art_for_idea
+    from easyicu.research_agent.discovery.idea_mining_priorart import assess_prior_art_for_idea
 
     idea, search = _sparse_idea_and_search()
 
@@ -2760,7 +2760,7 @@ def test_novelty_judge_cannot_upgrade_label() -> None:
 
 
 def test_more_conservative_novelty_helper() -> None:
-    from easyicu.research_agent.idea_mining_priorart import _more_conservative_novelty
+    from easyicu.research_agent.discovery.idea_mining_priorart import _more_conservative_novelty
 
     assert (
         _more_conservative_novelty("apparently_gap", "already_done") == "already_done"
@@ -2774,7 +2774,7 @@ def test_more_conservative_novelty_helper() -> None:
 
 def test_novelty_judge_error_is_best_effort_noop() -> None:
     # A judge that raises must leave the count label untouched (best-effort).
-    from easyicu.research_agent.idea_mining_priorart import assess_prior_art_for_idea
+    from easyicu.research_agent.discovery.idea_mining_priorart import assess_prior_art_for_idea
 
     idea, search = _sparse_idea_and_search()
 
@@ -2810,7 +2810,7 @@ def _idea(
 def test_collapse_near_duplicate_ideas_archive() -> None:
     # Phase 2b idea archive: the same construct restated (token-order/case/synonym
     # noise) collapses to one; genuinely distinct ideas survive.
-    from easyicu.research_agent.idea_mining import _collapse_near_duplicate_ideas
+    from easyicu.research_agent.discovery.idea_mining import _collapse_near_duplicate_ideas
 
     ideas = [
         _idea(predictor="lactate clearance", outcome="mortality"),
@@ -2826,7 +2826,7 @@ def test_collapse_near_duplicate_ideas_archive() -> None:
 def test_reflection_prompt_includes_prior_art_titles_when_supplied() -> None:
     # Phase 2b retrieval augmentation: supplied prior-art titles surface in the
     # reflection prompt with the drop-or-differentiate instruction.
-    from easyicu.research_agent.idea_mining import build_idea_reflection_messages
+    from easyicu.research_agent.discovery.idea_mining import build_idea_reflection_messages
 
     ideas = [_idea(predictor="lactate", outcome="mortality")]
     material = SourceMaterial(

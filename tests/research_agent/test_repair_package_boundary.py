@@ -1,9 +1,9 @@
-"""Compatibility and dependency contracts for repair-control modules."""
+"""Canonical dependency contracts for repair-control modules."""
 
 from __future__ import annotations
 
-import importlib
 import ast
+import importlib
 import inspect
 import os
 from pathlib import Path
@@ -12,88 +12,31 @@ import sys
 
 import pytest
 
-REPAIR_CONTROL_MODULE_ALIASES = (
-    (
-        "easyicu.research_agent.provider_budget",
-        "easyicu.research_agent.authority.provider_budget",
-    ),
-    (
-        "easyicu.research_agent.code_preflight",
-        "easyicu.research_agent.gates.preflight",
-    ),
-    (
-        "easyicu.research_agent.code_repair",
-        "easyicu.research_agent.repairs.source",
-    ),
-    (
-        "easyicu.research_agent.code_repair_helpers",
-        "easyicu.research_agent.repairs.helpers",
-    ),
-    (
-        "easyicu.research_agent.repair_reasons",
-        "easyicu.research_agent.repairs.reasons",
-    ),
-    (
-        "easyicu.research_agent.repair_coordination",
-        "easyicu.research_agent.repairs.coordination",
-    ),
-    (
-        "easyicu.research_agent.code_patch",
-        "easyicu.research_agent.repairs.patch",
-    ),
-    (
-        "easyicu.research_agent.summary_repair",
-        "easyicu.research_agent.repairs.summary",
-    ),
+
+REPAIR_CONTROL_MODULES = (
+    "authority.provider_budget",
+    "gates.preflight",
+    "repairs.source",
+    "repairs.helpers",
+    "repairs.reasons",
+    "repairs.coordination",
+    "repairs.patch",
+    "repairs.summary",
 )
 
-CANONICAL_REPAIR_CONSUMERS = (
+REPAIR_CONSUMERS = (
     "easyicu.research_agent.agents",
     "easyicu.research_agent.pipeline",
     "easyicu.research_agent.pipeline_execute",
     "easyicu.research_agent.pipeline_resume",
     "easyicu.research_agent.gates.visual",
-    "easyicu.research_agent.repairs.source",
-    "easyicu.research_agent.repairs.coordination",
-    "easyicu.research_agent.repairs.patch",
-    "easyicu.research_agent.repairs.summary",
 )
 
 
-@pytest.mark.parametrize("legacy,canonical", REPAIR_CONTROL_MODULE_ALIASES)
-def test_repair_control_legacy_path_is_canonical_module_object(
-    legacy: str,
-    canonical: str,
-) -> None:
-    old_module = importlib.import_module(legacy)
-    new_module = importlib.import_module(canonical)
-    assert old_module is new_module
-    assert old_module.__file__ == new_module.__file__
-
-
-@pytest.mark.parametrize("order", ("legacy_first", "canonical_first", "pipeline_first"))
-def test_repair_control_aliases_survive_clean_import_order(order: str) -> None:
-    script = f"""
-import importlib
-pairs = {REPAIR_CONTROL_MODULE_ALIASES!r}
-if {order!r} == 'pipeline_first':
-    importlib.import_module('easyicu.research_agent.pipeline_execute')
-for legacy, canonical in pairs:
-    names = (legacy, canonical) if {order!r} == 'legacy_first' else (canonical, legacy)
-    assert importlib.import_module(names[0]) is importlib.import_module(names[1])
-"""
-    env = dict(os.environ)
-    source_root = str(Path(__file__).resolve().parents[2] / "src")
-    env["PYTHONPATH"] = source_root + os.pathsep + env.get("PYTHONPATH", "")
-    subprocess.run([sys.executable, "-c", script], check=True, env=env)
-
-
-def test_provider_budget_legacy_monkeypatch_owner_is_canonical() -> None:
-    legacy = importlib.import_module("easyicu.research_agent.provider_budget")
-    canonical = importlib.import_module(
-        "easyicu.research_agent.authority.provider_budget"
-    )
-    assert legacy.os is canonical.os
+@pytest.mark.parametrize("target", REPAIR_CONTROL_MODULES)
+def test_repair_module_has_one_canonical_home(target: str) -> None:
+    module = importlib.import_module(f"easyicu.research_agent.{target}")
+    assert module.__name__ == f"easyicu.research_agent.{target}"
 
 
 def test_repairs_package_does_not_eagerly_import_implementation_modules() -> None:
@@ -111,26 +54,30 @@ assert loaded == [], loaded
     subprocess.run([sys.executable, "-c", script], check=True, env=env)
 
 
-@pytest.mark.parametrize("module_name", CANONICAL_REPAIR_CONSUMERS)
-def test_canonical_repair_consumers_never_route_through_legacy_facades(
-    module_name: str,
-) -> None:
+@pytest.mark.parametrize("module_name", REPAIR_CONSUMERS)
+def test_repair_consumers_import_canonical_packages(module_name: str) -> None:
     module = importlib.import_module(module_name)
     tree = ast.parse(inspect.getsource(module))
-    imported_modules: set[str] = set()
+    imported: set[str] = set()
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
-            imported_modules.update(alias.name for alias in node.names)
+            imported.update(alias.name for alias in node.names)
         elif isinstance(node, ast.ImportFrom) and node.module:
-            if node.level:
-                imported_modules.add(
-                    importlib.util.resolve_name(
-                        "." * node.level + node.module,
-                        module.__package__,
-                    )
+            imported.add(
+                importlib.util.resolve_name(
+                    "." * node.level + node.module, module.__package__
                 )
-            else:
-                imported_modules.add(node.module)
-
-    legacy_modules = {legacy for legacy, _canonical in REPAIR_CONTROL_MODULE_ALIASES}
-    assert imported_modules.isdisjoint(legacy_modules)
+                if node.level
+                else node.module
+            )
+    retired = {
+        "easyicu.research_agent.code_patch",
+        "easyicu.research_agent.code_preflight",
+        "easyicu.research_agent.code_repair",
+        "easyicu.research_agent.code_repair_helpers",
+        "easyicu.research_agent.provider_budget",
+        "easyicu.research_agent.repair_coordination",
+        "easyicu.research_agent.repair_reasons",
+        "easyicu.research_agent.summary_repair",
+    }
+    assert imported.isdisjoint(retired)

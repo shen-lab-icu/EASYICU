@@ -1,8 +1,8 @@
-from easyicu.research_agent.code_patch import (
+from easyicu.research_agent.repairs.patch import (
     looks_like_executable_python,
     repair_code_excerpt,
 )
-from easyicu.research_agent.repair_reasons import RepairPromptAuthority
+from easyicu.research_agent.repairs.reasons import RepairPromptAuthority
 
 
 def test_executable_candidate_detection_keeps_runtime_failure_paths():

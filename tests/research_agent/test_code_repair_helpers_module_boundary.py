@@ -7,7 +7,7 @@ from pathlib import Path
 
 
 def test_code_repair_helpers_entrypoints_are_importable() -> None:
-    from easyicu.research_agent.code_repair_helpers import (
+    from easyicu.research_agent.repairs.helpers import (
         _extract_required_cols_list,
         _family_allows_binary_model_repair,
     )
@@ -24,7 +24,8 @@ def test_code_repair_reexports_helpers_by_identity() -> None:
     """The split must be behavior-preserving: code_repair keeps exposing the
     same objects so existing internal references (and pipeline imports) resolve
     unchanged."""
-    from easyicu.research_agent import code_repair, code_repair_helpers
+    from easyicu.research_agent.repairs import helpers as code_repair_helpers
+    from easyicu.research_agent.repairs import source as code_repair
 
     for name in (
         "_patch_primary_predictor_into_design_matrix",
@@ -54,7 +55,6 @@ def test_code_repair_helpers_is_a_leaf_module() -> None:
         in {
             "source",
             "code_repair",
-            "easyicu.research_agent.code_repair",
             "easyicu.research_agent.repairs.source",
         }
         for node in tree.body

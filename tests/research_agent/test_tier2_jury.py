@@ -9,7 +9,7 @@ from typing import Dict, List
 
 import pytest
 
-from easyicu.research_agent.tier2_jury import (
+from easyicu.research_agent.evaluation.tier2_jury import (
     REAL_JUDGE_SPECS,
     JudgeClient,
     JudgeIdentity,
@@ -20,7 +20,7 @@ from easyicu.research_agent.tier2_jury import (
     krippendorff_alpha,
     make_real_judges,
 )
-from easyicu.research_agent.tier2_rubric import NPJ_DM_RUBRIC_V1
+from easyicu.research_agent.evaluation.tier2_rubric import NPJ_DM_RUBRIC_V1
 
 
 class ScriptedJudge(JudgeClient):
@@ -243,7 +243,7 @@ def test_real_judge_parser_tolerates_reasoning_preamble():
     """Judge responses with thinking/preamble before the JSON must still
     parse (reasoning models emit prose first). Covers fenced, prefixed, and
     bare-array forms."""
-    from easyicu.research_agent.tier2_jury import _parse_real_judge_response
+    from easyicu.research_agent.evaluation.tier2_jury import _parse_real_judge_response
 
     preamble = (
         'The user wants scores. Let me think... here is my answer:\n'

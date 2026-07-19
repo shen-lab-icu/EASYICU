@@ -58,12 +58,6 @@ not break the rest.
 
 from __future__ import annotations
 
-import os
-
-from .step_summary import step_summary
-
-os_environ = os.environ
-
 __all__ = [
     # Schemas
     "ResearchContext",
@@ -442,9 +436,6 @@ __all__ = [
     # Prompt pack provenance
     "PROMPT_PACK_VERSION",
     "prompt_pack_files",
-    # Compatibility exports used by generated scripts
-    "step_summary",
-    "os_environ",
 ]
 
 # Schemas are dependency-free, safe to import eagerly.

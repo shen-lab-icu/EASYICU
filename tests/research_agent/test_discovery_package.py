@@ -5,18 +5,18 @@ from pathlib import Path
 
 import pytest
 
-from easyicu.research_agent.discovery_handoff import (
+from easyicu.research_agent.discovery.discovery_handoff import (
     assert_discovery_analysis_ready,
     build_handoff_from_row,
     select_discovery_row,
     write_handoff_packet,
 )
-from easyicu.research_agent.discovery_package import (
+from easyicu.research_agent.discovery.discovery_package import (
     _figure_inventory,
     _valid_figure_artifact,
     validate_discovery_manuscript_package,
 )
-from easyicu.research_agent.discovery_story_figure import render_discovery_story_figure
+from easyicu.research_agent.discovery.discovery_story_figure import render_discovery_story_figure
 from easyicu.research_agent.evidence import EvidenceStore
 
 

@@ -199,7 +199,7 @@ from .authority.typed_binding import (
     _write_host_input_binding_receipts,
     _write_resolved_inputs_manifest,
 )
-from .gates.contract import (  # re-export the full contract gate API for old-path back-compat
+from .gates.contract import (  # execute-layer collaborators use the canonical gate API
     _AGENT_OWNED_ROBUSTNESS_RESULT_METHODS,
     _AGENT_OWNED_ROBUSTNESS_RESULT_PRODUCTS,
     _AUXILIARY_OUTPUT_KINDS,

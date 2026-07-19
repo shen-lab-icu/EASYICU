@@ -1,4 +1,4 @@
-"""Smoke tests for ``easyicu.research_agent.code_repair``.
+"""Smoke tests for ``easyicu.research_agent.repairs.source``.
 
 Background
 ----------
@@ -35,7 +35,7 @@ import json
 
 import pytest
 
-from easyicu.research_agent.code_repair import (
+from easyicu.research_agent.repairs.source import (
     _KEYERROR_NOT_IN_INDEX_RE,
     _NAME_ERROR_HELPER_RE,
     _deterministic_summary_repair,

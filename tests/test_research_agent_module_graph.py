@@ -175,10 +175,15 @@ def test_cli_emit_and_diff_round_trip(tmp_path: Path) -> None:
     assert graph.main([*common, "--diff", str(baseline_path)]) == 0
 
 
-def test_production_snapshot_keeps_all_named_legacy_targets() -> None:
+def test_production_snapshot_has_no_legacy_surfaces() -> None:
     snapshot = graph.build_snapshot()
-    assert set(snapshot["legacy_surfaces"]) == set(graph.LEGACY_TARGET_MODULES)
-    assert all(surface["exists"] for surface in snapshot["legacy_surfaces"].values())
+    assert snapshot["legacy_surfaces"] == {}
+    assert graph.LEGACY_TARGET_MODULES == ()
+
+
+def test_production_snapshot_contains_supported_canonical_modules() -> None:
+    snapshot = graph.build_snapshot()
+    assert set(graph.SUPPORTED_CANONICAL_MODULES).issubset(snapshot["modules"])
 
 
 def test_production_research_agent_import_graph_is_acyclic() -> None:

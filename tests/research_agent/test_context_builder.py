@@ -12,10 +12,8 @@ import numpy as np
 import pandas as pd
 
 
-def test_wide_companion_columns_inherit_exact_base_concept_metadata(
-    ra, monkeypatch
-):
-    from easyicu.research_agent import context as context_module
+def test_wide_companion_columns_inherit_exact_base_concept_metadata(ra, monkeypatch):
+    from easyicu.research_agent.research_context import builder as context_module
 
     def fake_info(name):
         if name == "event_ind":
@@ -55,7 +53,7 @@ def test_wide_companion_columns_inherit_exact_base_concept_metadata(
 def test_wide_concept_resolution_does_not_fuzzy_match_unknown_columns(
     monkeypatch,
 ):
-    from easyicu.research_agent import context as context_module
+    from easyicu.research_agent.research_context import builder as context_module
 
     monkeypatch.setattr(
         context_module,
@@ -71,7 +69,7 @@ def test_wide_concept_resolution_does_not_fuzzy_match_unknown_columns(
 
 def test_composite_wide_output_inherits_catalog_source_concept(ra, monkeypatch):
     from easyicu.concept import catalog
-    from easyicu.research_agent import context as context_module
+    from easyicu.research_agent.research_context import builder as context_module
 
     monkeypatch.setitem(
         catalog.COMPOSITE_CONCEPT_OUTPUT_SOURCES,
@@ -105,9 +103,7 @@ def test_composite_wide_output_inherits_catalog_source_concept(ra, monkeypatch):
         database="synthetic",
     )
 
-    assert context.variable("derived_signal_max").source_concept == (
-        "canonical_signal"
-    )
+    assert context.variable("derived_signal_max").source_concept == ("canonical_signal")
     assert context.variable("derived_signal_measured").source_concept == (
         "canonical_signal"
     )
@@ -118,14 +114,16 @@ def test_composite_wide_output_inherits_catalog_source_concept(ra, monkeypatch):
 
 
 def test_build_context_basic(ra):
-    df = pd.DataFrame({
-        "stay_id": [1, 2, 3, 4],
-        "age": [60.0, 72.5, 55.1, 80.0],
-        "sex": ["M", "F", "F", "M"],
-        "sofa2": [0, 1, 5, 8],
-        "lact": [1.2, 3.4, 2.1, 8.0],
-        "death": [0, 0, 1, 1],
-    })
+    df = pd.DataFrame(
+        {
+            "stay_id": [1, 2, 3, 4],
+            "age": [60.0, 72.5, 55.1, 80.0],
+            "sex": ["M", "F", "F", "M"],
+            "sofa2": [0, 1, 5, 8],
+            "lact": [1.2, 3.4, 2.1, 8.0],
+            "death": [0, 0, 1, 1],
+        }
+    )
     ctx = ra.build_research_context(
         research_question="Does sofa2 predict death?",
         cohort=df,
@@ -148,11 +146,13 @@ def test_build_context_basic(ra):
 
 
 def test_id_time_outcome_overrides(ra):
-    df = pd.DataFrame({
-        "custom_id": [1, 2, 3],
-        "ts_event": pd.to_datetime(["2024-01-01", "2024-01-02", "2024-01-03"]),
-        "weird_outcome": [0, 1, 0],
-    })
+    df = pd.DataFrame(
+        {
+            "custom_id": [1, 2, 3],
+            "ts_event": pd.to_datetime(["2024-01-01", "2024-01-02", "2024-01-03"]),
+            "weird_outcome": [0, 1, 0],
+        }
+    )
     ctx = ra.build_research_context(
         research_question="x",
         cohort=df,
@@ -170,14 +170,29 @@ def test_id_time_outcome_overrides(ra):
 
 
 def test_missingness_profile_is_populated(ra):
-    df = pd.DataFrame({
-        "stay_id": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
-        "age": [60, 70, 50, 80, 65, 75, 90, 40, 55, 60],
-        "lact": [1.0, np.nan, np.nan, 2.0, np.nan, 3.5, np.nan, np.nan, np.nan, 4.0],
-    })
+    df = pd.DataFrame(
+        {
+            "stay_id": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
+            "age": [60, 70, 50, 80, 65, 75, 90, 40, 55, 60],
+            "lact": [
+                1.0,
+                np.nan,
+                np.nan,
+                2.0,
+                np.nan,
+                3.5,
+                np.nan,
+                np.nan,
+                np.nan,
+                4.0,
+            ],
+        }
+    )
     ctx = ra.build_research_context(
-        research_question="x", cohort=df,
-        cohort_name="c", database="synthetic",
+        research_question="x",
+        cohort=df,
+        cohort_name="c",
+        database="synthetic",
     )
     lact = ctx.variable("lact")
     assert lact is not None
@@ -190,11 +205,13 @@ def test_missingness_profile_is_populated(ra):
 
 
 def test_missingness_test_is_not_run_when_panel_is_too_small(ra):
-    df = pd.DataFrame({
-        "stay_id": [1, 2, 3],
-        "lact": [1.0, np.nan, 2.0],
-        "creat": [0.8, 1.1, 1.0],
-    })
+    df = pd.DataFrame(
+        {
+            "stay_id": [1, 2, 3],
+            "lact": [1.0, np.nan, 2.0],
+            "creat": [0.8, 1.1, 1.0],
+        }
+    )
     ctx = ra.build_research_context(
         research_question="x",
         cohort=df,
@@ -241,14 +258,18 @@ def test_context_marks_generic_count_and_measurement_companions_as_audit_metadat
 
 
 def test_default_time_windows_attached(ra):
-    df = pd.DataFrame({
-        "stay_id": [1, 2],
-        "age": [60.0, 70.0],
-        "death": [0, 1],
-    })
+    df = pd.DataFrame(
+        {
+            "stay_id": [1, 2],
+            "age": [60.0, 70.0],
+            "death": [0, 1],
+        }
+    )
     ctx = ra.build_research_context(
-        research_question="x", cohort=df,
-        cohort_name="c", database="synthetic",
+        research_question="x",
+        cohort=df,
+        cohort_name="c",
+        database="synthetic",
         target_outcome="death",
     )
     names = {w.name for w in ctx.time_windows}
@@ -256,11 +277,13 @@ def test_default_time_windows_attached(ra):
 
 
 def test_target_outcome_semantics_are_enriched_from_question(ra):
-    df = pd.DataFrame({
-        "stay_id": [1, 2, 3, 4],
-        "age": [60.0, 70.0, 80.0, 55.0],
-        "death": [0, 1, 0, 1],
-    })
+    df = pd.DataFrame(
+        {
+            "stay_id": [1, 2, 3, 4],
+            "age": [60.0, 70.0, 80.0, 55.0],
+            "death": [0, 1, 0, 1],
+        }
+    )
     ctx = ra.build_research_context(
         research_question="Is age associated with ICU mortality?",
         cohort=df,
@@ -273,15 +296,19 @@ def test_target_outcome_semantics_are_enriched_from_question(ra):
     assert death.description is not None
     assert "ICU mortality" in death.description
     assert death.source_concept == "icu_mortality"
-    assert any("explicitly treated as ICU mortality" in note for note in death.clinical_caveats)
+    assert any(
+        "explicitly treated as ICU mortality" in note for note in death.clinical_caveats
+    )
 
 
 def test_non_mortality_target_outcomes_receive_explicit_semantics(ra):
-    df = pd.DataFrame({
-        "stay_id": [1, 2, 3, 4],
-        "age": [60.0, 70.0, 80.0, 55.0],
-        "los_icu": [2.5, 7.0, 4.5, 11.0],
-    })
+    df = pd.DataFrame(
+        {
+            "stay_id": [1, 2, 3, 4],
+            "age": [60.0, 70.0, 80.0, 55.0],
+            "los_icu": [2.5, 7.0, 4.5, 11.0],
+        }
+    )
     ctx = ra.build_research_context(
         research_question="Model ICU length of stay from admission age.",
         cohort=df,
@@ -295,15 +322,19 @@ def test_non_mortality_target_outcomes_receive_explicit_semantics(ra):
     assert los.description is not None
     assert "Length-of-stay" in los.description or "length-of-stay" in los.description
     assert los.source_concept == "length_of_stay"
-    assert any("Do not convert length of stay" in note for note in los.cross_database_notes)
+    assert any(
+        "Do not convert length of stay" in note for note in los.cross_database_notes
+    )
 
 
 def test_unknown_declared_target_outcome_is_not_left_semantically_blank(ra):
-    df = pd.DataFrame({
-        "stay_id": [1, 2, 3, 4],
-        "age": [60.0, 70.0, 80.0, 55.0],
-        "custom_endpoint": [0.2, 0.5, 0.4, 0.9],
-    })
+    df = pd.DataFrame(
+        {
+            "stay_id": [1, 2, 3, 4],
+            "age": [60.0, 70.0, 80.0, 55.0],
+            "custom_endpoint": [0.2, 0.5, 0.4, 0.9],
+        }
+    )
     ctx = ra.build_research_context(
         research_question="Estimate the relation between age and the custom endpoint.",
         cohort=df,
@@ -317,15 +348,20 @@ def test_unknown_declared_target_outcome_is_not_left_semantically_blank(ra):
     assert endpoint.description is not None
     assert "Primary outcome column declared by the caller" in endpoint.description
     assert endpoint.source_concept == "declared_primary_outcome"
-    assert any("Do not replace this declared outcome" in note for note in endpoint.cross_database_notes)
+    assert any(
+        "Do not replace this declared outcome" in note
+        for note in endpoint.cross_database_notes
+    )
 
 
 def test_survival_question_marks_target_as_time_to_event_endpoint(ra):
-    df = pd.DataFrame({
-        "stay_id": [1, 2, 3, 4],
-        "followup_days": [7, 14, 21, 28],
-        "death": [0, 1, 0, 1],
-    })
+    df = pd.DataFrame(
+        {
+            "stay_id": [1, 2, 3, 4],
+            "followup_days": [7, 14, 21, 28],
+            "death": [0, 1, 0, 1],
+        }
+    )
     ctx = ra.build_research_context(
         research_question="Evaluate 28-day survival after ICU admission with a Cox model.",
         cohort=df,
@@ -340,12 +376,14 @@ def test_survival_question_marks_target_as_time_to_event_endpoint(ra):
 
 
 def test_naive_context_strips_icu_metadata_and_preferences(ra):
-    df = pd.DataFrame({
-        "stay_id": [1, 2, 3, 4],
-        "lact": [1.2, 3.4, np.nan, 2.0],
-        "vaso_any_24h": [0, 1, 0, 1],
-        "death": [0, 1, 0, 1],
-    })
+    df = pd.DataFrame(
+        {
+            "stay_id": [1, 2, 3, 4],
+            "lact": [1.2, 3.4, np.nan, 2.0],
+            "vaso_any_24h": [0, 1, 0, 1],
+            "death": [0, 1, 0, 1],
+        }
+    )
     ctx = ra.build_naive_research_context(
         research_question="Does lactate predict death?",
         cohort=df,
@@ -375,12 +413,14 @@ def test_naive_context_strips_icu_metadata_and_preferences(ra):
 
 
 def test_temporal_constraints_and_provenance_are_attached(ra):
-    df = pd.DataFrame({
-        "stay_id": [1, 2],
-        "age": [60.0, 70.0],
-        "death": [0, 1],
-        "lact": [2.0, 4.5],
-    })
+    df = pd.DataFrame(
+        {
+            "stay_id": [1, 2],
+            "age": [60.0, 70.0],
+            "death": [0, 1],
+            "lact": [2.0, 4.5],
+        }
+    )
     ctx = ra.build_research_context(
         research_question="Assess AKI within 48h after ICU admission and worst lactate before vasopressor.",
         cohort=df,
@@ -388,21 +428,27 @@ def test_temporal_constraints_and_provenance_are_attached(ra):
         database="synthetic",
         target_outcome="death",
     )
-    assert ctx.temporal_constraints, "temporal semantics should be parsed into deterministic constraints"
+    assert (
+        ctx.temporal_constraints
+    ), "temporal semantics should be parsed into deterministic constraints"
     assert any(c.relation == "within_after" for c in ctx.temporal_constraints)
     assert "resolver" in ctx.cohort.provenance
 
 
 def test_n_patients_distinct_from_n_stays(ra):
     """If two rows share the same stay_id, n_patients < n_stays."""
-    df = pd.DataFrame({
-        "stay_id": [1, 1, 2, 3, 3, 3],
-        "age": [60.0, 60.0, 72.0, 55.0, 55.0, 55.0],
-        "death": [0, 0, 1, 1, 1, 1],
-    })
+    df = pd.DataFrame(
+        {
+            "stay_id": [1, 1, 2, 3, 3, 3],
+            "age": [60.0, 60.0, 72.0, 55.0, 55.0, 55.0],
+            "death": [0, 0, 1, 1, 1, 1],
+        }
+    )
     ctx = ra.build_research_context(
-        research_question="x", cohort=df,
-        cohort_name="c", database="synthetic",
+        research_question="x",
+        cohort=df,
+        cohort_name="c",
+        database="synthetic",
     )
     assert ctx.cohort.n_stays == 6
     assert ctx.cohort.n_patients == 3
@@ -414,7 +460,9 @@ def test_retrieved_context_keeps_relevant_and_outcome_variables(ra):
         schema.ConceptDescriptor(name="stay_id", role="id", dtype="int64"),
         schema.ConceptDescriptor(name="age", role="demographic", dtype="float64"),
         schema.ConceptDescriptor(
-            name="sofa2", role="composite_score", dtype="int64",
+            name="sofa2",
+            role="composite_score",
+            dtype="int64",
             pitfalls=["SOFA2 zero can indicate missingness"],
         ),
         schema.ConceptDescriptor(name="lact", role="lab", dtype="float64"),
@@ -424,14 +472,20 @@ def test_retrieved_context_keeps_relevant_and_outcome_variables(ra):
     ctx = schema.ResearchContext(
         research_question="Is SOFA-2 associated with ICU mortality?",
         cohort=schema.CohortDescriptor(
-            cohort_name="c", database="d", n_patients=1, n_stays=1,
-            id_columns=["stay_id"], outcome_columns=["death"],
+            cohort_name="c",
+            database="d",
+            n_patients=1,
+            n_stays=1,
+            id_columns=["stay_id"],
+            outcome_columns=["death"],
         ),
         variables=variables,
         target_outcome="death",
     )
 
-    from easyicu.research_agent.context import build_retrieved_research_context
+    from easyicu.research_agent.research_context.builder import (
+        build_retrieved_research_context,
+    )
 
     compact = build_retrieved_research_context(ctx, top_k=2)
     names = [v.name for v in compact.variables]
@@ -440,6 +494,7 @@ def test_retrieved_context_keeps_relevant_and_outcome_variables(ra):
     assert "stay_id" in names
     assert len(names) < len(variables)
     assert "Context retrieval active" in compact.notes
+
 
 def test_retrieved_context_always_preserves_primary_exposure(ra):
     schema = ra.schema

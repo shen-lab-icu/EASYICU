@@ -369,7 +369,7 @@ def test_runner_repair_strips_fake_easyicu_import():
     03 to exactly this. The runner repair now strips such imports and
     stubs the name with a clear NotImplementedError so the next repair
     attempt sees an actionable error."""
-    from easyicu.research_agent.code_repair import _deterministic_runner_repair
+    from easyicu.research_agent.repairs.source import _deterministic_runner_repair
 
     bad_code = (
         "import pandas as pd\n"

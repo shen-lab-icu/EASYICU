@@ -6826,7 +6826,7 @@ def test_article_figure_strategy_rejects_sparse_primary_publication_figure(
     ra,
     tmp_path: Path,
 ):
-    from easyicu.research_agent.figure_strategy import (
+    from easyicu.research_agent.planning.figure_strategy import (
         summarize_article_figure_strategy_coverage,
     )
 

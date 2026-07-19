@@ -8,7 +8,7 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
-from easyicu.research_agent.analysis_types import (
+from easyicu.research_agent.planning.analysis_types import (
     is_concept_set_family,
     normalize_analysis_family,
 )
@@ -47,7 +47,7 @@ def test_bare_word_model_does_not_force_prediction(ra):
     which then dragged the study-design family to prediction. Real prediction
     cues (predict/auroc/calibration/...) still route correctly (see M2).
     """
-    from easyicu.research_agent.study_design import infer_study_design_family
+    from easyicu.research_agent.planning.study_design import infer_study_design_family
 
     ctx = ra.ResearchContext(
         research_question=(
@@ -69,7 +69,7 @@ def test_bare_word_model_does_not_force_prediction(ra):
 def test_primary_cohort_workflow_boilerplate_does_not_override_scientific_family(ra):
     """One required cohort definition plus data QC is workflow, not sensitivity."""
 
-    from easyicu.research_agent.study_design import infer_study_design_family
+    from easyicu.research_agent.planning.study_design import infer_study_design_family
 
     ctx = ra.ResearchContext(
         research_question=(
@@ -155,7 +155,7 @@ def test_disclaimed_causal_does_not_hijack_trajectory_clustering(ra):
 
 
 def test_existing_cluster_membership_remains_an_association_exposure(ra):
-    from easyicu.research_agent.study_design import infer_study_design_family
+    from easyicu.research_agent.planning.study_design import infer_study_design_family
 
     for membership in (
         "a previously assigned subphenotype",
@@ -178,10 +178,10 @@ def test_existing_cluster_membership_remains_an_association_exposure(ra):
 
 
 def test_clustering_variance_language_for_patients_is_not_phenotype_discovery(ra):
-    from easyicu.research_agent.analysis_types import (
+    from easyicu.research_agent.planning.analysis_types import (
         strong_trajectory_clustering_framing,
     )
-    from easyicu.research_agent.study_design import infer_study_design_family
+    from easyicu.research_agent.planning.study_design import infer_study_design_family
 
     questions = (
         "Fit mixed effects with site-level clustering for patients and report "
@@ -209,10 +209,10 @@ def test_clustering_variance_language_for_patients_is_not_phenotype_discovery(ra
 
 
 def test_gaussian_mixture_phenotype_discovery_is_clustering(ra):
-    from easyicu.research_agent.analysis_types import (
+    from easyicu.research_agent.planning.analysis_types import (
         strong_trajectory_clustering_framing,
     )
-    from easyicu.research_agent.study_design import infer_study_design_family
+    from easyicu.research_agent.planning.study_design import infer_study_design_family
 
     question = (
         "Discover longitudinal patient phenotypes using a Gaussian mixture "
@@ -233,7 +233,7 @@ def test_gaussian_mixture_phenotype_discovery_is_clustering(ra):
 
 
 def test_causal_disclaimer_and_fixed_followup_endpoint_do_not_choose_science(ra):
-    from easyicu.research_agent.study_design import infer_study_design_family
+    from easyicu.research_agent.planning.study_design import infer_study_design_family
 
     questions = (
         "Estimate the adjusted association between exposure and mortality; do "
@@ -255,7 +255,7 @@ def test_causal_disclaimer_and_fixed_followup_endpoint_do_not_choose_science(ra)
 
 
 def test_chinese_negation_and_cluster_nuisance_do_not_hijack_family(ra):
-    from easyicu.research_agent.study_design import infer_study_design_family
+    from easyicu.research_agent.planning.study_design import infer_study_design_family
 
     questions = (
         "采用混合效应回归和医院层面聚类稳健标准误，评估既有轨迹分群与死亡的关联。",
@@ -689,7 +689,7 @@ def test_infer_does_not_misclassify_lab_names_as_multimodal(ra):
             target_outcome="death",
         )
 
-    from easyicu.research_agent.analysis_types import infer_analysis_type
+    from easyicu.research_agent.planning.analysis_types import infer_analysis_type
 
     # Lab names containing the substring 'ct'/'note' etc. must NOT score multimodal.
     assert infer_analysis_type(_ctx(["lactate"])).key == "association_study"

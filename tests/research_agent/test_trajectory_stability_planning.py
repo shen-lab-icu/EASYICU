@@ -21,7 +21,7 @@ from easyicu.research_agent.trajectory_plan_contract import (
     STABILITY_EXECUTOR_INPUTS,
     STABILITY_EXECUTOR_OUTPUTS,
 )
-from easyicu.research_agent.trajectory_stability_executor import (
+from easyicu.research_agent.execution.runners.trajectory_stability_executor import (
     trajectory_stability_executor_owns_step,
 )
 

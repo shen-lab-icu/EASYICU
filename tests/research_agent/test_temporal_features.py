@@ -10,7 +10,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from easyicu.research_agent import temporal_features as T
+from easyicu.research_agent.methods import temporal_features as T
 
 
 def _traj(rows):

@@ -2,9 +2,10 @@
 """Deterministic import-architecture gate for ``easyicu.research_agent``.
 
 The control-plane refactor moves implementation into responsibility subpackages
-while preserving legacy import surfaces.  This tool records the import graph
-before those moves so a mechanical reorganization cannot silently introduce a
-new cycle, drop an archived import target, or erase a literal dynamic import.
+and deliberately retired its pre-v1 facade modules.  This tool records the
+supported canonical surface and import graph so later reorganization cannot
+silently introduce a cycle, drop a supported target, or erase a literal dynamic
+import.
 
 Only syntax is inspected; importing research-agent modules would execute provider
 and environment setup and would make the baseline dependent on the host machine.
@@ -29,79 +30,84 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Set, Tuple
 
-TOOL_VERSION = "1.1.0"
+TOOL_VERSION = "1.2.0"
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_PACKAGE_DIR = REPO_ROOT / "src" / "easyicu" / "research_agent"
 DEFAULT_PACKAGE_NAME = "easyicu.research_agent"
 
-LEGACY_TARGET_MODULES: Tuple[str, ...] = (
-    "easyicu.research_agent.gate_evaluator",
-    "easyicu.research_agent.contract_gate",
-    "easyicu.research_agent.concept_gate",
-    "easyicu.research_agent.concept_audit_execution",
-    "easyicu.research_agent.figure_contract_preparation",
-    "easyicu.research_agent.publication_figure_execution",
-    "easyicu.research_agent.evidence_registration",
-    "easyicu.research_agent.deterministic_causal",
-    "easyicu.research_agent.deterministic_clustering",
-    "easyicu.research_agent.deterministic_cohort_flow",
-    "easyicu.research_agent.deterministic_descriptive",
-    "easyicu.research_agent.deterministic_missingness",
-    "easyicu.research_agent.deterministic_ordinal",
-    "easyicu.research_agent.deterministic_robustness",
-    "easyicu.research_agent.deterministic_sensitivity",
-    "easyicu.research_agent.deterministic_survival",
-    "easyicu.research_agent.trajectory_stability_executor",
-    "easyicu.research_agent.idea_mining_schema",
-    "easyicu.research_agent.idea_mining_pubmed",
-    "easyicu.research_agent.idea_scope",
-    "easyicu.research_agent.idea_registry",
-    "easyicu.research_agent.hypothesis_generator",
-    "easyicu.research_agent.idea_mining_data_first",
-    "easyicu.research_agent.idea_mining_feasibility_tier",
-    "easyicu.research_agent.concept_proposal",
-    "easyicu.research_agent.idea_mining",
-    "easyicu.research_agent.idea_mining_priorart",
-    "easyicu.research_agent.idea_mining_funnel",
-    "easyicu.research_agent.idea_mining_extended_feasibility",
-    "easyicu.research_agent.idea_mining_eval",
-    "easyicu.research_agent.discovery_handoff",
-    "easyicu.research_agent.discovery_package",
-    "easyicu.research_agent.discovery_story_figure",
-    "easyicu.research_agent.pdf_render",
-    "easyicu.research_agent.reporting_checklist",
-    "easyicu.research_agent.reviewer",
-    "easyicu.research_agent.review_artifacts",
-    "easyicu.research_agent.display_suite",
-    "easyicu.research_agent.article_contract",
-    "easyicu.research_agent.bibtex",
-    "easyicu.research_agent.latex",
-    "easyicu.research_agent.manuscript_post",
-    "easyicu.research_agent.provider_budget",
-    "easyicu.research_agent.code_preflight",
-    "easyicu.research_agent.code_repair",
-    "easyicu.research_agent.code_repair_helpers",
-    "easyicu.research_agent.repair_reasons",
-    "easyicu.research_agent.repair_coordination",
-    "easyicu.research_agent.code_patch",
-    "easyicu.research_agent.summary_repair",
-    "easyicu.research_agent.study_design",
-    "easyicu.research_agent.study_design_playbook",
-    "easyicu.research_agent.capability_registry",
-    "easyicu.research_agent.analysis_method_suite",
-    "easyicu.research_agent.figure_strategy",
-    "easyicu.research_agent.analysis_types",
-    "easyicu.research_agent.context",
-    "easyicu.research_agent.coder_context",
-    "easyicu.research_agent.research_context_v2",
-    "easyicu.research_agent.method_compatibility",
-    "easyicu.research_agent.cross_model_panel",
-    "easyicu.research_agent.tier2_jury",
-    "easyicu.research_agent.tier2_rubric",
-    "easyicu.research_agent.causal_audit",
-    "easyicu.research_agent.methodological_rigor",
+SUPPORTED_CANONICAL_MODULES: Tuple[str, ...] = (
+    "easyicu.research_agent.gates.visual",
+    "easyicu.research_agent.gates.contract",
+    "easyicu.research_agent.gates.concept",
+    "easyicu.research_agent.execution.concept_audit",
+    "easyicu.research_agent.execution.figure_preparation",
+    "easyicu.research_agent.execution.publication_figure",
+    "easyicu.research_agent.authority.registration",
+    "easyicu.research_agent.execution.runners.deterministic_causal",
+    "easyicu.research_agent.execution.runners.deterministic_clustering",
+    "easyicu.research_agent.execution.runners.deterministic_cohort_flow",
+    "easyicu.research_agent.execution.runners.deterministic_descriptive",
+    "easyicu.research_agent.execution.runners.deterministic_missingness",
+    "easyicu.research_agent.execution.runners.deterministic_ordinal",
+    "easyicu.research_agent.execution.runners.deterministic_robustness",
+    "easyicu.research_agent.execution.runners.deterministic_sensitivity",
+    "easyicu.research_agent.execution.runners.deterministic_survival",
+    "easyicu.research_agent.execution.runners.trajectory_stability_executor",
+    "easyicu.research_agent.discovery.idea_mining_schema",
+    "easyicu.research_agent.discovery.idea_mining_pubmed",
+    "easyicu.research_agent.discovery.idea_scope",
+    "easyicu.research_agent.discovery.idea_registry",
+    "easyicu.research_agent.discovery.hypothesis_generator",
+    "easyicu.research_agent.discovery.idea_mining_data_first",
+    "easyicu.research_agent.discovery.idea_mining_feasibility_tier",
+    "easyicu.research_agent.discovery.concept_proposal",
+    "easyicu.research_agent.discovery.idea_mining",
+    "easyicu.research_agent.discovery.idea_mining_priorart",
+    "easyicu.research_agent.discovery.idea_mining_funnel",
+    "easyicu.research_agent.discovery.idea_mining_extended_feasibility",
+    "easyicu.research_agent.discovery.idea_mining_eval",
+    "easyicu.research_agent.discovery.discovery_handoff",
+    "easyicu.research_agent.discovery.discovery_package",
+    "easyicu.research_agent.discovery.discovery_story_figure",
+    "easyicu.research_agent.reporting.pdf_render",
+    "easyicu.research_agent.reporting.reporting_checklist",
+    "easyicu.research_agent.reporting.reviewer",
+    "easyicu.research_agent.reporting.review_artifacts",
+    "easyicu.research_agent.reporting.display_suite",
+    "easyicu.research_agent.reporting.article_contract",
+    "easyicu.research_agent.reporting.bibtex",
+    "easyicu.research_agent.reporting.latex",
+    "easyicu.research_agent.reporting.manuscript_post",
+    "easyicu.research_agent.authority.provider_budget",
+    "easyicu.research_agent.gates.preflight",
+    "easyicu.research_agent.repairs.source",
+    "easyicu.research_agent.repairs.helpers",
+    "easyicu.research_agent.repairs.reasons",
+    "easyicu.research_agent.repairs.coordination",
+    "easyicu.research_agent.repairs.patch",
+    "easyicu.research_agent.repairs.summary",
+    "easyicu.research_agent.planning.study_design",
+    "easyicu.research_agent.planning.study_design_playbook",
+    "easyicu.research_agent.planning.capability_registry",
+    "easyicu.research_agent.planning.analysis_method_suite",
+    "easyicu.research_agent.planning.figure_strategy",
+    "easyicu.research_agent.planning.analysis_types",
+    "easyicu.research_agent.research_context.builder",
+    "easyicu.research_agent.research_context.prompt_scope",
+    "easyicu.research_agent.research_context.typed",
+    "easyicu.research_agent.gates.method_compatibility",
+    "easyicu.research_agent.evaluation.cross_model_panel",
+    "easyicu.research_agent.evaluation.tier2_jury",
+    "easyicu.research_agent.evaluation.tier2_rubric",
+    "easyicu.research_agent.review.causal_audit",
+    "easyicu.research_agent.review.methodological_rigor",
 )
+
+# Generic callers may still ask the graph tool to characterize compatibility
+# surfaces via ``--legacy-target``.  The EasyICU production package itself has
+# no supported pre-v1 facade modules after the 2026-07-19 cleanup.
+LEGACY_TARGET_MODULES: Tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)

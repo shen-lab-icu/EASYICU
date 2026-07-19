@@ -120,7 +120,7 @@ def trajectory_stability_executor_code(
         "os.environ['MKL_NUM_THREADS'] = '1'\n"
         "os.environ['NUMEXPR_NUM_THREADS'] = '1'\n"
         "from pathlib import Path\n"
-        "from easyicu.research_agent.trajectory_stability_executor import "
+        "from easyicu.research_agent.execution.runners.trajectory_stability_executor import "
         "run_trajectory_stability\n"
         f"spec = json.loads({json.dumps(json.dumps(payload, sort_keys=True))})\n"
         "run_trajectory_stability("

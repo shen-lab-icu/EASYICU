@@ -16,7 +16,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from easyicu.research_agent.deterministic_clustering import (
+from easyicu.research_agent.execution.runners.deterministic_clustering import (
     trajectory_clustering_analysis_code,
 )
 

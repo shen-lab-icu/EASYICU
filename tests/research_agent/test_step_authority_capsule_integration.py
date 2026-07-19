@@ -8,13 +8,13 @@ from pathlib import Path
 import pytest
 
 from easyicu.research_agent.coder_authority_notes import HostCoderAuthority
-from easyicu.research_agent.provider_budget import (
+from easyicu.research_agent.authority.provider_budget import (
     StepProviderCallBudget,
     load_provider_call_budget_state,
     provider_call_budget_receipt_path,
 )
 from easyicu.research_agent.pipeline import _load_resume_state
-from easyicu.research_agent.repair_coordination import RepairAuthorityBinding
+from easyicu.research_agent.repairs.coordination import RepairAuthorityBinding
 from easyicu.research_agent.runner import RunResult
 from easyicu.research_agent.runtime_artifacts import write_run_checkpoint
 from easyicu.research_agent.schema import (
@@ -22,7 +22,7 @@ from easyicu.research_agent.schema import (
     ResearchContext,
     ValidationFinding,
 )
-from easyicu.research_agent.research_context_v2 import ResearchContextV2
+from easyicu.research_agent.research_context.typed import ResearchContextV2
 from easyicu.research_agent.step_authority_capsule import (
     StepAuthorityCapsuleError,
     load_verified_step_authority_capsule,

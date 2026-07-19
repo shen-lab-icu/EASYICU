@@ -21,7 +21,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from easyicu.research_agent.deterministic_causal import causal_primary_analysis_code
+from easyicu.research_agent.execution.runners.deterministic_causal import causal_primary_analysis_code
 
 
 def _exec_runner(run_dir: Path, cohort: pd.DataFrame, context: dict) -> dict:

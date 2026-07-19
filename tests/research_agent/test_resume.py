@@ -34,7 +34,7 @@ from easyicu.research_agent.pipeline import (
 )
 from easyicu.research_agent.evidence import EvidenceStore
 from easyicu.research_agent.plan_utils import _render_only_figure_step_intent
-from easyicu.research_agent.context import build_research_context
+from easyicu.research_agent.research_context.builder import build_research_context
 from easyicu.research_agent.run_input_capsule import (
     RUN_INPUT_CAPSULE_FILENAME,
     RunInputIdentityError,
@@ -46,7 +46,7 @@ from easyicu.research_agent.run_input_capsule import (
     seal_run_input_capsule,
 )
 from easyicu.research_agent.runtime_artifacts import verified_run_evidence_path
-from easyicu.research_agent.provider_budget import (
+from easyicu.research_agent.authority.provider_budget import (
     StepProviderCallBudget,
     load_provider_call_budget_state,
     provider_call_budget_receipt_path,
@@ -2988,7 +2988,7 @@ def test_resume_reaudits_material_deterministic_quarantine_repair(
 ) -> None:
     """A deterministic replay retires stale findings without a new coder call."""
 
-    import easyicu.research_agent.repair_coordination as coordination_module
+    import easyicu.research_agent.repairs.coordination as coordination_module
 
     real_repair = coordination_module.deterministic_concept_audit_repair
     repair_enabled = {"value": False}

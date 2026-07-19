@@ -12,7 +12,7 @@ from easyicu.research_agent.cohort_schema import (
     ConceptPredicate,
     TimeWindow,
 )
-from easyicu.research_agent.cross_model_panel import (
+from easyicu.research_agent.evaluation.cross_model_panel import (
     BackendIdentity,
     FieldDisagreement,
     compare_panel_primaries,

@@ -23,7 +23,7 @@ def _register_pilot7_candidates(store) -> None:
 
 
 def test_or_prose_picks_odds_ratio_candidate(ra, tmp_path: Path) -> None:
-    from easyicu.research_agent.manuscript_post import bind_numeric_values
+    from easyicu.research_agent.reporting.manuscript_post import bind_numeric_values
 
     store = ra.EvidenceStore(tmp_path)
     _register_pilot7_candidates(store)
@@ -39,7 +39,7 @@ def test_or_prose_picks_odds_ratio_candidate(ra, tmp_path: Path) -> None:
 
 
 def test_mortality_prose_picks_mortality_candidate(ra, tmp_path: Path) -> None:
-    from easyicu.research_agent.manuscript_post import bind_numeric_values
+    from easyicu.research_agent.reporting.manuscript_post import bind_numeric_values
 
     store = ra.EvidenceStore(tmp_path)
     _register_pilot7_candidates(store)
@@ -57,7 +57,7 @@ def test_ambiguous_prose_writes_ambiguous_marker_not_arbitrary_pick(
     ra,
     tmp_path: Path,
 ) -> None:
-    from easyicu.research_agent.manuscript_post import bind_numeric_values
+    from easyicu.research_agent.reporting.manuscript_post import bind_numeric_values
 
     store = ra.EvidenceStore(tmp_path)
     store.register_numeric_claim(
@@ -86,7 +86,7 @@ def test_ambiguous_prose_writes_ambiguous_marker_not_arbitrary_pick(
 
 
 def test_same_step_preference(ra, tmp_path: Path) -> None:
-    from easyicu.research_agent.manuscript_post import bind_numeric_values
+    from easyicu.research_agent.reporting.manuscript_post import bind_numeric_values
 
     store = ra.EvidenceStore(tmp_path)
     store.register_numeric_claim(
@@ -122,7 +122,7 @@ def test_same_step_preference(ra, tmp_path: Path) -> None:
 
 
 def test_cited_step_breaks_repeated_count_tie(ra, tmp_path: Path) -> None:
-    from easyicu.research_agent.manuscript_post import bind_numeric_values
+    from easyicu.research_agent.reporting.manuscript_post import bind_numeric_values
 
     store = ra.EvidenceStore(tmp_path)
     store.register_numeric_claim(
@@ -154,7 +154,7 @@ def test_same_evidence_duplicate_count_uses_stable_field_tiebreak(
     ra,
     tmp_path: Path,
 ) -> None:
-    from easyicu.research_agent.manuscript_post import bind_numeric_values
+    from easyicu.research_agent.reporting.manuscript_post import bind_numeric_values
 
     store = ra.EvidenceStore(tmp_path)
     store.register_numeric_claim(
@@ -186,7 +186,7 @@ def test_same_step_duplicate_count_across_versions_uses_stable_tiebreak(
     ra,
     tmp_path: Path,
 ) -> None:
-    from easyicu.research_agent.manuscript_post import bind_numeric_values
+    from easyicu.research_agent.reporting.manuscript_post import bind_numeric_values
 
     store = ra.EvidenceStore(tmp_path)
     store.register_numeric_claim(
@@ -218,7 +218,7 @@ def test_analyzed_stays_context_prefers_final_model_over_universe(
     ra,
     tmp_path: Path,
 ) -> None:
-    from easyicu.research_agent.manuscript_post import bind_numeric_values
+    from easyicu.research_agent.reporting.manuscript_post import bind_numeric_values
 
     store = ra.EvidenceStore(tmp_path)
     store.register_numeric_claim(
@@ -250,7 +250,7 @@ def test_integer_percent_display_binds_to_rounded_percent_claim(
     ra,
     tmp_path: Path,
 ) -> None:
-    from easyicu.research_agent.manuscript_post import bind_numeric_values
+    from easyicu.research_agent.reporting.manuscript_post import bind_numeric_values
 
     store = ra.EvidenceStore(tmp_path)
     store.register_numeric_claim(
@@ -271,7 +271,7 @@ def test_integer_percent_display_binds_to_rounded_percent_claim(
 
 
 def test_precision_distance_breaks_remaining_tie(ra, tmp_path: Path) -> None:
-    from easyicu.research_agent.manuscript_post import bind_numeric_values
+    from easyicu.research_agent.reporting.manuscript_post import bind_numeric_values
 
     store = ra.EvidenceStore(tmp_path)
     store.register_numeric_claim(
@@ -299,7 +299,7 @@ def test_precision_distance_breaks_remaining_tie(ra, tmp_path: Path) -> None:
 
 
 def test_spaced_percent_display_binds_to_proportion_claim(ra, tmp_path: Path) -> None:
-    from easyicu.research_agent.manuscript_post import bind_numeric_values
+    from easyicu.research_agent.reporting.manuscript_post import bind_numeric_values
 
     store = ra.EvidenceStore(tmp_path)
     store.register_numeric_claim(
@@ -321,7 +321,7 @@ def test_spaced_percent_display_binds_to_proportion_claim(ra, tmp_path: Path) ->
 
 
 def test_hazard_ratio_prose_picks_hr_candidate(ra, tmp_path: Path) -> None:
-    from easyicu.research_agent.manuscript_post import bind_numeric_values
+    from easyicu.research_agent.reporting.manuscript_post import bind_numeric_values
 
     store = ra.EvidenceStore(tmp_path)
     store.register_numeric_claim(
@@ -352,7 +352,7 @@ def test_average_treatment_effect_prose_picks_ate_candidate(
     ra,
     tmp_path: Path,
 ) -> None:
-    from easyicu.research_agent.manuscript_post import bind_numeric_values
+    from easyicu.research_agent.reporting.manuscript_post import bind_numeric_values
 
     store = ra.EvidenceStore(tmp_path)
     store.register_numeric_claim(
@@ -380,7 +380,7 @@ def test_average_treatment_effect_prose_picks_ate_candidate(
 
 
 def test_length_of_stay_prose_picks_los_candidate(ra, tmp_path: Path) -> None:
-    from easyicu.research_agent.manuscript_post import bind_numeric_values
+    from easyicu.research_agent.reporting.manuscript_post import bind_numeric_values
 
     store = ra.EvidenceStore(tmp_path)
     store.register_numeric_claim(
@@ -411,7 +411,7 @@ def test_complete_case_context_prefers_complete_case_count(
     ra,
     tmp_path: Path,
 ) -> None:
-    from easyicu.research_agent.manuscript_post import bind_numeric_values
+    from easyicu.research_agent.reporting.manuscript_post import bind_numeric_values
 
     store = ra.EvidenceStore(tmp_path)
     store.register_numeric_claim(
@@ -449,7 +449,7 @@ def test_primary_or_ci_context_prefers_primary_or_ci_not_summary_alias(
     ra,
     tmp_path: Path,
 ) -> None:
-    from easyicu.research_agent.manuscript_post import bind_numeric_values
+    from easyicu.research_agent.reporting.manuscript_post import bind_numeric_values
 
     store = ra.EvidenceStore(tmp_path)
     store.register_numeric_claim(
@@ -484,7 +484,7 @@ def test_primary_or_ci_context_prefers_primary_or_ci_not_summary_alias(
 
 
 def test_range_context_prefers_robustness_range_claim(ra, tmp_path: Path) -> None:
-    from easyicu.research_agent.manuscript_post import bind_numeric_values
+    from easyicu.research_agent.reporting.manuscript_post import bind_numeric_values
 
     store = ra.EvidenceStore(tmp_path)
     store.register_numeric_claim(

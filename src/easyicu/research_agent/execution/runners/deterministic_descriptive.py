@@ -52,7 +52,7 @@ def absolute_risk_context_code() -> str:
 
     return textwrap.dedent(
         """
-        from easyicu.research_agent.deterministic_descriptive import (
+        from easyicu.research_agent.execution.runners.deterministic_descriptive import (
             run_absolute_risk_context,
         )
 

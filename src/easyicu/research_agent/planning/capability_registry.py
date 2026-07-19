@@ -409,7 +409,7 @@ def render_capability_matrix_markdown() -> str:
     lines = [
         "# EasyICU research-agent capability matrix",
         "",
-        "_Generated from `easyicu.research_agent.capability_registry`. Do not edit "
+        "_Generated from `easyicu.research_agent.planning.capability_registry`. Do not edit "
         "by hand — edit the registry and regenerate._",
         "",
         "**Primary analysis** = how the reported estimand is computed. **Figure** = "

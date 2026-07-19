@@ -16,7 +16,7 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
-from easyicu.research_agent.figure_strategy import (
+from easyicu.research_agent.planning.figure_strategy import (
     summarize_article_figure_strategy_coverage,
 )
 
@@ -279,7 +279,7 @@ def test_association_question_falls_through_to_forest(ra, tmp_path: Path):
     """An association family must NOT be intercepted by a family renderer."""
 
     from easyicu.research_agent.figures import render_family_figure
-    from easyicu.research_agent.study_design import infer_study_design_family
+    from easyicu.research_agent.planning.study_design import infer_study_design_family
 
     context = _context(
         ra,

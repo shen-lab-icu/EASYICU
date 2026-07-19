@@ -7,15 +7,15 @@ import json
 import pytest
 
 from easyicu.research_agent.agents import CoderAgent, _looks_like_python_script
-from easyicu.research_agent.code_preflight import audit_mechanical_code_contracts
-from easyicu.research_agent.code_repair import deterministic_concept_audit_repair
-from easyicu.research_agent.coder_context import (
+from easyicu.research_agent.gates.preflight import audit_mechanical_code_contracts
+from easyicu.research_agent.repairs.source import deterministic_concept_audit_repair
+from easyicu.research_agent.research_context.prompt_scope import (
     coder_guide_for_step,
     scoped_coder_context,
 )
 from easyicu.research_agent.concept_audit_cache import LLMConceptAuditCache
 from easyicu.research_agent.pipeline_resume import _looks_like_generated_python
-from easyicu.research_agent.provider_budget import (
+from easyicu.research_agent.authority.provider_budget import (
     ProviderCallBudgetExhausted,
     StepProviderCallBudget,
 )

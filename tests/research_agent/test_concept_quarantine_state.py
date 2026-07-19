@@ -5,7 +5,8 @@ from __future__ import annotations
 import ast
 import inspect
 
-from easyicu.research_agent import concept_audit_execution, pipeline_execute
+from easyicu.research_agent import pipeline_execute
+from easyicu.research_agent.execution import concept_audit as concept_audit_execution
 from easyicu.research_agent.schema import ValidationFinding
 
 

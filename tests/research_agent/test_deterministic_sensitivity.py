@@ -9,7 +9,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from easyicu.research_agent.deterministic_sensitivity import (
+from easyicu.research_agent.execution.runners.deterministic_sensitivity import (
     cohort_definition_overlap_code,
     cohort_definition_sensitivity_comparison_code,
 )

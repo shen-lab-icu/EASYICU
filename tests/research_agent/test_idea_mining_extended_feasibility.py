@@ -12,7 +12,7 @@ from typing import List
 
 import pytest
 
-from easyicu.research_agent.idea_mining_extended_feasibility import (
+from easyicu.research_agent.discovery.idea_mining_extended_feasibility import (
     ExtendedFeasibilityIndex,
 )
 
@@ -129,10 +129,10 @@ def test_reconsider_genuinely_absent_returns_none(index):
 
 
 # ---- cross-DB transportability novelty axis (prior-art) ----------------
-from easyicu.research_agent.idea_mining_priorart import (  # noqa: E402
+from easyicu.research_agent.discovery.idea_mining_priorart import (  # noqa: E402
     _cross_db_prior_art_differentiator,
 )
-from easyicu.research_agent.idea_mining_schema import (  # noqa: E402
+from easyicu.research_agent.discovery.idea_mining_schema import (  # noqa: E402
     PriorArtQueryRecord,
     PriorArtSearchHit,
 )

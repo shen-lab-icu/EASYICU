@@ -1,6 +1,6 @@
 """Case-specific EasyICU research-context packages.
 
-The generic :mod:`easyicu.research_agent.context` builder can infer a
+The generic :mod:`easyicu.research_agent.research_context.builder` builder can infer a
 lot from a cohort dataframe. Manuscript-grade agent work needs one more
 layer: a case-level contract that says exactly which EasyICU concepts
 produced each derived variable, what operations are unsafe, and what

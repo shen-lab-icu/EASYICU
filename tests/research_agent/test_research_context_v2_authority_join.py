@@ -12,7 +12,7 @@ import pandas as pd
 import pytest
 
 from easyicu.concept.metadata_projection import NumericBounds
-from easyicu.research_agent.context import build_research_context
+from easyicu.research_agent.research_context.builder import build_research_context
 from easyicu.research_agent.evidence import EvidenceStore
 from easyicu.research_agent.intake.materialized_metadata import (
     stage_materialized_cohort_authority,
@@ -21,8 +21,8 @@ from easyicu.research_agent.intake.materialized_trajectory import (
     StagedTrajectoryBinding,
     stage_materialized_trajectory_authority,
 )
-from easyicu.research_agent import research_context_v2 as research_context_v2_module
-from easyicu.research_agent.research_context_v2 import (
+from easyicu.research_agent.research_context import typed as research_context_v2_module
+from easyicu.research_agent.research_context.typed import (
     ResearchContextV2,
     materialized_research_inputs_from_authority,
 )

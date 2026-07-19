@@ -25,7 +25,7 @@ from easyicu.research_agent.agents import (
     ReplannerAgent,
     WriterAgent,
 )
-from easyicu.research_agent.research_context_v2 import (
+from easyicu.research_agent.research_context.typed import (
     ResearchContextV2,
     materialized_input_prompt_attachment,
 )
@@ -297,7 +297,7 @@ def test_typed_trajectory_prompt_reads_only_sealed_fallback_range(
         raise AssertionError("prompt rendering must not recompute sealed ranges")
 
     monkeypatch.setattr(
-        "easyicu.research_agent.research_context_v2.effective_analysis_plausibility_range",
+        "easyicu.research_agent.research_context.typed.effective_analysis_plausibility_range",
         must_not_recompute,
     )
     after = materialized_input_prompt_attachment(context)

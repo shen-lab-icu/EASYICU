@@ -11,7 +11,7 @@ from __future__ import annotations
 import json
 from typing import Sequence
 
-from easyicu.research_agent.idea_mining import (
+from easyicu.research_agent.discovery.idea_mining import (
     LiteratureIdeaCandidate,
     SourceMaterial,
     build_candidate_validation_messages,

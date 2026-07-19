@@ -19,12 +19,14 @@ from __future__ import annotations
 
 import pytest
 
-from easyicu.research_agent import (
-    contract_gate,
-    figure_contract_preparation,
-    pipeline_execute,
-    publication_figure_execution,
+from easyicu.research_agent import pipeline_execute
+from easyicu.research_agent.execution import (
+    figure_preparation as figure_contract_preparation,
 )
+from easyicu.research_agent.execution import (
+    publication_figure as publication_figure_execution,
+)
+from easyicu.research_agent.gates import contract as contract_gate
 
 _COMPAT_MODULES = (
     contract_gate,

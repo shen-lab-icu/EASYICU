@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from easyicu.research_agent.display_suite import summarize_display_suite_status
+from easyicu.research_agent.reporting.display_suite import summarize_display_suite_status
 from easyicu.research_agent.evidence import EvidenceStore
 
 
@@ -232,10 +232,10 @@ def test_article_audits_ignore_absent_and_superseded_supporting_contracts(
     ra,
     tmp_path: Path,
 ):
-    from easyicu.research_agent.article_contract import (
+    from easyicu.research_agent.reporting.article_contract import (
         summarize_article_contract_coverage,
     )
-    from easyicu.research_agent.figure_strategy import (
+    from easyicu.research_agent.planning.figure_strategy import (
         summarize_article_figure_strategy_coverage,
     )
     from easyicu.research_agent.pipeline_report import write_readiness_artifacts

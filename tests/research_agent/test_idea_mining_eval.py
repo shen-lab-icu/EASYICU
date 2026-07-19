@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import easyicu.research_agent as ra
-from easyicu.research_agent.idea_mining_eval import (
+from easyicu.research_agent.discovery.idea_mining_eval import (
     default_idea_quality_eval_path,
     load_idea_quality_eval_set,
     score_idea_quality_predictions,

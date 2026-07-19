@@ -72,7 +72,7 @@ def test_hallucinated_number_blocked_in_strict_for_every_engine(
     ra, tmp_path: Path, monkeypatch, engine_name: str
 ):
     from easyicu.research_agent.llm import LLMMessage
-    from easyicu.research_agent.manuscript_post import bind_numeric_values
+    from easyicu.research_agent.reporting.manuscript_post import bind_numeric_values
 
     if engine_name == "codex-cli":
         engine = _cli_engine_returning(_HALLUCINATED, monkeypatch)
@@ -93,7 +93,7 @@ def test_registered_number_passes_for_every_engine(
     ra, tmp_path: Path, monkeypatch, engine_name: str
 ):
     from easyicu.research_agent.llm import LLMMessage
-    from easyicu.research_agent.manuscript_post import bind_numeric_values
+    from easyicu.research_agent.reporting.manuscript_post import bind_numeric_values
 
     if engine_name == "codex-cli":
         engine = _cli_engine_returning(_CLEAN, monkeypatch)
@@ -110,7 +110,7 @@ def test_registered_number_passes_for_every_engine(
 
 def test_invariant_is_documented_at_the_boundary():
     """The engine-agnostic invariant must stay written where it is enforced."""
-    from easyicu.research_agent.manuscript_post import bind_numeric_values
+    from easyicu.research_agent.reporting.manuscript_post import bind_numeric_values
 
     doc = bind_numeric_values.__doc__ or ""
     assert "Engine-agnostic provenance invariant" in doc

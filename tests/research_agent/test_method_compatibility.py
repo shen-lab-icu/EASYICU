@@ -16,7 +16,7 @@ from easyicu.research_agent.schema import (
     ResearchContext,
     VariableRole,
 )
-from easyicu.research_agent.method_compatibility import (
+from easyicu.research_agent.gates.method_compatibility import (
     FORBIDDEN_METHOD_BY_KIND,
     _variable_kind,
     render_variable_constraints,

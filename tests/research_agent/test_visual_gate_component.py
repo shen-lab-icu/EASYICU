@@ -96,7 +96,7 @@ def test_collect_visual_gate_result_does_not_run_without_figures():
 def test_collect_visual_gate_result_assembles_findings_and_demotion(
     monkeypatch, tmp_path
 ):
-    from easyicu.research_agent import gate_evaluator
+    from easyicu.research_agent.gates import visual as gate_evaluator
     from easyicu.research_agent.pipeline_execute import collect_visual_gate_result
 
     cosmetic, hard, vlm = _cosmetic_error(), _hard_error(), _vlm_error()
@@ -141,7 +141,7 @@ def test_collect_visual_gate_result_assembles_findings_and_demotion(
 
 
 def test_collect_visual_gate_result_clean_when_only_warnings(monkeypatch, tmp_path):
-    from easyicu.research_agent import gate_evaluator
+    from easyicu.research_agent.gates import visual as gate_evaluator
     from easyicu.research_agent.pipeline_execute import collect_visual_gate_result
 
     warn = _warning()
@@ -172,7 +172,7 @@ def test_collect_visual_gate_result_clean_when_only_warnings(monkeypatch, tmp_pa
 def test_collect_visual_gate_result_passes_numeric_expectations_for_svg_only(
     monkeypatch, tmp_path
 ):
-    from easyicu.research_agent import gate_evaluator
+    from easyicu.research_agent.gates import visual as gate_evaluator
     from easyicu.research_agent.pipeline_execute import collect_visual_gate_result
 
     captured = {}
@@ -208,7 +208,7 @@ def test_collect_visual_gate_result_passes_numeric_expectations_for_svg_only(
 def test_collect_visual_gate_result_no_numeric_expectations_when_absent(
     monkeypatch, tmp_path
 ):
-    from easyicu.research_agent import gate_evaluator
+    from easyicu.research_agent.gates import visual as gate_evaluator
     from easyicu.research_agent.pipeline_execute import collect_visual_gate_result
 
     captured = {}
@@ -360,7 +360,7 @@ def test_decide_visual_repair_llm_repair_builds_recommendation():
         VisualRepairAction,
         decide_visual_repair,
     )
-    from easyicu.research_agent.repair_reasons import typed_repair_ticket
+    from easyicu.research_agent.repairs.reasons import typed_repair_ticket
 
     result = _errors_result()
     decision = decide_visual_repair(

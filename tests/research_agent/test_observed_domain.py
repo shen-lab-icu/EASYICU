@@ -20,7 +20,7 @@ import pandas as pd
 
 from easyicu.research_agent.agents import _format_observed_domain
 from easyicu.research_agent.cohort_artifact_facts import observed_domain_for_series
-from easyicu.research_agent.context import _observed_domain
+from easyicu.research_agent.research_context.builder import _observed_domain
 
 
 def test_legacy_observed_domain_name_is_canonical_object() -> None:
@@ -99,7 +99,7 @@ def test_high_cardinality_categorical_omits_levels():
 def test_descriptor_carries_observed_domain():
     # End-to-end: build_research_context attaches observed_domain so the binary
     # criterion is visible to the planner.
-    from easyicu.research_agent.context import build_research_context
+    from easyicu.research_agent.research_context.builder import build_research_context
 
     df = pd.DataFrame(
         {

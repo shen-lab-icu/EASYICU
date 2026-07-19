@@ -154,7 +154,7 @@ def test_extra_aliases_merge_on_top_of_derived() -> None:
 def test_catalog_aliases_let_resolver_bind_literature_phrases() -> None:
     # Integration with the idea_mining resolver: the derived aliases must
     # actually let an LLM-written phrase resolve to the concept key.
-    from easyicu.research_agent.idea_mining import (
+    from easyicu.research_agent.discovery.idea_mining import (
         _build_concept_lookup,
         _resolve_concept,
     )
@@ -201,7 +201,7 @@ def test_resolver_prefers_most_specific_concept_over_incidental_token() -> None:
     # "ventilation-induced acute kidney injury". The resolver must bind it to AKI
     # (3-token semantic match), NOT vent_ind (incidental 1-token "ventilation").
     # Guards against regressing _resolve_concept back to first-subset-hit.
-    from easyicu.research_agent.idea_mining import (
+    from easyicu.research_agent.discovery.idea_mining import (
         _build_concept_lookup,
         _resolve_concept,
     )
@@ -217,7 +217,7 @@ def test_resolver_prefers_most_specific_concept_over_incidental_token() -> None:
 
 
 def _ambiguous_idea(**overrides):
-    from easyicu.research_agent.idea_mining import LiteratureIdeaCandidate
+    from easyicu.research_agent.discovery.idea_mining import LiteratureIdeaCandidate
 
     base = dict(
         source_snapshot_id="snap1",
@@ -241,7 +241,7 @@ def _ambiguous_idea(**overrides):
 def test_core_concept_disambiguates_exposure_from_qualifier() -> None:
     # exposure_core_concept must steer resolution to norepinephrine, NOT the
     # incidental "lactate" qualifier sharing the phrase.
-    from easyicu.research_agent.idea_mining import (
+    from easyicu.research_agent.discovery.idea_mining import (
         map_literature_idea_to_executable_candidate,
     )
 
@@ -269,7 +269,7 @@ def test_core_concept_disambiguates_exposure_from_qualifier() -> None:
 def test_missing_core_concept_falls_back_to_full_phrase() -> None:
     # back-compat: when the model omits core fields, mapping must still run
     # (resolution may be ambiguous, but must not crash or regress the schema).
-    from easyicu.research_agent.idea_mining import (
+    from easyicu.research_agent.discovery.idea_mining import (
         map_literature_idea_to_executable_candidate,
     )
 
@@ -285,7 +285,7 @@ def test_missing_core_concept_falls_back_to_full_phrase() -> None:
 
 
 def _full_lookup():
-    from easyicu.research_agent.idea_mining import _build_concept_lookup
+    from easyicu.research_agent.discovery.idea_mining import _build_concept_lookup
 
     cat = load_concept_catalog()
     return _build_concept_lookup(
@@ -296,7 +296,7 @@ def _full_lookup():
 def test_uk_us_spelling_and_term_synonyms_resolve() -> None:
     # The dictionary only carries US spellings; literature (esp. ICM/Lancet)
     # uses UK spellings and equivalent terms that must still bind.
-    from easyicu.research_agent.idea_mining import _resolve_concept
+    from easyicu.research_agent.discovery.idea_mining import _resolve_concept
 
     lookup = _full_lookup()
     assert _resolve_concept("noradrenaline", lookup) == "norepi_rate"
@@ -309,7 +309,7 @@ def test_uk_us_spelling_and_term_synonyms_resolve() -> None:
 def test_synonym_group_fixes_pf_ratio_misresolution() -> None:
     # "P/F ratio" previously mis-resolved to inr_pt via the bare "ratio" token;
     # the oxygenation synonym group binds it to the Horowitz-index concept pafi.
-    from easyicu.research_agent.idea_mining import _resolve_concept
+    from easyicu.research_agent.discovery.idea_mining import _resolve_concept
 
     lookup = _full_lookup()
     assert _resolve_concept("P/F ratio", lookup) == "pafi"
@@ -317,7 +317,7 @@ def test_synonym_group_fixes_pf_ratio_misresolution() -> None:
 
 
 def test_parenthetical_brand_and_chemical_names_become_aliases() -> None:
-    from easyicu.research_agent.idea_mining import _resolve_concept
+    from easyicu.research_agent.discovery.idea_mining import _resolve_concept
 
     lookup = _full_lookup()
     assert _resolve_concept("Lasix", lookup) == "furosemide"

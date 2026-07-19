@@ -26,7 +26,7 @@ from easyicu.concept.metadata_sidecar import (
 )
 from easyicu.resources import load_dictionary
 from easyicu.research_agent import cohort_materializer
-from easyicu.research_agent.context import build_research_context
+from easyicu.research_agent.research_context.builder import build_research_context
 from easyicu.research_agent.evidence import EvidenceStore
 from easyicu.research_agent.intake import export_package as intake
 from easyicu.research_agent.intake.materialized_metadata import (

@@ -164,7 +164,7 @@ def test_returns_cli_authored_script(ra, monkeypatch):
 
     monkeypatch.setattr(subprocess, "run", _fake_run)
     # No method-compatibility violations for this snippet.
-    import easyicu.research_agent.method_compatibility as mc
+    import easyicu.research_agent.gates.method_compatibility as mc
 
     monkeypatch.setattr(
         mc,
@@ -192,7 +192,7 @@ def test_none_capsule_hooks_do_not_disable_cli_delegation(ra, monkeypatch):
         return SimpleNamespace(returncode=0, stdout="", stderr="")
 
     monkeypatch.setattr(subprocess, "run", _fake_run)
-    import easyicu.research_agent.method_compatibility as mc
+    import easyicu.research_agent.gates.method_compatibility as mc
 
     monkeypatch.setattr(
         mc,
@@ -282,7 +282,7 @@ def test_cohort_env_is_passed_through_to_subprocess(ra, monkeypatch):
         return SimpleNamespace(returncode=0, stdout="", stderr="")
 
     monkeypatch.setattr(subprocess, "run", _fake_run)
-    import easyicu.research_agent.method_compatibility as mc
+    import easyicu.research_agent.gates.method_compatibility as mc
 
     monkeypatch.setattr(
         mc,
@@ -313,7 +313,7 @@ def test_compatibility_violation_defers_to_central_repair_gate(ra, monkeypatch):
 
     monkeypatch.setattr(subprocess, "run", _fake_run)
 
-    import easyicu.research_agent.method_compatibility as mc
+    import easyicu.research_agent.gates.method_compatibility as mc
 
     calls = {"n": 0}
 

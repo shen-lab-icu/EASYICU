@@ -1,6 +1,6 @@
 # EasyICU research-agent capability matrix
 
-_Generated from `easyicu.research_agent.capability_registry`. Do not edit by hand — edit the registry and regenerate._
+_Generated from `easyicu.research_agent.planning.capability_registry`. Do not edit by hand — edit the registry and regenerate._
 
 **Primary analysis** = how the reported estimand is computed. **Figure** = how the publication figure is rendered. The two are independent: a family can have a deterministic figure while its primary analysis is LLM-coded.
 

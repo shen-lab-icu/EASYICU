@@ -20,7 +20,7 @@ def _context(ra, question: str, *, outcome: str = "death", exposure: str | None 
 
 
 def test_study_design_brief_infers_distinct_question_families(ra):
-    from easyicu.research_agent.study_design import infer_study_design_family
+    from easyicu.research_agent.planning.study_design import infer_study_design_family
 
     cases = {
         "Is exposure X associated with in-hospital mortality after adjustment?": "association",
@@ -47,7 +47,7 @@ def test_survival_question_phrased_as_association_routes_to_time_to_event(ra):
     richer analysis-type scorer) correctly built a survival step. The design
     family must now agree with the plan contract.
     """
-    from easyicu.research_agent.study_design import infer_study_design_family
+    from easyicu.research_agent.planning.study_design import infer_study_design_family
 
     question = (
         "Among adult ICU patients in MIMIC-IV, estimate the association between "
@@ -61,7 +61,7 @@ def test_survival_question_phrased_as_association_routes_to_time_to_event(ra):
 
 
 def test_study_design_brief_infers_chinese_canonical_question_families(ra):
-    from easyicu.research_agent.study_design import infer_study_design_family
+    from easyicu.research_agent.planning.study_design import infer_study_design_family
 
     cases = {
         "六个 ICU 数据库中患者年龄、性别、LOS、器官支持和死亡率分布如何不同？": "descriptive",
@@ -76,7 +76,7 @@ def test_study_design_brief_infers_chinese_canonical_question_families(ra):
 
 
 def test_e1_prevalence_plus_adjusted_association_routes_to_association(ra):
-    from easyicu.research_agent.study_design import build_study_design_brief
+    from easyicu.research_agent.planning.study_design import build_study_design_brief
 
     question = (
         "Among adult ICU patients in MIMIC-IV, what is the prevalence of "
@@ -99,7 +99,7 @@ def test_e1_prevalence_plus_adjusted_association_routes_to_association(ra):
 
 
 def test_prediction_brief_requires_prediction_specific_displays(ra):
-    from easyicu.research_agent.study_design import (
+    from easyicu.research_agent.planning.study_design import (
         build_study_design_brief,
         render_study_design_brief_for_prompt,
     )
@@ -125,7 +125,7 @@ def test_prediction_brief_requires_prediction_specific_displays(ra):
 
 def test_association_plan_validator_flags_single_display_plan(ra, tmp_path: Path):
     from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep
-    from easyicu.research_agent.study_design import (
+    from easyicu.research_agent.planning.study_design import (
         build_study_design_brief,
         validate_plan_against_study_design_brief,
     )
@@ -160,7 +160,7 @@ def test_association_plan_validator_flags_single_display_plan(ra, tmp_path: Path
 
 def test_display_coverage_requires_exact_structured_product_not_decoy(ra):
     from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep
-    from easyicu.research_agent.study_design import (
+    from easyicu.research_agent.planning.study_design import (
         _module_covered,
         _structured_plan_declarations,
         build_study_design_brief,
@@ -219,7 +219,7 @@ def test_display_coverage_requires_exact_structured_product_not_decoy(ra):
 
 
 def test_article_contract_flags_and_can_augment_narrow_association_plan(ra):
-    from easyicu.research_agent.article_contract import (
+    from easyicu.research_agent.reporting.article_contract import (
         augment_plan_for_article_contract,
         build_article_analysis_contract,
         roles_covered_by_plan,
@@ -267,7 +267,7 @@ def test_article_contract_flags_and_can_augment_narrow_association_plan(ra):
 
 
 def test_article_contract_ignores_role_words_in_step_prose_and_wrong_kinds(ra):
-    from easyicu.research_agent.article_contract import (
+    from easyicu.research_agent.reporting.article_contract import (
         build_article_analysis_contract,
         roles_covered_by_plan,
     )
@@ -302,7 +302,7 @@ def test_article_contract_ignores_role_words_in_step_prose_and_wrong_kinds(ra):
 
 
 def test_nonprimary_output_prefixes_do_not_satisfy_primary_estimand_role(ra):
-    from easyicu.research_agent.article_contract import (
+    from easyicu.research_agent.reporting.article_contract import (
         build_article_analysis_contract,
         roles_covered_by_plan,
     )
@@ -330,8 +330,8 @@ def test_nonprimary_output_prefixes_do_not_satisfy_primary_estimand_role(ra):
 
 
 def test_unmapped_family_negations_do_not_trigger_second_keyword_router(ra):
-    from easyicu.research_agent.analysis_types import infer_analysis_type
-    from easyicu.research_agent.study_design import infer_study_design_family
+    from easyicu.research_agent.planning.analysis_types import infer_analysis_type
+    from easyicu.research_agent.planning.study_design import infer_study_design_family
 
     examples = (
         (
@@ -353,7 +353,7 @@ def test_unmapped_family_negations_do_not_trigger_second_keyword_router(ra):
 
 def test_association_plan_validator_accepts_article_level_display_suite(ra):
     from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep
-    from easyicu.research_agent.study_design import (
+    from easyicu.research_agent.planning.study_design import (
         build_study_design_brief,
         validate_plan_against_study_design_brief,
     )
@@ -411,7 +411,7 @@ def test_association_plan_validator_accepts_article_level_display_suite(ra):
 
 def test_prediction_plan_validator_accepts_multi_module_prediction_suite(ra):
     from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep
-    from easyicu.research_agent.study_design import (
+    from easyicu.research_agent.planning.study_design import (
         build_study_design_brief,
         validate_plan_against_study_design_brief,
     )
@@ -473,7 +473,7 @@ def test_prediction_plan_validator_accepts_multi_module_prediction_suite(ra):
 
 
 def test_family_playbooks_are_distinct_and_not_effect_only(ra):
-    from easyicu.research_agent.study_design import build_study_design_brief
+    from easyicu.research_agent.planning.study_design import build_study_design_brief
 
     cases = {
         "association": "Is exposure X associated with mortality after adjustment?",
@@ -498,7 +498,7 @@ def test_family_playbooks_are_distinct_and_not_effect_only(ra):
 
 
 def test_article_figure_strategies_are_family_specific(ra):
-    from easyicu.research_agent.figure_strategy import (
+    from easyicu.research_agent.planning.figure_strategy import (
         build_article_figure_strategy,
         render_article_figure_strategy_for_prompt,
     )
@@ -550,7 +550,7 @@ def test_article_figure_strategies_are_family_specific(ra):
 
 
 def test_cross_database_context_adds_transportability_module(ra):
-    from easyicu.research_agent.study_design import build_study_design_brief
+    from easyicu.research_agent.planning.study_design import build_study_design_brief
 
     context = _context(
         ra,

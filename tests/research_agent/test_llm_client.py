@@ -352,7 +352,7 @@ def test_openai_client_ignores_invalid_retry_after_values(
 
 def test_openai_client_transport_retry_consumes_provider_budget(monkeypatch, ra):
     from easyicu.research_agent.llm import LLMMessage
-    from easyicu.research_agent.provider_budget import (
+    from easyicu.research_agent.authority.provider_budget import (
         StepProviderCallBudget,
         complete_with_provider_budget,
     )
@@ -377,7 +377,7 @@ def test_openai_client_transport_retry_consumes_provider_budget(monkeypatch, ra)
 
 def test_openai_client_does_not_sleep_or_call_over_provider_budget(monkeypatch, ra):
     from easyicu.research_agent.llm import LLMMessage
-    from easyicu.research_agent.provider_budget import (
+    from easyicu.research_agent.authority.provider_budget import (
         ProviderCallBudgetExhausted,
         StepProviderCallBudget,
         complete_with_provider_budget,

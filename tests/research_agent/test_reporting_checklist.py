@@ -373,7 +373,7 @@ def test_strobe_alias_matched_by_suffixed_artifact_name(ra):
 def test_strobe_alias_prefix_does_not_overcredit_unrelated_token(ra):
     # Impartiality: a different artefact that merely shares letters must NOT
     # satisfy an item — the prefix match is `_`-delimited, not a substring.
-    from easyicu.research_agent.reporting_checklist import _alias_satisfied
+    from easyicu.research_agent.reporting.reporting_checklist import _alias_satisfied
 
     assert _alias_satisfied("missingness", {"missingness_summary"}) is True
     assert _alias_satisfied("missingness", {"completeness_audit"}) is False
@@ -398,7 +398,7 @@ def test_strobe_13a_not_satisfied_by_table_one_alone(ra):
 
 
 def test_keyword_stem_matches_inflected_forms(ra):
-    from easyicu.research_agent.reporting_checklist import _keyword_hit
+    from easyicu.research_agent.reporting.reporting_checklist import _keyword_hit
 
     # Truncated stems (length>=6, single lowercase token) match as word prefixes,
     # so a writer who DID describe scaling is credited. A trailing \b previously
@@ -410,7 +410,7 @@ def test_keyword_stem_matches_inflected_forms(ra):
 
 
 def test_keyword_short_tokens_stay_exact_no_overmatch(ra):
-    from easyicu.research_agent.reporting_checklist import _keyword_hit
+    from easyicu.research_agent.reporting.reporting_checklist import _keyword_hit
 
     # Short / non-stem keywords keep exact whole-word matching so the stem rule
     # cannot, e.g., credit the BIC model-selection keyword against "bicarbonate".

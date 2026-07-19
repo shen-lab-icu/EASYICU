@@ -831,7 +831,7 @@ def render_method_suite_markdown() -> str:
     lines = [
         "# EasyICU research-agent analysis-method suite",
         "",
-        "_Generated from `easyicu.research_agent.analysis_method_suite`. Do not edit "
+        "_Generated from `easyicu.research_agent.planning.analysis_method_suite`. Do not edit "
         "by hand — edit the registry and regenerate._",
         "",
         "`capability_registry` declares the ONE primary estimand per family. This "
