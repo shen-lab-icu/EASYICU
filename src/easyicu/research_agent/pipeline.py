@@ -163,10 +163,13 @@ from .concept_dict_audit import (
     write_concept_dict_fingerprint,
 )
 from .cohort.schema import (
+    COHORT_LOCK_FILENAME,
+    _load_locked_cohort_definition,
     ensure_cohort_definition,
     materialize_locked_analysis_cohort,
     write_locked_cohort_definition,
 )
+from .planning.cohort_contract import cohort_definition_sha
 from .intake.materialized_metadata import (
     MaterializedCohortAuthorityRef,
     MaterializedMetadataError,
@@ -508,6 +511,11 @@ def _load_compatible_resume_plan(
     resume_state: Optional[Dict[str, Any]],
 ) -> tuple[Optional[AnalysisPlan], Optional[Path]]:
     """Load the newest saved plan compatible with completed resume steps."""
+    locked_cohort_sha256: Optional[str] = None
+    if (run_dir / COHORT_LOCK_FILENAME).exists():
+        locked_cohort_sha256 = cohort_definition_sha(
+            _load_locked_cohort_definition(run_dir)
+        )
     completed_records = [
         record
         for record in current_successful_step_records(
@@ -525,6 +533,14 @@ def _load_compatible_resume_plan(
                 json.loads(candidate.read_text(encoding="utf-8"))
             )
         except Exception:
+            continue
+        if locked_cohort_sha256 is not None and (
+            plan.cohort is None
+            or cohort_definition_sha(plan.cohort) != locked_cohort_sha256
+        ):
+            # Plan revisions are allowed to change unfinished steps, never the
+            # already sealed cohort authority.  Skip an incomplete/drifted
+            # revision and try the next digest-verified ancestor.
             continue
         step_by_id = {step.step_id: step for step in plan.steps}
         if not plan.steps or not completed_step_ids <= set(step_by_id):
@@ -1917,9 +1933,7 @@ class ResearchAgentPipeline:
         # host CodeRunner would silently fall back to probing the Codex process
         # rather than the configured execution interpreter.
         if self._validated_runtime_bundle is not None:
-            adopt_runtime = getattr(
-                runner, "adopt_validated_runtime_bundle", None
-            )
+            adopt_runtime = getattr(runner, "adopt_validated_runtime_bundle", None)
             if not callable(adopt_runtime):
                 raise RuntimeError(
                     "Execution runner changed after runtime preflight and cannot "

@@ -156,9 +156,14 @@ def _preserve_completed_step_snapshots_after_replan(
 
     current_scope = _plan_scientific_scope_signature(current_plan)
     revised_scope = _plan_scientific_scope_signature(revised_plan)
-    restored_plan_scope = bool(completed_current_records) and (
-        revised_scope != current_scope
-    )
+    # A replanner owns revisions to the remaining step DAG, not a new research
+    # question, cohort, analysis family, robustness lock, display semantics, or
+    # rationale.  Preserve that Planner-authored scope even before the first
+    # ordinary step completes (for example, immediately after the host probe).
+    # Otherwise a partial JSON response with ``cohort: null`` can be registered
+    # as the newest plan and make a later resume collide with the immutable
+    # cohort lock.
+    restored_plan_scope = revised_scope != current_scope
     restored_plan_scope_fields: List[str] = []
     if restored_plan_scope:
         for field_name in (

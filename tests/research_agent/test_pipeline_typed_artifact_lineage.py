@@ -192,6 +192,26 @@ def test_replan_restores_plan_scientific_scope_after_completed_step() -> None:
     }
 
 
+def test_replan_restores_plan_scientific_scope_before_first_completed_step() -> None:
+    current = _plan().model_copy(
+        update={"cohort": CohortDefinition(name="locked_primary_cohort")}
+    )
+    revised = current.model_copy(
+        update={"cohort": None, "revision": current.revision + 1}
+    )
+
+    preserved, findings = _preserve_completed_step_snapshots_after_replan(
+        current_plan=current,
+        revised_plan=revised,
+        completed_records=[],
+    )
+
+    assert preserved.cohort == current.cohort
+    assert preserved.revision == revised.revision
+    assert findings[0].detail["restored_plan_scope"] is True
+    assert findings[0].detail["restored_plan_scope_fields"] == ["cohort"]
+
+
 def _resolve(
     *,
     store: EvidenceStore,

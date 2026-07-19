@@ -1781,6 +1781,68 @@ def test_resume_plan_compatibility_uses_latest_step_status(tmp_path: Path):
     assert selected_path == verified_run_evidence_path(run_dir, record)
 
 
+def test_resume_plan_skips_newest_revision_without_locked_cohort(
+    tmp_path: Path,
+) -> None:
+    from easyicu.research_agent.cohort.schema import (
+        CohortDefinition,
+        write_locked_cohort_definition,
+    )
+
+    run_dir = tmp_path / "run_locked_cohort_revision"
+    run_dir.mkdir()
+    original = AnalysisPlan(
+        research_question="Resume the locked cohort.",
+        cohort=CohortDefinition(name="locked_primary_cohort"),
+        steps=[
+            AnalysisStep(
+                step_id="01_summary",
+                intent="Summarize the locked cohort.",
+                expected_outputs=["table:summary"],
+            )
+        ],
+    )
+    drifted_revision = original.model_copy(update={"cohort": None, "revision": 2})
+    original_path = run_dir / "analysis_plan.json"
+    revision_path = run_dir / "analysis_plan_revision_2.json"
+    original_path.write_text(original.model_dump_json(indent=2), encoding="utf-8")
+    revision_path.write_text(
+        drifted_revision.model_dump_json(indent=2), encoding="utf-8"
+    )
+    evidence = EvidenceStore(run_dir)
+    original_record = evidence.register_file(
+        kind="log",
+        description="Original plan with locked cohort.",
+        source_path=original_path,
+        evidence_id="analysis_plan",
+        producer="planner",
+        generation_mode="llm",
+    )
+    evidence.register_file(
+        kind="log",
+        description="Incomplete replan without cohort authority.",
+        source_path=revision_path,
+        evidence_id="analysis_plan_revision_2",
+        producer="replanner",
+        generation_mode="llm",
+    )
+    write_locked_cohort_definition(
+        run_dir=run_dir,
+        plan=original,
+        evidence=evidence,
+        prompt_pack_version=None,
+        llm_signature="test",
+    )
+
+    selected, selected_path = _load_compatible_resume_plan(
+        run_dir=run_dir,
+        resume_state={"per_step_records": []},
+    )
+
+    assert selected == original
+    assert selected_path == verified_run_evidence_path(run_dir, original_record)
+
+
 def test_resume_plan_rejects_completed_role_mismatch(tmp_path: Path) -> None:
     from easyicu.research_agent.authority.plan_scope import (
         _serializable_plan_scientific_scope_signature,
