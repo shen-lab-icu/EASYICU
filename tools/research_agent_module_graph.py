@@ -69,6 +69,11 @@ LEGACY_TARGET_MODULES: Tuple[str, ...] = (
     "easyicu.research_agent.discovery_handoff",
     "easyicu.research_agent.discovery_package",
     "easyicu.research_agent.discovery_story_figure",
+    "easyicu.research_agent.pdf_render",
+    "easyicu.research_agent.reporting_checklist",
+    "easyicu.research_agent.reviewer",
+    "easyicu.research_agent.review_artifacts",
+    "easyicu.research_agent.display_suite",
 )
 
 

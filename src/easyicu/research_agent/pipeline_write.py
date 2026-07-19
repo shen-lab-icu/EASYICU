@@ -58,17 +58,17 @@ from .replication.notebook import (
     build_requirements_lockfile,
     write_notebook,
 )
-from .reporting_checklist import (
+from .reporting.reporting_checklist import (
     build_internal_phenotype_checklist,
     build_strobe_checklist,
     build_tripod_ai_checklist,
     choose_checklist,
 )
-from .reviewer import run_reviewer_round
+from .reporting.reviewer import run_reviewer_round
 from .schema import CritiqueReport, EvidenceRef, ManuscriptDraftPacket
 from .side_findings import collect_side_findings
 from .visual_qa import VLMVisualQAAdapter, VisualQAAuditor
-from .pdf_render import render_pdf_for_run
+from .reporting.pdf_render import render_pdf_for_run
 
 
 class RuntimeProvenanceMismatchError(RuntimeError):

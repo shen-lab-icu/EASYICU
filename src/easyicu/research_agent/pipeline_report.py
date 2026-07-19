@@ -47,12 +47,12 @@ from .article_contract import (
     article_contract_audit_payload,
     summarize_article_contract_coverage,
 )
-from .display_suite import summarize_display_suite_status
+from .reporting.display_suite import summarize_display_suite_status
 from .evidence import EvidenceStore, sha256_of_file
 from .figure_strategy import summarize_article_figure_strategy_coverage
 from .publication_figures import PUBLICATION_FIGURE_SKILL_POLICY_VERSION
 from .plan_utils import _output_declares_figure, _parent_step_id_for_figure_step
-from .review_artifacts import build_review_artifact_payloads
+from .reporting.review_artifacts import build_review_artifact_payloads
 from .runtime_artifacts import (
     active_step_evidence_ids,
     capture_code_version,

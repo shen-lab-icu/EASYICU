@@ -82,12 +82,12 @@ from .replication.envelope import (
 )
 from .methods.multiple_testing import build_multiple_testing_report
 from .causal_audit import run_causal_audit
-from .reporting_checklist import (
+from .reporting.reporting_checklist import (
     build_strobe_checklist,
     build_tripod_ai_checklist,
     choose_checklist,
 )
-from .reviewer import run_reviewer_round
+from .reporting.reviewer import run_reviewer_round
 from .provenance import (
     ProvenanceBundle,
     SourceFileRecord,
@@ -121,7 +121,7 @@ from .replication.notebook import (
     write_notebook,
 )
 from .discovery.hypothesis_generator import generate_hypotheses
-from .pdf_render import render_pdf_for_run
+from .reporting.pdf_render import render_pdf_for_run
 from .context import (
     build_naive_research_context,
     build_research_context,

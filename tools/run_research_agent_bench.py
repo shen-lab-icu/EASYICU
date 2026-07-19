@@ -1028,7 +1028,9 @@ def _run_one_arm(
 ) -> Dict[str, Any]:
     from easyicu.research_agent import ResearchAgentPipeline  # type: ignore
     from easyicu.research_agent.cohort_schema import register_cohort_concept_ids
-    from easyicu.research_agent.reporting_checklist import checklist_names_for_kind
+    from easyicu.research_agent.reporting.reporting_checklist import (
+        checklist_names_for_kind,
+    )
 
     # The provided cohort is already materialised; let the planner reference any
     # of its columns in a CTAS predicate without tripping the static dictionary
