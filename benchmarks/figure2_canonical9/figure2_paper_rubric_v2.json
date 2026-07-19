@@ -10,7 +10,7 @@
     "audit_conclusion_safety"
   ],
   "na_policy": "preserve",
-  "rubric_ref": "easyicu.figure2_paper_rubric/20260718-v2",
+  "rubric_ref": "easyicu.figure2_paper_rubric/20260719-v2",
   "safety_protocol_ref": "easyicu.figure2_safety_adjudicator_protocol/20260718-v1",
   "safety_protocol_sha256": "76b4a20b39c76ce785d73fc9405954ed450bd2e6954b571621370699b3e9eb73",
   "safety_provider_ref": "local-openai-compatible/127.0.0.1:8317/v1",
@@ -30,7 +30,7 @@
     "src/easyicu/research_agent/viability.py"
   ],
   "scorer_tree_root": "benchmarks/figure2_canonical9/evaluator",
-  "scorer_tree_sha256": "c7e3b3ca363d64b12240781f849c83a0b7731087ade1ca548f79db2f2b339afe",
+  "scorer_tree_sha256": "59ce430106de126a0576c4f3d8583795c4fb4a243a248dbac51393a2ca3f219d",
   "suite_projection_sha256": "11c39afac69c9a0b560c6aa92be19f05725f04c66b9d2c499cfdb353c40295ab",
   "suite_ref": "easyicu_evaluation_protocol_suite/v2",
   "tasks": [

@@ -186,7 +186,7 @@ def test_openai_client_passes_provider_extra_body(ra, monkeypatch):
 
     monkeypatch.setitem(sys.modules, "openai", types.SimpleNamespace(OpenAI=_FakeOpenAI))
 
-    from easyicu.research_agent.llm import LLMMessage, OpenAIClient
+    from easyicu.research_agent.providers.llm import LLMMessage, OpenAIClient
 
     extra_body = {"reasoning": {"effort": "none", "exclude": True}}
     client = OpenAIClient(
@@ -295,7 +295,7 @@ def test_writer_prompt_discourages_tbd_and_manifest_narration(ra):
 
 
 def test_openrouter_reasoning_extra_body_skips_gpt_oss(ra):
-    from easyicu.research_agent.llm import openrouter_reasoning_extra_body
+    from easyicu.research_agent.providers.llm import openrouter_reasoning_extra_body
 
     assert openrouter_reasoning_extra_body("openai/gpt-oss-120b:free") is None
     assert openrouter_reasoning_extra_body("z-ai/glm-4.5-air:free") == {

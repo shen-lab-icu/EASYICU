@@ -213,7 +213,7 @@ def test_openai_client_retries_json_decode_error(monkeypatch):
     repair path, killing the whole step. After the fix the LLM client retries
     transient parse errors with short backoff."""
     import json
-    from easyicu.research_agent.llm import LLMMessage, OpenAIClient
+    from easyicu.research_agent.providers.llm import LLMMessage, OpenAIClient
 
     calls = {"n": 0}
 
@@ -304,7 +304,7 @@ def test_openai_client_retries_null_choices(monkeypatch):
     failure; `resp.choices[0]` then raised the cryptic
     `'NoneType' object is not subscriptable` and killed the step. After the
     fix the LLM client treats null-choices/null-message as transient."""
-    from easyicu.research_agent.llm import LLMMessage, OpenAIClient
+    from easyicu.research_agent.providers.llm import LLMMessage, OpenAIClient
 
     calls = {"n": 0}
 

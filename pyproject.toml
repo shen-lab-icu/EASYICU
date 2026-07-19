@@ -91,6 +91,7 @@ easyicu = ["data/*.json"]
   "static/css/*.css",
   "static/js/*.js"
 ]
+"easyicu.research_agent.providers.prompts" = ["v1/*.txt"]
 
 [tool.ruff]
 target-version = "py310"

@@ -2,11 +2,9 @@
 
 Two design rules:
 
-1. **The pipeline must run end-to-end without an LLM.** The
-   :class:`MockLLMClient` returns deterministic, ICU-aware canned
-   responses derived directly from the :class:`ResearchContext`. It
-   is what the unit tests and the offline demo use, and it is also a
-   useful baseline to compare a real LLM against.
+1. **Offline fixtures are separate from production providers.** The
+   deterministic mock client lives in :mod:`.mocks`, so importing this module
+   does not initialize the large canned-response layer used by tests.
 
 2. **No SDK is imported until used.** ``OpenAIClient`` lazy-imports
    ``openai``; if it is not installed the user gets a clear
@@ -32,20 +30,11 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Dict, List, Optional, Sequence
 
-from .planning.analysis_types import infer_analysis_type
-from .authority.provider_budget import (
+from ..authority.provider_budget import (
     active_provider_retry_available,
     consume_active_transport_attempt,
 )
-from .skills import build_dynamic_core_plan_steps
-from .schema import (
-    AnalysisPlan,
-    AnalysisStep,
-    ConceptDescriptor,
-    ResearchContext,
-    VariableRole,
-)
-from .providers.protocol import LLMClient, LLMMessage
+from .protocol import LLMClient, LLMMessage
 
 
 def _strip_reasoning_blocks(text: str) -> str:
@@ -55,9 +44,6 @@ def _strip_reasoning_blocks(text: str) -> str:
     cleaned = re.sub(r"<think\b[^>]*>.*?</think>", "", text, flags=re.I | re.S)
     cleaned = re.sub(r"<think\b[^>]*>.*$", "", cleaned, flags=re.I | re.S)
     return cleaned.strip()
-
-
-from .llm_mocks import MockLLMClient  # re-exported for backward compatibility
 
 
 def _extract_retry_after(exc: Exception) -> Optional[float]:
@@ -1440,7 +1426,7 @@ def _construct_backend(
             kwargs["extra_headers"] = extra_headers
         return OpenAIClient(**kwargs)
     if backend == "mock":
-        from .llm_mocks import MockLLMClient
+        from .mocks import MockLLMClient
 
         return MockLLMClient()
     raise ValueError(f"Unknown LLM backend: {backend!r}")
@@ -1587,8 +1573,6 @@ def llm_is_mockish(client: Any) -> bool:
 
     if client is None:
         return False
-    if isinstance(client, MockLLMClient):
-        return True
     if hasattr(client, "for_role"):
         try:
             analyzer_client = client.for_role("analyzer")
@@ -1617,7 +1601,6 @@ def llm_is_mockish(client: Any) -> bool:
 __all__ = [
     "LLMMessage",
     "LLMClient",
-    "MockLLMClient",
     "OpenAIClient",
     "CLIAgentLLMClient",
     "LLMRouter",

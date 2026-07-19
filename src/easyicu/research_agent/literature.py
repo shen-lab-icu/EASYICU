@@ -36,7 +36,8 @@ from .concept_availability import (
     hypothesis_cross_database_feasibility,
     normalize_concept_name,
 )
-from .llm import LLMClient, LLMMessage, MockLLMClient
+from .providers.mocks import MockLLMClient
+from .providers.protocol import LLMClient, LLMMessage
 from .schema import HypothesisBlueprint, ResearchContext, VariableRole
 
 

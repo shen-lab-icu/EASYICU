@@ -55,7 +55,7 @@ from easyicu.research_agent.evidence import (  # noqa: E402
     EvidenceStore,
     sha256_of_file,
 )
-from easyicu.research_agent.llm import OpenAIClient  # noqa: E402
+from easyicu.research_agent.providers.llm import OpenAIClient  # noqa: E402
 from easyicu.research_agent.providers import (  # noqa: E402
     ProviderConfigurationError,
     build_provider_client,

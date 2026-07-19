@@ -89,7 +89,7 @@ from .idea_mining_schema import (  # noqa: F401  (re-exported for back-compat)
     _stable_idea_id,
     _utc_now_iso,
 )
-from ..llm import LLMClient, LLMMessage
+from ..providers.protocol import LLMClient, LLMMessage
 from ..schema import (
     CohortDescriptor,
     ConceptDescriptor,

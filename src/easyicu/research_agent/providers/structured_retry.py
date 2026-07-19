@@ -39,7 +39,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Callable, List, Optional, Sequence, TypeVar
 
-from .llm import LLMMessage
+from .protocol import LLMMessage
 
 
 T = TypeVar("T")

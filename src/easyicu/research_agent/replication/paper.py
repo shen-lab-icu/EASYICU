@@ -1119,9 +1119,9 @@ def write_fail_closed_paper_package(
     from ..audits.validators import ReplicationDesignAuditor
     from ..research_context.builder import build_naive_research_context
     from ..evidence import EvidenceStore
-    from ..llm import MockLLMClient
+    from ..providers.mocks import MockLLMClient
     from ..pipeline_report import render_report, write_readiness_artifacts
-    from ..prompts import PROMPT_PACK_VERSION, prompt_pack_files
+    from ..providers.prompts import PROMPT_PACK_VERSION, prompt_pack_files
 
     run_id = (
         "paperrep_"

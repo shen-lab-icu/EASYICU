@@ -14,7 +14,7 @@ from easyicu.research_agent.research_context.prompt_scope import (
     coder_guide_for_step,
     coder_rewrite_guide_for_step,
 )
-from easyicu.research_agent.prompts import load_prompt_pack
+from easyicu.research_agent.providers.prompts import load_prompt_pack
 from easyicu.research_agent.authority.provider_budget import (
     ProviderCallBudgetReceiptError,
     StepProviderCallBudget,

@@ -30,13 +30,20 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Set, Tuple
 
-TOOL_VERSION = "1.2.0"
+TOOL_VERSION = "1.3.0"
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_PACKAGE_DIR = REPO_ROOT / "src" / "easyicu" / "research_agent"
 DEFAULT_PACKAGE_NAME = "easyicu.research_agent"
 
 SUPPORTED_CANONICAL_MODULES: Tuple[str, ...] = (
+    "easyicu.research_agent.providers.protocol",
+    "easyicu.research_agent.providers.factory",
+    "easyicu.research_agent.providers.llm",
+    "easyicu.research_agent.providers.mocks",
+    "easyicu.research_agent.providers.cost",
+    "easyicu.research_agent.providers.prompts",
+    "easyicu.research_agent.providers.structured_retry",
     "easyicu.research_agent.gates.visual",
     "easyicu.research_agent.gates.contract",
     "easyicu.research_agent.gates.concept",

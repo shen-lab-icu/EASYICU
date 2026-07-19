@@ -32,7 +32,7 @@ from easyicu.research_agent.intake.materialized_trajectory import (
     stage_legacy_trajectory_exact,
     stage_materialized_trajectory_authority,
 )
-from easyicu.research_agent.llm_mocks import MockLLMClient
+from easyicu.research_agent.providers.mocks import MockLLMClient
 from easyicu.research_agent.pipeline import ResearchAgentPipeline
 from easyicu.research_agent.run_input_capsule import (
     RUN_INPUT_CAPSULE_EVIDENCE_ID,

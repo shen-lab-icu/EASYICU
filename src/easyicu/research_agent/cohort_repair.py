@@ -38,7 +38,7 @@ from .cohort_schema import (
     register_cohort_concept_ids,
     validate_cohort_definition,
 )
-from .llm import LLMClient, LLMMessage
+from .providers.protocol import LLMClient, LLMMessage
 
 # Operators ``build_cohort._apply_op`` actually implements.
 _SUPPORTED_OPS = (

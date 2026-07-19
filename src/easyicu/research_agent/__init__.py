@@ -677,11 +677,18 @@ def __getattr__(name: str):
         from .case_plugins import contexts as _case_contexts
 
         return getattr(_case_contexts, name)
+    if name == "LLMClient":
+        from .providers import protocol as _protocol
+
+        return getattr(_protocol, name)
+    if name == "MockLLMClient":
+        from .providers import mocks as _mocks
+
+        return getattr(_mocks, name)
     if name in {
-        "LLMClient", "MockLLMClient", "OpenAIClient", "CLIAgentLLMClient",
-        "LLMRouter", "build_llm_client",
+        "OpenAIClient", "CLIAgentLLMClient", "LLMRouter", "build_llm_client",
     }:
-        from . import llm as _llm
+        from .providers import llm as _llm
 
         return getattr(_llm, name)
     if name in {
@@ -702,7 +709,7 @@ def __getattr__(name: str):
 
         return getattr(_agents, name)
     if name in {"PROMPT_PACK_VERSION", "prompt_pack_files"}:
-        from . import prompts as _prompts
+        from .providers import prompts as _prompts
 
         return getattr(_prompts, name)
     if name in {"LiteratureAgent", "HypothesisBlueprintAgent"}:
@@ -867,7 +874,7 @@ def __getattr__(name: str):
 
         return getattr(_bibtex, name)
     if name in {"CostMeter", "MeteredClient"}:
-        from . import cost as _cost
+        from .providers import cost as _cost
 
         return getattr(_cost, name)
     if name in {

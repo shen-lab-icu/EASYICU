@@ -51,7 +51,7 @@ from .intake.materialized_trajectory import (
     VerifiedMaterializedTrajectoryAuthority,
     load_verified_materialized_trajectory_authority,
 )
-from .prompts import PROMPT_PACK_VERSION, prompt_pack_files
+from .providers.prompts import PROMPT_PACK_VERSION, prompt_pack_files
 from .metadata_implementation_identity import metadata_implementation_identity
 from .runtime_artifacts import (
     current_successful_step_records,

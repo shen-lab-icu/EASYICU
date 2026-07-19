@@ -9,7 +9,8 @@ def test_replication_cli_paper_mode_dispatches_to_pipeline(
     monkeypatch, tmp_path: Path
 ):
     from easyicu.research_agent import replication_cli
-    import easyicu.research_agent.llm as llm_mod
+    import easyicu.research_agent.providers.llm as llm_mod
+    import easyicu.research_agent.providers.mocks as mocks_mod
     import easyicu.research_agent.pipeline as pipeline_mod
 
     calls = {}
@@ -35,7 +36,7 @@ def test_replication_cli_paper_mode_dispatches_to_pipeline(
 
             return Result()
 
-    monkeypatch.setattr(llm_mod, "MockLLMClient", FakeLLM)
+    monkeypatch.setattr(mocks_mod, "MockLLMClient", FakeLLM)
     monkeypatch.setattr(llm_mod, "OpenAIClient", FakeLLM)
     monkeypatch.setattr(pipeline_mod, "ResearchAgentPipeline", FakePipeline)
 

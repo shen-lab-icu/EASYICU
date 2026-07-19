@@ -36,7 +36,7 @@ from easyicu.research_agent.discovery.concept_proposal import (  # noqa: E402
 from easyicu.research_agent.discovery.idea_mining_feasibility_tier import (  # noqa: E402
     SourceItemIndex,
 )
-from easyicu.research_agent.llm import LLMMessage  # noqa: E402
+from easyicu.research_agent.providers.protocol import LLMMessage  # noqa: E402
 
 DEFAULT_DB = Path("/Volumes/外置硬盘/databases/mimiciv")
 DEFAULT_CATALOG = REPO_ROOT / "benchmark" / "source_item_catalog_miiv.json"

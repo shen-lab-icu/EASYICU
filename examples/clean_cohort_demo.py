@@ -106,7 +106,7 @@ def _make_client(model: str, api_key: str, base_url: str):
     """Return an OpenAIClient wrapped with exponential-backoff retry on 429/5xx."""
     import random
     from easyicu.research_agent import OpenAIClient
-    from easyicu.research_agent.llm import openrouter_reasoning_extra_body
+    from easyicu.research_agent.providers.llm import openrouter_reasoning_extra_body
 
     kwargs = dict(
         model=model,

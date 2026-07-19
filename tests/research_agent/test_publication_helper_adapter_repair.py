@@ -303,7 +303,8 @@ def test_stable_direct_helper_api_writes_declared_bundle(tmp_path) -> None:
 
 def test_coder_contract_requires_direct_host_api() -> None:
     prompt = (
-        Path(__file__).parents[2] / "src/easyicu/research_agent/prompts/v1/coder.txt"
+        Path(__file__).parents[2]
+        / "src/easyicu/research_agent/providers/prompts/v1/coder.txt"
     ).read_text(encoding="utf-8")
 
     assert "save_publication_figure(fig=fig, out_dir=out_dir, stem=stem," in prompt

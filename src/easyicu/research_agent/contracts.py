@@ -27,7 +27,7 @@ from .side_findings import SideFinding
 DerivedClaim = NumericClaim
 
 if TYPE_CHECKING:
-    from .cost import CostMeter
+    from .providers.cost import CostMeter
     from .evidence import EvidenceStore
     from .literature import LiteratureBundle
     from .replication.envelope import ReproEnvelope

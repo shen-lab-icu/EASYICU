@@ -49,7 +49,7 @@ from .concept_availability import (
 )
 from .research_context.builder import build_research_context
 from .evidence import EvidenceStore
-from .llm import OpenAIClient
+from .providers.llm import OpenAIClient
 from .pipeline import ResearchAgentPipeline
 from .providers import ProviderConfigurationError, build_provider_client
 from .skills import list_skills

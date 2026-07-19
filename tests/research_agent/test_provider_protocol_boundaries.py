@@ -1,4 +1,4 @@
-"""Provider protocol layering and legacy import compatibility."""
+"""Provider protocol layering and canonical import boundaries."""
 
 from __future__ import annotations
 
@@ -10,14 +10,16 @@ from pathlib import Path
 from typing import get_type_hints
 
 import easyicu.research_agent as research_agent
-from easyicu.research_agent import llm, llm_mocks, providers
+from easyicu.research_agent import providers
+from easyicu.research_agent.providers import llm, mocks as llm_mocks
 from easyicu.research_agent.providers import protocol
 
 
-def test_legacy_llm_protocol_exports_are_identical() -> None:
+def test_canonical_llm_protocol_exports_are_identical() -> None:
     assert llm.LLMClient is protocol.LLMClient
     assert llm.LLMMessage is protocol.LLMMessage
     assert research_agent.LLMClient is protocol.LLMClient
+    assert research_agent.MockLLMClient is llm_mocks.MockLLMClient
 
 
 def test_mock_annotations_resolve_without_importing_back_from_llm() -> None:
@@ -54,9 +56,21 @@ def test_protocol_first_import_does_not_load_concrete_llm_or_factory() -> None:
     code = """
 import sys
 from easyicu.research_agent.providers.protocol import LLMMessage
-assert 'easyicu.research_agent.llm' not in sys.modules
+assert 'easyicu.research_agent.providers.llm' not in sys.modules
 assert 'easyicu.research_agent.providers.factory' not in sys.modules
 assert LLMMessage('user', 'ok').content == 'ok'
+"""
+    subprocess.run([sys.executable, "-c", code], check=True)
+
+
+def test_production_provider_import_does_not_load_mock_module() -> None:
+    code = """
+import sys
+from easyicu.research_agent.providers.llm import OpenAIClient, llm_is_mockish
+assert 'easyicu.research_agent.providers.mocks' not in sys.modules
+assert OpenAIClient.__module__ == 'easyicu.research_agent.providers.llm'
+assert not llm_is_mockish(OpenAIClient.__new__(OpenAIClient))
+assert 'easyicu.research_agent.providers.mocks' not in sys.modules
 """
     subprocess.run([sys.executable, "-c", code], check=True)
 

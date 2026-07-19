@@ -37,7 +37,7 @@ and their prompts.
 Reviewer-facing claim: LLMs make bounded research-workflow decisions, but
 they do not directly create numeric results or rewrite ICU rules.
 
-Code examples: `agents.py`, `prompts.py`, `prompts/v1/`, `plan_utils.py`.
+Code examples: `agents.py`, `providers/prompts/`, and `plan_utils.py`.
 
 ## Layer 3: Safe Analytical Runtime
 

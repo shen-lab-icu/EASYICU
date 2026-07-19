@@ -9,7 +9,7 @@ import threading
 from pathlib import Path
 from typing import Any, Mapping, Optional
 
-from .prompts import PROMPT_PACK_VERSION
+from .providers.prompts import PROMPT_PACK_VERSION
 from .schema import AnalysisStep, ResearchContext, ValidationFinding
 
 

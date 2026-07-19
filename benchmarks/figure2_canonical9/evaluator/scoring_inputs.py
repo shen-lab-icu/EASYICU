@@ -204,7 +204,7 @@ class Figure2RunTaskAuthority(_StrictFrozenModel):
     checkpoint_payload_sha256: Sha256
     suite_ref: Literal["easyicu_evaluation_protocol_suite/v2"]
     suite_projection_sha256: Sha256
-    paper_rubric_ref: Literal["easyicu.figure2_paper_rubric/20260718-v2"]
+    paper_rubric_ref: Literal["easyicu.figure2_paper_rubric/20260719-v2"]
     paper_rubric_sha256: Sha256
     research_question_sha256: Sha256
     exposure_concept: str | None = Field(max_length=256)
@@ -261,7 +261,7 @@ class Figure2ScoringInputAuthority(_StrictFrozenModel):
     task_id: str = Field(min_length=1, max_length=128)
     suite_ref: Literal["easyicu_evaluation_protocol_suite/v2"]
     suite_projection_sha256: Sha256
-    paper_rubric_ref: Literal["easyicu.figure2_paper_rubric/20260718-v2"]
+    paper_rubric_ref: Literal["easyicu.figure2_paper_rubric/20260719-v2"]
     paper_rubric_sha256: Sha256
     research_question_sha256: Sha256
     exposure_concept: str | None = Field(max_length=256)

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 
 def test_coder_prompt_names_pandas_categorical_codes_gotcha() -> None:
-    from easyicu.research_agent.prompts import load_prompt_pack
+    from easyicu.research_agent.providers.prompts import load_prompt_pack
 
     coder_prompt = load_prompt_pack()["coder"]
 
@@ -15,7 +15,7 @@ def test_coder_prompt_names_pandas_categorical_codes_gotcha() -> None:
 
 
 def test_coder_prompt_closes_categorical_distribution_denominators() -> None:
-    from easyicu.research_agent.prompts import load_prompt_pack
+    from easyicu.research_agent.providers.prompts import load_prompt_pack
 
     coder_prompt = load_prompt_pack()["coder"]
     normalized = " ".join(coder_prompt.lower().split())
@@ -46,7 +46,7 @@ def test_coder_prompt_closes_categorical_distribution_denominators() -> None:
 
 
 def test_coder_prompt_forbids_bitwise_not_on_scalar_dtype_predicates() -> None:
-    from easyicu.research_agent.prompts import load_prompt_pack
+    from easyicu.research_agent.providers.prompts import load_prompt_pack
 
     coder_prompt = load_prompt_pack()["coder"]
 
@@ -55,7 +55,7 @@ def test_coder_prompt_forbids_bitwise_not_on_scalar_dtype_predicates() -> None:
 
 
 def test_coder_prompt_treats_input_cohort_as_already_locked() -> None:
-    from easyicu.research_agent.prompts import load_prompt_pack
+    from easyicu.research_agent.providers.prompts import load_prompt_pack
 
     coder_prompt = load_prompt_pack()["coder"]
 
@@ -67,7 +67,7 @@ def test_coder_prompt_treats_input_cohort_as_already_locked() -> None:
 
 
 def test_coder_prompt_keeps_fraction_units_and_zero_status_categories() -> None:
-    from easyicu.research_agent.prompts import load_prompt_pack
+    from easyicu.research_agent.providers.prompts import load_prompt_pack
 
     coder_prompt = load_prompt_pack()["coder"]
 
@@ -84,7 +84,7 @@ def test_coder_prompt_keeps_fraction_units_and_zero_status_categories() -> None:
 def test_coder_prompt_bounds_probability_intervals_without_constraining_effects() -> (
     None
 ):
-    from easyicu.research_agent.prompts import load_prompt_pack
+    from easyicu.research_agent.providers.prompts import load_prompt_pack
 
     coder_prompt = load_prompt_pack()["coder"]
 
@@ -99,7 +99,7 @@ def test_coder_prompt_bounds_probability_intervals_without_constraining_effects(
 
 
 def test_coder_prompt_controls_ordered_stratified_tools_and_reporting() -> None:
-    from easyicu.research_agent.prompts import load_prompt_pack
+    from easyicu.research_agent.providers.prompts import load_prompt_pack
 
     coder_prompt = load_prompt_pack()["coder"]
 
@@ -160,7 +160,7 @@ def test_coder_prompt_controls_ordered_stratified_tools_and_reporting() -> None:
 
 
 def test_coder_prompt_keeps_sparse_event_negatives_in_exposure_denominator() -> None:
-    from easyicu.research_agent.prompts import load_prompt_pack
+    from easyicu.research_agent.providers.prompts import load_prompt_pack
 
     coder_prompt = load_prompt_pack()["coder"]
 
@@ -190,7 +190,7 @@ def test_coder_prompt_keeps_sparse_event_negatives_in_exposure_denominator() -> 
 
 
 def test_coder_prompt_applies_source_status_to_every_measurement_summary() -> None:
-    from easyicu.research_agent.prompts import load_prompt_pack
+    from easyicu.research_agent.providers.prompts import load_prompt_pack
 
     coder_prompt = load_prompt_pack()["coder"]
 
@@ -204,7 +204,7 @@ def test_coder_prompt_applies_source_status_to_every_measurement_summary() -> No
 
 
 def test_coder_prompt_uses_one_host_replayed_count_flag_contract() -> None:
-    from easyicu.research_agent.prompts import load_prompt_pack
+    from easyicu.research_agent.providers.prompts import load_prompt_pack
 
     coder_prompt = load_prompt_pack()["coder"]
 
@@ -215,7 +215,7 @@ def test_coder_prompt_uses_one_host_replayed_count_flag_contract() -> None:
 
 
 def test_coder_prompt_requires_host_replayed_measurement_provenance_audit() -> None:
-    from easyicu.research_agent.prompts import load_prompt_pack
+    from easyicu.research_agent.providers.prompts import load_prompt_pack
 
     coder_prompt = load_prompt_pack()["coder"]
     normalized = " ".join(coder_prompt.split())
@@ -239,7 +239,7 @@ def test_coder_prompt_requires_host_replayed_measurement_provenance_audit() -> N
 
 
 def test_coder_prompt_separates_continuous_and_ordinal_source_status_rules() -> None:
-    from easyicu.research_agent.prompts import load_prompt_pack
+    from easyicu.research_agent.providers.prompts import load_prompt_pack
 
     coder_prompt = load_prompt_pack()["coder"]
 
@@ -251,7 +251,7 @@ def test_coder_prompt_separates_continuous_and_ordinal_source_status_rules() -> 
 
 
 def test_coder_prompt_keeps_long_provenance_notes_out_of_plot_canvas() -> None:
-    from easyicu.research_agent.prompts import load_prompt_pack
+    from easyicu.research_agent.providers.prompts import load_prompt_pack
 
     coder_prompt = load_prompt_pack()["coder"]
 
@@ -261,7 +261,7 @@ def test_coder_prompt_keeps_long_provenance_notes_out_of_plot_canvas() -> None:
 
 
 def test_coder_prompt_blocks_mixed_effect_scales_on_one_forest_axis() -> None:
-    from easyicu.research_agent.prompts import load_prompt_pack
+    from easyicu.research_agent.providers.prompts import load_prompt_pack
 
     coder_prompt = load_prompt_pack()["coder"]
 
@@ -275,7 +275,7 @@ def test_coder_prompt_blocks_mixed_effect_scales_on_one_forest_axis() -> None:
 
 
 def test_coder_prompt_prevents_resume_evidence_polluting_figure_rendering() -> None:
-    from easyicu.research_agent.prompts import load_prompt_pack
+    from easyicu.research_agent.providers.prompts import load_prompt_pack
 
     coder_prompt = load_prompt_pack()["coder"]
 
@@ -326,7 +326,7 @@ def test_figure_contract_repair_guidance_requires_flat_local_source_names() -> N
 
 
 def test_coder_prompt_uses_canonical_positional_source_trace_columns() -> None:
-    from easyicu.research_agent.prompts import load_prompt_pack
+    from easyicu.research_agent.providers.prompts import load_prompt_pack
 
     coder_prompt = load_prompt_pack()["coder"]
 
@@ -339,7 +339,7 @@ def test_coder_prompt_uses_canonical_positional_source_trace_columns() -> None:
 
 
 def test_coder_prompt_keeps_figure_source_data_minimal_and_traceable() -> None:
-    from easyicu.research_agent.prompts import load_prompt_pack
+    from easyicu.research_agent.providers.prompts import load_prompt_pack
 
     coder_prompt = load_prompt_pack()["coder"]
 
@@ -350,7 +350,7 @@ def test_coder_prompt_keeps_figure_source_data_minimal_and_traceable() -> None:
 
 
 def test_coder_prompt_fail_closes_unverifiable_plotted_values() -> None:
-    from easyicu.research_agent.prompts import load_prompt_pack
+    from easyicu.research_agent.providers.prompts import load_prompt_pack
 
     coder_prompt = load_prompt_pack()["coder"]
 
@@ -368,7 +368,7 @@ def test_coder_prompt_fail_closes_unverifiable_plotted_values() -> None:
 
 
 def test_coder_prompt_never_renders_partial_structural_accounting() -> None:
-    from easyicu.research_agent.prompts import load_prompt_pack
+    from easyicu.research_agent.providers.prompts import load_prompt_pack
 
     coder_prompt = load_prompt_pack()["coder"]
     normalized = " ".join(coder_prompt.split())
@@ -380,7 +380,7 @@ def test_coder_prompt_never_renders_partial_structural_accounting() -> None:
 
 
 def test_coder_prompt_forbids_arbitrary_figure_column_fallbacks() -> None:
-    from easyicu.research_agent.prompts import load_prompt_pack
+    from easyicu.research_agent.providers.prompts import load_prompt_pack
 
     normalized = " ".join(load_prompt_pack()["coder"].split())
 
@@ -392,7 +392,7 @@ def test_coder_prompt_forbids_arbitrary_figure_column_fallbacks() -> None:
 
 
 def test_coder_prompt_resolves_prior_tables_by_step_and_kind() -> None:
-    from easyicu.research_agent.prompts import load_prompt_pack
+    from easyicu.research_agent.providers.prompts import load_prompt_pack
 
     coder_prompt = load_prompt_pack()["coder"]
 
@@ -414,7 +414,7 @@ def test_coder_prompt_resolves_prior_tables_by_step_and_kind() -> None:
 
 
 def test_prompt_pack_preserves_the_singular_primary_exposure() -> None:
-    from easyicu.research_agent.prompts import load_prompt_pack
+    from easyicu.research_agent.providers.prompts import load_prompt_pack
 
     prompts = load_prompt_pack()
 
@@ -429,7 +429,7 @@ def test_prompt_pack_preserves_the_singular_primary_exposure() -> None:
 
 
 def test_coder_prompt_audits_categorical_model_cells_and_reference_choices() -> None:
-    from easyicu.research_agent.prompts import load_prompt_pack
+    from easyicu.research_agent.providers.prompts import load_prompt_pack
 
     coder_prompt = load_prompt_pack()["coder"]
     normalized = " ".join(coder_prompt.split())
@@ -450,7 +450,7 @@ def test_coder_prompt_audits_categorical_model_cells_and_reference_choices() -> 
 
 
 def test_coder_prompt_contracts_mixed_outcomes_and_model_effect_scales() -> None:
-    from easyicu.research_agent.prompts import load_prompt_pack
+    from easyicu.research_agent.providers.prompts import load_prompt_pack
 
     coder_prompt = load_prompt_pack()["coder"]
     normalized = " ".join(coder_prompt.split())
@@ -474,7 +474,7 @@ def test_coder_prompt_contracts_mixed_outcomes_and_model_effect_scales() -> None
 
 
 def test_coder_prompt_fail_closes_unvetted_penalized_inference() -> None:
-    from easyicu.research_agent.prompts import load_prompt_pack
+    from easyicu.research_agent.providers.prompts import load_prompt_pack
 
     coder_prompt = load_prompt_pack()["coder"]
     normalized = " ".join(coder_prompt.split())
@@ -494,7 +494,7 @@ def test_coder_prompt_fail_closes_unvetted_penalized_inference() -> None:
 
 
 def test_coder_prompt_replays_relaxed_cohort_sensitivity_from_universe() -> None:
-    from easyicu.research_agent.prompts import load_prompt_pack
+    from easyicu.research_agent.providers.prompts import load_prompt_pack
 
     coder_prompt = load_prompt_pack()["coder"]
     normalized = " ".join(coder_prompt.split())
@@ -515,7 +515,7 @@ def test_coder_prompt_replays_relaxed_cohort_sensitivity_from_universe() -> None
 
 
 def test_coder_prompt_keeps_footnotes_and_raw_ids_out_of_result_figures() -> None:
-    from easyicu.research_agent.prompts import load_prompt_pack
+    from easyicu.research_agent.providers.prompts import load_prompt_pack
 
     coder_prompt = load_prompt_pack()["coder"]
 

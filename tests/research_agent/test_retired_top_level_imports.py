@@ -34,6 +34,7 @@ RETIRED_TOP_LEVEL_MODULES: dict[str, str | None] = {
     "concept_proposal": "discovery.concept_proposal",
     "context": "research_context.builder",
     "contract_gate": "gates.contract",
+    "cost": "providers.cost",
     "cross_model_panel": "evaluation.cross_model_panel",
     "deterministic_causal": "execution.runners.deterministic_causal",
     "deterministic_clustering": "execution.runners.deterministic_clustering",
@@ -70,12 +71,15 @@ RETIRED_TOP_LEVEL_MODULES: dict[str, str | None] = {
     "idea_registry": "discovery.idea_registry",
     "idea_scope": "discovery.idea_scope",
     "latex": "reporting.latex",
+    "llm": "providers.llm",
+    "llm_mocks": "providers.mocks",
     "manuscript_post": "reporting.manuscript_post",
     "method_compatibility": "gates.method_compatibility",
     "methodological_rigor": "review.methodological_rigor",
     "memory": "learning.memory",
     "pdf_render": "reporting.pdf_render",
     "provider_budget": "authority.provider_budget",
+    "prompts": "providers.prompts",
     "publication_figure_execution": "execution.publication_figure",
     "repair_coordination": "repairs.coordination",
     "repair_reasons": "repairs.reasons",
@@ -86,6 +90,7 @@ RETIRED_TOP_LEVEL_MODULES: dict[str, str | None] = {
     "step_summary": None,
     "study_design": "planning.study_design",
     "study_design_playbook": "planning.study_design_playbook",
+    "structured_retry": "providers.structured_retry",
     "summary_repair": "repairs.summary",
     "temporal_features": "methods.temporal_features",
     "tier2_jury": "evaluation.tier2_jury",
@@ -119,3 +124,9 @@ def test_retired_top_level_module_is_absent(leaf: str) -> None:
 def test_canonical_replacement_is_importable(target: str) -> None:
     imported = importlib.import_module(f"easyicu.research_agent.{target}")
     assert imported.__name__ == f"easyicu.research_agent.{target}"
+
+
+@pytest.mark.parametrize("name", ["os_environ", "step_summary"])
+def test_retired_root_attribute_is_absent(name: str) -> None:
+    root = importlib.import_module("easyicu.research_agent")
+    assert not hasattr(root, name)

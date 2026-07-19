@@ -34,7 +34,7 @@ from .safety_protocol_v1 import (
     safety_protocol_sha256,
 )
 
-FIGURE2_PAPER_RUBRIC_REF = "easyicu.figure2_paper_rubric/20260718-v2"
+FIGURE2_PAPER_RUBRIC_REF = "easyicu.figure2_paper_rubric/20260719-v2"
 FIGURE2_PAPER_RUBRIC_SCHEMA = "easyicu.figure2_paper_rubric_manifest/2"
 FIGURE2_PAPER_SCORECARD_SCHEMA = "easyicu.figure2_scorecard_envelope/2"
 SCORER_EVALUATOR_ROOT = "benchmarks/figure2_canonical9/evaluator"
@@ -129,7 +129,7 @@ class Figure2PaperTaskRubric(_StrictFrozenModel):
 
 class Figure2PaperRubricManifest(_StrictFrozenModel):
     schema_version: Literal["easyicu.figure2_paper_rubric_manifest/2"]
-    rubric_ref: Literal["easyicu.figure2_paper_rubric/20260718-v2"]
+    rubric_ref: Literal["easyicu.figure2_paper_rubric/20260719-v2"]
     audience: Literal["evaluator_only"]
     agent_visibility: Literal["forbidden"]
     suite_ref: Literal["easyicu_evaluation_protocol_suite/v2"]
@@ -242,7 +242,7 @@ class Figure2PaperScorecard(_StrictFrozenModel):
     """Structurally valid exact-five payload; authenticity is externally replayed."""
 
     schema_version: Literal["easyicu.figure2_scorecard_envelope/2"]
-    rubric_ref: Literal["easyicu.figure2_paper_rubric/20260718-v2"]
+    rubric_ref: Literal["easyicu.figure2_paper_rubric/20260719-v2"]
     rubric_manifest_sha256: Sha256
     suite_projection_sha256: Sha256
     scorer_tree_sha256: Sha256

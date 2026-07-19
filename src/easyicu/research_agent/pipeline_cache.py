@@ -29,9 +29,9 @@ from pathlib import Path
 from typing import Any, Dict, Mapping, Optional, Sequence
 
 from .evidence_authority import EvidenceAuthorityIntegrityError
-from .llm import MockLLMClient
+from .providers.mocks import MockLLMClient
 from .metadata_implementation_identity import metadata_implementation_identity
-from .prompts import PROMPT_PACK_VERSION, prompt_pack_files
+from .providers.prompts import PROMPT_PACK_VERSION, prompt_pack_files
 from .run_input_capsule import (
     RunInputIdentityError,
     invalidate_unverified_successful_steps,

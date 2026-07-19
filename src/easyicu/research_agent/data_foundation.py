@@ -36,7 +36,7 @@ from .data_catalog import (
     assess_coverage,
     build_available_catalog,
 )
-from .llm import LLMClient, LLMMessage
+from .providers.protocol import LLMClient, LLMMessage
 from .intake.materialized_metadata import (
     MaterializedCohortAuthorityRef,
     MaterializedMetadataError,
@@ -242,7 +242,7 @@ def _selection_cost(llm: LLMClient) -> tuple:
     cost: Optional[float] = None
     if isinstance(usage, dict) and model:
         try:
-            from .cost import CostMeter
+            from .providers.cost import CostMeter
 
             cost = CostMeter().estimate_cost(
                 str(model),

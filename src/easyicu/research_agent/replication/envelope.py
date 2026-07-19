@@ -446,7 +446,7 @@ class ReproRecordingClient:
 def envelope_role_resolver(llm: Any, envelope: ReproEnvelope, *, seed: Optional[int] = None):
     """Return a ``role_resolver(role)`` that wraps each per-role client.
 
-    Designed to be composable with :func:`easyicu.research_agent.cost.metered_role_resolver`.
+    Designed to be composable with :func:`easyicu.research_agent.providers.cost.metered_role_resolver`.
     The typical composition used in the pipeline is::
 
         resolver = envelope_role_resolver(llm, envelope, seed=seed)
@@ -456,7 +456,7 @@ def envelope_role_resolver(llm: Any, envelope: ReproEnvelope, *, seed: Optional[
     The order matters: recording must see the exact prompt / response
     strings, so it sits closest to the inner client.
     """
-    from ..llm import resolve_role_client
+    from ..providers.llm import resolve_role_client
 
     def _resolve(role: str):
         inner = resolve_role_client(llm, role)
