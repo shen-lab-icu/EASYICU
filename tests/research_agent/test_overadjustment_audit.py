@@ -338,7 +338,7 @@ def test_genuine_constituent_still_fires_after_negation_guard(tmp_path: Path):
 
 def test_replanner_injects_methodological_principles(monkeypatch):
     from easyicu.research_agent import agents as A
-    from easyicu.research_agent import structured_retry as SR
+    from easyicu.research_agent.providers import structured_retry as SR
     from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep
 
     # The overadjustment principle must actually be in the shared guide. The

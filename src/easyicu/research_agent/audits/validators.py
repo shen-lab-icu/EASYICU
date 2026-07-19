@@ -64,7 +64,7 @@ from ..schema import (
     ValidationFinding,
     VariableRole,
 )
-from ..llm import LLMClient, LLMMessage
+from ..providers.protocol import LLMClient, LLMMessage
 from ..authority.provider_budget import (
     ProviderCallBudgetError,
     StepProviderCallBudget,

@@ -5,7 +5,7 @@ import json
 from easyicu.research_agent.agentic_coder import AgenticCoderAgent
 from easyicu.research_agent.agents import CoderAgent as _ProductionCoderAgent
 from easyicu.research_agent.authority.coder_authority import HostCoderAuthority
-from easyicu.research_agent.llm import LLMMessage
+from easyicu.research_agent.providers.llm import LLMMessage
 from easyicu.research_agent.pipeline_execute import (
     _coder_authority_with_typed_parent_schema_receipts,
     _typed_parent_schema_context_block,

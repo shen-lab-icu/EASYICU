@@ -25,7 +25,7 @@ import pytest
 
 def test_meter_records_authoritative_usage_when_inner_exposes_it(ra):
     LLMMessage = ra.LLMRouter  # ensure llm module is loaded for type
-    from easyicu.research_agent.llm import LLMMessage  # noqa: F401
+    from easyicu.research_agent.providers.llm import LLMMessage  # noqa: F401
 
     class _ClientWithUsage:
         name = "stub-with-usage"
@@ -45,7 +45,7 @@ def test_meter_records_authoritative_usage_when_inner_exposes_it(ra):
     meter = ra.CostMeter()
     metered = ra.MeteredClient(inner, role="planner", meter=meter)
 
-    from easyicu.research_agent.llm import LLMMessage as _Msg
+    from easyicu.research_agent.providers.llm import LLMMessage as _Msg
     metered.complete([_Msg(role="user", content="hi")])
     assert len(meter.records) == 1
     rec = meter.records[0]
@@ -58,7 +58,7 @@ def test_meter_records_authoritative_usage_when_inner_exposes_it(ra):
 
 
 def test_meter_falls_back_to_heuristic_when_no_last_usage(ra):
-    from easyicu.research_agent.llm import LLMMessage
+    from easyicu.research_agent.providers.llm import LLMMessage
 
     class _ClientNoUsage:
         name = "stub-no-usage"
@@ -159,7 +159,7 @@ def test_metered_client_does_not_double_count_when_inner_keeps_stale_usage(ra):
     """If the inner client's ``last_usage`` is left over from a prior call,
     the meter must reset it before invoking ``complete`` so the new
     record reflects only the new call."""
-    from easyicu.research_agent.llm import LLMMessage
+    from easyicu.research_agent.providers.llm import LLMMessage
 
     class _ClientStale:
         name = "stub-stale"

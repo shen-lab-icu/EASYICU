@@ -620,7 +620,7 @@ def test_analyzer_charges_the_same_step_budget_and_stops_when_exhausted():
 
 
 def test_openai_transport_retries_consume_the_same_provider_budget(monkeypatch):
-    from easyicu.research_agent.llm import LLMMessage, OpenAIClient
+    from easyicu.research_agent.providers.llm import LLMMessage, OpenAIClient
 
     class _Completions:
         def __init__(self) -> None:
@@ -659,7 +659,7 @@ def test_openai_transport_retries_consume_the_same_provider_budget(monkeypatch):
 
 
 def test_openai_transport_retry_stops_before_exceeding_budget(monkeypatch):
-    from easyicu.research_agent.llm import LLMMessage, OpenAIClient
+    from easyicu.research_agent.providers.llm import LLMMessage, OpenAIClient
 
     class _Completions:
         def __init__(self) -> None:
@@ -1374,7 +1374,7 @@ def test_concept_auditor_does_not_downgrade_receipt_failure(monkeypatch, tmp_pat
 
 
 def test_fallback_children_each_consume_a_real_provider_attempt():
-    from easyicu.research_agent.llm import FallbackLLMClient, LLMMessage
+    from easyicu.research_agent.providers.llm import FallbackLLMClient, LLMMessage
 
     class _Child:
         def __init__(self, result=None, error=None):
@@ -1406,7 +1406,7 @@ def test_fallback_children_each_consume_a_real_provider_attempt():
 
 
 def test_fallback_does_not_double_charge_transparent_transport_aware_wrapper():
-    from easyicu.research_agent.llm import FallbackLLMClient, LLMMessage
+    from easyicu.research_agent.providers.llm import FallbackLLMClient, LLMMessage
 
     class _AwareClient:
         provider_attempt_budget_aware = True

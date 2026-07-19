@@ -27,7 +27,7 @@ import pytest
 
 
 def test_sha256_messages_is_deterministic_across_calls(ra):
-    from easyicu.research_agent.llm import LLMMessage
+    from easyicu.research_agent.providers.llm import LLMMessage
     from easyicu.research_agent.replication.envelope import sha256_messages
 
     msgs = [
@@ -41,7 +41,7 @@ def test_sha256_messages_is_deterministic_across_calls(ra):
 
 
 def test_sha256_messages_changes_on_content_change(ra):
-    from easyicu.research_agent.llm import LLMMessage
+    from easyicu.research_agent.providers.llm import LLMMessage
     from easyicu.research_agent.replication.envelope import sha256_messages
 
     base = [LLMMessage(role="user", content="plan the analysis")]
@@ -50,7 +50,7 @@ def test_sha256_messages_changes_on_content_change(ra):
 
 
 def test_recording_client_records_prompt_and_response_hashes(ra):
-    from easyicu.research_agent.llm import LLMMessage
+    from easyicu.research_agent.providers.llm import LLMMessage
 
     class _Stub:
         name = "stub"
@@ -80,7 +80,7 @@ def test_recording_client_records_prompt_and_response_hashes(ra):
 
 
 def test_recording_client_forwards_seed_when_inner_accepts_it(ra):
-    from easyicu.research_agent.llm import LLMMessage
+    from easyicu.research_agent.providers.llm import LLMMessage
 
     observed = {}
 
@@ -103,7 +103,7 @@ def test_recording_client_forwards_seed_when_inner_accepts_it(ra):
 
 
 def test_recording_client_records_top_p_when_caller_sets_it(ra):
-    from easyicu.research_agent.llm import LLMMessage
+    from easyicu.research_agent.providers.llm import LLMMessage
 
     observed = {}
 
@@ -133,7 +133,7 @@ def test_recording_client_records_top_p_when_caller_sets_it(ra):
 
 
 def test_recording_client_records_provider_default_when_top_p_unset(ra):
-    from easyicu.research_agent.llm import LLMMessage
+    from easyicu.research_agent.providers.llm import LLMMessage
 
     class _NoTopP:
         name = "no-top-p"
@@ -155,7 +155,7 @@ def test_recording_client_records_provider_default_when_top_p_unset(ra):
 
 
 def test_recording_client_degrades_gracefully_for_clients_without_seed(ra):
-    from easyicu.research_agent.llm import LLMMessage
+    from easyicu.research_agent.providers.llm import LLMMessage
 
     class _NoSeed:
         name = "no-seed"
@@ -177,7 +177,7 @@ def test_recording_client_degrades_gracefully_for_clients_without_seed(ra):
 
 
 def test_manifest_summary_aggregates_by_role_and_model(ra):
-    from easyicu.research_agent.llm import LLMMessage
+    from easyicu.research_agent.providers.llm import LLMMessage
 
     class _A:
         name = "a"
@@ -214,7 +214,7 @@ def test_manifest_summary_aggregates_by_role_and_model(ra):
 
 
 def test_envelope_to_disk_roundtrips(ra, tmp_path):
-    from easyicu.research_agent.llm import LLMMessage
+    from easyicu.research_agent.providers.llm import LLMMessage
 
     class _C:
         name = "c"

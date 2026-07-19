@@ -173,7 +173,12 @@ def test_release_archives_preserve_reviewer_contract_and_package_data(
             "src/easyicu/research_agent/README.md",
             "src/easyicu/research_agent/planning/cohort_contract.py",
             "src/easyicu/research_agent/planning/robustness_contract.py",
+            "src/easyicu/research_agent/providers/cost.py",
+            "src/easyicu/research_agent/providers/llm.py",
+            "src/easyicu/research_agent/providers/mocks.py",
+            "src/easyicu/research_agent/providers/prompts/v1/coder.txt",
             "src/easyicu/research_agent/providers/protocol.py",
+            "src/easyicu/research_agent/providers/structured_retry.py",
             "src/easyicu/research_agent/replication/metrics.py",
             "src/easyicu/webserver/static/index.html",
             "src/easyicu/webserver/static/css/app.css",
@@ -208,7 +213,16 @@ def test_release_archives_preserve_reviewer_contract_and_package_data(
         required_canonical_modules = {
             "easyicu/research_agent/planning/cohort_contract.py",
             "easyicu/research_agent/planning/robustness_contract.py",
+            "easyicu/research_agent/providers/cost.py",
+            "easyicu/research_agent/providers/llm.py",
+            "easyicu/research_agent/providers/mocks.py",
+            "easyicu/research_agent/providers/prompts/__init__.py",
+            "easyicu/research_agent/providers/prompts/v1/coder.txt",
+            "easyicu/research_agent/providers/prompts/v1/replanner.txt",
+            "easyicu/research_agent/providers/prompts/v1/system.txt",
+            "easyicu/research_agent/providers/prompts/v1/writer.txt",
             "easyicu/research_agent/providers/protocol.py",
+            "easyicu/research_agent/providers/structured_retry.py",
             "easyicu/research_agent/replication/metrics.py",
         }
         missing_canonical_modules = sorted(required_canonical_modules - wheel_names)
@@ -229,6 +243,42 @@ def test_release_archives_preserve_reviewer_contract_and_package_data(
         }
         assert retired_sdist.isdisjoint(sdist_names)
         assert retired_wheel.isdisjoint(wheel_names)
+
+        wheel_extract_dir = tmp_path / "installed-wheel"
+        with zipfile.ZipFile(wheel_path) as archive:
+            archive.extractall(wheel_extract_dir)
+        smoke_env = env.copy()
+        smoke_env["PYTHONPATH"] = str(wheel_extract_dir)
+        smoke_code = """
+import importlib
+from pathlib import Path
+
+root = Path(__import__('os').environ['EASYICU_WHEEL_ROOT']).resolve()
+for name in (
+    'easyicu.research_agent.providers.cost',
+    'easyicu.research_agent.providers.llm',
+    'easyicu.research_agent.providers.mocks',
+    'easyicu.research_agent.providers.prompts',
+    'easyicu.research_agent.providers.structured_retry',
+):
+    module = importlib.import_module(name)
+    assert Path(module.__file__).resolve().is_relative_to(root), module.__file__
+
+from easyicu.research_agent.providers.prompts import load_prompt_pack
+assert set(load_prompt_pack()) == {'system', 'coder', 'replanner', 'writer'}
+"""
+        smoke_env["EASYICU_WHEEL_ROOT"] = str(wheel_extract_dir)
+        smoke_result = subprocess.run(
+            [sys.executable, "-c", smoke_code],
+            cwd=tmp_path,
+            env=smoke_env,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert smoke_result.returncode == 0, (
+            smoke_result.stdout + smoke_result.stderr
+        )
         assert not any(
             name.startswith(("tests/", "examples/", "docs/", "benchmarks/"))
             for name in wheel_names

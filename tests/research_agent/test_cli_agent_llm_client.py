@@ -14,13 +14,13 @@ import pytest
 
 
 def _client(backend="codex", model=None):
-    from easyicu.research_agent.llm import CLIAgentLLMClient
+    from easyicu.research_agent.providers.llm import CLIAgentLLMClient
 
     return CLIAgentLLMClient(backend=backend, model=model)
 
 
 def test_rejects_unknown_backend():
-    from easyicu.research_agent.llm import CLIAgentLLMClient
+    from easyicu.research_agent.providers.llm import CLIAgentLLMClient
 
     with pytest.raises(ValueError):
         CLIAgentLLMClient(backend="not-a-cli")
@@ -35,7 +35,7 @@ def test_name_and_model():
 
 
 def test_flatten_splits_system_and_transcript():
-    from easyicu.research_agent.llm import CLIAgentLLMClient, LLMMessage
+    from easyicu.research_agent.providers.llm import CLIAgentLLMClient, LLMMessage
 
     system, convo = CLIAgentLLMClient._flatten([
         LLMMessage(role="system", content="be terse"),
@@ -67,7 +67,7 @@ def test_build_argv_codex_read_only_sandbox():
 
 
 def test_complete_returns_text_and_strips_reasoning(monkeypatch):
-    from easyicu.research_agent.llm import LLMMessage
+    from easyicu.research_agent.providers.llm import LLMMessage
 
     monkeypatch.setattr(shutil, "which", lambda cmd: "/usr/bin/" + cmd)
 
@@ -84,7 +84,7 @@ def test_complete_returns_text_and_strips_reasoning(monkeypatch):
 
 
 def test_complete_missing_cli_raises(monkeypatch):
-    from easyicu.research_agent.llm import LLMMessage
+    from easyicu.research_agent.providers.llm import LLMMessage
 
     monkeypatch.setattr(shutil, "which", lambda cmd: None)
     with pytest.raises(RuntimeError):
@@ -92,7 +92,7 @@ def test_complete_missing_cli_raises(monkeypatch):
 
 
 def test_complete_nonzero_exit_raises(monkeypatch):
-    from easyicu.research_agent.llm import LLMMessage
+    from easyicu.research_agent.providers.llm import LLMMessage
 
     monkeypatch.setattr(shutil, "which", lambda cmd: "/usr/bin/" + cmd)
     monkeypatch.setattr(
@@ -105,7 +105,7 @@ def test_complete_nonzero_exit_raises(monkeypatch):
 
 def test_complete_accepts_and_ignores_extra_kwargs(monkeypatch):
     """Protocol kwargs the CLI cannot honour must not raise."""
-    from easyicu.research_agent.llm import LLMMessage
+    from easyicu.research_agent.providers.llm import LLMMessage
 
     monkeypatch.setattr(shutil, "which", lambda cmd: "/usr/bin/" + cmd)
     monkeypatch.setattr(
@@ -131,7 +131,7 @@ def test_exported_from_package():
 
 def _patch_cli(monkeypatch, available):
     """Make only the named CLI backends appear installed."""
-    import easyicu.research_agent.llm as llm_mod
+    import easyicu.research_agent.providers.llm as llm_mod
 
     def _which(cmd):
         return "/usr/bin/" + cmd if cmd in available else None
@@ -144,7 +144,7 @@ def _patch_cli(monkeypatch, available):
 
 
 def test_ladder_uses_cli_when_available(monkeypatch):
-    from easyicu.research_agent.llm import build_llm_client
+    from easyicu.research_agent.providers.llm import build_llm_client
 
     _patch_cli(monkeypatch, {"codex"})
     sel = build_llm_client(prefer="codex")
@@ -154,7 +154,7 @@ def test_ladder_uses_cli_when_available(monkeypatch):
 
 
 def test_ladder_falls_back_to_mock_when_nothing_available(monkeypatch):
-    from easyicu.research_agent.llm import build_llm_client
+    from easyicu.research_agent.providers.llm import build_llm_client
 
     _patch_cli(monkeypatch, set())
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
@@ -166,7 +166,7 @@ def test_ladder_falls_back_to_mock_when_nothing_available(monkeypatch):
 
 
 def test_ladder_falls_back_to_api_when_cli_absent_but_key_present(monkeypatch):
-    from easyicu.research_agent.llm import build_llm_client
+    from easyicu.research_agent.providers.llm import build_llm_client
 
     _patch_cli(monkeypatch, set())
     sel = build_llm_client(prefer="claude", api_key="sk-test", model="gpt-4o-mini")
@@ -178,7 +178,7 @@ def test_ladder_falls_back_to_api_when_cli_absent_but_key_present(monkeypatch):
 def test_ladder_no_mock_raises_when_nothing_usable(monkeypatch):
     import pytest as _pytest
 
-    from easyicu.research_agent.llm import build_llm_client
+    from easyicu.research_agent.providers.llm import build_llm_client
 
     _patch_cli(monkeypatch, set())
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
@@ -188,7 +188,7 @@ def test_ladder_no_mock_raises_when_nothing_usable(monkeypatch):
 
 
 def test_cli_backend_available_helper(monkeypatch):
-    from easyicu.research_agent.llm import cli_backend_available
+    from easyicu.research_agent.providers.llm import cli_backend_available
 
     _patch_cli(monkeypatch, {"claude"})
     assert cli_backend_available("claude")

@@ -16,8 +16,8 @@ from typing import List, Literal
 import pytest
 from pydantic import BaseModel
 
-from easyicu.research_agent.llm import LLMMessage
-from easyicu.research_agent.structured_retry import (
+from easyicu.research_agent.providers.llm import LLMMessage
+from easyicu.research_agent.providers.structured_retry import (
     StructuredResponseFailure,
     call_llm_with_structured_retry,
 )

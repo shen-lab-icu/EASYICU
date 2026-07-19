@@ -1,6 +1,6 @@
 """Provider contracts plus lazy construction helpers.
 
-The factory imports the concrete production client from :mod:`..llm`, while
+The factory imports the concrete production client from :mod:`.llm`, while
 that module imports the provider-neutral protocol from this package. Keeping
 factory exports lazy prevents package initialization from turning that legal
 layering into a runtime import cycle.

@@ -71,7 +71,7 @@ from .authority.parent_artifact import (
     _verified_direct_parent_artifact_digests,
     _verified_direct_parent_table_names,
 )
-from .cost import CostMeter, metered_role_resolver
+from .providers.cost import CostMeter, metered_role_resolver
 from .figures.distribution_availability import (
     _distribution_availability_parent_digest_seal,
 )
@@ -321,17 +321,16 @@ from .literature import (
     LiteratureBundle,
     render_hypothesis_blueprint_for_prompt,
 )
-from .llm import (
-    LLMClient,
-    LLMMessage,
+from .providers.llm import (
     LLMRouter,
-    MockLLMClient,
     llm_is_mockish,
     llm_supports_vision,
     resolve_role_client,
 )
+from .providers.mocks import MockLLMClient
+from .providers.protocol import LLMClient, LLMMessage
 from .learning.memory import RunMemory
-from .prompts import PROMPT_PACK_VERSION, prompt_pack_files
+from .providers.prompts import PROMPT_PACK_VERSION, prompt_pack_files
 from .runner import (
     HOST_OWNED_RUNNER_ENV_KEYS,
     CodeRunner,
@@ -1240,7 +1239,7 @@ def _migrate_legacy_resume_model_requirements(
         ),
     ]
     try:
-        from .structured_retry import call_llm_with_structured_retry
+        from .providers.structured_retry import call_llm_with_structured_retry
 
         packet = call_llm_with_structured_retry(
             role_resolver("planner"),
@@ -1706,7 +1705,7 @@ def _migrate_legacy_resume_trajectory_stability_spec(
         ),
     ]
     try:
-        from .structured_retry import call_llm_with_structured_retry
+        from .providers.structured_retry import call_llm_with_structured_retry
 
         packet = call_llm_with_structured_retry(
             role_resolver("planner"),

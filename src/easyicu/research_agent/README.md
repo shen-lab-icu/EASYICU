@@ -157,12 +157,12 @@ agent.
 Two invariants enforce this split:
 
 1. **The engine is optional, never required — capability degradation ladder.**
-   `llm.build_llm_client(prefer=...)` walks
+   `providers.llm.build_llm_client(prefer=...)` walks
    `CLI agent (codex/claude) → OpenAI → OpenRouter → MockLLMClient`, returning
    an `LLMClientSelection` that records what actually ran and why it fell back.
    A user without any coding-agent CLI or API key still gets a working,
    end-to-end pipeline on the offline `MockLLMClient` floor (design rule #1 in
-   `llm.py`). Adding `CLIAgentLLMClient` did **not** introduce a hard
+   `providers/llm.py`). Adding `CLIAgentLLMClient` did **not** introduce a hard
    dependency.
 
 2. **No engine bypasses `NumericClaim` binding — engine-agnostic provenance.**

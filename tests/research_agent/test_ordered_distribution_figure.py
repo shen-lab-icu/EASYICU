@@ -519,7 +519,7 @@ def test_ordered_sealed_renderer_requires_structural_child_edge(tmp_path: Path) 
 
 def test_renderer_and_prompt_remain_case_neutral() -> None:
     import easyicu.research_agent.figures.ordered_distribution as module
-    from easyicu.research_agent.prompts import load_prompt_pack
+    from easyicu.research_agent.providers.prompts import load_prompt_pack
 
     source = Path(module.__file__).read_text(encoding="utf-8").lower()
     assert "kdigo" not in source

@@ -1160,8 +1160,8 @@ def test_evaluator_authority_is_absent_from_agent_prompt_surfaces() -> None:
     root = Path(__file__).resolve().parents[4] / "src/easyicu/research_agent"
     protected = [
         root / "agents.py",
-        root / "prompts.py",
-        *(root / "prompts/v1").glob("*.txt"),
+        root / "providers/prompts/__init__.py",
+        *(root / "providers/prompts/v1").glob("*.txt"),
     ]
     forbidden = (
         "figure2_paper_rubric",

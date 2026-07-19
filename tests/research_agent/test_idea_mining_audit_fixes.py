@@ -38,7 +38,7 @@ from easyicu.research_agent.discovery.idea_mining_schema import (
     PriorArtAssessment,
 )
 from easyicu.research_agent.literature import CitationRecord
-from easyicu.research_agent.llm import LLMMessage
+from easyicu.research_agent.providers.llm import LLMMessage
 
 REPO = Path(__file__).resolve().parents[2]
 _HAS_ICD = (REPO / "benchmark" / "icd_cohort_catalog_miiv.json").exists()

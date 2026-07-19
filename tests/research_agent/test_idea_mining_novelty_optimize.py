@@ -20,7 +20,7 @@ from easyicu.research_agent.discovery.idea_mining import (
     score_candidates_multicriteria,
 )
 from easyicu.research_agent.literature import CitationRecord
-from easyicu.research_agent.llm import LLMMessage
+from easyicu.research_agent.providers.llm import LLMMessage
 
 SNAPSHOT = "source-snapshot/sha256:novopt"
 QUOTE = "future work should study this predictor of mortality in a subgroup"

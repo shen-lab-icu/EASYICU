@@ -27,7 +27,7 @@ from easyicu.research_agent.discovery.idea_registry import (
     IdeaCandidateRegistry,
 )
 from easyicu.research_agent.literature import CitationRecord
-from easyicu.research_agent.llm import LLMMessage
+from easyicu.research_agent.providers.llm import LLMMessage
 from easyicu.research_agent.schema import ConceptDescriptor, VariableRole
 
 

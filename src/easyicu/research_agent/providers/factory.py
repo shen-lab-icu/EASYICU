@@ -12,7 +12,7 @@ import os
 from typing import Any, Callable, Mapping, Optional
 from urllib.parse import urlsplit
 
-from ..llm import OpenAIClient, openrouter_reasoning_extra_body
+from .llm import OpenAIClient, openrouter_reasoning_extra_body
 
 DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1"
 DEFAULT_OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"

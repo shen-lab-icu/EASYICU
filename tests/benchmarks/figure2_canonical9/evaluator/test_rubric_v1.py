@@ -256,8 +256,8 @@ def test_planner_coder_and_shared_prompts_do_not_import_or_expose_rubric() -> No
     source_root = Path(__file__).resolve().parents[4] / "src/easyicu/research_agent"
     protected_paths = [
         source_root / "agents.py",
-        source_root / "prompts.py",
-        *(source_root / "prompts/v1").glob("*.txt"),
+        source_root / "providers/prompts/__init__.py",
+        *(source_root / "providers/prompts/v1").glob("*.txt"),
     ]
 
     for path in protected_paths:

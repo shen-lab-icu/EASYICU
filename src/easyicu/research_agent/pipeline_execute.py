@@ -246,7 +246,7 @@ from .gates.visual import (
     decide_visual_repair,
 )
 from .gate_semantics import blocking_validator_findings as _blocking_validator_findings
-from .llm import MockLLMClient
+from .providers.mocks import MockLLMClient
 from .ordered_stratified_contract import ordered_stratified_numeric_findings
 from .repairs.reasons import (
     RepairPromptAuthority,

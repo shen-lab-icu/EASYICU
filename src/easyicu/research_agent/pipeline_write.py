@@ -37,7 +37,7 @@ from .evidence import (
 from .figure_skill import PublicationFigureSkill
 from .reporting.latex import scaffold_to_latex
 from .literature import LiteratureAgent, LiteratureBundle
-from .llm import MockLLMClient
+from .providers.mocks import MockLLMClient
 from .reporting.manuscript_post import (
     bind_numeric_values,
     enforce_writer_claim_language,

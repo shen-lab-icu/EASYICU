@@ -8,7 +8,7 @@ from typing import Dict
 
 
 PROMPT_PACK_VERSION = "easyicu-research-agent-prompts/v1"
-_PROMPT_ROOT = Path(__file__).resolve().parent / "prompts" / "v1"
+_PROMPT_ROOT = Path(__file__).resolve().parent / "v1"
 _PROMPT_FILES = {
     "system": "system.txt",
     "coder": "coder.txt",

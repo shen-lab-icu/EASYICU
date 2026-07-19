@@ -306,7 +306,7 @@ def test_mine_is_deterministic_on_same_inputs() -> None:
 
 def _make_pipeline_with_bank(tmp_path: Path, enable: bool):
     from easyicu.research_agent.pipeline import ResearchAgentPipeline
-    from easyicu.research_agent.llm import MockLLMClient
+    from easyicu.research_agent.providers.mocks import MockLLMClient
 
     return ResearchAgentPipeline(
         workdir=tmp_path,

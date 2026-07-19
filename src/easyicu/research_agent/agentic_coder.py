@@ -20,7 +20,7 @@ gives us better *code*, not unverified results. See the engine-agnostic gate in
 (env ``EASYICU_AGENTIC_CODER_BACKEND`` at the single ``pipeline_execute``
 construction site) it falls back to the wrapped LLM ``CoderAgent`` whenever the
 CLI backend is unavailable or fails to produce a script — the same capability
-ladder as :func:`easyicu.research_agent.llm.build_llm_client`.
+ladder as :func:`easyicu.research_agent.providers.llm.build_llm_client`.
 """
 
 from __future__ import annotations
@@ -31,7 +31,7 @@ import tempfile
 from pathlib import Path
 from typing import Any, List
 
-from .llm import cli_backend_available
+from .providers.llm import cli_backend_available
 from .schema import AnalysisStep, ResearchContext
 from .authority.coder_authority import HostCoderAuthority
 

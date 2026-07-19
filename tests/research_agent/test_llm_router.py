@@ -19,7 +19,7 @@ import pytest
 
 def _spy_llm(ra, name: str):
     """A tiny stub LLM that records every ``complete`` call's prompt."""
-    from easyicu.research_agent.llm import MockLLMClient
+    from easyicu.research_agent.providers.mocks import MockLLMClient
 
     class _Spy(MockLLMClient):
         def __init__(self):
@@ -88,7 +88,7 @@ def test_router_iter_clients_dedupes(ra):
 def test_router_complete_routes_to_default(ra):
     default = _spy_llm(ra, "default")
     router = ra.LLMRouter(default=default, planner=_spy_llm(ra, "p"))
-    from easyicu.research_agent.llm import LLMMessage
+    from easyicu.research_agent.providers.llm import LLMMessage
     out = router.complete([LLMMessage(role="user", content="hello")])
     assert isinstance(out, str)
     assert any(c["name"] == "default" for c in default.calls)
@@ -96,7 +96,7 @@ def test_router_complete_routes_to_default(ra):
 
 def test_router_complete_without_default_raises(ra):
     router = ra.LLMRouter(planner=_spy_llm(ra, "p"))
-    from easyicu.research_agent.llm import LLMMessage
+    from easyicu.research_agent.providers.llm import LLMMessage
     with pytest.raises(RuntimeError):
         router.complete([LLMMessage(role="user", content="hello")])
 
@@ -107,7 +107,7 @@ def test_router_complete_without_default_raises(ra):
 
 
 def test_resolve_role_client_with_router(ra):
-    from easyicu.research_agent.llm import resolve_role_client
+    from easyicu.research_agent.providers.llm import resolve_role_client
     planner = _spy_llm(ra, "planner")
     default = _spy_llm(ra, "default")
     router = ra.LLMRouter(default=default, planner=planner)
@@ -116,7 +116,7 @@ def test_resolve_role_client_with_router(ra):
 
 
 def test_resolve_role_client_with_plain_client(ra):
-    from easyicu.research_agent.llm import resolve_role_client
+    from easyicu.research_agent.providers.llm import resolve_role_client
     plain = _spy_llm(ra, "plain")
     # No ``for_role`` → always returns the same client (legacy semantics).
     assert resolve_role_client(plain, "planner") is plain
@@ -125,7 +125,7 @@ def test_resolve_role_client_with_plain_client(ra):
 
 
 def test_resolve_role_client_with_none(ra):
-    from easyicu.research_agent.llm import resolve_role_client
+    from easyicu.research_agent.providers.llm import resolve_role_client
     assert resolve_role_client(None, "planner") is None
 
 

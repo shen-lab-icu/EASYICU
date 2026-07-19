@@ -150,7 +150,8 @@ class OpenAIJudge(JudgeClient):
         if base_url is None and self.base_url_env:
             base_url = os.environ.get(self.base_url_env)
 
-        from ..llm import LLMMessage, OpenAIClient
+        from ..providers.llm import OpenAIClient
+        from ..providers.protocol import LLMMessage
 
         client = OpenAIClient(
             model=self.model,

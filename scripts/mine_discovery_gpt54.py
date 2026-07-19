@@ -62,7 +62,7 @@ from easyicu.research_agent.discovery.idea_scope import (  # noqa: E402
     LiteratureScopeSpec,
     resolve_journals,
 )
-from easyicu.research_agent.llm import OpenAIClient  # noqa: E402
+from easyicu.research_agent.providers.llm import OpenAIClient  # noqa: E402
 
 import run_idea_mining_s6_validation_harness as H  # noqa: E402
 
@@ -201,7 +201,7 @@ _NOVELTY_JUDGE_SYSTEM = (
 
 def make_novelty_judge(llm: OpenAIClient):
     """Phase 3 LLM differentiation judge (veto-net: can only tighten novelty)."""
-    from easyicu.research_agent.llm import LLMMessage  # noqa: E402
+    from easyicu.research_agent.providers.protocol import LLMMessage  # noqa: E402
 
     def judge(*, idea, executable_candidate, hits, count_label):
         construct = idea.exposure_or_predictor.strip() or ", ".join(

@@ -55,7 +55,7 @@ from .icu_rules import (
     VariableKind,
     default_time_windows,
 )
-from .llm import LLMClient, LLMMessage
+from .providers.protocol import LLMClient, LLMMessage
 from .repairs.patch import (
     PATCH_FORMAT,
     looks_like_executable_python,
@@ -77,7 +77,7 @@ from .plan_utils import (
     _primary_analysis_cohort_canonical_schema_rules,
     effect_output_authorized,
 )
-from .prompts import PROMPT_PACK_VERSION, load_prompt_pack
+from .providers.prompts import PROMPT_PACK_VERSION, load_prompt_pack
 from .authority.provider_budget import (
     StepProviderCallBudget,
     complete_with_provider_budget,
@@ -810,7 +810,7 @@ class PlannerAgent:
             LLMMessage(role="system", content=_SYSTEM_GUIDE + _PRINCIPLES_GUIDE),
             LLMMessage(role="user", content=_build_planner_user_prompt(context)),
         ]
-        from .structured_retry import call_llm_with_structured_retry
+        from .providers.structured_retry import call_llm_with_structured_retry
 
         return call_llm_with_structured_retry(
             self.llm,
@@ -894,7 +894,7 @@ class PlannerAgent:
 # interaction matrix or per-subgroup table into its summary (the exact failure
 # class noted in CLAUDE.md: pilot-1's 295-leaf interaction dump) would otherwise
 # inflate the prompt without bound, multiplied by up to ``max_total_steps`` (12).
-# Small-context local engines (glm / qwen / deepseek, see ``llm.py``) overflow
+# Small-context local engines (glm / qwen / deepseek, see ``providers/llm.py``) overflow
 # well before a frontier model would.
 #
 # These guards slim ONLY the prompt projection. The full records keep flowing to
@@ -1060,7 +1060,7 @@ class ReplannerAgent(PlannerAgent):
                 ),
             ),
         ]
-        from .structured_retry import call_llm_with_structured_retry
+        from .providers.structured_retry import call_llm_with_structured_retry
 
         revised = call_llm_with_structured_retry(
             self.llm,

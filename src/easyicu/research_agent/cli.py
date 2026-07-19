@@ -186,7 +186,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     args = _build_parser().parse_args(argv)
 
     # Lazy imports so --help works without pandas / openai installed.
-    from .llm import MockLLMClient, OpenAIClient
+    from .providers.llm import OpenAIClient
+    from .providers.mocks import MockLLMClient
     from .pipeline import ResearchAgentPipeline
     from .experiment_spec import load_experiment_spec
 

@@ -34,7 +34,7 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
-from .schema import CostRecord
+from ..schema import CostRecord
 
 
 # Approx 4 chars per token for English / code mix (OpenAI's own rule of

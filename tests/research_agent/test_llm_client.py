@@ -7,7 +7,7 @@ import pytest
 
 
 def _retry_test_client(ra, failures):
-    from easyicu.research_agent.llm import OpenAIClient
+    from easyicu.research_agent.providers.llm import OpenAIClient
 
     class _Completions:
         def __init__(self):
@@ -34,7 +34,7 @@ def _retry_test_client(ra, failures):
 
 
 def test_openai_client_disables_sdk_retries(monkeypatch, ra):
-    from easyicu.research_agent.llm import OpenAIClient
+    from easyicu.research_agent.providers.llm import OpenAIClient
 
     captured = {}
 
@@ -56,7 +56,7 @@ def test_openai_client_disables_sdk_retries(monkeypatch, ra):
 
 
 def test_openai_client_strips_reasoning_blocks_from_content(ra):
-    from easyicu.research_agent.llm import LLMMessage, OpenAIClient
+    from easyicu.research_agent.providers.llm import LLMMessage, OpenAIClient
 
     class _Completions:
         def create(self, **kwargs):
@@ -79,7 +79,7 @@ def test_openai_client_strips_reasoning_blocks_from_content(ra):
 
 
 def test_openai_client_streaming_is_transport_only(monkeypatch, ra):
-    from easyicu.research_agent.llm import LLMMessage, OpenAIClient
+    from easyicu.research_agent.providers.llm import LLMMessage, OpenAIClient
 
     usage = SimpleNamespace(
         prompt_tokens=12,
@@ -147,7 +147,7 @@ def test_openai_client_streaming_is_transport_only(monkeypatch, ra):
 
 
 def test_openai_client_stream_closes_on_iteration_error(monkeypatch, ra):
-    from easyicu.research_agent.llm import LLMMessage, OpenAIClient
+    from easyicu.research_agent.providers.llm import LLMMessage, OpenAIClient
 
     class _Stream:
         def __init__(self):
@@ -181,7 +181,7 @@ def test_openai_client_stream_closes_on_iteration_error(monkeypatch, ra):
 
 
 def test_openai_client_recovers_unclosed_reasoning_prefix_for_debuggability(ra):
-    from easyicu.research_agent.llm import LLMMessage, OpenAIClient
+    from easyicu.research_agent.providers.llm import LLMMessage, OpenAIClient
 
     class _Completions:
         def create(self, **kwargs):
@@ -201,7 +201,7 @@ def test_openai_client_recovers_unclosed_reasoning_prefix_for_debuggability(ra):
 
 
 def test_openai_client_supports_local_noauth_proxy_mode(ra):
-    from easyicu.research_agent.llm import LLMMessage, OpenAIClient
+    from easyicu.research_agent.providers.llm import LLMMessage, OpenAIClient
 
     class _Response:
         def raise_for_status(self):
@@ -256,7 +256,7 @@ def test_openai_client_supports_local_noauth_proxy_mode(ra):
 
 
 def test_openai_client_zero_manual_retry_budget_makes_one_attempt(monkeypatch, ra):
-    from easyicu.research_agent.llm import LLMMessage, OpenAIClient
+    from easyicu.research_agent.providers.llm import LLMMessage, OpenAIClient
 
     class _Completions:
         def __init__(self):
@@ -289,7 +289,7 @@ def test_openai_client_zero_manual_retry_budget_makes_one_attempt(monkeypatch, r
 def test_openai_client_manual_owner_retries_transient_http_status(
     monkeypatch, ra, status_code
 ):
-    from easyicu.research_agent.llm import LLMMessage
+    from easyicu.research_agent.providers.llm import LLMMessage
 
     error = RuntimeError(f"provider rejected request with status {status_code}")
     error.status_code = status_code
@@ -317,7 +317,7 @@ def test_openai_client_manual_owner_retries_transient_http_status(
 def test_openai_client_manual_owner_recognizes_generic_transient_errors(
     monkeypatch, ra, error
 ):
-    from easyicu.research_agent.llm import LLMMessage
+    from easyicu.research_agent.providers.llm import LLMMessage
 
     client, completions = _retry_test_client(ra, [error])
     sleeps = []
@@ -333,7 +333,7 @@ def test_openai_client_manual_owner_recognizes_generic_transient_errors(
 def test_openai_client_ignores_invalid_retry_after_values(
     monkeypatch, ra, retry_after
 ):
-    from easyicu.research_agent.llm import LLMMessage
+    from easyicu.research_agent.providers.llm import LLMMessage
 
     error = RuntimeError("provider rejected request with status 503")
     error.status_code = 503
@@ -351,7 +351,7 @@ def test_openai_client_ignores_invalid_retry_after_values(
 
 
 def test_openai_client_transport_retry_consumes_provider_budget(monkeypatch, ra):
-    from easyicu.research_agent.llm import LLMMessage
+    from easyicu.research_agent.providers.llm import LLMMessage
     from easyicu.research_agent.authority.provider_budget import (
         StepProviderCallBudget,
         complete_with_provider_budget,
@@ -376,7 +376,7 @@ def test_openai_client_transport_retry_consumes_provider_budget(monkeypatch, ra)
 
 
 def test_openai_client_does_not_sleep_or_call_over_provider_budget(monkeypatch, ra):
-    from easyicu.research_agent.llm import LLMMessage
+    from easyicu.research_agent.providers.llm import LLMMessage
     from easyicu.research_agent.authority.provider_budget import (
         ProviderCallBudgetExhausted,
         StepProviderCallBudget,

@@ -41,7 +41,7 @@ from easyicu.research_agent.discovery.idea_mining import (  # noqa: E402
     run_idea_mining_dry_run,
 )
 from easyicu.research_agent.literature import CitationRecord  # noqa: E402
-from easyicu.research_agent.llm import LLMMessage  # noqa: E402
+from easyicu.research_agent.providers.protocol import LLMMessage  # noqa: E402
 from easyicu.research_agent.schema import ConceptDescriptor, VariableRole  # noqa: E402
 
 EUTILS = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils"

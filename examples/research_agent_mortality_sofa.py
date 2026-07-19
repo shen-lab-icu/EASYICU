@@ -110,7 +110,7 @@ def main() -> int:
         sys.path.insert(0, str(src_path))
 
     from easyicu.research_agent import ResearchAgentPipeline
-    from easyicu.research_agent.llm import MockLLMClient
+    from easyicu.research_agent.providers.mocks import MockLLMClient
 
     cohort = build_synthetic_cohort()
     workdir = repo_root / "research_output"

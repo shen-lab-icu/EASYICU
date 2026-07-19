@@ -5,16 +5,15 @@ This module hosts the deterministic mock-LLM machinery: the
 generators that produce ICU-shaped plan/replan/code/manuscript
 responses without calling out to a real model.
 
-Split out of :mod:`easyicu.research_agent.llm` so that file stays
+Split out of :mod:`easyicu.research_agent.providers.llm` so that file stays
 focused on production provider integrations (OpenAIClient,
 FallbackLLMClient, LLMRouter). The mock layer is ~1.5k lines of
 canned content and is what the unit tests and the offline demo
 exercise.
 
-The public surface (:class:`MockLLMClient`) is re-exported by
-``easyicu.research_agent.llm`` so that existing
-``from easyicu.research_agent.llm import MockLLMClient`` imports
-continue to work.
+The mock client is intentionally imported from this module rather than from
+the production provider module, keeping offline fixtures out of production
+provider initialization.
 """
 
 from __future__ import annotations
@@ -24,10 +23,10 @@ import re
 import textwrap
 from typing import Any, Dict, List, Optional, Sequence
 
-from .planning.analysis_types import infer_analysis_type
-from .providers.protocol import LLMMessage
-from .skills import build_dynamic_core_plan_steps
-from .schema import (
+from ..planning.analysis_types import infer_analysis_type
+from .protocol import LLMMessage
+from ..skills import build_dynamic_core_plan_steps
+from ..schema import (
     AnalysisPlan,
     AnalysisStep,
     ConceptDescriptor,

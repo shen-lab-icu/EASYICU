@@ -29,7 +29,7 @@ from easyicu.research_agent.agents import (
     _MAX_PRE_EXEC_COMPATIBILITY_REPAIRS,
 )
 from easyicu.research_agent.repairs.patch import PATCH_FORMAT
-from easyicu.research_agent.llm import LLMMessage
+from easyicu.research_agent.providers.llm import LLMMessage
 from easyicu.research_agent.gates.method_compatibility import (
     detect_forbidden_pattern_usage,
     format_violation_message,

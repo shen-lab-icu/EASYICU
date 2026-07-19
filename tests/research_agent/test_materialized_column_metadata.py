@@ -55,7 +55,7 @@ from easyicu.research_agent.intake.materialized_metadata import (
     stage_materialized_cohort_authority,
 )
 from easyicu.research_agent.evidence import EvidenceStore
-from easyicu.research_agent.llm import MockLLMClient
+from easyicu.research_agent.providers.mocks import MockLLMClient
 from easyicu.research_agent import pipeline as pipeline_module
 from easyicu.research_agent.pipeline import ResearchAgentPipeline
 from easyicu.research_agent.run_input_capsule import (
