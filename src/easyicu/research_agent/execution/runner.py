@@ -1709,6 +1709,9 @@ class DockerRunner:
         The result is cached per runner so concurrent/repeated steps share one
         immutable environment snapshot.  Failure is fatal: a Docker run without
         an image identity and execution-runtime lockfile is not submission-grade.
+        The short-lived probe is named and tracked just like an analysis
+        container so a host-side timeout cannot strand an anonymous ``pip
+        freeze`` container and stall later resumes.
         """
 
         with self._provenance_lock:
@@ -1720,34 +1723,62 @@ class DockerRunner:
                     dict(self._cached_runtime_provenance),
                     self._cached_runtime_requirements,
                 )
+            self._retry_stale_container_cleanup("runtime-provenance")
             image_id, repo_digests = self._inspect_image_identity()
 
-            freeze_proc = subprocess.run(  # noqa: S603 - argv list, no shell
-                [
-                    self.docker_executable,
-                    "run",
-                    "--rm",
-                    "--network=none",
-                    "--read-only",
-                    "--cap-drop=ALL",
-                    "--security-opt=no-new-privileges",
-                    "--tmpfs=/tmp:rw,noexec,nosuid,size=32m",
-                    *([f"--user={self.user}"] if self.user else []),
-                    "-e",
-                    "HOME=/tmp",
-                    image_id,
-                    "python",
-                    "-m",
-                    "pip",
-                    "freeze",
-                    "--disable-pip-version-check",
-                ],
-                capture_output=True,
-                text=True,
-                timeout=max(60.0, min(self.timeout_seconds, 180.0)),
-                encoding="utf-8",
-                errors="replace",
-            )
+            attempt_id = uuid.uuid4().hex
+            cidfile = self.workdir / (f".docker-runtime-provenance-{attempt_id}.cid")
+            sentinel = cidfile.with_suffix(".sentinel")
+            container_name = f"easyicu-ra-{attempt_id}"
+            self._write_regular_file(sentinel, f"name:{container_name}\n")
+            freeze_cmd = [
+                self.docker_executable,
+                "run",
+                f"--cidfile={cidfile}",
+                f"--name={container_name}",
+                "--rm",
+                "--network=none",
+                "--read-only",
+                "--cap-drop=ALL",
+                "--security-opt=no-new-privileges",
+                "--tmpfs=/tmp:rw,noexec,nosuid,size=32m",
+                *([f"--user={self.user}"] if self.user else []),
+                "-e",
+                "HOME=/tmp",
+                image_id,
+                "python",
+                "-m",
+                "pip",
+                "freeze",
+                "--disable-pip-version-check",
+            ]
+            try:
+                freeze_proc = subprocess.run(  # noqa: S603 - argv list, no shell
+                    freeze_cmd,
+                    capture_output=True,
+                    text=True,
+                    timeout=max(60.0, min(self.timeout_seconds, 180.0)),
+                    encoding="utf-8",
+                    errors="replace",
+                )
+            except subprocess.TimeoutExpired as exc:
+                container_ref = self._container_reference(
+                    cidfile,
+                    fallback_name=container_name,
+                )
+                assert container_ref is not None
+                teardown_confirmed, cleanup_note = self._teardown_container(
+                    container_ref
+                )
+                if teardown_confirmed:
+                    sentinel.unlink(missing_ok=True)
+                    cidfile.unlink(missing_ok=True)
+                raise RuntimeError(
+                    "Docker execution-runtime dependency capture timed out. "
+                    + cleanup_note.strip()
+                ) from exc
+            sentinel.unlink(missing_ok=True)
+            cidfile.unlink(missing_ok=True)
             requirements = freeze_proc.stdout.strip()
             if freeze_proc.returncode != 0 or not requirements:
                 raise RuntimeError(

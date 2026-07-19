@@ -644,6 +644,58 @@ def test_docker_coder_capabilities_use_image_snapshot_before_first_step(
     assert "* shap" not in block
 
 
+def test_runtime_provenance_timeout_tears_down_named_probe(
+    ra,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    cohort = _make_cohort(tmp_path)
+    _force_docker_present(monkeypatch)
+    captured: List[List[str]] = []
+
+    def fake_run(cmd, *args, **kwargs):
+        del args
+        captured.append(list(cmd))
+        if len(cmd) >= 3 and cmd[1:3] == ["image", "inspect"]:
+            return _FakeProc(
+                stdout=json.dumps({"Id": "sha256:" + "a" * 64, "RepoDigests": []})
+            )
+        if "pip" in cmd and "freeze" in cmd:
+            raise subprocess.TimeoutExpired(
+                cmd=cmd,
+                timeout=kwargs.get("timeout", 0),
+            )
+        if len(cmd) >= 2 and cmd[1] in {"stop", "wait"}:
+            return _FakeProc()
+        raise AssertionError(cmd)
+
+    import easyicu.research_agent.execution.runner as runner_module
+
+    monkeypatch.setattr(runner_module.subprocess, "run", fake_run)
+    run_dir = tmp_path / "run"
+    runner = ra.DockerRunner(workdir=run_dir, cohort_parquet=cohort)
+
+    with pytest.raises(
+        RuntimeError,
+        match="execution-runtime dependency capture timed out",
+    ):
+        runner._capture_runtime_provenance()
+
+    freeze_cmd = captured[1]
+    assert freeze_cmd[1] == "run"
+    assert any(token.startswith("--cidfile=") for token in freeze_cmd)
+    container_name = next(
+        token.removeprefix("--name=")
+        for token in freeze_cmd
+        if token.startswith("--name=")
+    )
+    assert captured[2][1:3] == ["stop", "--timeout=5"]
+    assert captured[2][-1] == container_name
+    assert captured[3][1:] == ["wait", container_name]
+    assert not list(run_dir.glob(".docker-runtime-provenance-*.sentinel"))
+    assert not list(run_dir.glob(".docker-runtime-provenance-*.cid"))
+
+
 def test_run_handles_timeout(
     ra,
     tmp_path: Path,
