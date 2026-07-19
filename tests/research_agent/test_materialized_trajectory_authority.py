@@ -30,6 +30,9 @@ from easyicu.research_agent.cohort.schema import (
     ConceptPredicate,
     TimeWindow,
 )
+from easyicu.research_agent.execution.development_sample import (
+    materialize_development_execution_sample,
+)
 from easyicu.research_agent.intake import export_package as intake
 from easyicu.research_agent.intake.materialized_metadata import (
     MaterializedCohortAuthorityRef,
@@ -42,6 +45,7 @@ from easyicu.research_agent.intake.materialized_trajectory import (
     MaterializedTrajectoryAuthority,
     MaterializedTrajectoryAuthorityRef,
     MaterializedTrajectoryError,
+    StagedTrajectoryBinding,
     TRAJECTORY_COLUMNS,
     load_verified_materialized_trajectory_authority,
     publish_materialized_trajectory_authority,
@@ -516,6 +520,75 @@ def test_trajectory_stage_is_exact_copy_and_rebinds_universe(tmp_path):
     assert staged.authority.parent_trajectory_authority == trajectory.reference
     assert staged.authority.bound_universe_authority == staged_cohort.reference
     assert staged.authority.bound_universe_authority != cohort.reference
+
+
+def test_development_sample_republishes_typed_trajectory_against_sampled_cohort(
+    tmp_path,
+):
+    paths, cohort, trajectory = _bundle(tmp_path)
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    staged_cohort_path = run_dir / "cohort_analysis.parquet"
+    staged_cohort = stage_materialized_cohort_authority(
+        paths["parquet"],
+        staged_cohort_path,
+        expected_source_authority=cohort.reference,
+        producer_implementation_sha256=_implementation_sha(),
+    )
+    assert staged_cohort is not None
+    staged_trajectory_path = run_dir / "cohort_trajectory.parquet"
+    staged_trajectory = stage_materialized_trajectory_authority(
+        paths["trajectory"],
+        staged_trajectory_path,
+        source_universe_path=paths["parquet"],
+        target_universe_path=staged_cohort_path,
+        expected_source_authority=trajectory.reference,
+        expected_target_universe_authority=staged_cohort.reference,
+        producer_implementation_sha256=_implementation_sha(),
+    )
+
+    sampled = materialize_development_execution_sample(
+        run_dir=run_dir,
+        target_rows=1,
+        seed=17,
+        declared_id_columns=("stay_id",),
+        trajectory_binding=StagedTrajectoryBinding(
+            path=staged_trajectory_path,
+            sha256=staged_trajectory.authority.trajectory_sha256,
+            size=staged_trajectory.authority.trajectory_size,
+            authority_ref=staged_trajectory.reference,
+        ),
+    )
+
+    assert sampled.cohort_authority_ref is not None
+    assert sampled.trajectory_binding is not None
+    assert sampled.trajectory_binding.authority_ref is not None
+    assert sampled.trajectory_bound_cohort_authority_ref == sampled.cohort_authority_ref
+    verified = load_verified_materialized_trajectory_authority(
+        sampled.trajectory_binding.path,
+        expected_authority=sampled.trajectory_binding.authority_ref,
+        expected_universe_authority=sampled.cohort_authority_ref,
+    )
+    assert verified is not None
+    sample_ids = set(pd.read_parquet(sampled.cohort_path)["stay_id"])
+    trajectory_ids = set(pd.read_parquet(sampled.trajectory_binding.path)["stay_id"])
+    assert trajectory_ids == sample_ids
+    assert verified.authority.semantic_provenance["paper_authority"] is False
+    assert (
+        materialize_development_execution_sample(
+            run_dir=run_dir,
+            target_rows=1,
+            seed=17,
+            declared_id_columns=("stay_id",),
+            trajectory_binding=StagedTrajectoryBinding(
+                path=staged_trajectory_path,
+                sha256=staged_trajectory.authority.trajectory_sha256,
+                size=staged_trajectory.authority.trajectory_size,
+                authority_ref=staged_trajectory.reference,
+            ),
+        )
+        == sampled
+    )
 
 
 def test_trajectory_publication_root_swap_cannot_write_victim(tmp_path, monkeypatch):

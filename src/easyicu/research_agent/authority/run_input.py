@@ -491,6 +491,7 @@ def build_scientific_identity(
     experiment_spec: Optional[BaseModel],
     source_files: Optional[Sequence[Any]],
     disable_icu_context: bool,
+    development_sampling: Optional[Mapping[str, Any]] = None,
     materialized_cohort_authority_ref: Optional[Mapping[str, Any]] = None,
     trajectory_path: Optional[Path] = None,
     materialized_trajectory_authority_ref: Optional[Mapping[str, Any]] = None,
@@ -527,6 +528,8 @@ def build_scientific_identity(
         "source_files": _source_file_identities(source_files),
         "disable_icu_context": bool(disable_icu_context),
     }
+    if development_sampling is not None:
+        payload["development_sampling"] = dict(development_sampling)
     if materialized_cohort_authority_ref is not None:
         payload["materialized_cohort_authority_ref"] = dict(
             materialized_cohort_authority_ref

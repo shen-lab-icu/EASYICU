@@ -46,7 +46,7 @@ import threading
 import time
 import uuid
 from pathlib import Path, PurePosixPath
-from typing import Dict, List, Optional, Sequence, Tuple
+from typing import Dict, List, Mapping, Optional, Sequence, Tuple
 
 from .code_hygiene import reorder_forward_references
 from ..contracts.method_packages import (
@@ -519,6 +519,64 @@ class CodeRunner:
         # A host runner must never inherit a Docker capability snapshot left in
         # the same context by an earlier run.
         set_runtime_capability_snapshot_provider(None)
+
+    def validate_runtime_capabilities(self) -> Tuple[str, ...]:
+        """Verify the selected interpreter before planning executable work.
+
+        Probe the exact configured interpreter, not the host process, and
+        publish the verified allow-list used by the Coder prompt. Package
+        installation is never attempted here.
+        """
+
+        import_names = tuple(
+            dict.fromkeys(
+                (
+                    *BASELINE_PACKAGES,
+                    *OPTIONAL_BASELINE_PACKAGES,
+                    *(package.import_name for package in CURATED_METHOD_PACKAGES),
+                )
+            )
+        )
+        probe = (
+            "import importlib.util, json\n"
+            f"names = {list(import_names)!r}\n"
+            "print(json.dumps([name for name in names "
+            "if importlib.util.find_spec(name) is not None]))\n"
+        )
+        try:
+            proc = subprocess.run(  # noqa: S603 - configured interpreter, no shell
+                [self.python_executable, "-c", probe],
+                capture_output=True,
+                text=True,
+                timeout=max(15.0, min(self.timeout_seconds, 60.0)),
+                check=False,
+                encoding="utf-8",
+                errors="replace",
+            )
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            raise RuntimeError(
+                "Python execution-runtime capability probe failed before planning"
+            ) from exc
+        if proc.returncode != 0:
+            raise RuntimeError(
+                "Python execution-runtime capability probe failed before planning: "
+                + (proc.stderr.strip() or f"returncode={proc.returncode}")
+            )
+        try:
+            snapshot = tuple(str(name) for name in json.loads(proc.stdout))
+        except Exception as exc:
+            raise RuntimeError(
+                "Python execution-runtime capability probe returned invalid JSON"
+            ) from exc
+        missing_baseline = sorted(set(BASELINE_PACKAGES).difference(snapshot))
+        if missing_baseline:
+            raise RuntimeError(
+                "Python execution runtime is missing required baseline packages: "
+                + ", ".join(missing_baseline)
+            )
+        frozen_snapshot = tuple(snapshot)
+        set_runtime_capability_snapshot_provider(lambda: frozen_snapshot)
+        return frozen_snapshot
 
     @property
     def authority_identity_sha256(self) -> str:
@@ -1193,7 +1251,7 @@ class DockerRunner:
     ``src/easyicu/research_agent/runner_image/Dockerfile``; build
     with::
 
-        docker build -t easyicu-research-agent:latest \\
+        docker build -t easyicu-research-agent:1.0.0 \\
             -f src/easyicu/research_agent/runner_image/Dockerfile .
 
     Subclassing for OpenHands or any other sandbox is intentionally
@@ -1202,7 +1260,7 @@ class DockerRunner:
     if your sandbox needs a different mount strategy.
     """
 
-    DEFAULT_IMAGE = "easyicu-research-agent:latest"
+    DEFAULT_IMAGE = "easyicu-research-agent:1.0.0"
     manages_output_cleanup = True
     CONTAINER_RUN_ROOT = "/easyicu-run"
     CONTAINER_COHORT_PATH = "/cohort.parquet"
@@ -1754,6 +1812,89 @@ class DockerRunner:
                 "Docker runtime provenance lacks a method capability snapshot"
             )
         return tuple(snapshot)
+
+    def validate_runtime_capabilities(self) -> Tuple[str, ...]:
+        """Validate the immutable image and publish its package allow-list."""
+
+        snapshot = tuple(self._method_capability_snapshot())
+        frozen_snapshot = tuple(snapshot)
+        set_runtime_capability_snapshot_provider(lambda: frozen_snapshot)
+        return frozen_snapshot
+
+    def export_validated_runtime_bundle(self) -> Dict[str, object]:
+        """Export the preflighted immutable-image receipt for runner rebuilds.
+
+        A pipeline may need to rebuild its runner after the Agent materializes
+        a locked analysis cohort.  Re-running ``pip freeze`` at that point is
+        redundant and can be slow on a cold Docker daemon.  The bundle is safe
+        to reuse only for the exact immutable image id and runner network
+        policy; :meth:`adopt_validated_runtime_bundle` rechecks those bindings.
+        """
+
+        provenance, requirements = self._capture_runtime_provenance()
+        return {
+            "schema": "easyicu.docker_runtime_preflight/1",
+            "provenance": dict(provenance),
+            "requirements": requirements,
+        }
+
+    def adopt_validated_runtime_bundle(self, bundle: Mapping[str, object]) -> None:
+        """Reuse one digest-bound preflight receipt without another freeze."""
+
+        if set(bundle) != {"schema", "provenance", "requirements"} or bundle.get(
+            "schema"
+        ) != "easyicu.docker_runtime_preflight/1":
+            raise RuntimeError("Docker runtime preflight bundle schema mismatch")
+        raw_provenance = bundle.get("provenance")
+        requirements = bundle.get("requirements")
+        if not isinstance(raw_provenance, Mapping) or not isinstance(
+            requirements, str
+        ):
+            raise RuntimeError("Docker runtime preflight bundle is incomplete")
+        provenance = dict(raw_provenance)
+        if set(provenance) != {
+            "runtime",
+            "image_reference",
+            "image_id",
+            "repo_digests",
+            "network",
+            "requirements_sha256",
+            "method_capabilities",
+        }:
+            raise RuntimeError("Docker runtime preflight provenance schema mismatch")
+        image_id, repo_digests = self._inspect_image_identity()
+        expected_requirements_sha = hashlib.sha256(
+            requirements.encode("utf-8")
+        ).hexdigest()
+        if (
+            provenance.get("runtime") != "docker"
+            or provenance.get("image_reference") != self.image
+            or provenance.get("image_id") != image_id
+            or provenance.get("repo_digests") != list(repo_digests)
+            or provenance.get("network") != self.network
+            or provenance.get("requirements_sha256") != expected_requirements_sha
+        ):
+            raise RuntimeError(
+                "Docker runtime changed after preflight; refusing cached receipt"
+            )
+        capabilities = provenance.get("method_capabilities")
+        if not isinstance(capabilities, list) or not capabilities or not all(
+            isinstance(name, str) and name for name in capabilities
+        ):
+            raise RuntimeError(
+                "Docker runtime preflight lacks verified method capabilities"
+            )
+        with self._provenance_lock:
+            self._cached_runtime_provenance = dict(provenance)
+            self._cached_runtime_requirements = requirements
+        frozen_snapshot = tuple(capabilities)
+        set_runtime_capability_snapshot_provider(lambda: frozen_snapshot)
+
+    def runtime_capability_report(self) -> Dict[str, object]:
+        """Return the verified, digest-bound image capability report."""
+
+        provenance, _requirements = self._capture_runtime_provenance()
+        return dict(provenance)
 
     @property
     def authority_identity_sha256(self) -> str:

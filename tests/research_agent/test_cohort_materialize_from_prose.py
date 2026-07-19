@@ -17,6 +17,7 @@ import json
 from pathlib import Path
 
 import pandas as pd
+import pytest
 
 
 def _is_replan(user: str) -> bool:
@@ -25,11 +26,14 @@ def _is_replan(user: str) -> bool:
 
 
 def _is_extraction(user: str) -> bool:
-    return "COHORT-DEFINITION STEP PROSE" in user and "AVAILABLE PER-STAY COLUMNS" in user
+    return (
+        "COHORT-DEFINITION STEP PROSE" in user and "AVAILABLE PER-STAY COLUMNS" in user
+    )
 
 
+@pytest.mark.parametrize("development_sample_size", [None, 100])
 def test_prose_cohort_is_extracted_materialised_and_enforced(
-    ra, synthetic_cohort, tmp_path: Path
+    ra, synthetic_cohort, tmp_path: Path, development_sample_size: int | None
 ):
     from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep
 
@@ -38,9 +42,7 @@ def test_prose_cohort_is_extracted_materialised_and_enforced(
         extraction call returns typed predicates over real universe columns."""
 
         def complete(self, messages, **kwargs):
-            user = next(
-                (m.content for m in reversed(messages) if m.role == "user"), ""
-            )
+            user = next((m.content for m in reversed(messages) if m.role == "user"), "")
             if _is_extraction(user):
                 return json.dumps(
                     {
@@ -85,7 +87,13 @@ def test_prose_cohort_is_extracted_materialised_and_enforced(
                 return revised.model_dump_json(indent=2)
             return super().complete(messages, **kwargs)
 
-    pipeline = ra.ResearchAgentPipeline(workdir=tmp_path, llm=ProseCohortLLM())
+    pipeline = ra.ResearchAgentPipeline(
+        workdir=tmp_path,
+        llm=ProseCohortLLM(),
+        runner_kind="subprocess",
+        runner_kwargs={"allow_unsafe_host_fallback": True},
+        development_sample_size=development_sample_size,
+    )
     result = pipeline.run(
         question="Is admission SOFA-2 associated with ICU mortality?",
         cohort=synthetic_cohort,
@@ -102,6 +110,16 @@ def test_prose_cohort_is_extracted_materialised_and_enforced(
     assert analysis_cohort.exists(), "cohort_analysis.parquet was not materialised"
     n_cohort = len(pd.read_parquet(analysis_cohort))
     assert 0 < n_cohort < 800, n_cohort
+    if development_sample_size is not None:
+        sampled = run_dir / "cohort_analysis_development_sample.parquet"
+        assert sampled.exists()
+        assert len(pd.read_parquet(sampled)) == development_sample_size
+        sample_manifest = json.loads(
+            (run_dir / "development_execution_sample.json").read_text(encoding="utf-8")
+        )
+        assert sample_manifest["paper_authority"] is False
+        assert sample_manifest["parent"]["rows"] == n_cohort
+        assert sample_manifest["sample"]["rows"] == development_sample_size
 
     manifest = json.loads(Path(result.manifest_path).read_text(encoding="utf-8"))
     findings = manifest["findings"]

@@ -102,6 +102,10 @@ from ..repairs.coordination import (
     authorized_deterministic_concept_repair,
 )
 from .concept_audit_cache import LLMConceptAuditCache
+from .development_sample import (
+    materialize_development_execution_sample,
+    record_development_sample_authority,
+)
 from .concept_audit import (
     ConceptAuditAuthority,
     ConceptAuditCoordinator,
@@ -3569,10 +3573,56 @@ def run_execute_phase(
         plan=plan,
         context=context,
     )
+    if (
+        pipeline._development_sample_size is not None
+        and run_input_authority_state.analysis_path.exists()
+    ):
+        run_input_authority_state.apply_development_sample(
+            materialize_development_execution_sample(
+                run_dir=run_dir,
+                target_rows=pipeline._development_sample_size,
+                seed=pipeline._development_sample_seed,
+                declared_id_columns=tuple(
+                    getattr(context.cohort, "id_columns", ()) or ()
+                ),
+                trajectory_binding=trajectory_binding,
+            )
+        )
     cohort_path = run_input_authority_state.selected_path
     run_input_authority_state.require_trajectory_integrity(
         step_id="execute_phase_initialization",
     )
+
+    if (
+        pipeline._development_sample_size is not None
+        and run_input_authority_state.development_sample is None
+    ):
+        findings.append(
+            ValidationFinding(
+                validator="development_sample_authority",
+                severity="error",
+                message=(
+                    "This run requested a non-paper post-QC development sample. "
+                    "The locked analysis cohort is not materialized yet, so "
+                    "sampling is deferred until cohort QC completes; regardless "
+                    "of whether that occurs, this run cannot become paper authority."
+                ),
+                detail={
+                    "paper_authority": False,
+                    "stage": "awaiting_locked_cohort_materialization_and_qc",
+                    "target_rows": pipeline._development_sample_size,
+                    "seed": pipeline._development_sample_seed,
+                },
+            )
+        )
+    if run_input_authority_state.development_sample is not None:
+        record_development_sample_authority(
+            binding=run_input_authority_state.development_sample,
+            evidence=evidence,
+            findings=findings,
+            emit_progress=emit_progress,
+            run_id=run_id,
+        )
 
     # Validator/code drift is resolved before ResumeController decides which
     # prior successes to skip and before any coder, runner, analyzer, or LLM
@@ -3936,13 +3986,6 @@ def run_execute_phase(
             context=context,
         )
         cohort_path = run_input_authority_state.selected_path
-        runner = pipeline._build_runner(
-            run_dir=run_dir,
-            cohort_path=cohort_path,
-            target_outcome=context.target_outcome,
-            universe_path=universe_path,
-            **run_input_authority_state.runner_bindings(),
-        )
         cohort_product_steps = [
             step
             for step in candidate_plan.steps
@@ -4056,6 +4099,33 @@ def run_execute_phase(
                         },
                     )
                 )
+        if pipeline._development_sample_size is not None:
+            run_input_authority_state.apply_development_sample(
+                materialize_development_execution_sample(
+                    run_dir=run_dir,
+                    target_rows=pipeline._development_sample_size,
+                    seed=pipeline._development_sample_seed,
+                    declared_id_columns=tuple(
+                        getattr(context.cohort, "id_columns", ()) or ()
+                    ),
+                    trajectory_binding=run_input_authority_state.trajectory_binding,
+                )
+            )
+            record_development_sample_authority(
+                binding=run_input_authority_state.development_sample,
+                evidence=evidence,
+                findings=findings,
+                emit_progress=emit_progress,
+                run_id=run_id,
+            )
+        cohort_path = run_input_authority_state.selected_path
+        runner = pipeline._build_runner(
+            run_dir=run_dir,
+            cohort_path=cohort_path,
+            target_outcome=context.target_outcome,
+            universe_path=universe_path,
+            **run_input_authority_state.runner_bindings(),
+        )
         findings.append(
             ValidationFinding(
                 validator="cohort_materializer",
@@ -10700,9 +10770,41 @@ def run_execute_phase(
         )
         return step_record
 
+    if (
+        pipeline._development_sample_size is not None
+        and run_input_authority_state.development_sample is None
+    ):
+        findings.append(
+            ValidationFinding(
+                validator="development_sample_authority",
+                severity="error",
+                message=(
+                    "Development execution stopped before scientific steps: "
+                    "the Agent did not produce a locked, post-QC analysis "
+                    "cohort from which the requested non-paper sample could "
+                    "be drawn. The host will not silently run those steps on "
+                    "the full universe."
+                ),
+                detail={
+                    "paper_authority": False,
+                    "stage": "blocked_before_scientific_execution",
+                    "target_rows": pipeline._development_sample_size,
+                    "seed": pipeline._development_sample_seed,
+                    "provider_calls_avoided": "coder_and_step_level_calls",
+                },
+            )
+        )
+
     steps_to_run = (
         []
-        if trajectory_plan_blocked or typed_plan_dag_blocked
+        if (
+            trajectory_plan_blocked
+            or typed_plan_dag_blocked
+            or (
+                pipeline._development_sample_size is not None
+                and run_input_authority_state.development_sample is None
+            )
+        )
         else resume_controller.remaining_steps(
             plan=plan,
             executed_step_ids=set(preexecuted_step_ids),

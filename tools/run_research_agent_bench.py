@@ -1862,6 +1862,8 @@ def _benchmark_pipeline_options(
     enable_cross_run_memory: bool = False,
     submission_profile: Optional["SubmissionProfile"] = None,
     runner_kind: Optional[str] = None,
+    development_sample_size: Optional[int] = None,
+    development_sample_seed: int = 20260719,
 ) -> Dict[str, Any]:
     options: Dict[str, Any] = {}
     if submission_profile:
@@ -1872,6 +1874,17 @@ def _benchmark_pipeline_options(
         # the run manifest / bench_results.json document the execution
         # isolation the manuscript Methods section cites.
         options["runner_kind"] = runner_kind
+    if development_sample_size is not None:
+        if submission_profile is not None:
+            raise SystemExit(
+                "--development-sample-size is non-paper authority and cannot be "
+                "combined with --submission-profile. Use it for development "
+                "runs, then rerun the frozen task on full data for the paper."
+            )
+        if int(development_sample_size) <= 0:
+            raise SystemExit("--development-sample-size must be positive.")
+        options["development_sample_size"] = int(development_sample_size)
+        options["development_sample_seed"] = int(development_sample_seed)
     # These are independent execution budgets.  The ordinary timeout bounds
     # model-generated scripts; registered standards use their own longer
     # planner-owned workload budget.
@@ -2009,7 +2022,7 @@ def _enforce_submission_profile_runner(
             f"Submission profile '{profile.ref}' is paper-facing and must "
             f"execute agent-generated code in a network-isolated sandbox: "
             f"pass '--runner {required}'. Build the image first with "
-            "`docker build -t easyicu-research-agent:latest -f "
+            "`docker build -t easyicu-research-agent:1.0.0 -f "
             "src/easyicu/research_agent/runner_image/Dockerfile .`. For a "
             "non-archival development run only, pass '--allow-host-runner'."
         )
@@ -2328,6 +2341,24 @@ def main() -> int:
         ),
     )
     parser.add_argument(
+        "--development-sample-size",
+        type=int,
+        default=None,
+        help=(
+            "Non-paper acceleration: after the Agent locks and materializes the "
+            "analysis cohort and QC, execute a deterministic identity-hash "
+            "sample of this many stays (for example 1000). Any trajectory is "
+            "filtered to the same stays. Incompatible with --submission-profile "
+            "and Figure 2 paper acceptance."
+        ),
+    )
+    parser.add_argument(
+        "--development-sample-seed",
+        type=int,
+        default=20260719,
+        help="Stable seed for --development-sample-size (default: 20260719).",
+    )
+    parser.add_argument(
         "--disable-replanning",
         action="store_true",
         help=(
@@ -2568,7 +2599,18 @@ def main() -> int:
         enable_cross_run_memory=bool(getattr(args, "enable_cross_run_memory", False)),
         submission_profile=submission_profile,
         runner_kind=runner_kind,
+        development_sample_size=getattr(args, "development_sample_size", None),
+        development_sample_seed=int(getattr(args, "development_sample_seed", 20260719)),
     )
+
+    if (
+        bool(args.require_figure2_paper_acceptance)
+        and getattr(args, "development_sample_size", None) is not None
+    ):
+        raise SystemExit(
+            "--require-figure2-paper-acceptance cannot score a non-paper "
+            "development sample. Rerun the frozen task on the full cohort."
+        )
 
     if args.ehrflowbench_jsonl:
         if bool(args.require_figure2_paper_acceptance) and _normalize_arms(
