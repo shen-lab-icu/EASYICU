@@ -100,7 +100,7 @@ from .repairs.coordination import (
     StepRepairBudget,
     authorized_deterministic_concept_repair,
 )
-from .concept_audit_cache import LLMConceptAuditCache
+from .execution.concept_audit_cache import LLMConceptAuditCache
 from .execution.concept_audit import (
     ConceptAuditAuthority,
     ConceptAuditCoordinator,

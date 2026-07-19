@@ -20,7 +20,7 @@ from ..audits.validators import (
     LLMConceptAuditor,
     _reclassify_llm_concept_findings,
 )
-from ..concept_audit_cache import LLMConceptAuditCache
+from .concept_audit_cache import LLMConceptAuditCache
 from ..gates.concept import (
     DETERMINISTIC_CODE_GATE_VALIDATORS,
     deterministic_code_gate_findings,

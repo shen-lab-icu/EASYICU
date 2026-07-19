@@ -10,7 +10,7 @@ import pandas as pd
 
 from easyicu.research_agent import pipeline_cache
 from easyicu.research_agent import run_input_capsule
-from easyicu.research_agent.metadata_implementation_identity import (
+from easyicu.research_agent.research_context.implementation_identity import (
     metadata_implementation_identity,
 )
 from tests.research_agent.test_materialized_column_metadata import _build_v2_context

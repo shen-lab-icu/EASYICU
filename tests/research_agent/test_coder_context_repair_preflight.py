@@ -13,7 +13,7 @@ from easyicu.research_agent.research_context.prompt_scope import (
     coder_guide_for_step,
     scoped_coder_context,
 )
-from easyicu.research_agent.concept_audit_cache import LLMConceptAuditCache
+from easyicu.research_agent.execution.concept_audit_cache import LLMConceptAuditCache
 from easyicu.research_agent.pipeline_resume import _looks_like_generated_python
 from easyicu.research_agent.authority.provider_budget import (
     ProviderCallBudgetExhausted,

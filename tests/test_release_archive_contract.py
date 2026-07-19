@@ -178,6 +178,7 @@ def test_release_archives_preserve_reviewer_contract_and_package_data(
             "src/easyicu/research_agent/authority/step_attempt.py",
             "src/easyicu/research_agent/authority/step_capsule.py",
             "src/easyicu/research_agent/authority/step_runtime.py",
+            "src/easyicu/research_agent/execution/concept_audit_cache.py",
             "src/easyicu/research_agent/planning/cohort_contract.py",
             "src/easyicu/research_agent/planning/robustness_contract.py",
             "src/easyicu/research_agent/providers/cost.py",
@@ -186,6 +187,7 @@ def test_release_archives_preserve_reviewer_contract_and_package_data(
             "src/easyicu/research_agent/providers/prompts/v1/coder.txt",
             "src/easyicu/research_agent/providers/protocol.py",
             "src/easyicu/research_agent/providers/structured_retry.py",
+            "src/easyicu/research_agent/research_context/implementation_identity.py",
             "src/easyicu/research_agent/replication/metrics.py",
             "src/easyicu/webserver/static/index.html",
             "src/easyicu/webserver/static/css/app.css",
@@ -226,6 +228,7 @@ def test_release_archives_preserve_reviewer_contract_and_package_data(
             "easyicu/research_agent/authority/step_attempt.py",
             "easyicu/research_agent/authority/step_capsule.py",
             "easyicu/research_agent/authority/step_runtime.py",
+            "easyicu/research_agent/execution/concept_audit_cache.py",
             "easyicu/research_agent/planning/cohort_contract.py",
             "easyicu/research_agent/planning/robustness_contract.py",
             "easyicu/research_agent/providers/cost.py",
@@ -238,6 +241,7 @@ def test_release_archives_preserve_reviewer_contract_and_package_data(
             "easyicu/research_agent/providers/prompts/v1/writer.txt",
             "easyicu/research_agent/providers/protocol.py",
             "easyicu/research_agent/providers/structured_retry.py",
+            "easyicu/research_agent/research_context/implementation_identity.py",
             "easyicu/research_agent/replication/metrics.py",
         }
         missing_canonical_modules = sorted(required_canonical_modules - wheel_names)
@@ -280,11 +284,13 @@ for name in (
     'easyicu.research_agent.authority.step_attempt',
     'easyicu.research_agent.authority.step_capsule',
     'easyicu.research_agent.authority.step_runtime',
+    'easyicu.research_agent.execution.concept_audit_cache',
     'easyicu.research_agent.providers.cost',
     'easyicu.research_agent.providers.llm',
     'easyicu.research_agent.providers.mocks',
     'easyicu.research_agent.providers.prompts',
     'easyicu.research_agent.providers.structured_retry',
+    'easyicu.research_agent.research_context.implementation_identity',
 ):
     module = importlib.import_module(name)
     assert Path(module.__file__).resolve().is_relative_to(root), module.__file__

@@ -9,8 +9,8 @@ import threading
 from pathlib import Path
 from typing import Any, Mapping, Optional
 
-from .providers.prompts import PROMPT_PACK_VERSION
-from .schema import AnalysisStep, ResearchContext, ValidationFinding
+from ..providers.prompts import PROMPT_PACK_VERSION
+from ..schema import AnalysisStep, ResearchContext, ValidationFinding
 
 
 _CACHE_SCHEMA = "easyicu.llm_concept_audit_cache/6"
