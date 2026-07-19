@@ -28,7 +28,7 @@ from ..gates.concept import (
     quarantined_deterministic_errors_resolved_by_current_gate,
     quarantined_errors_superseded_by_current_policy,
 )
-from ..contracts import ValidationFinding
+from ..contracts.runtime import ValidationFinding
 from ..authority.evidence_store import sha256_of_bytes
 from ..authority.provider_budget import (
     ProviderCallBudgetError,

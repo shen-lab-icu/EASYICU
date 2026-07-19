@@ -19,7 +19,7 @@ from easyicu.research_agent.methods.ordered_trends import (
     jonckheere_terpstra_trend,
     wilson_interval,
 )
-from easyicu.research_agent.ordered_stratified_contract import (
+from easyicu.research_agent.contracts.ordered_stratified import (
     is_ordered_stratified_analysis_step,
     ordered_stratified_numeric_findings,
     ordered_stratified_script_findings,

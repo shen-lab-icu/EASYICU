@@ -11,7 +11,7 @@ from pathlib import Path
 
 
 def _patch_failed_execute(monkeypatch, ra) -> None:
-    from easyicu.research_agent.contracts import _ExecutePhaseResult
+    from easyicu.research_agent.contracts.runtime import _ExecutePhaseResult
     from easyicu.research_agent.schema import AgentRuntimeState
 
     def _fake_execute(

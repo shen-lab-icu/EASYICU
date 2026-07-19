@@ -16,7 +16,7 @@ from typing import Any, Dict, List, Mapping, Optional, Sequence, Set, Tuple
 
 from ..audits.step_summary_integrity import StepSummaryIntegrityValidator
 from .coder_authority import HostCoderAuthority
-from ..declared_product_contract import (
+from ..contracts.declared_product import (
     RUNTIME_BINDABLE_TYPED_INPUT_KINDS,
     RUNTIME_TYPED_INPUT_EVIDENCE_KINDS,
     typed_product_binding_contract,

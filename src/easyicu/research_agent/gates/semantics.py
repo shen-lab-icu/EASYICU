@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import List, Sequence
 
-from .schema import ValidationFinding
+from ..schema import ValidationFinding
 
 
 def blocking_validator_findings(

@@ -57,7 +57,7 @@ internal type hints in :mod:`pipeline`.
 
 from __future__ import annotations
 
-from .contracts import (
+from .contracts.runtime import (
     _ExecutePhaseResult as ExecutePhaseState,
     _PlanPhaseResult as PlanPhaseState,
     _WritePhaseResult as WritePhaseState,

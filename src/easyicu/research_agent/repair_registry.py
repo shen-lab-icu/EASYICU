@@ -404,7 +404,7 @@ _SEALED_RENDERER_PARENT_OUTPUT_ROLE_GROUPS: Dict[
 
 _COMMON_SEALED_RENDERER_MODULES = (
     "easyicu.research_agent.pipeline",
-    "easyicu.research_agent.declared_product_contract",
+    "easyicu.research_agent.contracts.declared_product",
     "easyicu.research_agent.repair_registry",
     "easyicu.research_agent.figures.publication",
 )

@@ -53,10 +53,10 @@ from ..audits.validators import (
     PrimaryModelContractValidator,
     StepSummaryFractionValidator,
 )
-from ..contracts import ValidationFinding
-from ..declared_product_contract import primary_analysis_cohort_integrity_findings
+from ..contracts.runtime import ValidationFinding
+from ..contracts.declared_product import primary_analysis_cohort_integrity_findings
 from ..execution.runners.deterministic_robustness import replay_locked_memberships
-from ..ordered_stratified_contract import ordered_stratified_numeric_findings
+from ..contracts.ordered_stratified import ordered_stratified_numeric_findings
 from ..plan_utils import (
     _normalised_expected_output_names,
     _primary_exposure_contract_findings,
@@ -66,7 +66,7 @@ from ..plan_utils import (
     _step_contract_findings,
     _step_expects_figure,
 )
-from ..robustness_execution_contract import (
+from ..contracts.robustness_execution import (
     ROBUSTNESS_COHORT_MEMBERSHIP_ALIASES,
     _executed_robustness_result_issues,
 )

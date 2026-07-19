@@ -10707,7 +10707,7 @@ def test_advanced_plan_contract_infers_robustness_without_user_preferences(ra):
 
 def test_salvage_stdout_json_step_summary(ra, tmp_path: Path):
     from easyicu.research_agent.pipeline import _salvage_stdout_json_step_summary
-    from easyicu.research_agent.contracts import RunResult
+    from easyicu.research_agent.contracts.runtime import RunResult
 
     out_dir = tmp_path / "outputs"
     out_dir.mkdir()
@@ -10729,7 +10729,7 @@ def test_salvage_stdout_json_step_summary(ra, tmp_path: Path):
 
 def test_salvage_named_json_step_summary(ra, tmp_path: Path):
     from easyicu.research_agent.pipeline import _salvage_named_json_step_summary
-    from easyicu.research_agent.contracts import RunResult
+    from easyicu.research_agent.contracts.runtime import RunResult
 
     out_dir = tmp_path / "outputs"
     out_dir.mkdir()

@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from easyicu.research_agent.cohort.schema import CohortDefinition
-from easyicu.research_agent.declared_product_contract import (
+from easyicu.research_agent.contracts.declared_product import (
     typed_product,
     typed_product_schema_receipt,
 )

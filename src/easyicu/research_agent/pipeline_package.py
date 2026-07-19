@@ -30,7 +30,7 @@ from .concept_dict_audit import (
     SOFA2_DICT_PACKAGE_PATH,
     compute_concept_dict_fingerprint,
 )
-from .contracts import (
+from .contracts.runtime import (
     ValidationFinding,
     _ExecutePhaseResult,
     _PlanPhaseResult,

@@ -141,7 +141,7 @@ from .reporting.article_contract import (
 )
 from .planning.figure_strategy import build_article_figure_strategy
 from .pipeline_config import PipelineConfig
-from .contracts import (
+from .contracts.runtime import (
     RunResult,
     _ExecutePhaseResult,
     _PlanPhaseResult,
@@ -753,7 +753,7 @@ def _migrate_legacy_resume_figure_render_edges(
     fail-closed for the Planner.
     """
 
-    from .declared_product_contract import (
+    from .contracts.declared_product import (
         effect_bearing_product,
         typed_product,
     )
@@ -9464,7 +9464,7 @@ def _absolute_risk_parent_digest_seal(
     request_step = _resolve_upstream_manifest_step(run_dir, figure_step_id)
     if not isinstance(request_step, Mapping):
         return None
-    from .declared_product_contract import (
+    from .contracts.declared_product import (
         read_digest_bound_artifact_snapshot,
         typed_product,
     )
@@ -9612,7 +9612,7 @@ def _sealed_renderer_parent_digest_seal(
     parent_step_id = str(figure_step_id or "").removesuffix("_figure")
     parent_out = Path(run_dir) / "steps" / parent_step_id / "outputs"
     try:
-        from .declared_product_contract import read_digest_bound_artifact_snapshot
+        from .contracts.declared_product import read_digest_bound_artifact_snapshot
 
         snapshot = read_digest_bound_artifact_snapshot(
             parent_out=parent_out,
@@ -9663,7 +9663,7 @@ def _render_authorized_sealed_publication_bundle(
     direct parent's registered method/family and evidence digests.
     """
 
-    from .declared_product_contract import read_digest_bound_artifact_snapshot
+    from .contracts.declared_product import read_digest_bound_artifact_snapshot
 
     parent_step_id = str(current_step_id or "").removesuffix("_figure")
     if not parent_step_id or parent_step_id == str(current_step_id or ""):
@@ -9758,7 +9758,7 @@ def _distribution_availability_figure_step_matches_parent(
     request_step = _resolve_upstream_manifest_step(run_dir, step.step_id)
     if seal is None or not isinstance(request_step, Mapping):
         return False
-    from .declared_product_contract import typed_product
+    from .contracts.declared_product import typed_product
     from .figures.distribution_availability import CONTROLLED_METHOD
 
     required_inputs = {
@@ -9788,7 +9788,7 @@ def _sealed_renderer_figure_step_matches_parent(
     inputs exactly.  Merely using a ``*_figure`` sibling name is never enough.
     """
 
-    from .declared_product_contract import typed_product
+    from .contracts.declared_product import typed_product
     from .repair_registry import is_sealed_renderer_repair, repair_metadata_for
 
     if not is_sealed_renderer_repair(renderer_repair_id):
@@ -9853,7 +9853,7 @@ def deterministic_figure_repair_id_for_upstream(
     request_step = request.get("step") if isinstance(request, Mapping) else None
     if not isinstance(request_step, Mapping):
         return None
-    from .declared_product_contract import typed_product
+    from .contracts.declared_product import typed_product
 
     planner_table_tokens = {
         tuple(part for part in parsed[1].split("_") if part)

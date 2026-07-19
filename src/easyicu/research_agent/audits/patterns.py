@@ -40,7 +40,7 @@ import re
 from dataclasses import dataclass
 from typing import Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
-from ..ordered_stratified_contract import ordered_stratified_script_findings
+from ..contracts.ordered_stratified import ordered_stratified_script_findings
 from ..schema import (
     AnalysisStep,
     ConceptDescriptor,

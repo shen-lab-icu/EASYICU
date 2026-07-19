@@ -10,7 +10,7 @@ import pandas as pd
 import pytest
 
 from easyicu.research_agent.audits.validators import FigureSourceDataValidator
-from easyicu.research_agent.declared_product_contract import (
+from easyicu.research_agent.contracts.declared_product import (
     authorize_declared_figure_product_slots,
     bind_declared_figure_products,
 )

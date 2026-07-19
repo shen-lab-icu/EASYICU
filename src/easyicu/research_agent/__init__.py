@@ -730,7 +730,7 @@ def __getattr__(name: str):
 
         return getattr(_lit, name)
     if name == "RunResult":
-        from .contracts import RunResult
+        from .contracts.runtime import RunResult
 
         return RunResult
     if name in {"CodeRunner", "DockerRunner"}:

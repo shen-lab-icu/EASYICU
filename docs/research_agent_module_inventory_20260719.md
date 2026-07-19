@@ -20,8 +20,8 @@ Before the retirement patch, the 161 top-level Python files comprised:
 | Real top-level implementations | 93 | 98,530 | Canonical/public/frozen/dormant implementations requiring individual review |
 
 The cleanup has now removed the old facade layer rather than retaining hundreds
-of tiny forwarding files.  The current tree has **46 top-level Python files
-including `__init__.py`**, with 225 modules in 26 responsibility packages and
+of tiny forwarding files.  The current tree has **41 top-level Python files
+including `__init__.py`**, with 226 modules in 27 responsibility packages and
 758 static import edges.  The graph remains at **zero cyclic
 modules / zero SCCs**.  The former 23-module control-plane SCC,
 validator/replication pair, and final pipeline/execute/publication-figure cycle
@@ -29,10 +29,11 @@ are gone.
 
 The execution-runtime bundle moved `runner.py`, `code_hygiene.py`,
 `run_coordination.py`, `step_execution.py`, and `step_worker_state.py` into
-`execution/` and retired their old root paths.  `RunResult` now lives in the
-dependency-neutral `contracts.py`; both the package root and execution runner
-export that single contract object, so authority code does not reverse-import
-the execution layer.
+`execution/` and retired their old root paths.  Runtime boundary types now live
+in dependency-neutral `contracts/runtime.py`; declared-product, ordered-group
+and robustness execution contracts share the same package, while fail-closed
+finding semantics live under `gates/semantics.py`.  Authority code therefore
+does not reverse-import the execution layer.
 
 The trajectory, publication-figure, cohort and acquisition bundles now own
 their domain implementations under `trajectory/`, `figures/`, `cohort/` and

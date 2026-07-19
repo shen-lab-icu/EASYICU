@@ -17,7 +17,7 @@ from easyicu.research_agent.figures.ordered_distribution import (
     render_ordered_distribution_bundle_from_prior_outputs,
 )
 from easyicu.research_agent.authority.evidence_store import EvidenceStore
-from easyicu.research_agent.declared_product_contract import (
+from easyicu.research_agent.contracts.declared_product import (
     bind_declared_figure_products,
 )
 from easyicu.research_agent.pipeline import (

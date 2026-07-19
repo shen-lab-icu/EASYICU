@@ -30,7 +30,7 @@ import json
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Sequence
 
-from ..declared_product_contract import (
+from ..contracts.declared_product import (
     authorize_declared_figure_product_slots,
     typed_product as _canonical_typed_product,
 )
@@ -308,7 +308,7 @@ if repair_id != expected_repair_id:
 else:
     if __IS_SEALED_RENDERER__:
         contract_module = loaded_modules[
-            "easyicu.research_agent.declared_product_contract"
+            "easyicu.research_agent.contracts.declared_product"
         ]
         bind_declared_figure_products = getattr(
             contract_module,

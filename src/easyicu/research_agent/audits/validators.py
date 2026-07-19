@@ -37,7 +37,7 @@ from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Set, 
 import pandas as pd
 
 from ..planning.analysis_method_suite import figure_product_source_obligations
-from ..declared_product_contract import (
+from ..contracts.declared_product import (
     effect_adjustment_family,
     effect_bearing_product,
     effect_estimand_tier,
@@ -46,7 +46,7 @@ from ..declared_product_contract import (
     typed_product,
 )
 from ..replication.metrics import compare_metric_values
-from ..ordered_stratified_contract import ordered_stratified_numeric_findings
+from ..contracts.ordered_stratified import ordered_stratified_numeric_findings
 from ..schema import (
     ADJUSTED_ASSOCIATION_BINARY_METHOD_FAMILIES,
     ADJUSTED_ASSOCIATION_CONTINUOUS_METHOD_FAMILIES,

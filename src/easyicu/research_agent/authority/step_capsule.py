@@ -30,7 +30,7 @@ from pydantic import (
     model_validator,
 )
 
-from ..gate_semantics import blocking_validator_findings
+from ..gates.semantics import blocking_validator_findings
 from ..schema import ValidationFinding
 
 STEP_AUTHORITY_CAPSULE_SCHEMA_VERSION = "easyicu.step_authority_capsule/1"

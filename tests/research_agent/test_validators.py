@@ -2865,7 +2865,7 @@ def test_llm_concept_auditor_keeps_finalized_exposure_override_blocking(ra):
     from easyicu.research_agent.audits.validators import (
         _downgrade_finalized_exposure_reconciliation_findings,
     )
-    from easyicu.research_agent.contracts import ValidationFinding
+    from easyicu.research_agent.contracts.runtime import ValidationFinding
 
     script = """
 exposure_binding = resolved_inputs['artifact:primary_exposure_definition']
@@ -2911,7 +2911,7 @@ def test_llm_concept_auditor_downgrades_raw_resolver_branch_false_override(ra):
     from easyicu.research_agent.audits.validators import (
         _downgrade_finalized_exposure_reconciliation_findings,
     )
-    from easyicu.research_agent.contracts import ValidationFinding
+    from easyicu.research_agent.contracts.runtime import ValidationFinding
 
     script = """
 exposure_binding = resolved_inputs['artifact:primary_exposure_definition']
@@ -3013,7 +3013,7 @@ def test_llm_concept_auditor_keeps_post_branch_reconciliation_blocking(ra):
     from easyicu.research_agent.audits.validators import (
         _downgrade_finalized_exposure_reconciliation_findings,
     )
-    from easyicu.research_agent.contracts import ValidationFinding
+    from easyicu.research_agent.contracts.runtime import ValidationFinding
 
     script = """
 exposure_binding = resolved_inputs['artifact:primary_exposure_definition']
@@ -3065,7 +3065,7 @@ def test_llm_concept_auditor_accepts_contract_bound_finalized_branch(ra):
     from easyicu.research_agent.audits.validators import (
         _downgrade_finalized_exposure_reconciliation_findings,
     )
-    from easyicu.research_agent.contracts import ValidationFinding
+    from easyicu.research_agent.contracts.runtime import ValidationFinding
 
     script = """
 exposure_binding = resolved_inputs['artifact:primary_exposure_definition']
@@ -3433,7 +3433,7 @@ def test_llm_concept_auditor_accepts_finalized_only_consumer_without_helper_call
     from easyicu.research_agent.audits.validators import (
         _downgrade_finalized_exposure_reconciliation_findings,
     )
-    from easyicu.research_agent.contracts import ValidationFinding
+    from easyicu.research_agent.contracts.runtime import ValidationFinding
 
     script = f"""
 exposure_binding = resolved_inputs['artifact:primary_exposure_definition']

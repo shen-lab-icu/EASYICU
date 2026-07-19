@@ -12,7 +12,7 @@ from easyicu.research_agent.audits.validators import (
     FigureContractQualityValidator,
     FigureSourceDataValidator,
 )
-from easyicu.research_agent.declared_product_contract import (
+from easyicu.research_agent.contracts.declared_product import (
     bind_declared_figure_products,
 )
 from easyicu.research_agent.pipeline import (
