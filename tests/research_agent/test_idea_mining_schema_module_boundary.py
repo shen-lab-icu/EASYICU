@@ -44,6 +44,7 @@ def test_idea_mining_schema_is_a_leaf_module() -> None:
         / "src"
         / "easyicu"
         / "research_agent"
+        / "discovery"
         / "idea_mining_schema.py"
     )
     tree = ast.parse(path.read_text(encoding="utf-8"))

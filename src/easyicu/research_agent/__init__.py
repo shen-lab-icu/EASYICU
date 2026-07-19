@@ -551,7 +551,7 @@ def __getattr__(name: str):
         "IdeaRegistryError",
         "SelectionStatus",
     }:
-        from . import idea_registry as _idea_registry
+        from .discovery import idea_registry as _idea_registry
 
         return getattr(_idea_registry, name)
     if name in {
@@ -602,7 +602,7 @@ def __getattr__(name: str):
         "resolve_journals",
         "resolve_year_range",
     }:
-        from . import idea_scope as _idea_scope
+        from .discovery import idea_scope as _idea_scope
 
         return getattr(_idea_scope, name)
     if name in {
@@ -988,7 +988,7 @@ def __getattr__(name: str):
         "LITERATURE_SATURATION_SIGNAL_STATEMENT",
         "generate_hypotheses",
     }:
-        from . import hypothesis_generator as _hg
+        from .discovery import hypothesis_generator as _hg
 
         return getattr(_hg, name)
     if name == "AnalysisPatternAuditor":

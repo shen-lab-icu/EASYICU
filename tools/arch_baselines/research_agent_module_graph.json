@@ -85,6 +85,18 @@
     ],
     [
       "easyicu.research_agent",
+      "easyicu.research_agent.discovery.hypothesis_generator"
+    ],
+    [
+      "easyicu.research_agent",
+      "easyicu.research_agent.discovery.idea_registry"
+    ],
+    [
+      "easyicu.research_agent",
+      "easyicu.research_agent.discovery.idea_scope"
+    ],
+    [
+      "easyicu.research_agent",
       "easyicu.research_agent.discovery_handoff"
     ],
     [
@@ -113,10 +125,6 @@
     ],
     [
       "easyicu.research_agent",
-      "easyicu.research_agent.hypothesis_generator"
-    ],
-    [
-      "easyicu.research_agent",
       "easyicu.research_agent.icu_agent_bench"
     ],
     [
@@ -134,14 +142,6 @@
     [
       "easyicu.research_agent",
       "easyicu.research_agent.idea_mining_funnel"
-    ],
-    [
-      "easyicu.research_agent",
-      "easyicu.research_agent.idea_registry"
-    ],
-    [
-      "easyicu.research_agent",
-      "easyicu.research_agent.idea_scope"
     ],
     [
       "easyicu.research_agent",
@@ -780,6 +780,10 @@
       "easyicu.research_agent.gates.concept"
     ],
     [
+      "easyicu.research_agent.concept_proposal",
+      "easyicu.research_agent.discovery.concept_proposal"
+    ],
+    [
       "easyicu.research_agent.context",
       "easyicu.research_agent.cohort_artifact_facts"
     ],
@@ -958,6 +962,30 @@
     [
       "easyicu.research_agent.deterministic_survival",
       "easyicu.research_agent.execution.runners.deterministic_survival"
+    ],
+    [
+      "easyicu.research_agent.discovery.hypothesis_generator",
+      "easyicu.research_agent.schema"
+    ],
+    [
+      "easyicu.research_agent.discovery.idea_mining_data_first",
+      "easyicu.research_agent.concept_availability"
+    ],
+    [
+      "easyicu.research_agent.discovery.idea_mining_feasibility_tier",
+      "easyicu.research_agent.concept_catalog"
+    ],
+    [
+      "easyicu.research_agent.discovery.idea_mining_pubmed",
+      "easyicu.research_agent.concept_availability"
+    ],
+    [
+      "easyicu.research_agent.discovery.idea_mining_pubmed",
+      "easyicu.research_agent.concept_catalog"
+    ],
+    [
+      "easyicu.research_agent.discovery.idea_mining_schema",
+      "easyicu.research_agent.literature"
     ],
     [
       "easyicu.research_agent.discovery_package",
@@ -1481,7 +1509,7 @@
     ],
     [
       "easyicu.research_agent.hypothesis_generator",
-      "easyicu.research_agent.schema"
+      "easyicu.research_agent.discovery.hypothesis_generator"
     ],
     [
       "easyicu.research_agent.icu_rules",
@@ -1541,7 +1569,7 @@
     ],
     [
       "easyicu.research_agent.idea_mining_data_first",
-      "easyicu.research_agent.concept_availability"
+      "easyicu.research_agent.discovery.idea_mining_data_first"
     ],
     [
       "easyicu.research_agent.idea_mining_eval",
@@ -1553,7 +1581,7 @@
     ],
     [
       "easyicu.research_agent.idea_mining_feasibility_tier",
-      "easyicu.research_agent.concept_catalog"
+      "easyicu.research_agent.discovery.idea_mining_feasibility_tier"
     ],
     [
       "easyicu.research_agent.idea_mining_funnel",
@@ -1589,15 +1617,19 @@
     ],
     [
       "easyicu.research_agent.idea_mining_pubmed",
-      "easyicu.research_agent.concept_availability"
-    ],
-    [
-      "easyicu.research_agent.idea_mining_pubmed",
-      "easyicu.research_agent.concept_catalog"
+      "easyicu.research_agent.discovery.idea_mining_pubmed"
     ],
     [
       "easyicu.research_agent.idea_mining_schema",
-      "easyicu.research_agent.literature"
+      "easyicu.research_agent.discovery.idea_mining_schema"
+    ],
+    [
+      "easyicu.research_agent.idea_registry",
+      "easyicu.research_agent.discovery.idea_registry"
+    ],
+    [
+      "easyicu.research_agent.idea_scope",
+      "easyicu.research_agent.discovery.idea_scope"
     ],
     [
       "easyicu.research_agent.intake",
@@ -1857,6 +1889,10 @@
     ],
     [
       "easyicu.research_agent.pipeline",
+      "easyicu.research_agent.discovery.hypothesis_generator"
+    ],
+    [
+      "easyicu.research_agent.pipeline",
       "easyicu.research_agent.evidence"
     ],
     [
@@ -1906,10 +1942,6 @@
     [
       "easyicu.research_agent.pipeline",
       "easyicu.research_agent.graph"
-    ],
-    [
-      "easyicu.research_agent.pipeline",
-      "easyicu.research_agent.hypothesis_generator"
     ],
     [
       "easyicu.research_agent.pipeline",
@@ -3128,6 +3160,11 @@
       ],
       "relative_path": "concept_gate.py"
     },
+    "easyicu.research_agent.concept_proposal": {
+      "exists": true,
+      "literal_all": null,
+      "relative_path": "concept_proposal.py"
+    },
     "easyicu.research_agent.contract_gate": {
       "exists": true,
       "literal_all": [
@@ -3222,6 +3259,41 @@
       "literal_all": null,
       "relative_path": "gate_evaluator.py"
     },
+    "easyicu.research_agent.hypothesis_generator": {
+      "exists": true,
+      "literal_all": null,
+      "relative_path": "hypothesis_generator.py"
+    },
+    "easyicu.research_agent.idea_mining_data_first": {
+      "exists": true,
+      "literal_all": null,
+      "relative_path": "idea_mining_data_first.py"
+    },
+    "easyicu.research_agent.idea_mining_feasibility_tier": {
+      "exists": true,
+      "literal_all": null,
+      "relative_path": "idea_mining_feasibility_tier.py"
+    },
+    "easyicu.research_agent.idea_mining_pubmed": {
+      "exists": true,
+      "literal_all": null,
+      "relative_path": "idea_mining_pubmed.py"
+    },
+    "easyicu.research_agent.idea_mining_schema": {
+      "exists": true,
+      "literal_all": null,
+      "relative_path": "idea_mining_schema.py"
+    },
+    "easyicu.research_agent.idea_registry": {
+      "exists": true,
+      "literal_all": null,
+      "relative_path": "idea_registry.py"
+    },
+    "easyicu.research_agent.idea_scope": {
+      "exists": true,
+      "literal_all": null,
+      "relative_path": "idea_scope.py"
+    },
     "easyicu.research_agent.publication_figure_execution": {
       "exists": true,
       "literal_all": [
@@ -3243,10 +3315,10 @@
   "metrics": {
     "cyclic_module_count": 30,
     "cyclic_scc_count": 3,
-    "edge_count": 766,
+    "edge_count": 774,
     "largest_scc_size": 23,
-    "module_count": 235,
-    "package_count": 13,
+    "module_count": 244,
+    "package_count": 14,
     "top_level_module_count": 161
   },
   "modules": {
@@ -3316,6 +3388,15 @@
     "easyicu.research_agent.deterministic_robustness": "deterministic_robustness.py",
     "easyicu.research_agent.deterministic_sensitivity": "deterministic_sensitivity.py",
     "easyicu.research_agent.deterministic_survival": "deterministic_survival.py",
+    "easyicu.research_agent.discovery": "discovery/__init__.py",
+    "easyicu.research_agent.discovery.concept_proposal": "discovery/concept_proposal.py",
+    "easyicu.research_agent.discovery.hypothesis_generator": "discovery/hypothesis_generator.py",
+    "easyicu.research_agent.discovery.idea_mining_data_first": "discovery/idea_mining_data_first.py",
+    "easyicu.research_agent.discovery.idea_mining_feasibility_tier": "discovery/idea_mining_feasibility_tier.py",
+    "easyicu.research_agent.discovery.idea_mining_pubmed": "discovery/idea_mining_pubmed.py",
+    "easyicu.research_agent.discovery.idea_mining_schema": "discovery/idea_mining_schema.py",
+    "easyicu.research_agent.discovery.idea_registry": "discovery/idea_registry.py",
+    "easyicu.research_agent.discovery.idea_scope": "discovery/idea_scope.py",
     "easyicu.research_agent.discovery_handoff": "discovery_handoff.py",
     "easyicu.research_agent.discovery_package": "discovery_package.py",
     "easyicu.research_agent.discovery_story_figure": "discovery_story_figure.py",
@@ -3492,6 +3573,7 @@
     "easyicu.research_agent.audits",
     "easyicu.research_agent.authority",
     "easyicu.research_agent.case_plugins",
+    "easyicu.research_agent.discovery",
     "easyicu.research_agent.execution",
     "easyicu.research_agent.execution.runners",
     "easyicu.research_agent.fallback",
@@ -3503,6 +3585,6 @@
     "easyicu.research_agent.replication"
   ],
   "schema_version": 2,
-  "tool_sha256": "c7719686d5521ada16b3f846d2d732eb19fde853c363d0b73ff934af113a8673",
+  "tool_sha256": "385123609b715102a2ba35a647596a0527d1059bafc7f56b00fbd3b26b4afed6",
   "tool_version": "1.1.0"
 }
