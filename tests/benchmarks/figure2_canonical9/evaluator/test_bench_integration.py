@@ -959,3 +959,86 @@ def test_reuse_completion_requires_checkpoint_selected_final_and_exact_status_ga
         json.dumps(tampered, sort_keys=True), encoding="utf-8"
     )
     assert bench._run_reached_execution_complete(run_dir) is False
+
+
+def test_explicit_paper_acceptance_fails_only_after_results_are_written(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    task_id = FIGURE2_TASK_IDS[0]
+    cohort_path = tmp_path / "cohort.csv"
+    cohort_path.write_text("lactate,event\n1.2,0\n2.4,1\n", encoding="utf-8")
+    jsonl_path = tmp_path / "figure2.jsonl"
+    jsonl_path.write_text(
+        json.dumps(
+            {
+                "key": task_id,
+                "question": "One-task development run must not pass Canonical9.",
+                "cohort_path": str(cohort_path),
+                "target_outcome": "event",
+                "primary_predictor": "lactate",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    def fake_run(**kwargs: Any) -> dict[str, Any]:
+        root = Path(kwargs["out_root"])
+        run_dir = root / task_id / "aware" / "run_invalid"
+        run_dir.mkdir(parents=True, exist_ok=True)
+        attempt = _invalid_attempt(
+            task_id=task_id,
+            run_id=run_dir.name,
+            reason="SAFETY_ADJUDICATION_MISSING",
+            detail="development fixture",
+        )
+        return {
+            "item_key": task_id,
+            "aware": {
+                "arm": "aware",
+                "run_id": run_dir.name,
+                "workdir": str(run_dir),
+                "figure2_evaluation_attempt": attempt.model_dump(mode="json"),
+            },
+        }
+
+    monkeypatch.setattr(bench, "_run_one_item_from_cohort", fake_run)
+    monkeypatch.setattr(bench, "_aggregate", lambda _scores: {"aware": {}})
+    monkeypatch.setattr(bench, "_render_markdown", lambda **_kwargs: "fixture\n")
+
+    ordinary_root = tmp_path / "ordinary"
+    assert (
+        bench._run_ehrflowbench_jsonl(
+            jsonl_path=jsonl_path,
+            out_root=ordinary_root,
+            seed=7,
+            arms=["aware"],
+            allow_mock_aware=True,
+        )
+        == 0
+    )
+    assert (ordinary_root / "ehrflowbench_results.json").is_file()
+    ordinary_gate = json.loads(
+        (ordinary_root / "figure2_paper_acceptance.json").read_text(encoding="utf-8")
+    )
+    assert ordinary_gate["status"] == "invalid"
+
+    enforced_root = tmp_path / "enforced"
+    assert (
+        bench._run_ehrflowbench_jsonl(
+            jsonl_path=jsonl_path,
+            out_root=enforced_root,
+            seed=7,
+            arms=["aware"],
+            allow_mock_aware=True,
+            require_figure2_paper_acceptance=True,
+        )
+        == bench._FIGURE2_PAPER_ACCEPTANCE_EXIT_CODE
+    )
+    assert (enforced_root / "ehrflowbench_results.json").is_file()
+    assert (enforced_root / "ehrflowbench_results.md").is_file()
+    enforced_gate = json.loads(
+        (enforced_root / "figure2_paper_acceptance.json").read_text(encoding="utf-8")
+    )
+    assert enforced_gate["status"] == "invalid"
