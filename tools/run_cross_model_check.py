@@ -19,7 +19,7 @@ SRC = ROOT / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
-from easyicu.research_agent.cohort_schema import (  # noqa: E402
+from easyicu.research_agent.cohort.schema import (  # noqa: E402
     CohortDefinition,
     ConceptPredicate,
     TimeWindow,

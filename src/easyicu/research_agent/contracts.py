@@ -16,7 +16,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple
 
-from .cohort_schema import CohortDefinition, ConceptPredicate, TimeWindow
+from .cohort.schema import CohortDefinition, ConceptPredicate, TimeWindow
 from .authority.evidence_store import NumericClaim
 from .robustness_panel import RobustnessPanel, RobustnessPanelRow, RobustnessSpec
 from .schema import EvidenceRecord as EvidenceArtifact

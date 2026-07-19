@@ -30,7 +30,7 @@ from typing import Dict, List, Mapping, Optional, Sequence, Union
 
 from easyicu.concept.metadata_sidecar import ColumnMetadataBinding
 
-from .intake.export_package import index_export_package, resolve_exported_concept
+from ..intake.export_package import index_export_package, resolve_exported_concept
 
 
 @dataclass
@@ -167,7 +167,7 @@ def _methodology_tag(concept_id: str, category: str) -> str:
     just yields no tag (the catalog still lists the concept).
     """
     try:
-        from .icu_rules import concept_methodology_tag
+        from ..icu_rules import concept_methodology_tag
 
         return concept_methodology_tag(concept_id, category=category)
     except Exception:

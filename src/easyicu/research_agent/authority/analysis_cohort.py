@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional
 
-from ..cohort_schema import analysis_cohort_authority_coordinates
+from ..cohort.schema import analysis_cohort_authority_coordinates
 from ..intake.materialized_metadata import (
     MaterializedMetadataError,
     VerifiedMaterializedCohortAuthority,
@@ -92,7 +92,7 @@ def bind_execution_cohort_authority(
                 ),
             }
             implementation_paths = (
-                Path(__file__).resolve().parents[1] / "cohort_schema.py",
+                Path(__file__).resolve().parents[1] / "cohort" / "schema.py",
                 Path(__file__).resolve().parents[1]
                 / "planning"
                 / "cohort_contract.py",

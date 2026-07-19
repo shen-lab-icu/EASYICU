@@ -5,7 +5,8 @@ import importlib
 import inspect
 from pathlib import Path
 
-from easyicu.research_agent import cohort_schema, schema
+from easyicu.research_agent.cohort import schema as cohort_schema
+from easyicu.research_agent import schema
 from easyicu.research_agent.planning import cohort_contract, robustness_contract
 
 

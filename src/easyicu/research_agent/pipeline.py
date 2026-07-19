@@ -157,7 +157,7 @@ from .concept_dict_audit import (
     verify_recorded_dict_match,
     write_concept_dict_fingerprint,
 )
-from .cohort_schema import (
+from .cohort.schema import (
     ensure_cohort_definition,
     materialize_locked_analysis_cohort,
     write_locked_cohort_definition,

@@ -37,6 +37,8 @@ DEFAULT_PACKAGE_DIR = REPO_ROOT / "src" / "easyicu" / "research_agent"
 DEFAULT_PACKAGE_NAME = "easyicu.research_agent"
 
 SUPPORTED_CANONICAL_MODULES: Tuple[str, ...] = (
+    "easyicu.research_agent.acquisition.catalog",
+    "easyicu.research_agent.acquisition.foundation",
     "easyicu.research_agent.agents.core",
     "easyicu.research_agent.agents.agentic_coder",
     "easyicu.research_agent.providers.protocol",
@@ -62,6 +64,11 @@ SUPPORTED_CANONICAL_MODULES: Tuple[str, ...] = (
     "easyicu.research_agent.figures.publication",
     "easyicu.research_agent.figures.skill",
     "easyicu.research_agent.authority.registration",
+    "easyicu.research_agent.cohort.artifact_facts",
+    "easyicu.research_agent.cohort.materializer",
+    "easyicu.research_agent.cohort.primitives",
+    "easyicu.research_agent.cohort.repair",
+    "easyicu.research_agent.cohort.schema",
     "easyicu.research_agent.execution.runners.deterministic_descriptive",
     "easyicu.research_agent.execution.runners.deterministic_missingness",
     "easyicu.research_agent.execution.runners.deterministic_robustness",

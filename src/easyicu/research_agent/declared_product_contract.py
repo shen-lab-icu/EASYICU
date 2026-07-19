@@ -1707,7 +1707,7 @@ def primary_analysis_cohort_integrity_findings(
     try:
         import pandas as pd
 
-        from .cohort_schema import (
+        from .cohort.schema import (
             CohortDefinition,
             build_cohort,
             coerce_cohort_definition,

@@ -32,7 +32,7 @@ never occurred) so survival models and immortal-time guards are possible
 instead of being blocked by a timeless binary outcome.
 For every concept named by a CTAS cohort predicate it additionally emits a
 bare ``<concept_id>`` column carrying the predicate's declared aggregation, so
-:func:`easyicu.research_agent.cohort_schema.build_cohort` can apply the
+:func:`easyicu.research_agent.cohort.schema.build_cohort` can apply the
 inclusion/exclusion (纳排) deterministically and auditably.
 """
 
@@ -51,15 +51,15 @@ import uuid
 import numpy as np
 import pandas as pd
 
-from .case_plugins.builder import (
+from .primitives import (
     ID_COL,
     TIME_COL,
-    _first_nonnull,
-    _merge_left,
-    _window,
+    first_nonnull as _first_nonnull,
+    merge_left as _merge_left,
+    window as _window,
 )
-from .cohort_schema import CohortDefinition, build_cohort
-from .intake.export_package import (
+from .schema import CohortDefinition, build_cohort
+from ..intake.export_package import (
     ExportPackageError,
     ExportPackage,
     is_export_package,
@@ -68,14 +68,14 @@ from .intake.export_package import (
     require_canonical_time_projection,
     verify_export_package,
 )
-from .intake.materialized_metadata import MaterializedColumnMetadataCollector
-from .intake.materialized_metadata import (
+from ..intake.materialized_metadata import MaterializedColumnMetadataCollector
+from ..intake.materialized_metadata import (
     MaterializedMetadataError,
     implementation_bundle_sha256,
     load_verified_materialized_cohort_authority,
     prepare_real_directory,
 )
-from .intake.materialized_trajectory import (
+from ..intake.materialized_trajectory import (
     publish_materialized_trajectory_authority,
 )
 from easyicu.concept.metadata_projection import ConceptColumnRole
@@ -1462,8 +1462,10 @@ def materialize_to_parquet(
         producer_implementation_sha256=implementation_bundle_sha256(
             (
                 Path(__file__),
-                Path(__file__).resolve().parent / "intake" / "materialized_metadata.py",
                 Path(__file__).resolve().parents[1]
+                / "intake"
+                / "materialized_metadata.py",
+                Path(__file__).resolve().parents[2]
                 / "concept"
                 / "metadata_projection.py",
             )
@@ -1563,10 +1565,10 @@ def materialize_to_parquet(
                 producer_implementation_sha256=implementation_bundle_sha256(
                     (
                         Path(__file__),
-                        Path(__file__).resolve().parent
+                        Path(__file__).resolve().parents[1]
                         / "intake"
                         / "materialized_trajectory.py",
-                        Path(__file__).resolve().parent
+                        Path(__file__).resolve().parents[1]
                         / "intake"
                         / "materialized_metadata.py",
                     )

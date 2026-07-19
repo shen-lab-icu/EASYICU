@@ -49,7 +49,7 @@ from ..trajectory.plan_contract import (
     trajectory_role_code_contract,
 )
 from ..method_capabilities import coder_method_capability_block
-from ..cohort_schema import ALLOWED_CTAS_AGGREGATIONS, known_concept_ids
+from ..cohort.schema import ALLOWED_CTAS_AGGREGATIONS, known_concept_ids
 from ..icu_rules import (
     GENERAL_ICU_ANALYSIS_PRINCIPLES,
     VariableKind,

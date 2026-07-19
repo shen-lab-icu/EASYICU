@@ -634,7 +634,7 @@ def test_logistic_adapter_does_not_invent_ridge_estimate_on_separation() -> None
 def test_pipeline_finalization_never_infers_relaxed_variant_from_locked_cohort(
     tmp_path, monkeypatch
 ) -> None:
-    from easyicu.research_agent.cohort_schema import CohortDefinition
+    from easyicu.research_agent.cohort.schema import CohortDefinition
     from easyicu.research_agent.estimators import fit_robustness_rows_from_records
     from easyicu.research_agent.robustness_panel import RobustnessSpec
 

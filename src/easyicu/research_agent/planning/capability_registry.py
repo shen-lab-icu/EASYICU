@@ -98,11 +98,11 @@ CAPABILITY_REGISTRY: Tuple[FamilyCapability, ...] = (
         figure_renderer="time_to_event",
         data_contract=(
             "exposure column",
-            "certified follow-up time (followup_time_hours)",
-            "event indicator (event_observed)",
+            "Agent-declared, authority-bound follow-up time",
+            "Agent-declared, authority-bound event indicator",
         ),
         fail_closed=(
-            "The agent step fails when certified follow-up/event inputs are absent, "
+            "The agent step fails when verified follow-up/event inputs are absent, "
             "and survival plausibility/provenance gates reject invalid event counts, "
             "effect scales, or unsupported estimands."
         ),

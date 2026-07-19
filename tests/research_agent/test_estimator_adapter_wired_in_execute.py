@@ -7,7 +7,7 @@ import pandas as pd
 
 
 def test_opt_in_adapter_primary_cannot_enter_final_panel(tmp_path) -> None:
-    from easyicu.research_agent.cohort_schema import (
+    from easyicu.research_agent.cohort.schema import (
         CohortDefinition,
         ConceptPredicate,
         TimeWindow,

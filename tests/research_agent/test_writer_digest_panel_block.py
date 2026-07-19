@@ -15,7 +15,7 @@ def _write_panel(ra, tmp_path: Path, rows):
         write_robustness_panel,
     )
     from easyicu.research_agent.schema import AnalysisPlan
-    from easyicu.research_agent.cohort_schema import CohortDefinition
+    from easyicu.research_agent.cohort.schema import CohortDefinition
 
     evidence = ra.EvidenceStore(tmp_path)
     specs = list(default_robustness_specs())

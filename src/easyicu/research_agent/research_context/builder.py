@@ -50,7 +50,7 @@ from ..intake.materialized_trajectory import (
     VerifiedMaterializedTrajectoryAuthority,
     load_verified_materialized_trajectory_authority,
 )
-from ..cohort_artifact_facts import observed_domain_for_series
+from ..cohort.artifact_facts import observed_domain_for_series
 from .typed import (
     canonical_column_binding,
     ResearchContextAuthority,
@@ -737,17 +737,11 @@ def _infer_outcome_semantics(
             "description": (
                 "Outcome component for a time-to-event analysis; keep the event "
                 "indicator, follow-up time, censoring rule and time zero explicit. "
-                "When the universe provides the certified columns "
-                "`followup_time_hours` (ICU-anchored time to event-or-censoring, "
-                "in hours) and `event_observed` (1 = event, 0 = censored at "
-                "hospital discharge), use them directly as the survival time and "
-                "event indicator: the follow-up/censoring is certified at the "
-                "data-foundation layer (death_time for observed deaths, "
-                "los_hosp*24 hospital-discharge proxy for survivors, event times "
-                "capped at discharge, non-positive/artifact times excluded), so "
-                "exact post-landmark censoring IS available — do not decline "
-                "KM/Cox for lack of a certified censoring column when these "
-                "columns are present."
+                "Use a follow-up/event product only when its typed authority and "
+                "declared semantics bind both fields to the analysis time origin. "
+                "The shared data-foundation layer does not invent a censoring rule "
+                "or derive an estimand-specific follow-up column from convenient "
+                "source fields."
             ),
             "source_concept": "time_to_event_endpoint",
             "substitution_note": (

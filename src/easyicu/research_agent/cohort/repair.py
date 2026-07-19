@@ -30,7 +30,7 @@ from __future__ import annotations
 import json
 from typing import Any, Optional, Sequence
 
-from .cohort_schema import (
+from .schema import (
     CohortDefinition,
     CohortSchemaError,
     ConceptPredicate,
@@ -38,7 +38,7 @@ from .cohort_schema import (
     register_cohort_concept_ids,
     validate_cohort_definition,
 )
-from .providers.protocol import LLMClient, LLMMessage
+from ..providers.protocol import LLMClient, LLMMessage
 
 # Operators ``build_cohort._apply_op`` actually implements.
 _SUPPORTED_OPS = (
@@ -92,7 +92,7 @@ def _user_prompt(*, cohort_prose: str, universe_columns: Sequence[str]) -> str:
         "- Only use concept_id values that appear verbatim in AVAILABLE "
         "COLUMNS. Drop any criterion you cannot map to a listed column.\n"
         "- Omit time_window/aggregation; the framework fills audit defaults.\n"
-        "- If nothing maps, return {\"inclusion\": [], \"exclusion\": []}."
+        '- If nothing maps, return {"inclusion": [], "exclusion": []}.'
     )
 
 
@@ -127,7 +127,9 @@ def _loads_json_object(text: str) -> Optional[dict]:
     return data if isinstance(data, dict) else None
 
 
-def _predicate_from_minimal(item: Any, *, columns: set[str]) -> Optional[ConceptPredicate]:
+def _predicate_from_minimal(
+    item: Any, *, columns: set[str]
+) -> Optional[ConceptPredicate]:
     if not isinstance(item, dict):
         return None
     concept_id = str(item.get("concept_id") or "").strip()

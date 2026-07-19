@@ -1,4 +1,4 @@
-"""Unit tests for ``cohort_repair.extract_cohort_definition_from_prose``.
+"""Unit tests for ``cohort.repair.extract_cohort_definition_from_prose``.
 
 It translates a cohort step's prose 纳排 into typed CTAS predicates, grounded in
 the universe's actual columns. It must only emit predicates over real columns
@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import json
 
-from easyicu.research_agent.cohort_repair import (
+from easyicu.research_agent.cohort.repair import (
     extract_cohort_definition_from_prose,
 )
 

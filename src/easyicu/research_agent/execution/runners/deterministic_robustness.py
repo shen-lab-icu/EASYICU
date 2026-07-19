@@ -23,7 +23,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Dict, List, Optional, Sequence
 
-from ...cohort_schema import build_cohort, coerce_cohort_definition
+from ...cohort.schema import build_cohort, coerce_cohort_definition
 from ...estimators import (
     _data_with_predicate_aliases,
     fit_robustness_rows_from_records,
