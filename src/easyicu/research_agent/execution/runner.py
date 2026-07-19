@@ -49,13 +49,13 @@ from pathlib import Path, PurePosixPath
 from typing import Dict, List, Optional, Sequence, Tuple
 
 from .code_hygiene import reorder_forward_references
-from ..contracts.runtime import RunResult
-from .method_capabilities import (
+from ..contracts.method_packages import (
     BASELINE_PACKAGES,
     CURATED_METHOD_PACKAGES,
     OPTIONAL_BASELINE_PACKAGES,
-    set_runtime_capability_snapshot_provider,
 )
+from ..contracts.runtime import RunResult
+from .method_capabilities import set_runtime_capability_snapshot_provider
 
 _SAFE_INHERITED_ENV_KEYS = (
     "PATH",
@@ -1187,7 +1187,8 @@ class DockerRunner:
       ``pull_image=True``).
 
     The image is expected to provide Python plus the agent script's
-    runtime deps advertised by :mod:`method_capabilities`. A reference
+    runtime deps declared by
+    :mod:`easyicu.research_agent.contracts.method_packages`. A reference
     Dockerfile ships at
     ``src/easyicu/research_agent/runner_image/Dockerfile``; build
     with::

@@ -23,14 +23,14 @@ from typing import Any, Mapping, Optional, Sequence
 from pydantic import ValidationError
 
 from .coder_authority import HostCoderAuthority
-from ..gates.semantics import blocking_validator_findings
-from ..execution.method_capabilities import (
+from ..contracts.method_packages import (
     BASELINE_PACKAGES,
     CURATED_METHOD_PACKAGES,
     OPTIONAL_BASELINE_PACKAGES,
 )
-from .provider_budget import ProviderCallBudgetReceiptState
 from ..contracts.runtime import RunResult
+from ..gates.semantics import blocking_validator_findings
+from .provider_budget import ProviderCallBudgetReceiptState
 from ..authority.runtime_artifacts import (
     current_step_records,
     load_run_artifact_authority,

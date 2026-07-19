@@ -74,6 +74,7 @@ SUPPORTED_CANONICAL_MODULES: Tuple[str, ...] = (
     "easyicu.research_agent.contracts",
     "easyicu.research_agent.contracts.runtime",
     "easyicu.research_agent.contracts.declared_product",
+    "easyicu.research_agent.contracts.method_packages",
     "easyicu.research_agent.contracts.ordered_stratified",
     "easyicu.research_agent.contracts.robustness_execution",
     "easyicu.research_agent.orchestration.config",

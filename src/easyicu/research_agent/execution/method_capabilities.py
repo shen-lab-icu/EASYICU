@@ -18,74 +18,14 @@ from __future__ import annotations
 
 import importlib.util
 from contextvars import ContextVar
-from dataclasses import dataclass
-from typing import Callable, Collection, List, Optional, Tuple
+from typing import Callable, Collection, List, Optional
 
-# Declared core scientific stack — always assumed present (hard deps / webapp
-# extra). The agent may always use these.
-BASELINE_PACKAGES: Tuple[str, ...] = (
-    "pandas",
-    "numpy",
-    "scipy",
-    "matplotlib",
-    "statsmodels",
-    "sklearn",
-    "pyarrow",
+from ..contracts.method_packages import (
+    BASELINE_PACKAGES,
+    CURATED_METHOD_PACKAGES,
+    OPTIONAL_BASELINE_PACKAGES,
+    MethodPackage,
 )
-
-# Useful plotting convenience, but not a core project dependency. Probe it
-# rather than advertising it unconditionally to minimal host installations.
-OPTIONAL_BASELINE_PACKAGES: Tuple[str, ...] = ("seaborn",)
-
-
-@dataclass(frozen=True)
-class MethodPackage:
-    """A curated advanced analytical package and its reliable fallback."""
-
-    import_name: str
-    pip_name: str
-    capability: str  # one-line description injected into the coder prompt
-    families: Tuple[str, ...]  # analysis families it primarily serves
-    fallback: str  # what to use instead if the package is unavailable
-
-
-# Curated advanced packages. Mirrored by the ``methods`` extra in pyproject.toml.
-# Only add a package here once it is a declared, install-tested dependency — the
-# point is that "listed here" implies "reliably installable", not "happens to be
-# on one dev machine".
-CURATED_METHOD_PACKAGES: Tuple[MethodPackage, ...] = (
-    MethodPackage(
-        import_name="lifelines",
-        pip_name="lifelines",
-        capability=(
-            "survival analysis — KaplanMeierFitter, CoxPHFitter, "
-            "logrank_test, concordance_index"
-        ),
-        families=("survival",),
-        fallback="statsmodels.duration (PHReg, SurvfuncRight)",
-    ),
-    MethodPackage(
-        import_name="shap",
-        pip_name="shap",
-        capability=(
-            "model-agnostic feature attribution — TreeExplainer/Explainer, "
-            "beeswarm and waterfall summaries of per-feature contributions"
-        ),
-        families=("prediction_model", "dynamic_prediction"),
-        fallback="sklearn.inspection.permutation_importance or model coefficients",
-    ),
-    MethodPackage(
-        import_name="xgboost",
-        pip_name="xgboost",
-        capability=(
-            "gradient-boosted trees for tabular prediction "
-            "(XGBClassifier / XGBRegressor)"
-        ),
-        families=("prediction_model", "dynamic_prediction"),
-        fallback="sklearn HistGradientBoostingClassifier / GradientBoostingClassifier",
-    ),
-)
-
 
 _RUNTIME_SNAPSHOT_PROVIDER: ContextVar[Optional[Callable[[], Collection[str]]]] = (
     ContextVar("easyicu_method_capability_snapshot_provider", default=None)
