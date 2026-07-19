@@ -1,12 +1,12 @@
 """Replication subpackage.
 
-Groups four formerly-top-level modules that together implement
+Groups five modules that together implement
 cross-database / paper-aware replication and reproducibility:
 
 * :mod:`.discovery` — deterministic export discovery and the
   ``lactate / MAP / vasopressor`` cross-database driver.
-* :mod:`.paper` — paper-profile parsing, spec building, and
-  metric comparison.
+* :mod:`.paper` — paper-profile parsing and replication-spec/report building.
+* :mod:`.metrics` — provider- and pipeline-neutral metric comparison.
 * :mod:`.notebook` — ``run.ipynb`` and ``requirements.lock.txt``
   provenance artefacts.
 * :mod:`.envelope` — LLM reproducibility envelope (prompt/response
@@ -15,7 +15,7 @@ cross-database / paper-aware replication and reproducibility:
 The submodules do not cross-import each other, so they can be loaded
 independently. This ``__init__`` re-exports their public symbols so
 callers can keep writing ``from easyicu.research_agent.replication
-import X`` for any symbol previously exposed by the four old modules.
+import X`` for any symbol previously exposed by the legacy modules.
 """
 
 from __future__ import annotations
@@ -46,12 +46,12 @@ from .notebook import (
     build_requirements_lockfile,
     write_notebook,
 )
+from .metrics import compare_metric_values
 from .paper import (
     build_paper_replication_spec,
     build_paper_result_ledger,
     canonical_outcome_name,
     collect_easyicu_metrics,
-    compare_metric_values,
     compare_paper_to_easyicu,
     load_paper_source,
     map_text_to_easyicu_concept,
