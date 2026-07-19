@@ -2,7 +2,7 @@
 
 This module answers one question: are the registered tables and figure
 contracts rich enough for an article package? It is deliberately separate from
-``pipeline_report`` so reporting code only orchestrates artifact writing.
+``reporting.readiness`` so reporting code only orchestrates artifact writing.
 """
 
 from __future__ import annotations
@@ -23,7 +23,6 @@ from ..figures.contracts import (
 from ..authority.runtime_artifacts import current_evidence_records
 from ..schema import AnalysisPlan, ResearchContext
 from ..planning.study_design import infer_study_design_family
-
 
 # A "result-bearing" figure contract is one whose text carries the study's
 # actual findings (as opposed to audit/provenance displays). The base tokens
@@ -187,9 +186,10 @@ def summarize_display_suite_status(
     table_keys: set[str] = set()
     categories: set[str] = set()
     for record in current_evidence_records(evidence.records(), per_step_records):
-        if per_step_records is not None and not str(
-            record.produced_by_step or ""
-        ).strip():
+        if (
+            per_step_records is not None
+            and not str(record.produced_by_step or "").strip()
+        ):
             # Run-level logs/statistics are audit or packaging products, not
             # proof that a current step produced a manuscript display. Current
             # publication figures are evaluated separately via their contract.
@@ -299,11 +299,15 @@ def summarize_display_suite_status(
     figure_contract_count = len(contract_paths)
     errors: List[str] = []
     if table_one_expected and not has_table_one:
-        errors.append("Table 1/baseline cohort display was declared but not registered.")
+        errors.append(
+            "Table 1/baseline cohort display was declared but not registered."
+        )
     if not publication.get("publication_figure_bundle_ready"):
         errors.append("No complete publication figure bundle is registered.")
     if primary_result_like_contracts == 0:
-        errors.append("No primary publication result-bearing figure contract is registered.")
+        errors.append(
+            "No primary publication result-bearing figure contract is registered."
+        )
     if primary_panel_count < 2:
         errors.append("Primary publication figure exposes fewer than two panels.")
     if len(primary_role_names) < 2:
@@ -313,7 +317,9 @@ def summarize_display_suite_status(
             "No audit, sensitivity, robustness, missingness, or provenance display is registered."
         )
     if len(categories) < 3:
-        errors.append("Display suite covers fewer than three article content categories.")
+        errors.append(
+            "Display suite covers fewer than three article content categories."
+        )
     if (
         family == "association"
         and primary_result_like_contracts > 0
@@ -343,7 +349,9 @@ def summarize_display_suite_status(
         "display_table_count": len(table_keys),
         "display_figure_contract_count": figure_contract_count,
         "display_result_figure_contract_count": result_like_contracts,
-        "display_primary_publication_figure_contract_count": len(primary_contract_paths),
+        "display_primary_publication_figure_contract_count": len(
+            primary_contract_paths
+        ),
         "display_supporting_figure_contract_count": len(supporting_contract_paths),
         "display_other_figure_contract_count": len(other_contract_paths),
         "display_primary_publication_contract_paths": relative_contract_paths(

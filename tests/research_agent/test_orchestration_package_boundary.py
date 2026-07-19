@@ -17,6 +17,7 @@ ORCHESTRATION_MODULES = (
     "orchestration.profiles",
     "orchestration.experiment_spec",
     "orchestration.resume",
+    "orchestration.finalize",
 )
 
 RETIRED_MODULES = (
@@ -26,6 +27,7 @@ RETIRED_MODULES = (
     "pipeline_resume",
     "pipeline_phases",
     "pipeline_state",
+    "pipeline_package",
 )
 
 PROFILE_EXPORTS = (
@@ -91,6 +93,16 @@ def test_root_orchestration_api_resolves_to_canonical_modules() -> None:
         assert getattr(root, name) is getattr(profiles, name)
     for name in EXPERIMENT_SPEC_EXPORTS:
         assert getattr(root, name) is getattr(experiment_spec, name)
+
+
+def test_pipeline_finalization_helpers_use_canonical_objects() -> None:
+    pipeline = importlib.import_module("easyicu.research_agent.pipeline")
+    finalize = importlib.import_module("easyicu.research_agent.orchestration.finalize")
+    assert (
+        pipeline._concept_dictionary_manifest_fields
+        is finalize._concept_dictionary_manifest_fields
+    )
+    assert pipeline._render_cost_summary is finalize._render_cost_summary
 
 
 @pytest.mark.parametrize("target", ORCHESTRATION_MODULES)

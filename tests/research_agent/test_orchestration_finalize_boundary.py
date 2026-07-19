@@ -6,8 +6,8 @@ import ast
 from pathlib import Path
 
 
-def test_pipeline_package_entrypoints_are_importable() -> None:
-    from easyicu.research_agent.pipeline_package import (
+def test_orchestration_finalize_entrypoints_are_importable() -> None:
+    from easyicu.research_agent.orchestration.finalize import (
         finalise_aborted,
         finalise_success,
     )
@@ -16,19 +16,18 @@ def test_pipeline_package_entrypoints_are_importable() -> None:
     assert callable(finalise_aborted)
 
 
-def test_pipeline_package_does_not_import_pipeline_at_module_top() -> None:
+def test_orchestration_finalize_does_not_import_pipeline_at_module_top() -> None:
     path = (
         Path(__file__).resolve().parents[2]
         / "src"
         / "easyicu"
         / "research_agent"
-        / "pipeline_package.py"
+        / "orchestration"
+        / "finalize.py"
     )
     tree = ast.parse(path.read_text(encoding="utf-8"))
     top_imports = [
-        node
-        for node in tree.body
-        if isinstance(node, (ast.Import, ast.ImportFrom))
+        node for node in tree.body if isinstance(node, (ast.Import, ast.ImportFrom))
     ]
     assert not any(
         isinstance(node, ast.ImportFrom)

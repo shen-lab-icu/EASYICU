@@ -348,7 +348,7 @@ from .authority.runtime_artifacts import (
     write_run_checkpoint,
 )
 from .scalar_utils import _expected_numeric_annotations_for_step
-from .side_findings import SideFinding
+from .reporting.side_findings import SideFinding
 from .skills import ClinicalSkill
 from .authority.step_capsule import (
     StepAuthorityCapsuleError,

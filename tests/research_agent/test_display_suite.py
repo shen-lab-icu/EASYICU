@@ -3,7 +3,9 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from easyicu.research_agent.reporting.display_suite import summarize_display_suite_status
+from easyicu.research_agent.reporting.display_suite import (
+    summarize_display_suite_status,
+)
 from easyicu.research_agent.authority.evidence_store import EvidenceStore
 
 
@@ -238,7 +240,7 @@ def test_article_audits_ignore_absent_and_superseded_supporting_contracts(
     from easyicu.research_agent.planning.figure_strategy import (
         summarize_article_figure_strategy_coverage,
     )
-    from easyicu.research_agent.pipeline_report import write_readiness_artifacts
+    from easyicu.research_agent.reporting.readiness import write_readiness_artifacts
 
     evidence = EvidenceStore(tmp_path)
     _register_table_one(evidence, tmp_path)
@@ -427,9 +429,7 @@ def test_article_audits_ignore_absent_and_superseded_supporting_contracts(
         stop_after_analysis=True,
     )
     assert gates["display_supporting_figure_contract_paths"] == [active_path]
-    run_status = json.loads(
-        (tmp_path / "run_status.json").read_text(encoding="utf-8")
-    )
+    run_status = json.loads((tmp_path / "run_status.json").read_text(encoding="utf-8"))
     assert run_status["gates"]["display_supporting_figure_contract_paths"] == [
         active_path
     ]

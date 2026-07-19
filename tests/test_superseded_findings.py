@@ -38,7 +38,7 @@ from pathlib import Path
 from typing import Any, Dict, List
 
 from easyicu.research_agent.authority.evidence_store import EvidenceStore
-from easyicu.research_agent.pipeline_report import (
+from easyicu.research_agent.reporting.readiness import (
     _compute_readiness_gates,
     _partition_findings_by_supersession,
     _step_id_referenced_in_finding,
@@ -57,7 +57,9 @@ def _plan_with_steps(step_ids: List[str]) -> AnalysisPlan:
     return AnalysisPlan(
         research_question="dummy",
         steps=[
-            AnalysisStep(step_id=sid, intent="dummy intent", inputs=[], expected_outputs=[])
+            AnalysisStep(
+                step_id=sid, intent="dummy intent", inputs=[], expected_outputs=[]
+            )
             for sid in step_ids
         ],
     )
@@ -343,8 +345,12 @@ def test_partition_is_deterministic_order_preserving() -> None:
         _coder_failure("b", "y"),
         _coder_failure("a", "z"),
     ]
-    active1, sup1 = _partition_findings_by_supersession(findings, success_step_ids={"a"})
-    active2, sup2 = _partition_findings_by_supersession(findings, success_step_ids={"a"})
+    active1, sup1 = _partition_findings_by_supersession(
+        findings, success_step_ids={"a"}
+    )
+    active2, sup2 = _partition_findings_by_supersession(
+        findings, success_step_ids={"a"}
+    )
     assert active1 == active2
     assert sup1 == sup2
     # Order preserved within each partition

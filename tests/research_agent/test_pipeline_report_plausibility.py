@@ -12,7 +12,9 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from easyicu.research_agent.pipeline_report import primary_result_plausibility_errors
+from easyicu.research_agent.reporting.readiness import (
+    primary_result_plausibility_errors,
+)
 
 
 def _summary(run_dir: Path, step_id: str, payload: dict) -> None:
@@ -26,7 +28,14 @@ def test_events_exceeding_sample_is_flagged(tmp_path: Path):
     _summary(
         tmp_path,
         "01_survival_analysis",
-        {"primary_model": {"estimate": 0.93, "p_value": 1e-25, "n": 73083, "events": 4635208}},
+        {
+            "primary_model": {
+                "estimate": 0.93,
+                "p_value": 1e-25,
+                "n": 73083,
+                "events": 4635208,
+            }
+        },
     )
     errs = primary_result_plausibility_errors(tmp_path)
     assert errs, "events (4.6M) > n (73k) must be flagged"
@@ -74,7 +83,9 @@ def test_unrelated_count_dict_without_result_markers_is_not_flagged(tmp_path: Pa
     _summary(
         tmp_path,
         "01_cohort",
-        {"cohort_counts": {"n_events": 900, "n_stays": 500}},  # no estimate/p_value marker
+        {
+            "cohort_counts": {"n_events": 900, "n_stays": 500}
+        },  # no estimate/p_value marker
     )
     assert primary_result_plausibility_errors(tmp_path) == []
 

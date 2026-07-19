@@ -234,7 +234,7 @@ def _write_runner_snapshot(
 
 
 def test_pipeline_write_accepts_identical_step_runtime_snapshots(tmp_path):
-    from easyicu.research_agent.pipeline_write import _validated_runtime_lock
+    from easyicu.research_agent.reporting.write_phase import _validated_runtime_lock
 
     run_dir = tmp_path / "run"
     lock_text = "# runtime=docker\nnumpy==2.0.0\n"
@@ -251,7 +251,7 @@ def test_pipeline_write_accepts_identical_step_runtime_snapshots(tmp_path):
 
 
 def test_pipeline_write_rejects_inconsistent_step_runtime_snapshots(tmp_path):
-    from easyicu.research_agent.pipeline_write import (
+    from easyicu.research_agent.reporting.write_phase import (
         RuntimeProvenanceMismatchError,
         _validated_runtime_lock,
     )
@@ -270,7 +270,7 @@ def test_pipeline_write_rejects_inconsistent_step_runtime_snapshots(tmp_path):
 
 
 def test_pipeline_write_rejects_stale_registered_lock_on_resume(ra, tmp_path):
-    from easyicu.research_agent.pipeline_write import (
+    from easyicu.research_agent.reporting.write_phase import (
         RuntimeProvenanceMismatchError,
         _assert_registered_runtime_lock_matches,
     )

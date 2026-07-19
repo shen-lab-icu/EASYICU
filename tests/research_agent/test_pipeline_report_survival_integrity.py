@@ -11,7 +11,7 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 
-from easyicu.research_agent.pipeline_report import (
+from easyicu.research_agent.reporting.readiness import (
     primary_survival_estimate_integrity_errors,
 )
 

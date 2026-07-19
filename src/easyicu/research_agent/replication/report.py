@@ -16,8 +16,7 @@ import json
 from pathlib import Path
 from typing import Any, Dict, Optional, Sequence
 
-from .schema import PaperProfile, PaperReplicationSpec, PipelineResult
-
+from ..schema import PaperProfile, PaperReplicationSpec, PipelineResult
 
 __all__ = [
     "_literature_provenance_note",
@@ -63,7 +62,9 @@ def _build_replication_notes(
     if replication_spec.mapped_concepts:
         lines.append(
             "Mapped concepts: "
-            + ", ".join(f"{k}->{v}" for k, v in sorted(replication_spec.mapped_concepts.items()))
+            + ", ".join(
+                f"{k}->{v}" for k, v in sorted(replication_spec.mapped_concepts.items())
+            )
             + "."
         )
     if replication_spec.unmappable_items:
@@ -186,11 +187,13 @@ def _render_cross_database_validation_report(
         "",
     ]
     lines.extend(_render_cross_database_comparison_markdown(rows).splitlines())
-    lines.extend([
-        "",
-        "## Readiness summary",
-        "",
-    ])
+    lines.extend(
+        [
+            "",
+            "## Readiness summary",
+            "",
+        ]
+    )
     lines.extend(_render_cross_database_summary_markdown(run_summaries).splitlines())
     lines.append("")
     return "\n".join(lines) + "\n"

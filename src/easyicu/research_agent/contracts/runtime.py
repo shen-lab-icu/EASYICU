@@ -21,7 +21,7 @@ from ..authority.evidence_store import NumericClaim
 from ..robustness_panel import RobustnessPanel, RobustnessPanelRow, RobustnessSpec
 from ..schema import EvidenceRecord as EvidenceArtifact
 from ..schema import ValidationFinding
-from ..side_findings import SideFinding
+from ..reporting.side_findings import SideFinding
 
 DerivedClaim = NumericClaim
 
