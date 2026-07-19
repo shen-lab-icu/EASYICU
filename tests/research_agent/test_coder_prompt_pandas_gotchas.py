@@ -250,6 +250,32 @@ def test_coder_prompt_separates_continuous_and_ordinal_source_status_rules() -> 
     assert "locked protocol says to retain and flag" in coder_prompt
 
 
+def test_coder_prompt_keeps_authoritative_values_independent_of_audit_companions(
+    ra,
+) -> None:
+    from easyicu.research_agent.providers.prompts import load_prompt_pack
+    from easyicu.research_agent.research_context.prompt_scope import (
+        coder_guide_for_step,
+    )
+
+    step = ra.AnalysisStep(
+        step_id="ordered_value_qc",
+        intent="Audit one planner-selected ordered value.",
+        inputs=["ordered_value", "ordered_value_measured", "ordered_value_n"],
+        expected_outputs=["table:ordered_value_qc"],
+        method="ordered_exposure_quality_control",
+    )
+    guide = coder_guide_for_step(load_prompt_pack()["coder"], step)
+    normalized = " ".join(guide.split())
+
+    assert "AUTHORITATIVE-VALUE DENOMINATOR INVARIANT" in guide
+    assert "derive that value's availability, non-missing denominator" in normalized
+    assert "field is audit-only: never use it to gate, mask, filter" in normalized
+    assert "STRICT ORDERED-DOMAIN INTEGRITY" in guide
+    assert "raise before writing any scientific output" in normalized
+    assert "Merely recording an invalid count/status" in normalized
+
+
 def test_coder_prompt_keeps_long_provenance_notes_out_of_plot_canvas() -> None:
     from easyicu.research_agent.providers.prompts import load_prompt_pack
 
