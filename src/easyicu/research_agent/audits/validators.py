@@ -45,7 +45,7 @@ from ..declared_product_contract import (
     effect_role_family,
     typed_product,
 )
-from ..replication.paper import compare_metric_values
+from ..replication.metrics import compare_metric_values
 from ..ordered_stratified_contract import ordered_stratified_numeric_findings
 from ..schema import (
     ADJUSTED_ASSOCIATION_BINARY_METHOD_FAMILIES,
