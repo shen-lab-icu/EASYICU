@@ -325,7 +325,7 @@ from .repair_registry import (
     is_sealed_renderer_repair,
     repair_metadata_for,
 )
-from .provider_budget import (
+from .authority.provider_budget import (
     PROVIDER_CALL_BUDGET_RECEIPT_SCHEMA_VERSION,
     ProviderCallBudgetError,
     ProviderCallBudgetReceiptError,

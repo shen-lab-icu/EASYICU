@@ -35,7 +35,7 @@ from .code_patch import CodePatchError, apply_code_patch
 from .code_repair import deterministic_concept_audit_repair
 from .repair_reasons import RepairReason
 from .schema import ValidationFinding
-from .provider_budget import (
+from .authority.provider_budget import (
     PROVIDER_CALL_BUDGET_RECEIPT_SCHEMA_VERSION,
     ProviderCallBudgetReceiptError,
     StepProviderCallBudget,

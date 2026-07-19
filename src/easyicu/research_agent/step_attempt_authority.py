@@ -12,7 +12,7 @@ import hashlib
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Mapping, MutableMapping, Optional, Tuple
 
-from .provider_budget import (
+from .authority.provider_budget import (
     ProviderCallBudgetReceiptError,
     ProviderCallBudgetReceiptState,
 )

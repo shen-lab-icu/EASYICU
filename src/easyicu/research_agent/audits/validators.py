@@ -65,7 +65,7 @@ from ..schema import (
     VariableRole,
 )
 from ..llm import LLMClient, LLMMessage
-from ..provider_budget import (
+from ..authority.provider_budget import (
     ProviderCallBudgetError,
     StepProviderCallBudget,
     complete_with_provider_budget,

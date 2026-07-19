@@ -30,7 +30,7 @@ from ..gates.concept import (
 )
 from ..contracts import ValidationFinding
 from ..evidence import sha256_of_bytes
-from ..provider_budget import (
+from ..authority.provider_budget import (
     ProviderCallBudgetError,
     ProviderCallBudgetReceiptError,
     StepProviderCallBudget,

@@ -78,7 +78,10 @@ from .plan_utils import (
     effect_output_authorized,
 )
 from .prompts import PROMPT_PACK_VERSION, load_prompt_pack
-from .provider_budget import StepProviderCallBudget, complete_with_provider_budget
+from .authority.provider_budget import (
+    StepProviderCallBudget,
+    complete_with_provider_budget,
+)
 from .repair_coordination import RepairCoordinator
 from .repair_reasons import (
     RepairPromptAuthority,
