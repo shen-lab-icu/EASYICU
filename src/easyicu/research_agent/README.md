@@ -4,6 +4,12 @@ A traceable, ICU-aware analysis-agent layer that extends EasyICU from
 "data extraction and visualisation" to "data extraction → analysis →
 manuscript scaffold" — without giving up provenance.
 
+Current architecture and retirement status is tracked in
+[`docs/research_agent_module_inventory_20260719.md`](../../../docs/research_agent_module_inventory_20260719.md),
+with the live component scoreboard in
+`task_logs/20260717_remaining_debt_register.md`. The Figure 2 task-generalization
+protocol is [`docs/figure2_taskbank_9x3_protocol.md`](../../../docs/figure2_taskbank_9x3_protocol.md).
+
 ## What this layer adds
 
 EasyICU's distinct contribution is the **ICU-aware research context**

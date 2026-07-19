@@ -1,10 +1,9 @@
-"""Deterministic survival (time-to-event) primary-analysis runner.
+"""Parked deterministic survival-analysis script generator.
 
-This is the analytical counterpart of ``deterministic_sensitivity``: it returns
-a self-contained runner script that fits the primary Cox proportional-hazards
-model for a time-to-event question WITHOUT an LLM coder call, so the survival
-result path is reproducible instead of varying run-to-run (exposure naming,
-inline single-panel figures, layout drift — all sources of fail-closed churn).
+This module is retained for historical replay, direct-import compatibility, and
+unit fixtures. It is intentionally absent from primary-runner dispatch and does
+not own a current survival estimand or method. New production primary analyses
+remain Planner/Coder-owned.
 
 The generated script:
 

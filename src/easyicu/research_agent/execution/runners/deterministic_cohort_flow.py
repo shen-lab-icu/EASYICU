@@ -1,4 +1,9 @@
-"""Deterministic primary-cohort attrition runner.
+"""Parked deterministic cohort-attrition script generator.
+
+This module is retained for historical replay, direct-import compatibility, and
+unit fixtures. It is intentionally absent from primary-runner dispatch; current
+production cohort authority remains with the Agent-owned locked cohort and host
+materialization/gates.
 
 The pipeline materialises the locked analysis cohort before executing planned
 steps.  A cohort-flow step that reads only ``COHORT_PARQUET`` therefore sees the

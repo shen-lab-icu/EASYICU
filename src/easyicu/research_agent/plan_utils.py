@@ -1379,16 +1379,6 @@ def _enforce_advanced_plan_contract(
     return revised, [finding]
 
 
-def _question_primary_predictor_is_vasopressor_or_unknown(
-    context: ResearchContext,
-) -> bool:
-    predictor = _infer_primary_predictor_from_context(context)
-    if not predictor:
-        return True
-    tokens = _predictor_tokens(predictor)
-    return bool(tokens & {"vaso", "vasopressor", "vasopressors", "norepinephrine"})
-
-
 def _infer_primary_predictor_from_context(
     context: ResearchContext,
 ) -> Optional[str]:
