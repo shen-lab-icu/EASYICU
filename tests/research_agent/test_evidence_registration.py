@@ -2,13 +2,17 @@
 
 from __future__ import annotations
 
+import hashlib
 import inspect
 from pathlib import Path
 
 import pytest
 
 from easyicu.research_agent.authority.evidence_store import EvidenceStore
-from easyicu.research_agent.authority.registration import EvidenceRegistrar
+from easyicu.research_agent.authority.registration import (
+    EvidenceRegistrar,
+    step_owned_artifact_evidence_id,
+)
 
 
 def _register(
@@ -131,6 +135,51 @@ def test_registrar_allows_same_step_retry_to_replace_its_alias(tmp_path: Path) -
     )
 
     assert store.get("primary_association").evidence_id == second.evidence_id
+
+
+def test_identical_artifact_bytes_keep_distinct_step_authority(tmp_path: Path) -> None:
+    store = EvidenceStore(tmp_path)
+    payload = '{"runtime":"docker","image_id":"sha256:fixed"}'
+    first_path = tmp_path / "first" / "runner_provenance.json"
+    second_path = tmp_path / "second" / "runner_provenance.json"
+    first_path.parent.mkdir()
+    second_path.parent.mkdir()
+    first_path.write_text(payload, encoding="utf-8")
+    second_path.write_text(payload, encoding="utf-8")
+    artifact_sha256 = hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+    records = []
+    for step_id, script_id, source_path in (
+        ("01_cohort", "code_step_01", first_path),
+        ("02_table", "code_step_02", second_path),
+    ):
+        evidence_id = step_owned_artifact_evidence_id(
+            kind="log",
+            step_id=step_id,
+            source_name=source_path.name,
+            artifact_sha256=artifact_sha256,
+            script_evidence_id=script_id,
+        )
+        record = store.register_file(
+            kind="log",
+            description="Immutable runner provenance.",
+            source_path=source_path,
+            produced_by_step=step_id,
+            script_evidence_id=script_id,
+            evidence_id=evidence_id,
+            publish_aliases=False,
+        )
+        EvidenceRegistrar(store).promote_validated_step(
+            step_id=step_id,
+            pending_aliases={record.evidence_id: []},
+            allowed_evidence_ids=[record.evidence_id],
+        )
+        records.append(record)
+
+    assert records[0].sha256 == records[1].sha256
+    assert records[0].evidence_id != records[1].evidence_id
+    assert records[0].produced_by_step == "01_cohort"
+    assert records[1].produced_by_step == "02_table"
 
 
 def test_registrar_propagates_store_failure_without_local_authority(
