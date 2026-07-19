@@ -71,7 +71,7 @@ from ..robustness_execution_contract import (
     _executed_robustness_result_issues,
 )
 from ..robustness_panel import RobustnessSpec
-from ..runtime_artifacts import current_successful_step_records
+from ..authority.runtime_artifacts import current_successful_step_records
 from ..schema import AnalysisPlan, AnalysisStep, ResearchContext
 
 

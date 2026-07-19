@@ -50,7 +50,7 @@ from easyicu.research_agent.discovery.discovery_package import (  # noqa: E402
 from easyicu.research_agent.discovery.discovery_story_figure import (  # noqa: E402
     render_discovery_story_figure,
 )
-from easyicu.research_agent.evidence import (  # noqa: E402
+from easyicu.research_agent.authority.evidence_store import (  # noqa: E402
     EvidenceRecord,
     EvidenceStore,
     sha256_of_file,

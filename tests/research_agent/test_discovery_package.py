@@ -17,7 +17,7 @@ from easyicu.research_agent.discovery.discovery_package import (
     validate_discovery_manuscript_package,
 )
 from easyicu.research_agent.discovery.discovery_story_figure import render_discovery_story_figure
-from easyicu.research_agent.evidence import EvidenceStore
+from easyicu.research_agent.authority.evidence_store import EvidenceStore
 
 
 def _write_json(path: Path, payload: dict) -> None:

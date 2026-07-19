@@ -27,14 +27,14 @@ from easyicu.concept.metadata_sidecar import (
 from easyicu.resources import load_dictionary
 from easyicu.research_agent import cohort_materializer
 from easyicu.research_agent.research_context.builder import build_research_context
-from easyicu.research_agent.evidence import EvidenceStore
+from easyicu.research_agent.authority.evidence_store import EvidenceStore
 from easyicu.research_agent.intake import export_package as intake
 from easyicu.research_agent.intake.materialized_metadata import (
     implementation_bundle_sha256,
     load_verified_materialized_cohort_authority,
     stage_materialized_cohort_authority,
 )
-from easyicu.research_agent.run_input_capsule import (
+from easyicu.research_agent.authority.run_input import (
     RunInputCapsuleV2,
     build_environment_identity,
     seal_run_input_capsule,

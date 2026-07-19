@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 
 from easyicu.research_agent.reporting.display_suite import summarize_display_suite_status
-from easyicu.research_agent.evidence import EvidenceStore
+from easyicu.research_agent.authority.evidence_store import EvidenceStore
 
 
 def _write_contract(

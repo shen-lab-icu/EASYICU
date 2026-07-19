@@ -10,7 +10,7 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from benchmarks.figure2_canonical9.evaluator.paper_rubric_v2 import (
+from benchmarks.figure2_canonical9.evaluator.paper_rubric_v3 import (
     Figure2PaperRubricManifest,
     paper_rubric_manifest_sha256,
 )
@@ -48,7 +48,7 @@ def _manifest() -> Figure2PaperRubricManifest:
         Path(__file__).resolve().parents[4]
         / "benchmarks"
         / "figure2_canonical9"
-        / "figure2_paper_rubric_v2.json"
+        / "figure2_paper_rubric_v3.json"
     )
     return Figure2PaperRubricManifest.model_validate_json(
         path.read_text(encoding="utf-8"), strict=True

@@ -28,17 +28,17 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Mapping, Optional, Sequence
 
-from .evidence_authority import EvidenceAuthorityIntegrityError
-from .providers.mocks import MockLLMClient
-from .research_context.implementation_identity import metadata_implementation_identity
-from .providers.prompts import PROMPT_PACK_VERSION, prompt_pack_files
-from .run_input_capsule import (
+from .evidence_snapshot import EvidenceAuthorityIntegrityError
+from ..providers.mocks import MockLLMClient
+from ..research_context.implementation_identity import metadata_implementation_identity
+from ..providers.prompts import PROMPT_PACK_VERSION, prompt_pack_files
+from .run_input import (
     RunInputIdentityError,
     invalidate_unverified_successful_steps,
     load_verified_run_input_capsule,
 )
 from .runtime_artifacts import verified_run_evidence_path
-from .schema import AnalysisManifest, PipelineResult
+from ..schema import AnalysisManifest, PipelineResult
 
 _CACHE_KEY_SCHEMA_VERSION = "easyicu.pipeline_cache_key/2"
 _CACHE_READY_STATUSES = frozenset({"manuscript_ready", "publication_ready"})
@@ -100,7 +100,7 @@ def runtime_identity() -> Dict[str, Any]:
     after a hot deployment.
     """
 
-    package_root = Path(__file__).resolve().parent
+    package_root = Path(__file__).resolve().parents[1]
     engine_paths = list(package_root.rglob("*.py"))
     validator_paths = [
         package_root / "gates" / "preflight.py",

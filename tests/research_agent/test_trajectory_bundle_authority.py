@@ -8,7 +8,7 @@ import pandas as pd
 import pytest
 
 import easyicu.research_agent.trajectory_bundle as trajectory_bundle
-from easyicu.research_agent.evidence import EvidenceStore
+from easyicu.research_agent.authority.evidence_store import EvidenceStore
 from easyicu.research_agent.schema import (
     AnalysisPlan,
     AnalysisStep,

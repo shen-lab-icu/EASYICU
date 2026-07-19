@@ -31,7 +31,7 @@ from ..method_capabilities import (
 )
 from .provider_budget import ProviderCallBudgetReceiptState
 from ..runner import RunResult
-from ..runtime_artifacts import current_step_records, load_run_artifact_authority
+from ..authority.runtime_artifacts import current_step_records, load_run_artifact_authority
 from ..schema import ResearchContext, ValidationFinding
 from ..research_context.typed import parse_research_context
 from .step_capsule import (

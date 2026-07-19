@@ -5,7 +5,7 @@ from __future__ import annotations
 
 def test_numeric_claim_is_evidence_canonical():
     from easyicu.research_agent.contracts import NumericClaim as ContractsNC
-    from easyicu.research_agent.evidence import NumericClaim as EvidenceNC
+    from easyicu.research_agent.authority.evidence_store import NumericClaim as EvidenceNC
 
     assert ContractsNC is EvidenceNC
 
@@ -34,7 +34,7 @@ def test_no_duplicate_dataclass_shells_in_contracts():
     """Contracts must not define shadow copies of evidence/schema classes."""
 
     import easyicu.research_agent.contracts as c
-    import easyicu.research_agent.evidence as e
+    import easyicu.research_agent.authority.evidence_store as e
     import easyicu.research_agent.schema as s
 
     assert c.NumericClaim.__module__ == e.__name__

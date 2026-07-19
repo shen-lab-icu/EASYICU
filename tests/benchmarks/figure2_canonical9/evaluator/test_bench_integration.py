@@ -22,8 +22,8 @@ from benchmarks.figure2_canonical9.evaluator.scoring import (
     Figure2EvaluationAttempt,
 )
 from tools import run_research_agent_bench as bench
-from easyicu.research_agent.evidence import EvidenceStore
-from easyicu.research_agent.runtime_artifacts import write_run_checkpoint
+from easyicu.research_agent.authority.evidence_store import EvidenceStore
+from easyicu.research_agent.authority.runtime_artifacts import write_run_checkpoint
 
 _LEGACY_ARM_SCORE_KEYS = {
     "arm",
@@ -929,7 +929,7 @@ def test_reuse_completion_requires_checkpoint_selected_final_and_exact_status_ga
         "evidence": [record.model_dump(mode="json") for record in store.records()],
     }
     assert write_run_checkpoint(run_dir / "manifest.json", final_manifest) == 1
-    from easyicu.research_agent import runtime_artifacts
+    from easyicu.research_agent.authority import runtime_artifacts
 
     selected = runtime_artifacts.load_run_artifact_authority(run_dir)
     assert selected is not None

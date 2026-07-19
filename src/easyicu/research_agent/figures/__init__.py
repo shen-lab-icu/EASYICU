@@ -28,7 +28,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Optional
 
-from ..evidence import EvidenceStore
+from ..authority.evidence_store import EvidenceStore
 from ..schema import AnalysisPlan, ResearchContext
 from ..planning.study_design_playbook import StudyDesignFamily
 from .base import RenderedFigure

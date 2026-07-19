@@ -1195,17 +1195,17 @@ def _run_one_item(
 def _run_reached_execution_complete(run_dir: Path) -> bool:
     """Return True only when current checkpoint and EvidenceStore status agree."""
 
-    from easyicu.research_agent.run_lock import (
+    from easyicu.research_agent.authority.run_lock import (
         RunExecutionLockError,
         acquire_run_execution_lock,
     )
-    from easyicu.research_agent.runtime_artifacts import (
+    from easyicu.research_agent.authority.runtime_artifacts import (
         RunArtifactAuthorityError,
         current_evidence_records,
         load_run_artifact_authority,
         verified_run_evidence_path,
     )
-    from easyicu.research_agent.evidence_authority import (
+    from easyicu.research_agent.authority.evidence_snapshot import (
         EvidenceAuthorityIntegrityError,
         load_current_evidence_snapshot,
     )

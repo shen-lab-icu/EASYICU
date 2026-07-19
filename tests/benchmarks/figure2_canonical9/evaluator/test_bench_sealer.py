@@ -9,8 +9,8 @@ from pathlib import Path
 import pytest
 
 from benchmarks.figure2_canonical9.evaluator import input_binding_v2
-from easyicu.research_agent.evidence import EvidenceStore
-from easyicu.research_agent.evidence_authority import (
+from easyicu.research_agent.authority.evidence_store import EvidenceStore
+from easyicu.research_agent.authority.evidence_snapshot import (
     load_current_evidence_snapshot,
 )
 from benchmarks.figure2_canonical9.evaluator.rubric_v1 import (
@@ -20,11 +20,11 @@ from benchmarks.figure2_canonical9.evaluator.scoring_inputs import (
     Figure2RunTaskAuthority,
     seal_figure2_run_task_authority,
 )
-from easyicu.research_agent.runtime_artifacts import (
+from easyicu.research_agent.authority.runtime_artifacts import (
     load_run_artifact_authority,
     write_run_checkpoint,
 )
-from easyicu.research_agent.run_input_capsule import (
+from easyicu.research_agent.authority.run_input import (
     RUN_INPUT_CAPSULE_EVIDENCE_ID,
 )
 from easyicu.research_agent.schema import AnalysisManifest

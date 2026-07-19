@@ -297,7 +297,7 @@ def _capture_run_artifact_authority_snapshot(
     without replaying an older checkpoint.
     """
 
-    from .runtime_artifacts import (
+    from .authority.runtime_artifacts import (
         RunArtifactAuthorityError,
         current_evidence_records,
         current_step_records,

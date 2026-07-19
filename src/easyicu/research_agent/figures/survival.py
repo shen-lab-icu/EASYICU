@@ -21,7 +21,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import pandas as pd
 
-from ..evidence import EvidenceStore
+from ..authority.evidence_store import EvidenceStore
 from ..schema import AnalysisPlan, EvidenceRecord, ResearchContext
 from .base import (
     RenderedFigure,
@@ -171,10 +171,9 @@ def _parse_cox(frame: pd.DataFrame) -> Optional[pd.DataFrame]:
     )
     hr_col = resolve_column(frame, ["hr", "hazard_ratio", "exp(coef)", "exp_coef"])
     coef_col = resolve_column(frame, ["coef", "log_hr", "estimate", "beta"])
-    # ci_low / ci_high are what the deterministic Cox runner writes
-    # (deterministic_survival.py:266-267); they must be listed first (exact match)
-    # or the old candidates (ci_lower/lower/...) miss them and the HR forest
-    # silently renders with no confidence interval.
+    # The typed-product contract prefers ci_low / ci_high. They must be listed
+    # first (exact match) or the old candidates (ci_lower/lower/...) miss them
+    # and the HR forest silently renders with no confidence interval.
     lo_col = resolve_column(
         frame,
         [

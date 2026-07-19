@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from easyicu.research_agent.evidence import EvidenceStore
+from easyicu.research_agent.authority.evidence_store import EvidenceStore
 from easyicu.research_agent.pipeline_report import (
     _compute_readiness_gates,
     _is_cosmetic_visual_error,

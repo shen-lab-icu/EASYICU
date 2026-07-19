@@ -29,20 +29,20 @@ from typing import Any, Callable, Dict, Literal, Mapping, Optional, Sequence, Un
 import pandas as pd
 from pydantic import BaseModel, ConfigDict, Field
 
-from .authority.filesystem import AnchoredDirectory, AuthorityFilesystemError
-from .evidence import EvidenceStore, sha256_of_file
-from .evidence_authority import (
+from .filesystem import AnchoredDirectory, AuthorityFilesystemError
+from .evidence_store import EvidenceStore, sha256_of_file
+from .evidence_snapshot import (
     EvidenceAuthorityIntegrityError,
     load_current_evidence_snapshot,
 )
-from .intake.materialized_metadata import (
+from ..intake.materialized_metadata import (
     MaterializedCohortAuthorityRef,
     MaterializedMetadataError,
     VerifiedMaterializedCohortAuthority,
     load_verified_materialized_cohort_authority,
     read_verified_materialized_cohort_table,
 )
-from .intake.materialized_trajectory import (
+from ..intake.materialized_trajectory import (
     MaterializedTrajectoryAuthorityRef,
     MaterializedTrajectoryError,
     StagedTrajectoryBinding,
@@ -51,22 +51,22 @@ from .intake.materialized_trajectory import (
     VerifiedMaterializedTrajectoryAuthority,
     load_verified_materialized_trajectory_authority,
 )
-from .providers.prompts import PROMPT_PACK_VERSION, prompt_pack_files
-from .research_context.implementation_identity import metadata_implementation_identity
+from ..providers.prompts import PROMPT_PACK_VERSION, prompt_pack_files
+from ..research_context.implementation_identity import metadata_implementation_identity
 from .runtime_artifacts import (
     current_successful_step_records,
     current_step_records,
     verified_run_evidence_path,
 )
-from .schema import ResearchContext, TimeWindow
-from .research_context.typed import (
+from ..schema import ResearchContext, TimeWindow
+from ..research_context.typed import (
     MaterializedResearchInputs,
     ResearchContextV2,
     binding_preserves_analysis_range,
     materialized_research_inputs_from_authority,
     parse_research_context_json,
 )
-from .cohort_artifact_facts import observed_domain_for_series
+from ..cohort_artifact_facts import observed_domain_for_series
 
 RUN_INPUT_CAPSULE_FILENAME = "run_input_capsule.json"
 RUN_INPUT_CAPSULE_EVIDENCE_ID = "run_input_capsule"
@@ -598,7 +598,9 @@ def _tree_sha256(root: Path, *, relative_paths: Optional[Sequence[Path]] = None)
 def engine_code_sha256() -> str:
     return canonical_sha256(
         {
-            "research_agent_tree_sha256": _tree_sha256(Path(__file__).resolve().parent),
+            "research_agent_tree_sha256": _tree_sha256(
+                Path(__file__).resolve().parents[1]
+            ),
             "metadata_implementation": dict(metadata_implementation_identity()),
         }
     )
@@ -606,7 +608,7 @@ def engine_code_sha256() -> str:
 
 @lru_cache(maxsize=1)
 def validator_code_sha256() -> str:
-    root = Path(__file__).resolve().parent
+    root = Path(__file__).resolve().parents[1]
     paths = [
         root / "gates" / "preflight.py",
         root / "declared_product_contract.py",
@@ -1591,14 +1593,14 @@ def _host_cohort_materializer_authority_error(
         if isinstance(metadata, Mapping)
         else ""
     ).strip()
-    from .cohort_schema import (
+    from ..cohort_schema import (
         CohortSchemaError,
         _load_locked_cohort_definition,
         cohort_definition_sha,
     )
 
     try:
-        from .intake.materialized_metadata import (
+        from ..intake.materialized_metadata import (
             MaterializedCohortAuthorityRef,
             MaterializedMetadataError,
             load_verified_materialized_cohort_authority,

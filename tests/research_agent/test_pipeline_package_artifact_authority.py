@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from easyicu.research_agent.evidence import EvidenceStore
+from easyicu.research_agent.authority.evidence_store import EvidenceStore
 from easyicu.research_agent.pipeline_package import _current_verified_semantic_csv
 
 

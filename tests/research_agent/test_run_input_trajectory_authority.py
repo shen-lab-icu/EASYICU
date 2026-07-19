@@ -18,7 +18,7 @@ from easyicu.research_agent.authority.execution_input import (
 from easyicu.research_agent.authority.analysis_cohort import (
     ExecutionCohortAuthority,
 )
-from easyicu.research_agent.evidence import EvidenceStore, sha256_of_file
+from easyicu.research_agent.authority.evidence_store import EvidenceStore, sha256_of_file
 from easyicu.research_agent.intake.materialized_metadata import (
     MaterializedCohortAuthorityRef,
     stage_materialized_cohort_authority,
@@ -34,7 +34,7 @@ from easyicu.research_agent.intake.materialized_trajectory import (
 )
 from easyicu.research_agent.providers.mocks import MockLLMClient
 from easyicu.research_agent.pipeline import ResearchAgentPipeline
-from easyicu.research_agent.run_input_capsule import (
+from easyicu.research_agent.authority.run_input import (
     RUN_INPUT_CAPSULE_EVIDENCE_ID,
     RUN_INPUT_CAPSULE_FILENAME,
     RUN_INPUT_CAPSULE_SCHEMA_VERSION,

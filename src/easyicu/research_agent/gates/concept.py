@@ -26,7 +26,7 @@ from .method_compatibility import (
     detect_forbidden_pattern_usage,
     format_violation_message,
 )
-from ..run_input_capsule import canonical_sha256, engine_code_sha256
+from ..authority.run_input import canonical_sha256, engine_code_sha256
 from ..schema import AnalysisStep, ResearchContext
 
 DETERMINISTIC_CODE_GATE_VALIDATORS = frozenset(

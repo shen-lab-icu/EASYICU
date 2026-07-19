@@ -761,7 +761,7 @@ def test_resume_uses_only_latest_step_evidence_and_versions_o22_report(ra, tmp_p
 
 def test_package_scopes_o22_evidence_to_its_own_current_producer(ra, tmp_path):
     from easyicu.research_agent import pipeline_package
-    from easyicu.research_agent.runtime_artifacts import current_evidence_records
+    from easyicu.research_agent.authority.runtime_artifacts import current_evidence_records
 
     run_dir = tmp_path / "run"
     evidence_dir = run_dir / "evidence"

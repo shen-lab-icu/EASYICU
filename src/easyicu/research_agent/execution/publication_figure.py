@@ -36,7 +36,7 @@ from ..declared_product_contract import (
 )
 from ..authority.parent_artifact import _resolve_upstream_manifest_step
 
-from ..evidence import sha256_of_bytes, sha256_of_file
+from ..authority.evidence_store import sha256_of_bytes, sha256_of_file
 from .figure_preparation import _step_has_figure_only_output_contract
 from .host_services import ExecutePhaseHost, PublicationFigureAuthorityServices
 from ..repair_registry import is_sealed_renderer_repair, repair_metadata_for

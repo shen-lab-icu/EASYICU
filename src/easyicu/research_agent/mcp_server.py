@@ -48,7 +48,7 @@ from .concept_availability import (
     cross_database_concept_availability,
 )
 from .research_context.builder import build_research_context
-from .evidence import EvidenceStore
+from .authority.evidence_store import EvidenceStore
 from .providers.llm import OpenAIClient
 from .pipeline import ResearchAgentPipeline
 from .providers import ProviderConfigurationError, build_provider_client

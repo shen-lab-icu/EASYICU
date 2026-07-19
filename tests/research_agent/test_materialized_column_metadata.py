@@ -54,11 +54,11 @@ from easyicu.research_agent.intake.materialized_metadata import (
     publish_ordered_subset_materialized_cohort,
     stage_materialized_cohort_authority,
 )
-from easyicu.research_agent.evidence import EvidenceStore
+from easyicu.research_agent.authority.evidence_store import EvidenceStore
 from easyicu.research_agent.providers.mocks import MockLLMClient
 from easyicu.research_agent import pipeline as pipeline_module
 from easyicu.research_agent.pipeline import ResearchAgentPipeline
-from easyicu.research_agent.run_input_capsule import (
+from easyicu.research_agent.authority.run_input import (
     RUN_INPUT_CAPSULE_SCHEMA_VERSION_V2,
     RunInputIdentityError,
     load_verified_run_input_capsule,

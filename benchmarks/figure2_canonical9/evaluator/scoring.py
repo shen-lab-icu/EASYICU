@@ -26,7 +26,7 @@ from easyicu.research_agent.evaluation_scorecard import (
     score_evidence_binding,
     score_run,
 )
-from .paper_rubric_v2 import (
+from .paper_rubric_v3 import (
     FIGURE2_PAPER_RUBRIC_REF,
     Figure2PaperScorecard,
     Figure2PaperTaskRubric,
@@ -46,7 +46,7 @@ from .scoring_inputs import (
     _load_figure2_scoring_inputs_locked,
 )
 from .suite import easyicu_evaluation_protocol_suite
-from easyicu.research_agent.run_lock import (
+from easyicu.research_agent.authority.run_lock import (
     RunExecutionLockError,
     acquire_run_execution_lock,
 )

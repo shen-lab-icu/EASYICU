@@ -19,7 +19,7 @@ from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from .paper_rubric_v2 import (
+from .paper_rubric_v3 import (
     FIGURE2_PAPER_RUBRIC_REF,
     Figure2PaperRubricManifest,
     Figure2PaperTaskRubric,
@@ -105,7 +105,7 @@ class Figure2SafetyRequest(_StrictFrozenModel):
     schema_version: Literal["easyicu.figure2_safety_request/1"]
     protocol_ref: Literal["easyicu.figure2_safety_adjudicator_protocol/20260718-v1"]
     protocol_sha256: Sha256
-    paper_rubric_ref: Literal["easyicu.figure2_paper_rubric/20260719-v2"]
+    paper_rubric_ref: Literal["easyicu.figure2_paper_rubric/20260719-v3"]
     paper_rubric_sha256: Sha256
     provider_ref: str = Field(min_length=1, max_length=256)
     model_ref: str = Field(min_length=1, max_length=256)

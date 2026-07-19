@@ -25,7 +25,7 @@ from __future__ import annotations
 import re
 from typing import Any, Dict, List, Optional, Sequence
 
-from ..runtime_artifacts import current_successful_step_records
+from ..authority.runtime_artifacts import current_successful_step_records
 from ..schema import ValidationFinding
 
 

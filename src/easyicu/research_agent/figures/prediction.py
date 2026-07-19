@@ -20,7 +20,7 @@ from typing import Any, Dict, List, Optional
 
 import pandas as pd
 
-from ..evidence import EvidenceStore
+from ..authority.evidence_store import EvidenceStore
 from ..schema import AnalysisPlan, EvidenceRecord, ResearchContext
 from .base import RenderedFigure, load_table, numeric_series, resolve_column
 

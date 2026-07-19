@@ -757,7 +757,7 @@ def __getattr__(name: str):
         "render_workflow_graph_mermaid",
         "build_execution_replay",
     }:
-        from . import runtime_artifacts as _runtime_artifacts
+        from .authority import runtime_artifacts as _runtime_artifacts
 
         return getattr(_runtime_artifacts, name)
     if name in {"VisualQAAuditor", "VLMVisualQAAdapter"}:
@@ -781,7 +781,7 @@ def __getattr__(name: str):
 
         return getattr(_pubfig, name)
     if name in {"EvidenceStore", "EvidenceEnforcementMode", "EvidenceEnforcementError"}:
-        from . import evidence as _evidence
+        from .authority import evidence_store as _evidence
 
         return getattr(_evidence, name)
     if name in {
@@ -932,7 +932,7 @@ def __getattr__(name: str):
         "build_provenance_bundle",
         "hash_sources",
     }:
-        from . import provenance as _prov
+        from .authority import provenance as _prov
 
         return getattr(_prov, name)
     if name in {

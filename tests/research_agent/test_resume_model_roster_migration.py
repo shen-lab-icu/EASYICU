@@ -9,13 +9,13 @@ import pandas as pd
 import pytest
 
 from easyicu.research_agent.research_context.builder import build_research_context
-from easyicu.research_agent.evidence import EvidenceStore
+from easyicu.research_agent.authority.evidence_store import EvidenceStore
 from easyicu.research_agent.pipeline import (
     LegacyResumePlanMigrationError,
     _load_compatible_resume_plan,
     _migrate_legacy_resume_model_requirements,
 )
-from easyicu.research_agent.runtime_artifacts import verified_run_evidence_path
+from easyicu.research_agent.authority.runtime_artifacts import verified_run_evidence_path
 from easyicu.research_agent.schema import (
     AnalysisPlan,
     AnalysisStep,

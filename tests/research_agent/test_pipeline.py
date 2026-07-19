@@ -5428,7 +5428,7 @@ def test_manuscript_numeric_auditor_flags_value_matching_no_registered_step(ra):
 
 
 def test_repair_common_writer_placeholders_prediction_fallbacks(ra, tmp_path: Path):
-    from easyicu.research_agent.evidence import EvidenceStore
+    from easyicu.research_agent.authority.evidence_store import EvidenceStore
     from easyicu.research_agent.pipeline import _repair_common_writer_placeholders
 
     store = EvidenceStore(tmp_path)
@@ -5477,7 +5477,7 @@ def test_prediction_placeholder_repair_does_not_create_outcome_rate_for_continuo
     ra,
     tmp_path: Path,
 ):
-    from easyicu.research_agent.evidence import EvidenceStore
+    from easyicu.research_agent.authority.evidence_store import EvidenceStore
     from easyicu.research_agent.pipeline import _repair_common_writer_placeholders
 
     store = EvidenceStore(tmp_path)
@@ -5542,7 +5542,7 @@ def test_repair_common_writer_citation_omissions_for_methods_sentences(
     ra,
     tmp_path: Path,
 ):
-    from easyicu.research_agent.evidence import EvidenceStore
+    from easyicu.research_agent.authority.evidence_store import EvidenceStore
     from easyicu.research_agent.pipeline import _repair_common_writer_citation_omissions
 
     store = EvidenceStore(tmp_path)
@@ -5584,7 +5584,7 @@ def test_repair_common_writer_citation_omissions_handles_mixed_cited_paragraph(
     ra,
     tmp_path: Path,
 ):
-    from easyicu.research_agent.evidence import EvidenceStore
+    from easyicu.research_agent.authority.evidence_store import EvidenceStore
     from easyicu.research_agent.pipeline import _repair_common_writer_citation_omissions
 
     store = EvidenceStore(tmp_path)
@@ -5626,7 +5626,7 @@ def test_repair_common_writer_citation_omissions_fails_closed_without_evidence(
     ra,
     tmp_path: Path,
 ):
-    from easyicu.research_agent.evidence import EvidenceStore
+    from easyicu.research_agent.authority.evidence_store import EvidenceStore
     from easyicu.research_agent.pipeline import _repair_common_writer_citation_omissions
 
     store = EvidenceStore(tmp_path)
@@ -5648,7 +5648,7 @@ def test_repair_common_writer_citation_omissions_skips_manuscript_metadata(
     ra,
     tmp_path: Path,
 ):
-    from easyicu.research_agent.evidence import EvidenceStore
+    from easyicu.research_agent.authority.evidence_store import EvidenceStore
     from easyicu.research_agent.pipeline import _repair_common_writer_citation_omissions
 
     store = EvidenceStore(tmp_path)
@@ -5691,7 +5691,7 @@ def test_repair_common_writer_citation_omissions_does_not_launder_numeric_result
     result-sentence filter instead of being laundered with a Methods citation.
     """
 
-    from easyicu.research_agent.evidence import EvidenceStore
+    from easyicu.research_agent.authority.evidence_store import EvidenceStore
     from easyicu.research_agent.pipeline import _repair_common_writer_citation_omissions
 
     store = EvidenceStore(tmp_path)
@@ -5773,7 +5773,7 @@ def test_execution_gate_and_parent_figure_dependency_helpers(ra):
 
 
 def test_readiness_artifacts_fail_closed_without_manuscript_ready(ra, tmp_path: Path):
-    from easyicu.research_agent.evidence import EvidenceStore
+    from easyicu.research_agent.authority.evidence_store import EvidenceStore
     from easyicu.research_agent.pipeline import _write_readiness_artifacts
     from easyicu.research_agent.schema import ValidationFinding
 
@@ -5848,7 +5848,7 @@ def _evidence_bound_demo_manuscript() -> str:
 
 
 def test_readiness_artifacts_reject_writer_failure_text(ra, tmp_path: Path):
-    from easyicu.research_agent.evidence import EvidenceStore
+    from easyicu.research_agent.authority.evidence_store import EvidenceStore
     from easyicu.research_agent.pipeline import _write_readiness_artifacts
 
     context = ra.ResearchContext(
@@ -5906,7 +5906,7 @@ def test_readiness_artifacts_reject_unresolved_manifest_comments(
     ra,
     tmp_path: Path,
 ):
-    from easyicu.research_agent.evidence import EvidenceStore
+    from easyicu.research_agent.authority.evidence_store import EvidenceStore
     from easyicu.research_agent.pipeline import _write_readiness_artifacts
 
     context = ra.ResearchContext(
@@ -5995,7 +5995,7 @@ def test_readiness_artifacts_reject_unresolved_manifest_comments(
 def test_readiness_artifacts_emit_manuscript_ready_only_after_gates_pass(
     ra, tmp_path: Path
 ):
-    from easyicu.research_agent.evidence import EvidenceStore
+    from easyicu.research_agent.authority.evidence_store import EvidenceStore
     from easyicu.research_agent.pipeline import _write_readiness_artifacts
 
     context = ra.ResearchContext(
@@ -6244,7 +6244,7 @@ def test_readiness_publication_ready_requires_article_display_suite(
     ra,
     tmp_path: Path,
 ):
-    from easyicu.research_agent.evidence import EvidenceStore
+    from easyicu.research_agent.authority.evidence_store import EvidenceStore
     from easyicu.research_agent.pipeline import _write_readiness_artifacts
 
     context = ra.ResearchContext(
@@ -6329,7 +6329,7 @@ def test_readiness_publication_ready_accepts_complete_display_suite(
     ra,
     tmp_path: Path,
 ):
-    from easyicu.research_agent.evidence import EvidenceStore
+    from easyicu.research_agent.authority.evidence_store import EvidenceStore
     from easyicu.research_agent.pipeline import _write_readiness_artifacts
 
     context = ra.ResearchContext(
@@ -6413,7 +6413,7 @@ def test_display_suite_keeps_step_contracts_supporting_not_primary(
     ra,
     tmp_path: Path,
 ):
-    from easyicu.research_agent.evidence import EvidenceStore
+    from easyicu.research_agent.authority.evidence_store import EvidenceStore
     from easyicu.research_agent.pipeline import _write_readiness_artifacts
 
     context = ra.ResearchContext(
@@ -6648,7 +6648,7 @@ def test_review_gallery_archives_covered_and_duplicate_supporting_figures(
     ra,
     tmp_path: Path,
 ):
-    from easyicu.research_agent.evidence import EvidenceStore
+    from easyicu.research_agent.authority.evidence_store import EvidenceStore
     from easyicu.research_agent.pipeline import _write_readiness_artifacts
 
     def write_support_contract(
@@ -6922,7 +6922,7 @@ def test_association_display_suite_rejects_generic_chart_only_bundle(
     ra,
     tmp_path: Path,
 ):
-    from easyicu.research_agent.evidence import EvidenceStore
+    from easyicu.research_agent.authority.evidence_store import EvidenceStore
     from easyicu.research_agent.pipeline import _write_readiness_artifacts
 
     context = ra.ResearchContext(
@@ -7032,7 +7032,7 @@ def test_association_display_suite_rejects_risk_difference_without_absolute_risk
     ra,
     tmp_path: Path,
 ):
-    from easyicu.research_agent.evidence import EvidenceStore
+    from easyicu.research_agent.authority.evidence_store import EvidenceStore
     from easyicu.research_agent.pipeline import _write_readiness_artifacts
 
     context = ra.ResearchContext(
@@ -7144,7 +7144,7 @@ def test_readiness_supersedes_stale_publication_figure_contract_quality_error(
     ra,
     tmp_path: Path,
 ):
-    from easyicu.research_agent.evidence import EvidenceStore
+    from easyicu.research_agent.authority.evidence_store import EvidenceStore
     from easyicu.research_agent.pipeline import _write_readiness_artifacts
     from easyicu.research_agent.schema import ValidationFinding
 
@@ -7242,7 +7242,7 @@ def test_author_review_note_marks_superseded_publication_export_error_nonblockin
     ra,
     tmp_path: Path,
 ):
-    from easyicu.research_agent.evidence import EvidenceStore
+    from easyicu.research_agent.authority.evidence_store import EvidenceStore
     from easyicu.research_agent.pipeline import _write_readiness_artifacts
     from easyicu.research_agent.schema import ValidationFinding
 
@@ -7333,7 +7333,7 @@ def test_readiness_keeps_current_publication_figure_export_error_active(
     ra,
     tmp_path: Path,
 ):
-    from easyicu.research_agent.evidence import EvidenceStore
+    from easyicu.research_agent.authority.evidence_store import EvidenceStore
     from easyicu.research_agent.pipeline import _write_readiness_artifacts
     from easyicu.research_agent.schema import ValidationFinding
 
@@ -7414,7 +7414,7 @@ def test_readiness_supersedes_stale_strict_writer_error_after_clean_bound_manusc
     ra,
     tmp_path: Path,
 ):
-    from easyicu.research_agent.evidence import EvidenceStore
+    from easyicu.research_agent.authority.evidence_store import EvidenceStore
     from easyicu.research_agent.pipeline import _write_readiness_artifacts
     from easyicu.research_agent.schema import ValidationFinding
 
@@ -7502,7 +7502,7 @@ def test_readiness_supersedes_stale_numeric_error_after_clean_bound_manuscript(
     ra,
     tmp_path: Path,
 ):
-    from easyicu.research_agent.evidence import EvidenceStore
+    from easyicu.research_agent.authority.evidence_store import EvidenceStore
     from easyicu.research_agent.pipeline import _write_readiness_artifacts
     from easyicu.research_agent.schema import ValidationFinding
 
@@ -7594,7 +7594,7 @@ def test_readiness_supersedes_stale_critic_error_after_passed_current_critique(
     ra,
     tmp_path: Path,
 ):
-    from easyicu.research_agent.evidence import EvidenceStore
+    from easyicu.research_agent.authority.evidence_store import EvidenceStore
     from easyicu.research_agent.pipeline import _write_readiness_artifacts
     from easyicu.research_agent.schema import ValidationFinding
 
@@ -7682,7 +7682,7 @@ def test_readiness_supersedes_stale_critic_error_after_passed_current_critique(
 
 
 def _readiness_fixture_for_manifest_caveats(ra, tmp_path: Path):
-    from easyicu.research_agent.evidence import EvidenceStore
+    from easyicu.research_agent.authority.evidence_store import EvidenceStore
     from easyicu.research_agent.schema import ValidationFinding
 
     context = ra.ResearchContext(
@@ -7819,7 +7819,7 @@ def test_readiness_artifacts_block_outcome_leak_after_blocked_gate(
     ra,
     tmp_path: Path,
 ):
-    from easyicu.research_agent.evidence import EvidenceStore
+    from easyicu.research_agent.authority.evidence_store import EvidenceStore
     from easyicu.research_agent.pipeline import _write_readiness_artifacts
 
     context = ra.ResearchContext(
@@ -7896,7 +7896,7 @@ def test_readiness_artifacts_block_outcome_leak_after_blocked_gate(
 def test_publication_bundle_ready_groups_hash_suffixed_exports_under_one_stem(
     ra, tmp_path: Path
 ):
-    from easyicu.research_agent.evidence import EvidenceStore
+    from easyicu.research_agent.authority.evidence_store import EvidenceStore
     from easyicu.research_agent.pipeline import _publication_figure_bundle_ready
     from easyicu.research_agent.publication_figures import (
         PUBLICATION_FIGURE_SKILL_POLICY_VERSION,
@@ -7954,7 +7954,7 @@ def test_publication_bundle_ready_groups_hash_suffixed_exports_under_one_stem(
 def test_publication_bundle_requires_sources_from_current_checkpoint(
     ra, tmp_path: Path
 ):
-    from easyicu.research_agent.evidence import EvidenceStore
+    from easyicu.research_agent.authority.evidence_store import EvidenceStore
     from easyicu.research_agent.pipeline import _publication_figure_bundle_ready
     from easyicu.research_agent.publication_figures import (
         PUBLICATION_FIGURE_SKILL_POLICY_VERSION,
@@ -8033,7 +8033,7 @@ def test_publication_bundle_requires_sources_from_current_checkpoint(
 
 
 def test_publication_bundle_ready_rejects_outdated_figure_policy(ra, tmp_path: Path):
-    from easyicu.research_agent.evidence import EvidenceStore
+    from easyicu.research_agent.authority.evidence_store import EvidenceStore
     from easyicu.research_agent.pipeline import _publication_figure_bundle_ready
 
     evidence = EvidenceStore(tmp_path)
@@ -8086,7 +8086,7 @@ def test_publication_bundle_ready_rejects_stale_publication_skill_exports(
     ra,
     tmp_path: Path,
 ):
-    from easyicu.research_agent.evidence import EvidenceStore
+    from easyicu.research_agent.authority.evidence_store import EvidenceStore
     from easyicu.research_agent.pipeline import _publication_figure_bundle_ready
 
     evidence = EvidenceStore(tmp_path)
@@ -8138,7 +8138,7 @@ def test_publication_bundle_ready_rejects_uncontracted_forest_plot_png_svg(
     ra,
     tmp_path: Path,
 ):
-    from easyicu.research_agent.evidence import EvidenceStore
+    from easyicu.research_agent.authority.evidence_store import EvidenceStore
     from easyicu.research_agent.pipeline import _publication_figure_bundle_ready
 
     evidence = EvidenceStore(tmp_path)
@@ -8161,7 +8161,7 @@ def test_publication_bundle_ready_rejects_uncontracted_forest_plot_png_svg(
 
 
 def test_publication_bundle_ready_blocks_visual_qa_errors(ra, tmp_path: Path):
-    from easyicu.research_agent.evidence import EvidenceStore
+    from easyicu.research_agent.authority.evidence_store import EvidenceStore
     from easyicu.research_agent.pipeline import _publication_figure_bundle_ready
     from easyicu.research_agent.publication_figures import (
         PUBLICATION_FIGURE_SKILL_POLICY_VERSION,
@@ -8233,7 +8233,7 @@ def test_publication_bundle_ready_blocks_publication_export_visual_errors(
     ra,
     tmp_path: Path,
 ):
-    from easyicu.research_agent.evidence import EvidenceStore
+    from easyicu.research_agent.authority.evidence_store import EvidenceStore
     from easyicu.research_agent.pipeline import _publication_figure_bundle_ready
     from easyicu.research_agent.schema import ValidationFinding
 
@@ -8515,7 +8515,7 @@ def test_manuscript_critic_ignores_markdown_title_and_background_framing(ra):
 
 
 def test_evidence_filter_removes_unquantified_performance_claims(ra, tmp_path: Path):
-    from easyicu.research_agent.evidence import EvidenceStore
+    from easyicu.research_agent.authority.evidence_store import EvidenceStore
 
     store = EvidenceStore(tmp_path)
     scaffold = (

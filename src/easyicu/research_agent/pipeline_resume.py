@@ -14,8 +14,8 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 
 from .repairs.patch import looks_like_executable_python
 from .contracts import ValidationFinding
-from .evidence_authority import load_current_evidence_snapshot
-from .runtime_artifacts import current_step_records, verified_run_evidence_path
+from .authority.evidence_snapshot import load_current_evidence_snapshot
+from .authority.runtime_artifacts import current_step_records, verified_run_evidence_path
 from .schema import AnalysisPlan, AnalysisStep
 
 

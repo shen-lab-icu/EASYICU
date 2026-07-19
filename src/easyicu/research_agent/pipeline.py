@@ -88,7 +88,7 @@ from .reporting.reporting_checklist import (
     choose_checklist,
 )
 from .reporting.reviewer import run_reviewer_round
-from .provenance import (
+from .authority.provenance import (
     ProvenanceBundle,
     SourceFileRecord,
     build_provenance_bundle,
@@ -129,7 +129,7 @@ from .research_context.builder import (
 )
 from .research_context.typed import parse_research_context_json
 from .context_numeric import register_context_numeric_claims
-from . import pipeline_cache as _pipeline_cache
+from .authority import pipeline_cache as _pipeline_cache
 from .analysis_blueprint import (
     build_analysis_blueprint,
     render_analysis_blueprint_for_prompt,
@@ -219,14 +219,14 @@ _audit_manuscript_numeric_claims = (
     audit_manuscript_numeric_claims  # noqa: F841 (legacy alias)
 )
 
-from .evidence import (
+from .authority.evidence_store import (
     EvidenceEnforcementError,
     EvidenceEnforcementMode,
     EvidenceStore,
     _coerce_enforcement_mode,
     sha256_of_file,
 )
-from .evidence_authority import load_current_evidence_snapshot
+from .authority.evidence_snapshot import load_current_evidence_snapshot
 from .learning.experience import (
     ExperienceBank,
     ExperienceRecord,
@@ -372,7 +372,7 @@ from .planning.study_design import (
     validate_plan_against_study_design_brief,
 )
 from .skills import ClinicalSkill, get_skill, list_skills
-from .runtime_artifacts import (
+from .authority.runtime_artifacts import (
     AuditLogger,
     build_execution_replay,
     build_workflow_graph,
@@ -383,7 +383,7 @@ from .runtime_artifacts import (
     verified_run_evidence_path,
     write_json_artifact,
 )
-from .run_input_capsule import (
+from .authority.run_input import (
     RUN_INPUT_CAPSULE_EVIDENCE_ID,
     RUN_INPUT_CAPSULE_FILENAME,
     RunInputIdentityError,
@@ -393,7 +393,7 @@ from .run_input_capsule import (
     seal_run_input_capsule,
     verify_legacy_trajectory_capsule_receipt,
 )
-from .run_lock import current_locked_run_id, exclusive_run_execution
+from .authority.run_lock import current_locked_run_id, exclusive_run_execution
 from .audits.validators import (
     ClinicalConstraintValidator,
     CohortAuditor,
@@ -4923,7 +4923,7 @@ class ResearchAgentPipeline:
         )
 
     # ------------------------------------------------------------------
-    # T3.5 — cohort cache (delegates; real logic in pipeline_cache.py)
+    # T3.5 — cohort cache (delegates; real logic in authority/pipeline_cache.py)
     # ------------------------------------------------------------------
 
     @staticmethod

@@ -1,4 +1,4 @@
-"""Frozen paper-rubric v2 authority contracts."""
+"""Frozen paper-rubric v3 authority contracts."""
 
 from __future__ import annotations
 
@@ -10,12 +10,12 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from benchmarks.figure2_canonical9.evaluator import paper_rubric_v2 as paper_rubric
+from benchmarks.figure2_canonical9.evaluator import paper_rubric_v3 as paper_rubric
 from easyicu.research_agent.evaluation_scorecard import (
     DimensionScore,
     FiveDimensionScorecard,
 )
-from benchmarks.figure2_canonical9.evaluator.paper_rubric_v2 import (
+from benchmarks.figure2_canonical9.evaluator.paper_rubric_v3 import (
     FIGURE2_PAPER_RUBRIC_REF,
     FIGURE2_PAPER_SCORECARD_SCHEMA,
     PAPER_SCORER_CORE_FILES,
@@ -64,14 +64,14 @@ _EXPECTED_VALIDITY_BINDINGS = {
 }
 
 
-def _read_v2_payload() -> dict[str, object]:
+def _read_v3_payload() -> dict[str, object]:
     return json.loads(default_figure2_paper_rubric_path().read_text(encoding="utf-8"))
 
 
-def _live_v2_payload() -> dict[str, object]:
+def _live_v3_payload() -> dict[str, object]:
     """Return the committed shape with volatile implementation hashes refreshed."""
 
-    payload = _read_v2_payload()
+    payload = _read_v3_payload()
     payload["suite_projection_sha256"] = figure2_suite_projection_sha256()
     payload["scorer_tree_sha256"] = scorer_tree_sha256()
     payload["safety_protocol_sha256"] = safety_protocol_sha256()
@@ -87,7 +87,7 @@ def _write_payload(
 
 
 def _load_live_manifest(tmp_path: Path):
-    return load_figure2_paper_rubric(_write_payload(tmp_path, _live_v2_payload()))
+    return load_figure2_paper_rubric(_write_payload(tmp_path, _live_v3_payload()))
 
 
 def _dimension(name: str) -> DimensionScore:
@@ -129,10 +129,10 @@ def test_v1_manifest_and_semantic_authority_are_frozen() -> None:
     assert rubric_manifest_sha256(manifest) == _EXPECTED_V1_MANIFEST_SHA256
 
 
-def test_committed_v2_manifest_binds_the_current_full_scorer_tree() -> None:
-    """This is the sole expected hash failure while the manifest has a placeholder."""
+def test_committed_v3_manifest_binds_the_current_full_scorer_tree() -> None:
+    """The committed v3 manifest binds the complete live scorer tree."""
 
-    payload = _read_v2_payload()
+    payload = _read_v3_payload()
 
     assert payload["suite_projection_sha256"] == figure2_suite_projection_sha256()
     assert payload["safety_protocol_sha256"] == safety_protocol_sha256()
@@ -140,7 +140,7 @@ def test_committed_v2_manifest_binds_the_current_full_scorer_tree() -> None:
     assert load_figure2_paper_rubric().scorer_tree_sha256 == scorer_tree_sha256()
 
 
-def test_v2_manifest_is_exactly_nine_tasks_by_five_dimensions(tmp_path: Path) -> None:
+def test_v3_manifest_is_exactly_nine_tasks_by_five_dimensions(tmp_path: Path) -> None:
     manifest = _load_live_manifest(tmp_path)
 
     assert manifest.rubric_ref == FIGURE2_PAPER_RUBRIC_REF
@@ -238,7 +238,7 @@ def test_paper_scorecard_is_exact_five_and_drops_extended_dimensions(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    manifest_path = _write_payload(tmp_path, _live_v2_payload())
+    manifest_path = _write_payload(tmp_path, _live_v3_payload())
     _patch_default_manifest(monkeypatch, manifest_path)
 
     envelope = build_figure2_paper_scorecard(_extended_scorecard())
@@ -339,7 +339,7 @@ def test_scorecard_rejects_direct_authority_field_tampering(
     replacement: str,
     message: str | None,
 ) -> None:
-    manifest_path = _write_payload(tmp_path, _live_v2_payload())
+    manifest_path = _write_payload(tmp_path, _live_v3_payload())
     _patch_default_manifest(monkeypatch, manifest_path)
     envelope = build_figure2_paper_scorecard(_extended_scorecard())
     payload = envelope.model_dump(mode="json")
@@ -373,7 +373,7 @@ def test_manifest_rejects_direct_authority_field_tampering(
     replacement: str,
     message: str | None,
 ) -> None:
-    payload = _live_v2_payload()
+    payload = _live_v3_payload()
     payload[field] = replacement
 
     if message is None:
@@ -393,6 +393,10 @@ def test_safety_protocol_ref_and_digest_are_frozen(tmp_path: Path) -> None:
 
 
 def test_scorer_tree_covers_evaluator_and_explicit_core_exactly_once() -> None:
+    assert (
+        "src/easyicu/research_agent/authority/evidence_store.py"
+        in PAPER_SCORER_CORE_FILES
+    )
     repository_root = Path(__file__).resolve().parents[4]
     evaluator_root = repository_root / SCORER_EVALUATOR_ROOT
     expected_paths = tuple(
@@ -419,7 +423,7 @@ def test_scorer_tree_covers_evaluator_and_explicit_core_exactly_once() -> None:
 
 
 def test_manifest_rejects_duplicate_json_keys(tmp_path: Path) -> None:
-    payload = _live_v2_payload()
+    payload = _live_v3_payload()
     raw = json.dumps(payload, indent=2)
     duplicate = raw.replace(
         '  "agent_visibility": "forbidden",',
@@ -441,7 +445,7 @@ def test_manifest_rejects_duplicate_json_keys(tmp_path: Path) -> None:
     ],
 )
 def test_manifest_rejects_extra_json_fields(tmp_path: Path, mutate) -> None:
-    payload = copy.deepcopy(_live_v2_payload())
+    payload = copy.deepcopy(_live_v3_payload())
     mutate(payload)
 
     with pytest.raises(ValidationError, match="Extra inputs are not permitted"):

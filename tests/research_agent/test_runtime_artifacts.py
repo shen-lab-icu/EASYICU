@@ -71,7 +71,7 @@ def test_capture_code_version_reports_git_and_package_identity(ra):
     In this repo checkout git identity is available; assert the shape and
     that it degrades to a dict (never raises). package_version comes from
     the installed easyicu metadata."""
-    from easyicu.research_agent.runtime_artifacts import capture_code_version
+    from easyicu.research_agent.authority.runtime_artifacts import capture_code_version
 
     cv = capture_code_version()
     # In a git checkout with the package installed, capture returns a dict.
@@ -104,7 +104,7 @@ def test_code_version_manifest_field_wraps_capture(ra):
 
 
 def test_current_artifact_authority_uses_latest_outer_step_status():
-    from easyicu.research_agent.runtime_artifacts import (
+    from easyicu.research_agent.authority.runtime_artifacts import (
         active_step_evidence_ids,
         current_evidence_records,
         current_step_records,
@@ -143,7 +143,7 @@ def test_current_artifact_authority_uses_latest_outer_step_status():
 
 
 def test_current_evidence_requires_its_own_current_producer_binding():
-    from easyicu.research_agent.runtime_artifacts import current_evidence_records
+    from easyicu.research_agent.authority.runtime_artifacts import current_evidence_records
 
     records = [
         {
@@ -168,7 +168,7 @@ def test_current_evidence_requires_its_own_current_producer_binding():
 
 
 def test_newer_final_manifest_supersedes_stale_partial_authority(tmp_path: Path):
-    from easyicu.research_agent.runtime_artifacts import load_run_artifact_authority
+    from easyicu.research_agent.authority.runtime_artifacts import load_run_artifact_authority
 
     partial = tmp_path / "manifest_partial.json"
     final = tmp_path / "manifest.json"
@@ -192,7 +192,7 @@ def test_newer_final_manifest_supersedes_stale_partial_authority(tmp_path: Path)
 
 
 def test_corrupt_newest_manifest_cannot_replay_older_success(tmp_path: Path):
-    from easyicu.research_agent.runtime_artifacts import (
+    from easyicu.research_agent.authority.runtime_artifacts import (
         RunArtifactAuthorityError,
         load_run_artifact_authority,
     )
@@ -215,7 +215,7 @@ def test_corrupt_newest_manifest_cannot_replay_older_success(tmp_path: Path):
 
 
 def test_corrupt_only_manifest_is_not_reported_as_legacy(tmp_path: Path):
-    from easyicu.research_agent.runtime_artifacts import (
+    from easyicu.research_agent.authority.runtime_artifacts import (
         RunArtifactAuthorityError,
         current_run_evidence_records,
     )
@@ -230,7 +230,7 @@ def test_corrupt_only_manifest_is_not_reported_as_legacy(tmp_path: Path):
 
 
 def test_newest_manifest_missing_ledger_cannot_replay_older_success(tmp_path: Path):
-    from easyicu.research_agent.runtime_artifacts import (
+    from easyicu.research_agent.authority.runtime_artifacts import (
         RunArtifactAuthorityError,
         load_run_artifact_authority,
     )
@@ -253,7 +253,7 @@ def test_newest_manifest_missing_ledger_cannot_replay_older_success(tmp_path: Pa
 
 
 def test_missing_manifests_keep_legacy_authority_signal(tmp_path: Path):
-    from easyicu.research_agent.runtime_artifacts import (
+    from easyicu.research_agent.authority.runtime_artifacts import (
         current_run_evidence_records,
         load_run_artifact_authority,
     )
@@ -263,7 +263,7 @@ def test_missing_manifests_keep_legacy_authority_signal(tmp_path: Path):
 
 
 def test_checkpoint_writer_is_atomic_and_monotonically_sequenced(tmp_path: Path):
-    from easyicu.research_agent.runtime_artifacts import write_run_checkpoint
+    from easyicu.research_agent.authority.runtime_artifacts import write_run_checkpoint
 
     first = write_run_checkpoint(
         tmp_path / "manifest_partial.json",
@@ -281,7 +281,7 @@ def test_checkpoint_writer_is_atomic_and_monotonically_sequenced(tmp_path: Path)
 
 
 def test_checkpoint_sequence_outranks_mtime_for_current_authority(tmp_path: Path):
-    from easyicu.research_agent.runtime_artifacts import load_run_artifact_authority
+    from easyicu.research_agent.authority.runtime_artifacts import load_run_artifact_authority
 
     partial = tmp_path / "manifest_partial.json"
     final = tmp_path / "manifest.json"

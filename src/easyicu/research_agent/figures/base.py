@@ -21,7 +21,7 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import pandas as pd
 
-from ..evidence import EvidenceStore
+from ..authority.evidence_store import EvidenceStore
 from ..schema import EvidenceRecord
 
 

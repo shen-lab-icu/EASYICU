@@ -16,8 +16,8 @@ import re
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
-from .evidence import EvidenceStore
-from .runtime_artifacts import current_step_records, verified_run_evidence_path
+from .authority.evidence_store import EvidenceStore
+from .authority.runtime_artifacts import current_step_records, verified_run_evidence_path
 from .schema import AnalysisPlan, ResearchContext, ValidationFinding
 from .trajectory_plan_contract import evaluate_trajectory_plan_dag
 

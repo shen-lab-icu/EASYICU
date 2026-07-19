@@ -108,7 +108,7 @@ def test_host_probe_authority_reason_matrix(
     case: str,
     expected: str,
 ):
-    from easyicu.research_agent.run_input_capsule import (
+    from easyicu.research_agent.authority.run_input import (
         _host_probe_authority_error,
     )
 
@@ -148,7 +148,7 @@ def test_host_probe_authority_reason_matrix(
 
 
 def test_host_probe_exact_authority_passes(ra, tmp_path: Path):
-    from easyicu.research_agent.run_input_capsule import (
+    from easyicu.research_agent.authority.run_input import (
         _host_probe_authority_error,
     )
 
@@ -297,7 +297,7 @@ def test_host_cohort_materializer_reason_matrix(
     case: str,
     expected: str,
 ):
-    from easyicu.research_agent.run_input_capsule import (
+    from easyicu.research_agent.authority.run_input import (
         _host_cohort_materializer_authority_error,
     )
 
@@ -358,7 +358,7 @@ def test_host_cohort_materializer_reason_matrix(
 
 
 def test_host_cohort_materializer_exact_authority_passes(ra, tmp_path: Path):
-    from easyicu.research_agent.run_input_capsule import (
+    from easyicu.research_agent.authority.run_input import (
         _host_cohort_materializer_authority_error,
     )
 
@@ -420,7 +420,7 @@ def test_closed_legacy_script_chain_migrates_but_ambiguous_chain_does_not(
     ra,
     tmp_path: Path,
 ):
-    from easyicu.research_agent.run_input_capsule import (
+    from easyicu.research_agent.authority.run_input import (
         _migrated_legacy_step_authority,
     )
 
@@ -488,7 +488,7 @@ def test_generic_step_missing_authority_is_invalidated_when_not_safely_migratabl
     case: str,
     expected: str,
 ):
-    from easyicu.research_agent.run_input_capsule import (
+    from easyicu.research_agent.authority.run_input import (
         invalidate_unverified_successful_steps,
     )
 
@@ -536,7 +536,7 @@ def test_generic_step_missing_authority_is_invalidated_when_not_safely_migratabl
 
 
 def test_upstream_invalidation_propagates_to_exact_consumers(ra, tmp_path: Path):
-    from easyicu.research_agent.run_input_capsule import (
+    from easyicu.research_agent.authority.run_input import (
         invalidate_unverified_successful_steps,
     )
 
@@ -611,7 +611,7 @@ def test_resume_cut_after_newly_invalidated_upstream_fails_before_receipt(
     ra,
     tmp_path: Path,
 ):
-    from easyicu.research_agent.run_input_capsule import (
+    from easyicu.research_agent.authority.run_input import (
         RunInputIdentityError,
         prepare_existing_resume_input,
         seal_run_input_capsule,

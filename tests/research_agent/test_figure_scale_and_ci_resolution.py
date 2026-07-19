@@ -1,16 +1,16 @@
 """Effect-scale and confidence-interval resolution in the causal / survival
-renderers must match what the DETERMINISTIC runners actually emit.
+renderers must match the canonical typed-product contracts.
 
 Two false-pass bugs this locks down (found by the 2026-07-07 audit, verified on
 real H2/H1 runs):
 
-* causal: deterministic_causal writes scale="odds_ratio" (canonical full name) +
+* causal: typed products use scale="odds_ratio" (canonical full name) plus
   ci_low/ci_high. The renderer classified "odds_ratio" as a difference measure
   (null line at 0, linear axis) and missed ci_low/ci_high (CI collapsed to the
   point estimate). H2's hero panel shipped mislabeled with no interval.
-* survival: deterministic_survival writes THREE cox tables; cox_summary.csv is
-  metadata-only (no HR) and is matched first, so _parse_cox returned None and the
-  HR forest never rendered. The HR + ci_low/ci_high live in cox_model.csv.
+* survival: cox_summary.csv may be metadata-only (no HR) and matched first, so
+  _parse_cox returned None and the HR forest never rendered. The HR plus
+  ci_low/ci_high live in cox_model.csv.
 """
 
 from __future__ import annotations
@@ -19,7 +19,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from easyicu.research_agent.evidence import EvidenceStore
+from easyicu.research_agent.authority.evidence_store import EvidenceStore
 from easyicu.research_agent.figures.base import load_table
 from easyicu.research_agent.figures.causal import _effect_scale_info, _load_effect
 from easyicu.research_agent.figures.survival import _COX_TABLE_NAMES, _parse_cox
@@ -75,7 +75,7 @@ def test_effect_scale_info_recognises_canonical_full_names():
 
 def test_load_effect_reads_odds_ratio_scale_and_ci(tmp_path: Path):
     evidence = EvidenceStore(tmp_path)
-    # mirrors deterministic_causal.py causal_effect.csv
+    # Mirrors the canonical causal-effect typed-product contract.
     _register(
         evidence,
         tmp_path,

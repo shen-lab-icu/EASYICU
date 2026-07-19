@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from easyicu.research_agent.evidence import EvidenceStore
+from easyicu.research_agent.authority.evidence_store import EvidenceStore
 from easyicu.research_agent.pipeline import _migrate_resume_trajectory_products
 from easyicu.research_agent.schema import (
     AnalysisPlan,

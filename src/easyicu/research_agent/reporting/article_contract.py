@@ -23,7 +23,7 @@ from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Set
 from pydantic import BaseModel, ConfigDict, Field
 
 from ..figure_contracts import figure_contract_paths
-from ..runtime_artifacts import (
+from ..authority.runtime_artifacts import (
     current_evidence_records,
     current_successful_step_records,
 )

@@ -13,7 +13,7 @@ from easyicu.research_agent.audits.validators import (
     FigureContractQualityValidator,
     FigureSourceDataValidator,
 )
-from easyicu.research_agent.evidence import EvidenceStore
+from easyicu.research_agent.authority.evidence_store import EvidenceStore
 from easyicu.research_agent.figures.distribution_availability import (
     REPAIR_ID,
     render_distribution_availability_bundle_from_prior_outputs,

@@ -23,8 +23,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
-from .evidence import EvidenceStore, sha256_of_file
-from .runtime_artifacts import (
+from .authority.evidence_store import EvidenceStore, sha256_of_file
+from .authority.runtime_artifacts import (
     current_evidence_records,
     current_successful_step_records,
     verified_run_evidence_path,

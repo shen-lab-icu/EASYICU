@@ -42,7 +42,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Dict, List, Mapping, Optional, Sequence
 
-from .runtime_artifacts import (
+from .authority.runtime_artifacts import (
     current_run_evidence_paths,
     current_successful_step_records,
     load_run_artifact_authority,

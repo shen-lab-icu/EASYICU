@@ -22,7 +22,7 @@ from __future__ import annotations
 import re
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
-from ..evidence import (
+from ..authority.evidence_store import (
     EvidenceEnforcementError,
     EvidenceEnforcementMode,
     EvidenceStore,
