@@ -1,4 +1,5 @@
 """Tests for the L2 data-foundation agent (concept selection + acquisition)."""
+
 from __future__ import annotations
 
 import easyicu.research_agent.acquisition.foundation as df_mod
@@ -66,9 +67,12 @@ def test_acquire_blocks_when_outcome_missing(monkeypatch):
         called["materialize"] = True
         return {"parquet": "x.parquet", "provenance": "x.json"}
 
-    monkeypatch.setattr(df_mod, "build_available_catalog", lambda _d: _catalog("lact", "sofa2"))
+    monkeypatch.setattr(
+        df_mod, "build_available_catalog", lambda _d: _catalog("lact", "sofa2")
+    )
     # patch the lazily-imported materializer symbol
     import easyicu.research_agent.cohort.materializer as cm
+
     monkeypatch.setattr(cm, "materialize_to_parquet", _fake_materialize)
 
     res = acquire_universe_for_question(
@@ -92,10 +96,12 @@ def test_acquire_proceeds_on_available_subset_when_outcome_present(monkeypatch):
         return {"parquet": "u.parquet", "provenance": "u.json"}
 
     monkeypatch.setattr(
-        df_mod, "build_available_catalog",
+        df_mod,
+        "build_available_catalog",
         lambda _d: _catalog("sofa2", "lact", "death", "age", "sex", "los_icu"),
     )
     import easyicu.research_agent.cohort.materializer as cm
+
     monkeypatch.setattr(cm, "materialize_to_parquet", _fake_materialize)
 
     res = acquire_universe_for_question(
@@ -115,22 +121,85 @@ def test_acquire_proceeds_on_available_subset_when_outcome_present(monkeypatch):
     assert "re-extract" in res.note.lower()
 
 
+def test_acquire_preserves_legacy_trajectory_without_typed_loader(
+    monkeypatch, tmp_path
+):
+    """A legacy export trajectory is path/provenance bound, not typed-authority bound."""
+
+    universe = tmp_path / "universe.parquet"
+    provenance = tmp_path / "universe_provenance.json"
+    trajectory = tmp_path / "universe_trajectory.parquet"
+    trajectory_provenance = tmp_path / "universe_trajectory_provenance.json"
+
+    monkeypatch.setattr(
+        df_mod,
+        "build_available_catalog",
+        lambda _d: _catalog("sofa2", "death", "age"),
+    )
+    monkeypatch.setattr(
+        df_mod, "load_verified_materialized_cohort_authority", lambda _path: None
+    )
+
+    def _typed_loader_must_not_run(*_args, **_kwargs):
+        raise AssertionError("legacy trajectory was sent through the typed loader")
+
+    monkeypatch.setattr(
+        df_mod,
+        "load_verified_materialized_trajectory_authority",
+        _typed_loader_must_not_run,
+    )
+    import easyicu.research_agent.cohort.materializer as cm
+
+    monkeypatch.setattr(
+        cm,
+        "materialize_to_parquet",
+        lambda **_kwargs: {
+            "parquet": universe,
+            "provenance": provenance,
+            "trajectory": trajectory,
+            "trajectory_provenance": trajectory_provenance,
+        },
+    )
+
+    result = acquire_universe_for_question(
+        export_dir=tmp_path,
+        question="q",
+        llm=_StubLLM('{"selected_concepts": ["sofa2", "death"]}'),
+        output_dir=tmp_path,
+        target_outcome="death",
+        outcome_concepts=["death"],
+        static_concepts=["age"],
+    )
+
+    assert result.blocked is False
+    assert result.trajectory_path == trajectory
+    assert result.trajectory_provenance_path == trajectory_provenance
+    assert result.trajectory_authority_path is None
+    assert result.trajectory_authority_ref is None
+
+
 def test_acquire_captures_selection_token_usage_and_cost(monkeypatch):
     # A metered client exposes last_usage + model; the selection's token cost
     # is recorded on the result (it runs as a pre-sandbox stage).
     class _MeteredStub(_StubLLM):
         # OpenAIClient stores the model id as the private ``_model``.
         _model = "deepseek-chat"
-        last_usage = {"prompt_tokens": 1000, "completion_tokens": 200,
-                      "total_tokens": 1200}
+        last_usage = {
+            "prompt_tokens": 1000,
+            "completion_tokens": 200,
+            "total_tokens": 1200,
+        }
 
     monkeypatch.setattr(
-        df_mod, "build_available_catalog",
+        df_mod,
+        "build_available_catalog",
         lambda _d: _catalog("sofa2", "death", "age", "sex", "los_icu"),
     )
     import easyicu.research_agent.cohort.materializer as cm
+
     monkeypatch.setattr(
-        cm, "materialize_to_parquet",
+        cm,
+        "materialize_to_parquet",
         lambda **kw: {"parquet": "u.parquet", "provenance": "u.json"},
     )
 
@@ -143,8 +212,11 @@ def test_acquire_captures_selection_token_usage_and_cost(monkeypatch):
         outcome_concepts=["death"],
     )
     assert res.selection_model == "deepseek-chat"
-    assert res.selection_usage == {"prompt_tokens": 1000, "completion_tokens": 200,
-                                   "total_tokens": 1200}
+    assert res.selection_usage == {
+        "prompt_tokens": 1000,
+        "completion_tokens": 200,
+        "total_tokens": 1200,
+    }
     # deepseek-chat priced at (0.27, 1.10)/1M -> 0.001*0.27 + 0.0002*1.10
     assert res.selection_cost_usd is not None and res.selection_cost_usd > 0
 

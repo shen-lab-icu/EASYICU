@@ -362,6 +362,7 @@ def acquire_universe_for_question(
             "verify it"
         )
     trajectory_path = Path(paths["trajectory"]) if "trajectory" in paths else None
+    typed_trajectory_declared = "trajectory_authority" in paths
     verified_trajectory = (
         load_verified_materialized_trajectory_authority(
             trajectory_path,
@@ -369,10 +370,10 @@ def acquire_universe_for_question(
                 verified_authority.reference if verified_authority is not None else None
             ),
         )
-        if trajectory_path is not None
+        if trajectory_path is not None and typed_trajectory_declared
         else None
     )
-    if "trajectory_authority" in paths and verified_trajectory is None:
+    if typed_trajectory_declared and verified_trajectory is None:
         raise MaterializedTrajectoryError(
             "typed materializer declared a trajectory authority but acquisition "
             "could not verify it"
