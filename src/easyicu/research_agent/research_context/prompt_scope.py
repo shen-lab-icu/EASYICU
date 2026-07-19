@@ -88,6 +88,7 @@ _QUALITY_CONTROL_METHODS = frozenset(
         "longitudinal_missingness_and_score_quality_audit",
         "missingness_and_measurement_audit",
         "ordinal_exposure_quality_control",
+        "ordered_exposure_derivation_and_qc",
         "ordered_category_exposure_qc",
         "ordinal_exposure_derivation_and_quality_control",
         "ordered_exposure_quality_control",
@@ -97,6 +98,7 @@ _QUALITY_CONTROL_METHODS = frozenset(
 _ORDERED_QUALITY_CONTROL_METHODS = frozenset(
     {
         "ordinal_exposure_quality_control",
+        "ordered_exposure_derivation_and_qc",
         "ordered_category_exposure_qc",
         "ordered_exposure_quality_control",
         "ordinal_exposure_derivation_and_quality_control",
