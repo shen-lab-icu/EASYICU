@@ -1721,15 +1721,7 @@
     ],
     [
       "easyicu.research_agent.manuscript_post",
-      "easyicu.research_agent.evidence"
-    ],
-    [
-      "easyicu.research_agent.manuscript_post",
-      "easyicu.research_agent.schema"
-    ],
-    [
-      "easyicu.research_agent.manuscript_post",
-      "easyicu.research_agent.side_findings"
+      "easyicu.research_agent.reporting.manuscript_post"
     ],
     [
       "easyicu.research_agent.mcp_server",
@@ -1953,10 +1945,6 @@
     ],
     [
       "easyicu.research_agent.pipeline",
-      "easyicu.research_agent.manuscript_post"
-    ],
-    [
-      "easyicu.research_agent.pipeline",
       "easyicu.research_agent.memory"
     ],
     [
@@ -2050,6 +2038,10 @@
     [
       "easyicu.research_agent.pipeline",
       "easyicu.research_agent.reporting.latex"
+    ],
+    [
+      "easyicu.research_agent.pipeline",
+      "easyicu.research_agent.reporting.manuscript_post"
     ],
     [
       "easyicu.research_agent.pipeline",
@@ -2613,10 +2605,6 @@
     ],
     [
       "easyicu.research_agent.pipeline_write",
-      "easyicu.research_agent.manuscript_post"
-    ],
-    [
-      "easyicu.research_agent.pipeline_write",
       "easyicu.research_agent.methodological_rigor"
     ],
     [
@@ -2638,6 +2626,10 @@
     [
       "easyicu.research_agent.pipeline_write",
       "easyicu.research_agent.reporting.latex"
+    ],
+    [
+      "easyicu.research_agent.pipeline_write",
+      "easyicu.research_agent.reporting.manuscript_post"
     ],
     [
       "easyicu.research_agent.pipeline_write",
@@ -2886,6 +2878,18 @@
     [
       "easyicu.research_agent.reporting.latex",
       "easyicu.research_agent.reporting.bibtex"
+    ],
+    [
+      "easyicu.research_agent.reporting.manuscript_post",
+      "easyicu.research_agent.evidence"
+    ],
+    [
+      "easyicu.research_agent.reporting.manuscript_post",
+      "easyicu.research_agent.schema"
+    ],
+    [
+      "easyicu.research_agent.reporting.manuscript_post",
+      "easyicu.research_agent.side_findings"
     ],
     [
       "easyicu.research_agent.reporting.review_artifacts",
@@ -3418,6 +3422,11 @@
       "literal_all": null,
       "relative_path": "latex.py"
     },
+    "easyicu.research_agent.manuscript_post": {
+      "exists": true,
+      "literal_all": null,
+      "relative_path": "manuscript_post.py"
+    },
     "easyicu.research_agent.pdf_render": {
       "exists": true,
       "literal_all": null,
@@ -3459,9 +3468,9 @@
   "metrics": {
     "cyclic_module_count": 30,
     "cyclic_scc_count": 3,
-    "edge_count": 790,
+    "edge_count": 791,
     "largest_scc_size": 23,
-    "module_count": 261,
+    "module_count": 262,
     "package_count": 15,
     "top_level_module_count": 161
   },
@@ -3686,6 +3695,7 @@
     "easyicu.research_agent.reporting.bibtex": "reporting/bibtex.py",
     "easyicu.research_agent.reporting.display_suite": "reporting/display_suite.py",
     "easyicu.research_agent.reporting.latex": "reporting/latex.py",
+    "easyicu.research_agent.reporting.manuscript_post": "reporting/manuscript_post.py",
     "easyicu.research_agent.reporting.pdf_render": "reporting/pdf_render.py",
     "easyicu.research_agent.reporting.reporting_checklist": "reporting/reporting_checklist.py",
     "easyicu.research_agent.reporting.review_artifacts": "reporting/review_artifacts.py",
@@ -3747,6 +3757,6 @@
     "easyicu.research_agent.reporting"
   ],
   "schema_version": 2,
-  "tool_sha256": "2536b4fcd6f6e3fa44043802324d68bd94e11b0aaba7db035b30bc972818e056",
+  "tool_sha256": "df855eed26bdcb815b6b33e0aed42cd0ce8f269ead7f1d29c2ea372d5b01cde9",
   "tool_version": "1.1.0"
 }

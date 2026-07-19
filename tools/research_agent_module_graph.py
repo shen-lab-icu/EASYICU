@@ -77,6 +77,7 @@ LEGACY_TARGET_MODULES: Tuple[str, ...] = (
     "easyicu.research_agent.article_contract",
     "easyicu.research_agent.bibtex",
     "easyicu.research_agent.latex",
+    "easyicu.research_agent.manuscript_post",
 )
 
 
