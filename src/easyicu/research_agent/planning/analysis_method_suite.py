@@ -214,7 +214,7 @@ _PREDICTION = MethodSuite(
             produces="feature_importance.csv; beeswarm/bar summary",
             runner=None,
             reporting_items=("TRIPOD+AI 10a",),
-            notes="`shap` is a curated importable package with a permutation-importance fallback (method_capabilities). A deterministic SHAP-summary panel is PLANNED (WS5).",
+            notes="`shap` is a curated importable package with a permutation-importance fallback (contracts/method_packages.py). A deterministic SHAP-summary panel is PLANNED (WS5).",
         ),
         AnalysisMethod(
             key="subgroup_fairness",
@@ -482,9 +482,7 @@ _ASSOCIATION = MethodSuite(
             produces="interaction test + subgroup forest",
             runner=None,
             reporting_items=("STROBE 12b",),
-            figure_source_contracts=(
-                ("figure:subgroup_forest", ("effect:subgroup",)),
-            ),
+            figure_source_contracts=(("figure:subgroup_forest", ("effect:subgroup",)),),
         ),
         AnalysisMethod(
             key="missingness_audit",
@@ -633,7 +631,11 @@ _PHENOTYPING = MethodSuite(
             implementation="llm_coded",
             produces="agent-declared feature representation + cluster assignments + silhouette/stability/size QC + outcome-by-trajectory",
             runner="phenotyping",
-            reporting_items=("internal_phenotype P4", "internal_phenotype P5", "internal_phenotype P9"),
+            reporting_items=(
+                "internal_phenotype P4",
+                "internal_phenotype P5",
+                "internal_phenotype P9",
+            ),
             notes="The agent owns the feature representation, time horizon, clustering method, and k-selection. The `phenotyping` runner only renders standardized, source-backed products; it never chooses the science. Trajectory-feature clustering is deliberately not relabelled as LCGA.",
         ),
         AnalysisMethod(
@@ -731,6 +733,7 @@ METHOD_SUITE_REGISTRY: Tuple[MethodSuite, ...] = (
 # shape, not membership, since those are not capability_registry primaries).
 # ---------------------------------------------------------------------------
 
+
 def _known_primary_runner_names() -> frozenset:
     names = {c.primary_runner for c in CAPABILITY_REGISTRY if c.primary_runner}
     names |= {a.name for a in AUXILIARY_DETERMINISTIC_RUNNERS}
@@ -814,6 +817,7 @@ def figure_product_source_obligations(product: object) -> Tuple[str, ...]:
 # ---------------------------------------------------------------------------
 # Renderer
 # ---------------------------------------------------------------------------
+
 
 def _impl_badge(impl: str) -> str:
     if impl == "deterministic":

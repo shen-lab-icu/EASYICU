@@ -712,11 +712,11 @@
     ],
     [
       "easyicu.research_agent.authority.step_runtime",
-      "easyicu.research_agent.contracts.runtime"
+      "easyicu.research_agent.contracts.method_packages"
     ],
     [
       "easyicu.research_agent.authority.step_runtime",
-      "easyicu.research_agent.execution.method_capabilities"
+      "easyicu.research_agent.contracts.runtime"
     ],
     [
       "easyicu.research_agent.authority.step_runtime",
@@ -1179,6 +1179,10 @@
       "easyicu.research_agent.schema"
     ],
     [
+      "easyicu.research_agent.execution.method_capabilities",
+      "easyicu.research_agent.contracts.method_packages"
+    ],
+    [
       "easyicu.research_agent.execution.publication_figure",
       "easyicu.research_agent.authority.evidence_store"
     ],
@@ -1217,6 +1221,10 @@
     [
       "easyicu.research_agent.execution.runner",
       "easyicu.research_agent.authority.runtime_artifacts"
+    ],
+    [
+      "easyicu.research_agent.execution.runner",
+      "easyicu.research_agent.contracts.method_packages"
     ],
     [
       "easyicu.research_agent.execution.runner",
@@ -3019,9 +3027,9 @@
   "metrics": {
     "cyclic_module_count": 0,
     "cyclic_scc_count": 0,
-    "edge_count": 753,
+    "edge_count": 755,
     "largest_scc_size": 0,
-    "module_count": 225,
+    "module_count": 226,
     "package_count": 28,
     "top_level_module_count": 31
   },
@@ -3079,6 +3087,7 @@
     "easyicu.research_agent.concept_dict_audit": "concept_dict_audit.py",
     "easyicu.research_agent.contracts": "contracts/__init__.py",
     "easyicu.research_agent.contracts.declared_product": "contracts/declared_product.py",
+    "easyicu.research_agent.contracts.method_packages": "contracts/method_packages.py",
     "easyicu.research_agent.contracts.ordered_stratified": "contracts/ordered_stratified.py",
     "easyicu.research_agent.contracts.robustness_execution": "contracts/robustness_execution.py",
     "easyicu.research_agent.contracts.runtime": "contracts/runtime.py",
@@ -3284,6 +3293,6 @@
     "easyicu.research_agent.trajectory"
   ],
   "schema_version": 2,
-  "tool_sha256": "67ee7b02d61fc7a8723d767b0de4f1845d91518b6f88eb90b08877e8d0d17672",
+  "tool_sha256": "d0d717ea32e9e3829cfbcccddb7bc41a4791af21bcbd3931f2323901ad457ade",
   "tool_version": "1.3.0"
 }
