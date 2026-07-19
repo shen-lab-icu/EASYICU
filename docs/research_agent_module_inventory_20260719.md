@@ -1,7 +1,7 @@
 # Research-agent Module Inventory and Retirement Audit
 
-Baseline: `refactor/agent-control-plane@c2df928`; retirement patch measured on
-the working tree immediately after that baseline.
+Baseline: `refactor/agent-control-plane@c2df928`; current architecture measured
+at `c411ed0`/`00c962d` after the retirement and dependency-inversion patches.
 
 This inventory explains why `src/easyicu/research_agent/` still appears flat
 after responsibility packages were introduced, and distinguishes safe cleanup
@@ -19,9 +19,17 @@ Before the retirement patch, the 161 top-level Python files comprised:
 
 The first safe retirement removed one never-wired implementation and its test,
 plus one unused function/import. The current tree therefore has 160 top-level
-files and 92 real top-level implementations (approximately 98.3k LOC). The
-module graph now reports 289 modules, 20 packages, 813 edges, 30 cyclic modules,
-and SCC sizes 23/5/2.
+files and 92 real top-level implementations (approximately 97.9k LOC). After
+the planning-contract, provider-protocol, replication-metric, and execute-host
+service cuts, the module graph reports 295 modules, 20 packages, 822 edges, and
+**zero cyclic modules / zero SCCs**. The former 23-module control-plane SCC,
+validator/replication pair, and final pipeline/execute/publication-figure cycle
+are gone.
+
+This is the AST-visible, module-top-level static import graph. Sealed-renderer
+digest and archived-candidate compatibility still use a controlled registry-
+mediated dynamic import of legacy implementation modules; that runtime
+compatibility surface is not an import-time SCC and is not classified as dead.
 
 The visible file count is therefore partly intentional compatibility surface,
 but the remaining 92 real top-level implementations and the two ~11k-line
@@ -105,35 +113,32 @@ method, or estimand.
 
 ## Remaining design problems
 
-1. **Largest SCC (23 modules).** It mixes schemas, evidence, plan utilities,
-   publication figures, provider/mock logic, contracts, and `visual_qa`. The
-   next cut should separate deterministic SVG/contract inspection from
-   provider-backed visual-model transport before moving the module.
-2. **Paper semantics in installed core.** `evaluation_scorecard.py`,
+1. **Paper semantics in installed core.** `evaluation_scorecard.py`,
    `validity_signals.py`, and `icu_agent_bench.py` still participate in the
    current Figure 2 evaluator/scorer authority. They cannot be moved as an
    ordinary refactor: use additive evaluator v3, preserve v1/v2 bytes and
    digests, then leave compatibility shims.
-3. **Case/showcase leaves.** `case_contexts.py` and
+2. **Case/showcase leaves.** `case_contexts.py` and
    `easyicu_case_builder.py` encode lactate/MAP/vasopressor showcase material.
    Move these toward examples/replication only after consumer and archive
    compatibility is explicit.
-4. **Display-contract leakage.** `pipeline.py` still contains publication and
+3. **Display-contract leakage.** `pipeline.py` still contains publication and
    sensitivity labels/semantic aliases with sepsis, lactate, or KDIGO language.
    This is a real shared-engine hygiene issue, not just a file-layout issue; a
    fix changes visible figure contracts and therefore needs dedicated review.
-5. **Mock/learning case heuristics.** `llm_mocks.py`, `memory.py`, and
+4. **Mock/learning case heuristics.** `llm_mocks.py`, `memory.py`, and
    `experience.py` contain KDIGO/SOFA/sepsis examples or heuristics. Canonical
    profiles do not consume them, but they should eventually be isolated as
    mock/example or learning-policy data instead of growing in shared logic.
-6. **Large orchestration surfaces.** `pipeline.py` and `pipeline_execute.py`
+5. **Large orchestration surfaces.** `pipeline.py` and `pipeline_execute.py`
    remain roughly 11k lines each, and the package root exports hundreds of
    symbols. Responsibility packages are real progress, but they do not by
    themselves complete orchestration/API reduction.
 
 ## Next retirement gates
 
-1. Complete the 23-module SCC cut without changing scientific authority.
+1. Keep the import graph acyclic: execute/publication consumers receive fresh,
+   immutable host-service snapshots and may not reverse-import `pipeline`.
 2. Add explicit deprecation metadata/tests for parked primary runners; remove
    them only under an archive/public API retirement version.
 3. Design additive evaluator v3 before moving scorer-bound files.

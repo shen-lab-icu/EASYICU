@@ -80,13 +80,14 @@ mechanically moving every top-level file:
 | Package | Owns | Must not own |
 | --- | --- | --- |
 | `gates/` | read-only contract, visual and concept findings/decisions | provider calls, repair budget, checkpoint/evidence mutation, scientific design |
-| `execution/` | provider-backed concept audit and preparation/rendering of already-authorized figure products | cohort, exposure, outcome, method or estimand selection |
+| `execution/` | provider-backed concept audit, explicit host-service boundaries, filesystem execution helpers, and preparation/rendering of already-authorized figure products | cohort, exposure, outcome, method or estimand selection |
 | `execution/runners/` | auxiliary deterministic calculations over an Agent-locked specification | primary estimand selection or benchmark-case routing |
 | `authority/` | replanner-candidate invariants, typed input/evidence binding, typed success-promotion boundaries and digest-bound direct-parent resolution around the existing EvidenceStore/checkpoint authorities | provider calls, scientific plan selection, a second `current` selector, sibling scan, or independent evidence ledger |
 | `repairs/` | typed repair reasons, exact patch/full-rewrite transport, deterministic source repair and summary salvage | scientific redesign, silent gate relaxation or case-specific repair rules |
 | `discovery/` | candidate-hypothesis ranking, feasibility and discovery handoff | manuscript authority or autonomous scientific claims |
 | `reporting/` | manuscript binding, article/display contracts, review artifacts and rendering helpers | unverified numeric claims or a second evidence authority |
-| `planning/` | case-neutral analysis families, study-design playbooks, capability/method registries and article figure strategy | case-specific benchmark instructions or execution/evidence mutation |
+| `planning/` | case-neutral analysis families, pure cohort/robustness contracts, study-design playbooks, capability/method registries and article figure strategy | case-specific benchmark instructions or execution/evidence mutation |
+| `providers/` | provider-neutral LLM protocol plus lazy concrete-client construction | planning, scientific policy, evidence authority or eager import of the concrete client |
 | `research_context/` | typed context authority, cohort-aware context construction and step-scoped Coder projection | scientific method selection, provider calls or run authority mutation |
 | `evaluation/` | optional cross-model concordance and Tier-2 jury/rubric adapters over completed artifacts | primary scientific adjudication or hidden manuscript benchmark authority |
 | `review/` | deterministic post-analysis causal-claim and method-appropriateness review | exposure, outcome, cohort, method or estimand selection |
@@ -116,6 +117,15 @@ New canonical code must import the responsibility package directly, never the
 compatibility façade. Consequently, counting physical top-level files includes
 these deliberate shims and is not a valid measure of remaining architecture
 debt.
+
+The production module-top-level static import graph is now acyclic. `pipeline_execute` and
+`execution.publication_figure` receive host-owned compatibility helpers through
+a fresh immutable `execution.host_services.ExecutePhaseServices` snapshot; they
+do not statically reverse-import `pipeline`. Sealed-renderer digest and archived
+candidate compatibility retain a controlled registry-mediated dynamic import
+of legacy implementation modules. This dependency inversion changes neither
+the Agent's scientific ownership nor the sealed renderer template, and an
+explicit static-graph regression requires zero cyclic modules.
 
 Current scope note: Layer 4 is bounded. It produces an auditable
 `hypothesis_blueprint.json` before planning, ranking candidates by
