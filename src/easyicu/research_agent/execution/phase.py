@@ -246,7 +246,9 @@ from ..gates.visual import (
     collect_visual_gate_result,
     decide_visual_repair,
 )
-from ..gates.semantics import blocking_validator_findings as _blocking_validator_findings
+from ..gates.semantics import (
+    blocking_validator_findings as _blocking_validator_findings,
+)
 from ..providers.mocks import MockLLMClient
 from ..contracts.ordered_stratified import ordered_stratified_numeric_findings
 from ..repairs.reasons import (
@@ -270,7 +272,6 @@ from ..plan_utils import (
     _parent_step_id_for_figure_step,
     _plan_expects_analysis_cohort,
     _preserve_figure_steps_after_replan,
-    _preserve_primary_estimand_step_after_replan,
     _step_contract_repair_guidance,
     _step_expects_figure,
     _typed_plan_dag_findings,
@@ -3992,6 +3993,10 @@ def run_execute_phase(
             cohort_checkpoint = {
                 "step_id": cohort_product_step.step_id,
                 "intent": cohort_product_step.intent,
+                "planned_analysis_role": cohort_product_step.planned_analysis_role,
+                "analysis_request": {
+                    "step": cohort_product_step.model_dump(mode="json")
+                },
                 "status": "ok",
                 "generation_mode": _HOST_COHORT_MATERIALIZER_GENERATION_MODE,
                 "step_authority_kind": _HOST_COHORT_MATERIALIZER_AUTHORITY_KIND,
@@ -4325,6 +4330,7 @@ def run_execute_phase(
         probe_record = {
             "step_id": probe_step_id,
             "intent": "Probe distributions, missingness, and obvious anomalies before execution.",
+            "planned_analysis_role": "auxiliary",
             "status": "ok",
             "generation_mode": "deterministic_probe",
             "step_summary": probe_summary,
@@ -4676,6 +4682,7 @@ def run_execute_phase(
         step_record: Dict[str, Any] = {
             "step_id": step.step_id,
             "intent": step.intent,
+            "planned_analysis_role": step.planned_analysis_role,
             "attempt_id": attempt_id,
             "attempt_sequence": attempt_sequence,
             "review_checkpoint_id": review_checkpoint_id,

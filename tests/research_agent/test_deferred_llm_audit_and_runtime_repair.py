@@ -37,6 +37,7 @@ def _plan() -> str:
             "steps": [
                 {
                     "step_id": "01_summary",
+                    "planned_analysis_role": "auxiliary",
                     "intent": "Produce a descriptive cohort summary.",
                     "inputs": ["stay_id"],
                     "expected_outputs": ["table:cohort_summary"],
@@ -262,6 +263,7 @@ with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as hand
             "steps": [
                 {
                     "step_id": "02_exposure_qc",
+                    "planned_analysis_role": "auxiliary",
                     "intent": "Audit the ordered exposure without silent coercion.",
                     "inputs": ["aki_stage_max"],
                     "expected_outputs": ["table:exposure_qc"],

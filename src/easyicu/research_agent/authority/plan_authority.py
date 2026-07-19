@@ -18,7 +18,6 @@ from ..plan_utils import (
     _augment_report_typed_product_inputs,
     _cap_plan_preserving_figure_steps,
     _preserve_figure_steps_after_replan,
-    _preserve_primary_estimand_step_after_replan,
 )
 from ..robustness.panel import (
     RobustnessSpec,
@@ -29,6 +28,7 @@ from ..authority.runtime_artifacts import current_successful_step_records
 from ..schema import AnalysisPlan, AnalysisStep, ResearchContext, ValidationFinding
 from ..trajectory.plan_contract import augment_trajectory_plan_products
 from .plan_scope import _plan_scientific_scope_signature, _plan_signature
+from .planned_role import verified_planned_analysis_role
 
 __all__ = [
     "NormalizedPlanCandidate",
@@ -45,6 +45,36 @@ class NormalizedPlanCandidate:
     plan: AnalysisPlan
     findings: Tuple[ValidationFinding, ...]
     substantive: bool
+
+
+_INVALID_AUTHORITY_PROJECTION_REASON = (
+    "replanner_candidate_invalid_after_authority_projection"
+)
+
+
+def _invalid_authority_projection_finding(exc: Exception) -> ValidationFinding:
+    return ValidationFinding(
+        validator="replanner",
+        severity="warning",
+        message=(
+            "Rejected a replanner candidate because restoring immutable host "
+            "authority produced an invalid analysis plan; kept the current plan "
+            "without assigning or demoting a scientific role."
+        ),
+        detail={
+            "reason": _INVALID_AUTHORITY_PROJECTION_REASON,
+            "error_type": type(exc).__name__,
+        },
+    )
+
+
+def _has_invalid_authority_projection(
+    findings: Sequence[ValidationFinding],
+) -> bool:
+    return any(
+        finding.detail.get("reason") == _INVALID_AUTHORITY_PROJECTION_REASON
+        for finding in findings
+    )
 
 
 def _preserve_completed_step_snapshots_after_replan(
@@ -72,6 +102,12 @@ def _preserve_completed_step_snapshots_after_replan(
     ]
     for record in completed_current_records:
         step_id = str(record.get("step_id") or "").strip()
+        if verified_planned_analysis_role(record) is None:
+            return current_plan, [
+                _invalid_authority_projection_finding(
+                    ValueError("completed step has inconsistent Planner role authority")
+                )
+            ]
         analysis_request = record.get("analysis_request")
         raw_step = (
             analysis_request.get("step")
@@ -148,7 +184,12 @@ def _preserve_completed_step_snapshots_after_replan(
                 "rationale": current_plan.rationale,
             }
         )
-    preserved = revised_plan.model_copy(update=update)
+    payload = revised_plan.model_dump(mode="json")
+    payload.update(update)
+    try:
+        preserved = AnalysisPlan.model_validate(payload)
+    except (TypeError, ValueError) as exc:
+        return current_plan, [_invalid_authority_projection_finding(exc)]
     return preserved, [
         ValidationFinding(
             validator="replanner",
@@ -232,12 +273,12 @@ def normalize_replan_candidate(
         completed_records=completed_records,
     )
     findings.extend(immutable_step_findings)
-
-    revised, estimand_findings = _preserve_primary_estimand_step_after_replan(
-        current=current_plan,
-        revised=revised,
-    )
-    findings.extend(estimand_findings)
+    if _has_invalid_authority_projection(findings):
+        return NormalizedPlanCandidate(
+            plan=current_plan,
+            findings=tuple(findings),
+            substantive=False,
+        )
     revised, figure_findings = _preserve_figure_steps_after_replan(
         current=current_plan,
         revised=revised,
@@ -295,6 +336,21 @@ def normalize_replan_candidate(
         completed_records=completed_records,
     )
     findings.extend(post_transform_findings)
+    if _has_invalid_authority_projection(findings):
+        return NormalizedPlanCandidate(
+            plan=current_plan,
+            findings=tuple(findings),
+            substantive=False,
+        )
+    try:
+        revised = AnalysisPlan.model_validate(revised.model_dump(mode="json"))
+    except (TypeError, ValueError) as exc:
+        findings.append(_invalid_authority_projection_finding(exc))
+        return NormalizedPlanCandidate(
+            plan=current_plan,
+            findings=tuple(findings),
+            substantive=False,
+        )
     return NormalizedPlanCandidate(
         plan=revised,
         findings=tuple(findings),

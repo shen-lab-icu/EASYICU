@@ -34,7 +34,6 @@ from ..schema import (
     VariableRole,
 )
 
-
 # ---------------------------------------------------------------------------
 # Mock client: ICU-aware canned responses, used for tests / offline demo
 # ---------------------------------------------------------------------------
@@ -70,8 +69,14 @@ class MockLLMClient:
         # without falling back to the chars/4 heuristic.
         self.last_usage: Optional[Dict[str, int]] = None
 
-    def complete(self, messages: Sequence[LLMMessage], *, max_tokens: int = 2048,
-                 temperature: float = 0.2, seed: Optional[int] = None) -> str:
+    def complete(
+        self,
+        messages: Sequence[LLMMessage],
+        *,
+        max_tokens: int = 2048,
+        temperature: float = 0.2,
+        seed: Optional[int] = None,
+    ) -> str:
         # ``seed`` is accepted for signature parity with OpenAIClient so
         # the reproducibility envelope (O20) can forward it uniformly.
         # The mock is deterministic regardless of seed.
@@ -96,28 +101,34 @@ class MockLLMClient:
                 or "REPAIR THE PYTHON CODE" in upper
             ):
                 response = _mock_code_for_step(ctx, last_user)
-            elif "INTERPRET THE RESULTS OF STEP" in upper or "INTERPRET THE RESULTS" in upper:
+            elif (
+                "INTERPRET THE RESULTS OF STEP" in upper
+                or "INTERPRET THE RESULTS" in upper
+            ):
                 response = _mock_interpretation(ctx, last_user)
             elif "WRITE ONLY THE **" in upper and "CITATION RULE" in upper:
-                language = "zh" if (
-                    "OUTPUT LANGUAGE: ZH" in upper
-                    or "SIMPLIFIED CHINESE" in upper
-                ) else "en"
+                language = (
+                    "zh"
+                    if ("OUTPUT LANGUAGE: ZH" in upper or "SIMPLIFIED CHINESE" in upper)
+                    else "en"
+                )
                 response = _mock_writer_section(ctx, last_user, language=language)
             elif (
                 "WRITE A MANUSCRIPT SCAFFOLD" in upper
                 or "MANUSCRIPT SCAFFOLD" in upper
                 or "WRITE METHODS" in upper
             ):
-                language = "zh" if (
-                    "OUTPUT LANGUAGE: ZH" in upper
-                    or "SIMPLIFIED CHINESE" in upper
-                ) else "en"
+                language = (
+                    "zh"
+                    if ("OUTPUT LANGUAGE: ZH" in upper or "SIMPLIFIED CHINESE" in upper)
+                    else "en"
+                )
                 response = _mock_manuscript_scaffold(ctx, language=language)
             elif (
                 "REVISE THE ICU-AWARE RESEARCH PLAN" in upper
                 or "REVISE THE RESEARCH PLAN" in upper
-                or "COMPLETED STEP RECORDS" in upper and "CURRENT PLAN" in upper
+                or "COMPLETED STEP RECORDS" in upper
+                and "CURRENT PLAN" in upper
             ):
                 response = _mock_replan_json(ctx, last_user)
             elif (
@@ -163,40 +174,52 @@ def _mock_literature(ctx: ResearchContext) -> str:
     pass a populated client and skip this branch.
     """
     sofa_in_scope = any(v.name.lower() in {"sofa", "sofa2"} for v in ctx.variables)
-    aki_in_scope = any(v.name.lower() in {"creat", "kdigo", "aki"} for v in ctx.variables)
-    seps_in_scope = any(v.name.lower() in {"sep3", "sepsis", "lact"} for v in ctx.variables)
+    aki_in_scope = any(
+        v.name.lower() in {"creat", "kdigo", "aki"} for v in ctx.variables
+    )
+    seps_in_scope = any(
+        v.name.lower() in {"sep3", "sepsis", "lact"} for v in ctx.variables
+    )
     citations: List[Dict[str, str]] = []
     if sofa_in_scope:
-        citations.append({
-            "key": "vincent_sofa_1996",
-            "title": "The SOFA (Sepsis-related Organ Failure Assessment) score to describe organ dysfunction/failure.",
-            "year": "1996",
-            "venue": "Intensive Care Medicine",
-            "relevance": "Defines the SOFA score and its 0-4 ordinal components used here.",
-        })
+        citations.append(
+            {
+                "key": "vincent_sofa_1996",
+                "title": "The SOFA (Sepsis-related Organ Failure Assessment) score to describe organ dysfunction/failure.",
+                "year": "1996",
+                "venue": "Intensive Care Medicine",
+                "relevance": "Defines the SOFA score and its 0-4 ordinal components used here.",
+            }
+        )
     if seps_in_scope:
-        citations.append({
-            "key": "singer_sepsis3_2016",
-            "title": "The Third International Consensus Definitions for Sepsis and Septic Shock (Sepsis-3).",
-            "year": "2016",
-            "venue": "JAMA",
-            "relevance": "Sepsis-3 reframes sepsis around SOFA-defined organ dysfunction; underpins outcome interpretation.",
-        })
+        citations.append(
+            {
+                "key": "singer_sepsis3_2016",
+                "title": "The Third International Consensus Definitions for Sepsis and Septic Shock (Sepsis-3).",
+                "year": "2016",
+                "venue": "JAMA",
+                "relevance": "Sepsis-3 reframes sepsis around SOFA-defined organ dysfunction; underpins outcome interpretation.",
+            }
+        )
     if aki_in_scope:
-        citations.append({
-            "key": "kdigo_aki_2012",
-            "title": "KDIGO Clinical Practice Guideline for Acute Kidney Injury.",
-            "year": "2012",
-            "venue": "Kidney International Supplements",
-            "relevance": "Defines KDIGO AKI staging used by the EasyICU AKI module.",
-        })
-    citations.append({
-        "key": "easyicu_2026",
-        "title": "EasyICU: a Python toolkit for ICU dataset standardisation, inspired by ricu.",
-        "year": "2026",
-        "venue": "Software (this work)",
-        "relevance": "Source of the cohort and concept dictionary used in the analysis.",
-    })
+        citations.append(
+            {
+                "key": "kdigo_aki_2012",
+                "title": "KDIGO Clinical Practice Guideline for Acute Kidney Injury.",
+                "year": "2012",
+                "venue": "Kidney International Supplements",
+                "relevance": "Defines KDIGO AKI staging used by the EasyICU AKI module.",
+            }
+        )
+    citations.append(
+        {
+            "key": "easyicu_2026",
+            "title": "EasyICU: a Python toolkit for ICU dataset standardisation, inspired by ricu.",
+            "year": "2026",
+            "venue": "Software (this work)",
+            "relevance": "Source of the cohort and concept dictionary used in the analysis.",
+        }
+    )
     return json.dumps({"citations": citations}, indent=2, ensure_ascii=False)
 
 
@@ -229,9 +252,11 @@ def _mock_plan_json(ctx: ResearchContext) -> str:
     # specific so an effect-producing step is owned by an authorised method
     # instead of the old ambiguous ``logistic_or_KM`` placeholder.
     steps = [
-        step.model_copy(update={"method": "logistic_regression"})
-        if step.step_id == "04_primary_association"
-        else step
+        (
+            step.model_copy(update={"method": "logistic_regression"})
+            if step.step_id == "04_primary_association"
+            else step
+        )
         for step in steps
     ]
     # Mock plans make the data dependency explicit before the shared plan
@@ -247,8 +272,7 @@ def _mock_plan_json(ctx: ResearchContext) -> str:
             output for output in outputs if output not in figure_outputs
         ]
         split_mock_step = bool(figure_outputs and non_figure_outputs) and (
-            step.step_id == "04_primary_association"
-            or "missingness" in step.step_id
+            step.step_id == "04_primary_association" or "missingness" in step.step_id
         )
         if not split_mock_step:
             separated_steps.append(step)
@@ -259,13 +283,14 @@ def _mock_plan_json(ctx: ResearchContext) -> str:
         typed_table_inputs = [
             output
             for output in non_figure_outputs
-            if str(output).lower().startswith(
-                ("table:", "statistic:", "artifact:", "dataset:", "model:")
-            )
+            if str(output)
+            .lower()
+            .startswith(("table:", "statistic:", "artifact:", "dataset:", "model:"))
         ]
         separated_steps.append(
             AnalysisStep(
                 step_id=f"{step.step_id}_figure",
+                planned_analysis_role="auxiliary",
                 intent=(
                     f"Render {', '.join(figure_outputs)} from the registered "
                     f"typed outputs of '{step.step_id}' without recomputing science."
@@ -282,6 +307,7 @@ def _mock_plan_json(ctx: ResearchContext) -> str:
         steps.append(
             AnalysisStep(
                 step_id="06_cross_database_protocol",
+                planned_analysis_role="auxiliary",
                 intent=(
                     "Document a replication protocol for: "
                     + ", ".join(ctx.cross_database_validation)
@@ -312,18 +338,27 @@ def _mock_replan_json(ctx: ResearchContext, prompt: str) -> str:
     """Deterministic replan: preserve completed steps, adjust remaining plan conservatively."""
     plan = AnalysisPlan.model_validate_json(_mock_plan_json(ctx))
     try:
-        current_match = re.search(r"CURRENT PLAN:\n(\{.*?\})\n\nPROBE SUMMARY:", prompt, flags=re.DOTALL)
+        current_match = re.search(
+            r"CURRENT PLAN:\n(\{.*?\})\n\nPROBE SUMMARY:", prompt, flags=re.DOTALL
+        )
         if current_match:
             current = AnalysisPlan.model_validate_json(current_match.group(1))
             plan = current
     except Exception:
         pass
-    return plan.model_copy(update={"revision": plan.revision + 1}).model_dump_json(indent=2)
+    return plan.model_copy(update={"revision": plan.revision + 1}).model_dump_json(
+        indent=2
+    )
 
 
 def _pick_outcome(ctx: ResearchContext) -> Optional[str]:
     for v in ctx.variables:
-        if v.role == VariableRole.OUTCOME and v.name.lower() in {"death", "death_icu", "death_hosp", "mortality"}:
+        if v.role == VariableRole.OUTCOME and v.name.lower() in {
+            "death",
+            "death_icu",
+            "death_hosp",
+            "mortality",
+        }:
             return v.name
     for v in ctx.variables:
         if v.role == VariableRole.OUTCOME:
@@ -370,7 +405,8 @@ def _score_preference_key(ctx: ResearchContext, name: str) -> tuple[int, int, st
 def _pick_score(ctx: ResearchContext) -> Optional[str]:
     """Choose a composite/ordinal score without naming a particular score."""
     candidates = [
-        v.name for v in ctx.variables
+        v.name
+        for v in ctx.variables
         if v.role in {VariableRole.COMPOSITE_SCORE, VariableRole.ORDINAL_SCORE}
     ]
     if not candidates:
@@ -378,7 +414,9 @@ def _pick_score(ctx: ResearchContext) -> Optional[str]:
     return sorted(candidates, key=lambda name: _score_preference_key(ctx, name))[0]
 
 
-def _pick_primary_predictor(ctx: ResearchContext, outcome: Optional[str]) -> Optional[str]:
+def _pick_primary_predictor(
+    ctx: ResearchContext, outcome: Optional[str]
+) -> Optional[str]:
     """Heuristic: prefer question-mentioned variables, then scores/vitals/labs."""
     pref_order = [
         VariableRole.COMPOSITE_SCORE,
@@ -390,7 +428,8 @@ def _pick_primary_predictor(ctx: ResearchContext, outcome: Optional[str]) -> Opt
     ]
     eligible_roles = set(pref_order)
     mentioned = [
-        v.name for v in ctx.variables
+        v.name
+        for v in ctx.variables
         if v.name != outcome
         and v.role in eligible_roles
         and _question_mentions_variable(ctx, v.name)
@@ -425,11 +464,7 @@ def _mock_code_for_step(ctx: ResearchContext, prompt: str) -> str:
     step_id = _extract_step_id(prompt) or "step"
     expected_outputs = _extract_expected_outputs(prompt)
     protocol_output = next(
-        (
-            output
-            for output in expected_outputs
-            if output.lower().startswith("log:")
-        ),
+        (output for output in expected_outputs if output.lower().startswith("log:")),
         "log:protocol_notes",
     )
     outcome = ctx.target_outcome or _pick_outcome(ctx) or "death"
@@ -447,7 +482,9 @@ def _mock_code_for_step(ctx: ResearchContext, prompt: str) -> str:
             outcome=outcome,
         )
     if re.search(r"(?:^|_)primary_association$", step_id):
-        primary_pred = _pick_primary_predictor(ctx, outcome=outcome) or score_var or "age"
+        primary_pred = (
+            _pick_primary_predictor(ctx, outcome=outcome) or score_var or "age"
+        )
         return _mock_code_primary_association(
             ctx=ctx,
             step_id=step_id,
@@ -468,8 +505,7 @@ def _mock_code_for_step(ctx: ResearchContext, prompt: str) -> str:
         )
     # Inline script as a triple-quoted heredoc — note: keep this tight; the
     # runner persists it byte-for-byte and hashes it as evidence.
-    code = textwrap.dedent(
-        f'''
+    code = textwrap.dedent(f"""
         # AUTO-GENERATED by easyicu.research_agent.MockLLMClient
         # step_id: {step_id}
         # research_question: {ctx.research_question!r}
@@ -591,8 +627,7 @@ def _mock_code_for_step(ctx: ResearchContext, prompt: str) -> str:
         with open(out_dir / "step_summary.json", "w", encoding="utf-8") as f:
             json.dump(summary, f, indent=2, ensure_ascii=False, default=str)
         print(json.dumps(summary, indent=2, ensure_ascii=False, default=str))
-        '''
-    ).strip() + "\n"
+        """).strip() + "\n"
     return code
 
 
@@ -607,7 +642,7 @@ def _mock_code_declared_figure(*, step_id: str, prompt: str) -> str:
     products = list(dict.fromkeys(product for product in products if product))
     if not products:
         products = ["publication_figure"]
-    template = r'''
+    template = r"""
     # AUTO-GENERATED by easyicu.research_agent.MockLLMClient
     # rendering-only figure step; never reads COHORT_PARQUET or refits a model
     from __future__ import annotations
@@ -882,7 +917,7 @@ def _mock_code_declared_figure(*, step_id: str, prompt: str) -> str:
         json.dumps(summary, indent=2, ensure_ascii=False), encoding="utf-8"
     )
     print(json.dumps(summary, indent=2, ensure_ascii=False))
-    '''
+    """
     return (
         textwrap.dedent(template)
         .replace("__STEP_ID__", json.dumps(step_id))
@@ -891,7 +926,11 @@ def _mock_code_declared_figure(*, step_id: str, prompt: str) -> str:
 
 
 def _mock_code_primary_association(
-    *, ctx: ResearchContext, step_id: str, outcome: str, predictor: str,
+    *,
+    ctx: ResearchContext,
+    step_id: str,
+    outcome: str,
+    predictor: str,
 ) -> str:
     """Logistic-regression script for the ``*_primary_association`` step (T1.6).
 
@@ -909,8 +948,7 @@ def _mock_code_primary_association(
     """
     # The script itself checks at runtime which adjustment columns are
     # available; we don't need to bake the answer in here.
-    code = textwrap.dedent(
-        f'''
+    code = textwrap.dedent(f"""
         # AUTO-GENERATED by easyicu.research_agent.MockLLMClient
         # step_id: {step_id}
         # research_question: {ctx.research_question!r}
@@ -1066,13 +1104,14 @@ def _mock_code_primary_association(
         with open(out_dir / "step_summary.json", "w", encoding="utf-8") as f:
             json.dump(summary, f, indent=2, ensure_ascii=False, default=str)
         print(json.dumps(summary, indent=2, ensure_ascii=False, default=str))
-        '''
-    ).strip() + "\n"
+        """).strip() + "\n"
     return code
 
 
-def _mock_code_prediction_model(*, ctx: ResearchContext, step_id: str, outcome: str) -> str:
-    template = r'''
+def _mock_code_prediction_model(
+    *, ctx: ResearchContext, step_id: str, outcome: str
+) -> str:
+    template = r"""
     # AUTO-GENERATED by easyicu.research_agent.MockLLMClient
     # step_id: __STEP_ID__
     # research_question: __QUESTION__
@@ -1301,14 +1340,19 @@ def _mock_code_prediction_model(*, ctx: ResearchContext, step_id: str, outcome: 
     with open(out_dir / "step_summary.json", "w", encoding="utf-8") as f:
         json.dump(summary, f, indent=2, ensure_ascii=False, default=to_jsonable)
     print(json.dumps(summary, indent=2, ensure_ascii=False, default=to_jsonable))
-    '''
-    return textwrap.dedent(template).replace("__STEP_ID__", step_id).replace(
-        "__QUESTION__", json.dumps(ctx.research_question)
-    ).replace("__OUTCOME__", json.dumps(outcome))
+    """
+    return (
+        textwrap.dedent(template)
+        .replace("__STEP_ID__", step_id)
+        .replace("__QUESTION__", json.dumps(ctx.research_question))
+        .replace("__OUTCOME__", json.dumps(outcome))
+    )
 
 
-def _mock_code_trajectory_clustering(*, ctx: ResearchContext, step_id: str, outcome: str) -> str:
-    template = r'''
+def _mock_code_trajectory_clustering(
+    *, ctx: ResearchContext, step_id: str, outcome: str
+) -> str:
+    template = r"""
     # AUTO-GENERATED by easyicu.research_agent.MockLLMClient
     # step_id: __STEP_ID__
     # research_question: __QUESTION__
@@ -1473,19 +1517,24 @@ def _mock_code_trajectory_clustering(*, ctx: ResearchContext, step_id: str, outc
     with open(out_dir / "step_summary.json", "w", encoding="utf-8") as f:
         json.dump(summary, f, indent=2, ensure_ascii=False, default=to_jsonable)
     print(json.dumps(summary, indent=2, ensure_ascii=False, default=to_jsonable))
-    '''
-    return textwrap.dedent(template).replace("__STEP_ID__", step_id).replace(
-        "__QUESTION__", json.dumps(ctx.research_question)
-    ).replace("__OUTCOME__", json.dumps(outcome))
+    """
+    return (
+        textwrap.dedent(template)
+        .replace("__STEP_ID__", step_id)
+        .replace("__QUESTION__", json.dumps(ctx.research_question))
+        .replace("__OUTCOME__", json.dumps(outcome))
+    )
 
 
-def _mock_code_publication_figure(*, ctx: ResearchContext, step_id: str, outcome: str) -> str:
+def _mock_code_publication_figure(
+    *, ctx: ResearchContext, step_id: str, outcome: str
+) -> str:
     analysis_type = infer_analysis_type(
         ctx,
         primary_predictor=_pick_primary_predictor(ctx, outcome=outcome),
         target_outcome=outcome,
     ).key
-    template = r'''
+    template = r"""
     # AUTO-GENERATED by easyicu.research_agent.MockLLMClient
     # step_id: __STEP_ID__
     # research_question: __QUESTION__
@@ -1705,10 +1754,14 @@ def _mock_code_publication_figure(*, ctx: ResearchContext, step_id: str, outcome
     with open(out_dir / "step_summary.json", "w", encoding="utf-8") as f:
         json.dump(summary, f, indent=2, ensure_ascii=False, default=to_jsonable)
     print(json.dumps(summary, indent=2, ensure_ascii=False, default=to_jsonable))
-    '''
-    return textwrap.dedent(template).replace("__STEP_ID__", step_id).replace(
-        "__QUESTION__", json.dumps(ctx.research_question)
-    ).replace("__ANALYSIS_TYPE__", analysis_type).replace("__OUTCOME__", json.dumps(outcome))
+    """
+    return (
+        textwrap.dedent(template)
+        .replace("__STEP_ID__", step_id)
+        .replace("__QUESTION__", json.dumps(ctx.research_question))
+        .replace("__ANALYSIS_TYPE__", analysis_type)
+        .replace("__OUTCOME__", json.dumps(outcome))
+    )
 
 
 def _extract_step_id(prompt: str) -> Optional[str]:
@@ -1787,7 +1840,9 @@ def _mock_writer_section(
     if language == "zh":
         if section.startswith("Title"):
             return "# EasyICU ICU 关联分析\n\n**关键词：** ICU，队列，关联，证据追踪，EasyICU"
-        heading = "## " + section.replace("Conclusion, Data availability, Funding, COI", "结论")
+        heading = "## " + section.replace(
+            "Conclusion, Data availability, Funding, COI", "结论"
+        )
         return textwrap.dedent(f"""
         {heading}
 
@@ -1866,7 +1921,11 @@ def _mock_manuscript_scaffold(ctx: ResearchContext, *, language: str = "en") -> 
     """
     outcome = ctx.target_outcome or _pick_outcome(ctx) or "the primary outcome"
     predictor = _pick_primary_predictor(ctx, outcome=outcome) or "the primary predictor"
-    cross_db = ", ".join(ctx.cross_database_validation) if ctx.cross_database_validation else "(none planned)"
+    cross_db = (
+        ", ".join(ctx.cross_database_validation)
+        if ctx.cross_database_validation
+        else "(none planned)"
+    )
     if language == "zh":
         return textwrap.dedent(f"""
         # 手稿脚手架

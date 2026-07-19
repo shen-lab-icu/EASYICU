@@ -29,7 +29,6 @@ from easyicu.research_agent.schema import AnalysisStep
 from easyicu.research_agent.schema import ResearchContext
 from easyicu.research_agent.schema import ValidationFinding
 
-
 PARENT_STEP = "02_marker_audit"
 FIGURE_STEP = f"{PARENT_STEP}_figure"
 
@@ -1087,6 +1086,7 @@ def test_sealed_renderer_authority_and_failure_policy(
                         "steps": [
                             {
                                 "step_id": PARENT_STEP,
+                                "planned_analysis_role": "auxiliary",
                                 "intent": "Audit the planned marker distribution and availability.",
                                 "inputs": ["marker_value"],
                                 "expected_outputs": [
@@ -1098,6 +1098,7 @@ def test_sealed_renderer_authority_and_failure_policy(
                             },
                             {
                                 "step_id": FIGURE_STEP,
+                                "planned_analysis_role": "auxiliary",
                                 "intent": "Render the direct parent's planned descriptive audit.",
                                 "inputs": [
                                     "table:descriptive_distribution",

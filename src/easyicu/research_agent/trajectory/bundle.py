@@ -548,6 +548,7 @@ def trajectory_bundle_findings(
     )
     synthetic_step = AnalysisStep(
         step_id="trajectory_bundle_validation",
+        planned_analysis_role="auxiliary",
         intent="Replay the agent-declared cross-step trajectory bundle.",
         inputs=raw_inputs,
         expected_outputs=expected_outputs,

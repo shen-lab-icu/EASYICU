@@ -22,6 +22,7 @@ import pandas as pd
 
 from ..audits.validators import FigureContractQualityValidator
 from ..authority.evidence_store import EvidenceStore
+from ..contracts.declared_product import typed_product
 from .publication import (
     PUBLICATION_FIGURE_SKILL_POLICY_VERSION,
     add_panel_label,
@@ -34,6 +35,79 @@ from . import RenderedFigure, render_family_figure
 from ..robustness.panel import RobustnessPanel, load_robustness_panel
 from ..schema import AnalysisPlan, EvidenceRecord, ResearchContext, ValidationFinding
 from ..planning.study_design import infer_study_design_family
+
+
+class _PrimaryLineageEvidenceView:
+    """Read-only evidence view limited to Planner-primary descendants."""
+
+    def __init__(self, evidence: EvidenceStore, allowed_step_ids: set[str]) -> None:
+        self._evidence = evidence
+        self._allowed_step_ids = set(allowed_step_ids)
+
+    def records(self) -> List[EvidenceRecord]:
+        records = self._evidence.records()
+        allowed_records = [
+            record
+            for record in records
+            if str(record.produced_by_step or "") in self._allowed_step_ids
+        ]
+        allowed_ids = {record.evidence_id for record in allowed_records}
+        for record in records:
+            if record.produced_by_step is not None:
+                continue
+            source_ids = {
+                str(value)
+                for value in ((record.metadata or {}).get("source_evidence_ids") or [])
+                if str(value).strip()
+            }
+            if source_ids and source_ids <= allowed_ids:
+                allowed_records.append(record)
+        return allowed_records
+
+    def get(self, evidence_id_or_alias: str) -> Optional[EvidenceRecord]:
+        record = self._evidence.get(evidence_id_or_alias)
+        if record is None:
+            return None
+        return next(
+            (
+                candidate
+                for candidate in self.records()
+                if candidate.evidence_id == record.evidence_id
+            ),
+            None,
+        )
+
+
+def _declared_primary_lineage_step_ids(plan: AnalysisPlan) -> set[str]:
+    primary_steps = [
+        step for step in plan.steps if step.planned_analysis_role == "primary"
+    ]
+    if len(primary_steps) != 1:
+        return set()
+    producers: Dict[tuple[str, str], set[str]] = {}
+    for step in plan.steps:
+        for raw_output in step.expected_outputs:
+            product = typed_product(raw_output)
+            if product is not None:
+                producers.setdefault(product, set()).add(step.step_id)
+    allowed = {primary_steps[0].step_id}
+    changed = True
+    while changed:
+        changed = False
+        for step in plan.steps:
+            if step.step_id in allowed or step.planned_analysis_role not in {
+                "secondary",
+                "auxiliary",
+            }:
+                continue
+            for raw_input in step.inputs:
+                product = typed_product(raw_input)
+                owners = producers.get(product, set()) if product is not None else set()
+                if len(owners) == 1 and owners <= allowed:
+                    allowed.add(step.step_id)
+                    changed = True
+                    break
+    return allowed
 
 
 def _close_leaked_figures() -> None:
@@ -95,8 +169,14 @@ class PublicationFigureSkill:
         run_dir: Path,
         prompt_pack_version: Optional[str] = None,
     ) -> PublicationFigureSkillResult:
+        primary_lineage_ids = _declared_primary_lineage_step_ids(plan)
+        source_evidence: Any = (
+            _PrimaryLineageEvidenceView(evidence, primary_lineage_ids)
+            if primary_lineage_ids
+            else evidence
+        )
         if _has_curated_publication_figure_bundle(
-            evidence,
+            source_evidence,
             run_dir=run_dir,
             context=context,
         ):
@@ -116,7 +196,7 @@ class PublicationFigureSkill:
             family,
             context=context,
             plan=plan,
-            evidence=evidence,
+            evidence=source_evidence,
             run_dir=run_dir,
         )
         if family_figure is not None:
@@ -132,23 +212,13 @@ class PublicationFigureSkill:
                 # A finalisation bug must not crash the figure stage; fall
                 # through to the existing association/promotion/skip ladder.
                 _close_leaked_figures()
-        primary = _select_primary_association_record(
-            evidence,
-            run_dir=run_dir,
-            context=context,
-            names=[
-                "primary_association",
-                "primary_association_table",
-                "table_primary_association",
-                "adjusted_association",
-                "adjusted_association_death",
-                "association_table",
-            ],
-        )
-        if primary is None:
-            primary = _first_existing_record(
-                evidence,
-                [
+        primary = None
+        if primary_lineage_ids:
+            primary = _select_primary_association_record(
+                source_evidence,
+                run_dir=run_dir,
+                context=context,
+                names=[
                     "primary_association",
                     "primary_association_table",
                     "table_primary_association",
@@ -157,7 +227,9 @@ class PublicationFigureSkill:
                     "association_table",
                 ],
             )
-        promoted_bundle = _select_existing_step_publication_figure_bundle(evidence)
+        promoted_bundle = _select_existing_step_publication_figure_bundle(
+            source_evidence
+        )
         if promoted_bundle is not None and (
             primary is None or _bundle_primary_strategy_ready(context, promoted_bundle)
         ):
@@ -170,7 +242,7 @@ class PublicationFigureSkill:
             )
         if primary is None:
             robustness_record = _latest_record_for_basename(
-                evidence,
+                source_evidence,
                 "robustness_panel.json",
                 kind="statistic",
             )
@@ -212,7 +284,7 @@ class PublicationFigureSkill:
                 skipped_reason="plan_has_no_figure_outputs",
             )
 
-        prediction_bundle = _select_existing_prediction_figure_bundle(evidence)
+        prediction_bundle = _select_existing_prediction_figure_bundle(source_evidence)
         if prediction_bundle is not None:
             return self._promote_prediction_validation_figure(
                 context=context,
@@ -220,7 +292,7 @@ class PublicationFigureSkill:
                 run_dir=run_dir,
                 figure_records=prediction_bundle,
                 summary_record=_first_existing_statistic_record(
-                    evidence,
+                    source_evidence,
                     [
                         "01_model_training",
                         "model_performance",
@@ -233,7 +305,7 @@ class PublicationFigureSkill:
             try:
                 frame = _read_table(run_dir / primary.relative_path)
                 strata = _first_normalisable_record(
-                    evidence,
+                    source_evidence,
                     [
                         "stratified_mortality",
                         "stratified_mortality_incidence",
@@ -1702,13 +1774,9 @@ def _select_existing_step_publication_figure_bundle(
     # table/evidence reference named by the contract across the whole store;
     # exact basename/stem/id matching keeps the promotion evidence-bound.
     table_records = [record for record in records if record.kind == "table"]
-    record_order = {
-        record.evidence_id: order for order, record in enumerate(records)
-    }
+    record_order = {record.evidence_id: order for order, record in enumerate(records)}
     for group in groups.values():
-        refs = _contract_payload_source_references(
-            group.get("contract_payload") or {}
-        )
+        refs = _contract_payload_source_references(group.get("contract_payload") or {})
         attached = list(group.get("source_records") or [])
         attached_ids = {record.evidence_id for record in attached}
 
@@ -1737,9 +1805,7 @@ def _select_existing_step_publication_figure_bundle(
                 continue
             ref_tokens = {token, Path(token).name, Path(token).stem}
             candidates = [
-                record
-                for record in table_records
-                if ref_tokens & record_tokens(record)
+                record for record in table_records if ref_tokens & record_tokens(record)
             ]
             if not candidates:
                 continue
@@ -2499,11 +2565,9 @@ def _select_primary_association_record(
             return
         seen.add(record.evidence_id)
         basename = Path(record.relative_path).stem.lower()
-        if (
-            not any(token in basename for token in name_set)
-            and record.evidence_id.lower() not in name_set
-        ):
-            return
+        # The caller supplies a read-only view already limited to the exact
+        # Planner-primary lineage.  Filenames may rank candidates but must not
+        # decide scientific ownership.
         score = float(order) * 0.001
         severity = str(getattr(record, "finding_severity", "") or "").lower()
         if severity == "error":
@@ -2512,6 +2576,10 @@ def _select_primary_association_record(
             score -= 2.0
         if "full_coefficients" in basename or "all_coefficients" in basename:
             score -= 25.0
+        if any(token in basename for token in name_set):
+            score += 4.0
+        if record.evidence_id.lower() in name_set:
+            score += 4.0
         try:
             frame = _read_table(run_dir / record.relative_path)
             cols = {str(c).lower(): c for c in frame.columns}

@@ -311,14 +311,24 @@ _FAMILY_DISPLAY_MODULES: Dict[StudyDesignFamily, List[DisplayModuleSpec]] = {
             "cohort_accounting",
             "core",
             "Readers need eligibility, exclusions, and denominators before interpreting estimates.",
-            ("cohort flow", "attrition table", "eligibility diagram", "denominator panel"),
+            (
+                "cohort flow",
+                "attrition table",
+                "eligibility diagram",
+                "denominator panel",
+            ),
         ),
         _module(
             "baseline_table",
             "baseline_context",
             "core",
             "Baseline characteristics show who contributed to the estimate and whether adjustment is plausible.",
-            ("Table 1", "baseline table", "descriptor table", "stratified baseline summary"),
+            (
+                "Table 1",
+                "baseline table",
+                "descriptor table",
+                "stratified baseline summary",
+            ),
         ),
         _module(
             "missingness_measurement_audit",
@@ -385,7 +395,12 @@ _FAMILY_DISPLAY_MODULES: Dict[StudyDesignFamily, List[DisplayModuleSpec]] = {
             "supplementary_provenance",
             "supplementary",
             "Full coefficients, definitions, and code provenance belong in the supplement or artifact manifest.",
-            ("full coefficient table", "variable dictionary", "code manifest", "claim ledger"),
+            (
+                "full coefficient table",
+                "variable dictionary",
+                "code manifest",
+                "claim ledger",
+            ),
         ),
     ],
     "prediction": [
@@ -408,7 +423,11 @@ _FAMILY_DISPLAY_MODULES: Dict[StudyDesignFamily, List[DisplayModuleSpec]] = {
             "validation",
             "core",
             "Internal, temporal, site, or external validation design must be explicit.",
-            ("validation split table", "external validation table", "site validation panel"),
+            (
+                "validation split table",
+                "external validation table",
+                "site validation panel",
+            ),
         ),
         _module(
             "discrimination",
@@ -422,21 +441,36 @@ _FAMILY_DISPLAY_MODULES: Dict[StudyDesignFamily, List[DisplayModuleSpec]] = {
             "calibration",
             "core",
             "Clinical prediction reporting needs calibration to judge whether predicted risks are usable.",
-            ("calibration plot", "calibration-in-the-large", "calibration slope", "Brier score"),
+            (
+                "calibration plot",
+                "calibration-in-the-large",
+                "calibration slope",
+                "Brier score",
+            ),
         ),
         _module(
             "missingness_leakage_audit",
             "data_quality",
             "core",
             "Feature availability, imputation, and leakage checks are part of model validity.",
-            ("missingness table", "feature availability panel", "leakage audit", "preprocessing table"),
+            (
+                "missingness table",
+                "feature availability panel",
+                "leakage audit",
+                "preprocessing table",
+            ),
         ),
         _module(
             "clinical_utility",
             "clinical_utility",
             "conditional",
             "If action thresholds are clinically relevant, net benefit or threshold analyses are needed.",
-            ("decision curve", "net-benefit plot", "threshold utility table", "risk-group table"),
+            (
+                "decision curve",
+                "net-benefit plot",
+                "threshold utility table",
+                "risk-group table",
+            ),
             triggers=("action thresholds", "deployment", "triage", "clinical utility"),
         ),
         _module(
@@ -444,14 +478,24 @@ _FAMILY_DISPLAY_MODULES: Dict[StudyDesignFamily, List[DisplayModuleSpec]] = {
             "explainability",
             "recommended",
             "Interpretability helps readers inspect model behaviour but does not replace validation.",
-            ("feature importance", "coefficient plot", "SHAP summary", "partial-dependence panel"),
+            (
+                "feature importance",
+                "coefficient plot",
+                "SHAP summary",
+                "partial-dependence panel",
+            ),
         ),
         _module(
             "model_card_appendix",
             "supplementary_provenance",
             "supplementary",
             "Model cards and preprocessing details are needed for reproducibility.",
-            ("feature dictionary", "hyperparameter table", "model card", "code manifest"),
+            (
+                "feature dictionary",
+                "hyperparameter table",
+                "model card",
+                "code manifest",
+            ),
         ),
     ],
     "time_to_event": [
@@ -505,7 +549,11 @@ _FAMILY_DISPLAY_MODULES: Dict[StudyDesignFamily, List[DisplayModuleSpec]] = {
             "robustness",
             "recommended",
             "Landmark, censoring, and competing-risk choices should be tested when plausible.",
-            ("landmark analysis", "competing-risk sensitivity", "alternative censoring panel"),
+            (
+                "landmark analysis",
+                "competing-risk sensitivity",
+                "alternative censoring panel",
+            ),
         ),
     ],
     "phenotyping": [
@@ -514,14 +562,22 @@ _FAMILY_DISPLAY_MODULES: Dict[StudyDesignFamily, List[DisplayModuleSpec]] = {
             "cohort_accounting",
             "core",
             "Phenotype discovery depends on which patients and features survive availability filters.",
-            ("cohort flow", "feature availability table", "phenotyping denominator panel"),
+            (
+                "cohort flow",
+                "feature availability table",
+                "phenotyping denominator panel",
+            ),
         ),
         _module(
             "feature_quality_scaling",
             "data_quality",
             "core",
             "Scaling, missingness, and feature provenance influence cluster geometry.",
-            ("feature missingness heatmap", "scaling summary", "feature provenance table"),
+            (
+                "feature missingness heatmap",
+                "scaling summary",
+                "feature provenance table",
+            ),
         ),
         _module(
             "phenotype_structure",
@@ -535,7 +591,11 @@ _FAMILY_DISPLAY_MODULES: Dict[StudyDesignFamily, List[DisplayModuleSpec]] = {
             "phenotype_profile",
             "core",
             "Clinical profiles make unsupervised clusters interpretable.",
-            ("cluster profile heatmap", "phenotype characteristics table", "radar plot"),
+            (
+                "cluster profile heatmap",
+                "phenotype characteristics table",
+                "radar plot",
+            ),
         ),
         _module(
             "cluster_stability",
@@ -549,7 +609,11 @@ _FAMILY_DISPLAY_MODULES: Dict[StudyDesignFamily, List[DisplayModuleSpec]] = {
             "downstream_characterization",
             "recommended",
             "Outcome associations characterize phenotypes but should be labelled exploratory.",
-            ("outcome-by-cluster table", "survival by phenotype", "mortality by cluster panel"),
+            (
+                "outcome-by-cluster table",
+                "survival by phenotype",
+                "mortality by cluster panel",
+            ),
         ),
     ],
     "causal_emulation": [
@@ -558,7 +622,11 @@ _FAMILY_DISPLAY_MODULES: Dict[StudyDesignFamily, List[DisplayModuleSpec]] = {
             "causal_protocol",
             "core",
             "The estimand is defined by eligibility, time zero, strategies, assignment, follow-up, and contrast.",
-            ("target-trial table", "protocol schematic", "emulation specification table"),
+            (
+                "target-trial table",
+                "protocol schematic",
+                "emulation specification table",
+            ),
         ),
         _module(
             "causal_cohort_flow",
@@ -572,28 +640,47 @@ _FAMILY_DISPLAY_MODULES: Dict[StudyDesignFamily, List[DisplayModuleSpec]] = {
             "balance_positivity",
             "core",
             "Balance and positivity diagnostics are required before interpreting a causal contrast.",
-            ("standardized mean difference plot", "balance table", "positivity plot", "weight distribution"),
+            (
+                "standardized mean difference plot",
+                "balance table",
+                "positivity plot",
+                "weight distribution",
+            ),
         ),
         _module(
             "primary_causal_contrast",
             "causal_contrast",
             "core",
             "The main display must state the causal contrast, estimator, effect scale, and uncertainty.",
-            ("causal contrast table", "IPTW estimate", "g-computation estimate", "effect curve"),
+            (
+                "causal contrast table",
+                "IPTW estimate",
+                "g-computation estimate",
+                "effect curve",
+            ),
         ),
         _module(
             "causal_sensitivity",
             "robustness",
             "core",
             "Unmeasured confounding, trimming, and estimator choices need sensitivity assessment.",
-            ("unmeasured-confounding sensitivity", "trimming sensitivity", "alternative-estimator grid"),
+            (
+                "unmeasured-confounding sensitivity",
+                "trimming sensitivity",
+                "alternative-estimator grid",
+            ),
         ),
         _module(
             "timing_dag_appendix",
             "supplementary_provenance",
             "supplementary",
             "Timing tables or DAGs clarify why variables are confounders, mediators, or excluded colliders.",
-            ("variable timing table", "DAG", "confounder rationale table", "code manifest"),
+            (
+                "variable timing table",
+                "DAG",
+                "confounder rationale table",
+                "code manifest",
+            ),
         ),
     ],
     "descriptive": [
@@ -616,7 +703,13 @@ _FAMILY_DISPLAY_MODULES: Dict[StudyDesignFamily, List[DisplayModuleSpec]] = {
             "distribution",
             "core",
             "Distributional or prevalence displays answer the primary descriptive question.",
-            ("distribution plot", "prevalence bar chart", "density plot", "histogram", "ridge plot"),
+            (
+                "distribution plot",
+                "prevalence bar chart",
+                "density plot",
+                "histogram",
+                "ridge plot",
+            ),
         ),
         _module(
             "missingness_data_quality",
@@ -635,6 +728,39 @@ _FAMILY_DISPLAY_MODULES: Dict[StudyDesignFamily, List[DisplayModuleSpec]] = {
     ],
 }
 
+
+# Scientific headline ownership is narrower than display-suite completeness.
+# These roles must be produced by the Planner-declared primary analysis (or a
+# digest-bound auxiliary renderer consuming that analysis).  Protocol,
+# diagnostics, robustness, and context displays remain independently
+# reportable.  ``descriptive`` intentionally has no family-wide entry because
+# that umbrella also contains data-quality, cohort-sensitivity, multimodal,
+# reinforcement-learning, and cross-database fallback questions whose headline
+# role cannot be inferred safely from the family alone.
+_PRIMARY_RESULT_ROLES_BY_ANALYSIS_TYPE: Dict[str, frozenset[str]] = {
+    "association_study": frozenset({"primary_estimand"}),
+    "prediction_model": frozenset({"model_performance", "calibration"}),
+    "dynamic_prediction": frozenset({"model_performance", "calibration"}),
+    "validation": frozenset({"model_performance", "calibration"}),
+    "survival": frozenset({"survival_effect", "temporal_absolute_risk"}),
+    "trajectory_clustering": frozenset({"phenotype_structure", "phenotype_profile"}),
+    "causal_inference": frozenset({"causal_contrast", "balance_positivity"}),
+    "treatment_response": frozenset({"heterogeneity"}),
+    "descriptive_epidemiology": frozenset({"descriptive_result"}),
+}
+
+
+def primary_result_roles_for_analysis_type(
+    analysis_type: str,
+) -> frozenset[str]:
+    """Return article roles that require Planner-primary result lineage."""
+
+    return _PRIMARY_RESULT_ROLES_BY_ANALYSIS_TYPE.get(
+        str(analysis_type or "").strip(),
+        frozenset(),
+    )
+
+
 _GENERIC_CONDITIONAL_MODULES = [
     _module(
         "cross_database_heterogeneity",
@@ -647,7 +773,12 @@ _GENERIC_CONDITIONAL_MODULES = [
             "source-level estimate forest",
             "coverage-by-database table",
         ),
-        triggers=("multiple databases", "external validation", "transportability", "cross database"),
+        triggers=(
+            "multiple databases",
+            "external validation",
+            "transportability",
+            "cross database",
+        ),
     ),
     _module(
         "measurement_process_audit",
@@ -678,29 +809,103 @@ _GENERIC_CONDITIONAL_MODULES = [
 
 
 _BRIEF_CHECK_TERMS: Dict[str, Sequence[str]] = {
-    "cohort flow / attrition": ("cohort", "attrition", "flow", "eligibility", "denominator"),
-    "cohort flow / modelling denominator": ("cohort", "denominator", "eligibility", "attrition"),
-    "cohort flow / risk-set denominator": ("cohort", "risk-set", "risk set", "denominator"),
-    "cohort flow / feature availability": ("cohort", "feature availability", "missingness"),
-    "target-trial schematic or cohort flow": ("target trial", "cohort", "time zero", "eligibility"),
-    "Table 1 baseline characteristics": ("table 1", "table_one", "baseline characteristic", "demographic"),
-    "Table 1 or descriptive summary table": ("table 1", "table_one", "descriptive summary", "baseline"),
-    "primary adjusted effect estimate": ("adjusted", "association", "effect", "odds ratio", "risk ratio"),
+    "cohort flow / attrition": (
+        "cohort",
+        "attrition",
+        "flow",
+        "eligibility",
+        "denominator",
+    ),
+    "cohort flow / modelling denominator": (
+        "cohort",
+        "denominator",
+        "eligibility",
+        "attrition",
+    ),
+    "cohort flow / risk-set denominator": (
+        "cohort",
+        "risk-set",
+        "risk set",
+        "denominator",
+    ),
+    "cohort flow / feature availability": (
+        "cohort",
+        "feature availability",
+        "missingness",
+    ),
+    "target-trial schematic or cohort flow": (
+        "target trial",
+        "cohort",
+        "time zero",
+        "eligibility",
+    ),
+    "Table 1 baseline characteristics": (
+        "table 1",
+        "table_one",
+        "baseline characteristic",
+        "demographic",
+    ),
+    "Table 1 or descriptive summary table": (
+        "table 1",
+        "table_one",
+        "descriptive summary",
+        "baseline",
+    ),
+    "primary adjusted effect estimate": (
+        "adjusted",
+        "association",
+        "effect",
+        "odds ratio",
+        "risk ratio",
+    ),
     "sensitivity / robustness summary": ("sensitivity", "robustness", "variant"),
-    "missingness or data-quality summary": ("missingness", "data quality", "measurement"),
+    "missingness or data-quality summary": (
+        "missingness",
+        "data quality",
+        "measurement",
+    ),
     "discrimination curve or metric panel": ("auroc", "auc", "discrimination", "roc"),
     "calibration plot": ("calibration",),
-    "feature importance or coefficient summary": ("feature importance", "coefficient", "importance"),
-    "survival or cumulative-incidence curve with risk table": ("survival", "cumulative incidence", "risk table"),
+    "feature importance or coefficient summary": (
+        "feature importance",
+        "coefficient",
+        "importance",
+    ),
+    "survival or cumulative-incidence curve with risk table": (
+        "survival",
+        "cumulative incidence",
+        "risk table",
+    ),
     "adjusted hazard/risk estimate": ("hazard", "cox", "survival model"),
-    "assumption or censoring diagnostic": ("censoring", "proportional hazards", "assumption"),
+    "assumption or censoring diagnostic": (
+        "censoring",
+        "proportional hazards",
+        "assumption",
+    ),
     "feature missingness and scaling summary": ("missingness", "scaling", "feature"),
-    "embedding or heatmap of phenotype structure": ("embedding", "heatmap", "umap", "pca", "phenotype"),
+    "embedding or heatmap of phenotype structure": (
+        "embedding",
+        "heatmap",
+        "umap",
+        "pca",
+        "phenotype",
+    ),
     "cluster characteristics table": ("cluster", "characteristic", "phenotype"),
     "stability or validation diagnostic": ("stability", "validation", "bootstrap"),
     "balance plot": ("balance", "standardized mean difference", "smd"),
-    "primary causal contrast": ("causal contrast", "estimand", "iptw", "g-computation", "matching"),
-    "distribution or prevalence figure": ("distribution", "prevalence", "histogram", "density"),
+    "primary causal contrast": (
+        "causal contrast",
+        "estimand",
+        "iptw",
+        "g-computation",
+        "matching",
+    ),
+    "distribution or prevalence figure": (
+        "distribution",
+        "prevalence",
+        "histogram",
+        "density",
+    ),
 }
 
 _ROLE_CHECK_TERMS: Dict[str, Sequence[str]] = {
@@ -772,7 +977,12 @@ _ROLE_CHECK_TERMS: Dict[str, Sequence[str]] = {
     ),
     "calibration": ("calibration", "brier", "calibration slope"),
     "clinical_utility": ("decision curve", "net benefit", "threshold", "utility"),
-    "explainability": ("feature importance", "shap", "coefficient", "partial dependence"),
+    "explainability": (
+        "feature importance",
+        "shap",
+        "coefficient",
+        "partial dependence",
+    ),
     "temporal_absolute_risk": (
         "survival curve",
         "kaplan",
@@ -790,9 +1000,25 @@ _ROLE_CHECK_TERMS: Dict[str, Sequence[str]] = {
     ),
     "phenotype_structure": ("embedding", "umap", "pca", "heatmap", "dendrogram"),
     "phenotype_profile": ("cluster profile", "phenotype characteristic", "radar"),
-    "stability": ("stability", "bootstrap", "consensus", "alternative k", "alternative-k"),
-    "downstream_characterization": ("outcome by cluster", "mortality by cluster", "downstream"),
-    "causal_protocol": ("target trial", "time zero", "strategy", "estimand", "protocol"),
+    "stability": (
+        "stability",
+        "bootstrap",
+        "consensus",
+        "alternative k",
+        "alternative-k",
+    ),
+    "downstream_characterization": (
+        "outcome by cluster",
+        "mortality by cluster",
+        "downstream",
+    ),
+    "causal_protocol": (
+        "target trial",
+        "time zero",
+        "strategy",
+        "estimand",
+        "protocol",
+    ),
     "balance_positivity": (
         "balance",
         "standardized mean difference",
@@ -837,7 +1063,6 @@ _ROLE_CHECK_TERMS: Dict[str, Sequence[str]] = {
 }
 
 
-
 def family_template(family: StudyDesignFamily) -> Dict[str, object]:
     return _FAMILY_TEMPLATES[family]
 
@@ -861,7 +1086,12 @@ def triggered_generic_modules(triggers: Sequence[str]) -> List[DisplayModuleSpec
         if module.module_id == "cross_database_heterogeneity":
             is_active = any(
                 token in trigger_blob
-                for token in ("cross_database", "cross database", "site", "transportability")
+                for token in (
+                    "cross_database",
+                    "cross database",
+                    "site",
+                    "transportability",
+                )
             )
         elif module.module_id == "measurement_process_audit":
             is_active = any(
@@ -874,7 +1104,9 @@ def triggered_generic_modules(triggers: Sequence[str]) -> List[DisplayModuleSpec
                 for token in ("prevalence", "incidence", "event rate", "mortality rate")
             )
         else:
-            is_active = any(trigger.lower() in trigger_blob for trigger in module.triggers)
+            is_active = any(
+                trigger.lower() in trigger_blob for trigger in module.triggers
+            )
         if is_active:
             modules.append(module.model_copy(deep=True))
     return modules
@@ -897,6 +1129,7 @@ __all__ = [
     "design_principles_for_family",
     "display_modules_for_family",
     "family_template",
+    "primary_result_roles_for_analysis_type",
     "role_check_terms",
     "triggered_generic_modules",
 ]

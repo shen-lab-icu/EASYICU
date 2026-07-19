@@ -418,7 +418,7 @@ def _pipeline_result(run_dir: Path) -> PipelineResult:
     )
 
 
-def test_cross_database_primary_effect_uses_active_then_legacy_summary(
+def test_cross_database_primary_effect_uses_only_host_authorized_active_record(
     tmp_path: Path,
 ):
     step_id = "01_primary_model"
@@ -433,7 +433,18 @@ def test_cross_database_primary_effect_uses_active_then_legacy_summary(
     _write_manifest(
         tmp_path,
         [
-            {"step_id": step_id, "status": "ok", "step_summary": stale},
+            {
+                "step_id": step_id,
+                "status": "ok",
+                "planned_analysis_role": "primary",
+                "analysis_request": {
+                    "step": {
+                        "step_id": step_id,
+                        "planned_analysis_role": "primary",
+                    }
+                },
+                "step_summary": stale,
+            },
             {
                 "step_id": step_id,
                 "status": "contract_failed",
@@ -457,7 +468,20 @@ def test_cross_database_primary_effect_uses_active_then_legacy_summary(
     }
     _write_manifest(
         tmp_path,
-        [{"step_id": step_id, "status": "ok", "step_summary": active_summary}],
+        [
+            {
+                "step_id": step_id,
+                "status": "ok",
+                "planned_analysis_role": "primary",
+                "analysis_request": {
+                    "step": {
+                        "step_id": step_id,
+                        "planned_analysis_role": "primary",
+                    }
+                },
+                "step_summary": active_summary,
+            }
+        ],
     )
     active = _extract_primary_effect_row(
         database="miiv",
@@ -466,8 +490,9 @@ def test_cross_database_primary_effect_uses_active_then_legacy_summary(
     assert active["primary_or"] == 1.25
 
     (tmp_path / "manifest_partial.json").unlink()
-    legacy = _extract_primary_effect_row(
+    orphaned_legacy_summary = _extract_primary_effect_row(
         database="miiv",
         result=_pipeline_result(tmp_path),
     )
-    assert legacy["primary_or"] == 9.9
+    assert orphaned_legacy_summary["primary_or"] is None
+    assert orphaned_legacy_summary["status"] == "missing_primary_association"

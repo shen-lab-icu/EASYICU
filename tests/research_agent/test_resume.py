@@ -1617,6 +1617,10 @@ def test_bench_runner_ehrflow_resume_requires_single_row(tmp_path: Path):
 
 
 def test_resume_prefers_latest_compatible_plan_revision(tmp_path: Path):
+    from easyicu.research_agent.authority.plan_scope import (
+        _serializable_plan_scientific_scope_signature,
+    )
+
     run_dir = tmp_path / "run_20260701T000000_revision"
     run_dir.mkdir()
     original = AnalysisPlan(
@@ -1693,10 +1697,19 @@ def test_resume_prefers_latest_compatible_plan_revision(tmp_path: Path):
     )
     resume_state = {
         "plan_path": "analysis_plan.json",
-        "per_step_records": [
-            {"step_id": "00_probe", "status": "ok"},
-            {"step_id": "01_cohort", "status": "ok"},
-            {"step_id": "02_table", "status": "ok"},
+        "per_step_records": [{"step_id": "00_probe", "status": "ok"}]
+        + [
+            {
+                "step_id": step.step_id,
+                "status": "ok",
+                "planned_analysis_role": step.planned_analysis_role,
+                "analysis_request": {"step": step.model_dump(mode="json")},
+                "plan_scientific_signature": (
+                    _serializable_plan_scientific_scope_signature(revision)
+                ),
+            }
+            for step in revision.steps
+            if step.step_id in {"01_cohort", "02_table"}
         ],
     }
 
@@ -1716,6 +1729,10 @@ def test_resume_prefers_latest_compatible_plan_revision(tmp_path: Path):
 
 
 def test_resume_plan_compatibility_uses_latest_step_status(tmp_path: Path):
+    from easyicu.research_agent.authority.plan_scope import (
+        _serializable_plan_scientific_scope_signature,
+    )
+
     run_dir = tmp_path / "run_latest_step_authority"
     run_dir.mkdir()
     plan = AnalysisPlan(
@@ -1741,7 +1758,15 @@ def test_resume_plan_compatibility_uses_latest_step_status(tmp_path: Path):
     )
     resume_state = {
         "per_step_records": [
-            {"step_id": "01_current_success", "status": "ok"},
+            {
+                "step_id": "01_current_success",
+                "status": "ok",
+                "planned_analysis_role": plan.steps[0].planned_analysis_role,
+                "analysis_request": {"step": plan.steps[0].model_dump(mode="json")},
+                "plan_scientific_signature": (
+                    _serializable_plan_scientific_scope_signature(plan)
+                ),
+            },
             {"step_id": "02_superseded", "status": "ok"},
             {"step_id": "02_superseded", "status": "contract_failed"},
         ]
@@ -1754,6 +1779,53 @@ def test_resume_plan_compatibility_uses_latest_step_status(tmp_path: Path):
 
     assert selected == plan
     assert selected_path == verified_run_evidence_path(run_dir, record)
+
+
+def test_resume_plan_rejects_completed_role_mismatch(tmp_path: Path) -> None:
+    from easyicu.research_agent.authority.plan_scope import (
+        _serializable_plan_scientific_scope_signature,
+    )
+
+    run_dir = tmp_path / "run_role_mismatch"
+    run_dir.mkdir()
+    saved_step = AnalysisStep(
+        step_id="01_model",
+        intent="Estimate the result.",
+        planned_analysis_role="auxiliary",
+        expected_outputs=["table:estimate"],
+    )
+    saved_plan = AnalysisPlan(research_question="q", steps=[saved_step])
+    path = run_dir / "analysis_plan.json"
+    path.write_text(saved_plan.model_dump_json(indent=2), encoding="utf-8")
+    evidence = EvidenceStore(run_dir)
+    evidence.register_file(
+        kind="log",
+        description="Saved plan.",
+        source_path=path,
+        evidence_id="analysis_plan",
+        producer="planner",
+        generation_mode="llm",
+    )
+    executed_step = saved_step.model_copy(update={"planned_analysis_role": "primary"})
+    executed_plan = saved_plan.model_copy(update={"steps": [executed_step]})
+    selected, selected_path = _load_compatible_resume_plan(
+        run_dir=run_dir,
+        resume_state={
+            "per_step_records": [
+                {
+                    "step_id": executed_step.step_id,
+                    "status": "ok",
+                    "planned_analysis_role": "primary",
+                    "analysis_request": {"step": executed_step.model_dump(mode="json")},
+                    "plan_scientific_signature": (
+                        _serializable_plan_scientific_scope_signature(executed_plan)
+                    ),
+                }
+            ]
+        },
+    )
+    assert selected is None
+    assert selected_path is None
 
 
 def test_implicit_resume_offers_only_latest_contract_failed_code_once(
@@ -2099,6 +2171,7 @@ def test_resume_from_step_prefers_verified_capsule_over_legacy_code_reuse(
                         "steps": [
                             {
                                 "step_id": "04_primary_association",
+                                "planned_analysis_role": "primary",
                                 "intent": "Estimate SOFA and ICU mortality association.",
                                 "inputs": ["sofa2", "death"],
                                 "expected_outputs": ["table:cohort_summary"],
@@ -2386,6 +2459,7 @@ with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as f:
                         "steps": [
                             {
                                 "step_id": "01_summary",
+                                "planned_analysis_role": "auxiliary",
                                 "intent": "Produce a descriptive cohort summary.",
                                 "inputs": ["stay_id"],
                                 "expected_outputs": ["table:cohort_summary"],
@@ -2653,6 +2727,7 @@ with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as f:
                         "steps": [
                             {
                                 "step_id": "01_summary",
+                                "planned_analysis_role": "auxiliary",
                                 "intent": "Produce a descriptive cohort summary.",
                                 "inputs": ["stay_id"],
                                 "expected_outputs": ["table:summary"],
@@ -2866,6 +2941,7 @@ with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as f:
                         "steps": [
                             {
                                 "step_id": "01_summary",
+                                "planned_analysis_role": "auxiliary",
                                 "intent": "Produce a descriptive cohort summary.",
                                 "inputs": ["death"],
                                 "expected_outputs": ["table:cohort_summary"],
@@ -3070,6 +3146,7 @@ if __name__ == "__main__":
                         "steps": [
                             {
                                 "step_id": "01_summary",
+                                "planned_analysis_role": "auxiliary",
                                 "intent": "Produce a descriptive cohort summary.",
                                 "inputs": ["stay_id"],
                                 "expected_outputs": ["table:cohort_summary"],
@@ -3772,6 +3849,7 @@ def test_resume_reuses_locked_plan_instead_of_replanning(
                         "steps": [
                             {
                                 "step_id": "88_resume_should_ignore_this",
+                                "planned_analysis_role": "primary",
                                 "intent": "This plan must be ignored on resume.",
                                 "inputs": ["sofa2", "death"],
                                 "expected_outputs": ["table:ignored"],
@@ -4019,6 +4097,7 @@ def test_final_manifest_keeps_step_records_for_metered_hosted_stub(ra, tmp_path:
                         "steps": [
                             {
                                 "step_id": "04_primary_association",
+                                "planned_analysis_role": "primary",
                                 "intent": "Estimate SOFA and ICU mortality association.",
                                 "inputs": ["sofa2", "death"],
                                 "expected_outputs": ["table:primary_association"],

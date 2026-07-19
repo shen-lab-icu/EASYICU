@@ -129,6 +129,11 @@ from .research_context.builder import (
 )
 from .research_context.typed import parse_research_context_json
 from .authority.context_numeric_claims import register_context_numeric_claims
+from .authority.plan_scope import (
+    _serializable_plan_scientific_scope_signature,
+    _step_scientific_signature,
+)
+from .authority.planned_role import verified_planned_analysis_role
 from .authority import pipeline_cache as _pipeline_cache
 from .planning.analysis_blueprint import (
     build_analysis_blueprint,
@@ -469,13 +474,14 @@ def _load_compatible_resume_plan(
     resume_state: Optional[Dict[str, Any]],
 ) -> tuple[Optional[AnalysisPlan], Optional[Path]]:
     """Load the newest saved plan compatible with completed resume steps."""
-    completed_step_ids = {
-        str(record.get("step_id"))
+    completed_records = [
+        record
         for record in current_successful_step_records(
             (resume_state or {}).get("per_step_records") or []
         )
         if record.get("step_id") and record.get("step_id") != "00_probe"
-    }
+    ]
+    completed_step_ids = {str(record.get("step_id")) for record in completed_records}
     for candidate in _resume_plan_candidate_paths(
         run_dir=run_dir,
         resume_state=resume_state,
@@ -486,8 +492,34 @@ def _load_compatible_resume_plan(
             )
         except Exception:
             continue
-        step_ids = {step.step_id for step in plan.steps}
-        if plan.steps and completed_step_ids <= step_ids:
+        step_by_id = {step.step_id: step for step in plan.steps}
+        if not plan.steps or not completed_step_ids <= set(step_by_id):
+            continue
+        compatible = True
+        expected_plan_scope = _serializable_plan_scientific_scope_signature(plan)
+        for record in completed_records:
+            step_id = str(record.get("step_id") or "")
+            analysis_request = record.get("analysis_request")
+            raw_step = (
+                analysis_request.get("step")
+                if isinstance(analysis_request, Mapping)
+                else None
+            )
+            try:
+                sealed_step = AnalysisStep.model_validate(raw_step)
+            except (TypeError, ValueError):
+                compatible = False
+                break
+            if (
+                verified_planned_analysis_role(record) is None
+                or _step_scientific_signature(sealed_step)
+                != _step_scientific_signature(step_by_id[step_id])
+                or list(record.get("plan_scientific_signature") or [])
+                != expected_plan_scope
+            ):
+                compatible = False
+                break
+        if compatible:
             return plan, candidate
     return None, None
 
@@ -2873,6 +2905,78 @@ class ResearchAgentPipeline:
             # running the analysis on the full universe.
             findings.extend(_cohort_definition_contract_findings(plan))
         if study_design_brief is not None:
+            if (
+                plan.analysis_type
+                and article_contract is not None
+                and plan.analysis_type != article_contract.source_analysis_type
+            ):
+                # The pre-plan contract is a prompt profile.  Once the Planner
+                # has selected a valid analysis type, seal a separate final
+                # contract instead of letting provisional inference retain
+                # scientific headline authority.
+                final_brief = build_study_design_brief(
+                    agent_context,
+                    analysis_type=plan.analysis_type,
+                )
+                final_contract = build_article_analysis_contract(
+                    agent_context,
+                    brief=final_brief,
+                    analysis_type=plan.analysis_type,
+                )
+                final_strategy = build_article_figure_strategy(
+                    agent_context,
+                    analysis_family=final_brief.analysis_family,
+                )
+                final_blueprint = build_analysis_blueprint(
+                    agent_context,
+                    brief=final_brief,
+                    contract=final_contract,
+                    figure_strategy=final_strategy,
+                )
+                final_payloads = (
+                    (
+                        "study_design_brief_final",
+                        "study_design_brief.final.json",
+                        final_brief,
+                    ),
+                    (
+                        "article_analysis_contract_final",
+                        "article_analysis_contract.final.json",
+                        final_contract,
+                    ),
+                    (
+                        "article_figure_strategy_final",
+                        "article_figure_strategy.final.json",
+                        final_strategy,
+                    ),
+                    (
+                        "analysis_blueprint_final",
+                        "analysis_blueprint.final.json",
+                        final_blueprint,
+                    ),
+                )
+                for evidence_id, filename, payload in final_payloads:
+                    final_path = run_dir / filename
+                    final_path.write_text(
+                        payload.model_dump_json(indent=2),
+                        encoding="utf-8",
+                    )
+                    if evidence.get(evidence_id) is None:
+                        evidence.register_file(
+                            kind="log",
+                            description=(
+                                "Planner-final article design authority bound to "
+                                f"analysis_type={plan.analysis_type}."
+                            ),
+                            source_path=final_path,
+                            evidence_id=evidence_id,
+                            producer="planner_contract_finalizer",
+                            generation_mode="deterministic_skill",
+                        )
+                study_design_brief = final_brief
+                article_contract = final_contract
+                article_figure_strategy = final_strategy
+                analysis_blueprint = final_blueprint
             findings.extend(
                 validate_plan_against_study_design_brief(
                     plan=plan,

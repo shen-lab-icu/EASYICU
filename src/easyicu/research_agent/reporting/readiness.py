@@ -50,6 +50,7 @@ from .article_contract import (
 from .display_suite import summarize_display_suite_status
 from ..authority.evidence_store import EvidenceStore, sha256_of_file
 from ..planning.figure_strategy import summarize_article_figure_strategy_coverage
+from ..planning.study_design import study_design_family_for_analysis_type
 from ..figures.publication import PUBLICATION_FIGURE_SKILL_POLICY_VERSION
 from ..plan_utils import _output_declares_figure, _parent_step_id_for_figure_step
 from .review_artifacts import build_review_artifact_payloads
@@ -2088,6 +2089,11 @@ def _compute_readiness_gates(
         context=context,
         run_dir=run_dir,
         per_step_records=per_step_records,
+        analysis_family=(
+            study_design_family_for_analysis_type(plan.analysis_type)
+            if plan is not None and plan.analysis_type is not None
+            else None
+        ),
     )
     return {
         **execution,
