@@ -5906,6 +5906,98 @@ def _host_helper_call_signature_findings(
     return findings
 
 
+def _local_helper_unpack_arity_findings(
+    tree: ast.Module,
+) -> list[ValidationFinding]:
+    """Reject statically provable local return/unpack arity mismatches.
+
+    Only module-level helpers whose every direct return is a fixed tuple/list
+    of the same width are claimed. Dynamic, branching-width, starred, nested,
+    attribute, and indirect calls remain outside this mechanical contract.
+    """
+
+    def _direct_body_nodes(
+        function: ast.FunctionDef | ast.AsyncFunctionDef,
+    ) -> list[ast.AST]:
+        nodes: list[ast.AST] = []
+        pending: list[ast.AST] = list(reversed(function.body))
+        while pending:
+            node = pending.pop()
+            nodes.append(node)
+            if isinstance(
+                node,
+                (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda, ast.ClassDef),
+            ):
+                continue
+            pending.extend(reversed(list(ast.iter_child_nodes(node))))
+        return nodes
+
+    helpers: dict[str, tuple[int, tuple[int, ...]]] = {}
+    for function in tree.body:
+        if not isinstance(function, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        returns = [
+            node
+            for node in _direct_body_nodes(function)
+            if isinstance(node, ast.Return)
+        ]
+        if not returns or any(
+            not isinstance(node.value, (ast.Tuple, ast.List)) for node in returns
+        ):
+            continue
+        widths = {len(node.value.elts) for node in returns}
+        if len(widths) != 1:
+            continue
+        helpers[function.name] = (
+            next(iter(widths)),
+            tuple(sorted(int(node.lineno) for node in returns)),
+        )
+    if not helpers:
+        return []
+
+    findings: list[ValidationFinding] = []
+    for statement in tree.body:
+        if not isinstance(statement, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        for node in _direct_body_nodes(statement):
+            if not isinstance(node, (ast.Assign, ast.AnnAssign)):
+                continue
+            value = node.value
+            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+            if not (
+                isinstance(value, ast.Call)
+                and isinstance(value.func, ast.Name)
+                and value.func.id in helpers
+                and len(targets) == 1
+                and isinstance(targets[0], (ast.Tuple, ast.List))
+                and not any(isinstance(item, ast.Starred) for item in targets[0].elts)
+            ):
+                continue
+            return_arity, return_lines = helpers[value.func.id]
+            target_arity = len(targets[0].elts)
+            if return_arity == target_arity:
+                continue
+            findings.append(
+                ValidationFinding(
+                    validator="mechanical_code_preflight",
+                    severity="error",
+                    message=(
+                        "A statically defined local helper returns a fixed number "
+                        "of values that does not match its direct unpack target."
+                    ),
+                    detail={
+                        "reason": "local_helper_unpack_arity_mismatch",
+                        "function_name": value.func.id,
+                        "call_line": int(value.lineno),
+                        "return_lines": list(return_lines),
+                        "return_arity": return_arity,
+                        "target_arity": target_arity,
+                    },
+                )
+            )
+    return findings
+
+
 def _host_helper_runtime_introspection_findings(
     tree: ast.Module,
 ) -> list[ValidationFinding]:
@@ -6120,6 +6212,7 @@ def audit_mechanical_code_contracts(
     findings.extend(_scalar_cast_before_reduction_findings(tree))
     findings.extend(_first_time_companion_findings(tree))
     findings.extend(_host_helper_call_signature_findings(tree))
+    findings.extend(_local_helper_unpack_arity_findings(tree))
     findings.extend(_host_helper_runtime_introspection_findings(tree))
     findings.extend(_lossy_numeric_coercion_findings(tree))
     return findings

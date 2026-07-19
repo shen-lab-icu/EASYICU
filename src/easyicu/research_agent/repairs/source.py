@@ -373,6 +373,166 @@ def _patch_host_helper_keyword_only_call(
     return repaired
 
 
+def _local_helper_unpack_repair_coordinate(
+    findings: Sequence[ValidationFinding],
+) -> tuple[str, int, int] | None:
+    coordinates = {
+        (
+            str(detail.get("function_name") or ""),
+            int(detail["return_arity"]),
+            int(detail["target_arity"]),
+        )
+        for finding in findings
+        for detail in [finding.detail or {}]
+        if finding.validator == "mechanical_code_preflight"
+        and finding.severity == "error"
+        and detail.get("reason") == "local_helper_unpack_arity_mismatch"
+        and isinstance(detail.get("function_name"), str)
+        and isinstance(detail.get("return_arity"), int)
+        and not isinstance(detail.get("return_arity"), bool)
+        and isinstance(detail.get("target_arity"), int)
+        and not isinstance(detail.get("target_arity"), bool)
+    }
+    if len(coordinates) != 1:
+        return None
+    function_name, return_arity, target_arity = next(iter(coordinates))
+    if not function_name or target_arity != return_arity + 1:
+        return None
+    return function_name, return_arity, target_arity
+
+
+def _patch_discarded_host_receipt_unpack(
+    code: str,
+    *,
+    coordinate: tuple[str, int, int] | None,
+) -> str:
+    """Thread one discarded host receipt through an exact local helper tuple.
+
+    The repair requires a uniquely shaped module-level helper and call site:
+    one exact host import, one discarded receipt call, one fixed all-name return,
+    and one direct unpack whose tail names already match that return. The missing
+    leading target name is merely threaded through; no new value is computed.
+    """
+
+    if coordinate is None:
+        return code
+    function_name, return_arity, target_arity = coordinate
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return code
+    functions = [
+        node
+        for node in tree.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and node.name == function_name
+    ]
+    if len(functions) != 1:
+        return code
+    function = functions[0]
+    direct_nodes: list[ast.AST] = []
+    pending: list[ast.AST] = list(reversed(function.body))
+    while pending:
+        node = pending.pop()
+        direct_nodes.append(node)
+        if isinstance(
+            node,
+            (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda, ast.ClassDef),
+        ):
+            continue
+        pending.extend(reversed(list(ast.iter_child_nodes(node))))
+    returns = [node for node in direct_nodes if isinstance(node, ast.Return)]
+    if len(returns) != 1 or not isinstance(returns[0].value, ast.Tuple):
+        return code
+    returned = returns[0].value
+    if len(returned.elts) != return_arity or not all(
+        isinstance(item, ast.Name) for item in returned.elts
+    ):
+        return code
+
+    exact_imports = [
+        node
+        for node in function.body
+        if isinstance(node, ast.ImportFrom)
+        and node.level == 0
+        and node.module == "easyicu.research_agent.methods.descriptive_inputs"
+        and any(
+            alias.name == "measurement_provenance_receipt" and alias.asname is None
+            for alias in node.names
+        )
+    ]
+    discarded_calls = [
+        node.value
+        for node in direct_nodes
+        if isinstance(node, ast.Expr)
+        and isinstance(node.value, ast.Call)
+        and _call_tail(node.value.func) == "measurement_provenance_receipt"
+    ]
+    if len(exact_imports) != 1 or len(discarded_calls) != 1:
+        return code
+    host_call = discarded_calls[0]
+    if len(host_call.args) != 1 or {keyword.arg for keyword in host_call.keywords} != {
+        "measured_column",
+        "count_column",
+    }:
+        return code
+
+    callers: list[ast.Assign] = []
+    for caller in tree.body:
+        if not isinstance(caller, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        for node in ast.walk(caller):
+            if (
+                isinstance(node, ast.Assign)
+                and len(node.targets) == 1
+                and isinstance(node.targets[0], ast.Tuple)
+                and len(node.targets[0].elts) == target_arity
+                and all(isinstance(item, ast.Name) for item in node.targets[0].elts)
+                and isinstance(node.value, ast.Call)
+                and isinstance(node.value.func, ast.Name)
+                and node.value.func.id == function_name
+            ):
+                callers.append(node)
+    if len(callers) != 1:
+        return code
+    target = callers[0].targets[0]
+    target_names = [item.id for item in target.elts]
+    returned_names = [item.id for item in returned.elts]
+    if target_names[1:] != returned_names:
+        return code
+    receipt_name = target_names[0]
+    if any(
+        isinstance(node, (ast.Name, ast.arg))
+        and (
+            (isinstance(node, ast.Name) and node.id == receipt_name)
+            or (isinstance(node, ast.arg) and node.arg == receipt_name)
+        )
+        for node in direct_nodes
+    ):
+        return code
+
+    call_source = ast.get_source_segment(code, host_call)
+    return_source = ast.get_source_segment(code, returns[0])
+    if (
+        not call_source
+        or not return_source
+        or code.count(call_source) != 1
+        or code.count(return_source) != 1
+    ):
+        return code
+    repaired = code.replace(call_source, f"{receipt_name} = {call_source}", 1)
+    repaired = repaired.replace(
+        return_source,
+        f"return {receipt_name}, {', '.join(returned_names)}",
+        1,
+    )
+    try:
+        ast.parse(repaired)
+    except SyntaxError:
+        return code
+    return repaired
+
+
 def _lossy_numeric_coercion_repair_lines(
     findings: Sequence[ValidationFinding],
 ) -> frozenset[int]:
@@ -731,6 +891,15 @@ def deterministic_concept_audit_repair(
         if keyword_bound != repaired:
             repair_name = "host_helper_keyword_only_call_v1"
             repaired = keyword_bound
+            repair_names.append(repair_name)
+
+        receipt_threaded = _patch_discarded_host_receipt_unpack(
+            repaired,
+            coordinate=_local_helper_unpack_repair_coordinate(repair_findings),
+        )
+        if receipt_threaded != repaired:
+            repair_name = "local_helper_unpack_receipt_v1"
+            repaired = receipt_threaded
             repair_names.append(repair_name)
 
     if RepairReason.LOSSY_NUMERIC_COERCION in set(repair_reasons):
