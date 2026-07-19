@@ -1,6 +1,6 @@
 """Small scalar / nested-dict helpers shared between pipeline phases.
 
-These functions are used in two places:
+These functions are used across three responsibility boundaries:
 
 * :mod:`code_repair` — the deterministic step-summary repair logic needs
   to read primary-effect numerics out of arbitrarily nested coder JSON,
@@ -8,6 +8,8 @@ These functions are used in two places:
   ``robustness_analysis_manifest.primary_or`` or inside a list of dicts.
 * :mod:`pipeline` (still) — the prediction / publication bundle renderer
   pulls the same numerics back out at write time.
+* :mod:`audits.manuscript_claims` — manuscript claim verification resolves
+  candidate numeric values without importing the pipeline orchestration layer.
 
 They are intentionally tiny and have no pipeline state. Lifting them
 into a dedicated module breaks the import cycle that would otherwise
