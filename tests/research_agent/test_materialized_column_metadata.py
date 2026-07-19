@@ -32,6 +32,9 @@ from easyicu.concept.metadata_sidecar import (
 from easyicu.resources import load_dictionary
 from easyicu.research_agent import cohort_materializer
 from easyicu.research_agent.authority_fs import AnchoredDirectory
+from easyicu.research_agent.authority.analysis_cohort import (
+    bind_execution_cohort_authority,
+)
 from easyicu.research_agent.context import (
     build_research_context,
     build_retrieved_research_context,
@@ -1525,6 +1528,7 @@ def _adult_over_55_definition() -> CohortDefinition:
 
 def test_locked_typed_analysis_cohort_uses_parent_bound_arrow_subset(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     source = _typed_export(tmp_path / "export")
     paths = cohort_materializer.materialize_to_parquet(
@@ -1562,6 +1566,41 @@ def test_locked_typed_analysis_cohort_uses_parent_bound_arrow_subset(
     assert child is not None
     assert child.authority.parent_authority_sha256 == parent.reference.sha256
     assert child.authority.cohort_schema_sha256 == parent.authority.cohort_schema_sha256
+    context = build_research_context(
+        research_question="Which older adults enter the analysis cohort?",
+        cohort=parent_path,
+        cohort_name="typed_analysis_child",
+        database="miiv",
+        target_outcome="death",
+        primary_exposure="lact_max",
+        id_columns=("stay_id",),
+        outcome_columns=("death",),
+    )
+    selected = bind_execution_cohort_authority(
+        universe_path=parent_path,
+        analysis_path=child_path,
+        plan=SimpleNamespace(cohort=_adult_over_55_definition(), steps=[]),
+        context=context,
+    )
+    assert selected.selected_path == child_path
+    assert selected.analysis_authority is not None
+    from easyicu.research_agent.authority import analysis_cohort as authority_module
+
+    monkeypatch.setattr(
+        authority_module,
+        "implementation_bundle_sha256",
+        lambda _paths: "f" * 64,
+    )
+    with pytest.raises(
+        MaterializedMetadataError,
+        match="does not match the locked cohort authority",
+    ):
+        bind_execution_cohort_authority(
+            universe_path=parent_path,
+            analysis_path=child_path,
+            plan=SimpleNamespace(cohort=_adult_over_55_definition(), steps=[]),
+            context=context,
+        )
 
 
 def test_locked_typed_analysis_cohort_rejects_parent_selector_swap(

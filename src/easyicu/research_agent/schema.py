@@ -26,12 +26,12 @@ from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from .cohort_schema import (
+from .planning.cohort_contract import (
     CohortDefinition,
     CohortSchemaError,
     coerce_cohort_definition,
 )
-from .robustness_panel import (
+from .planning.robustness_contract import (
     RobustnessPlanError,
     RobustnessSpec,
     validate_robustness_specs,

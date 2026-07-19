@@ -94,6 +94,9 @@ def bind_execution_cohort_authority(
             implementation_paths = (
                 Path(__file__).resolve().parents[1] / "cohort_schema.py",
                 Path(__file__).resolve().parents[1]
+                / "planning"
+                / "cohort_contract.py",
+                Path(__file__).resolve().parents[1]
                 / "intake"
                 / "materialized_metadata.py",
             )

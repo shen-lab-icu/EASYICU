@@ -19,18 +19,21 @@ import math
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Literal, Optional, Sequence
+from typing import Any, Dict, Iterable, List, Optional, Sequence
 
-from .cohort_schema import CohortDefinition, coerce_cohort_definition
 from .lock_authority import (
     LockAuthorityError,
     assert_lock_matches_evidence_anchor,
     rehydrate_timestamp_only_legacy_lock,
 )
-
-RobustnessAxis = Literal["cohort", "missing", "outcome"]
-
-MIN_AXIS_COUNTS: Dict[str, int] = {"cohort": 3, "missing": 2, "outcome": 2}
+from .planning.cohort_contract import CohortDefinition
+from .planning.robustness_contract import (
+    MIN_AXIS_COUNTS,
+    RobustnessAxis,
+    RobustnessPlanError,
+    RobustnessSpec,
+    validate_robustness_specs,
+)
 
 PRIMARY_SPEC_ID = "primary"
 LOCK_FILENAME = "robustness_specs_locked.json"
@@ -63,8 +66,8 @@ def _successful_step_records(
 ) -> List[Dict[str, Any]]:
     """Return latest-per-step records with an explicit successful status."""
 
-    # Imported lazily because runtime_artifacts owns schema models, while the
-    # schema imports RobustnessSpec from this module.
+    # Imported lazily because runtime_artifacts owns schema models; this module
+    # is a runtime consumer of the pure planning contract, not its owner.
     from .runtime_artifacts import current_successful_step_records
 
     return [
@@ -72,39 +75,6 @@ def _successful_step_records(
         for record in current_successful_step_records(per_step_records)
         if isinstance(record, dict)
     ]
-
-
-@dataclass(frozen=True)
-class RobustnessSpec:
-    spec_id: str
-    axis: RobustnessAxis
-    description: str
-    cohort_override: Optional[CohortDefinition] = None
-    missing_override: Optional[Dict[str, Any]] = None
-    outcome_override: Optional[Dict[str, Any]] = None
-
-    def to_dict(self) -> Dict[str, Any]:
-        return {
-            "spec_id": self.spec_id,
-            "axis": self.axis,
-            "description": self.description,
-            "cohort_override": (
-                self.cohort_override.to_dict() if self.cohort_override is not None else None
-            ),
-            "missing_override": self.missing_override,
-            "outcome_override": self.outcome_override,
-        }
-
-    @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "RobustnessSpec":
-        return cls(
-            spec_id=str(data.get("spec_id") or "").strip(),
-            axis=str(data.get("axis") or "").strip(),  # type: ignore[arg-type]
-            description=str(data.get("description") or "").strip(),
-            cohort_override=coerce_cohort_definition(data.get("cohort_override")),
-            missing_override=_dict_or_none(data.get("missing_override")),
-            outcome_override=_dict_or_none(data.get("outcome_override")),
-        )
 
 
 @dataclass(frozen=True)
@@ -196,10 +166,6 @@ class RobustnessPanel:
         )
 
 
-class RobustnessPlanError(ValueError):
-    """Raised when robustness specifications are missing or not locked."""
-
-
 def default_robustness_specs() -> List[RobustnessSpec]:
     """Return case-neutral fallback specs used when a planner omits the field."""
 
@@ -264,30 +230,6 @@ def default_robustness_specs() -> List[RobustnessSpec]:
             outcome_override={"target": "author_defined_outcome_2"},
         ),
     ]
-
-
-def validate_robustness_specs(specs: Sequence[RobustnessSpec]) -> None:
-    counts = {axis: 0 for axis in MIN_AXIS_COUNTS}
-    seen_ids: set[str] = set()
-    problems: List[str] = []
-    for spec in specs:
-        if not spec.spec_id:
-            problems.append("spec_id must be non-empty")
-        if spec.spec_id in seen_ids:
-            problems.append(f"duplicate spec_id: {spec.spec_id}")
-        seen_ids.add(spec.spec_id)
-        if spec.axis not in counts:
-            problems.append(f"unknown robustness axis for {spec.spec_id}: {spec.axis}")
-            continue
-        counts[spec.axis] += 1
-    for axis, minimum in MIN_AXIS_COUNTS.items():
-        if counts[axis] < minimum:
-            problems.append(
-                f"robustness_specs require at least {minimum} {axis} axis spec(s); "
-                f"got {counts[axis]}"
-            )
-    if problems:
-        raise RobustnessPlanError("; ".join(problems))
 
 
 def ensure_robustness_specs(plan: Any) -> Any:
@@ -855,10 +797,6 @@ def _assert_claimable_panel_rows_match_evidence(
             raise RobustnessPlanError(
                 f"robustness panel row {row.spec_id!r} disagrees with its evidence summary"
             )
-
-
-def _dict_or_none(value: Any) -> Optional[Dict[str, Any]]:
-    return value if isinstance(value, dict) else None
 
 
 def _safe_key(value: str) -> str:
