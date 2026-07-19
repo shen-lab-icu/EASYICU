@@ -56,7 +56,7 @@ from .icu_rules import (
     default_time_windows,
 )
 from .llm import LLMClient, LLMMessage
-from .code_patch import (
+from .repairs.patch import (
     PATCH_FORMAT,
     looks_like_executable_python,
     repair_code_excerpt,
@@ -82,8 +82,8 @@ from .authority.provider_budget import (
     StepProviderCallBudget,
     complete_with_provider_budget,
 )
-from .repair_coordination import RepairCoordinator
-from .repair_reasons import (
+from .repairs.coordination import RepairCoordinator
+from .repairs.reasons import (
     RepairPromptAuthority,
     RepairReason,
     RepairRoute,

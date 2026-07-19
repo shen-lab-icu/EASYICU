@@ -9,7 +9,7 @@ drive no control flow). ``pipeline_execute`` re-exports every public name here s
 existing imports keep working; the AST contract in
 ``tests/research_agent/test_gate_evaluator_contract.py`` locks the boundary.
 
-Imports only leaf modules (contracts / repair_reasons / scalar_utils /
+Imports only leaf modules (contracts / repairs.reasons / scalar_utils /
 visual_qa) so there is no import cycle with pipeline_execute.
 """
 
@@ -23,7 +23,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from ..contracts import ValidationFinding
-from ..repair_reasons import typed_repair_ticket
+from ..repairs.reasons import typed_repair_ticket
 from ..scalar_utils import _expected_numeric_annotations_for_step
 from ..visual_qa import VisualQAAuditor
 

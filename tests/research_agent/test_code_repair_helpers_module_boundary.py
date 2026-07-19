@@ -38,18 +38,24 @@ def test_code_repair_reexports_helpers_by_identity() -> None:
 
 
 def test_code_repair_helpers_is_a_leaf_module() -> None:
-    """The helper module must not import code_repair at module top (would be a
-    cycle, since code_repair imports it)."""
+    """The helper module must not import its parent repair implementation."""
     path = (
         Path(__file__).resolve().parents[2]
         / "src"
         / "easyicu"
         / "research_agent"
-        / "code_repair_helpers.py"
+        / "repairs"
+        / "helpers.py"
     )
     tree = ast.parse(path.read_text(encoding="utf-8"))
-    forbidden = {"code_repair", "easyicu.research_agent.code_repair"}
     assert not any(
-        isinstance(node, ast.ImportFrom) and node.module in forbidden
+        isinstance(node, ast.ImportFrom)
+        and node.module
+        in {
+            "source",
+            "code_repair",
+            "easyicu.research_agent.code_repair",
+            "easyicu.research_agent.repairs.source",
+        }
         for node in tree.body
     )

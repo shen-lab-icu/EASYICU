@@ -235,13 +235,13 @@ from .reporting.manuscript_post import (
     _repair_common_writer_citation_omissions,
     _repair_common_writer_placeholders,
 )
-from .summary_repair import (
+from .repairs.summary import (
     _extract_last_json_object,
     _salvage_minimal_contract_step_summary,
     _salvage_named_json_step_summary,
     _salvage_stdout_json_step_summary,
 )
-from .code_repair import (
+from .repairs.source import (
     _KEYERROR_NOT_IN_INDEX_RE,
     _NAME_ERROR_HELPER_RE,
     _deterministic_runner_repair,
