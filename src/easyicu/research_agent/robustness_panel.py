@@ -21,7 +21,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence
 
-from .lock_authority import (
+from .authority.lock_contract import (
     LockAuthorityError,
     assert_lock_matches_evidence_anchor,
     rehydrate_timestamp_only_legacy_lock,

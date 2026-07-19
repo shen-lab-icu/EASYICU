@@ -90,7 +90,7 @@ from ..repairs.reasons import (
     repair_prompt_binding_sha256,
 )
 from ..research_context.typed import materialized_input_prompt_attachment
-from ..step_authority_capsule import ContentRef
+from ..authority.step_capsule import ContentRef
 from ..schema import (
     AggregationRule,
     AgentRuntimeState,

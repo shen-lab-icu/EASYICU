@@ -351,11 +351,11 @@ from .runtime_artifacts import (
 from .scalar_utils import _expected_numeric_annotations_for_step
 from .side_findings import SideFinding
 from .skills import ClinicalSkill
-from .step_authority_capsule import (
+from .authority.step_capsule import (
     StepAuthorityCapsuleError,
     load_verified_step_authority_capsule,
 )
-from .step_authority_runtime import (
+from .authority.step_runtime import (
     StepAuthorityRuntimeError,
     adopt_candidate_for_control_plane_revalidation,
     adopt_frozen_scoped_coder_context,
@@ -377,7 +377,7 @@ from .step_authority_runtime import (
     seal_legacy_candidate,
     seal_repair_candidate_from_receipt,
 )
-from .step_attempt_authority import (
+from .authority.step_attempt import (
     CheckpointAuthority,
     StepAttemptState,
     StepAuthorityOperations,

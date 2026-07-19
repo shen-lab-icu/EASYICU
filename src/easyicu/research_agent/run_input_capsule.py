@@ -29,7 +29,7 @@ from typing import Any, Callable, Dict, Literal, Mapping, Optional, Sequence, Un
 import pandas as pd
 from pydantic import BaseModel, ConfigDict, Field
 
-from .authority_fs import AnchoredDirectory, AuthorityFilesystemError
+from .authority.filesystem import AnchoredDirectory, AuthorityFilesystemError
 from .evidence import EvidenceStore, sha256_of_file
 from .evidence_authority import (
     EvidenceAuthorityIntegrityError,

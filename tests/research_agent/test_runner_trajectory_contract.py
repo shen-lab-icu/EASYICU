@@ -14,7 +14,7 @@ from easyicu.research_agent.intake.materialized_trajectory import (
     MaterializedTrajectoryError,
 )
 from easyicu.research_agent.runner import RunResult
-from easyicu.research_agent.step_authority_capsule import (
+from easyicu.research_agent.authority.step_capsule import (
     StepAuthorityCapsuleRef,
     load_verified_step_authority_capsule,
 )

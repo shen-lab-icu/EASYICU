@@ -1136,7 +1136,7 @@ def test_initial_authority_checkpoint_io_failure_never_enters_code_fallback(
     error_pattern: str,
 ):
     from easyicu.research_agent import pipeline_execute
-    from easyicu.research_agent.step_authority_runtime import (
+    from easyicu.research_agent.authority.step_runtime import (
         StepAuthorityRuntimeError,
     )
 

@@ -29,7 +29,7 @@ from easyicu.concept.metadata_sidecar import (
     parse_column_metadata_sidecar,
 )
 
-from ..authority_fs import AnchoredDirectory, AuthorityFilesystemError
+from ..authority.filesystem import AnchoredDirectory, AuthorityFilesystemError
 from .materialized_metadata import (
     MaterializedCohortAuthorityRef,
     MaterializedMetadataError,
