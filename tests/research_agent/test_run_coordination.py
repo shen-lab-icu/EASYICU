@@ -13,7 +13,7 @@ def _step(step_id: str) -> AnalysisStep:
 
 
 def test_sequential_stop_is_resolved_after_step_execution() -> None:
-    from easyicu.research_agent.run_coordination import (
+    from easyicu.research_agent.execution.run_coordination import (
         RunCoordinator,
         RunExecutionState,
         RunTransition,
@@ -46,7 +46,7 @@ def test_sequential_stop_is_resolved_after_step_execution() -> None:
 
 
 def test_directed_replan_retries_current_step_without_two_plan_authorities() -> None:
-    from easyicu.research_agent.run_coordination import (
+    from easyicu.research_agent.execution.run_coordination import (
         RunCoordinator,
         RunExecutionState,
         RunTransition,
@@ -88,7 +88,7 @@ def test_directed_replan_retries_current_step_without_two_plan_authorities() -> 
 
 
 def test_success_replan_keeps_completed_step_out_of_rebuilt_queue() -> None:
-    from easyicu.research_agent.run_coordination import (
+    from easyicu.research_agent.execution.run_coordination import (
         RunCoordinator,
         RunExecutionState,
         RunTransition,
@@ -123,7 +123,7 @@ def test_success_replan_keeps_completed_step_out_of_rebuilt_queue() -> None:
 
 
 def test_empty_blocked_schedule_executes_nothing() -> None:
-    from easyicu.research_agent.run_coordination import (
+    from easyicu.research_agent.execution.run_coordination import (
         RunCoordinator,
         RunExecutionState,
     )
@@ -143,7 +143,7 @@ def test_empty_blocked_schedule_executes_nothing() -> None:
 
 
 def test_sequential_worker_exception_propagates_unchanged() -> None:
-    from easyicu.research_agent.run_coordination import (
+    from easyicu.research_agent.execution.run_coordination import (
         RunCoordinator,
         RunExecutionState,
     )
@@ -170,7 +170,7 @@ def test_sequential_worker_exception_propagates_unchanged() -> None:
 
 def test_parallel_workers_use_supplied_context_submitter_and_report_errors() -> None:
     from easyicu.research_agent.pipeline_execute import _submit_in_current_context
-    from easyicu.research_agent.run_coordination import RunCoordinator
+    from easyicu.research_agent.execution.run_coordination import RunCoordinator
 
     marker: ContextVar[str] = ContextVar("run_coordinator_marker", default="missing")
     marker.set("bound")
@@ -198,7 +198,7 @@ def test_parallel_workers_use_supplied_context_submitter_and_report_errors() -> 
 
 def test_run_coordinator_is_science_neutral_and_pipeline_owns_transitions() -> None:
     import easyicu.research_agent.pipeline_execute as pipeline_execute
-    import easyicu.research_agent.run_coordination as run_coordination
+    import easyicu.research_agent.execution.run_coordination as run_coordination
 
     module_source = inspect.getsource(run_coordination)
     for forbidden in (
@@ -216,7 +216,7 @@ def test_run_coordinator_is_science_neutral_and_pipeline_owns_transitions() -> N
     assert "while remaining_steps:" not in phase_source
     assert phase_source.count("run_coordinator.run_sequential(") == 1
     assert phase_source.count("run_coordinator.run_parallel(") == 1
-    corruption = phase_source.index('if run_input_authority_state["corrupted"]:')
+    corruption = phase_source.index("if run_input_authority_state.corrupted:")
     requested_stop = phase_source.index(
         "if step.step_id == requested_stop_after_step_id:", corruption
     )

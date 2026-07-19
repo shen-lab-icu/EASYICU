@@ -141,7 +141,12 @@ from .reporting.article_contract import (
 )
 from .planning.figure_strategy import build_article_figure_strategy
 from .pipeline_config import PipelineConfig
-from .contracts import _ExecutePhaseResult, _PlanPhaseResult, _WritePhaseResult
+from .contracts import (
+    RunResult,
+    _ExecutePhaseResult,
+    _PlanPhaseResult,
+    _WritePhaseResult,
+)
 from .execution.host_services import (
     ExecutePhaseServices,
     PublicationFigureAuthorityServices,
@@ -331,11 +336,10 @@ from .providers.mocks import MockLLMClient
 from .providers.protocol import LLMClient, LLMMessage
 from .learning.memory import RunMemory
 from .providers.prompts import PROMPT_PACK_VERSION, prompt_pack_files
-from .runner import (
+from .execution.runner import (
     HOST_OWNED_RUNNER_ENV_KEYS,
     CodeRunner,
     DockerRunner,
-    RunResult,
     reject_reserved_runner_env,
     select_safe_runner_kind,
 )

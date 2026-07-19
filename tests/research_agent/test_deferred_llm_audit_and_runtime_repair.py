@@ -65,7 +65,7 @@ def test_llm_concept_audit_runs_once_only_after_local_contracts_pass(
 ) -> None:
     from easyicu.research_agent.audits.validators import PrimaryModelContractValidator
     from easyicu.research_agent.contracts import ValidationFinding
-    from easyicu.research_agent.runner import CodeRunner
+    from easyicu.research_agent.execution.runner import CodeRunner
 
     initial_code = _summary_script(phase="INITIAL_CONTRACT_ERROR")
     repaired_code = _summary_script(phase="FINAL_CONTRACT_VALID")
@@ -353,7 +353,7 @@ with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as hand
 def test_runtime_repair_transport_retry_does_not_reexecute_known_failure(
     ra, tmp_path: Path, monkeypatch
 ) -> None:
-    from easyicu.research_agent.runner import CodeRunner
+    from easyicu.research_agent.execution.runner import CodeRunner
 
     broken_code = "raise RuntimeError('KNOWN_RUNTIME_FAILURE')\n"
 
@@ -421,7 +421,7 @@ def test_runtime_repair_transport_retry_does_not_reexecute_known_failure(
 def test_noop_runtime_repair_is_retried_without_reexecution(
     ra, tmp_path: Path, monkeypatch
 ) -> None:
-    from easyicu.research_agent.runner import CodeRunner
+    from easyicu.research_agent.execution.runner import CodeRunner
 
     broken_code = (
         _summary_script(phase="NOOP_RUNTIME_FAILURE")
@@ -495,7 +495,7 @@ def test_exact_capsule_resume_skips_generation_audit_and_execution_but_reruns_ga
 ) -> None:
     from easyicu.research_agent import pipeline_execute
     from easyicu.research_agent.agents.core import RuntimeSupervisor
-    from easyicu.research_agent.runner import RunResult
+    from easyicu.research_agent.contracts import RunResult
     from easyicu.research_agent.schema import ValidationFinding
     from easyicu.research_agent.authority.step_capsule import (
         StepAuthorityCapsuleRef,
@@ -815,7 +815,9 @@ def test_exact_capsule_resume_skips_generation_audit_and_execution_but_reruns_ga
         "executed_pending_review",
     }
     assert interrupted_record["status"] != "ok"
-    from easyicu.research_agent.authority.runtime_artifacts import current_successful_step_ids
+    from easyicu.research_agent.authority.runtime_artifacts import (
+        current_successful_step_ids,
+    )
 
     partial = json.loads(
         (successful_dir / "manifest_partial.json").read_text(encoding="utf-8")
@@ -876,7 +878,7 @@ def test_resume_seals_completed_repair_after_capsule_checkpoint_crash(
     from easyicu.research_agent import pipeline_execute
     from easyicu.research_agent.agents.core import RuntimeSupervisor
     from easyicu.research_agent.audits.validators import PrimaryModelContractValidator
-    from easyicu.research_agent.runner import RunResult
+    from easyicu.research_agent.contracts import RunResult
     from easyicu.research_agent.schema import ValidationFinding
     from easyicu.research_agent.authority.step_runtime import (
         StepAuthorityRuntimeError,

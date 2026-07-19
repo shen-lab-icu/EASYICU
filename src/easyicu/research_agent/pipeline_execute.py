@@ -94,7 +94,7 @@ from .repairs.source import (
     _deterministic_summary_repair,
     deterministic_contract_repair,
 )
-from .code_hygiene import reorder_forward_references
+from .execution.code_hygiene import reorder_forward_references
 from .repairs.coordination import (
     RepairAuthorityBinding,
     StepRepairBudget,
@@ -341,7 +341,7 @@ from .authority.run_input import (
     verify_legacy_trajectory_capsule_receipt,
     validator_code_sha256,
 )
-from .run_coordination import RunCoordinator, RunExecutionState, RunTransition
+from .execution.run_coordination import RunCoordinator, RunExecutionState, RunTransition
 from .authority.runtime_artifacts import (
     current_step_records,
     current_successful_step_records,
@@ -382,8 +382,8 @@ from .authority.step_attempt import (
     StepAttemptState,
     StepAuthorityOperations,
 )
-from .step_execution import LockedStepExecutionRequest, StepExecutor
-from .step_worker_state import StepWorkerProgress
+from .execution.step_execution import LockedStepExecutionRequest, StepExecutor
+from .execution.step_worker_state import StepWorkerProgress
 from .repairs.summary import salvage_step_summary
 from .viability import (
     CohortViability,

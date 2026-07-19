@@ -686,7 +686,10 @@ def __getattr__(name: str):
 
         return getattr(_mocks, name)
     if name in {
-        "OpenAIClient", "CLIAgentLLMClient", "LLMRouter", "build_llm_client",
+        "OpenAIClient",
+        "CLIAgentLLMClient",
+        "LLMRouter",
+        "build_llm_client",
     }:
         from .providers import llm as _llm
 
@@ -726,8 +729,12 @@ def __getattr__(name: str):
         from . import literature as _lit
 
         return getattr(_lit, name)
-    if name in {"CodeRunner", "DockerRunner", "RunResult"}:
-        from . import runner as _runner
+    if name == "RunResult":
+        from .contracts import RunResult
+
+        return RunResult
+    if name in {"CodeRunner", "DockerRunner"}:
+        from .execution import runner as _runner
 
         return getattr(_runner, name)
     if name in {

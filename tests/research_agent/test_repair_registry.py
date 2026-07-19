@@ -325,7 +325,7 @@ def test_summary_salvage_minimal_contract_is_not_auto_authorized() -> None:
 
 
 def test_salvage_step_summary_records_stdout_salvage_end_to_end(tmp_path: Path) -> None:
-    from easyicu.research_agent.runner import RunResult
+    from easyicu.research_agent.contracts import RunResult
     from easyicu.research_agent.schema import AnalysisStep
     from easyicu.research_agent.repairs.summary import salvage_step_summary
 
@@ -371,7 +371,7 @@ def test_salvage_step_summary_records_stdout_salvage_end_to_end(tmp_path: Path) 
 def test_salvage_step_summary_does_not_select_from_result_tables(
     tmp_path: Path,
 ) -> None:
-    from easyicu.research_agent.runner import RunResult
+    from easyicu.research_agent.contracts import RunResult
     from easyicu.research_agent.schema import AnalysisStep
     from easyicu.research_agent.repairs.summary import salvage_step_summary
 
@@ -401,7 +401,7 @@ def test_salvage_step_summary_does_not_select_from_result_tables(
 
 
 def test_salvage_step_summary_returns_none_when_summary_present(tmp_path: Path) -> None:
-    from easyicu.research_agent.runner import RunResult
+    from easyicu.research_agent.contracts import RunResult
     from easyicu.research_agent.schema import AnalysisStep
     from easyicu.research_agent.repairs.summary import salvage_step_summary
 

@@ -54,7 +54,7 @@ software gates. A failed or unsafe analysis path is demoted or blocked
 rather than trusted because an LLM said it was valid.
 
 Code examples: `pipeline_execute.py`, `repairs/source.py`,
-`repairs/coordination.py`, `gates/preflight.py`, `code_hygiene.py`,
+`repairs/coordination.py`, `gates/preflight.py`, `execution/code_hygiene.py`,
 `audits/validators.py`, `gates/visual.py`, `review/causal_audit.py`,
 `review/methodological_rigor.py`.
 

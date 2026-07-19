@@ -33,7 +33,7 @@ def _legacy_generation_mode(
 
 
 def test_worker_progress_defaults_are_isolated() -> None:
-    from easyicu.research_agent.step_worker_state import StepWorkerProgress
+    from easyicu.research_agent.execution.step_worker_state import StepWorkerProgress
 
     first = StepWorkerProgress()
     second = StepWorkerProgress()
@@ -62,7 +62,7 @@ def test_worker_progress_defaults_are_isolated() -> None:
 
 
 def test_generation_mode_preserves_existing_priority() -> None:
-    from easyicu.research_agent.step_worker_state import StepWorkerProgress
+    from easyicu.research_agent.execution.step_worker_state import StepWorkerProgress
 
     assert StepWorkerProgress().generation_mode() == "llm"
     assert (
@@ -117,7 +117,7 @@ def test_generation_mode_preserves_existing_priority() -> None:
 
 
 def test_generation_mode_can_describe_non_llm_terminal_branch() -> None:
-    from easyicu.research_agent.step_worker_state import StepWorkerProgress
+    from easyicu.research_agent.execution.step_worker_state import StepWorkerProgress
 
     progress = StepWorkerProgress(
         llm_repair_used=True,
@@ -129,7 +129,7 @@ def test_generation_mode_can_describe_non_llm_terminal_branch() -> None:
 
 
 def test_generation_mode_exhaustively_matches_extracted_legacy_projection() -> None:
-    from easyicu.research_agent.step_worker_state import StepWorkerProgress
+    from easyicu.research_agent.execution.step_worker_state import StepWorkerProgress
 
     for (
         repaired,
@@ -163,7 +163,8 @@ def test_generation_mode_exhaustively_matches_extracted_legacy_projection() -> N
 
 
 def test_worker_progress_is_data_only_and_pipeline_uses_single_seam() -> None:
-    from easyicu.research_agent import pipeline_execute, step_worker_state
+    from easyicu.research_agent import pipeline_execute
+    from easyicu.research_agent.execution import step_worker_state
 
     module_source = inspect.getsource(step_worker_state)
     for forbidden in (

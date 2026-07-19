@@ -9,10 +9,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable, Optional
+from typing import Any, Callable, Optional
 
-if TYPE_CHECKING:
-    from .runner import RunResult
+from ..contracts import RunResult
 
 
 @dataclass(frozen=True)

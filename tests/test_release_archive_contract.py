@@ -187,7 +187,12 @@ def test_release_archives_preserve_reviewer_contract_and_package_data(
             "src/easyicu/research_agent/authority/step_attempt.py",
             "src/easyicu/research_agent/authority/step_capsule.py",
             "src/easyicu/research_agent/authority/step_runtime.py",
+            "src/easyicu/research_agent/execution/code_hygiene.py",
             "src/easyicu/research_agent/execution/concept_audit_cache.py",
+            "src/easyicu/research_agent/execution/run_coordination.py",
+            "src/easyicu/research_agent/execution/runner.py",
+            "src/easyicu/research_agent/execution/step_execution.py",
+            "src/easyicu/research_agent/execution/step_worker_state.py",
             "src/easyicu/research_agent/planning/cohort_contract.py",
             "src/easyicu/research_agent/planning/robustness_contract.py",
             "src/easyicu/research_agent/providers/cost.py",
@@ -244,7 +249,12 @@ def test_release_archives_preserve_reviewer_contract_and_package_data(
             "easyicu/research_agent/authority/step_attempt.py",
             "easyicu/research_agent/authority/step_capsule.py",
             "easyicu/research_agent/authority/step_runtime.py",
+            "easyicu/research_agent/execution/code_hygiene.py",
             "easyicu/research_agent/execution/concept_audit_cache.py",
+            "easyicu/research_agent/execution/run_coordination.py",
+            "easyicu/research_agent/execution/runner.py",
+            "easyicu/research_agent/execution/step_execution.py",
+            "easyicu/research_agent/execution/step_worker_state.py",
             "easyicu/research_agent/planning/cohort_contract.py",
             "easyicu/research_agent/planning/robustness_contract.py",
             "easyicu/research_agent/providers/cost.py",
@@ -273,13 +283,25 @@ def test_release_archives_preserve_reviewer_contract_and_package_data(
             for leaf in RETIRED_TOP_LEVEL_MODULES
         }
         retired_wheel = {
-            f"easyicu/research_agent/{leaf}.py"
-            for leaf in RETIRED_TOP_LEVEL_MODULES
+            f"easyicu/research_agent/{leaf}.py" for leaf in RETIRED_TOP_LEVEL_MODULES
         }
         assert retired_sdist.isdisjoint(sdist_names)
         assert retired_wheel.isdisjoint(wheel_names)
         assert "src/easyicu/research_agent/agents.py" not in sdist_names
         assert "easyicu/research_agent/agents.py" not in wheel_names
+        retired_execution_leaves = {
+            "code_hygiene",
+            "run_coordination",
+            "runner",
+            "step_execution",
+            "step_worker_state",
+        }
+        assert {
+            f"src/easyicu/research_agent/{leaf}.py" for leaf in retired_execution_leaves
+        }.isdisjoint(sdist_names)
+        assert {
+            f"easyicu/research_agent/{leaf}.py" for leaf in retired_execution_leaves
+        }.isdisjoint(wheel_names)
 
         wheel_extract_dir = tmp_path / "installed-wheel"
         with zipfile.ZipFile(wheel_path) as archive:
@@ -307,7 +329,12 @@ for name in (
     'easyicu.research_agent.authority.step_attempt',
     'easyicu.research_agent.authority.step_capsule',
     'easyicu.research_agent.authority.step_runtime',
+    'easyicu.research_agent.execution.code_hygiene',
     'easyicu.research_agent.execution.concept_audit_cache',
+    'easyicu.research_agent.execution.run_coordination',
+    'easyicu.research_agent.execution.runner',
+    'easyicu.research_agent.execution.step_execution',
+    'easyicu.research_agent.execution.step_worker_state',
     'easyicu.research_agent.providers.cost',
     'easyicu.research_agent.providers.llm',
     'easyicu.research_agent.providers.mocks',
@@ -330,9 +357,7 @@ assert set(load_prompt_pack()) == {'system', 'coder', 'replanner', 'writer'}
             text=True,
             check=False,
         )
-        assert smoke_result.returncode == 0, (
-            smoke_result.stdout + smoke_result.stderr
-        )
+        assert smoke_result.returncode == 0, smoke_result.stdout + smoke_result.stderr
         assert not any(
             name.startswith(("tests/", "examples/", "docs/", "benchmarks/"))
             for name in wheel_names

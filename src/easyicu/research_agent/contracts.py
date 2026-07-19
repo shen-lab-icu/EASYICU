@@ -5,14 +5,13 @@ consumers can import the public API from one place without creating shadow
 schemas. Numeric claims come from :mod:`evidence`; evidence artifacts and
 validation findings come from :mod:`schema`.
 
-Only the phase-result dataclasses are defined here because they are internal
-handoff records for ``pipeline_execute.py``, ``pipeline_write.py``, and
-``pipeline_package.py``.
+The execution result and phase-result dataclasses are defined here so runtime,
+authority, and orchestration modules share one dependency-neutral contract.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple
@@ -25,6 +24,37 @@ from .schema import ValidationFinding
 from .side_findings import SideFinding
 
 DerivedClaim = NumericClaim
+
+
+@dataclass
+class RunResult:
+    """Everything captured from one generated-code execution."""
+
+    step_id: str
+    script_path: Path
+    cwd: Path
+    out_dir: Path
+    stdout: str
+    stderr: str
+    returncode: int
+    duration_seconds: float
+    artefacts: List[Path] = field(default_factory=list)
+    timed_out: bool = False
+    requested_network_policy: str = "none"
+    effective_isolation: str = "unknown"
+    isolation_degraded: bool = False
+    isolation_degradation_reason: Optional[str] = None
+    runtime_provenance: Dict[str, object] = field(default_factory=dict)
+    # False means callers must not scan or hash anything under ``out_dir``.
+    outputs_safe_to_collect: bool = True
+    runner_log_path: Optional[Path] = None
+
+    @property
+    def succeeded(self) -> bool:
+        return (
+            self.returncode == 0 and not self.timed_out and self.outputs_safe_to_collect
+        )
+
 
 if TYPE_CHECKING:
     from .providers.cost import CostMeter
@@ -91,6 +121,7 @@ __all__ = [
     "EvidenceArtifact",
     "NumericClaim",
     "DerivedClaim",
+    "RunResult",
     "TimeWindow",
     "ConceptPredicate",
     "CohortDefinition",

@@ -25,8 +25,8 @@ Two runner backends ship in this module:
   as :class:`CodeRunner`, so the pipeline can swap them in via
   ``runner_kind="docker"``.
 
-Hashes live in :mod:`evidence`, not here — these classes only produce
-the artefacts.
+Hashes live in :mod:`easyicu.research_agent.authority.evidence_store`, not here
+— these classes only produce the artefacts.
 """
 
 from __future__ import annotations
@@ -45,12 +45,12 @@ import textwrap
 import threading
 import time
 import uuid
-from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 from typing import Dict, List, Optional, Sequence, Tuple
 
 from .code_hygiene import reorder_forward_references
-from .method_capabilities import (
+from ..contracts import RunResult
+from ..method_capabilities import (
     BASELINE_PACKAGES,
     CURATED_METHOD_PACKAGES,
     OPTIONAL_BASELINE_PACKAGES,
@@ -297,7 +297,7 @@ def _capture_run_artifact_authority_snapshot(
     without replaying an older checkpoint.
     """
 
-    from .authority.runtime_artifacts import (
+    from ..authority.runtime_artifacts import (
         RunArtifactAuthorityError,
         current_evidence_records,
         current_step_records,
@@ -361,7 +361,8 @@ def _code_requests_robustness_authority_snapshot(code: str) -> bool:
         return False
     return any(
         isinstance(node, ast.ImportFrom)
-        and node.module == "easyicu.research_agent.execution.runners.deterministic_robustness"
+        and node.module
+        == "easyicu.research_agent.execution.runners.deterministic_robustness"
         and any(alias.name == _ROBUSTNESS_AUTHORITY_ENTRYPOINT for alias in node.names)
         for node in ast.walk(tree)
     )
@@ -464,36 +465,6 @@ def _as_text(stream: object) -> str:
     if isinstance(stream, bytes):
         return stream.decode("utf-8", errors="replace")
     return str(stream)
-
-
-@dataclass
-class RunResult:
-    """Everything captured from one code execution."""
-
-    step_id: str
-    script_path: Path
-    cwd: Path
-    out_dir: Path
-    stdout: str
-    stderr: str
-    returncode: int
-    duration_seconds: float
-    artefacts: List[Path] = field(default_factory=list)
-    timed_out: bool = False
-    requested_network_policy: str = "none"
-    effective_isolation: str = "unknown"
-    isolation_degraded: bool = False
-    isolation_degradation_reason: Optional[str] = None
-    runtime_provenance: Dict[str, object] = field(default_factory=dict)
-    # False means callers must not scan or hash anything under ``out_dir``.
-    outputs_safe_to_collect: bool = True
-    runner_log_path: Optional[Path] = None
-
-    @property
-    def succeeded(self) -> bool:
-        return (
-            self.returncode == 0 and not self.timed_out and self.outputs_safe_to_collect
-        )
 
 
 class CodeRunner:
@@ -659,7 +630,7 @@ class CodeRunner:
             Path("/private/var/db/timezone"),
             Path(sys.prefix).resolve(),
             Path(sys.base_prefix).resolve(),
-            Path(__file__).resolve().parents[2],
+            Path(__file__).resolve().parents[3],
             Path(self.workdir).resolve(),
             Path(self.python_executable).resolve().parent,
         }
@@ -782,7 +753,7 @@ class CodeRunner:
         env["TEMP"] = str(private_tmp)
         env["PYTHONNOUSERSITE"] = "1"
         env["PYTHONDONTWRITEBYTECODE"] = "1"
-        env["PYTHONPATH"] = str(Path(__file__).resolve().parents[2])
+        env["PYTHONPATH"] = str(Path(__file__).resolve().parents[3])
         env["COHORT_PARQUET"] = str(self.cohort_parquet)
         env["STEP_OUT_DIR"] = str(out_dir)
         env["EASYICU_RUN_DIR"] = str(self.workdir.resolve())
@@ -1754,7 +1725,7 @@ class DockerRunner:
                 f"# docker_image_reference={self.image}\n"
                 f"# docker_image_id={image_id}\n"
                 f"# docker_repo_digests={','.join(repo_digests)}\n"
-                "# generated_by=easyicu.research_agent.runner.DockerRunner\n"
+                "# generated_by=easyicu.research_agent.execution.runner.DockerRunner\n"
                 f"{requirements}\n"
             )
             provenance: Dict[str, object] = {

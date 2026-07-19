@@ -10,7 +10,7 @@ import pandas as pd
 import pytest
 
 from easyicu.research_agent.authority.evidence_store import EvidenceStore
-from easyicu.research_agent.runner import RunResult
+from easyicu.research_agent.contracts import RunResult
 from easyicu.research_agent.schema import AnalysisPlan
 from easyicu.research_agent.trajectory_plan_contract import (
     STABILITY_EXECUTOR_INPUTS,
@@ -511,7 +511,9 @@ def test_typed_trajectory_stability_success_is_evidence_bound_and_continues(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from easyicu.research_agent import pipeline_execute
-    from easyicu.research_agent.authority.runtime_artifacts import verified_run_evidence_path
+    from easyicu.research_agent.authority.runtime_artifacts import (
+        verified_run_evidence_path,
+    )
 
     _disable_unrelated_audits(monkeypatch)
     llm = _PlanAndCoderLLM()

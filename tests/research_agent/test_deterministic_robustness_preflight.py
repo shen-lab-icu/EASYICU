@@ -200,7 +200,7 @@ def _run_generated(
     universe_path: Path,
     tamper_snapshot: bool = False,
 ) -> None:
-    from easyicu.research_agent.runner import (
+    from easyicu.research_agent.execution.runner import (
         _capture_run_artifact_authority_snapshot,
     )
 
@@ -303,10 +303,7 @@ def test_preflight_emits_renderer_contract_and_nonindependent_scalar_outcomes(
     summary = json.loads((out_dir / "step_summary.json").read_text())
     assert summary["status"] == "blocked"
     assert "did not emit verifiable estimates" in summary["blocking_reason"]
-    assert (
-        summary["aliases"]["sensitivity_comparison"]
-        == "sensitivity_comparison.csv"
-    )
+    assert summary["aliases"]["sensitivity_comparison"] == "sensitivity_comparison.csv"
     assert (
         summary["aliases"]["cohort_overlap_and_attrition"]
         == "cohort_overlap_and_attrition.csv"
@@ -539,25 +536,23 @@ def test_preflight_blocks_unsupported_locked_missing_strategy(
     summary = json.loads((out_dir / "step_summary.json").read_text())
     assert summary["status"] == "blocked"
     assert "missing_unimplemented" in summary["blocking_reason"]
-    assert "not executable under the registered analysis contract" in summary[
-        "blocking_reason"
-    ]
+    assert (
+        "not executable under the registered analysis contract"
+        in summary["blocking_reason"]
+    )
 
 
 def test_structured_preflight_replays_exact_primary_code_and_emits_spec_by_model_evidence(
     tmp_path: Path, monkeypatch
 ) -> None:
-    out_dir, cohort_path, universe_path = _prepare_run(
-        tmp_path, include_primary=False
-    )
+    out_dir, cohort_path, universe_path = _prepare_run(tmp_path, include_primary=False)
     run_dir = out_dir.parents[2]
     source_step = run_dir / "steps" / "07_primary_model"
     source_outputs = source_step / "outputs"
     source_outputs.mkdir(parents=True)
     source_script = source_step / "analysis.py"
     source_script.write_text(
-        textwrap.dedent(
-            """
+        textwrap.dedent("""
             import json, math, os
             from pathlib import Path
             import pandas as pd
@@ -647,8 +642,7 @@ def test_structured_preflight_replays_exact_primary_code_and_emits_spec_by_model
                 },
             }
             (out / "step_summary.json").write_text(json.dumps(summary))
-            """
-        ),
+            """),
         encoding="utf-8",
     )
     base_env = os.environ.copy()
@@ -704,9 +698,7 @@ def test_structured_preflight_replays_exact_primary_code_and_emits_spec_by_model
                     {
                         "evidence_id": "code_primary_analysis",
                         "kind": "code",
-                        "relative_path": str(
-                            code_evidence_path.relative_to(run_dir)
-                        ),
+                        "relative_path": str(code_evidence_path.relative_to(run_dir)),
                         "sha256": script_sha,
                         "produced_by_step": "07_primary_model",
                     },
@@ -740,9 +732,7 @@ def test_structured_preflight_replays_exact_primary_code_and_emits_spec_by_model
             spec_id="missing_source_aware",
             axis="missing",
             description="Reuse the registered source-aware model.",
-            missing_override={
-                "strategy": "source_aware_categories_no_imputation"
-            },
+            missing_override={"strategy": "source_aware_categories_no_imputation"},
         )
     )
     (run_dir / "robustness_specs_locked.json").write_text(
@@ -768,16 +758,11 @@ def test_structured_preflight_replays_exact_primary_code_and_emits_spec_by_model
     assert summary["primary_model_replay"]["mode"] == (
         "exact_registered_primary_model_code"
     )
-    assert summary["model_contracts"][0]["exposure_expression"] == (
-        "log1p(exposure)"
-    )
+    assert summary["model_contracts"][0]["exposure_expression"] == ("log1p(exposure)")
     assert summary["complete_case_n"] == source_summary["model_contracts"][2]["n"]
     contracts = summary["robustness_model_contracts"]
     assert len(contracts) == 16
-    assert {
-        (contract["spec_id"], contract["model_id"])
-        for contract in contracts
-    } == {
+    assert {(contract["spec_id"], contract["model_id"]) for contract in contracts} == {
         (spec_id, model_id)
         for spec_id in (
             "adult_any_los",
@@ -835,9 +820,10 @@ def test_structured_preflight_replays_exact_primary_code_and_emits_spec_by_model
     coefficients = pd.read_csv(out_dir / "robustness_variant_coefficients.csv")
     assert coefficients[["spec_id", "model_id"]].drop_duplicates().shape[0] == 16
     replay_index = json.loads((out_dir / "model_replay_index.json").read_text())
-    assert replay_index["source_script_sha256"] == summary["primary_model_replay"][
-        "source_script_sha256"
-    ]
+    assert (
+        replay_index["source_script_sha256"]
+        == summary["primary_model_replay"]["source_script_sha256"]
+    )
     assert all(item["status"] == "ok" for item in replay_index["variants"])
 
 
@@ -1131,12 +1117,15 @@ def test_same_scalar_outcome_is_disclosed_without_becoming_blocking() -> None:
 
     assert audits[0]["outcome_executable"] is True
     assert audits[0]["independent_variant"] is False
-    assert _unexecutable_locked_spec_ids(
-        specs=[duplicate],
-        membership_rows=[],
-        missing_rows=[],
-        outcome_rows=audits,
-    ) == []
+    assert (
+        _unexecutable_locked_spec_ids(
+            specs=[duplicate],
+            membership_rows=[],
+            missing_rows=[],
+            outcome_rows=audits,
+        )
+        == []
+    )
 
 
 def test_exact_replay_blocks_script_that_ignores_locked_cohort_membership(
@@ -1153,8 +1142,7 @@ def test_exact_replay_blocks_script_that_ignores_locked_cohort_membership(
     source_outputs.mkdir(parents=True)
     source_script = source_dir / "analysis.py"
     source_script.write_text(
-        textwrap.dedent(
-            """
+        textwrap.dedent("""
             import json, os
             from pathlib import Path
             import pandas as pd
@@ -1189,8 +1177,7 @@ def test_exact_replay_blocks_script_that_ignores_locked_cohort_membership(
                 "primary_model_id": "primary",
                 "model_contracts": [contract],
             }))
-            """
-        ),
+            """),
         encoding="utf-8",
     )
     primary_contract = {
