@@ -89,6 +89,9 @@ class _JSONLObjectDecodeError(ValueError):
     """Raised when one benchmark JSONL row is not a strict JSON object."""
 
 
+_FIGURE2_PAPER_ACCEPTANCE_EXIT_CODE = 3
+
+
 def _is_figure2_task_id(value: object) -> bool:
     """Return True only for an exact frozen Canonical9 identifier."""
 
@@ -2463,6 +2466,16 @@ def main() -> int:
         "key, question, cohort_path, target_outcome, expected_or_direction.",
     )
     parser.add_argument(
+        "--require-figure2-paper-acceptance",
+        action="store_true",
+        help=(
+            "After every EHRFlowBench row has run and results are written, "
+            "require deterministic replay verification of one valid aware-arm "
+            "attempt for each exact Canonical9 task. Invalid attempts remain "
+            "nonfatal per item, but the completed batch exits with status 3."
+        ),
+    )
+    parser.add_argument(
         "--force-writer-probe",
         action="store_true",
         help=(
@@ -2567,6 +2580,12 @@ def main() -> int:
     )
 
     if args.ehrflowbench_jsonl:
+        if bool(args.require_figure2_paper_acceptance) and _normalize_arms(
+            args.arms
+        ) != ["aware"]:
+            raise SystemExit(
+                "--require-figure2-paper-acceptance requires exactly '--arms aware'."
+            )
         ehrflow_model = args.model if args.provider != "mock" else "mock"
         if args.models:
             ehrflow_model = args.models[0]
@@ -2594,6 +2613,9 @@ def main() -> int:
                 stop_after_step_id=stop_after_step_id,
                 force_writer_probe=bool(args.force_writer_probe),
                 allow_mock_aware=bool(args.allow_mock_aware),
+                require_figure2_paper_acceptance=bool(
+                    args.require_figure2_paper_acceptance
+                ),
             )
 
         if n_repeat == 1:
@@ -2609,6 +2631,11 @@ def main() -> int:
             rc = rc or rc_i
         _write_stability_report(base_out_root, repeat_roots, arms=args.arms)
         return rc
+
+    if bool(args.require_figure2_paper_acceptance):
+        raise SystemExit(
+            "--require-figure2-paper-acceptance requires --ehrflowbench-jsonl."
+        )
 
     all_items = list(
         RULE_BENCH_ITEMS if args.bench_kind == "rule" else ANALYSIS_BENCH_ITEMS
@@ -3214,6 +3241,7 @@ def _run_ehrflowbench_jsonl(
     stop_after_step_id: Optional[str] = None,
     force_writer_probe: bool = False,
     allow_mock_aware: bool = False,
+    require_figure2_paper_acceptance: bool = False,
 ) -> int:
     """Run an external EHRFlowBench-style JSONL export when available."""
     import pandas as pd
@@ -3266,6 +3294,10 @@ def _run_ehrflowbench_jsonl(
 
     scores: List[Dict[str, Any]] = []
     pending: List[Dict[str, Any]] = []
+    input_task_ids = [
+        str(row.get("key") or row.get("id") or f"ehrflowbench_{idx:03d}")
+        for idx, row in enumerate(rows)
+    ]
     for idx, row in enumerate(rows):
         key = str(row.get("key") or row.get("id") or f"ehrflowbench_{idx:03d}")
         if idx in invalid_row_indices:
@@ -3585,11 +3617,13 @@ def _run_ehrflowbench_jsonl(
         "arms": _normalize_arms(arms),
         "pipeline_options": dict(pipeline_options or {}),
         "force_writer_probe": bool(force_writer_probe),
+        "items": input_task_ids,
         "scores": scores,
         "pending": pending,
         "totals": totals,
     }
-    (out_root / "ehrflowbench_results.json").write_text(
+    results_path = out_root / "ehrflowbench_results.json"
+    results_path.write_text(
         json.dumps(payload, indent=2, ensure_ascii=False, default=str),
         encoding="utf-8",
     )
@@ -3612,8 +3646,54 @@ def _run_ehrflowbench_jsonl(
         for p in pending:
             md.append(f"- `{p['key']}` — {p['status']}")
     (out_root / "ehrflowbench_results.md").write_text("\n".join(md), encoding="utf-8")
-    print(f"  -> {out_root / 'ehrflowbench_results.json'}")
+    acceptance_status: str | None = None
+    if require_figure2_paper_acceptance or any(
+        _is_figure2_task_id(task_id) for task_id in input_task_ids
+    ):
+        from benchmarks.figure2_canonical9.evaluator.acceptance import (
+            FIGURE2_PAPER_ACCEPTANCE_SCHEMA,
+            Figure2AcceptanceIssue,
+            Figure2PaperAcceptance,
+            evaluate_figure2_paper_acceptance,
+        )
+        from benchmarks.figure2_canonical9.evaluator.rubric_v1 import (
+            FIGURE2_TASK_IDS,
+        )
+
+        try:
+            acceptance = evaluate_figure2_paper_acceptance(results_path)
+        except Exception as exc:  # paper gate must not truncate item outputs
+            acceptance = Figure2PaperAcceptance(
+                schema_version=FIGURE2_PAPER_ACCEPTANCE_SCHEMA,
+                status="invalid",
+                results_sha256=hashlib.sha256(results_path.read_bytes()).hexdigest(),
+                expected_task_ids=tuple(FIGURE2_TASK_IDS),
+                observed_task_ids=tuple(input_task_ids),
+                issues=(
+                    Figure2AcceptanceIssue(
+                        code="ACCEPTANCE_EVALUATOR_ERROR",
+                        detail=f"{type(exc).__name__}: {exc}"[:2048],
+                    ),
+                ),
+            )
+        acceptance_path = out_root / "figure2_paper_acceptance.json"
+        acceptance_path.write_text(
+            json.dumps(
+                acceptance.model_dump(mode="json"),
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=False,
+                allow_nan=False,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        acceptance_status = acceptance.status
+        print(f"  -> {acceptance_path}")
+    print(f"  -> {results_path}")
     print(f"  -> {out_root / 'ehrflowbench_results.md'}")
+    if require_figure2_paper_acceptance and acceptance_status != "accepted":
+        return _FIGURE2_PAPER_ACCEPTANCE_EXIT_CODE
     return 0
 
 
