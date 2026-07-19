@@ -276,6 +276,84 @@ x_cols = list(dict.fromkeys(x_cols))
     assert namespace["x_cols"] == ["sepsis3", "age_per_10y"]
 
 
+def test_contract_repair_keeps_measurement_provenance_receipts_machine_readable():
+    code = """
+import pandas as pd
+
+provenance_receipts = [
+    {
+        "measured_column": "marker_measured",
+        "count_column": "marker_n",
+        "status": "checked",
+        "comparison_n": 100,
+        "invalid_pair_n": 0,
+        "discordant_n": 0,
+        "role": "audit_only",
+    }
+]
+measurement_provenance_audit = pd.DataFrame.from_records(provenance_receipts)
+step_summary = {
+    "measurement_provenance_audit": measurement_provenance_audit,
+}
+""".lstrip()
+    finding = {
+        "validator": "step_summary_integrity",
+        "severity": "error",
+        "detail": {
+            "issue": "measurement_provenance_source_invalid",
+            "reported_source": None,
+        },
+    }
+
+    repaired = deterministic_contract_repair(code=code, findings=[finding])
+
+    assert repaired is not None
+    name, patched = repaired
+    assert name == "measurement_provenance_summary_mapping_v1"
+    assert "pd.DataFrame.from_records(provenance_receipts)" not in patched
+    namespace = {}
+    exec(patched, namespace)
+    assert namespace["step_summary"]["measurement_provenance_audit"] == {
+        "source": "COHORT_PARQUET",
+        "checks": namespace["provenance_receipts"],
+    }
+    assert (
+        deterministic_contract_repair(
+            code=patched,
+            findings=[finding],
+            previous_repair=name,
+        )
+        is None
+    )
+
+
+def test_contract_repair_refuses_provenance_frame_with_another_consumer():
+    code = """
+import pandas as pd
+
+receipts = [{"measured_column": "marker_measured"}]
+audit = pd.DataFrame.from_records(receipts)
+audit.to_csv("review.csv", index=False)
+step_summary = {"measurement_provenance_audit": audit}
+""".lstrip()
+
+    assert (
+        deterministic_contract_repair(
+            code=code,
+            findings=[
+                {
+                    "validator": "step_summary_integrity",
+                    "detail": {
+                        "issue": "measurement_provenance_source_invalid",
+                        "reported_source": None,
+                    },
+                }
+            ],
+        )
+        is None
+    )
+
+
 def test_prediction_split_repair_uses_outcome_col_at_runtime(
     tmp_path,
     monkeypatch,
