@@ -24,7 +24,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from easyicu.research_agent.deterministic_missingness import (
+from easyicu.research_agent.execution.runners.deterministic_missingness import (
     missingness_measurement_audit_code,
 )
 

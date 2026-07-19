@@ -86,7 +86,7 @@ def test_side_findings_excluded_from_writer_digest() -> None:
 
 
 def test_strict_blocks_side_finding_leak_in_manuscript(ra) -> None:
-    from easyicu.research_agent.manuscript_post import enforce_writer_claim_language
+    from easyicu.research_agent.reporting.manuscript_post import enforce_writer_claim_language
     from easyicu.research_agent.side_findings import SideFinding
 
     finding = SideFinding.from_dict(_finding_payload())
@@ -101,7 +101,7 @@ def test_strict_blocks_side_finding_leak_in_manuscript(ra) -> None:
 
 
 def test_soft_annotates_side_finding_leak(ra) -> None:
-    from easyicu.research_agent.manuscript_post import enforce_writer_claim_language
+    from easyicu.research_agent.reporting.manuscript_post import enforce_writer_claim_language
     from easyicu.research_agent.side_findings import SideFinding
 
     finding = SideFinding.from_dict(_finding_payload())

@@ -3,7 +3,7 @@ from __future__ import annotations
 from easyicu.research_agent.declared_product_contract import (
     declared_product_contract_findings,
 )
-from easyicu.research_agent.method_compatibility import (
+from easyicu.research_agent.gates.method_compatibility import (
     detect_forbidden_pattern_usage,
 )
 from easyicu.research_agent.schema import (

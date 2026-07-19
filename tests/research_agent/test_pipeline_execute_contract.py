@@ -229,7 +229,7 @@ def test_parallel_step_worker_inherits_runner_capability_context() -> None:
 def test_consistent_local_figure_source_descriptor_is_canonicalized_for_consumers(
     tmp_path,
 ):
-    from easyicu.research_agent.discovery_package import _string_list
+    from easyicu.research_agent.discovery.discovery_package import _string_list
     from easyicu.research_agent.figure_skill import (
         _contract_payload_source_references,
     )
@@ -991,7 +991,10 @@ def test_figure_repair_precedes_output_evidence_and_numeric_claim_seal():
 
 
 def test_execute_phase_deterministically_requires_typed_exposure_consumption():
-    from easyicu.research_agent import concept_audit_execution, pipeline_execute
+    from easyicu.research_agent import pipeline_execute
+    from easyicu.research_agent.execution import (
+        concept_audit as concept_audit_execution,
+    )
 
     shared_source = inspect.getsource(
         pipeline_execute._deterministic_code_gate_findings
@@ -1017,7 +1020,10 @@ def test_execute_phase_deterministically_requires_typed_exposure_consumption():
 def test_concept_audit_execution_is_cycle_free_and_old_state_path_is_compatible():
     import ast
 
-    from easyicu.research_agent import concept_audit_execution, pipeline_execute
+    from easyicu.research_agent import pipeline_execute
+    from easyicu.research_agent.execution import (
+        concept_audit as concept_audit_execution,
+    )
 
     tree = ast.parse(inspect.getsource(concept_audit_execution))
     imported_modules = {
@@ -1040,7 +1046,8 @@ def test_concept_audit_execution_is_cycle_free_and_old_state_path_is_compatible(
 
 
 def test_concept_gate_is_read_only_and_keeps_old_function_identity():
-    from easyicu.research_agent import concept_gate, pipeline_execute
+    from easyicu.research_agent import pipeline_execute
+    from easyicu.research_agent.gates import concept as concept_gate
 
     source = inspect.getsource(concept_gate)
     compatibility_exports = {
@@ -1100,7 +1107,8 @@ def test_final_gate_evaluator_preserves_group_order_and_attempt_binding(
     monkeypatch,
     tmp_path,
 ):
-    from easyicu.research_agent import contract_gate, pipeline_execute
+    from easyicu.research_agent import pipeline_execute
+    from easyicu.research_agent.gates import contract as contract_gate
     from easyicu.research_agent.contracts import ValidationFinding
     from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep
 

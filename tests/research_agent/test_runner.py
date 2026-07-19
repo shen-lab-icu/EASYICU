@@ -235,7 +235,7 @@ def test_code_runner_exposes_digest_bound_current_authority_snapshot(
         code=(
             "import hashlib, json, os\n"
             "from pathlib import Path\n"
-            "from easyicu.research_agent.deterministic_robustness import (\n"
+            "from easyicu.research_agent.execution.runners.deterministic_robustness import (\n"
             "    _run_robustness_preflight_from_env,\n"
             ")\n"
             "path = Path(os.environ['EASYICU_RUN_ARTIFACT_AUTHORITY_SNAPSHOT'])\n"

@@ -7,20 +7,20 @@ import json
 import pytest
 
 from easyicu.research_agent.agents import CoderAgent, CoderPromptBudgetError
-from easyicu.research_agent.code_patch import PATCH_FORMAT
+from easyicu.research_agent.repairs.patch import PATCH_FORMAT
 from easyicu.research_agent.coder_authority_notes import HostCoderAuthority
-from easyicu.research_agent.coder_context import (
+from easyicu.research_agent.research_context.prompt_scope import (
     coder_context_requires_method_constraints,
     coder_guide_for_step,
     coder_rewrite_guide_for_step,
 )
 from easyicu.research_agent.prompts import load_prompt_pack
-from easyicu.research_agent.provider_budget import (
+from easyicu.research_agent.authority.provider_budget import (
     ProviderCallBudgetReceiptError,
     StepProviderCallBudget,
 )
-from easyicu.research_agent.repair_coordination import RepairAuthorityBinding
-from easyicu.research_agent.repair_reasons import (
+from easyicu.research_agent.repairs.coordination import RepairAuthorityBinding
+from easyicu.research_agent.repairs.reasons import (
     RepairPromptAuthority,
     RepairReason,
     repair_prompt_binding_sha256,

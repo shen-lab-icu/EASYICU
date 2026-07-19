@@ -20,19 +20,19 @@ from typing import List, Sequence
 
 import pytest
 
-from easyicu.research_agent.idea_mining import (
+from easyicu.research_agent.discovery.idea_mining import (
     OutcomeDeterminability,
     SourceMaterial,
     run_idea_mining_dry_run,
 )
-from easyicu.research_agent.idea_mining_extended_feasibility import (
+from easyicu.research_agent.discovery.idea_mining_extended_feasibility import (
     ExtendedFeasibilityIndex,
 )
-from easyicu.research_agent.idea_mining_priorart import (
+from easyicu.research_agent.discovery.idea_mining_priorart import (
     _MIN_JOINT_COMPLETE_FOR_RECOMMEND,
     _go_no_go_decision,
 )
-from easyicu.research_agent.idea_mining_schema import (
+from easyicu.research_agent.discovery.idea_mining_schema import (
     ExecutableHypothesisCandidate,
     IdeaMiningCandidateTriageRecord,
     PriorArtAssessment,

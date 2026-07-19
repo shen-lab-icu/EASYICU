@@ -16,7 +16,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from easyicu.research_agent.deterministic_survival import survival_primary_analysis_code
+from easyicu.research_agent.execution.runners.deterministic_survival import survival_primary_analysis_code
 
 
 def _synth_cohort(n: int = 4000, seed: int = 7) -> pd.DataFrame:

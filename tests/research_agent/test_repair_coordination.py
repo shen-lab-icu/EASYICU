@@ -18,12 +18,12 @@ import json
 import pytest
 
 from easyicu.research_agent import pipeline_execute
-from easyicu.research_agent.provider_budget import (
+from easyicu.research_agent.authority.provider_budget import (
     ProviderCallBudgetReceiptError,
     StepProviderCallBudget,
     load_provider_call_budget_state,
 )
-from easyicu.research_agent.repair_coordination import (
+from easyicu.research_agent.repairs.coordination import (
     RepairAuthorityBinding,
     RepairCoordinator,
     StepRepairBudget,

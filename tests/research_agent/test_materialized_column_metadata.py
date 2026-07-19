@@ -35,7 +35,7 @@ from easyicu.research_agent.authority_fs import AnchoredDirectory
 from easyicu.research_agent.authority.analysis_cohort import (
     bind_execution_cohort_authority,
 )
-from easyicu.research_agent.context import (
+from easyicu.research_agent.research_context.builder import (
     build_research_context,
     build_retrieved_research_context,
 )
@@ -64,7 +64,7 @@ from easyicu.research_agent.run_input_capsule import (
     load_verified_run_input_capsule,
     seal_run_input_capsule,
 )
-from easyicu.research_agent.research_context_v2 import (
+from easyicu.research_agent.research_context.typed import (
     CanonicalColumnBinding,
     ResearchContextV2,
     binding_preserves_analysis_range,
@@ -1066,7 +1066,7 @@ def test_v2_builder_reads_through_verified_snapshot_not_plain_parquet(
         feature_concepts=("lact",),
         outcome_concepts=("death",),
     )
-    from easyicu.research_agent import context as context_module
+    from easyicu.research_agent.research_context import builder as context_module
 
     monkeypatch.setattr(
         context_module.pd,

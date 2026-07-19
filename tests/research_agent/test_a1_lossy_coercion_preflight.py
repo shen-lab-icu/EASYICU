@@ -23,8 +23,8 @@ from __future__ import annotations
 import pandas as pd
 import pytest
 
-from easyicu.research_agent.code_preflight import audit_mechanical_code_contracts
-from easyicu.research_agent.repair_reasons import (
+from easyicu.research_agent.gates.preflight import audit_mechanical_code_contracts
+from easyicu.research_agent.repairs.reasons import (
     RepairReason,
     repair_reason_for_finding,
 )
@@ -224,7 +224,7 @@ def test_t4_host_helper_passes(ra):
 
 
 def test_lossy_coercion_guard_is_a_typed_deterministic_minimal_repair(ra):
-    from easyicu.research_agent.code_repair import (
+    from easyicu.research_agent.repairs.source import (
         deterministic_concept_audit_repair,
     )
 
@@ -255,7 +255,7 @@ def test_lossy_guard_uses_the_unique_structural_count_key(
     key_source: str,
     runtime_key: str,
 ) -> None:
-    from easyicu.research_agent.code_repair import (
+    from easyicu.research_agent.repairs.source import (
         deterministic_concept_audit_repair,
     )
 
@@ -284,7 +284,7 @@ def test_lossy_guard_uses_the_unique_structural_count_key(
 
 
 def test_lossy_guard_refuses_two_structural_keys_in_one_record(ra) -> None:
-    from easyicu.research_agent.code_repair import (
+    from easyicu.research_agent.repairs.source import (
         deterministic_concept_audit_repair,
     )
 
@@ -312,7 +312,7 @@ def numeric_coercion_audit(frame, column):
 
 
 def test_lossy_guard_refuses_renamed_count_key_overwrite(ra) -> None:
-    from easyicu.research_agent.code_repair import (
+    from easyicu.research_agent.repairs.source import (
         deterministic_concept_audit_repair,
     )
 
@@ -337,7 +337,7 @@ def test_lossy_guard_refuses_renamed_count_key_overwrite(ra) -> None:
 
 
 def test_lossy_guard_refuses_dynamic_count_key_overwrite(ra) -> None:
-    from easyicu.research_agent.code_repair import (
+    from easyicu.research_agent.repairs.source import (
         deterministic_concept_audit_repair,
     )
 
@@ -390,7 +390,7 @@ def numeric_coercion_audit(frame, column):
 
 
 def test_lossy_guard_does_not_route_on_human_message_text() -> None:
-    from easyicu.research_agent.code_repair import (
+    from easyicu.research_agent.repairs.source import (
         deterministic_concept_audit_repair,
     )
 
@@ -404,7 +404,7 @@ def test_lossy_guard_does_not_route_on_human_message_text() -> None:
 
 
 def test_lossy_guard_refuses_ambiguous_multiple_audit_sites(ra) -> None:
-    from easyicu.research_agent.code_repair import (
+    from easyicu.research_agent.repairs.source import (
         deterministic_concept_audit_repair,
     )
 
@@ -434,7 +434,7 @@ def test_lossy_guard_refuses_ambiguous_multiple_audit_sites(ra) -> None:
     ids=["fraction", "integer-then-normalized"],
 )
 def test_lossy_guard_refuses_normalized_rates(ra, replacement: str) -> None:
-    from easyicu.research_agent.code_repair import (
+    from easyicu.research_agent.repairs.source import (
         deterministic_concept_audit_repair,
     )
 
@@ -461,7 +461,7 @@ def test_lossy_guard_refuses_normalized_rates(ra, replacement: str) -> None:
     ids=["duplicate-key", "mapping-overwrite"],
 )
 def test_lossy_guard_refuses_count_overwrite(ra, dict_tail: str) -> None:
-    from easyicu.research_agent.code_repair import (
+    from easyicu.research_agent.repairs.source import (
         deterministic_concept_audit_repair,
     )
 
@@ -480,7 +480,7 @@ def test_lossy_guard_refuses_count_overwrite(ra, dict_tail: str) -> None:
 
 
 def test_lossy_guard_refuses_same_line_return(ra) -> None:
-    from easyicu.research_agent.code_repair import (
+    from easyicu.research_agent.repairs.source import (
         deterministic_concept_audit_repair,
     )
 
@@ -503,7 +503,7 @@ def numeric_coercion_audit(frame, column):
 
 
 def test_lossy_guard_requires_exact_structured_finding(ra) -> None:
-    from easyicu.research_agent.code_repair import (
+    from easyicu.research_agent.repairs.source import (
         deterministic_concept_audit_repair,
     )
 
@@ -524,7 +524,7 @@ def test_lossy_guard_requires_exact_structured_finding(ra) -> None:
 
 
 def test_lossy_guard_raises_on_dirty_observed_value(ra) -> None:
-    from easyicu.research_agent.code_repair import (
+    from easyicu.research_agent.repairs.source import (
         deterministic_concept_audit_repair,
     )
 

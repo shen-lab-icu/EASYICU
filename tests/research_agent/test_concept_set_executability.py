@@ -11,11 +11,11 @@ explicit floor of 1 for genuinely single-variable threshold/policy families.
 from __future__ import annotations
 
 from easyicu.research_agent.concept_catalog import load_concept_catalog
-from easyicu.research_agent.idea_mining import (
+from easyicu.research_agent.discovery.idea_mining import (
     _build_concept_lookup,
     _map_concept_set_candidate,
 )
-from easyicu.research_agent.idea_mining_schema import LiteratureIdeaCandidate
+from easyicu.research_agent.discovery.idea_mining_schema import LiteratureIdeaCandidate
 
 # A small AVAILABLE set (as if from an export catalog). fluid_balance present
 # once; bun_creatinine_ratio present; crea + map present.

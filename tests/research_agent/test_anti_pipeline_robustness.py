@@ -672,7 +672,7 @@ def test_pipeline_finalization_never_infers_relaxed_variant_from_locked_cohort(
     )
 
     from easyicu.research_agent.pipeline_execute import run_execute_phase
-    from easyicu.research_agent.deterministic_robustness import (
+    from easyicu.research_agent.execution.runners.deterministic_robustness import (
         _run_robustness_preflight,
     )
 
@@ -1476,7 +1476,7 @@ def test_later_repairs_receive_prior_concept_findings_as_regression_constraints(
 
 
 def test_untrusted_runtime_diagnostics_can_authorize_syntactic_repairs_only():
-    from easyicu.research_agent.code_repair import _deterministic_runner_repair
+    from easyicu.research_agent.repairs.source import _deterministic_runner_repair
     from easyicu.research_agent.pipeline_execute import (
         _untrusted_runtime_repair_allowed,
     )

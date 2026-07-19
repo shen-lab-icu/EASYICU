@@ -1466,7 +1466,7 @@ def test_audit_publication_exports_accepts_legacy_contract_and_output_dir_call(t
 
 
 def test_publication_figure_skill_renders_from_registered_association_table(ra, tmp_path: Path):
-    from easyicu.research_agent.discovery_package import _figure_inventory
+    from easyicu.research_agent.discovery.discovery_package import _figure_inventory
 
     run_dir = tmp_path / "run"
     source = tmp_path / "primary_association.csv"

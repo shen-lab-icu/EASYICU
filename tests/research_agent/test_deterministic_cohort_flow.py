@@ -9,7 +9,7 @@ from pathlib import Path
 import pandas as pd
 
 from easyicu.research_agent.cohort_schema import clear_cohort_concept_ids
-from easyicu.research_agent.deterministic_cohort_flow import (
+from easyicu.research_agent.execution.runners.deterministic_cohort_flow import (
     primary_cohort_flow_code,
 )
 

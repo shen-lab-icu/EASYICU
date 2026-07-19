@@ -8,7 +8,7 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
-from easyicu.research_agent.context import build_research_context
+from easyicu.research_agent.research_context.builder import build_research_context
 from easyicu.research_agent.evidence import EvidenceStore
 from easyicu.research_agent.pipeline import (
     LegacyResumePlanMigrationError,

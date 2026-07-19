@@ -26,7 +26,7 @@ from easyicu.research_agent.schema import (
     RESEARCH_CONTEXT_SCHEMA_VERSION,
     ResearchContext,
 )
-from easyicu.research_agent.research_context_v2 import (
+from easyicu.research_agent.research_context.typed import (
     RESEARCH_CONTEXT_V2_SCHEMA_VERSION,
     ResearchContextV2,
     parse_research_context,

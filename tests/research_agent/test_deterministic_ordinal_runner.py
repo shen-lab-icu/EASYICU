@@ -24,7 +24,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from easyicu.research_agent.deterministic_ordinal import (
+from easyicu.research_agent.execution.runners.deterministic_ordinal import (
     ordinal_dose_response_analysis_code,
 )
 

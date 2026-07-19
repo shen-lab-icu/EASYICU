@@ -7,7 +7,7 @@ publish LLM-generated clinical claims.
 
 Usage::
 
-    from easyicu.research_agent.latex import scaffold_to_latex
+    from easyicu.research_agent.reporting.latex import scaffold_to_latex
     tex = scaffold_to_latex(
         markdown=manuscript_scaffold_bound_text,
         title="Admission SOFA-2 and ICU mortality",

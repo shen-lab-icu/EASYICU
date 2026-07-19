@@ -12,7 +12,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from easyicu.research_agent.deterministic_descriptive import (
+from easyicu.research_agent.execution.runners.deterministic_descriptive import (
     _is_categorical,
     absolute_risk_context_code,
 )

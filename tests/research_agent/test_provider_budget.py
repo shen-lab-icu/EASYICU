@@ -10,8 +10,8 @@ import pandas as pd
 import pytest
 
 from easyicu.research_agent.audits.validators import LLMConceptAuditor
-from easyicu.research_agent.code_patch import PATCH_FORMAT
-from easyicu.research_agent.provider_budget import (
+from easyicu.research_agent.repairs.patch import PATCH_FORMAT
+from easyicu.research_agent.authority.provider_budget import (
     PROVIDER_CALL_BUDGET_RECEIPT_SCHEMA_VERSION,
     ProviderCallBudgetExhausted,
     ProviderCallBudgetReceiptError,
@@ -1280,7 +1280,7 @@ def test_logical_repair_persistence_failure_rolls_back_reservation(
         raise OSError("disk full")
 
     monkeypatch.setattr(
-        "easyicu.research_agent.provider_budget.os.replace",
+        "easyicu.research_agent.authority.provider_budget.os.replace",
         fail_replace,
     )
     with pytest.raises(ProviderCallBudgetReceiptError, match="persist"):
@@ -1334,7 +1334,7 @@ def test_receipt_persistence_failure_prevents_provider_call(monkeypatch, tmp_pat
         raise OSError("disk full")
 
     monkeypatch.setattr(
-        "easyicu.research_agent.provider_budget.os.replace",
+        "easyicu.research_agent.authority.provider_budget.os.replace",
         fail_replace,
     )
 
@@ -1359,7 +1359,7 @@ def test_concept_auditor_does_not_downgrade_receipt_failure(monkeypatch, tmp_pat
         raise OSError("read-only filesystem")
 
     monkeypatch.setattr(
-        "easyicu.research_agent.provider_budget.os.replace",
+        "easyicu.research_agent.authority.provider_budget.os.replace",
         fail_replace,
     )
 

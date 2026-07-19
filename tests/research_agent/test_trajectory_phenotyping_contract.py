@@ -10,8 +10,8 @@ import pandas as pd
 
 from easyicu.research_agent.audits.patterns import AnalysisPatternAuditor
 from easyicu.research_agent.agentic_coder import AgenticCoderAgent
-from easyicu.research_agent.context import build_research_context
-from easyicu.research_agent.method_compatibility import (
+from easyicu.research_agent.research_context.builder import build_research_context
+from easyicu.research_agent.gates.method_compatibility import (
     detect_forbidden_pattern_usage,
 )
 from easyicu.research_agent.schema import (

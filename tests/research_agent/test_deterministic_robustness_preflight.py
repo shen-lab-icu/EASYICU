@@ -18,7 +18,7 @@ from easyicu.research_agent.cohort_schema import (
     TimeWindow,
     cohort_definition_sha,
 )
-from easyicu.research_agent.deterministic_robustness import (
+from easyicu.research_agent.execution.runners.deterministic_robustness import (
     robustness_sensitivity_preflight_code,
 )
 from easyicu.research_agent.robustness_panel import (
@@ -930,7 +930,7 @@ def _write_structured_source_authority(run_dir: Path):
 def test_structured_source_uses_latest_step_record_and_registered_code_sha(
     tmp_path: Path,
 ) -> None:
-    from easyicu.research_agent.deterministic_robustness import (
+    from easyicu.research_agent.execution.runners.deterministic_robustness import (
         _find_structured_primary_model_source,
     )
 
@@ -983,7 +983,7 @@ def test_structured_source_uses_latest_step_record_and_registered_code_sha(
 
 
 def test_structured_source_rejects_symlinked_analysis_script(tmp_path: Path) -> None:
-    from easyicu.research_agent.deterministic_robustness import (
+    from easyicu.research_agent.execution.runners.deterministic_robustness import (
         _find_structured_primary_model_source,
     )
 
@@ -1006,7 +1006,7 @@ def test_structured_source_rejects_symlinked_analysis_script(tmp_path: Path) -> 
 def test_structured_primary_headline_blocks_manifest_scalar_forgery(
     tmp_path: Path,
 ) -> None:
-    from easyicu.research_agent.deterministic_robustness import (
+    from easyicu.research_agent.execution.runners.deterministic_robustness import (
         _find_structured_primary_model_source,
         _structured_primary_effect_payload,
     )
@@ -1052,7 +1052,7 @@ def test_structured_primary_headline_blocks_manifest_scalar_forgery(
 
 
 def test_exact_replay_does_not_advertise_unimplemented_variants() -> None:
-    from easyicu.research_agent.deterministic_robustness import (
+    from easyicu.research_agent.execution.runners.deterministic_robustness import (
         _missing_strategy_audit,
         _outcome_executability_audit,
         _unexecutable_locked_spec_ids,
@@ -1111,7 +1111,7 @@ def test_exact_replay_does_not_advertise_unimplemented_variants() -> None:
 
 
 def test_same_scalar_outcome_is_disclosed_without_becoming_blocking() -> None:
-    from easyicu.research_agent.deterministic_robustness import (
+    from easyicu.research_agent.execution.runners.deterministic_robustness import (
         _outcome_executability_audit,
         _unexecutable_locked_spec_ids,
     )
@@ -1144,7 +1144,7 @@ def test_exact_replay_blocks_script_that_ignores_locked_cohort_membership(
 ) -> None:
     from types import SimpleNamespace
 
-    from easyicu.research_agent.deterministic_robustness import (
+    from easyicu.research_agent.execution.runners.deterministic_robustness import (
         _replay_primary_model_for_cohort,
     )
 

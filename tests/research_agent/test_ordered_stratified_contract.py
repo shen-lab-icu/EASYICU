@@ -13,7 +13,7 @@ from statsmodels.stats.multitest import multipletests
 
 from easyicu.research_agent.audits.patterns import AnalysisPatternAuditor
 from easyicu.research_agent.audits.validators import StatisticalValidator
-from easyicu.research_agent.context import build_research_context
+from easyicu.research_agent.research_context.builder import build_research_context
 from easyicu.research_agent.methods.ordered_trends import (
     cochran_armitage_trend,
     jonckheere_terpstra_trend,

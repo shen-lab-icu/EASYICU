@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from easyicu.research_agent.code_preflight import audit_mechanical_code_contracts
+from easyicu.research_agent.gates.preflight import audit_mechanical_code_contracts
 
 
 def _step(ra):

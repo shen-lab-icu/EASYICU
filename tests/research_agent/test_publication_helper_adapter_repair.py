@@ -5,12 +5,12 @@ from pathlib import Path
 
 import pytest
 
-from easyicu.research_agent.code_preflight import audit_mechanical_code_contracts
-from easyicu.research_agent.code_repair import deterministic_concept_audit_repair
+from easyicu.research_agent.gates.preflight import audit_mechanical_code_contracts
+from easyicu.research_agent.repairs.source import deterministic_concept_audit_repair
 from easyicu.research_agent.legacy_code_migrations import (
     migrate_legacy_publication_helper_adapter_v1,
 )
-from easyicu.research_agent.repair_reasons import repair_reason_for_finding
+from easyicu.research_agent.repairs.reasons import repair_reason_for_finding
 from easyicu.research_agent.repair_registry import RepairClass, repair_metadata_for
 
 _LEGACY_SCRIPT = """

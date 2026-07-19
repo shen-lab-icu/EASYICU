@@ -1,6 +1,6 @@
 import pytest
 
-from easyicu.research_agent.repair_reasons import (
+from easyicu.research_agent.repairs.reasons import (
     RepairPromptAuthority,
     RepairReason,
     RepairRoute,

@@ -13,8 +13,8 @@ import json
 from pathlib import Path
 from typing import get_args
 
-from easyicu.research_agent.capability_registry import get_capability
-from easyicu.research_agent.study_design_playbook import StudyDesignFamily
+from easyicu.research_agent.planning.capability_registry import get_capability
+from easyicu.research_agent.planning.study_design_playbook import StudyDesignFamily
 
 _SPEC = (
     Path(__file__).resolve().parents[2]

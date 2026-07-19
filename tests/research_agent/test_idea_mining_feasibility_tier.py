@@ -5,7 +5,7 @@ from __future__ import annotations
 import importlib
 import inspect
 
-from easyicu.research_agent.idea_mining_feasibility_tier import (
+from easyicu.research_agent.discovery.idea_mining_feasibility_tier import (
     SourceItemIndex,
     classify_feasibility_tier,
 )
@@ -203,7 +203,7 @@ def test_exact_match_still_outranks_morphological_match():
 
 def test_module_is_a_leaf_does_not_import_idea_mining():
     src = inspect.getsource(
-        importlib.import_module("easyicu.research_agent.idea_mining_feasibility_tier")
+        importlib.import_module("easyicu.research_agent.discovery.idea_mining_feasibility_tier")
     )
     assert "import idea_mining" not in src
     assert "from .idea_mining import" not in src

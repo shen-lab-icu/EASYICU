@@ -12,6 +12,9 @@ import zipfile
 import pytest
 
 from benchmarks.figure2_canonical9.evaluator.rubric_v1 import FIGURE2_TASK_IDS
+from tests.research_agent.test_retired_top_level_imports import (
+    RETIRED_TOP_LEVEL_MODULES,
+)
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -216,6 +219,16 @@ def test_release_archives_preserve_reviewer_contract_and_package_data(
 
         assert "src/easyicu/research_agent/projection.py" not in sdist_names
         assert "easyicu/research_agent/projection.py" not in wheel_names
+        retired_sdist = {
+            f"src/easyicu/research_agent/{leaf}.py"
+            for leaf in RETIRED_TOP_LEVEL_MODULES
+        }
+        retired_wheel = {
+            f"easyicu/research_agent/{leaf}.py"
+            for leaf in RETIRED_TOP_LEVEL_MODULES
+        }
+        assert retired_sdist.isdisjoint(sdist_names)
+        assert retired_wheel.isdisjoint(wheel_names)
         assert not any(
             name.startswith(("tests/", "examples/", "docs/", "benchmarks/"))
             for name in wheel_names

@@ -1142,7 +1142,7 @@ def test_writer_digest_contains_panel_block(ra, tmp_path: Path) -> None:
 
 
 def test_writer_forbidden_terms_blocked_in_strict(ra, tmp_path: Path) -> None:
-    from easyicu.research_agent.manuscript_post import enforce_writer_claim_language
+    from easyicu.research_agent.reporting.manuscript_post import enforce_writer_claim_language
 
     with pytest.raises(ra.EvidenceEnforcementError) as exc_info:
         enforce_writer_claim_language(
@@ -1153,7 +1153,7 @@ def test_writer_forbidden_terms_blocked_in_strict(ra, tmp_path: Path) -> None:
 
 
 def test_writer_forbidden_terms_annotated_in_soft(ra) -> None:
-    from easyicu.research_agent.manuscript_post import enforce_writer_claim_language
+    from easyicu.research_agent.reporting.manuscript_post import enforce_writer_claim_language
 
     annotated, detail = enforce_writer_claim_language(
         "Surprisingly, the model was stable.",

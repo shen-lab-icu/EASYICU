@@ -11,7 +11,7 @@ import pandas as pd
 import pytest
 from pydantic import ValidationError
 
-from easyicu.research_agent.context import build_research_context
+from easyicu.research_agent.research_context.builder import build_research_context
 from easyicu.research_agent.authority.execution_input import (
     ExecutionInputAuthorityState,
 )
@@ -51,7 +51,7 @@ from easyicu.research_agent.run_input_capsule import (
     seal_run_input_capsule,
     verify_legacy_trajectory_capsule_receipt,
 )
-from easyicu.research_agent.research_context_v2 import ResearchContextV2
+from easyicu.research_agent.research_context.typed import ResearchContextV2
 from tests.research_agent.test_materialized_trajectory_authority import (
     _bundle,
     _implementation_sha,

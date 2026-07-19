@@ -958,7 +958,10 @@ def test_checkpoint_write_failure_never_retires_aliases(
 def test_replay_uses_shared_gates_and_never_constructs_llm_auditor():
     import inspect
 
-    from easyicu.research_agent import concept_audit_execution, pipeline_execute
+    from easyicu.research_agent import pipeline_execute
+    from easyicu.research_agent.execution import (
+        concept_audit as concept_audit_execution,
+    )
 
     replay_source = inspect.getsource(
         pipeline_execute._selectively_revalidate_resume_successes

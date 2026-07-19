@@ -11,7 +11,7 @@ from easyicu.research_agent.pipeline_execute import (
     _typed_parent_schema_context_block,
 )
 from easyicu.research_agent.plan_utils import effect_output_authorized
-from easyicu.research_agent.repair_reasons import RepairPromptAuthority, RepairRoute
+from easyicu.research_agent.repairs.reasons import RepairPromptAuthority, RepairRoute
 from easyicu.research_agent.schema import AnalysisStep, PlannedModelRequirement
 
 
@@ -651,7 +651,7 @@ TYPED REPAIR TICKET (authoritative routing):
 
 def test_coder_guide_separates_model_failure_from_host_validation_failure() -> None:
     from easyicu.research_agent.agents import _CODER_GUIDE
-    from easyicu.research_agent.coder_context import coder_guide_for_step
+    from easyicu.research_agent.research_context.prompt_scope import coder_guide_for_step
 
     assert "Run every host-owned input-validation or provenance helper" in _CODER_GUIDE
     assert "model/plot `try/except`" in _CODER_GUIDE

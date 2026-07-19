@@ -1554,7 +1554,7 @@ def fetch_source_materials_from_scope(
 
     This is the discovery-lever-1 search front-end: it turns a
     ``LiteratureScopeSpec`` into a PubMed query (via
-    :func:`~easyicu.research_agent.idea_scope.build_pubmed_query_from_scope`),
+    :func:`~easyicu.research_agent.discovery.idea_scope.build_pubmed_query_from_scope`),
     runs the caller-injected ``search_client`` (``search_client.search(query,
     retmax=...) -> Sequence[CitationRecord]``), and wraps each hit as a
     ``metadata_only`` :class:`SourceMaterial`.

@@ -70,7 +70,7 @@ class _FakeStore:
 
 
 def _commit(store):
-    from easyicu.research_agent.evidence_registration import StepEvidenceCommit
+    from easyicu.research_agent.authority.registration import StepEvidenceCommit
 
     return StepEvidenceCommit(store)
 
@@ -109,7 +109,7 @@ def test_commit_returns_promotion_result():
         allowed_evidence_ids=[],
         register_numeric_claims=lambda: None,
     )
-    from easyicu.research_agent.evidence_registration import EvidencePromotionResult
+    from easyicu.research_agent.authority.registration import EvidencePromotionResult
 
     assert isinstance(result, EvidencePromotionResult)
 
@@ -176,7 +176,7 @@ def test_pending_alias_outside_attempt_is_rejected_before_any_commit():
 def _commit_method_ast():
     import textwrap
 
-    from easyicu.research_agent import evidence_registration
+    from easyicu.research_agent.authority import registration as evidence_registration
 
     src = inspect.getsource(
         evidence_registration.StepEvidenceCommit.commit_validated_step
@@ -220,7 +220,7 @@ def test_commit_boundary_is_not_a_second_authority_or_a_gate():
     """
     import textwrap
 
-    from easyicu.research_agent import evidence_registration
+    from easyicu.research_agent.authority import registration as evidence_registration
 
     src = textwrap.dedent(inspect.getsource(evidence_registration.StepEvidenceCommit))
     tree = ast.parse(src)

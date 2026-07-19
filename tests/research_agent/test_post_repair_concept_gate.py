@@ -6,7 +6,7 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
-from easyicu.research_agent.code_patch import PATCH_FORMAT
+from easyicu.research_agent.repairs.patch import PATCH_FORMAT
 
 _SAFE_CODE = """
 import json
@@ -533,7 +533,7 @@ def test_monotonic_constraints_preserve_existing_warning_history() -> None:
 
 
 def test_monotonic_constraints_keep_same_local_from_distinct_scopes(ra) -> None:
-    from easyicu.research_agent.code_preflight import audit_mechanical_code_contracts
+    from easyicu.research_agent.gates.preflight import audit_mechanical_code_contracts
     from easyicu.research_agent.pipeline_execute import (
         _merge_monotonic_concept_constraints,
     )
@@ -573,7 +573,7 @@ def second():
 
 
 def test_branch_local_occurrence_ids_distinguish_identical_sibling_tries(ra) -> None:
-    from easyicu.research_agent.code_preflight import audit_mechanical_code_contracts
+    from easyicu.research_agent.gates.preflight import audit_mechanical_code_contracts
     from easyicu.research_agent.pipeline_execute import (
         _merge_monotonic_concept_constraints,
     )
@@ -611,7 +611,7 @@ def analyze():
 
 
 def test_branch_local_occurrence_id_survives_body_edit(ra) -> None:
-    from easyicu.research_agent.code_preflight import audit_mechanical_code_contracts
+    from easyicu.research_agent.gates.preflight import audit_mechanical_code_contracts
 
     step = ra.AnalysisStep(
         step_id="body_edit_scope_check",

@@ -28,13 +28,13 @@ from easyicu.research_agent.agents import (
     CoderAgent,
     _MAX_PRE_EXEC_COMPATIBILITY_REPAIRS,
 )
-from easyicu.research_agent.code_patch import PATCH_FORMAT
+from easyicu.research_agent.repairs.patch import PATCH_FORMAT
 from easyicu.research_agent.llm import LLMMessage
-from easyicu.research_agent.method_compatibility import (
+from easyicu.research_agent.gates.method_compatibility import (
     detect_forbidden_pattern_usage,
     format_violation_message,
 )
-from easyicu.research_agent.provider_budget import (
+from easyicu.research_agent.authority.provider_budget import (
     ProviderCallBudgetExhausted,
     StepProviderCallBudget,
 )

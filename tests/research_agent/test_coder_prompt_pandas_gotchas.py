@@ -24,7 +24,7 @@ def test_coder_prompt_closes_categorical_distribution_denominators() -> None:
     assert "counts must sum exactly to `n_nonmissing`" in normalized
     assert "silently omitted from the category rows" in normalized
 
-    from easyicu.research_agent.coder_context import coder_guide_for_step
+    from easyicu.research_agent.research_context.prompt_scope import coder_guide_for_step
     from easyicu.research_agent.schema import AnalysisStep
 
     repair_normalized = " ".join(
