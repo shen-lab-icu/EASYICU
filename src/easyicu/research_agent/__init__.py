@@ -916,7 +916,7 @@ def __getattr__(name: str):
         "choose_checklist",
         "checklist_names_for_kind",
     }:
-        from . import reporting_checklist as _rc
+        from .reporting import reporting_checklist as _rc
 
         return getattr(_rc, name)
     if name in {
@@ -925,7 +925,7 @@ def __getattr__(name: str):
         "ReviewerReport",
         "run_reviewer_round",
     }:
-        from . import reviewer as _rv
+        from .reporting import reviewer as _rv
 
         return getattr(_rv, name)
     if name in {
@@ -996,7 +996,7 @@ def __getattr__(name: str):
 
         return AnalysisPatternAuditor
     if name in {"PDFRenderResult", "render_pdf_for_run"}:
-        from . import pdf_render as _pdf
+        from .reporting import pdf_render as _pdf
 
         return getattr(_pdf, name)
     if name in {"mcp_dispatch", "MCP_TOOLS", "MCP_TOOL_SCHEMAS"}:
