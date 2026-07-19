@@ -205,6 +205,12 @@ class _HybridTrajectoryRunner:
         self.exact_binding_consumption: dict[str, set[str]] = {}
 
     @staticmethod
+    def validate_runtime_capabilities() -> tuple[str, ...]:
+        """Declare the immutable packages exercised by this controlled runner."""
+
+        return ("numpy", "pandas", "scipy", "sklearn", "statsmodels")
+
+    @staticmethod
     def _write_json(path: Path, payload: dict[str, Any]) -> None:
         path.write_text(json.dumps(payload), encoding="utf-8")
 
