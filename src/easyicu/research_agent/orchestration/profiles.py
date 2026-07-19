@@ -38,6 +38,16 @@ class SubmissionProfile:
     # to ``False`` pins cross-run memory OFF as a submission-defining option.
     enable_memory: Optional[bool] = None
     enable_experience_bank: Optional[bool] = None
+    # Deterministic mock-generated planner/coder fallbacks are useful only for
+    # tests and offline demonstrations.  ``None`` preserves pre-existing
+    # profiles byte-for-byte; the current paper profile explicitly pins both
+    # fallbacks off so a provider failure cannot turn into fixture science.
+    enable_deterministic_code_fallback: Optional[bool] = None
+    enable_deterministic_planner_fallback: Optional[bool] = None
+    # Bench-wrapper policy rather than a PipelineConfig key.  When true, even
+    # the explicit ``--allow-mock-aware`` smoke escape hatch is incompatible
+    # with this paper-facing profile.
+    requires_real_provider: Optional[bool] = None
 
     @property
     def ref(self) -> str:
@@ -73,6 +83,14 @@ class SubmissionProfile:
             options["enable_memory"] = self.enable_memory
         if self.enable_experience_bank is not None:
             options["enable_experience_bank"] = self.enable_experience_bank
+        if self.enable_deterministic_code_fallback is not None:
+            options["enable_deterministic_code_fallback"] = (
+                self.enable_deterministic_code_fallback
+            )
+        if self.enable_deterministic_planner_fallback is not None:
+            options["enable_deterministic_planner_fallback"] = (
+                self.enable_deterministic_planner_fallback
+            )
         return options
 
     def pipeline_options(self) -> Dict[str, Any]:
@@ -94,7 +112,13 @@ class SubmissionProfile:
         # fields existed, so its PUBLIC replay representation is unchanged. Only
         # a profile that explicitly pins them (``True``/``False``) surfaces the
         # keys. Mirrors ``as_pipeline_options`` — both are replay contracts.
-        for field_name in ("enable_memory", "enable_experience_bank"):
+        for field_name in (
+            "enable_memory",
+            "enable_experience_bank",
+            "enable_deterministic_code_fallback",
+            "enable_deterministic_planner_fallback",
+            "requires_real_provider",
+        ):
             if payload.get(field_name) is None:
                 payload.pop(field_name, None)
         payload["ref"] = self.ref
@@ -219,7 +243,28 @@ NPJ_DM_2026_07_18 = SubmissionProfile(
     enable_experience_bank=False,
 )
 
-DEFAULT_SUBMISSION_PROFILE_REF = NPJ_DM_2026_07_18.ref
+NPJ_DM_2026_07_19 = SubmissionProfile(
+    name="npj_dm",
+    version="20260719",
+    locked_at="2026-07-19T11:45:00-04:00",
+    evidence_enforcement_mode="strict",
+    writer_digest_widened=True,
+    enable_reproducibility_envelope=True,
+    requires_arm="aware",
+    requires_runner="docker",
+    # Additive protocol re-lock after Planner-owned primary-role authority.
+    # Dictionary bytes are unchanged from 20260718; this profile additionally
+    # prevents test/demo mock fallbacks from acquiring paper-facing authority.
+    expected_concept_dict_sha="fccadc53622dc82fe1dc8696617e52044168b6a84a9255e97e59df9e53bc5803",
+    expected_sofa2_dict_sha="61f37a41083cd96df49a2e61d26c682e9d090d0a22d05ff97ba85a966b165b1c",
+    enable_memory=False,
+    enable_experience_bank=False,
+    enable_deterministic_code_fallback=False,
+    enable_deterministic_planner_fallback=False,
+    requires_real_provider=True,
+)
+
+DEFAULT_SUBMISSION_PROFILE_REF = NPJ_DM_2026_07_19.ref
 SUBMISSION_PROFILE_REGISTRY: Dict[str, SubmissionProfile] = {
     NPJ_DM_2026_05.ref: NPJ_DM_2026_05,
     NPJ_DM_2026_06.ref: NPJ_DM_2026_06,
@@ -227,6 +272,7 @@ SUBMISSION_PROFILE_REGISTRY: Dict[str, SubmissionProfile] = {
     NPJ_DM_2026_07_16.ref: NPJ_DM_2026_07_16,
     NPJ_DM_2026_07_17.ref: NPJ_DM_2026_07_17,
     NPJ_DM_2026_07_18.ref: NPJ_DM_2026_07_18,
+    NPJ_DM_2026_07_19.ref: NPJ_DM_2026_07_19,
 }
 
 
@@ -251,6 +297,7 @@ __all__ = [
     "NPJ_DM_2026_07_16",
     "NPJ_DM_2026_07_17",
     "NPJ_DM_2026_07_18",
+    "NPJ_DM_2026_07_19",
     "DEFAULT_SUBMISSION_PROFILE_REF",
     "SUBMISSION_PROFILE_REGISTRY",
     "get_submission_profile",

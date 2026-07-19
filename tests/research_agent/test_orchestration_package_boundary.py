@@ -38,6 +38,7 @@ PROFILE_EXPORTS = (
     "NPJ_DM_2026_07_16",
     "NPJ_DM_2026_07_17",
     "NPJ_DM_2026_07_18",
+    "NPJ_DM_2026_07_19",
     "DEFAULT_SUBMISSION_PROFILE_REF",
     "SUBMISSION_PROFILE_REGISTRY",
     "get_submission_profile",
