@@ -28,7 +28,7 @@ from urllib import parse, request
 from xml.etree import ElementTree as ET
 
 from easyicu.concept import catalog as concept_catalog
-from easyicu.research_agent.discovery_handoff import DiscoveryHandoffPacket
+from easyicu.research_agent.discovery.discovery_handoff import DiscoveryHandoffPacket
 from easyicu.webserver import dataio
 from easyicu.webserver import sources as source_store
 from easyicu.webserver.ideas.handoff import (

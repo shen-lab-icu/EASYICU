@@ -31,6 +31,9 @@ DISCOVERY_MODULE_ALIASES = tuple(
         "idea_mining_funnel",
         "idea_mining_extended_feasibility",
         "idea_mining_eval",
+        "discovery_handoff",
+        "discovery_package",
+        "discovery_story_figure",
     )
 )
 

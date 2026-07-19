@@ -16,7 +16,7 @@ from typing import Any, Dict, Mapping, Optional
 
 from pydantic import ValidationError
 
-from easyicu.research_agent.discovery_handoff import (
+from easyicu.research_agent.discovery.discovery_handoff import (
     DiscoveryHandoffPacket,
     DiscoverySelectionMode,
     build_handoff_from_row,

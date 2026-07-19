@@ -36,18 +36,18 @@ REPO_ROOT = _bootstrap_imports()
 from easyicu.research_agent.data_foundation import (  # noqa: E402
     acquire_universe_for_question,
 )
-from easyicu.research_agent.discovery_handoff import (  # noqa: E402
+from easyicu.research_agent.discovery.discovery_handoff import (  # noqa: E402
     assert_discovery_analysis_ready,
     build_handoff_from_row,
     load_discovery_ledger,
     select_discovery_row,
     write_handoff_packet,
 )
-from easyicu.research_agent.discovery_package import (  # noqa: E402
+from easyicu.research_agent.discovery.discovery_package import (  # noqa: E402
     validate_discovery_manuscript_package,
     write_discovery_package_assessment,
 )
-from easyicu.research_agent.discovery_story_figure import (  # noqa: E402
+from easyicu.research_agent.discovery.discovery_story_figure import (  # noqa: E402
     render_discovery_story_figure,
 )
 from easyicu.research_agent.evidence import (  # noqa: E402
@@ -469,6 +469,7 @@ def _register_story_figure_provenance(
             / "src"
             / "easyicu"
             / "research_agent"
+            / "discovery"
             / "discovery_story_figure.py"
         ),
         kind="code",
