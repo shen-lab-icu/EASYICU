@@ -868,11 +868,11 @@ def __getattr__(name: str):
 
         return getattr(_memory, name)
     if name in {"scaffold_to_latex", "latex_template_preamble"}:
-        from . import latex as _latex
+        from .reporting import latex as _latex
 
         return getattr(_latex, name)
     if name in {"render_bibtex", "render_thebibliography_block"}:
-        from . import bibtex as _bibtex
+        from .reporting import bibtex as _bibtex
 
         return getattr(_bibtex, name)
     if name in {"CostMeter", "MeteredClient"}:

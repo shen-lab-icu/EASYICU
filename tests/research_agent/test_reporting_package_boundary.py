@@ -23,6 +23,9 @@ REPORTING_MODULE_ALIASES = tuple(
         "reviewer",
         "review_artifacts",
         "display_suite",
+        "article_contract",
+        "bibtex",
+        "latex",
     )
 )
 
@@ -82,6 +85,10 @@ def test_root_lazy_reporting_api_uses_canonical_objects() -> None:
         "easyicu.research_agent.reporting.reporting_checklist"
     )
     reviewer = importlib.import_module("easyicu.research_agent.reporting.reviewer")
+    latex = importlib.import_module("easyicu.research_agent.reporting.latex")
+    bibtex = importlib.import_module("easyicu.research_agent.reporting.bibtex")
     assert root.render_pdf_for_run is pdf.render_pdf_for_run
     assert root.choose_checklist is checklist.choose_checklist
     assert root.run_reviewer_round is reviewer.run_reviewer_round
+    assert root.scaffold_to_latex is latex.scaffold_to_latex
+    assert root.render_bibtex is bibtex.render_bibtex

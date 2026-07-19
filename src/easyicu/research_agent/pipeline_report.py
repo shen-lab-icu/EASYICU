@@ -43,7 +43,7 @@ import textwrap
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Sequence
 
-from .article_contract import (
+from .reporting.article_contract import (
     article_contract_audit_payload,
     summarize_article_contract_coverage,
 )
