@@ -61,7 +61,7 @@ from .repairs.patch import (
     looks_like_executable_python,
     repair_code_excerpt,
 )
-from .coder_authority_notes import HostCoderAuthority
+from .authority.coder_authority import HostCoderAuthority
 from .research_context.prompt_scope import (
     coder_context_requires_method_constraints,
     coder_guide_for_step,

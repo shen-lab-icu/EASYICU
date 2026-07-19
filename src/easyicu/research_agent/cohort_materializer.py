@@ -51,7 +51,7 @@ import uuid
 import numpy as np
 import pandas as pd
 
-from .easyicu_case_builder import (
+from .case_plugins.builder import (
     ID_COL,
     TIME_COL,
     _first_nonnull,

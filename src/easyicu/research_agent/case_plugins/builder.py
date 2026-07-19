@@ -21,7 +21,7 @@ from typing import Dict, Iterable, List, Optional, Sequence, Tuple, Union
 
 import pandas as pd
 
-from .intake.export_package import (
+from ..intake.export_package import (
     ExportPackage,
     ExportPackageError,
     index_export_package,
@@ -350,7 +350,7 @@ def _build_lactate_map_vaso_cohort_from_open_package(
         concept_sources["sep3_sofa2_any_24h"] = index["sep3_sofa2"]["file_name"]
 
     manifest = {
-        "builder": "easyicu.research_agent.easyicu_case_builder.build_lactate_map_vaso_cohort_from_export",
+        "builder": "easyicu.research_agent.case_plugins.builder.build_lactate_map_vaso_cohort_from_export",
         "export_dir": str(root),
         "source_database": package.database,
         "window_hours": {

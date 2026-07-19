@@ -28,12 +28,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
-from .concept_availability import (
+from ..concept_availability import (
     default_public_databases,
     hypothesis_cross_database_feasibility,
     normalize_database_name,
 )
-from .schema import ValidationFinding
+from ..schema import ValidationFinding
 
 
 @dataclass

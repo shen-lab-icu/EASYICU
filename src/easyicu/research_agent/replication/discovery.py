@@ -19,7 +19,7 @@ from typing import Dict, List, Mapping, Optional, Sequence, Tuple, Union
 
 import pandas as pd
 
-from ..easyicu_case_builder import (
+from ..case_plugins.builder import (
     EasyICUCasePackage,
     build_lactate_map_vaso_cohort_from_export,
 )

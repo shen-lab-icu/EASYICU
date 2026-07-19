@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from easyicu.research_agent.coder_authority_notes import HostCoderAuthority
+from easyicu.research_agent.authority.coder_authority import HostCoderAuthority
 from easyicu.research_agent.authority.provider_budget import (
     StepProviderCallBudget,
     load_provider_call_budget_state,

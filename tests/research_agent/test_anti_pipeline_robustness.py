@@ -1262,7 +1262,7 @@ def test_sensitivity_figure_step_is_not_subject_to_result_spec_gate(tmp_path) ->
 def test_coder_context_receives_locked_spec_definitions_and_universe_contract(
     tmp_path,
 ) -> None:
-    from easyicu.research_agent.coder_authority_notes import HostCoderAuthority
+    from easyicu.research_agent.authority.coder_authority import HostCoderAuthority
     from easyicu.research_agent.pipeline_execute import (
         _coder_authority_with_locked_robustness_specs,
     )
@@ -1366,7 +1366,7 @@ def test_coder_context_receives_locked_spec_definitions_and_universe_contract(
 def test_prespecified_robustness_alias_receives_locked_execution_contract(
     tmp_path,
 ) -> None:
-    from easyicu.research_agent.coder_authority_notes import HostCoderAuthority
+    from easyicu.research_agent.authority.coder_authority import HostCoderAuthority
     from easyicu.research_agent.pipeline_execute import (
         _coder_authority_with_locked_robustness_specs,
     )

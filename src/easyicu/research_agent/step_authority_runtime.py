@@ -22,7 +22,7 @@ from typing import Any, Mapping, Optional, Sequence
 
 from pydantic import ValidationError
 
-from .coder_authority_notes import HostCoderAuthority
+from .authority.coder_authority import HostCoderAuthority
 from .gate_semantics import blocking_validator_findings
 from .method_capabilities import (
     BASELINE_PACKAGES,

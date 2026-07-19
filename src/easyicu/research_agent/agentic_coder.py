@@ -33,7 +33,7 @@ from typing import Any, List
 
 from .llm import cli_backend_available
 from .schema import AnalysisStep, ResearchContext
-from .coder_authority_notes import HostCoderAuthority
+from .authority.coder_authority import HostCoderAuthority
 
 # The filename the CLI is told to save its final, working script as. We read
 # this file back rather than parsing the CLI's chat output for a code fence —

@@ -116,7 +116,7 @@ from .gates.concept import (
     quarantined_deterministic_errors_resolved_by_current_gate as _quarantined_deterministic_errors_resolved_by_current_gate,
     quarantined_errors_superseded_by_current_policy as _quarantined_errors_superseded_by_current_policy,
 )
-from .coder_authority_notes import HostCoderAuthority
+from .authority.coder_authority import HostCoderAuthority
 from .research_context.prompt_scope import scoped_coder_context
 from .cohort_repair import extract_cohort_definition_from_prose
 from .cohort_schema import (
