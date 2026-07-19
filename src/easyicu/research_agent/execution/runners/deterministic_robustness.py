@@ -32,6 +32,7 @@ from ...robustness.primary_effect import (
     _extract_primary_effect_payload_from_records,
     _primary_effect_payload_is_complete,
 )
+from ...authority.planned_role import unique_verified_primary_record
 from ...robustness.panel import (
     PRIMARY_SPEC_ID,
     RobustnessPanelRow,
@@ -119,15 +120,13 @@ _AUTHORITY_ERROR_ENV = "EASYICU_RUN_ARTIFACT_AUTHORITY_ERROR"
 def robustness_sensitivity_preflight_code() -> str:
     """Return the dispatch-ready deterministic robustness runner script."""
 
-    return textwrap.dedent(
-        """
+    return textwrap.dedent("""
         from easyicu.research_agent.execution.runners.deterministic_robustness import (
             _run_robustness_preflight_from_env,
         )
 
         _run_robustness_preflight_from_env()
-        """
-    )
+        """)
 
 
 def _run_robustness_preflight_from_env() -> None:
@@ -429,9 +428,7 @@ def _run_robustness_preflight(
             if missing_trace:
                 trace_error = (
                     f"{spec_id}: fitted sensitivity estimate lacks an unambiguous "
-                    "model-contract trace ("
-                    + ", ".join(missing_trace)
-                    + ")"
+                    "model-contract trace (" + ", ".join(missing_trace) + ")"
                 )
                 if trace_error not in blocking_reasons:
                     blocking_reasons.append(trace_error)
@@ -609,9 +606,7 @@ def _run_robustness_preflight(
         )
         output_files.update(inherited_files)
     if structured_replay.get("replay_index_file"):
-        output_files["model_replay_index"] = structured_replay[
-            "replay_index_file"
-        ]
+        output_files["model_replay_index"] = structured_replay["replay_index_file"]
     if structured_replay.get("variant_coefficients_file"):
         output_files["robustness_variant_coefficients"] = structured_replay[
             "variant_coefficients_file"
@@ -791,9 +786,12 @@ def _find_structured_primary_model_source(
         if isinstance(item, dict) and str(item.get("evidence_id") or "").strip()
     }
 
-    for record in reversed(list(current_successful_step_records(records))):
-        if not isinstance(record, dict):
-            continue
+    successful_records = current_successful_step_records(records)
+    selected_primary = unique_verified_primary_record(successful_records)
+    if selected_primary is None or not isinstance(selected_primary, dict):
+        return None
+
+    for record in (selected_primary,):
         step_id = str(record.get("step_id") or "").strip()
         if not _safe_step_id(step_id):
             continue
@@ -846,8 +844,7 @@ def _find_structured_primary_model_source(
         )
         if (
             summary_evidence_id is None
-            or str(record.get("step_summary_evidence_id") or "")
-            != summary_evidence_id
+            or str(record.get("step_summary_evidence_id") or "") != summary_evidence_id
         ):
             continue
         try:
@@ -876,8 +873,7 @@ def _find_structured_primary_model_source(
                     contract
                     for contract in contracts
                     if isinstance(contract, dict)
-                    and str(contract.get("analysis_role") or "").lower()
-                    == "primary"
+                    and str(contract.get("analysis_role") or "").lower() == "primary"
                     and str(contract.get("exposure_role") or "primary").lower()
                     == "primary"
                 ),
@@ -940,9 +936,7 @@ def _fit_structured_robustness_rows(
 
     for spec in specs:
         if spec.axis == "missing":
-            strategy = str(
-                (spec.missing_override or {}).get("strategy") or ""
-            ).lower()
+            strategy = str((spec.missing_override or {}).get("strategy") or "").lower()
             if strategy == "complete_case":
                 contract = _matching_primary_contract(
                     source,
@@ -1028,12 +1022,16 @@ def _fit_structured_robustness_rows(
         ),
         encoding="utf-8",
     )
-    return rows, warnings, {
-        "variant_contracts": variant_contracts,
-        "variant_coefficients": variant_coefficients,
-        "replay_index_file": replay_index_filename,
-        "variant_coefficients_file": coefficient_filename or None,
-    }
+    return (
+        rows,
+        warnings,
+        {
+            "variant_contracts": variant_contracts,
+            "variant_coefficients": variant_coefficients,
+            "replay_index_file": replay_index_filename,
+            "variant_coefficients_file": coefficient_filename or None,
+        },
+    )
 
 
 def _replay_primary_model_for_cohort(
@@ -1268,11 +1266,19 @@ def _structured_model_row(
         None,
     )
     low_col = next(
-        (column for column in ("ci_low", "or_ci_low", "ci_lower") if column in exposure_rows.columns),
+        (
+            column
+            for column in ("ci_low", "or_ci_low", "ci_lower")
+            if column in exposure_rows.columns
+        ),
         None,
     )
     high_col = next(
-        (column for column in ("ci_high", "or_ci_high", "ci_upper") if column in exposure_rows.columns),
+        (
+            column
+            for column in ("ci_high", "or_ci_high", "ci_upper")
+            if column in exposure_rows.columns
+        ),
         None,
     )
     if effect_col is None or low_col is None or high_col is None:
@@ -1320,9 +1326,7 @@ def _matching_primary_contract(
     *,
     analysis_set: str,
 ) -> Optional[Dict[str, Any]]:
-    primary_source = str(
-        source["primary_contract"].get("exposure_source") or ""
-    )
+    primary_source = str(source["primary_contract"].get("exposure_source") or "")
     contracts = source["summary"].get("model_contracts") or []
     return next(
         (
@@ -1436,8 +1440,7 @@ def _matrix_model_trace(
         coefficient_rows = [
             dict(item)
             for item in (structured_replay.get("variant_coefficients") or [])
-            if isinstance(item, dict)
-            and str(item.get("spec_id") or "") == spec_id
+            if isinstance(item, dict) and str(item.get("spec_id") or "") == spec_id
         ]
 
     if not isinstance(contract, dict):
@@ -1457,8 +1460,7 @@ def _matrix_model_trace(
         "model_contract_n": contract.get("n"),
         "event_n": contract.get("event_n"),
         "model_id": contract.get("model_id"),
-        "source_model_id": contract.get("source_model_id")
-        or contract.get("model_id"),
+        "source_model_id": contract.get("source_model_id") or contract.get("model_id"),
         "exposure_source": contract.get("exposure_source"),
         "exposure_expression": contract.get("exposure_expression"),
         "exposure_role": contract.get("exposure_role"),
@@ -1515,9 +1517,7 @@ def _variant_model_evidence(
         return evidence_contracts, []
     if "model_id" not in coefficients.columns:
         return evidence_contracts, []
-    selected = coefficients[
-        coefficients["model_id"].astype(str).isin(model_ids)
-    ].copy()
+    selected = coefficients[coefficients["model_id"].astype(str).isin(model_ids)].copy()
     selected["spec_id"] = spec_id
     selected["source_model_id"] = selected["model_id"].astype(str)
     selected["replay_mode"] = replay_mode
@@ -1581,8 +1581,10 @@ def _copy_structured_primary_contract_artifacts(
     # it from the digest-verified step_summary evidence that authorized the
     # structured source instead.
     raw_contracts = source.get("summary", {}).get("model_contracts")
-    if isinstance(raw_contracts, list) and raw_contracts and all(
-        isinstance(contract, dict) for contract in raw_contracts
+    if (
+        isinstance(raw_contracts, list)
+        and raw_contracts
+        and all(isinstance(contract, dict) for contract in raw_contracts)
     ):
         pd.DataFrame(raw_contracts).to_csv(
             out_dir / "model_summaries.csv",
@@ -1781,16 +1783,24 @@ def _structured_primary_effect_payload(
             f"robustness headline: {error or 'invalid coefficient row'}"
         ]
 
-    authoritative_record = {
-        "step_id": source["step_id"],
-        "status": "ok",
-        "step_summary": source["summary"],
-        "step_summary_evidence_id": source["summary_evidence_id"],
-        "evidence_ids": [
-            source["summary_evidence_id"],
-            source["coefficient_evidence_id"],
-        ],
-    }
+    # Preserve the original host-owned role binding and immutable
+    # ``analysis_request`` snapshot. Only replace the payload coordinates with
+    # the digest-verified files selected above; fabricating a role-less record
+    # here would bypass (or, after hardening, incorrectly fail) the same
+    # authority contract used by the ordinary headline selector.
+    authoritative_record = dict(source["record"])
+    authoritative_record.update(
+        {
+            "step_id": source["step_id"],
+            "status": "ok",
+            "step_summary": source["summary"],
+            "step_summary_evidence_id": source["summary_evidence_id"],
+            "evidence_ids": [
+                source["summary_evidence_id"],
+                source["coefficient_evidence_id"],
+            ],
+        }
+    )
     summary_payload = _extract_primary_effect_payload_from_records(
         [authoritative_record],
         preferred_predictor=preferred_predictor,
@@ -2072,8 +2082,7 @@ def _outcome_executability_audit(
         )
         independent = bool(data_executable and not same_scalar_label)
         executable = bool(
-            data_executable
-            and not (exact_primary_replay_available and independent)
+            data_executable and not (exact_primary_replay_available and independent)
         )
         if target_column is None:
             note = "Declared outcome column is absent; the variant was not executed."
@@ -2197,7 +2206,10 @@ def _unexecutable_locked_spec_ids(
     blocked: List[str] = []
     for spec in specs:
         if spec.axis == "cohort":
-            if membership.get(spec.spec_id, {}).get("membership_executable") is not True:
+            if (
+                membership.get(spec.spec_id, {}).get("membership_executable")
+                is not True
+            ):
                 blocked.append(spec.spec_id)
         elif spec.axis == "missing":
             if missing.get(spec.spec_id, {}).get("strategy_executable") is not True:
@@ -2258,7 +2270,9 @@ def _robustness_summary(matrix: Any):
                 "axis": axis,
                 "total_specs": int(len(group)),
                 "converged_specs": int(len(converged)),
-                "non_independent_specs": int((independent == False).sum()),  # noqa: E712
+                "non_independent_specs": int(
+                    (independent == False).sum()  # noqa: E712
+                ),
                 "range_low": (
                     float(converged["ci_low"].min()) if not converged.empty else None
                 ),
@@ -2300,7 +2314,9 @@ def _panel_row_has_verifiable_estimate(
         return False
     if not row.evidence_id:
         return False
-    if not all(_finite(value) for value in (row.point_estimate, row.ci_low, row.ci_high)):
+    if not all(
+        _finite(value) for value in (row.point_estimate, row.ci_low, row.ci_high)
+    ):
         return False
     assert row.ci_low is not None and row.ci_high is not None
     return float(row.ci_low) <= float(row.ci_high)

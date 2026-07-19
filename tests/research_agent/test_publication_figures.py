@@ -154,8 +154,7 @@ def test_robustness_panel_publication_figure_has_no_header_title_overlap(
         for finding in result.findings
     )
     assert not any(
-        finding.severity == "error"
-        and finding.validator == "figure_contract_quality"
+        finding.severity == "error" and finding.validator == "figure_contract_quality"
         for finding in result.findings
     )
     contract_path = (
@@ -361,9 +360,7 @@ def test_curated_publication_bundle_requires_current_policy_version(ra, tmp_path
             metadata={"figure_role": "publication_figure", **stale_metadata},
         )
 
-    assert (
-        _has_curated_publication_figure_bundle(evidence, run_dir=tmp_path) is False
-    )
+    assert _has_curated_publication_figure_bundle(evidence, run_dir=tmp_path) is False
 
 
 def test_publication_figure_skill_promotes_step_publication_bundle_before_robustness(
@@ -643,7 +640,10 @@ def test_publication_figure_skill_prefers_primary_bundle_over_sensitivity(
             / "publication_figure_skill_summary__publication_figure_skill_summary.json"
         ).read_text(encoding="utf-8")
     )
-    assert summary["promoted_from_step_id"] == "03_primary_results_publication_figure_repair"
+    assert (
+        summary["promoted_from_step_id"]
+        == "03_primary_results_publication_figure_repair"
+    )
     assert summary["promoted_from_stem"] == "primary_results_figure"
     promoted_contract = json.loads(
         (
@@ -886,12 +886,14 @@ def test_publication_figure_skill_rebuilds_sparse_primary_bundle_when_source_tab
         source_path=primary_table,
         evidence_id="primary_association_table",
         aliases=["primary_association"],
+        produced_by_step="02_primary_association",
     )
     evidence.register_file(
         kind="table",
         description="Observed outcome by exposure group.",
         source_path=outcome_table,
         evidence_id="outcome_by_exposure",
+        produced_by_step="02_primary_association",
     )
     evidence.register_file(
         kind="table",
@@ -914,10 +916,21 @@ def test_publication_figure_skill_rebuilds_sparse_primary_bundle_when_source_tab
         research_question=context.research_question,
         steps=[
             ra.AnalysisStep(
+                step_id="02_primary_association",
+                intent="Estimate the primary adjusted association.",
+                expected_outputs=[
+                    "table:primary_association",
+                    "table:outcome_by_exposure",
+                ],
+                planned_analysis_role="primary",
+            ),
+            ra.AnalysisStep(
                 step_id="03_primary_results_figure",
                 intent="Render the primary manuscript figure.",
+                inputs=["table:primary_association"],
                 expected_outputs=["figure:publication_figure"],
-            )
+                planned_analysis_role="auxiliary",
+            ),
         ],
     )
 
@@ -976,7 +989,9 @@ def test_contract_audit_flags_missing_evidence_and_duplicate_roles():
         core_claim="SOFA2 zero is an audit target.",
         panels=[
             PanelSpec(panel_id="a", title="Overview", role="overview", claim="x"),
-            PanelSpec(panel_id="b", title="Another overview", role="overview", claim="y"),
+            PanelSpec(
+                panel_id="b", title="Another overview", role="overview", claim="y"
+            ),
         ],
     )
 
@@ -1036,13 +1051,15 @@ def test_make_figure_contract_accepts_deferred_agent_panel_append(tmp_path: Path
         figure_id="fig_trajectory_clustering",
         core_claim="ICU shock physiology clusters have distinct outcomes.",
     )
-    contract["panels"].append({
-        "panel_id": "A",
-        "title": "Cluster Profiles",
-        "role": "profile_plot",
-        "claim": "Profiles differ across shock physiology clusters.",
-        "evidence_ids": ["cluster_profile_data"],
-    })
+    contract["panels"].append(
+        {
+            "panel_id": "A",
+            "title": "Cluster Profiles",
+            "role": "profile_plot",
+            "claim": "Profiles differ across shock physiology clusters.",
+            "evidence_ids": ["cluster_profile_data"],
+        }
+    )
 
     findings = audit_figure_contract(contract)
     assert not any(f.severity == "error" for f in findings)
@@ -1142,12 +1159,14 @@ def test_make_figure_contract_wraps_string_source_data():
     contract = make_figure_contract(
         figure_id="FigureStringSource",
         core_claim="Single-string source data should stay a single entry.",
-        panels=[{
-            "panel_id": "a",
-            "title": "Overview",
-            "role": "main",
-            "claim": "Overview exists.",
-        }],
+        panels=[
+            {
+                "panel_id": "a",
+                "title": "Overview",
+                "role": "main",
+                "claim": "Overview exists.",
+            }
+        ],
         source_data="Cohort Data",
     )
 
@@ -1196,7 +1215,9 @@ def test_publication_export_keeps_svg_text_editable(tmp_path: Path):
         ],
         export_formats=["svg", "pdf", "png"],
     )
-    paths = save_publication_figure(fig, tmp_path / "figure_test", contract=contract, dpi=150)
+    paths = save_publication_figure(
+        fig, tmp_path / "figure_test", contract=contract, dpi=150
+    )
     plt.close(fig)
 
     assert {"svg", "pdf", "png", "contract"} <= set(paths)
@@ -1224,7 +1245,9 @@ def test_publication_export_caps_and_compresses_tiff(tmp_path: Path):
     ax.set_ylabel("Death risk")
     ax.set_title("Compressed TIFF export")
 
-    paths = save_publication_figure(fig, tmp_path / "figure_tiff", formats=["tiff"], dpi=600)
+    paths = save_publication_figure(
+        fig, tmp_path / "figure_tiff", formats=["tiff"], dpi=600
+    )
     plt.close(fig)
 
     assert paths["tiff"].exists()
@@ -1287,7 +1310,9 @@ def test_publication_export_audit_accepts_output_dir_and_stem(tmp_path: Path):
     ax.set_xlabel("x")
     ax.set_ylabel("y")
     ax.set_title("Audit path")
-    paths = save_publication_figure(fig, tmp_path / "figure_audit", formats=["svg", "png"])
+    paths = save_publication_figure(
+        fig, tmp_path / "figure_audit", formats=["svg", "png"]
+    )
     plt.close(fig)
 
     findings = audit_publication_exports(tmp_path, min_bytes=1)
@@ -1295,7 +1320,9 @@ def test_publication_export_audit_accepts_output_dir_and_stem(tmp_path: Path):
     assert paths["svg"].exists()
 
 
-def test_save_publication_figure_accepts_legacy_contract_and_output_dir_call(tmp_path: Path):
+def test_save_publication_figure_accepts_legacy_contract_and_output_dir_call(
+    tmp_path: Path,
+):
     plt = pytest.importorskip("matplotlib.pyplot")
     apply_publication_style()
 
@@ -1368,7 +1395,9 @@ def test_save_publication_figure_accepts_agent_output_dir_name_kwargs(tmp_path: 
 
     assert paths["svg"] == out_dir / "sofa_mortality_by_stratum.svg"
     assert paths["png"] == out_dir / "sofa_mortality_by_stratum.png"
-    assert paths["contract"] == out_dir / "sofa_mortality_by_stratum.figure_contract.json"
+    assert (
+        paths["contract"] == out_dir / "sofa_mortality_by_stratum.figure_contract.json"
+    )
     assert audit_publication_exports(out_dir, min_bytes=1) == []
 
 
@@ -1376,12 +1405,14 @@ def test_save_publication_figure_accepts_contract_only_output_dir_call(tmp_path:
     contract = make_figure_contract(
         figure_id="FigureContractOnly",
         core_claim="Contract-only save should still persist contract JSON.",
-        panels=[{
-            "panel_id": "a",
-            "title": "Overview",
-            "role": "overview",
-            "claim": "Line exists.",
-        }],
+        panels=[
+            {
+                "panel_id": "a",
+                "title": "Overview",
+                "role": "overview",
+                "claim": "Line exists.",
+            }
+        ],
     )
 
     paths = save_publication_figure(contract, tmp_path)
@@ -1421,7 +1452,9 @@ def test_runner_synthesizes_contract_for_step_figure_exports(tmp_path: Path):
         evidence_ids=["table_missingness_source"],
     )
 
-    assert contract_path == out_dir / "missingness_measurement_panel.figure_contract.json"
+    assert (
+        contract_path == out_dir / "missingness_measurement_panel.figure_contract.json"
+    )
     findings = FigureContractQualityValidator().audit(
         step=step,
         out_dir=out_dir,
@@ -1443,17 +1476,21 @@ def test_audit_publication_exports_returns_plain_findings_list(tmp_path: Path):
         findings["figure_contract"] = {"figure_id": "Figure1"}
 
 
-def test_publication_figure_skill_renders_from_registered_association_table(ra, tmp_path: Path):
+def test_publication_figure_skill_renders_from_registered_association_table(
+    ra, tmp_path: Path
+):
     from easyicu.research_agent.discovery.discovery_package import _figure_inventory
 
     run_dir = tmp_path / "run"
     source = tmp_path / "primary_association.csv"
-    pd.DataFrame({
-        "variable": ["lactate", "MAP"],
-        "odds_ratio": [1.35, 0.82],
-        "or_lower": [1.10, 0.70],
-        "or_upper": [1.66, 0.96],
-    }).to_csv(source, index=False)
+    pd.DataFrame(
+        {
+            "variable": ["lactate", "MAP"],
+            "odds_ratio": [1.35, 0.82],
+            "or_lower": [1.10, 0.70],
+            "or_upper": [1.66, 0.96],
+        }
+    ).to_csv(source, index=False)
 
     evidence = ra.EvidenceStore(run_dir)
     evidence.register_file(
@@ -1462,6 +1499,7 @@ def test_publication_figure_skill_renders_from_registered_association_table(ra, 
         source_path=source,
         evidence_id="primary_association",
         aliases=["primary_association_table"],
+        produced_by_step="04_primary_association",
     )
     context = ra.ResearchContext(
         research_question="Are hemodynamic variables associated with mortality?",
@@ -1488,6 +1526,7 @@ def test_publication_figure_skill_renders_from_registered_association_table(ra, 
                     "table:primary_association",
                     "figure:primary_association_curve",
                 ],
+                planned_analysis_role="primary",
             )
         ],
     )
@@ -1628,6 +1667,7 @@ def test_publication_figure_skill_e1_like_layout_has_no_svg_overlap_errors(
         source_path=primary,
         evidence_id="table_adjusted_association_death",
         aliases=["adjusted_association_death"],
+        produced_by_step="03_primary_results",
     )
     evidence.register_file(
         kind="table",
@@ -1635,6 +1675,7 @@ def test_publication_figure_skill_e1_like_layout_has_no_svg_overlap_errors(
         source_path=strata,
         evidence_id="table_outcome_by_exposure",
         aliases=["outcome_by_exposure"],
+        produced_by_step="03_primary_results",
     )
     evidence.register_file(
         kind="table",
@@ -1661,7 +1702,12 @@ def test_publication_figure_skill_e1_like_layout_has_no_svg_overlap_errors(
             ra.AnalysisStep(
                 step_id="03_primary_results",
                 intent="Render primary association and audit context.",
-                expected_outputs=["figure:publication"],
+                expected_outputs=[
+                    "table:adjusted_association_death",
+                    "table:outcome_by_exposure",
+                    "figure:publication",
+                ],
+                planned_analysis_role="primary",
             )
         ],
     )
@@ -1679,14 +1725,18 @@ def test_publication_figure_skill_e1_like_layout_has_no_svg_overlap_errors(
         finding.severity == "error" and "overlapping text" in finding.message
         for finding in result.findings
     )
-    assert not any("outside the canvas" in finding.message for finding in result.findings)
+    assert not any(
+        "outside the canvas" in finding.message for finding in result.findings
+    )
     source = pd.read_csv(
         run_dir / "publication_figures" / "publication_figure_source_missingness.csv"
     )
     assert source["variable"].tolist() == ["Lactate", "Temperature", "Resp. rate"]
 
 
-def test_primary_association_selector_prefers_single_primary_estimand(ra, tmp_path: Path):
+def test_primary_association_selector_prefers_single_primary_estimand(
+    ra, tmp_path: Path
+):
     from easyicu.research_agent.authority.evidence_store import EvidenceStore
     from easyicu.research_agent.figures.skill import _select_primary_association_record
 
@@ -1741,6 +1791,92 @@ def test_primary_association_selector_prefers_single_primary_estimand(ra, tmp_pa
 
     assert selected is not None
     assert selected.evidence_id == "single_primary"
+
+
+def test_publication_figure_ignores_misleading_sensitivity_alias_outside_primary_lineage(
+    ra,
+    tmp_path: Path,
+):
+    run_dir = tmp_path / "run"
+    evidence = ra.EvidenceStore(run_dir)
+    primary = tmp_path / "adjusted_primary.csv"
+    primary.write_text(
+        "exposure,point_estimate,ci_low,ci_high,effect_scale\n"
+        "vasopressor,1.10,1.01,1.20,adjusted odds ratio\n",
+        encoding="utf-8",
+    )
+    sensitivity = tmp_path / "primary_association.csv"
+    sensitivity.write_text(
+        "exposure,point_estimate,ci_low,ci_high,effect_scale\n"
+        "vasopressor,9.90,8.00,12.00,adjusted odds ratio\n",
+        encoding="utf-8",
+    )
+    evidence.register_file(
+        kind="table",
+        description="Planner-owned primary association.",
+        source_path=primary,
+        evidence_id="true_primary_association",
+        produced_by_step="02_primary_model",
+    )
+    evidence.register_file(
+        kind="table",
+        description="Sensitivity estimate with a misleading primary alias.",
+        source_path=sensitivity,
+        evidence_id="sensitivity_decoy",
+        aliases=["primary_association"],
+        produced_by_step="03_sensitivity_model",
+    )
+    context = ra.ResearchContext(
+        research_question="Is vasopressor exposure associated with mortality?",
+        cohort=ra.CohortDescriptor(
+            cohort_name="demo",
+            database="synthetic",
+            n_patients=100,
+            n_stays=100,
+        ),
+        variables=[],
+        target_outcome="death",
+        primary_exposure="vasopressor",
+    )
+    plan = ra.AnalysisPlan(
+        research_question=context.research_question,
+        steps=[
+            ra.AnalysisStep(
+                step_id="02_primary_model",
+                intent="Estimate the primary adjusted association.",
+                expected_outputs=[
+                    "table:adjusted_primary",
+                    "figure:primary_association_curve",
+                ],
+                planned_analysis_role="primary",
+            ),
+            ra.AnalysisStep(
+                step_id="03_sensitivity_model",
+                intent="Estimate a sensitivity association.",
+                expected_outputs=["table:sensitivity_association"],
+                planned_analysis_role="sensitivity",
+            ),
+        ],
+    )
+
+    result = ra.PublicationFigureSkill().run(
+        context=context,
+        plan=plan,
+        evidence=evidence,
+        run_dir=run_dir,
+        prompt_pack_version="test",
+    )
+
+    assert result.generated is True
+    summary = json.loads(
+        (
+            run_dir
+            / "evidence"
+            / "publication_figure_skill_summary__publication_figure_skill_summary.json"
+        ).read_text(encoding="utf-8")
+    )
+    assert "true_primary_association" in summary["source_evidence_ids"]
+    assert "sensitivity_decoy" not in summary["source_evidence_ids"]
 
 
 def test_missingness_frame_deduplicates_variable_labels(ra):
@@ -1931,18 +2067,24 @@ def test_publication_figure_skill_renders_from_robustness_panel_without_table(
 
     assert result.generated is True
     summary = json.loads(
-        (run_dir / "evidence" / "publication_figure_skill_summary__publication_figure_skill_summary.json").read_text(
-            encoding="utf-8"
-        )
+        (
+            run_dir
+            / "evidence"
+            / "publication_figure_skill_summary__publication_figure_skill_summary.json"
+        ).read_text(encoding="utf-8")
     )
     assert summary["generation_mode"] == "robustness_panel_publication_figure"
     for suffix in ("svg", "png", "pdf", "tiff"):
         assert evidence.get(f"publication_figure_{suffix}") is not None
-        assert (run_dir / "publication_figures" / f"easyicu_publication_figure.{suffix}").exists()
+        assert (
+            run_dir / "publication_figures" / f"easyicu_publication_figure.{suffix}"
+        ).exists()
     assert evidence.get("publication_figure_contract") is not None
 
 
-def test_publication_figure_skill_promotes_prediction_validation_bundle(ra, tmp_path: Path):
+def test_publication_figure_skill_promotes_prediction_validation_bundle(
+    ra, tmp_path: Path
+):
     from PIL import Image
 
     run_dir = tmp_path / "run"
@@ -2029,7 +2171,9 @@ def test_publication_figure_skill_promotes_prediction_validation_bundle(ra, tmp_
     assert result.generated is True
     for suffix in ("svg", "png", "pdf", "tiff"):
         assert evidence.get(f"publication_figure_{suffix}") is not None
-        assert (run_dir / "publication_figures" / f"easyicu_publication_figure.{suffix}").exists()
+        assert (
+            run_dir / "publication_figures" / f"easyicu_publication_figure.{suffix}"
+        ).exists()
     assert evidence.get("publication_figure_contract") is not None
 
 
@@ -2043,10 +2187,20 @@ def test_make_figure_contract_backfills_blank_panel_titles_from_role():
             "core_claim": "Candidate sepsis subphenotypes differ in outcome.",
             "source_data": ["clustering_assignments"],
             "panels": [
-                {"panel_id": "A", "title": "", "role": "data_quality",
-                 "claim": "Feature availability differs", "evidence_ids": ["a"]},
-                {"panel_id": "B", "title": "", "role": "phenotype_structure",
-                 "claim": "PCA geometry", "evidence_ids": ["b"]},
+                {
+                    "panel_id": "A",
+                    "title": "",
+                    "role": "data_quality",
+                    "claim": "Feature availability differs",
+                    "evidence_ids": ["a"],
+                },
+                {
+                    "panel_id": "B",
+                    "title": "",
+                    "role": "phenotype_structure",
+                    "claim": "PCA geometry",
+                    "evidence_ids": ["b"],
+                },
             ],
         }
     )
@@ -2063,8 +2217,13 @@ def test_make_figure_contract_preserves_explicit_panel_title():
             "core_claim": "cc",
             "source_data": ["s"],
             "panels": [
-                {"panel_id": "A", "title": "Held-out AUROC", "role": "validation",
-                 "claim": "x", "evidence_ids": ["e"]},
+                {
+                    "panel_id": "A",
+                    "title": "Held-out AUROC",
+                    "role": "validation",
+                    "claim": "x",
+                    "evidence_ids": ["e"],
+                },
             ],
         }
     )

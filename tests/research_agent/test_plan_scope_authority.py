@@ -13,6 +13,7 @@ import pytest
 
 from easyicu.research_agent.execution import phase as execution_phase
 from easyicu.research_agent.authority import plan_scope
+from easyicu.research_agent.schema import AnalysisStep
 
 
 def test_execution_phase_uses_plan_scope_objects_with_identity() -> None:
@@ -47,6 +48,47 @@ def test_plan_scope_has_no_orchestration_or_mutation_dependency() -> None:
             "complete",
         }
     )
+
+
+def test_scientific_signature_uses_typed_role_not_intent_role_words() -> None:
+    step = AnalysisStep(
+        step_id="01_model",
+        intent=(
+            "Discuss primary, secondary, sensitivity, and corroborative results "
+            "without owning the primary estimand."
+        ),
+        method="logistic_regression",
+        planned_analysis_role="auxiliary",
+        expected_outputs=["statistic:adjusted_effect"],
+    )
+
+    signature = plan_scope._step_scientific_signature(step)
+
+    assert signature[6] == "auxiliary"
+    assert not isinstance(signature[6], tuple)
+
+
+def test_scientific_signature_changes_only_role_coordinate_for_role_change() -> None:
+    primary = AnalysisStep(
+        step_id="01_model",
+        intent="Fit the prespecified model.",
+        method="logistic_regression",
+        planned_analysis_role="primary",
+        expected_outputs=["statistic:adjusted_effect"],
+    )
+    secondary = primary.model_copy(update={"planned_analysis_role": "secondary"})
+
+    primary_signature = plan_scope._step_scientific_signature(primary)
+    secondary_signature = plan_scope._step_scientific_signature(secondary)
+
+    assert primary_signature != secondary_signature
+    assert [
+        index
+        for index, (left, right) in enumerate(
+            zip(primary_signature, secondary_signature, strict=True)
+        )
+        if left != right
+    ] == [6]
 
 
 @pytest.mark.parametrize("canonical_first", [True, False])

@@ -519,6 +519,7 @@ def build_dynamic_core_plan_steps(
             steps.append(
                 AnalysisStep(
                     step_id="04_prediction_model_analysis",
+                    planned_analysis_role="primary",
                     intent=(
                         "Develop and evaluate a deterministic ICU prediction model for "
                         f"{target_outcome or 'the configured target outcome'} with "
@@ -541,6 +542,7 @@ def build_dynamic_core_plan_steps(
             steps.append(
                 AnalysisStep(
                     step_id="05_publication_figure_generation",
+                    planned_analysis_role="auxiliary",
                     intent=(
                         "Generate a claim-first, manuscript-ready publication figure for the "
                         "prediction-model analysis using easyicu.research_agent.figures.publication."
@@ -557,6 +559,7 @@ def build_dynamic_core_plan_steps(
             steps.append(
                 AnalysisStep(
                     step_id="04_trajectory_clustering_analysis",
+                    planned_analysis_role="primary",
                     intent=(
                         "Cluster patients by longitudinal physiology trajectories, summarise cluster stability "
                         "and compare mortality across clusters without collapsing the task into a simple association model."
@@ -577,6 +580,7 @@ def build_dynamic_core_plan_steps(
             steps.append(
                 AnalysisStep(
                     step_id="05_publication_figure_generation",
+                    planned_analysis_role="auxiliary",
                     intent=(
                         "Generate a claim-first, manuscript-ready publication figure for the "
                         "trajectory clustering analysis using easyicu.research_agent.figures.publication."
@@ -734,6 +738,7 @@ def build_dynamic_core_plan_steps(
         steps.append(
             AnalysisStep(
                 step_id="04_primary_association",
+                planned_analysis_role="primary",
                 intent=(
                     f"Estimate the association between {primary_predictor} and "
                     f"{target_outcome} using ICU-aware aggregation and time-window defaults."

@@ -92,7 +92,13 @@ def test_e1_prevalence_plus_adjusted_association_routes_to_association(ra):
 
     assert brief.analysis_family == "association"
     roles = {module.role for module in brief.display_modules if module.tier == "core"}
-    assert {"cohort_accounting", "baseline_context", "data_quality", "primary_estimand", "robustness"} <= roles
+    assert {
+        "cohort_accounting",
+        "baseline_context",
+        "data_quality",
+        "primary_estimand",
+        "robustness",
+    } <= roles
     modules = {module.module_id: module for module in brief.display_modules}
     assert "prevalence_or_event_rate_question" in " ".join(brief.adaptive_triggers)
     assert modules["exposure_outcome_distribution"].role == "descriptive_result"
@@ -114,7 +120,9 @@ def test_prediction_brief_requires_prediction_specific_displays(ra):
 
     assert brief.analysis_family == "prediction"
     assert any("calibration" in item.lower() for item in brief.main_text_displays)
-    assert any("hyperparameter" in item.lower() for item in brief.supplementary_displays)
+    assert any(
+        "hyperparameter" in item.lower() for item in brief.supplementary_displays
+    )
     assert "leakage" in brief.covariate_strategy.lower()
     modules = {module.module_id: module for module in brief.display_modules}
     assert modules["discrimination"].role == "model_performance"
@@ -241,7 +249,11 @@ def test_article_contract_flags_and_can_augment_narrow_association_plan(ra):
                 step_id="01_forest",
                 intent="Fit adjusted model and draw a forest plot.",
                 method="logistic regression",
-                expected_outputs=["figure:forest_plot"],
+                planned_analysis_role="primary",
+                expected_outputs=[
+                    "table:adjusted_effect",
+                    "figure:forest_plot",
+                ],
             )
         ],
     )
@@ -329,6 +341,173 @@ def test_nonprimary_output_prefixes_do_not_satisfy_primary_estimand_role(ra):
         assert "primary_estimand" not in roles_covered_by_plan(decoy, contract), prefix
 
 
+def test_sensitivity_role_cannot_cover_primary_estimand_plan_or_artifact(ra, tmp_path):
+    from easyicu.research_agent.reporting.article_contract import (
+        build_article_analysis_contract,
+        roles_covered_by_artifacts,
+        roles_covered_by_plan,
+    )
+    from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep
+
+    context = _context(
+        ra,
+        "Estimate an adjusted association and report the analytic cohort.",
+        exposure="x",
+    )
+    contract = build_article_analysis_contract(context)
+    step = AnalysisStep(
+        step_id="06_sensitivity_association",
+        intent="Fit a sensitivity association model.",
+        method="adjusted_association",
+        planned_analysis_role="sensitivity",
+        expected_outputs=["table:association_estimates"],
+    )
+    plan = AnalysisPlan(research_question=context.research_question, steps=[step])
+    record = {
+        "step_id": step.step_id,
+        "status": "ok",
+        "planned_analysis_role": "sensitivity",
+        "analysis_request": {"step": step.model_dump(mode="json")},
+        "step_summary": {
+            "output_files": {"table:association_estimates": "association_estimates.csv"}
+        },
+    }
+
+    assert "primary_estimand" not in roles_covered_by_plan(plan, contract)
+    assert "primary_estimand" not in roles_covered_by_artifacts(
+        contract=contract,
+        evidence_records=[],
+        per_step_records=[record],
+        run_dir=tmp_path,
+    )
+
+    primary_step = step.model_copy(update={"planned_analysis_role": "primary"})
+    primary_record = {
+        **record,
+        "planned_analysis_role": "primary",
+        "analysis_request": {"step": primary_step.model_dump(mode="json")},
+    }
+    assert "primary_estimand" in roles_covered_by_plan(
+        AnalysisPlan(
+            research_question=context.research_question,
+            steps=[primary_step],
+        ),
+        contract,
+    )
+    assert "primary_estimand" in roles_covered_by_artifacts(
+        contract=contract,
+        evidence_records=[],
+        per_step_records=[primary_record],
+        run_dir=tmp_path,
+    )
+
+    figure_step = AnalysisStep(
+        step_id="07_primary_figure",
+        intent="Render the Planner-owned primary result.",
+        method="publication_figure_generation",
+        planned_analysis_role="auxiliary",
+        inputs=["table:association_estimates"],
+        expected_outputs=["figure:forest_plot"],
+    )
+    figure_record = {
+        "step_id": figure_step.step_id,
+        "status": "ok",
+        "planned_analysis_role": "auxiliary",
+        "analysis_request": {"step": figure_step.model_dump(mode="json")},
+        "step_summary": {"output_files": {"figure:forest_plot": "forest_plot.svg"}},
+    }
+    silent_primary_record = {**primary_record, "step_summary": {}}
+    assert "primary_estimand" not in roles_covered_by_artifacts(
+        contract=contract,
+        evidence_records=[],
+        per_step_records=[silent_primary_record, figure_record],
+        run_dir=tmp_path,
+    )
+
+    import hashlib
+    import json
+
+    evidence_dir = tmp_path / "evidence"
+    evidence_dir.mkdir()
+    evidence_path = evidence_dir / "primary_estimate__association_estimates.csv"
+    evidence_path.write_text("term,estimate\nx,1.2\n", encoding="utf-8")
+    evidence_sha = hashlib.sha256(evidence_path.read_bytes()).hexdigest()
+    evidence_id = "primary_estimate"
+    primary_with_evidence = {
+        **silent_primary_record,
+        "evidence_ids": [evidence_id],
+    }
+    resolved_dir = tmp_path / "resolved_inputs"
+    resolved_dir.mkdir()
+    resolved_path = resolved_dir / f"{figure_step.step_id}.json"
+    identity_row = {
+        "input_key": "table:association_estimates",
+        "declared_kind": "table",
+        "product": "association_estimates",
+        "evidence_id": evidence_id,
+        "sha256": evidence_sha,
+        "produced_by_step": primary_step.step_id,
+    }
+    resolved_path.write_text(
+        json.dumps(
+            {
+                "schema_version": "2.1",
+                "step_id": figure_step.step_id,
+                "planner_declared_inputs": ["table:association_estimates"],
+                "inputs": {
+                    "table:association_estimates": {
+                        **identity_row,
+                        "identity_row": identity_row,
+                    }
+                },
+            },
+            sort_keys=True,
+        ),
+        encoding="utf-8",
+    )
+    figure_with_binding = {
+        **figure_record,
+        "resolved_inputs_path": str(resolved_path.relative_to(tmp_path)),
+        "resolved_inputs_sha256": hashlib.sha256(
+            resolved_path.read_bytes()
+        ).hexdigest(),
+        "resolved_input_evidence_ids": [evidence_id],
+    }
+    evidence_record = {
+        "evidence_id": evidence_id,
+        "kind": "table",
+        "description": "Primary adjusted association estimate",
+        "relative_path": str(evidence_path.relative_to(tmp_path)),
+        "sha256": evidence_sha,
+        "produced_by_step": primary_step.step_id,
+    }
+    assert "primary_estimand" in roles_covered_by_artifacts(
+        contract=contract,
+        evidence_records=[evidence_record],
+        per_step_records=[primary_with_evidence, figure_with_binding],
+        run_dir=tmp_path,
+    )
+
+    publication_dir = tmp_path / "publication_figures"
+    publication_dir.mkdir()
+    (publication_dir / "decoy.figure_contract.json").write_text(
+        json.dumps(
+            {
+                "figure_id": "decoy",
+                "title": "Sensitivity forest plot",
+                "core_claim": "Primary adjusted effect estimate",
+            }
+        ),
+        encoding="utf-8",
+    )
+    assert "primary_estimand" not in roles_covered_by_artifacts(
+        contract=contract,
+        evidence_records=[],
+        per_step_records=[silent_primary_record],
+        run_dir=tmp_path,
+    )
+
+
 def test_unmapped_family_negations_do_not_trigger_second_keyword_router(ra):
     from easyicu.research_agent.planning.analysis_types import infer_analysis_type
     from easyicu.research_agent.planning.study_design import infer_study_design_family
@@ -349,6 +528,131 @@ def test_unmapped_family_negations_do_not_trigger_second_keyword_router(ra):
         context = _context(ra, question, exposure="x")
         assert infer_analysis_type(context).key == expected_analysis_type
         assert infer_study_design_family(context) == "descriptive"
+
+
+def test_noncausal_treatment_response_uses_descriptive_not_causal_contract(ra):
+    from easyicu.research_agent.planning.analysis_types import infer_analysis_type
+    from easyicu.research_agent.planning.study_design import build_study_design_brief
+    from easyicu.research_agent.reporting.article_contract import (
+        build_article_analysis_contract,
+    )
+
+    context = _context(
+        ra,
+        "Characterize treatment responders and heterogeneity descriptively "
+        "without causal interpretation.",
+        exposure="treatment",
+    )
+    assert infer_analysis_type(context).key == "treatment_response"
+    brief = build_study_design_brief(context)
+    contract = build_article_analysis_contract(context, brief=brief)
+    assert brief.analysis_family == "descriptive"
+    assert contract.source_analysis_type == "treatment_response"
+    assert contract.planner_owned_result_roles == ["heterogeneity"]
+    assert not {
+        "causal_protocol",
+        "balance_positivity",
+        "causal_contrast",
+    } & set(contract.required_roles)
+
+
+def test_run_contract_uses_planner_final_analysis_type_over_question_inference(
+    ra,
+    tmp_path,
+):
+    from easyicu.research_agent.reporting.article_contract import (
+        summarize_article_contract_coverage,
+    )
+
+    context = _context(
+        ra,
+        "Describe longitudinal ICU measurements.",
+        exposure="marker",
+    )
+    plan = ra.AnalysisPlan(
+        research_question=context.research_question,
+        analysis_type="trajectory_clustering",
+        steps=[
+            ra.AnalysisStep(
+                step_id="01_primary_phenotypes",
+                intent="Discover longitudinal phenotypes.",
+                method="trajectory_clustering",
+                planned_analysis_role="primary",
+                expected_outputs=["table:cluster_assignments"],
+            )
+        ],
+    )
+
+    status = summarize_article_contract_coverage(
+        context=context,
+        plan=plan,
+        evidence_records=[],
+        per_step_records=[],
+        run_dir=tmp_path,
+    )
+
+    assert status["article_contract_family"] == "phenotyping"
+    assert status["article_contract"]["source_analysis_type"] == "trajectory_clustering"
+
+
+def test_headline_roles_across_method_families_require_primary_lineage(ra):
+    from easyicu.research_agent.reporting.article_contract import (
+        build_article_analysis_contract,
+        roles_covered_by_plan,
+    )
+    from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep
+
+    cases = (
+        (
+            "Build a mortality prediction model and report AUROC and calibration.",
+            "model_performance",
+            ["table:model_performance", "figure:roc_curve"],
+        ),
+        (
+            "Build a mortality prediction model and report AUROC and calibration.",
+            "calibration",
+            ["table:model_performance", "figure:calibration_plot"],
+        ),
+        (
+            "Estimate time-to-event survival using Cox regression.",
+            "survival_effect",
+            ["table:cox_summary"],
+        ),
+        (
+            "Discover ICU phenotypes using clustering and trajectory features.",
+            "phenotype_structure",
+            ["table:cluster_assignments", "figure:cluster_heatmap"],
+        ),
+        (
+            "Emulate a target trial using IPTW and estimate a causal contrast.",
+            "causal_contrast",
+            ["table:causal_contrast"],
+        ),
+    )
+    for question, role, outputs in cases:
+        context = _context(ra, question, exposure="x")
+        contract = build_article_analysis_contract(context)
+        sensitivity = AnalysisStep(
+            step_id="02_sensitivity",
+            intent="Produce an alternative result.",
+            method="sensitivity_analysis",
+            planned_analysis_role="sensitivity",
+            expected_outputs=outputs,
+        )
+        assert role not in roles_covered_by_plan(
+            AnalysisPlan(research_question=question, steps=[sensitivity]),
+            contract,
+        )
+        primary = sensitivity.model_copy(
+            update={
+                "step_id": "01_primary",
+                "planned_analysis_role": "primary",
+            }
+        )
+        assert role in roles_covered_by_plan(
+            AnalysisPlan(research_question=question, steps=[primary]),
+            contract,
+        )
 
 
 def test_association_plan_validator_accepts_article_level_display_suite(ra):
@@ -486,7 +790,9 @@ def test_family_playbooks_are_distinct_and_not_effect_only(ra):
     role_sets = {}
     for family, question in cases.items():
         brief = build_study_design_brief(_context(ra, question))
-        roles = {module.role for module in brief.display_modules if module.tier == "core"}
+        roles = {
+            module.role for module in brief.display_modules if module.tier == "core"
+        }
         role_sets[family] = roles
         assert len(roles) >= 4
         assert roles != {"primary_estimand"}
@@ -589,7 +895,10 @@ def test_analysis_blueprint_combines_prior_art_contract_and_figure_strategy(ra):
     assert "validation" in blueprint.required_article_roles
     assert blueprint.figure_hero_role == "calibration"
     assert any(role.role == "calibration" for role in blueprint.visual_roles)
-    assert any("supplement" in item.lower() for item in blueprint.prior_art_design_brief.design_questions)
+    assert any(
+        "supplement" in item.lower()
+        for item in blueprint.prior_art_design_brief.design_questions
+    )
     assert "ANALYSIS BLUEPRINT" in prompt
     assert "PRIOR-ART DESIGN BRIEF" in prompt
     assert "ARTICLE ANALYSIS CONTRACT" in prompt

@@ -302,9 +302,7 @@ def _step_is_figure_only(step: AnalysisStep) -> bool:
     and is never the primary estimand. But a *combined* model+figure step that
     the replanner can emit before the figure/table splitter runs
     (``['statistic:primary_estimate', 'figure:forest_plot']``) still owns the
-    result product and must remain eligible as the primary model -- excluding it
-    here would make ``_preserve_primary_estimand_step_after_replan`` re-attach a
-    stale duplicate of the primary model.
+    result product and must remain eligible as the primary model.
     """
 
     if not _step_expects_figure(step):
@@ -506,7 +504,7 @@ def _article_display_roles(steps: Sequence[AnalysisStep]) -> set[str]:
             }
         ):
             roles.add("data_quality")
-        if (
+        if step.planned_analysis_role == "primary" and (
             _effect_contract_applies(step)
             or _prediction_contract_applies(step)
             or _clustering_contract_applies(
@@ -2011,6 +2009,7 @@ def _split_table_and_figure_outputs_in_plan(
         )
         figure_step = AnalysisStep(
             step_id=figure_step_id,
+            planned_analysis_role="auxiliary",
             intent=figure_intent,
             inputs=render_source_outputs,
             expected_outputs=figure_outputs,
@@ -2122,6 +2121,7 @@ def _ensure_publication_figure_step_in_plan(
     next_index = len(plan.steps or []) + 1
     fallback_step = AnalysisStep(
         step_id=f"{next_index:02d}_publication_figure_fallback",
+        planned_analysis_role="auxiliary",
         intent=(
             "Render a publication-ready overview using only the exact typed "
             "table inputs bound by the host. Do not scan the run directory, "
@@ -2197,6 +2197,7 @@ def _ensure_audit_panel_step_in_plan(
     next_index = len(plan.steps or []) + 1
     audit_step = AnalysisStep(
         step_id=f"{next_index:02d}_audit_panel",
+        planned_analysis_role="auxiliary",
         intent=(
             "Render an audit panel that summarises the analysis's robustness: "
             "data completeness / missingness, the pre-specified sensitivity / "
@@ -2364,16 +2365,19 @@ def _preserve_figure_steps_after_replan(
 def _step_is_primary_estimand_model(step: AnalysisStep) -> bool:
     """True when ``step`` is a result-bearing PRIMARY model (the estimand).
 
-    Requires both a compatible method family and a structured result product.
-    Free-text id/intent tokens and preparation-only outputs do not establish
-    ownership of the primary estimand.
+    Requires the Planner's typed ``primary`` role, a compatible method family,
+    and a structured result product. Free-text id/intent tokens and
+    preparation-only outputs do not establish ownership of the primary
+    estimand.
     """
+
+    if step.planned_analysis_role != "primary":
+        return False
 
     # Exclude only a PURE figure/render child, not a combined model+figure step
     # (which the replanner can emit before the figure/table splitter runs). Both
     # contract helpers below already require a closed result-bearing product, so
-    # a combined step that owns the estimand stays primary and is not duplicated
-    # by _preserve_primary_estimand_step_after_replan.
+    # a combined step that owns the estimand stays primary.
     if _step_is_figure_only(step):
         return False
     # Both helpers normalize only the ``<head>`` of a ``<head>_with_<rider>``
@@ -2409,54 +2413,6 @@ def _step_is_baseline_context_table(step: AnalysisStep) -> bool:
             "baseline characteristics",
         )
     )
-
-
-def _preserve_primary_estimand_step_after_replan(
-    *,
-    current: AnalysisPlan,
-    revised: AnalysisPlan,
-) -> Tuple[AnalysisPlan, List[ValidationFinding]]:
-    """Re-add a result-bearing PRIMARY model step the replanner silently dropped.
-
-    The replanner is an LLM call and can drop the adjusted-model step that
-    produces the primary estimand while inserting an audit/reconciliation step,
-    even when its own rationale claims it is keeping the primary model. The
-    article contract still requires a primary estimand, so the primary model
-    step is load-bearing: if ``current`` has one and
-    ``revised`` has NO result-bearing model step at all, re-attach the dropped
-    step(s).
-
-    Mirrors ``_preserve_figure_steps_after_replan``. Fires ONLY when the revised
-    plan has lost EVERY primary model step — a legitimately renamed or replaced
-    model still satisfies ``_step_is_primary_estimand_model`` and is left alone,
-    so this cannot duplicate a model the replanner kept under a new name.
-    """
-
-    if any(_step_is_primary_estimand_model(step) for step in revised.steps):
-        return revised, []
-    dropped = [step for step in current.steps if _step_is_primary_estimand_model(step)]
-    if not dropped:
-        return revised, []
-    revised_ids = {step.step_id for step in revised.steps}
-    reattach = [step for step in dropped if step.step_id not in revised_ids]
-    if not reattach:
-        return revised, []
-    new_steps = list(revised.steps) + list(reattach)
-    preserved = revised.model_copy(update={"steps": new_steps})
-    findings = [
-        ValidationFinding(
-            validator="replanner",
-            severity="warning",
-            message=(
-                "Replanner dropped the primary result-bearing model step(s) "
-                f"({', '.join(s.step_id for s in reattach)}); the revised plan had "
-                "no model producing the primary estimand, so they were re-attached "
-                "to preserve the article contract."
-            ),
-            detail={"preserved_step_ids": [s.step_id for s in reattach]},
-        )
-    ]
-    return preserved, findings
 
 
 def _typed_plan_dependency_graph(
@@ -2734,10 +2690,16 @@ def _cap_plan_preserving_figure_steps(
     protected_ids = {
         str(step_id) for step_id in (protected_step_ids or []) if step_id in step_by_id
     }
-    for predicate in (
-        _step_is_primary_estimand_model,
-        _step_is_baseline_context_table,
-    ):
+    # Role authority is method-family agnostic.  A survival, phenotyping, or
+    # causal primary result is just as load-bearing as an association model and
+    # must not disappear merely because it sits beyond the numerical cap.
+    primary_owner = next(
+        (step for step in steps if step.planned_analysis_role == "primary"),
+        None,
+    )
+    if primary_owner is not None:
+        protected_ids.add(primary_owner.step_id)
+    for predicate in (_step_is_baseline_context_table,):
         owner = next((step for step in steps if predicate(step)), None)
         if owner is not None:
             protected_ids.add(owner.step_id)
@@ -3140,30 +3102,6 @@ def _primary_effect_from_summary(step_summary: Dict[str, Any]) -> Optional[float
     return None
 
 
-def _primary_effect_from_completed_records(
-    completed_step_records: Optional[Sequence[Dict[str, Any]]],
-    *,
-    current_step_id: str,
-) -> Optional[Tuple[str, float]]:
-    if not completed_step_records:
-        return None
-    for record in completed_step_records:
-        if not isinstance(record, dict):
-            continue
-        source_step_id = str(record.get("step_id") or "")
-        if not source_step_id or source_step_id == current_step_id:
-            continue
-        if record.get("status") != "ok":
-            continue
-        step_summary = record.get("step_summary")
-        if not isinstance(step_summary, dict):
-            continue
-        effect = _primary_effect_from_summary(step_summary)
-        if effect is not None:
-            return source_step_id, effect
-    return None
-
-
 _AUROC_SCALAR_KEYS = (
     "auroc",
     "statistic:auroc",
@@ -3190,8 +3128,8 @@ def _prediction_auroc_from_completed_records(
 ) -> Optional[Tuple[str, float]]:
     """Find an auditable AUROC in a *sibling* completed step's summary.
 
-    Mirrors :func:`_primary_effect_from_completed_records` for the prediction
-    requirement: a figure/rendering step (e.g. ``*_model_training_figure``)
+    This fallback is limited to the prediction requirement: a figure/rendering
+    step (e.g. ``*_model_training_figure``)
     often does not re-register the metric under a key its own renderer
     recognises, but the discrimination estimate is genuinely produced and bound
     (``statistic:auroc``) by the upstream training step it renders. When that is
@@ -4333,32 +4271,7 @@ def _step_contract_findings(
     effect_required = not figure_only_step and _effect_contract_applies(step)
     if effect_required:
         effect_value = _primary_effect_from_summary(step_summary)
-        fallback_effect = None
         if effect_value is None:
-            fallback_effect = _primary_effect_from_completed_records(
-                completed_step_records,
-                current_step_id=str(step.step_id or ""),
-            )
-        if effect_value is None and fallback_effect is not None:
-            source_step_id, _source_effect = fallback_effect
-            findings.append(
-                ValidationFinding(
-                    validator="step_contract",
-                    severity="warning",
-                    message=(
-                        f"Step {step.step_id} did not record its own primary association "
-                        f"estimate, but the requirement was satisfied by successful step "
-                        f"{source_step_id}."
-                    ),
-                    detail={
-                        "step_id": step.step_id,
-                        "fallback_step_id": source_step_id,
-                        "expected_outputs": list(step.expected_outputs or []),
-                        "summary_keys": sorted(step_summary.keys()),
-                    },
-                )
-            )
-        elif effect_value is None:
             _append_missing(
                 (
                     f"Step {step.step_id} was expected to report a primary association "

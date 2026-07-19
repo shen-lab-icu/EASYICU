@@ -78,6 +78,7 @@ def test_first_json_block_skips_braces_in_strings(ra):
     block = helpers._first_json_block(raw)
     assert block is not None
     import json as _json
+
     parsed = _json.loads(block)
     assert parsed["steps"][0]["step_id"] == "01"
 
@@ -87,13 +88,16 @@ def test_planner_parse_recovers_fenced_json(ra):
     raw = (
         "Sure, here's the plan:\n```json\n"
         '{"research_question": "Is sofa2 -> death?", "steps":'
-        ' [{"step_id":"01_table_one","intent":"t1","inputs":[],"expected_outputs":[]}]}\n'
+        ' [{"step_id":"01_table_one","planned_analysis_role":"auxiliary",'
+        '"intent":"t1","inputs":[],"expected_outputs":[]}]}\n'
         "```"
     )
     schema = ra.schema
     ctx = schema.ResearchContext(
         research_question="Is sofa2 -> death?",
-        cohort=schema.CohortDescriptor(cohort_name="c", database="d", n_patients=1, n_stays=1),
+        cohort=schema.CohortDescriptor(
+            cohort_name="c", database="d", n_patients=1, n_stays=1
+        ),
         variables=[],
     )
 
@@ -104,6 +108,7 @@ def test_planner_parse_recovers_fenced_json(ra):
             return raw
 
     from easyicu.research_agent.agents.core import PlannerAgent
+
     plan = PlannerAgent(_DummyLLM())._parse(raw, ctx)
     assert plan.steps and plan.steps[0].step_id == "01_table_one"
 
@@ -111,13 +116,16 @@ def test_planner_parse_recovers_fenced_json(ra):
 def test_planner_parse_drops_extra_step_fields(ra):
     raw = (
         '{"research_question": "Is sofa2 -> death?", "extra": "drop me", "steps":'
-        ' [{"step_id":"06_cross_database","intent":"protocol","inputs":[],'
+        ' [{"step_id":"06_cross_database","planned_analysis_role":"auxiliary",'
+        '"intent":"protocol","inputs":[], '
         '"expected_outputs":[],"note":"external cohort unavailable"}]}'
     )
     schema = ra.schema
     ctx = schema.ResearchContext(
         research_question="Is sofa2 -> death?",
-        cohort=schema.CohortDescriptor(cohort_name="c", database="d", n_patients=1, n_stays=1),
+        cohort=schema.CohortDescriptor(
+            cohort_name="c", database="d", n_patients=1, n_stays=1
+        ),
         variables=[],
     )
 
@@ -128,6 +136,7 @@ def test_planner_parse_drops_extra_step_fields(ra):
             return raw
 
     from easyicu.research_agent.agents.core import PlannerAgent
+
     plan = PlannerAgent(_DummyLLM())._parse(raw, ctx)
     assert plan.steps[0].step_id == "06_cross_database"
     assert not hasattr(plan.steps[0], "note")
@@ -138,7 +147,9 @@ def test_planner_uses_enough_completion_budget(ra):
     schema = ra.schema
     ctx = schema.ResearchContext(
         research_question="Is sofa2 -> death?",
-        cohort=schema.CohortDescriptor(cohort_name="c", database="d", n_patients=1, n_stays=1),
+        cohort=schema.CohortDescriptor(
+            cohort_name="c", database="d", n_patients=1, n_stays=1
+        ),
         variables=[],
     )
 
@@ -152,10 +163,12 @@ def test_planner_uses_enough_completion_budget(ra):
             self.kwargs = kwargs
             return (
                 '{"research_question": "Is sofa2 -> death?", "steps":'
-                ' [{"step_id":"01_table_one","intent":"t1","inputs":[],"expected_outputs":[]}]}'
+                ' [{"step_id":"01_table_one","planned_analysis_role":"auxiliary",'
+                '"intent":"t1","inputs":[],"expected_outputs":[]}]}'
             )
 
     from easyicu.research_agent.agents.core import PlannerAgent
+
     llm = _CapturingLLM()
     PlannerAgent(llm).run(ctx)
     assert llm.kwargs["max_tokens"] >= 4096
@@ -184,7 +197,9 @@ def test_openai_client_passes_provider_extra_body(ra, monkeypatch):
                 completions=_FakeCompletions(),
             )
 
-    monkeypatch.setitem(sys.modules, "openai", types.SimpleNamespace(OpenAI=_FakeOpenAI))
+    monkeypatch.setitem(
+        sys.modules, "openai", types.SimpleNamespace(OpenAI=_FakeOpenAI)
+    )
 
     from easyicu.research_agent.providers.llm import LLMMessage, OpenAIClient
 
@@ -211,10 +226,13 @@ def test_writer_strips_markdown_fence(ra, tmp_path: Path):
             return raw
 
     from easyicu.research_agent.agents.core import WriterAgent
+
     schema = ra.schema
     ctx = schema.ResearchContext(
         research_question="x",
-        cohort=schema.CohortDescriptor(cohort_name="c", database="d", n_patients=1, n_stays=1),
+        cohort=schema.CohortDescriptor(
+            cohort_name="c", database="d", n_patients=1, n_stays=1
+        ),
         variables=[],
     )
     out = WriterAgent(_DummyLLM()).run(context=ctx, evidence_ids=["table_one"])
@@ -235,10 +253,13 @@ def test_writer_language_prompt_preserves_evidence_ids(ra):
             return "# 标题\n\n结果：12 例 {evidence:table_one}。\n"
 
     from easyicu.research_agent.agents.core import WriterAgent
+
     schema = ra.schema
     ctx = schema.ResearchContext(
         research_question="x",
-        cohort=schema.CohortDescriptor(cohort_name="c", database="d", n_patients=1, n_stays=1),
+        cohort=schema.CohortDescriptor(
+            cohort_name="c", database="d", n_patients=1, n_stays=1
+        ),
         variables=[],
     )
 
@@ -268,10 +289,13 @@ def test_writer_prompt_discourages_tbd_and_manifest_narration(ra):
             return "# Title\n\n## Results\n\nBaseline characteristics are summarised in Table 1 {evidence:table_one}.\n"
 
     from easyicu.research_agent.agents.core import WriterAgent
+
     schema = ra.schema
     ctx = schema.ResearchContext(
         research_question="x",
-        cohort=schema.CohortDescriptor(cohort_name="c", database="d", n_patients=1, n_stays=1),
+        cohort=schema.CohortDescriptor(
+            cohort_name="c", database="d", n_patients=1, n_stays=1
+        ),
         variables=[],
     )
 
@@ -280,7 +304,10 @@ def test_writer_prompt_discourages_tbd_and_manifest_narration(ra):
     # Writer contract assertions land in the system prompt.
     assert "`[TBD]`" in captured["system"]
     assert "warning: see manifest" in captured["system"]
-    assert "Only cite `table_one`, `outcome_rate`, or `primary_association`" in captured["system"]
+    assert (
+        "Only cite `table_one`, `outcome_rate`, or `primary_association`"
+        in captured["system"]
+    )
     # Writer contract should reference `model_performance` as a fallback
     # baseline source for prediction tasks. Exact wording has shifted; we
     # assert on the alias token rather than a specific sentence.

@@ -42,6 +42,7 @@ class _TrajectoryAuthorityPlanLLM:
                     "steps": [
                         {
                             "step_id": "01_summary",
+                            "planned_analysis_role": "auxiliary",
                             "intent": "Produce the declared cohort summary.",
                             "inputs": ["stay_id"],
                             "expected_outputs": ["table:cohort_summary"],

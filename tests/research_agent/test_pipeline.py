@@ -355,8 +355,9 @@ def test_pipeline_recovers_when_planner_parses_to_zero_steps(
             "steps": [
                 {
                     "step_id": "01_assoc",
+                    "planned_analysis_role": "primary",
                     "intent": "Fit the adjusted association model.",
-                    "expected_outputs": ["or_table"],
+                    "expected_outputs": ["table:or_table"],
                     "method": "logit",
                 }
             ],
@@ -436,6 +437,7 @@ def test_pipeline_repairs_failed_generated_code(ra, tmp_path: Path):
                         "steps": [
                             {
                                 "step_id": "01_table_one",
+                                "planned_analysis_role": "auxiliary",
                                 "intent": "Write a compact cohort table.",
                                 "inputs": ["age", "death"],
                                 "expected_outputs": ["table:table_one"],
@@ -576,6 +578,7 @@ print(json.dumps(summary))
                         "steps": [
                             {
                                 "step_id": "01_source_status_audit",
+                                "planned_analysis_role": "auxiliary",
                                 "intent": "Record the source-status denominator lock.",
                                 "inputs": ["lab_max"],
                                 "expected_outputs": [],
@@ -584,6 +587,7 @@ print(json.dumps(summary))
                             },
                             {
                                 "step_id": "02_table_one",
+                                "planned_analysis_role": "auxiliary",
                                 "intent": "Build Table 1 without redefining lab validity.",
                                 "inputs": ["lab_max"],
                                 "expected_outputs": ["table:table_one"],
@@ -669,6 +673,7 @@ print(json.dumps(summary))
                         "steps": [
                             {
                                 "step_id": "01_cohort_lock",
+                                "planned_analysis_role": "auxiliary",
                                 "intent": "Record the completed analytic cohort.",
                                 "inputs": ["age"],
                                 "expected_outputs": [],
@@ -677,6 +682,7 @@ print(json.dumps(summary))
                             },
                             {
                                 "step_id": "02_reconcile",
+                                "planned_analysis_role": "auxiliary",
                                 "intent": "Keep the completed cohort fixed while reconciling outputs.",
                                 "inputs": ["age"],
                                 "expected_outputs": [],
@@ -760,6 +766,7 @@ def test_runtime_crash_after_contract_repair_gets_its_own_repair_budget(
                         "steps": [
                             {
                                 "step_id": "05_primary_association",
+                                "planned_analysis_role": "primary",
                                 "intent": "Estimate the adjusted odds ratio for the exposure.",
                                 "inputs": ["age", "death"],
                                 "expected_outputs": ["statistic:primary_association"],
@@ -878,6 +885,7 @@ def test_method_substitution_contract_repair_is_blocked_when_budget_is_zero(
                         "steps": [
                             {
                                 "step_id": "05_primary_association",
+                                "planned_analysis_role": "primary",
                                 "intent": (
                                     "Estimate the adjusted odds ratio for Sepsis-3 and "
                                     "mortality."
@@ -1007,6 +1015,7 @@ def test_generic_association_figure_coder_failure_fails_closed(ra, tmp_path: Pat
                         "steps": [
                             {
                                 "step_id": "03_primary_association",
+                                "planned_analysis_role": "primary",
                                 "intent": "Estimate the adjusted odds ratio.",
                                 "inputs": ["sepsis3", "death", "age"],
                                 "expected_outputs": ["statistic:primary_or"],
@@ -1015,6 +1024,7 @@ def test_generic_association_figure_coder_failure_fails_closed(ra, tmp_path: Pat
                             },
                             {
                                 "step_id": "03_primary_association_figure",
+                                "planned_analysis_role": "auxiliary",
                                 "intent": (
                                     "Render the publication figure(s) declared by "
                                     "step '03_primary_association'."
@@ -1157,6 +1167,7 @@ def test_initial_authority_checkpoint_io_failure_never_enters_code_fallback(
                         "steps": [
                             {
                                 "step_id": "01_summary",
+                                "planned_analysis_role": "auxiliary",
                                 "intent": "Produce the declared cohort summary.",
                                 "inputs": ["stay_id"],
                                 "expected_outputs": ["table:cohort_summary"],
@@ -1392,6 +1403,7 @@ def test_pipeline_does_not_block_or_repair_advisory_ordinal_mean(ra, tmp_path: P
                         "steps": [
                             {
                                 "step_id": "04_primary_association",
+                                "planned_analysis_role": "primary",
                                 "intent": "Assess SOFA-2 and mortality.",
                                 "inputs": ["sofa2", "death"],
                                 "expected_outputs": ["table:primary_association"],
@@ -1515,6 +1527,7 @@ def test_pipeline_falls_back_to_deterministic_code_after_repair_failure(
                         "steps": [
                             {
                                 "step_id": "01_table_one",
+                                "planned_analysis_role": "auxiliary",
                                 "intent": "Produce a Table 1 cohort summary.",
                                 "inputs": ["sofa2", "death"],
                                 "expected_outputs": ["table:table_one"],
@@ -1581,6 +1594,7 @@ def test_pipeline_falls_back_when_repair_model_call_fails(ra, tmp_path: Path):
                         "steps": [
                             {
                                 "step_id": "01_table_one",
+                                "planned_analysis_role": "auxiliary",
                                 "intent": "Produce a Table 1 cohort summary.",
                                 "inputs": ["sofa2", "death"],
                                 "expected_outputs": ["table:table_one"],
@@ -1644,6 +1658,7 @@ def test_pipeline_falls_back_when_successful_script_writes_no_artefacts(
                         "steps": [
                             {
                                 "step_id": "01_table_one",
+                                "planned_analysis_role": "auxiliary",
                                 "intent": "Produce a Table 1 cohort summary.",
                                 "inputs": ["sofa2", "death"],
                                 "expected_outputs": ["table:table_one"],
@@ -2235,6 +2250,7 @@ def test_pipeline_probe_can_trigger_replanning(ra, tmp_path: Path):
                         "steps": [
                             {
                                 "step_id": "00_probe",
+                                "planned_analysis_role": "auxiliary",
                                 "intent": "Probe distributions before execution.",
                                 "inputs": [],
                                 "expected_outputs": [],
@@ -2243,6 +2259,7 @@ def test_pipeline_probe_can_trigger_replanning(ra, tmp_path: Path):
                             },
                             {
                                 "step_id": "03_missingness_audit",
+                                "planned_analysis_role": "auxiliary",
                                 "intent": "Audit missingness before modelling.",
                                 "inputs": ["lact", "death"],
                                 "expected_outputs": ["table:missingness"],
@@ -2251,6 +2268,7 @@ def test_pipeline_probe_can_trigger_replanning(ra, tmp_path: Path):
                             },
                             {
                                 "step_id": "04_primary_association",
+                                "planned_analysis_role": "primary",
                                 "intent": "Model lactate and mortality.",
                                 "inputs": ["lact", "death"],
                                 "expected_outputs": ["table:primary_association"],
@@ -2269,6 +2287,7 @@ def test_pipeline_probe_can_trigger_replanning(ra, tmp_path: Path):
                         "steps": [
                             {
                                 "step_id": "04_primary_association",
+                                "planned_analysis_role": "primary",
                                 "intent": "Model lactate and mortality.",
                                 "inputs": ["lact", "death"],
                                 "expected_outputs": ["table:primary_association"],
@@ -5054,6 +5073,7 @@ def test_plan_cap_makes_room_for_late_primary_anchor_without_exceeding_cap(ra):
         + [
             AnalysisStep(
                 step_id="05_primary_adjusted_model",
+                planned_analysis_role="primary",
                 intent="Fit the primary adjusted model.",
                 method="logistic_regression",
                 expected_outputs=["table:primary_estimate"],
@@ -6193,6 +6213,20 @@ def _register_complete_display_suite_for_readiness(
         producer="coder",
         generation_mode="llm_code",
     )
+    primary_path = tmp_path / "primary_estimand.csv"
+    primary_path.write_text(
+        "term,estimate,ci_low,ci_high\nsepsis3,1.14,1.02,1.28\n",
+        encoding="utf-8",
+    )
+    primary_record = evidence.register_file(
+        kind="table",
+        description="Planner-owned primary adjusted estimate.",
+        source_path=primary_path,
+        evidence_id="table_primary_estimand",
+        produced_by_step=publication_source_step_id,
+        producer="coder",
+        generation_mode="llm_code",
+    )
     publication_source_id = _register_publication_bundle_for_readiness(
         evidence,
         tmp_path,
@@ -6236,8 +6270,28 @@ def _register_complete_display_suite_for_readiness(
     if table_step_id:
         bound.setdefault(table_step_id, []).append(table_record.evidence_id)
     if publication_source_step_id:
-        bound.setdefault(publication_source_step_id, []).append(publication_source_id)
+        bound.setdefault(publication_source_step_id, []).extend(
+            [primary_record.evidence_id, publication_source_id]
+        )
     return bound
+
+
+def _authoritative_readiness_records(
+    plan,
+    evidence_ids_by_step: dict[str, list[str]],
+) -> list[dict]:
+    """Build the same doubly-bound role records produced by the live pipeline."""
+
+    return [
+        {
+            "step_id": step.step_id,
+            "status": "ok",
+            "planned_analysis_role": step.planned_analysis_role,
+            "analysis_request": {"step": step.model_dump(mode="json")},
+            "evidence_ids": list(evidence_ids_by_step.get(step.step_id, [])),
+        }
+        for step in plan.steps
+    ]
 
 
 def test_readiness_publication_ready_requires_article_display_suite(
@@ -6354,7 +6408,8 @@ def test_readiness_publication_ready_accepts_complete_display_suite(
             ra.AnalysisStep(
                 step_id="02_model",
                 intent="Fit adjusted association model.",
-                expected_outputs=["table:adjusted_association"],
+                expected_outputs=["table:primary_estimand"],
+                planned_analysis_role="primary",
             ),
             ra.AnalysisStep(
                 step_id="03_sensitivity",
@@ -6377,19 +6432,7 @@ def test_readiness_publication_ready_accepts_complete_display_suite(
         context=context,
         plan=plan,
         findings=[],
-        per_step_records=[
-            {
-                "step_id": "01_table_one",
-                "status": "ok",
-                "evidence_ids": bound_evidence["01_table_one"],
-            },
-            {
-                "step_id": "02_model",
-                "status": "ok",
-                "evidence_ids": bound_evidence["02_model"],
-            },
-            {"step_id": "03_sensitivity", "status": "ok"},
-        ],
+        per_step_records=_authoritative_readiness_records(plan, bound_evidence),
         evidence=evidence,
         run_dir=tmp_path,
         manuscript_path=bound_path,
@@ -7170,7 +7213,8 @@ def test_readiness_supersedes_stale_publication_figure_contract_quality_error(
             ra.AnalysisStep(
                 step_id="02_model",
                 intent="Fit adjusted association model.",
-                expected_outputs=["table:adjusted_association"],
+                expected_outputs=["table:primary_estimand"],
+                planned_analysis_role="primary",
             ),
             ra.AnalysisStep(
                 step_id="03_sensitivity",
@@ -7213,19 +7257,7 @@ def test_readiness_supersedes_stale_publication_figure_contract_quality_error(
                 ),
             )
         ],
-        per_step_records=[
-            {
-                "step_id": "01_table_one",
-                "status": "ok",
-                "evidence_ids": current_evidence["01_table_one"],
-            },
-            {
-                "step_id": "02_model",
-                "status": "ok",
-                "evidence_ids": current_evidence["02_model"],
-            },
-            {"step_id": "03_sensitivity", "status": "ok"},
-        ],
+        per_step_records=_authoritative_readiness_records(plan, current_evidence),
         evidence=evidence,
         run_dir=tmp_path,
         manuscript_path=bound_path,
@@ -7268,7 +7300,8 @@ def test_author_review_note_marks_superseded_publication_export_error_nonblockin
             ra.AnalysisStep(
                 step_id="02_model",
                 intent="Fit adjusted association model.",
-                expected_outputs=["table:adjusted_association"],
+                expected_outputs=["table:primary_estimand"],
+                planned_analysis_role="primary",
             ),
             ra.AnalysisStep(
                 step_id="03_sensitivity",
@@ -7300,19 +7333,7 @@ def test_author_review_note_marks_superseded_publication_export_error_nonblockin
         context=context,
         plan=plan,
         findings=[stale_error],
-        per_step_records=[
-            {
-                "step_id": "01_table_one",
-                "status": "ok",
-                "evidence_ids": current_evidence["01_table_one"],
-            },
-            {
-                "step_id": "02_model",
-                "status": "ok",
-                "evidence_ids": current_evidence["02_model"],
-            },
-            {"step_id": "03_sensitivity", "status": "ok"},
-        ],
+        per_step_records=_authoritative_readiness_records(plan, current_evidence),
         evidence=evidence,
         run_dir=tmp_path,
         manuscript_path=bound_path,
@@ -7440,7 +7461,8 @@ def test_readiness_supersedes_stale_strict_writer_error_after_clean_bound_manusc
             ra.AnalysisStep(
                 step_id="02_model",
                 intent="Fit adjusted association model.",
-                expected_outputs=["table:adjusted_association"],
+                expected_outputs=["table:primary_estimand"],
+                planned_analysis_role="primary",
             ),
             ra.AnalysisStep(
                 step_id="03_sensitivity",
@@ -7473,19 +7495,7 @@ def test_readiness_supersedes_stale_strict_writer_error_after_clean_bound_manusc
                 ),
             )
         ],
-        per_step_records=[
-            {
-                "step_id": "01_table_one",
-                "status": "ok",
-                "evidence_ids": current_evidence["01_table_one"],
-            },
-            {
-                "step_id": "02_model",
-                "status": "ok",
-                "evidence_ids": current_evidence["02_model"],
-            },
-            {"step_id": "03_sensitivity", "status": "ok"},
-        ],
+        per_step_records=_authoritative_readiness_records(plan, current_evidence),
         evidence=evidence,
         run_dir=tmp_path,
         manuscript_path=bound_path,
@@ -7528,7 +7538,8 @@ def test_readiness_supersedes_stale_numeric_error_after_clean_bound_manuscript(
             ra.AnalysisStep(
                 step_id="02_model",
                 intent="Fit adjusted association model.",
-                expected_outputs=["table:adjusted_association"],
+                expected_outputs=["table:primary_estimand"],
+                planned_analysis_role="primary",
             ),
             ra.AnalysisStep(
                 step_id="03_sensitivity",
@@ -7565,19 +7576,7 @@ def test_readiness_supersedes_stale_numeric_error_after_clean_bound_manuscript(
                 ),
             )
         ],
-        per_step_records=[
-            {
-                "step_id": "01_table_one",
-                "status": "ok",
-                "evidence_ids": current_evidence["01_table_one"],
-            },
-            {
-                "step_id": "02_model",
-                "status": "ok",
-                "evidence_ids": current_evidence["02_model"],
-            },
-            {"step_id": "03_sensitivity", "status": "ok"},
-        ],
+        per_step_records=_authoritative_readiness_records(plan, current_evidence),
         evidence=evidence,
         run_dir=tmp_path,
         manuscript_path=bound_path,
@@ -7620,7 +7619,8 @@ def test_readiness_supersedes_stale_critic_error_after_passed_current_critique(
             ra.AnalysisStep(
                 step_id="02_model",
                 intent="Fit adjusted association model.",
-                expected_outputs=["table:adjusted_association"],
+                expected_outputs=["table:primary_estimand"],
+                planned_analysis_role="primary",
             ),
             ra.AnalysisStep(
                 step_id="03_sensitivity",
@@ -7656,19 +7656,7 @@ def test_readiness_supersedes_stale_critic_error_after_passed_current_critique(
                 ),
             )
         ],
-        per_step_records=[
-            {
-                "step_id": "01_table_one",
-                "status": "ok",
-                "evidence_ids": current_evidence["01_table_one"],
-            },
-            {
-                "step_id": "02_model",
-                "status": "ok",
-                "evidence_ids": current_evidence["02_model"],
-            },
-            {"step_id": "03_sensitivity", "status": "ok"},
-        ],
+        per_step_records=_authoritative_readiness_records(plan, current_evidence),
         evidence=evidence,
         run_dir=tmp_path,
         manuscript_path=bound_path,
@@ -7707,7 +7695,8 @@ def _readiness_fixture_for_manifest_caveats(ra, tmp_path: Path):
             ra.AnalysisStep(
                 step_id="02_model",
                 intent="Fit adjusted association model.",
-                expected_outputs=["table:adjusted_association"],
+                expected_outputs=["table:primary_estimand"],
+                planned_analysis_role="primary",
             ),
             ra.AnalysisStep(
                 step_id="03_sensitivity",
@@ -7731,19 +7720,7 @@ def _readiness_fixture_for_manifest_caveats(ra, tmp_path: Path):
             "manifest caveats: 0 error and 4 warning comment(s)."
         ),
     )
-    per_step_records = [
-        {
-            "step_id": "01_table_one",
-            "status": "ok",
-            "evidence_ids": current_evidence["01_table_one"],
-        },
-        {
-            "step_id": "02_model",
-            "status": "ok",
-            "evidence_ids": current_evidence["02_model"],
-        },
-        {"step_id": "03_sensitivity", "status": "ok"},
-    ]
+    per_step_records = _authoritative_readiness_records(plan, current_evidence)
     return context, plan, evidence, caveat_finding, per_step_records
 
 

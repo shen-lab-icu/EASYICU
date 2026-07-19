@@ -1,13 +1,13 @@
 """Primary-effect candidate selection helpers extracted from pipeline.py.
 
 When the cross-database aggregator needs one canonical primary effect per
-database, it reads the current successful step ledger.  Filesystem discovery
-is retained only for legacy runs whose manifest predates ``per_step_records``.
-The scoring + path inference live here so pipeline.py can stay focused
-on orchestration.
+database, it reads the current successful step ledger.  Primary ownership is
+granted only by the host-persisted ``planned_analysis_role`` bound both to the
+outer step record and its immutable ``analysis_request.step`` snapshot.  A
+summary (including a model-contract payload) can describe an effect but cannot
+declare itself primary.
 
-Moved out on 2026-05-27 as part of the pipeline.py size-reduction effort;
-behaviour is unchanged.
+Moved out on 2026-05-27 as part of the pipeline.py size-reduction effort.
 """
 
 from __future__ import annotations
@@ -15,7 +15,7 @@ from __future__ import annotations
 import json
 import math
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Mapping, Optional
 
 from ..research_context.typed import parse_research_context
 from ..plan_utils import (
@@ -28,6 +28,7 @@ from ..authority.runtime_artifacts import (
     current_successful_step_records,
     load_run_artifact_authority,
 )
+from ..authority.planned_role import unique_verified_primary_record
 from ..scalar_utils import _first_present_scalar
 from ..schema import PipelineResult
 
@@ -58,37 +59,18 @@ def _extract_primary_effect_row(
         "status": "missing_primary_association",
     }
     authority = load_run_artifact_authority(run_dir)
-    if authority is not None:
-        raw_records = authority.get("per_step_records")
-        records = raw_records if isinstance(raw_records, list) else []
-        active_payload = _extract_primary_effect_payload_from_records(
-            records,
-            preferred_predictor=preferred_predictor,
-        )
-        if active_payload is not None:
-            payload.update(active_payload)
+    if authority is None:
+        # Pre-v1 cleanup deliberately removes filesystem discovery.  An orphaned
+        # ``step_summary.json`` has no current-attempt or host role authority.
         return payload
-    summary_candidates = sorted(run_dir.rglob("step_summary.json"))
-    best_payload: Optional[Dict[str, Any]] = None
-    best_score = -10_000
-    for path in summary_candidates:
-        try:
-            summary = json.loads(path.read_text(encoding="utf-8"))
-        except Exception:
-            continue
-        if not isinstance(summary, dict):
-            continue
-        candidate_payload = _extract_primary_effect_payload_from_summary(
-            summary,
-            path=path,
-            preferred_predictor=preferred_predictor,
-        )
-        score = int(candidate_payload.pop("_score"))
-        if score > best_score:
-            best_score = score
-            best_payload = candidate_payload
-    if best_payload is not None:
-        payload.update(best_payload)
+    raw_records = authority.get("per_step_records")
+    records = raw_records if isinstance(raw_records, list) else []
+    active_payload = _extract_primary_effect_payload_from_records(
+        records,
+        preferred_predictor=preferred_predictor,
+    )
+    if active_payload is not None:
+        payload.update(active_payload)
     return payload
 
 
@@ -97,31 +79,35 @@ def _extract_primary_effect_payload_from_records(
     *,
     preferred_predictor: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
-    """Pick the best primary-effect payload from in-memory step records."""
+    """Return the uniquely host-authorised primary-effect payload.
 
-    best_payload: Optional[Dict[str, Any]] = None
-    best_score = -10_000
-    for record in current_successful_step_records(per_step_records or []):
-        if not isinstance(record, dict):
-            continue
-        summary = record.get("step_summary")
-        if not isinstance(summary, dict):
-            continue
-        path = _record_summary_path(record)
-        candidate_payload = _extract_primary_effect_payload_from_summary(
-            summary,
-            path=path,
-            preferred_predictor=preferred_predictor,
-        )
-        score = int(candidate_payload.pop("_score"))
-        if score > best_score:
-            best_score = score
-            best_payload = candidate_payload
-            best_payload["step_id"] = str(record.get("step_id") or "")
-            best_payload["evidence_id"] = str(
-                record.get("step_summary_evidence_id") or ""
-            )
-    return best_payload
+    Every planned current-successful record must carry the same valid role in
+    two host-owned locations: the outer record and the frozen
+    ``analysis_request.step`` snapshot.  Host-native auxiliary records are the
+    only exception and require an explicit ``step_authority_kind``.  Missing,
+    invalid, or disagreeing role bindings fail closed.  Exactly one current
+    record must be ``primary``; summary fields and model-contract self-claims
+    never participate in this selection.
+    """
+
+    successful_records = current_successful_step_records(per_step_records or [])
+    primary_record = unique_verified_primary_record(successful_records)
+    if primary_record is None:
+        return None
+    summary = primary_record.get("step_summary")
+    if not isinstance(summary, dict):
+        return None
+    candidate_payload = _extract_primary_effect_payload_from_summary(
+        summary,
+        path=_record_summary_path(primary_record),
+        preferred_predictor=preferred_predictor,
+    )
+    candidate_payload.pop("_score", None)
+    candidate_payload["step_id"] = str(primary_record.get("step_id") or "")
+    candidate_payload["evidence_id"] = str(
+        primary_record.get("step_summary_evidence_id") or ""
+    )
+    return candidate_payload
 
 
 def _effect_measure_from_scale(scale: Any) -> Optional[str]:
@@ -346,8 +332,7 @@ def _extract_primary_effect_payload_from_summary(
                     contract
                     for contract in model_contracts
                     if isinstance(contract, dict)
-                    and str(contract.get("analysis_role") or "").lower()
-                    == "primary"
+                    and str(contract.get("analysis_role") or "").lower() == "primary"
                     and str(contract.get("exposure_role") or "primary").lower()
                     == "primary"
                 ),

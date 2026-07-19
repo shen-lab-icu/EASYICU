@@ -94,6 +94,7 @@ def _trajectory_plan() -> dict[str, Any]:
         "steps": [
             {
                 "step_id": "01_representation",
+                "planned_analysis_role": "auxiliary",
                 "intent": "Build the agent-selected trajectory representation.",
                 "inputs": ["marker_h0_6", "marker_h6_12"],
                 "expected_outputs": [
@@ -108,6 +109,7 @@ def _trajectory_plan() -> dict[str, Any]:
             },
             {
                 "step_id": "02_candidates",
+                "planned_analysis_role": "primary",
                 "intent": "Fit and select the agent-planned candidate solution.",
                 "inputs": [
                     "artifact:trajectory_representation",
@@ -126,6 +128,7 @@ def _trajectory_plan() -> dict[str, Any]:
             },
             {
                 "step_id": "03_stability",
+                "planned_analysis_role": "sensitivity",
                 "intent": "Execute the planner-owned stability design.",
                 "inputs": sorted(STABILITY_EXECUTOR_INPUTS),
                 "expected_outputs": sorted(STABILITY_EXECUTOR_OUTPUTS),
@@ -136,6 +139,7 @@ def _trajectory_plan() -> dict[str, Any]:
             },
             {
                 "step_id": "04_characterization",
+                "planned_analysis_role": "secondary",
                 "intent": "Describe the frozen groups without causal claims.",
                 "inputs": ["artifact:cluster_assignments"],
                 "expected_outputs": [

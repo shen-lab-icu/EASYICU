@@ -37,6 +37,22 @@ from .planning.robustness_contract import (
     validate_robustness_specs,
 )
 
+PlannedAnalysisRole = Literal[
+    "primary",
+    "secondary",
+    "sensitivity",
+    "auxiliary",
+]
+
+_PRIMARY_RESULT_KIND_ALIASES = {
+    "cohort": "dataset",
+    "metric": "statistic",
+    "statistics": "statistic",
+}
+_PRIMARY_SCIENTIFIC_RESULT_KINDS = frozenset(
+    {"artifact", "dataset", "model", "statistic", "table"}
+)
+
 # ---------------------------------------------------------------------------
 # Variable / concept descriptors
 # ---------------------------------------------------------------------------
@@ -681,6 +697,15 @@ class AnalysisStep(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     step_id: str
+    planned_analysis_role: PlannedAnalysisRole = Field(
+        default="auxiliary",
+        description=(
+            "Planner-owned scientific role of this step. Exactly one step may "
+            "be 'primary'; plans may also have no primary step. Host/internal "
+            "construction defaults to 'auxiliary', while Planner LLM responses "
+            "must explicitly declare the role for every step."
+        ),
+    )
     intent: str = Field(
         ..., description="One-sentence description of what this step does."
     )
@@ -794,6 +819,32 @@ class AnalysisPlan(BaseModel):
         step_ids = [str(step.step_id) for step in self.steps]
         if len(step_ids) != len(set(step_ids)):
             raise ValueError("analysis plan step_id values must be unique")
+        primary_step_ids = [
+            str(step.step_id)
+            for step in self.steps
+            if step.planned_analysis_role == "primary"
+        ]
+        if len(primary_step_ids) > 1:
+            raise ValueError(
+                "analysis plan may declare at most one step with "
+                "planned_analysis_role='primary'; found " + ", ".join(primary_step_ids)
+            )
+        for step in self.steps:
+            if step.planned_analysis_role != "primary":
+                continue
+            typed_output_kinds = {
+                _PRIMARY_RESULT_KIND_ALIASES.get(kind, kind)
+                for raw in step.expected_outputs
+                if isinstance(raw, str)
+                and (separator := raw.strip().partition(":"))[1]
+                and (kind := separator[0].strip().lower())
+                and separator[2].strip()
+            }
+            if not (typed_output_kinds & _PRIMARY_SCIENTIFIC_RESULT_KINDS):
+                raise ValueError(
+                    "a planned primary step must declare at least one typed, "
+                    "non-rendering scientific result product owned by the analysis"
+                )
         if self.robustness_specs:
             try:
                 validate_robustness_specs(self.robustness_specs)
@@ -1348,6 +1399,13 @@ class StepRecord(BaseModel):
     # Always set on construction.
     step_id: str
     intent: str
+    planned_analysis_role: Optional[PlannedAnalysisRole] = Field(
+        default=None,
+        description=(
+            "Host-recorded copy of the Planner-owned step role. New execution "
+            "records populate it; None remains readable for historical records."
+        ),
+    )
 
     # Lifecycle / status.
     status: Optional[str] = Field(
@@ -1418,6 +1476,7 @@ class StepRecord(BaseModel):
 
 
 __all__ = [
+    "PlannedAnalysisRole",
     "VariableRole",
     "AggregationRule",
     "TimeWindow",

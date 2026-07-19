@@ -373,10 +373,10 @@
     "by_severity": {
       "error": 0,
       "info": 3,
-      "warning": 14
+      "warning": 15
     },
-    "count": 17,
-    "set_sha256": "7287db0de0c20b12eae33170969496d9ffe72550eba07e9d0d8acfcd306e4692"
+    "count": 18,
+    "set_sha256": "0d98c4e23c89a0257dfb243c339f911224b310bb5d2e7fc0d4a9b68dc6b12209"
   },
   "volatile_field_allowlist": [
     "absolute_path",

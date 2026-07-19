@@ -616,6 +616,7 @@ def test_plan_normalizer_preserves_typed_model_requirements() -> None:
             "steps": [
                 {
                     "step_id": "01_model",
+                    "planned_analysis_role": "primary",
                     "intent": "Fit the planner-selected model.",
                     "method": "adjusted_association_models",
                     "expected_outputs": ["table:adjusted_association_estimates"],

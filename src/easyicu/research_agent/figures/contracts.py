@@ -9,7 +9,6 @@ from typing import Any, Dict, List, Mapping, Sequence
 
 from ..authority.runtime_artifacts import current_successful_step_records
 
-
 EXPORT_SUFFIXES = ("png", "svg", "pdf", "tiff", "tif")
 
 
@@ -24,6 +23,7 @@ def figure_contract_paths(
     run_dir: Path,
     *,
     per_step_records: Sequence[Mapping[str, Any]] | None = None,
+    include_publication_figures: bool = True,
 ) -> List[Path]:
     supporting_paths = list(run_dir.glob("steps/*/outputs/*.figure_contract.json"))
     if per_step_records is not None:
@@ -55,10 +55,12 @@ def figure_contract_paths(
                 or path.name in declared_contracts[path.parents[1].name]
             )
         ]
-    paths = [
-        *run_dir.glob("publication_figures/*.figure_contract.json"),
-        *supporting_paths,
-    ]
+    paths = list(supporting_paths)
+    if include_publication_figures:
+        paths = [
+            *run_dir.glob("publication_figures/*.figure_contract.json"),
+            *paths,
+        ]
     seen: set[str] = set()
     unique: List[Path] = []
     for path in sorted(paths):
@@ -164,14 +166,20 @@ def panel_chart_type(panel: Mapping[str, Any]) -> str:
     # display-suite gate and the article figure-strategy audit call this;
     # keeping one classifier prevents the same panel being reported with two
     # different chart types in sibling audit artifacts.
-    metadata = panel.get("metadata") if isinstance(panel.get("metadata"), Mapping) else {}
-    explicit = str(
-        panel.get("chart_type")
-        or panel.get("visual_form")
-        or metadata.get("chart_type")
-        or metadata.get("visual_form")
-        or ""
-    ).strip().lower()
+    metadata = (
+        panel.get("metadata") if isinstance(panel.get("metadata"), Mapping) else {}
+    )
+    explicit = (
+        str(
+            panel.get("chart_type")
+            or panel.get("visual_form")
+            or metadata.get("chart_type")
+            or metadata.get("visual_form")
+            or ""
+        )
+        .strip()
+        .lower()
+    )
     if explicit:
         return "_".join(explicit.split())
     text = panel_text(panel)

@@ -640,6 +640,15 @@ def _build_planner_user_prompt(context: ResearchContext) -> str:
         "`expected_outputs`; never rely on hidden in-memory state. Do not force "
         "prediction, clustering, or any other family into a hard-coded mega-step "
         "or split it solely to fit a shared pipeline template.\n\n"
+        "Every step MUST explicitly declare `planned_analysis_role` as exactly "
+        "one of `primary`, `secondary`, `sensitivity`, or `auxiliary`. Use "
+        "`primary` only for the single step that produces the study's headline "
+        "estimand/result; at most one step may be primary, and a plan may have "
+        "none. Use `secondary` for another scientific result, `sensitivity` for "
+        "a robustness analysis, and `auxiliary` for preparation, quality control, "
+        "descriptive reporting, rendering, or protocol work. This role is a "
+        "Planner scientific decision; the host will not infer it from intent, "
+        "method, filenames, or outputs.\n\n"
         "The typed `model_requirements` roster currently covers only a complex "
         "binary/continuous adjusted-association step whose method is exactly "
         "`adjusted_association_models` and whose expected outputs include "
@@ -714,6 +723,7 @@ def _build_planner_user_prompt(context: ResearchContext) -> str:
         '  "steps": [\n'
         "    {\n"
         '      "step_id": "01_table_one",\n'
+        '      "planned_analysis_role": "auxiliary",\n'
         '      "intent": "<one sentence>",\n'
         '      "inputs": ["<variable names from context>"],\n'
         '      "expected_outputs": ["table:table_one"],\n'
@@ -824,7 +834,7 @@ class PlannerAgent:
                 "The JSON must be a single object with keys: "
                 "research_question (string), cohort (object or null), "
                 "steps (array of objects "
-                "each with step_id, intent, inputs, expected_outputs, "
+                "each with step_id, planned_analysis_role, intent, inputs, expected_outputs, "
                 "method, icu_rule_refs, optional model_requirements, and optional "
                 "trajectory_stability_spec), "
                 "rationale (string). "
@@ -859,6 +869,18 @@ class PlannerAgent:
                     "set EASYICU_LLM_DEBUG=1 to also capture every LLM call."
                 )
             data = json.loads(match)
+        if not isinstance(data, dict):
+            raise ValueError("Planner JSON root must be an object")
+        for index, raw_step in enumerate(data.get("steps", []) or []):
+            if not isinstance(raw_step, dict):
+                continue
+            if "planned_analysis_role" not in raw_step:
+                step_id = raw_step.get("step_id") or f"step[{index}]"
+                raise ValueError(
+                    "Planner step "
+                    f"{step_id!r} must explicitly declare planned_analysis_role "
+                    "as one of: primary, secondary, sensitivity, auxiliary"
+                )
         if "research_question" not in data:
             data["research_question"] = context.research_question
         data, dropped = _normalise_plan_payload(data)
@@ -1072,7 +1094,8 @@ class ReplannerAgent(PlannerAgent):
             temperature=0.1,
             format_reminder=(
                 "The JSON must be a single AnalysisPlan object with keys: "
-                "research_question, steps, rationale. Keep completed step_ids "
+                "research_question, steps, rationale. Every step must include "
+                "planned_analysis_role. Keep completed step_ids "
                 "from the CURRENT PLAN unchanged; only revise the remaining steps."
             ),
         )
@@ -3207,6 +3230,7 @@ def _normalise_plan_payload(
     }
     allowed_step = {
         "step_id",
+        "planned_analysis_role",
         "intent",
         "inputs",
         "expected_outputs",

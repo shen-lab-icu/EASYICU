@@ -54,6 +54,7 @@ def _completed_record(plan: AnalysisPlan, *, status: str = "ok") -> dict:
     return {
         "step_id": "01_completed",
         "status": status,
+        "planned_analysis_role": plan.steps[0].planned_analysis_role,
         "analysis_request": {
             "step": plan.steps[0].model_dump(mode="json"),
         },
@@ -69,11 +70,6 @@ def _call_name(node: ast.Call) -> str | None:
 
 
 def _identity_transforms(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(
-        plan_authority,
-        "_preserve_primary_estimand_step_after_replan",
-        lambda *, current, revised: (revised, []),
-    )
     monkeypatch.setattr(
         plan_authority,
         "_preserve_figure_steps_after_replan",
@@ -151,7 +147,6 @@ def test_candidate_transform_order_keeps_second_snapshot_restore() -> None:
         if name
         in {
             "_preserve_completed_step_snapshots_after_replan",
-            "_preserve_primary_estimand_step_after_replan",
             "_preserve_figure_steps_after_replan",
             "_augment_report_typed_product_inputs",
             "_cap_plan_preserving_figure_steps",
@@ -162,7 +157,6 @@ def test_candidate_transform_order_keeps_second_snapshot_restore() -> None:
     ]
     assert relevant == [
         "_preserve_completed_step_snapshots_after_replan",
-        "_preserve_primary_estimand_step_after_replan",
         "_preserve_figure_steps_after_replan",
         "_augment_report_typed_product_inputs",
         "_cap_plan_preserving_figure_steps",
@@ -206,6 +200,63 @@ def test_second_snapshot_restore_repairs_intermediate_transform(
     )
 
 
+def test_normalizer_rejects_double_primary_created_by_snapshot_restore(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    current_primary = AnalysisStep(
+        step_id="01_completed",
+        intent="Fit the immutable primary model.",
+        method="adjusted_association",
+        planned_analysis_role="primary",
+        expected_outputs=["table:association_estimates"],
+    )
+    current = AnalysisPlan(
+        research_question="Test candidate plan authority.",
+        steps=[current_primary],
+    )
+    candidate = AnalysisPlan(
+        research_question=current.research_question,
+        revision=2,
+        steps=[
+            current_primary.model_copy(update={"planned_analysis_role": "secondary"}),
+            AnalysisStep(
+                step_id="02_replacement",
+                intent="Fit a new Planner-selected primary model.",
+                method="adjusted_association",
+                planned_analysis_role="primary",
+                expected_outputs=["table:replacement_association"],
+            ),
+        ],
+    )
+    _identity_transforms(monkeypatch)
+
+    result = plan_authority.normalize_replan_candidate(
+        current_plan=current,
+        candidate_plan=candidate,
+        completed_records=[
+            {
+                "step_id": "01_completed",
+                "status": "ok",
+                "analysis_request": {"step": current_primary.model_dump(mode="json")},
+            }
+        ],
+        context=_context(),
+        max_total_steps=0,
+        locked_robustness_specs=[],
+    )
+
+    assert result.plan is current
+    assert result.substantive is False
+    assert (
+        sum(step.planned_analysis_role == "primary" for step in result.plan.steps) == 1
+    )
+    assert any(
+        finding.detail.get("reason")
+        == "replanner_candidate_invalid_after_authority_projection"
+        for finding in result.findings
+    )
+
+
 def test_latest_failed_checkpoint_does_not_freeze_older_success_snapshot() -> None:
     current = _plan()
     candidate = _plan(intent="New future request.").model_copy(update={"revision": 2})
@@ -222,6 +273,30 @@ def test_latest_failed_checkpoint_does_not_freeze_older_success_snapshot() -> No
 
     assert preserved.steps[0].intent == "New future request."
     assert findings == []
+
+
+def test_completed_snapshot_with_mismatched_outer_role_is_rejected() -> None:
+    current = _plan()
+    candidate = _plan(intent="Attempted rewrite.").model_copy(update={"revision": 2})
+    forged = {
+        **_completed_record(current),
+        "planned_analysis_role": "primary",
+    }
+
+    preserved, findings = (
+        plan_authority._preserve_completed_step_snapshots_after_replan(
+            current_plan=current,
+            revised_plan=candidate,
+            completed_records=[forged],
+        )
+    )
+
+    assert preserved is current
+    assert any(
+        finding.detail.get("reason")
+        == "replanner_candidate_invalid_after_authority_projection"
+        for finding in findings
+    )
 
 
 def test_normalizer_passes_only_current_successful_ids_to_cap(

@@ -21,7 +21,6 @@ from ..schema import ResearchContext, ValidationFinding
 from .study_design import infer_study_design_family
 from .study_design_playbook import StudyDesignFamily
 
-
 ARTICLE_FIGURE_STRATEGY_SCHEMA_VERSION = "easyicu.article_figure_strategy/1"
 ARTICLE_FIGURE_STRATEGY_AUDIT_SCHEMA_VERSION = "easyicu.article_figure_strategy_audit/1"
 
@@ -127,14 +126,35 @@ _FAMILY_STRATEGIES: Dict[StudyDesignFamily, Dict[str, Any]] = {
             _role(
                 "primary_estimand",
                 "Expose the primary adjusted estimand, scale, uncertainty, and adjustment context.",
-                ("forest", "coefficient_plot", "dot_interval", "marginal_effect_panel", "table"),
-                search_terms=("adjusted", "odds ratio", "risk ratio", "effect estimate"),
+                (
+                    "forest",
+                    "coefficient_plot",
+                    "dot_interval",
+                    "marginal_effect_panel",
+                    "table",
+                ),
+                search_terms=(
+                    "adjusted",
+                    "odds ratio",
+                    "risk ratio",
+                    "effect estimate",
+                ),
             ),
             _role(
                 "robustness",
                 "Show sensitivity across definitions, missing-data choices, or model specifications.",
-                ("specification_grid", "sensitivity_forest", "small_multiples", "dot_interval"),
-                search_terms=("sensitivity", "robustness", "specification", "alternative"),
+                (
+                    "specification_grid",
+                    "sensitivity_forest",
+                    "small_multiples",
+                    "dot_interval",
+                ),
+                search_terms=(
+                    "sensitivity",
+                    "robustness",
+                    "specification",
+                    "alternative",
+                ),
             ),
             _role(
                 "data_quality",
@@ -162,7 +182,12 @@ _FAMILY_STRATEGIES: Dict[StudyDesignFamily, Dict[str, Any]] = {
             _role(
                 "model_performance",
                 "Discrimination must be visible but is not sufficient by itself.",
-                ("roc_curve", "precision_recall_curve", "metric_dot_interval", "performance_table"),
+                (
+                    "roc_curve",
+                    "precision_recall_curve",
+                    "metric_dot_interval",
+                    "performance_table",
+                ),
                 search_terms=("roc", "auroc", "precision-recall", "discrimination"),
             ),
             _role(
@@ -181,7 +206,12 @@ _FAMILY_STRATEGIES: Dict[StudyDesignFamily, Dict[str, Any]] = {
                 "data_quality",
                 "Feature availability, imputation, and leakage checks affect reported model performance.",
                 ("feature_availability_panel", "missingness_matrix", "leakage_audit"),
-                search_terms=("missingness", "feature availability", "leakage", "preprocessing"),
+                search_terms=(
+                    "missingness",
+                    "feature availability",
+                    "leakage",
+                    "preprocessing",
+                ),
             ),
         ],
         "anti_patterns": [
@@ -201,12 +231,21 @@ _FAMILY_STRATEGIES: Dict[StudyDesignFamily, Dict[str, Any]] = {
                 "temporal_absolute_risk",
                 "Absolute-risk curves and risk sets orient readers before hazard contrasts.",
                 ("kaplan_meier_curve", "cumulative_incidence_curve", "risk_table"),
-                search_terms=("survival curve", "kaplan", "cumulative incidence", "risk table"),
+                search_terms=(
+                    "survival curve",
+                    "kaplan",
+                    "cumulative incidence",
+                    "risk table",
+                ),
             ),
             _role(
                 "survival_effect",
                 "Adjusted hazard or risk contrasts quantify the primary survival estimand.",
-                ("hazard_ratio_forest", "risk_difference_panel", "survival_contrast_table"),
+                (
+                    "hazard_ratio_forest",
+                    "risk_difference_panel",
+                    "survival_contrast_table",
+                ),
                 search_terms=("hazard", "cox", "survival contrast"),
             ),
             _role(
@@ -237,7 +276,12 @@ _FAMILY_STRATEGIES: Dict[StudyDesignFamily, Dict[str, Any]] = {
             _role(
                 "phenotype_profile",
                 "Clinical profiles make unsupervised groups interpretable.",
-                ("profile_heatmap", "radar", "parallel_coordinates", "characteristics_table"),
+                (
+                    "profile_heatmap",
+                    "radar",
+                    "parallel_coordinates",
+                    "characteristics_table",
+                ),
                 search_terms=("profile", "characteristics", "radar"),
             ),
             _role(
@@ -276,7 +320,12 @@ _FAMILY_STRATEGIES: Dict[StudyDesignFamily, Dict[str, Any]] = {
                 "balance_positivity",
                 "Balance and positivity must be inspected before interpreting a causal contrast.",
                 ("love_plot", "weight_distribution", "positivity_panel"),
-                search_terms=("balance", "standardized mean difference", "positivity", "weight"),
+                search_terms=(
+                    "balance",
+                    "standardized mean difference",
+                    "positivity",
+                    "weight",
+                ),
             ),
             _role(
                 "causal_contrast",
@@ -306,7 +355,13 @@ _FAMILY_STRATEGIES: Dict[StudyDesignFamily, Dict[str, Any]] = {
             _role(
                 "distribution",
                 "The main figure must answer the distributional or prevalence question.",
-                ("distribution_plot", "density", "histogram", "ridge", "prevalence_panel"),
+                (
+                    "distribution_plot",
+                    "density",
+                    "histogram",
+                    "ridge",
+                    "prevalence_panel",
+                ),
                 search_terms=("distribution", "prevalence", "density", "histogram"),
             ),
             _role(
@@ -332,8 +387,12 @@ _FAMILY_STRATEGIES: Dict[StudyDesignFamily, Dict[str, Any]] = {
 }
 
 
-def build_article_figure_strategy(context: ResearchContext) -> ArticleFigureStrategy:
-    family = infer_study_design_family(context)
+def build_article_figure_strategy(
+    context: ResearchContext,
+    *,
+    analysis_family: StudyDesignFamily | None = None,
+) -> ArticleFigureStrategy:
+    family = analysis_family or infer_study_design_family(context)
     template = _FAMILY_STRATEGIES[family]
     return ArticleFigureStrategy(
         analysis_family=family,
@@ -389,7 +448,9 @@ _panel_text = panel_text
 
 
 def _panel_role(panel: Mapping[str, Any]) -> str:
-    metadata = panel.get("metadata") if isinstance(panel.get("metadata"), Mapping) else {}
+    metadata = (
+        panel.get("metadata") if isinstance(panel.get("metadata"), Mapping) else {}
+    )
     return _normalise(
         panel.get("article_role")
         or metadata.get("article_role")
@@ -412,7 +473,9 @@ def _role_matches_panel(role: FigureRoleStrategy, panel: Mapping[str, Any]) -> b
     return any(term and term in text for term in role.search_terms)
 
 
-def _role_has_required_text(role: FigureRoleStrategy, panels: Sequence[Mapping[str, Any]]) -> bool:
+def _role_has_required_text(
+    role: FigureRoleStrategy, panels: Sequence[Mapping[str, Any]]
+) -> bool:
     if not role.required_text_terms:
         return True
     return any(
@@ -457,7 +520,12 @@ def _acceptable_chart_match(role: FigureRoleStrategy, chart_type: str) -> bool:
             "precision_recall_curve",
             "effect_curve",
         },
-        "bar": {"availability_panel", "feature_availability_panel", "denominator_panel", "prevalence_panel"},
+        "bar": {
+            "availability_panel",
+            "feature_availability_panel",
+            "denominator_panel",
+            "prevalence_panel",
+        },
         "heatmap": {
             "coverage_heatmap",
             "missingness_matrix",
@@ -467,7 +535,12 @@ def _acceptable_chart_match(role: FigureRoleStrategy, chart_type: str) -> bool:
             "consensus_matrix",
         },
         "forest": {"sensitivity_forest", "hazard_ratio_forest", "coefficient_plot"},
-        "flow": {"cohort_flow", "target_trial_schematic", "protocol_table", "timeline_diagram"},
+        "flow": {
+            "cohort_flow",
+            "target_trial_schematic",
+            "protocol_table",
+            "timeline_diagram",
+        },
         "distribution": {
             "distribution_plot",
             "density",
@@ -521,8 +594,12 @@ def summarize_article_figure_strategy_coverage(
     context: ResearchContext,
     run_dir: Path,
     per_step_records: Optional[Sequence[Mapping[str, Any]]] = None,
+    analysis_family: StudyDesignFamily | None = None,
 ) -> Dict[str, Any]:
-    strategy = build_article_figure_strategy(context)
+    strategy = build_article_figure_strategy(
+        context,
+        analysis_family=analysis_family,
+    )
     panels = _read_panels(run_dir, per_step_records=per_step_records)
     primary_panels = [
         panel for panel in panels if panel.get("_primary_publication_contract")
@@ -564,7 +641,9 @@ def summarize_article_figure_strategy_coverage(
             )
             continue
         acceptable = [
-            panel for panel in matching if _acceptable_chart_match(role, _panel_chart_type(panel))
+            panel
+            for panel in matching
+            if _acceptable_chart_match(role, _panel_chart_type(panel))
         ]
         if not acceptable:
             role_errors.append(
@@ -602,7 +681,10 @@ def summarize_article_figure_strategy_coverage(
             f"{strategy.hero_role}."
         )
     primary_required_role_count = len(primary_publication_roles & required_roles)
-    if primary_panels and primary_required_role_count < primary_minimum_required_role_count:
+    if (
+        primary_panels
+        and primary_required_role_count < primary_minimum_required_role_count
+    ):
         errors.append(
             "Primary publication figure covers fewer required visual roles than "
             f"expected for {strategy.analysis_family}: "

@@ -559,6 +559,7 @@ def test_parse_fills_inferred_analysis_type_only_when_agent_omits_it(ra):
             "steps": [
                 {
                     "step_id": "01_fit",
+                    "planned_analysis_role": "primary",
                     "intent": "fit cox model",
                     "inputs": [],
                     "expected_outputs": ["table:hr"],
@@ -598,6 +599,7 @@ def test_parse_preserves_agent_selected_family_and_rationale(ra):
             "steps": [
                 {
                     "step_id": "01_association",
+                    "planned_analysis_role": "primary",
                     "intent": "Fit the prespecified logistic association.",
                     "method": "logistic_regression",
                     "expected_outputs": ["table:association_estimates"],
@@ -637,6 +639,7 @@ def test_parse_rejects_unknown_analysis_type_instead_of_bypassing_contract(ra):
             "steps": [
                 {
                     "step_id": "01_model",
+                    "planned_analysis_role": "primary",
                     "intent": "Fit the declared model.",
                     "method": "cox_proportional_hazards",
                     "expected_outputs": ["table:hazard_ratio"],
@@ -693,7 +696,10 @@ def test_infer_does_not_misclassify_lab_names_as_multimodal(ra):
 
     # Lab names containing the substring 'ct'/'note' etc. must NOT score multimodal.
     assert infer_analysis_type(_ctx(["lactate"])).key == "association_study"
-    assert infer_analysis_type(_ctx(["lactate", "extract_flag"])).key == "association_study"
+    assert (
+        infer_analysis_type(_ctx(["lactate", "extract_flag"])).key
+        == "association_study"
+    )
     # Genuine modality variables must still be detected as multimodal.
     assert infer_analysis_type(_ctx(["ct_scan_present"])).key == "multimodal"
     assert infer_analysis_type(_ctx(["clinical_note"])).key == "multimodal"

@@ -8,7 +8,6 @@ method, covariate set, or estimand.
 from __future__ import annotations
 
 import json
-import re
 from typing import Any, List, Optional, Tuple
 
 from ..schema import AnalysisPlan, AnalysisStep
@@ -39,16 +38,7 @@ def _step_scientific_signature(step: AnalysisStep) -> Tuple[Any, ...]:
         tuple(step.expected_outputs),
         " ".join(str(step.intent or "").split()).casefold(),
         tuple(step.icu_rule_refs),
-        tuple(
-            role
-            for role in (
-                "primary",
-                "secondary",
-                "sensitivity",
-                "corroborative",
-            )
-            if re.search(rf"\b{role}\b", (step.intent or "").lower())
-        ),
+        step.planned_analysis_role,
         tuple(
             (
                 requirement.requirement_id,

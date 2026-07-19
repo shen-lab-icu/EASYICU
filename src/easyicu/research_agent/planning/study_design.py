@@ -28,7 +28,6 @@ from .study_design_playbook import (
     triggered_generic_modules,
 )
 
-
 STUDY_DESIGN_BRIEF_SCHEMA_VERSION = "easyicu.study_design_brief/2"
 
 # The analysis-type scorer (``infer_analysis_type``) is richer than the keyword
@@ -49,7 +48,11 @@ _ANALYSIS_TYPE_TO_DESIGN_FAMILY: dict[str, StudyDesignFamily] = {
     "validation": "prediction",
     "trajectory_clustering": "phenotyping",
     "causal_inference": "causal_emulation",
-    "treatment_response": "causal_emulation",
+    # Explicit causal treatment questions are classified as
+    # ``causal_inference`` before this key is considered.  The remaining
+    # treatment-response family is descriptive heterogeneity by definition and
+    # must not inherit a target-trial/causal-contrast contract.
+    "treatment_response": "descriptive",
     "association_study": "association",
     "descriptive_epidemiology": "descriptive",
     "data_quality_audit": "descriptive",
@@ -89,6 +92,20 @@ class StudyDesignBrief(BaseModel):
     planner_instructions: List[str] = Field(default_factory=list)
 
 
+def study_design_family_for_analysis_type(value: str) -> StudyDesignFamily:
+    """Resolve one canonical analysis type to its display-playbook family."""
+
+    from .analysis_types import canonical_analysis_family
+
+    canonical = canonical_analysis_family(value)
+    if canonical is None:
+        raise ValueError(f"unknown analysis_type {value!r}")
+    return _ANALYSIS_TYPE_TO_DESIGN_FAMILY.get(
+        canonical,
+        _UNMAPPED_ANALYSIS_TYPE_TO_DESIGN_FAMILY.get(canonical, "descriptive"),
+    )
+
+
 def infer_study_design_family(context: ResearchContext) -> StudyDesignFamily:
     # Defer to the authoritative analysis-type scorer so the design family and
     # plan contract cannot disagree. Best-effort failures use the neutral
@@ -97,13 +114,7 @@ def infer_study_design_family(context: ResearchContext) -> StudyDesignFamily:
     try:
         from .analysis_types import infer_analysis_type
 
-        inferred_key = infer_analysis_type(context).key
-        return _ANALYSIS_TYPE_TO_DESIGN_FAMILY.get(
-            inferred_key,
-            _UNMAPPED_ANALYSIS_TYPE_TO_DESIGN_FAMILY.get(
-                inferred_key, "descriptive"
-            ),
-        )
+        return study_design_family_for_analysis_type(infer_analysis_type(context).key)
     except Exception:
         return "descriptive"
 
@@ -159,10 +170,14 @@ def _adaptive_triggers_for_context(
             "cross_database_or_site_heterogeneity: add source-level coverage, "
             "site/database-specific estimates, or transportability displays."
         )
-    if "missing" in text or "missingness" in text or any(
-        v.missingness
-        and v.missingness.missingness_severity in {"medium", "high", "unknown"}
-        for v in context.variables
+    if (
+        "missing" in text
+        or "missingness" in text
+        or any(
+            v.missingness
+            and v.missingness.missingness_severity in {"medium", "high", "unknown"}
+            for v in context.variables
+        )
     ):
         triggers.append(
             "nontrivial_missingness_or_measurement_process: show availability, "
@@ -242,8 +257,16 @@ def _display_modules_for_context(
     return modules
 
 
-def build_study_design_brief(context: ResearchContext) -> StudyDesignBrief:
-    family = infer_study_design_family(context)
+def build_study_design_brief(
+    context: ResearchContext,
+    *,
+    analysis_type: str | None = None,
+) -> StudyDesignBrief:
+    family = (
+        study_design_family_for_analysis_type(analysis_type)
+        if analysis_type is not None
+        else infer_study_design_family(context)
+    )
     template = family_template(family)
     question = (context.research_question or "").strip()
     exemplar_query = question if question else family.replace("_", " ")
@@ -302,7 +325,8 @@ def render_study_design_brief_for_prompt(brief: StudyDesignBrief) -> str:
         "- display_playbook:",
         *module_lines,
         "- sensitivity_requirements: " + "; ".join(brief.sensitivity_requirements),
-        "- adaptive_triggers: " + ("; ".join(brief.adaptive_triggers) or "none detected"),
+        "- adaptive_triggers: "
+        + ("; ".join(brief.adaptive_triggers) or "none detected"),
         "- anti_patterns: " + "; ".join(brief.anti_patterns),
         f"- covariate_strategy: {brief.covariate_strategy}",
         "- planner_instructions: " + "; ".join(brief.planner_instructions),
@@ -426,8 +450,7 @@ def _declaration_matches_term(declaration: str, term: str) -> bool:
 def _brief_item_covered(item: str, declarations: set[str]) -> bool:
     def _matches(term: str) -> bool:
         return any(
-            _declaration_matches_term(declaration, term)
-            for declaration in declarations
+            _declaration_matches_term(declaration, term) for declaration in declarations
         )
 
     alternatives = [

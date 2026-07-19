@@ -173,6 +173,13 @@ def _prepare_run(tmp_path: Path, *, include_primary: bool) -> tuple[Path, Path, 
             {
                 "step_id": "07_primary_model",
                 "status": "ok",
+                "planned_analysis_role": "primary",
+                "analysis_request": {
+                    "step": {
+                        "step_id": "07_primary_model",
+                        "planned_analysis_role": "primary",
+                    }
+                },
                 "step_summary_evidence_id": "stat_primary",
                 "step_summary": {
                     "primary_predictor": "exposure",
@@ -684,6 +691,13 @@ def test_structured_preflight_replays_exact_primary_code_and_emits_spec_by_model
                     {
                         "step_id": "07_primary_model",
                         "status": "ok",
+                        "planned_analysis_role": "primary",
+                        "analysis_request": {
+                            "step": {
+                                "step_id": "07_primary_model",
+                                "planned_analysis_role": "primary",
+                            }
+                        },
                         "executed_code_sha256": script_sha,
                         "evidence_ids": [
                             "code_primary_analysis",
@@ -905,6 +919,13 @@ def _write_structured_source_authority(run_dir: Path):
     record = {
         "step_id": step_id,
         "status": "ok",
+        "planned_analysis_role": "primary",
+        "analysis_request": {
+            "step": {
+                "step_id": step_id,
+                "planned_analysis_role": "primary",
+            }
+        },
         "executed_code_sha256": script_sha,
         "evidence_ids": ["code_primary", "table_coefficients", "stat_primary"],
         "step_summary_evidence_id": "stat_primary",
@@ -982,6 +1003,60 @@ def test_structured_source_rejects_symlinked_analysis_script(tmp_path: Path) -> 
     assert (
         _find_structured_primary_model_source(
             records=[record],
+            run_dir=run_dir,
+            evidence_records=evidence,
+        )
+        is None
+    )
+
+
+def test_structured_source_rejects_sensitivity_role_self_claim(
+    tmp_path: Path,
+) -> None:
+    from easyicu.research_agent.execution.runners.deterministic_robustness import (
+        _find_structured_primary_model_source,
+    )
+
+    run_dir = tmp_path / "run"
+    record, evidence, _script_path = _write_structured_source_authority(run_dir)
+    record["planned_analysis_role"] = "sensitivity"
+    record["analysis_request"]["step"]["planned_analysis_role"] = "sensitivity"
+
+    assert (
+        _find_structured_primary_model_source(
+            records=[record],
+            run_dir=run_dir,
+            evidence_records=evidence,
+        )
+        is None
+    )
+
+
+def test_structured_source_rejects_duplicate_verified_primary_records(
+    tmp_path: Path,
+) -> None:
+    from easyicu.research_agent.execution.runners.deterministic_robustness import (
+        _find_structured_primary_model_source,
+    )
+
+    run_dir = tmp_path / "run"
+    record, evidence, _script_path = _write_structured_source_authority(run_dir)
+    decoy = {
+        "step_id": "02_other_primary",
+        "status": "ok",
+        "planned_analysis_role": "primary",
+        "analysis_request": {
+            "step": {
+                "step_id": "02_other_primary",
+                "planned_analysis_role": "primary",
+            }
+        },
+        "step_summary": {},
+    }
+
+    assert (
+        _find_structured_primary_model_source(
+            records=[decoy, record],
             run_dir=run_dir,
             evidence_records=evidence,
         )

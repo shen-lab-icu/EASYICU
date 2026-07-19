@@ -8,6 +8,15 @@ from pathlib import Path
 import pytest
 
 
+def _host_role_fields(step_id: str, role: str = "primary") -> dict:
+    return {
+        "planned_analysis_role": role,
+        "analysis_request": {
+            "step": {"step_id": step_id, "planned_analysis_role": role}
+        },
+    }
+
+
 def test_planner_emits_minimum_axes() -> None:
     from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep
 
@@ -284,6 +293,7 @@ def test_panel_excludes_variant_outside_plan_time_lock() -> None:
             {
                 "step_id": "01_model",
                 "status": "ok",
+                **_host_role_fields("01_model"),
                 "step_summary_evidence_id": "stat_primary",
                 "step_summary": {
                     "primary_or": 1.4,
@@ -414,6 +424,7 @@ def test_panel_writer_rejects_nonexistent_or_stale_summary_evidence(
             {
                 "step_id": "01_model",
                 "status": "ok",
+                **_host_role_fields("01_model"),
                 "step_summary_evidence_id": evidence_id,
                 "evidence_ids": [evidence_id],
                 "step_summary": {
@@ -539,6 +550,7 @@ def test_plan_payload_normalizer_drops_extra_robustness_spec_keys(ra) -> None:
             "steps": [
                 {
                     "step_id": "01_model",
+                    "planned_analysis_role": "primary",
                     "intent": "Fit the primary model.",
                     "expected_outputs": ["statistic:primary_or"],
                 }
@@ -571,6 +583,7 @@ def test_each_spec_produces_panel_row() -> None:
         {
             "step_id": "01_model",
             "status": "ok",
+            **_host_role_fields("01_model"),
             "step_summary_evidence_id": "stat_model",
             "step_summary": {
                 "primary_or": 1.4,
@@ -620,7 +633,9 @@ def test_panel_primary_row_comes_from_step_validated_primary_not_refit() -> None
     import numpy as np
     import pandas as pd
 
-    from easyicu.research_agent.robustness.estimators import fit_robustness_rows_from_records
+    from easyicu.research_agent.robustness.estimators import (
+        fit_robustness_rows_from_records,
+    )
     from easyicu.research_agent.robustness.panel import (
         PRIMARY_SPEC_ID,
         default_robustness_specs,
@@ -640,6 +655,7 @@ def test_panel_primary_row_comes_from_step_validated_primary_not_refit() -> None
         {
             "step_id": "01_primary_model",
             "status": "ok",
+            **_host_role_fields("01_primary_model"),
             "step_summary_evidence_id": "stat_primary_model",
             "step_summary": {
                 "primary_predictor": "lactate",
@@ -698,7 +714,9 @@ def test_primary_row_prefers_final_repaired_effect_over_synthesis_collision() ->
     import numpy as np
     import pandas as pd
 
-    from easyicu.research_agent.robustness.estimators import fit_robustness_rows_from_records
+    from easyicu.research_agent.robustness.estimators import (
+        fit_robustness_rows_from_records,
+    )
     from easyicu.research_agent.robustness.panel import (
         PRIMARY_SPEC_ID,
         default_robustness_specs,
@@ -716,6 +734,7 @@ def test_primary_row_prefers_final_repaired_effect_over_synthesis_collision() ->
         {
             "step_id": "04_final_evidence_synthesis",
             "status": "ok",
+            **_host_role_fields("04_final_evidence_synthesis", "auxiliary"),
             "step_summary_evidence_id": "stat_synthesis",
             "step_summary": {
                 "primary_or": 1.3460230881055546,
@@ -731,6 +750,7 @@ def test_primary_row_prefers_final_repaired_effect_over_synthesis_collision() ->
         {
             "step_id": "05_contract_repair_and_association_addendum",
             "status": "ok",
+            **_host_role_fields("05_contract_repair_and_association_addendum"),
             "step_summary_evidence_id": "stat_repaired_primary",
             "step_summary": {
                 "primary_or": 1.3460230881055546,
@@ -773,6 +793,7 @@ def test_primary_row_prefers_nested_frozen_primary_reconciliation() -> None:
         {
             "step_id": "04_primary_adjusted_association_model",
             "status": "ok",
+            **_host_role_fields("04_primary_adjusted_association_model", "secondary"),
             "step_summary_evidence_id": "stat_offprotocol_primary",
             "step_summary": {
                 "primary_predictor": "sepsis3",
@@ -785,6 +806,7 @@ def test_primary_row_prefers_nested_frozen_primary_reconciliation() -> None:
         {
             "step_id": "05_cohort_definition_sensitivity_comparison",
             "status": "ok",
+            **_host_role_fields("05_cohort_definition_sensitivity_comparison"),
             "step_summary_evidence_id": "stat_reconciled_primary",
             "step_summary": {
                 "primary_predictor": "sepsis3",
@@ -829,7 +851,9 @@ def test_robustness_variants_adjust_for_primary_covariates(tmp_path: Path) -> No
     import numpy as np
     import pandas as pd
 
-    from easyicu.research_agent.robustness.estimators import fit_robustness_rows_from_records
+    from easyicu.research_agent.robustness.estimators import (
+        fit_robustness_rows_from_records,
+    )
     from easyicu.research_agent.robustness.panel import (
         PRIMARY_SPEC_ID,
         default_robustness_specs,

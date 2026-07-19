@@ -22,6 +22,13 @@ def _adapter_records(df: pd.DataFrame):
         {
             "step_id": "01_model",
             "status": "ok",
+            "planned_analysis_role": "primary",
+            "analysis_request": {
+                "step": {
+                    "step_id": "01_model",
+                    "planned_analysis_role": "primary",
+                }
+            },
             "step_summary_evidence_id": "stat_model",
             "step_summary": {
                 "primary_predictor": "x",
@@ -39,7 +46,7 @@ def _adapter_records(df: pd.DataFrame):
                         "author_defined_outcome_1": "y_alt_1",
                         "author_defined_outcome_2": "y_alt_2",
                     },
-                }
+                },
             },
         }
     ]
@@ -93,7 +100,9 @@ def test_adapter_builds_full_eight_row_panel_and_registers_claims(ra, tmp_path) 
     import json
     from types import SimpleNamespace
 
-    from easyicu.research_agent.robustness.estimators import fit_robustness_rows_from_records
+    from easyicu.research_agent.robustness.estimators import (
+        fit_robustness_rows_from_records,
+    )
     from easyicu.research_agent.robustness.panel import (
         build_robustness_panel_from_records,
         default_robustness_specs,
@@ -154,7 +163,9 @@ def test_adapter_builds_full_eight_row_panel_and_registers_claims(ra, tmp_path) 
 
 
 def test_step_owned_rows_prevent_adapter_refit_with_warning() -> None:
-    from easyicu.research_agent.robustness.estimators import fit_robustness_rows_from_records
+    from easyicu.research_agent.robustness.estimators import (
+        fit_robustness_rows_from_records,
+    )
     from easyicu.research_agent.robustness.panel import (
         build_robustness_panel_from_records,
         default_robustness_specs,
