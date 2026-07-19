@@ -49,11 +49,11 @@ from easyicu.research_agent.data_catalog import build_available_catalog  # noqa:
 from easyicu.research_agent.concept_catalog import (  # noqa: E402
     normalize_concept_name,
 )
-from easyicu.research_agent.idea_mining import (  # noqa: E402
+from easyicu.research_agent.discovery.idea_mining import (  # noqa: E402
     OutcomeDeterminability,
     run_idea_mining_dry_run,
 )  # noqa: E402
-from easyicu.research_agent.idea_mining_funnel import (  # noqa: E402
+from easyicu.research_agent.discovery.idea_mining_funnel import (  # noqa: E402
     LiteratureFunnelSpec,
     fetch_literature_funnel_corpus,
 )
@@ -808,7 +808,7 @@ def main() -> None:
     # Extended feasibility: reconsider db-cannot-do via ICD-derivable cohort
     # (Case 1) and dictionary / cross-DB concept reachability (Case 2). Only
     # downgrades to hold (human-confirm); never promotes to executable.
-    from easyicu.research_agent.idea_mining_extended_feasibility import (
+    from easyicu.research_agent.discovery.idea_mining_extended_feasibility import (
         ExtendedFeasibilityIndex,
     )
 

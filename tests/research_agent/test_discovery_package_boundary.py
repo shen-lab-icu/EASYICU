@@ -26,6 +26,11 @@ DISCOVERY_MODULE_ALIASES = tuple(
         "idea_mining_data_first",
         "idea_mining_feasibility_tier",
         "concept_proposal",
+        "idea_mining",
+        "idea_mining_priorart",
+        "idea_mining_funnel",
+        "idea_mining_extended_feasibility",
+        "idea_mining_eval",
     )
 )
 
@@ -78,3 +83,15 @@ def test_discovery_package_is_lazy_and_canonical_modules_do_not_import_pipeline(
             if isinstance(node, ast.ImportFrom)
         }
         assert not any(name.startswith("pipeline") for name in imported_modules)
+
+
+def test_default_idea_quality_fixture_path_is_independent_of_module_depth() -> None:
+    module = importlib.import_module(
+        "easyicu.research_agent.discovery.idea_mining_eval"
+    )
+    package_root = (
+        Path(importlib.import_module("easyicu").__file__).resolve().parents[2]
+    )
+    assert module.default_idea_quality_eval_path() == (
+        package_root / "benchmark" / "idea_mining_quality_eval_set.json"
+    )
