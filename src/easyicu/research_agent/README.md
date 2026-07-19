@@ -75,7 +75,11 @@ mechanically moving every top-level file:
 | --- | --- | --- |
 | `gates/` | read-only contract, visual and concept findings/decisions | provider calls, repair budget, checkpoint/evidence mutation, scientific design |
 | `execution/` | provider-backed concept audit and preparation/rendering of already-authorized figure products | cohort, exposure, outcome, method or estimand selection |
+| `execution/runners/` | auxiliary deterministic calculations over an Agent-locked specification | primary estimand selection or benchmark-case routing |
 | `authority/` | replanner-candidate invariants, typed input/evidence binding, typed success-promotion boundaries and digest-bound direct-parent resolution around the existing EvidenceStore/checkpoint authorities | provider calls, scientific plan selection, a second `current` selector, sibling scan, or independent evidence ledger |
+| `repairs/` | typed repair reasons, exact patch/full-rewrite transport, deterministic source repair and summary salvage | scientific redesign, silent gate relaxation or case-specific repair rules |
+| `discovery/` | candidate-hypothesis ranking, feasibility and discovery handoff | manuscript authority or autonomous scientific claims |
+| `reporting/` | manuscript binding, article/display contracts, review artifacts and rendering helpers | unverified numeric claims or a second evidence authority |
 
 `pipeline_execute.py` remains the orchestration caller. PlanAuthority's pure
 candidate projection and TypedBindingResolver are now canonical under
@@ -89,11 +93,16 @@ body is sequence-sensitive orchestration and maintenance debt, not a reason to
 create a universal state bag or inflate the executor. The
 legacy top-level module paths (`contract_gate`, `concept_gate`,
 `concept_audit_execution`, `gate_evaluator`, `figure_contract_preparation`,
-`publication_figure_execution`, `evidence_registration`) are module-object
-aliases to the canonical packages. This is intentional: archived scripts and
-public imports keep working, and monkeypatches through either path reach the
-same implementation. New canonical code must import the responsibility package
-directly, never the compatibility façade.
+`publication_figure_execution`, `evidence_registration`, `provider_budget`,
+`code_preflight`, `code_repair`, `code_repair_helpers`, `repair_reasons`,
+`repair_coordination`, `code_patch`, `summary_repair`, and the moved
+discovery/reporting/runner modules) are module-object aliases to the canonical
+packages. This is intentional: archived scripts and public imports keep
+working, and monkeypatches through either path reach the same implementation.
+New canonical code must import the responsibility package directly, never the
+compatibility façade. Consequently, counting physical top-level files includes
+these deliberate shims and is not a valid measure of remaining architecture
+debt.
 
 Current scope note: Layer 4 is bounded. It produces an auditable
 `hypothesis_blueprint.json` before planning, ranking candidates by
