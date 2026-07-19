@@ -2808,6 +2808,44 @@ def test_llm_concept_auditor_checks_summary_source_status_bypasses(ra):
     assert "Message text is explanatory only, never routing" in prompt
 
 
+def test_llm_concept_auditor_trusts_exact_step_input_metadata_binding(ra):
+    context = ra.ResearchContext(
+        research_question="Assess one planned early summary.",
+        cohort=ra.CohortDescriptor(
+            cohort_name="c",
+            database="synthetic",
+            n_stays=2,
+            n_patients=2,
+        ),
+        variables=[
+            ra.ConceptDescriptor(
+                name="marker_max",
+                dtype="float64",
+                source_concept="marker",
+                analysis_window="icu_admit_0_24h",
+            )
+        ],
+        primary_exposure="marker_max",
+    )
+    step = ra.AnalysisStep(
+        step_id="early_summary",
+        intent="Use the exact planned early summary.",
+        inputs=["marker_max"],
+        expected_outputs=["table:summary"],
+        method="descriptive_statistics",
+    )
+
+    prompt = ra.LLMConceptAuditor(ra.MockLLMClient())._prompt(
+        context=context,
+        script_text="values = frame['marker_max']",
+        step=step,
+    )
+
+    assert "host-owned binding" in prompt
+    assert "do not require generated code to re-prove the host metadata" in prompt
+    assert "flag it merely because its column name contains first/max/min/mean" in prompt
+
+
 def test_llm_concept_auditor_downgrades_finalized_exposure_rederivation_demand(ra):
     class _FalseReconciliationDemandLLM:
         def complete(self, messages, *, max_tokens=1024, temperature=0.0):

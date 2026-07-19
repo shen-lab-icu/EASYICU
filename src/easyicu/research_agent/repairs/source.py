@@ -566,6 +566,77 @@ def _lossy_numeric_coercion_repair_lines(
     return frozenset(lines)
 
 
+def _conditional_nonfinite_guard_lines(
+    findings: Sequence[ValidationFinding],
+) -> frozenset[int]:
+    """Return exact host-owned outer guards eligible for dedenting repair."""
+
+    return frozenset(
+        int((finding.detail or {})["guard_line"])
+        for finding in findings
+        if finding.validator == "mechanical_code_preflight"
+        and finding.severity == "error"
+        and (finding.detail or {}).get("reason") == "conditional_nonfinite_guard"
+        and isinstance((finding.detail or {}).get("guard_line"), int)
+        and not isinstance((finding.detail or {}).get("guard_line"), bool)
+        and int((finding.detail or {})["guard_line"]) > 0
+    )
+
+
+def _patch_conditional_nonfinite_guard(
+    code: str,
+    *,
+    guard_lines: frozenset[int],
+) -> str:
+    """Remove one unrelated inner condition from a proven numeric fail guard."""
+
+    if len(guard_lines) != 1:
+        return code
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return code
+    candidates = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.If)
+        and int(node.lineno) in guard_lines
+        and not node.orelse
+        and len(node.body) == 1
+        and isinstance(node.body[0], ast.If)
+        and not node.body[0].orelse
+        and len(node.body[0].body) == 1
+        and isinstance(node.body[0].body[0], (ast.Expr, ast.Raise))
+    ]
+    if len(candidates) != 1:
+        return code
+    outer = candidates[0]
+    inner = outer.body[0]
+    terminal = inner.body[0]
+    if not (
+        inner.end_lineno is not None
+        and terminal.end_lineno is not None
+        and terminal.col_offset > inner.col_offset
+    ):
+        return code
+    lines = code.splitlines(keepends=True)
+    dedent = terminal.col_offset - inner.col_offset
+    replacement: list[str] = []
+    for raw in lines[terminal.lineno - 1 : terminal.end_lineno]:
+        if raw.strip():
+            if len(raw) - len(raw.lstrip(" ")) < dedent:
+                return code
+            raw = raw[dedent:]
+        replacement.append(raw)
+    lines[inner.lineno - 1 : inner.end_lineno] = replacement
+    repaired = "".join(lines)
+    try:
+        ast.parse(repaired)
+    except SyntaxError:
+        return code
+    return repaired
+
+
 def _expression_key(node: ast.AST) -> str:
     return ast.dump(node, annotate_fields=True, include_attributes=False)
 
@@ -909,6 +980,16 @@ def deterministic_concept_audit_repair(
         )
         if guarded != repaired:
             repair_name = "lossy_numeric_coercion_guard_v1"
+            repaired = guarded
+            repair_names.append(repair_name)
+
+    if RepairReason.NONFINITE_NUMERIC_INPUT in set(repair_reasons):
+        guarded = _patch_conditional_nonfinite_guard(
+            repaired,
+            guard_lines=_conditional_nonfinite_guard_lines(repair_findings),
+        )
+        if guarded != repaired:
+            repair_name = "conditional_nonfinite_fail_closed_guard_v1"
             repaired = guarded
             repair_names.append(repair_name)
 
