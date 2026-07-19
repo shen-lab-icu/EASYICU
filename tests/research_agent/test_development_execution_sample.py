@@ -19,11 +19,13 @@ from easyicu.research_agent.execution.development_sample import (
     DevelopmentSampleError,
     materialize_development_execution_sample,
 )
+from easyicu.research_agent.execution.phase import _step_execution_cohort_path
 from easyicu.research_agent.intake.materialized_trajectory import (
     StagedTrajectoryBinding,
 )
 from easyicu.research_agent.orchestration.config import PipelineConfig
 from easyicu.research_agent.pipeline import ResearchAgentPipeline
+from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep
 
 
 def _sha(path: Path) -> str:
@@ -210,6 +212,68 @@ def test_execution_authority_selects_sample_but_keeps_full_universe(
     assert state.selected_path == binding.cohort_path
     assert state.universe_path == universe
     assert len(pd.read_parquet(state.selected_path)) == 5
+
+
+def test_primary_cohort_confirmation_uses_post_qc_development_sample(
+    tmp_path: Path,
+) -> None:
+    universe = tmp_path / "cohort.parquet"
+    analysis = tmp_path / "cohort_analysis.parquet"
+    sample = tmp_path / DEVELOPMENT_COHORT_FILENAME
+    for path in (universe, analysis, sample):
+        pd.DataFrame({"stay_id": [1]}).to_parquet(path, index=False)
+    (tmp_path / DEVELOPMENT_SAMPLE_FILENAME).write_text("{}", encoding="utf-8")
+    step = AnalysisStep(
+        step_id="01_cohort",
+        intent="Confirm the locked analysis cohort and report attrition.",
+        inputs=["stay_id"],
+        expected_outputs=[
+            "cohort:analysis_set",
+            "table:cohort_flow",
+            "table:cohort_attrition",
+        ],
+        method="cohort_definition_and_attrition",
+    )
+    plan = AnalysisPlan(research_question="Confirm the cohort.", steps=[step])
+
+    selected = _step_execution_cohort_path(
+        step=step,
+        plan=plan,
+        run_dir=tmp_path,
+        universe_path=universe,
+        cohort_path=sample,
+    )
+
+    assert selected == sample
+
+
+def test_primary_cohort_producer_uses_universe_without_development_sample(
+    tmp_path: Path,
+) -> None:
+    universe = tmp_path / "cohort.parquet"
+    analysis = tmp_path / "cohort_analysis.parquet"
+    step = AnalysisStep(
+        step_id="01_cohort",
+        intent="Construct the locked analysis cohort and report attrition.",
+        inputs=["stay_id"],
+        expected_outputs=[
+            "cohort:analysis_set",
+            "table:cohort_flow",
+            "table:cohort_attrition",
+        ],
+        method="cohort_definition_and_attrition",
+    )
+    plan = AnalysisPlan(research_question="Construct the cohort.", steps=[step])
+
+    selected = _step_execution_cohort_path(
+        step=step,
+        plan=plan,
+        run_dir=tmp_path,
+        universe_path=universe,
+        cohort_path=analysis,
+    )
+
+    assert selected == universe
 
 
 def test_pipeline_config_round_trips_development_sample(tmp_path: Path) -> None:

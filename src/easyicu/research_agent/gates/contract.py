@@ -714,7 +714,11 @@ def _step_deterministic_contract_findings(
         plan=plan,
         step_summary=step_summary,
         out_dir=out_dir,
-        universe_path=universe_path,
+        # ``execution_cohort_path`` is normally the raw universe for the
+        # primary cohort producer.  In post-QC development mode it is the
+        # verified sample, which must remain the execution population for every
+        # scientific step rather than silently expanding back to full data.
+        universe_path=execution_cohort_path,
         authoritative_cohort_path=cohort_path,
     )
     findings += cross_step_cohort_lock_validator.audit(
