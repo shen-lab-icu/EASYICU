@@ -24,7 +24,7 @@ from typing import Any, Callable, Dict, List, Mapping, Optional
 import pandas as pd
 
 from .audits.validators import dedupe_findings
-from .cohort_schema import COHORT_LOCK_FILENAME
+from .cohort.schema import COHORT_LOCK_FILENAME
 from .concept_dict_audit import (
     CONCEPT_DICT_PACKAGE_PATH,
     SOFA2_DICT_PACKAGE_PATH,

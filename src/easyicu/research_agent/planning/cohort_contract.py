@@ -3,7 +3,7 @@
 This module owns the serializable CTAS types, validation rules, named-pattern
 registry, and concept-id registry used while planning a cohort. It deliberately
 does not read or write run locks, materialize dataframes, or promote evidence;
-those lifecycle responsibilities remain in :mod:`cohort_schema`.
+those lifecycle responsibilities remain in :mod:`..cohort.schema`.
 """
 
 from __future__ import annotations

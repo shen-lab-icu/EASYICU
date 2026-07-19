@@ -183,7 +183,7 @@ def _register_case_patterns(case_name: Optional[str]) -> Optional[Dict[str, Any]
             "numbers, and underscores"
         )
     _bootstrap_imports()
-    from easyicu.research_agent.cohort_schema import default_pattern_registry
+    from easyicu.research_agent.cohort.schema import default_pattern_registry
 
     module_name = f"benchmark.cases.{case_name}.register_patterns"
     try:
@@ -1027,7 +1027,7 @@ def _run_one_arm(
     force_writer_probe: bool = False,
 ) -> Dict[str, Any]:
     from easyicu.research_agent import ResearchAgentPipeline  # type: ignore
-    from easyicu.research_agent.cohort_schema import register_cohort_concept_ids
+    from easyicu.research_agent.cohort.schema import register_cohort_concept_ids
     from easyicu.research_agent.reporting.reporting_checklist import (
         checklist_names_for_kind,
     )

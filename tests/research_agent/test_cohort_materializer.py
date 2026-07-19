@@ -7,8 +7,8 @@ integration on synthetic frames so the logic is covered in CI.
 import pandas as pd
 import pytest
 
-from easyicu.research_agent import cohort_materializer as M
-from easyicu.research_agent.cohort_schema import CohortDefinition, build_cohort
+from easyicu.research_agent.cohort import materializer as M
+from easyicu.research_agent.cohort.schema import CohortDefinition, build_cohort
 
 
 def test_summarize_timeseries_basic():
@@ -384,7 +384,7 @@ def test_windowed_death_exclusion_uses_event_time_not_wholestay_flag():
     (``death_time``) must exclude only events INSIDE the window, using the event
     time — not drop every event because the whole-stay flag is set. Previously
     the landmark exclusion "died within 24h" removed all deaths -> 0 events."""
-    from easyicu.research_agent.cohort_schema import build_cohort, CohortDefinition
+    from easyicu.research_agent.cohort.schema import build_cohort, CohortDefinition
 
     data = pd.DataFrame(
         {
@@ -420,7 +420,7 @@ def test_windowed_death_exclusion_uses_event_time_not_wholestay_flag():
 def test_windowed_predicate_without_event_time_column_is_unchanged():
     """A concept with no ``<concept>_time`` sibling keeps whole-stay semantics
     (association runs like E3 have no death_time and must be unaffected)."""
-    from easyicu.research_agent.cohort_schema import build_cohort, CohortDefinition
+    from easyicu.research_agent.cohort.schema import build_cohort, CohortDefinition
 
     data = pd.DataFrame({"stay_id": [1, 2, 3], "age": [65, 70, 55], "death": [1, 0, 1]})
     definition = CohortDefinition.from_dict(

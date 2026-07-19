@@ -20,7 +20,7 @@ from easyicu.research_agent.figures.publication import (
 
 def _prepare_robustness_authority(ra, run_dir: Path, evidence, rows) -> None:
     """Give panel fixtures the same lock + digest-bound row authority as runs."""
-    from easyicu.research_agent.cohort_schema import CohortDefinition
+    from easyicu.research_agent.cohort.schema import CohortDefinition
     from easyicu.research_agent.robustness_panel import (
         RobustnessSpec,
         default_robustness_specs,

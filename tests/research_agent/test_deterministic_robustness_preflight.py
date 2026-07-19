@@ -12,7 +12,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from easyicu.research_agent.cohort_schema import (
+from easyicu.research_agent.cohort.schema import (
     CohortDefinition,
     ConceptPredicate,
     TimeWindow,

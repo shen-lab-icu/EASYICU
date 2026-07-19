@@ -118,8 +118,8 @@ from .gates.concept import (
 )
 from .authority.coder_authority import HostCoderAuthority
 from .research_context.prompt_scope import scoped_coder_context
-from .cohort_repair import extract_cohort_definition_from_prose
-from .cohort_schema import (
+from .cohort.repair import extract_cohort_definition_from_prose
+from .cohort.schema import (
     CohortDefinition,
     assert_cohort_definition_locked,
     materialize_locked_analysis_cohort,

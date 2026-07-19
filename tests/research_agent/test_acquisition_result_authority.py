@@ -4,8 +4,8 @@ from pathlib import Path
 
 import pytest
 
-from easyicu.research_agent.data_catalog import CoverageReport
-from easyicu.research_agent.data_foundation import AcquisitionResult, ConceptSelection
+from easyicu.research_agent.acquisition.catalog import CoverageReport
+from easyicu.research_agent.acquisition.foundation import AcquisitionResult, ConceptSelection
 from easyicu.research_agent.intake.materialized_metadata import (
     MaterializedCohortAuthorityRef,
     MaterializedMetadataError,

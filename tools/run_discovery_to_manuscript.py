@@ -33,7 +33,7 @@ def _bootstrap_imports() -> Path:
 
 REPO_ROOT = _bootstrap_imports()
 
-from easyicu.research_agent.data_foundation import (  # noqa: E402
+from easyicu.research_agent.acquisition.foundation import (  # noqa: E402
     acquire_universe_for_question,
 )
 from easyicu.research_agent.discovery.discovery_handoff import (  # noqa: E402

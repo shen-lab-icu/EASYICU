@@ -1335,7 +1335,7 @@ def test_execute_phase_host_verifies_measurement_provenance_at_every_contract_ga
 
 
 def test_primary_cohort_coder_receives_only_exact_locked_cohort_payload():
-    from easyicu.research_agent.cohort_schema import (
+    from easyicu.research_agent.cohort.schema import (
         CohortDefinition,
         ConceptPredicate,
         TimeWindow,

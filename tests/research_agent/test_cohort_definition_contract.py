@@ -9,7 +9,7 @@ primary model silently ran on the full universe.
 
 from __future__ import annotations
 
-from easyicu.research_agent.cohort_schema import (
+from easyicu.research_agent.cohort.schema import (
     CohortDefinition,
     ConceptPredicate,
     TimeWindow,

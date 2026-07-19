@@ -12,7 +12,7 @@ from easyicu.research_agent.agents.core import (
     PLANNER_MAX_RETRIES,
     _build_planner_user_prompt,
 )
-from easyicu.research_agent.cohort_schema import ALLOWED_CTAS_AGGREGATIONS
+from easyicu.research_agent.cohort.schema import ALLOWED_CTAS_AGGREGATIONS
 
 
 def _context(

@@ -20,9 +20,9 @@ Before the retirement patch, the 161 top-level Python files comprised:
 | Real top-level implementations | 93 | 98,530 | Canonical/public/frozen/dormant implementations requiring individual review |
 
 The cleanup has now removed the old facade layer rather than retaining hundreds
-of tiny forwarding files.  The current tree has **60 top-level Python files
-including `__init__.py`**, with 222 modules in 23 responsibility packages and
-761 static import edges.  The graph remains at **zero cyclic
+of tiny forwarding files.  The current tree has **46 top-level Python files
+including `__init__.py`**, with 225 modules in 26 responsibility packages and
+758 static import edges.  The graph remains at **zero cyclic
 modules / zero SCCs**.  The former 23-module control-plane SCC,
 validator/replication pair, and final pipeline/execute/publication-figure cycle
 are gone.
@@ -34,10 +34,16 @@ dependency-neutral `contracts.py`; both the package root and execution runner
 export that single contract object, so authority code does not reverse-import
 the execution layer.
 
+The trajectory, publication-figure, cohort and acquisition bundles now own
+their domain implementations under `trajectory/`, `figures/`, `cohort/` and
+`acquisition/`. Their former top-level import paths are deleted. Generic cohort
+dataframe primitives now live in `cohort/primitives.py`, so the materializer no
+longer imports private helpers from a case plugin. The acquisition API requires
+the caller's outcome declaration and carries no default death/censoring science.
+
 This is the AST-visible, module-top-level static import graph. Sealed-renderer
-digest and archived-candidate compatibility still use a controlled registry-
-mediated dynamic import of legacy implementation modules; that runtime
-compatibility surface is not an import-time SCC and is not classified as dead.
+digest selection uses a controlled registry-mediated dynamic import of current
+implementation modules; that runtime surface is not an import-time SCC.
 
 The remaining visible file count is now implementation work, not compatibility
 surface.  The two ~11k-line pipeline modules and the remaining top-level domain
@@ -107,7 +113,7 @@ method, or estimand.
   submission profiles disable them, but non-canonical consumers remain.
 - `graph.py`: opt-in graph execution path.
 - `cli.py` and `replication_cli.py`: installed console entry points.
-- `data_foundation.py`: consumed by `run_discovery_to_manuscript.py`.
+- `acquisition/foundation.py`: consumed by `run_discovery_to_manuscript.py`.
 - `evaluation_scorecard.py`, `validity_signals.py`, and `icu_agent_bench.py`:
   live benchmark/evaluator dependencies.
 

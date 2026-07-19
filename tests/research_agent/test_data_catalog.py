@@ -13,7 +13,7 @@ from easyicu.concept.metadata_projection import (
 )
 from easyicu.concept.metadata_sidecar import ColumnMetadataBinding
 from easyicu.resources import load_dictionary
-from easyicu.research_agent.data_catalog import (
+from easyicu.research_agent.acquisition.catalog import (
     AvailableCatalog,
     CatalogConcept,
     _methodology_tag,
@@ -123,7 +123,7 @@ def test_build_available_catalog_from_export_dir(tmp_path):
 
 def test_typed_catalog_exposes_source_owner_not_physical_companions(monkeypatch):
     monkeypatch.setattr(
-        "easyicu.research_agent.data_catalog.index_export_package",
+        "easyicu.research_agent.acquisition.catalog.index_export_package",
         lambda _root: {
             "lact": {
                 "column_metadata_v2": True,
@@ -177,7 +177,7 @@ def test_typed_catalog_exposes_source_owner_not_physical_companions(monkeypatch)
 
 def test_typed_catalog_omits_ambiguous_primary_owner(monkeypatch):
     monkeypatch.setattr(
-        "easyicu.research_agent.data_catalog.index_export_package",
+        "easyicu.research_agent.acquisition.catalog.index_export_package",
         lambda _root: {
             "signal_a": {
                 "column_metadata_v2": True,
@@ -201,7 +201,7 @@ def test_typed_catalog_omits_ambiguous_primary_owner(monkeypatch):
 def test_typed_catalog_uses_sealed_metadata_not_mutable_dictionary(monkeypatch):
     binding = _typed_binding("lact", "lact", ConceptColumnRole.VALUE)
     monkeypatch.setattr(
-        "easyicu.research_agent.data_catalog.index_export_package",
+        "easyicu.research_agent.acquisition.catalog.index_export_package",
         lambda _root: {
             "lact": {
                 "column_metadata_v2": True,
@@ -214,7 +214,7 @@ def test_typed_catalog_uses_sealed_metadata_not_mutable_dictionary(monkeypatch):
         },
     )
     monkeypatch.setattr(
-        "easyicu.research_agent.data_catalog._concept_dict_meta",
+        "easyicu.research_agent.acquisition.catalog._concept_dict_meta",
         lambda: {"lact": {"description": "MUTABLE DECOY", "category": "decoy"}},
     )
 
@@ -287,7 +287,7 @@ def test_build_available_catalog_populates_methodology(tmp_path, monkeypatch):
     import pandas as pd
 
     monkeypatch.setattr(
-        "easyicu.research_agent.data_catalog._concept_dict_meta",
+        "easyicu.research_agent.acquisition.catalog._concept_dict_meta",
         lambda: {
             "norepi": {
                 "description": "norepinephrine exposure",

@@ -9,11 +9,11 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
-from easyicu.research_agent import cohort_materializer
+from easyicu.research_agent.cohort import materializer as cohort_materializer
 from easyicu.research_agent.case_plugins.builder import (
     build_lactate_map_vaso_cohort_from_export,
 )
-from easyicu.research_agent.data_catalog import build_available_catalog
+from easyicu.research_agent.acquisition.catalog import build_available_catalog
 from easyicu.research_agent.intake import export_package as intake
 from easyicu.research_agent.replication.discovery import discover_easyicu_exports
 

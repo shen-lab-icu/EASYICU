@@ -21,12 +21,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Mapping, Optional
 
-from .authority.lock_contract import (
+from ..authority.lock_contract import (
     LockAuthorityError,
     assert_lock_matches_evidence_anchor,
-    rehydrate_timestamp_only_legacy_lock,
 )
-from .planning.cohort_contract import (
+from ..planning.cohort_contract import (
     ALLOWED_CTAS_AGGREGATIONS,
     Aggregation,
     CohortDefinition,
@@ -83,18 +82,7 @@ def _load_locked_cohort_definition(run_dir: Path) -> CohortDefinition:
     validate_cohort_definition(definition)
     expected_sha = str(payload.get("cohort_sha256") or "").strip()
     observed_sha = cohort_definition_sha(definition)
-    # Compatibility for locks written before cohort hashes canonicalised
-    # integer/float time-window offsets.  This does not weaken modern evidence
-    # authority: the complete lock bytes must still match the immutable anchor.
-    legacy_payload_sha = hashlib.sha256(
-        json.dumps(
-            raw_cohort,
-            sort_keys=True,
-            ensure_ascii=False,
-            separators=(",", ":"),
-        ).encode("utf-8")
-    ).hexdigest()
-    if not expected_sha or expected_sha not in {observed_sha, legacy_payload_sha}:
+    if not expected_sha or expected_sha != observed_sha:
         raise CohortSchemaError("cohort definition lock hash mismatch")
     try:
         assert_lock_matches_evidence_anchor(
@@ -136,34 +124,6 @@ def write_locked_cohort_definition(
     validate_cohort_definition(definition)
     path = run_dir / COHORT_LOCK_FILENAME
     if path.exists():
-        try:
-            repair = rehydrate_timestamp_only_legacy_lock(
-                run_dir=run_dir,
-                lock_path=path,
-                evidence_id="cohort_locked",
-                label="cohort definition lock",
-            )
-        except LockAuthorityError as exc:
-            raise CohortSchemaError(str(exc)) from exc
-        if (
-            repair is not None
-            and evidence.get("cohort_lock_resume_rehydration") is None
-        ):
-            evidence.register_json(
-                kind="log",
-                description=(
-                    "Resume compatibility repair: restored the cohort lock from "
-                    "its verified plan-time evidence anchor after a legacy "
-                    "timestamp-only rewrite."
-                ),
-                payload=repair,
-                filename="cohort_lock_resume_rehydration.json",
-                evidence_id="cohort_lock_resume_rehydration",
-                producer="planner",
-                generation_mode="system",
-                prompt_pack_version=prompt_pack_version,
-                metadata={"llm_signature": llm_signature},
-            )
         locked_definition = _load_locked_cohort_definition(run_dir)
         definition_sha = cohort_definition_sha(definition)
         locked_sha = cohort_definition_sha(locked_definition)
@@ -210,7 +170,7 @@ def write_locked_cohort_definition(
                     "supersedes_evidence_id": "cohort_locked",
                 },
             )
-            from .authority.evidence_store import _atomic_write_bytes
+            from ..authority.evidence_store import _atomic_write_bytes
 
             _atomic_write_bytes(
                 path,
@@ -558,7 +518,7 @@ def materialize_locked_analysis_cohort(
     definition = coerce_cohort_definition(getattr(plan, "cohort", None))
     if definition is None or not (definition.inclusion or definition.exclusion):
         return result
-    from .intake.materialized_metadata import (
+    from ..intake.materialized_metadata import (
         MaterializedMetadataError,
         implementation_bundle_sha256,
         load_verified_materialized_cohort_authority,
@@ -632,10 +592,10 @@ def materialize_locked_analysis_cohort(
             producer_implementation_sha256=implementation_bundle_sha256(
                 (
                     Path(__file__),
-                    Path(__file__).resolve().parent
+                    Path(__file__).resolve().parents[1]
                     / "planning"
                     / "cohort_contract.py",
-                    Path(__file__).resolve().parent
+                    Path(__file__).resolve().parents[1]
                     / "intake"
                     / "materialized_metadata.py",
                 )

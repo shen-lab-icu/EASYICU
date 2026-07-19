@@ -66,7 +66,7 @@ from ..research_context.typed import (
     materialized_research_inputs_from_authority,
     parse_research_context_json,
 )
-from ..cohort_artifact_facts import observed_domain_for_series
+from ..cohort.artifact_facts import observed_domain_for_series
 
 RUN_INPUT_CAPSULE_FILENAME = "run_input_capsule.json"
 RUN_INPUT_CAPSULE_EVIDENCE_ID = "run_input_capsule"
@@ -1593,7 +1593,7 @@ def _host_cohort_materializer_authority_error(
         if isinstance(metadata, Mapping)
         else ""
     ).strip()
-    from ..cohort_schema import (
+    from ..cohort.schema import (
         CohortSchemaError,
         _load_locked_cohort_definition,
         cohort_definition_sha,

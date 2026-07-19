@@ -45,7 +45,7 @@ sys.path.insert(0, str(REPO / "src"))
 sys.path.insert(0, str(REPO / "tools"))
 
 from easyicu.research_agent.concept_catalog import load_concept_catalog  # noqa: E402
-from easyicu.research_agent.data_catalog import build_available_catalog  # noqa: E402
+from easyicu.research_agent.acquisition.catalog import build_available_catalog  # noqa: E402
 from easyicu.research_agent.concept_catalog import (  # noqa: E402
     normalize_concept_name,
 )

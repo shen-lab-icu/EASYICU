@@ -89,6 +89,8 @@ mechanically moving every top-level file:
 | `planning/` | case-neutral analysis families, pure cohort/robustness contracts, study-design playbooks, capability/method registries and article figure strategy | case-specific benchmark instructions or execution/evidence mutation |
 | `providers/` | provider-neutral LLM protocol plus lazy concrete-client construction | planning, scientific policy, evidence authority or eager import of the concrete client |
 | `research_context/` | typed context authority, cohort-aware context construction and step-scoped Coder projection | scientific method selection, provider calls or run authority mutation |
+| `cohort/` | typed cohort schema, deterministic materialization, artifact facts and case-neutral dataframe primitives | outcome choice, censoring rules or case-specific cohort criteria |
+| `acquisition/` | export catalog, coverage checks and materialization handoff for caller-declared concepts | hidden outcome/static-variable defaults or estimand construction |
 | `evaluation/` | optional cross-model concordance and Tier-2 jury/rubric adapters over completed artifacts | primary scientific adjudication or hidden manuscript benchmark authority |
 | `review/` | deterministic post-analysis causal-claim and method-appropriateness review | exposure, outcome, cohort, method or estimand selection |
 
@@ -101,29 +103,17 @@ boundaries are now closed as domain-specific state objects and deliberately
 narrow coordination components: they do not absorb plan authority, gates,
 repair, evidence mutation, or scientific decisions. The remaining execute-loop
 body is sequence-sensitive orchestration and maintenance debt, not a reason to
-create a universal state bag or inflate the executor. The
-legacy top-level module paths (`contract_gate`, `concept_gate`,
-`concept_audit_execution`, `gate_evaluator`, `figure_contract_preparation`,
-`publication_figure_execution`, `evidence_registration`, `provider_budget`,
-`code_preflight`, `code_repair`, `code_repair_helpers`, `repair_reasons`,
-`repair_coordination`, `code_patch`, `summary_repair`, `context`,
-`coder_context`, `research_context_v2`, `method_compatibility`,
-`cross_model_panel`, `tier2_jury`, `tier2_rubric`, `causal_audit`,
-`methodological_rigor`, and the moved
-discovery/reporting/runner modules) are module-object aliases to the canonical
-packages. This is intentional: archived scripts and public imports keep
-working, and monkeypatches through either path reach the same implementation.
-New canonical code must import the responsibility package directly, never the
-compatibility façade. Consequently, counting physical top-level files includes
-these deliberate shims and is not a valid measure of remaining architecture
-debt.
+create a universal state bag or inflate the executor. This is a pre-v1
+breaking-cleanup line: retired top-level module paths are absent rather than
+retained as façades. Fresh runs import responsibility packages directly, and
+the archive tag preserves the former diagnostic state.
 
 The production module-top-level static import graph is now acyclic. `pipeline_execute` and
 `execution.publication_figure` receive host-owned compatibility helpers through
 a fresh immutable `execution.host_services.ExecutePhaseServices` snapshot; they
-do not statically reverse-import `pipeline`. Sealed-renderer digest and archived
-candidate compatibility retain a controlled registry-mediated dynamic import
-of legacy implementation modules. This dependency inversion changes neither
+do not statically reverse-import `pipeline`. Sealed-renderer digest selection
+uses a controlled registry-mediated dynamic import of current implementation
+modules. This dependency inversion changes neither
 the Agent's scientific ownership nor the sealed renderer template, and an
 explicit static-graph regression requires zero cyclic modules.
 

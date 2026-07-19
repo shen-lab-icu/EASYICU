@@ -7,7 +7,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from easyicu.research_agent.cohort_schema import (
+from easyicu.research_agent.cohort.schema import (
     CohortDefinition,
     ConceptPredicate,
     TimeWindow,

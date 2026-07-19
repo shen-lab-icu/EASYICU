@@ -30,7 +30,7 @@ from easyicu.concept.metadata_sidecar import (
     write_content_addressed_sidecar,
 )
 from easyicu.resources import load_dictionary
-from easyicu.research_agent import cohort_materializer
+from easyicu.research_agent.cohort import materializer as cohort_materializer
 from easyicu.research_agent.authority.filesystem import AnchoredDirectory
 from easyicu.research_agent.authority.analysis_cohort import (
     bind_execution_cohort_authority,
@@ -39,7 +39,7 @@ from easyicu.research_agent.research_context.builder import (
     build_research_context,
     build_retrieved_research_context,
 )
-from easyicu.research_agent.cohort_schema import (
+from easyicu.research_agent.cohort.schema import (
     CohortDefinition,
     ConceptPredicate,
     TimeWindow,

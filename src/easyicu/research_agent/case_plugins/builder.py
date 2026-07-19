@@ -17,7 +17,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Sequence, Tuple, Union
+from typing import Dict, List, Optional, Sequence, Tuple, Union
 
 import pandas as pd
 
@@ -31,9 +31,13 @@ from ..intake.export_package import (
     resolve_exported_concept,
     verify_export_package,
 )
-
-ID_COL = "stay_id"
-TIME_COL = "charttime"
+from ..cohort.primitives import (
+    ID_COL,
+    TIME_COL,
+    first_nonnull as _first_nonnull,
+    merge_left as _merge_left,
+    window as _window,
+)
 
 
 @dataclass(frozen=True)
@@ -58,19 +62,6 @@ class EasyICUCasePackage:
             encoding="utf-8",
         )
         return {"csv": csv_path, "parquet": parquet_path, "manifest": manifest_path}
-
-
-def _window(df: pd.DataFrame, start_hour: float, end_hour: float) -> pd.DataFrame:
-    if TIME_COL not in df.columns:
-        return df.copy()
-    out = df.copy()
-    out[TIME_COL] = pd.to_numeric(out[TIME_COL], errors="coerce")
-    return out[(out[TIME_COL] >= start_hour) & (out[TIME_COL] <= end_hour)].copy()
-
-
-def _first_nonnull(series: pd.Series):
-    s = series.dropna()
-    return s.iloc[0] if len(s) else pd.NA
 
 
 def _aggregate_lactate(
@@ -174,15 +165,6 @@ def _aggregate_sep3(
         .reset_index()
     )
     out["sep3_sofa2_any_24h"] = out["sep3_sofa2_any_24h"].astype(int)
-    return out
-
-
-def _merge_left(base: pd.DataFrame, frames: Iterable[pd.DataFrame]) -> pd.DataFrame:
-    out = base.copy()
-    for frame in frames:
-        if frame is None or frame.empty or ID_COL not in frame.columns:
-            continue
-        out = out.merge(frame, on=ID_COL, how="left")
     return out
 
 
