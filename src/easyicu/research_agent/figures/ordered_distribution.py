@@ -432,16 +432,23 @@ def _declared_optional_missingness_audits(
         role = _normalise(role)
         if _normalise(kind) not in {"artifact", "dataset", "table"}:
             continue
-        if role in {"missingness_audit", "structural_missingness_audit"}:
+        semantic_role: Optional[str] = None
+        if role == "structural_missingness_audit" or role.endswith(
+            "_structural_missingness_audit"
+        ):
+            semantic_role = "structural_missingness_audit"
+        elif role == "missingness_audit" or role.endswith("_missingness_audit"):
+            semantic_role = "missingness_audit"
+        if semantic_role is not None:
             name = str(raw_name or "").strip()
             if (
                 not name
                 or Path(name).name != name
                 or Path(name).suffix.lower() != ".csv"
-                or role in role_names
+                or semantic_role in role_names
             ):
                 return None
-            role_names[role] = name
+            role_names[semantic_role] = name
     if not role_names:
         return None
     if set(role_names) != {"missingness_audit", "structural_missingness_audit"}:
@@ -572,7 +579,13 @@ def _declares_optional_missingness_audits(summary: Mapping[str, Any]) -> bool:
         for product in output_files
         if ":" in str(product)
     }
-    return bool(roles & {"missingness_audit", "structural_missingness_audit"})
+    return any(
+        role == "missingness_audit"
+        or role.endswith("_missingness_audit")
+        or role == "structural_missingness_audit"
+        or role.endswith("_structural_missingness_audit")
+        for role in roles
+    )
 
 
 def ordered_distribution_availability_snapshot_is_valid(
@@ -932,6 +945,7 @@ def render_ordered_distribution_bundle_from_prior_outputs(
     source_data_paths = [source_copy]
     source_table_names = [source_path.name, availability_source_path.name]
     missingness_plot: Optional[pd.DataFrame] = None
+    missingness_total_variables = 0
     structural_variables: set[str] = set()
     if optional_audits is not None:
         (missingness_path, missingness, _missingness_payload), (
@@ -988,13 +1002,11 @@ def render_ordered_distribution_bundle_from_prior_outputs(
         missingness_plot["missing_pct"] = pd.to_numeric(
             missingness_plot["missing_pct"], errors="coerce"
         )
-        missingness_plot = (
-            missingness_plot.sort_values(
-                ["missing_pct", "variable"], ascending=[False, True]
-            )
-            .head(12)
-            .reset_index(drop=True)
+        missingness_plot = missingness_plot.sort_values(
+            ["missing_pct", "variable"], ascending=[False, True]
         )
+        missingness_total_variables = len(missingness_plot)
+        missingness_plot = missingness_plot.head(12).reset_index(drop=True)
         structural_variables = set(
             structural[structural_variable_col].fillna("").astype(str).str.strip()
         )
@@ -1175,7 +1187,12 @@ def render_ordered_distribution_bundle_from_prior_outputs(
         ax_c.invert_yaxis()
         ax_c.set_xlim(0, 100)
         ax_c.set_xlabel("Locked analysis cohort missing (%)")
-        ax_c.set_title("Variable missingness", loc="left", pad=4)
+        missingness_title = "Variable missingness"
+        if missingness_total_variables > len(missingness_plot):
+            missingness_title += (
+                f" (top {len(missingness_plot)} of {missingness_total_variables})"
+            )
+        ax_c.set_title(missingness_title, loc="left", pad=4)
         ax_c.grid(axis="x", color=palette["neutral_light"], linewidth=0.55, zorder=0)
         for bar, percentage in zip(bars_c, missingness_plot["missing_pct"]):
             ax_c.text(
@@ -1191,10 +1208,12 @@ def render_ordered_distribution_bundle_from_prior_outputs(
         panels.append(
             {
                 "panel_id": "C",
-                "title": "Variable missingness",
+                "title": missingness_title,
                 "role": "missingness_audit",
                 "claim": (
-                    "The highest missingness percentages are reproduced from "
+                    f"The top {len(missingness_plot)} of "
+                    f"{missingness_total_variables} missingness percentages are "
+                    "reproduced from "
                     "the declared audit, with structural-audit coverage shown "
                     "only where that companion table contains the variable."
                 ),

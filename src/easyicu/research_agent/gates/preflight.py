@@ -2970,103 +2970,6 @@ def _provenance_pair_scan_findings(tree: ast.Module) -> list[ValidationFinding]:
     return []
 
 
-def _negative_integer_literal(node: ast.AST | None) -> int | None:
-    if not (
-        isinstance(node, ast.UnaryOp)
-        and isinstance(node.op, ast.USub)
-        and isinstance(node.operand, ast.Constant)
-        and isinstance(node.operand.value, int)
-        and not isinstance(node.operand.value, bool)
-    ):
-        return None
-    return int(node.operand.value)
-
-
-def _string_suffix_trim_findings(tree: ast.Module) -> list[ValidationFinding]:
-    """Reject an exact ``endswith`` guard paired with the wrong trim length.
-
-    This deliberately claims only comprehensions where the same simple name is
-    guarded by one literal ``endswith`` suffix and sliced by one negative
-    integer.  Dynamic suffixes, tuple suffixes and ambiguous conditions remain
-    outside host-owned repair authority.
-    """
-
-    findings: list[ValidationFinding] = []
-    comprehension_types = (
-        ast.ListComp,
-        ast.SetComp,
-        ast.DictComp,
-        ast.GeneratorExp,
-    )
-    for comprehension in ast.walk(tree):
-        if not isinstance(comprehension, comprehension_types):
-            continue
-        suffixes_by_name: dict[str, set[str]] = {}
-        for generator in comprehension.generators:
-            for condition in generator.ifs:
-                for candidate in ast.walk(condition):
-                    if not (
-                        isinstance(candidate, ast.Call)
-                        and isinstance(candidate.func, ast.Attribute)
-                        and candidate.func.attr == "endswith"
-                        and isinstance(candidate.func.value, ast.Name)
-                        and len(candidate.args) == 1
-                        and not candidate.keywords
-                        and isinstance(candidate.args[0], ast.Constant)
-                        and isinstance(candidate.args[0].value, str)
-                        and candidate.args[0].value
-                    ):
-                        continue
-                    suffixes_by_name.setdefault(candidate.func.value.id, set()).add(
-                        candidate.args[0].value
-                    )
-        expressions = (
-            [comprehension.key, comprehension.value]
-            if isinstance(comprehension, ast.DictComp)
-            else [comprehension.elt]
-        )
-        for expression in expressions:
-            for candidate in ast.walk(expression):
-                if not (
-                    isinstance(candidate, ast.Subscript)
-                    and isinstance(candidate.value, ast.Name)
-                    and isinstance(candidate.slice, ast.Slice)
-                    and candidate.slice.lower is None
-                    and candidate.slice.step is None
-                ):
-                    continue
-                suffixes = suffixes_by_name.get(candidate.value.id, set())
-                if len(suffixes) != 1:
-                    continue
-                reported = _negative_integer_literal(candidate.slice.upper)
-                if reported is None:
-                    continue
-                suffix = next(iter(suffixes))
-                expected = len(suffix)
-                if reported == expected:
-                    continue
-                findings.append(
-                    ValidationFinding(
-                        validator="mechanical_code_preflight",
-                        severity="error",
-                        message=(
-                            "A literal endswith guard and its negative suffix "
-                            "slice disagree, so the derived stem is truncated "
-                            "incorrectly."
-                        ),
-                        detail={
-                            "reason": "string_suffix_trim_length_mismatch",
-                            "line": int(candidate.lineno),
-                            "variable": candidate.value.id,
-                            "reported": reported,
-                            "expected": expected,
-                            "suffix": suffix,
-                        },
-                    )
-                )
-    return sorted(findings, key=lambda finding: int(finding.detail["line"]))
-
-
 def _resolved_context_payload_findings(tree: ast.Module) -> list[ValidationFinding]:
     """Reject treating the resolved-input context binding as its JSON payload."""
 
@@ -3280,9 +3183,13 @@ def _resolved_input_binding_key_findings(tree: ast.Module) -> list[ValidationFin
                 and node.args
                 and isinstance(_subscript_key(node.args[0]), str)
             ):
-                keys_by_parameter.setdefault(node.func.value.id, set()).add(
-                    str(_subscript_key(node.args[0]))
-                )
+                parameter_name = node.func.value.id
+                key = str(_subscript_key(node.args[0]))
+                keys_by_parameter.setdefault(parameter_name, set()).add(key)
+                if key == "input_key":
+                    input_key_accesses.setdefault(parameter_name, []).append(
+                        int(node.lineno)
+                    )
         candidate_parameters = {
             name
             for name, keys in keys_by_parameter.items()
@@ -3337,7 +3244,9 @@ def _resolved_input_binding_key_findings(tree: ast.Module) -> list[ValidationFin
                         "reason": "resolved_input_key_not_materialized",
                         "helper_name": function.name,
                         "binding_parameter": parameter_name,
-                        "access_lines": sorted(input_key_accesses[parameter_name]),
+                        "access_lines": sorted(
+                            input_key_accesses.get(parameter_name, [])
+                        ),
                     },
                 )
             )
@@ -7206,7 +7115,7 @@ def _boolean_reduction_identity_findings(
                 expression.func.value,
                 at_node=expression,
             )
-            if provenance == "custom":
+            if provenance in {"custom", "unknown"}:
                 return None
             scalar = provenance in {"pandas_series", "numpy_array"}
             if expression.args:
@@ -8093,7 +8002,6 @@ def audit_mechanical_code_contracts(
     findings.extend(_binding_metadata_findings(tree))
     findings.extend(_provenance_fail_closed_findings(tree))
     findings.extend(_provenance_pair_scan_findings(tree))
-    findings.extend(_string_suffix_trim_findings(tree))
     findings.extend(_resolved_context_payload_findings(tree))
     findings.extend(_resolved_input_binding_key_findings(tree))
     findings.extend(_pre312_fstring_subscript_quote_findings(script_text, tree))

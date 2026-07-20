@@ -1,18 +1,18 @@
 {
-  "tool_version": "1.5.0",
-  "tool_sha256": "48b57269a208182a4d991216048bbbdd634b91d72bc9fbe093f472c8282e3c69",
+  "tool_version": "1.6.0",
+  "tool_sha256": "da6f41b74c7b76c2bc56dae9059fd76b67004fe21f66da79d5294c1178f52518",
   "shim_import_paths": [],
   "files": {
     "execution/phase.py": {
       "loc": 11452,
-      "sha256": "38058e40d8e0c9dc9001b491243ef007815e2936cca1638484d503b09a0a9f99",
+      "sha256": "984b1f2db8be1cc55d32030af96e0908a3012baa251b51ee1c7e31d8762c8bf5",
       "intra_package_import_edges": 67,
       "shim_bypass_violations": []
     },
     "pipeline.py": {
-      "loc": 10772,
-      "sha256": "c59b59f18171736af6c4c16af964c9c0e90e50437cccf220507e8351d503057d",
-      "intra_package_import_edges": 84,
+      "loc": 10747,
+      "sha256": "f2757939d7bdd9f1c5567fd51bdf037333928fc650850c110f1489daa78bdddb",
+      "intra_package_import_edges": 85,
       "shim_bypass_violations": []
     },
     "reporting/readiness.py": {
@@ -31,6 +31,18 @@
       "loc": 365,
       "sha256": "b614e144c12d1e0548fae93ad1f9e295a9ea039aa5b1abdb5f170a05a0e3a280",
       "intra_package_import_edges": 7,
+      "shim_bypass_violations": []
+    },
+    "gates/preflight.py": {
+      "loc": 8031,
+      "sha256": "2448199879cea2c87b8390f1efc6107930c362563e264b8a3a3491f7217a0133",
+      "intra_package_import_edges": 2,
+      "shim_bypass_violations": []
+    },
+    "repairs/source.py": {
+      "loc": 6591,
+      "sha256": "94f5ca5d3bf5fd8f5ee1896667ecc8687e885dcd650dd46a8a5e6863d34e5cdc",
+      "intra_package_import_edges": 6,
       "shim_bypass_violations": []
     }
   },

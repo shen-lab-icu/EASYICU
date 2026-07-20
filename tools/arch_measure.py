@@ -65,7 +65,7 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
-TOOL_VERSION = "1.5.0"
+TOOL_VERSION = "1.6.0"
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 RA = REPO_ROOT / "src" / "easyicu" / "research_agent"
@@ -78,6 +78,8 @@ TARGET_FILES: List[Path] = [
     RA / "reporting" / "readiness.py",
     RA / "authority" / "typed_binding.py",
     RA / "authority" / "plan_authority.py",
+    RA / "gates" / "preflight.py",
+    RA / "repairs" / "source.py",
 ]
 # (file, function name) — first match by name (top-level or nested).
 TARGET_FUNCTIONS: List[Tuple[str, str]] = [

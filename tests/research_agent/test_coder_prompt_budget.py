@@ -471,6 +471,25 @@ def test_mixed_model_and_figure_outputs_remain_analysis_not_render_only(ra):
 
     assert "Before fitting, audit every categorical predictor" in guide
     assert "For rendering-only figure steps" not in guide
+    assert 'Use matplotlib\'s "Agg" backend' in guide
+    assert "save_publication_figure" in guide
+
+
+def test_mixed_quality_table_and_figure_keeps_visual_contract(ra) -> None:
+    step = ra.AnalysisStep(
+        step_id="quality_with_figure",
+        intent="Audit data quality and render the declared panel.",
+        inputs=["artifact:analysis_cohort", "value_n_24h", "value_measured_24h"],
+        expected_outputs=["table:data_quality", "figure:missingness_heatmap"],
+        method="binary_event_data_quality_audit",
+    )
+
+    guide = coder_guide_for_step(load_prompt_pack()["coder"], step)
+
+    assert "For rendering-only figure steps" not in guide
+    assert 'Use matplotlib\'s "Agg" backend' in guide
+    assert "save_publication_figure" in guide
+    assert "BINARY EVENT-PRESENCE EXCEPTION:" in guide
 
 
 def test_wide_generic_ordered_qc_prompt_stays_under_initial_transport_gate(ra):

@@ -276,7 +276,6 @@ _SYNTACTIC_REPAIRS = {
     "resolved_context_digest_load_v1",
     "resolved_input_identity_key_v1",
     "scalar_cast_before_reduction_v1",
-    "string_suffix_trim_length_v1",
 }
 
 _STRUCTURAL_REPAIRS = {

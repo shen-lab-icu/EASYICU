@@ -24,7 +24,11 @@ REPAIR_ID = "ordered_category_distribution_availability_publication_bundle_v2"
 
 
 def _write_split_parent(
-    run_dir: Path, *, mutation: str = "", with_audits: bool = False
+    run_dir: Path,
+    *,
+    mutation: str = "",
+    with_audits: bool = False,
+    prefixed_audit_roles: bool = False,
 ) -> Path:
     parent = run_dir / "steps" / PARENT / "outputs"
     parent.mkdir(parents=True)
@@ -123,10 +127,16 @@ def _write_split_parent(
             "table:measurement_availability": "measurement_availability.csv",
             **(
                 {
-                    "table:missingness_audit": "missingness_audit.csv",
-                    "table:structural_missingness_audit": (
-                        "structural_missingness_audit.csv"
-                    ),
+                    (
+                        "table:severity_missingness_audit"
+                        if prefixed_audit_roles
+                        else "table:missingness_audit"
+                    ): "missingness_audit.csv",
+                    (
+                        "table:severity_structural_missingness_audit"
+                        if prefixed_audit_roles
+                        else "table:structural_missingness_audit"
+                    ): ("structural_missingness_audit.csv"),
                 }
                 if with_audits
                 else {}
@@ -205,8 +215,16 @@ def _write_split_parent(
                                     "table:measurement_availability",
                                     *(
                                         [
-                                            "table:missingness_audit",
-                                            "table:structural_missingness_audit",
+                                            (
+                                                "table:severity_missingness_audit"
+                                                if prefixed_audit_roles
+                                                else "table:missingness_audit"
+                                            ),
+                                            (
+                                                "table:severity_structural_missingness_audit"
+                                                if prefixed_audit_roles
+                                                else "table:structural_missingness_audit"
+                                            ),
                                         ]
                                         if with_audits
                                         else []
@@ -348,6 +366,43 @@ def test_v2_consumes_and_exports_every_declared_audit_table(tmp_path: Path) -> N
         "structural_missingness_audit.csv",
     }
     assert summary["denominator_contract"]["panel_c"] == "locked_analysis_cohort"
+
+
+def test_v2_consumes_prefixed_optional_audit_roles(tmp_path: Path) -> None:
+    _write_split_parent(
+        tmp_path,
+        with_audits=True,
+        prefixed_audit_roles=True,
+    )
+
+    child = _child(with_audits=True).model_copy(
+        update={
+            "inputs": [
+                "table:severity_distribution",
+                "table:measurement_availability",
+                "table:severity_missingness_audit",
+                "table:severity_structural_missingness_audit",
+            ]
+        }
+    )
+    seal = _sealed_renderer_parent_digest_seal(tmp_path, CHILD, REPAIR_ID)
+
+    assert seal is not None
+    assert _sealed_renderer_figure_step_matches_parent(tmp_path, child, REPAIR_ID)
+    out = tmp_path / "steps" / CHILD / "outputs"
+    assert (
+        _render_authorized_sealed_publication_bundle(
+            repair_id=REPAIR_ID,
+            run_dir=tmp_path,
+            current_step_id=CHILD,
+            out_dir=out,
+            parent_artifact_digests=seal,
+        )
+        == REPAIR_ID
+    )
+    summary = json.loads((out / "step_summary.json").read_text(encoding="utf-8"))
+    assert "missingness_audit.csv" in summary["source_tables"]
+    assert "structural_missingness_audit.csv" in summary["source_tables"]
 
 
 def test_v2_incomplete_or_malformed_audit_pair_fails_closed(tmp_path: Path) -> None:

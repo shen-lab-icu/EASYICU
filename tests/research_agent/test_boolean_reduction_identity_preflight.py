@@ -158,10 +158,6 @@ if False is arr.all() is other:
     raise ValueError("invalid")
 """,
         """
-if thing.all() is False:
-    raise ValueError("invalid")
-""",
-        """
 import numpy as np
 arr = np.asarray([True, False])
 if arr.all(*args) is True:
@@ -183,6 +179,15 @@ def test_ambiguous_or_non_scalar_reductions_are_finding_only(script: str, ra):
     assert findings[0].detail["repair_safe"] is False
     assert repaired == script
     assert repair_names == []
+
+
+def test_unknown_all_receiver_is_outside_pandas_numpy_authority(ra) -> None:
+    script = """
+if validate(*parts).all() is True:
+    raise ValueError("invalid")
+"""
+
+    assert _findings(script, ra) == []
 
 
 @pytest.mark.parametrize(
