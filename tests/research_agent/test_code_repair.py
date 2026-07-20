@@ -156,6 +156,42 @@ def test_boolean_mask_reduction_repair_requires_traceback_and_exact_ast_shape():
     )
 
 
+def test_runner_repair_moves_inverted_right_reduction_after_boolean_mask():
+    code = """import numpy as np
+import pandas as pd
+
+frame = pd.DataFrame({"stage": [0.0, np.inf, np.nan]})
+stage = pd.to_numeric(frame["stage"], errors="coerce")
+counts = {
+    "nonfinite_n": int(
+        frame["stage"].notna()
+        & ~np.isfinite(stage.to_numpy(dtype=float))
+        .sum()
+    )
+}
+"""
+
+    repair = _deterministic_runner_repair(
+        code=code,
+        run_log="TypeError: cannot convert the series to <class 'int'>",
+    )
+
+    assert repair is not None
+    name, repaired = repair
+    assert name == "boolean_mask_reduction_precedence_v1"
+    namespace = {}
+    exec(repaired, namespace)
+    assert namespace["counts"]["nonfinite_n"] == 1
+    assert (
+        _deterministic_runner_repair(
+            code=repaired,
+            run_log="TypeError: cannot convert the series to <class 'int'>",
+            previous_repair=name,
+        )
+        is None
+    )
+
+
 def test_runner_repair_reindexes_exact_pandas_boolean_mask_from_traceback():
     code = """import pandas as pd
 
@@ -451,7 +487,7 @@ def test_attrition_rule_id_repair_rejects_partial_or_nonlabel_literal_coverage()
 def test_contract_repair_preserves_full_parent_for_unavailable_figure_source(
     tmp_path,
 ):
-    code = '''import pandas as pd
+    code = """import pandas as pd
 
 NOTICE = "not_estimable_notice"
 SOURCE_STATUS = "unsupported"
@@ -471,7 +507,7 @@ def make_source(out_dir, source_table, frame):
     )
     source_frame.to_csv(source_data_path, index=False)
     return source_data_path
-'''
+"""
     finding = {
         "validator": "figure_source_data",
         "severity": "error",
@@ -525,7 +561,7 @@ def make_source(out_dir, source_table, frame):
 
 
 def test_unavailable_figure_source_repair_requires_typed_finding_and_notice_shape():
-    code = '''import pandas as pd
+    code = """import pandas as pd
 NOTICE = "not_estimable_notice"
 SOURCE_STATUS = "unsupported"
 def make_source(out_dir, source_table, frame):
@@ -534,7 +570,7 @@ def make_source(out_dir, source_table, frame):
         rows.append({"source_row_index": source_row_index, "source_table": source_table})
     source_frame = pd.DataFrame(rows, columns=["source_row_index", "source_table"])
     source_frame.to_csv(out_dir / "source.csv", index=False)
-'''
+"""
     finding = {
         "validator": "figure_source_data",
         "detail": {
