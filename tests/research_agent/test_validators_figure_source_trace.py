@@ -2878,6 +2878,46 @@ def test_cohort_score_columns_cannot_authenticate_model_performance(tmp_path: Pa
     assert [finding for finding in findings if finding.severity == "error"]
 
 
+def test_exact_typed_input_key_can_name_its_hash_verified_source_table(
+    tmp_path: Path,
+):
+    upstream = pd.DataFrame(
+        {"group": ["low", "high"], "n": [40, 60], "rate": [0.1, 0.2]}
+    )
+    source = upstream.assign(source_table="table:grouped_result")
+    findings = _audit_bound_tabular_figures(
+        tmp_path,
+        declared_input="table:grouped_result",
+        upstream=upstream,
+        source=source,
+        figure_products=["figure:outcome_distribution"],
+    )
+    assert [finding for finding in findings if finding.severity == "error"] == []
+
+
+def test_foreign_typed_input_key_cannot_name_a_bound_source_table(tmp_path: Path):
+    upstream = pd.DataFrame(
+        {"group": ["low", "high"], "n": [40, 60], "rate": [0.1, 0.2]}
+    )
+    source = upstream.assign(source_table="table:foreign_result")
+    findings = _audit_bound_tabular_figures(
+        tmp_path,
+        declared_input="table:grouped_result",
+        upstream=upstream,
+        source=source,
+        figure_products=["figure:outcome_distribution"],
+    )
+    errors = [finding for finding in findings if finding.severity == "error"]
+    assert errors
+    assert any(
+        (finding.detail or {}).get("reason")
+        in {"declared_source_table_not_found", "incomplete_source_lineage_coverage"}
+        or (finding.detail or {}).get("best_mismatch", {}).get("reason")
+        == "declared_source_table_not_found"
+        for finding in errors
+    )
+
+
 def test_cohort_counts_cannot_authenticate_compound_prediction_figure(
     tmp_path: Path,
 ):
