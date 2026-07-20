@@ -103,11 +103,14 @@ from ..repairs.coordination import (
 )
 from .concept_audit_cache import LLMConceptAuditCache
 from .development_sample import (
-    DEVELOPMENT_COHORT_FILENAME,
     DEVELOPMENT_PRIMARY_COHORT_CONFIRMATION_ROLE,
-    DEVELOPMENT_SAMPLE_FILENAME,
     materialize_development_execution_sample,
     record_development_sample_authority,
+)
+from .cohort_routing import (
+    bind_step_execution_cohort as _bind_step_execution_cohort,
+    bound_step_execution_cohort_path as _bound_step_execution_cohort_path,
+    step_execution_cohort_path as _step_execution_cohort_path,
 )
 from .concept_audit import (
     ConceptAuditAuthority,
@@ -2625,39 +2628,6 @@ def _resume_success_dependencies(
     return dependencies
 
 
-def _step_execution_cohort_path(
-    *,
-    step: AnalysisStep,
-    plan: AnalysisPlan,
-    run_dir: Path,
-    universe_path: Path,
-    cohort_path: Path,
-) -> Path:
-    """Choose the already-authorized data plane for one planned step.
-
-    A primary cohort producer ordinarily reads the raw universe so its declared
-    attrition can be replayed against the full locked cohort.  A development
-    sample is different by definition: it is selected only after that cohort is
-    locked, materialized, and QC'd.  In that non-paper mode the sample is the
-    execution population for *every* scientific step, including a mixed cohort
-    + attrition step; routing that step back to the raw universe silently defeats
-    the user's development-size ceiling and makes its product disagree with the
-    sampled downstream authority.
-    """
-
-    expected_sample = run_dir / DEVELOPMENT_COHORT_FILENAME
-    development_sample_selected = bool(
-        (run_dir / DEVELOPMENT_SAMPLE_FILENAME).is_file()
-        and cohort_path.resolve() == expected_sample.resolve()
-    )
-    if (
-        primary_analysis_cohort_producer_uses_universe(step=step, plan=plan)
-        and not development_sample_selected
-    ):
-        return universe_path
-    return cohort_path
-
-
 def _evaluate_final_deterministic_gates(
     *,
     context: ResearchContext,
@@ -2701,6 +2671,11 @@ def _evaluate_final_deterministic_gates(
         run_dir=run_dir,
         universe_path=universe_path,
         cohort_path=cohort_path,
+    )
+    execution_cohort_path = _bound_step_execution_cohort_path(
+        run_dir=run_dir,
+        fallback_path=execution_cohort_path,
+        resolved_input_bindings=resolved_input_bindings,
     )
 
     stat_findings = stat_validator.audit(
@@ -5467,6 +5442,10 @@ def run_execute_phase(
                 total_steps=total_steps,
             )
             return step_record
+        step_execution_cohort_path = _bind_step_execution_cohort(
+            run_dir, step_execution_cohort_path, resolved_input_bindings, step_record
+        )
+        primary_cohort_uses_universe = step_execution_cohort_path == universe_path
         resolved_inputs_path = _write_resolved_inputs_manifest(
             run_dir=run_dir,
             step_id=step.step_id,
@@ -8205,17 +8184,12 @@ def run_execute_phase(
                 # planner froze. Give it the dedicated bounded timeout even
                 # when the step also consumes a staged primary-cohort universe.
                 execution_timeout_seconds = pipeline._standard_executor_timeout_seconds
-            if primary_cohort_uses_universe or (
+            if step_execution_cohort_path != cohort_path or (
                 worker_progress.deterministic_standard_executor_used
             ):
-                execution_cohort_path = (
-                    step_execution_cohort_path
-                    if primary_cohort_uses_universe
-                    else cohort_path
-                )
                 execution_runner = pipeline._build_runner(
                     run_dir=run_dir,
-                    cohort_path=execution_cohort_path,
+                    cohort_path=step_execution_cohort_path,
                     target_outcome=context.target_outcome,
                     universe_path=universe_path,
                     **run_input_authority_state.runner_bindings(),
