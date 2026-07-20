@@ -376,6 +376,7 @@ from ..authority.step_runtime import (
     execution_context_sha256,
     initial_generation_code_ref,
     load_checkpoint_selected_step_capsule,
+    load_explicit_failed_step_capsule,
     materialize_sealed_run_result,
     persist_candidate_code,
     prepare_step_authority_coordinates,
@@ -5556,6 +5557,45 @@ def run_execute_phase(
                         ),
                     )
                 )
+                if (
+                    step_attempt_state.selected_resume_capsule is None
+                    and requested_resume_from_step_id == step.step_id
+                    and isinstance(prior_step_record, Mapping)
+                ):
+                    failed_capsule = load_explicit_failed_step_capsule(
+                        run_dir,
+                        step_id=step.step_id,
+                        record=prior_step_record,
+                    )
+                    failed_code_sha256 = str(
+                        prior_step_record.get("executed_code_sha256") or ""
+                    )
+                    already_replayed = (
+                        prior_step_record.get(
+                            "explicit_failed_capsule_reused_code_sha256"
+                        )
+                        == failed_code_sha256
+                        and prior_step_record.get(
+                            "explicit_failed_capsule_reused_gate_fingerprint"
+                        )
+                        == gate_stamp["deterministic_gate_fingerprint"]
+                    )
+                    if failed_capsule is not None and not already_replayed:
+                        step_attempt_state.selected_resume_capsule = failed_capsule
+                        step_record.update(
+                            {
+                                "explicit_failed_capsule_reused": True,
+                                "explicit_failed_capsule_reused_status": str(
+                                    prior_step_record.get("status") or ""
+                                ),
+                                "explicit_failed_capsule_reused_code_sha256": (
+                                    failed_code_sha256
+                                ),
+                                "explicit_failed_capsule_reused_gate_fingerprint": (
+                                    gate_stamp["deterministic_gate_fingerprint"]
+                                ),
+                            }
+                        )
                 if (
                     step_attempt_state.selected_resume_capsule is None
                     and isinstance(prior_step_record, Mapping)

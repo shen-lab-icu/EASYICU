@@ -599,10 +599,41 @@ class ResumeController:
 
         if not self.resume_from_step_id or step_id != self.resume_from_step_id:
             return None
-        return load_quarantined_concept_draft(
+        records = [
+            record
+            for record in (
+                (self.resume_state or {}).get("step_attempt_history")
+                or (self.resume_state or {}).get("per_step_records")
+                or []
+            )
+            if isinstance(record, dict) and record.get("step_id") == step_id
+        ]
+        latest = next(
+            (
+                record
+                for record in current_step_records(records)
+                if str(record.get("step_id") or "") == step_id
+            ),
+            None,
+        )
+        if (
+            not isinstance(latest, dict)
+            or latest.get("quarantined_requires_repair") is not True
+        ):
+            return None
+        draft = load_quarantined_concept_draft(
             run_dir=self.run_dir,
             step_id=step_id,
         )
+        if draft is None:
+            return None
+        if (
+            str(latest.get("quarantined_draft_sha256") or "") != draft.sha256
+            or str(latest.get("quarantined_draft_relative_path") or "")
+            != draft.relative_path
+        ):
+            return None
+        return draft
 
     def remaining_steps(
         self,

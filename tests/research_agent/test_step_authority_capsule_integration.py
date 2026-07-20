@@ -37,6 +37,7 @@ from easyicu.research_agent.authority.step_runtime import (
     adopt_frozen_scoped_coder_context,
     execution_context_sha256,
     load_checkpoint_selected_step_capsule,
+    load_explicit_failed_step_capsule,
     materialize_sealed_run_result,
     persist_candidate_code,
     prepare_step_authority_coordinates,
@@ -642,6 +643,87 @@ def test_checkpoint_selector_never_discovers_or_falls_back_to_orphan(
     selected_path.unlink()
     with pytest.raises(StepAuthorityRuntimeError, match="checkpoint-selected"):
         load_checkpoint_selected_step_capsule(tmp_path, step_id="01_summary")
+
+
+def test_explicit_failed_capsule_requires_terminal_ref_and_exact_code_digest(
+    tmp_path: Path,
+) -> None:
+    coordinates, code, candidate_ref, _budget, _receipt = _initial_candidate(tmp_path)
+    code_sha256 = code.sha256
+    record = {
+        "step_id": coordinates.step_id,
+        "status": "execution_failed",
+        "returncode": 1,
+        "timed_out": False,
+        "quarantined_requires_repair": False,
+        "executed_code_sha256": code_sha256,
+        "concept_approved_code_sha256": code_sha256,
+        "step_authority_capsule_ref": candidate_ref.model_dump(mode="json"),
+    }
+
+    loaded = load_explicit_failed_step_capsule(
+        tmp_path,
+        step_id=coordinates.step_id,
+        record=record,
+    )
+
+    assert loaded is not None
+    assert loaded.ref == candidate_ref
+    assert (
+        load_explicit_failed_step_capsule(
+            tmp_path,
+            step_id=coordinates.step_id,
+            record={**record, "quarantined_requires_repair": True},
+        )
+        is None
+    )
+    with pytest.raises(StepAuthorityRuntimeError, match="code digest"):
+        load_explicit_failed_step_capsule(
+            tmp_path,
+            step_id=coordinates.step_id,
+            record={
+                **record,
+                "executed_code_sha256": SHA_E,
+                "concept_approved_code_sha256": SHA_E,
+            },
+        )
+
+
+def test_explicit_failed_capsule_rejects_nonterminal_or_unexecuted_record(
+    tmp_path: Path,
+) -> None:
+    coordinates, code, candidate_ref, _budget, _receipt = _initial_candidate(tmp_path)
+    code_sha256 = code.sha256
+    base = {
+        "step_id": coordinates.step_id,
+        "returncode": 0,
+        "timed_out": False,
+        "outputs_safe_to_collect": True,
+        "executed_code_sha256": code_sha256,
+        "concept_approved_code_sha256": code_sha256,
+        "step_authority_capsule_ref": candidate_ref.model_dump(mode="json"),
+    }
+
+    assert (
+        load_explicit_failed_step_capsule(
+            tmp_path,
+            step_id=coordinates.step_id,
+            record={**base, "status": "ok"},
+        )
+        is None
+    )
+    assert (
+        load_explicit_failed_step_capsule(
+            tmp_path,
+            step_id=coordinates.step_id,
+            record={
+                **base,
+                "status": "contract_failed",
+                "outputs_safe_to_collect": False,
+            },
+        )
+        is None
+    )
 
 
 def test_resume_state_uses_monotonic_sequence_not_partial_file_preference(

@@ -14,7 +14,10 @@ from typing import Callable, Optional, Sequence
 
 from ..research_context.prompt_scope import normalised_method_head
 from ..schema import AnalysisStep, ValidationFinding
-from .typed_input import resolved_input_relative_path_root_findings
+from .typed_input import (
+    resolved_input_relative_path_root_findings,
+    resolved_input_shadowed_by_cohort_env_findings,
+)
 
 _STRUCTURAL_ACCOUNTING_PRODUCTS = frozenset(
     {
@@ -8094,6 +8097,7 @@ def audit_mechanical_code_contracts(
     findings.extend(_resolved_context_payload_findings(tree))
     findings.extend(_resolved_input_binding_key_findings(tree))
     findings.extend(resolved_input_relative_path_root_findings(tree))
+    findings.extend(resolved_input_shadowed_by_cohort_env_findings(tree))
     findings.extend(_pre312_fstring_subscript_quote_findings(script_text, tree))
     findings.extend(_swallowed_reconciliation_error_findings(tree))
     findings.extend(_authoritative_exposure_binding_findings(tree, step))

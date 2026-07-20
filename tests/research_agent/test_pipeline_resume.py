@@ -468,7 +468,18 @@ def test_quarantined_concept_draft_is_isolated_and_digest_checked(
     controller = ResumeController(
         plan=_plan(),
         run_dir=tmp_path,
-        resume_state={"evidence": []},
+        resume_state={
+            "evidence": [],
+            "step_attempt_history": [
+                {
+                    "step_id": "02_model",
+                    "status": "blocked_by_concept_audit",
+                    "quarantined_requires_repair": True,
+                    "quarantined_draft_sha256": draft.sha256,
+                    "quarantined_draft_relative_path": draft.relative_path,
+                }
+            ],
+        },
         resume_from_step_id="02_model",
     )
     assert controller.prior_code_for_step("02_model") is None
@@ -489,6 +500,42 @@ def test_quarantined_concept_draft_is_isolated_and_digest_checked(
 
     clear_quarantined_concept_draft(run_dir=tmp_path, step_id="02_model")
     assert not code_path.parent.exists()
+
+
+def test_stale_quarantine_file_is_not_reused_after_successful_repair(
+    tmp_path: Path,
+) -> None:
+    draft = store_quarantined_concept_draft(
+        run_dir=tmp_path,
+        step_id="02_model",
+        code="import os\nprint(os.environ['COHORT_PARQUET'])\n",
+        findings=[
+            {
+                "validator": "llm_concept_auditor",
+                "severity": "error",
+                "message": "Repair this draft.",
+                "detail": {"step_id": "02_model"},
+            }
+        ],
+    )
+    controller = ResumeController(
+        plan=_plan(),
+        run_dir=tmp_path,
+        resume_state={
+            "step_attempt_history": [
+                {
+                    "step_id": "02_model",
+                    "status": "execution_failed",
+                    "quarantined_requires_repair": False,
+                    "quarantined_draft_sha256": draft.sha256,
+                    "quarantined_draft_relative_path": draft.relative_path,
+                }
+            ]
+        },
+        resume_from_step_id="02_model",
+    )
+
+    assert controller.quarantined_concept_draft_for_step("02_model") is None
 
 
 @pytest.mark.skipif(not hasattr(os, "symlink"), reason="symlinks unavailable")

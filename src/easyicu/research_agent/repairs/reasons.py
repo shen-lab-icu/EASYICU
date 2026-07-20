@@ -589,6 +589,9 @@ _DETAIL_REASON_CODES = {
     "required_raw_source_not_unique_in_authoritative_cohort": (
         RepairReason.TYPED_PRODUCT_BINDING_INVALID
     ),
+    "resolved_typed_input_shadowed_by_cohort_env": (
+        RepairReason.TYPED_PRODUCT_BINDING_INVALID
+    ),
     "provenance_audit_not_fail_closed": RepairReason.PROVENANCE_NOT_FAIL_CLOSED,
     "provenance_helper_error_swallowed": RepairReason.PROVENANCE_NOT_FAIL_CLOSED,
     "provenance_pair_scan_not_bidirectional": (RepairReason.PROVENANCE_NOT_FAIL_CLOSED),
