@@ -30,6 +30,7 @@ from ..intake.materialized_metadata import (
     load_verified_materialized_cohort_authority,
     publish_ordered_subset_materialized_cohort,
 )
+from ..authority.development_projection import DEVELOPMENT_COHORT_EVIDENCE_ID
 from ..intake.materialized_trajectory import (
     StagedTrajectoryBinding,
     load_verified_materialized_trajectory_authority,
@@ -401,16 +402,11 @@ def materialize_development_execution_sample(
                 "development sample identity disappeared from its locked parent"
             )
         expected_positions = _selected_positions(
-            parent_table.column(binding.identity_column)
-            .combine_chunks()
-            .to_pylist(),
+            parent_table.column(binding.identity_column).combine_chunks().to_pylist(),
             target_rows=binding.target_rows,
             seed=binding.seed,
         )
-        if (
-            _positions_sha256(expected_positions)
-            != binding.selected_positions_sha256
-        ):
+        if _positions_sha256(expected_positions) != binding.selected_positions_sha256:
             raise DevelopmentSampleError(
                 "development sample row selection changed across resume"
             )
@@ -418,9 +414,8 @@ def materialize_development_execution_sample(
             pa.array(expected_positions, type=pa.int64())
         )
         actual_sample = pq.read_table(binding.cohort_path)
-        if (
-            binding.selected_rows != len(expected_positions)
-            or not actual_sample.equals(expected_sample)
+        if binding.selected_rows != len(expected_positions) or not actual_sample.equals(
+            expected_sample
         ):
             raise DevelopmentSampleError(
                 "development sample is not the deterministic parent subset"
@@ -652,6 +647,32 @@ def record_development_sample_authority(
 ) -> None:
     """Register one non-paper sample without adding orchestration closure state."""
 
+    if evidence.get(DEVELOPMENT_COHORT_EVIDENCE_ID) is None:
+        evidence.register_file(
+            kind="table",
+            description=(
+                "Non-paper deterministic execution subset of the locked, "
+                "post-QC analysis cohort. This table may validate workflow "
+                "capability and runtime only; it is not manuscript authority."
+            ),
+            source_path=binding.cohort_path,
+            evidence_id=DEVELOPMENT_COHORT_EVIDENCE_ID,
+            producer="runtime_supervisor",
+            generation_mode="system",
+            metadata={
+                "paper_authority": False,
+                "projection_kind": "ordered_subset_of_locked_analysis_cohort",
+                "parent_cohort_sha256": binding.parent_sha256,
+                "sample_cohort_sha256": binding.sample_sha256,
+                "sample_manifest_sha256": _sha256_file(binding.manifest_path),
+                "identity_column": binding.identity_column,
+                "selected_positions_sha256": binding.selected_positions_sha256,
+                "target_rows": binding.target_rows,
+                "selected_rows": binding.selected_rows,
+                "seed": binding.seed,
+            },
+            publish_aliases=False,
+        )
     if evidence.get("development_execution_sample") is None:
         evidence.register_file(
             kind="log",
@@ -712,6 +733,7 @@ def record_development_sample_authority(
 
 __all__ = [
     "DEVELOPMENT_COHORT_FILENAME",
+    "DEVELOPMENT_COHORT_EVIDENCE_ID",
     "DEVELOPMENT_SAMPLE_FILENAME",
     "DEVELOPMENT_SAMPLE_SCHEMA",
     "DEVELOPMENT_TRAJECTORY_FILENAME",

@@ -2805,6 +2805,7 @@ def _selectively_revalidate_resume_successes(
     cohort_path: Path,
     universe_path: Path,
     resume_from_step_id: Optional[str],
+    development_sample: Optional[Any] = None,
 ) -> _ResumeDeterministicRevalidationResult:
     """Replay changed deterministic gates against sealed evidence only.
 
@@ -3236,6 +3237,7 @@ def _selectively_revalidate_resume_successes(
                     trusted_step_records=trusted_current_records,
                     run_dir=run_dir,
                     cohort_path=cohort_path,
+                    development_sample=development_sample,
                 )
             )
             with tempfile.TemporaryDirectory(
@@ -3755,6 +3757,7 @@ def run_execute_phase(
             cohort_path=cohort_path,
             universe_path=universe_path,
             resume_from_step_id=requested_resume_from_step_id,
+            development_sample=run_input_authority_state.development_sample,
         )
         plan_result.resume_state = resume_revalidation.resume_state
         resume_controller.resume_state = resume_revalidation.resume_state
@@ -4657,6 +4660,7 @@ def run_execute_phase(
         records_lock=shared_lock,
         run_dir=run_dir,
         authoritative_cohort_path=cohort_path,
+        development_sample=run_input_authority_state.development_sample,
     )
     step_order = {s.step_id: i for i, s in enumerate(plan.steps)}
     total_steps = len(plan.steps)
