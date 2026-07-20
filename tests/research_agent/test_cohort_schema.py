@@ -715,7 +715,12 @@ def _synthetic_source_predicate(
     )
 
 
-def _synthetic_binding_plan(definition, inputs):
+def _synthetic_binding_plan(
+    definition,
+    inputs,
+    *,
+    cohort_output="artifact:analysis_cohort",
+):
     return SimpleNamespace(
         cohort=definition,
         steps=[
@@ -723,7 +728,7 @@ def _synthetic_binding_plan(definition, inputs):
                 inputs=list(inputs),
                 expected_outputs=[
                     "table:cohort_attrition",
-                    "artifact:analysis_cohort",
+                    cohort_output,
                 ],
             )
         ],
@@ -842,6 +847,54 @@ def test_materialize_binds_unique_planner_input_by_source_concept(
             ],
         }
     ]
+
+
+def test_cohort_namespace_product_preserves_planner_column_binding(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """A supported cohort namespace binds like analysis_cohort aliases."""
+
+    from easyicu.research_agent.cohort import schema as cohort_schema
+
+    monkeypatch.setattr(
+        cohort_contract,
+        "_EXTRA_COHORT_CONCEPT_IDS",
+        {"canonical_signal"},
+    )
+    definition = cohort_schema.CohortDefinition(
+        name="primary",
+        inclusion=(_synthetic_source_predicate(),),
+    )
+    universe_path = tmp_path / "cohort.parquet"
+    pd.DataFrame(
+        {
+            "stay_id": [1, 2, 3],
+            "exported_signal_any": [0.0, None, 2.0],
+        }
+    ).to_parquet(universe_path, index=False)
+    context = _synthetic_binding_context(
+        SimpleNamespace(
+            name="exported_signal_any",
+            source_concept="canonical_signal",
+            role="other",
+            analysis_window="icu_admit_0_24h",
+        )
+    )
+
+    result = cohort_schema.materialize_locked_analysis_cohort(
+        run_dir=tmp_path,
+        plan=_synthetic_binding_plan(
+            definition,
+            ["stay_id", "exported_signal_any"],
+            cohort_output="cohort:analysis_set",
+        ),
+        universe_path=universe_path,
+        context=context,
+    )
+
+    assert result["status"] == "applied"
+    assert result["n_cohort"] == 2
 
 
 def test_materialize_binds_unique_non_primary_qc_input_for_any_missingness(
