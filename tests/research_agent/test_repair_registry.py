@@ -157,12 +157,16 @@ def test_syntactic_repair_has_no_invariants_and_passes_vacuously() -> None:
 
 
 def test_measurement_provenance_summary_mapping_is_structural_and_automatic() -> None:
-    metadata = repair_metadata_for("measurement_provenance_summary_mapping_v1")
+    for repair_id in (
+        "measurement_provenance_summary_mapping_v1",
+        "measurement_provenance_summary_mapping_v2",
+    ):
+        metadata = repair_metadata_for(repair_id)
 
-    assert metadata.repair_class is RepairClass.STRUCTURAL
-    assert metadata.introduces_numbers is False
-    assert metadata.requires_disclosure is False
-    assert automatic_repair_allowed(metadata.repair_id)
+        assert metadata.repair_class is RepairClass.STRUCTURAL
+        assert metadata.introduces_numbers is False
+        assert metadata.requires_disclosure is False
+        assert automatic_repair_allowed(metadata.repair_id)
 
 
 def test_provenance_checked_status_contract_is_structural_and_automatic() -> None:
