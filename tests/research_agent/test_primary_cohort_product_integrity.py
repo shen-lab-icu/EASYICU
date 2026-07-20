@@ -1191,6 +1191,77 @@ def test_same_ids_with_changed_authoritative_values_fail_closed(tmp_path: Path) 
     assert findings[0].detail["issue"] == "analysis_cohort_value_mismatch"
 
 
+def test_nullable_boolean_and_exact_zero_one_storage_are_equivalent(
+    tmp_path: Path,
+) -> None:
+    step = _cohort_step()
+    plan = _plan(step)
+    universe_path, authoritative_path, authoritative = _write_authorities(tmp_path)
+    universe = pd.read_parquet(universe_path)
+    universe["source_flag"] = pd.Series(
+        [True, False, None, True, None, False, True, None], dtype="boolean"
+    )
+    universe.to_parquet(universe_path, index=False)
+    authoritative = universe[universe["stay_id"].isin([3, 4, 6, 7])].copy()
+    authoritative_storage = authoritative.copy()
+    authoritative_storage["source_flag"] = authoritative_storage["source_flag"].astype(
+        "Float64"
+    )
+    authoritative_storage.to_parquet(authoritative_path, index=False)
+    out_dir = tmp_path / "outputs"
+    summary = _write_outputs(
+        out_dir,
+        produced=authoritative,
+        universe_n=8,
+        final_n=4,
+    )
+
+    assert (
+        primary_analysis_cohort_integrity_findings(
+            step=step,
+            plan=plan,
+            step_summary=summary,
+            out_dir=out_dir,
+            universe_path=universe_path,
+            authoritative_cohort_path=authoritative_path,
+        )
+        == []
+    )
+
+
+def test_nullable_boolean_storage_still_rejects_changed_flag(tmp_path: Path) -> None:
+    step = _cohort_step()
+    plan = _plan(step)
+    universe_path, authoritative_path, _authoritative = _write_authorities(tmp_path)
+    universe = pd.read_parquet(universe_path)
+    universe["source_flag"] = pd.Series(
+        [True, False, None, True, None, False, True, None], dtype="boolean"
+    )
+    universe.to_parquet(universe_path, index=False)
+    authoritative = universe[universe["stay_id"].isin([3, 4, 6, 7])].copy()
+    authoritative_storage = authoritative.copy()
+    authoritative_storage["source_flag"] = authoritative_storage["source_flag"].astype(
+        "Float64"
+    )
+    authoritative_storage.to_parquet(authoritative_path, index=False)
+    changed = authoritative.copy().reset_index(drop=True)
+    changed.loc[1, "source_flag"] = False
+    out_dir = tmp_path / "outputs"
+    summary = _write_outputs(out_dir, produced=changed, universe_n=8, final_n=4)
+
+    findings = primary_analysis_cohort_integrity_findings(
+        step=step,
+        plan=plan,
+        step_summary=summary,
+        out_dir=out_dir,
+        universe_path=universe_path,
+        authoritative_cohort_path=authoritative_path,
+    )
+
+    assert len(findings) == 1
+    assert findings[0].detail["issue"] == "analysis_cohort_value_mismatch"
+
+
 def test_primary_cohort_alias_participates_in_plan_contracts() -> None:
     from easyicu.research_agent.plan_utils import (
         _cohort_change_contract_applies,
