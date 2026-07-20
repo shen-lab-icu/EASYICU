@@ -1490,11 +1490,10 @@ class DockerRunner:
 
     @staticmethod
     def _clear_step_outputs(out_dir: Path) -> None:
-        """Clear a quiescent step output directory without following symlinks."""
+        """Recreate a quiescent output mount instead of reusing its inode."""
 
-        DockerRunner._ensure_real_directory(out_dir, replace_unsafe=True)
-        for child in out_dir.iterdir():
-            DockerRunner._remove_lexical_path(child)
+        DockerRunner._remove_lexical_path(out_dir)
+        out_dir.mkdir(parents=False)
 
     def build_command(
         self,
