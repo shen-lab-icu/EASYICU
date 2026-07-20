@@ -650,6 +650,41 @@ second_loss = int((raw_second.notna() & coerced_second.isna()).sum())
     assert _lossy_findings(script, ra)
 
 
+def test_compound_or_guard_covers_consecutive_loss_bindings(ra):
+    script = """
+import pandas as pd
+
+raw_measured = cohort["measured"]
+raw_count = cohort["count"]
+measured_num = pd.to_numeric(raw_measured, errors="coerce")
+measured_loss = int((raw_measured.notna() & measured_num.isna()).sum())
+count_num = pd.to_numeric(raw_count, errors="coerce")
+count_loss = int((raw_count.notna() & count_num.isna()).sum())
+if measured_loss > 0 or count_loss > 0:
+    raise ValueError("provenance values were lost during numeric coercion")
+"""
+
+    assert _lossy_findings(script, ra) == []
+
+
+def test_compound_guard_cannot_skip_scientific_work(ra):
+    script = """
+import pandas as pd
+
+raw_measured = cohort["measured"]
+raw_count = cohort["count"]
+measured_num = pd.to_numeric(raw_measured, errors="coerce")
+measured_loss = int((raw_measured.notna() & measured_num.isna()).sum())
+model_result = fit_model(measured_num)
+count_num = pd.to_numeric(raw_count, errors="coerce")
+count_loss = int((raw_count.notna() & count_num.isna()).sum())
+if measured_loss > 0 or count_loss > 0:
+    raise ValueError("provenance values were lost during numeric coercion")
+"""
+
+    assert _lossy_findings(script, ra)
+
+
 def test_unrelated_domain_check_is_not_claimed_by_other_coercion(ra):
     script = """
 import pandas as pd

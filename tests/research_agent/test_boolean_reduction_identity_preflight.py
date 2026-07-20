@@ -190,6 +190,15 @@ if validate(*parts).all() is True:
     assert _findings(script, ra) == []
 
 
+def test_arbitrary_starred_call_identity_is_outside_reduction_authority(ra) -> None:
+    script = """
+if validate(*parts) is True:
+    raise ValueError("invalid")
+"""
+
+    assert _findings(script, ra) == []
+
+
 @pytest.mark.parametrize(
     "script",
     [

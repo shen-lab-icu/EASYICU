@@ -14,6 +14,7 @@ from typing import Callable, Optional, Sequence
 
 from ..research_context.prompt_scope import normalised_method_head
 from ..schema import AnalysisStep, ValidationFinding
+from .typed_input import resolved_input_relative_path_root_findings
 
 _STRUCTURAL_ACCOUNTING_PRODUCTS = frozenset(
     {
@@ -6017,6 +6018,20 @@ def _positive_count_test(
 ) -> bool:
     """Return whether an ``if`` condition is true exactly when count > 0."""
 
+    if isinstance(node, ast.BoolOp) and isinstance(node.op, ast.Or):
+        # ``a_loss > 0 or b_loss > 0`` fail-closes for each named loss count:
+        # either positive operand is sufficient to enter the terminating body.
+        # ``and`` is deliberately excluded because the other operand could keep
+        # the guard false while this binding is positive.
+        return any(
+            _positive_count_test(
+                value,
+                binding,
+                scope_id=scope_id,
+                builtin_int_unmodified=builtin_int_unmodified,
+            )
+            for value in node.values
+        )
     if _binding_expression_matches(
         node,
         binding,
@@ -6069,6 +6084,18 @@ def _zero_count_assertion(
 ) -> bool:
     """Return whether an assertion fails whenever the count is positive."""
 
+    if isinstance(node, ast.BoolOp) and isinstance(node.op, ast.And):
+        # ``assert a_loss == 0 and b_loss == 0`` fails if either audited count
+        # is positive.  An ``or`` assertion would not provide that guarantee.
+        return any(
+            _zero_count_assertion(
+                value,
+                binding,
+                scope_id=scope_id,
+                builtin_int_unmodified=builtin_int_unmodified,
+            )
+            for value in node.values
+        )
     if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.Not):
         return _binding_expression_matches(
             node.operand,
@@ -6320,6 +6347,51 @@ def _immediate_guard_for_statement(
     )
 
 
+def _grouped_loss_guard_for_statement(
+    statement: ast.stmt,
+    binding: _GuardBinding,
+    *,
+    audit_statement_ids: set[int],
+    tree: ast.Module,
+    positions: dict[int, _StatementPosition],
+    parents: dict[int, ast.AST],
+    builtin_int_unmodified: bool,
+) -> bool:
+    """Accept one shared guard after only consecutive coercion-audit statements.
+
+    This admits the common host-audit shape where two returned loss counts are
+    unpacked around adjacent proven numeric-coercion/loss assignments and one
+    ``or`` guard terminates for either.  No other statement may be crossed, so
+    scientific work or a side effect cannot occur between computing a loss
+    count and enforcing its guard.
+    """
+
+    position = positions.get(id(statement))
+    if position is None:
+        return False
+    next_index = position.index + 1
+    while (
+        next_index < len(position.block)
+        and id(position.block[next_index]) in audit_statement_ids
+    ):
+        next_index += 1
+    if next_index >= len(position.block):
+        return False
+    guard = position.block[next_index]
+    guard_position = positions.get(id(guard))
+    if guard_position is None or guard_position.scope_id != binding.scope_id:
+        return False
+    return _statement_is_fail_closed_guard(
+        guard,
+        binding,
+        position=guard_position,
+        tree=tree,
+        parents=parents,
+        positions=positions,
+        builtin_int_unmodified=builtin_int_unmodified,
+    )
+
+
 def _function_returns(
     function: ast.FunctionDef,
 ) -> list[ast.Return]:
@@ -6553,10 +6625,23 @@ def _guarded_coercion_roots(
 ) -> set[_NumericCoercionSite]:
     guarded: set[_NumericCoercionSite] = set()
     builtin_int_unmodified = _builtin_int_binding_is_unmodified(tree)
+    audit_statement_ids = {
+        statement_id
+        for binding in bindings
+        for statement_id in (binding.statement_id, binding.coercion.statement_id)
+    }
     for binding in bindings:
         if _immediate_guard_for_statement(
             binding.statement,
             binding.guard_binding,
+            tree=tree,
+            positions=positions,
+            parents=parents,
+            builtin_int_unmodified=builtin_int_unmodified,
+        ) or _grouped_loss_guard_for_statement(
+            binding.statement,
+            binding.guard_binding,
+            audit_statement_ids=audit_statement_ids,
             tree=tree,
             positions=positions,
             parents=parents,
@@ -7074,10 +7159,6 @@ def _boolean_reduction_identity_findings(
     def _reduction_info(expression: ast.AST) -> Optional[tuple[str, str, bool]]:
         if not isinstance(expression, ast.Call):
             return None
-        if any(
-            isinstance(argument, ast.Starred) for argument in expression.args
-        ) or any(keyword.arg is None for keyword in expression.keywords):
-            return "dynamic", "unknown", False
 
         reduction: Optional[str] = None
         provenance = "unknown"
@@ -7097,6 +7178,10 @@ def _boolean_reduction_identity_findings(
                 reduction = imported.removeprefix("numpy_")
                 provenance = "numpy_function"
         if reduction is not None:
+            if any(
+                isinstance(argument, ast.Starred) for argument in expression.args
+            ) or any(keyword.arg is None for keyword in expression.keywords):
+                return "dynamic", provenance, False
             scalar = len(expression.args) == 1
             if any(keyword.arg != "axis" for keyword in expression.keywords):
                 scalar = False
@@ -7117,6 +7202,10 @@ def _boolean_reduction_identity_findings(
             )
             if provenance in {"custom", "unknown"}:
                 return None
+            if any(
+                isinstance(argument, ast.Starred) for argument in expression.args
+            ) or any(keyword.arg is None for keyword in expression.keywords):
+                return "dynamic", provenance, False
             scalar = provenance in {"pandas_series", "numpy_array"}
             if expression.args:
                 scalar = False
@@ -8004,6 +8093,7 @@ def audit_mechanical_code_contracts(
     findings.extend(_provenance_pair_scan_findings(tree))
     findings.extend(_resolved_context_payload_findings(tree))
     findings.extend(_resolved_input_binding_key_findings(tree))
+    findings.extend(resolved_input_relative_path_root_findings(tree))
     findings.extend(_pre312_fstring_subscript_quote_findings(script_text, tree))
     findings.extend(_swallowed_reconciliation_error_findings(tree))
     findings.extend(_authoritative_exposure_binding_findings(tree, step))
