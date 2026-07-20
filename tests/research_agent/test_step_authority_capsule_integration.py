@@ -35,10 +35,13 @@ from easyicu.research_agent.authority.step_runtime import (
     StepAuthorityRuntimeError,
     adopt_candidate_for_control_plane_revalidation,
     adopt_frozen_scoped_coder_context,
+    dependency_blocked_candidate_metadata,
     execution_context_sha256,
     load_checkpoint_selected_step_capsule,
     load_explicit_failed_step_capsule,
+    load_latest_explicit_failed_step_capsule_from_history,
     load_explicit_success_step_capsule,
+    select_explicit_step_capsule_for_targeted_resume,
     materialize_sealed_run_result,
     persist_candidate_code,
     prepare_step_authority_coordinates,
@@ -722,6 +725,88 @@ def test_explicit_failed_capsule_rejects_nonterminal_or_unexecuted_record(
                 "status": "contract_failed",
                 "outputs_safe_to_collect": False,
             },
+        )
+        is None
+    )
+
+
+def test_latest_explicit_capsule_survives_newer_dependency_status_row(
+    tmp_path: Path,
+) -> None:
+    coordinates, code, candidate_ref, _budget, _receipt = _initial_candidate(tmp_path)
+    failed = {
+        "step_id": coordinates.step_id,
+        "attempt_id": "01_summary:attempt:1",
+        "status": "contract_failed",
+        "returncode": 0,
+        "timed_out": False,
+        "outputs_safe_to_collect": True,
+        "executed_code_sha256": code.sha256,
+        "concept_approved_code_sha256": code.sha256,
+        "step_authority_capsule_ref": candidate_ref.model_dump(mode="json"),
+    }
+    blocked = {
+        "step_id": coordinates.step_id,
+        "attempt_id": "01_summary:attempt:2",
+        "status": "blocked_dependency_evidence",
+    }
+
+    selected = load_latest_explicit_failed_step_capsule_from_history(
+        tmp_path,
+        step_id=coordinates.step_id,
+        records=[failed, blocked],
+    )
+
+    assert selected is not None
+    verified, source_record = selected
+    assert verified.ref == candidate_ref
+    assert source_record is failed
+
+    blocked.update(
+        dependency_blocked_candidate_metadata(
+            tmp_path,
+            step_id=coordinates.step_id,
+            current_record=failed,
+            records=[failed],
+        )
+    )
+    replay = select_explicit_step_capsule_for_targeted_resume(
+        tmp_path,
+        step_id=coordinates.step_id,
+        current_record=blocked,
+        records=[blocked],
+        deterministic_gate_fingerprint="f" * 64,
+    )
+    assert replay is not None
+    replay_capsule, metadata = replay
+    assert replay_capsule.ref == candidate_ref
+    assert metadata["explicit_failed_capsule_reused"] is True
+    assert metadata["explicit_failed_capsule_reused_attempt_id"] == (
+        "01_summary:attempt:1"
+    )
+
+
+def test_latest_ineligible_explicit_capsule_blocks_older_fallback(
+    tmp_path: Path,
+) -> None:
+    coordinates, code, candidate_ref, _budget, _receipt = _initial_candidate(tmp_path)
+    eligible = {
+        "step_id": coordinates.step_id,
+        "status": "contract_failed",
+        "returncode": 0,
+        "timed_out": False,
+        "outputs_safe_to_collect": True,
+        "executed_code_sha256": code.sha256,
+        "concept_approved_code_sha256": code.sha256,
+        "step_authority_capsule_ref": candidate_ref.model_dump(mode="json"),
+    }
+    newer_unsafe = {**eligible, "outputs_safe_to_collect": False}
+
+    assert (
+        load_latest_explicit_failed_step_capsule_from_history(
+            tmp_path,
+            step_id=coordinates.step_id,
+            records=[eligible, newer_unsafe],
         )
         is None
     )
