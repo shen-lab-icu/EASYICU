@@ -336,6 +336,151 @@ def _closed_counts_signature_repair_lines(
     )
 
 
+def _closed_counts_stable_keyword_repair_lines(
+    findings: Sequence[ValidationFinding],
+) -> frozenset[int]:
+    """Return closed-count calls whose only gap is a known keyword adapter."""
+
+    allowed_violations = {
+        "required_keyword_only_argument_missing",
+        "unknown_keyword_argument",
+    }
+    return frozenset(
+        int(detail["line"])
+        for finding in findings
+        for detail in [finding.detail or {}]
+        for violations in [detail.get("violations")]
+        if finding.validator == "mechanical_code_preflight"
+        and finding.severity == "error"
+        and detail.get("reason") == "host_helper_call_signature_invalid"
+        and detail.get("helper_name") == "closed_categorical_counts"
+        and isinstance(violations, list)
+        and "unknown_keyword_argument" in violations
+        and set(violations) <= allowed_violations
+        and isinstance(detail.get("line"), int)
+        and not isinstance(detail.get("line"), bool)
+        and int(detail["line"]) > 0
+    )
+
+
+def _patch_closed_counts_stable_keywords(
+    code: str,
+    *,
+    finding_lines: frozenset[int],
+) -> str:
+    """Remove a diagnostic label or rename an authored levels keyword.
+
+    The host helper accepts one series plus ``declared_levels=``. Generated
+    adapters sometimes add ``variable=`` for error-label prose or spell the
+    already-authored level expression as ``levels=``. Both forms currently
+    fail before execution. This repair changes no level value, category,
+    denominator, row, or scientific choice and applies every exact structured
+    occurrence atomically.
+    """
+
+    if not finding_lines:
+        return code
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return code
+    parents = {
+        child: parent
+        for parent in ast.walk(tree)
+        for child in ast.iter_child_nodes(parent)
+    }
+    candidates_by_line: dict[int, list[ast.Call]] = {line: [] for line in finding_lines}
+    for node in ast.walk(tree):
+        if (
+            isinstance(node, ast.Call)
+            and int(getattr(node, "lineno", 0)) in candidates_by_line
+            and _call_tail(node.func) == "closed_categorical_counts"
+        ):
+            candidates_by_line[int(node.lineno)].append(node)
+    if any(len(candidates) != 1 for candidates in candidates_by_line.values()):
+        return code
+
+    replacements: list[tuple[str, str]] = []
+    for line in sorted(finding_lines):
+        call = candidates_by_line[line][0]
+        if (
+            len(call.args) != 1
+            or isinstance(call.args[0], ast.Starred)
+            or any(keyword.arg is None for keyword in call.keywords)
+        ):
+            return code
+        keyword_map = {str(keyword.arg): keyword.value for keyword in call.keywords}
+        if len(keyword_map) != len(call.keywords) or not set(keyword_map) <= {
+            "variable",
+            "levels",
+            "declared_levels",
+        }:
+            return code
+        if "levels" in keyword_map and "declared_levels" in keyword_map:
+            return code
+        level_expression = keyword_map.get("declared_levels") or keyword_map.get(
+            "levels"
+        )
+        if level_expression is None:
+            function: ast.AST | None = call
+            while function is not None and not isinstance(
+                function, (ast.FunctionDef, ast.AsyncFunctionDef)
+            ):
+                function = parents.get(function)
+            if not isinstance(function, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                return code
+            parameters = [
+                argument
+                for argument in [
+                    *function.args.posonlyargs,
+                    *function.args.args,
+                    *function.args.kwonlyargs,
+                ]
+                if argument.arg in {"levels", "declared_levels"}
+            ]
+            if len(parameters) != 1:
+                return code
+            levels_name = parameters[0].arg
+            if any(
+                isinstance(node, ast.Name)
+                and node.id == levels_name
+                and isinstance(node.ctx, (ast.Store, ast.Del))
+                for statement in function.body
+                for node in ast.walk(statement)
+                if int(getattr(node, "lineno", 0) or 0) < line
+            ):
+                return code
+            level_expression = ast.Name(id=parameters[0].arg, ctx=ast.Load())
+            level_source = levels_name
+        else:
+            level_source = ast.get_source_segment(code, level_expression)
+        call_source = ast.get_source_segment(code, call)
+        function_source = ast.get_source_segment(code, call.func)
+        series_source = ast.get_source_segment(code, call.args[0])
+        if (
+            not call_source
+            or not function_source
+            or not series_source
+            or not level_source
+            or code.count(call_source) != 1
+        ):
+            return code
+        replacements.append(
+            (
+                call_source,
+                f"{function_source}({series_source}, declared_levels={level_source})",
+            )
+        )
+    repaired = code
+    for call_source, replacement in replacements:
+        repaired = repaired.replace(call_source, replacement, 1)
+    try:
+        ast.parse(repaired)
+    except SyntaxError:
+        return code
+    return repaired
+
+
 def _patch_host_helper_keyword_only_call(
     code: str,
     *,
@@ -1745,6 +1890,15 @@ def deterministic_concept_audit_repair(
         if closed_levels_bound != repaired:
             repair_name = "closed_counts_declared_levels_binding_v1"
             repaired = closed_levels_bound
+            repair_names.append(repair_name)
+
+        stable_keywords = _patch_closed_counts_stable_keywords(
+            repaired,
+            finding_lines=_closed_counts_stable_keyword_repair_lines(repair_findings),
+        )
+        if stable_keywords != repaired:
+            repair_name = "closed_counts_stable_keywords_v1"
+            repaired = stable_keywords
             repair_names.append(repair_name)
 
         receipt_threaded = _patch_discarded_host_receipt_unpack(

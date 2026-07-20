@@ -234,6 +234,114 @@ def add_categorical(series, categories):
     assert names == []
 
 
+def test_closed_counts_unknown_diagnostic_keyword_is_repaired_without_science_change(
+    ra,
+):
+    script = """
+from easyicu.research_agent.methods.descriptive_inputs import closed_categorical_counts
+
+def add_categorical(series, variable, levels):
+    return closed_categorical_counts(
+        series,
+        variable=variable,
+        declared_levels=levels,
+    )
+"""
+    findings = _signature_findings(script, ra)
+
+    repaired, names = deterministic_concept_audit_repair(
+        script,
+        [finding.message for finding in findings],
+        repair_reasons=[repair_reason_for_finding(finding) for finding in findings],
+        repair_findings=findings,
+    )
+
+    assert len(findings) == 1
+    assert findings[0].detail["violations"] == ["unknown_keyword_argument"]
+    assert names == ["closed_counts_stable_keywords_v1"]
+    assert "closed_categorical_counts(series, declared_levels=levels)" in repaired
+    assert "variable=variable" not in repaired
+    assert _signature_findings(repaired, ra) == []
+
+
+def test_closed_counts_unknown_keywords_are_repaired_atomically(ra):
+    script = """
+from easyicu.research_agent.methods.descriptive_inputs import closed_categorical_counts
+
+def first(series, variable, first_levels):
+    return closed_categorical_counts(
+        series, variable=variable, levels=first_levels
+    )
+
+def second(series, variable, second_levels):
+    return closed_categorical_counts(
+        series, variable=variable, declared_levels=second_levels
+    )
+"""
+    findings = _signature_findings(script, ra)
+
+    repaired, names = deterministic_concept_audit_repair(
+        script,
+        [finding.message for finding in findings],
+        repair_reasons=[repair_reason_for_finding(finding) for finding in findings],
+        repair_findings=findings,
+    )
+
+    assert len(findings) == 2
+    assert names == ["closed_counts_stable_keywords_v1"]
+    assert repaired.count("variable=variable") == 0
+    assert repaired.count("declared_levels=") == 2
+    assert _signature_findings(repaired, ra) == []
+
+
+def test_closed_counts_stable_keyword_repair_refuses_ambiguous_or_unknown_inputs(ra):
+    script = """
+from easyicu.research_agent.methods.descriptive_inputs import closed_categorical_counts
+
+def add_categorical(series, variable, levels, declared_levels):
+    return closed_categorical_counts(
+        series,
+        variable=variable,
+        levels=levels,
+        declared_levels=declared_levels,
+    )
+"""
+    findings = _signature_findings(script, ra)
+
+    repaired, names = deterministic_concept_audit_repair(
+        script,
+        [finding.message for finding in findings],
+        repair_reasons=[repair_reason_for_finding(finding) for finding in findings],
+        repair_findings=findings,
+    )
+
+    assert len(findings) == 1
+    assert repaired == script
+    assert names == []
+
+
+def test_closed_counts_stable_keyword_repair_does_not_bind_reassigned_levels(ra):
+    script = """
+from easyicu.research_agent.methods.descriptive_inputs import closed_categorical_counts
+
+def add_categorical(series, variable, levels):
+    levels = infer_levels(series)
+    return closed_categorical_counts(series, variable=variable)
+"""
+    findings = _signature_findings(script, ra)
+
+    repaired, names = deterministic_concept_audit_repair(
+        script,
+        [finding.message for finding in findings],
+        repair_reasons=[repair_reason_for_finding(finding) for finding in findings],
+        repair_findings=findings,
+    )
+
+    assert len(findings) == 1
+    assert repaired == script
+    assert names == []
+
+
 def test_fixed_local_return_arity_must_match_direct_unpack(ra):
     script = """
 def collect(frame):

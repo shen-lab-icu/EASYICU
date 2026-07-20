@@ -473,18 +473,18 @@ def _format_repair_authority_context(
             "source_concept": variable.source_concept,
             "role": variable.role.value,
             "dtype": variable.dtype,
-            "unit": variable.unit,
-            "valid_range": variable.valid_range,
-            "observed_domain": variable.observed_domain,
             "is_ordinal": variable.is_ordinal,
             "ordinal_levels": variable.ordinal_levels,
-            "analysis_window": variable.analysis_window,
-            "missingness_semantics": variable.missingness_semantics,
-            "forbidden_transformations": variable.forbidden_transformations,
         }
         if include_scientific_authority:
             row.update(
                 {
+                    "unit": variable.unit,
+                    "valid_range": variable.valid_range,
+                    "observed_domain": variable.observed_domain,
+                    "analysis_window": variable.analysis_window,
+                    "missingness_semantics": variable.missingness_semantics,
+                    "forbidden_transformations": variable.forbidden_transformations,
                     "description": variable.description,
                     "allowed_aggregations": [
                         value.value for value in variable.allowed_aggregations
@@ -531,15 +531,15 @@ def _format_repair_authority_context(
         }
     payload: Dict[str, Any] = {
         "schema": "easyicu.repair_authority_context/1",
-        "research_question": ctx.research_question,
         "cohort": cohort_payload,
         "primary_exposure": ctx.primary_exposure,
         "target_outcome": ctx.target_outcome,
         "time_windows": [window.model_dump(mode="json") for window in ctx.time_windows],
-        "cross_database_validation": list(ctx.cross_database_validation),
         "variables": variables,
     }
     if include_scientific_authority:
+        payload["research_question"] = ctx.research_question
+        payload["cross_database_validation"] = list(ctx.cross_database_validation)
         payload["temporal_constraints"] = [
             constraint.model_dump(mode="json")
             for constraint in ctx.temporal_constraints
@@ -2360,8 +2360,9 @@ class CoderAgent:
             "repair may not change one.\n"
             f"Repair attempt: {attempt}\n"
             f"Step intent: {step.intent}\n"
-            f"Step inputs: {step.inputs}\n"
-            f"Expected outputs: {step.expected_outputs}\n"
+            # Exact inputs and outputs are already rendered once by
+            # _compact_repair_scope_contract below. Repeating wide step lists
+            # here consumed transport budget without adding authority.
             "Model requirements: "
             f"{json.dumps([item.model_dump(mode='json') for item in step.model_requirements], ensure_ascii=False)}\n"
             f"Method: {step.method or '(unspecified)'}\n\n"
