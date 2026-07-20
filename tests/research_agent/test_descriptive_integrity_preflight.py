@@ -94,6 +94,30 @@ def test_strict_numeric_nonfinite_guard_is_deterministically_repaired() -> None:
         strict_input(pd.Series([1.0, float("inf")]))
 
 
+def test_multiple_strict_numeric_helpers_are_repaired_in_one_pass() -> None:
+    two_helpers = _STRICT_NUMERIC + _STRICT_NUMERIC.replace(
+        "strict_input", "strict_secondary"
+    )
+    findings = audit_mechanical_code_contracts(two_helpers, _STEP)
+
+    repaired, names = deterministic_concept_audit_repair(
+        two_helpers,
+        [finding.message for finding in findings],
+        repair_reasons=[RepairReason.NONFINITE_NUMERIC_INPUT],
+        repair_findings=findings,
+    )
+
+    assert names == ["strict_numeric_nonfinite_guard_v1"]
+    assert audit_mechanical_code_contracts(repaired, _STEP) == []
+    namespace: dict[str, object] = {}
+    exec(repaired, namespace)
+    for helper_name in ("strict_input", "strict_secondary"):
+        helper = namespace[helper_name]
+        assert callable(helper)
+        with pytest.raises(RuntimeError, match="non-finite"):
+            helper(pd.Series([1.0, float("inf")]))
+
+
 def test_unrelated_isfinite_call_does_not_satisfy_strict_helper() -> None:
     decoy = _STRICT_NUMERIC + """
 

@@ -1087,10 +1087,10 @@ def _conditional_nonfinite_guard_lines(
     )
 
 
-def _strict_numeric_nonfinite_repair_line(
+def _strict_numeric_nonfinite_repair_lines(
     findings: Sequence[ValidationFinding],
-) -> Optional[int]:
-    lines = {
+) -> frozenset[int]:
+    return frozenset(
         int((finding.detail or {})["coercion_line"])
         for finding in findings
         if finding.validator == "mechanical_code_preflight"
@@ -1099,8 +1099,7 @@ def _strict_numeric_nonfinite_repair_line(
         and isinstance((finding.detail or {}).get("coercion_line"), int)
         and not isinstance((finding.detail or {}).get("coercion_line"), bool)
         and int((finding.detail or {})["coercion_line"]) > 0
-    }
-    return next(iter(lines)) if len(lines) == 1 else None
+    )
 
 
 def _categorical_level_reconciliation_repair_line(
@@ -1228,11 +1227,11 @@ def _stable_numpy_alias(tree: ast.Module) -> Optional[str]:
 def _patch_strict_numeric_nonfinite_guard(
     code: str,
     *,
-    coercion_line: Optional[int],
+    coercion_lines: frozenset[int],
 ) -> str:
-    """Reject infinities in one proven strict numeric coercion helper."""
+    """Reject infinities in every proven strict numeric coercion helper."""
 
-    if coercion_line is None or _STRICT_NUMERIC_NONFINITE_GUARD_SENTINEL in code:
+    if not coercion_lines:
         return code
     try:
         tree = ast.parse(code)
@@ -1256,7 +1255,7 @@ def _patch_strict_numeric_nonfinite_guard(
         node for node in ast.walk(tree) if isinstance(node, ast.FunctionDef)
     ]:
         for statement in function.body:
-            if int(getattr(statement, "lineno", -1)) != coercion_line:
+            if int(getattr(statement, "lineno", -1)) not in coercion_lines:
                 continue
             if isinstance(statement, ast.Assign) and len(statement.targets) == 1:
                 target = statement.targets[0]
@@ -1280,26 +1279,35 @@ def _patch_strict_numeric_nonfinite_guard(
             ):
                 continue
             candidates.append((function, statement, target.id))
-    if len(candidates) != 1:
+    if {int(statement.lineno) for _function, statement, _target in candidates} != set(
+        coercion_lines
+    ):
         return code
-    _function, statement, coerced_name = candidates[0]
-    if statement.end_lineno is None:
+    if any(
+        statement.end_lineno is None for _function, statement, _target in candidates
+    ):
         return code
     lines = code.splitlines(keepends=True)
-    indent_source = lines[statement.lineno - 1]
-    indent = indent_source[: len(indent_source) - len(indent_source.lstrip(" \t"))]
-    body_indent = indent + ("\t" if "\t" in indent else "    ")
-    guard = (
-        f"{indent}# {_STRICT_NUMERIC_NONFINITE_GUARD_SENTINEL}\n"
-        f"{indent}{mask_name} = {coerced_name}.notna() & "
-        f"~{numpy_alias}.isfinite({coerced_name})\n"
-        f"{indent}if int({mask_name}.sum()) > 0:\n"
-        f'{body_indent}raise RuntimeError("strict numeric input contains '
-        'non-finite observed values")\n'
-    )
-    if not lines[statement.end_lineno - 1].endswith(("\n", "\r")):
-        lines[statement.end_lineno - 1] += "\n"
-    lines.insert(statement.end_lineno, guard)
+    for _function, statement, coerced_name in sorted(
+        candidates,
+        key=lambda item: int(item[1].end_lineno or -1),
+        reverse=True,
+    ):
+        assert statement.end_lineno is not None
+        indent_source = lines[statement.lineno - 1]
+        indent = indent_source[: len(indent_source) - len(indent_source.lstrip(" \t"))]
+        body_indent = indent + ("\t" if "\t" in indent else "    ")
+        guard = (
+            f"{indent}# {_STRICT_NUMERIC_NONFINITE_GUARD_SENTINEL}\n"
+            f"{indent}{mask_name} = {coerced_name}.notna() & "
+            f"~{numpy_alias}.isfinite({coerced_name})\n"
+            f"{indent}if int({mask_name}.sum()) > 0:\n"
+            f'{body_indent}raise RuntimeError("strict numeric input contains '
+            'non-finite observed values")\n'
+        )
+        if not lines[statement.end_lineno - 1].endswith(("\n", "\r")):
+            lines[statement.end_lineno - 1] += "\n"
+        lines.insert(statement.end_lineno, guard)
     repaired = "".join(lines)
     try:
         ast.parse(repaired)
@@ -1791,7 +1799,7 @@ def deterministic_concept_audit_repair(
 
         guarded = _patch_strict_numeric_nonfinite_guard(
             repaired,
-            coercion_line=_strict_numeric_nonfinite_repair_line(repair_findings),
+            coercion_lines=_strict_numeric_nonfinite_repair_lines(repair_findings),
         )
         if guarded != repaired:
             repair_name = "strict_numeric_nonfinite_guard_v1"
