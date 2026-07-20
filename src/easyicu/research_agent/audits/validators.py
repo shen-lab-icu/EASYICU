@@ -8040,6 +8040,7 @@ class FigureSourceDataValidator:
         *,
         product: str,
         source_frame: pd.DataFrame,
+        upstream_frame: Optional[pd.DataFrame] = None,
         upstream_step_id: str,
         completed_step_records: Optional[Sequence[Dict[str, Any]]],
     ) -> str:
@@ -8054,16 +8055,33 @@ class FigureSourceDataValidator:
         """
 
         parsed = typed_product(product)
+        contract_frame = source_frame
+        if (
+            "model_id" not in contract_frame.columns
+            and upstream_frame is not None
+            and "source_row_index" in source_frame.columns
+        ):
+            positions = pd.to_numeric(
+                source_frame["source_row_index"], errors="coerce"
+            )
+            if (
+                positions.notna().all()
+                and positions.mod(1).eq(0).all()
+                and positions.between(0, len(upstream_frame) - 1).all()
+            ):
+                contract_frame = upstream_frame.iloc[
+                    positions.astype(int).tolist()
+                ].reset_index(drop=True)
         if (
             parsed is None
             or not effect_bearing_product(product)
-            or "model_id" not in source_frame.columns
+            or "model_id" not in contract_frame.columns
             or not completed_step_records
         ):
             return product
         model_ids = {
             str(value).strip()
-            for value in source_frame["model_id"].dropna().tolist()
+            for value in contract_frame["model_id"].dropna().tolist()
             if str(value).strip()
         }
         if not model_ids:
@@ -8102,12 +8120,12 @@ class FigureSourceDataValidator:
             for contract in selected_contracts
         ):
             return product
-        if not {"term_role", "source_variable"} <= set(source_frame.columns):
+        if not {"term_role", "source_variable"} <= set(contract_frame.columns):
             return product
-        exposure_rows = source_frame.loc[
-            source_frame["term_role"].map(cls._normalise).eq("exposure")
+        exposure_rows = contract_frame.loc[
+            contract_frame["term_role"].map(cls._normalise).eq("exposure")
         ]
-        if exposure_rows.empty or len(exposure_rows) != len(source_frame):
+        if exposure_rows.empty:
             return product
         for _, row in exposure_rows.iterrows():
             contract = contract_by_model.get(
@@ -9497,6 +9515,7 @@ class FigureSourceDataValidator:
                 semantic_product = self._contract_scoped_effect_product(
                     product=product,
                     source_frame=source_frame,
+                    upstream_frame=frame,
                     upstream_step_id=self._table_step_id(table_path, run_dir=run_dir),
                     completed_step_records=completed_step_records,
                 )

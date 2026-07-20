@@ -74,6 +74,23 @@ def test_effect_source_inherits_primary_tier_only_from_matching_model_contract()
         completed_step_records=completed,
     ) == "table:adjusted_association_estimates"
 
+    positional_source = pd.DataFrame({"source_row_index": [0, 1]})
+    upstream = pd.DataFrame(
+        {
+            "model_id": ["planned_model", "planned_model"],
+            "term_role": ["exposure", "adjustment"],
+            "source_variable": ["marker_max", "age"],
+            "odds_ratio": [1.25, 1.01],
+        }
+    )
+    assert FigureSourceDataValidator._contract_scoped_effect_product(
+        product="table:adjusted_association_estimates",
+        source_frame=positional_source,
+        upstream_frame=upstream,
+        upstream_step_id="05_model",
+        completed_step_records=completed,
+    ) == "table:primary_adjusted_association_estimates"
+
 
 def _write_upstream(tmp_path: Path) -> Path:
     up = tmp_path / "causal_effect.csv"
