@@ -175,6 +175,7 @@ from .intake.materialized_metadata import (
     MaterializedMetadataError,
     implementation_bundle_sha256 as materialized_implementation_bundle_sha256,
     load_verified_materialized_cohort_authority,
+    materialized_provenance_path,
     stage_materialized_cohort_authority,
 )
 from .intake.materialized_trajectory import (
@@ -4548,6 +4549,12 @@ class ResearchAgentPipeline:
                 if staged is None and src.resolve() != target.resolve():
                     df = pd.read_parquet(src)
                     df.to_parquet(target, index=False)
+                    source_provenance = materialized_provenance_path(src)
+                    if source_provenance.is_file():
+                        shutil.copy2(
+                            source_provenance,
+                            materialized_provenance_path(target),
+                        )
             elif src.suffix.lower() in {".csv", ".tsv"}:
                 if expected_source_authority is not None:
                     raise MaterializedMetadataError(

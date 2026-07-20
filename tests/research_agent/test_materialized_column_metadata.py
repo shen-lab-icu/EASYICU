@@ -57,7 +57,7 @@ from easyicu.research_agent.intake.materialized_metadata import (
     publish_ordered_subset_materialized_cohort,
     stage_materialized_cohort_authority,
 )
-from easyicu.research_agent.authority.evidence_store import EvidenceStore
+from easyicu.research_agent.authority.evidence_store import EvidenceStore, sha256_of_file
 from easyicu.research_agent.providers.mocks import MockLLMClient
 from easyicu.research_agent import pipeline as pipeline_module
 from easyicu.research_agent.pipeline import ResearchAgentPipeline
@@ -270,6 +270,8 @@ def test_materialized_cohort_publishes_exact_typed_sidecar(tmp_path: Path) -> No
     )
 
     provenance = json.loads(paths["provenance"].read_text(encoding="utf-8"))
+    assert provenance["cohort_file_sha256"] == sha256_of_file(paths["parquet"])
+    assert provenance["cohort_file_size"] == paths["parquet"].stat().st_size
     descriptor = provenance["column_metadata"]
     reference = SidecarRef.from_dict(descriptor["sidecar"])
     sidecar = read_content_addressed_sidecar(
