@@ -47,6 +47,7 @@ from ..scalar_utils import (
     _first_present_scalar,
     _flatten_scalar_dict,
 )
+from .attrition import patch_attrition_rule_id_canonicalization
 from .helpers import (  # noqa: F401  (re-exported for back-compat)
     _BINARY_MODEL_REPAIR_FAMILIES,
     _KEYERROR_NOT_IN_INDEX_RE,
@@ -4668,6 +4669,36 @@ def deterministic_contract_repair(
     previous_repair: Optional[str] = None,
 ) -> Optional[tuple[str, str]]:
     """Patch objective contract/audit failures before asking the LLM to repair."""
+
+    attrition_identity_findings = []
+    for finding in findings:
+        validator = getattr(finding, "validator", None)
+        detail = getattr(finding, "detail", None)
+        if isinstance(finding, dict):
+            validator = finding.get("validator")
+            detail = finding.get("detail")
+        if (
+            validator == "primary_analysis_cohort_integrity"
+            and isinstance(detail, dict)
+            and detail.get("issue") == "attrition_sequence_rule_ids_mismatch"
+        ):
+            attrition_identity_findings.append(detail)
+    attrition_repair_name = "attrition_rule_id_canonicalization_v1"
+    if (
+        len(attrition_identity_findings) == 1
+        and previous_repair != attrition_repair_name
+    ):
+        detail = attrition_identity_findings[0]
+        expected_rule_ids = detail.get("expected_criterion_ids")
+        reported_rule_ids = detail.get("reported_criterion_ids")
+        if isinstance(expected_rule_ids, list) and isinstance(reported_rule_ids, list):
+            repaired = patch_attrition_rule_id_canonicalization(
+                code,
+                expected_rule_ids=expected_rule_ids,
+                reported_rule_ids=reported_rule_ids,
+            )
+            if repaired != code:
+                return attrition_repair_name, repaired
 
     provenance_source_findings = []
     for finding in findings:

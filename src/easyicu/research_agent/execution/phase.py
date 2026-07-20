@@ -9419,8 +9419,8 @@ def run_execute_phase(
                                 ],
                             },
                             transformation=(
-                                "Deterministically removed covariates named by "
-                                "objective contract/audit findings."
+                                "Applied a centrally authorized deterministic source "
+                                "transformation for objective contract findings."
                             ),
                             before_code=before_repair_code,
                             after_code=code,
