@@ -131,15 +131,16 @@ def _payload_bytes(messages) -> int:  # noqa: ANN001
     return sum(len(str(message.content or "").encode("utf-8")) for message in messages)
 
 
-def test_quality_guide_keeps_runtime_clinical_and_statistics_without_model_families(
+def test_quality_guide_keeps_runtime_clinical_without_unrelated_transport_tutorials(
     ra,
 ):
     guide = coder_guide_for_step(load_prompt_pack()["coder"], _quality_step(ra))
 
     assert "Treat `COHORT_PARQUET` as the already-materialised" in guide
+    assert "Run every host-owned input-validation or provenance helper" in guide
     assert "CLINICAL SCORE AND MISSINGNESS SEMANTICS:" in guide
     assert "Numeric coercion" in guide or "numeric" in guide.lower()
-    assert "PYTHON HYGIENE:" in guide
+    assert "PYTHON HYGIENE:" not in guide
     assert "For a regression step that explicitly requests" not in guide
     assert "Exposure/event TIMING" not in guide
     assert "PREDICTION / CLUSTERING APIs:" not in guide
@@ -312,7 +313,7 @@ def test_artifact_named_missingness_audit_is_not_claimed_as_a_table(ra):
     assert "TABLE-ONE / DESCRIPTIVE SUMMARIES:" not in guide
     assert "CLINICAL SCORE AND MISSINGNESS SEMANTICS:" in guide
     assert "STATISTICS APIs:" not in guide
-    assert "PYTHON HYGIENE:" in guide
+    assert "PYTHON HYGIENE:" not in guide
     assert "For a regression step that explicitly requests" not in guide
     assert coder_context_requires_method_constraints(step) is False
 
@@ -332,6 +333,71 @@ def test_production_ordinal_qc_owner_gets_source_and_table_guidance(ra):
     assert "CLINICAL SCORE AND MISSINGNESS SEMANTICS:" in guide
     assert "For a regression step that explicitly requests" not in guide
     assert coder_context_requires_method_constraints(step) is False
+
+
+def test_generic_ordered_qc_synonym_omits_binary_event_and_upstream_lookup(ra):
+    step = ra.AnalysisStep(
+        step_id="ordered_qc",
+        intent="Human prose must not select prompt sections.",
+        inputs=[
+            "dataset:analysis_cohort",
+            "ordered_exposure_max",
+            "ordered_exposure_measured",
+            "ordered_exposure_n",
+        ],
+        expected_outputs=[
+            "table:exposure_distribution",
+            "table:missingness_audit",
+            "table:measurement_source_audit",
+            "artifact:analysis_variable_specification",
+        ],
+        method="ordinal_exposure_qc_and_missingness_audit",
+    )
+
+    guide = coder_guide_for_step(load_prompt_pack()["coder"], step)
+
+    assert "Treat `COHORT_PARQUET` as the already-materialised" in guide
+    assert "Run every host-owned input-validation or provenance helper" in guide
+    assert "If a step depends on an artefact produced by a previous step" not in guide
+    assert "CLINICAL SCORE AND MISSINGNESS SEMANTICS:" in guide
+    assert "BINARY EVENT-PRESENCE EXCEPTION:" not in guide
+    assert "PYTHON HYGIENE:" not in guide
+    assert "For a regression step that explicitly requests" not in guide
+    assert coder_context_requires_method_constraints(step) is False
+
+
+def test_wide_generic_ordered_qc_prompt_stays_under_initial_transport_gate(ra):
+    step = _quality_step(ra).model_copy(
+        update={
+            "method": "ordinal_exposure_qc_and_missingness_audit",
+            "inputs": ["dataset:analysis_cohort", *_quality_step(ra).inputs],
+            "expected_outputs": [
+                "table:exposure_distribution",
+                "table:missingness_audit",
+                "table:measurement_source_audit",
+                "artifact:analysis_variable_specification",
+            ],
+        }
+    )
+    llm = _CaptureLLM(["import os\nvalue = 1\n"])
+
+    CoderAgent(llm).run(context=_wide_context(ra), step=step)
+
+    assert _payload_bytes(llm.calls[0][0]) <= 42_000
+
+
+def test_typed_upstream_table_input_keeps_evidence_lookup_guidance(ra):
+    step = ra.AnalysisStep(
+        step_id="render_parent_table",
+        intent="Render an already produced table.",
+        inputs=["table:source_data"],
+        expected_outputs=["figure:publication_panel"],
+        method="publication_figure",
+    )
+
+    guide = coder_guide_for_step(load_prompt_pack()["coder"], step)
+
+    assert "If a step depends on an artefact produced by a previous step" in guide
 
 
 def test_ordered_derivation_qc_synonym_does_not_load_model_scaffolds(ra):
