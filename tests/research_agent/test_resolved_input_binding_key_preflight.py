@@ -95,6 +95,21 @@ def test_resolved_binding_key_is_repaired_to_identity_row(ra) -> None:
     assert result[0][0] == "table:upstream"
 
 
+def test_get_input_key_access_is_reported_without_preflight_crash(ra) -> None:
+    script = _SCRIPT.replace(
+        "binding['input_key']",
+        'binding.get("input_key", "")',
+    ).replace(
+        'binding["input_key"]',
+        'binding.get("input_key", "")',
+    )
+
+    findings = _findings(script, ra)
+
+    assert len(findings) == 1
+    assert findings[0].detail["access_lines"] == [6, 7]
+
+
 def test_unproven_binding_dictionary_is_not_claimed(ra) -> None:
     unrelated = """
 def read_config(binding):

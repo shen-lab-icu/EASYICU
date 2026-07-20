@@ -786,7 +786,16 @@ def _is_primary_analysis_cohort_method(value: object) -> bool:
     if method in _PRIMARY_ANALYSIS_COHORT_METHODS:
         return True
     tokens = frozenset(part for part in method.split("_") if part)
-    if tokens & {"overlap", "robustness", "sensitivity"}:
+    if tokens & {
+        "external",
+        "matched",
+        "overlap",
+        "robustness",
+        "secondary",
+        "sensitivity",
+        "subgroup",
+        "validation",
+    }:
         return False
     return bool(tokens & {"cohort", "eligibility"}) and bool(
         tokens & {"construction", "definition", "filter"}
@@ -868,11 +877,7 @@ def _declares_explicit_cohort_namespace(raw: object) -> bool:
     """Recognize an explicit cohort claim even when its product is malformed."""
 
     raw_kind, separator, raw_product = str(raw or "").strip().partition(":")
-    return bool(
-        separator
-        and raw_product.strip()
-        and _normalise(raw_kind) == "cohort"
-    )
+    return bool(separator and raw_product.strip() and _normalise(raw_kind) == "cohort")
 
 
 def _primary_analysis_cohort_attrition_candidate(step: AnalysisStep) -> bool:
@@ -1578,12 +1583,16 @@ def _registered_product_paths(
                 descriptor_kind_families = {
                     family
                     for family in (
-                        raw_kind_identity[0]
-                        if raw_kind_identity is not None
-                        else _canonical_kind(raw_descriptor_kind),
-                        product_type_identity[0]
-                        if product_type_identity is not None
-                        else _canonical_kind(raw_product_type),
+                        (
+                            raw_kind_identity[0]
+                            if raw_kind_identity is not None
+                            else _canonical_kind(raw_descriptor_kind)
+                        ),
+                        (
+                            product_type_identity[0]
+                            if product_type_identity is not None
+                            else _canonical_kind(raw_product_type)
+                        ),
                     )
                     if family
                 }
@@ -1601,9 +1610,7 @@ def _registered_product_paths(
                     semantic_identities.update(
                         identity
                         for family in descriptor_kind_families
-                        for identity in (
-                            typed_product(f"{family}:{descriptor_name}"),
-                        )
+                        for identity in (typed_product(f"{family}:{descriptor_name}"),)
                         if identity is not None
                     )
                 identity_targets_product = any(
@@ -1635,10 +1642,7 @@ def _registered_product_paths(
                 # Descriptor fields form a closed authority boundary.  Never
                 # recurse into metadata/value or reuse these paths as legacy
                 # filename evidence after descriptor validation fails.
-                if (
-                    isinstance(raw_descriptor_kind, str)
-                    and ":" in raw_descriptor_kind
-                ):
+                if isinstance(raw_descriptor_kind, str) and ":" in raw_descriptor_kind:
                     shorthand = _typed_kind_shorthand_receipt(value, out_dir=out_dir)
                     if shorthand is not None:
                         descriptor, candidate = shorthand
@@ -1648,11 +1652,7 @@ def _registered_product_paths(
                         ):
                             try:
                                 explicit.append(
-                                    str(
-                                        candidate.relative_to(
-                                            Path(out_dir).absolute()
-                                        )
-                                    )
+                                    str(candidate.relative_to(Path(out_dir).absolute()))
                                 )
                             except ValueError:
                                 target_descriptor_invalid = True
@@ -2726,8 +2726,7 @@ def _typed_kind_shorthand_receipt(
     authoritative_stat = candidates[0].stat()
     authoritative_identity = (authoritative_stat.st_dev, authoritative_stat.st_ino)
     if any(
-        (candidate.stat().st_dev, candidate.stat().st_ino)
-        != authoritative_identity
+        (candidate.stat().st_dev, candidate.stat().st_ino) != authoritative_identity
         for candidate in candidates[1:]
     ):
         return None
@@ -2753,9 +2752,7 @@ def _typed_kind_shorthand_receipt(
         if matching_candidate is None:
             return None
 
-    if not _descriptor_path_is_compatible(
-        kind=descriptor[0], path=str(candidates[0])
-    ):
+    if not _descriptor_path_is_compatible(kind=descriptor[0], path=str(candidates[0])):
         return None
     return descriptor, candidates[0]
 
@@ -2810,9 +2807,7 @@ def _registered_products(
                     shorthand_descriptor, shorthand_path = shorthand
                     products.add(shorthand_descriptor)
                     if shorthand_descriptor[0] == "figure":
-                        figure_paths.append(
-                            (str(shorthand_path), explicit_figure_list)
-                        )
+                        figure_paths.append((str(shorthand_path), explicit_figure_list))
                 return
 
             descriptor_kind = raw_descriptor_kind or value.get("product_type")

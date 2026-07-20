@@ -279,6 +279,10 @@ def test_named_cohort_product_must_match_planner_cohort_name() -> None:
         "cohort_definition_with_sensitivity",
         "cohort_definition_with_robustness",
         "cohort_definition_and_attrition_with_sensitivity",
+        "matched_cohort_construction",
+        "subgroup_cohort_definition",
+        "secondary_cohort_definition",
+        "external_validation_cohort_definition",
     ],
 )
 def test_primary_cohort_method_riders_cannot_claim_universe(method: str) -> None:

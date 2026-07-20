@@ -162,11 +162,9 @@ message = f"{binding["doctor's note"]}"
 
     repaired, names = _repair(script, findings)
 
-    assert names == ["fstring_runtime_quote_compat_v1"]
-    ast.parse(repaired, feature_version=(3, 11))
-    namespace: dict[str, object] = {}
-    exec(repaired, namespace)
-    assert namespace["message"] == "present"
+    assert names == []
+    assert repaired == script
+    assert _findings(repaired, ra) == findings
 
 
 def test_fstring_runtime_quote_repair_is_syntactic_and_automatic() -> None:

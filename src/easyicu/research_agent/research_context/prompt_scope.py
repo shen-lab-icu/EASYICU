@@ -239,9 +239,18 @@ def _binary_event_presence_contract_applies(step: AnalysisStep) -> bool:
         for value in (step.inputs or [])
         if ":" not in str(value or "")
     }
-    count_stems = {name[: -len("_n")] for name in names if name.endswith("_n")}
+
+    def _companion_stem(name: str, role: str) -> str | None:
+        match = re.fullmatch(rf"(.+)_{role}(?:_\d+(?:h|d))?", name)
+        return match.group(1) if match else None
+
+    count_stems = {
+        stem for name in names if (stem := _companion_stem(name, "n")) is not None
+    }
     measured_stems = {
-        name[: -len("_measured")] for name in names if name.endswith("_measured")
+        stem
+        for name in names
+        if (stem := _companion_stem(name, "measured")) is not None
     }
     return bool(count_stems & measured_stems)
 
@@ -387,6 +396,7 @@ def coder_guide_for_step(
         # step must resolve some other typed upstream product itself.
         selected.add("upstream")
     is_figure = _figure_contract_applies(step)
+    has_figure_output = bool(output_kinds & {"figure", "plot", "chart", "heatmap"})
     is_descriptive_table = _descriptive_table_contract_applies(step)
     if is_figure and "table" not in output_kinds:
         # A render-only product can legitimately retain the producer's
@@ -394,7 +404,9 @@ def coder_guide_for_step(
         # table-one/clinical-statistics tutorial into a figure-only prompt.
         is_descriptive_table = False
     if is_figure:
-        selected.update(("figure", "visual"))
+        selected.add("figure")
+    if has_figure_output:
+        selected.add("visual")
     if is_trajectory:
         selected.update(("trajectory", "prediction"))
     if is_descriptive_table or is_data_quality_audit:
