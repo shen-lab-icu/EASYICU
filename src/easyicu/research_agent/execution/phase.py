@@ -375,12 +375,11 @@ from ..authority.step_runtime import (
     adopt_frozen_scoped_coder_context,
     capsule_matches_coordinates,
     current_execution_runtime_sha256,
+    dependency_blocked_candidate_metadata,
     coordinates_from_verified_capsule,
     execution_context_sha256,
     initial_generation_code_ref,
     load_checkpoint_selected_step_capsule,
-    load_explicit_failed_step_capsule,
-    load_explicit_success_step_capsule,
     materialize_sealed_run_result,
     persist_candidate_code,
     prepare_step_authority_coordinates,
@@ -392,6 +391,7 @@ from ..authority.step_runtime import (
     seal_initial_generation_candidate,
     seal_legacy_candidate,
     seal_repair_candidate_from_receipt,
+    select_explicit_step_capsule_for_targeted_resume,
 )
 from ..authority.step_attempt import (
     CheckpointAuthority,
@@ -5416,6 +5416,12 @@ def run_execute_phase(
                     "diagnostic_only": True,
                     "generation_mode": "system",
                     "evidence_lineage_failures": exc.failures,
+                    **dependency_blocked_candidate_metadata(
+                        run_dir,
+                        step_id=step.step_id,
+                        current_record=prior_step_record,
+                        records=prior_attempt_records,
+                    ),
                 }
             )
             lineage_finding = ValidationFinding(
@@ -5542,49 +5548,23 @@ def run_execute_phase(
                     and requested_resume_from_step_id == step.step_id
                     and isinstance(prior_step_record, Mapping)
                 ):
-                    failed_capsule = load_explicit_failed_step_capsule(
-                        run_dir,
-                        step_id=step.step_id,
-                        record=prior_step_record,
-                    )
-                    failed_code_sha256 = str(
-                        prior_step_record.get("executed_code_sha256") or ""
-                    )
-                    already_replayed = (
-                        prior_step_record.get(
-                            "explicit_failed_capsule_reused_code_sha256"
-                        )
-                        == failed_code_sha256
-                        and prior_step_record.get(
-                            "explicit_failed_capsule_reused_gate_fingerprint"
-                        )
-                        == gate_stamp["deterministic_gate_fingerprint"]
-                    )
-                    if failed_capsule is not None and not already_replayed:
-                        step_attempt_state.selected_resume_capsule = failed_capsule
-                        step_record.update(
-                            {
-                                "explicit_failed_capsule_reused": True,
-                                "explicit_failed_capsule_reused_status": str(
-                                    prior_step_record.get("status") or ""
-                                ),
-                                "explicit_failed_capsule_reused_code_sha256": (
-                                    failed_code_sha256
-                                ),
-                                "explicit_failed_capsule_reused_gate_fingerprint": (
-                                    gate_stamp["deterministic_gate_fingerprint"]
-                                ),
-                            }
-                        )
-                    if failed_capsule is None:
-                        success_capsule = load_explicit_success_step_capsule(
+                    explicit_selection = (
+                        select_explicit_step_capsule_for_targeted_resume(
                             run_dir,
                             step_id=step.step_id,
-                            record=prior_step_record,
+                            current_record=prior_step_record,
+                            records=prior_attempt_records,
+                            deterministic_gate_fingerprint=gate_stamp[
+                                "deterministic_gate_fingerprint"
+                            ],
                         )
-                        if success_capsule is not None:
-                            step_attempt_state.selected_resume_capsule = success_capsule
-                            step_record["explicit_success_capsule_reused"] = True
+                    )
+                    if explicit_selection is not None:
+                        (
+                            step_attempt_state.selected_resume_capsule,
+                            explicit_metadata,
+                        ) = explicit_selection
+                        step_record.update(explicit_metadata)
                 if (
                     step_attempt_state.selected_resume_capsule is None
                     and isinstance(prior_step_record, Mapping)

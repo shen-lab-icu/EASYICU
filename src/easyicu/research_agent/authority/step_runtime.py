@@ -1009,6 +1009,216 @@ def load_explicit_success_step_capsule(
     return verified
 
 
+def load_latest_explicit_failed_step_capsule_from_history(
+    run_dir: str | Path,
+    *,
+    step_id: str,
+    records: Sequence[Mapping[str, object]],
+) -> Optional[tuple[VerifiedStepAuthorityCapsule, Mapping[str, object]]]:
+    """Load the newest failed candidate hidden by a dependency-status row.
+
+    Dependency blocking and targeted resume checkpoints may append a newer row
+    without candidate coordinates.  That row must not erase the last explicit
+    immutable candidate.  Walk only the supplied append-only ledger (never the
+    capsule directory), stop at the newest record that names a capsule, and
+    accept it only through the existing failed terminal loader.  A newer
+    ineligible or corrupt candidate therefore blocks fallback to older bytes;
+    historical successes keep using their separate revalidation path.
+    """
+
+    normalized_step_id = str(step_id)
+    for record in reversed(tuple(records)):
+        if str(record.get("step_id") or "") != normalized_step_id:
+            continue
+        if "step_authority_capsule_ref" not in record:
+            continue
+        failed = load_explicit_failed_step_capsule(
+            run_dir,
+            step_id=normalized_step_id,
+            record=record,
+        )
+        if failed is not None:
+            return failed, record
+        return None
+    return None
+
+
+_DEPENDENCY_CANDIDATE_FIELDS = (
+    "dependency_blocked_candidate_capsule_ref",
+    "dependency_blocked_candidate_code_sha256",
+    "dependency_blocked_candidate_attempt_id",
+    "dependency_blocked_candidate_source_status",
+)
+
+
+def _load_dependency_blocked_candidate(
+    run_dir: str | Path,
+    *,
+    step_id: str,
+    record: Mapping[str, object],
+) -> Optional[VerifiedStepAuthorityCapsule]:
+    present = [field in record for field in _DEPENDENCY_CANDIDATE_FIELDS]
+    if not any(present):
+        return None
+    if not all(present):
+        raise StepAuthorityRuntimeError(
+            "dependency-blocked candidate coordinates are incomplete"
+        )
+    try:
+        ref = StepAuthorityCapsuleRef.model_validate(
+            record["dependency_blocked_candidate_capsule_ref"]
+        )
+        verified = load_verified_step_authority_capsule(
+            run_dir,
+            ref=ref,
+            expected_step_id=step_id,
+        )
+    except (ValidationError, StepAuthorityCapsuleError, ValueError) as exc:
+        raise StepAuthorityRuntimeError(
+            "dependency-blocked candidate is missing, corrupt, or inconsistent"
+        ) from exc
+    expected_sha256 = str(record.get("dependency_blocked_candidate_code_sha256") or "")
+    if verified.capsule.candidate_code.sha256 != expected_sha256:
+        raise StepAuthorityRuntimeError(
+            "dependency-blocked candidate code digest is inconsistent"
+        )
+    return verified
+
+
+def dependency_blocked_candidate_metadata(
+    run_dir: str | Path,
+    *,
+    step_id: str,
+    current_record: Optional[Mapping[str, object]],
+    records: Sequence[Mapping[str, object]],
+) -> dict[str, object]:
+    """Carry exact failed-candidate coordinates through a dependency block."""
+
+    if current_record is None:
+        return {}
+    carried = _load_dependency_blocked_candidate(
+        run_dir,
+        step_id=step_id,
+        record=current_record,
+    )
+    if carried is not None:
+        return {field: current_record[field] for field in _DEPENDENCY_CANDIDATE_FIELDS}
+    failed = load_explicit_failed_step_capsule(
+        run_dir,
+        step_id=step_id,
+        record=current_record,
+    )
+    source_record = current_record
+    if failed is None:
+        historical = load_latest_explicit_failed_step_capsule_from_history(
+            run_dir,
+            step_id=step_id,
+            records=records,
+        )
+        if historical is None:
+            return {}
+        failed, source_record = historical
+    return {
+        "dependency_blocked_candidate_capsule_ref": failed.ref.model_dump(mode="json"),
+        "dependency_blocked_candidate_code_sha256": (
+            failed.capsule.candidate_code.sha256
+        ),
+        "dependency_blocked_candidate_attempt_id": str(
+            source_record.get("attempt_id") or ""
+        ),
+        "dependency_blocked_candidate_source_status": str(
+            source_record.get("status") or ""
+        ),
+    }
+
+
+def select_explicit_step_capsule_for_targeted_resume(
+    run_dir: str | Path,
+    *,
+    step_id: str,
+    current_record: Mapping[str, object],
+    records: Sequence[Mapping[str, object]],
+    deterministic_gate_fingerprint: str,
+) -> Optional[tuple[VerifiedStepAuthorityCapsule, dict[str, object]]]:
+    """Select exact candidate bytes and monotonic replay metadata.
+
+    This is orchestration glue for an explicit resume cut.  It keeps capsule
+    selection out of the execute god-function while preserving the authority
+    rules of the individual loaders.
+    """
+
+    source_record = current_record
+    failed = load_explicit_failed_step_capsule(
+        run_dir, step_id=step_id, record=source_record
+    )
+    success = (
+        None
+        if failed is not None
+        else load_explicit_success_step_capsule(
+            run_dir, step_id=step_id, record=source_record
+        )
+    )
+    if (
+        failed is None
+        and success is None
+        and str(current_record.get("status") or "").strip().lower()
+        == "blocked_dependency_evidence"
+    ):
+        carried = _load_dependency_blocked_candidate(
+            run_dir,
+            step_id=step_id,
+            record=current_record,
+        )
+        if carried is not None:
+            failed = carried
+        else:
+            historical = load_latest_explicit_failed_step_capsule_from_history(
+                run_dir,
+                step_id=step_id,
+                records=records,
+            )
+            if historical is not None:
+                failed, source_record = historical
+    if failed is not None:
+        code_sha256 = str(
+            source_record.get("dependency_blocked_candidate_code_sha256")
+            or source_record.get("executed_code_sha256")
+            or ""
+        )
+        if (
+            source_record.get("explicit_failed_capsule_reused_code_sha256")
+            == code_sha256
+            and source_record.get("explicit_failed_capsule_reused_gate_fingerprint")
+            == deterministic_gate_fingerprint
+        ):
+            return None
+        return failed, {
+            "explicit_failed_capsule_reused": True,
+            "explicit_failed_capsule_reused_status": str(
+                source_record.get("dependency_blocked_candidate_source_status")
+                or source_record.get("status")
+                or ""
+            ),
+            "explicit_failed_capsule_reused_attempt_id": str(
+                source_record.get("dependency_blocked_candidate_attempt_id")
+                or source_record.get("attempt_id")
+                or ""
+            ),
+            "explicit_failed_capsule_reused_code_sha256": code_sha256,
+            "explicit_failed_capsule_reused_gate_fingerprint": (
+                deterministic_gate_fingerprint
+            ),
+        }
+    if success is not None:
+        return success, {
+            "explicit_success_capsule_reused": True,
+            "explicit_success_capsule_reused_attempt_id": str(
+                source_record.get("attempt_id") or ""
+            ),
+        }
+    return None
+
+
 def capsule_matches_coordinates(
     verified: VerifiedStepAuthorityCapsule,
     coordinates: StepAuthorityCoordinates,
@@ -1424,11 +1634,14 @@ __all__ = [
     "capsule_matches_coordinates",
     "coordinates_from_verified_capsule",
     "current_execution_runtime_sha256",
+    "dependency_blocked_candidate_metadata",
     "execution_context_sha256",
     "initial_generation_code_ref",
     "load_checkpoint_selected_step_capsule",
     "load_explicit_failed_step_capsule",
+    "load_latest_explicit_failed_step_capsule_from_history",
     "load_explicit_success_step_capsule",
+    "select_explicit_step_capsule_for_targeted_resume",
     "materialize_sealed_run_result",
     "persist_candidate_code",
     "prepare_step_authority_coordinates",
