@@ -213,6 +213,135 @@ for var in source_vars_for_table:
     )
 
 
+def _attrition_identity_finding(
+    *,
+    expected: list[object] | None = None,
+    reported: list[object] | None = None,
+) -> dict:
+    return {
+        "validator": "primary_analysis_cohort_integrity",
+        "severity": "error",
+        "detail": {
+            "issue": "attrition_sequence_rule_ids_mismatch",
+            "expected_criterion_ids": expected
+            or [
+                "universe",
+                "include_01_age",
+                "include_02_los_icu",
+                "include_03_kdigo_aki",
+            ],
+            "reported_criterion_ids": reported
+            or [
+                "universe",
+                "include_01_adult",
+                "include_02_los_at_least_one_day",
+                "include_03_observed_stage",
+            ],
+        },
+    }
+
+
+def test_contract_repair_canonicalizes_only_proven_attrition_rule_labels():
+    code = """
+predicate_specs = [
+    ("include_01_adult", adult_mask),
+    ("include_02_los_at_least_one_day", los_mask),
+    ("include_03_observed_stage", stage_mask),
+]
+labels = {
+    "adult": "include_01_adult",
+    "los": "include_02_los_at_least_one_day",
+    "stage": "include_03_observed_stage",
+}
+for criterion_id, mask in predicate_specs:
+    if criterion_id == "include_01_adult":
+        label = "Adult"
+"""
+
+    repaired = deterministic_contract_repair(
+        code=code,
+        findings=[_attrition_identity_finding()],
+    )
+
+    assert repaired is not None
+    repair_id, patched = repaired
+    assert repair_id == "attrition_rule_id_canonicalization_v1"
+    assert "include_01_adult" not in patched
+    assert "include_02_los_at_least_one_day" not in patched
+    assert "include_03_observed_stage" not in patched
+    assert patched.count("include_01_age") == 3
+    assert "include_02_los_icu" in patched
+    assert "include_03_kdigo_aki" in patched
+    ast.parse(patched)
+    assert (
+        deterministic_contract_repair(
+            code=code,
+            findings=[_attrition_identity_finding()],
+            previous_repair=repair_id,
+        )
+        is None
+    )
+
+
+@pytest.mark.parametrize(
+    ("expected", "reported"),
+    [
+        (
+            ["universe", "include_01_age"],
+            ["universe", "exclude_01_adult"],
+        ),
+        (
+            ["universe", "include_01_age", "include_02_los_icu"],
+            ["universe", "include_02_adult", "include_01_long_stay"],
+        ),
+        (
+            ["universe", "include_01_age"],
+            ["universe", "include_01_adult", "final_analysis_cohort"],
+        ),
+        (
+            ["universe", "include_01_age", "include_02_los_icu"],
+            ["universe", "include_01_adult", "include_01_adult"],
+        ),
+        (
+            ["universe", "include_01_age"],
+            ["universe", 1],
+        ),
+    ],
+)
+def test_attrition_rule_id_repair_rejects_unproven_sequence_mapping(
+    expected: list[object],
+    reported: list[object],
+) -> None:
+    code = 'predicate_specs = [("include_01_adult", adult_mask)]\n'
+
+    assert (
+        deterministic_contract_repair(
+            code=code,
+            findings=[
+                _attrition_identity_finding(
+                    expected=expected,
+                    reported=reported,
+                )
+            ],
+        )
+        is None
+    )
+
+
+def test_attrition_rule_id_repair_rejects_partial_or_nonlabel_literal_coverage():
+    finding = _attrition_identity_finding(
+        expected=["universe", "include_01_age"],
+        reported=["universe", "include_01_adult"],
+    )
+
+    for code in (
+        '"""include_01_adult"""\npredicate_id = make_id()\n',
+        'source_column = frame["include_01_adult"]\n',
+        'predicate_id = "include_01_adult"\n',
+    ):
+        assert deterministic_contract_repair(code=code, findings=[finding]) is None
+
+
 def test_contract_repair_drops_overadjustment_covariates():
     code = (
         'continuous_covariates = ["age", "map_first", "lact_first"]\n'
