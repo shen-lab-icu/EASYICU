@@ -24,8 +24,12 @@ from ..contracts.declared_product import (
     typed_product as _canonical_typed_product,
 )
 from ..authority.evidence_store import sha256_of_file
+from ..authority.development_projection import resolve_development_input_projection
 from ..authority.run_input import canonical_sha256
-from ..authority.runtime_artifacts import current_step_records, verified_run_evidence_path
+from ..authority.runtime_artifacts import (
+    current_step_records,
+    verified_run_evidence_path,
+)
 from ..schema import AnalysisPlan, AnalysisStep, EvidenceRef
 from .plan_scope import (
     _serializable_plan_scientific_scope_signature,
@@ -649,6 +653,7 @@ def _resolved_typed_input_binding(
     run_dir: Path,
     producer_step_records: Sequence[Mapping[str, Any]] = (),
     authoritative_cohort_path: Optional[Path] = None,
+    development_sample: Optional[Any] = None,
 ) -> Optional[Dict[str, Any]]:
     """Build the exact, digest-verified runtime binding for one typed input."""
 
@@ -668,27 +673,56 @@ def _resolved_typed_input_binding(
         return None
     if not _evidence_kind_matches_typed_product(record, typed_product):
         return None
-    verified_path = verified_run_evidence_path(run_dir, record)
-    if verified_path is None:
+    parent_verified_path = verified_run_evidence_path(run_dir, record)
+    if parent_verified_path is None:
         return None
+    parent_evidence_id = evidence_ref.evidence_id
+    parent_sha256 = str(_evidence_record_field(record, "sha256") or "")
+    parent_produced_by_step = str(
+        _evidence_record_field(record, "produced_by_step") or ""
+    )
+    execution_projection: Optional[Dict[str, Any]] = None
+    projection = None
+    verified_path = parent_verified_path
+    selected_record = record
+    declared_kind, product_name = typed_product
+    if development_sample is not None and product_name == "analysis_cohort":
+        projection = resolve_development_input_projection(
+            product_name=product_name,
+            parent_evidence_id=parent_evidence_id,
+            parent_sha256=parent_sha256,
+            parent_produced_by_step=parent_produced_by_step,
+            evidence_records=evidence_records,
+            run_dir=run_dir,
+            authoritative_cohort_path=authoritative_cohort_path,
+            development_sample=development_sample,
+        )
+        if projection is None:
+            return None
+        selected_record = projection.evidence_record
+        verified_path = projection.verified_path
+        execution_projection = dict(projection.authority_payload)
     run_root = Path(run_dir).resolve()
     try:
         run_relative_path = verified_path.relative_to(run_root).as_posix()
     except ValueError:
         return None
-    declared_kind, product_name = typed_product
     binding = {
-        "evidence_id": evidence_ref.evidence_id,
+        "evidence_id": str(
+            _evidence_record_field(selected_record, "evidence_id") or ""
+        ),
         "declared_kind": declared_kind,
         "product": product_name,
-        "evidence_kind": str(_evidence_record_field(record, "kind") or ""),
+        "evidence_kind": str(_evidence_record_field(selected_record, "kind") or ""),
         "relative_path": run_relative_path,
         "absolute_path": str(verified_path),
-        "sha256": str(_evidence_record_field(record, "sha256") or ""),
-        "produced_by_step": str(
-            _evidence_record_field(record, "produced_by_step") or ""
-        ),
+        "sha256": str(_evidence_record_field(selected_record, "sha256") or ""),
+        # The Planner product remains owned by its declared producer.  The
+        # host-owned projection below records who selected the non-paper child.
+        "produced_by_step": parent_produced_by_step,
     }
+    if execution_projection is not None:
+        binding["execution_projection"] = execution_projection
     producer_contract: Optional[Dict[str, Any]] = None
     for step_record in reversed(list(producer_step_records)):
         if str(step_record.get("status") or "") != "ok":
@@ -702,7 +736,7 @@ def _resolved_typed_input_binding(
         product_contract = typed_product_binding_contract(
             product_name=product_name,
             step_summary=step_summary,
-            artifact_path=verified_path,
+            artifact_path=parent_verified_path,
             authoritative_cohort_path=authoritative_cohort_path,
         )
         if product_contract is not None:
@@ -719,7 +753,7 @@ def _resolved_typed_input_binding(
         "input_key": str(input_name),
         "declared_kind": declared_kind,
         "product": product_name,
-        "evidence_id": evidence_ref.evidence_id,
+        "evidence_id": binding["evidence_id"],
         "sha256": binding["sha256"],
         "produced_by_step": binding["produced_by_step"],
     }
@@ -742,6 +776,8 @@ def _resolved_typed_input_binding(
         # producer-authored ``columns`` claim. No scientific column roles are
         # installed by the host.
         host_contract.update(schema_receipt)
+        if projection is not None:
+            host_contract.update(projection.row_identity_contract)
         contract_schema_version = "easyicu.host_typed_product.v2"
     else:
         # Non-table typed products retain their pre-existing contract and
@@ -1085,6 +1121,7 @@ def _resume_typed_input_bindings(
     trusted_step_records: Sequence[Mapping[str, Any]],
     run_dir: Path,
     cohort_path: Path,
+    development_sample: Optional[Any] = None,
 ) -> Tuple[Dict[str, Dict[str, Any]], List[str]]:
     """Rebuild typed bindings without reading mutable resolved-input receipts."""
 
@@ -1114,11 +1151,15 @@ def _resume_typed_input_bindings(
             run_dir=run_dir,
             producer_step_records=trusted_step_records,
             authoritative_cohort_path=cohort_path,
+            development_sample=development_sample,
         )
         if binding is None:
             raise ValueError(f"typed input {input_name} has no verified host binding")
         bindings[input_name] = binding
         evidence_ids.append(ref.evidence_id)
+        projected_evidence_id = str(binding.get("evidence_id") or "")
+        if projected_evidence_id:
+            evidence_ids.append(projected_evidence_id)
     return bindings, list(dict.fromkeys(evidence_ids))
 
 
@@ -1146,6 +1187,7 @@ def _resume_typed_input_bindings_fingerprint(
                 "produced_by_step",
                 "identity_row",
                 "product_contract",
+                "execution_projection",
             )
             if field in binding
         }
@@ -1173,6 +1215,7 @@ class TypedBindingResolver:
     records_lock: Any
     run_dir: Path
     authoritative_cohort_path: Path
+    development_sample: Optional[Any] = None
 
     def _records_snapshot(self) -> List[Mapping[str, Any]]:
         with self.records_lock:
@@ -1219,6 +1262,7 @@ class TypedBindingResolver:
                         run_dir=self.run_dir,
                         producer_step_records=records_snapshot,
                         authoritative_cohort_path=self.authoritative_cohort_path,
+                        development_sample=self.development_sample,
                     )
                     if binding is None:
                         failures.append(
@@ -1229,6 +1273,11 @@ class TypedBindingResolver:
                         )
                     else:
                         typed_bindings[value] = binding
+                        projected_evidence_id = str(binding.get("evidence_id") or "")
+                        if projected_evidence_id and projected_evidence_id not in seen:
+                            refs.append(EvidenceRef(evidence_id=projected_evidence_id))
+                            seen.add(projected_evidence_id)
+                            typed_evidence_ids.append(projected_evidence_id)
                 continue
 
             direct_record = self.evidence_store.get(value)

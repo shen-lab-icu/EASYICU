@@ -1487,7 +1487,11 @@ def test_every_runner_build_receives_the_selected_trajectory_authority():
         and node.func.attr == "_build_runner"
     ]
 
-    assert len(runner_builds) == 4
+    # Initial, post-materialization, and per-step runner construction are the
+    # three live call sites.  The former fourth build was retired when runner
+    # authority selection was centralized; keep this count aligned with live
+    # construction sites rather than the historical implementation shape.
+    assert len(runner_builds) == 3
     for call in runner_builds:
         starred = [keyword.value for keyword in call.keywords if keyword.arg is None]
         assert len(starred) == 1

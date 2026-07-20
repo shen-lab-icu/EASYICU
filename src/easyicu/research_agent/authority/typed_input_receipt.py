@@ -261,7 +261,14 @@ def _read_manifest(
     return decoded
 
 
-def _identity_digest(values: pd.Series) -> str:
+def typed_input_row_identity_sha256(values: pd.Series) -> str:
+    """Return the ordered row-identity digest used by typed-input receipts.
+
+    Binding producers and receipt consumers must share this exact host-owned
+    representation.  Keeping the helper public avoids a second, subtly
+    incompatible row-identity digest at development-sample projection time.
+    """
+
     digest = hashlib.sha256()
     for value in values.astype("string"):
         encoded = str(value).encode("utf-8")
@@ -493,7 +500,7 @@ def _verify_table_contract(
     normalized = identity.astype("string")
     if normalized.duplicated().any():
         raise TypedInputReceiptError("opened table has duplicate row identity")
-    observed_identity_sha256 = _identity_digest(identity)
+    observed_identity_sha256 = typed_input_row_identity_sha256(identity)
     if (
         len(frame) != expected_row_count
         or observed_identity_sha256 != expected_identity_sha256
@@ -589,7 +596,7 @@ def seal_typed_input_consumption(
     if (
         identity.isna().any()
         or identity.astype("string").duplicated().any()
-        or _identity_digest(identity) != loaded.row_identity_sha256
+        or typed_input_row_identity_sha256(identity) != loaded.row_identity_sha256
     ):
         raise TypedInputReceiptError("loaded row identity changed after verified load")
     payload: dict[str, object] = {
