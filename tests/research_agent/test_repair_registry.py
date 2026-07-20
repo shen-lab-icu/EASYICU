@@ -156,6 +156,17 @@ def test_syntactic_repair_has_no_invariants_and_passes_vacuously() -> None:
     assert evaluation.passed is True
 
 
+def test_closed_counts_stable_keyword_repair_is_syntactic_and_automatic() -> None:
+    metadata = repair_metadata_for("closed_counts_stable_keywords_v1")
+
+    assert metadata.classification_source == "exact"
+    assert metadata.repair_class is RepairClass.SYNTACTIC
+    assert metadata.invariants == ()
+    assert metadata.introduces_numbers is False
+    assert metadata.requires_disclosure is False
+    assert automatic_repair_allowed(metadata.repair_id)
+
+
 def test_measurement_provenance_summary_mapping_is_structural_and_automatic() -> None:
     for repair_id in (
         "measurement_provenance_summary_mapping_v1",
