@@ -1314,8 +1314,10 @@ def test_execute_phase_host_verifies_measurement_provenance_at_every_contract_ga
 
     # The early repair gate and the final authority gate now share ONE
     # deterministic contract sequence (dedup): the summary-integrity validator is
-    # audited exactly once, inside that shared sequence, carrying the
-    # execution-cohort path.
+    # audited exactly once, inside that shared sequence.  The shared gate first
+    # resolves the integrity population: ordinary scientific steps use the
+    # development execution cohort, while the cohort-producing step keeps the
+    # full raw-universe/full locked-cohort authority needed to report attrition.
     shared_tree = ast.parse(
         inspect.getsource(pipeline_execute._step_deterministic_contract_findings)
     )
@@ -1331,7 +1333,7 @@ def test_execute_phase_host_verifies_measurement_provenance_at_every_contract_ga
     assert len(shared_audits) == 1
     shared_keywords = {kw.arg: kw.value for kw in shared_audits[0].keywords}
     assert isinstance(shared_keywords.get("cohort_path"), ast.Name)
-    assert shared_keywords["cohort_path"].id == "execution_cohort_path"
+    assert shared_keywords["cohort_path"].id == "integrity_universe_path"
 
     def _shared_gate_calls(function) -> list:
         tree = ast.parse(inspect.getsource(function))

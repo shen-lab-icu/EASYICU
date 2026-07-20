@@ -24,6 +24,9 @@ from easyicu.research_agent.execution.development_sample import (
     materialize_development_execution_sample,
 )
 from easyicu.research_agent.execution.phase import _step_execution_cohort_path
+from easyicu.research_agent.gates.contract import (
+    _primary_cohort_integrity_authority_paths,
+)
 from easyicu.research_agent.intake.materialized_trajectory import (
     StagedTrajectoryBinding,
 )
@@ -249,6 +252,17 @@ def test_primary_cohort_confirmation_uses_post_qc_development_sample(
     )
 
     assert selected == sample
+
+    integrity_universe, integrity_cohort = _primary_cohort_integrity_authority_paths(
+        step=step,
+        plan=plan,
+        run_dir=tmp_path,
+        universe_path=universe,
+        cohort_path=sample,
+        execution_cohort_path=selected,
+    )
+    assert integrity_universe == universe
+    assert integrity_cohort == analysis
 
 
 def test_primary_cohort_producer_uses_universe_without_development_sample(

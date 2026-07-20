@@ -2515,7 +2515,12 @@ def _summary_scalar_products(value: Any) -> set[tuple[str, str]]:
                 if isinstance(child, Mapping) or isinstance(child, (list, tuple)):
                     visit(child)
                     continue
-                valid = child is not None and child != "" and not _is_file_path(child)
+                valid = (
+                    child is not None
+                    and child != ""
+                    and not _is_file_path(child)
+                    and not _is_noncomputed_result_status(child)
+                )
                 if isinstance(child, float):
                     valid = math.isfinite(child)
                 if valid and key:
@@ -2535,6 +2540,26 @@ def _finite_json_number(value: Any) -> bool:
     if isinstance(value, int):
         return True
     return isinstance(value, float) and math.isfinite(value)
+
+
+_NONCOMPUTED_RESULT_STATUSES = frozenset(
+    {
+        "deferred",
+        "non_estimable",
+        "not_applicable",
+        "not_computed",
+        "not_estimable",
+        "not_estimated",
+        "skipped",
+        "unavailable",
+    }
+)
+
+
+def _is_noncomputed_result_status(value: Any) -> bool:
+    """Return whether a scalar explicitly says no scientific result exists."""
+
+    return isinstance(value, str) and _normalise(value) in _NONCOMPUTED_RESULT_STATUSES
 
 
 def _valid_inline_statistic_descriptor(
@@ -3029,6 +3054,7 @@ def _effect_summary_paths(summary: Mapping[str, Any]) -> list[str]:
                     and child is not None
                     and child != ""
                     and not _is_file_path(child)
+                    and not _is_noncomputed_result_status(child)
                 ):
                     paths.append(path)
         elif isinstance(node, (list, tuple)):

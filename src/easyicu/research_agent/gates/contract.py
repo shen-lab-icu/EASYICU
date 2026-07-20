@@ -54,7 +54,11 @@ from ..audits.validators import (
     StepSummaryFractionValidator,
 )
 from ..contracts.runtime import ValidationFinding
-from ..contracts.declared_product import primary_analysis_cohort_integrity_findings
+from ..cohort.schema import ANALYSIS_COHORT_FILENAME
+from ..contracts.declared_product import (
+    primary_analysis_cohort_integrity_findings,
+    primary_analysis_cohort_producer_uses_universe,
+)
 from ..execution.runners.deterministic_robustness import replay_locked_memberships
 from ..contracts.ordered_stratified import ordered_stratified_numeric_findings
 from ..plan_utils import (
@@ -73,6 +77,22 @@ from ..contracts.robustness_execution import (
 from ..robustness.panel import RobustnessSpec
 from ..authority.runtime_artifacts import current_successful_step_records
 from ..schema import AnalysisPlan, AnalysisStep, ResearchContext
+
+
+def _primary_cohort_integrity_authority_paths(
+    *,
+    step: AnalysisStep,
+    plan: AnalysisPlan,
+    run_dir: Path,
+    universe_path: Path,
+    cohort_path: Path,
+    execution_cohort_path: Path,
+) -> tuple[Path, Path]:
+    """Keep a cohort producer's full authority outside dev sampling."""
+
+    if not primary_analysis_cohort_producer_uses_universe(step=step, plan=plan):
+        return Path(execution_cohort_path), Path(cohort_path)
+    return Path(universe_path), Path(run_dir) / ANALYSIS_COHORT_FILENAME
 
 
 def _read_locked_robustness_spec_dicts(run_dir: Path) -> List[Dict[str, Any]]:
@@ -709,18 +729,24 @@ def _step_deterministic_contract_findings(
         context=context,
         completed_step_records=completed_step_records,
     )
+    integrity_universe_path, integrity_cohort_path = (
+        _primary_cohort_integrity_authority_paths(
+            step=step,
+            plan=plan,
+            run_dir=run_dir,
+            universe_path=universe_path,
+            cohort_path=cohort_path,
+            execution_cohort_path=execution_cohort_path,
+        )
+    )
     findings += primary_analysis_cohort_integrity_findings(
         step=step,
         plan=plan,
         context=context,
         step_summary=step_summary,
         out_dir=out_dir,
-        # ``execution_cohort_path`` is normally the raw universe for the
-        # primary cohort producer.  In post-QC development mode it is the
-        # verified sample, which must remain the execution population for every
-        # scientific step rather than silently expanding back to full data.
-        universe_path=execution_cohort_path,
-        authoritative_cohort_path=cohort_path,
+        universe_path=integrity_universe_path,
+        authoritative_cohort_path=integrity_cohort_path,
     )
     findings += cross_step_cohort_lock_validator.audit(
         step=step,
@@ -741,7 +767,7 @@ def _step_deterministic_contract_findings(
         step=step,
         step_summary=step_summary,
         resolved_input_bindings=resolved_input_bindings,
-        cohort_path=execution_cohort_path,
+        cohort_path=integrity_universe_path,
     )
     findings += step_summary_fraction_validator.audit(
         step=step,
@@ -758,7 +784,7 @@ def _step_deterministic_contract_findings(
         context=context,
         completed_step_records=completed_step_records,
         out_dir=out_dir,
-        cohort_path=execution_cohort_path,
+        cohort_path=integrity_universe_path,
     )
     findings += _primary_exposure_contract_findings(
         step=step,
