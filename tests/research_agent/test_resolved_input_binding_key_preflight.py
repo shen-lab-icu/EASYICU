@@ -36,7 +36,8 @@ def read_bound_table(binding):
     path = binding["relative_path"]
     expected_digest = binding.get("sha256")
     product_contract = binding.get("product_contract") or {}
-    return binding["input_key"], path, expected_digest, product_contract
+    message = f"Loading {binding['input_key']}"
+    return binding["input_key"], path, expected_digest, product_contract, message
 
 def main(manifest):
     declared = manifest.get("planner_declared_inputs")
@@ -57,7 +58,7 @@ def test_resolved_binding_key_is_repaired_to_identity_row(ra) -> None:
         "reason": "resolved_input_key_not_materialized",
         "helper_name": "read_bound_table",
         "binding_parameter": "binding",
-        "access_lines": [6],
+        "access_lines": [6, 7],
     }
     assert (
         repair_reason_for_finding(findings[0])
@@ -72,7 +73,7 @@ def test_resolved_binding_key_is_repaired_to_identity_row(ra) -> None:
     )
 
     assert names == ["resolved_input_identity_key_v1"]
-    assert 'binding["identity_row"]["input_key"]' in repaired
+    assert "binding['identity_row']['input_key']" in repaired
     assert _findings(repaired, ra) == []
 
     namespace: dict[str, object] = {}
