@@ -60,6 +60,7 @@ class RepairMetadata:
     execution_policy: RepairExecutionPolicy = RepairExecutionPolicy.MUTABLE
     figure_product_slots: Tuple[str, ...] = ()
     planner_methods: Tuple[str, ...] = ()
+    planner_method_required: bool = True
     planner_parent_output_role_groups: Tuple[Tuple[Tuple[str, ...], ...], ...] = ()
     implementation_modules: Tuple[str, ...] = ()
     description: str = ""
@@ -230,6 +231,7 @@ def _meta(
     execution_policy: RepairExecutionPolicy = RepairExecutionPolicy.MUTABLE,
     figure_product_slots: Sequence[str] = (),
     planner_methods: Sequence[str] = (),
+    planner_method_required: bool = True,
     planner_parent_output_role_groups: Sequence[Sequence[Sequence[str]]] = (),
     implementation_modules: Sequence[str] = (),
     description: str = "",
@@ -244,6 +246,7 @@ def _meta(
         execution_policy=execution_policy,
         figure_product_slots=tuple(figure_product_slots),
         planner_methods=tuple(str(value) for value in planner_methods),
+        planner_method_required=planner_method_required,
         planner_parent_output_role_groups=tuple(
             tuple(tuple(str(token) for token in suffix) for suffix in alternatives)
             for alternatives in planner_parent_output_role_groups
@@ -311,6 +314,7 @@ _STRUCTURAL_REPAIRS = {
     # exposure, outcome, or model selection remains METHOD_SUBSTITUTION by the
     # conservative unknown-id fallback until it gains a typed source contract.
     "ordered_category_distribution_publication_bundle_v1",
+    "ordered_category_distribution_availability_publication_bundle_v2",
     "distribution_availability_publication_bundle_from_parent_outputs_v1",
     "absolute_risk_incidence_prevalence_publication_bundle_v1",
     "association_publication_bundle_from_planned_model_contract_v1",
@@ -337,6 +341,7 @@ _STRUCTURAL_REPAIRS = {
 # credits the structural renderer.
 _SEALED_RENDERER_REPAIRS = {
     "ordered_category_distribution_publication_bundle_v1",
+    "ordered_category_distribution_availability_publication_bundle_v2",
     "distribution_availability_publication_bundle_from_parent_outputs_v1",
     "absolute_risk_incidence_prevalence_publication_bundle_v1",
     "association_publication_bundle_from_planned_model_contract_v1",
@@ -346,6 +351,10 @@ _SEALED_RENDERER_REPAIRS = {
 
 _SEALED_RENDERER_PRODUCT_SLOTS: Dict[str, Tuple[str, ...]] = {
     "ordered_category_distribution_publication_bundle_v1": (
+        "distribution",
+        "availability",
+    ),
+    "ordered_category_distribution_availability_publication_bundle_v2": (
         "distribution",
         "availability",
     ),
@@ -376,6 +385,11 @@ _SEALED_RENDERER_PLANNER_METHODS: Dict[str, Tuple[str, ...]] = {
     "ordered_category_distribution_publication_bundle_v1": (
         "ordinal_exposure_derivation_and_quality_control",
     ),
+    # v2 is an additive compatibility renderer for an already-sealed Planner
+    # product pair.  It is authorized by exact typed output roles plus a
+    # digest-bound ordinal/schema contract, never by a model-authored method
+    # string.  Keeping this tuple empty prevents accidental text routing.
+    "ordered_category_distribution_availability_publication_bundle_v2": (),
     "distribution_availability_publication_bundle_from_parent_outputs_v1": (
         "exposure_distribution_and_missingness_audit",
     ),
@@ -394,6 +408,13 @@ _SEALED_RENDERER_PARENT_OUTPUT_ROLE_GROUPS: Dict[
     str, Tuple[Tuple[Tuple[str, ...], ...], ...]
 ] = {
     "ordered_category_distribution_publication_bundle_v1": ((("distribution",),),),
+    "ordered_category_distribution_availability_publication_bundle_v2": (
+        (("distribution",),),
+        (
+            ("measurement", "availability"),
+            ("availability",),
+        ),
+    ),
     "distribution_availability_publication_bundle_from_parent_outputs_v1": (
         (("distribution",),),
         (
@@ -429,6 +450,11 @@ _COMMON_SEALED_RENDERER_MODULES = (
 _SEALED_RENDERER_IMPLEMENTATION_MODULES: Dict[str, Tuple[str, ...]] = {
     "ordered_category_distribution_publication_bundle_v1": (
         *_COMMON_SEALED_RENDERER_MODULES,
+        "easyicu.research_agent.figures.ordered_distribution",
+    ),
+    "ordered_category_distribution_availability_publication_bundle_v2": (
+        *_COMMON_SEALED_RENDERER_MODULES,
+        "easyicu.research_agent.authority.figure_renderer",
         "easyicu.research_agent.figures.ordered_distribution",
     ),
     "distribution_availability_publication_bundle_from_parent_outputs_v1": (
@@ -520,6 +546,10 @@ REPAIR_METADATA: Dict[str, RepairMetadata] = {
             ),
             figure_product_slots=_SEALED_RENDERER_PRODUCT_SLOTS.get(repair_id, ()),
             planner_methods=_SEALED_RENDERER_PLANNER_METHODS.get(repair_id, ()),
+            planner_method_required=(
+                repair_id
+                != "ordered_category_distribution_availability_publication_bundle_v2"
+            ),
             planner_parent_output_role_groups=(
                 _SEALED_RENDERER_PARENT_OUTPUT_ROLE_GROUPS.get(repair_id, ())
             ),
@@ -591,6 +621,7 @@ def repair_metadata_for(repair_id: str) -> RepairMetadata:
                 execution_policy=metadata.execution_policy,
                 figure_product_slots=metadata.figure_product_slots,
                 planner_methods=metadata.planner_methods,
+                planner_method_required=metadata.planner_method_required,
                 planner_parent_output_role_groups=(
                     metadata.planner_parent_output_role_groups
                 ),
@@ -689,11 +720,17 @@ def assert_repair_metadata_invariants(metadata: RepairMetadata) -> None:
                 f"{metadata.repair_id} is a sealed renderer without unique "
                 "figure product slots."
             )
-        if not metadata.planner_methods or len(metadata.planner_methods) != len(
-            set(metadata.planner_methods)
+        if metadata.planner_method_required and (
+            not metadata.planner_methods
+            or len(metadata.planner_methods) != len(set(metadata.planner_methods))
         ):
             raise AssertionError(
                 f"{metadata.repair_id} is a sealed renderer without unique "
+                "Planner methods."
+            )
+        if not metadata.planner_method_required and metadata.planner_methods:
+            raise AssertionError(
+                f"{metadata.repair_id} disables method routing but still declares "
                 "Planner methods."
             )
         if not metadata.planner_parent_output_role_groups or any(

@@ -71,6 +71,10 @@ from .authority.parent_artifact import (
     _verified_direct_parent_artifact_digests,
     _verified_direct_parent_table_names,
 )
+from .authority.figure_renderer import (
+    _ordered_distribution_availability_parent_digest_seal,
+    _sealed_renderer_figure_step_matches_parent,
+)
 from .providers.cost import CostMeter, metered_role_resolver
 from .figures.distribution_availability import (
     _distribution_availability_parent_digest_seal,
@@ -9857,6 +9861,12 @@ def _sealed_renderer_parent_digest_seal(
         return _distribution_availability_parent_digest_seal(run_dir, figure_step_id)
     if repair_id == "absolute_risk_incidence_prevalence_publication_bundle_v1":
         return _absolute_risk_parent_digest_seal(run_dir, figure_step_id)
+    if repair_id == (
+        "ordered_category_distribution_availability_publication_bundle_v2"
+    ):
+        return _ordered_distribution_availability_parent_digest_seal(
+            run_dir, figure_step_id
+        )
     digests = _verified_direct_parent_artifact_digests(run_dir, figure_step_id)
     if not digests or "step_summary.json" not in digests:
         return None
@@ -9995,6 +10005,20 @@ def _render_authorized_sealed_publication_bundle(
             out_dir=out_dir,
             preverified_parent_artifacts=snapshot,
         )
+    elif repair_id == (
+        "ordered_category_distribution_availability_publication_bundle_v2"
+    ):
+        from .figures.ordered_distribution import (
+            render_ordered_distribution_bundle_from_prior_outputs,
+        )
+
+        observed = render_ordered_distribution_bundle_from_prior_outputs(
+            run_dir=run_dir,
+            current_step_id=current_step_id,
+            out_dir=out_dir,
+            preverified_parent_artifacts=snapshot,
+            authorized_repair_id=repair_id,
+        )
     elif repair_id == "cohort_flow_publication_bundle_from_parent_outputs_v1":
         observed = _render_cohort_flow_publication_bundle_from_prior_outputs(
             run_dir=run_dir,
@@ -10057,64 +10081,6 @@ def _distribution_availability_figure_step_matches_parent(
     ) == tuple(str(value) for value in (request_step.get("inputs") or []))
 
 
-def _sealed_renderer_figure_step_matches_parent(
-    run_dir: Path,
-    step: AnalysisStep,
-    renderer_repair_id: str,
-) -> bool:
-    """Require a Planner-owned structural edge for every sealed renderer.
-
-    Modern split steps consume the exact logical parent products required by
-    the renderer registry.  Legacy split steps repeat the parent method and
-    inputs exactly.  Merely using a ``*_figure`` sibling name is never enough.
-    """
-
-    from .contracts.declared_product import typed_product
-    from .repair_registry import is_sealed_renderer_repair, repair_metadata_for
-
-    if not is_sealed_renderer_repair(renderer_repair_id):
-        return False
-    metadata = repair_metadata_for(renderer_repair_id)
-    request_step = _resolve_upstream_manifest_step(run_dir, step.step_id)
-    if not isinstance(request_step, Mapping):
-        return False
-    planner_method = str(request_step.get("method") or "").strip().lower()
-    if planner_method not in metadata.planner_methods:
-        return False
-
-    parent_products = {
-        parsed
-        for raw in (request_step.get("expected_outputs") or [])
-        if (parsed := typed_product(raw)) is not None
-        and parsed[0] in {"table", "artifact", "dataset"}
-    }
-    required_products: set[tuple[str, str]] = set()
-    for role_alternatives in metadata.planner_parent_output_role_groups:
-        matches = {
-            product
-            for product in parent_products
-            if any(
-                len(product[1].split("_")) >= len(suffix)
-                and tuple(product[1].split("_")[-len(suffix) :]) == tuple(suffix)
-                for suffix in role_alternatives
-            )
-        }
-        if not matches:
-            return False
-        required_products.update(matches)
-
-    child_typed_inputs = {
-        parsed
-        for raw in (step.inputs or [])
-        if (parsed := typed_product(raw)) is not None
-    }
-    if required_products <= child_typed_inputs:
-        return True
-    return str(step.method or "").strip().lower() == planner_method and tuple(
-        str(value) for value in (step.inputs or [])
-    ) == tuple(str(value) for value in (request_step.get("inputs") or []))
-
-
 def deterministic_figure_repair_id_for_upstream(
     run_dir: Path, step_id: str
 ) -> Optional[str]:
@@ -10167,6 +10133,15 @@ def deterministic_figure_repair_id_for_upstream(
             for role_alternatives in metadata.planner_parent_output_role_groups
         )
     ]
+    if not candidates:
+        structural_v2 = (
+            "ordered_category_distribution_availability_publication_bundle_v2"
+        )
+        if (
+            _ordered_distribution_availability_parent_digest_seal(run_dir, step_id)
+            is not None
+        ):
+            return structural_v2
     if len(candidates) != 1:
         return None
     repair_id = candidates[0].repair_id
