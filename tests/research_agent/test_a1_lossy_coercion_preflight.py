@@ -215,6 +215,17 @@ def test_t4_raise_guard_passes(ra):
     assert _lossy_findings(_T4_GUARDED_BY_RAISE, ra) == []
 
 
+def test_t4_raise_guard_survives_unrelated_exception_type_logging(ra):
+    script = _T4_GUARDED_BY_RAISE + """
+try:
+    publish_results()
+except Exception as exc:
+    diagnostic = {"error_type": type(exc).__name__}
+"""
+
+    assert _lossy_findings(script, ra) == []
+
+
 def test_t4_dict_key_guard_passes(ra):
     assert _lossy_findings(_T4_GUARDED_VIA_DICT_KEY, ra) == []
 
