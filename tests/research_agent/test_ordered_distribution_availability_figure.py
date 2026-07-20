@@ -23,7 +23,9 @@ CHILD = f"{PARENT}_figure"
 REPAIR_ID = "ordered_category_distribution_availability_publication_bundle_v2"
 
 
-def _write_split_parent(run_dir: Path, *, mutation: str = "") -> Path:
+def _write_split_parent(
+    run_dir: Path, *, mutation: str = "", with_audits: bool = False
+) -> Path:
     parent = run_dir / "steps" / PARENT / "outputs"
     parent.mkdir(parents=True)
     distribution = pd.DataFrame(
@@ -74,6 +76,38 @@ def _write_split_parent(run_dir: Path, *, mutation: str = "") -> Path:
     )
     distribution.to_csv(parent / "severity_distribution.csv", index=False)
     availability.to_csv(parent / "measurement_availability.csv", index=False)
+    if with_audits:
+        missingness = pd.DataFrame(
+            [
+                {
+                    "variable": variable,
+                    "n_total": 104,
+                    "n_nonmissing": 104 - missing_n,
+                    "missing_n": missing_n,
+                    "missing_pct": 100.0 * missing_n / 104,
+                }
+                for variable, missing_n in (
+                    ("severity_band", 4),
+                    ("secondary_measure", 24),
+                    ("complete_measure", 0),
+                )
+            ]
+        )
+        structural = pd.DataFrame(
+            [
+                {
+                    "variable": "secondary_measure",
+                    "n_total": 104,
+                    "missing_n": 24,
+                    "missing_pct": 100.0 * 24 / 104,
+                    "nonmissing_n": 80,
+                    "nonmissing_unique_n": 2,
+                    "structural_status": "partially_observed",
+                }
+            ]
+        )
+        missingness.to_csv(parent / "missingness_audit.csv", index=False)
+        structural.to_csv(parent / "structural_missingness_audit.csv", index=False)
     summary = {
         "method": "agent_selected_quality_protocol",
         "analysis_family": "association_study",
@@ -87,6 +121,16 @@ def _write_split_parent(run_dir: Path, *, mutation: str = "") -> Path:
         "output_files": {
             "table:severity_distribution": "severity_distribution.csv",
             "table:measurement_availability": "measurement_availability.csv",
+            **(
+                {
+                    "table:missingness_audit": "missingness_audit.csv",
+                    "table:structural_missingness_audit": (
+                        "structural_missingness_audit.csv"
+                    ),
+                }
+                if with_audits
+                else {}
+            ),
         },
     }
     if mutation == "nonordinal":
@@ -117,11 +161,23 @@ def _write_split_parent(run_dir: Path, *, mutation: str = "") -> Path:
 
     evidence = EvidenceStore(run_dir)
     records = []
-    for evidence_id, kind, name in (
+    artifact_specs = [
         ("split_distribution", "table", "severity_distribution.csv"),
         ("split_availability", "table", "measurement_availability.csv"),
         ("split_summary", "statistic", "step_summary.json"),
-    ):
+    ]
+    if with_audits:
+        artifact_specs.extend(
+            [
+                ("split_missingness", "table", "missingness_audit.csv"),
+                (
+                    "split_structural_missingness",
+                    "table",
+                    "structural_missingness_audit.csv",
+                ),
+            ]
+        )
+    for evidence_id, kind, name in artifact_specs:
         records.append(
             evidence.register_file(
                 kind=kind,
@@ -147,6 +203,14 @@ def _write_split_parent(run_dir: Path, *, mutation: str = "") -> Path:
                                 "expected_outputs": [
                                     "table:severity_distribution",
                                     "table:measurement_availability",
+                                    *(
+                                        [
+                                            "table:missingness_audit",
+                                            "table:structural_missingness_audit",
+                                        ]
+                                        if with_audits
+                                        else []
+                                    ),
                                 ],
                             },
                             "analysis_family": "association_study",
@@ -165,13 +229,21 @@ def _write_split_parent(run_dir: Path, *, mutation: str = "") -> Path:
     return parent
 
 
-def _child() -> AnalysisStep:
+def _child(*, with_audits: bool = False) -> AnalysisStep:
     return AnalysisStep(
         step_id=CHILD,
         intent="Render the Planner-owned availability panel.",
         inputs=[
             "table:severity_distribution",
             "table:measurement_availability",
+            *(
+                [
+                    "table:missingness_audit",
+                    "table:structural_missingness_audit",
+                ]
+                if with_audits
+                else []
+            ),
         ],
         expected_outputs=["figure:measurement_availability_panel"],
         method="visualization",
@@ -214,6 +286,87 @@ def test_v2_routes_by_typed_roles_and_digest_bound_schema_not_method(
     )
 
 
+def test_v2_consumes_and_exports_every_declared_audit_table(tmp_path: Path) -> None:
+    parent = _write_split_parent(tmp_path, with_audits=True)
+    seal = _sealed_renderer_parent_digest_seal(tmp_path, CHILD, REPAIR_ID)
+    assert set(seal or {}) == {
+        "measurement_availability.csv",
+        "missingness_audit.csv",
+        "severity_distribution.csv",
+        "step_summary.json",
+        "structural_missingness_audit.csv",
+    }
+    assert _sealed_renderer_figure_step_matches_parent(
+        tmp_path, _child(with_audits=True), REPAIR_ID
+    )
+
+    out = tmp_path / "steps" / CHILD / "outputs"
+    assert (
+        _render_authorized_sealed_publication_bundle(
+            repair_id=REPAIR_ID,
+            run_dir=tmp_path,
+            current_step_id=CHILD,
+            out_dir=out,
+            parent_artifact_digests=seal or {},
+        )
+        == REPAIR_ID
+    )
+    missingness_source = pd.read_csv(out / "missingness_audit_source_data.csv")
+    structural_source = pd.read_csv(
+        out / "structural_missingness_audit_source_data.csv"
+    )
+    assert missingness_source["source_table"].unique().tolist() == [
+        "missingness_audit.csv"
+    ]
+    assert structural_source["source_table"].unique().tolist() == [
+        "structural_missingness_audit.csv"
+    ]
+    assert missingness_source["source_step_id"].unique().tolist() == [PARENT]
+    assert structural_source["source_step_id"].unique().tolist() == [PARENT]
+    assert (
+        missingness_source["variable"].tolist()
+        == pd.read_csv(parent / "missingness_audit.csv")["variable"].tolist()
+    )
+    assert (
+        structural_source["variable"].tolist()
+        == pd.read_csv(parent / "structural_missingness_audit.csv")["variable"].tolist()
+    )
+    contract = json.loads(
+        (out / "severity_distribution.figure_contract.json").read_text(encoding="utf-8")
+    )
+    assert {panel["panel_id"] for panel in contract["panels"]} == {"A", "B", "C"}
+    assert set(contract["source_data"]) == {
+        "severity_distribution_source_data.csv",
+        "missingness_audit_source_data.csv",
+        "structural_missingness_audit_source_data.csv",
+    }
+    summary = json.loads((out / "step_summary.json").read_text(encoding="utf-8"))
+    assert set(summary["source_tables"]) == {
+        "severity_distribution.csv",
+        "measurement_availability.csv",
+        "missingness_audit.csv",
+        "structural_missingness_audit.csv",
+    }
+    assert summary["denominator_contract"]["panel_c"] == "locked_analysis_cohort"
+
+
+def test_v2_incomplete_or_malformed_audit_pair_fails_closed(tmp_path: Path) -> None:
+    parent = _write_split_parent(tmp_path, with_audits=True)
+    summary_path = parent / "step_summary.json"
+    summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    summary["output_files"].pop("table:structural_missingness_audit")
+    summary_path.write_text(json.dumps(summary), encoding="utf-8")
+    assert deterministic_figure_repair_id_for_upstream(tmp_path, CHILD) is None
+
+    malformed = tmp_path / "malformed"
+    parent = _write_split_parent(malformed, with_audits=True)
+    missingness_path = parent / "missingness_audit.csv"
+    missingness = pd.read_csv(missingness_path)
+    missingness.loc[0, "n_total"] = 103
+    missingness.to_csv(missingness_path, index=False)
+    assert deterministic_figure_repair_id_for_upstream(malformed, CHILD) is None
+
+
 @pytest.mark.parametrize(
     "mutation",
     (
@@ -241,6 +394,18 @@ def test_v2_requires_exact_child_inputs_and_rejects_result_role(tmp_path: Path) 
     )
     assert not _sealed_renderer_figure_step_matches_parent(
         tmp_path, missing_input, REPAIR_ID
+    )
+    extra_input = _child().model_copy(
+        update={
+            "inputs": [
+                "table:severity_distribution",
+                "table:measurement_availability",
+                "table:unconsumed_audit",
+            ]
+        }
+    )
+    assert not _sealed_renderer_figure_step_matches_parent(
+        tmp_path, extra_input, REPAIR_ID
     )
 
     from easyicu.research_agent.contracts.declared_product import (
