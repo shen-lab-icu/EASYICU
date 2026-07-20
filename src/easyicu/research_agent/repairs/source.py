@@ -1929,6 +1929,111 @@ def _patch_string_suffix_trim_length(
     return repaired
 
 
+def _patch_resolved_context_digest_load(
+    code: str,
+    *,
+    repair_findings: Sequence[ValidationFinding],
+) -> str:
+    """Load the exact digest-bound ResearchContext instead of its binding row."""
+
+    coordinates: list[tuple[int, str, str]] = []
+    for finding in repair_findings:
+        detail = finding.detail or {}
+        if detail.get("reason") != "resolved_context_payload_not_loaded":
+            continue
+        line = detail.get("line")
+        manifest_name = detail.get("manifest_name")
+        target_name = detail.get("target_name")
+        if not (
+            isinstance(line, int)
+            and line > 0
+            and isinstance(manifest_name, str)
+            and manifest_name.isidentifier()
+            and isinstance(target_name, str)
+            and target_name.isidentifier()
+        ):
+            return code
+        coordinates.append((line, manifest_name, target_name))
+    if len(coordinates) != 1:
+        return code
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return code
+    parents = {
+        child: parent
+        for parent in ast.walk(tree)
+        for child in ast.iter_child_nodes(parent)
+    }
+    line, manifest_name, target_name = coordinates[0]
+    candidates = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Assign)
+        and node.lineno == line
+        and len(node.targets) == 1
+        and isinstance(node.targets[0], ast.Name)
+        and node.targets[0].id == target_name
+        and isinstance(node.value, ast.Subscript)
+        and isinstance(node.value.value, ast.Subscript)
+        and isinstance(node.value.value.value, ast.Name)
+        and node.value.value.value.id == manifest_name
+    ]
+    if len(candidates) != 1:
+        return code
+    assignment = candidates[0]
+    standalone = _standalone_statement_source(
+        code,
+        assignment,
+        tree=tree,
+        parents=parents,
+    )
+    if standalone is None or assignment.end_lineno is None:
+        return code
+    lines, indent = standalone
+    body_indent = indent + ("\t" if "\t" in indent else "    ")
+    patch = (
+        f"{indent}# _easyicu_resolved_context_digest_load_v1\n"
+        f"{indent}import hashlib as _easyicu_context_hashlib\n"
+        f"{indent}import json as _easyicu_context_json\n"
+        f"{indent}import os as _easyicu_context_os\n"
+        f"{indent}from pathlib import Path as _EasyICUContextPath\n"
+        f'{indent}_easyicu_context_binding = {manifest_name}["context"]\n'
+        f"{indent}_easyicu_context_path = (\n"
+        f"{body_indent}_EasyICUContextPath("
+        f'_easyicu_context_os.environ["EASYICU_RUN_DIR"])\n'
+        f'{body_indent}/ _easyicu_context_binding["relative_path"]\n'
+        f"{indent})\n"
+        f"{indent}if not _easyicu_context_path.is_file():\n"
+        f'{body_indent}raise FileNotFoundError("Bound ResearchContext is missing")\n'
+        f"{indent}_easyicu_context_digest = _easyicu_context_hashlib.sha256()\n"
+        f'{indent}with _easyicu_context_path.open("rb") as _easyicu_context_stream:\n'
+        f"{body_indent}for _easyicu_context_chunk in iter(\n"
+        f'{body_indent}    lambda: _easyicu_context_stream.read(1024 * 1024), b""\n'
+        f"{body_indent}):\n"
+        f"{body_indent}    _easyicu_context_digest.update(_easyicu_context_chunk)\n"
+        f"{indent}if (\n"
+        f"{body_indent}_easyicu_context_digest.hexdigest()\n"
+        f'{body_indent}!= _easyicu_context_binding["sha256"]\n'
+        f"{indent}):\n"
+        f'{body_indent}raise ValueError("Bound ResearchContext digest mismatch")\n'
+        f'{indent}with _easyicu_context_path.open("r", encoding="utf-8") '
+        f"as _easyicu_context_stream:\n"
+        f"{body_indent}_easyicu_context_payload = "
+        f"_easyicu_context_json.load(_easyicu_context_stream)\n"
+        f'{indent}{target_name} = _easyicu_context_payload.get("variables")\n'
+        f"{indent}if not isinstance({target_name}, list):\n"
+        f'{body_indent}raise ValueError("Bound ResearchContext variables are invalid")\n'
+    )
+    lines[assignment.lineno - 1 : assignment.end_lineno] = [patch]
+    repaired = "".join(lines)
+    try:
+        ast.parse(repaired)
+    except SyntaxError:
+        return code
+    return repaired
+
+
 def deterministic_concept_audit_repair(
     code: str,
     audit_messages: Sequence[str],
@@ -1966,6 +2071,16 @@ def deterministic_concept_audit_repair(
         if suffix_trimmed != repaired:
             repair_name = "string_suffix_trim_length_v1"
             repaired = suffix_trimmed
+            repair_names.append(repair_name)
+
+    if RepairReason.TYPED_CONTEXT_BINDING_INVALID in set(repair_reasons):
+        context_loaded = _patch_resolved_context_digest_load(
+            repaired,
+            repair_findings=repair_findings,
+        )
+        if context_loaded != repaired:
+            repair_name = "resolved_context_digest_load_v1"
+            repaired = context_loaded
             repair_names.append(repair_name)
 
     if RepairReason.ARBITRARY_COLUMN_FALLBACK in set(repair_reasons):

@@ -20,6 +20,7 @@ from ..schema import ValidationFinding
 class RepairReason(str, Enum):
     INVALID_HELPER_SIGNATURE = "INVALID_HELPER_SIGNATURE"
     STRING_SUFFIX_TRIM_MISMATCH = "STRING_SUFFIX_TRIM_MISMATCH"
+    TYPED_CONTEXT_BINDING_INVALID = "TYPED_CONTEXT_BINDING_INVALID"
     UNDEFINED_HELPER = "UNDEFINED_HELPER"
     UNBOUND_LOCAL = "UNBOUND_LOCAL"
     LOSSY_NUMERIC_COERCION = "LOSSY_NUMERIC_COERCION"
@@ -528,6 +529,7 @@ _DETAIL_REASON_CODES = {
     "local_helper_unpack_arity_mismatch": RepairReason.INVALID_HELPER_SIGNATURE,
     "host_helper_runtime_introspection": RepairReason.INVALID_HELPER_SIGNATURE,
     "string_suffix_trim_length_mismatch": (RepairReason.STRING_SUFFIX_TRIM_MISMATCH),
+    "resolved_context_payload_not_loaded": (RepairReason.TYPED_CONTEXT_BINDING_INVALID),
     "undefined_helper_call": RepairReason.UNDEFINED_HELPER,
     "branch_local_unbound": RepairReason.UNBOUND_LOCAL,
     "lossy_ordinal_rounding": RepairReason.LOSSY_ORDINAL_ROUNDING,
