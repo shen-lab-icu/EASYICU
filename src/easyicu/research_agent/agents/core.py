@@ -63,6 +63,7 @@ from ..repairs.patch import (
 )
 from ..authority.coder_authority import HostCoderAuthority
 from ..research_context.prompt_scope import (
+    _is_required_source_companion,
     coder_context_requires_method_constraints,
     coder_guide_for_step,
     coder_rewrite_guide_for_step,
@@ -272,21 +273,13 @@ def _format_companion_variable(v: ConceptDescriptor) -> str:
     fields = [
         f"- {v.name}",
         "companion_metadata=true",
-        f"role={v.role.value}",
+        "scientific_input=false",
         f"dtype={v.dtype}",
     ]
-    if v.unit:
-        fields.append(f"unit={v.unit}")
-    if v.valid_range:
-        fields.append(f"range={v.valid_range}")
     if v.observed_domain:
         fields.append(_format_observed_domain(v.observed_domain).strip())
     if v.source_concept:
         fields.append(f"source_concept={v.source_concept}")
-    if v.is_ordinal:
-        fields.append("is_ordinal=true")
-    if v.ordinal_levels:
-        fields.append(f"ordinal_levels={v.ordinal_levels}")
     if v.analysis_window:
         fields.append(f"analysis_window={v.analysis_window}")
     if v.missingness_semantics:
@@ -335,6 +328,7 @@ def _format_context(
     detailed_variable_names: Optional[set[str]] = None,
     method_constraint_variable_names: Optional[set[str]] = None,
     include_ctas_aggregation_guidance: bool = True,
+    compact_declared_source_companions: bool = False,
 ) -> str:
     lines = [
         f"Research question: {ctx.research_question}",
@@ -358,9 +352,12 @@ def _format_context(
         lines.append(f"  - {w.name}: {w.start_hours}-{w.end_hours}h from {w.anchor}")
     lines.append("Variables:")
     for v in ctx.variables:
-        if (
+        detailed = (
             detailed_variable_names is None
             or v.name.strip().lower() in detailed_variable_names
+        )
+        if detailed and not (
+            compact_declared_source_companions and _is_required_source_companion(v)
         ):
             lines.append(
                 _format_variable(
@@ -2140,6 +2137,7 @@ class CoderAgent:
                         detailed_variable_names=detailed_variable_names,
                         method_constraint_variable_names=detailed_variable_names,
                         include_ctas_aggregation_guidance=False,
+                        compact_declared_source_companions=True,
                     )
                 ),
             ),

@@ -512,6 +512,27 @@ def test_wide_generic_ordered_qc_prompt_stays_under_initial_transport_gate(ra):
     assert _payload_bytes(llm.calls[0][0]) <= 42_000
 
 
+def test_declared_provenance_companions_use_compact_typed_coordinates(ra):
+    llm = _CaptureLLM(["import os\nvalue = 1\n"])
+
+    CoderAgent(llm).run(
+        context=_wide_context(ra, n_families=7),
+        step=_quality_step(ra, n_families=7),
+    )
+
+    messages = llm.calls[0][0]
+    payload = "\n".join(str(message.content or "") for message in messages)
+    assert _payload_bytes(messages) < 40_000
+    assert (
+        "- declared_family_0_measured | companion_metadata=true | "
+        "scientific_input=false | dtype=bool"
+    ) in payload
+    assert "source_concept=declared_family_0" in payload
+    assert "description='Registered measured companion" not in payload
+    assert "- declared_family_0_first | role=ordinal_score" in payload
+    assert "description='Registered first companion" in payload
+
+
 def test_materialized_wide_qc_prompt_keeps_authority_under_transport_gate(ra):
     inputs = ["artifact:analysis_cohort"]
     for family in range(4):
