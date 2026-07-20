@@ -2704,6 +2704,21 @@ def test_llm_concept_auditor_prompt_declares_flag_only_plausibility_policy(ra):
     assert "plausibility_range_exclusion_required" in prompt
 
 
+def test_llm_concept_auditor_prompt_declares_strict_numeric_host_boundary(ra):
+    auditor = ra.LLMConceptAuditor(ra.MockLLMClient())
+    prompt = auditor._prompt(
+        context=_plausibility_range_context(ra),
+        script_text="strict_numeric_input(frame['marker']).values",
+        step=None,
+    )
+
+    assert "unconvertible" in prompt
+    assert "semantically nonnumeric" in prompt
+    assert "non-finite" in prompt
+    assert "strict_numeric_nonfinite_guard_required" in prompt
+    assert "do not demand a second `isfinite` guard" in prompt
+
+
 def test_llm_concept_auditor_reclassifies_typed_flag_only_range_demand(ra):
     class _RangeDemandLLM:
         def complete(self, messages, *, max_tokens=1024, temperature=0.0):

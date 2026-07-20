@@ -932,6 +932,17 @@ class LLMConceptAuditor:
             "host-owned fail-closed boundary: it raises on missing, invalid, or "
             "discordant measured/count pairs. Do not demand a second status "
             "guard or inspection of its successful receipt. "
+            "A value returned by a direct call imported exactly as "
+            "`strict_numeric_input` from that same host module has already "
+            "failed closed on every non-missing value that is unconvertible, "
+            "semantically nonnumeric, or non-finite. When a result-bearing "
+            "summary consumes only that returned `.values` Series (including "
+            "through a local wrapper), do not demand a second `isfinite` guard "
+            "or infer that later JSON null handling can hide non-finite input. "
+            "If you believe a named result variable bypasses this exact host "
+            "boundary, use issue_code "
+            "`strict_numeric_nonfinite_guard_required` and include every "
+            "affected name in `detail.variables`. "
             "A Step input whose exact ConceptDescriptor names a source_concept, "
             "analysis_window, and aggregation-compatible materialized column is "
             "a host-owned binding. Direct use of that exact input is therefore "
@@ -1004,6 +1015,7 @@ class LLMConceptAuditor:
             "derives the event from event-time/follow-up data.\n\n"
             "Every finding must include `detail.issue_code`. For these narrow "
             "cases use exactly `audit_only_companion_row_gating_required`, "
+            "`strict_numeric_nonfinite_guard_required`, "
             "`finalized_exposure_missing_reconciliation`, "
             "`finalized_exposure_overridden`, or "
             "`finalized_exposure_forced_raw_reconciliation`, or "
@@ -1034,6 +1046,7 @@ class LLMConceptAuditor:
 _LLM_CONCEPT_ISSUE_CODES = frozenset(
     {
         "audit_only_companion_row_gating_required",
+        "strict_numeric_nonfinite_guard_required",
         "finalized_exposure_missing_reconciliation",
         "finalized_exposure_overridden",
         "finalized_exposure_forced_raw_reconciliation",
