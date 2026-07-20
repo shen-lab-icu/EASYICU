@@ -6532,6 +6532,15 @@ def _notna_gated_domain_checks(
 
 _HOST_HELPER_CALL_CONTRACTS: dict[tuple[str, str], dict[str, object]] = {
     (
+        "easyicu.research_agent.figures.publication",
+        "audit_publication_exports",
+    ): {
+        "max_positional": 1,
+        "positional_parameter": "paths",
+        "required_keywords": (),
+        "allowed_keywords": ("paths", "min_bytes", "require_svg_text"),
+    },
+    (
         "easyicu.research_agent.methods.descriptive_inputs",
         "closed_categorical_counts",
     ): {
