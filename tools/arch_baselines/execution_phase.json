@@ -1,61 +1,61 @@
 {
-  "tool_version": "1.4.4",
-  "tool_sha256": "339c40d69b9442a43ef26aa097e07e662483baa0b5766cdfe5a8fe0e15fa953e",
+  "tool_version": "1.5.0",
+  "tool_sha256": "48b57269a208182a4d991216048bbbdd634b91d72bc9fbe093f472c8282e3c69",
   "shim_import_paths": [],
   "files": {
     "execution/phase.py": {
-      "loc": 14631,
-      "sha256": "2f77cf14179e0941e13d4cb1c7befd9cc15fee55980708248eaecf3a686c8757",
-      "intra_package_import_edges": 56,
+      "loc": 11452,
+      "sha256": "38058e40d8e0c9dc9001b491243ef007815e2936cca1638484d503b09a0a9f99",
+      "intra_package_import_edges": 67,
       "shim_bypass_violations": []
     },
     "pipeline.py": {
-      "loc": 10747,
-      "sha256": "5d989352a11aa8358c495b46adc95f8e01edb10c1ba4c25ba27e9aeea610f01c",
-      "intra_package_import_edges": 71,
+      "loc": 10772,
+      "sha256": "c59b59f18171736af6c4c16af964c9c0e90e50437cccf220507e8351d503057d",
+      "intra_package_import_edges": 84,
       "shim_bypass_violations": []
     },
     "reporting/readiness.py": {
-      "loc": 2861,
-      "sha256": "e52645f954944d1bba6e645fe281c201e8d1f31b739879da8b442e8f5df11b13",
+      "loc": 2953,
+      "sha256": "3bf7336b6fffc78d1571d15884ea5baa9d82a2845628300e1f50517af63169fd",
       "intra_package_import_edges": 12,
       "shim_bypass_violations": []
     },
     "authority/typed_binding.py": {
-      "loc": 1137,
-      "sha256": "745718337a0dd21ef452127a9f9f47f8802fbc51fb2d99af94a252f1fd210863",
+      "loc": 1263,
+      "sha256": "23b369fe9d4b2c3e3568ec3ee0a6b5a9b56385dd7ec65201e4758aa37cdb45c0",
       "intra_package_import_edges": 8,
       "shim_bypass_violations": []
     },
     "authority/plan_authority.py": {
-      "loc": 302,
-      "sha256": "95f2f4652463efdaa3385dfa3e54ac67baec258c41be7eeb3ad0743d567c5b8e",
-      "intra_package_import_edges": 6,
+      "loc": 365,
+      "sha256": "b614e144c12d1e0548fae93ad1f9e295a9ea039aa5b1abdb5f170a05a0e3a280",
+      "intra_package_import_edges": 7,
       "shim_bypass_violations": []
     }
   },
   "functions": {
     "execution/phase.py::_execute_one_step": {
-      "lines": 6694,
-      "line_start": 7513,
-      "direct_nested_funcs": 26,
-      "total_nested_funcs": 28,
-      "own_bound_names": 347,
+      "lines": 6133,
+      "line_start": 4863,
+      "direct_nested_funcs": 24,
+      "total_nested_funcs": 26,
+      "own_bound_names": 340,
       "own_nonlocal_names": [
         "runtime_state"
       ],
       "own_nonlocal_count": 1,
-      "callable_closure_captured_names": 37
+      "callable_closure_captured_names": 31
     },
     "execution/phase.py::run_execute_phase": {
-      "lines": 8451,
-      "line_start": 6181,
-      "direct_nested_funcs": 16,
-      "total_nested_funcs": 48,
-      "own_bound_names": 143,
+      "lines": 7903,
+      "line_start": 3550,
+      "direct_nested_funcs": 15,
+      "total_nested_funcs": 45,
+      "own_bound_names": 145,
       "own_nonlocal_names": [],
       "own_nonlocal_count": 0,
-      "callable_closure_captured_names": 80
+      "callable_closure_captured_names": 79
     }
   }
 }

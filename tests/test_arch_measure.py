@@ -12,10 +12,13 @@ walrus (targets DO leak), and nonlocal/global.
 from __future__ import annotations
 
 import ast
+import copy
+import json
 import sys
 from pathlib import Path
 
 TOOLS_DIR = Path(__file__).resolve().parents[1] / "tools"
+BASELINE_PATH = TOOLS_DIR / "arch_baselines" / "execution_phase.json"
 sys.path.insert(0, str(TOOLS_DIR))
 try:
     import arch_measure  # type: ignore[import-not-found]
@@ -52,6 +55,39 @@ def test_measure_tracks_current_authority_boundaries() -> None:
     assert "authority/typed_binding.py" in measured
     assert "authority/plan_authority.py" in measured
     assert measured["authority/plan_authority.py"].get("missing") is not True
+
+
+def test_checked_in_architecture_baseline_has_no_regression() -> None:
+    baseline = json.loads(BASELINE_PATH.read_text(encoding="utf-8"))
+
+    assert arch_measure.diff(baseline, arch_measure.measure()) == 0
+
+
+def test_architecture_diff_blocks_function_growth() -> None:
+    current = arch_measure.measure()
+    baseline = copy.deepcopy(current)
+    function = next(iter(current["functions"]))
+    baseline["functions"][function]["own_bound_names"] -= 1
+
+    assert arch_measure.diff(baseline, current) == 1
+
+
+def test_architecture_diff_blocks_target_file_growth() -> None:
+    current = arch_measure.measure()
+    baseline = copy.deepcopy(current)
+    file_name = next(iter(current["files"]))
+    baseline["files"][file_name]["loc"] -= 1
+
+    assert arch_measure.diff(baseline, current) == 1
+
+
+def test_architecture_diff_blocks_missing_target() -> None:
+    current = arch_measure.measure()
+    baseline = copy.deepcopy(current)
+    function = next(iter(current["functions"]))
+    current["functions"][function] = {"missing": True}
+
+    assert arch_measure.diff(baseline, current) == 1
 
 
 # --------------------------------------------------------------------------- #

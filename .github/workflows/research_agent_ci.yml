@@ -5,12 +5,18 @@ on:
     paths:
       - "src/easyicu/research_agent/**"
       - "tests/research_agent/**"
+      - "tests/test_arch_measure.py"
+      - "tools/arch_measure.py"
+      - "tools/arch_baselines/execution_phase.json"
       - "examples/research_agent_*.py"
       - ".github/workflows/research_agent_ci.yml"
   pull_request:
     paths:
       - "src/easyicu/research_agent/**"
       - "tests/research_agent/**"
+      - "tests/test_arch_measure.py"
+      - "tools/arch_measure.py"
+      - "tools/arch_baselines/execution_phase.json"
       - "examples/research_agent_*.py"
       - ".github/workflows/research_agent_ci.yml"
 
@@ -59,4 +65,6 @@ jobs:
 
       - name: Run research_agent test suite
         run: |
+          python tools/arch_measure.py --diff tools/arch_baselines/execution_phase.json
+          pytest tests/test_arch_measure.py -q
           pytest tests/research_agent -q
