@@ -25,6 +25,7 @@ class RepairReason(str, Enum):
     UNDEFINED_HELPER = "UNDEFINED_HELPER"
     UNBOUND_LOCAL = "UNBOUND_LOCAL"
     LOSSY_NUMERIC_COERCION = "LOSSY_NUMERIC_COERCION"
+    BOOLEAN_REDUCTION_IDENTITY = "BOOLEAN_REDUCTION_IDENTITY"
     NONFINITE_NUMERIC_INPUT = "NONFINITE_NUMERIC_INPUT"
     LOSSY_ORDINAL_ROUNDING = "LOSSY_ORDINAL_ROUNDING"
     INVALID_NUMERIC_REDUCTION = "INVALID_NUMERIC_REDUCTION"
@@ -73,6 +74,7 @@ _SAFE_TICKET_KEYS = frozenset(
         "analysis_set_id",
         "allowed_values",
         "branch_line",
+        "boolean_literal",
         "call_line",
         "column",
         "columns",
@@ -102,10 +104,14 @@ _SAFE_TICKET_KEYS = frozenset(
         "path",
         "preferred",
         "reason",
+        "reduction",
+        "repair_safe",
         "reported",
         "role",
         "spec_id",
         "structured_reason",
+        "operator",
+        "provenance",
         "validator",
         "variable",
         "violations",
@@ -540,6 +546,7 @@ _DETAIL_REASON_CODES = {
     "branch_local_unbound": RepairReason.UNBOUND_LOCAL,
     "lossy_ordinal_rounding": RepairReason.LOSSY_ORDINAL_ROUNDING,
     "lossy_numeric_coercion": RepairReason.LOSSY_NUMERIC_COERCION,
+    "boolean_reduction_identity_comparison": (RepairReason.BOOLEAN_REDUCTION_IDENTITY),
     "conditional_nonfinite_guard": RepairReason.NONFINITE_NUMERIC_INPUT,
     "strict_numeric_nonfinite_unchecked": RepairReason.NONFINITE_NUMERIC_INPUT,
     "scalar_cast_before_reduction": RepairReason.INVALID_NUMERIC_REDUCTION,
