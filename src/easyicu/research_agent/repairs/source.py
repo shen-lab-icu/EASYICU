@@ -2120,7 +2120,7 @@ def _patch_resolved_input_identity_key(
                 (
                     _absolute_offset(int(node.lineno), int(node.col_offset)),
                     _absolute_offset(int(node.end_lineno), int(node.end_col_offset)),
-                    f'{parameter_name}["identity_row"]["input_key"]',
+                    f"{parameter_name}['identity_row']['input_key']",
                 )
             )
     if not replacements:
