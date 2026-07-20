@@ -278,6 +278,7 @@ _SYNTACTIC_REPAIRS = {
     "resolved_input_run_root_v1",
     "resolved_typed_input_precedence_v1",
     "scalar_cast_before_reduction_v1",
+    "validation_finding_json_default_v1",
 }
 
 _STRUCTURAL_REPAIRS = {
@@ -286,6 +287,7 @@ _STRUCTURAL_REPAIRS = {
     "cohort_file_direct_read_v1",
     "categorical_level_reconciliation_guard_v1",
     "conditional_nonfinite_fail_closed_guard_v1",
+    "host_schema_numeric_alias_v1",
     "dedupe_predictor_numeric_design_v1",
     "dedupe_required_cols_outcome_v1",
     "include_outcome_in_all_vars_v1",

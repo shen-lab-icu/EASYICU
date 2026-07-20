@@ -225,6 +225,7 @@ class ConceptAuditCoordinator:
             script_text=script_text,
             usage_auditor=runtime.usage_auditor,
             pattern_auditor=runtime.pattern_auditor,
+            resolved_input_bindings=authority.resolved_input_bindings,
         )
         deterministic_errors = [
             finding
