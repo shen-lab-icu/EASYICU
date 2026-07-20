@@ -11008,11 +11008,19 @@ class FigureSourceDataValidator:
 
         def _merged_source(col: str) -> pd.Series:
             suffixed = f"{col}_source"
-            return merged[suffixed] if suffixed in merged.columns else merged[col]
+            return (
+                merged[suffixed]
+                if col in upstream.columns and suffixed in merged.columns
+                else merged[col]
+            )
 
         def _merged_upstream(col: str) -> pd.Series:
             suffixed = f"{col}_upstream"
-            return merged[suffixed] if suffixed in merged.columns else merged[col]
+            return (
+                merged[suffixed]
+                if col in source.columns and suffixed in merged.columns
+                else merged[col]
+            )
 
         def _numeric_comparison(
             source_name: str, upstream_name: str
