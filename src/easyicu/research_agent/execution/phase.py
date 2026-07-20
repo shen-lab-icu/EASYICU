@@ -361,6 +361,7 @@ from ..scalar_utils import _expected_numeric_annotations_for_step
 from ..reporting.side_findings import SideFinding
 from ..skills import ClinicalSkill
 from ..authority.step_capsule import (
+    StepAuthorityCapsuleRef,
     StepAuthorityCapsuleError,
     load_verified_step_authority_capsule,
 )
@@ -2931,6 +2932,49 @@ def _selectively_revalidate_resume_successes(
         )
         if prior_success is not None:
             retirement_records[invalid_step_id] = prior_success
+            current_invalid = next(
+                (
+                    record
+                    for record in reversed(history)
+                    if str(record.get("step_id") or "").strip() == invalid_step_id
+                    and str(record.get("status") or "").strip().lower()
+                    in {"resume_evidence_invalid", "resume_validator_invalid"}
+                ),
+                None,
+            )
+            raw_capsule_ref = prior_success.get("step_authority_capsule_ref")
+            prior_code_sha256 = str(
+                prior_success.get("executed_code_sha256")
+                or prior_success.get("concept_approved_code_sha256")
+                or ""
+            )
+            if (
+                isinstance(current_invalid, Mapping)
+                and "resume_revalidation_candidate_capsule_ref" not in current_invalid
+                and isinstance(raw_capsule_ref, Mapping)
+                and re.fullmatch(r"[0-9a-f]{64}", prior_code_sha256)
+            ):
+                # Append a monotonic continuation for invalid checkpoints
+                # written before recovery coordinates existed. Never mutate
+                # the historical checkpoint or reset its provider receipt.
+                history.append(
+                    {
+                        **dict(current_invalid),
+                        "attempt_id": (
+                            f"{str(current_invalid.get('attempt_id') or invalid_step_id)}"
+                            ":candidate_recovery"
+                        ),
+                        "resume_revalidation_candidate_capsule_ref": dict(
+                            raw_capsule_ref
+                        ),
+                        "resume_revalidation_candidate_code_sha256": (
+                            prior_code_sha256
+                        ),
+                        "resume_revalidation_candidate_attempt_id": str(
+                            prior_success.get("attempt_id") or ""
+                        ),
+                    }
+                )
 
     def append_invalid(
         *,
@@ -2975,6 +3019,27 @@ def _selectively_revalidate_resume_successes(
             "retired_current_aliases": {},
             **stamp,
         }
+        raw_capsule_ref = prior_record.get("step_authority_capsule_ref")
+        prior_code_sha256 = str(
+            prior_record.get("executed_code_sha256")
+            or prior_record.get("concept_approved_code_sha256")
+            or ""
+        )
+        if isinstance(raw_capsule_ref, Mapping) and re.fullmatch(
+            r"[0-9a-f]{64}", prior_code_sha256
+        ):
+            # Invalid status retires current authority, but this explicit
+            # immutable coordinate lets the next attempt revalidate the exact
+            # candidate without purchasing a second initial generation.
+            payload.update(
+                {
+                    "resume_revalidation_candidate_capsule_ref": dict(raw_capsule_ref),
+                    "resume_revalidation_candidate_code_sha256": (prior_code_sha256),
+                    "resume_revalidation_candidate_attempt_id": str(
+                        prior_record.get("attempt_id") or ""
+                    ),
+                }
+            )
         for key, value in prior_record.items():
             if key.startswith("step_provider_call_") or key.startswith(
                 "step_llm_repair_"
@@ -4548,9 +4613,7 @@ def run_execute_phase(
             )
             or None,
             force=bool(
-                typed_plan_preflight
-                or primary_cohort_preflight
-                or trajectory_preflight
+                typed_plan_preflight or primary_cohort_preflight or trajectory_preflight
             ),
         )
 
@@ -5485,6 +5548,49 @@ def run_execute_phase(
                         ),
                     )
                 )
+                if (
+                    step_attempt_state.selected_resume_capsule is None
+                    and isinstance(prior_step_record, Mapping)
+                    and str(prior_step_record.get("status") or "").strip().lower()
+                    == "resume_validator_invalid"
+                    and isinstance(
+                        prior_step_record.get(
+                            "resume_revalidation_candidate_capsule_ref"
+                        ),
+                        Mapping,
+                    )
+                ):
+                    try:
+                        recovery_ref = StepAuthorityCapsuleRef.model_validate(
+                            prior_step_record[
+                                "resume_revalidation_candidate_capsule_ref"
+                            ]
+                        )
+                        recovery_capsule = load_verified_step_authority_capsule(
+                            run_dir,
+                            ref=recovery_ref,
+                            expected_step_id=step.step_id,
+                        )
+                    except (ValueError, StepAuthorityCapsuleError) as exc:
+                        raise StepAuthorityRuntimeError(
+                            "resume revalidation candidate is invalid"
+                        ) from exc
+                    expected_recovery_sha256 = str(
+                        prior_step_record.get(
+                            "resume_revalidation_candidate_code_sha256"
+                        )
+                        or ""
+                    )
+                    if (
+                        not re.fullmatch(r"[0-9a-f]{64}", expected_recovery_sha256)
+                        or recovery_capsule.capsule.candidate_code.sha256
+                        != expected_recovery_sha256
+                    ):
+                        raise StepAuthorityRuntimeError(
+                            "resume revalidation candidate digest is inconsistent"
+                        )
+                    step_attempt_state.selected_resume_capsule = recovery_capsule
+                    step_record["resume_validator_invalid_candidate_reused"] = True
                 # A paid repair result belongs to the historical parent and
                 # coordinates recorded before a crash. Recover that exact
                 # candidate first; only then may current engine/validator drift

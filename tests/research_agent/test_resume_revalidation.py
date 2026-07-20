@@ -412,7 +412,9 @@ def test_missing_or_tampered_summary_fails_closed(
         evidence=evidence,
         step=step,
     )
-    from easyicu.research_agent.authority.runtime_artifacts import verified_run_evidence_path
+    from easyicu.research_agent.authority.runtime_artifacts import (
+        verified_run_evidence_path,
+    )
 
     summary_path = verified_run_evidence_path(run_dir, summary)
     assert summary_path is not None
@@ -835,6 +837,17 @@ def test_invalid_checkpoint_inherits_monotonic_provider_and_repair_budgets(
         "step_llm_repair_classes": ["contract", "runtime"],
     }
     record.update(inherited)
+    record.update(
+        {
+            "attempt_id": "01_model:attempt:1",
+            "executed_code_sha256": "a" * 64,
+            "step_authority_capsule_ref": {
+                "schema_version": "easyicu.step_authority_capsule_ref/1",
+                "step_id": step.step_id,
+                "capsule_sha256": "b" * 64,
+            },
+        }
+    )
     error = ValidationFinding(
         validator="test_gate",
         severity="error",
@@ -859,6 +872,57 @@ def test_invalid_checkpoint_inherits_monotonic_provider_and_repair_budgets(
 
     assert latest["status"] == "resume_validator_invalid"
     assert {key: latest[key] for key in inherited} == inherited
+    assert latest["resume_revalidation_candidate_code_sha256"] == "a" * 64
+    assert latest["resume_revalidation_candidate_capsule_ref"] == {
+        "schema_version": "easyicu.step_authority_capsule_ref/1",
+        "step_id": step.step_id,
+        "capsule_sha256": "b" * 64,
+    }
+
+
+def test_legacy_invalid_checkpoint_gets_monotonic_capsule_recovery_continuation(
+    replay_environment,
+) -> None:
+    pipeline_execute, run_dir, evidence = replay_environment
+    step = AnalysisStep(step_id="01_model", intent="Fit the planned model.")
+    success, _, _ = _register_success(
+        run_dir=run_dir,
+        evidence=evidence,
+        step=step,
+    )
+    success.update(
+        {
+            "attempt_id": "01_model:attempt:1",
+            "executed_code_sha256": "a" * 64,
+            "step_authority_capsule_ref": {
+                "schema_version": "easyicu.step_authority_capsule_ref/1",
+                "step_id": step.step_id,
+                "capsule_sha256": "b" * 64,
+            },
+        }
+    )
+    invalid = {
+        "step_id": step.step_id,
+        "status": "resume_validator_invalid",
+        "attempt_id": "01_model:resume_revalidation:1",
+        "revalidated_without_execution": True,
+        "evidence_ids": [],
+    }
+
+    result = _revalidate(
+        pipeline_execute,
+        run_dir=run_dir,
+        evidence=evidence,
+        records=[success, invalid],
+        plan=AnalysisPlan(research_question="Question", steps=[step]),
+        resume_from_step_id=step.step_id,
+    )
+
+    latest = result.resume_state["per_step_records"][-1]
+    assert latest["status"] == "resume_validator_invalid"
+    assert latest["attempt_id"].endswith(":candidate_recovery")
+    assert latest["resume_revalidation_candidate_code_sha256"] == "a" * 64
+    assert result.invalidated_step_ids == (step.step_id,)
 
 
 def test_alias_retirement_failure_rolls_back_manifest_and_alias_authority(
