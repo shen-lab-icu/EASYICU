@@ -3485,6 +3485,68 @@ def run(frame):
     )
 
 
+def test_mechanical_preflight_accepts_each_inline_provenance_row_guarded_in_loop(ra):
+    code = """
+def main(frame, pairs):
+    checks = []
+    for measured_column, count_column in pairs:
+        invalid_pair_n = int(frame[measured_column].isna().sum())
+        discordant_n = int(
+            (frame[measured_column] != (frame[count_column] > 0)).sum()
+        )
+        checks.append({
+            'role': 'audit_only',
+            'invalid_pair_n': invalid_pair_n,
+            'discordant_n': discordant_n,
+        })
+        if invalid_pair_n > 0 or discordant_n > 0:
+            raise RuntimeError('invalid measurement provenance')
+    model.fit(frame)
+
+if __name__ == '__main__':
+    main(frame, pairs)
+"""
+    findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+
+    assert not any(
+        finding.detail
+        and finding.detail.get("reason") == "provenance_audit_not_fail_closed"
+        for finding in findings
+    )
+
+
+def test_mechanical_preflight_rejects_inline_loop_guard_after_continue(ra):
+    code = """
+def main(frame, pairs):
+    checks = []
+    for measured_column, count_column in pairs:
+        invalid_pair_n = int(frame[measured_column].isna().sum())
+        discordant_n = int(
+            (frame[measured_column] != (frame[count_column] > 0)).sum()
+        )
+        if should_skip(measured_column):
+            continue
+        checks.append({
+            'role': 'audit_only',
+            'invalid_pair_n': invalid_pair_n,
+            'discordant_n': discordant_n,
+        })
+        if invalid_pair_n > 0 or discordant_n > 0:
+            raise RuntimeError('invalid measurement provenance')
+    model.fit(frame)
+
+if __name__ == '__main__':
+    main(frame, pairs)
+"""
+    findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+
+    assert any(
+        finding.detail
+        and finding.detail.get("reason") == "provenance_audit_not_fail_closed"
+        for finding in findings
+    )
+
+
 def test_mechanical_preflight_blocks_conditionally_nested_provenance_return(ra):
     code = """
 def run(frame, should_stop):

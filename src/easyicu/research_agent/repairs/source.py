@@ -316,6 +316,26 @@ def _host_helper_signature_repair_lines(
     )
 
 
+def _closed_counts_signature_repair_lines(
+    findings: Sequence[ValidationFinding],
+) -> frozenset[int]:
+    """Return exact closed-count helper calls missing their level binding."""
+
+    return frozenset(
+        int(detail["line"])
+        for finding in findings
+        for detail in [finding.detail or {}]
+        if finding.validator == "mechanical_code_preflight"
+        and finding.severity == "error"
+        and detail.get("reason") == "host_helper_call_signature_invalid"
+        and detail.get("helper_name") == "closed_categorical_counts"
+        and detail.get("violations") == ["required_keyword_only_argument_missing"]
+        and isinstance(detail.get("line"), int)
+        and not isinstance(detail.get("line"), bool)
+        and int(detail["line"]) > 0
+    )
+
+
 def _patch_host_helper_keyword_only_call(
     code: str,
     *,
@@ -367,6 +387,91 @@ def _patch_host_helper_keyword_only_call(
         f"{function_source}({frame_source}, "
         f"measured_column={measured_source}, count_column={count_source})"
     )
+    repaired = code.replace(call_source, replacement, 1)
+    try:
+        ast.parse(repaired)
+    except SyntaxError:
+        return code
+    return repaired
+
+
+def _patch_closed_counts_missing_levels(
+    code: str,
+    *,
+    finding_lines: frozenset[int],
+) -> str:
+    """Bind one existing local level parameter to the stable host API.
+
+    The repair is deliberately narrower than the detector. It requires one
+    exact host finding, one one-argument call, and exactly one enclosing
+    function parameter named ``levels`` or ``declared_levels`` that has not
+    been rebound. No level, value, category, or denominator is invented.
+    """
+
+    if len(finding_lines) != 1:
+        return code
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return code
+    parents = {
+        child: parent
+        for parent in ast.walk(tree)
+        for child in ast.iter_child_nodes(parent)
+    }
+    line = next(iter(finding_lines))
+    calls = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and int(getattr(node, "lineno", 0)) == line
+        and _call_tail(node.func) == "closed_categorical_counts"
+        and len(node.args) == 1
+        and not node.keywords
+        and not isinstance(node.args[0], ast.Starred)
+    ]
+    if len(calls) != 1:
+        return code
+    call = calls[0]
+    function: ast.AST | None = call
+    while function is not None and not isinstance(
+        function, (ast.FunctionDef, ast.AsyncFunctionDef)
+    ):
+        function = parents.get(function)
+    if not isinstance(function, (ast.FunctionDef, ast.AsyncFunctionDef)):
+        return code
+    parameters = [
+        argument.arg
+        for argument in [
+            *function.args.posonlyargs,
+            *function.args.args,
+            *function.args.kwonlyargs,
+        ]
+        if argument.arg in {"levels", "declared_levels"}
+    ]
+    if len(parameters) != 1:
+        return code
+    levels_name = parameters[0]
+    if any(
+        isinstance(node, ast.Name)
+        and node.id == levels_name
+        and isinstance(node.ctx, (ast.Store, ast.Del))
+        for statement in function.body
+        for node in ast.walk(statement)
+        if int(getattr(node, "lineno", 0) or 0) < line
+    ):
+        return code
+    call_source = ast.get_source_segment(code, call)
+    function_source = ast.get_source_segment(code, call.func)
+    argument_source = ast.get_source_segment(code, call.args[0])
+    if (
+        not call_source
+        or not function_source
+        or not argument_source
+        or code.count(call_source) != 1
+    ):
+        return code
+    replacement = f"{function_source}({argument_source}, declared_levels={levels_name})"
     repaired = code.replace(call_source, replacement, 1)
     try:
         ast.parse(repaired)
@@ -1623,6 +1728,15 @@ def deterministic_concept_audit_repair(
         if keyword_bound != repaired:
             repair_name = "host_helper_keyword_only_call_v1"
             repaired = keyword_bound
+            repair_names.append(repair_name)
+
+        closed_levels_bound = _patch_closed_counts_missing_levels(
+            repaired,
+            finding_lines=_closed_counts_signature_repair_lines(repair_findings),
+        )
+        if closed_levels_bound != repaired:
+            repair_name = "closed_counts_declared_levels_binding_v1"
+            repaired = closed_levels_bound
             repair_names.append(repair_name)
 
         receipt_threaded = _patch_discarded_host_receipt_unpack(

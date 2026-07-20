@@ -160,6 +160,80 @@ first = measurement_provenance_receipt(frame, measured_a, count_a); second = mea
     assert names == []
 
 
+def test_closed_counts_requires_explicit_declared_levels_before_execution(ra):
+    script = """
+from easyicu.research_agent.methods.descriptive_inputs import closed_categorical_counts
+
+def add_categorical(series, levels):
+    return closed_categorical_counts(series)
+"""
+
+    findings = _signature_findings(script, ra)
+
+    assert len(findings) == 1
+    assert findings[0].detail == {
+        "reason": "host_helper_call_signature_invalid",
+        "helper_name": "closed_categorical_counts",
+        "line": 5,
+        "max_positional": 1,
+        "required_keywords": ["declared_levels"],
+        "violations": ["required_keyword_only_argument_missing"],
+    }
+    assert repair_reason_for_finding(findings[0]).value == ("INVALID_HELPER_SIGNATURE")
+
+
+def test_closed_counts_explicit_declared_levels_passes(ra):
+    script = """
+from easyicu.research_agent.methods.descriptive_inputs import closed_categorical_counts
+
+def add_categorical(series, levels):
+    return closed_categorical_counts(series, declared_levels=levels)
+"""
+
+    assert _signature_findings(script, ra) == []
+
+
+def test_closed_counts_missing_levels_is_repaired_without_inventing_categories(ra):
+    script = """
+from easyicu.research_agent.methods.descriptive_inputs import closed_categorical_counts
+
+def add_categorical(series, levels):
+    return closed_categorical_counts(series)
+"""
+    findings = _signature_findings(script, ra)
+
+    repaired, names = deterministic_concept_audit_repair(
+        script,
+        [finding.message for finding in findings],
+        repair_reasons=[repair_reason_for_finding(finding) for finding in findings],
+        repair_findings=findings,
+    )
+
+    assert names == ["closed_counts_declared_levels_binding_v1"]
+    assert "closed_categorical_counts(series, declared_levels=levels)" in repaired
+    assert _signature_findings(repaired, ra) == []
+
+
+def test_closed_counts_repair_refuses_ambiguous_local_category_parameter(ra):
+    script = """
+from easyicu.research_agent.methods.descriptive_inputs import closed_categorical_counts
+
+def add_categorical(series, categories):
+    return closed_categorical_counts(series)
+"""
+    findings = _signature_findings(script, ra)
+
+    repaired, names = deterministic_concept_audit_repair(
+        script,
+        [finding.message for finding in findings],
+        repair_reasons=[repair_reason_for_finding(finding) for finding in findings],
+        repair_findings=findings,
+    )
+
+    assert repaired == script
+    assert names == []
+
+
 def test_fixed_local_return_arity_must_match_direct_unpack(ra):
     script = """
 def collect(frame):
