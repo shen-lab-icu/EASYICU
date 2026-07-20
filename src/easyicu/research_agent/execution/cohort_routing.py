@@ -17,7 +17,6 @@ from ..contracts.declared_product import (
     primary_analysis_cohort_producer_uses_universe,
 )
 from ..schema import AnalysisPlan, AnalysisStep
-from .development_sample import DEVELOPMENT_COHORT_FILENAME, DEVELOPMENT_SAMPLE_FILENAME
 
 
 class StepExecutionCohortRoutingError(RuntimeError):
@@ -32,17 +31,18 @@ def step_execution_cohort_path(
     universe_path: Path,
     cohort_path: Path,
 ) -> Path:
-    """Choose the run-level data plane before typed inputs are resolved."""
+    """Choose the run-level data plane before typed inputs are resolved.
 
-    expected_sample = run_dir / DEVELOPMENT_COHORT_FILENAME
-    development_sample_selected = bool(
-        (run_dir / DEVELOPMENT_SAMPLE_FILENAME).is_file()
-        and cohort_path.resolve() == expected_sample.resolve()
-    )
-    if (
-        primary_analysis_cohort_producer_uses_universe(step=step, plan=plan)
-        and not development_sample_selected
-    ):
+    Development sampling is a child of the already locked, post-QC analysis
+    cohort.  The step that materialises and reports that parent cohort must
+    therefore continue to consume the full universe; only downstream
+    scientific steps consume the deterministic development child.  Feeding
+    the child back into its own producer destroys the attrition denominator
+    and makes host replay impossible.
+    """
+
+    del run_dir  # Kept in the stable public signature for routing callers.
+    if primary_analysis_cohort_producer_uses_universe(step=step, plan=plan):
         return universe_path
     return cohort_path
 

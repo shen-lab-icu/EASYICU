@@ -221,7 +221,7 @@ def test_execution_authority_selects_sample_but_keeps_full_universe(
     assert len(pd.read_parquet(state.selected_path)) == 5
 
 
-def test_primary_cohort_confirmation_uses_post_qc_development_sample(
+def test_primary_cohort_producer_keeps_full_universe_with_development_sample(
     tmp_path: Path,
 ) -> None:
     universe = tmp_path / "cohort.parquet"
@@ -251,7 +251,7 @@ def test_primary_cohort_confirmation_uses_post_qc_development_sample(
         cohort_path=sample,
     )
 
-    assert selected == sample
+    assert selected == universe
 
     integrity_universe, integrity_cohort = _primary_cohort_integrity_authority_paths(
         step=step,
@@ -263,6 +263,41 @@ def test_primary_cohort_confirmation_uses_post_qc_development_sample(
     )
     assert integrity_universe == universe
     assert integrity_cohort == analysis
+
+
+def test_downstream_step_uses_post_qc_development_sample(tmp_path: Path) -> None:
+    universe = tmp_path / "cohort.parquet"
+    sample = tmp_path / DEVELOPMENT_COHORT_FILENAME
+    for path in (universe, sample):
+        pd.DataFrame({"stay_id": [1]}).to_parquet(path, index=False)
+    (tmp_path / DEVELOPMENT_SAMPLE_FILENAME).write_text("{}", encoding="utf-8")
+    producer = AnalysisStep(
+        step_id="01_cohort",
+        intent="Construct the locked cohort.",
+        inputs=["stay_id"],
+        expected_outputs=["cohort:analysis_set", "table:cohort_flow"],
+        method="cohort_definition_and_attrition",
+    )
+    downstream = AnalysisStep(
+        step_id="02_describe",
+        intent="Describe the locked cohort.",
+        inputs=["artifact:analysis_cohort"],
+        expected_outputs=["table:table_one"],
+        method="descriptive_statistics",
+    )
+    plan = AnalysisPlan(
+        research_question="Describe the cohort.", steps=[producer, downstream]
+    )
+
+    selected = _step_execution_cohort_path(
+        step=downstream,
+        plan=plan,
+        run_dir=tmp_path,
+        universe_path=universe,
+        cohort_path=sample,
+    )
+
+    assert selected == sample
 
 
 def test_primary_cohort_producer_uses_universe_without_development_sample(
