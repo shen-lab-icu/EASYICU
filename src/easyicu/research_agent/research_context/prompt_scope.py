@@ -274,8 +274,13 @@ def coder_guide_for_step(
     )
 
     selected = {"core", "runtime", "serialization"}
-    is_descriptive_table = _descriptive_table_contract_applies(step)
     is_figure = _figure_contract_applies(step)
+    is_descriptive_table = _descriptive_table_contract_applies(step)
+    if is_figure and "table" not in output_kinds:
+        # A render-only product can legitimately retain the producer's
+        # descriptive method label.  That label must not pull the full
+        # table-one/clinical-statistics tutorial into a figure-only prompt.
+        is_descriptive_table = False
     if is_figure:
         selected.update(("figure", "visual"))
     if is_trajectory:
