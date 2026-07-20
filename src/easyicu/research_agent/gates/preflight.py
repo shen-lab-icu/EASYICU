@@ -647,7 +647,11 @@ def _has_dynamic_namespace_indirection(tree: ast.Module) -> bool:
             isinstance(node, ast.Attribute)
             and isinstance(node.ctx, ast.Load)
             and (
-                (node.attr.startswith("__") and node.attr.endswith("__"))
+                (
+                    node.attr.startswith("__")
+                    and node.attr.endswith("__")
+                    and node.attr != "__name__"
+                )
                 or node.attr in {"f_builtins", "f_globals", "f_locals"}
                 or (node.attr == "modules" and _mapping_root_name(node) in sys_roots)
             )
