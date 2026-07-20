@@ -65,7 +65,7 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
-TOOL_VERSION = "1.4.4"
+TOOL_VERSION = "1.5.0"
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 RA = REPO_ROOT / "src" / "easyicu" / "research_agent"
@@ -448,6 +448,7 @@ _LOWER_IS_BETTER_FUNC = (
     "own_nonlocal_count",
     "callable_closure_captured_names",
 )
+_LOWER_IS_BETTER_FILE = ("loc",)
 
 
 def diff(baseline: Dict[str, Any], current: Dict[str, Any]) -> int:
@@ -466,6 +467,10 @@ def diff(baseline: Dict[str, Any], current: Dict[str, Any]) -> int:
     print("-" * 84)
     for key, cur in current.get("functions", {}).items():
         base = baseline.get("functions", {}).get(key, {})
+        if cur.get("missing") is True:
+            print(f"{key:<52} {'present':>10} {'missing':>10} {'':>8}  <-- REGRESSED")
+            regressions += 1
+            continue
         for m in _LOWER_IS_BETTER_FUNC:
             b, c = base.get(m), cur.get(m)
             if b is None or c is None:
@@ -479,12 +484,21 @@ def diff(baseline: Dict[str, Any], current: Dict[str, Any]) -> int:
             print(f"{key + '.' + m:<52} {b:>10} {c:>10} {delta:>+8}{flag}")
     print()
     for name, cur in current.get("files", {}).items():
+        if cur.get("missing") is True:
+            print(f"{name:<52} {'present':>10} {'missing':>10} {'':>8}  <-- REGRESSED")
+            regressions += 1
+            continue
         for m in ("loc", "intra_package_import_edges"):
             b = baseline.get("files", {}).get(name, {}).get(m)
             c = cur.get(m)
             if b is None or c is None:
                 continue
-            print(f"{name + '.' + m:<52} {b:>10} {c:>10} {c - b:>+8}")
+            delta = c - b
+            gated = m in _LOWER_IS_BETTER_FILE and delta > 0
+            flag = "  <-- REGRESSED" if gated else ""
+            if gated:
+                regressions += 1
+            print(f"{name + '.' + m:<52} {b:>10} {c:>10} {delta:>+8}{flag}")
         for v in cur.get("shim_bypass_violations", []):
             print(f"  SHIM-BYPASS VIOLATION in {name}: imports shim {v}")
             regressions += 1
