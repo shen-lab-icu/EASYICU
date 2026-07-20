@@ -345,6 +345,8 @@ _SEMANTIC_PROVENANCE_KEYS = (
     "event_indicator_columns_normalized",
     "columns",
     "cohort_sha256",
+    "cohort_file_sha256",
+    "cohort_file_size",
 )
 
 
@@ -851,6 +853,130 @@ def _hash_df(df: pd.DataFrame) -> str:
     return hashlib.sha256(
         pd.util.hash_pandas_object(df, index=False).values.tobytes()
     ).hexdigest()
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with Path(path).open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def load_verified_legacy_materialization_provenance(
+    cohort_path: Union[str, Path],
+    *,
+    cohort: Optional[pd.DataFrame] = None,
+) -> Optional[Dict[str, Any]]:
+    """Return a digest-bound legacy cohort-materializer receipt, when present.
+
+    Modern typed materializations carry per-column derivation windows in their
+    sealed column-metadata authority.  Older export packages cannot produce
+    that sidecar, but :func:`materialize_to_parquet` still writes an adjacent
+    ``<stem>_provenance.json`` receipt containing the exact cohort window and a
+    dataframe-content digest.  This loader is the compatibility bridge: it
+    accepts only that closed schema and verifies the receipt against the
+    selected parquet before any temporal metadata reaches ResearchContext.
+
+    A non-materializer sidecar (including the typed authority transaction
+    selector) is outside this compatibility contract and returns ``None``.
+    A file that claims the legacy materializer schema but is malformed or does
+    not match the parquet fails closed.
+    """
+
+    selected = Path(cohort_path).expanduser().resolve()
+    provenance_path = selected.with_name(f"{selected.stem}_provenance.json")
+    if not provenance_path.exists():
+        return None
+    if provenance_path.is_symlink() or not provenance_path.is_file():
+        raise MaterializedMetadataError(
+            "legacy materialization provenance must be a regular file"
+        )
+    try:
+        raw_bytes = provenance_path.read_bytes()
+        payload = json.loads(raw_bytes.decode("utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise MaterializedMetadataError(
+            "legacy materialization provenance is unreadable"
+        ) from exc
+    if not isinstance(payload, dict):
+        raise MaterializedMetadataError(
+            "legacy materialization provenance must be a JSON object"
+        )
+    if payload.get("schema_version") != "easyicu.cohort_materializer/1":
+        return None
+
+    required = {
+        "cohort_window_hours",
+        "feature_concepts",
+        "outcome_concepts",
+        "static_concepts",
+        "n_stays_after_inclusion_exclusion",
+        "columns",
+        "cohort_sha256",
+        "cohort_file_sha256",
+        "cohort_file_size",
+    }
+    missing = sorted(required - set(payload))
+    if missing:
+        raise MaterializedMetadataError(
+            "legacy materialization provenance lacks required fields: "
+            + ", ".join(missing)
+        )
+
+    frame = cohort if cohort is not None else pd.read_parquet(selected)
+    if not isinstance(frame, pd.DataFrame):
+        raise MaterializedMetadataError("legacy materialization cohort is not tabular")
+    columns = payload.get("columns")
+    if columns != list(frame.columns):
+        raise MaterializedMetadataError(
+            "legacy materialization provenance column order does not match cohort"
+        )
+    if payload.get("n_stays_after_inclusion_exclusion") != int(len(frame)):
+        raise MaterializedMetadataError(
+            "legacy materialization provenance row count does not match cohort"
+        )
+    expected_file_sha = payload.get("cohort_file_sha256")
+    expected_file_size = payload.get("cohort_file_size")
+    if (
+        not isinstance(expected_file_sha, str)
+        or len(expected_file_sha) != 64
+        or isinstance(expected_file_size, bool)
+        or not isinstance(expected_file_size, int)
+        or expected_file_size < 0
+        or selected.stat().st_size != expected_file_size
+        or _sha256_file(selected) != expected_file_sha
+    ):
+        raise MaterializedMetadataError(
+            "legacy materialization provenance file binding does not match cohort"
+        )
+
+    window = payload.get("cohort_window_hours")
+    if (
+        not isinstance(window, list)
+        or len(window) != 2
+        or any(
+            isinstance(value, bool) or not isinstance(value, (int, float))
+            for value in window
+        )
+        or not all(np.isfinite(float(value)) for value in window)
+        or float(window[0]) > float(window[1])
+    ):
+        raise MaterializedMetadataError(
+            "legacy materialization provenance has an invalid cohort window"
+        )
+    for key in ("feature_concepts", "outcome_concepts", "static_concepts"):
+        values = payload.get(key)
+        if not isinstance(values, list) or any(
+            not isinstance(value, str) or not value.strip() for value in values
+        ):
+            raise MaterializedMetadataError(
+                f"legacy materialization provenance has invalid {key}"
+            )
+
+    verified = dict(payload)
+    verified["provenance_sha256"] = hashlib.sha256(raw_bytes).hexdigest()
+    return verified
 
 
 def _atomic_write_parquet(frame: pd.DataFrame, path: Path) -> None:
@@ -1454,6 +1580,8 @@ def materialize_to_parquet(
             canonical=True,
         )
     _atomic_write_parquet(cohort, parquet_path)
+    provenance["cohort_file_sha256"] = _sha256_file(parquet_path)
+    provenance["cohort_file_size"] = int(parquet_path.stat().st_size)
     descriptor = metadata_collector.seal_existing_cohort(
         cohort_path=parquet_path,
         identity_column=ID_COL,

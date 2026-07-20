@@ -51,6 +51,7 @@ from ..intake.materialized_trajectory import (
     load_verified_materialized_trajectory_authority,
 )
 from ..cohort.artifact_facts import observed_domain_for_series
+from ..cohort.materializer import load_verified_legacy_materialization_provenance
 from .typed import (
     canonical_column_binding,
     ResearchContextAuthority,
@@ -175,22 +176,37 @@ def _profile_missingness(series: pd.Series) -> MissingnessProfile:
 
 def _compute_missingness_test_metadata(df: pd.DataFrame) -> Dict[str, Any]:
     """Best-effort global Little's MCAR test over a small numeric panel."""
-    numeric = df.select_dtypes(include=["number", "bool"]).replace([np.inf, -np.inf], np.nan)
+    numeric = df.select_dtypes(include=["number", "bool"]).replace(
+        [np.inf, -np.inf], np.nan
+    )
     if numeric.empty:
         return {"name": "not_run", "p_value": None, "note": "no_numeric_variables"}
     numeric = numeric.loc[:, numeric.isna().any()]
     if numeric.shape[1] < 2:
-        return {"name": "not_run", "p_value": None, "note": "fewer_than_two_incomplete_numeric_variables"}
+        return {
+            "name": "not_run",
+            "p_value": None,
+            "note": "fewer_than_two_incomplete_numeric_variables",
+        }
     cols = [
-        col for col in numeric.columns
+        col
+        for col in numeric.columns
         if numeric[col].notna().sum() >= max(10, int(len(numeric) * 0.2))
     ]
     if len(cols) < 2:
-        return {"name": "not_run", "p_value": None, "note": "insufficient_complete_support"}
+        return {
+            "name": "not_run",
+            "p_value": None,
+            "note": "insufficient_complete_support",
+        }
     panel = numeric[cols[: min(len(cols), 8)]]
     complete = panel.dropna()
     if len(complete) < max(10, panel.shape[1] + 2):
-        return {"name": "not_run", "p_value": None, "note": "too_few_complete_cases_for_mcar_screen"}
+        return {
+            "name": "not_run",
+            "p_value": None,
+            "note": "too_few_complete_cases_for_mcar_screen",
+        }
     try:
         from scipy.stats import chi2  # type: ignore
     except Exception:
@@ -287,8 +303,7 @@ def _estimate_mvn_with_em(
 
                 expected = rows.copy().astype(float)
                 expected[:, mis] = (
-                    mu[mis]
-                    + (rows[:, obs] - mu[obs]) @ conditional_weights.T
+                    mu[mis] + (rows[:, obs] - mu[obs]) @ conditional_weights.T
                 )
                 expected_sum += expected.sum(axis=0)
                 second_sum += expected.T @ expected
@@ -306,7 +321,9 @@ def _estimate_mvn_with_em(
     return mu, cov
 
 
-def _allowed_aggregations(role: VariableRole, kind: VariableKind) -> List[AggregationRule]:
+def _allowed_aggregations(
+    role: VariableRole, kind: VariableKind
+) -> List[AggregationRule]:
     return aggregation_rule_for(role, kind)
 
 
@@ -357,6 +374,45 @@ def _apply_materialized_column_metadata(
                     "source_files": source_files,
                 }
             )
+        )
+    return projected
+
+
+def _apply_legacy_materialization_window(
+    *,
+    descriptors: Sequence[ConceptDescriptor],
+    provenance: Dict[str, Any],
+) -> List[ConceptDescriptor]:
+    """Project one verified legacy materialization window onto wide outputs.
+
+    The host-owned receipt says which concepts were summarized and over which
+    ICU-admission-relative window.  Only mechanically named wide summary and
+    companion columns inherit it; bare/static/outcome columns do not.  Existing
+    concept-catalog or typed-authority windows always take precedence.
+    """
+
+    window = provenance["cohort_window_hours"]
+    start, end = float(window[0]), float(window[1])
+    window_label = f"icu_admission[{start:g},{end:g}]h"
+    feature_concepts = {
+        str(value).strip().lower() for value in provenance["feature_concepts"]
+    }
+    projected: List[ConceptDescriptor] = []
+    for descriptor in descriptors:
+        if descriptor.analysis_window:
+            projected.append(descriptor)
+            continue
+        lowered = descriptor.name.strip().lower()
+        base: Optional[str] = None
+        for suffix in _WIDE_COMPANION_SUFFIXES:
+            if lowered.endswith(suffix) and len(lowered) > len(suffix):
+                base = lowered[: -len(suffix)]
+                break
+        if base is None or base not in feature_concepts:
+            projected.append(descriptor)
+            continue
+        projected.append(
+            descriptor.model_copy(update={"analysis_window": window_label})
         )
     return projected
 
@@ -420,6 +476,7 @@ def build_research_context(
     # --- normalise cohort input
     verified_cohort: Optional[VerifiedMaterializedCohortAuthority] = None
     verified_trajectory: Optional[VerifiedMaterializedTrajectoryAuthority] = None
+    legacy_materialization_provenance: Optional[Dict[str, Any]] = None
     if isinstance(cohort, (str, Path)):
         cohort_path_obj = Path(cohort).resolve()
         cohort_path = str(cohort_path_obj)
@@ -452,6 +509,12 @@ def build_research_context(
             ).to_pandas()
         else:
             df = pd.read_parquet(cohort_path)
+            legacy_materialization_provenance = (
+                load_verified_legacy_materialization_provenance(
+                    cohort_path_obj,
+                    cohort=df,
+                )
+            )
     else:
         cohort_path = None
         df = cohort
@@ -462,8 +525,12 @@ def build_research_context(
     # --- cohort descriptor
     id_columns = list(id_columns) if id_columns else _guess_id_columns(df)
     time_columns = list(time_columns) if time_columns else _guess_time_columns(df)
-    outcome_columns = list(outcome_columns) if outcome_columns else _guess_outcome_columns(df)
-    cohort_path_str = str(Path(cohort).resolve()) if isinstance(cohort, (str, Path)) else None
+    outcome_columns = (
+        list(outcome_columns) if outcome_columns else _guess_outcome_columns(df)
+    )
+    cohort_path_str = (
+        str(Path(cohort).resolve()) if isinstance(cohort, (str, Path)) else None
+    )
     episode = ICUEpisodeResolver().resolve(
         df=df,
         database=database,
@@ -474,7 +541,11 @@ def build_research_context(
         cohort_path=cohort_path_str,
     )
 
-    n_patients = _count_unique(df, episode.id_columns[:1]) if episode.id_columns else int(len(df))
+    n_patients = (
+        _count_unique(df, episode.id_columns[:1])
+        if episode.id_columns
+        else int(len(df))
+    )
     n_stays = int(len(df))
 
     cohort_desc = CohortDescriptor(
@@ -491,6 +562,18 @@ def build_research_context(
             **episode.provenance,
             "inclusion_criteria": list(inclusion_criteria or []),
             "exclusion_criteria": list(exclusion_criteria or []),
+            **(
+                {
+                    "materialized_cohort_window_hours": list(
+                        legacy_materialization_provenance["cohort_window_hours"]
+                    ),
+                    "materialized_cohort_provenance_sha256": (
+                        legacy_materialization_provenance["provenance_sha256"]
+                    ),
+                }
+                if legacy_materialization_provenance is not None
+                else {}
+            ),
         },
     )
 
@@ -520,11 +603,20 @@ def build_research_context(
             descriptors=descriptors,
             verified=verified_cohort,
         )
+    elif legacy_materialization_provenance is not None:
+        descriptors = _apply_legacy_materialization_window(
+            descriptors=descriptors,
+            provenance=legacy_materialization_provenance,
+        )
 
     prefs_obj = (
         user_preferences
         if isinstance(user_preferences, UserPreferences)
-        else (UserPreferences.model_validate(user_preferences) if user_preferences else None)
+        else (
+            UserPreferences.model_validate(user_preferences)
+            if user_preferences
+            else None
+        )
     )
 
     # --- time windows + deterministic temporal semantics
@@ -533,7 +625,11 @@ def build_research_context(
         timing_and_design=(prefs_obj.timing_and_design if prefs_obj else None),
         explicit_windows=time_windows,
     )
-    windows = list(time_windows) if time_windows else inferred_windows or default_time_windows()
+    windows = (
+        list(time_windows)
+        if time_windows
+        else inferred_windows or default_time_windows()
+    )
 
     base_context = ResearchContext(
         research_question=research_question,
@@ -677,10 +773,18 @@ def _describe_column(
 
 def _guess_id_columns(df: pd.DataFrame) -> List[str]:
     candidates = [
-        c for c in df.columns
-        if c.lower() in {
-            "patient_id", "icustay_id", "hadm_id", "stay_id", "subject_id",
-            "patientunitstayid", "uniquepid", "admissionid",
+        c
+        for c in df.columns
+        if c.lower()
+        in {
+            "patient_id",
+            "icustay_id",
+            "hadm_id",
+            "stay_id",
+            "subject_id",
+            "patientunitstayid",
+            "uniquepid",
+            "admissionid",
         }
     ]
     return candidates[:3]
@@ -692,7 +796,14 @@ def _guess_time_columns(df: pd.DataFrame) -> List[str]:
         s = df[c]
         if "datetime" in str(s.dtype).lower() or "timestamp" in str(s.dtype).lower():
             out.append(c)
-        elif c.lower() in {"intime", "outtime", "admittime", "dischtime", "deathtime", "charttime"}:
+        elif c.lower() in {
+            "intime",
+            "outtime",
+            "admittime",
+            "dischtime",
+            "deathtime",
+            "charttime",
+        }:
             out.append(c)
     return out
 
@@ -701,8 +812,16 @@ def _guess_outcome_columns(df: pd.DataFrame) -> List[str]:
     out: List[str] = []
     for c in df.columns:
         cl = c.lower()
-        if cl in {"death", "death_icu", "death_hosp", "mortality", "los_icu", "los_hosp",
-                  "readmission", "readmit_30d"}:
+        if cl in {
+            "death",
+            "death_icu",
+            "death_hosp",
+            "mortality",
+            "los_icu",
+            "los_hosp",
+            "readmission",
+            "readmit_30d",
+        }:
             out.append(c)
         elif cl.startswith("outcome_"):
             out.append(c)
@@ -725,7 +844,10 @@ def _infer_outcome_semantics(
 ) -> Dict[str, str]:
     question = (research_question or "").lower()
     outcome = (outcome_name or "").lower()
-    if any(term in question for term in ("survival", "time-to-event", "time to event", "cox", "hazard")) or outcome in {
+    if any(
+        term in question
+        for term in ("survival", "time-to-event", "time to event", "cox", "hazard")
+    ) or outcome in {
         "survival_time",
         "time_to_event",
         "event_time",
@@ -749,7 +871,11 @@ def _infer_outcome_semantics(
                 "or unrelated follow-up horizon for this time-to-event endpoint."
             ),
         }
-    if "icu mortality" in question or outcome in {"death_icu", "icu_death", "icu_mortality"}:
+    if "icu mortality" in question or outcome in {
+        "death_icu",
+        "icu_death",
+        "icu_mortality",
+    }:
         return {
             "label": "ICU mortality",
             "description": "Binary outcome flag operationalizing ICU mortality for this analysis.",
@@ -803,7 +929,9 @@ def _infer_outcome_semantics(
                 "analysis-specific mortality definitions without an explicit protocol."
             ),
         }
-    if any(term in question for term in ("length of stay", "los", "duration of stay")) or outcome in {
+    if any(
+        term in question for term in ("length of stay", "los", "duration of stay")
+    ) or outcome in {
         "los",
         "los_icu",
         "icu_los",
@@ -823,7 +951,11 @@ def _infer_outcome_semantics(
                 "or silently binarize it without an explicit protocol."
             ),
         }
-    if "readmission" in question or outcome in {"readmission", "readmit_30d", "readmission_30d"}:
+    if "readmission" in question or outcome in {
+        "readmission",
+        "readmit_30d",
+        "readmission_30d",
+    }:
         return {
             "label": "readmission outcome",
             "description": (
@@ -871,9 +1003,15 @@ def _enrich_target_outcome_descriptor(
             continue
         if descriptor.role != VariableRole.OUTCOME:
             descriptor.role = VariableRole.OUTCOME
-        if descriptor.description is None or semantics["source_concept"] != "declared_primary_outcome":
+        if (
+            descriptor.description is None
+            or semantics["source_concept"] != "declared_primary_outcome"
+        ):
             descriptor.description = semantics["description"]
-        if descriptor.source_concept is None or semantics["source_concept"] != "declared_primary_outcome":
+        if (
+            descriptor.source_concept is None
+            or semantics["source_concept"] != "declared_primary_outcome"
+        ):
             descriptor.source_concept = semantics["source_concept"]
         explicit_note = (
             f"For this analysis, '{target_outcome}' is explicitly treated as "
@@ -942,17 +1080,25 @@ def build_naive_research_context(
     id_cols = list(id_columns) if id_columns else _guess_id_columns(df)
     time_cols = list(time_columns) if time_columns else _guess_time_columns(df)
     out_cols = list(outcome_columns) if outcome_columns else _guess_outcome_columns(df)
-    if target_outcome and target_outcome in df.columns and target_outcome not in out_cols:
+    if (
+        target_outcome
+        and target_outcome in df.columns
+        and target_outcome not in out_cols
+    ):
         out_cols.append(target_outcome)
 
     n_patients = _count_unique(df, id_cols[:1]) if id_cols else int(len(df))
     n_stays = int(len(df))
     cohort_desc = CohortDescriptor(
-        cohort_name=cohort_name, database=database,
-        n_patients=n_patients, n_stays=n_stays,
+        cohort_name=cohort_name,
+        database=database,
+        n_patients=n_patients,
+        n_stays=n_stays,
         inclusion_criteria=list(inclusion_criteria or []),
         exclusion_criteria=list(exclusion_criteria or []),
-        id_columns=id_cols, time_columns=time_cols, outcome_columns=out_cols,
+        id_columns=id_cols,
+        time_columns=time_cols,
+        outcome_columns=out_cols,
     )
 
     descriptors: List[ConceptDescriptor] = []
@@ -966,22 +1112,24 @@ def build_naive_research_context(
             role = VariableRole.OUTCOME
         else:
             role = VariableRole.OTHER
-        descriptors.append(ConceptDescriptor(
-            name=col,
-            description=None,
-            role=role,
-            dtype=str(df[col].dtype),
-            unit=None,
-            valid_range=None,
-            allowed_aggregations=[],
-            aggregation_default=None,
-            is_ordinal=False,
-            ordinal_levels=None,
-            source_concept=None,
-            source_databases=[],
-            pitfalls=[],
-            missingness=None,
-        ))
+        descriptors.append(
+            ConceptDescriptor(
+                name=col,
+                description=None,
+                role=role,
+                dtype=str(df[col].dtype),
+                unit=None,
+                valid_range=None,
+                allowed_aggregations=[],
+                aggregation_default=None,
+                is_ordinal=False,
+                ordinal_levels=None,
+                source_concept=None,
+                source_databases=[],
+                pitfalls=[],
+                missingness=None,
+            )
+        )
     _enrich_target_outcome_descriptor(
         descriptors=descriptors,
         research_question=research_question,
@@ -1025,16 +1173,18 @@ def retrieve_context_variables(
     q_tokens = _tokens(query or context.research_question)
     scored: List[Tuple[float, int, ConceptDescriptor]] = []
     for i, v in enumerate(context.variables):
-        haystack = " ".join([
-            v.name,
-            v.description or "",
-            v.role.value,
-            v.dtype,
-            " ".join(v.pitfalls),
-            v.missingness_semantics or "",
-            " ".join(v.forbidden_transformations),
-            " ".join(v.cross_database_notes),
-        ])
+        haystack = " ".join(
+            [
+                v.name,
+                v.description or "",
+                v.role.value,
+                v.dtype,
+                " ".join(v.pitfalls),
+                v.missingness_semantics or "",
+                " ".join(v.forbidden_transformations),
+                " ".join(v.cross_database_notes),
+            ]
+        )
         v_tokens = _tokens(haystack)
         overlap = len(q_tokens & v_tokens)
         score = float(overlap)
@@ -1046,7 +1196,11 @@ def retrieve_context_variables(
             score += 3.0
         if context.primary_exposure and v.name == context.primary_exposure:
             score += 3.0
-        if v.role in {VariableRole.OUTCOME, VariableRole.COMPOSITE_SCORE, VariableRole.ORDINAL_SCORE}:
+        if v.role in {
+            VariableRole.OUTCOME,
+            VariableRole.COMPOSITE_SCORE,
+            VariableRole.ORDINAL_SCORE,
+        }:
             score += 1.0
         if v.pitfalls:
             score += 0.5
@@ -1058,7 +1212,11 @@ def retrieve_context_variables(
 
     # Always preserve declared id/time/outcome columns even if the
     # natural-language query did not mention them.
-    required = set(context.cohort.id_columns + context.cohort.time_columns + context.cohort.outcome_columns)
+    required = set(
+        context.cohort.id_columns
+        + context.cohort.time_columns
+        + context.cohort.outcome_columns
+    )
     if context.target_outcome:
         required.add(context.target_outcome)
     if context.primary_exposure:
@@ -1102,11 +1260,7 @@ def build_retrieved_research_context(
 
 
 def _tokens(text: str) -> set:
-    return {
-        t.lower()
-        for t in re.findall(r"[A-Za-z0-9_]+", text or "")
-        if len(t) >= 2
-    }
+    return {t.lower() for t in re.findall(r"[A-Za-z0-9_]+", text or "") if len(t) >= 2}
 
 
 __all__ = [
