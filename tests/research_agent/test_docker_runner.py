@@ -1194,6 +1194,33 @@ def test_each_run_recreates_the_output_mount_directory(
     assert not list((tmp_path / "run" / "steps" / "repeat").glob(".outputs-*"))
 
 
+def test_each_run_executes_an_immutable_attempt_owned_script(
+    ra,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    cohort = _make_cohort(tmp_path)
+    _force_docker_present(monkeypatch)
+    captured: List[List[str]] = []
+    _install_fake_subprocess(monkeypatch, captured=captured)
+    runner = ra.DockerRunner(workdir=tmp_path / "run", cohort_parquet=cohort)
+
+    runner.run(step_id="repeat", code="print('first')\n")
+    runner.run(step_id="repeat", code="print('second')\n")
+
+    run_commands = [command for command in captured if "run" in command[:2]]
+    script_sources = [
+        entry.split(",target=", 1)[0].removeprefix("type=bind,source=")
+        for command in run_commands
+        for entry in command
+        if ",target=/easyicu-run/steps/repeat/analysis.py" in entry
+    ]
+    assert len(script_sources) == 2
+    assert script_sources[0] != script_sources[1]
+    assert all(source.endswith(".analysis.py") for source in script_sources)
+    assert not list((tmp_path / "run").glob(".docker-repeat-*.analysis.py"))
+
+
 def test_run_rejects_symlinked_step_directory(
     ra,
     tmp_path: Path,

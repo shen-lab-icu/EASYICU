@@ -1509,6 +1509,7 @@ class DockerRunner:
         step_id: str,
         script_path: Path,
         out_dir: Path,
+        immutable_script_path: Optional[Path] = None,
         runtime_image: Optional[str] = None,
         resolved_inputs_path: Optional[Path] = None,
         authority_snapshot_path: Optional[Path] = None,
@@ -1586,6 +1587,21 @@ class DockerRunner:
                 ),
             ]
         )
+        if immutable_script_path is not None:
+            immutable_script_path = _validated_real_mount_source(
+                immutable_script_path,
+                label="immutable attempt script",
+            )
+            cmd.extend(
+                [
+                    "--mount",
+                    _docker_mount_entry(
+                        str(immutable_script_path),
+                        f"{container_step_dir}/{script_path.name}",
+                        readonly=True,
+                    ),
+                ]
+            )
         rewritten_extra_env, path_mounts = self._containerise_extra_env()
         for source, target, mode in [*self.extra_mounts, *path_mounts]:
             entry = _docker_mount_entry(
@@ -2187,10 +2203,22 @@ class DockerRunner:
         attempt_id = uuid.uuid4().hex
         staged_out_dir = step_dir / f".outputs-{attempt_id}"
         self._clear_step_outputs(staged_out_dir)
+        # Docker Desktop can retain a stale view of a repeatedly replaced file
+        # inside the long-lived run-root bind mount.  Execute an immutable,
+        # attempt-owned copy overlaid at the canonical container path; publish
+        # the same bytes back to ``steps/<id>/analysis.py`` only after teardown.
+        cidfile = self.workdir / f".docker-{step_id}-{attempt_id}.cid"
+        sentinel = self.workdir / f".docker-{step_id}-{attempt_id}.sentinel"
+        control_script_path = sentinel.with_suffix(".analysis.py")
+        control_log_path = sentinel.with_suffix(".run.log")
+        container_name = f"easyicu-ra-{attempt_id}"
+        self._write_regular_file(sentinel, f"name:{container_name}\n")
+        self._write_regular_file(control_script_path, code)
         cmd = self.build_command(
             step_id=step_id,
             script_path=script_path,
             out_dir=staged_out_dir,
+            immutable_script_path=control_script_path,
             runtime_image=str(runtime_provenance["image_id"]),
             resolved_inputs_path=resolved_inputs_path,
             authority_snapshot_path=authority_snapshot_path,
@@ -2199,13 +2227,6 @@ class DockerRunner:
         )
         # Keep the host-written cidfile outside the step's read-write mount so
         # generated code cannot replace the container id used for teardown.
-        cidfile = self.workdir / f".docker-{step_id}-{attempt_id}.cid"
-        sentinel = self.workdir / f".docker-{step_id}-{attempt_id}.sentinel"
-        control_script_path = sentinel.with_suffix(".analysis.py")
-        control_log_path = sentinel.with_suffix(".run.log")
-        container_name = f"easyicu-ra-{attempt_id}"
-        self._write_regular_file(sentinel, f"name:{container_name}\n")
-        self._write_regular_file(control_script_path, code)
         cmd.insert(2, f"--cidfile={cidfile}")
         cmd.insert(3, f"--name={container_name}")
 
