@@ -2888,6 +2888,102 @@ def _string_suffix_trim_findings(tree: ast.Module) -> list[ValidationFinding]:
     return sorted(findings, key=lambda finding: int(finding.detail["line"]))
 
 
+def _resolved_context_payload_findings(tree: ast.Module) -> list[ValidationFinding]:
+    """Reject treating the resolved-input context binding as its JSON payload."""
+
+    findings: list[ValidationFinding] = []
+
+    def _nodes_in_scope(owner: ast.Module | ast.FunctionDef | ast.AsyncFunctionDef):
+        nodes: list[ast.AST] = []
+
+        class _Visitor(ast.NodeVisitor):
+            def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+                nodes.append(node)
+
+            def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
+                nodes.append(node)
+
+            def visit_Lambda(self, node: ast.Lambda) -> None:
+                nodes.append(node)
+
+            def visit_ClassDef(self, node: ast.ClassDef) -> None:
+                nodes.append(node)
+
+            def generic_visit(self, node: ast.AST) -> None:
+                nodes.append(node)
+                super().generic_visit(node)
+
+        visitor = _Visitor()
+        for statement in owner.body:
+            visitor.visit(statement)
+        return nodes
+
+    scope_owners: list[ast.Module | ast.FunctionDef | ast.AsyncFunctionDef] = [tree]
+    scope_owners.extend(
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    )
+    for owner in scope_owners:
+        scope_nodes = _nodes_in_scope(owner)
+        keys_by_name: dict[str, set[str]] = {}
+        for node in scope_nodes:
+            if (
+                isinstance(node, ast.Subscript)
+                and isinstance(node.value, ast.Name)
+                and isinstance(_subscript_key(node.slice), str)
+            ):
+                keys_by_name.setdefault(node.value.id, set()).add(
+                    str(_subscript_key(node.slice))
+                )
+            if not (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "get"
+                and isinstance(node.func.value, ast.Name)
+                and node.args
+                and isinstance(node.args[0], ast.Constant)
+                and isinstance(node.args[0].value, str)
+            ):
+                continue
+            keys_by_name.setdefault(node.func.value.id, set()).add(node.args[0].value)
+        resolved_manifest_names = {
+            name
+            for name, keys in keys_by_name.items()
+            if {"planner_declared_inputs", "inputs"} <= keys
+        }
+        for node in scope_nodes:
+            if not (
+                isinstance(node, ast.Assign)
+                and len(node.targets) == 1
+                and isinstance(node.targets[0], ast.Name)
+                and isinstance(node.value, ast.Subscript)
+                and _subscript_key(node.value.slice) == "variables"
+                and isinstance(node.value.value, ast.Subscript)
+                and _subscript_key(node.value.value.slice) == "context"
+                and isinstance(node.value.value.value, ast.Name)
+                and node.value.value.value.id in resolved_manifest_names
+            ):
+                continue
+            findings.append(
+                ValidationFinding(
+                    validator="mechanical_code_preflight",
+                    severity="error",
+                    message=(
+                        "The resolved-input manifest context entry is a digest-bound "
+                        "file reference, not an inline ResearchContext payload."
+                    ),
+                    detail={
+                        "reason": "resolved_context_payload_not_loaded",
+                        "line": int(node.lineno),
+                        "manifest_name": node.value.value.value.id,
+                        "target_name": node.targets[0].id,
+                    },
+                )
+            )
+    return sorted(findings, key=lambda finding: int(finding.detail["line"]))
+
+
 _HOST_VALIDATION_FAILURE_EXCEPTIONS = frozenset(
     {
         "BaseException",
@@ -7197,6 +7293,7 @@ def audit_mechanical_code_contracts(
     findings.extend(_provenance_fail_closed_findings(tree))
     findings.extend(_provenance_pair_scan_findings(tree))
     findings.extend(_string_suffix_trim_findings(tree))
+    findings.extend(_resolved_context_payload_findings(tree))
     findings.extend(_swallowed_reconciliation_error_findings(tree))
     findings.extend(_authoritative_exposure_binding_findings(tree, step))
     findings.extend(_authoritative_exposure_fallback_findings(tree, step))
