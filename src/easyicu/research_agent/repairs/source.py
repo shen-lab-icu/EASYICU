@@ -4833,6 +4833,13 @@ def _patch_boolean_mask_reduction_precedence(code: str) -> Optional[str]:
     except SyntaxError:
         return None
 
+    from ..gates.numeric_reduction import patch_misnested_boolean_mask_reduction
+
+    misnested_repair = patch_misnested_boolean_mask_reduction(code)
+    if misnested_repair is not None:
+        code = misnested_repair
+        tree = ast.parse(code)
+
     array_like_nodes = (
         ast.Name,
         ast.Attribute,
@@ -4903,7 +4910,7 @@ def _patch_boolean_mask_reduction_precedence(code: str) -> Optional[str]:
         )
 
     if not replacements:
-        return None
+        return misnested_repair
     repaired = code
     for start, end, replacement in sorted(replacements, reverse=True):
         repaired = repaired[:start] + replacement + repaired[end:]
@@ -4976,9 +4983,7 @@ def _patch_pandas_boolean_index_alignment(
         char_col = len(line.encode("utf-8")[:utf8_col].decode("utf-8"))
         return line_starts[lineno - 1] + char_col
 
-    replacement = (
-        f"({mask_source}).reindex(({base_source}).index, fill_value=False)"
-    )
+    replacement = f"({mask_source}).reindex(({base_source}).index, fill_value=False)"
     start = _absolute_offset(candidate.slice.lineno, candidate.slice.col_offset)
     end = _absolute_offset(candidate.slice.end_lineno, candidate.slice.end_col_offset)
     repaired = code[:start] + replacement + code[end:]
@@ -4996,6 +5001,13 @@ def _patch_scalar_cast_before_reduction(code: str) -> str:
         tree = ast.parse(code)
     except SyntaxError:
         return code
+
+    from ..gates.numeric_reduction import patch_misnested_boolean_mask_reduction
+
+    misnested_repair = patch_misnested_boolean_mask_reduction(code)
+    if misnested_repair is not None:
+        code = misnested_repair
+        tree = ast.parse(code)
 
     from ..gates.preflight import (
         _builtin_int_binding_is_unmodified,
@@ -5108,9 +5120,9 @@ def _deterministic_runner_repair(
     if repair := _finding_json_repair(code, run_log, previous_repair):
         return repair
 
-    mask_reduction_precedence_failure = (
-        "typeerror:" in lowered
-        and "only length-1 arrays can be converted to python scalars" in lowered
+    mask_reduction_precedence_failure = "typeerror:" in lowered and (
+        "only length-1 arrays can be converted to python scalars" in lowered
+        or "cannot convert the series to <class 'int'>" in lowered
     )
     if mask_reduction_precedence_failure:
         repair_name = "boolean_mask_reduction_precedence_v1"

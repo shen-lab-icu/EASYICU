@@ -14,6 +14,8 @@ from typing import Callable, Optional, Sequence
 
 from ..research_context.prompt_scope import normalised_method_head
 from ..schema import AnalysisStep, ValidationFinding
+from .numeric_reduction import is_array_boolean_predicate as _is_array_boolean_predicate
+from .numeric_reduction import misnested_boolean_mask_reduction_expression
 from .typed_input import (
     resolved_input_relative_path_root_findings,
     resolved_input_shadowed_by_cohort_env_findings,
@@ -1107,32 +1109,49 @@ def _provenance_fail_closed_findings(tree: ast.Module) -> list[ValidationFinding
             current = parents.get(current)
         return current
 
-    def _function_tokens(function: ast.AST) -> set[str]:
-        return {
-            str(node.value)
-            for node in ast.walk(function)
-            if isinstance(node, ast.Constant)
-            and isinstance(node.value, str)
-            and _nearest_function(node) is function
-        }
+    def _contains_literal_audit_row(scope: ast.AST) -> bool:
+        """Require an actual provenance audit row, not matching prose tokens."""
+
+        expected_function = None if scope is tree else scope
+        for node in ast.walk(scope):
+            if (
+                not isinstance(node, ast.Dict)
+                or _nearest_function(node) is not expected_function
+            ):
+                continue
+            fields = {
+                str(key.value): value
+                for key, value in zip(node.keys, node.values)
+                if isinstance(key, ast.Constant) and isinstance(key.value, str)
+            }
+            role = fields.get("role")
+            if (
+                _PROVENANCE_FAILURE_KEYS <= fields.keys()
+                and isinstance(role, ast.Constant)
+                and str(role.value).strip().lower() == "audit_only"
+            ):
+                return True
+        return False
+
+    def _uses_host_provenance_receipt(scope: ast.AST) -> bool:
+        """Leave fail-closed semantics of the host receipt to its own gate."""
+
+        return any(
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "measurement_provenance_receipt"
+            and _nearest_function(node) is scope
+            for node in ast.walk(scope)
+        )
 
     marker_nodes = [
         node
         for node in ast.walk(tree)
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
-        and _PROVENANCE_FAILURE_KEYS <= _function_tokens(node)
-        and "audit_only" in _function_tokens(node)
+        and _contains_literal_audit_row(node)
+        and not _uses_host_provenance_receipt(node)
     ]
-    module_tokens = {
-        str(node.value)
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Constant)
-        and isinstance(node.value, str)
-        and _nearest_function(node) is None
-    }
-    module_is_marker = (
-        _PROVENANCE_FAILURE_KEYS <= module_tokens and "audit_only" in module_tokens
-    )
+    module_is_marker = _contains_literal_audit_row(tree)
     if not marker_nodes and not module_is_marker:
         return []
     marker_names = {node.name for node in marker_nodes}
@@ -2140,9 +2159,19 @@ def _provenance_fail_closed_findings(tree: ast.Module) -> list[ValidationFinding
                 audit_rows.append((index, fields, containers))
         returned_audit_row = None
         if not audit_rows:
-            returned_audit_row = _immediate_returned_audit_row(guard)
-            if returned_audit_row is not None:
-                audit_rows.append((len(preceding), returned_audit_row, set()))
+            following = _next_statement(guard)
+            following_audit_row = (
+                _direct_audit_row(following)
+                if isinstance(following, ast.stmt)
+                else None
+            )
+            if following_audit_row is not None:
+                fields, containers = following_audit_row
+                audit_rows.append((len(preceding), fields, containers))
+            else:
+                returned_audit_row = _immediate_returned_audit_row(guard)
+                if returned_audit_row is not None:
+                    audit_rows.append((len(preceding), returned_audit_row, set()))
         if len(audit_rows) != 1:
             return False
 
@@ -5356,6 +5385,11 @@ def _scalar_cast_before_reduction_findings(
     unsafe_lines.extend(
         int(node.lineno) for node in _unreduced_boolean_mask_count_casts(tree)
     )
+    unsafe_lines.extend(
+        int(node.lineno)
+        for node in ast.walk(tree)
+        if misnested_boolean_mask_reduction_expression(node) is not None
+    )
 
     if not unsafe_lines:
         return []
@@ -5374,44 +5408,6 @@ def _scalar_cast_before_reduction_findings(
             },
         )
     ]
-
-
-_ARRAY_BOOLEAN_PREDICATE_METHODS = frozenset(
-    {
-        "between",
-        "duplicated",
-        "isna",
-        "isin",
-        "notna",
-    }
-)
-
-
-def _is_array_boolean_predicate(node: ast.AST) -> bool:
-    """Return whether ``node`` is structurally an array-like boolean predicate."""
-
-    if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.Invert):
-        return _is_array_boolean_predicate(node.operand)
-    if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
-        return node.func.attr in _ARRAY_BOOLEAN_PREDICATE_METHODS
-    if isinstance(node, ast.Compare):
-        operands = [node.left, *node.comparators]
-        return any(
-            any(
-                isinstance(candidate, ast.Subscript)
-                or (
-                    isinstance(candidate, ast.Call)
-                    and isinstance(candidate.func, ast.Attribute)
-                )
-                for candidate in ast.walk(operand)
-            )
-            for operand in operands
-        )
-    if isinstance(node, ast.BinOp) and isinstance(node.op, (ast.BitAnd, ast.BitOr)):
-        return _is_array_boolean_predicate(node.left) and _is_array_boolean_predicate(
-            node.right
-        )
-    return False
 
 
 def _is_numeric_zero(value: ast.AST) -> bool:
@@ -6634,27 +6630,31 @@ def _guarded_coercion_roots(
         for statement_id in (binding.statement_id, binding.coercion.statement_id)
     }
     for binding in bindings:
-        if _immediate_guard_for_statement(
-            binding.statement,
-            binding.guard_binding,
-            tree=tree,
-            positions=positions,
-            parents=parents,
-            builtin_int_unmodified=builtin_int_unmodified,
-        ) or _grouped_loss_guard_for_statement(
-            binding.statement,
-            binding.guard_binding,
-            audit_statement_ids=audit_statement_ids,
-            tree=tree,
-            positions=positions,
-            parents=parents,
-            builtin_int_unmodified=builtin_int_unmodified,
-        ) or _exported_receipt_guard_proves_failure(
-            tree,
-            binding,
-            parents=parents,
-            positions=positions,
-            builtin_int_unmodified=builtin_int_unmodified,
+        if (
+            _immediate_guard_for_statement(
+                binding.statement,
+                binding.guard_binding,
+                tree=tree,
+                positions=positions,
+                parents=parents,
+                builtin_int_unmodified=builtin_int_unmodified,
+            )
+            or _grouped_loss_guard_for_statement(
+                binding.statement,
+                binding.guard_binding,
+                audit_statement_ids=audit_statement_ids,
+                tree=tree,
+                positions=positions,
+                parents=parents,
+                builtin_int_unmodified=builtin_int_unmodified,
+            )
+            or _exported_receipt_guard_proves_failure(
+                tree,
+                binding,
+                parents=parents,
+                positions=positions,
+                builtin_int_unmodified=builtin_int_unmodified,
+            )
         ):
             guarded.add(binding.coercion)
     return guarded

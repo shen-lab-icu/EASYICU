@@ -4,9 +4,9 @@
   "shim_import_paths": [],
   "files": {
     "execution/phase.py": {
-      "loc": 11507,
-      "sha256": "aadcf526f397c6b2584dd6f6cd7bb6e0ebc8880c444cef1afe7c81a1796dffe4",
-      "intra_package_import_edges": 67,
+      "loc": 11481,
+      "sha256": "9b898a1d2656e5d36a67e64da727bc63f86ea20eb05e1927ab60f74a2e0edc45",
+      "intra_package_import_edges": 68,
       "shim_bypass_violations": []
     },
     "pipeline.py": {
@@ -53,20 +53,20 @@
     },
     "gates/preflight.py": {
       "loc": 8125,
-      "sha256": "3b8a912b606803536b10360821210c1218b412a3ededf60fa0be696ef7d9a6ed",
-      "intra_package_import_edges": 3,
+      "sha256": "d692521a4139547d7e01735221c622069823bd6ea87d523e9bed3d7e7ff6ab10",
+      "intra_package_import_edges": 4,
       "shim_bypass_violations": []
     },
     "gates/typed_input.py": {
-      "loc": 415,
-      "sha256": "a60743150c16e19ae73c84c3ce594f828c50d495598fa087a2882b924e607fed",
-      "intra_package_import_edges": 1,
+      "loc": 308,
+      "sha256": "0d88b47f006111765f5c803bb028eb2986f05387ec4f960a5f5f8a13579e3e73",
+      "intra_package_import_edges": 2,
       "shim_bypass_violations": []
     },
     "repairs/source.py": {
-      "loc": 6611,
-      "sha256": "00adf6341fd2c758fde37a037412e40249c6332c9f35b579023e39484bb63d15",
-      "intra_package_import_edges": 7,
+      "loc": 6852,
+      "sha256": "20956e7519d11c8537539a2a4287cdbb7b37162b7f48f81378bb7f04797fa8ed",
+      "intra_package_import_edges": 8,
       "shim_bypass_violations": []
     },
     "repairs/typed_input.py": {
@@ -78,11 +78,11 @@
   },
   "functions": {
     "execution/phase.py::_execute_one_step": {
-      "lines": 6181,
-      "line_start": 4870,
+      "lines": 6180,
+      "line_start": 4845,
       "direct_nested_funcs": 24,
       "total_nested_funcs": 26,
-      "own_bound_names": 344,
+      "own_bound_names": 343,
       "own_nonlocal_names": [
         "runtime_state"
       ],
@@ -90,8 +90,8 @@
       "callable_closure_captured_names": 31
     },
     "execution/phase.py::run_execute_phase": {
-      "lines": 7953,
-      "line_start": 3555,
+      "lines": 7952,
+      "line_start": 3530,
       "direct_nested_funcs": 15,
       "total_nested_funcs": 45,
       "own_bound_names": 145,
