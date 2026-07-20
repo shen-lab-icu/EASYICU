@@ -931,6 +931,75 @@ def test_provenance_fail_close_repair_does_not_expand_full_scientific_context(ra
     assert _payload_bytes(messages) <= 30_000
     assert '"source_concept":"declared_family_0"' in payload
     assert '"description":"Registered' not in payload
+    assert '"valid_range":' not in payload
+    assert '"observed_domain":' not in payload
+    assert '"cross_database_validation":' not in payload
+
+
+def test_wide_provenance_repair_remains_under_patch_transport_budget(ra):
+    patch = json.dumps(
+        {
+            "format": PATCH_FORMAT,
+            "edits": [{"old": "value = 1", "new": "value = 2", "expected_count": 1}],
+        }
+    )
+    context = _wide_context(ra, n_families=6)
+    step = _quality_step(ra, n_families=6).model_copy(
+        update={
+            "step_id": "wide_provenance_repair",
+            "method": "exposure_and_data_quality_audit",
+        }
+    )
+    authority = RepairPromptAuthority.create(
+        typed_ticket=[
+            {
+                "reason": RepairReason.PROVENANCE_NOT_FAIL_CLOSED.value,
+                "validator": "mechanical_code_preflight",
+                "structured_reason": "provenance_audit_not_fail_closed",
+                "detail": {
+                    "reason": "provenance_audit_not_fail_closed",
+                    "failure_mode": "module_provenance_scope_not_proven_fail_closed",
+                    "line": 41,
+                },
+                "occurrences": [
+                    {
+                        "detail": {
+                            "failure_mode": (
+                                "module_provenance_scope_not_proven_fail_closed"
+                            ),
+                            "line": 41,
+                        }
+                    }
+                ],
+                "occurrence_count": 1,
+            }
+        ]
+    )
+    host_authority = HostCoderAuthority().append(
+        "host-authority-v1\n" + "digest-bound-input\n" * 350
+    )
+    code = "import os\nvalue = 1\n" + "# retained candidate line\n" * 550
+    llm = _CaptureLLM([patch])
+
+    repaired = CoderAgent(llm).repair(
+        context=context,
+        step=step,
+        code=code,
+        run_log="module provenance scope was not proven fail-closed",
+        repair_authority=authority,
+        current_repair_authority=authority,
+        host_authority=host_authority,
+    )
+    messages = llm.calls[0][0]
+    payload = "\n".join(str(message.content or "") for message in messages)
+
+    assert repaired.startswith("import os\nvalue = 2")
+    assert _payload_bytes(messages) <= 30_000
+    assert RepairReason.PROVENANCE_NOT_FAIL_CLOSED.value in payload
+    assert "module_provenance_scope_not_proven_fail_closed" in payload
+    assert "host-authority-v1" in payload
+    assert '"valid_range":' not in payload
+    assert '"observed_domain":' not in payload
 
 
 def test_prior_semantic_constraint_does_not_expand_current_mechanical_patch(ra):
