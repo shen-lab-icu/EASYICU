@@ -2062,6 +2062,48 @@ class DockerRunner:
             "[DockerRunner] container teardown confirmed before output collection\n"
         )
 
+    def _confirm_successful_container_teardown(
+        self,
+        container_ref: str,
+    ) -> Tuple[bool, str]:
+        """Confirm that ``docker run --rm`` released the completed container.
+
+        A zero process return code proves that the generated program exited,
+        but it does not prove that Docker Desktop has finished removing the
+        container and releasing its nested bind mounts.  Inspect once for the
+        normal already-removed case; if the container is still visible (or the
+        inspect result is ambiguous), use the existing fail-closed teardown
+        path before the host reuses or scans the output directory.
+        """
+
+        try:
+            inspect_proc = subprocess.run(  # noqa: S603 - argv list, no shell
+                [
+                    self.docker_executable,
+                    "container",
+                    "inspect",
+                    container_ref,
+                ],
+                capture_output=True,
+                text=True,
+                timeout=10.0,
+                encoding="utf-8",
+                errors="replace",
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            inspect_proc = None
+        if inspect_proc is not None:
+            inspect_error = inspect_proc.stderr.lower()
+            if inspect_proc.returncode != 0 and (
+                "no such object" in inspect_error
+                or "no such container" in inspect_error
+            ):
+                return True, (
+                    "[DockerRunner] successful container removal confirmed "
+                    "before output collection\n"
+                )
+        return self._teardown_container(container_ref)
+
     def _retry_stale_container_cleanup(self, step_id: str) -> None:
         """Resolve prior unconfirmed teardown before reusing a step directory."""
 
@@ -2161,14 +2203,17 @@ class DockerRunner:
                 proc.stderr,
                 proc.returncode,
             )
+            container_ref = self._container_reference(
+                cidfile,
+                fallback_name=container_name,
+            )
+            assert container_ref is not None
             if returncode == 0:
-                teardown_confirmed = True
-            else:
-                container_ref = self._container_reference(
-                    cidfile,
-                    fallback_name=container_name,
+                teardown_confirmed, cleanup_note = (
+                    self._confirm_successful_container_teardown(container_ref)
                 )
-                assert container_ref is not None
+                stderr = _as_text(stderr) + "\n" + cleanup_note
+            else:
                 teardown_confirmed, cleanup_note = self._teardown_container(
                     container_ref
                 )

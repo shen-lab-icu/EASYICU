@@ -57,8 +57,8 @@ def _install_fake_subprocess(
     kill_returncode: int = 0,
     rm_returncode: int = 0,
     wait_returncode: int = 0,
-    container_inspect_returncode: int = 0,
-    container_inspect_stderr: str = "",
+    container_inspect_returncode: int = 1,
+    container_inspect_stderr: str = "Error: No such container",
     cidfile_value: Optional[str] = "c" * 64,
     run_exception: Optional[BaseException] = None,
     run_side_effect: Optional[Callable[[], None]] = None,
@@ -573,7 +573,9 @@ def test_run_invokes_subprocess_and_writes_log(
     )
     result = runner.run(step_id="probe", code="print('hi')\n")
 
-    assert len(captured) == 3, "inspect, metadata capture, then run are required"
+    assert (
+        len(captured) == 4
+    ), "image inspect, metadata capture, run, and teardown confirmation are required"
     assert captured[0][1:3] == ["image", "inspect"]
     assert "importlib.metadata" in " ".join(captured[1])
     immutable_id = "sha256:" + "a" * 64
@@ -810,6 +812,70 @@ def test_nonzero_docker_return_collects_only_after_confirmed_teardown(
     assert not list((tmp_path / "run").glob("*.sentinel"))
 
 
+def test_successful_docker_return_confirms_teardown_before_collecting_outputs(
+    ra,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """A successful process exit is not itself proof that mounts are quiescent."""
+
+    cohort = _make_cohort(tmp_path)
+    _force_docker_present(monkeypatch)
+    captured: List[List[str]] = []
+    _install_fake_subprocess(
+        monkeypatch,
+        container_inspect_returncode=1,
+        container_inspect_stderr="Error: No such container: completed",
+        captured=captured,
+    )
+
+    runner = ra.DockerRunner(workdir=tmp_path / "run", cohort_parquet=cohort)
+    result = runner.run(step_id="successful", code="print('done')\n")
+
+    assert result.succeeded
+    assert result.outputs_safe_to_collect is True
+    assert result.artefacts
+    assert captured[-1][1:3] == ["container", "inspect"]
+    assert not list((tmp_path / "run").glob("*.sentinel"))
+
+
+def test_successful_docker_return_hides_outputs_when_teardown_is_unconfirmed(
+    ra,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    cohort = _make_cohort(tmp_path)
+    _force_docker_present(monkeypatch)
+    captured: List[List[str]] = []
+    _install_fake_subprocess(
+        monkeypatch,
+        stop_returncode=1,
+        kill_returncode=1,
+        rm_returncode=1,
+        wait_returncode=1,
+        container_inspect_returncode=0,
+        captured=captured,
+    )
+    run_dir = tmp_path / "run"
+    runner = ra.DockerRunner(workdir=run_dir, cohort_parquet=cohort)
+
+    result = runner.run(step_id="successful", code="print('done')\n")
+
+    assert result.returncode == 0
+    assert result.succeeded is False
+    assert result.outputs_safe_to_collect is False
+    assert result.artefacts == []
+    assert [cmd[1] for cmd in captured[-6:]] == [
+        "container",
+        "stop",
+        "kill",
+        "rm",
+        "wait",
+        "container",
+    ]
+    assert len(list(run_dir.glob(".docker-successful-*.sentinel"))) == 1
+
+
 def test_nonzero_docker_return_hides_outputs_when_teardown_is_unconfirmed(
     ra,
     tmp_path: Path,
@@ -825,6 +891,7 @@ def test_nonzero_docker_return_hides_outputs_when_teardown_is_unconfirmed(
         kill_returncode=1,
         rm_returncode=1,
         wait_returncode=1,
+        container_inspect_returncode=0,
         captured=captured,
     )
     run_dir = tmp_path / "run"
@@ -892,6 +959,7 @@ def test_unconfirmed_timeout_hides_artifacts_and_retries_stale_cleanup(
         kill_returncode=1,
         rm_returncode=1,
         wait_returncode=1,
+        container_inspect_returncode=0,
         captured=captured,
     )
     run_dir = tmp_path / "run"
