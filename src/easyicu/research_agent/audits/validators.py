@@ -12034,6 +12034,10 @@ class FigureContractQualityValidator:
         """
         if step is None:
             return False
+        if str(getattr(step, "planned_analysis_role", "") or "").strip().lower() == (
+            "auxiliary"
+        ):
+            return True
         step_id = cls._normalise_supporting_identifier(
             getattr(step, "step_id", "")
         )
