@@ -246,7 +246,7 @@ def _loaded_input_receipt(
     return receipt
 
 
-def _require_evidence_link(
+def _require_legacy_evidence_link(
     *,
     payload: Mapping[str, Any],
     field: str,
@@ -264,6 +264,48 @@ def _require_evidence_link(
         raise ValueError(
             f"typed schema provenance mismatch: {field} does not bind {input_key}"
         )
+
+
+def _require_artifact_digest_link(
+    *,
+    payload: Mapping[str, Any],
+    digest_field: str,
+    legacy_evidence_field: str,
+    inputs: Mapping[str, Any],
+    input_key: str,
+) -> None:
+    """Bind a typed schema to one artifact by its producer-computable digest.
+
+    Current evidence identifiers are assigned by the host after the producer
+    finishes and may therefore be step-owned rather than content-derived.  A
+    producer cannot truthfully predict that identifier.  New schemas bind the
+    exact artifact bytes by SHA-256 instead.  The evidence-id fallback exists
+    only so already-sealed legacy schemas remain replayable when their original
+    binding still carries that exact identifier.
+    """
+
+    binding = inputs.get(input_key)
+    if not isinstance(binding, Mapping):
+        raise ValueError(f"missing typed input binding: {input_key}")
+    expected_digest = str(payload.get(digest_field) or "").strip().lower()
+    actual_digest = str(binding.get("sha256") or "").strip().lower()
+    if expected_digest:
+        if len(expected_digest) != 64 or any(
+            character not in "0123456789abcdef" for character in expected_digest
+        ):
+            raise ValueError(f"{digest_field} must be a SHA-256 digest")
+        if expected_digest != actual_digest:
+            raise ValueError(
+                "typed schema provenance mismatch: "
+                f"{digest_field} does not bind {input_key}"
+            )
+        return
+    _require_legacy_evidence_link(
+        payload=payload,
+        field=legacy_evidence_field,
+        inputs=inputs,
+        input_key=input_key,
+    )
 
 
 def _write_json(path: Path, payload: Mapping[str, Any]) -> None:
@@ -811,38 +853,24 @@ def run_trajectory_stability(
             solution_schema, Mapping
         ):
             raise ValueError("trajectory schemas must be JSON objects")
-        _require_evidence_link(
+        _require_artifact_digest_link(
             payload=representation_schema,
-            field="representation_evidence_id",
+            digest_field="representation_sha256",
+            legacy_evidence_field="representation_evidence_id",
             inputs=inputs,
             input_key="artifact:trajectory_representation",
         )
-        expected_representation_sha = (
-            str(representation_schema.get("representation_sha256") or "")
-            .strip()
-            .lower()
-        )
-        bound_representation_sha = (
-            str(inputs["artifact:trajectory_representation"].get("sha256") or "")
-            .strip()
-            .lower()
-        )
-        if (
-            not expected_representation_sha
-            or expected_representation_sha != bound_representation_sha
-        ):
-            raise ValueError(
-                "trajectory representation schema digest does not match its bound artifact"
-            )
-        _require_evidence_link(
+        _require_artifact_digest_link(
             payload=solution_schema,
-            field="candidate_assignments_evidence_id",
+            digest_field="candidate_assignments_sha256",
+            legacy_evidence_field="candidate_assignments_evidence_id",
             inputs=inputs,
             input_key="artifact:candidate_cluster_assignments",
         )
-        _require_evidence_link(
+        _require_artifact_digest_link(
             payload=solution_schema,
-            field="representation_schema_evidence_id",
+            digest_field="representation_schema_sha256",
+            legacy_evidence_field="representation_schema_evidence_id",
             inputs=inputs,
             input_key="manifest:trajectory_representation_schema",
         )

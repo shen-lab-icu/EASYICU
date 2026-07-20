@@ -105,9 +105,6 @@ def _write_upstream_bundle(
     representation.to_parquet(representation_path, index=False)
     assignments.to_csv(assignment_path, index=False)
 
-    representation_evidence_id = "table_opaque_representation_ab12cd34"
-    representation_schema_evidence_id = "log_opaque_representation_schema_bc23de45"
-    assignment_evidence_id = "table_opaque_candidate_labels_cd34ef56"
     representation_schema = {
         "schema_version": "easyicu.trajectory_representation_schema/1",
         "id_column": id_column,
@@ -129,7 +126,6 @@ def _write_upstream_bundle(
             "eligibility_uses_observed_window_count": True,
             "profile_summaries_ignore_missing": True,
         },
-        "representation_evidence_id": representation_evidence_id,
         "representation_sha256": _sha256(representation_path),
     }
     solution_schema = {
@@ -148,13 +144,16 @@ def _write_upstream_bundle(
         "selection_rule": "minimum",
         "direction": "minimize",
         "selected_criterion_value": 123.0,
-        "representation_schema_evidence_id": representation_schema_evidence_id,
-        "candidate_assignments_evidence_id": assignment_evidence_id,
+        "representation_schema_sha256": "pending",
+        "candidate_assignments_sha256": _sha256(assignment_path),
     }
     representation_schema_path = upstream / "opaque_representation_schema.json"
     solution_schema_path = upstream / "opaque_solution_schema.json"
     representation_schema_path.write_text(
         json.dumps(representation_schema), encoding="utf-8"
+    )
+    solution_schema["representation_schema_sha256"] = _sha256(
+        representation_schema_path
     )
     solution_schema_path.write_text(json.dumps(solution_schema), encoding="utf-8")
 
@@ -163,17 +162,17 @@ def _write_upstream_bundle(
             "artifact:trajectory_representation": _binding(
                 run_dir,
                 representation_path,
-                evidence_id=representation_evidence_id,
+                evidence_id="step_owned_representation_12345678",
             ),
             "artifact:candidate_cluster_assignments": _binding(
                 run_dir,
                 assignment_path,
-                evidence_id=assignment_evidence_id,
+                evidence_id="step_owned_assignments_23456789",
             ),
             "manifest:trajectory_representation_schema": _binding(
                 run_dir,
                 representation_schema_path,
-                evidence_id=representation_schema_evidence_id,
+                evidence_id="step_owned_representation_schema_34567890",
             ),
             "manifest:candidate_cluster_solution_schema": _binding(
                 run_dir,
@@ -185,9 +184,95 @@ def _write_upstream_bundle(
     return resolved_inputs, representation, assignments
 
 
+def test_executor_replays_legacy_exact_evidence_links_without_digest_links(
+    tmp_path: Path,
+) -> None:
+    resolved, _representation, _assignments = _write_upstream_bundle(
+        tmp_path,
+        n_clusters=2,
+        id_column="legacy_id",
+        representation_columns=("feature_alpha", "feature_beta"),
+        assignment_column="legacy_partition",
+    )
+    inputs = resolved["inputs"]
+    assert isinstance(inputs, dict)
+    representation_path = tmp_path / "upstream" / "opaque_representation.parquet"
+    assignments_path = tmp_path / "upstream" / "opaque_candidate_labels.csv"
+    representation_schema_path = (
+        tmp_path / "upstream" / "opaque_representation_schema.json"
+    )
+    solution_schema_path = tmp_path / "upstream" / "opaque_solution_schema.json"
+
+    representation_schema = json.loads(
+        representation_schema_path.read_text(encoding="utf-8")
+    )
+    representation_schema.pop("representation_sha256")
+    representation_schema["representation_evidence_id"] = "legacy-representation"
+    representation_schema_path.write_text(
+        json.dumps(representation_schema), encoding="utf-8"
+    )
+    solution_schema = json.loads(solution_schema_path.read_text(encoding="utf-8"))
+    solution_schema.pop("representation_schema_sha256")
+    solution_schema.pop("candidate_assignments_sha256")
+    solution_schema["representation_schema_evidence_id"] = "legacy-schema"
+    solution_schema["candidate_assignments_evidence_id"] = "legacy-assignments"
+    solution_schema_path.write_text(json.dumps(solution_schema), encoding="utf-8")
+
+    legacy_bindings = {
+        "artifact:trajectory_representation": (
+            representation_path,
+            "legacy-representation",
+        ),
+        "artifact:candidate_cluster_assignments": (
+            assignments_path,
+            "legacy-assignments",
+        ),
+        "manifest:trajectory_representation_schema": (
+            representation_schema_path,
+            "legacy-schema",
+        ),
+        "manifest:candidate_cluster_solution_schema": (
+            solution_schema_path,
+            "legacy-solution-schema",
+        ),
+    }
+    for input_key, (path, evidence_id) in legacy_bindings.items():
+        binding = inputs[input_key]
+        assert isinstance(binding, dict)
+        binding["evidence_id"] = evidence_id
+        binding["sha256"] = _sha256(path)
+
+    summary = run_trajectory_stability(
+        spec=_spec(),
+        out_dir=tmp_path / "step_outputs",
+        run_dir=tmp_path,
+        resolved_inputs=resolved,
+    )
+
+    assert summary["status"] == "ok", summary
+
+
 def _sample_hash(values: pd.Series) -> str:
     payload = "\n".join(sorted(str(value).strip() for value in values.tolist()))
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _rewrite_solution_digest_link(
+    resolved: dict[str, object],
+    run_dir: Path,
+    *,
+    field: str,
+    target_path: Path,
+) -> None:
+    inputs = resolved["inputs"]
+    assert isinstance(inputs, dict)
+    solution_path = run_dir / "upstream" / "opaque_solution_schema.json"
+    solution = json.loads(solution_path.read_text(encoding="utf-8"))
+    solution[field] = _sha256(target_path)
+    solution_path.write_text(json.dumps(solution), encoding="utf-8")
+    solution_binding = inputs["manifest:candidate_cluster_solution_schema"]
+    assert isinstance(solution_binding, dict)
+    solution_binding["sha256"] = _sha256(solution_path)
 
 
 def _assert_complete_input_receipts(
@@ -356,6 +441,8 @@ def test_executor_is_case_neutral_and_replayable(
         "unexpected_outcome",
         "binding_digest_mismatch",
         "schema_digest_mismatch",
+        "candidate_assignment_schema_digest_mismatch",
+        "representation_schema_link_digest_mismatch",
         "coordinate_order_mismatch",
         "schema_version_mismatch",
         "fractional_cluster_count",
@@ -403,6 +490,12 @@ def test_executor_fails_closed_on_untrusted_input_binding(
         schema_binding = inputs["manifest:trajectory_representation_schema"]
         assert isinstance(schema_binding, dict)
         schema_binding["sha256"] = _sha256(schema_path)
+        _rewrite_solution_digest_link(
+            resolved,
+            tmp_path,
+            field="representation_schema_sha256",
+            target_path=schema_path,
+        )
     else:
         schema_path = tmp_path / "upstream" / "opaque_solution_schema.json"
         schema = json.loads(schema_path.read_text(encoding="utf-8"))
@@ -412,6 +505,10 @@ def test_executor_fails_closed_on_untrusted_input_binding(
             )
         elif violation == "schema_version_mismatch":
             schema["schema_version"] = "easyicu.candidate_cluster_solution_schema/999"
+        elif violation == "candidate_assignment_schema_digest_mismatch":
+            schema["candidate_assignments_sha256"] = "0" * 64
+        elif violation == "representation_schema_link_digest_mismatch":
+            schema["representation_schema_sha256"] = "0" * 64
         else:
             schema["selected_n_clusters"] = 2.9
         schema_path.write_text(json.dumps(schema), encoding="utf-8")
@@ -435,7 +532,11 @@ def test_executor_fails_closed_on_untrusted_input_binding(
     elif violation == "binding_digest_mismatch":
         assert "digest mismatch" in error_text
     elif violation == "schema_digest_mismatch":
-        assert "schema digest" in error_text
+        assert "representation_sha256 does not bind" in error_text
+    elif violation == "candidate_assignment_schema_digest_mismatch":
+        assert "candidate_assignments_sha256 does not bind" in error_text
+    elif violation == "representation_schema_link_digest_mismatch":
+        assert "representation_schema_sha256 does not bind" in error_text
     elif violation == "coordinate_order_mismatch":
         assert "coordinate order" in error_text
     elif violation == "schema_version_mismatch":
@@ -467,6 +568,12 @@ def test_executor_fails_closed_when_sampled_reference_has_one_cluster(
     assignments.to_csv(assignment_path, index=False)
     assignment_binding = resolved["inputs"]["artifact:candidate_cluster_assignments"]
     assignment_binding["sha256"] = _sha256(assignment_path)
+    _rewrite_solution_digest_link(
+        resolved,
+        tmp_path,
+        field="candidate_assignments_sha256",
+        target_path=assignment_path,
+    )
 
     out_dir = tmp_path / "step_outputs"
     summary = run_trajectory_stability(
