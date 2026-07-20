@@ -399,6 +399,182 @@ def _validate_separate_availability_rows(
     return rows
 
 
+def _declared_optional_missingness_audits(
+    *,
+    parent_out: Path,
+    parent_summary: Mapping[str, Any],
+    preverified_parent_artifacts: Mapping[str, bytes],
+    locked_n: int,
+) -> Optional[
+    Tuple[
+        Tuple[Path, pd.DataFrame, bytes],
+        Tuple[Path, pd.DataFrame, bytes],
+    ]
+]:
+    """Return a schema-verified optional missingness/structural-audit pair.
+
+    The Planner-owned product roles select the tables.  Both roles must be
+    present together; filenames and clinical vocabulary never authorize a
+    table.  ``None`` therefore means either "no optional pair declared" or an
+    invalid/incomplete pair, and the caller distinguishes those states from
+    the declared role set.
+    """
+
+    output_files = parent_summary.get("output_files")
+    if not isinstance(output_files, Mapping):
+        return None
+    role_names: Dict[str, str] = {}
+    for raw_product, raw_name in output_files.items():
+        product = str(raw_product or "").strip()
+        if ":" not in product:
+            continue
+        kind, role = product.split(":", 1)
+        role = _normalise(role)
+        if _normalise(kind) not in {"artifact", "dataset", "table"}:
+            continue
+        if role in {"missingness_audit", "structural_missingness_audit"}:
+            name = str(raw_name or "").strip()
+            if (
+                not name
+                or Path(name).name != name
+                or Path(name).suffix.lower() != ".csv"
+                or role in role_names
+            ):
+                return None
+            role_names[role] = name
+    if not role_names:
+        return None
+    if set(role_names) != {"missingness_audit", "structural_missingness_audit"}:
+        return None
+
+    loaded: Dict[str, Tuple[Path, pd.DataFrame, bytes]] = {}
+    for role, name in role_names.items():
+        payload = preverified_parent_artifacts.get(name)
+        if not isinstance(payload, bytes):
+            return None
+        try:
+            frame = pd.read_csv(io.BytesIO(payload))
+        except Exception:
+            return None
+        if frame.empty:
+            return None
+        loaded[role] = (parent_out / name, frame, payload)
+
+    missingness_path, missingness, missingness_payload = loaded["missingness_audit"]
+    structural_path, structural, structural_payload = loaded[
+        "structural_missingness_audit"
+    ]
+    missing_variable = _resolve_column(missingness, ("variable",))
+    missing_total = _resolve_column(missingness, ("n_total",))
+    missing_nonmissing = _resolve_column(missingness, ("n_nonmissing",))
+    missing_count = _resolve_column(missingness, ("missing_n",))
+    missing_pct = _resolve_column(missingness, ("missing_pct",))
+    if None in {
+        missing_variable,
+        missing_total,
+        missing_nonmissing,
+        missing_count,
+        missing_pct,
+    }:
+        return None
+    missing_variables = missingness[missing_variable].fillna("").astype(str).str.strip()
+    totals = _nonnegative_integer(missingness[missing_total])
+    nonmissing = _nonnegative_integer(missingness[missing_nonmissing])
+    missing = _nonnegative_integer(missingness[missing_count])
+    percentages = pd.to_numeric(missingness[missing_pct], errors="coerce")
+    if (
+        missing_variables.eq("").any()
+        or missing_variables.duplicated().any()
+        or totals is None
+        or nonmissing is None
+        or missing is None
+        or not bool(totals.eq(locked_n).all())
+        or not bool(nonmissing.add(missing).eq(totals).all())
+        or percentages.isna().any()
+        or not bool(
+            percentages.sub(100.0 * missing.astype(float) / totals.astype(float))
+            .abs()
+            .le(0.05)
+            .all()
+        )
+    ):
+        return None
+
+    structural_variable = _resolve_column(structural, ("variable",))
+    structural_total = _resolve_column(structural, ("n_total",))
+    structural_missing = _resolve_column(structural, ("missing_n",))
+    structural_nonmissing = _resolve_column(structural, ("nonmissing_n",))
+    structural_unique = _resolve_column(structural, ("nonmissing_unique_n",))
+    structural_pct = _resolve_column(structural, ("missing_pct",))
+    structural_status = _resolve_column(structural, ("structural_status",))
+    if None in {
+        structural_variable,
+        structural_total,
+        structural_missing,
+        structural_nonmissing,
+        structural_unique,
+        structural_pct,
+        structural_status,
+    }:
+        return None
+    structural_variables = (
+        structural[structural_variable].fillna("").astype(str).str.strip()
+    )
+    structural_totals = _nonnegative_integer(structural[structural_total])
+    structural_missing_n = _nonnegative_integer(structural[structural_missing])
+    structural_nonmissing_n = _nonnegative_integer(structural[structural_nonmissing])
+    structural_unique_n = _nonnegative_integer(structural[structural_unique])
+    structural_percentages = pd.to_numeric(structural[structural_pct], errors="coerce")
+    structural_statuses = (
+        structural[structural_status].fillna("").astype(str).str.strip()
+    )
+    if (
+        structural_variables.eq("").any()
+        or structural_variables.duplicated().any()
+        or not set(structural_variables).issubset(set(missing_variables))
+        or structural_statuses.eq("").any()
+        or structural_totals is None
+        or structural_missing_n is None
+        or structural_nonmissing_n is None
+        or structural_unique_n is None
+        or not bool(structural_totals.eq(locked_n).all())
+        or not bool(
+            structural_missing_n.add(structural_nonmissing_n)
+            .eq(structural_totals)
+            .all()
+        )
+        or not bool(structural_unique_n.le(structural_nonmissing_n).all())
+        or structural_percentages.isna().any()
+        or not bool(
+            structural_percentages.sub(
+                100.0
+                * structural_missing_n.astype(float)
+                / structural_totals.astype(float)
+            )
+            .abs()
+            .le(0.05)
+            .all()
+        )
+    ):
+        return None
+    return (
+        (missingness_path, missingness, missingness_payload),
+        (structural_path, structural, structural_payload),
+    )
+
+
+def _declares_optional_missingness_audits(summary: Mapping[str, Any]) -> bool:
+    output_files = summary.get("output_files")
+    if not isinstance(output_files, Mapping):
+        return False
+    roles = {
+        _normalise(str(product).split(":", 1)[1])
+        for product in output_files
+        if ":" in str(product)
+    }
+    return bool(roles & {"missingness_audit", "structural_missingness_audit"})
+
+
 def ordered_distribution_availability_snapshot_is_valid(
     preverified_parent_artifacts: Mapping[str, bytes],
 ) -> bool:
@@ -469,16 +645,23 @@ def ordered_distribution_availability_snapshot_is_valid(
     if availability is None:
         return False
     _path, rows, status_col, availability_count_col = availability
-    return (
-        _validate_separate_availability_rows(
-            rows=rows,
-            status_col=status_col,
-            count_col=availability_count_col,
-            observed_n=observed_n,
-            locked_n=locked_n,
-        )
-        is not None
+    availability_rows = _validate_separate_availability_rows(
+        rows=rows,
+        status_col=status_col,
+        count_col=availability_count_col,
+        observed_n=observed_n,
+        locked_n=locked_n,
     )
+    if availability_rows is None:
+        return False
+    optional_audits = _declares_optional_missingness_audits(summary)
+    verified_audits = _declared_optional_missingness_audits(
+        parent_out=parent_out,
+        parent_summary=summary,
+        preverified_parent_artifacts=preverified_parent_artifacts,
+        locked_n=locked_n,
+    )
+    return verified_audits is not None if optional_audits else True
 
 
 def _display_label(value: Any) -> str:
@@ -539,7 +722,7 @@ def render_ordered_distribution_bundle_from_prior_outputs(
     preverified_parent_artifacts: Optional[Mapping[str, bytes]] = None,
     authorized_repair_id: str = ORDERED_DISTRIBUTION_REPAIR_V1,
 ) -> Optional[str]:
-    """Render a two-panel ordered distribution from the exact parent outputs."""
+    """Render a digest-bound ordered-distribution and data-quality bundle."""
 
     parent_step_id = str(current_step_id).removesuffix("_figure")
     if not parent_step_id or parent_step_id == str(current_step_id):
@@ -708,6 +891,19 @@ def render_ordered_distribution_bundle_from_prior_outputs(
         _status_display_label(role, value)
         for role, value in zip(availability_roles, status_rows[status_col].tolist())
     ]
+    optional_audits = None
+    if v2_separate_availability and preverified_parent_artifacts is not None:
+        optional_audits = _declared_optional_missingness_audits(
+            parent_out=parent_out,
+            parent_summary=parent_summary,
+            preverified_parent_artifacts=preverified_parent_artifacts,
+            locked_n=locked_n,
+        )
+        if (
+            _declares_optional_missingness_audits(parent_summary)
+            and optional_audits is None
+        ):
+            return None
 
     label_col = _resolve_column(
         plot, ("stage_label", "level_label", "label", "category_label")
@@ -733,6 +929,75 @@ def render_ordered_distribution_bundle_from_prior_outputs(
     out_dir.mkdir(parents=True, exist_ok=True)
     stem = source_path.stem
     source_copy = out_dir / f"{stem}_source_data.csv"
+    source_data_paths = [source_copy]
+    source_table_names = [source_path.name, availability_source_path.name]
+    missingness_plot: Optional[pd.DataFrame] = None
+    structural_variables: set[str] = set()
+    if optional_audits is not None:
+        (missingness_path, missingness, _missingness_payload), (
+            structural_path,
+            structural,
+            _structural_payload,
+        ) = optional_audits
+        missingness_copy = out_dir / f"{missingness_path.stem}_source_data.csv"
+        structural_copy = out_dir / f"{structural_path.stem}_source_data.csv"
+        source_data_paths.extend((missingness_copy, structural_copy))
+        source_table_names.extend((missingness_path.name, structural_path.name))
+        variable_col = _resolve_column(missingness, ("variable",))
+        missing_pct_col = _resolve_column(missingness, ("missing_pct",))
+        structural_variable_col = _resolve_column(structural, ("variable",))
+        if (
+            variable_col is None
+            or missing_pct_col is None
+            or structural_variable_col is None
+        ):
+            return None
+        missingness_source = missingness[
+            [
+                variable_col,
+                _resolve_column(missingness, ("n_total",)),
+                _resolve_column(missingness, ("n_nonmissing",)),
+                _resolve_column(missingness, ("missing_n",)),
+                missing_pct_col,
+            ]
+        ].copy()
+        structural_source = structural[
+            [
+                structural_variable_col,
+                _resolve_column(structural, ("n_total",)),
+                _resolve_column(structural, ("missing_n",)),
+                _resolve_column(structural, ("missing_pct",)),
+                _resolve_column(structural, ("nonmissing_n",)),
+                _resolve_column(structural, ("nonmissing_unique_n",)),
+                _resolve_column(structural, ("structural_status",)),
+            ]
+        ].copy()
+        for source_frame, source_name in (
+            (missingness_source, missingness_path.name),
+            (structural_source, structural_path.name),
+        ):
+            source_frame["source_table"] = source_name
+            source_frame["source_step_id"] = parent_step_id
+        missingness_source.to_csv(missingness_copy, index=False)
+        structural_source.to_csv(structural_copy, index=False)
+        missingness_plot = missingness[[variable_col, missing_pct_col]].copy()
+        missingness_plot.columns = ["variable", "missing_pct"]
+        missingness_plot["variable"] = (
+            missingness_plot["variable"].fillna("").astype(str).str.strip()
+        )
+        missingness_plot["missing_pct"] = pd.to_numeric(
+            missingness_plot["missing_pct"], errors="coerce"
+        )
+        missingness_plot = (
+            missingness_plot.sort_values(
+                ["missing_pct", "variable"], ascending=[False, True]
+            )
+            .head(12)
+            .reset_index(drop=True)
+        )
+        structural_variables = set(
+            structural[structural_variable_col].fillna("").astype(str).str.strip()
+        )
     source_rows: list[Dict[str, Any]] = []
     for index, row in plot.iterrows():
         source_rows.append(
@@ -783,12 +1048,25 @@ def render_ordered_distribution_bundle_from_prior_outputs(
     import matplotlib.pyplot as plt
 
     palette = apply_publication_style(font_size=7.0)
-    fig, (ax_a, ax_b) = plt.subplots(
-        1,
-        2,
-        figsize=(183 / 25.4, 90 / 25.4),
-        gridspec_kw={"width_ratios": [1.35, 0.85]},
-    )
+    if missingness_plot is None:
+        figure_height_mm = 90.0
+        fig, axes = plt.subplots(
+            1,
+            2,
+            figsize=(183 / 25.4, figure_height_mm / 25.4),
+            gridspec_kw={"width_ratios": [1.35, 0.85]},
+        )
+        ax_a, ax_b = axes
+        ax_c = None
+    else:
+        figure_height_mm = 100.0
+        fig, axes = plt.subplots(
+            1,
+            3,
+            figsize=(183 / 25.4, figure_height_mm / 25.4),
+            gridspec_kw={"width_ratios": [1.1, 0.8, 1.25]},
+        )
+        ax_a, ax_b, ax_c = axes
     category_colors = [
         palette["blue_soft"],
         "#7FA6C9",
@@ -850,7 +1128,86 @@ def render_ordered_distribution_bundle_from_prior_outputs(
             fontsize=6.5,
         )
     add_panel_label(ax_b, "B", x=-0.18, y=1.03)
-    fig.subplots_adjust(left=0.09, right=0.98, bottom=0.19, top=0.89, wspace=0.48)
+    panels = [
+        {
+            "panel_id": "A",
+            "title": "Ordered category distribution",
+            "role": "distribution",
+            "claim": (
+                "Ordered-category counts and percentages use the same "
+                "valid-observed denominator."
+            ),
+            "evidence_ids": [source_copy.name],
+            "metadata": {"planner_product_slots": ["distribution"]},
+        },
+        {
+            "panel_id": "B",
+            "title": "Source availability",
+            "role": "data_quality",
+            "claim": (
+                "Valid-observed and unavailable records reconcile to the "
+                "locked analysis cohort."
+            ),
+            "evidence_ids": [source_copy.name],
+            "metadata": {"planner_product_slots": ["availability"]},
+        },
+    ]
+    if ax_c is not None and missingness_plot is not None:
+        panel_c_colors = [
+            (
+                palette["teal"]
+                if variable in structural_variables
+                else palette["neutral_light"]
+            )
+            for variable in missingness_plot["variable"]
+        ]
+        bars_c = ax_c.barh(
+            range(len(missingness_plot)),
+            missingness_plot["missing_pct"],
+            color=panel_c_colors,
+            height=0.58,
+        )
+        ax_c.set_yticks(range(len(missingness_plot)))
+        ax_c.set_yticklabels(
+            [_display_label(value) for value in missingness_plot["variable"]],
+            fontsize=5.8,
+        )
+        ax_c.invert_yaxis()
+        ax_c.set_xlim(0, 100)
+        ax_c.set_xlabel("Locked analysis cohort missing (%)")
+        ax_c.set_title("Variable missingness", loc="left", pad=4)
+        ax_c.grid(axis="x", color=palette["neutral_light"], linewidth=0.55, zorder=0)
+        for bar, percentage in zip(bars_c, missingness_plot["missing_pct"]):
+            ax_c.text(
+                min(float(percentage) + 1.0, 97.0),
+                bar.get_y() + bar.get_height() / 2,
+                f"{float(percentage):.1f}%",
+                va="center",
+                ha="right" if percentage > 92 else "left",
+                fontsize=5.8,
+                color=palette["baseline"],
+            )
+        add_panel_label(ax_c, "C", x=-0.18, y=1.03)
+        panels.append(
+            {
+                "panel_id": "C",
+                "title": "Variable missingness",
+                "role": "missingness_audit",
+                "claim": (
+                    "The highest missingness percentages are reproduced from "
+                    "the declared audit, with structural-audit coverage shown "
+                    "only where that companion table contains the variable."
+                ),
+                "evidence_ids": [
+                    missingness_copy.name,
+                    structural_copy.name,
+                ],
+                "metadata": {"planner_product_slots": ["availability"]},
+            }
+        )
+        fig.subplots_adjust(left=0.065, right=0.99, bottom=0.17, top=0.90, wspace=0.58)
+    else:
+        fig.subplots_adjust(left=0.09, right=0.98, bottom=0.19, top=0.89, wspace=0.48)
 
     contract = make_figure_contract(
         figure_id=f"figure:{stem}",
@@ -861,32 +1218,9 @@ def render_ordered_distribution_bundle_from_prior_outputs(
         ),
         archetype="quantitative_grid",
         width_mm=183.0,
-        height_mm=90.0,
-        panels=[
-            {
-                "panel_id": "A",
-                "title": "Ordered category distribution",
-                "role": "distribution",
-                "claim": (
-                    "Ordered-category counts and percentages use the same "
-                    "valid-observed denominator."
-                ),
-                "evidence_ids": [source_copy.name],
-                "metadata": {"planner_product_slots": ["distribution"]},
-            },
-            {
-                "panel_id": "B",
-                "title": "Source availability",
-                "role": "data_quality",
-                "claim": (
-                    "Valid-observed and unavailable records reconcile to the "
-                    "locked analysis cohort."
-                ),
-                "evidence_ids": [source_copy.name],
-                "metadata": {"planner_product_slots": ["availability"]},
-            },
-        ],
-        source_data=[source_copy.name],
+        height_mm=figure_height_mm,
+        panels=panels,
+        source_data=[path.name for path in source_data_paths],
         statistics_note=(
             "Percentages are deterministic count/denominator calculations. "
             "Panel A is conditional on valid-observed records; panel B uses the "
@@ -910,12 +1244,12 @@ def render_ordered_distribution_bundle_from_prior_outputs(
         "status": "completed",
         "source_step_id": parent_step_id,
         "source_table": str(source_path),
-        "source_tables": [source_path.name, availability_source_path.name],
+        "source_tables": source_table_names,
         "source_data_csv": str(source_copy),
         "figure_files": [
             path.name for key, path in outputs.items() if key != "contract"
         ],
-        "source_data_files": [source_copy.name],
+        "source_data_files": [path.name for path in source_data_paths],
         "figure_path": f"{stem}.png",
         "figure_contract": f"{stem}.figure_contract.json",
         "ordered_levels": [int(value) for value in plot["__level"].tolist()],
@@ -935,6 +1269,11 @@ def render_ordered_distribution_bundle_from_prior_outputs(
         "denominator_contract": {
             "panel_a": "valid_observed",
             "panel_b": "locked_analysis_cohort",
+            **(
+                {"panel_c": "locked_analysis_cohort"}
+                if missingness_plot is not None
+                else {}
+            ),
         },
         "warnings": [],
         "skipped": [],

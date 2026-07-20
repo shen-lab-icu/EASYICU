@@ -30,9 +30,9 @@ def _ordered_distribution_availability_parent_digest_seal(
     run_dir: Path,
     figure_step_id: str,
 ) -> Optional[dict[str, str]]:
-    """Seal one typed distribution table and one typed availability table.
+    """Seal a distribution/availability pair and any declared audit pair.
 
-    Planner product roles select the two logical inputs, the digest-bound
+    Planner product roles select the logical inputs, the digest-bound
     parent summary maps those roles to physical files, and the renderer schema
     validates ordinal levels, counts, percentages, and denominators before the
     sealed adapter is authorized. A model-authored method string is never a
@@ -61,7 +61,35 @@ def _ordered_distribution_availability_parent_digest_seal(
         for product in products
         if product[1] == "availability" or product[1].endswith("_availability")
     ]
-    if len(distribution) != 1 or len(availability) != 1:
+    structural_missingness = [
+        product
+        for product in products
+        if product[1] == "structural_missingness_audit"
+        or product[1].endswith("_structural_missingness_audit")
+    ]
+    missingness = [
+        product
+        for product in products
+        if (
+            product[1] == "missingness_audit"
+            or product[1].endswith("_missingness_audit")
+        )
+        and product not in structural_missingness
+    ]
+    supported = {
+        *distribution,
+        *availability,
+        *missingness,
+        *structural_missingness,
+    }
+    if (
+        len(distribution) != 1
+        or len(availability) != 1
+        or len(missingness) not in {0, 1}
+        or len(structural_missingness) not in {0, 1}
+        or bool(missingness) != bool(structural_missingness)
+        or supported != set(products)
+    ):
         return None
 
     parent_out = (
@@ -85,7 +113,12 @@ def _ordered_distribution_availability_parent_digest_seal(
         return None
 
     selected_names: list[str] = []
-    for product in (distribution[0], availability[0]):
+    for product in (
+        distribution[0],
+        availability[0],
+        *missingness,
+        *structural_missingness,
+    ):
         raw_name = output_files.get(f"{product[0]}:{product[1]}")
         name = str(raw_name or "").strip()
         if (
@@ -96,7 +129,7 @@ def _ordered_distribution_availability_parent_digest_seal(
         ):
             return None
         selected_names.append(name)
-    if len(set(selected_names)) != 2:
+    if len(set(selected_names)) != len(selected_names):
         return None
 
     sealed = {
@@ -165,6 +198,14 @@ def _sealed_renderer_figure_step_matches_parent(
         for raw in (step.inputs or [])
         if (parsed := typed_product(raw)) is not None
     }
+    if renderer_repair_id == (
+        "ordered_category_distribution_availability_publication_bundle_v2"
+    ):
+        return {
+            product
+            for product in child_typed_inputs
+            if product[0] in {"table", "artifact", "dataset"}
+        } == parent_products
     if required_products <= child_typed_inputs:
         return True
     return str(step.method or "").strip().lower() == planner_method and tuple(
