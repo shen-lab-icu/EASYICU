@@ -133,6 +133,7 @@ class CandidateOrigin(_StrictFrozenModel):
     repair_ticket_sha256: Optional[Sha256] = None
     deterministic_reason_sha256: Optional[Sha256] = None
     adopted_from_capsule_sha256: Optional[Sha256] = None
+    input_representation_upgrade_proof: Optional[ContentRef] = None
 
     @field_validator("provider_category")
     @classmethod
@@ -167,6 +168,7 @@ class CandidateOrigin(_StrictFrozenModel):
                 or self.repair_ticket_sha256 is not None
                 or self.deterministic_reason_sha256 is not None
                 or self.adopted_from_capsule_sha256 is not None
+                or self.input_representation_upgrade_proof is not None
             ):
                 raise ValueError(
                     "initial generation requires its own provider transport"
@@ -178,6 +180,7 @@ class CandidateOrigin(_StrictFrozenModel):
                 or not repair_bound
                 or self.deterministic_reason_sha256 is not None
                 or self.adopted_from_capsule_sha256 is not None
+                or self.input_representation_upgrade_proof is not None
             ):
                 raise ValueError("repair origin requires exact ledger coordinates")
         elif self.kind == "deterministic_mutation":
@@ -188,6 +191,7 @@ class CandidateOrigin(_StrictFrozenModel):
                 or self.repair_ticket_sha256 is not None
                 or self.deterministic_reason_sha256 is None
                 or self.adopted_from_capsule_sha256 is not None
+                or self.input_representation_upgrade_proof is not None
             ):
                 raise ValueError("deterministic mutation cannot claim provider calls")
         elif self.kind == "legacy_adoption":
@@ -197,6 +201,10 @@ class CandidateOrigin(_StrictFrozenModel):
                 or self.logical_repair_attempt_id is not None
                 or self.repair_ticket_sha256 is not None
                 or self.deterministic_reason_sha256 is not None
+                or (
+                    self.input_representation_upgrade_proof is not None
+                    and self.adopted_from_capsule_sha256 is None
+                )
             ):
                 raise ValueError("legacy adoption cannot invent generation authority")
         elif (
@@ -205,6 +213,7 @@ class CandidateOrigin(_StrictFrozenModel):
             or self.logical_repair_attempt_id is not None
             or self.repair_ticket_sha256 is not None
             or self.deterministic_reason_sha256 is not None
+            or self.input_representation_upgrade_proof is not None
         ):
             raise ValueError("candidate origin is inconsistent")
         return self
@@ -760,6 +769,136 @@ def _authority_identity(capsule: StepAuthorityCapsule) -> tuple[object, ...]:
     )
 
 
+def input_representation_upgrade_matches(
+    *,
+    historical_manifest: object,
+    current_manifest: object,
+    historical_typed_bindings_sha256: str,
+    current_typed_bindings_sha256: str,
+    historical_upstream_authority_sha256: str,
+    current_upstream_authority_sha256: str,
+    historical_upstream_authority: object,
+    current_upstream_authority: object,
+) -> bool:
+    """Prove that v3 adds representation facts without changing input science."""
+
+    if not isinstance(historical_manifest, dict) or not isinstance(
+        current_manifest, dict
+    ):
+        return False
+    if set(historical_manifest) != set(current_manifest):
+        return False
+    if any(
+        historical_manifest[key] != current_manifest[key]
+        for key in historical_manifest
+        if key != "inputs"
+    ):
+        return False
+    historical_inputs = historical_manifest.get("inputs")
+    current_inputs = current_manifest.get("inputs")
+    if not isinstance(historical_inputs, Mapping) or not isinstance(
+        current_inputs, Mapping
+    ):
+        return False
+    if set(historical_inputs) != set(current_inputs):
+        return False
+
+    added_contract_fields = {"column_dtypes", "numeric_columns"}
+    for input_key in historical_inputs:
+        historical_binding = historical_inputs[input_key]
+        current_binding = current_inputs[input_key]
+        if not isinstance(historical_binding, Mapping) or not isinstance(
+            current_binding, Mapping
+        ):
+            return False
+        if set(historical_binding) != set(current_binding):
+            return False
+        if any(
+            historical_binding[key] != current_binding[key]
+            for key in historical_binding
+            if key != "product_contract"
+        ):
+            return False
+        historical_contract = historical_binding.get("product_contract")
+        current_contract = current_binding.get("product_contract")
+        if historical_contract == current_contract:
+            continue
+        if not isinstance(historical_contract, Mapping) or not isinstance(
+            current_contract, Mapping
+        ):
+            return False
+        if (
+            historical_contract.get("schema_version") != "easyicu.host_typed_product.v2"
+            or current_contract.get("schema_version") != "easyicu.host_typed_product.v3"
+            or set(current_contract)
+            != set(historical_contract).union(added_contract_fields)
+        ):
+            return False
+        historical_core = {
+            key: value
+            for key, value in historical_contract.items()
+            if key != "schema_version"
+        }
+        current_core = {
+            key: value
+            for key, value in current_contract.items()
+            if key not in {"schema_version", *added_contract_fields}
+        }
+        columns = current_contract.get("columns")
+        column_dtypes = current_contract.get("column_dtypes")
+        numeric_columns = current_contract.get("numeric_columns")
+        if not (
+            historical_core == current_core
+            and isinstance(columns, list)
+            and all(isinstance(column, str) for column in columns)
+            and len(columns) == len(set(columns))
+            and isinstance(column_dtypes, Mapping)
+            and set(column_dtypes) == set(columns)
+            and all(isinstance(dtype, str) for dtype in column_dtypes.values())
+            and isinstance(numeric_columns, list)
+            and all(isinstance(column, str) for column in numeric_columns)
+            and len(numeric_columns) == len(set(numeric_columns))
+            and numeric_columns
+            == [column for column in columns if column in set(numeric_columns)]
+        ):
+            return False
+
+    expected_upstream_keys = {
+        "resolved_input_evidence_ids",
+        "resolved_input_bindings",
+        "cohort_sha256",
+        "universe_sha256",
+    }
+    if not isinstance(historical_upstream_authority, Mapping) or not isinstance(
+        current_upstream_authority, Mapping
+    ):
+        return False
+    if (
+        set(historical_upstream_authority) != expected_upstream_keys
+        or set(current_upstream_authority) != expected_upstream_keys
+        or historical_upstream_authority.get("resolved_input_bindings")
+        != historical_inputs
+        or current_upstream_authority.get("resolved_input_bindings") != current_inputs
+    ):
+        return False
+    if any(
+        historical_upstream_authority[key] != current_upstream_authority[key]
+        for key in expected_upstream_keys
+        if key != "resolved_input_bindings"
+    ):
+        return False
+    return bool(
+        historical_typed_bindings_sha256
+        == _sha256_bytes(_canonical_json_bytes(historical_inputs))
+        and current_typed_bindings_sha256
+        == _sha256_bytes(_canonical_json_bytes(current_inputs))
+        and historical_upstream_authority_sha256
+        == _sha256_bytes(_canonical_json_bytes(historical_upstream_authority))
+        and current_upstream_authority_sha256
+        == _sha256_bytes(_canonical_json_bytes(current_upstream_authority))
+    )
+
+
 def _scientific_adoption_identity(
     capsule: StepAuthorityCapsule,
 ) -> tuple[object, ...]:
@@ -772,6 +911,87 @@ def _scientific_adoption_identity(
         capsule.typed_bindings_sha256,
         capsule.upstream_authority_sha256,
         capsule.candidate_code,
+    )
+
+
+def _verified_representation_upgrade_adoption(
+    root: Path,
+    *,
+    source_sha256: str,
+    source: StepAuthorityCapsule,
+    current: StepAuthorityCapsule,
+    proof_ref: ContentRef,
+) -> bool:
+    """Re-derive a narrow v2 -> v3 input-representation adoption proof."""
+
+    if proof_ref.media_type != "application/json":
+        return False
+    try:
+        proof = json.loads(
+            _read_object(
+                root,
+                kind="blobs",
+                digest=proof_ref.sha256,
+                size_bytes=proof_ref.size_bytes,
+            )
+        )
+        historical_manifest = json.loads(
+            _read_object(
+                root,
+                kind="blobs",
+                digest=source.resolved_inputs.sha256,
+                size_bytes=source.resolved_inputs.size_bytes,
+            )
+        )
+        current_manifest = json.loads(
+            _read_object(
+                root,
+                kind="blobs",
+                digest=current.resolved_inputs.sha256,
+                size_bytes=current.resolved_inputs.size_bytes,
+            )
+        )
+    except (UnicodeDecodeError, ValueError, TypeError):
+        return False
+    expected_proof_keys = {
+        "schema_version",
+        "historical_capsule_sha256",
+        "historical_upstream_authority",
+        "current_upstream_authority",
+    }
+    if (
+        not isinstance(proof, dict)
+        or set(proof) != expected_proof_keys
+        or proof.get("schema_version") != "easyicu.input_representation_upgrade_proof/1"
+        or proof.get("historical_capsule_sha256") != source_sha256
+    ):
+        return False
+    source_fixed_scientific_identity = (
+        source.step_id,
+        source.run_input_capsule_sha256,
+        source.planner_scope,
+        source.scoped_coder_context,
+        source.candidate_code,
+    )
+    current_fixed_scientific_identity = (
+        current.step_id,
+        current.run_input_capsule_sha256,
+        current.planner_scope,
+        current.scoped_coder_context,
+        current.candidate_code,
+    )
+    return bool(
+        source_fixed_scientific_identity == current_fixed_scientific_identity
+        and input_representation_upgrade_matches(
+            historical_manifest=historical_manifest,
+            current_manifest=current_manifest,
+            historical_typed_bindings_sha256=source.typed_bindings_sha256,
+            current_typed_bindings_sha256=current.typed_bindings_sha256,
+            historical_upstream_authority_sha256=source.upstream_authority_sha256,
+            current_upstream_authority_sha256=current.upstream_authority_sha256,
+            historical_upstream_authority=proof.get("historical_upstream_authority"),
+            current_upstream_authority=proof.get("current_upstream_authority"),
+        )
     )
 
 
@@ -955,8 +1175,23 @@ def _verify_capsule_contents(
     if adopted_from is not None:
         source = _load_capsule_model(root, adopted_from)
         _verify_capsule_contents(root, source, ancestry=visited)
-        if _scientific_adoption_identity(source) != _scientific_adoption_identity(
-            capsule
+        exact_science = _scientific_adoption_identity(
+            source
+        ) == _scientific_adoption_identity(capsule)
+        proof_ref = capsule.candidate_origin.input_representation_upgrade_proof
+        if exact_science and proof_ref is not None:
+            raise StepAuthorityCapsuleError(
+                "exact adoption cannot claim an input representation upgrade"
+            )
+        if not exact_science and (
+            proof_ref is None
+            or not _verified_representation_upgrade_adoption(
+                root,
+                source_sha256=adopted_from,
+                source=source,
+                current=capsule,
+                proof_ref=proof_ref,
+            )
         ):
             raise StepAuthorityCapsuleError(
                 "adopted candidate disagrees with its verified scientific source"
@@ -1042,6 +1277,7 @@ __all__ = [
     "VerifiedStepAuthorityCapsule",
     "concept_audit_authority_sha256",
     "execution_seal_identity_sha256",
+    "input_representation_upgrade_matches",
     "load_verified_step_authority_capsule",
     "put_content_blob",
     "read_verified_content",

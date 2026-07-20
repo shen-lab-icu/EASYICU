@@ -49,6 +49,7 @@ from .step_capsule import (
     VerifiedStepAuthorityCapsule,
     concept_audit_authority_sha256,
     execution_seal_identity_sha256,
+    input_representation_upgrade_matches,
     load_verified_step_authority_capsule,
     put_content_blob,
     read_verified_content,
@@ -95,6 +96,7 @@ class StepAuthorityCoordinates:
     validator_code_sha256: str
     prompt_pack_version: str
     prompt_pack_sha256: str
+    upstream_authority_payload: Optional[bytes] = None
 
     def initial_generation_binding(self) -> dict[str, object]:
         return {
@@ -197,6 +199,7 @@ def prepare_step_authority_coordinates(
         validator_code_sha256=str(validator_code_sha256),
         prompt_pack_version=str(prompt_pack_version),
         prompt_pack_sha256=_canonical_sha256(dict(prompt_pack)),
+        upstream_authority_payload=_canonical_json_bytes(dict(upstream_authority)),
     )
 
 
@@ -493,6 +496,7 @@ def seal_legacy_candidate(
     *,
     code_ref: ContentRef,
     adopted_from_ref: Optional[StepAuthorityCapsuleRef] = None,
+    input_representation_upgrade_proof: Optional[ContentRef] = None,
 ) -> StepAuthorityCapsuleRef:
     """Adopt pre-capsule or host-selected code without inventing provider lineage."""
 
@@ -502,6 +506,7 @@ def seal_legacy_candidate(
         adopted_from_capsule_sha256=(
             adopted_from_ref.capsule_sha256 if adopted_from_ref is not None else None
         ),
+        input_representation_upgrade_proof=input_representation_upgrade_proof,
     )
     return seal_step_authority_capsule(
         coordinates.run_dir,
@@ -967,6 +972,72 @@ def adopt_frozen_scoped_coder_context(
     return frozen_context, frozen_coordinates
 
 
+def _resolved_inputs_representation_upgrade_proof(
+    verified: VerifiedStepAuthorityCapsule,
+    coordinates: StepAuthorityCoordinates,
+) -> Optional[dict[str, object]]:
+    """Prove that only digest-bound typed-table representation facts changed."""
+
+    try:
+        historical_manifest = json.loads(
+            read_verified_content(
+                coordinates.run_dir,
+                verified.capsule.resolved_inputs,
+            ).decode("utf-8")
+        )
+        current_manifest = json.loads(
+            read_verified_content(
+                coordinates.run_dir,
+                coordinates.resolved_inputs,
+            ).decode("utf-8")
+        )
+        current_upstream_authority = json.loads(
+            coordinates.upstream_authority_payload or b"null"
+        )
+    except (
+        UnicodeDecodeError,
+        ValueError,
+        TypeError,
+        StepAuthorityCapsuleError,
+    ) as exc:
+        raise StepAuthorityRuntimeError(
+            "resolved-input representation authority is invalid"
+        ) from exc
+    if not isinstance(historical_manifest, dict) or not isinstance(
+        current_manifest, dict
+    ):
+        return None
+    historical_inputs = historical_manifest.get("inputs")
+    current_inputs = current_manifest.get("inputs")
+    if not isinstance(historical_inputs, Mapping) or not isinstance(
+        current_inputs, Mapping
+    ):
+        return None
+    if not isinstance(current_upstream_authority, Mapping):
+        return None
+    historical_upstream = dict(current_upstream_authority)
+    historical_upstream["resolved_input_bindings"] = historical_inputs
+    if not input_representation_upgrade_matches(
+        historical_manifest=historical_manifest,
+        current_manifest=current_manifest,
+        historical_typed_bindings_sha256=verified.capsule.typed_bindings_sha256,
+        current_typed_bindings_sha256=coordinates.typed_bindings_sha256,
+        historical_upstream_authority_sha256=(
+            verified.capsule.upstream_authority_sha256
+        ),
+        current_upstream_authority_sha256=coordinates.upstream_authority_sha256,
+        historical_upstream_authority=historical_upstream,
+        current_upstream_authority=current_upstream_authority,
+    ):
+        return None
+    return {
+        "schema_version": "easyicu.input_representation_upgrade_proof/1",
+        "historical_capsule_sha256": verified.ref.capsule_sha256,
+        "historical_upstream_authority": historical_upstream,
+        "current_upstream_authority": dict(current_upstream_authority),
+    }
+
+
 def adopt_candidate_for_control_plane_revalidation(
     verified: VerifiedStepAuthorityCapsule,
     coordinates: StepAuthorityCoordinates,
@@ -976,13 +1047,28 @@ def adopt_candidate_for_control_plane_revalidation(
     """Adopt old code under new engine/gate/prompt authority, never old seals."""
 
     capsule = verified.capsule
-    if not (
+    immutable_science_matches = (
         capsule.step_id == coordinates.step_id
         and capsule.run_input_capsule_sha256 == coordinates.run_input_capsule_sha256
         and capsule.planner_scope == coordinates.planner_scope
-        and capsule.resolved_inputs == coordinates.resolved_inputs
+    )
+    exact_input_authority = (
+        capsule.resolved_inputs == coordinates.resolved_inputs
         and capsule.typed_bindings_sha256 == coordinates.typed_bindings_sha256
         and capsule.upstream_authority_sha256 == coordinates.upstream_authority_sha256
+    )
+    representation_upgrade_proof = None
+    if (
+        immutable_science_matches
+        and not exact_input_authority
+        and coordinates.upstream_authority_payload is not None
+    ):
+        representation_upgrade_proof = _resolved_inputs_representation_upgrade_proof(
+            verified,
+            coordinates,
+        )
+    if not immutable_science_matches or not (
+        exact_input_authority or representation_upgrade_proof is not None
     ):
         return None
     try:
@@ -1015,10 +1101,20 @@ def adopt_candidate_for_control_plane_revalidation(
         coordinates,
         scoped_coder_context=capsule.scoped_coder_context,
     )
+    proof_ref = (
+        put_content_blob(
+            adopted_coordinates.run_dir,
+            payload=_canonical_json_bytes(representation_upgrade_proof),
+            media_type="application/json",
+        )
+        if representation_upgrade_proof is not None
+        else None
+    )
     adopted_ref = seal_legacy_candidate(
         adopted_coordinates,
         code_ref=capsule.candidate_code,
         adopted_from_ref=verified.ref,
+        input_representation_upgrade_proof=proof_ref,
     )
     return frozen_context, adopted_coordinates, adopted_ref
 

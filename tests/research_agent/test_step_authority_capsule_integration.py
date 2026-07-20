@@ -26,9 +26,13 @@ from easyicu.research_agent.research_context.typed import ResearchContextV2
 from easyicu.research_agent.authority.step_capsule import (
     StepAuthorityCapsuleError,
     load_verified_step_authority_capsule,
+    put_content_blob,
+    read_verified_content,
+    seal_step_authority_capsule,
 )
 from easyicu.research_agent.authority.step_runtime import (
     StepAuthorityRuntimeError,
+    adopt_candidate_for_control_plane_revalidation,
     adopt_frozen_scoped_coder_context,
     execution_context_sha256,
     load_checkpoint_selected_step_capsule,
@@ -114,6 +118,212 @@ def _initial_candidate(tmp_path: Path, *, scoped_coder_context=None):
         receipt_state=state,
     )
     return coordinates, code_ref, candidate_ref, budget, receipt_path
+
+
+def _resolved_table_coordinates(
+    tmp_path: Path,
+    *,
+    filename: str,
+    contract: dict[str, object],
+    artifact_sha256: str = SHA_B,
+    cohort_sha256: str = SHA_C,
+):
+    identity = {
+        "input_key": "artifact:analysis_cohort",
+        "declared_kind": "artifact",
+        "product": "analysis_cohort",
+        "evidence_id": "cohort_evidence",
+        "sha256": artifact_sha256,
+        "produced_by_step": "01_cohort",
+    }
+    binding = {
+        "declared_kind": "artifact",
+        "product": "analysis_cohort",
+        "evidence_id": "cohort_evidence",
+        "evidence_kind": "table",
+        "sha256": artifact_sha256,
+        "produced_by_step": "01_cohort",
+        "relative_path": "evidence/cohort.parquet",
+        "absolute_path": str(tmp_path / "evidence" / "cohort.parquet"),
+        "identity_row": identity,
+        "product_contract": {**contract, "identity_row": identity},
+    }
+    resolved = tmp_path / filename
+    resolved.write_text(
+        json.dumps(
+            {
+                "schema_version": "easyicu.resolved_inputs/2",
+                "step_id": "02_table_one",
+                "planner_declared_inputs": ["artifact:analysis_cohort"],
+                "inputs": {"artifact:analysis_cohort": binding},
+                "context": "context.json",
+            },
+            sort_keys=True,
+        ),
+        encoding="utf-8",
+    )
+    upstream = {
+        "resolved_input_evidence_ids": ["cohort_evidence"],
+        "resolved_input_bindings": {"artifact:analysis_cohort": binding},
+        "cohort_sha256": cohort_sha256,
+        "universe_sha256": SHA_D,
+    }
+    scoped_context = ResearchContext(
+        research_question="Describe the analysis cohort.",
+        cohort=CohortDescriptor(
+            cohort_name="typed_table_revalidation",
+            database="synthetic",
+            n_patients=3,
+            n_stays=3,
+        ),
+        variables=[],
+        target_outcome="death",
+        created_at=datetime(2026, 7, 20, 10, tzinfo=timezone.utc),
+    )
+    coordinates = prepare_step_authority_coordinates(
+        run_dir=tmp_path,
+        step_id="02_table_one",
+        run_input_capsule_sha256=SHA_A,
+        planner_scope={"step_id": "02_table_one", "intent": "Table 1"},
+        scoped_coder_context=scoped_context.model_dump(mode="json"),
+        resolved_inputs_path=resolved,
+        typed_bindings={"artifact:analysis_cohort": binding},
+        upstream_authority=upstream,
+        deterministic_gate_fingerprint=SHA_C,
+        engine_code_sha256=SHA_D,
+        validator_code_sha256=SHA_E,
+        prompt_pack_version="2026-07-20",
+        prompt_pack={"coder.txt": SHA_A},
+    )
+    return coordinates, upstream
+
+
+def test_control_plane_revalidation_accepts_only_additive_v2_to_v3_table_facts(
+    tmp_path: Path,
+) -> None:
+    columns = ["stay_id", "group", "age"]
+    historical, _historical_upstream = _resolved_table_coordinates(
+        tmp_path,
+        filename="resolved_v2.json",
+        contract={
+            "schema_version": "easyicu.host_typed_product.v2",
+            "tabular_format": "parquet",
+            "column_count": len(columns),
+            "columns": columns,
+        },
+    )
+    code_ref = persist_candidate_code(historical, "print('table one')\n")
+    historical_ref = seal_legacy_candidate(historical, code_ref=code_ref)
+    verified = load_verified_step_authority_capsule(tmp_path, ref=historical_ref)
+    current, _current_upstream = _resolved_table_coordinates(
+        tmp_path,
+        filename="resolved_v3.json",
+        contract={
+            "schema_version": "easyicu.host_typed_product.v3",
+            "tabular_format": "parquet",
+            "column_count": len(columns),
+            "columns": columns,
+            "column_dtypes": {
+                "stay_id": "int64",
+                "group": "object",
+                "age": "float64",
+            },
+            "numeric_columns": ["stay_id", "age"],
+        },
+    )
+
+    adopted = adopt_candidate_for_control_plane_revalidation(verified, current)
+
+    assert adopted is not None
+    _context, adopted_coordinates, adopted_ref = adopted
+    adopted_capsule = load_verified_step_authority_capsule(
+        tmp_path,
+        ref=adopted_ref,
+    )
+    assert adopted_coordinates.resolved_inputs == current.resolved_inputs
+    assert adopted_capsule.capsule.candidate_code == code_ref
+    assert adopted_capsule.capsule.candidate_origin.kind == "legacy_adoption"
+    assert (
+        adopted_capsule.capsule.candidate_origin.input_representation_upgrade_proof
+        is not None
+    )
+    assert (
+        adopted_capsule.capsule.candidate_origin.adopted_from_capsule_sha256
+        == historical_ref.capsule_sha256
+    )
+
+    proof_ref = (
+        adopted_capsule.capsule.candidate_origin.input_representation_upgrade_proof
+    )
+    assert proof_ref is not None
+    forged_proof = json.loads(read_verified_content(tmp_path, proof_ref))
+    forged_proof["current_upstream_authority"]["cohort_sha256"] = SHA_E
+    forged_proof_ref = put_content_blob(
+        tmp_path,
+        payload=json.dumps(
+            forged_proof,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8"),
+        media_type="application/json",
+    )
+    forged_origin = adopted_capsule.capsule.candidate_origin.model_copy(
+        update={"input_representation_upgrade_proof": forged_proof_ref}
+    )
+    forged_capsule = adopted_capsule.capsule.model_copy(
+        update={"candidate_origin": forged_origin}
+    )
+    with pytest.raises(
+        StepAuthorityCapsuleError,
+        match="disagrees with its verified scientific source",
+    ):
+        seal_step_authority_capsule(tmp_path, forged_capsule)
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    ["artifact_sha", "columns", "cohort_sha", "extra_contract_field"],
+)
+def test_control_plane_revalidation_rejects_scientific_or_unproven_input_drift(
+    tmp_path: Path,
+    mutation: str,
+) -> None:
+    columns = ["stay_id", "group", "age"]
+    historical, _historical_upstream = _resolved_table_coordinates(
+        tmp_path,
+        filename="resolved_v2.json",
+        contract={
+            "schema_version": "easyicu.host_typed_product.v2",
+            "tabular_format": "parquet",
+            "column_count": len(columns),
+            "columns": columns,
+        },
+    )
+    historical_ref = seal_legacy_candidate(
+        historical,
+        code_ref=persist_candidate_code(historical, "print('table one')\n"),
+    )
+    verified = load_verified_step_authority_capsule(tmp_path, ref=historical_ref)
+    current_columns = [*columns, "outcome"] if mutation == "columns" else columns
+    current_contract: dict[str, object] = {
+        "schema_version": "easyicu.host_typed_product.v3",
+        "tabular_format": "parquet",
+        "column_count": len(current_columns),
+        "columns": current_columns,
+        "column_dtypes": {column: "float64" for column in current_columns},
+        "numeric_columns": list(current_columns),
+    }
+    if mutation == "extra_contract_field":
+        current_contract["semantic_roles"] = {"outcome": "death"}
+    current, _current_upstream = _resolved_table_coordinates(
+        tmp_path,
+        filename="resolved_v3.json",
+        contract=current_contract,
+        artifact_sha256=(SHA_E if mutation == "artifact_sha" else SHA_B),
+        cohort_sha256=(SHA_E if mutation == "cohort_sha" else SHA_C),
+    )
+
+    assert adopt_candidate_for_control_plane_revalidation(verified, current) is None
 
 
 def _repair_binding(coordinates, *, attempt_id: int, before_code_sha256: str):
