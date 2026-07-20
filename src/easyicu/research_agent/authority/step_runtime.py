@@ -957,6 +957,58 @@ def load_explicit_failed_step_capsule(
     return verified
 
 
+def load_explicit_success_step_capsule(
+    run_dir: str | Path,
+    *,
+    step_id: str,
+    record: Mapping[str, object],
+) -> Optional[VerifiedStepAuthorityCapsule]:
+    """Load exact historical success bytes for explicit current revalidation.
+
+    A targeted ``stop_after`` run may temporarily omit later successful steps
+    from the current selector while their append-only history remains intact.
+    Re-entering one of those steps must not purchase a second initial draft.
+    This returns candidate code only; current execution, audit, gates, and
+    evidence registration remain mandatory.
+    """
+
+    if (
+        str(record.get("status") or "").strip().lower() != "ok"
+        or record.get("provider_call_budget_receipt_invalid") is True
+        or record.get("quarantined_requires_repair") is True
+        or record.get("returncode") != 0
+        or record.get("timed_out") is not False
+        or record.get("outputs_safe_to_collect") is not True
+    ):
+        return None
+    executed_sha256 = str(record.get("executed_code_sha256") or "")
+    approved_sha256 = str(record.get("concept_approved_code_sha256") or "")
+    if (
+        len(executed_sha256) != 64
+        or any(char not in "0123456789abcdef" for char in executed_sha256)
+        or approved_sha256 != executed_sha256
+    ):
+        return None
+    try:
+        ref = StepAuthorityCapsuleRef.model_validate(
+            record.get("step_authority_capsule_ref")
+        )
+        verified = load_verified_step_authority_capsule(
+            run_dir,
+            ref=ref,
+            expected_step_id=str(step_id),
+        )
+    except (ValidationError, StepAuthorityCapsuleError, ValueError) as exc:
+        raise StepAuthorityRuntimeError(
+            "explicit successful-step capsule is missing, corrupt, or inconsistent"
+        ) from exc
+    if verified.capsule.candidate_code.sha256 != executed_sha256:
+        raise StepAuthorityRuntimeError(
+            "explicit successful-step capsule code digest is inconsistent"
+        )
+    return verified
+
+
 def capsule_matches_coordinates(
     verified: VerifiedStepAuthorityCapsule,
     coordinates: StepAuthorityCoordinates,
@@ -1376,6 +1428,7 @@ __all__ = [
     "initial_generation_code_ref",
     "load_checkpoint_selected_step_capsule",
     "load_explicit_failed_step_capsule",
+    "load_explicit_success_step_capsule",
     "materialize_sealed_run_result",
     "persist_candidate_code",
     "prepare_step_authority_coordinates",

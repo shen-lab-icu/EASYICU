@@ -377,6 +377,7 @@ from ..authority.step_runtime import (
     initial_generation_code_ref,
     load_checkpoint_selected_step_capsule,
     load_explicit_failed_step_capsule,
+    load_explicit_success_step_capsule,
     materialize_sealed_run_result,
     persist_candidate_code,
     prepare_step_authority_coordinates,
@@ -5596,6 +5597,15 @@ def run_execute_phase(
                                 ),
                             }
                         )
+                    if failed_capsule is None:
+                        success_capsule = load_explicit_success_step_capsule(
+                            run_dir,
+                            step_id=step.step_id,
+                            record=prior_step_record,
+                        )
+                        if success_capsule is not None:
+                            step_attempt_state.selected_resume_capsule = success_capsule
+                            step_record["explicit_success_capsule_reused"] = True
                 if (
                     step_attempt_state.selected_resume_capsule is None
                     and isinstance(prior_step_record, Mapping)

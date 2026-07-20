@@ -4,8 +4,8 @@
   "shim_import_paths": [],
   "files": {
     "execution/phase.py": {
-      "loc": 11497,
-      "sha256": "5afdafc8c176d3281bd4b10384e145f5f738570348ca3cf1ae14746ce9602650",
+      "loc": 11507,
+      "sha256": "aadcf526f397c6b2584dd6f6cd7bb6e0ebc8880c444cef1afe7c81a1796dffe4",
       "intra_package_import_edges": 67,
       "shim_bypass_violations": []
     },
@@ -52,8 +52,8 @@
       "shim_bypass_violations": []
     },
     "gates/preflight.py": {
-      "loc": 8129,
-      "sha256": "e66a80778207c67f095ae2fc7ff5bc3e19fd287a5be2086e2404d48f6ae48160",
+      "loc": 8125,
+      "sha256": "3b8a912b606803536b10360821210c1218b412a3ededf60fa0be696ef7d9a6ed",
       "intra_package_import_edges": 3,
       "shim_bypass_violations": []
     },
@@ -78,11 +78,11 @@
   },
   "functions": {
     "execution/phase.py::_execute_one_step": {
-      "lines": 6172,
-      "line_start": 4869,
+      "lines": 6181,
+      "line_start": 4870,
       "direct_nested_funcs": 24,
       "total_nested_funcs": 26,
-      "own_bound_names": 343,
+      "own_bound_names": 344,
       "own_nonlocal_names": [
         "runtime_state"
       ],
@@ -90,8 +90,8 @@
       "callable_closure_captured_names": 31
     },
     "execution/phase.py::run_execute_phase": {
-      "lines": 7944,
-      "line_start": 3554,
+      "lines": 7953,
+      "line_start": 3555,
       "direct_nested_funcs": 15,
       "total_nested_funcs": 45,
       "own_bound_names": 145,
