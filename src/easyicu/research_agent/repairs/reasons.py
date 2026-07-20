@@ -541,6 +541,9 @@ _DETAIL_REASON_CODES = {
     "string_suffix_trim_length_mismatch": (RepairReason.STRING_SUFFIX_TRIM_MISMATCH),
     "resolved_context_payload_not_loaded": (RepairReason.TYPED_CONTEXT_BINDING_INVALID),
     "resolved_input_key_not_materialized": (RepairReason.TYPED_PRODUCT_BINDING_INVALID),
+    "resolved_input_relative_path_wrong_root": (
+        RepairReason.TYPED_PRODUCT_BINDING_INVALID
+    ),
     "fstring_runtime_quote_incompatible": (RepairReason.RUNTIME_SYNTAX_INCOMPATIBLE),
     "undefined_helper_call": RepairReason.UNDEFINED_HELPER,
     "branch_local_unbound": RepairReason.UNBOUND_LOCAL,
