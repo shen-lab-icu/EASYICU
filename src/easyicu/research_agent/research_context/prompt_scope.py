@@ -126,6 +126,16 @@ _TIMING_METHODS = frozenset(
     }
 )
 
+_COMPACT_MECHANICAL_GUIDANCE = """MECHANICAL PYTHON CONTRACT:
+- Use valid Python collection literals/constructors; never write set(value) with multiple positional values.
+- With NumPy 2, create nullable string labels via an object/string pandas Series plus `.loc`; do not mix strings and NaN in `np.where` or `np.select`.
+- Import only packages listed in AVAILABLE ANALYTICAL LIBRARIES. Mechanical validation still runs before execution."""
+
+_COMPACT_SERIALIZATION_GUIDANCE = """OUTPUT SERIALIZATION CONTRACT:
+- JSON values must be Python primitives. Convert NumPy scalars to int/float/bool, arrays to lists, and pandas/NumPy missing or non-finite values to None; always pass a `default=` converter to `json.dump`.
+- Every CSV cell must be one scalar. Emit separate columns for median, quartiles, counts, and percentages; emit one row per categorical level.
+- Never assign the result of an inplace pandas operation, and prefer stable `.agg`/`.transform` over mixed-shape `groupby.apply`."""
+
 
 def normalised_method_head(method: object) -> str:
     """Return the exact scientific method head before an optional rider."""
@@ -149,22 +159,101 @@ def _descriptive_table_contract_applies(step: AnalysisStep) -> bool:
     """Return whether exact method/product structure owns a descriptive table."""
 
     method = normalised_method_head(step.method)
+    method_tokens = frozenset(method.split("_"))
     output_names = {
         name
         for kind, name in _typed_products(step.expected_outputs or [])
         if kind == "table"
     }
-    return bool(method in _TABLE_METHODS or output_names & _DESCRIPTIVE_TABLE_PRODUCTS)
+    semantic_summary = bool(
+        "descriptive" in method_tokens
+        or (
+            "summary" in method_tokens
+            and not method_tokens
+            & {
+                "model",
+                "prediction",
+                "provenance",
+                "reporting",
+                "robustness",
+                "sensitivity",
+            }
+        )
+    )
+    return bool(
+        method in _TABLE_METHODS
+        or output_names & _DESCRIPTIVE_TABLE_PRODUCTS
+        or semantic_summary
+    )
+
+
+def _quality_control_contract_applies(step: AnalysisStep) -> bool:
+    """Recognise a case-neutral QC/audit method from its structural label."""
+
+    method = normalised_method_head(step.method)
+    tokens = frozenset(method.split("_"))
+    return bool(
+        method in _QUALITY_CONTROL_METHODS
+        or "quality_control" in method
+        or (
+            "audit" in tokens
+            and tokens & {"data", "exposure", "measurement", "missingness"}
+        )
+    )
+
+
+def _robustness_contract_applies(step: AnalysisStep) -> bool:
+    """Recognise a robustness/sensitivity step without intent-text routing."""
+
+    method = normalised_method_head(step.method)
+    tokens = frozenset(method.split("_"))
+    return bool(method in _ROBUSTNESS_METHODS or tokens & {"robustness", "sensitivity"})
+
+
+def _reporting_contract_applies(step: AnalysisStep) -> bool:
+    """Return whether this is a typed manuscript/report assembly step."""
+
+    method_tokens = frozenset(normalised_method_head(step.method).split("_"))
+    output_kinds = {kind for kind, _ in _typed_products(step.expected_outputs or [])}
+    return bool(
+        output_kinds
+        and output_kinds <= {"artifact", "report"}
+        and method_tokens & {"manuscript", "provenance", "render", "reporting"}
+    )
+
+
+def _binary_event_presence_contract_applies(step: AnalysisStep) -> bool:
+    """Select the sparse-event exception only for an explicit paired design."""
+
+    method_tokens = frozenset(normalised_method_head(step.method).split("_"))
+    output_tokens = {
+        token
+        for _, name in _typed_products(step.expected_outputs or [])
+        for token in name.split("_")
+    }
+    semantic_tokens = method_tokens | output_tokens
+    if not semantic_tokens & {"binary", "event", "incidence", "presence"}:
+        return False
+    names = {
+        str(value or "").strip().lower()
+        for value in (step.inputs or [])
+        if ":" not in str(value or "")
+    }
+    count_stems = {name[: -len("_n")] for name in names if name.endswith("_n")}
+    measured_stems = {
+        name[: -len("_measured")] for name in names if name.endswith("_measured")
+    }
+    return bool(count_stems & measured_stems)
 
 
 def _figure_contract_applies(step: AnalysisStep) -> bool:
-    """Return whether exact method or a typed output makes this a figure step."""
+    """Return whether this is rendering-only, not a model with a figure output."""
 
     method = normalised_method_head(step.method)
     output_kinds = {kind for kind, _ in _typed_products(step.expected_outputs or [])}
+    figure_kinds = {"figure", "plot", "chart", "heatmap"}
     return bool(
-        method in _FIGURE_METHODS
-        or output_kinds & {"figure", "plot", "chart", "heatmap"}
+        method in _FIGURE_METHODS or (output_kinds and output_kinds <= figure_kinds)
     )
 
 
@@ -268,21 +357,31 @@ def coder_guide_for_step(
     output_names = {name for _, name in outputs}
     is_data_quality_audit = canonical_analysis_family(method) == "data_quality_audit"
     is_quality_control = bool(
-        method in _QUALITY_CONTROL_METHODS or is_data_quality_audit
+        _quality_control_contract_applies(step) or is_data_quality_audit
     )
     is_ordered = is_ordered_stratified_analysis_step(step)
     is_ordered_semantics = bool(
-        is_ordered or method in _ORDERED_QUALITY_CONTROL_METHODS
+        is_ordered
+        or method in _ORDERED_QUALITY_CONTROL_METHODS
+        or {"ordinal", "ordered"} & set(method.split("_"))
+        or any(
+            token in name for name in output_names for token in ("ordinal", "ordered")
+        )
     )
     is_cohort_change = cohort_change_contract_applies(step)
+    is_robustness = _robustness_contract_applies(step)
+    is_reporting = _reporting_contract_applies(step)
     is_trajectory = bool(
         trajectory_step_roles(step)
         or clustering_contract_applies(step)
         or step.trajectory_stability_spec is not None
     )
 
-    selected = {"core", "runtime", "helper_guard", "serialization"}
-    if any(kind not in {"cohort", "dataset"} for kind, _ in inputs):
+    selected = {"core", "runtime", "helper_guard"}
+    if any(
+        kind not in {"cohort", "dataset"} and name != "analysis_cohort"
+        for kind, name in inputs
+    ):
         # The host maps a locked cohort/dataset input to COHORT_PARQUET.  The
         # longer evidence-directory lookup tutorial is only useful when this
         # step must resolve some other typed upstream product itself.
@@ -326,7 +425,8 @@ def coder_guide_for_step(
         or is_quality_control
         or is_ordered
         or is_cohort_change
-        or method in _ROBUSTNESS_METHODS
+        or is_robustness
+        or is_reporting
     )
     is_effect = effect_output_authorized(step)
     is_adjusted = bool(
@@ -336,18 +436,33 @@ def coder_guide_for_step(
         or (not known_non_adjusted and not (is_figure or is_table or is_trajectory))
     )
     if is_adjusted:
-        selected.update(("model_safety", "derived"))
+        selected.add("model_safety")
         if step.model_requirements or method == PLANNED_MODEL_REQUIREMENTS_STEP_METHOD:
             selected.add("adjusted")
-    if is_quality_control or is_ordered or is_table or not (is_figure or is_trajectory):
-        selected.update(("clinical", "clinical_tail", "hygiene"))
-        if not is_ordered_semantics:
+    has_provenance_inputs = any(
+        re.search(
+            r"(?:_n|_measured|_status|_first_time|_last_time)" r"(?:_\d+(?:h|d))?$",
+            name,
+        )
+        for raw in (step.inputs or [])
+        for name in [str(raw or "").strip().lower()]
+        if ":" not in name
+    )
+    if (
+        is_quality_control
+        or is_ordered
+        or is_table
+        or not (is_figure or is_trajectory or is_reporting)
+    ):
+        selected.add("clinical")
+        if is_quality_control or has_provenance_inputs:
+            selected.add("clinical_tail")
+        if not is_ordered_semantics and _binary_event_presence_contract_applies(step):
             selected.add("binary_event")
-    if is_quality_control:
-        # QC scripts retain the complete clinical/provenance contract.  Their
-        # generic Python idiom tutorial is mechanical transport, already
-        # enforced by syntax/import/code preflight and targeted repair.
-        selected.discard("hygiene")
+    # The long generic tutorial is transport-heavy. Keep its few residual
+    # safety rules in the compact contract below; deterministic preflight and
+    # repair continue to own syntax, imports, and host-helper call shapes.
+    selected.discard("hygiene")
     needs_statistics = bool(
         is_adjusted
         or is_prediction
@@ -367,7 +482,7 @@ def coder_guide_for_step(
         selected.add("timing_guard")
     if is_prediction:
         selected.update(("prediction", "derived"))
-    if method in _ROBUSTNESS_METHODS:
+    if is_robustness:
         selected.update(("derived", "robustness"))
     if any(
         name.endswith(("source_status", "missingness_audit")) for name in input_names
@@ -375,11 +490,16 @@ def coder_guide_for_step(
         selected.add("source")
 
     canonical_order = list(sections)
-    return "\n\n".join(
+    parts = [
         sections[name]
         for name in canonical_order
         if name in selected and name not in _exclude_sections and sections[name]
-    ).strip()
+    ]
+    if "hygiene" not in _exclude_sections:
+        parts.append(_COMPACT_MECHANICAL_GUIDANCE)
+    if "serialization" not in _exclude_sections:
+        parts.append(_COMPACT_SERIALIZATION_GUIDANCE)
+    return "\n\n".join(parts).strip()
 
 
 def coder_rewrite_guide_for_step(full_guide: str, step: AnalysisStep) -> str:
@@ -409,7 +529,9 @@ def coder_context_requires_method_constraints(step: AnalysisStep) -> bool:
         return True
     if effect_output_authorized(step):
         return True
-    if canonical_analysis_family(method) == "data_quality_audit":
+    if canonical_analysis_family(
+        method
+    ) == "data_quality_audit" or _quality_control_contract_applies(step):
         return False
     if is_ordered_stratified_analysis_step(step):
         return False
@@ -418,6 +540,8 @@ def coder_context_requires_method_constraints(step: AnalysisStep) -> bool:
     if _descriptive_table_contract_applies(step):
         return False
     if _figure_contract_applies(step):
+        return False
+    if _reporting_contract_applies(step):
         return False
     return method not in (_FIGURE_METHODS | _TABLE_METHODS | _QUALITY_CONTROL_METHODS)
 
@@ -428,6 +552,25 @@ def _variable_family(name: object) -> str:
         if lowered.endswith(suffix):
             return lowered[: -len(suffix)]
     return lowered
+
+
+def _is_required_source_companion(variable: object) -> bool:
+    """Keep provenance coordinates, not every unrequested sibling summary.
+
+    ``source_concept`` groups physical export columns.  A selected value needs
+    its count/measurement/time/status coordinates for provenance auditing, but
+    unrelated ``first/min/max/mean`` representations are different scientific
+    variables and should not be injected unless the Planner declared them.
+    """
+
+    name = str(getattr(variable, "name", "") or "").strip().lower()
+    return bool(
+        re.search(
+            r"(?:_n|_measured|_status|_valid|_first_time|_last_time)"
+            r"(?:_\d+(?:h|d))?$",
+            name,
+        )
+    )
 
 
 def scoped_coder_context(
@@ -450,15 +593,15 @@ def scoped_coder_context(
         for value in (requirement.outcome, requirement.exposure_source)
         if str(value or "").strip()
     )
-    families = {_variable_family(value) for value in declared}
     direct = {
         str(value).strip().lower()
         for value in (context.target_outcome, context.primary_exposure)
         if value
     }
     seed_names = declared | direct
+    code_referenced = set()
     if code:
-        seed_names.update(
+        code_referenced.update(
             variable.name.lower()
             for variable in context.variables
             if re.search(
@@ -466,6 +609,8 @@ def scoped_coder_context(
                 code,
             )
         )
+        seed_names.update(code_referenced)
+    families = {_variable_family(value) for value in seed_names}
     source_concepts = {
         str(variable.source_concept).strip().lower()
         for variable in context.variables
@@ -478,9 +623,15 @@ def scoped_coder_context(
         source_concept = str(variable.source_concept or "").strip().lower()
         if (
             name in declared
-            or _variable_family(name) in families
             or name in direct
-            or (source_concept and source_concept in source_concepts)
+            or name in code_referenced
+            or (
+                _is_required_source_companion(variable)
+                and (
+                    _variable_family(name) in families
+                    or (source_concept and source_concept in source_concepts)
+                )
+            )
         ):
             priority.append(variable)
         elif code and re.search(
@@ -489,10 +640,10 @@ def scoped_coder_context(
         ):
             referenced.append(variable)
     # ``max_variables`` is a transport target, not permission to cut an
-    # authoritative concept family in half.  Keep every declared/direct/code
-    # variable and every source_concept companion as one atomic capsule.  Do
-    # not pad spare capacity with unrelated cohort columns; that was the main
-    # source of 36-column prompts whose useful metadata was still incomplete.
+    # authoritative input set in half. Keep every declared/direct/code variable
+    # and its required provenance coordinates. Do not pad spare capacity with
+    # unrelated cohort columns; that was the main source of 36-column prompts
+    # whose useful metadata was still incomplete.
     cap = max(1, int(max_variables))
     selected = list(priority)
     if len(selected) < cap:
@@ -501,6 +652,11 @@ def scoped_coder_context(
         context,
         selected,
         additional_concept_ids=tuple(sorted(declared)),
+        # The selected variables already include the value and its required
+        # provenance companions. Retaining every other physical column with the
+        # same source_concept would recreate the wide-context leak inside the
+        # host-owned materialized attachment.
+        include_source_concept_siblings=False,
     )
 
 

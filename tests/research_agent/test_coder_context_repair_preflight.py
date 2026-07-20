@@ -147,7 +147,7 @@ def test_step_scoped_context_keeps_all_declared_source_concept_companions(ra):
     assert len(scoped.variables) <= 36
 
 
-def test_step_scoped_context_never_truncates_an_authoritative_companion_family(ra):
+def test_step_scoped_context_drops_unrequested_sibling_summaries(ra):
     variables = [
         ra.ConceptDescriptor(
             name=f"event_companion_{index}",
@@ -175,9 +175,34 @@ def test_step_scoped_context_never_truncates_an_authoritative_companion_family(r
 
     scoped = scoped_coder_context(context, step, max_variables=36)
 
+    assert [variable.name for variable in scoped.variables] == ["event_companion_0"]
+
+
+def test_step_scoped_context_never_truncates_explicit_planner_inputs(ra):
+    variables = [
+        ra.ConceptDescriptor(name=f"declared_{index}", dtype="float64")
+        for index in range(40)
+    ]
+    context = ra.ResearchContext(
+        research_question="Summarise every Planner-declared variable.",
+        cohort=ra.CohortDescriptor(
+            cohort_name="demo", database="synthetic", n_stays=20, n_patients=18
+        ),
+        variables=variables,
+    )
+    step = ra.AnalysisStep(
+        step_id="wide_summary",
+        intent="Summarise the declared variables.",
+        inputs=[variable.name for variable in variables],
+        expected_outputs=["table:wide_summary"],
+        method="descriptive_summary",
+    )
+
+    scoped = scoped_coder_context(context, step, max_variables=36)
+
     assert len(scoped.variables) == 40
     assert {variable.name for variable in scoped.variables} == {
-        f"event_companion_{index}" for index in range(40)
+        f"declared_{index}" for index in range(40)
     }
 
 
