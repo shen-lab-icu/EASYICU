@@ -2829,9 +2829,12 @@ def _selectively_revalidate_resume_successes(
     for authority_record in authority_history:
         if authority_record not in history:
             history.append(authority_record)
-    current_records = [
-        dict(record) for record in current_step_records(authority_history)
-    ]
+    # Resume audit history is append-only and may contain a newer invalidation
+    # than the compact outer authority view (for example after an interrupted
+    # execution attempt rewrote only the latter).  Resolve latest-per-step from
+    # the merged monotonic history so validator-invalid checkpoints cannot
+    # disappear and fall through to a second initial-generation purchase.
+    current_records = [dict(record) for record in current_step_records(history)]
     current_successes = [
         record
         for record in current_records

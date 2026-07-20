@@ -119,9 +119,14 @@ def _revalidate(
     resume_from_step_id: str | None = None,
     cohort_path: Path | None = None,
     universe_path: Path | None = None,
+    attempt_history: list[dict] | None = None,
 ):
     return pipeline_execute._selectively_revalidate_resume_successes(
-        resume_state={"per_step_records": records, "findings": []},
+        resume_state={
+            "per_step_records": records,
+            "step_attempt_history": attempt_history or [],
+            "findings": [],
+        },
         plan=plan,
         context=_context(),
         evidence=evidence,
@@ -923,6 +928,50 @@ def test_legacy_invalid_checkpoint_gets_monotonic_capsule_recovery_continuation(
     assert latest["attempt_id"].endswith(":candidate_recovery")
     assert latest["resume_revalidation_candidate_code_sha256"] == "a" * 64
     assert result.invalidated_step_ids == (step.step_id,)
+
+
+def test_compact_authority_view_cannot_hide_newer_invalid_attempt_history(
+    replay_environment,
+) -> None:
+    pipeline_execute, run_dir, evidence = replay_environment
+    step = AnalysisStep(step_id="01_model", intent="Fit the planned model.")
+    success, _, _ = _register_success(
+        run_dir=run_dir,
+        evidence=evidence,
+        step=step,
+    )
+    success.update(
+        {
+            "attempt_id": "01_model:attempt:1",
+            "executed_code_sha256": "a" * 64,
+            "step_authority_capsule_ref": {
+                "schema_version": "easyicu.step_authority_capsule_ref/1",
+                "step_id": step.step_id,
+                "capsule_sha256": "b" * 64,
+            },
+        }
+    )
+    invalid = {
+        "step_id": step.step_id,
+        "status": "resume_validator_invalid",
+        "attempt_id": "01_model:resume_revalidation:1",
+        "revalidated_without_execution": True,
+        "evidence_ids": [],
+    }
+
+    result = _revalidate(
+        pipeline_execute,
+        run_dir=run_dir,
+        evidence=evidence,
+        records=[],
+        attempt_history=[success, invalid],
+        plan=AnalysisPlan(research_question="Question", steps=[step]),
+        resume_from_step_id=step.step_id,
+    )
+
+    latest = result.resume_state["per_step_records"][-1]
+    assert latest["status"] == "resume_validator_invalid"
+    assert latest["resume_revalidation_candidate_code_sha256"] == "a" * 64
 
 
 def test_alias_retirement_failure_rolls_back_manifest_and_alias_authority(
