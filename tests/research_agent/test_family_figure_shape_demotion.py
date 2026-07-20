@@ -85,6 +85,22 @@ def test_family_gate_true_for_renderer_backed_false_for_association():
     assert _family_has_deterministic_figure_renderer(_context(_ASSOCIATION)) is False
 
 
+def test_auxiliary_figure_step_is_not_held_to_primary_panel_count() -> None:
+    from easyicu.research_agent.audits.validators import FigureContractQualityValidator
+    from easyicu.research_agent.schema import AnalysisStep
+
+    step = AnalysisStep(
+        step_id="03_measurement_qc_figure",
+        planned_analysis_role="auxiliary",
+        intent="Render registered QC tables without changing the analysis.",
+        inputs=["table:measurement_audit"],
+        expected_outputs=["figure:measurement_distribution"],
+        method="visualization",
+    )
+
+    assert FigureContractQualityValidator._is_supporting_figure_step(step) is True
+
+
 # --- demotion ---------------------------------------------------------------
 
 
