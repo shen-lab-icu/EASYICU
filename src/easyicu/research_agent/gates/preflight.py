@@ -3169,6 +3169,83 @@ def _resolved_input_binding_key_findings(tree: ast.Module) -> list[ValidationFin
     return findings
 
 
+def _pre312_fstring_subscript_quote_findings(
+    code: str,
+    tree: ast.Module,
+) -> list[ValidationFinding]:
+    """Find PEP-701-only subscript quotes rejected by the Python 3.11 runner."""
+
+    parents = {
+        id(child): parent
+        for parent in ast.walk(tree)
+        for child in ast.iter_child_nodes(parent)
+    }
+    occurrences: list[dict[str, object]] = []
+    for joined in ast.walk(tree):
+        if not isinstance(joined, ast.JoinedStr):
+            continue
+        source = ast.get_source_segment(code, joined)
+        if not source:
+            continue
+        prefix = re.match(r"(?i)^[rubf]*", source)
+        prefix_end = prefix.end() if prefix is not None else 0
+        remainder = source[prefix_end:]
+        if remainder.startswith(('"""', "'''")) or not remainder.startswith(('"', "'")):
+            continue
+        outer_quote = remainder[0]
+        for formatted in joined.values:
+            if not isinstance(formatted, ast.FormattedValue):
+                continue
+            for candidate in ast.walk(formatted.value):
+                parent = parents.get(id(candidate))
+                if not (
+                    isinstance(candidate, ast.Constant)
+                    and isinstance(candidate.value, str)
+                    and isinstance(parent, ast.Subscript)
+                    and parent.slice is candidate
+                    and candidate.end_lineno is not None
+                    and candidate.end_col_offset is not None
+                ):
+                    continue
+                literal_source = ast.get_source_segment(code, candidate)
+                if not literal_source or not literal_source.startswith(outer_quote):
+                    continue
+                occurrences.append(
+                    {
+                        "line": int(candidate.lineno),
+                        "column": int(candidate.col_offset),
+                        "end_line": int(candidate.end_lineno),
+                        "end_column": int(candidate.end_col_offset),
+                        "outer_quote": ("double" if outer_quote == '"' else "single"),
+                    }
+                )
+    if not occurrences:
+        return []
+    occurrences.sort(
+        key=lambda occurrence: (
+            int(occurrence["line"]),
+            int(occurrence["column"]),
+            int(occurrence["end_line"]),
+            int(occurrence["end_column"]),
+        )
+    )
+    return [
+        ValidationFinding(
+            validator="mechanical_code_preflight",
+            severity="error",
+            message=(
+                "A generated f-string uses its outer quote inside a subscript "
+                "expression; the sandbox Python runtime rejects this PEP-701-only "
+                "syntax."
+            ),
+            detail={
+                "reason": "fstring_runtime_quote_incompatible",
+                "occurrences": occurrences,
+            },
+        )
+    ]
+
+
 _HOST_VALIDATION_FAILURE_EXCEPTIONS = frozenset(
     {
         "BaseException",
@@ -7480,6 +7557,7 @@ def audit_mechanical_code_contracts(
     findings.extend(_string_suffix_trim_findings(tree))
     findings.extend(_resolved_context_payload_findings(tree))
     findings.extend(_resolved_input_binding_key_findings(tree))
+    findings.extend(_pre312_fstring_subscript_quote_findings(script_text, tree))
     findings.extend(_swallowed_reconciliation_error_findings(tree))
     findings.extend(_authoritative_exposure_binding_findings(tree, step))
     findings.extend(_authoritative_exposure_fallback_findings(tree, step))

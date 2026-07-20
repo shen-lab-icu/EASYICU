@@ -2135,6 +2135,127 @@ def _patch_resolved_input_identity_key(
     return repaired
 
 
+def _patch_pre312_fstring_subscript_quotes(
+    code: str,
+    *,
+    repair_findings: Sequence[ValidationFinding],
+) -> str:
+    """Use the opposite quote for subscript literals inside simple f-strings."""
+
+    coordinates: list[tuple[int, int, int, int, str]] = []
+    matching_findings = 0
+    for finding in repair_findings:
+        detail = finding.detail or {}
+        if detail.get("reason") != "fstring_runtime_quote_incompatible":
+            continue
+        matching_findings += 1
+        occurrences = detail.get("occurrences")
+        if not isinstance(occurrences, list) or not occurrences:
+            return code
+        for occurrence in occurrences:
+            if not isinstance(occurrence, dict):
+                return code
+            values = (
+                occurrence.get("line"),
+                occurrence.get("column"),
+                occurrence.get("end_line"),
+                occurrence.get("end_column"),
+            )
+            outer_quote_name = occurrence.get("outer_quote")
+            if not (
+                all(
+                    isinstance(value, int)
+                    and not isinstance(value, bool)
+                    and value >= 0
+                    for value in values
+                )
+                and int(values[0]) > 0
+                and int(values[2]) > 0
+                and outer_quote_name in {"double", "single"}
+            ):
+                return code
+            outer_quote = '"' if outer_quote_name == "double" else "'"
+            coordinates.append(
+                (
+                    int(values[0]),
+                    int(values[1]),
+                    int(values[2]),
+                    int(values[3]),
+                    str(outer_quote),
+                )
+            )
+    if (
+        matching_findings != 1
+        or not coordinates
+        or len(coordinates) != len(set(coordinates))
+    ):
+        return code
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return code
+    parents = {
+        id(child): parent
+        for parent in ast.walk(tree)
+        for child in ast.iter_child_nodes(parent)
+    }
+    constants = {
+        (
+            int(node.lineno),
+            int(node.col_offset),
+            int(node.end_lineno),
+            int(node.end_col_offset),
+        ): node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Constant)
+        and isinstance(node.value, str)
+        and node.end_lineno is not None
+        and node.end_col_offset is not None
+        and isinstance(parents.get(id(node)), ast.Subscript)
+        and parents[id(node)].slice is node
+    }
+    lines = code.splitlines(keepends=True)
+    line_starts: list[int] = []
+    offset = 0
+    for line in lines:
+        line_starts.append(offset)
+        offset += len(line)
+
+    def _absolute_offset(lineno: int, utf8_col: int) -> int:
+        line = lines[lineno - 1]
+        char_col = len(line.encode("utf-8")[:utf8_col].decode("utf-8"))
+        return line_starts[lineno - 1] + char_col
+
+    replacements: list[tuple[int, int, str]] = []
+    for line, column, end_line, end_column, outer_quote in coordinates:
+        node = constants.get((line, column, end_line, end_column))
+        if node is None:
+            return code
+        source = ast.get_source_segment(code, node)
+        if not source or not source.startswith(outer_quote):
+            return code
+        if outer_quote == '"':
+            content = json.dumps(node.value, ensure_ascii=False)[1:-1]
+            replacement = "'" + content.replace("'", "\\'") + "'"
+        else:
+            replacement = json.dumps(node.value, ensure_ascii=False)
+        replacements.append(
+            (
+                _absolute_offset(line, column),
+                _absolute_offset(end_line, end_column),
+                replacement,
+            )
+        )
+    repaired = code
+    for start, end, replacement in sorted(replacements, reverse=True):
+        repaired = repaired[:start] + replacement + repaired[end:]
+    try:
+        ast.parse(repaired, feature_version=(3, 11))
+    except SyntaxError:
+        return code
+    return repaired
+
+
 def deterministic_concept_audit_repair(
     code: str,
     audit_messages: Sequence[str],
@@ -2192,6 +2313,16 @@ def deterministic_concept_audit_repair(
         if identity_keyed != repaired:
             repair_name = "resolved_input_identity_key_v1"
             repaired = identity_keyed
+            repair_names.append(repair_name)
+
+    if RepairReason.RUNTIME_SYNTAX_INCOMPATIBLE in set(repair_reasons):
+        runtime_compatible = _patch_pre312_fstring_subscript_quotes(
+            repaired,
+            repair_findings=repair_findings,
+        )
+        if runtime_compatible != repaired:
+            repair_name = "fstring_runtime_quote_compat_v1"
+            repaired = runtime_compatible
             repair_names.append(repair_name)
 
     if RepairReason.ARBITRARY_COLUMN_FALLBACK in set(repair_reasons):
