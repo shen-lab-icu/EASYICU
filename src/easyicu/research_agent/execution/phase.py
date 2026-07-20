@@ -8145,25 +8145,22 @@ def run_execute_phase(
             )
             execution_runner = runner
             execution_timeout_seconds = pipeline._timeout_seconds
-            if primary_cohort_uses_universe:
-                execution_runner = pipeline._build_runner(
-                    run_dir=run_dir,
-                    cohort_path=step_execution_cohort_path,
-                    target_outcome=context.target_outcome,
-                    universe_path=universe_path,
-                    **run_input_authority_state.runner_bindings(),
-                    timeout_seconds=execution_timeout_seconds,
-                )
-            elif worker_progress.deterministic_standard_executor_used:
+            if worker_progress.deterministic_standard_executor_used:
                 # A registered standard executes the exact typed workload the
-                # planner froze. Give it a distinct bounded runner rather than
-                # widening the shared generated-code runner's timeout. This is
-                # concurrency-safe and leaves every ordinary coder attempt on
-                # the configured short budget.
+                # planner froze. Give it the dedicated bounded timeout even
+                # when the step also consumes a staged primary-cohort universe.
                 execution_timeout_seconds = pipeline._standard_executor_timeout_seconds
+            if primary_cohort_uses_universe or (
+                worker_progress.deterministic_standard_executor_used
+            ):
+                execution_cohort_path = (
+                    step_execution_cohort_path
+                    if primary_cohort_uses_universe
+                    else cohort_path
+                )
                 execution_runner = pipeline._build_runner(
                     run_dir=run_dir,
-                    cohort_path=cohort_path,
+                    cohort_path=execution_cohort_path,
                     target_outcome=context.target_outcome,
                     universe_path=universe_path,
                     **run_input_authority_state.runner_bindings(),

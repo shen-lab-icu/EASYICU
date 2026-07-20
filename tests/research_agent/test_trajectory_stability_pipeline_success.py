@@ -241,9 +241,6 @@ class _HybridTrajectoryRunner:
         ).to_csv(membership_path, index=False)
 
         representation_sha = _sha256(representation_path)
-        representation_evidence_id = (
-            f"table_trajectory_representation_{representation_sha[:8]}"
-        )
         self._write_json(
             out_dir / "trajectory_representation_schema.json",
             {
@@ -269,7 +266,6 @@ class _HybridTrajectoryRunner:
                     "eligibility_uses_observed_window_count": True,
                     "profile_summaries_ignore_missing": True,
                 },
-                "representation_evidence_id": representation_evidence_id,
                 "representation_sha256": representation_sha,
             },
         )
@@ -342,9 +338,6 @@ class _HybridTrajectoryRunner:
         self._write_json(cluster_selection_path, selection)
 
         assignment_sha = _sha256(assignments_path)
-        assignment_evidence_id = (
-            f"table_candidate_cluster_assignments_{assignment_sha[:8]}"
-        )
         self._write_json(
             out_dir / "candidate_cluster_solution_schema.json",
             {
@@ -368,10 +361,10 @@ class _HybridTrajectoryRunner:
                 "selection_rule": "minimum",
                 "direction": "minimize",
                 "selected_criterion_value": 100.0,
-                "representation_schema_evidence_id": (
-                    bindings["manifest:trajectory_representation_schema"]["evidence_id"]
+                "representation_schema_sha256": (
+                    bindings["manifest:trajectory_representation_schema"]["sha256"]
                 ),
-                "candidate_assignments_evidence_id": assignment_evidence_id,
+                "candidate_assignments_sha256": assignment_sha,
             },
         )
         self._write_json(
@@ -528,10 +521,15 @@ def test_typed_trajectory_stability_success_is_evidence_bound_and_continues(
     _disable_unrelated_audits(monkeypatch)
     llm = _PlanAndCoderLLM()
     runner_records: list[tuple[float, _HybridTrajectoryRunner]] = []
+    runners_by_timeout: dict[float, _HybridTrajectoryRunner] = {}
 
     def runner_factory(*, workdir, timeout_seconds, **_kwargs):
-        runner = _HybridTrajectoryRunner(workdir=Path(workdir))
-        runner_records.append((float(timeout_seconds), runner))
+        timeout = float(timeout_seconds)
+        runner = runners_by_timeout.get(timeout)
+        if runner is None:
+            runner = _HybridTrajectoryRunner(workdir=Path(workdir))
+            runners_by_timeout[timeout] = runner
+            runner_records.append((timeout, runner))
         return runner
 
     pipeline = ra.ResearchAgentPipeline(

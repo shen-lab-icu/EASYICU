@@ -585,9 +585,15 @@ def test_minimal_typed_pipeline_matches_normalized_golden_bundle(
     fixture._disable_unrelated_audits(monkeypatch)
     observed_events = _install_authority_order_observer(monkeypatch)
     llm = fixture._PlanAndCoderLLM()
+    runners_by_timeout: dict[float, object] = {}
 
-    def runner_factory(*, workdir, **_kwargs):
-        return fixture._HybridTrajectoryRunner(workdir=Path(workdir))
+    def runner_factory(*, workdir, timeout_seconds, **_kwargs):
+        timeout = float(timeout_seconds)
+        runner = runners_by_timeout.get(timeout)
+        if runner is None:
+            runner = fixture._HybridTrajectoryRunner(workdir=Path(workdir))
+            runners_by_timeout[timeout] = runner
+        return runner
 
     pipeline = ra.ResearchAgentPipeline(
         workdir=tmp_path,
@@ -661,9 +667,15 @@ def test_numeric_authority_failure_prevents_current_alias_publication(
         "register_step_summary_numerics",
         fail_numeric_registration,
     )
+    runners_by_timeout: dict[float, object] = {}
 
-    def runner_factory(*, workdir, **_kwargs):
-        return fixture._HybridTrajectoryRunner(workdir=Path(workdir))
+    def runner_factory(*, workdir, timeout_seconds, **_kwargs):
+        timeout = float(timeout_seconds)
+        runner = runners_by_timeout.get(timeout)
+        if runner is None:
+            runner = fixture._HybridTrajectoryRunner(workdir=Path(workdir))
+            runners_by_timeout[timeout] = runner
+        return runner
 
     pipeline = ra.ResearchAgentPipeline(
         workdir=tmp_path,
