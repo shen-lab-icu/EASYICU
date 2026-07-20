@@ -2032,6 +2032,133 @@ def _patch_string_suffix_trim_length(
     return repaired
 
 
+def _patch_boolean_reduction_identity(
+    code: str,
+    *,
+    repair_findings: Sequence[ValidationFinding],
+) -> str:
+    """Replace host-proven scalar reduction identity checks atomically."""
+
+    coordinates: list[tuple[int, str, bool, str]] = []
+    for finding in repair_findings:
+        detail = finding.detail or {}
+        if detail.get("reason") != "boolean_reduction_identity_comparison":
+            continue
+        line = detail.get("line")
+        operator = detail.get("operator")
+        boolean_literal = detail.get("boolean_literal")
+        reduction = detail.get("reduction")
+        provenance = detail.get("provenance")
+        if detail.get("repair_safe") is not True:
+            continue
+        if not (
+            isinstance(line, int)
+            and not isinstance(line, bool)
+            and line > 0
+            and operator in {"is", "is_not"}
+            and isinstance(boolean_literal, bool)
+            and reduction in {"all", "any"}
+            and provenance in {"numpy_array", "numpy_function", "pandas_series"}
+        ):
+            return code
+        coordinates.append((line, str(operator), boolean_literal, str(reduction)))
+    if not coordinates or len(coordinates) != len(set(coordinates)):
+        return code
+
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return code
+
+    def _reduction_tail(expression: ast.AST) -> Optional[str]:
+        if not isinstance(expression, ast.Call):
+            return None
+        if isinstance(expression.func, ast.Attribute):
+            return expression.func.attr
+        if isinstance(expression.func, ast.Name):
+            if expression.func.id.endswith("all"):
+                return "all"
+            if expression.func.id.endswith("any"):
+                return "any"
+        return None
+
+    replacements: list[tuple[int, int, str]] = []
+    lines = code.splitlines(keepends=True)
+    line_starts: list[int] = []
+    offset = 0
+    for line_text in lines:
+        line_starts.append(offset)
+        offset += len(line_text)
+
+    def _absolute_offset(lineno: int, utf8_col: int) -> int:
+        line_text = lines[lineno - 1]
+        char_col = len(line_text.encode("utf-8")[:utf8_col].decode("utf-8"))
+        return line_starts[lineno - 1] + char_col
+
+    for line, operator_name, boolean_literal, reduction in coordinates:
+        candidates: list[tuple[ast.Compare, ast.AST]] = []
+        for node in ast.walk(tree):
+            if not (
+                isinstance(node, ast.Compare)
+                and node.lineno == line
+                and len(node.ops) == 1
+                and len(node.comparators) == 1
+            ):
+                continue
+            operator = node.ops[0]
+            if (operator_name == "is") != isinstance(operator, ast.Is):
+                continue
+            if (operator_name == "is_not") != isinstance(operator, ast.IsNot):
+                continue
+            left, right = node.left, node.comparators[0]
+            if (
+                isinstance(left, ast.Constant)
+                and isinstance(left.value, bool)
+                and left.value is boolean_literal
+                and _reduction_tail(right) == reduction
+            ):
+                candidates.append((node, right))
+            elif (
+                isinstance(right, ast.Constant)
+                and isinstance(right.value, bool)
+                and right.value is boolean_literal
+                and _reduction_tail(left) == reduction
+            ):
+                candidates.append((node, left))
+        if len(candidates) != 1:
+            return code
+        comparison, reduction_expression = candidates[0]
+        if comparison.end_lineno is None or comparison.end_col_offset is None:
+            return code
+        expression_source = ast.get_source_segment(code, reduction_expression)
+        if not expression_source:
+            return code
+        truthy = (operator_name == "is" and boolean_literal) or (
+            operator_name == "is_not" and not boolean_literal
+        )
+        replacement = (
+            f"bool({expression_source})" if truthy else f"not bool({expression_source})"
+        )
+        replacements.append(
+            (
+                _absolute_offset(comparison.lineno, comparison.col_offset),
+                _absolute_offset(comparison.end_lineno, comparison.end_col_offset),
+                replacement,
+            )
+        )
+
+    if len(replacements) != len(coordinates):
+        return code
+    repaired = code
+    for start, end, replacement in sorted(replacements, reverse=True):
+        repaired = repaired[:start] + replacement + repaired[end:]
+    try:
+        ast.parse(repaired)
+    except SyntaxError:
+        return code
+    return repaired
+
+
 def _patch_resolved_context_digest_load(
     code: str,
     *,
@@ -2501,6 +2628,16 @@ def deterministic_concept_audit_repair(
         if guarded != repaired:
             repair_name = "lossy_numeric_coercion_guard_v1"
             repaired = guarded
+            repair_names.append(repair_name)
+
+    if RepairReason.BOOLEAN_REDUCTION_IDENTITY in set(repair_reasons):
+        value_compared = _patch_boolean_reduction_identity(
+            repaired,
+            repair_findings=repair_findings,
+        )
+        if value_compared != repaired:
+            repair_name = "boolean_reduction_identity_v1"
+            repaired = value_compared
             repair_names.append(repair_name)
 
     # Apply later-line accounting guards before earlier-line numeric guards so
