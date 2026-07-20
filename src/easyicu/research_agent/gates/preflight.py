@@ -2988,6 +2988,187 @@ def _resolved_context_payload_findings(tree: ast.Module) -> list[ValidationFindi
     return sorted(findings, key=lambda finding: int(finding.detail["line"]))
 
 
+def _resolved_input_binding_key_findings(tree: ast.Module) -> list[ValidationFinding]:
+    """Reject reading ``input_key`` from the wrong typed-binding schema level."""
+
+    parents, _ = _ast_parent_and_statement_positions(tree)
+    manifest_keys: dict[tuple[int, str], set[str]] = {}
+    for node in ast.walk(tree):
+        scope_id = _scope_id_for_node(node, parents=parents, tree=tree)
+        if isinstance(node, ast.Subscript) and isinstance(node.value, ast.Name):
+            key = _subscript_key(node.slice)
+            if isinstance(key, str):
+                manifest_keys.setdefault((scope_id, node.value.id), set()).add(key)
+        elif (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "get"
+            and isinstance(node.func.value, ast.Name)
+            and node.args
+            and isinstance(_subscript_key(node.args[0]), str)
+        ):
+            manifest_keys.setdefault((scope_id, node.func.value.id), set()).add(
+                str(_subscript_key(node.args[0]))
+            )
+    resolved_manifests = {
+        coordinate
+        for coordinate, keys in manifest_keys.items()
+        if {"planner_declared_inputs", "inputs"} <= keys
+    }
+
+    input_mappings: dict[tuple[int, str], int] = {}
+    for node in ast.walk(tree):
+        if not (
+            isinstance(node, (ast.Assign, ast.AnnAssign)) and node.value is not None
+        ):
+            continue
+        targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+        if len(targets) != 1 or not isinstance(targets[0], ast.Name):
+            continue
+        value = node.value
+        manifest_name: str | None = None
+        if (
+            isinstance(value, ast.Subscript)
+            and isinstance(value.value, ast.Name)
+            and _subscript_key(value.slice) == "inputs"
+        ):
+            manifest_name = value.value.id
+        elif (
+            isinstance(value, ast.Call)
+            and isinstance(value.func, ast.Attribute)
+            and value.func.attr == "get"
+            and isinstance(value.func.value, ast.Name)
+            and value.args
+            and _subscript_key(value.args[0]) == "inputs"
+        ):
+            manifest_name = value.func.value.id
+        if manifest_name is None:
+            continue
+        scope_id = _scope_id_for_node(node, parents=parents, tree=tree)
+        if (scope_id, manifest_name) in resolved_manifests:
+            input_mappings[(scope_id, targets[0].id)] = int(node.lineno)
+
+    binding_origins: dict[tuple[int, str], tuple[str, int]] = {}
+    for node in ast.walk(tree):
+        if not (
+            isinstance(node, (ast.Assign, ast.AnnAssign)) and node.value is not None
+        ):
+            continue
+        targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+        value = node.value
+        if not (
+            len(targets) == 1
+            and isinstance(targets[0], ast.Name)
+            and isinstance(value, ast.Subscript)
+            and isinstance(value.value, ast.Name)
+            and isinstance(value.slice, ast.Name)
+        ):
+            continue
+        scope_id = _scope_id_for_node(node, parents=parents, tree=tree)
+        mapping_line = input_mappings.get((scope_id, value.value.id))
+        if mapping_line is not None and mapping_line < int(node.lineno):
+            binding_origins[(scope_id, targets[0].id)] = (
+                value.slice.id,
+                int(node.lineno),
+            )
+
+    findings: list[ValidationFinding] = []
+    for function in tree.body:
+        if not isinstance(function, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        parameters = {
+            argument.arg
+            for argument in (
+                *function.args.posonlyargs,
+                *function.args.args,
+                *function.args.kwonlyargs,
+            )
+        }
+        nodes = _scope_nodes(function.body)
+        keys_by_parameter: dict[str, set[str]] = {}
+        input_key_accesses: dict[str, list[int]] = {}
+        for node in nodes:
+            if isinstance(node, ast.Subscript) and isinstance(node.value, ast.Name):
+                key = _subscript_key(node.slice)
+                if node.value.id in parameters and isinstance(key, str):
+                    keys_by_parameter.setdefault(node.value.id, set()).add(key)
+                    if key == "input_key":
+                        input_key_accesses.setdefault(node.value.id, []).append(
+                            int(node.lineno)
+                        )
+            elif (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "get"
+                and isinstance(node.func.value, ast.Name)
+                and node.func.value.id in parameters
+                and node.args
+                and isinstance(_subscript_key(node.args[0]), str)
+            ):
+                keys_by_parameter.setdefault(node.func.value.id, set()).add(
+                    str(_subscript_key(node.args[0]))
+                )
+        candidate_parameters = {
+            name
+            for name, keys in keys_by_parameter.items()
+            if {"input_key", "relative_path", "sha256", "product_contract"} <= keys
+        }
+        for parameter_name in sorted(candidate_parameters):
+            positional_parameters = [
+                argument.arg
+                for argument in (*function.args.posonlyargs, *function.args.args)
+            ]
+            if parameter_name not in positional_parameters:
+                continue
+            parameter_index = positional_parameters.index(parameter_name)
+            helper_loads = [
+                node
+                for node in ast.walk(tree)
+                if isinstance(node, ast.Name)
+                and isinstance(node.ctx, ast.Load)
+                and node.id == function.name
+            ]
+            calls: list[ast.Call] = []
+            valid_calls = bool(helper_loads)
+            for load in helper_loads:
+                parent = parents.get(id(load))
+                if not (
+                    isinstance(parent, ast.Call)
+                    and parent.func is load
+                    and len(parent.args) > parameter_index
+                    and isinstance(parent.args[parameter_index], ast.Name)
+                ):
+                    valid_calls = False
+                    break
+                argument_name = parent.args[parameter_index].id
+                scope_id = _scope_id_for_node(parent, parents=parents, tree=tree)
+                origin = binding_origins.get((scope_id, argument_name))
+                if origin is None or origin[1] >= int(parent.lineno):
+                    valid_calls = False
+                    break
+                calls.append(parent)
+            if not valid_calls or not calls:
+                continue
+            findings.append(
+                ValidationFinding(
+                    validator="mechanical_code_preflight",
+                    severity="error",
+                    message=(
+                        "A resolved typed-input binding stores its authoritative "
+                        "input key in identity_row; the top-level binding row does "
+                        "not expose binding['input_key']."
+                    ),
+                    detail={
+                        "reason": "resolved_input_key_not_materialized",
+                        "helper_name": function.name,
+                        "binding_parameter": parameter_name,
+                        "access_lines": sorted(input_key_accesses[parameter_name]),
+                    },
+                )
+            )
+    return findings
+
+
 _HOST_VALIDATION_FAILURE_EXCEPTIONS = frozenset(
     {
         "BaseException",
@@ -7298,6 +7479,7 @@ def audit_mechanical_code_contracts(
     findings.extend(_provenance_pair_scan_findings(tree))
     findings.extend(_string_suffix_trim_findings(tree))
     findings.extend(_resolved_context_payload_findings(tree))
+    findings.extend(_resolved_input_binding_key_findings(tree))
     findings.extend(_swallowed_reconciliation_error_findings(tree))
     findings.extend(_authoritative_exposure_binding_findings(tree, step))
     findings.extend(_authoritative_exposure_fallback_findings(tree, step))

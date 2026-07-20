@@ -2034,6 +2034,107 @@ def _patch_resolved_context_digest_load(
     return repaired
 
 
+def _patch_resolved_input_identity_key(
+    code: str,
+    *,
+    repair_findings: Sequence[ValidationFinding],
+) -> str:
+    """Read the authoritative input identity from a resolved binding row."""
+
+    coordinates: list[tuple[str, str, tuple[int, ...]]] = []
+    for finding in repair_findings:
+        detail = finding.detail or {}
+        if detail.get("reason") != "resolved_input_key_not_materialized":
+            continue
+        helper_name = detail.get("helper_name")
+        parameter_name = detail.get("binding_parameter")
+        access_lines = detail.get("access_lines")
+        if not (
+            isinstance(helper_name, str)
+            and helper_name.isidentifier()
+            and isinstance(parameter_name, str)
+            and parameter_name.isidentifier()
+            and isinstance(access_lines, list)
+            and access_lines
+            and all(
+                isinstance(line, int) and not isinstance(line, bool) and line > 0
+                for line in access_lines
+            )
+        ):
+            return code
+        coordinates.append((helper_name, parameter_name, tuple(access_lines)))
+    if not coordinates or len(coordinates) != len(set(coordinates)):
+        return code
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return code
+    lines = code.splitlines(keepends=True)
+    line_starts: list[int] = []
+    offset = 0
+    for line in lines:
+        line_starts.append(offset)
+        offset += len(line)
+
+    def _absolute_offset(lineno: int, utf8_col: int) -> int:
+        line = lines[lineno - 1]
+        char_col = len(line.encode("utf-8")[:utf8_col].decode("utf-8"))
+        return line_starts[lineno - 1] + char_col
+
+    replacements: list[tuple[int, int, str]] = []
+    for helper_name, parameter_name, access_lines in coordinates:
+        functions = [
+            node
+            for node in tree.body
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and node.name == helper_name
+        ]
+        if len(functions) != 1:
+            return code
+        function = functions[0]
+        parameter_names = {
+            argument.arg
+            for argument in (
+                *function.args.posonlyargs,
+                *function.args.args,
+                *function.args.kwonlyargs,
+            )
+        }
+        if parameter_name not in parameter_names:
+            return code
+        matches = [
+            node
+            for node in ast.walk(function)
+            if isinstance(node, ast.Subscript)
+            and isinstance(node.value, ast.Name)
+            and node.value.id == parameter_name
+            and isinstance(node.slice, ast.Constant)
+            and node.slice.value == "input_key"
+        ]
+        if sorted(int(node.lineno) for node in matches) != sorted(access_lines):
+            return code
+        for node in matches:
+            if node.end_lineno is None or node.end_col_offset is None:
+                return code
+            replacements.append(
+                (
+                    _absolute_offset(int(node.lineno), int(node.col_offset)),
+                    _absolute_offset(int(node.end_lineno), int(node.end_col_offset)),
+                    f'{parameter_name}["identity_row"]["input_key"]',
+                )
+            )
+    if not replacements:
+        return code
+    repaired = code
+    for start, end, replacement in sorted(replacements, reverse=True):
+        repaired = repaired[:start] + replacement + repaired[end:]
+    try:
+        ast.parse(repaired)
+    except SyntaxError:
+        return code
+    return repaired
+
+
 def deterministic_concept_audit_repair(
     code: str,
     audit_messages: Sequence[str],
@@ -2081,6 +2182,16 @@ def deterministic_concept_audit_repair(
         if context_loaded != repaired:
             repair_name = "resolved_context_digest_load_v1"
             repaired = context_loaded
+            repair_names.append(repair_name)
+
+    if RepairReason.TYPED_PRODUCT_BINDING_INVALID in set(repair_reasons):
+        identity_keyed = _patch_resolved_input_identity_key(
+            repaired,
+            repair_findings=repair_findings,
+        )
+        if identity_keyed != repaired:
+            repair_name = "resolved_input_identity_key_v1"
+            repaired = identity_keyed
             repair_names.append(repair_name)
 
     if RepairReason.ARBITRARY_COLUMN_FALLBACK in set(repair_reasons):
