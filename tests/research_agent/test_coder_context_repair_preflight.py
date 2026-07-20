@@ -193,6 +193,25 @@ def test_figure_coder_guide_excludes_unrelated_method_families(ra):
     assert len(guide) < len(_CODER_GUIDE) * 0.7
 
 
+def test_render_only_descriptive_method_does_not_load_table_contract(ra):
+    from easyicu.research_agent.agents.core import _CODER_GUIDE
+
+    step = ra.AnalysisStep(
+        step_id="render",
+        intent="Render the declared descriptive figure.",
+        inputs=["artifact:summary"],
+        expected_outputs=["figure:summary"],
+        method="descriptive_summary",
+    )
+
+    guide = coder_guide_for_step(_CODER_GUIDE, step)
+
+    assert "For rendering-only figure steps" in guide
+    assert 'Use matplotlib\'s "Agg" backend' in guide
+    assert "TABLE-ONE / DESCRIPTIVE SUMMARIES:" not in guide
+    assert "CLINICAL SCORE AND MISSINGNESS SEMANTICS:" not in guide
+
+
 def test_table_coder_guide_loads_host_owned_descriptive_input_contract(ra):
     from easyicu.research_agent.agents.core import _CODER_GUIDE
 
