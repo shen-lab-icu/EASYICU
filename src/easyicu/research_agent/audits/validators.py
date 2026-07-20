@@ -9304,6 +9304,9 @@ class FigureSourceDataValidator:
                         declared_table_aliases.setdefault(
                             evidence_path.name, set()
                         ).add(bound_path.resolve())
+                    declared_table_aliases.setdefault(
+                        str(raw_input), set()
+                    ).add(bound_path.resolve())
                 elif (
                     not self._safe_regular_run_file(bound_path, run_dir=run_dir)
                     or self._sha256_file(bound_path) != expected_sha
