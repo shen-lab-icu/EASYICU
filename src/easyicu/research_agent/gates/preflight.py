@@ -1341,6 +1341,28 @@ def _provenance_fail_closed_findings(tree: ast.Module) -> list[ValidationFinding
         if len(keys) != len(set(keys)):
             return None
         fields = dict(zip(keys, payload.values))
+        checks = fields.get("checks")
+        if checks is not None:
+            if not (
+                isinstance(checks, (ast.List, ast.Tuple))
+                and len(checks.elts) == 1
+                and isinstance(checks.elts[0], ast.Dict)
+            ):
+                return None
+            payload = checks.elts[0]
+            if any(
+                key is None
+                or not isinstance(key, ast.Constant)
+                or not isinstance(key.value, str)
+                for key in payload.keys
+            ):
+                return None
+            keys = [
+                str(key.value) for key in payload.keys if isinstance(key, ast.Constant)
+            ]
+            if len(keys) != len(set(keys)):
+                return None
+            fields = dict(zip(keys, payload.values))
         role = fields.get("role")
         if not (
             _PROVENANCE_FAILURE_KEYS <= fields.keys()

@@ -1426,6 +1426,35 @@ main(frame)
     )
 
 
+def test_mechanical_preflight_accepts_direct_host_shaped_provenance_guard(ra):
+    code = """
+def main(frame):
+    invalid_pair_n = int(frame['invalid_pair_n'])
+    discordant_n = int(frame['discordant_n'])
+    audit = {
+        'source': 'COHORT_PARQUET',
+        'checks': [{
+            'role': 'audit_only',
+            'status': 'checked',
+            'invalid_pair_n': invalid_pair_n,
+            'discordant_n': discordant_n,
+        }],
+    }
+    if invalid_pair_n > 0 or discordant_n > 0:
+        raise RuntimeError('invalid measurement provenance')
+    model.fit(frame)
+
+main(frame)
+"""
+    findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+
+    assert not any(
+        finding.detail
+        and finding.detail.get("reason") == "provenance_audit_not_fail_closed"
+        for finding in findings
+    )
+
+
 def test_deterministic_repair_proves_aggregate_provenance_loop_coverage(ra):
     code = """
 def main(frame, stems):

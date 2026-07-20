@@ -1435,11 +1435,19 @@ def deterministic_concept_audit_repair(
             repair_names.append(repair_name)
 
     if provenance_finding:
+        provenance_guard_applied = False
         guarded = _patch_provenance_fail_closed_guard(repaired)
         if guarded != repaired:
             repair_name = "provenance_fail_closed_guard_v1"
             repaired = guarded
             repair_names.append(repair_name)
+            provenance_guard_applied = True
+        if provenance_guard_applied:
+            status_aligned = _patch_provenance_checked_status_contract(repaired)
+            if status_aligned != repaired:
+                repair_name = "provenance_checked_status_contract_v1"
+                repaired = status_aligned
+                repair_names.append(repair_name)
 
     swallowed_helper_finding = any(
         "provenance_helper_error_swallowed" in str(message).lower()
@@ -2021,6 +2029,196 @@ def _patch_inline_provenance_failure_guard(code: str) -> str:
     return code
 
 
+def _patch_direct_provenance_contract_guard(code: str) -> str:
+    """Guard one direct host-shaped provenance contract before result sinks."""
+
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return code
+    if _PROVENANCE_GUARD_SENTINEL in code:
+        return code
+
+    def _dict_fields(node: ast.Dict) -> Optional[dict[str, ast.AST]]:
+        if any(
+            key is None
+            or not isinstance(key, ast.Constant)
+            or not isinstance(key.value, str)
+            for key in node.keys
+        ):
+            return None
+        keys = [str(key.value) for key in node.keys if isinstance(key, ast.Constant)]
+        if len(keys) != len(set(keys)):
+            return None
+        return dict(zip(keys, node.values))
+
+    candidates: list[tuple[ast.FunctionDef, ast.Assign, str, str]] = []
+    for function in [node for node in tree.body if isinstance(node, ast.FunctionDef)]:
+        for statement in function.body:
+            if not (
+                isinstance(statement, ast.Assign)
+                and len(statement.targets) == 1
+                and isinstance(statement.targets[0], ast.Name)
+                and isinstance(statement.value, ast.Dict)
+            ):
+                continue
+            outer = _dict_fields(statement.value)
+            if outer is None:
+                continue
+            checks = outer.get("checks")
+            if not (
+                isinstance(checks, (ast.List, ast.Tuple))
+                and len(checks.elts) == 1
+                and isinstance(checks.elts[0], ast.Dict)
+            ):
+                continue
+            row = _dict_fields(checks.elts[0])
+            if row is None:
+                continue
+            role = row.get("role")
+            invalid = row.get("invalid_pair_n")
+            discordant = row.get("discordant_n")
+            if not (
+                isinstance(role, ast.Constant)
+                and str(role.value).strip().lower() == "audit_only"
+                and isinstance(invalid, ast.Name)
+                and isinstance(discordant, ast.Name)
+                and invalid.id != discordant.id
+            ):
+                continue
+            count_names = (invalid.id, discordant.id)
+            bindings: dict[str, list[ast.Assign]] = {name: [] for name in count_names}
+            for local_statement in function.body:
+                if not (
+                    isinstance(local_statement, ast.Assign)
+                    and len(local_statement.targets) == 1
+                    and isinstance(local_statement.targets[0], ast.Name)
+                    and local_statement.targets[0].id in bindings
+                ):
+                    continue
+                bindings[local_statement.targets[0].id].append(local_statement)
+            if any(len(items) != 1 for items in bindings.values()):
+                continue
+            if any(
+                not (
+                    isinstance(items[0].value, ast.Call)
+                    and isinstance(items[0].value.func, ast.Name)
+                    and items[0].value.func.id == "int"
+                    and len(items[0].value.args) == 1
+                    and not items[0].value.keywords
+                    and int(items[0].lineno) < int(statement.lineno)
+                )
+                for items in bindings.values()
+            ):
+                continue
+            if any(
+                isinstance(node, (ast.Assign, ast.AnnAssign, ast.AugAssign))
+                and any(
+                    isinstance(target, ast.Name) and target.id == "int"
+                    for target in (
+                        node.targets if isinstance(node, ast.Assign) else [node.target]
+                    )
+                )
+                for node in ast.walk(tree)
+            ):
+                continue
+            candidates.append((function, statement, count_names[0], count_names[1]))
+    if len(candidates) != 1:
+        return code
+
+    _, statement, invalid_name, discordant_name = candidates[0]
+    if statement.end_lineno is None:
+        return code
+    lines = code.splitlines(keepends=True)
+    source_line = lines[int(statement.lineno) - 1]
+    indent = source_line[: len(source_line) - len(source_line.lstrip())]
+    body_indent = indent + ("\t" if "\t" in indent else "    ")
+    guard = (
+        f"{indent}# {_PROVENANCE_GUARD_SENTINEL}\n"
+        f"{indent}if {invalid_name} > 0 or {discordant_name} > 0:\n"
+        f"{body_indent}raise RuntimeError(\n"
+        f'{body_indent}    "Measurement provenance audit failed; "\n'
+        f'{body_indent}    "scientific outputs were not published."\n'
+        f"{body_indent})\n"
+    )
+    lines.insert(int(statement.end_lineno), guard)
+    repaired = "".join(lines)
+    try:
+        ast.parse(repaired)
+    except SyntaxError:
+        return code
+    return repaired
+
+
+def _patch_provenance_checked_status_contract(code: str) -> str:
+    """Accept the host ``checked`` status when the same script emits it."""
+
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return code
+    emits_checked = any(
+        isinstance(node, ast.Dict)
+        and any(
+            isinstance(key, ast.Constant)
+            and key.value == "status"
+            and isinstance(value, ast.Constant)
+            and value.value == "checked"
+            for key, value in zip(node.keys, node.values)
+            if key is not None
+        )
+        and any(
+            isinstance(key, ast.Constant)
+            and key.value == "role"
+            and isinstance(value, ast.Constant)
+            and value.value == "audit_only"
+            for key, value in zip(node.keys, node.values)
+            if key is not None
+        )
+        for node in ast.walk(tree)
+    )
+    if not emits_checked:
+        return code
+
+    expected = {"passed", "ok", "valid"}
+    candidates: list[ast.AST] = []
+    for node in ast.walk(tree):
+        if not (
+            isinstance(node, ast.Compare)
+            and len(node.ops) == 1
+            and isinstance(node.ops[0], ast.NotIn)
+            and len(node.comparators) == 1
+            and isinstance(node.comparators[0], (ast.Set, ast.List, ast.Tuple))
+            and isinstance(node.left, ast.Call)
+            and isinstance(node.left.func, ast.Attribute)
+            and node.left.func.attr == "get"
+            and len(node.left.args) == 1
+            and isinstance(node.left.args[0], ast.Constant)
+            and node.left.args[0].value == "status"
+            and not node.left.keywords
+        ):
+            continue
+        values = node.comparators[0].elts
+        if not all(
+            isinstance(value, ast.Constant) and isinstance(value.value, str)
+            for value in values
+        ):
+            continue
+        if {str(value.value) for value in values} == expected:
+            candidates.append(node.comparators[0])
+    if len(candidates) != 1:
+        return code
+    source = ast.get_source_segment(code, candidates[0])
+    if not source or code.count(source) != 1:
+        return code
+    repaired = code.replace(source, '{"passed", "ok", "valid", "checked"}', 1)
+    try:
+        ast.parse(repaired)
+    except SyntaxError:
+        return code
+    return repaired
+
+
 def _patch_provenance_loop_coverage_guard(code: str) -> str:
     """Add a neutral non-empty-loop proof to one exact aggregate audit loop."""
 
@@ -2378,6 +2576,9 @@ def _patch_provenance_fail_closed_guard(code: str) -> str:
     inline_guard = _patch_inline_provenance_failure_guard(code)
     if inline_guard != code:
         return _validated_candidate(inline_guard)
+    contract_guard = _patch_direct_provenance_contract_guard(code)
+    if contract_guard != code:
+        return _validated_candidate(contract_guard)
     return _validated_candidate(_patch_provenance_loop_coverage_guard(code))
 
 

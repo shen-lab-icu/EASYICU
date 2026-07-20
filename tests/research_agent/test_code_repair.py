@@ -998,6 +998,77 @@ if __name__ == "__main__":
     assert isinstance(main.body[1].body[0], ast.Raise)
 
 
+def test_concept_repair_guards_direct_provenance_contract_and_status():
+    code = """
+def require(condition, message):
+    if not condition:
+        raise RuntimeError(message)
+
+def main(frame):
+    invalid_pair_n = int(frame["invalid_pair_n"])
+    discordant_n = int(frame["discordant_n"])
+    measurement_provenance_audit = {
+        "source": "COHORT_PARQUET",
+        "checks": [{
+            "status": "checked",
+            "role": "audit_only",
+            "invalid_pair_n": invalid_pair_n,
+            "discordant_n": discordant_n,
+        }],
+    }
+    provenance_checks = measurement_provenance_audit.get("checks")
+    provenance_failures = [
+        check
+        for check in provenance_checks
+        if check.get("status") not in {"passed", "ok", "valid"}
+    ]
+    require(len(provenance_failures) == 0, "provenance failed")
+    return measurement_provenance_audit
+
+result = main(frame)
+""".lstrip()
+    finding = ValidationFinding(
+        validator="mechanical_code_preflight",
+        severity="error",
+        message="provenance_audit_not_fail_closed",
+        detail={
+            "reason": "provenance_audit_not_fail_closed",
+            "issues": [
+                {
+                    "failure_mode": "provenance_helper_result_not_bound",
+                    "helper_name": "main",
+                    "call_line": 25,
+                }
+            ],
+        },
+    )
+
+    out, names = deterministic_concept_audit_repair(
+        code,
+        [finding.message],
+        repair_reasons=[RepairReason.PROVENANCE_NOT_FAIL_CLOSED],
+        repair_findings=[finding],
+    )
+
+    assert names == [
+        "provenance_fail_closed_guard_v1",
+        "provenance_checked_status_contract_v1",
+    ]
+    assert "_easyicu_provenance_fail_closed_guard_v1" in out
+    assert '{"passed", "ok", "valid", "checked"}' in out
+    namespace = {"frame": {"invalid_pair_n": 0, "discordant_n": 0}}
+    exec(out, namespace)
+    assert namespace["result"]["checks"][0]["status"] == "checked"
+    with pytest.raises(RuntimeError, match="scientific outputs were not published"):
+        exec(out, {"frame": {"invalid_pair_n": 1, "discordant_n": 0}})
+    assert deterministic_concept_audit_repair(
+        out,
+        [finding.message],
+        repair_reasons=[RepairReason.PROVENANCE_NOT_FAIL_CLOSED],
+        repair_findings=[finding],
+    ) == (out, [])
+
+
 def test_concept_repair_does_not_infer_provenance_policy_from_counts():
     code = """
 def measurement_provenance_audit(frame):
