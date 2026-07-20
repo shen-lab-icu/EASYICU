@@ -1165,6 +1165,37 @@ def test_run_replaces_hostile_step_file_and_output_symlinks(
     assert all(not path.is_symlink() for path in result.artefacts)
 
 
+def test_each_run_recreates_the_output_mount_directory(
+    ra,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    cohort = _make_cohort(tmp_path)
+    _force_docker_present(monkeypatch)
+    _install_fake_subprocess(monkeypatch)
+    runner = ra.DockerRunner(workdir=tmp_path / "run", cohort_parquet=cohort)
+    removed: list[Path] = []
+    original = ra.DockerRunner._remove_lexical_path
+
+    def record_remove(path: Path) -> None:
+        if Path(path).name == "outputs":
+            removed.append(Path(path))
+        original(path)
+
+    monkeypatch.setattr(
+        ra.DockerRunner,
+        "_remove_lexical_path",
+        staticmethod(record_remove),
+    )
+
+    first = runner.run(step_id="repeat", code="print('first')\n")
+    second = runner.run(step_id="repeat", code="print('second')\n")
+
+    assert first.outputs_safe_to_collect is True
+    assert second.outputs_safe_to_collect is True
+    assert removed == [first.out_dir, second.out_dir]
+
+
 def test_run_rejects_symlinked_step_directory(
     ra,
     tmp_path: Path,
