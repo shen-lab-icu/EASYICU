@@ -309,7 +309,7 @@ step_summary = {
 
     assert repaired is not None
     name, patched = repaired
-    assert name == "measurement_provenance_summary_mapping_v1"
+    assert name == "measurement_provenance_summary_mapping_v2"
     assert "pd.DataFrame.from_records(provenance_receipts)" not in patched
     namespace = {}
     exec(patched, namespace)
@@ -322,6 +322,74 @@ step_summary = {
             code=patched,
             findings=[finding],
             previous_repair=name,
+        )
+        is None
+    )
+
+
+def test_contract_repair_wraps_direct_host_provenance_receipt_list():
+    code = """
+from easyicu.research_agent.methods.descriptive_inputs import (
+    measurement_provenance_receipt,
+)
+
+provenance_receipts = []
+provenance_receipts.append(
+    measurement_provenance_receipt(
+        frame,
+        measured_column=measured_column,
+        count_column=count_column,
+    )
+)
+if not provenance_receipts:
+    raise RuntimeError("no provenance checks")
+measurement_provenance_audit = provenance_receipts
+step_summary = {
+    "measurement_provenance_audit": measurement_provenance_audit,
+}
+""".lstrip()
+    finding = {
+        "validator": "step_summary_integrity",
+        "severity": "error",
+        "detail": {
+            "issue": "measurement_provenance_source_invalid",
+            "reported_source": None,
+        },
+    }
+
+    repaired = deterministic_contract_repair(code=code, findings=[finding])
+
+    assert repaired is not None
+    name, patched = repaired
+    assert name == "measurement_provenance_summary_mapping_v2"
+    assert (
+        'measurement_provenance_audit = {"source": "COHORT_PARQUET", '
+        '"checks": provenance_receipts}'
+    ) in patched
+    assert patched.count("measurement_provenance_receipt(") == 1
+
+
+def test_contract_repair_refuses_unverified_direct_provenance_list():
+    code = """
+provenance_receipts = [{"measured_column": "marker_measured"}]
+measurement_provenance_audit = provenance_receipts
+step_summary = {
+    "measurement_provenance_audit": measurement_provenance_audit,
+}
+""".lstrip()
+
+    assert (
+        deterministic_contract_repair(
+            code=code,
+            findings=[
+                {
+                    "validator": "step_summary_integrity",
+                    "detail": {
+                        "issue": "measurement_provenance_source_invalid",
+                        "reported_source": None,
+                    },
+                }
+            ],
         )
         is None
     )

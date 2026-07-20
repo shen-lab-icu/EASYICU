@@ -3511,7 +3511,10 @@ def _patch_measurement_provenance_summary_mapping(code: str) -> str:
     then place the DataFrame in ``measurement_provenance_audit``.  Generic JSON
     sanitizers stringify the frame, erasing the required ``source``/``checks``
     contract.  Rewrite only that exact, uniquely bound representation; all
-    receipt values and scientific outputs remain unchanged.
+    receipt values and scientific outputs remain unchanged.  The same narrow
+    repair also accepts a directly referenced host-receipt list, but only when
+    that list is uniquely initialized and populated exclusively by the
+    host-owned ``measurement_provenance_receipt`` helper.
     """
 
     try:
@@ -3556,8 +3559,10 @@ def _patch_measurement_provenance_summary_mapping(code: str) -> str:
     ]
     if len(assignments) != 1 or len(audit_loads) != 1:
         return code
-    value = assignments[0].value
-    if not (
+    assignment = assignments[0]
+    value = assignment.value
+    receipts_name: str | None = None
+    if (
         isinstance(value, ast.Call)
         and isinstance(value.func, ast.Attribute)
         and value.func.attr == "from_records"
@@ -3569,13 +3574,95 @@ def _patch_measurement_provenance_summary_mapping(code: str) -> str:
         and isinstance(value.args[0], ast.Name)
         and not value.keywords
     ):
+        receipts_name = value.args[0].id
+    elif isinstance(value, ast.Name) and value.id != audit_name:
+        candidate_name = value.id
+        exact_imports = [
+            node
+            for node in tree.body
+            if isinstance(node, ast.ImportFrom)
+            and node.level == 0
+            and node.module == "easyicu.research_agent.methods.descriptive_inputs"
+            and any(
+                alias.name == "measurement_provenance_receipt" and alias.asname is None
+                for alias in node.names
+            )
+        ]
+        receipt_assignments = [
+            node
+            for node in tree.body
+            if isinstance(node, ast.Assign)
+            and len(node.targets) == 1
+            and isinstance(node.targets[0], ast.Name)
+            and node.targets[0].id == candidate_name
+        ]
+
+        def _is_host_receipt_call(node: ast.AST) -> bool:
+            return (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Name)
+                and node.func.id == "measurement_provenance_receipt"
+                and len(node.args) == 1
+                and not any(keyword.arg is None for keyword in node.keywords)
+                and {keyword.arg for keyword in node.keywords}
+                == {"measured_column", "count_column"}
+            )
+
+        append_calls = [
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and isinstance(node.func.value, ast.Name)
+            and node.func.value.id == candidate_name
+            and node.func.attr == "append"
+        ]
+        other_attribute_calls = [
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and isinstance(node.func.value, ast.Name)
+            and node.func.value.id == candidate_name
+            and node.func.attr != "append"
+        ]
+        stored_names = [
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Name)
+            and isinstance(node.ctx, ast.Store)
+            and node.id == candidate_name
+        ]
+        initial_values: list[ast.AST] = []
+        if (
+            len(exact_imports) == 1
+            and len(receipt_assignments) == 1
+            and len(stored_names) == 1
+            and isinstance(receipt_assignments[0].value, ast.List)
+            and not other_attribute_calls
+        ):
+            initial_values = list(receipt_assignments[0].value.elts)
+        receipt_calls = initial_values + [
+            node.args[0]
+            for node in append_calls
+            if len(node.args) == 1 and not node.keywords
+        ]
+        if (
+            not receipt_calls
+            or len(receipt_calls) != len(initial_values) + len(append_calls)
+            or not all(_is_host_receipt_call(node) for node in receipt_calls)
+        ):
+            return code
+        receipts_name = candidate_name
+    if receipts_name is None:
         return code
-    receipts_name = value.args[0].id
-    value_source = ast.get_source_segment(code, value)
-    if not value_source or code.count(value_source) != 1:
+    assignment_source = ast.get_source_segment(code, assignment)
+    if not assignment_source or code.count(assignment_source) != 1:
         return code
-    replacement = '{"source": "COHORT_PARQUET", "checks": ' + receipts_name + "}"
-    repaired = code.replace(value_source, replacement, 1)
+    replacement = (
+        f'{audit_name} = {{"source": "COHORT_PARQUET", ' f'"checks": {receipts_name}}}'
+    )
+    repaired = code.replace(assignment_source, replacement, 1)
     try:
         ast.parse(repaired)
     except SyntaxError:
@@ -3605,7 +3692,7 @@ def deterministic_contract_repair(
             and detail.get("reported_source") is None
         ):
             provenance_source_findings.append(finding)
-    provenance_repair_name = "measurement_provenance_summary_mapping_v1"
+    provenance_repair_name = "measurement_provenance_summary_mapping_v2"
     if (
         len(provenance_source_findings) == 1
         and previous_repair != provenance_repair_name

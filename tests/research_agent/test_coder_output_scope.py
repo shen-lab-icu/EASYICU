@@ -603,6 +603,7 @@ def test_coder_repair_replaces_unverifiable_module_provenance_scanner(ra):
         "measured_column=measured_column, count_column=count_column)"
     ) in prompt
     assert "Keep each returned receipt mapping unchanged" in prompt
+    assert '{"source": "COHORT_PARQUET", "checks": receipts}' in prompt
     assert "pd.DataFrame.from_records(receipts)" in prompt
     assert "do not unpack, copy, relabel, or re-emit" in prompt
     assert "may not change values, rows, denominators" in prompt
@@ -651,7 +652,9 @@ TYPED REPAIR TICKET (authoritative routing):
 
 def test_coder_guide_separates_model_failure_from_host_validation_failure() -> None:
     from easyicu.research_agent.agents.core import _CODER_GUIDE
-    from easyicu.research_agent.research_context.prompt_scope import coder_guide_for_step
+    from easyicu.research_agent.research_context.prompt_scope import (
+        coder_guide_for_step,
+    )
 
     assert "Run every host-owned input-validation or provenance helper" in _CODER_GUIDE
     assert "model/plot `try/except`" in _CODER_GUIDE
