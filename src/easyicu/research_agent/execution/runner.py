@@ -1540,6 +1540,11 @@ class DockerRunner:
                 "authority_snapshot_path is required when its digest is supplied"
             )
         container_step_dir = self._container_step_dir(step_id)
+        container_output_name = _safe_path_component(
+            out_dir.name,
+            label="output directory name",
+        )
+        container_output_dir = f"{container_step_dir}/{container_output_name}"
         cmd: List[str] = [
             self.docker_executable,
             "run",
@@ -1576,7 +1581,7 @@ class DockerRunner:
                 "--mount",
                 _docker_mount_entry(
                     str(out_dir.resolve()),
-                    f"{container_step_dir}/outputs",
+                    container_output_dir,
                     readonly=False,
                 ),
                 "--mount",
@@ -1619,13 +1624,13 @@ class DockerRunner:
             "COHORT_PATH": container_cohort_path,
             "EASYICU_COHORT_PATH": container_cohort_path,
             "EASYICU_COHORT_PARQUET": container_cohort_path,
-            "STEP_OUT_DIR": f"{container_step_dir}/outputs",
-            "STEP_OUTPUT_DIR": f"{container_step_dir}/outputs",
-            "STEP_OUTPUT": f"{container_step_dir}/outputs",
-            "OUT_DIR": f"{container_step_dir}/outputs",
-            "OUTPUT_DIR": f"{container_step_dir}/outputs",
-            "EASYICU_OUTPUT_DIR": f"{container_step_dir}/outputs",
-            "EASYICU_STEP_OUT_DIR": f"{container_step_dir}/outputs",
+            "STEP_OUT_DIR": container_output_dir,
+            "STEP_OUTPUT_DIR": container_output_dir,
+            "STEP_OUTPUT": container_output_dir,
+            "OUT_DIR": container_output_dir,
+            "OUTPUT_DIR": container_output_dir,
+            "EASYICU_OUTPUT_DIR": container_output_dir,
+            "EASYICU_STEP_OUT_DIR": container_output_dir,
             "EASYICU_RUN_DIR": self.CONTAINER_RUN_ROOT,
             "EASYICU_EVIDENCE_DIR": f"{self.CONTAINER_RUN_ROOT}/evidence",
             "EASYICU_MANIFEST_PARTIAL": (

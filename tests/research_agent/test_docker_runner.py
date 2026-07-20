@@ -1182,15 +1182,25 @@ def test_each_run_recreates_the_output_mount_directory(
     assert first.outputs_safe_to_collect is True
     assert second.outputs_safe_to_collect is True
     run_commands = [command for command in captured if "run" in command[:2]]
-    output_sources = [
-        entry.split(",target=", 1)[0].removeprefix("type=bind,source=")
+    output_mounts = [
+        (
+            command,
+            entry.split(",target=", 1)[0].removeprefix("type=bind,source="),
+            entry.split(",target=", 1)[1],
+        )
         for command in run_commands
         for entry in command
-        if ",target=/easyicu-run/steps/repeat/outputs" in entry
+        if ",target=/easyicu-run/steps/repeat/.outputs-" in entry
     ]
-    assert len(output_sources) == 2
-    assert output_sources[0] != output_sources[1]
-    assert all("/.outputs-" in source for source in output_sources)
+    assert len(output_mounts) == 2
+    assert output_mounts[0][1:] != output_mounts[1][1:]
+    assert all("/.outputs-" in source for _command, source, _target in output_mounts)
+    assert all(
+        target.startswith("/easyicu-run/steps/repeat/.outputs-")
+        for _command, _source, target in output_mounts
+    )
+    for command, _source, target in output_mounts:
+        assert f"STEP_OUT_DIR={target}" in command
     assert not list((tmp_path / "run" / "steps" / "repeat").glob(".outputs-*"))
 
 
