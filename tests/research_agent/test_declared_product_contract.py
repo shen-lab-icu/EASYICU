@@ -845,9 +845,7 @@ def test_typed_kind_shorthand_accepts_absolute_path_with_relative_output_dir(
         step=_step(outputs=["table:summary"]),
         step_summary={
             "status": "ok",
-            "output_files": [
-                {"kind": "table:summary", "path": str(output_path)}
-            ],
+            "output_files": [{"kind": "table:summary", "path": str(output_path)}],
         },
         effect_method_authorized=False,
         out_dir=out_dir,
@@ -933,9 +931,7 @@ def test_typed_kind_shorthand_rejects_output_root_escape(tmp_path):
         step=_step(outputs=["table:summary"]),
         step_summary={
             "status": "ok",
-            "output_files": [
-                {"kind": "table:summary", "path": "../outside.csv"}
-            ],
+            "output_files": [{"kind": "table:summary", "path": "../outside.csv"}],
         },
         effect_method_authorized=False,
         out_dir=out_dir,
@@ -1371,6 +1367,40 @@ def test_nested_effect_estimate_is_scientific_output_not_diagnostic_companion():
         effect_method_authorized=False,
     )
     assert "unauthorized_effect_product" in _kinds(findings)
+
+
+@pytest.mark.parametrize("status", ["deferred", "non-estimable", "not_estimated"])
+def test_noncomputed_effect_status_is_not_an_effect_result(status):
+    findings = declared_product_contract_findings(
+        step=_step(outputs=["artifact:target_trial_protocol"]),
+        step_summary={
+            "output_files": {
+                "artifact:target_trial_protocol": "target_trial_protocol.json"
+            },
+            "estimability": {
+                "primary_adjusted_or_weighted_contrast": status,
+                "reason": "The protocol did not estimate an effect.",
+            },
+        },
+        effect_method_authorized=False,
+    )
+
+    assert "unauthorized_effect_product" not in _kinds(findings)
+
+
+def test_textual_or_numeric_effect_value_remains_effect_bearing():
+    for value in (1.4, "OR=1.4"):
+        findings = declared_product_contract_findings(
+            step=_step(outputs=["artifact:target_trial_protocol"]),
+            step_summary={
+                "output_files": {
+                    "artifact:target_trial_protocol": "target_trial_protocol.json"
+                },
+                "primary_adjusted_or_weighted_contrast": value,
+            },
+            effect_method_authorized=False,
+        )
+        assert "unauthorized_effect_product" in _kinds(findings)
 
 
 def test_effect_method_owner_may_realise_its_declared_effect():
