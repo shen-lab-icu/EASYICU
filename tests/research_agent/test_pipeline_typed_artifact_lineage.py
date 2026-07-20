@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+import easyicu.research_agent.contracts.typed_schema as typed_schema_contracts
 from easyicu.research_agent.cohort.schema import CohortDefinition
 from easyicu.research_agent.contracts.declared_product import (
     typed_product,
@@ -719,7 +720,7 @@ def test_typed_table_uses_current_resume_authority_and_writes_exact_manifest(
     assert binding["product_contract"]["value_column"] == "x"
     assert binding["product_contract"]["scale"] == "standardized"
     assert binding["product_contract"]["schema_version"] == (
-        "easyicu.host_typed_product.v2"
+        "easyicu.host_typed_product.v3"
     )
     assert binding["product_contract"]["identity_row"] == binding["identity_row"]
     assert binding["identity_row"]["input_key"] == "table:scaling_summary"
@@ -930,7 +931,7 @@ def test_generic_artifact_backed_by_table_gets_host_schema_contract(
 
     assert binding is not None
     assert binding["product_contract"]["schema_version"] == (
-        "easyicu.host_typed_product.v2"
+        "easyicu.host_typed_product.v3"
     )
     assert binding["product_contract"]["columns"] == ["row_id", "value"]
     assert binding["product_contract"]["column_count"] == 2
@@ -994,7 +995,7 @@ def test_dataset_aliases_backed_by_tables_get_host_schema_contract(
     assert binding["declared_kind"] == "dataset"
     assert binding["evidence_kind"] == "table"
     contract = binding["product_contract"]
-    assert contract["schema_version"] == "easyicu.host_typed_product.v2"
+    assert contract["schema_version"] == "easyicu.host_typed_product.v3"
     assert contract["columns"] == ["stay_id", "value"]
     assert contract["column_count"] == 2
     assert contract["tabular_format"] == expected_format
@@ -1068,6 +1069,8 @@ def test_typed_parent_table_receipt_exposes_host_schema_without_guessing_roles(
                     "display_summary": {
                         "columns": ["forged"],
                         "semantic_roles": {"estimate": "forged"},
+                        "column_dtypes": {"forged": "float64"},
+                        "numeric_columns": ["forged"],
                     }
                 },
             }
@@ -1079,8 +1082,15 @@ def test_typed_parent_table_receipt_exposes_host_schema_without_guessing_roles(
     assert contract["columns"] == ["band", "point", "lower", "upper"]
     assert contract["column_count"] == 4
     assert contract["tabular_format"] == "csv"
+    assert contract["column_dtypes"] == {
+        "band": "object",
+        "point": "float64",
+        "lower": "float64",
+        "upper": "float64",
+    }
+    assert contract["numeric_columns"] == ["point", "lower", "upper"]
     assert "semantic_roles" not in contract
-    assert contract["schema_version"] == "easyicu.host_typed_product.v2"
+    assert contract["schema_version"] == "easyicu.host_typed_product.v3"
 
     context_block = _typed_parent_schema_context_block(
         {"table:display_summary": binding}
@@ -1088,8 +1098,80 @@ def test_typed_parent_table_receipt_exposes_host_schema_without_guessing_roles(
     assert '"columns":["band","point","lower","upper"]' in context_block
     assert '"column_count":4' in context_block
     assert '"tabular_format":"csv"' in context_block
+    assert '"band":"object"' in context_block
+    assert '"numeric_columns":["point","lower","upper"]' in context_block
     assert "semantic_roles" not in context_block
     assert str(source) not in context_block
+
+
+def test_typed_parent_schema_distinguishes_numeric_from_text_denominator(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "outcome_incidence.csv"
+    source.write_text(
+        "group,n_stays,deaths,risk_denominator\n"
+        "low,236,18,all stays in this mutually exclusive group\n",
+        encoding="utf-8",
+    )
+
+    receipt = typed_product_schema_receipt(
+        artifact_path=source,
+        expected_sha256=sha256_of_file(source),
+    )
+
+    assert receipt is not None
+    assert receipt["column_dtypes"] == {
+        "group": "object",
+        "n_stays": "int64",
+        "deaths": "int64",
+        "risk_denominator": "object",
+    }
+    assert receipt["numeric_columns"] == ["n_stays", "deaths"]
+
+
+def test_optional_dtype_profile_falls_back_to_base_schema(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "large_for_profile_limit.csv"
+    source.write_text("label,value\nA,1\n", encoding="utf-8")
+    monkeypatch.setattr(
+        typed_schema_contracts,
+        "_MAX_TYPED_TABLE_DTYPE_PROFILE_BYTES",
+        1,
+    )
+
+    receipt = typed_product_schema_receipt(
+        artifact_path=source,
+        expected_sha256=sha256_of_file(source),
+    )
+
+    assert receipt == {
+        "tabular_format": "csv",
+        "column_count": 2,
+        "columns": ["label", "value"],
+    }
+
+
+def test_v2_contract_never_surfaces_unsealed_dtype_claims() -> None:
+    context_block = _typed_parent_schema_context_block(
+        {
+            "table:summary": {
+                "product_contract": {
+                    "schema_version": "easyicu.host_typed_product.v2",
+                    "tabular_format": "csv",
+                    "column_count": 2,
+                    "columns": ["label", "value"],
+                    "column_dtypes": {"value": "forged"},
+                    "numeric_columns": ["value"],
+                }
+            }
+        }
+    )
+
+    assert '"columns":["label","value"]' in context_block
+    assert "column_dtypes" not in context_block.split("\n", 2)[1]
+    assert "numeric_columns" not in context_block.split("\n", 2)[1]
 
 
 @pytest.mark.parametrize(

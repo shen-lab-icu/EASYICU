@@ -12,9 +12,7 @@ an exposure, outcome, cohort, estimator, or analysis method.
 from __future__ import annotations
 
 import json
-import csv
 import hashlib
-import io
 import math
 import os
 import re
@@ -28,6 +26,12 @@ from ..schema import AnalysisStep, ValidationFinding
 from ..trajectory.plan_contract import (
     trajectory_role_result_findings,
     trajectory_role_scope_summary_findings,
+)
+from .typed_schema import (
+    _tabular_artifact_columns,
+    merge_host_table_contract,
+    typed_product_prompt_facts,
+    typed_product_schema_receipt,
 )
 
 _FIGURE_KINDS = frozenset({"figure", "plot", "chart", "fig", "heatmap"})
@@ -267,125 +271,6 @@ _HOST_RECEIPT_SUBTREES = frozenset({"sealed_renderer_parent_digests"})
 
 def _normalise(value: object) -> str:
     return re.sub(r"[^a-z0-9]+", "_", str(value or "").strip().lower()).strip("_")
-
-
-def _tabular_artifact_columns(
-    path: Path,
-    *,
-    expected_sha256: str | None = None,
-) -> list[str]:
-    """Read only a verified artifact's schema for typed product binding."""
-
-    suffix = path.suffix.lower()
-    try:
-        with path.open("rb") as handle:
-            if expected_sha256 is not None:
-                digest = hashlib.sha256()
-                for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-                    digest.update(chunk)
-                if digest.hexdigest() != expected_sha256:
-                    return []
-                handle.seek(0)
-            if suffix in {".csv", ".tsv"}:
-                delimiter = "\t" if suffix == ".tsv" else ","
-                with io.TextIOWrapper(
-                    handle,
-                    # Match the de-facto pandas CSV/TSV header semantics: a
-                    # leading UTF-8 BOM is transport metadata, not part of the
-                    # first physical column name.
-                    encoding="utf-8-sig",
-                    newline="",
-                ) as text_handle:
-                    return [
-                        str(value)
-                        for value in next(
-                            csv.reader(text_handle, delimiter=delimiter),
-                            [],
-                        )
-                    ]
-            if suffix in {".parquet", ".pq"}:
-                import pyarrow.parquet as pq
-
-                return [str(value) for value in pq.read_schema(handle).names]
-    except Exception:
-        # This parser is an authority boundary, not a best-effort reader. The
-        # caller converts an unreadable supported schema to an unbound typed
-        # product rather than guessing columns or crashing the whole run.
-        return []
-    return []
-
-
-_MAX_TYPED_TABLE_COLUMNS = 2048
-_MAX_TYPED_TABLE_HEADER_CHARS = 256
-_MAX_TYPED_TABLE_RECEIPT_BYTES = 64 * 1024
-
-
-def _serialized_json_size(value: object) -> int:
-    return len(
-        json.dumps(
-            value,
-            ensure_ascii=False,
-            sort_keys=True,
-            separators=(",", ":"),
-        ).encode("utf-8")
-    )
-
-
-def typed_product_schema_receipt(
-    *,
-    artifact_path: Path,
-    expected_sha256: str,
-) -> dict[str, Any] | None:
-    """Seal only a digest-verified tabular product's exact physical schema.
-
-    This receipt intentionally contains no semantic roles. Selecting which
-    physical column fulfils a Planner-declared product remains Agent work; the
-    host supplies ordered names, format, and count only. ``None`` means that
-    the table format has no host adapter or its header is unsafe, unreadable,
-    or unbounded. A declared table is never bound without all three facts.
-    """
-
-    artifact_path = Path(artifact_path)
-    supported_format = artifact_path.suffix.lower() in {
-        ".csv",
-        ".tsv",
-        ".parquet",
-        ".pq",
-    }
-    if re.fullmatch(r"[0-9a-f]{64}", str(expected_sha256 or "")) is None:
-        return None
-    if not supported_format:
-        return None
-    columns = _tabular_artifact_columns(
-        artifact_path,
-        expected_sha256=expected_sha256,
-    )
-    if not columns:
-        return None
-    stripped_columns = [column.strip() for column in columns]
-    if (
-        len(columns) > _MAX_TYPED_TABLE_COLUMNS
-        or any(
-            not stripped
-            or len(column) > _MAX_TYPED_TABLE_HEADER_CHARS
-            or "\ufeff" in column
-            or any(ord(character) < 32 for character in column)
-            for column, stripped in zip(columns, stripped_columns, strict=True)
-        )
-        or len(set(columns)) != len(columns)
-        or len(set(stripped_columns)) != len(stripped_columns)
-    ):
-        return None
-    receipt: dict[str, Any] = {
-        "tabular_format": artifact_path.suffix.lower().lstrip("."),
-        "column_count": len(columns),
-        "columns": list(columns),
-    }
-    return (
-        receipt
-        if _serialized_json_size(receipt) <= _MAX_TYPED_TABLE_RECEIPT_BYTES
-        else None
-    )
 
 
 def _assignment_artifact_frame(

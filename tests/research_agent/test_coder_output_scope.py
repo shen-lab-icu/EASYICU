@@ -169,10 +169,17 @@ def test_initial_and_repair_coder_receive_the_same_typed_parent_schema(ra):
     bindings = {
         "table:display_summary": {
             "product_contract": {
-                "schema_version": "easyicu.host_typed_product.v2",
+                "schema_version": "easyicu.host_typed_product.v3",
                 "tabular_format": "csv",
                 "column_count": 4,
                 "columns": ["band", "point", "lower", "upper"],
+                "column_dtypes": {
+                    "band": "object",
+                    "point": "float64",
+                    "lower": "float64",
+                    "upper": "float64",
+                },
+                "numeric_columns": ["point", "lower", "upper"],
             }
         }
     }
@@ -208,8 +215,12 @@ def test_initial_and_repair_coder_receive_the_same_typed_parent_schema(ra):
     assert '"columns":["band","point","lower","upper"]' in initial_prompt
     assert '"column_count":4' in initial_prompt
     assert '"tabular_format":"csv"' in initial_prompt
+    assert '"band":"object"' in initial_prompt
+    assert '"numeric_columns":["point","lower","upper"]' in initial_prompt
     assert '"column_count":4' in repair_prompt
     assert '"tabular_format":"csv"' in repair_prompt
+    assert '"band":"object"' in repair_prompt
+    assert '"numeric_columns":["point","lower","upper"]' in repair_prompt
     assert "first-numeric" in initial_prompt
     assert "first-numeric" in repair_prompt
 
