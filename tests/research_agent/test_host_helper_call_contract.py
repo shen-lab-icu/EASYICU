@@ -449,3 +449,164 @@ def main(frame, measured_column, count_column):
 
     assert repaired == script
     assert names == []
+
+
+def test_publication_export_audit_exact_fresh_api_passes(ra):
+    script = """
+from easyicu.research_agent.figures.publication import audit_publication_exports
+qa = audit_publication_exports(
+    paths=out_dir,
+    min_bytes=2048,
+    require_svg_text=True,
+)
+"""
+
+    assert _signature_findings(script, ra) == []
+
+
+def test_publication_export_audit_retired_keywords_repair_before_execution(ra):
+    script = """
+from easyicu.research_agent.figures.publication import audit_publication_exports
+qa = audit_publication_exports(out_dir=out_dir, stem=stem)
+"""
+    findings = _signature_findings(script, ra)
+
+    repaired, names = deterministic_concept_audit_repair(
+        script,
+        [finding.message for finding in findings],
+        repair_reasons=[repair_reason_for_finding(finding) for finding in findings],
+        repair_findings=findings,
+    )
+
+    assert len(findings) == 1
+    assert findings[0].detail == {
+        "reason": "host_helper_call_signature_invalid",
+        "helper_name": "audit_publication_exports",
+        "line": 3,
+        "max_positional": 1,
+        "required_keywords": [],
+        "violations": ["paths_argument_missing", "unknown_keyword_argument"],
+    }
+    assert names == ["publication_export_audit_paths_v1"]
+    assert "audit_publication_exports(paths=out_dir)" in repaired
+    assert "stem=" not in repaired
+    assert _signature_findings(repaired, ra) == []
+
+
+def test_archived_step03_publication_audit_shape_is_repaired(ra):
+    script = """
+from easyicu.research_agent.figures.publication import audit_publication_exports
+
+def render(out_dir, stem):
+    qa = audit_publication_exports(
+        out_dir=out_dir,
+        stem=stem,
+    )
+    return qa
+"""
+    findings = _signature_findings(script, ra)
+
+    repaired, names = deterministic_concept_audit_repair(
+        script,
+        [finding.message for finding in findings],
+        repair_reasons=[repair_reason_for_finding(finding) for finding in findings],
+        repair_findings=findings,
+    )
+
+    assert names == ["publication_export_audit_paths_v1"]
+    assert "audit_publication_exports(paths=out_dir)" in repaired
+    assert _signature_findings(repaired, ra) == []
+
+
+def test_archived_step06_two_positional_fallback_remains_finding_only(ra):
+    script = """
+from easyicu.research_agent.figures.publication import audit_publication_exports
+
+def render(step_out_dir):
+    try:
+        publication_qa = audit_publication_exports(
+            out_dir=step_out_dir,
+            stem="icu_los_adjusted_effect",
+        )
+    except TypeError:
+        publication_qa = audit_publication_exports(
+            step_out_dir, "icu_los_adjusted_effect"
+        )
+    return publication_qa
+"""
+    findings = _signature_findings(script, ra)
+
+    repaired, names = deterministic_concept_audit_repair(
+        script,
+        [finding.message for finding in findings],
+        repair_reasons=[repair_reason_for_finding(finding) for finding in findings],
+        repair_findings=findings,
+    )
+
+    assert len(findings) == 2
+    assert names == ["publication_export_audit_paths_v1"]
+    assert "audit_publication_exports(paths=step_out_dir)" in repaired
+    remaining = _signature_findings(repaired, ra)
+    assert len(remaining) == 1
+    assert remaining[0].detail["violations"] == [
+        "keyword_only_parameters_passed_positionally"
+    ]
+
+
+def test_publication_export_audit_alias_import_is_finding_only(ra):
+    script = """
+from easyicu.research_agent.figures.publication import (
+    audit_publication_exports as audit_exports,
+)
+qa = audit_exports(out_dir=out_dir, stem=stem)
+"""
+    findings = _signature_findings(script, ra)
+
+    repaired, names = deterministic_concept_audit_repair(
+        script,
+        [finding.message for finding in findings],
+        repair_reasons=[repair_reason_for_finding(finding) for finding in findings],
+        repair_findings=findings,
+    )
+
+    assert len(findings) == 1
+    assert repaired == script
+    assert names == []
+
+
+def test_publication_export_audit_dynamic_arguments_are_finding_only(ra):
+    script = """
+from easyicu.research_agent.figures.publication import audit_publication_exports
+qa = audit_publication_exports(*args, **kwargs)
+"""
+    findings = _signature_findings(script, ra)
+
+    repaired, names = deterministic_concept_audit_repair(
+        script,
+        [finding.message for finding in findings],
+        repair_reasons=[repair_reason_for_finding(finding) for finding in findings],
+        repair_findings=findings,
+    )
+
+    assert len(findings) == 1
+    assert repaired == script
+    assert names == []
+
+
+def test_publication_export_audit_unknown_extra_keyword_is_not_repaired(ra):
+    script = """
+from easyicu.research_agent.figures.publication import audit_publication_exports
+qa = audit_publication_exports(out_dir=out_dir, stem=stem, strict=True)
+"""
+    findings = _signature_findings(script, ra)
+
+    repaired, names = deterministic_concept_audit_repair(
+        script,
+        [finding.message for finding in findings],
+        repair_reasons=[repair_reason_for_finding(finding) for finding in findings],
+        repair_findings=findings,
+    )
+
+    assert len(findings) == 1
+    assert repaired == script
+    assert names == []
