@@ -101,6 +101,47 @@ def test_inputs_mapping_and_get_relative_path_are_supported(ra) -> None:
     assert "os.environ.get('EASYICU_RUN_DIR')" in repaired
 
 
+def test_direct_host_manifest_read_is_proven_without_key_shape_inference(ra) -> None:
+    script = """
+import json
+import os
+from pathlib import Path
+
+manifest_path = Path(os.environ["EASYICU_RESOLVED_INPUTS_JSON"])
+resolved = json.loads(manifest_path.read_text(encoding="utf-8"))
+binding = resolved["inputs"]["artifact:analysis_cohort"]
+cohort_path = Path(os.environ["EASYICU_EVIDENCE_DIR"]) / binding["relative_path"]
+"""
+
+    findings = _findings(script, ra)
+
+    assert len(findings) == 1
+    repaired, names = deterministic_concept_audit_repair(
+        script,
+        [findings[0].message],
+        repair_reasons=[RepairReason.TYPED_PRODUCT_BINDING_INVALID],
+        repair_findings=findings,
+    )
+    assert names == ["resolved_input_run_root_v1"]
+    assert "EASYICU_EVIDENCE_DIR" not in repaired
+    assert "EASYICU_RUN_DIR" in repaired
+
+
+def test_arbitrary_json_file_is_not_promoted_to_host_manifest_authority(ra) -> None:
+    script = """
+import json
+import os
+from pathlib import Path
+
+manifest_path = Path("untrusted.json")
+resolved = json.loads(manifest_path.read_text(encoding="utf-8"))
+binding = resolved["inputs"]["artifact:analysis_cohort"]
+cohort_path = Path(os.environ["EASYICU_EVIDENCE_DIR"]) / binding["relative_path"]
+"""
+
+    assert _findings(script, ra) == []
+
+
 def test_all_proven_wrong_roots_are_repaired_atomically(ra) -> None:
     script = _SCRIPT.replace(
         "    return declared, cohort_path",
