@@ -1495,6 +1495,14 @@ class DockerRunner:
         DockerRunner._remove_lexical_path(out_dir)
         out_dir.mkdir(parents=False)
 
+    @staticmethod
+    def _publish_step_outputs(staged_out_dir: Path, out_dir: Path) -> None:
+        """Publish one quiescent attempt directory at the canonical path."""
+
+        DockerRunner._remove_lexical_path(out_dir)
+        os.replace(staged_out_dir, out_dir)
+        DockerRunner._ensure_real_directory(out_dir, replace_unsafe=False)
+
     def build_command(
         self,
         *,
@@ -2130,6 +2138,11 @@ class DockerRunner:
                     "DockerRunner could not confirm stale container teardown; "
                     "refusing to reuse the step output directory"
                 )
+            prefix = f".docker-{step_id}-"
+            attempt_id = sentinel.name[len(prefix) : -len(".sentinel")]
+            self._remove_lexical_path(
+                self.workdir / "steps" / step_id / f".outputs-{attempt_id}"
+            )
             sentinel.unlink(missing_ok=True)
             for suffix in (".cid", ".analysis.py", ".run.log"):
                 sentinel.with_suffix(suffix).unlink(missing_ok=True)
@@ -2171,10 +2184,13 @@ class DockerRunner:
 
         runtime_provenance, runtime_requirements = self._capture_runtime_provenance()
 
+        attempt_id = uuid.uuid4().hex
+        staged_out_dir = step_dir / f".outputs-{attempt_id}"
+        self._clear_step_outputs(staged_out_dir)
         cmd = self.build_command(
             step_id=step_id,
             script_path=script_path,
-            out_dir=out_dir,
+            out_dir=staged_out_dir,
             runtime_image=str(runtime_provenance["image_id"]),
             resolved_inputs_path=resolved_inputs_path,
             authority_snapshot_path=authority_snapshot_path,
@@ -2183,7 +2199,6 @@ class DockerRunner:
         )
         # Keep the host-written cidfile outside the step's read-write mount so
         # generated code cannot replace the container id used for teardown.
-        attempt_id = uuid.uuid4().hex
         cidfile = self.workdir / f".docker-{step_id}-{attempt_id}.cid"
         sentinel = self.workdir / f".docker-{step_id}-{attempt_id}.sentinel"
         control_script_path = sentinel.with_suffix(".analysis.py")
@@ -2262,8 +2277,8 @@ class DockerRunner:
 
         if teardown_confirmed:
             self._ensure_real_directory(step_dir, replace_unsafe=False)
-            self._ensure_real_directory(out_dir, replace_unsafe=True)
-            for output_path in list(out_dir.iterdir()):
+            self._ensure_real_directory(staged_out_dir, replace_unsafe=True)
+            for output_path in list(staged_out_dir.iterdir()):
                 metadata = os.lstat(output_path)
                 if stat.S_ISLNK(metadata.st_mode) or (
                     stat.S_ISREG(metadata.st_mode) and metadata.st_nlink != 1
@@ -2273,13 +2288,14 @@ class DockerRunner:
             safe_script_path = script_path
             safe_log_path = log_path
             self._write_regular_file(safe_log_path, log_content)
-            requirements_path = out_dir / "runner_requirements.lock.txt"
+            requirements_path = staged_out_dir / "runner_requirements.lock.txt"
             self._write_regular_file(requirements_path, runtime_requirements)
-            provenance_path = out_dir / "runner_provenance.json"
+            provenance_path = staged_out_dir / "runner_provenance.json"
             self._write_regular_file(
                 provenance_path,
                 json.dumps(runtime_provenance, indent=2, ensure_ascii=False) + "\n",
             )
+            self._publish_step_outputs(staged_out_dir, out_dir)
             artefacts = _collect_safe_output_artifacts(out_dir)
             for control_path in (cidfile, sentinel, control_script_path):
                 control_path.unlink(missing_ok=True)

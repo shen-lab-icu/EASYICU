@@ -1172,28 +1172,26 @@ def test_each_run_recreates_the_output_mount_directory(
 ):
     cohort = _make_cohort(tmp_path)
     _force_docker_present(monkeypatch)
-    _install_fake_subprocess(monkeypatch)
+    captured: List[List[str]] = []
+    _install_fake_subprocess(monkeypatch, captured=captured)
     runner = ra.DockerRunner(workdir=tmp_path / "run", cohort_parquet=cohort)
-    removed: list[Path] = []
-    original = ra.DockerRunner._remove_lexical_path
-
-    def record_remove(path: Path) -> None:
-        if Path(path).name == "outputs":
-            removed.append(Path(path))
-        original(path)
-
-    monkeypatch.setattr(
-        ra.DockerRunner,
-        "_remove_lexical_path",
-        staticmethod(record_remove),
-    )
 
     first = runner.run(step_id="repeat", code="print('first')\n")
     second = runner.run(step_id="repeat", code="print('second')\n")
 
     assert first.outputs_safe_to_collect is True
     assert second.outputs_safe_to_collect is True
-    assert removed == [first.out_dir, second.out_dir]
+    run_commands = [command for command in captured if "run" in command[:2]]
+    output_sources = [
+        entry.split(",target=", 1)[0].removeprefix("type=bind,source=")
+        for command in run_commands
+        for entry in command
+        if ",target=/easyicu-run/steps/repeat/outputs" in entry
+    ]
+    assert len(output_sources) == 2
+    assert output_sources[0] != output_sources[1]
+    assert all("/.outputs-" in source for source in output_sources)
+    assert not list((tmp_path / "run" / "steps" / "repeat").glob(".outputs-*"))
 
 
 def test_run_rejects_symlinked_step_directory(
