@@ -395,6 +395,11 @@ def _build_bundle(*, run_dir: Path, observed_events: list[tuple[str, str]]):
     authority = load_run_artifact_authority(run_dir)
     assert authority is not None
     ledger = list(authority["per_step_records"])
+    partial = json.loads(
+        (run_dir / "manifest_partial.json").read_text(encoding="utf-8")
+    )
+    attempt_history = list(partial["step_attempt_history"])
+    assert all(record in attempt_history for record in partial["per_step_records"])
     current = [dict(record) for record in current_step_records(ledger)]
     current.sort(key=lambda record: str(record.get("step_id") or ""))
     plan = json.loads((run_dir / "analysis_plan.json").read_text(encoding="utf-8"))
