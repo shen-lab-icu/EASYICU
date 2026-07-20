@@ -45,6 +45,25 @@ _NON_SEALABLE_AUDIT_ISSUE_CODES = frozenset(
         "llm_concept_audit_response_invalid",
     }
 )
+_TYPED_PARENT_SCHEMA_HEADER = (
+    "HOST-VERIFIED TYPED PARENT TABLE SCHEMAS (binding facts only):"
+)
+_TYPED_PARENT_SCHEMA_SUFFIX_V2 = (
+    "Column order and names are physical schema facts, not scientific role "
+    "assignments. Choose columns only inside the Planner-declared typed product "
+    "using the Planner-owned method and scientific context. Do not use "
+    "first-numeric, dtype-order, or nonexistent-column fallbacks; fail closed "
+    "when the schema cannot support the declared product."
+)
+_TYPED_PARENT_SCHEMA_SUFFIX_V3 = (
+    "Column order and names are physical schema facts, not scientific role "
+    "assignments. column_dtypes/numeric_columns, when present, are host-observed "
+    "pandas representation facts for the exact artifact, not scientific roles. "
+    "Choose columns only inside the Planner-declared typed product using the "
+    "Planner-owned method and scientific context. Do not use first-numeric, "
+    "dtype-order, or nonexistent-column fallbacks; fail closed when the schema "
+    "cannot support the declared product."
+)
 
 Sha256 = Annotated[str, Field(pattern=_DIGEST_PATTERN)]
 MediaType = Literal[
@@ -899,6 +918,165 @@ def input_representation_upgrade_matches(
     )
 
 
+def _typed_parent_schema_attachment_upgrade_matches(
+    historical_attachment: object,
+    current_attachment: object,
+) -> bool:
+    """Accept only the host's bounded v2 -> v3 schema-receipt rendering."""
+
+    if not isinstance(historical_attachment, str) or not isinstance(
+        current_attachment, str
+    ):
+        return False
+    historical_lines = historical_attachment.splitlines()
+    current_lines = current_attachment.splitlines()
+    if not (
+        len(historical_lines) == len(current_lines) == 3
+        and historical_lines[0] == current_lines[0] == _TYPED_PARENT_SCHEMA_HEADER
+        and historical_lines[2] == _TYPED_PARENT_SCHEMA_SUFFIX_V2
+        and current_lines[2] == _TYPED_PARENT_SCHEMA_SUFFIX_V3
+    ):
+        return False
+    try:
+        historical_payload = json.loads(historical_lines[1])
+        current_payload = json.loads(current_lines[1])
+    except (TypeError, ValueError):
+        return False
+    if not isinstance(historical_payload, dict) or not isinstance(
+        current_payload, dict
+    ):
+        return False
+    if set(historical_payload) != set(current_payload):
+        return False
+    if any(
+        historical_payload[key] != current_payload[key]
+        for key in historical_payload
+        if key != "receipts"
+    ):
+        return False
+    historical_receipts = historical_payload.get("receipts")
+    current_receipts = current_payload.get("receipts")
+    if not isinstance(historical_receipts, Mapping) or not isinstance(
+        current_receipts, Mapping
+    ):
+        return False
+    if not historical_receipts or set(historical_receipts) != set(current_receipts):
+        return False
+
+    additions = {"column_dtypes", "numeric_columns"}
+    upgraded_n = 0
+    for input_key in historical_receipts:
+        historical_receipt = historical_receipts[input_key]
+        current_receipt = current_receipts[input_key]
+        if not isinstance(historical_receipt, Mapping) or not isinstance(
+            current_receipt, Mapping
+        ):
+            return False
+        if current_receipt == historical_receipt:
+            continue
+        if set(current_receipt) != set(historical_receipt).union(additions):
+            return False
+        if any(
+            historical_receipt[key] != current_receipt[key]
+            for key in historical_receipt
+        ):
+            return False
+        columns = historical_receipt.get("columns")
+        column_count = historical_receipt.get("column_count")
+        column_dtypes = current_receipt.get("column_dtypes")
+        numeric_columns = current_receipt.get("numeric_columns")
+        if not (
+            isinstance(columns, list)
+            and all(isinstance(column, str) for column in columns)
+            and len(columns) == len(set(columns))
+            and not isinstance(column_count, bool)
+            and isinstance(column_count, int)
+            and column_count >= len(columns)
+            and isinstance(column_dtypes, Mapping)
+            and set(column_dtypes) == set(columns)
+            and all(isinstance(dtype, str) for dtype in column_dtypes.values())
+            and isinstance(numeric_columns, list)
+            and all(isinstance(column, str) for column in numeric_columns)
+            and len(numeric_columns) == len(set(numeric_columns))
+            and numeric_columns
+            == [column for column in columns if column in set(numeric_columns)]
+        ):
+            return False
+        upgraded_n += 1
+    return upgraded_n > 0
+
+
+def scoped_coder_representation_upgrade_matches(
+    historical_payload: object,
+    current_payload: object,
+) -> bool:
+    """Prove that scoped Coder authority changed only by typed representation.
+
+    Run-memory fields in ``ResearchContext`` may change as before.  Every host
+    attachment must remain byte-identical except one bounded typed-parent schema
+    receipt whose only new facts are dtypes and its ordered numeric subset.
+    """
+
+    if not isinstance(historical_payload, dict) or not isinstance(
+        current_payload, dict
+    ):
+        return False
+    wrapper_keys = {"research_context", "host_coder_authority"}
+    if set(historical_payload) != wrapper_keys or set(current_payload) != wrapper_keys:
+        return False
+    historical_context = historical_payload.get("research_context")
+    current_context = current_payload.get("research_context")
+    if not isinstance(historical_context, dict) or not isinstance(
+        current_context, dict
+    ):
+        return False
+    historical_comparable = dict(historical_context)
+    current_comparable = dict(current_context)
+    for field in ("created_at", "notes"):
+        historical_comparable.pop(field, None)
+        current_comparable.pop(field, None)
+    if historical_comparable != current_comparable:
+        return False
+
+    historical_authority = historical_payload.get("host_coder_authority")
+    current_authority = current_payload.get("host_coder_authority")
+    authority_keys = {"schema_version", "attachments"}
+    if not isinstance(historical_authority, dict) or not isinstance(
+        current_authority, dict
+    ):
+        return False
+    if (
+        set(historical_authority) != authority_keys
+        or set(current_authority) != authority_keys
+        or historical_authority.get("schema_version")
+        != current_authority.get("schema_version")
+        or historical_authority.get("schema_version")
+        != "easyicu.host_coder_authority/1"
+    ):
+        return False
+    historical_attachments = historical_authority.get("attachments")
+    current_attachments = current_authority.get("attachments")
+    if not isinstance(historical_attachments, list) or not isinstance(
+        current_attachments, list
+    ):
+        return False
+    if len(historical_attachments) != len(current_attachments):
+        return False
+    changed = [
+        (historical, current)
+        for historical, current in zip(
+            historical_attachments,
+            current_attachments,
+            strict=True,
+        )
+        if historical != current
+    ]
+    return bool(
+        len(changed) == 1
+        and _typed_parent_schema_attachment_upgrade_matches(*changed[0])
+    )
+
+
 def _scientific_adoption_identity(
     capsule: StepAuthorityCapsule,
 ) -> tuple[object, ...]:
@@ -970,18 +1148,42 @@ def _verified_representation_upgrade_adoption(
         source.step_id,
         source.run_input_capsule_sha256,
         source.planner_scope,
-        source.scoped_coder_context,
         source.candidate_code,
     )
     current_fixed_scientific_identity = (
         current.step_id,
         current.run_input_capsule_sha256,
         current.planner_scope,
-        current.scoped_coder_context,
         current.candidate_code,
     )
+    try:
+        historical_scoped_context = json.loads(
+            _read_object(
+                root,
+                kind="blobs",
+                digest=source.scoped_coder_context.sha256,
+                size_bytes=source.scoped_coder_context.size_bytes,
+            )
+        )
+        current_scoped_context = json.loads(
+            _read_object(
+                root,
+                kind="blobs",
+                digest=current.scoped_coder_context.sha256,
+                size_bytes=current.scoped_coder_context.size_bytes,
+            )
+        )
+    except (UnicodeDecodeError, ValueError, TypeError):
+        return False
     return bool(
         source_fixed_scientific_identity == current_fixed_scientific_identity
+        and (
+            source.scoped_coder_context == current.scoped_coder_context
+            or scoped_coder_representation_upgrade_matches(
+                historical_scoped_context,
+                current_scoped_context,
+            )
+        )
         and input_representation_upgrade_matches(
             historical_manifest=historical_manifest,
             current_manifest=current_manifest,
@@ -1278,6 +1480,7 @@ __all__ = [
     "concept_audit_authority_sha256",
     "execution_seal_identity_sha256",
     "input_representation_upgrade_matches",
+    "scoped_coder_representation_upgrade_matches",
     "load_verified_step_authority_capsule",
     "put_content_blob",
     "read_verified_content",

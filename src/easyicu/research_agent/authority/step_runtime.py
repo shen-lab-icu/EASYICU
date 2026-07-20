@@ -53,6 +53,7 @@ from .step_capsule import (
     load_verified_step_authority_capsule,
     put_content_blob,
     read_verified_content,
+    scoped_coder_representation_upgrade_matches,
     seal_step_authority_capsule,
 )
 
@@ -1090,16 +1091,36 @@ def adopt_candidate_for_control_plane_revalidation(
                 frozen_payload,
             )
         )
-        if not contexts_match:
+        representation_context_upgrade = bool(
+            representation_upgrade_proof is not None
+            and scoped_coder_representation_upgrade_matches(
+                frozen_payload,
+                current_payload,
+            )
+        )
+        if not contexts_match and not representation_context_upgrade:
             return None
-        frozen_context = parse_research_context(frozen_context_payload)
+        selected_context_payload = (
+            current_payload.get("research_context")
+            if representation_context_upgrade
+            and isinstance(current_payload, dict)
+            and set(current_payload) == {"research_context", "host_coder_authority"}
+            else frozen_context_payload
+        )
+        if not isinstance(selected_context_payload, dict):
+            return None
+        selected_context = parse_research_context(selected_context_payload)
     except (UnicodeDecodeError, ValueError, TypeError, ValidationError) as exc:
         raise StepAuthorityRuntimeError(
             "checkpoint-selected scoped coder context is invalid"
         ) from exc
-    adopted_coordinates = replace(
-        coordinates,
-        scoped_coder_context=capsule.scoped_coder_context,
+    adopted_coordinates = (
+        coordinates
+        if representation_upgrade_proof is not None
+        else replace(
+            coordinates,
+            scoped_coder_context=capsule.scoped_coder_context,
+        )
     )
     proof_ref = (
         put_content_blob(
@@ -1116,7 +1137,7 @@ def adopt_candidate_for_control_plane_revalidation(
         adopted_from_ref=verified.ref,
         input_representation_upgrade_proof=proof_ref,
     )
-    return frozen_context, adopted_coordinates, adopted_ref
+    return selected_context, adopted_coordinates, adopted_ref
 
 
 def _atomic_write(path: Path, payload: bytes) -> None:
