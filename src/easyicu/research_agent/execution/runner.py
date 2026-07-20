@@ -1380,6 +1380,15 @@ class DockerRunner:
         _reject_docker_mount_field(safe_step_id, label="step_id")
         return f"{self.CONTAINER_RUN_ROOT}/steps/{safe_step_id}"
 
+    def _container_cohort_path(self) -> str:
+        """Return the canonical container name for the selected cohort bytes."""
+
+        try:
+            relative = self.cohort_parquet.relative_to(self.workdir.resolve())
+        except ValueError:
+            return self.CONTAINER_COHORT_PATH
+        return f"{self.CONTAINER_RUN_ROOT}/{relative.as_posix()}"
+
     def _containerise_extra_env(
         self,
     ) -> Tuple[Dict[str, str], List[Tuple[str, str, str]]]:
@@ -1399,7 +1408,7 @@ class DockerRunner:
                 label="extra_env path source",
             )
             if resolved == self.cohort_parquet:
-                rewritten[key] = self.CONTAINER_COHORT_PATH
+                rewritten[key] = self._container_cohort_path()
                 continue
             try:
                 relative = resolved.relative_to(run_root)
@@ -1581,11 +1590,12 @@ class DockerRunner:
 
         # Env. The container sees absolute container paths; the host
         # path is irrelevant inside.
+        container_cohort_path = self._container_cohort_path()
         env = {
-            "COHORT_PARQUET": self.CONTAINER_COHORT_PATH,
-            "COHORT_PATH": self.CONTAINER_COHORT_PATH,
-            "EASYICU_COHORT_PATH": self.CONTAINER_COHORT_PATH,
-            "EASYICU_COHORT_PARQUET": self.CONTAINER_COHORT_PATH,
+            "COHORT_PARQUET": container_cohort_path,
+            "COHORT_PATH": container_cohort_path,
+            "EASYICU_COHORT_PATH": container_cohort_path,
+            "EASYICU_COHORT_PARQUET": container_cohort_path,
             "STEP_OUT_DIR": f"{container_step_dir}/outputs",
             "STEP_OUTPUT_DIR": f"{container_step_dir}/outputs",
             "STEP_OUTPUT": f"{container_step_dir}/outputs",

@@ -312,6 +312,35 @@ def test_build_command_maps_resolved_inputs_manifest_into_container(
     )
 
 
+def test_run_owned_cohort_uses_one_canonical_container_path(
+    ra,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    _force_docker_present(monkeypatch)
+    run_dir = tmp_path / "run"
+    cohort = run_dir / "evidence" / "analysis_cohort.parquet"
+    cohort.parent.mkdir(parents=True)
+    cohort.write_bytes(b"bound cohort")
+    runner = ra.DockerRunner(workdir=run_dir, cohort_parquet=cohort)
+    _, script_path, out_dir = runner.prepare_step_dir("consume")
+    script_path.write_text("print('hi')\n", encoding="utf-8")
+
+    cmd = runner.build_command(
+        step_id="consume",
+        script_path=script_path,
+        out_dir=out_dir,
+    )
+
+    env_pairs = [cmd[i + 1] for i, token in enumerate(cmd) if token == "-e"]
+    env_dict = dict(pair.split("=", 1) for pair in env_pairs)
+    expected = "/easyicu-run/evidence/analysis_cohort.parquet"
+    assert env_dict["COHORT_PARQUET"] == expected
+    assert env_dict["COHORT_PATH"] == expected
+    assert env_dict["EASYICU_COHORT_PATH"] == expected
+    assert env_dict["EASYICU_COHORT_PARQUET"] == expected
+
+
 def test_build_command_maps_digest_bound_authority_snapshot_into_container(
     ra,
     tmp_path: Path,
