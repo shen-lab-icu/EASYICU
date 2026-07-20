@@ -282,6 +282,7 @@ _STRUCTURAL_REPAIRS = {
     "lossy_numeric_coercion_guard_v1",
     "matplotlib_errorbar_xerr_shape_v1",
     "measurement_provenance_summary_mapping_v1",
+    "measurement_provenance_summary_mapping_v2",
     "normalize_first_time_companion_v1",
     "primary_predictor_safe_summary_lookup_v1",
     "provenance_bidirectional_pair_scan_v1",
