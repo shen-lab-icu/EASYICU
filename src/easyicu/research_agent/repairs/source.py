@@ -102,7 +102,8 @@ def _patch_rank_safe_statsmodels_design(code: str) -> Optional[str]:
 
     if "_easyicu_rank_safe_design_v1" in code:
         return None
-    helper = textwrap.dedent("""
+    helper = textwrap.dedent(
+        """
 
         def _easyicu_safe_exp_v1(value):
             import math as _math
@@ -177,7 +178,8 @@ def _patch_rank_safe_statsmodels_design(code: str) -> Optional[str]:
             except Exception:
                 pass
             return reduced, dropped
-        """).strip("\n")
+        """
+    ).strip("\n")
 
     model_call = re.compile(
         r"(?m)^(?P<indent>\s*)(?P<lhs>[A-Za-z_]\w*)\s*=\s*sm\.Logit\("
@@ -361,6 +363,107 @@ def _closed_counts_stable_keyword_repair_lines(
         and not isinstance(detail.get("line"), bool)
         and int(detail["line"]) > 0
     )
+
+
+def _publication_export_audit_repair_lines(
+    findings: Sequence[ValidationFinding],
+) -> frozenset[int]:
+    """Return exact publication-export calls using the retired adapter shape."""
+
+    return frozenset(
+        int(detail["line"])
+        for finding in findings
+        for detail in [finding.detail or {}]
+        for violations in [detail.get("violations")]
+        if finding.validator == "mechanical_code_preflight"
+        and finding.severity == "error"
+        and detail.get("reason") == "host_helper_call_signature_invalid"
+        and detail.get("helper_name") == "audit_publication_exports"
+        and isinstance(violations, list)
+        and set(violations) == {"paths_argument_missing", "unknown_keyword_argument"}
+        and isinstance(detail.get("line"), int)
+        and not isinstance(detail.get("line"), bool)
+        and int(detail["line"]) > 0
+    )
+
+
+def _patch_publication_export_audit_call(
+    code: str,
+    *,
+    finding_lines: frozenset[int],
+) -> str:
+    """Replace only the exact retired ``out_dir=..., stem=...`` adapter.
+
+    Auditing the directory is the stable fresh API and is no weaker than the
+    retired stem-labelled adapter: every publication export in that directory
+    is checked.  Aliased imports, namespace calls, positional calls, expanded
+    keywords, and any additional option remain finding-only.
+    """
+
+    if not finding_lines:
+        return code
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return code
+
+    direct_import_lines = {
+        int(node.lineno)
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.level == 0
+        and node.module == "easyicu.research_agent.figures.publication"
+        and any(
+            alias.name == "audit_publication_exports" and alias.asname is None
+            for alias in node.names
+        )
+    }
+    if not direct_import_lines:
+        return code
+
+    candidates_by_line: dict[int, list[ast.Call]] = {line: [] for line in finding_lines}
+    for node in ast.walk(tree):
+        if (
+            isinstance(node, ast.Call)
+            and int(getattr(node, "lineno", 0)) in candidates_by_line
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "audit_publication_exports"
+        ):
+            candidates_by_line[int(node.lineno)].append(node)
+    if any(len(candidates) != 1 for candidates in candidates_by_line.values()):
+        return code
+
+    replacements: list[tuple[str, str]] = []
+    for line in sorted(finding_lines):
+        call = candidates_by_line[line][0]
+        if (
+            not any(import_line < line for import_line in direct_import_lines)
+            or call.args
+            or any(keyword.arg is None for keyword in call.keywords)
+        ):
+            return code
+        keyword_map = {str(keyword.arg): keyword.value for keyword in call.keywords}
+        if len(keyword_map) != len(call.keywords) or set(keyword_map) != {
+            "out_dir",
+            "stem",
+        }:
+            return code
+        call_source = ast.get_source_segment(code, call)
+        paths_source = ast.get_source_segment(code, keyword_map["out_dir"])
+        if not call_source or not paths_source or code.count(call_source) != 1:
+            return code
+        replacements.append(
+            (call_source, f"audit_publication_exports(paths={paths_source})")
+        )
+
+    repaired = code
+    for call_source, replacement in replacements:
+        repaired = repaired.replace(call_source, replacement, 1)
+    try:
+        ast.parse(repaired)
+    except SyntaxError:
+        return code
+    return repaired
 
 
 def _patch_closed_counts_stable_keywords(
@@ -2336,6 +2439,15 @@ def deterministic_concept_audit_repair(
             repair_names.append(repair_name)
 
     if RepairReason.INVALID_HELPER_SIGNATURE in set(repair_reasons):
+        publication_audit = _patch_publication_export_audit_call(
+            repaired,
+            finding_lines=_publication_export_audit_repair_lines(repair_findings),
+        )
+        if publication_audit != repaired:
+            repair_name = "publication_export_audit_paths_v1"
+            repaired = publication_audit
+            repair_names.append(repair_name)
+
         keyword_bound = _patch_host_helper_keyword_only_call(
             repaired,
             finding_lines=_host_helper_signature_repair_lines(repair_findings),
@@ -4090,13 +4202,15 @@ def _deterministic_summary_repair(
                     flags=re.MULTILINE,
                 )
                 if model_df_assign:
-                    patch = textwrap.dedent("""
+                    patch = textwrap.dedent(
+                        """
                         if 'sex' in model_df.columns:
                             model_df['sex'] = model_df['sex'].astype(str).str.lower().isin(['m', 'male']).astype(float)
                         for col in model_df.columns:
                             if col != 'sex':
                                 model_df[col] = pd.to_numeric(model_df[col], errors="coerce")
-                        """).strip("\n")
+                        """
+                    ).strip("\n")
                     repaired = code.replace(
                         model_df_assign.group(1),
                         model_df_assign.group(1) + "\n" + patch,
@@ -4122,13 +4236,15 @@ def _deterministic_summary_repair(
             repair_name = "sex_numeric_coercion_before_dropna_v1"
             if previous_repair == repair_name:
                 return None
-            replacement = textwrap.dedent("""
+            replacement = textwrap.dedent(
+                """
                 if 'sex' in model_df.columns:
                     model_df['sex'] = model_df['sex'].astype(str).str.lower().isin(['m', 'male']).astype(float)
                 for col in model_df.columns:
                     if col != 'sex':
                         model_df[col] = pd.to_numeric(model_df[col], errors="coerce")
-                """).strip("\n")
+                """
+            ).strip("\n")
             repaired = re.sub(
                 r"^(?P<indent>\s*)model_df = model_df\.apply\(pd\.to_numeric, errors=\"coerce\"\)",
                 lambda match: match.group("indent")
@@ -4782,7 +4898,8 @@ def _deterministic_runner_repair(
     if missing_seaborn:
         repair_name = "seaborn_matplotlib_fallback_v1"
         if previous_repair != repair_name:
-            fallback = textwrap.dedent("""
+            fallback = textwrap.dedent(
+                """
                 class _EasyICUSeabornFallback:
                     def set_theme(self, *args, **kwargs):
                         return None
@@ -4897,7 +5014,8 @@ def _deterministic_runner_repair(
                             return kwargs.get("ax")
                         return _seaborn_noop
                 sns = _EasyICUSeabornFallback()
-                """).strip()
+                """
+            ).strip()
             repaired = code.replace("import seaborn as sns", fallback, 1)
             if repaired != code:
                 return repair_name, repaired
@@ -4909,7 +5027,8 @@ def _deterministic_runner_repair(
     if missing_proportion_confint:
         repair_name = "local_wilson_proportion_confint_v1"
         if previous_repair != repair_name:
-            helper = textwrap.dedent("""
+            helper = textwrap.dedent(
+                """
                 def proportion_confint(count, nobs=None, alpha=0.05, method="wilson", **kwargs):
                     import math
                     if nobs is None:
@@ -4924,7 +5043,8 @@ def _deterministic_runner_repair(
                     centre = phat + z * z / (2.0 * nobs)
                     spread = z * math.sqrt((phat * (1.0 - phat) + z * z / (4.0 * nobs)) / nobs)
                     return (max(0.0, (centre - spread) / denom), min(1.0, (centre + spread) / denom))
-                """).strip()
+                """
+            ).strip()
             repaired = re.sub(
                 r"^\s*from\s+statsmodels\.stats\.proportion\s+import\s+proportion_confint\s*$",
                 helper,
@@ -5277,7 +5397,8 @@ def _deterministic_runner_repair(
                 repaired,
                 flags=re.MULTILINE,
             )
-            sex_numeric_patch = textwrap.dedent("""
+            sex_numeric_patch = textwrap.dedent(
+                """
                 if 'sex' in model_df.columns:
                     model_df['sex'] = model_df['sex'].astype(str).str.lower().isin(['m', 'male']).astype(float)
                 for col in model_df.columns:
@@ -5285,7 +5406,8 @@ def _deterministic_runner_repair(
                         model_df[col] = pd.to_numeric(model_df[col], errors="coerce")
                 model_df = model_df.replace([np.inf, -np.inf], np.nan)
                 reduced_covariates = [c for c in covariates if model_df[c].isna().mean() <= 0.2]
-                """).strip("\n")
+                """
+            ).strip("\n")
             if model_df_assign and "reduced_covariates =" not in repaired:
                 indent = model_df_assign.group("indent")
                 patch = "\n".join(
@@ -5415,7 +5537,8 @@ def _deterministic_runner_repair(
                 lower_var = "or_lowers"
                 upper_var = "or_uppers"
             plot_marker = "ax.errorbar(x_pos, ors, yerr=[yerr_lower, yerr_upper],"
-            plot_guard = textwrap.dedent(f"""
+            plot_guard = textwrap.dedent(
+                f"""
                 plot_rows = [
                     (s, o, lo, hi)
                     for s, o, lo, hi in zip(strategies, ors, {lower_var}, {upper_var})
@@ -5427,7 +5550,8 @@ def _deterministic_runner_repair(
                 else:
                     strategies, ors, {lower_var}, {upper_var} = [], [], [], []
                     x_pos = np.array([])
-                """).strip("\n")
+                """
+            ).strip("\n")
             if plot_marker in repaired and "plot_rows = [" not in repaired:
                 repaired = repaired.replace(
                     plot_marker,
@@ -5444,7 +5568,8 @@ def _deterministic_runner_repair(
     if missing_internal_utils:
         repair_name = "inline_missing_to_jsonable_utils_v1"
         if previous_repair != repair_name:
-            helper = textwrap.dedent("""
+            helper = textwrap.dedent(
+                """
                 def to_jsonable(x):
                     import math
                     import numpy as np
@@ -5464,7 +5589,8 @@ def _deterministic_runner_repair(
                     except Exception:
                         pass
                     return str(x)
-                """).strip()
+                """
+            ).strip()
             repaired = code.replace(
                 "from easyicu.research_agent.utils import to_jsonable",
                 helper,
@@ -5500,7 +5626,8 @@ def _deterministic_runner_repair(
         if previous_repair != repair_name:
 
             def _numeric_block(prefix: str) -> str:
-                block = textwrap.dedent(f"""
+                block = textwrap.dedent(
+                    f"""
                     if 'sex' in X_{prefix}.columns:
                         X_{prefix}['sex'] = X_{prefix}['sex'].astype(str).str.lower().isin(['m', 'male', '1', 'true']).astype(float)
                     X_{prefix} = X_{prefix}.apply(pd.to_numeric, errors='coerce').replace([np.inf, -np.inf], np.nan)
@@ -5508,7 +5635,8 @@ def _deterministic_runner_repair(
                     valid_{prefix}_idx = X_{prefix}.dropna().index.intersection(y_{prefix}.dropna().index)
                     X_{prefix} = X_{prefix}.loc[valid_{prefix}_idx]
                     y_{prefix} = y_{prefix}.loc[valid_{prefix}_idx].astype(float)
-                    """).strip("\n")
+                    """
+                ).strip("\n")
                 return block.replace("\n", "\n    ")
 
             repaired = code
@@ -5563,7 +5691,9 @@ def _deterministic_runner_repair(
     if table_one_unclosed_syntax:
         repair_name = "table_one_descriptive_repair_v1"
         if previous_repair != repair_name:
-            repaired = textwrap.dedent("""
+            repaired = (
+                textwrap.dedent(
+                    """
                 import json
                 import os
                 import math
@@ -5660,7 +5790,10 @@ def _deterministic_runner_repair(
                 with open(os.path.join(out_dir, "step_summary.json"), "w", encoding="utf-8") as f:
                     json.dump(summary, f, indent=2, default=to_jsonable)
                 print(json.dumps({"table": "table_one.csv", "summary": summary}, default=to_jsonable))
-                """).strip() + "\n"
+                """
+                ).strip()
+                + "\n"
+            )
             return repair_name, repaired
 
     outcome_incidence_broken_syntax = "syntaxerror" in lowered and (
@@ -5670,7 +5803,9 @@ def _deterministic_runner_repair(
     if outcome_incidence_broken_syntax:
         repair_name = "outcome_incidence_descriptive_repair_v1"
         if previous_repair != repair_name:
-            repaired = textwrap.dedent("""
+            repaired = (
+                textwrap.dedent(
+                    """
                 import json
                 import os
                 import math
@@ -5778,7 +5913,10 @@ def _deterministic_runner_repair(
                 with open(os.path.join(out_dir, "step_summary.json"), "w", encoding="utf-8") as f:
                     json.dump(summary, f, indent=2, default=to_jsonable)
                 print(json.dumps(summary, default=to_jsonable))
-                """).strip() + "\n"
+                """
+                ).strip()
+                + "\n"
+            )
             return repair_name, repaired
 
     repeated_keyword_syntax = (
@@ -5789,7 +5927,9 @@ def _deterministic_runner_repair(
     if repeated_keyword_syntax and binary_model_repair_allowed:
         repair_name = "prediction_split_minimal_v1"
         if previous_repair != repair_name:
-            repaired = textwrap.dedent("""
+            repaired = (
+                textwrap.dedent(
+                    """
                 import json
                 import os
                 import numpy as np
@@ -5851,7 +5991,10 @@ def _deterministic_runner_repair(
                 with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as f:
                     json.dump(step_summary, f, indent=2, default=to_jsonable, ensure_ascii=False)
                 print(json.dumps(step_summary, indent=2, default=to_jsonable, ensure_ascii=False))
-                """).strip() + "\n"
+                """
+                ).strip()
+                + "\n"
+            )
             return repair_name, repaired
 
     logreg_nan = (
@@ -5861,7 +6004,8 @@ def _deterministic_runner_repair(
     if logreg_nan and binary_model_repair_allowed:
         repair_name = "logreg_impute_v1"
         if previous_repair != repair_name and "_easyicu_logreg_impute_v1" not in code:
-            patch = textwrap.dedent("""
+            patch = textwrap.dedent(
+                """
 
                 def _easyicu_logreg_impute_v1(frame):
                     if not hasattr(frame, "copy"):
@@ -5875,7 +6019,8 @@ def _deterministic_runner_repair(
                                 series = series.fillna(median if pd.notna(median) else 0)
                         work[col] = series
                     return work
-                """).strip("\n")
+                """
+            ).strip("\n")
             train_split = re.compile(
                 r"(?P<line>X_train,\s*X_test,\s*y_train,\s*y_test\s*=\s*train_test_split\([^\\n]+?\)\s*)",
                 re.DOTALL,
@@ -5914,7 +6059,9 @@ def _deterministic_runner_repair(
     if placeholder_ellipsis and binary_model_repair_allowed:
         repair_name = "prediction_discrimination_template_v1"
         if previous_repair != repair_name:
-            repaired = textwrap.dedent("""
+            repaired = (
+                textwrap.dedent(
+                    """
                 import json
                 import math
                 import os
@@ -6014,7 +6161,10 @@ def _deterministic_runner_repair(
                 with open(os.path.join(step_out_dir, "step_summary.json"), "w", encoding="utf-8") as f:
                     json.dump(step_summary, f, indent=2, default=to_jsonable, ensure_ascii=False)
                 print(json.dumps(step_summary, indent=2, default=to_jsonable, ensure_ascii=False))
-                """).strip() + "\n"
+                """
+                ).strip()
+                + "\n"
+            )
             return repair_name, repaired
 
     omitted_primary_predictor = re.search(
@@ -6078,14 +6228,16 @@ def _deterministic_runner_repair(
                 return repair_name, patched
         repair_name = "logit_regularized_fit_v1"
         if previous_repair != repair_name:
-            helper = textwrap.dedent("""
+            helper = textwrap.dedent(
+                """
 
                 def _easyicu_safe_logit_fit_v1(model):
                     try:
                         return model.fit(disp=0, method="newton")
                     except Exception:
                         return model.fit_regularized(alpha=1e-6, disp=0, trim_mode="off")
-                """).strip("\n")
+                """
+            ).strip("\n")
             patched = code
             if "_easyicu_safe_logit_fit_v1" not in patched:
                 insert_after = patched.find("import warnings")
@@ -6178,7 +6330,9 @@ def _deterministic_runner_repair(
     if publication_style_nameerror:
         repair_name = "publication_bundle_promote_script_v1"
         if previous_repair != repair_name:
-            repaired = textwrap.dedent("""
+            repaired = (
+                textwrap.dedent(
+                    """
                 from __future__ import annotations
                 import json
                 import os
@@ -6250,7 +6404,10 @@ def _deterministic_runner_repair(
                 with open(out_dir / "step_summary.json", "w", encoding="utf-8") as f:
                     json.dump(summary, f, indent=2, ensure_ascii=False)
                 print(json.dumps(summary, indent=2, ensure_ascii=False))
-                """).strip() + "\n"
+                """
+                ).strip()
+                + "\n"
+            )
             return repair_name, repaired
 
     # ----------------------------------------------------------------
@@ -6296,7 +6453,8 @@ def _deterministic_runner_repair(
         ):
             repair_name = f"undefined_helper_stub_{helper_name}_v1"
             if previous_repair != repair_name:
-                stub = textwrap.dedent(f"""
+                stub = textwrap.dedent(
+                    f"""
                     def {helper_name}(*args, **kwargs):
                         \"\"\"Auto-injected stub for an undefined helper.
 
@@ -6324,7 +6482,8 @@ def _deterministic_runner_repair(
                             return str(value)
                         except Exception:
                             return None
-                    """).strip("\n")
+                    """
+                ).strip("\n")
                 repaired = stub + "\n\n" + code
                 if repaired != code:
                     return repair_name, repaired
@@ -6344,7 +6503,8 @@ def _deterministic_runner_repair(
     )
     if dtype_coerce_applies:
         repair_name = "dtype_coerce_v1"
-        patch = textwrap.dedent("""
+        patch = textwrap.dedent(
+            """
 
             def _easyicu_runner_repair_v1(X, y):
                 X_work = X.copy() if hasattr(X, "copy") else X
@@ -6367,7 +6527,8 @@ def _deterministic_runner_repair(
                     X_work = X_arr[mask]
                     y_work = y_arr[mask]
                 return y_work.astype(float), X_work
-            """).strip("\n")
+            """
+        ).strip("\n")
 
         patched = code
         if "_easyicu_runner_repair_v1" not in patched:
