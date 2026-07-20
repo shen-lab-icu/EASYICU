@@ -28,6 +28,7 @@ from easyicu.research_agent.authority.step_capsule import (
     load_verified_step_authority_capsule,
     put_content_blob,
     read_verified_content,
+    scoped_coder_representation_upgrade_matches,
     seal_step_authority_capsule,
 )
 from easyicu.research_agent.authority.step_runtime import (
@@ -127,6 +128,7 @@ def _resolved_table_coordinates(
     contract: dict[str, object],
     artifact_sha256: str = SHA_B,
     cohort_sha256: str = SHA_C,
+    scoped_coder_context: object = None,
 ):
     identity = {
         "input_key": "artifact:analysis_cohort",
@@ -185,7 +187,11 @@ def _resolved_table_coordinates(
         step_id="02_table_one",
         run_input_capsule_sha256=SHA_A,
         planner_scope={"step_id": "02_table_one", "intent": "Table 1"},
-        scoped_coder_context=scoped_context.model_dump(mode="json"),
+        scoped_coder_context=(
+            scoped_context.model_dump(mode="json")
+            if scoped_coder_context is None
+            else scoped_coder_context
+        ),
         resolved_inputs_path=resolved,
         typed_bindings={"artifact:analysis_cohort": binding},
         upstream_authority=upstream,
@@ -196,6 +202,71 @@ def _resolved_table_coordinates(
         prompt_pack={"coder.txt": SHA_A},
     )
     return coordinates, upstream
+
+
+def _typed_schema_scoped_context(
+    *,
+    columns: list[str],
+    with_representation: bool,
+) -> dict[str, object]:
+    context = ResearchContext(
+        research_question="Describe the analysis cohort.",
+        cohort=CohortDescriptor(
+            cohort_name="typed_table_revalidation",
+            database="synthetic",
+            n_patients=3,
+            n_stays=3,
+        ),
+        variables=[],
+        target_outcome="death",
+        created_at=datetime(2026, 7, 20, 10, tzinfo=timezone.utc),
+    )
+    receipt: dict[str, object] = {
+        "column_count": len(columns),
+        "columns": columns,
+        "tabular_format": "parquet",
+    }
+    suffix = (
+        "Column order and names are physical schema facts, not scientific role "
+        "assignments. Choose columns only inside the Planner-declared typed product "
+        "using the Planner-owned method and scientific context. Do not use "
+        "first-numeric, dtype-order, or nonexistent-column fallbacks; fail closed "
+        "when the schema cannot support the declared product."
+    )
+    if with_representation:
+        receipt.update(
+            {
+                "column_dtypes": {
+                    "stay_id": "int64",
+                    "group": "object",
+                    "age": "float64",
+                },
+                "numeric_columns": ["stay_id", "age"],
+            }
+        )
+        suffix = (
+            "Column order and names are physical schema facts, not scientific role "
+            "assignments. column_dtypes/numeric_columns, when present, are "
+            "host-observed pandas representation facts for the exact artifact, not "
+            "scientific roles. Choose columns only inside the Planner-declared typed "
+            "product using the Planner-owned method and scientific context. Do not "
+            "use first-numeric, dtype-order, or nonexistent-column fallbacks; fail "
+            "closed when the schema cannot support the declared product."
+        )
+    attachment = (
+        "HOST-VERIFIED TYPED PARENT TABLE SCHEMAS (binding facts only):\n"
+        + json.dumps(
+            {"receipts": {"artifact:analysis_cohort": receipt}},
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        + "\n"
+        + suffix
+    )
+    return {
+        "research_context": context.model_dump(mode="json"),
+        "host_coder_authority": HostCoderAuthority().append(attachment).payload(),
+    }
 
 
 def test_control_plane_revalidation_accepts_only_additive_v2_to_v3_table_facts(
@@ -211,6 +282,10 @@ def test_control_plane_revalidation_accepts_only_additive_v2_to_v3_table_facts(
             "column_count": len(columns),
             "columns": columns,
         },
+        scoped_coder_context=_typed_schema_scoped_context(
+            columns=columns,
+            with_representation=False,
+        ),
     )
     code_ref = persist_candidate_code(historical, "print('table one')\n")
     historical_ref = seal_legacy_candidate(historical, code_ref=code_ref)
@@ -230,6 +305,10 @@ def test_control_plane_revalidation_accepts_only_additive_v2_to_v3_table_facts(
             },
             "numeric_columns": ["stay_id", "age"],
         },
+        scoped_coder_context=_typed_schema_scoped_context(
+            columns=columns,
+            with_representation=True,
+        ),
     )
 
     adopted = adopt_candidate_for_control_plane_revalidation(verified, current)
@@ -241,6 +320,7 @@ def test_control_plane_revalidation_accepts_only_additive_v2_to_v3_table_facts(
         ref=adopted_ref,
     )
     assert adopted_coordinates.resolved_inputs == current.resolved_inputs
+    assert adopted_coordinates.scoped_coder_context == current.scoped_coder_context
     assert adopted_capsule.capsule.candidate_code == code_ref
     assert adopted_capsule.capsule.candidate_origin.kind == "legacy_adoption"
     assert (
@@ -278,6 +358,56 @@ def test_control_plane_revalidation_accepts_only_additive_v2_to_v3_table_facts(
         match="disagrees with its verified scientific source",
     ):
         seal_step_authority_capsule(tmp_path, forged_capsule)
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "research_question",
+        "attachment_suffix",
+        "columns",
+        "dtype_keys",
+        "numeric_order",
+        "extra_attachment",
+    ],
+)
+def test_scoped_coder_representation_upgrade_rejects_unproven_drift(
+    mutation: str,
+) -> None:
+    columns = ["stay_id", "group", "age"]
+    historical = _typed_schema_scoped_context(
+        columns=columns,
+        with_representation=False,
+    )
+    current = _typed_schema_scoped_context(
+        columns=columns,
+        with_representation=True,
+    )
+    if mutation == "research_question":
+        current["research_context"]["research_question"] = "Changed science"
+    else:
+        authority = current["host_coder_authority"]
+        attachments = authority["attachments"]
+        if mutation == "attachment_suffix":
+            attachments[0] += " changed"
+        elif mutation == "extra_attachment":
+            attachments.append("unrelated host assertion")
+        else:
+            lines = attachments[0].splitlines()
+            payload = json.loads(lines[1])
+            receipt = payload["receipts"]["artifact:analysis_cohort"]
+            if mutation == "columns":
+                receipt["columns"] = ["stay_id", "group", "outcome"]
+            elif mutation == "dtype_keys":
+                receipt["column_dtypes"]["outcome"] = receipt["column_dtypes"].pop(
+                    "age"
+                )
+            else:
+                receipt["numeric_columns"] = ["age", "stay_id"]
+            lines[1] = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+            attachments[0] = "\n".join(lines)
+
+    assert not scoped_coder_representation_upgrade_matches(historical, current)
 
 
 @pytest.mark.parametrize(
