@@ -2791,6 +2791,103 @@ def _provenance_pair_scan_findings(tree: ast.Module) -> list[ValidationFinding]:
     return []
 
 
+def _negative_integer_literal(node: ast.AST | None) -> int | None:
+    if not (
+        isinstance(node, ast.UnaryOp)
+        and isinstance(node.op, ast.USub)
+        and isinstance(node.operand, ast.Constant)
+        and isinstance(node.operand.value, int)
+        and not isinstance(node.operand.value, bool)
+    ):
+        return None
+    return int(node.operand.value)
+
+
+def _string_suffix_trim_findings(tree: ast.Module) -> list[ValidationFinding]:
+    """Reject an exact ``endswith`` guard paired with the wrong trim length.
+
+    This deliberately claims only comprehensions where the same simple name is
+    guarded by one literal ``endswith`` suffix and sliced by one negative
+    integer.  Dynamic suffixes, tuple suffixes and ambiguous conditions remain
+    outside host-owned repair authority.
+    """
+
+    findings: list[ValidationFinding] = []
+    comprehension_types = (
+        ast.ListComp,
+        ast.SetComp,
+        ast.DictComp,
+        ast.GeneratorExp,
+    )
+    for comprehension in ast.walk(tree):
+        if not isinstance(comprehension, comprehension_types):
+            continue
+        suffixes_by_name: dict[str, set[str]] = {}
+        for generator in comprehension.generators:
+            for condition in generator.ifs:
+                for candidate in ast.walk(condition):
+                    if not (
+                        isinstance(candidate, ast.Call)
+                        and isinstance(candidate.func, ast.Attribute)
+                        and candidate.func.attr == "endswith"
+                        and isinstance(candidate.func.value, ast.Name)
+                        and len(candidate.args) == 1
+                        and not candidate.keywords
+                        and isinstance(candidate.args[0], ast.Constant)
+                        and isinstance(candidate.args[0].value, str)
+                        and candidate.args[0].value
+                    ):
+                        continue
+                    suffixes_by_name.setdefault(candidate.func.value.id, set()).add(
+                        candidate.args[0].value
+                    )
+        expressions = (
+            [comprehension.key, comprehension.value]
+            if isinstance(comprehension, ast.DictComp)
+            else [comprehension.elt]
+        )
+        for expression in expressions:
+            for candidate in ast.walk(expression):
+                if not (
+                    isinstance(candidate, ast.Subscript)
+                    and isinstance(candidate.value, ast.Name)
+                    and isinstance(candidate.slice, ast.Slice)
+                    and candidate.slice.lower is None
+                    and candidate.slice.step is None
+                ):
+                    continue
+                suffixes = suffixes_by_name.get(candidate.value.id, set())
+                if len(suffixes) != 1:
+                    continue
+                reported = _negative_integer_literal(candidate.slice.upper)
+                if reported is None:
+                    continue
+                suffix = next(iter(suffixes))
+                expected = len(suffix)
+                if reported == expected:
+                    continue
+                findings.append(
+                    ValidationFinding(
+                        validator="mechanical_code_preflight",
+                        severity="error",
+                        message=(
+                            "A literal endswith guard and its negative suffix "
+                            "slice disagree, so the derived stem is truncated "
+                            "incorrectly."
+                        ),
+                        detail={
+                            "reason": "string_suffix_trim_length_mismatch",
+                            "line": int(candidate.lineno),
+                            "variable": candidate.value.id,
+                            "reported": reported,
+                            "expected": expected,
+                            "suffix": suffix,
+                        },
+                    )
+                )
+    return sorted(findings, key=lambda finding: int(finding.detail["line"]))
+
+
 _HOST_VALIDATION_FAILURE_EXCEPTIONS = frozenset(
     {
         "BaseException",
@@ -7099,6 +7196,7 @@ def audit_mechanical_code_contracts(
     findings.extend(_binding_metadata_findings(tree))
     findings.extend(_provenance_fail_closed_findings(tree))
     findings.extend(_provenance_pair_scan_findings(tree))
+    findings.extend(_string_suffix_trim_findings(tree))
     findings.extend(_swallowed_reconciliation_error_findings(tree))
     findings.extend(_authoritative_exposure_binding_findings(tree, step))
     findings.extend(_authoritative_exposure_fallback_findings(tree, step))

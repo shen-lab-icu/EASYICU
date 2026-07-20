@@ -1834,6 +1834,101 @@ def _patch_lossy_numeric_coercion_guard(
     return repaired
 
 
+def _patch_string_suffix_trim_length(
+    code: str,
+    *,
+    repair_findings: Sequence[ValidationFinding],
+) -> str:
+    """Align a literal suffix slice with its host-proven ``endswith`` guard."""
+
+    coordinates: list[tuple[int, str, int, int]] = []
+    for finding in repair_findings:
+        detail = finding.detail or {}
+        if detail.get("reason") != "string_suffix_trim_length_mismatch":
+            continue
+        line = detail.get("line")
+        variable = detail.get("variable")
+        reported = detail.get("reported")
+        expected = detail.get("expected")
+        if not (
+            isinstance(line, int)
+            and line > 0
+            and isinstance(variable, str)
+            and variable
+            and isinstance(reported, int)
+            and not isinstance(reported, bool)
+            and reported > 0
+            and isinstance(expected, int)
+            and not isinstance(expected, bool)
+            and expected > 0
+        ):
+            return code
+        coordinates.append((line, variable, reported, expected))
+    if not coordinates or len(coordinates) != len(set(coordinates)):
+        return code
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return code
+    parents = {
+        child: parent
+        for parent in ast.walk(tree)
+        for child in ast.iter_child_nodes(parent)
+    }
+    replacements: list[tuple[int, int, str]] = []
+    lines = code.splitlines(keepends=True)
+
+    def _offset(line: int, column: int) -> int:
+        return sum(len(value) for value in lines[: line - 1]) + column
+
+    for line, variable, reported, expected in coordinates:
+        matches: list[ast.UnaryOp] = []
+        for node in ast.walk(tree):
+            if not (
+                isinstance(node, ast.UnaryOp)
+                and node.lineno == line
+                and isinstance(node.op, ast.USub)
+                and isinstance(node.operand, ast.Constant)
+                and node.operand.value == reported
+            ):
+                continue
+            slice_node = parents.get(node)
+            subscript = parents.get(slice_node) if slice_node is not None else None
+            if not (
+                isinstance(slice_node, ast.Slice)
+                and slice_node.upper is node
+                and slice_node.lower is None
+                and slice_node.step is None
+                and isinstance(subscript, ast.Subscript)
+                and isinstance(subscript.value, ast.Name)
+                and subscript.value.id == variable
+            ):
+                continue
+            matches.append(node)
+        if len(matches) != 1:
+            return code
+        node = matches[0]
+        if node.end_lineno is None or node.end_col_offset is None:
+            return code
+        replacements.append(
+            (
+                _offset(node.lineno, node.col_offset),
+                _offset(node.end_lineno, node.end_col_offset),
+                f"-{expected}",
+            )
+        )
+    if len(replacements) != len(coordinates):
+        return code
+    repaired = code
+    for start, end, replacement in sorted(replacements, reverse=True):
+        repaired = repaired[:start] + replacement + repaired[end:]
+    try:
+        ast.parse(repaired)
+    except SyntaxError:
+        return code
+    return repaired
+
+
 def deterministic_concept_audit_repair(
     code: str,
     audit_messages: Sequence[str],
@@ -1862,6 +1957,16 @@ def deterministic_concept_audit_repair(
     )
     repaired = code
     repair_names: List[str] = []
+
+    if RepairReason.STRING_SUFFIX_TRIM_MISMATCH in set(repair_reasons):
+        suffix_trimmed = _patch_string_suffix_trim_length(
+            repaired,
+            repair_findings=repair_findings,
+        )
+        if suffix_trimmed != repaired:
+            repair_name = "string_suffix_trim_length_v1"
+            repaired = suffix_trimmed
+            repair_names.append(repair_name)
 
     if RepairReason.ARBITRARY_COLUMN_FALLBACK in set(repair_reasons):
         fail_closed = _patch_arbitrary_column_fallback_to_raise(
