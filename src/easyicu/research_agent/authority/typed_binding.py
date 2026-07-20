@@ -19,7 +19,9 @@ from .coder_authority import HostCoderAuthority
 from ..contracts.declared_product import (
     RUNTIME_BINDABLE_TYPED_INPUT_KINDS,
     RUNTIME_TYPED_INPUT_EVIDENCE_KINDS,
+    merge_host_table_contract,
     typed_product_binding_contract,
+    typed_product_prompt_facts,
     typed_product_schema_receipt,
     typed_product as _canonical_typed_product,
 )
@@ -757,35 +759,28 @@ def _resolved_typed_input_binding(
         "sha256": binding["sha256"],
         "produced_by_step": binding["produced_by_step"],
     }
-    host_contract = dict(producer_contract or {})
     if binding["evidence_kind"] == "table":
-        # Table schema v2 is deliberately schema-only. Arbitrary
+        # Table schema v2/v3 is deliberately representation-only. Arbitrary
         # producer-authored role prose must not become a second source of
         # scientific authority. Use the verified physical evidence kind rather
         # than the Planner-facing alias: dataset/cohort and generic artifact
         # products may also resolve to a digest-bound table.
-        host_contract.pop("semantic_roles", None)
-        host_contract.pop("semantic_roles_scope", None)
         schema_receipt = typed_product_schema_receipt(
             artifact_path=verified_path,
             expected_sha256=binding["sha256"],
         )
         if schema_receipt is None:
             return None
-        # Physical columns are host-observed and therefore replace any
-        # producer-authored ``columns`` claim. No scientific column roles are
-        # installed by the host.
-        host_contract.update(schema_receipt)
+        host_contract = merge_host_table_contract(producer_contract, schema_receipt)
         if projection is not None:
             host_contract.update(projection.row_identity_contract)
-        contract_schema_version = "easyicu.host_typed_product.v2"
     else:
         # Non-table typed products retain their pre-existing contract and
         # version. This patch adds physical table schema facts only.
-        contract_schema_version = "easyicu.host_typed_product.v1"
+        host_contract = dict(producer_contract or {})
+        host_contract["schema_version"] = "easyicu.host_typed_product.v1"
     host_contract.update(
         {
-            "schema_version": contract_schema_version,
             "identity_row": identity_row,
         }
     )
@@ -838,7 +833,9 @@ def _typed_parent_schema_context_block(
                 separators=(",", ":"),
             )
             + "\nColumn order and names are physical schema facts, not scientific "
-            "role assignments. Choose columns only inside the Planner-declared typed "
+            "role assignments. column_dtypes/numeric_columns, when present, are "
+            "host-observed pandas representation facts for the exact artifact, not "
+            "scientific roles. Choose columns only inside the Planner-declared typed "
             "product using the Planner-owned method and scientific context. Do not "
             "use first-numeric, dtype-order, or nonexistent-column fallbacks; fail "
             "closed when the schema cannot support the declared product."
@@ -872,6 +869,7 @@ def _typed_parent_schema_context_block(
             "column_count": column_count,
             "columns": prompt_columns,
         }
+        receipt.update(typed_product_prompt_facts(contract, prompt_columns))
         if len(prompt_columns) != len(columns):
             receipt["columns_omitted_from_prompt_n"] = len(columns) - len(
                 prompt_columns
