@@ -247,18 +247,55 @@ def _descriptor_window_matches_predicate(value: Any, window: TimeWindow) -> bool
     labels such as ``entire_stay`` fail closed.
     """
 
-    normalized = re.sub(r"[^a-z0-9.]+", "_", str(value or "").casefold()).strip("_")
-    if not normalized:
+    raw = str(value or "").strip().casefold()
+    if not raw:
         return False
 
     def _number(raw: float) -> str:
         number = float(raw)
         return str(int(number)) if number.is_integer() else f"{number:g}"
 
-    anchor = re.sub(r"[^a-z0-9]+", "_", str(window.anchor).casefold()).strip("_")
+    anchor_aliases = {
+        "icu_admit": {"icu_admit", "icu_admission"},
+        "hospital_admit": {"hospital_admit", "hospital_admission"},
+        "index_time": {"index_time"},
+    }
+    anchors = anchor_aliases.get(str(window.anchor).casefold(), {str(window.anchor)})
     start = _number(window.start_offset_hours)
     end = _number(window.end_offset_hours)
-    return normalized == f"{anchor}_{start}_{end}h"
+    accepted = {
+        candidate
+        for anchor in anchors
+        for candidate in (
+            f"{anchor}_{start}_{end}h",
+            f"{anchor}[{start},{end}]h",
+        )
+    }
+    normalized = re.sub(r"[^a-z0-9.]+", "_", raw).strip("_")
+    normalized_accepted = {
+        re.sub(r"[^a-z0-9.]+", "_", candidate).strip("_") for candidate in accepted
+    }
+    return raw in accepted or normalized in normalized_accepted
+
+
+def _descriptor_aggregation_matches_predicate(
+    *, descriptor_name: str, predicate: ConceptPredicate
+) -> bool:
+    """Require the declared summary, except for explicit missingness gates.
+
+    ``aggregation='any'`` on a ``missing``/``not_missing`` predicate expresses
+    availability of the Planner-selected value, not permission for the host to
+    choose one of several summaries.  A unique, non-metadata descriptor from
+    the analysis-cohort producer may therefore bind it; ambiguity is rejected
+    by the caller.  Numeric/comparison predicates still require an exact
+    aggregation suffix.
+    """
+
+    aggregation = str(predicate.aggregation or "").strip().casefold()
+    op = str(predicate.op or "").strip().casefold()
+    if aggregation == "any" and op in {"missing", "not_missing"}:
+        return True
+    return _column_aggregation_matches(descriptor_name, aggregation)
 
 
 def _planner_declared_context_column_bindings(
@@ -273,12 +310,12 @@ def _planner_declared_context_column_bindings(
     The Planner still owns every predicate.  This helper only bridges a
     canonical ``concept_id`` to a materialised output column when all authority
     signals agree: exactly one analysis-cohort producer declares the column as
-    an input, the ResearchContext names it as the operational exposure or
-    outcome, and its descriptor binds it to the same ``source_concept``, exact
-    aggregation, and exact time window.  This prevents a sibling output from
-    the same composite loader from masquerading as the selected analysis
-    variable or silently changing Planner-owned temporal/aggregation semantics.
-    Ambiguity fails closed; no dtype, token, or frame-order fallback is allowed.
+    an input, and its ResearchContext descriptor binds it to the same
+    ``source_concept``, exact time window, and (except for an explicit
+    missingness gate) exact aggregation.  This supports ordinary inclusion/QC
+    variables without pretending they must be the primary exposure or outcome.
+    A sibling output can never be selected by frame order: ambiguity fails
+    closed, and no dtype or token fallback is allowed.
     """
 
     if context is None:
@@ -291,13 +328,6 @@ def _planner_declared_context_column_bindings(
     if len(producers) != 1:
         return {}
     available = {str(column) for column in columns}
-    operational_outputs = {
-        str(getattr(context, field, "") or "").strip()
-        for field in ("primary_exposure", "target_outcome")
-        if str(getattr(context, field, "") or "").strip() in available
-    }
-    if not operational_outputs:
-        return {}
     declared_inputs = {
         str(value).strip()
         for value in getattr(producers[0], "inputs", ()) or ()
@@ -316,7 +346,6 @@ def _planner_declared_context_column_bindings(
             not name
             or not source_concept
             or name not in declared_inputs
-            or name not in operational_outputs
             or role_value in {"id", "meta", "time"}
         ):
             continue
@@ -344,9 +373,9 @@ def _planner_declared_context_column_bindings(
             str(getattr(descriptor, "name", "") or "").strip()
             for descriptor in source_descriptors
             if all(
-                _column_aggregation_matches(
-                    str(getattr(descriptor, "name", "") or ""),
-                    predicate.aggregation,
+                _descriptor_aggregation_matches_predicate(
+                    descriptor_name=str(getattr(descriptor, "name", "") or ""),
+                    predicate=predicate,
                 )
                 and _descriptor_window_matches_predicate(
                     getattr(descriptor, "analysis_window", None),
@@ -380,7 +409,7 @@ def _predicate_column_binding_records(
         {
             "concept_id": concept_id,
             "column": column,
-            "basis": "planner_declared_operational_output_source_concept",
+            "basis": "planner_declared_context_input_source_concept",
             "predicate_contracts": [
                 {
                     "aggregation": predicate.aggregation,
@@ -443,14 +472,12 @@ def coerce_isfinite_safe_dtypes(frame: Any) -> Any:
     columns holding python bools, whenever the aggregate is mostly null.
     Generated causal / prediction code does ``design_df[col].to_numpy()`` and
     feeds the result to ``np.isfinite``; on a nullable or object array numpy
-    raises ``ufunc 'isfinite' not supported for the input types`` and the whole
-    primary estimate is silently lost (H2 vasopressor causal: the readmission
-    aggregates came through as ``boolean`` / ``Float64`` / ``Int64`` and crashed
-    the propensity balance table -> ``adjusted_effect=None``). Coercing these to
-    ``float64`` (NA -> NaN) at cohort-materialisation time leaves every column as
-    either a numpy numeric or a genuine string categorical -- the two shapes the
-    generated code already handles. True string/categorical object columns (e.g.
-    ``sex``, admission type) are left untouched for dummy-encoding.
+    raises ``ufunc 'isfinite' not supported for the input types`` and a primary
+    estimate can be silently lost. Coercing these to ``float64`` (NA -> NaN) at
+    cohort-materialisation time leaves every column as either a numpy numeric or
+    a genuine string categorical -- the two shapes generated code already
+    handles. True string/categorical object columns (for example a demographic
+    category or admission type) are left untouched for dummy-encoding.
     """
     import numpy as np
     import pandas as pd
@@ -681,22 +708,23 @@ def build_cohort(
     return data.loc[mask].copy()
 
 
-# A few EasyICU concepts materialise their value under an output-column name
-# that differs from the dictionary ``concept_id`` because the concept's callback
-# emits a clinically-named column (e.g. the ``kdigo_aki`` concept emits
-# ``aki_stage``; see ``kdigo_aki.py`` and ``api.py``'s SPECIAL_CONCEPTS dispatch
-# ``_KDIGO_OUTPUTS``/``_CIRC_OUTPUTS``). A planner that references the cohort
-# concept by its *dictionary id* (the canonical, cross-database way per the
-# concept layer) then names a predicate whose ``concept_id`` never appears as a
-# universe column, even though the data is present under the output name. This
-# is a general EasyICU concept-layer fact, not a benchmark-specific alias: the
-# mapping holds for every database and every analysis that uses these concepts.
-_CONCEPT_OUTPUT_COLUMN_ALIASES: dict[str, tuple[str, ...]] = {
-    "kdigo_aki": ("aki_stage",),
-    "kdigo_creat": ("aki_stage_creat",),
-    "kdigo_uo": ("aki_stage_uo",),
-    "circ_failure": ("circ_failure", "circ_event"),
-}
+def _catalog_output_stems(concept_id: str) -> tuple[str, ...]:
+    """Return catalog-owned output stems for one extraction source.
+
+    Composite-loader output names belong to the EasyICU concept catalog, not
+    the research-agent cohort engine.  Import lazily to keep this execution leaf
+    free of a module-import dependency on the catalog/UI layer.
+    """
+
+    from easyicu.concept_output_sources import COMPOSITE_CONCEPT_OUTPUT_SOURCES
+
+    return tuple(
+        sorted(
+            output
+            for output, source in COMPOSITE_CONCEPT_OUTPUT_SOURCES.items()
+            if str(source).strip() == str(concept_id).strip()
+        )
+    )
 
 
 def _resolve_predicate_column(
@@ -712,10 +740,10 @@ def _resolve_predicate_column(
     ``death``) and time-series concepts as ``<output>_<aggregation>``
     (``aki_stage_max`` …). A predicate carries the *dictionary* ``concept_id``
     plus the requested ``aggregation``; resolve against the columns present,
-    trying in order: the bare id, the wide ``<concept_id>_<aggregation>`` form,
-    and the concept's known output-column alias(es) (bare and aggregated). Return
-    ``None`` when no column honours the requested aggregation, so the caller can
-    fail loudly rather than silently skip an unenforceable predicate.
+    trying in order: an explicit Planner/context binding, the bare id, the wide
+    ``<concept_id>_<aggregation>`` form, and unambiguous catalog-owned composite
+    outputs. Return ``None`` when no unique column honours the contract, so the
+    caller can fail loudly rather than silently choose a sibling output.
     """
     cols = set(columns)
     if concept_id in cols:
@@ -726,13 +754,14 @@ def _resolve_predicate_column(
     bound = str((column_bindings or {}).get(concept_id) or "").strip()
     if bound and bound in cols:
         return bound
-    for stem in _CONCEPT_OUTPUT_COLUMN_ALIASES.get(concept_id, ()):
+    catalog_candidates: set[str] = set()
+    for stem in _catalog_output_stems(concept_id):
         if stem in cols:
-            return stem
+            catalog_candidates.add(stem)
         stem_aggregated = f"{stem}_{aggregation}"
         if stem_aggregated in cols:
-            return stem_aggregated
-    return None
+            catalog_candidates.add(stem_aggregated)
+    return next(iter(catalog_candidates)) if len(catalog_candidates) == 1 else None
 
 
 def _predicate_mask(
@@ -755,8 +784,8 @@ def _predicate_mask(
     if column is None:
         raise CohortDataError(
             f"cohort dataframe is missing concept column {pred.concept_id!r} "
-            f"(also tried {pred.concept_id}_{pred.aggregation} and known output "
-            "aliases)"
+            f"(also tried {pred.concept_id}_{pred.aggregation}, an explicit "
+            "Planner binding, and unambiguous catalog outputs)"
         )
     series = data[column]
     mask = _apply_op(series, pred.op, pred.value)
@@ -773,17 +802,16 @@ def _refine_occurrence_mask_by_event_time(
     column was summarised WITHIN the predicate window, but an OUTCOME concept is
     materialised whole-stay (``death`` is 1 whenever the patient ever died)
     alongside an event-time column (``death_time`` = hours from the anchor). A
-    bounded-window occurrence predicate on such a concept — e.g. the landmark
-    exclusion "died within the first 24h" that a survival design writes to avoid
-    immortal-time bias — must therefore consult the event time. Otherwise the
-    whole-stay flag drops EVERY event, not just the in-window ones (H1 survival
-    regression: all 9,466 deaths excluded -> 0 events -> "survival infeasible").
+    bounded-window occurrence predicate on such a concept — for example, a
+    landmark exclusion written to avoid immortal-time bias — must therefore
+    consult the event time. Otherwise the whole-stay flag drops every event,
+    not just the in-window ones.
 
     Scope is deliberately narrow: only a truthy ``==`` occurrence check over a
     finite window on a concept that actually carries a ``<concept>_time`` sibling
     column is refined. Magnitude filters (age>=18, los>=1) and concepts without
     an event-time column are untouched, so association runs with no event-time
-    columns (e.g. E3) behave exactly as before.
+    columns behave exactly as before.
     """
     tw = pred.time_window
     if tw is None:

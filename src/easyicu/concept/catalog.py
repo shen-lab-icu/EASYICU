@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+from ..concept_output_sources import (
+    COMPOSITE_CONCEPT_OUTPUT_SOURCES as COMPOSITE_CONCEPT_OUTPUT_SOURCES,
+)
+
 # 数据字典定义 - 特征缩写及其含义
 CONCEPT_DICTIONARY = {
     # 生命体征
@@ -496,40 +500,6 @@ CONCEPT_GROUPS_INTERNAL = {
     'demographics': ['age', 'bmi', 'height', 'sex', 'weight', 'adm'],
     'other_scores': ['qsofa', 'sirs', 'mews', 'news', 'apache_iv', 'apache_iv_pred_hosp_mort', 'saps3', 'charlson', 'elixhauser'],
     'outcome': ['death', 'los_icu', 'los_hosp', 'mort_28d', 'mort_90d', 'mort_365d', 'icu_free_days_28', 'vent_free_days_28', 'icu_readmission', 'persistent_critical_illness'],
-}
-
-# Canonical web concepts that are produced by composite loaders rather than by
-# one flat dictionary entry with the same name.  Keep UI/export names canonical
-# (for example `aki_stage`) while preserving the lower-level extraction source
-# (`kdigo_aki`, `kdigo_creat`, `kdigo_uo`, `sep3`, or the dedicated
-# circulatory-failure loader).
-COMPOSITE_CONCEPT_OUTPUT_SOURCES = {
-    'aki': 'kdigo_aki',
-    'aki_stage': 'kdigo_aki',
-    'aki_stage_rrt': 'kdigo_aki',
-    'aki_stage_creat': 'kdigo_creat',
-    'creat_low_past_48hr': 'kdigo_creat',
-    'creat_low_past_7day': 'kdigo_creat',
-    'aki_stage_uo': 'kdigo_uo',
-    'uo_rt_6hr': 'kdigo_uo',
-    'uo_rt_12hr': 'kdigo_uo',
-    'uo_rt_24hr': 'kdigo_uo',
-    'circ_event': 'circ_failure_loader',
-    'circ_failure': 'circ_failure_loader',
-    'sep3_sofa1': 'sep3',
-    # Comorbidity indices (easyicu.comorbidity.load_comorbidity)
-    'charlson': 'comorbidity_loader',
-    'elixhauser': 'comorbidity_loader',
-    # Composite outcome endpoints (easyicu.outcomes.load_outcomes)
-    'mort_28d': 'outcomes_loader',
-    'mort_90d': 'outcomes_loader',
-    'mort_365d': 'outcomes_loader',
-    'icu_free_days_28': 'outcomes_loader',
-    'vent_free_days_28': 'outcomes_loader',
-    'icu_readmission': 'outcomes_loader',
-    # Microbiology culture positivity (easyicu.microbiology.load_microbiology)
-    'culture_positive': 'microbiology_loader',
-    'bld_culture_positive': 'microbiology_loader',
 }
 
 # Concepts present in the extraction dictionary but intentionally hidden from

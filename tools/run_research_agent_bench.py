@@ -3605,7 +3605,12 @@ def _run_ehrflowbench_jsonl(
         try:
             score = _run_one_item_from_cohort(
                 item=item,
-                cohort=(path if cohort_authority_ref is not None else cohort),
+                # Preserve the source path even for a legacy/untyped export.
+                # The pipeline can then verify and stage the adjacent
+                # materialization provenance instead of losing it through an
+                # eager DataFrame handoff (which also duplicates the full table
+                # in memory before post-QC development sampling).
+                cohort=path,
                 out_root=out_root,
                 arms=arms,
                 pipeline_options=dict(pipeline_options or {}),
