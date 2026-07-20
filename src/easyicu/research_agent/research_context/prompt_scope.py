@@ -88,6 +88,7 @@ _QUALITY_CONTROL_METHODS = frozenset(
         "longitudinal_missingness_and_score_quality_audit",
         "missingness_and_measurement_audit",
         "ordinal_exposure_quality_control",
+        "ordinal_exposure_qc_and_missingness_audit",
         "ordered_exposure_derivation_and_qc",
         "ordered_category_exposure_qc",
         "ordinal_exposure_derivation_and_quality_control",
@@ -98,6 +99,7 @@ _QUALITY_CONTROL_METHODS = frozenset(
 _ORDERED_QUALITY_CONTROL_METHODS = frozenset(
     {
         "ordinal_exposure_quality_control",
+        "ordinal_exposure_qc_and_missingness_audit",
         "ordered_exposure_derivation_and_qc",
         "ordered_category_exposure_qc",
         "ordered_exposure_quality_control",
@@ -184,6 +186,10 @@ def _guide_segments(full_guide: str) -> dict[str, str]:
             "- Treat `COHORT_PARQUET` as the already-materialised, locked "
             "analysis cohort."
         ),
+        "upstream": ("- If a step depends on an artefact produced by a previous step,"),
+        "helper_guard": (
+            "- Run every host-owned input-validation or provenance helper"
+        ),
         "figure": "- For rendering-only figure steps,",
         "trajectory": "- OPTIONAL trajectory:",
         "visual": '- Use matplotlib\'s "Agg" backend;',
@@ -214,6 +220,8 @@ def _guide_segments(full_guide: str) -> dict[str, str]:
         "adjusted",
         "model_safety",
         "runtime",
+        "upstream",
+        "helper_guard",
         "figure",
         "trajectory",
         "visual",
@@ -273,7 +281,12 @@ def coder_guide_for_step(
         or step.trajectory_stability_spec is not None
     )
 
-    selected = {"core", "runtime", "serialization"}
+    selected = {"core", "runtime", "helper_guard", "serialization"}
+    if any(kind not in {"cohort", "dataset"} for kind, _ in inputs):
+        # The host maps a locked cohort/dataset input to COHORT_PARQUET.  The
+        # longer evidence-directory lookup tutorial is only useful when this
+        # step must resolve some other typed upstream product itself.
+        selected.add("upstream")
     is_figure = _figure_contract_applies(step)
     is_descriptive_table = _descriptive_table_contract_applies(step)
     if is_figure and "table" not in output_kinds:
@@ -330,6 +343,11 @@ def coder_guide_for_step(
         selected.update(("clinical", "clinical_tail", "hygiene"))
         if not is_ordered_semantics:
             selected.add("binary_event")
+    if is_quality_control:
+        # QC scripts retain the complete clinical/provenance contract.  Their
+        # generic Python idiom tutorial is mechanical transport, already
+        # enforced by syntax/import/code preflight and targeted repair.
+        selected.discard("hygiene")
     needs_statistics = bool(
         is_adjusted
         or is_prediction
@@ -377,7 +395,9 @@ def coder_rewrite_guide_for_step(full_guide: str, step: AnalysisStep) -> str:
     return coder_guide_for_step(
         full_guide,
         step,
-        _exclude_sections=frozenset({"runtime", "serialization", "hygiene"}),
+        _exclude_sections=frozenset(
+            {"runtime", "upstream", "helper_guard", "serialization", "hygiene"}
+        ),
     )
 
 
