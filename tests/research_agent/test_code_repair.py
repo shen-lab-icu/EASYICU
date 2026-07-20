@@ -448,6 +448,127 @@ def test_attrition_rule_id_repair_rejects_partial_or_nonlabel_literal_coverage()
         assert deterministic_contract_repair(code=code, findings=[finding]) is None
 
 
+def test_contract_repair_preserves_full_parent_for_unavailable_figure_source(
+    tmp_path,
+):
+    code = '''import pandas as pd
+
+NOTICE = "not_estimable_notice"
+SOURCE_STATUS = "unsupported"
+
+def make_source(out_dir, source_table, frame):
+    source_data_path = out_dir / "notice_source.csv"
+    rows = []
+    for source_row_index, row in frame.iterrows():
+        rows.append({
+            "source_row_index": int(source_row_index),
+            "source_table": source_table,
+            "spec_id": row["spec_id"],
+        })
+    source_frame = pd.DataFrame(
+        rows,
+        columns=["source_row_index", "source_table", "spec_id"],
+    )
+    source_frame.to_csv(source_data_path, index=False)
+    return source_data_path
+'''
+    finding = {
+        "validator": "figure_source_data",
+        "severity": "error",
+        "detail": {
+            "reason": "incomplete_source_lineage_coverage",
+            "missing_bound_tables": ["robustness_grid.csv"],
+            "missing_bound_statistics": [],
+        },
+    }
+
+    repair = deterministic_contract_repair(code=code, findings=[finding])
+
+    assert repair is not None
+    repair_id, repaired = repair
+    assert repair_id == "unavailable_figure_full_source_projection_v1"
+    namespace = {}
+    exec(repaired, namespace)
+    source_path = namespace["make_source"](
+        tmp_path,
+        "robustness_grid.csv",
+        namespace["pd"].DataFrame(
+            {
+                "spec_id": ["primary", "secondary"],
+                "n_analysis": [515, 1000],
+                "mortality_pct": [15.1, 10.2],
+            }
+        ),
+    )
+    observed = namespace["pd"].read_csv(source_path)
+    assert observed.columns.tolist() == [
+        "source_row_index",
+        "source_table",
+        "spec_id",
+        "n_analysis",
+        "mortality_pct",
+    ]
+    assert observed["source_row_index"].tolist() == [0, 1]
+    assert observed["source_table"].tolist() == [
+        "robustness_grid.csv",
+        "robustness_grid.csv",
+    ]
+    assert observed["n_analysis"].tolist() == [515, 1000]
+    assert (
+        deterministic_contract_repair(
+            code=code,
+            findings=[finding],
+            previous_repair=repair_id,
+        )
+        is None
+    )
+
+
+def test_unavailable_figure_source_repair_requires_typed_finding_and_notice_shape():
+    code = '''import pandas as pd
+NOTICE = "not_estimable_notice"
+SOURCE_STATUS = "unsupported"
+def make_source(out_dir, source_table, frame):
+    rows = []
+    for source_row_index, row in frame.iterrows():
+        rows.append({"source_row_index": source_row_index, "source_table": source_table})
+    source_frame = pd.DataFrame(rows, columns=["source_row_index", "source_table"])
+    source_frame.to_csv(out_dir / "source.csv", index=False)
+'''
+    finding = {
+        "validator": "figure_source_data",
+        "detail": {
+            "reason": "incomplete_source_lineage_coverage",
+            "missing_bound_tables": ["parent.csv"],
+            "missing_bound_statistics": [],
+        },
+    }
+
+    assert deterministic_contract_repair(code=code, findings=[]) is None
+    assert (
+        deterministic_contract_repair(
+            code=code.replace('NOTICE = "not_estimable_notice"\n', ""),
+            findings=[finding],
+        )
+        is None
+    )
+    assert (
+        deterministic_contract_repair(
+            code=code,
+            findings=[
+                {
+                    **finding,
+                    "detail": {
+                        **finding["detail"],
+                        "missing_bound_statistics": ["statistic:effect"],
+                    },
+                }
+            ],
+        )
+        is None
+    )
+
+
 def test_contract_repair_drops_overadjustment_covariates():
     code = (
         'continuous_covariates = ["age", "map_first", "lact_first"]\n'

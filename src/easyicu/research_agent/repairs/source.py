@@ -4573,6 +4573,131 @@ def _patch_measurement_provenance_summary_mapping(code: str) -> str:
     return repaired
 
 
+def _patch_unavailable_figure_full_source_projection(code: str) -> str:
+    """Keep the complete bound table behind an unavailable-result notice.
+
+    A rendering-only step may honestly report that its typed parent lacks the
+    columns needed for the planned chart.  Its source-data file must still
+    preserve the complete bound parent rather than emit identifiers alone;
+    otherwise the host cannot independently verify the claimed absence.  This
+    rewrite is limited to the generated key-only ``pd.DataFrame(rows, ...)``
+    shape and retains the existing path and CSV write.
+    """
+
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return code
+    string_literals = {
+        node.value
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Constant) and isinstance(node.value, str)
+    }
+    if not {"not_estimable_notice", "unsupported"} <= string_literals:
+        return code
+
+    candidates: List[tuple[ast.Assign, str, str, str]] = []
+    for function in (
+        node for node in ast.walk(tree) if isinstance(node, ast.FunctionDef)
+    ):
+        frame_names = {
+            node.func.value.id
+            for node in ast.walk(function)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "iterrows"
+            and isinstance(node.func.value, ast.Name)
+        }
+        source_table_names = {
+            value.id
+            for node in ast.walk(function)
+            if isinstance(node, ast.Dict)
+            for key, value in zip(node.keys, node.values)
+            if isinstance(key, ast.Constant)
+            and key.value == "source_table"
+            and isinstance(value, ast.Name)
+        }
+        for node in ast.walk(function):
+            if not (
+                isinstance(node, ast.Assign)
+                and len(node.targets) == 1
+                and isinstance(node.targets[0], ast.Name)
+                and isinstance(node.value, ast.Call)
+                and isinstance(node.value.func, ast.Attribute)
+                and isinstance(node.value.func.value, ast.Name)
+                and node.value.func.value.id == "pd"
+                and node.value.func.attr == "DataFrame"
+                and node.value.args
+                and isinstance(node.value.args[0], ast.Name)
+            ):
+                continue
+            declared_columns = {
+                item.value
+                for keyword in node.value.keywords
+                if keyword.arg == "columns" and isinstance(keyword.value, ast.List)
+                for item in keyword.value.elts
+                if isinstance(item, ast.Constant) and isinstance(item.value, str)
+            }
+            target_name = node.targets[0].id
+            writes_csv = any(
+                isinstance(call, ast.Call)
+                and isinstance(call.func, ast.Attribute)
+                and call.func.attr == "to_csv"
+                and isinstance(call.func.value, ast.Name)
+                and call.func.value.id == target_name
+                for call in ast.walk(function)
+            )
+            if not (
+                {"source_row_index", "source_table"} <= declared_columns
+                and len(frame_names) == 1
+                and len(source_table_names) == 1
+                and writes_csv
+            ):
+                continue
+            candidates.append(
+                (
+                    node,
+                    target_name,
+                    next(iter(frame_names)),
+                    next(iter(source_table_names)),
+                )
+            )
+    if len(candidates) != 1:
+        return code
+
+    node, target_name, frame_name, source_table_name = candidates[0]
+    lines = code.splitlines(keepends=True)
+    line_starts: List[int] = []
+    offset = 0
+    for line in lines:
+        line_starts.append(offset)
+        offset += len(line)
+
+    def _absolute_offset(lineno: int, utf8_col: int) -> int:
+        line = lines[lineno - 1]
+        char_col = len(line.encode("utf-8")[:utf8_col].decode("utf-8"))
+        return line_starts[lineno - 1] + char_col
+
+    indent = " " * int(node.col_offset)
+    replacement = (
+        f'{target_name} = {frame_name}.drop(columns=["source_row_index", '
+        f'"source_table"], errors="ignore").copy(deep=True).reset_index(drop=True)\n'
+        f'{indent}{target_name}.insert(0, "source_table", {source_table_name})\n'
+        f'{indent}{target_name}.insert(0, "source_row_index", '
+        f"range(len({target_name})))"
+    )
+    repaired = (
+        code[: _absolute_offset(node.lineno, node.col_offset)]
+        + replacement
+        + code[_absolute_offset(node.end_lineno, node.end_col_offset) :]
+    )
+    try:
+        ast.parse(repaired)
+    except SyntaxError:
+        return code
+    return repaired
+
+
 def deterministic_contract_repair(
     *,
     code: str,
@@ -4580,6 +4705,30 @@ def deterministic_contract_repair(
     previous_repair: Optional[str] = None,
 ) -> Optional[tuple[str, str]]:
     """Patch objective contract/audit failures before asking the LLM to repair."""
+
+    unavailable_source_findings = []
+    for finding in findings:
+        validator = getattr(finding, "validator", None)
+        detail = getattr(finding, "detail", None)
+        if isinstance(finding, dict):
+            validator = finding.get("validator")
+            detail = finding.get("detail")
+        if (
+            validator == "figure_source_data"
+            and isinstance(detail, dict)
+            and detail.get("reason") == "incomplete_source_lineage_coverage"
+            and detail.get("missing_bound_tables")
+            and not detail.get("missing_bound_statistics")
+        ):
+            unavailable_source_findings.append(finding)
+    unavailable_source_repair_name = "unavailable_figure_full_source_projection_v1"
+    if (
+        len(unavailable_source_findings) == 1
+        and previous_repair != unavailable_source_repair_name
+    ):
+        repaired = _patch_unavailable_figure_full_source_projection(code)
+        if repaired != code:
+            return unavailable_source_repair_name, repaired
 
     attrition_identity_findings = []
     for finding in findings:
