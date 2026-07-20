@@ -19,13 +19,6 @@ analysis template. Case-specific fallbacks belong in an explicitly registered
 ``CasePluginRegistry`` (``research_agent.fallback``), not in this shared
 module.
 
-The split between this module and :mod:`.summary` is by *target*:
-``repairs.summary`` rewrites ``step_summary.json`` from raw artefacts on
-disk; this module rewrites the *Python source* the runner executes.
-
-Both deterministic repair functions take ``previous_repair`` so the
-orchestrator can break out of an A→B→A oscillation by remembering what it
-last tried.
 """
 
 from __future__ import annotations
@@ -55,6 +48,7 @@ from .helpers import (  # noqa: F401  (re-exported for back-compat)
     _code_mentions_missing_indicator_column,
     _extract_missing_index_columns,
     _extract_required_cols_list,
+    _finding_json_repair,
     _family_allows_binary_model_repair,
     _infer_analysis_cohort_source_column,
     _patch_derived_analysis_cohort_materialization,
@@ -62,6 +56,7 @@ from .helpers import (  # noqa: F401  (re-exported for back-compat)
     _patch_primary_predictor_into_design_matrix,
     _patch_statsmodels_conf_int_filter_axis,
     _patch_statsmodels_endog_exog_index_alignment,
+    _schema_alias_repair,
     _statsmodels_repair_allowed_for_family,
     _strip_columns_from_list_literals,
 )
@@ -2439,6 +2434,8 @@ def deterministic_concept_audit_repair(
             repair_names.append(repair_name)
 
     if RepairReason.TYPED_PRODUCT_BINDING_INVALID in set(repair_reasons):
+        repaired, applied = _schema_alias_repair(repaired, repair_findings)
+        repair_names.extend(applied)
         typed_input_preserved = patch_resolved_input_cohort_env_shadow(
             repaired,
             repair_findings=repair_findings,
@@ -4884,6 +4881,8 @@ def _deterministic_runner_repair(
     """
     lowered = (run_log or "").lower()
     binary_model_repair_allowed = _family_allows_binary_model_repair(analysis_family)
+    if repair := _finding_json_repair(code, run_log, previous_repair):
+        return repair
 
     mask_reduction_precedence_failure = (
         "typeerror:" in lowered

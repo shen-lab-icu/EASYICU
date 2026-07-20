@@ -6,9 +6,8 @@ statsmodels alignment, and JSON serialization sanitation. Scientific choices
 such as the exposure, outcome, adjustment set, estimand, and model remain owned
 by the agent-authored plan and code; helpers here must not infer or replace them.
 
-It imports only the stdlib (ast/re/textwrap) and typing, and must never import
-``repairs.source`` — the parent re-exports the shared helpers for backward
-compatibility (pipeline / execution.phase import several directly).
+It imports only the stdlib and leaf repair modules, and must never import
+``repairs.source``; the parent re-exports shared helpers for compatibility.
 """
 
 from __future__ import annotations
@@ -17,6 +16,25 @@ import ast
 import re
 import textwrap
 from typing import List, Optional, Sequence
+
+from .serialization import validation_finding_json_runner_repair
+from .typed_schema import patch_host_schema_numeric_alias
+
+
+def _finding_json_repair(
+    code: str, run_log: str, previous_repair: str | None
+) -> tuple[str, str] | None:
+    return validation_finding_json_runner_repair(
+        code=code, run_log=run_log, previous_repair=previous_repair
+    )
+
+
+def _schema_alias_repair(
+    code: str, findings: Sequence[object]
+) -> tuple[str, list[str]]:
+    repaired = patch_host_schema_numeric_alias(code, repair_findings=findings)
+    names = ["host_schema_numeric_alias_v1"] if repaired != code else []
+    return repaired, names
 
 
 _BINARY_MODEL_REPAIR_FAMILIES = {
@@ -129,12 +147,10 @@ def _patch_primary_predictor_into_design_matrix(
         f"X = model_df[['{predictor}', ",
         1,
     )
-    summary_defaults = textwrap.dedent(
-        """
+    summary_defaults = textwrap.dedent("""
         n_total = int(len(df))
         n_complete = int(len(model_df))
-        """
-    ).strip("\n")
+        """).strip("\n")
     if "# Fit logistic regression model" in repaired:
         repaired = repaired.replace(
             "# Fit logistic regression model",
@@ -371,8 +387,7 @@ def _patch_statsmodels_endog_exog_index_alignment(code: str) -> str:
         return code
     if f"def {helper_name}" in repaired:
         return repaired
-    helper = textwrap.dedent(
-        f"""
+    helper = textwrap.dedent(f"""
 
         def {helper_name}(X, y):
             X_work = X.copy() if hasattr(X, "copy") else X
@@ -385,16 +400,14 @@ def _patch_statsmodels_endog_exog_index_alignment(code: str) -> str:
             except Exception:
                 pass
             return y_work, X_work
-        """
-    ).strip("\n")
+        """).strip("\n")
     return helper + "\n\n" + repaired
 
 
 def _patch_json_dump_numpy_key_sanitizer(code: str) -> str:
     if "_easyicu_json_sanitize_v1" in code:
         return code
-    helper = textwrap.dedent(
-        """
+    helper = textwrap.dedent("""
         import json as _easyicu_json_module_v1
         _easyicu_original_json_dump_v1 = _easyicu_json_module_v1.dump
         _easyicu_original_json_dumps_v1 = _easyicu_json_module_v1.dumps
@@ -434,6 +447,5 @@ def _patch_json_dump_numpy_key_sanitizer(code: str) -> str:
             return _easyicu_original_json_dumps_v1(_easyicu_json_sanitize_v1(obj), *args, **kwargs)
         _easyicu_json_module_v1.dump = _easyicu_json_dump_v1
         _easyicu_json_module_v1.dumps = _easyicu_json_dumps_v1
-        """
-    ).strip()
+        """).strip()
     return helper + "\n" + code

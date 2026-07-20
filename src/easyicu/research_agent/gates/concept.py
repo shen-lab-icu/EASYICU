@@ -10,6 +10,7 @@ retirement requires one of the explicit deterministic proofs below.
 
 from __future__ import annotations
 
+import ast
 import hashlib
 import json
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
@@ -21,6 +22,7 @@ from ..audits.validators import (
     _verified_authoritative_exposure_flow,
 )
 from .preflight import audit_mechanical_code_contracts
+from .typed_schema import host_schema_numeric_alias_findings
 from ..contracts.runtime import ValidationFinding
 from .method_compatibility import (
     detect_forbidden_pattern_usage,
@@ -75,6 +77,7 @@ def deterministic_code_gate_findings(
     script_text: str,
     usage_auditor: Optional[ConceptUsageAuditor] = None,
     pattern_auditor: Optional[AnalysisPatternAuditor] = None,
+    resolved_input_bindings: Optional[Mapping[str, Any]] = None,
 ) -> List[ValidationFinding]:
     """Run the shared deterministic pre-execution code gate."""
 
@@ -112,6 +115,17 @@ def deterministic_code_gate_findings(
             )
         )
     findings.extend(audit_mechanical_code_contracts(script_text, step))
+    try:
+        parsed_script = ast.parse(str(script_text or ""))
+    except SyntaxError:
+        parsed_script = None
+    if parsed_script is not None:
+        findings.extend(
+            host_schema_numeric_alias_findings(
+                parsed_script,
+                resolved_input_bindings,
+            )
+        )
     requires_primary_exposure_artifact = any(
         str(value).strip().casefold() == "artifact:primary_exposure_definition"
         for value in step.inputs or []

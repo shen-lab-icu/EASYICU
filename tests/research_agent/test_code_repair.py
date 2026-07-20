@@ -163,6 +163,45 @@ def test_boolean_mask_reduction_repair_requires_traceback_and_exact_ast_shape():
     )
 
 
+def test_runner_repair_serializes_host_validation_findings_via_model_dump():
+    code = """import json
+
+def json_default(value):
+    raise TypeError(f"Object of type {type(value).__name__} is not JSON serializable")
+
+summary = {"publication_export_qa": []}
+json.dumps(summary, default=json_default)
+"""
+
+    repair = _deterministic_runner_repair(
+        code=code,
+        run_log=(
+            "TypeError: Object of type ValidationFinding is not JSON serializable"
+        ),
+    )
+
+    assert repair is not None
+    name, repaired = repair
+    assert name == "validation_finding_json_default_v1"
+    assert 'if hasattr(value, "model_dump"):' in repaired
+    assert "return value.model_dump()" in repaired
+    ast.parse(repaired)
+
+
+def test_runner_repair_declines_validation_finding_json_without_default_hook():
+    code = 'import json\njson.dumps({"value": object()})\n'
+
+    assert (
+        _deterministic_runner_repair(
+            code=code,
+            run_log=(
+                "TypeError: Object of type ValidationFinding is not JSON serializable"
+            ),
+        )
+        is None
+    )
+
+
 def test_prediction_split_repair_requires_explicit_outcome_col():
     repaired = _deterministic_runner_repair(
         code=(

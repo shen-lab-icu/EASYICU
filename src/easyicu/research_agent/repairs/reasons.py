@@ -91,13 +91,16 @@ _SAFE_TICKET_KEYS = frozenset(
         "handler_line",
         "helper_name",
         "helper_names",
+        "input_key",
         "issue_code",
         "issues",
         "kind",
         "line",
         "matched_patterns",
         "model_id",
+        "mapping_name",
         "name",
+        "numeric_alias_column",
         "occurrence_count",
         "occurrences",
         "outer_quote",
@@ -108,6 +111,8 @@ _SAFE_TICKET_KEYS = frozenset(
         "repair_safe",
         "reported",
         "role",
+        "sequence_name",
+        "source_column",
         "spec_id",
         "structured_reason",
         "operator",
@@ -590,6 +595,9 @@ _DETAIL_REASON_CODES = {
         RepairReason.TYPED_PRODUCT_BINDING_INVALID
     ),
     "resolved_typed_input_shadowed_by_cohort_env": (
+        RepairReason.TYPED_PRODUCT_BINDING_INVALID
+    ),
+    "host_schema_nonnumeric_numeric_alias": (
         RepairReason.TYPED_PRODUCT_BINDING_INVALID
     ),
     "provenance_audit_not_fail_closed": RepairReason.PROVENANCE_NOT_FAIL_CLOSED,
