@@ -10,13 +10,16 @@ import pandas as pd
 import pytest
 
 from easyicu.research_agent.authority.typed_input_receipt import (
+    TYPED_INPUT_CONSUMPTION_RECEIPT_SCHEMA,
     TypedInputConsumptionReceipt,
     TypedInputReceiptError,
     load_verified_typed_input_table,
     seal_typed_input_consumption,
     typed_input_receipt_sha256,
+    verify_step_typed_input_receipts,
     verify_typed_input_consumption_receipt,
 )
+from easyicu.research_agent.authority.run_input import canonical_sha256
 
 INPUT_A = "artifact:reference_table"
 INPUT_B = "artifact:comparison_table"
@@ -159,6 +162,65 @@ def _verify(receipt, manifest: Path, manifest_sha: str, *, input_key=INPUT_A):
         consumer_step_id=STEP_ID,
         consumer_code_sha256=CODE_SHA,
     )
+
+
+def _bindings(manifest: Path) -> dict[str, dict[str, object]]:
+    payload = json.loads(manifest.read_text(encoding="utf-8"))
+    return {str(key): dict(value) for key, value in payload["inputs"].items()}
+
+
+def _declared(manifest: Path) -> list[str]:
+    payload = json.loads(manifest.read_text(encoding="utf-8"))
+    return list(payload["planner_declared_inputs"])
+
+
+def _receipt(manifest: Path, manifest_sha: str, *, input_key: str = INPUT_A):
+    loaded = _load(manifest, manifest_sha, input_key=input_key)
+    return seal_typed_input_consumption(loaded, consumed_frame=loaded.frame)
+
+
+def _step_verify(
+    manifest: Path,
+    manifest_sha: str,
+    receipts,
+    *,
+    declared: list[str] | None = None,
+    bindings: dict[str, dict[str, object]] | None = None,
+    step_id: str = STEP_ID,
+    code_sha: str = CODE_SHA,
+    row_identity_not_applicable: list[str] | None = None,
+):
+    return verify_step_typed_input_receipts(
+        planner_declared_inputs=(
+            declared if declared is not None else _declared(manifest)
+        ),
+        resolved_input_bindings=(
+            bindings if bindings is not None else _bindings(manifest)
+        ),
+        resolved_inputs_sha256=manifest_sha,
+        consumer_step_id=step_id,
+        consumer_code_sha256=code_sha,
+        receipts=receipts,
+        row_identity_not_applicable=row_identity_not_applicable or [],
+    )
+
+
+def _issue_codes(result) -> set[str]:
+    return {
+        str((finding.detail or {}).get("issue_code") or "")
+        for finding in result.findings
+    }
+
+
+def _not_applicable_receipt(
+    receipt: TypedInputConsumptionReceipt,
+    *,
+    reason: str = "dictionary lookup input has no row alignment semantics",
+) -> dict[str, object]:
+    payload = receipt.model_dump(mode="json")
+    payload["row_identity"] = {"not_applicable": True, "reason": reason}
+    payload["receipt_sha256"] = typed_input_receipt_sha256(payload)
+    return payload
 
 
 def test_correct_artifact_seals_and_reverifies(tmp_path: Path) -> None:
@@ -392,3 +454,286 @@ def test_product_contract_row_identity_must_match_opened_table(
 
     with pytest.raises(TypedInputReceiptError, match="product contract"):
         _load(manifest, _sha256(manifest))
+
+
+def test_step_receipt_completeness_accepts_exact_declared_receipt_set(
+    tmp_path: Path,
+) -> None:
+    manifest, manifest_sha, _, _ = _resolved_manifest(tmp_path, two_inputs=True)
+    receipt_a = _receipt(manifest, manifest_sha, input_key=INPUT_A)
+    receipt_b = _receipt(manifest, manifest_sha, input_key=INPUT_B)
+
+    result = _step_verify(manifest, manifest_sha, [receipt_a, receipt_b])
+
+    assert result.findings == ()
+    assert set(result.verified_inputs) == {INPUT_A, INPUT_B}
+    assert result.verified_inputs[INPUT_A] == receipt_a
+    with pytest.raises(TypeError):
+        result.verified_inputs[INPUT_A] = receipt_b  # type: ignore[index]
+
+
+def test_step_receipt_completeness_reports_missing_receipt(tmp_path: Path) -> None:
+    manifest, manifest_sha, _, _ = _resolved_manifest(tmp_path, two_inputs=True)
+    receipt_a = _receipt(manifest, manifest_sha, input_key=INPUT_A)
+
+    result = _step_verify(manifest, manifest_sha, [receipt_a])
+
+    assert _issue_codes(result) == {"missing_receipt"}
+    assert result.verified_inputs == {}
+
+
+def test_step_receipt_completeness_reports_duplicate_receipt(tmp_path: Path) -> None:
+    manifest, manifest_sha, _, _ = _resolved_manifest(tmp_path)
+    receipt = _receipt(manifest, manifest_sha)
+
+    result = _step_verify(manifest, manifest_sha, [receipt, receipt])
+
+    assert _issue_codes(result) == {"duplicate_receipt"}
+    assert result.verified_inputs == {}
+
+
+def test_step_receipt_completeness_reports_extra_receipt(tmp_path: Path) -> None:
+    manifest, manifest_sha, _, _ = _resolved_manifest(tmp_path, two_inputs=True)
+    receipt_a = _receipt(manifest, manifest_sha, input_key=INPUT_A)
+    receipt_b = _receipt(manifest, manifest_sha, input_key=INPUT_B)
+
+    result = _step_verify(
+        manifest,
+        manifest_sha,
+        [receipt_a, receipt_b],
+        declared=[INPUT_A],
+        bindings={INPUT_A: _bindings(manifest)[INPUT_A]},
+    )
+
+    assert _issue_codes(result) == {"extra_receipt"}
+    assert result.verified_inputs == {}
+
+
+def test_step_receipt_completeness_rejects_identity_interchange(
+    tmp_path: Path,
+) -> None:
+    manifest, manifest_sha, _, _ = _resolved_manifest(tmp_path, two_inputs=True)
+    receipt_a = _receipt(manifest, manifest_sha, input_key=INPUT_A)
+    payload = receipt_a.model_dump(mode="json")
+    payload["input_key"] = INPUT_B
+    payload["receipt_sha256"] = typed_input_receipt_sha256(payload)
+
+    result = _step_verify(manifest, manifest_sha, [payload])
+
+    assert _issue_codes(result) == {"missing_receipt", "receipt_binding_mismatch"}
+    assert result.verified_inputs == {}
+
+
+@pytest.mark.parametrize(
+    ("step_id", "code_sha", "expected_field"),
+    [
+        ("old_step", CODE_SHA, "consumer_step_id"),
+        (STEP_ID, "d" * 64, "consumer_code_sha256"),
+    ],
+)
+def test_step_receipt_completeness_rejects_old_step_or_code_replay(
+    tmp_path: Path,
+    step_id: str,
+    code_sha: str,
+    expected_field: str,
+) -> None:
+    manifest, manifest_sha, _, _ = _resolved_manifest(tmp_path)
+    receipt = _receipt(manifest, manifest_sha)
+
+    result = _step_verify(
+        manifest,
+        manifest_sha,
+        [receipt],
+        step_id=step_id,
+        code_sha=code_sha,
+    )
+
+    assert _issue_codes(result) == {"receipt_binding_mismatch"}
+    assert (result.findings[0].detail or {})["fields"] == [expected_field]
+    assert result.verified_inputs == {}
+
+
+def test_step_receipt_completeness_rejects_same_file_for_two_logical_inputs(
+    tmp_path: Path,
+) -> None:
+    manifest, manifest_sha, _, _ = _resolved_manifest(tmp_path, two_inputs=True)
+    bindings = _bindings(manifest)
+    bindings[INPUT_B] = dict(bindings[INPUT_A])
+    bindings[INPUT_B]["declared_kind"] = "artifact"
+    bindings[INPUT_B]["product"] = "comparison_table"
+    bindings[INPUT_B]["identity_row"] = {
+        **dict(bindings[INPUT_A]["identity_row"]),
+        "input_key": INPUT_B,
+        "product": "comparison_table",
+    }
+    bindings[INPUT_B]["product_contract"] = {
+        **dict(bindings[INPUT_A]["product_contract"]),
+        "identity_row": bindings[INPUT_B]["identity_row"],
+    }
+    receipt_a = _receipt(manifest, manifest_sha, input_key=INPUT_A)
+    payload_b = receipt_a.model_dump(mode="json")
+    payload_b["input_key"] = INPUT_B
+    payload_b["resolved_input_binding_sha256"] = canonical_sha256(bindings[INPUT_B])
+    payload_b["receipt_sha256"] = typed_input_receipt_sha256(payload_b)
+
+    result = _step_verify(
+        manifest, manifest_sha, [receipt_a, payload_b], bindings=bindings
+    )
+
+    assert "shared_file_identity" in _issue_codes(result)
+    assert result.verified_inputs == {}
+
+
+def test_step_receipt_completeness_rejects_missing_binding(tmp_path: Path) -> None:
+    manifest, manifest_sha, _, _ = _resolved_manifest(tmp_path, two_inputs=True)
+    receipt_a = _receipt(manifest, manifest_sha, input_key=INPUT_A)
+    bindings = _bindings(manifest)
+    bindings.pop(INPUT_B)
+
+    result = _step_verify(manifest, manifest_sha, [receipt_a], bindings=bindings)
+
+    assert _issue_codes(result) == {"missing_resolved_binding", "missing_receipt"}
+    assert result.verified_inputs == {}
+
+
+def test_step_receipt_completeness_rejects_extra_binding(tmp_path: Path) -> None:
+    manifest, manifest_sha, _, _ = _resolved_manifest(tmp_path)
+    receipt = _receipt(manifest, manifest_sha)
+    bindings = _bindings(manifest)
+    bindings[INPUT_B] = dict(bindings[INPUT_A])
+
+    result = _step_verify(manifest, manifest_sha, [receipt], bindings=bindings)
+
+    assert _issue_codes(result) == {"extra_resolved_binding"}
+    assert result.verified_inputs == {}
+
+
+def test_step_receipt_completeness_rejects_missing_row_identity_contract(
+    tmp_path: Path,
+) -> None:
+    manifest, manifest_sha, _, _ = _resolved_manifest(tmp_path)
+    receipt = _receipt(manifest, manifest_sha)
+    bindings = _bindings(manifest)
+    bindings[INPUT_A]["product_contract"] = {
+        "schema_version": "easyicu.host_typed_product.v2",
+        "columns": ["record_id", "measurement"],
+        "column_count": 2,
+    }
+    payload = receipt.model_dump(mode="json")
+    payload["resolved_input_binding_sha256"] = canonical_sha256(bindings[INPUT_A])
+    payload["receipt_sha256"] = typed_input_receipt_sha256(payload)
+
+    result = _step_verify(manifest, manifest_sha, [payload], bindings=bindings)
+
+    assert _issue_codes(result) == {"missing_row_identity_contract"}
+    assert result.verified_inputs == {}
+
+
+def test_step_receipt_completeness_accepts_host_declared_row_identity_not_applicable(
+    tmp_path: Path,
+) -> None:
+    manifest, manifest_sha, _, _ = _resolved_manifest(tmp_path)
+    receipt = _receipt(manifest, manifest_sha)
+    bindings = _bindings(manifest)
+    bindings[INPUT_A]["product_contract"] = {
+        "schema_version": "easyicu.host_typed_product.v2",
+        "columns": ["record_id", "measurement"],
+        "column_count": 2,
+    }
+    payload = _not_applicable_receipt(receipt)
+    payload["resolved_input_binding_sha256"] = canonical_sha256(bindings[INPUT_A])
+    payload["receipt_sha256"] = typed_input_receipt_sha256(payload)
+
+    result = _step_verify(
+        manifest,
+        manifest_sha,
+        [payload],
+        bindings=bindings,
+        row_identity_not_applicable=[INPUT_A],
+    )
+
+    assert result.findings == ()
+    assert set(result.verified_inputs) == {INPUT_A}
+
+
+def test_step_receipt_completeness_requires_explicit_not_applicable_receipt_marker(
+    tmp_path: Path,
+) -> None:
+    manifest, manifest_sha, _, _ = _resolved_manifest(tmp_path)
+    receipt = _receipt(manifest, manifest_sha)
+    bindings = _bindings(manifest)
+    bindings[INPUT_A]["product_contract"] = {
+        "schema_version": "easyicu.host_typed_product.v2",
+        "columns": ["record_id", "measurement"],
+        "column_count": 2,
+    }
+    payload = receipt.model_dump(mode="json")
+    payload["resolved_input_binding_sha256"] = canonical_sha256(bindings[INPUT_A])
+    payload["receipt_sha256"] = typed_input_receipt_sha256(payload)
+
+    result = _step_verify(
+        manifest,
+        manifest_sha,
+        [payload],
+        bindings=bindings,
+        row_identity_not_applicable=[INPUT_A],
+    )
+
+    assert _issue_codes(result) == {"row_identity_not_applicable_receipt_missing"}
+    assert result.verified_inputs == {}
+
+
+def test_step_receipt_completeness_rejects_unknown_not_applicable_input(
+    tmp_path: Path,
+) -> None:
+    manifest, manifest_sha, _, _ = _resolved_manifest(tmp_path)
+    receipt = _receipt(manifest, manifest_sha)
+
+    result = _step_verify(
+        manifest,
+        manifest_sha,
+        [receipt],
+        row_identity_not_applicable=[INPUT_B],
+    )
+
+    assert _issue_codes(result) == {"row_identity_not_applicable_for_unknown_input"}
+    assert result.verified_inputs == {}
+
+
+def test_step_receipt_completeness_rejects_row_identity_not_applicable_when_contract_exists(
+    tmp_path: Path,
+) -> None:
+    manifest, manifest_sha, _, _ = _resolved_manifest(tmp_path)
+    receipt = _receipt(manifest, manifest_sha)
+
+    result = _step_verify(
+        manifest,
+        manifest_sha,
+        [receipt],
+        row_identity_not_applicable=[INPUT_A],
+    )
+
+    assert _issue_codes(result) == {
+        "row_identity_not_applicable_conflicts_with_contract"
+    }
+    assert result.verified_inputs == {}
+
+
+def test_step_receipt_completeness_rejects_invalid_receipt_schema(
+    tmp_path: Path,
+) -> None:
+    manifest, manifest_sha, _, _ = _resolved_manifest(tmp_path)
+
+    result = _step_verify(
+        manifest,
+        manifest_sha,
+        [
+            {
+                "schema_version": TYPED_INPUT_CONSUMPTION_RECEIPT_SCHEMA,
+                "input_key": INPUT_A,
+            }
+        ],
+    )
+
+    assert _issue_codes(result) == {"invalid_receipt", "missing_receipt"}
+    assert result.verified_inputs == {}

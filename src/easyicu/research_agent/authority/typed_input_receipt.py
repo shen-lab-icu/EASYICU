@@ -18,7 +18,8 @@ import json
 import os
 from pathlib import Path
 import re
-from typing import Annotated, Any, Literal, Mapping
+from types import MappingProxyType
+from typing import Annotated, Any, Literal, Mapping, Sequence
 
 import pandas as pd
 from pydantic import (
@@ -31,6 +32,7 @@ from pydantic import (
 
 from .filesystem import AnchoredDirectory, AuthorityFilesystemError
 from .run_input import canonical_sha256
+from ..schema import ValidationFinding
 
 TYPED_INPUT_CONSUMPTION_RECEIPT_SCHEMA = "easyicu.typed_input_consumption_receipt/1"
 _RESOLVED_INPUTS_SCHEMA = "2.1"
@@ -56,6 +58,13 @@ class TypedInputRowIdentity(_StrictFrozenModel):
     missing_count: Literal[0]
 
 
+class TypedInputRowIdentityNotApplicable(_StrictFrozenModel):
+    """Receipt marker for host-declared inputs that do not align rows."""
+
+    not_applicable: Literal[True]
+    reason: str = Field(min_length=1)
+
+
 class TypedInputConsumptionReceipt(_StrictFrozenModel):
     """Strict receipt joining one opened table to one code/step consumer."""
 
@@ -68,7 +77,7 @@ class TypedInputConsumptionReceipt(_StrictFrozenModel):
     artifact_relative_path: str = Field(min_length=1)
     opened_file_sha256: _Sha256
     opened_file_size_bytes: int = Field(ge=0)
-    row_identity: TypedInputRowIdentity
+    row_identity: TypedInputRowIdentity | TypedInputRowIdentityNotApplicable
     consumer_step_id: str = Field(min_length=1)
     consumer_code_sha256: _Sha256
     loaded_frame_sha256: _Sha256
@@ -100,6 +109,14 @@ class VerifiedTypedInputLoad:
     loaded_frame_sha256: str
     consumer_step_id: str
     consumer_code_sha256: str
+
+
+@dataclass(frozen=True, slots=True)
+class StepTypedInputReceiptVerification:
+    """Structured step-level typed-input receipt verification result."""
+
+    findings: tuple[ValidationFinding, ...]
+    verified_inputs: Mapping[str, TypedInputConsumptionReceipt]
 
 
 def _canonical_json_bytes(value: object) -> bytes:
@@ -138,6 +155,38 @@ def _validated_nonempty_string(value: object, *, name: str) -> str:
     if not isinstance(value, str) or not value.strip():
         raise TypedInputReceiptError(f"{name} must be a non-empty string")
     return value.strip()
+
+
+def _typed_input_product(value: object) -> tuple[str, str] | None:
+    if not isinstance(value, str) or ":" not in value:
+        return None
+    declared_kind, product = value.split(":", 1)
+    declared_kind = declared_kind.strip()
+    product = product.strip()
+    if not declared_kind or not product:
+        return None
+    return declared_kind, product
+
+
+def _finding(
+    *,
+    issue_code: str,
+    message: str,
+    severity: Literal["info", "warning", "error"] = "error",
+    input_key: str | None = None,
+    detail: Mapping[str, object] | None = None,
+) -> ValidationFinding:
+    payload: dict[str, object] = {"issue_code": issue_code}
+    if input_key is not None:
+        payload["input_key"] = input_key
+    if detail:
+        payload.update(dict(detail))
+    return ValidationFinding(
+        validator="typed_input_receipt_completeness",
+        severity=severity,
+        message=message,
+        detail=payload,
+    )
 
 
 def _no_duplicate_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
@@ -579,6 +628,383 @@ def _parse_receipt(
         raise TypedInputReceiptError("invalid receipt schema") from exc
 
 
+def _receipt_contract_identity(
+    receipt: TypedInputConsumptionReceipt,
+) -> tuple[object, ...]:
+    return (
+        receipt.evidence_id,
+        receipt.artifact_sha256,
+        receipt.resolved_inputs_sha256,
+        receipt.artifact_relative_path,
+        receipt.opened_file_sha256,
+        receipt.opened_file_size_bytes,
+        receipt.loaded_frame_sha256,
+    )
+
+
+def verify_step_typed_input_receipts(
+    *,
+    planner_declared_inputs: Sequence[str],
+    resolved_input_bindings: Mapping[str, Mapping[str, object]],
+    resolved_inputs_sha256: str,
+    consumer_step_id: str,
+    consumer_code_sha256: str,
+    receipts: Sequence[TypedInputConsumptionReceipt | Mapping[str, object]],
+    row_identity_not_applicable: Sequence[str] = (),
+) -> StepTypedInputReceiptVerification:
+    """Verify the complete receipt set for one candidate step.
+
+    This is a collection-level host gate.  It does not infer row keys or select
+    inputs.  It checks that the Planner-declared typed file inputs, the
+    host-resolved bindings, the current consumer identity, and the durable
+    receipts describe the same exact set.
+    """
+
+    findings: list[ValidationFinding] = []
+    verified: dict[str, TypedInputConsumptionReceipt] = {}
+
+    try:
+        expected_resolved_inputs_sha256 = _validated_sha256(
+            resolved_inputs_sha256,
+            name="resolved inputs SHA-256",
+        )
+    except TypedInputReceiptError as exc:
+        expected_resolved_inputs_sha256 = ""
+        findings.append(
+            _finding(
+                issue_code="invalid_resolved_inputs_sha256",
+                message=str(exc),
+            )
+        )
+    try:
+        expected_code_sha256 = _validated_sha256(
+            consumer_code_sha256,
+            name="consumer code SHA-256",
+        )
+    except TypedInputReceiptError as exc:
+        expected_code_sha256 = ""
+        findings.append(
+            _finding(issue_code="invalid_consumer_code_sha256", message=str(exc))
+        )
+    try:
+        expected_step_id = _validated_nonempty_string(
+            consumer_step_id,
+            name="consumer step",
+        )
+    except TypedInputReceiptError as exc:
+        expected_step_id = ""
+        findings.append(_finding(issue_code="invalid_consumer_step", message=str(exc)))
+
+    declared_file_inputs: list[str] = []
+    seen_declared: set[str] = set()
+    for item in planner_declared_inputs:
+        if not isinstance(item, str) or not item.strip():
+            findings.append(
+                _finding(
+                    issue_code="invalid_declared_input",
+                    message="Planner-declared typed input must be a non-empty string.",
+                )
+            )
+            continue
+        if item in seen_declared:
+            findings.append(
+                _finding(
+                    issue_code="duplicate_declared_input",
+                    input_key=item,
+                    message="Planner declared the same typed input more than once.",
+                )
+            )
+            continue
+        seen_declared.add(item)
+        if _typed_input_product(item) is not None:
+            declared_file_inputs.append(item)
+
+    declared_set = set(declared_file_inputs)
+    binding_keys = set(resolved_input_bindings)
+    missing_bindings = sorted(declared_set - binding_keys)
+    extra_bindings = sorted(binding_keys - declared_set)
+    for input_key in missing_bindings:
+        findings.append(
+            _finding(
+                issue_code="missing_resolved_binding",
+                input_key=input_key,
+                message="Planner-declared typed input has no host-resolved binding.",
+            )
+        )
+    for input_key in extra_bindings:
+        findings.append(
+            _finding(
+                issue_code="extra_resolved_binding",
+                input_key=input_key,
+                message="Host-resolved binding was not declared by the Planner.",
+            )
+        )
+
+    not_applicable_inputs = set(row_identity_not_applicable)
+    for input_key in sorted(not_applicable_inputs - declared_set):
+        findings.append(
+            _finding(
+                issue_code="row_identity_not_applicable_for_unknown_input",
+                input_key=input_key,
+                message=(
+                    "row_identity_not_applicable was asserted for an input that "
+                    "is not Planner-declared for this step."
+                ),
+            )
+        )
+
+    receipts_by_input: dict[str, list[TypedInputConsumptionReceipt]] = {}
+    for position, raw_receipt in enumerate(receipts):
+        try:
+            receipt = _parse_receipt(raw_receipt)
+        except TypedInputReceiptError as exc:
+            findings.append(
+                _finding(
+                    issue_code="invalid_receipt",
+                    message=str(exc),
+                    detail={"receipt_index": position},
+                )
+            )
+            continue
+        receipts_by_input.setdefault(receipt.input_key, []).append(receipt)
+
+    receipt_inputs = set(receipts_by_input)
+    for input_key in sorted(declared_set - receipt_inputs):
+        findings.append(
+            _finding(
+                issue_code="missing_receipt",
+                input_key=input_key,
+                message="Planner-declared typed file input has no consumption receipt.",
+            )
+        )
+    for input_key in sorted(receipt_inputs - declared_set):
+        findings.append(
+            _finding(
+                issue_code="extra_receipt",
+                input_key=input_key,
+                message="Consumption receipt does not correspond to this step's declared inputs.",
+            )
+        )
+    for input_key, grouped in sorted(receipts_by_input.items()):
+        if len(grouped) > 1:
+            findings.append(
+                _finding(
+                    issue_code="duplicate_receipt",
+                    input_key=input_key,
+                    message="Typed input has more than one consumption receipt.",
+                    detail={"receipt_count": len(grouped)},
+                )
+            )
+
+    file_identity_owner: dict[tuple[object, ...], str] = {}
+    for input_key in sorted(declared_set):
+        binding = resolved_input_bindings.get(input_key)
+        if not isinstance(binding, Mapping):
+            continue
+        grouped = receipts_by_input.get(input_key, [])
+        if len(grouped) != 1:
+            continue
+        receipt = grouped[0]
+
+        typed_product = _typed_input_product(input_key)
+        declared_kind = str(binding.get("declared_kind") or "").strip()
+        product = str(binding.get("product") or "").strip()
+        if typed_product != (declared_kind, product):
+            findings.append(
+                _finding(
+                    issue_code="binding_identity_mismatch",
+                    input_key=input_key,
+                    message="Resolved binding does not match the Planner input identity.",
+                    detail={"declared_kind": declared_kind, "product": product},
+                )
+            )
+            continue
+        if binding.get("evidence_kind") != "table":
+            findings.append(
+                _finding(
+                    issue_code="non_table_typed_input_receipt",
+                    input_key=input_key,
+                    message=(
+                        "Typed input receipt completeness currently verifies "
+                        "file-backed table inputs only."
+                    ),
+                )
+            )
+            continue
+
+        expected_artifact_sha = str(binding.get("sha256") or "")
+        expected_evidence_id = str(binding.get("evidence_id") or "")
+        expected_relative_path = str(binding.get("relative_path") or "")
+        expected_binding_sha = canonical_sha256(binding)
+
+        mismatched_fields: list[str] = []
+        if receipt.evidence_id != expected_evidence_id:
+            mismatched_fields.append("evidence_id")
+        if receipt.artifact_sha256 != expected_artifact_sha:
+            mismatched_fields.append("artifact_sha256")
+        if receipt.opened_file_sha256 != expected_artifact_sha:
+            mismatched_fields.append("opened_file_sha256")
+        if receipt.artifact_relative_path != expected_relative_path:
+            mismatched_fields.append("artifact_relative_path")
+        if receipt.resolved_input_binding_sha256 != expected_binding_sha:
+            mismatched_fields.append("resolved_input_binding_sha256")
+        if (
+            expected_resolved_inputs_sha256
+            and receipt.resolved_inputs_sha256 != expected_resolved_inputs_sha256
+        ):
+            mismatched_fields.append("resolved_inputs_sha256")
+        if expected_step_id and receipt.consumer_step_id != expected_step_id:
+            mismatched_fields.append("consumer_step_id")
+        if (
+            expected_code_sha256
+            and receipt.consumer_code_sha256 != expected_code_sha256
+        ):
+            mismatched_fields.append("consumer_code_sha256")
+        if mismatched_fields:
+            findings.append(
+                _finding(
+                    issue_code="receipt_binding_mismatch",
+                    input_key=input_key,
+                    message="Receipt does not match the current resolved binding.",
+                    detail={"fields": sorted(mismatched_fields)},
+                )
+            )
+            continue
+
+        file_identity = _receipt_contract_identity(receipt)
+        other_input = file_identity_owner.get(file_identity)
+        if other_input is not None:
+            findings.append(
+                _finding(
+                    issue_code="shared_file_identity",
+                    input_key=input_key,
+                    message=(
+                        "The same consumed file receipt cannot authorize "
+                        "multiple logical typed inputs."
+                    ),
+                    detail={"other_input_key": other_input},
+                )
+            )
+            continue
+        file_identity_owner[file_identity] = input_key
+
+        contract = binding.get("product_contract")
+        if not isinstance(contract, Mapping):
+            if input_key in not_applicable_inputs:
+                if not isinstance(
+                    receipt.row_identity,
+                    TypedInputRowIdentityNotApplicable,
+                ):
+                    findings.append(
+                        _finding(
+                            issue_code="row_identity_not_applicable_receipt_missing",
+                            input_key=input_key,
+                            message=(
+                                "Host declared row identity not applicable, but "
+                                "the receipt still carries row-alignment authority."
+                            ),
+                        )
+                    )
+                    continue
+                verified[input_key] = receipt
+                continue
+            findings.append(
+                _finding(
+                    issue_code="missing_row_identity_contract",
+                    input_key=input_key,
+                    message=(
+                        "Typed input requires row alignment but has no explicit "
+                        "row-identity product contract."
+                    ),
+                )
+            )
+            continue
+
+        identity_column = contract.get("row_identity_column")
+        row_count = contract.get("row_count")
+        row_identity_sha256 = contract.get("row_identity_sha256")
+        has_exact_identity = (
+            isinstance(identity_column, str)
+            and bool(identity_column)
+            and isinstance(row_count, int)
+            and not isinstance(row_count, bool)
+            and row_count >= 0
+            and _SHA256_RE.fullmatch(str(row_identity_sha256 or "")) is not None
+        )
+        if not has_exact_identity:
+            if input_key in not_applicable_inputs:
+                if not isinstance(
+                    receipt.row_identity,
+                    TypedInputRowIdentityNotApplicable,
+                ):
+                    findings.append(
+                        _finding(
+                            issue_code="row_identity_not_applicable_receipt_missing",
+                            input_key=input_key,
+                            message=(
+                                "Host declared row identity not applicable, but "
+                                "the receipt still carries row-alignment authority."
+                            ),
+                        )
+                    )
+                    continue
+                verified[input_key] = receipt
+                continue
+            findings.append(
+                _finding(
+                    issue_code="missing_row_identity_contract",
+                    input_key=input_key,
+                    message=(
+                        "Typed input requires row alignment but its product "
+                        "contract lacks exact row identity authority."
+                    ),
+                )
+            )
+            continue
+        if input_key in not_applicable_inputs:
+            findings.append(
+                _finding(
+                    issue_code="row_identity_not_applicable_conflicts_with_contract",
+                    input_key=input_key,
+                    message=(
+                        "Host declared row identity not applicable for an input "
+                        "that already has exact row-identity authority."
+                    ),
+                )
+            )
+            continue
+        if not isinstance(receipt.row_identity, TypedInputRowIdentity):
+            findings.append(
+                _finding(
+                    issue_code="row_identity_required",
+                    input_key=input_key,
+                    message="Receipt marks row identity not applicable for a row-aligned input.",
+                )
+            )
+            continue
+        if (
+            receipt.row_identity.column != identity_column
+            or receipt.row_identity.row_count != row_count
+            or receipt.row_identity.sha256 != row_identity_sha256
+        ):
+            findings.append(
+                _finding(
+                    issue_code="row_identity_mismatch",
+                    input_key=input_key,
+                    message="Receipt row identity does not match the product contract.",
+                )
+            )
+            continue
+        verified[input_key] = receipt
+
+    if findings:
+        verified = {}
+    return StepTypedInputReceiptVerification(
+        findings=tuple(findings),
+        verified_inputs=MappingProxyType(dict(verified)),
+    )
+
+
 def verify_typed_input_consumption_receipt(
     receipt: TypedInputConsumptionReceipt | Mapping[str, object],
     *,
@@ -622,10 +1048,13 @@ __all__ = [
     "TYPED_INPUT_CONSUMPTION_RECEIPT_SCHEMA",
     "TypedInputConsumptionReceipt",
     "TypedInputReceiptError",
+    "StepTypedInputReceiptVerification",
+    "TypedInputRowIdentityNotApplicable",
     "TypedInputRowIdentity",
     "VerifiedTypedInputLoad",
     "load_verified_typed_input_table",
     "seal_typed_input_consumption",
     "typed_input_receipt_sha256",
+    "verify_step_typed_input_receipts",
     "verify_typed_input_consumption_receipt",
 ]
