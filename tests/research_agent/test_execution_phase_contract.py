@@ -1419,9 +1419,9 @@ def test_primary_cohort_raw_runner_is_scoped_and_authority_hashes_are_rechecked(
 
     assert "step_execution_cohort_path = _step_execution_cohort_path(" in source
     assert "primary_analysis_cohort_producer_uses_universe" in routing_source
-    assert "development_sample_selected" in routing_source
     assert "return universe_path" in routing_source
     assert "return cohort_path" in routing_source
+    assert "only downstream" in routing_source
     assert "cohort_path=step_execution_cohort_path" in source
     assert '"execution_cohort_sha256": sha256_of_file(universe_path)' in source
     assert (
