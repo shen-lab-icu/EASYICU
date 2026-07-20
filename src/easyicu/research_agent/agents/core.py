@@ -209,7 +209,11 @@ def _ctas_aggregation_hint(rule: Optional[AggregationRule]) -> str:
     return f"{ctas_value} (icu_rule={rule.value}; {note})"
 
 
-def _format_variable(v: ConceptDescriptor) -> str:
+def _format_variable(
+    v: ConceptDescriptor,
+    *,
+    include_ctas_aggregation_guidance: bool = True,
+) -> str:
     miss = ""
     if v.missingness is not None:
         miss = (
@@ -236,10 +240,19 @@ def _format_variable(v: ConceptDescriptor) -> str:
             f" representation={metadata.representation_kind}"
             f" anchor={metadata.anchor or 'unspecified_agent_must_declare'}"
         )
+    aggregation = (
+        _ctas_aggregation_hint(v.aggregation_default)
+        if include_ctas_aggregation_guidance
+        else (
+            v.aggregation_default.value
+            if v.aggregation_default is not None
+            else "unspecified"
+        )
+    )
     return (
         f"- {v.name} | role={v.role.value} dtype={v.dtype}{unit}{rng}{obs}"
         f"{source}{description}{ordinal}"
-        f" agg_default={_ctas_aggregation_hint(v.aggregation_default)}"
+        f" agg_default={aggregation}"
         f"{trajectory}{miss}{pit}"
     )
 
@@ -247,13 +260,13 @@ def _format_variable(v: ConceptDescriptor) -> str:
 def _format_companion_variable(v: ConceptDescriptor) -> str:
     """Render a non-consumed concept companion without repeating full prose.
 
-    The scoped context deliberately retains every registered column sharing a
-    declared ``source_concept`` so the Coder can see measurement/count/time
-    companions.  Those siblings are metadata coordinates, not additional
-    Planner-declared inputs.  Repeating their descriptions, aggregation
-    tutorials, pitfalls, and missingness profiles made wide QC prompts grow in
-    proportion to the physical export schema.  Keep the safety-relevant typed
-    coordinates while leaving the full descriptor on exact consumed columns.
+    The scoped context retains required measurement/count/time coordinates for
+    a declared value. Those companions are metadata, not additional
+    Planner-declared scientific inputs. Repeating their descriptions,
+    aggregation tutorials, pitfalls, and missingness profiles made wide QC
+    prompts grow in proportion to the physical export schema. Keep the
+    safety-relevant typed coordinates while leaving the full descriptor on
+    exact consumed columns.
     """
 
     fields = [
@@ -320,6 +333,8 @@ def _format_context(
     include_planning_scaffolds: bool = True,
     include_materialized_input_facts: bool = False,
     detailed_variable_names: Optional[set[str]] = None,
+    method_constraint_variable_names: Optional[set[str]] = None,
+    include_ctas_aggregation_guidance: bool = True,
 ) -> str:
     lines = [
         f"Research question: {ctx.research_question}",
@@ -347,7 +362,14 @@ def _format_context(
             detailed_variable_names is None
             or v.name.strip().lower() in detailed_variable_names
         ):
-            lines.append(_format_variable(v))
+            lines.append(
+                _format_variable(
+                    v,
+                    include_ctas_aggregation_guidance=(
+                        include_ctas_aggregation_guidance
+                    ),
+                )
+            )
         else:
             lines.append(_format_companion_variable(v))
     if ctx.cross_database_validation:
@@ -402,7 +424,19 @@ def _format_context(
     from ..gates.method_compatibility import render_variable_constraints
 
     if include_method_constraints:
-        constraints = render_variable_constraints(ctx)
+        constraint_context = ctx
+        if method_constraint_variable_names is not None:
+            constraint_context = ctx.model_copy(
+                update={
+                    "variables": [
+                        variable
+                        for variable in ctx.variables
+                        if variable.name.strip().lower()
+                        in method_constraint_variable_names
+                    ]
+                }
+            )
+        constraints = render_variable_constraints(constraint_context)
         if constraints:
             lines.append("")
             lines.append(constraints)
@@ -2102,6 +2136,8 @@ class CoderAgent:
                         include_materialized_input_facts=False,
                         include_planning_scaffolds=False,
                         detailed_variable_names=detailed_variable_names,
+                        method_constraint_variable_names=detailed_variable_names,
+                        include_ctas_aggregation_guidance=False,
                     )
                 ),
             ),

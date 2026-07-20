@@ -141,6 +141,8 @@ def test_quality_guide_keeps_runtime_clinical_without_unrelated_transport_tutori
     assert "CLINICAL SCORE AND MISSINGNESS SEMANTICS:" in guide
     assert "Numeric coercion" in guide or "numeric" in guide.lower()
     assert "PYTHON HYGIENE:" not in guide
+    assert "MECHANICAL PYTHON CONTRACT:" in guide
+    assert "do not mix strings and NaN" in guide
     assert "For a regression step that explicitly requests" not in guide
     assert "Exposure/event TIMING" not in guide
     assert "PREDICTION / CLUSTERING APIs:" not in guide
@@ -223,9 +225,10 @@ def test_descriptive_products_do_not_load_adjusted_model_contract(
     guide = coder_guide_for_step(load_prompt_pack()["coder"], step)
 
     assert "TABLE-ONE / DESCRIPTIVE SUMMARIES:" in guide
-    assert "JSON SERIALISATION — MANDATORY:" in guide
+    assert "OUTPUT SERIALIZATION CONTRACT:" in guide
     assert "CLINICAL SCORE AND MISSINGNESS SEMANTICS:" in guide
-    assert "PYTHON HYGIENE:" in guide
+    assert "PYTHON HYGIENE:" not in guide
+    assert "MECHANICAL PYTHON CONTRACT:" in guide
     if method == "incidence":
         assert "STATISTICS APIs:" in guide
     assert "For a regression step that explicitly requests" not in guide
@@ -366,6 +369,110 @@ def test_generic_ordered_qc_synonym_omits_binary_event_and_upstream_lookup(ra):
     assert coder_context_requires_method_constraints(step) is False
 
 
+def test_binary_event_exception_requires_explicit_semantics_and_paired_provenance(ra):
+    event_step = ra.AnalysisStep(
+        step_id="event_incidence",
+        intent="Human prose must not select prompt sections.",
+        inputs=["event_first", "event_n", "event_measured", "outcome"],
+        expected_outputs=["table:binary_event_incidence"],
+        method="binary_event_incidence",
+    )
+    generic_step = event_step.model_copy(
+        update={
+            "step_id": "generic_robustness",
+            "expected_outputs": ["table:robustness_grid"],
+            "method": "pre_specified_sensitivity_analysis_grid",
+        }
+    )
+
+    assert "BINARY EVENT-PRESENCE EXCEPTION:" in coder_guide_for_step(
+        load_prompt_pack()["coder"], event_step
+    )
+    assert "BINARY EVENT-PRESENCE EXCEPTION:" not in coder_guide_for_step(
+        load_prompt_pack()["coder"], generic_step
+    )
+
+
+def test_analysis_cohort_artifact_uses_runtime_cohort_not_evidence_search(ra):
+    step = ra.AnalysisStep(
+        step_id="table_one",
+        intent="Summarise the locked cohort.",
+        inputs=["artifact:analysis_cohort", "age", "outcome"],
+        expected_outputs=["table:table_one"],
+        method="descriptive_stratified_baseline_summary",
+    )
+
+    guide = coder_guide_for_step(load_prompt_pack()["coder"], step)
+
+    assert "TABLE-ONE / DESCRIPTIVE SUMMARIES:" in guide
+    assert "If a step depends on an artefact produced by a previous step" not in guide
+    assert "Before fitting, audit every categorical predictor" not in guide
+
+
+def test_structural_qc_synonym_keeps_provenance_without_model_scaffolds(ra):
+    step = ra.AnalysisStep(
+        step_id="exposure_qc",
+        intent="Human prose must not route prompt sections.",
+        inputs=[
+            "artifact:analysis_cohort",
+            "ordered_exposure_max",
+            "ordered_exposure_measured",
+            "ordered_exposure_n",
+        ],
+        expected_outputs=["table:exposure_distribution", "table:missingness_audit"],
+        method="ordinal_exposure_qc_and_missingness_measurement_audit",
+    )
+
+    guide = coder_guide_for_step(load_prompt_pack()["coder"], step)
+
+    assert "CLINICAL SCORE AND MISSINGNESS SEMANTICS:" in guide
+    assert "A shared source-status helper must make" in guide
+    assert "BINARY EVENT-PRESENCE EXCEPTION:" not in guide
+    assert "Before fitting, audit every categorical predictor" not in guide
+    assert coder_context_requires_method_constraints(step) is False
+
+
+def test_structural_descriptive_and_reporting_methods_do_not_default_to_models(ra):
+    descriptive = ra.AnalysisStep(
+        step_id="outcomes",
+        intent="Human prose must not route prompt sections.",
+        inputs=["artifact:analysis_cohort", "ordered_exposure", "outcome"],
+        expected_outputs=["table:stratified_outcomes"],
+        method="stage_stratified_absolute_outcome_summary",
+    )
+    reporting = ra.AnalysisStep(
+        step_id="report",
+        intent="Assemble the declared report products.",
+        inputs=["table:results"],
+        expected_outputs=["artifact:display_suite", "artifact:analysis_provenance"],
+        method="manuscript_facing_reporting_and_provenance_render",
+    )
+
+    descriptive_guide = coder_guide_for_step(load_prompt_pack()["coder"], descriptive)
+    reporting_guide = coder_guide_for_step(load_prompt_pack()["coder"], reporting)
+
+    assert "TABLE-ONE / DESCRIPTIVE SUMMARIES:" in descriptive_guide
+    assert "Before fitting, audit every categorical predictor" not in descriptive_guide
+    assert "CLINICAL SCORE AND MISSINGNESS SEMANTICS:" not in reporting_guide
+    assert "Before fitting, audit every categorical predictor" not in reporting_guide
+    assert coder_context_requires_method_constraints(reporting) is False
+
+
+def test_mixed_model_and_figure_outputs_remain_analysis_not_render_only(ra):
+    step = ra.AnalysisStep(
+        step_id="quantile_model",
+        intent="Fit the declared model and export its supporting plot.",
+        inputs=["artifact:analysis_cohort", "exposure", "outcome"],
+        expected_outputs=["table:model_estimates", "figure:model_effect"],
+        method="quantile_regression_for_median_outcome",
+    )
+
+    guide = coder_guide_for_step(load_prompt_pack()["coder"], step)
+
+    assert "Before fitting, audit every categorical predictor" in guide
+    assert "For rendering-only figure steps" not in guide
+
+
 def test_wide_generic_ordered_qc_prompt_stays_under_initial_transport_gate(ra):
     step = _quality_step(ra).model_copy(
         update={
@@ -384,6 +491,95 @@ def test_wide_generic_ordered_qc_prompt_stays_under_initial_transport_gate(ra):
     CoderAgent(llm).run(context=_wide_context(ra), step=step)
 
     assert _payload_bytes(llm.calls[0][0]) <= 42_000
+
+
+def test_materialized_wide_qc_prompt_keeps_authority_under_transport_gate(ra):
+    inputs = ["artifact:analysis_cohort"]
+    for family in range(4):
+        inputs.extend(
+            f"declared_family_{family}_{suffix}"
+            for suffix in ("first", "n", "measured", "first_time", "last_time")
+        )
+    step = ra.AnalysisStep(
+        step_id="wide_qc",
+        intent="Audit the declared ordered value and provenance coordinates.",
+        inputs=inputs,
+        expected_outputs=["table:exposure_distribution", "table:missingness_audit"],
+        method="ordinal_exposure_qc_and_missingness_measurement_audit",
+    )
+    llm = _CaptureLLM(["import os\nvalue = 1\n"])
+
+    CoderAgent(llm).run(
+        context=_wide_context(ra),
+        step=step,
+        host_authority=HostCoderAuthority.from_values(["x" * 5_000]),
+    )
+
+    assert _payload_bytes(llm.calls[0][0]) <= 42_000
+
+
+def test_adjusted_prompt_limits_method_constraints_to_declared_model_inputs(ra):
+    step = ra.AnalysisStep(
+        step_id="adjusted",
+        intent="Fit the declared adjusted association.",
+        inputs=[
+            "artifact:analysis_cohort",
+            *[f"declared_family_{family}_first" for family in range(4)],
+            "outcome",
+        ],
+        expected_outputs=["table:adjusted_estimates", "table:ordinal_trend_test"],
+        method="adjusted_association_models",
+    )
+    llm = _CaptureLLM(["import os\nvalue = 1\n"])
+
+    CoderAgent(llm).run(
+        context=_wide_context(ra),
+        step=step,
+        host_authority=HostCoderAuthority.from_values(["x" * 4_000]),
+    )
+    messages = llm.calls[0][0]
+    payload = "\n".join(str(message.content or "") for message in messages)
+    compatibility = payload.split(
+        "Variable-type method-compatibility self-review checklist", 1
+    )[1]
+
+    assert _payload_bytes(messages) <= 42_000
+    assert "`declared_family_0_first` (kind: ordinal)" in compatibility
+    assert "declared_family_0_n" not in compatibility
+    assert "declared_family_0_measured" not in compatibility
+
+
+def test_wide_robustness_prompt_stays_under_transport_gate_with_authority(ra):
+    inputs = ["artifact:analysis_cohort", "outcome"]
+    inputs.extend(f"declared_family_{family}_first" for family in range(4))
+    inputs.extend(
+        f"declared_family_{family}_{suffix}"
+        for family in range(2)
+        for suffix in ("n", "measured", "first_time", "last_time", "status")
+    )
+    step = ra.AnalysisStep(
+        step_id="robustness_grid",
+        intent="Run the Planner-declared sensitivity specifications.",
+        inputs=inputs,
+        expected_outputs=[
+            "table:robustness_grid",
+            "artifact:robustness_specification",
+        ],
+        method="pre_specified_sensitivity_analysis_grid",
+    )
+    llm = _CaptureLLM(["import os\nvalue = 1\n"])
+
+    CoderAgent(llm).run(
+        context=_wide_context(ra),
+        step=step,
+        host_authority=HostCoderAuthority.from_values(["x" * 4_000]),
+    )
+    messages = llm.calls[0][0]
+    payload = "\n".join(str(message.content or "") for message in messages)
+
+    assert _payload_bytes(messages) <= 42_000
+    assert "ROBUSTNESS:" in payload
+    assert "BINARY EVENT-PRESENCE EXCEPTION:" not in payload
 
 
 def test_typed_upstream_table_input_keeps_evidence_lookup_guidance(ra):
@@ -510,6 +706,7 @@ def test_full_rewrite_guide_keeps_method_contracts_without_transport_duplicates(
     assert "Treat `COHORT_PARQUET`" not in guide
     assert "PANDAS IDIOM GOTCHAS" not in guide
     assert "PYTHON HYGIENE:" not in guide
+    assert "MECHANICAL PYTHON CONTRACT:" not in guide
 
 
 def test_controlled_ordered_method_gets_its_single_source_contract(ra):
@@ -564,7 +761,9 @@ def test_initial_prompt_compacts_non_consumed_source_concept_companions(ra):
     assert "description='Registered first companion" in payload
     assert "description='Registered max companion" not in payload
     for family in range(4):
-        assert f"declared_family_{family}_max" in payload
+        assert f"declared_family_{family}_max" not in payload
+        assert f"declared_family_{family}_n" in payload
+        assert f"declared_family_{family}_measured" in payload
         assert f"source_concept=declared_family_{family}" in payload
     assert "companion_metadata=true" in payload
 

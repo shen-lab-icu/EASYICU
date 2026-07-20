@@ -934,6 +934,7 @@ def project_research_context_variables(
     selected_variables: List[ConceptDescriptor],
     *,
     additional_concept_ids: tuple[str, ...] = (),
+    include_source_concept_siblings: bool = True,
 ) -> ResearchContextAuthority:
     """Atomically scope variables and their typed physical authority.
 
@@ -968,10 +969,13 @@ def project_research_context_variables(
         column: binding
         for column, binding in cohort.column_bindings.items()
         if column.lower() in selected_names
-        or str((binding.binding.get("metadata") or {}).get("source_concept"))
-        .strip()
-        .lower()
-        in selected_source_concepts
+        or (
+            include_source_concept_siblings
+            and str((binding.binding.get("metadata") or {}).get("source_concept"))
+            .strip()
+            .lower()
+            in selected_source_concepts
+        )
     }
     canonical_cohort_bindings = {
         column: ColumnMetadataBinding.from_dict(binding.binding)
