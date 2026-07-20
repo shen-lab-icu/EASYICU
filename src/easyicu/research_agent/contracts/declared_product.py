@@ -773,6 +773,26 @@ _PRIMARY_ANALYSIS_COHORT_FLOW_PRODUCTS = frozenset(
 )
 
 
+def _is_primary_analysis_cohort_method(value: object) -> bool:
+    """Recognise a case-neutral primary cohort construction method family.
+
+    Planner method labels are agent-authored and may use an equivalent phrase
+    instead of one host spelling.  Match the method's semantic tokens while
+    excluding sensitivity/robustness riders; typed outputs and the locked plan
+    still decide whether the step may own the primary cohort.
+    """
+
+    method = _normalise(value)
+    if method in _PRIMARY_ANALYSIS_COHORT_METHODS:
+        return True
+    tokens = frozenset(part for part in method.split("_") if part)
+    if tokens & {"overlap", "robustness", "sensitivity"}:
+        return False
+    return bool(tokens & {"cohort", "eligibility"}) and bool(
+        tokens & {"construction", "definition", "filter"}
+    )
+
+
 def _primary_analysis_cohort_product(raw: object) -> tuple[str, str] | None:
     """Return one exact primary-cohort product identity.
 
@@ -856,8 +876,7 @@ def _declares_explicit_cohort_namespace(raw: object) -> bool:
 
 
 def _primary_analysis_cohort_attrition_candidate(step: AnalysisStep) -> bool:
-    method = _normalise(step.method)
-    if method not in _PRIMARY_ANALYSIS_COHORT_METHODS:
+    if not _is_primary_analysis_cohort_method(step.method):
         return False
     outputs = list(step.expected_outputs or [])
     parsed = [typed_product(raw) for raw in outputs]
@@ -870,6 +889,25 @@ def _primary_analysis_cohort_attrition_candidate(step: AnalysisStep) -> bool:
         and product[0] == "table"
         and product[1] in _PRIMARY_ANALYSIS_COHORT_FLOW_PRODUCTS
         for product in parsed
+    )
+
+
+def _primary_analysis_cohort_attrition_step(step: AnalysisStep) -> bool:
+    """Return whether a step claims primary cohort construction + attrition.
+
+    Unlike ``_primary_analysis_cohort_attrition_candidate``, this predicate
+    deliberately does not require a valid closed cohort output.  It lets plan
+    preflight reject a definition/log artifact that was incorrectly declared
+    in place of the materialised cohort before Coder or cohort execution runs.
+    """
+
+    if not _is_primary_analysis_cohort_method(step.method):
+        return False
+    return any(
+        product is not None
+        and product[0] == "table"
+        and product[1] in _PRIMARY_ANALYSIS_COHORT_FLOW_PRODUCTS
+        for product in (typed_product(raw) for raw in step.expected_outputs or [])
     )
 
 
@@ -931,21 +969,37 @@ def _primary_analysis_cohort_product_owner_finding(
     stages from drifting into different definitions of a closed owner.
     """
 
-    if not _primary_analysis_cohort_attrition_candidate(step):
+    if not _primary_analysis_cohort_attrition_step(step):
         return None
     if primary_analysis_cohort_producer_uses_universe(step=step, plan=plan):
         return None
+    declared_closed_candidates = [
+        str(raw or "").strip()
+        for raw in step.expected_outputs or []
+        if _primary_analysis_cohort_product(raw) is not None
+        or _declares_explicit_cohort_namespace(raw)
+    ]
+    issue = (
+        "primary_cohort_product_owner_ambiguous"
+        if declared_closed_candidates
+        else "primary_cohort_product_missing"
+    )
+    detail: dict[str, Any] = {
+        "issue": issue,
+        "step_id": step.step_id,
+    }
+    if issue == "primary_cohort_product_missing":
+        detail["declared_closed_candidates"] = declared_closed_candidates
     return ValidationFinding(
         validator=validator,
         severity="error",
         message=(
-            "A mixed analysis_cohort + attrition step must be the plan's unique "
-            "closed primary-cohort product owner before it may execute."
+            "A primary cohort construction + attrition step must declare exactly "
+            "one materialised closed cohort product and be the plan's unique "
+            "primary-cohort owner. A definition or protocol artifact is not a "
+            "cohort dataset."
         ),
-        detail={
-            "issue": "primary_cohort_product_owner_ambiguous",
-            "step_id": step.step_id,
-        },
+        detail=detail,
     )
 
 
@@ -1738,7 +1792,7 @@ def primary_analysis_cohort_integrity_findings(
     and declared attrition accounting before the attempt may become current.
     """
 
-    if not _primary_analysis_cohort_attrition_candidate(step):
+    if not _primary_analysis_cohort_attrition_step(step):
         return []
 
     def finding(issue: str, message: str, **detail: Any) -> list[ValidationFinding]:

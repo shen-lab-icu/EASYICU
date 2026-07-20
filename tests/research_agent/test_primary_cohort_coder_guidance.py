@@ -161,6 +161,24 @@ def test_primary_cohort_schema_guidance_accepts_analysis_set_alias() -> None:
     assert "ordered row identity" in guidance
 
 
+def test_primary_cohort_guidance_accepts_agent_semantic_method_label() -> None:
+    step = _primary_cohort_step().model_copy(
+        update={
+            "method": "explicit_eligibility_filter_with_attrition",
+            "expected_outputs": [
+                "cohort:analysis_set",
+                "table:cohort_flow",
+                "table:cohort_attrition",
+            ],
+        }
+    )
+
+    _assert_canonical_schema_guidance(_primary_analysis_cohort_output_contract(step))
+    _assert_partition_safety_guidance(
+        _cohort_predicate_partition_safety_contract(step)
+    )
+
+
 @pytest.mark.parametrize(
     "output",
     ["artifact:analysis_set", "table:analysis_set", "dataset:analysis_set"],

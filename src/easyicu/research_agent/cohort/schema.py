@@ -216,14 +216,17 @@ def write_locked_cohort_definition(
 ANALYSIS_COHORT_FILENAME = "cohort_analysis.parquet"
 
 
-def _declares_analysis_cohort(step: Any) -> bool:
+def _declares_analysis_cohort(step: Any, *, plan: Any) -> bool:
+    cohort_name = (
+        str(getattr(getattr(plan, "cohort", None), "name", "") or "").strip().casefold()
+    )
     for raw in getattr(step, "expected_outputs", ()) or ():
         kind, separator, name = str(raw or "").strip().casefold().partition(":")
-        if (
-            separator
-            and kind in {"artifact", "dataset", "table"}
-            and name == ("analysis_cohort")
-        ):
+        if not separator:
+            continue
+        if kind in {"artifact", "dataset", "table"} and name == "analysis_cohort":
+            return True
+        if kind == "cohort" and name in {"analysis_set", cohort_name}:
             return True
     return False
 
@@ -323,7 +326,7 @@ def _planner_declared_context_column_bindings(
     producers = [
         step
         for step in getattr(plan, "steps", ()) or ()
-        if _declares_analysis_cohort(step)
+        if _declares_analysis_cohort(step, plan=plan)
     ]
     if len(producers) != 1:
         return {}

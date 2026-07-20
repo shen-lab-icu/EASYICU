@@ -4562,11 +4562,11 @@ def run_execute_phase(
         if primary_cohort_preflight:
             primary_cohort_directive = (
                 "Repair the plan's primary-cohort typed-product ownership "
-                "without changing eligibility, exposure, outcome, estimator, "
-                "or any other scientific choice. A mixed analysis_cohort + "
-                "attrition step must be the unique closed owner: declare one "
-                "primary cohort product and only canonical attrition/flow "
-                "tables in that step. Contract findings: "
+                "without changing any scientific choice. A cohort construction + "
+                "attrition step must uniquely own exactly one materialised product: "
+                "`artifact|dataset|table:analysis_cohort`, `cohort:analysis_set`, "
+                "or `cohort:<exact cohort.name>`. Definition/protocol/status artifacts "
+                "are not cohort datasets. Contract findings: "
                 + json.dumps(
                     [
                         {

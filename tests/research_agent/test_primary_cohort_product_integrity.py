@@ -153,6 +153,62 @@ def test_plan_preflight_rejects_noncanonical_extra_attrition_product() -> None:
     }
 
 
+def test_plan_preflight_rejects_definition_artifact_in_place_of_cohort_data(
+    tmp_path: Path,
+) -> None:
+    """A prose/status artifact cannot masquerade as a materialised cohort."""
+
+    step = _cohort_step(method="explicit_eligibility_filter_with_attrition").model_copy(
+        update={
+            "expected_outputs": [
+                "artifact:cohort_defined",
+                "table:cohort_flow",
+                "table:cohort_attrition",
+            ]
+        }
+    )
+
+    findings = primary_analysis_cohort_plan_findings(plan=_plan(step))
+
+    assert len(findings) == 1
+    assert findings[0].validator == "plan_primary_analysis_cohort_integrity"
+    assert findings[0].severity == "error"
+    assert findings[0].detail == {
+        "issue": "primary_cohort_product_missing",
+        "step_id": step.step_id,
+        "declared_closed_candidates": [],
+    }
+    assert not primary_analysis_cohort_producer_uses_universe(
+        step=step,
+        plan=_plan(step),
+    )
+    execution_findings = primary_analysis_cohort_integrity_findings(
+        step=step,
+        plan=_plan(step),
+        step_summary={},
+        out_dir=tmp_path,
+        universe_path=tmp_path / "universe.parquet",
+        authoritative_cohort_path=tmp_path / "analysis_cohort.parquet",
+    )
+    assert len(execution_findings) == 1
+    assert execution_findings[0].detail["issue"] == "primary_cohort_product_missing"
+
+
+def test_semantic_eligibility_method_with_closed_cohort_is_accepted() -> None:
+    step = _cohort_step(method="explicit_eligibility_filter_with_attrition").model_copy(
+        update={
+            "expected_outputs": [
+                "cohort:analysis_set",
+                "table:cohort_flow",
+                "table:cohort_attrition",
+            ]
+        }
+    )
+
+    assert primary_analysis_cohort_plan_findings(plan=_plan(step)) == []
+    assert primary_analysis_cohort_producer_uses_universe(step=step, plan=_plan(step))
+
+
 def test_plan_preflight_rejects_multiple_primary_cohort_owners() -> None:
     primary = _cohort_step()
     competing = AnalysisStep(

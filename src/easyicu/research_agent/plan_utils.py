@@ -37,6 +37,7 @@ from pydantic import ValidationError
 from .contracts.declared_product import (
     PLAN_MATERIALIZABLE_TYPED_OUTPUT_KINDS,
     RUNTIME_BINDABLE_TYPED_INPUT_KINDS,
+    _is_primary_analysis_cohort_method,
     _primary_analysis_cohort_attrition_candidate,
     declared_product_contract_findings,
     effect_adjustment_family,
@@ -1018,9 +1019,12 @@ def prediction_contract_applies(step: AnalysisStep) -> bool:
 def _cohort_change_contract_applies(step: AnalysisStep) -> bool:
     """Whether a cohort owner declares a closed attrition/overlap product."""
 
-    return _normalised_method_head(
-        str(step.method or "")
-    ) in _COHORT_CHANGE_OWNER_METHODS and _has_closed_contract_product(
+    method = str(step.method or "")
+    method_matches = (
+        _normalised_method_head(method) in _COHORT_CHANGE_OWNER_METHODS
+        or _is_primary_analysis_cohort_method(method)
+    )
+    return method_matches and _has_closed_contract_product(
         step.expected_outputs or [],
         products=_COHORT_CHANGE_PRODUCTS,
     )
