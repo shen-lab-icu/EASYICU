@@ -4547,8 +4547,11 @@ class ResearchAgentPipeline:
                     expected_source_authority=expected_source_authority,
                 )
                 if staged is None and src.resolve() != target.resolve():
-                    df = pd.read_parquet(src)
-                    df.to_parquet(target, index=False)
+                    # Legacy materializations bind provenance to the exact
+                    # Parquet bytes. Re-serializing an otherwise identical
+                    # frame changes that file authority and needlessly loads
+                    # the full cohort into memory, so stage it byte-for-byte.
+                    shutil.copy2(src, target)
                     source_provenance = materialized_provenance_path(src)
                     if source_provenance.is_file():
                         shutil.copy2(

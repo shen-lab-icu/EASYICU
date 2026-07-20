@@ -67,6 +67,8 @@ def test_pipeline_stages_legacy_materialization_window_for_context(
     pipeline = object.__new__(ra.ResearchAgentPipeline)
     staged = pipeline._materialise_cohort(source, run_dir)
 
+    assert staged.read_bytes() == source.read_bytes()
+    assert _sha256_file(staged) == _sha256_file(source)
     staged_provenance = run_dir / "cohort_provenance.json"
     assert staged_provenance.is_file()
     assert (
