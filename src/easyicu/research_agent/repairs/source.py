@@ -293,6 +293,8 @@ _FILLNA_ZERO_ASSIGN_RE = re.compile(
 )
 
 _LOSSY_NUMERIC_COERCION_GUARD_SENTINEL = "_easyicu_lossy_numeric_coercion_guard_v1"
+_STRICT_NUMERIC_NONFINITE_GUARD_SENTINEL = "_easyicu_strict_numeric_nonfinite_guard_v1"
+_CATEGORICAL_LEVEL_GUARD_SENTINEL = "_easyicu_categorical_level_reconciliation_guard_v1"
 
 
 def _host_helper_signature_repair_lines(
@@ -980,6 +982,39 @@ def _conditional_nonfinite_guard_lines(
     )
 
 
+def _strict_numeric_nonfinite_repair_line(
+    findings: Sequence[ValidationFinding],
+) -> Optional[int]:
+    lines = {
+        int((finding.detail or {})["coercion_line"])
+        for finding in findings
+        if finding.validator == "mechanical_code_preflight"
+        and finding.severity == "error"
+        and (finding.detail or {}).get("reason") == "strict_numeric_nonfinite_unchecked"
+        and isinstance((finding.detail or {}).get("coercion_line"), int)
+        and not isinstance((finding.detail or {}).get("coercion_line"), bool)
+        and int((finding.detail or {})["coercion_line"]) > 0
+    }
+    return next(iter(lines)) if len(lines) == 1 else None
+
+
+def _categorical_level_reconciliation_repair_line(
+    findings: Sequence[ValidationFinding],
+) -> Optional[int]:
+    lines = {
+        int((finding.detail or {})["counts_line"])
+        for finding in findings
+        if finding.validator == "mechanical_code_preflight"
+        and finding.severity == "error"
+        and (finding.detail or {}).get("reason")
+        == "categorical_level_accounting_unverified"
+        and isinstance((finding.detail or {}).get("counts_line"), int)
+        and not isinstance((finding.detail or {}).get("counts_line"), bool)
+        and int((finding.detail or {})["counts_line"]) > 0
+    }
+    return next(iter(lines)) if len(lines) == 1 else None
+
+
 def _patch_conditional_nonfinite_guard(
     code: str,
     *,
@@ -1026,6 +1061,225 @@ def _patch_conditional_nonfinite_guard(
             raw = raw[dedent:]
         replacement.append(raw)
     lines[inner.lineno - 1 : inner.end_lineno] = replacement
+    repaired = "".join(lines)
+    try:
+        ast.parse(repaired)
+    except SyntaxError:
+        return code
+    return repaired
+
+
+def _builtin_name_is_unmodified(tree: ast.Module, name: str) -> bool:
+    """Return whether one exception builtin remains safe to reference."""
+
+    for node in ast.walk(tree):
+        if (
+            isinstance(node, ast.Name)
+            and node.id == name
+            and isinstance(node.ctx, (ast.Store, ast.Del))
+        ):
+            return False
+        if isinstance(node, ast.arg) and node.arg == name:
+            return False
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)) and (
+            node.name == name
+        ):
+            return False
+        if isinstance(node, (ast.Import, ast.ImportFrom)) and any(
+            (alias.asname or alias.name.split(".", 1)[0]) == name
+            for alias in node.names
+        ):
+            return False
+    return True
+
+
+def _stable_numpy_alias(tree: ast.Module) -> Optional[str]:
+    aliases = {
+        alias.asname or "numpy"
+        for statement in tree.body
+        if isinstance(statement, ast.Import)
+        for alias in statement.names
+        if alias.name == "numpy"
+    }
+    if len(aliases) != 1:
+        return None
+    alias_name = next(iter(aliases))
+    for node in ast.walk(tree):
+        if (
+            isinstance(node, ast.Name)
+            and node.id == alias_name
+            and isinstance(node.ctx, (ast.Store, ast.Del))
+        ):
+            return None
+        if isinstance(node, ast.arg) and node.arg == alias_name:
+            return None
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)) and (
+            node.name == alias_name
+        ):
+            return None
+    return alias_name
+
+
+def _patch_strict_numeric_nonfinite_guard(
+    code: str,
+    *,
+    coercion_line: Optional[int],
+) -> str:
+    """Reject infinities in one proven strict numeric coercion helper."""
+
+    if coercion_line is None or _STRICT_NUMERIC_NONFINITE_GUARD_SENTINEL in code:
+        return code
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return code
+    numpy_alias = _stable_numpy_alias(tree)
+    if numpy_alias is None or not _builtin_name_is_unmodified(tree, "RuntimeError"):
+        return code
+    mask_name = "_easyicu_nonfinite_numeric_mask_v1"
+    if any(
+        isinstance(node, ast.Name)
+        and node.id == mask_name
+        or isinstance(node, ast.arg)
+        and node.arg == mask_name
+        for node in ast.walk(tree)
+    ):
+        return code
+
+    candidates: list[tuple[ast.FunctionDef, ast.Assign | ast.AnnAssign, str]] = []
+    for function in [
+        node for node in ast.walk(tree) if isinstance(node, ast.FunctionDef)
+    ]:
+        for statement in function.body:
+            if int(getattr(statement, "lineno", -1)) != coercion_line:
+                continue
+            if isinstance(statement, ast.Assign) and len(statement.targets) == 1:
+                target = statement.targets[0]
+                value = statement.value
+            elif isinstance(statement, ast.AnnAssign) and statement.value is not None:
+                target = statement.target
+                value = statement.value
+            else:
+                continue
+            if not (
+                isinstance(target, ast.Name)
+                and isinstance(value, ast.Call)
+                and isinstance(value.func, ast.Attribute)
+                and value.func.attr == "to_numeric"
+                and any(
+                    keyword.arg == "errors"
+                    and isinstance(keyword.value, ast.Constant)
+                    and keyword.value.value == "coerce"
+                    for keyword in value.keywords
+                )
+            ):
+                continue
+            candidates.append((function, statement, target.id))
+    if len(candidates) != 1:
+        return code
+    _function, statement, coerced_name = candidates[0]
+    if statement.end_lineno is None:
+        return code
+    lines = code.splitlines(keepends=True)
+    indent_source = lines[statement.lineno - 1]
+    indent = indent_source[: len(indent_source) - len(indent_source.lstrip(" \t"))]
+    body_indent = indent + ("\t" if "\t" in indent else "    ")
+    guard = (
+        f"{indent}# {_STRICT_NUMERIC_NONFINITE_GUARD_SENTINEL}\n"
+        f"{indent}{mask_name} = {coerced_name}.notna() & "
+        f"~{numpy_alias}.isfinite({coerced_name})\n"
+        f"{indent}if int({mask_name}.sum()) > 0:\n"
+        f'{body_indent}raise RuntimeError("strict numeric input contains '
+        'non-finite observed values")\n'
+    )
+    if not lines[statement.end_lineno - 1].endswith(("\n", "\r")):
+        lines[statement.end_lineno - 1] += "\n"
+    lines.insert(statement.end_lineno, guard)
+    repaired = "".join(lines)
+    try:
+        ast.parse(repaired)
+    except SyntaxError:
+        return code
+    return repaired
+
+
+def _patch_categorical_level_reconciliation_guard(
+    code: str,
+    *,
+    counts_line: Optional[int],
+) -> str:
+    """Fail closed when emitted categorical levels omit observed values."""
+
+    if counts_line is None or _CATEGORICAL_LEVEL_GUARD_SENTINEL in code:
+        return code
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return code
+    if not _builtin_name_is_unmodified(tree, "RuntimeError"):
+        return code
+
+    candidates: list[tuple[ast.Assign | ast.AnnAssign, str, str]] = []
+    for function in [
+        node for node in ast.walk(tree) if isinstance(node, ast.FunctionDef)
+    ]:
+        for index, statement in enumerate(function.body):
+            if int(getattr(statement, "lineno", -1)) != counts_line:
+                continue
+            if isinstance(statement, ast.Assign) and len(statement.targets) == 1:
+                target = statement.targets[0]
+                value = statement.value
+            elif isinstance(statement, ast.AnnAssign) and statement.value is not None:
+                target = statement.target
+                value = statement.value
+            else:
+                continue
+            if not (
+                isinstance(target, ast.Name)
+                and isinstance(value, ast.Call)
+                and isinstance(value.func, ast.Attribute)
+                and value.func.attr == "value_counts"
+                and isinstance(value.func.value, ast.Name)
+            ):
+                continue
+            counts_name = target.id
+            values_name = value.func.value.id
+            matching_levels = {
+                later.iter.id
+                for later in function.body[index + 1 :]
+                if isinstance(later, ast.For)
+                and isinstance(later.target, ast.Name)
+                and isinstance(later.iter, ast.Name)
+                and any(
+                    isinstance(candidate, ast.Call)
+                    and isinstance(candidate.func, ast.Attribute)
+                    and candidate.func.attr == "get"
+                    and isinstance(candidate.func.value, ast.Name)
+                    and candidate.func.value.id == counts_name
+                    and candidate.args
+                    and isinstance(candidate.args[0], ast.Name)
+                    and candidate.args[0].id == later.target.id
+                    for candidate in ast.walk(later)
+                )
+            }
+            if len(matching_levels) == 1:
+                candidates.append((statement, values_name, next(iter(matching_levels))))
+    if len(candidates) != 1:
+        return code
+    statement, values_name, levels_name = candidates[0]
+    if statement.end_lineno is None:
+        return code
+    lines = code.splitlines(keepends=True)
+    indent_source = lines[statement.lineno - 1]
+    indent = indent_source[: len(indent_source) - len(indent_source.lstrip(" \t"))]
+    body_indent = indent + ("\t" if "\t" in indent else "    ")
+    guard = (
+        f"{indent}# {_CATEGORICAL_LEVEL_GUARD_SENTINEL}\n"
+        f"{indent}if (~{values_name}.isin({levels_name})).any():\n"
+        f'{body_indent}raise RuntimeError("observed categorical values are '
+        'not covered by declared levels")\n'
+    )
+    lines.insert(statement.lineno - 1, guard)
     repaired = "".join(lines)
     try:
         ast.parse(repaired)
@@ -1399,6 +1653,18 @@ def deterministic_concept_audit_repair(
             repaired = guarded
             repair_names.append(repair_name)
 
+    # Apply later-line accounting guards before earlier-line numeric guards so
+    # both host-owned source coordinates remain valid in one atomic repair.
+    if RepairReason.STRUCTURAL_ACCOUNTING_INVALID in set(repair_reasons):
+        guarded = _patch_categorical_level_reconciliation_guard(
+            repaired,
+            counts_line=_categorical_level_reconciliation_repair_line(repair_findings),
+        )
+        if guarded != repaired:
+            repair_name = "categorical_level_reconciliation_guard_v1"
+            repaired = guarded
+            repair_names.append(repair_name)
+
     if RepairReason.NONFINITE_NUMERIC_INPUT in set(repair_reasons):
         guarded = _patch_conditional_nonfinite_guard(
             repaired,
@@ -1406,6 +1672,15 @@ def deterministic_concept_audit_repair(
         )
         if guarded != repaired:
             repair_name = "conditional_nonfinite_fail_closed_guard_v1"
+            repaired = guarded
+            repair_names.append(repair_name)
+
+        guarded = _patch_strict_numeric_nonfinite_guard(
+            repaired,
+            coercion_line=_strict_numeric_nonfinite_repair_line(repair_findings),
+        )
+        if guarded != repaired:
+            repair_name = "strict_numeric_nonfinite_guard_v1"
             repaired = guarded
             repair_names.append(repair_name)
 

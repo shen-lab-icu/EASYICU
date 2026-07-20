@@ -10,7 +10,7 @@ import ast
 import builtins
 import re
 from dataclasses import dataclass, field
-from typing import Optional, Sequence
+from typing import Callable, Optional, Sequence
 
 from ..research_context.prompt_scope import normalised_method_head
 from ..schema import AnalysisStep, ValidationFinding
@@ -6601,6 +6601,392 @@ def _conditional_nonfinite_guard_findings(
     return findings
 
 
+def _strict_numeric_nonfinite_findings(
+    tree: ast.Module,
+) -> list[ValidationFinding]:
+    """Reject strict coercion helpers that return non-finite numeric values.
+
+    This is deliberately narrower than a blanket ``to_numeric`` policy.  A
+    candidate is claimed only when the same lexical function already proves
+    coercion loss fail-closed and then returns the coerced series.  The host
+    therefore adds no range, domain, variable, or missing-data decision; it
+    merely requires the helper's existing *strict* contract to reject infinities
+    before downstream summaries can silently turn them into nulls.
+    """
+
+    parents, positions = _ast_parent_and_statement_positions(tree)
+    coercion_sites = _numeric_coercion_sites(tree, positions)
+    if not coercion_sites:
+        return []
+    loss_bindings = _coercion_loss_bindings(
+        tree,
+        coercion_sites,
+        positions,
+        builtin_int_unmodified=_builtin_int_binding_is_unmodified(tree),
+    )
+    guarded_sites = _guarded_coercion_roots(
+        tree,
+        loss_bindings,
+        parents=parents,
+        positions=positions,
+    )
+
+    def _returns_name(function: ast.FunctionDef, name: str) -> bool:
+        return any(
+            isinstance(node, ast.Return)
+            and any(
+                isinstance(candidate, ast.Name) and candidate.id == name
+                for candidate in ast.walk(node.value)
+            )
+            for node in _scope_nodes(function.body)
+            if isinstance(node, ast.Return) and node.value is not None
+        )
+
+    def _negated_isfinite_for(node: ast.AST, name: str) -> bool:
+        return any(
+            isinstance(candidate, ast.UnaryOp)
+            and isinstance(candidate.op, (ast.Invert, ast.Not))
+            and isinstance(candidate.operand, ast.Call)
+            and _call_name(candidate.operand.func).split(".")[-1] == "isfinite"
+            and any(
+                isinstance(argument_node, ast.Name) and argument_node.id == name
+                for argument in candidate.operand.args
+                for argument_node in ast.walk(argument)
+            )
+            for candidate in ast.walk(node)
+        )
+
+    def _has_guard(function: ast.FunctionDef, name: str, *, after_line: int) -> bool:
+        body = function.body
+        masks: set[str] = set()
+        for statement in body:
+            if int(getattr(statement, "lineno", -1)) <= after_line:
+                continue
+            if isinstance(statement, ast.Return):
+                return False
+            if (
+                isinstance(statement, ast.Assign)
+                and len(statement.targets) == 1
+                and isinstance(statement.targets[0], ast.Name)
+                and _negated_isfinite_for(statement.value, name)
+            ):
+                masks.add(statement.targets[0].id)
+                continue
+            if not (
+                isinstance(statement, ast.If)
+                and statement.body
+                and all(
+                    isinstance(item, (ast.Raise, ast.Return)) for item in statement.body
+                )
+            ):
+                continue
+            if _positive_boolean_mask_test(
+                statement.test,
+                mask_names=masks,
+                inline_match=lambda candidate: _negated_isfinite_for(candidate, name),
+            ):
+                return True
+        return False
+
+    def _coerced_name(site: _NumericCoercionSite) -> str:
+        statement = site.statement
+        if (
+            isinstance(statement, ast.Assign)
+            and len(statement.targets) == 1
+            and isinstance(statement.targets[0], ast.Name)
+        ):
+            return statement.targets[0].id
+        if isinstance(statement, ast.AnnAssign) and isinstance(
+            statement.target, ast.Name
+        ):
+            return statement.target.id
+        return ""
+
+    findings: list[ValidationFinding] = []
+    for site in guarded_sites:
+        coerced_name = _coerced_name(site)
+        if not (
+            isinstance(site.scope, ast.FunctionDef)
+            and coerced_name
+            and _returns_name(site.scope, coerced_name)
+            and not _has_guard(site.scope, coerced_name, after_line=site.line)
+        ):
+            continue
+        findings.append(
+            ValidationFinding(
+                validator="mechanical_code_preflight",
+                severity="error",
+                message=(
+                    "A strict numeric coercion helper rejects lossy conversion "
+                    "but can still return non-finite observed values. Reject "
+                    "non-finite non-missing values before returning the coerced "
+                    "series."
+                ),
+                detail={
+                    "reason": "strict_numeric_nonfinite_unchecked",
+                    "coercion_line": int(site.line),
+                    "function_line": int(site.scope.lineno),
+                },
+            )
+        )
+    return sorted(findings, key=lambda finding: int(finding.detail["coercion_line"]))
+
+
+def _positive_boolean_mask_test(
+    test: ast.AST,
+    *,
+    mask_names: set[str],
+    inline_match: Callable[[ast.AST], bool],
+) -> bool:
+    """Return whether a condition triggers when an invalid mask has any rows."""
+
+    def _matches_mask(node: ast.AST) -> bool:
+        return (isinstance(node, ast.Name) and node.id in mask_names) or inline_match(
+            node
+        )
+
+    if (
+        isinstance(test, ast.Call)
+        and not test.args
+        and not test.keywords
+        and isinstance(test.func, ast.Attribute)
+        and test.func.attr == "any"
+        and _matches_mask(test.func.value)
+    ):
+        return True
+    if not (
+        isinstance(test, ast.Compare)
+        and len(test.ops) == 1
+        and len(test.comparators) == 1
+    ):
+        return False
+
+    def _sum_source(node: ast.AST) -> ast.AST | None:
+        current = node
+        if (
+            isinstance(current, ast.Call)
+            and isinstance(current.func, ast.Name)
+            and current.func.id == "int"
+            and len(current.args) == 1
+            and not current.keywords
+        ):
+            current = current.args[0]
+        if (
+            isinstance(current, ast.Call)
+            and not current.args
+            and not current.keywords
+            and isinstance(current.func, ast.Attribute)
+            and current.func.attr == "sum"
+        ):
+            return current.func.value
+        return None
+
+    left_source = _sum_source(test.left)
+    right = test.comparators[0]
+    op = test.ops[0]
+    if left_source is not None and _matches_mask(left_source):
+        return bool(
+            isinstance(op, ast.Gt)
+            and _literal_int(right, 0)
+            or isinstance(op, ast.GtE)
+            and _literal_int(right, 1)
+            or isinstance(op, ast.NotEq)
+            and _literal_int(right, 0)
+        )
+    right_source = _sum_source(right)
+    if right_source is not None and _matches_mask(right_source):
+        return bool(
+            isinstance(op, ast.Lt)
+            and _literal_int(test.left, 0)
+            or isinstance(op, ast.LtE)
+            and _literal_int(test.left, 1)
+            or isinstance(op, ast.NotEq)
+            and _literal_int(test.left, 0)
+        )
+    return False
+
+
+def _categorical_level_reconciliation_findings(
+    tree: ast.Module,
+) -> list[ValidationFinding]:
+    """Require categorical summaries to cover their declared level set.
+
+    The detector never invents or normalizes categories.  It claims only a
+    straight-line helper that drops missing values, computes ``value_counts``,
+    and emits rows by iterating an Agent-authored ``levels`` argument.  Such a
+    helper must fail closed when a non-missing value is absent from that same
+    declared set, otherwise its reported counts cannot reconcile to its own
+    denominator.
+    """
+
+    def _assignment_name(statement: ast.stmt) -> tuple[str, ast.AST] | None:
+        if (
+            isinstance(statement, ast.Assign)
+            and len(statement.targets) == 1
+            and isinstance(statement.targets[0], ast.Name)
+        ):
+            return statement.targets[0].id, statement.value
+        if (
+            isinstance(statement, ast.AnnAssign)
+            and isinstance(statement.target, ast.Name)
+            and statement.value is not None
+        ):
+            return statement.target.id, statement.value
+        return None
+
+    def _dropna_source(value: ast.AST) -> str:
+        if (
+            isinstance(value, ast.Call)
+            and not value.args
+            and not value.keywords
+            and isinstance(value.func, ast.Attribute)
+            and value.func.attr == "dropna"
+            and isinstance(value.func.value, ast.Name)
+        ):
+            return value.func.value.id
+        return ""
+
+    def _value_counts_source(value: ast.AST) -> str:
+        if (
+            isinstance(value, ast.Call)
+            and isinstance(value.func, ast.Attribute)
+            and value.func.attr == "value_counts"
+            and isinstance(value.func.value, ast.Name)
+        ):
+            return value.func.value.id
+        return ""
+
+    def _is_uncovered_mask(node: ast.AST, values_name: str, levels_name: str) -> bool:
+        return bool(
+            isinstance(node, ast.UnaryOp)
+            and isinstance(node.op, (ast.Invert, ast.Not))
+            and isinstance(node.operand, ast.Call)
+            and isinstance(node.operand.func, ast.Attribute)
+            and node.operand.func.attr == "isin"
+            and isinstance(node.operand.func.value, ast.Name)
+            and node.operand.func.value.id == values_name
+            and len(node.operand.args) == 1
+            and isinstance(node.operand.args[0], ast.Name)
+            and node.operand.args[0].id == levels_name
+        )
+
+    def _guarded(
+        statements: list[ast.stmt],
+        *,
+        before_index: int,
+        values_name: str,
+        levels_name: str,
+    ) -> bool:
+        mask_names: set[str] = set()
+        for statement in statements[:before_index]:
+            assignment = _assignment_name(statement)
+            if assignment is not None and _is_uncovered_mask(
+                assignment[1], values_name, levels_name
+            ):
+                mask_names.add(assignment[0])
+                continue
+            if not (
+                isinstance(statement, ast.If)
+                and statement.body
+                and all(
+                    isinstance(item, (ast.Raise, ast.Return)) for item in statement.body
+                )
+            ):
+                continue
+            if _positive_boolean_mask_test(
+                statement.test,
+                mask_names=mask_names,
+                inline_match=lambda candidate: _is_uncovered_mask(
+                    candidate, values_name, levels_name
+                ),
+            ):
+                return True
+            if (
+                isinstance(statement.test, ast.UnaryOp)
+                and isinstance(statement.test.op, ast.Not)
+                and isinstance(statement.test.operand, ast.Call)
+                and isinstance(statement.test.operand.func, ast.Attribute)
+                and statement.test.operand.func.attr == "all"
+                and isinstance(statement.test.operand.func.value, ast.Call)
+                and isinstance(statement.test.operand.func.value.func, ast.Attribute)
+                and statement.test.operand.func.value.func.attr == "isin"
+                and isinstance(statement.test.operand.func.value.func.value, ast.Name)
+                and statement.test.operand.func.value.func.value.id == values_name
+                and len(statement.test.operand.func.value.args) == 1
+                and isinstance(statement.test.operand.func.value.args[0], ast.Name)
+                and statement.test.operand.func.value.args[0].id == levels_name
+            ):
+                return True
+        return False
+
+    findings: list[ValidationFinding] = []
+    for function in [
+        node for node in ast.walk(tree) if isinstance(node, ast.FunctionDef)
+    ]:
+        parameter_names = {argument.arg for argument in function.args.args}
+        statements = function.body
+        nonmissing_bindings: dict[str, str] = {}
+        for index, statement in enumerate(statements):
+            assignment = _assignment_name(statement)
+            if assignment is None:
+                continue
+            target_name, value = assignment
+            source_name = _dropna_source(value)
+            if source_name in parameter_names:
+                nonmissing_bindings[target_name] = source_name
+                continue
+            values_name = _value_counts_source(value)
+            if values_name not in nonmissing_bindings:
+                continue
+            counts_name = target_name
+            matching_loops = [
+                later
+                for later in statements[index + 1 :]
+                if isinstance(later, ast.For)
+                and isinstance(later.target, ast.Name)
+                and isinstance(later.iter, ast.Name)
+                and later.iter.id in parameter_names
+                and any(
+                    isinstance(candidate, ast.Call)
+                    and isinstance(candidate.func, ast.Attribute)
+                    and candidate.func.attr == "get"
+                    and isinstance(candidate.func.value, ast.Name)
+                    and candidate.func.value.id == counts_name
+                    and candidate.args
+                    and isinstance(candidate.args[0], ast.Name)
+                    and candidate.args[0].id == later.target.id
+                    for candidate in ast.walk(later)
+                )
+            ]
+            if len(matching_loops) != 1:
+                continue
+            levels_name = matching_loops[0].iter.id
+            if _guarded(
+                statements,
+                before_index=index,
+                values_name=values_name,
+                levels_name=levels_name,
+            ):
+                continue
+            findings.append(
+                ValidationFinding(
+                    validator="mechanical_code_preflight",
+                    severity="error",
+                    message=(
+                        "Categorical rows iterate declared levels without "
+                        "proving that every non-missing value belongs to those "
+                        "levels, so counts can disagree with the denominator."
+                    ),
+                    detail={
+                        "reason": "categorical_level_accounting_unverified",
+                        "counts_line": int(statement.lineno),
+                        "function_line": int(function.lineno),
+                    },
+                )
+            )
+    return sorted(findings, key=lambda finding: int(finding.detail["counts_line"]))
+
+
 def audit_mechanical_code_contracts(
     script_text: str,
     step: AnalysisStep,
@@ -6657,6 +7043,8 @@ def audit_mechanical_code_contracts(
     findings.extend(_host_helper_runtime_introspection_findings(tree))
     findings.extend(_lossy_numeric_coercion_findings(tree))
     findings.extend(_conditional_nonfinite_guard_findings(tree))
+    findings.extend(_strict_numeric_nonfinite_findings(tree))
+    findings.extend(_categorical_level_reconciliation_findings(tree))
     return findings
 
 
