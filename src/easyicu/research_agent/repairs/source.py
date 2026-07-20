@@ -66,7 +66,10 @@ from .helpers import (  # noqa: F401  (re-exported for back-compat)
     _strip_columns_from_list_literals,
 )
 from .reasons import RepairReason
-from .typed_input import patch_resolved_input_relative_path_root
+from .typed_input import (
+    patch_resolved_input_cohort_env_shadow,
+    patch_resolved_input_relative_path_root,
+)
 from ..schema import ValidationFinding
 
 _NULL_PRIMARY_EFFECT_MARKERS = (
@@ -2436,6 +2439,14 @@ def deterministic_concept_audit_repair(
             repair_names.append(repair_name)
 
     if RepairReason.TYPED_PRODUCT_BINDING_INVALID in set(repair_reasons):
+        typed_input_preserved = patch_resolved_input_cohort_env_shadow(
+            repaired,
+            repair_findings=repair_findings,
+        )
+        if typed_input_preserved != repaired:
+            repair_name = "resolved_typed_input_precedence_v1"
+            repaired = typed_input_preserved
+            repair_names.append(repair_name)
         run_rooted = patch_resolved_input_relative_path_root(
             repaired,
             repair_findings=repair_findings,
