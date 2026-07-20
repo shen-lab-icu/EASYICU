@@ -154,6 +154,73 @@ def test_boolean_mask_reduction_repair_requires_traceback_and_exact_ast_shape():
         )
         is None
     )
+
+
+def test_runner_repair_reindexes_exact_pandas_boolean_mask_from_traceback():
+    code = """import pandas as pd
+
+death = pd.Series([1, 0, 1], index=[10, 11, 12])
+
+def update_row(mortality_mask):
+    deaths = death.loc[mortality_mask]
+    return deaths
+
+mask = pd.Series([True, True], index=[10, 12])
+result = update_row(mask)
+"""
+    run_log = """Traceback (most recent call last):
+  File "/easyicu-run/steps/06/analysis.py", line 6, in update_row
+    deaths = death.loc[mortality_mask]
+pandas.errors.IndexingError: Unalignable boolean Series provided as indexer (index of the boolean Series and of the indexed object do not match).
+"""
+
+    repair = _deterministic_runner_repair(code=code, run_log=run_log)
+
+    assert repair is not None
+    name, repaired = repair
+    assert name == "pandas_boolean_index_alignment_v1"
+    assert (
+        "death.loc[(mortality_mask).reindex((death).index, fill_value=False)]"
+        in repaired
+    )
+    namespace = {}
+    exec(repaired, namespace)
+    assert namespace["result"].to_dict() == {10: 1, 12: 1}
+    assert (
+        _deterministic_runner_repair(
+            code=code,
+            run_log=run_log,
+            previous_repair=name,
+        )
+        is None
+    )
+
+
+def test_pandas_boolean_alignment_repair_is_traceback_and_shape_bound():
+    code = """def update_row(mask):
+    left = death.loc[mask]
+    right = age.loc[mask]
+"""
+    traceback = (
+        'File "/easyicu-run/analysis.py", line 2, in update_row\n'
+        "pandas.errors.IndexingError: Unalignable boolean Series provided as indexer"
+    )
+
+    assert _deterministic_runner_repair(code=code, run_log="") is None
+    assert (
+        _deterministic_runner_repair(
+            code=code,
+            run_log=traceback.replace("line 2", "line 1"),
+        )
+        is None
+    )
+    assert (
+        _deterministic_runner_repair(
+            code="death.loc[mask, 'value']\n",
+            run_log=traceback.replace("line 2", "line 1"),
+        )
+        is None
+    )
     assert (
         _deterministic_runner_repair(
             code="count = int(observed.sum() & 1)\n",

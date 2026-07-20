@@ -4765,6 +4765,81 @@ def _patch_boolean_mask_reduction_precedence(code: str) -> Optional[str]:
     return repaired if repaired != code else None
 
 
+def _patch_pandas_boolean_index_alignment(
+    code: str,
+    run_log: str,
+) -> Optional[str]:
+    """Reindex the exact boolean mask named by a pandas alignment traceback.
+
+    Pandas reports ``Unalignable boolean Series`` only after proving that the
+    boolean indexer and selected Series have different indexes.  Generated
+    helper functions sometimes receive a mask that was already subsetted and
+    then apply it to the full Series again.  This transform is intentionally
+    traceback-bound: it changes exactly one ``series.loc[mask]`` expression on
+    the reported failing line and only wraps the mask with
+    ``reindex(series.index, fill_value=False)``.  It does not choose rows,
+    variables, or an analysis method.
+    """
+
+    if "Unalignable boolean Series provided as indexer" not in (run_log or ""):
+        return None
+    line_matches = re.findall(
+        r'File\s+["\'][^"\']*analysis\.py["\'],\s+line\s+(\d+)',
+        run_log or "",
+    )
+    if not line_matches:
+        return None
+    failing_line = int(line_matches[-1])
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return None
+
+    candidates: List[ast.Subscript] = []
+    for node in ast.walk(tree):
+        if not (
+            isinstance(node, ast.Subscript)
+            and int(getattr(node, "lineno", -1)) == failing_line
+            and isinstance(node.value, ast.Attribute)
+            and node.value.attr == "loc"
+            and isinstance(node.slice, ast.Name)
+        ):
+            continue
+        candidates.append(node)
+    if len(candidates) != 1:
+        return None
+
+    candidate = candidates[0]
+    base_source = ast.get_source_segment(code, candidate.value.value)
+    mask_source = ast.get_source_segment(code, candidate.slice)
+    if not base_source or not mask_source:
+        return None
+
+    lines = code.splitlines(keepends=True)
+    line_starts: List[int] = []
+    offset = 0
+    for line in lines:
+        line_starts.append(offset)
+        offset += len(line)
+
+    def _absolute_offset(lineno: int, utf8_col: int) -> int:
+        line = lines[lineno - 1]
+        char_col = len(line.encode("utf-8")[:utf8_col].decode("utf-8"))
+        return line_starts[lineno - 1] + char_col
+
+    replacement = (
+        f"({mask_source}).reindex(({base_source}).index, fill_value=False)"
+    )
+    start = _absolute_offset(candidate.slice.lineno, candidate.slice.col_offset)
+    end = _absolute_offset(candidate.slice.end_lineno, candidate.slice.end_col_offset)
+    repaired = code[:start] + replacement + code[end:]
+    try:
+        ast.parse(repaired)
+    except SyntaxError:
+        return None
+    return repaired if repaired != code else None
+
+
 def _patch_scalar_cast_before_reduction(code: str) -> str:
     """Reduce a proven array-like count before its built-in ``int`` cast."""
 
@@ -4894,6 +4969,12 @@ def _deterministic_runner_repair(
             repaired = _patch_boolean_mask_reduction_precedence(code)
             if repaired is not None:
                 return repair_name, repaired
+
+    boolean_index_alignment_repair = "pandas_boolean_index_alignment_v1"
+    if previous_repair != boolean_index_alignment_repair:
+        repaired = _patch_pandas_boolean_index_alignment(code, run_log)
+        if repaired is not None:
+            return boolean_index_alignment_repair, repaired
 
     # 🔧 2026-05-17: defend against LLM hallucinating non-existent easyicu
     # sub-modules (e.g. deepseek-v4-flash emitted
