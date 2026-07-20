@@ -2918,6 +2918,36 @@ def test_foreign_typed_input_key_cannot_name_a_bound_source_table(tmp_path: Path
     )
 
 
+def test_value_name_is_not_shadowed_by_semantic_source_metadata(
+    tmp_path: Path,
+):
+    source_path = tmp_path / "figure_source.csv"
+    upstream_path = tmp_path / "model_estimates.csv"
+    source = pd.DataFrame(
+        {
+            "term": ["const", "exposure"],
+            "effect": [0.25, 1.5],
+            "effect_source": ["odds_ratio", "odds_ratio"],
+        }
+    )
+    source.to_csv(source_path, index=False)
+    pd.DataFrame(
+        {
+            "term": ["const", "exposure"],
+            "odds_ratio": [0.25, 1.5],
+        }
+    ).to_csv(upstream_path, index=False)
+
+    comparison = FigureSourceDataValidator._compare_source_to_upstream(
+        source_df=source,
+        source_path=source_path,
+        upstream_path=upstream_path,
+    )
+
+    assert comparison["ok"] is True
+    assert comparison["verified_value_mappings"]["effect"] == "odds_ratio"
+
+
 def test_cohort_counts_cannot_authenticate_compound_prediction_figure(
     tmp_path: Path,
 ):
