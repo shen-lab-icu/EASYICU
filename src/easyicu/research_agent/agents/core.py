@@ -2609,7 +2609,9 @@ def _repair_specialization(
             "returns audit metadata and raises on unavailable, invalid, or "
             "discordant pairs; do not catch it, turn its receipt into a row mask, "
             "or retain a second custom provenance marker around the same pair. "
-            "Keep each returned receipt mapping unchanged. If a tabular audit "
+            "Keep each returned receipt mapping unchanged, collect the mappings "
+            "in `receipts`, and publish the step-summary value exactly as "
+            '`{"source": "COHORT_PARQUET", "checks": receipts}`. If a tabular audit '
             "sidecar is required, build it directly with "
             "`pd.DataFrame.from_records(receipts)`; do not unpack, copy, relabel, "
             "or re-emit `invalid_pair_n`, `discordant_n`, or `role` in a custom "
