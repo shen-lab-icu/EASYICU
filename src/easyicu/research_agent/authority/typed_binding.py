@@ -26,7 +26,10 @@ from ..contracts.declared_product import (
     typed_product as _canonical_typed_product,
 )
 from ..authority.evidence_store import sha256_of_file
-from ..authority.development_projection import resolve_development_input_projection
+from ..authority.development_projection import (
+    DEVELOPMENT_PRIMARY_COHORT_CONFIRMATION_ROLE,
+    resolve_development_input_projection,
+)
 from ..authority.run_input import canonical_sha256
 from ..authority.runtime_artifacts import (
     current_step_records,
@@ -95,6 +98,42 @@ def _evidence_kind_matches_typed_product(
 def _normalise_typed_product_name(value: Any) -> str:
     parsed = _canonical_typed_product(f"artifact:{value}")
     return parsed[1] if parsed is not None else ""
+
+
+def _producer_output_is_already_development_scoped(
+    *,
+    evidence_id: str,
+    producer_step_records: Sequence[Mapping[str, Any]],
+    sample_sha256: str,
+) -> bool:
+    """Recognise an exact step-owned child of the current development sample.
+
+    The child remains the physical input because replacing it with the base
+    sample would discard the producer's deterministic cohort transformations.
+    Every authority coordinate is required; ambiguous or legacy records fall
+    back to the ordinary host-owned projection path.
+    """
+
+    if not evidence_id or not sample_sha256:
+        return False
+    for step_record in reversed(list(producer_step_records)):
+        evidence_ids = step_record.get("evidence_ids")
+        if not isinstance(evidence_ids, Sequence) or isinstance(
+            evidence_ids, (str, bytes)
+        ):
+            continue
+        if (
+            str(step_record.get("status") or "") == "ok"
+            and evidence_id in {str(value) for value in evidence_ids}
+            and step_record.get("paper_authority") is False
+            and str(step_record.get("execution_cohort_role") or "")
+            == DEVELOPMENT_PRIMARY_COHORT_CONFIRMATION_ROLE
+            and str(step_record.get("execution_cohort_sha256") or "") == sample_sha256
+            and str(step_record.get("authoritative_analysis_cohort_sha256") or "")
+            == sample_sha256
+        ):
+            return True
+    return False
 
 
 def _typed_input_product(value: Any) -> Optional[Tuple[str, str]]:
@@ -688,7 +727,20 @@ def _resolved_typed_input_binding(
     verified_path = parent_verified_path
     selected_record = record
     declared_kind, product_name = typed_product
-    if development_sample is not None and product_name == "analysis_cohort":
+    parent_already_development_scoped = (
+        development_sample is not None
+        and product_name == "analysis_cohort"
+        and _producer_output_is_already_development_scoped(
+            evidence_id=evidence_ref.evidence_id,
+            producer_step_records=producer_step_records,
+            sample_sha256=str(getattr(development_sample, "sample_sha256", "") or ""),
+        )
+    )
+    if (
+        development_sample is not None
+        and product_name == "analysis_cohort"
+        and not parent_already_development_scoped
+    ):
         projection = resolve_development_input_projection(
             product_name=product_name,
             parent_evidence_id=parent_evidence_id,

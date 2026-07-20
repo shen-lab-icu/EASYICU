@@ -104,6 +104,7 @@ from ..repairs.coordination import (
 from .concept_audit_cache import LLMConceptAuditCache
 from .development_sample import (
     DEVELOPMENT_COHORT_FILENAME,
+    DEVELOPMENT_PRIMARY_COHORT_CONFIRMATION_ROLE,
     DEVELOPMENT_SAMPLE_FILENAME,
     materialize_development_execution_sample,
     record_development_sample_authority,
@@ -4935,7 +4936,7 @@ def run_execute_phase(
             step_record.update(
                 {
                     "execution_cohort_role": (
-                        "post_qc_development_sample_for_primary_cohort_confirmation"
+                        DEVELOPMENT_PRIMARY_COHORT_CONFIRMATION_ROLE
                     ),
                     "execution_cohort_sha256": sha256_of_file(cohort_path),
                     "authoritative_analysis_cohort_sha256": sha256_of_file(cohort_path),
