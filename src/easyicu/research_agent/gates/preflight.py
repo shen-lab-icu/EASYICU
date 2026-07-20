@@ -1812,6 +1812,169 @@ def _provenance_fail_closed_findings(tree: ast.Module) -> list[ValidationFinding
             for candidate in _local_nodes(call_scope)
         )
 
+    def _eager_outer_call_statement(call: ast.Call) -> ast.stmt | None:
+        """Return the statement for a nested, eagerly evaluated call argument.
+
+        Python evaluates positional and keyword arguments before invoking the
+        outer callable, so an exception raised by ``outer(audit(...))`` cannot
+        be swallowed by ``outer``.  Keep this proof deliberately narrow: only
+        calls, keyword wrappers, and starred call arguments may occur between
+        the provenance helper and its statement.  Lazy or conditional
+        constructs (lambda/comprehensions/bool ops/conditional expressions)
+        therefore remain fail-closed.
+        """
+
+        current: ast.AST = call
+        crossed_outer_call = False
+        while True:
+            owner = parents.get(current)
+            if isinstance(owner, ast.stmt):
+                if crossed_outer_call and isinstance(
+                    owner, (ast.Expr, ast.Assign, ast.AnnAssign)
+                ):
+                    return owner
+                return None
+            if isinstance(owner, ast.Call):
+                crossed_outer_call = True
+                current = owner
+                continue
+            if isinstance(owner, (ast.keyword, ast.Starred)):
+                current = owner
+                continue
+            return None
+
+    def _loop_eager_argument_is_fail_closed(
+        call: ast.Call, statement: ast.stmt
+    ) -> bool:
+        """Prove an eager helper call covers every non-empty loop execution.
+
+        The supported grammar is intentionally small: a direct ``for`` loop
+        appends the helper result to an empty collection, only assignments or
+        unconditional failure guards may precede that append, and the next
+        statement rejects an empty collection.  Thus an empty iterable fails,
+        while every non-empty iteration either raises before the helper or
+        eagerly evaluates the self-raising helper before appending its result.
+        """
+
+        if not (
+            isinstance(statement, ast.Expr)
+            and isinstance(statement.value, ast.Call)
+            and isinstance(statement.value.func, ast.Attribute)
+            and statement.value.func.attr in {"append", "add"}
+            and isinstance(statement.value.func.value, ast.Name)
+        ):
+            return False
+        collection = statement.value.func.value.id
+        loop = parents.get(statement)
+        call_scope = _scope(call)
+        if not (
+            isinstance(loop, ast.For)
+            and statement in loop.body
+            and not loop.orelse
+            and isinstance(
+                call_scope, (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef)
+            )
+            and _direct_scope_statement(loop, call_scope)
+        ):
+            return False
+        forbidden_loop_control = (
+            ast.AsyncFor,
+            ast.Break,
+            ast.Continue,
+            ast.Match,
+            ast.Return,
+            ast.Try,
+            ast.TryStar,
+            ast.While,
+            ast.With,
+            ast.AsyncWith,
+            ast.Yield,
+            ast.YieldFrom,
+        )
+        if any(
+            isinstance(candidate, forbidden_loop_control)
+            for candidate in ast.walk(loop)
+        ) or any(
+            isinstance(candidate, ast.For) and candidate is not loop
+            for candidate in ast.walk(loop)
+        ):
+            return False
+        if _provenance_branch_contains_result_sink(loop.body):
+            return False
+
+        owner = parents.get(loop)
+        preceding_suite: list[ast.stmt] = []
+        if owner is not None:
+            for _, value in ast.iter_fields(owner):
+                if isinstance(value, list) and loop in value:
+                    preceding_suite = [
+                        item
+                        for item in value[: value.index(loop)]
+                        if isinstance(item, ast.stmt)
+                    ]
+                    break
+        initialization_indexes = [
+            index
+            for index, candidate in enumerate(preceding_suite)
+            if isinstance(candidate, (ast.Assign, ast.AnnAssign))
+            and candidate.value is not None
+            and any(
+                isinstance(target, ast.Name) and target.id == collection
+                for target in (
+                    candidate.targets
+                    if isinstance(candidate, ast.Assign)
+                    else [candidate.target]
+                )
+            )
+            and isinstance(candidate.value, ast.List)
+            and not candidate.value.elts
+        ]
+        if not initialization_indexes:
+            return False
+        initialization_index = initialization_indexes[-1]
+        if any(
+            any(
+                isinstance(candidate, ast.Name) and candidate.id == collection
+                for candidate in ast.walk(later)
+            )
+            for later in preceding_suite[initialization_index + 1 :]
+        ):
+            return False
+        empty_guard = _next_statement(loop)
+        if not (
+            isinstance(empty_guard, ast.If)
+            and isinstance(empty_guard.test, ast.UnaryOp)
+            and isinstance(empty_guard.test.op, ast.Not)
+            and isinstance(empty_guard.test.operand, ast.Name)
+            and empty_guard.test.operand.id == collection
+            and _branch_all_paths_raise(empty_guard.body)
+            and not empty_guard.orelse
+            and _direct_scope_statement(empty_guard, call_scope)
+            and not _failure_exit_may_be_swallowed(empty_guard)
+            and not _provenance_branch_contains_result_sink(empty_guard.body)
+            and not _result_sink_precedes_guard(empty_guard, parents)
+        ):
+            return False
+
+        for preceding in loop.body[: loop.body.index(statement)]:
+            if isinstance(preceding, (ast.Assign, ast.AnnAssign)):
+                if any(
+                    isinstance(candidate, ast.Name) and candidate.id == collection
+                    for candidate in ast.walk(preceding)
+                ):
+                    return False
+                continue
+            if (
+                isinstance(preceding, ast.If)
+                and not preceding.orelse
+                and _branch_all_paths_raise(preceding.body)
+                and not _failure_exit_may_be_swallowed(preceding)
+                and not _provenance_branch_contains_result_sink(preceding.body)
+            ):
+                continue
+            return False
+        return True
+
     def _exact_collection_test(node: ast.AST, name: str) -> bool:
         if isinstance(node, ast.Name):
             return node.id == name
@@ -2619,6 +2782,19 @@ def _provenance_fail_closed_findings(tree: ast.Module) -> list[ValidationFinding
                 and statement.value is call
                 and isinstance(statement.target, ast.Name)
             )
+            if not direct_self_raising_call:
+                eager_statement = _eager_outer_call_statement(call)
+                if eager_statement is not None:
+                    statement = eager_statement
+                    direct_self_raising_call = True
+            direct_call_execution = bool(
+                direct_self_raising_call
+                and isinstance(statement, ast.stmt)
+                and (
+                    _direct_execution_statement(statement)
+                    or _loop_eager_argument_is_fail_closed(call, statement)
+                )
+            )
             returns = [
                 candidate
                 for candidate in _local_nodes(marker_function)
@@ -2644,8 +2820,7 @@ def _provenance_fail_closed_findings(tree: ast.Module) -> list[ValidationFinding
             )
             if (
                 not (
-                    direct_self_raising_call
-                    and _direct_execution_statement(statement)
+                    direct_call_execution
                     and returns_follow_guard
                     and not _result_sink_precedes_call(call)
                 )

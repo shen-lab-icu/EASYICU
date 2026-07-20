@@ -1499,6 +1499,202 @@ main(frame)
     )
 
 
+@pytest.mark.parametrize(
+    "call_site",
+    [
+        "checks.append(validate_provenance(frame))",
+        "record_check(result=validate_provenance(frame))",
+    ],
+    ids=["positional-argument", "keyword-argument"],
+)
+def test_mechanical_preflight_accepts_self_raising_provenance_call_as_eager_argument(
+    ra, call_site
+):
+    code = f"""
+def validate_provenance(frame):
+    invalid_pair_n = int(frame['measured'].isna().sum())
+    discordant_n = int((frame['measured'] != (frame['count'] > 0)).sum())
+    check = {{
+        'role': 'audit_only',
+        'invalid_pair_n': invalid_pair_n,
+        'discordant_n': discordant_n,
+    }}
+    if invalid_pair_n or discordant_n:
+        raise RuntimeError('invalid measurement provenance')
+    return check
+
+checks = []
+{call_site}
+model.fit(frame)
+"""
+
+    findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+
+    assert not any(
+        finding.detail
+        and finding.detail.get("reason") == "provenance_audit_not_fail_closed"
+        for finding in findings
+    )
+
+
+@pytest.mark.parametrize(
+    "call_site",
+    [
+        "if enabled:\n    checks.append(validate_provenance(frame))",
+        "callback = lambda: checks.append(validate_provenance(frame))",
+        (
+            "try:\n    checks.append(validate_provenance(frame))\n"
+            "except RuntimeError:\n    pass"
+        ),
+    ],
+    ids=["conditional", "lazy-lambda", "swallowed"],
+)
+def test_mechanical_preflight_rejects_non_direct_eager_argument_provenance_call(
+    ra, call_site
+):
+    code = f"""
+def validate_provenance(frame):
+    invalid_pair_n = int(frame['measured'].isna().sum())
+    discordant_n = int((frame['measured'] != (frame['count'] > 0)).sum())
+    check = {{
+        'role': 'audit_only',
+        'invalid_pair_n': invalid_pair_n,
+        'discordant_n': discordant_n,
+    }}
+    if invalid_pair_n or discordant_n:
+        raise RuntimeError('invalid measurement provenance')
+    return check
+
+checks = []
+{call_site}
+model.fit(frame)
+"""
+
+    findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+
+    assert any(
+        finding.detail
+        and finding.detail.get("reason") == "provenance_audit_not_fail_closed"
+        for finding in findings
+    )
+
+
+def test_mechanical_preflight_accepts_self_raising_provenance_call_in_covered_loop(
+    ra,
+):
+    code = """
+def validate_provenance(frame, measured_column, count_column):
+    invalid_pair_n = int(frame[measured_column].isna().sum())
+    discordant_n = int(
+        (frame[measured_column] != (frame[count_column] > 0)).sum()
+    )
+    check = {
+        'role': 'audit_only',
+        'invalid_pair_n': invalid_pair_n,
+        'discordant_n': discordant_n,
+    }
+    if invalid_pair_n or discordant_n:
+        raise RuntimeError('invalid measurement provenance')
+    return check
+
+def main(frame, stems, declared_columns):
+    checks = []
+    for stem in stems:
+        measured_column = f'{stem}_measured'
+        count_column = f'{stem}_n'
+        if measured_column not in declared_columns or count_column not in declared_columns:
+            raise ValueError('incomplete provenance pair')
+        checks.append(
+            validate_provenance(
+                frame,
+                measured_column=measured_column,
+                count_column=count_column,
+            )
+        )
+    if not checks:
+        raise RuntimeError('no completed provenance checks')
+    model.fit(frame)
+
+main(frame, stems, declared_columns)
+"""
+
+    findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+
+    assert not any(
+        finding.detail
+        and finding.detail.get("reason") == "provenance_audit_not_fail_closed"
+        for finding in findings
+    )
+
+
+@pytest.mark.parametrize(
+    "loop_or_guard",
+    [
+        """for stem in stems:
+        if enabled:
+            checks.append(validate_provenance(frame))
+    if not checks:
+        raise RuntimeError('no checks')""",
+        """for stem in stems:
+        checks.append(validate_provenance(frame))""",
+        """checks.append({'role': 'decoy'})
+    for stem in stems:
+        checks.append(validate_provenance(frame))
+    if not checks:
+        raise RuntimeError('no checks')""",
+        """for stem in stems:
+        checks.append(validate_provenance(frame))
+        model.fit(frame)
+    if not checks:
+        raise RuntimeError('no checks')""",
+        """for stem in stems:
+        checks.append(validate_provenance(frame))
+        if stop:
+            break
+    if not checks:
+        raise RuntimeError('no checks')""",
+    ],
+    ids=[
+        "conditional-append",
+        "missing-empty-guard",
+        "prepopulated-decoy",
+        "result-sink-before-full-coverage",
+        "break-before-full-coverage",
+    ],
+)
+def test_mechanical_preflight_rejects_uncovered_eager_argument_provenance_loop(
+    ra, loop_or_guard
+):
+    code = f"""
+def validate_provenance(frame):
+    invalid_pair_n = int(frame['measured'].isna().sum())
+    discordant_n = int((frame['measured'] != (frame['count'] > 0)).sum())
+    check = {{
+        'role': 'audit_only',
+        'invalid_pair_n': invalid_pair_n,
+        'discordant_n': discordant_n,
+    }}
+    if invalid_pair_n or discordant_n:
+        raise RuntimeError('invalid measurement provenance')
+    return check
+
+def main(frame, stems, enabled):
+    checks = []
+    {loop_or_guard}
+    model.fit(frame)
+
+main(frame, stems, enabled)
+"""
+
+    findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+
+    assert any(
+        finding.detail
+        and finding.detail.get("reason") == "provenance_audit_not_fail_closed"
+        for finding in findings
+    )
+
+
 def test_deterministic_repair_proves_aggregate_provenance_loop_coverage(ra):
     code = """
 def main(frame, stems):
