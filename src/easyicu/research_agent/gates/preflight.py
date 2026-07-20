@@ -2262,6 +2262,63 @@ def _provenance_fail_closed_findings(tree: ast.Module) -> list[ValidationFinding
                     return False
             return True
 
+        def _direct_inline_loop_guard_proves_failure(
+            loop: ast.For,
+            full_guard: ast.If,
+        ) -> bool:
+            """Accept one audit row immediately protected inside each iteration.
+
+            This is the inline counterpart of a self-raising provenance helper:
+            the row and its two stable failure counts are authored in the loop,
+            then the direct guard raises before execution can reach a result
+            sink. Any control-flow construct before that guard could bypass it
+            and therefore keeps the script fail-closed.
+            """
+
+            if (
+                not _direct_scope_statement(loop, function)
+                or parents.get(full_guard) is not loop
+                or full_guard not in loop.body
+                or loop.orelse
+                or not _branch_all_paths_raise(full_guard.body)
+                or _failure_exit_may_be_swallowed(full_guard)
+            ):
+                return False
+            guard_index = loop.body.index(full_guard)
+            preceding = loop.body[:guard_index]
+            if (
+                len(
+                    [
+                        row
+                        for statement in preceding
+                        if (row := _direct_audit_row(statement)) is not None
+                    ]
+                )
+                != 1
+            ):
+                return False
+            forbidden = (
+                ast.AsyncFor,
+                ast.Break,
+                ast.Continue,
+                ast.For,
+                ast.Match,
+                ast.Raise,
+                ast.Return,
+                ast.Try,
+                ast.TryStar,
+                ast.While,
+                ast.With,
+                ast.AsyncWith,
+                ast.Yield,
+                ast.YieldFrom,
+            )
+            return not any(
+                isinstance(candidate, forbidden)
+                for statement in preceding
+                for candidate in ast.walk(statement)
+            )
+
         collection_events: dict[str, set[ast.Call]] = {}
         for guard in local_nodes:
             if not isinstance(guard, ast.If) or not _full_failure_test(
@@ -2271,8 +2328,13 @@ def _provenance_fail_closed_findings(tree: ast.Module) -> list[ValidationFinding
             ):
                 continue
             owner = parents.get(guard)
-            direct_guard = (function is not tree and owner is function) or (
-                function is tree and _module_direct_guard_is_bound(guard)
+            direct_guard = (
+                (function is not tree and owner is function)
+                or (function is tree and _module_direct_guard_is_bound(guard))
+                or (
+                    isinstance(owner, ast.For)
+                    and _direct_inline_loop_guard_proves_failure(owner, guard)
+                )
             )
             for statement in guard.body:
                 if isinstance(statement, (ast.Raise, ast.Return)):
@@ -6016,9 +6078,19 @@ def _notna_gated_domain_checks(
 _HOST_HELPER_CALL_CONTRACTS: dict[tuple[str, str], dict[str, object]] = {
     (
         "easyicu.research_agent.methods.descriptive_inputs",
+        "closed_categorical_counts",
+    ): {
+        "max_positional": 1,
+        "positional_parameter": "series",
+        "required_keywords": ("declared_levels",),
+        "allowed_keywords": ("series", "declared_levels"),
+    },
+    (
+        "easyicu.research_agent.methods.descriptive_inputs",
         "measurement_provenance_receipt",
     ): {
         "max_positional": 1,
+        "positional_parameter": "frame",
         "required_keywords": ("measured_column", "count_column"),
         "allowed_keywords": ("frame", "measured_column", "count_column"),
     },
@@ -6171,6 +6243,7 @@ def _host_helper_call_signature_findings(
             continue
         helper_name, contract = imported
         max_positional = int(contract["max_positional"])
+        positional_parameter = str(contract["positional_parameter"])
         required_keywords = tuple(contract["required_keywords"])
         allowed_keywords = set(contract["allowed_keywords"])
         keyword_names = [keyword.arg for keyword in node.keywords]
@@ -6186,10 +6259,10 @@ def _host_helper_call_signature_findings(
             violations.append("duplicate_keyword_arguments")
         if any(name not in allowed_keywords for name in explicit_keywords):
             violations.append("unknown_keyword_argument")
-        if node.args and "frame" in explicit_keywords:
-            violations.append("frame_bound_more_than_once")
-        if not node.args and "frame" not in explicit_keywords:
-            violations.append("frame_argument_missing")
+        if node.args and positional_parameter in explicit_keywords:
+            violations.append(f"{positional_parameter}_bound_more_than_once")
+        if not node.args and positional_parameter not in explicit_keywords:
+            violations.append(f"{positional_parameter}_argument_missing")
         if not set(required_keywords) <= set(explicit_keywords):
             violations.append("required_keyword_only_argument_missing")
         if not violations:
