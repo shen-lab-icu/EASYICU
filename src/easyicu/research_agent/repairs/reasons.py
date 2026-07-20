@@ -531,6 +531,7 @@ _DETAIL_REASON_CODES = {
     "lossy_ordinal_rounding": RepairReason.LOSSY_ORDINAL_ROUNDING,
     "lossy_numeric_coercion": RepairReason.LOSSY_NUMERIC_COERCION,
     "conditional_nonfinite_guard": RepairReason.NONFINITE_NUMERIC_INPUT,
+    "strict_numeric_nonfinite_unchecked": RepairReason.NONFINITE_NUMERIC_INPUT,
     "scalar_cast_before_reduction": RepairReason.INVALID_NUMERIC_REDUCTION,
     "arbitrary_column_fallback": RepairReason.ARBITRARY_COLUMN_FALLBACK,
     "typed binding unavailable": RepairReason.TYPED_PRODUCT_BINDING_INVALID,
@@ -548,6 +549,9 @@ _DETAIL_REASON_CODES = {
     "row_alignment_unverified": RepairReason.ROW_ALIGNMENT_UNVERIFIED,
     "structural_accounting_filter": RepairReason.STRUCTURAL_ACCOUNTING_INVALID,
     "structural_accounting_integer_validation": (
+        RepairReason.STRUCTURAL_ACCOUNTING_INVALID
+    ),
+    "categorical_level_accounting_unverified": (
         RepairReason.STRUCTURAL_ACCOUNTING_INVALID
     ),
     "host_validation_helper_error_swallowed": (
