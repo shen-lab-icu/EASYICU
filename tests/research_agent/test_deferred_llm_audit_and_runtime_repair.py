@@ -562,6 +562,10 @@ def test_exact_capsule_resume_skips_generation_audit_and_execution_but_reruns_ga
         def __init__(self, *, workdir: Path) -> None:
             self.workdir = Path(workdir)
 
+        @staticmethod
+        def validate_runtime_capabilities() -> tuple[str, ...]:
+            return ("pandas",)
+
         def run(self, *, step_id, code, resolved_inputs_path=None):
             del resolved_inputs_path
             runner_calls.append(step_id)
@@ -825,6 +829,56 @@ def test_exact_capsule_resume_skips_generation_audit_and_execution_but_reruns_ga
         (successful_dir / "manifest_partial.json").read_text(encoding="utf-8")
     )
     assert "01_summary" not in current_successful_step_ids(partial["per_step_records"])
+
+    # A current validator may invalidate a previously successful sealed
+    # candidate.  Resume may reuse those exact candidate bytes as a cache, but
+    # must not trust the prior approval: it has to append an invalid checkpoint
+    # and run the current gate again without buying another generation.
+    from easyicu.research_agent.gates import concept as concept_gates
+
+    gate_behavior["mode"] = "pass"
+    invalid_candidate_kwargs = {
+        **run_kwargs,
+        "cohort_name": "validator_invalid_candidate_resume_test",
+    }
+    valid_before_drift = build_pipeline(auditor_b).run(**invalid_candidate_kwargs)
+    valid_before_drift_dir = Path(valid_before_drift.workdir)
+    assert _latest_step_record(valid_before_drift_dir)["status"] == "ok"
+    generation_before_validator_drift = llm.generation_calls
+    gate_calls_before_validator_drift = len(gate_calls)
+    monkeypatch.setattr(
+        concept_gates,
+        "engine_code_sha256",
+        lambda: "d" * 64,
+    )
+    gate_behavior["mode"] = "error"
+
+    invalid_after_drift = build_pipeline(auditor_b).run(
+        **invalid_candidate_kwargs,
+        resume_run_id=valid_before_drift.run_id,
+        resume_from_step_id="01_summary",
+    )
+    invalid_after_drift_dir = Path(invalid_after_drift.workdir)
+    invalid_after_drift_record = _latest_step_record(invalid_after_drift_dir)
+    invalid_manifest = json.loads(
+        (invalid_after_drift_dir / "manifest_partial.json").read_text(encoding="utf-8")
+    )
+    invalid_history = invalid_manifest["step_attempt_history"]
+
+    assert any(
+        record.get("step_id") == "01_summary"
+        and record.get("status") == "resume_validator_invalid"
+        and record.get("resume_revalidation_candidate_capsule_ref")
+        and record.get("resume_revalidation_candidate_code_sha256")
+        for record in invalid_history
+    )
+    assert invalid_after_drift_record["status"] == "contract_failed"
+    assert invalid_after_drift_record["resume_validator_invalid_candidate_reused"] is True
+    assert invalid_after_drift_record["step_authority_capsule_cache_miss"] == (
+        "control_plane_drift_revalidation"
+    )
+    assert llm.generation_calls == generation_before_validator_drift
+    assert len(gate_calls) >= gate_calls_before_validator_drift + 2
 
     from easyicu.research_agent.agents import agentic_coder
 
