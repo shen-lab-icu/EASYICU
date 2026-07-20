@@ -4,8 +4,8 @@
   "shim_import_paths": [],
   "files": {
     "execution/phase.py": {
-      "loc": 11456,
-      "sha256": "207169c3dbdbcc287967d9f3c92bc5732ec6d690a854e5ff8a94d4e24d987c27",
+      "loc": 11457,
+      "sha256": "a08fc0ae12695764ab69a51451b40c35b28f2666a5603d59856e11de8e6080a3",
       "intra_package_import_edges": 67,
       "shim_bypass_violations": []
     },
@@ -22,8 +22,8 @@
       "shim_bypass_violations": []
     },
     "authority/typed_binding.py": {
-      "loc": 1312,
-      "sha256": "c075024f6c5a50ea1fd3094d304c2699b4b888dd1965952d4bccd2b386b5f4e9",
+      "loc": 1362,
+      "sha256": "66c8fb821d224a892b61ef8f782602efa1ed8dbbf111620bba958e60b8981643",
       "intra_package_import_edges": 9,
       "shim_bypass_violations": []
     },
@@ -46,8 +46,8 @@
       "shim_bypass_violations": []
     },
     "authority/development_projection.py": {
-      "loc": 151,
-      "sha256": "61aeff6804b7c2d85de27d59f9220e3ace59671043117b800d24443129308228",
+      "loc": 154,
+      "sha256": "bf7b8be1494b5d0d977a9c626ed3a3fbb4e3eaac654b58d171db9bf5225d9f2c",
       "intra_package_import_edges": 3,
       "shim_bypass_violations": []
     },
@@ -79,7 +79,7 @@
   "functions": {
     "execution/phase.py::_execute_one_step": {
       "lines": 6133,
-      "line_start": 4867,
+      "line_start": 4868,
       "direct_nested_funcs": 24,
       "total_nested_funcs": 26,
       "own_bound_names": 340,
@@ -91,7 +91,7 @@
     },
     "execution/phase.py::run_execute_phase": {
       "lines": 7905,
-      "line_start": 3552,
+      "line_start": 3553,
       "direct_nested_funcs": 15,
       "total_nested_funcs": 45,
       "own_bound_names": 145,

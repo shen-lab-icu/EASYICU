@@ -8,7 +8,13 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
+from easyicu.research_agent.audits.step_summary_integrity import (
+    StepSummaryIntegrityValidator,
+)
 from easyicu.research_agent.authority.evidence_store import EvidenceStore
+from easyicu.research_agent.authority.development_projection import (
+    DEVELOPMENT_PRIMARY_COHORT_CONFIRMATION_ROLE,
+)
 from easyicu.research_agent.authority import typed_binding as typed_binding_module
 from easyicu.research_agent.authority.plan_scope import (
     _serializable_plan_scientific_scope_signature,
@@ -176,6 +182,128 @@ def test_analysis_cohort_binding_selects_sample_and_preserves_parent(
     )
     assert loaded.payload.num_rows == 5
     assert loaded.receipt.evidence_id == DEVELOPMENT_COHORT_EVIDENCE_ID
+
+
+def test_development_scoped_producer_artifact_is_not_replaced_by_base_sample(
+    tmp_path: Path,
+) -> None:
+    store, _parent, sample, _plan, records = _arrange_projection(tmp_path)
+    derived_path = tmp_path / "step01_analysis_cohort.parquet"
+    derived = pd.read_parquet(sample.cohort_path)
+    derived["age_qc_passed"] = True
+    derived.to_parquet(derived_path, index=False)
+    derived_record = store.register_file(
+        kind="table",
+        description="Step-owned analysis cohort derived on the development sample.",
+        source_path=derived_path,
+        evidence_id="step01_development_analysis_cohort",
+        produced_by_step="01_cohort",
+    )
+    records[0].update(
+        {
+            "evidence_ids": [derived_record.evidence_id],
+            "execution_cohort_role": DEVELOPMENT_PRIMARY_COHORT_CONFIRMATION_ROLE,
+            "execution_cohort_sha256": sample.sample_sha256,
+            "authoritative_analysis_cohort_sha256": sample.sample_sha256,
+            "paper_authority": False,
+        }
+    )
+
+    binding = _resolved_typed_input_binding(
+        input_name="artifact:analysis_cohort",
+        evidence_ref=EvidenceRef(evidence_id=derived_record.evidence_id),
+        evidence_records=store.records(),
+        run_dir=tmp_path,
+        producer_step_records=records,
+        authoritative_cohort_path=sample.cohort_path,
+        development_sample=sample,
+    )
+
+    assert binding is not None
+    assert binding["evidence_id"] == derived_record.evidence_id
+    assert binding["sha256"] == derived_record.sha256
+    assert "execution_projection" not in binding
+    assert "age_qc_passed" in binding["product_contract"]["columns"]
+    findings = StepSummaryIntegrityValidator().audit(
+        step=AnalysisStep(
+            step_id="02_table_one",
+            intent="Summarize the exact derived development cohort.",
+            inputs=["artifact:analysis_cohort"],
+        ),
+        step_summary={
+            "input_bindings": [
+                {
+                    "input_key": "artifact:analysis_cohort",
+                    "evidence_id": derived_record.evidence_id,
+                    "sha256": derived_record.sha256,
+                    "loaded": True,
+                    "row_count": len(derived),
+                }
+            ]
+        },
+        resolved_input_bindings={"artifact:analysis_cohort": binding},
+        cohort_path=sample.cohort_path,
+    )
+    assert not [finding for finding in findings if finding.severity == "error"]
+
+
+@pytest.mark.parametrize(
+    ("record_override", "evidence_ids"),
+    [
+        ({"status": "contract_failed"}, None),
+        ({"paper_authority": True}, None),
+        ({"execution_cohort_role": "raw_universe"}, None),
+        ({"execution_cohort_sha256": "f" * 64}, None),
+        ({"authoritative_analysis_cohort_sha256": "f" * 64}, None),
+        ({}, ["different_evidence"]),
+    ],
+)
+def test_ambiguous_producer_authority_cannot_bypass_development_projection(
+    tmp_path: Path,
+    record_override: dict[str, object],
+    evidence_ids: list[str] | None,
+) -> None:
+    store, _parent, sample, _plan, records = _arrange_projection(tmp_path)
+    derived_path = tmp_path / "step01_analysis_cohort.parquet"
+    derived = pd.read_parquet(sample.cohort_path)
+    derived["age_qc_passed"] = True
+    derived.to_parquet(derived_path, index=False)
+    derived_record = store.register_file(
+        kind="table",
+        description="Ambiguously scoped producer output.",
+        source_path=derived_path,
+        evidence_id="ambiguous_step01_development_analysis_cohort",
+        produced_by_step="01_cohort",
+    )
+    records[0].update(
+        {
+            "evidence_ids": [derived_record.evidence_id],
+            "execution_cohort_role": DEVELOPMENT_PRIMARY_COHORT_CONFIRMATION_ROLE,
+            "execution_cohort_sha256": sample.sample_sha256,
+            "authoritative_analysis_cohort_sha256": sample.sample_sha256,
+            "paper_authority": False,
+            **record_override,
+        }
+    )
+    if evidence_ids is not None:
+        records[0]["evidence_ids"] = evidence_ids
+
+    binding = _resolved_typed_input_binding(
+        input_name="artifact:analysis_cohort",
+        evidence_ref=EvidenceRef(evidence_id=derived_record.evidence_id),
+        evidence_records=store.records(),
+        run_dir=tmp_path,
+        producer_step_records=records,
+        authoritative_cohort_path=sample.cohort_path,
+        development_sample=sample,
+    )
+
+    assert binding is not None
+    assert binding["evidence_id"] == DEVELOPMENT_COHORT_EVIDENCE_ID
+    assert binding["sha256"] == sample.sample_sha256
+    assert binding["execution_projection"]["declared_parent_input"]["evidence_id"] == (
+        derived_record.evidence_id
+    )
 
 
 def test_resolver_records_both_declared_parent_and_execution_projection(

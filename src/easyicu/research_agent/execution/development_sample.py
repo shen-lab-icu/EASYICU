@@ -30,7 +30,10 @@ from ..intake.materialized_metadata import (
     load_verified_materialized_cohort_authority,
     publish_ordered_subset_materialized_cohort,
 )
-from ..authority.development_projection import DEVELOPMENT_COHORT_EVIDENCE_ID
+from ..authority.development_projection import (
+    DEVELOPMENT_COHORT_EVIDENCE_ID,
+    DEVELOPMENT_PRIMARY_COHORT_CONFIRMATION_ROLE,
+)
 from ..intake.materialized_trajectory import (
     StagedTrajectoryBinding,
     load_verified_materialized_trajectory_authority,

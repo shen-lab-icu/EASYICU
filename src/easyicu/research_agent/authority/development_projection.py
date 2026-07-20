@@ -20,6 +20,9 @@ from .typed_input_receipt import typed_input_row_identity_sha256
 
 DEVELOPMENT_COHORT_EVIDENCE_ID = "development_execution_cohort"
 DEVELOPMENT_INPUT_PROJECTION_SCHEMA = "easyicu.development_input_projection/1"
+DEVELOPMENT_PRIMARY_COHORT_CONFIRMATION_ROLE = (
+    "post_qc_development_sample_for_primary_cohort_confirmation"
+)
 
 
 @dataclass(frozen=True, slots=True)
