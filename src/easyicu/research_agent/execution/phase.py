@@ -6521,15 +6521,7 @@ def run_execute_phase(
             )
             if reuse_selected_step_code_opt_in or failed_contract_code_preflight_reuse:
                 preflight_resumed_code = resumed_code_candidate
-        if step_attempt_state.selected_resume_capsule is not None:
-            code = step_attempt_state.selected_resume_capsule.candidate_code
-            worker_progress.resumed_code_reuse_used = True
-            step_record["generation_mode"] = "resumed_code_reuse"
-            step_record["step_authority_capsule_reused"] = True
-            step_record["resumed_from_generation_mode"] = str(
-                (prior_step_record or {}).get("generation_mode") or "capsule"
-            )
-        elif preflight_trajectory_stability_code is not None:
+        if preflight_trajectory_stability_code is not None:
             code = preflight_trajectory_stability_code
             with shared_lock:
                 findings.append(
@@ -6559,6 +6551,14 @@ def run_execute_phase(
                         detail={"step_id": step.step_id},
                     )
                 )
+        elif step_attempt_state.selected_resume_capsule is not None:
+            code = step_attempt_state.selected_resume_capsule.candidate_code
+            worker_progress.resumed_code_reuse_used = True
+            step_record["generation_mode"] = "resumed_code_reuse"
+            step_record["step_authority_capsule_reused"] = True
+            step_record["resumed_from_generation_mode"] = str(
+                (prior_step_record or {}).get("generation_mode") or "capsule"
+            )
         elif quarantined_resume_draft is not None:
             code = _use_quarantined_draft(quarantined_resume_draft)
         elif resume_critic_repair_code is not None:

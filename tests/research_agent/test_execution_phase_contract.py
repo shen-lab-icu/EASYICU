@@ -782,6 +782,31 @@ def test_locked_measurement_preflight_runs_before_every_coder_repair():
     assert preflight < first_coder_repair
 
 
+def test_sealed_figure_preflight_supersedes_stale_resume_capsule_candidate():
+    """A selected failed figure capsule cannot inherit a new renderer id."""
+
+    from easyicu.research_agent.execution import phase as pipeline_execute
+
+    source = inspect.getsource(pipeline_execute.run_execute_phase)
+    selection_start = source.index(
+        "if preflight_trajectory_stability_code is not None:"
+    )
+    figure_branch = source.index(
+        "elif preflight_figure_code is not None:", selection_start
+    )
+    resumed_branch = source.index(
+        "elif step_attempt_state.selected_resume_capsule is not None:",
+        selection_start,
+    )
+
+    assert figure_branch < resumed_branch
+    figure_body = source[figure_branch:resumed_branch]
+    assert "code = preflight_figure_code" in figure_body
+    assert "code = step_attempt_state.selected_resume_capsule.candidate_code" not in (
+        figure_body
+    )
+
+
 @pytest.mark.parametrize(
     ("step_id", "intent"),
     [
