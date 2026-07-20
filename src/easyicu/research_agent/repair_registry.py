@@ -316,6 +316,7 @@ _STRUCTURAL_REPAIRS = {
     "statsmodels_helper_design_float_v1",
     "strict_numeric_nonfinite_guard_v1",
     "table_one_binary_key_string_v1",
+    "unavailable_figure_full_source_projection_v1",
     # Only renderers with an exact direct-parent product, closed source schema,
     # and no scientific selection are automatic.  Heuristic result-table,
     # exposure, outcome, or model selection remains METHOD_SUBSTITUTION by the
