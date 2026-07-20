@@ -1660,6 +1660,57 @@ def _coherent_integral_mapping_counts(
     return (values_by_field[present[0]] if present else None), values_by_field, None
 
 
+def _assert_exact_frame_values_equal(left: Any, right: Any) -> None:
+    """Compare host values exactly while ignoring storage-only dtype changes.
+
+    Parquet round-trips may represent the same nullable flag as either
+    ``boolean {False, True, NA}`` or ``float {0.0, 1.0, NaN}``.  Pandas'
+    frame comparator treats those values as different even with dtype checks
+    disabled.  Authority needs a narrower rule: column order and missingness
+    must match exactly, and every nonmissing scalar must compare exactly after
+    conversion from NumPy/Pandas scalar wrappers to Python scalars.  No numeric
+    tolerance, string coercion, or scientific recoding is permitted.
+    """
+
+    if left.shape != right.shape:
+        raise AssertionError(f"frame shapes differ: {left.shape} != {right.shape}")
+    if list(left.columns) != list(right.columns):
+        raise AssertionError("frame columns differ")
+
+    def python_scalar(value: Any) -> Any:
+        item = getattr(value, "item", None)
+        if callable(item):
+            try:
+                return item()
+            except (TypeError, ValueError):
+                pass
+        return value
+
+    for position, column in enumerate(left.columns):
+        left_series = left.iloc[:, position].reset_index(drop=True)
+        right_series = right.iloc[:, position].reset_index(drop=True)
+        left_missing = left_series.isna().tolist()
+        right_missing = right_series.isna().tolist()
+        if left_missing != right_missing:
+            raise AssertionError(f"column {column!r} has different missingness")
+        for row, (left_value, right_value, missing) in enumerate(
+            zip(left_series.tolist(), right_series.tolist(), left_missing, strict=True)
+        ):
+            if missing:
+                continue
+            left_scalar = python_scalar(left_value)
+            right_scalar = python_scalar(right_value)
+            try:
+                equal = bool(left_scalar == right_scalar)
+            except (TypeError, ValueError):
+                equal = False
+            if not equal:
+                raise AssertionError(
+                    f"column {column!r} differs at row {row}: "
+                    f"{left_scalar!r} != {right_scalar!r}"
+                )
+
+
 def primary_analysis_cohort_integrity_findings(
     *,
     step: AnalysisStep,
@@ -1847,11 +1898,9 @@ def primary_analysis_cohort_integrity_findings(
             authoritative_cohort_n=locked_n,
         )
     try:
-        pd.testing.assert_frame_equal(
+        _assert_exact_frame_values_equal(
             replayed.loc[:, authoritative.columns].reset_index(drop=True),
             authoritative,
-            check_dtype=False,
-            check_exact=True,
         )
     except (AssertionError, KeyError) as exc:
         return finding(
@@ -1930,11 +1979,9 @@ def primary_analysis_cohort_integrity_findings(
             authoritative_cohort_n=locked_n,
         )
     try:
-        pd.testing.assert_frame_equal(
+        _assert_exact_frame_values_equal(
             produced.loc[:, authoritative.columns].reset_index(drop=True),
             authoritative,
-            check_dtype=False,
-            check_exact=True,
         )
     except (AssertionError, KeyError) as exc:
         return finding(
