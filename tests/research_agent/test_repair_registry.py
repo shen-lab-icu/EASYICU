@@ -167,6 +167,21 @@ def test_closed_counts_stable_keyword_repair_is_syntactic_and_automatic() -> Non
     assert automatic_repair_allowed(metadata.repair_id)
 
 
+def test_preflight_only_helper_repairs_are_syntactic_and_automatic() -> None:
+    for repair_id in (
+        "publication_export_audit_paths_v1",
+        "boolean_reduction_identity_v1",
+    ):
+        metadata = repair_metadata_for(repair_id)
+
+        assert metadata.classification_source == "exact"
+        assert metadata.repair_class is RepairClass.SYNTACTIC
+        assert metadata.invariants == ()
+        assert metadata.introduces_numbers is False
+        assert metadata.requires_disclosure is False
+        assert automatic_repair_allowed(repair_id)
+
+
 def test_measurement_provenance_summary_mapping_is_structural_and_automatic() -> None:
     for repair_id in (
         "measurement_provenance_summary_mapping_v1",

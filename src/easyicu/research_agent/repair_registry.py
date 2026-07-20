@@ -258,6 +258,7 @@ def _meta(
 
 _SYNTACTIC_REPAIRS = {
     "boolean_mask_reduction_precedence_v1",
+    "boolean_reduction_identity_v1",
     "closed_counts_declared_levels_binding_v1",
     "closed_counts_direct_host_call_v1",
     "closed_counts_stable_keywords_v1",
@@ -270,6 +271,7 @@ _SYNTACTIC_REPAIRS = {
     "restore_shadowed_json_module_v1",
     "replace_hallucinated_figure_utils_import_v1",
     "prediction_calibration_import_fix_v1",
+    "publication_export_audit_paths_v1",
     "resolved_context_digest_load_v1",
     "resolved_input_identity_key_v1",
     "scalar_cast_before_reduction_v1",
