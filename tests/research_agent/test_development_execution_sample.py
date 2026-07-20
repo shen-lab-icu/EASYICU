@@ -12,6 +12,10 @@ import pytest
 from easyicu.research_agent.authority.execution_input import (
     ExecutionInputAuthorityState,
 )
+from easyicu.research_agent.authority.run_input import (
+    build_scientific_identity,
+    canonical_sha256,
+)
 from easyicu.research_agent.execution.development_sample import (
     DEVELOPMENT_COHORT_FILENAME,
     DEVELOPMENT_SAMPLE_FILENAME,
@@ -294,6 +298,57 @@ def test_submission_profile_cannot_enable_development_sample(tmp_path: Path) -> 
             submission_profile_name="npj_dm",
             development_sample_size=1000,
         )
+
+
+def test_development_sample_changes_scientific_identity_and_stays_non_paper(
+    tmp_path: Path,
+) -> None:
+    cohort_path = _locked_analysis(tmp_path, rows=20)
+    common = {
+        "cohort": cohort_path,
+        "question": "Is the locked exposure associated with the outcome?",
+        "cohort_name": "development_sample_identity",
+        "database": "synthetic",
+        "target_outcome": "death",
+        "primary_exposure": "exposure",
+        "cross_database_validation": None,
+        "inclusion_criteria": None,
+        "exclusion_criteria": None,
+        "id_columns": ("stay_id",),
+        "time_columns": None,
+        "outcome_columns": ("death",),
+        "time_windows": None,
+        "concept_descriptions": None,
+        "user_preferences": None,
+        "notes": None,
+        "skill_key": None,
+        "experiment_spec": None,
+        "source_files": None,
+        "disable_icu_context": False,
+    }
+    full_identity = build_scientific_identity(**common)
+    sampled_identity = build_scientific_identity(
+        **common,
+        development_sampling={
+            "schema": "easyicu.development_execution_sample/1",
+            "paper_authority": False,
+            "stage": "after_locked_cohort_materialization_and_qc",
+            "algorithm": "sha256_identity_rank_v1",
+            "target_rows": 1000,
+            "seed": 20260719,
+        },
+    )
+
+    assert "development_sampling" not in full_identity
+    assert sampled_identity["development_sampling"] == {
+        "schema": "easyicu.development_execution_sample/1",
+        "paper_authority": False,
+        "stage": "after_locked_cohort_materialization_and_qc",
+        "algorithm": "sha256_identity_rank_v1",
+        "target_rows": 1000,
+        "seed": 20260719,
+    }
+    assert canonical_sha256(sampled_identity) != canonical_sha256(full_identity)
 
 
 def test_missing_post_qc_cohort_blocks_scientific_steps_without_coder_calls(
