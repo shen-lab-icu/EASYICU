@@ -7,7 +7,9 @@ from pathlib import Path
 import pytest
 
 from easyicu.research_agent.execution import phase as pipeline_execute
-from easyicu.research_agent.pipeline import _sealed_renderer_figure_step_matches_parent
+from easyicu.research_agent.authority.figure_renderer import (
+    _sealed_renderer_figure_step_matches_parent,
+)
 from easyicu.research_agent.schema import AnalysisStep
 
 from easyicu.research_agent.execution.phase import (
@@ -64,11 +66,11 @@ def test_every_sealed_renderer_requires_a_planner_owned_child_edge(
     planner_method,
     parent_outputs,
 ):
-    import easyicu.research_agent.pipeline as pipeline_module
+    import easyicu.research_agent.authority.figure_renderer as figure_authority
 
     parent_inputs = ["artifact:locked_cohort", "marker_value"]
     monkeypatch.setattr(
-        pipeline_module,
+        figure_authority,
         "_resolve_upstream_manifest_step",
         lambda run_dir, step_id: {
             "method": planner_method,
@@ -96,6 +98,16 @@ def test_every_sealed_renderer_requires_a_planner_owned_child_edge(
     )
     assert not _sealed_renderer_figure_step_matches_parent(
         Path("/unused"), unrelated, repair_id
+    )
+
+
+def test_pipeline_keeps_the_legacy_sealed_renderer_edge_import() -> None:
+    import easyicu.research_agent.authority.figure_renderer as figure_authority
+    import easyicu.research_agent.pipeline as pipeline_module
+
+    assert (
+        pipeline_module._sealed_renderer_figure_step_matches_parent
+        is figure_authority._sealed_renderer_figure_step_matches_parent
     )
 
 
