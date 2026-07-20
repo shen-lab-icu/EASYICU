@@ -314,11 +314,7 @@ def test_ehrflowbench_preserves_trajectory_as_typed_pipeline_input(
         == 0
     )
 
-    assert isinstance(seen["cohort"], pd.DataFrame)
-    pd.testing.assert_frame_equal(
-        seen["cohort"].reset_index(drop=True),
-        pd.read_parquet(cohort).reset_index(drop=True),
-    )
+    assert seen["cohort"] == cohort.resolve()
     assert seen["item"].cohort_size == 2
     assert seen["item"].cohort_columns == ["stay_id", "death"]
     assert seen["item"].trajectory_path == trajectory.resolve()

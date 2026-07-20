@@ -34,7 +34,9 @@ def test_concept_predicate_rejects_missing_time_window() -> None:
     from easyicu.research_agent.cohort.schema import ConceptPredicate, CohortSchemaError
 
     with pytest.raises(CohortSchemaError, match="time_window"):
-        ConceptPredicate.from_dict({"concept_id": "age", "aggregation": "max", "op": ">="})
+        ConceptPredicate.from_dict(
+            {"concept_id": "age", "aggregation": "max", "op": ">="}
+        )
 
 
 def test_concept_predicate_rejects_missing_aggregation() -> None:
@@ -133,12 +135,16 @@ def test_two_registered_patterns_with_different_windows_have_different_hash() ->
     try:
         register_pattern(
             "adult_first_day",
-            CohortDefinition(name="adult_first_day", inclusion=(_age_predicate(0, 24),)),
+            CohortDefinition(
+                name="adult_first_day", inclusion=(_age_predicate(0, 24),)
+            ),
             provenance="test fixture",
         )
         register_pattern(
             "adult_first_hour",
-            CohortDefinition(name="adult_first_hour", inclusion=(_age_predicate(0, 1),)),
+            CohortDefinition(
+                name="adult_first_hour", inclusion=(_age_predicate(0, 1),)
+            ),
             provenance="test fixture",
         )
         assert cohort_definition_sha(
@@ -424,9 +430,10 @@ def test_cohort_lock_resume_does_not_rehydrate_scientific_drift(
             prompt_pack_version="test",
             llm_signature="mock",
         )
-    assert json.loads(path.read_text(encoding="utf-8"))["cohort"]["inclusion"][0][
-        "value"
-    ] == 65
+    assert (
+        json.loads(path.read_text(encoding="utf-8"))["cohort"]["inclusion"][0]["value"]
+        == 65
+    )
 
 
 def test_assert_cohort_definition_locked_catches_post_lock_mutation(
@@ -529,7 +536,9 @@ def test_materialize_locked_analysis_cohort_applies_inclusion(tmp_path: Path) ->
         inclusion=(_age_predicate(0, 24),),  # age >= 18 (max)
     )
     result = materialize_locked_analysis_cohort(
-        run_dir=tmp_path, plan=_plan_with_cohort(definition), universe_path=universe_path
+        run_dir=tmp_path,
+        plan=_plan_with_cohort(definition),
+        universe_path=universe_path,
     )
     assert result["status"] == "applied"
     assert result["n_universe"] == 4
@@ -617,6 +626,34 @@ def test_resolve_predicate_column_bare_and_aggregated_and_alias() -> None:
     assert _resolve_predicate_column(cols, "lactate", "max") is None
     # the requested aggregation must exist: only `_first` present, asked `_max`
     assert _resolve_predicate_column(["aki_stage_first"], "kdigo_aki", "max") is None
+
+
+def test_catalog_output_resolution_requires_unique_candidate(monkeypatch) -> None:
+    from easyicu.concept.catalog import COMPOSITE_CONCEPT_OUTPUT_SOURCES
+    from easyicu.research_agent.cohort.schema import _resolve_predicate_column
+
+    monkeypatch.setitem(
+        COMPOSITE_CONCEPT_OUTPUT_SOURCES,
+        "synthetic_output_a",
+        "synthetic_loader",
+    )
+    monkeypatch.setitem(
+        COMPOSITE_CONCEPT_OUTPUT_SOURCES,
+        "synthetic_output_b",
+        "synthetic_loader",
+    )
+    columns = ["synthetic_output_a_max", "synthetic_output_b_max"]
+
+    assert _resolve_predicate_column(columns, "synthetic_loader", "max") is None
+    assert (
+        _resolve_predicate_column(
+            columns,
+            "synthetic_loader",
+            "max",
+            column_bindings={"synthetic_loader": "synthetic_output_b_max"},
+        )
+        == "synthetic_output_b_max"
+    )
 
 
 def test_materialize_resolves_kdigo_alias_to_aki_stage_column(tmp_path: Path) -> None:
@@ -713,6 +750,9 @@ def test_descriptor_window_match_requires_explicit_matching_anchor() -> None:
     assert cohort_schema._descriptor_window_matches_predicate(
         "hospital_admit_0_24h", window
     )
+    assert cohort_schema._descriptor_window_matches_predicate(
+        "hospital_admission[0,24]h", window
+    )
     assert not cohort_schema._descriptor_window_matches_predicate("0_24h", window)
     assert not cohort_schema._descriptor_window_matches_predicate(
         "icu_admit_0_24h", window
@@ -789,7 +829,7 @@ def test_materialize_binds_unique_planner_input_by_source_concept(
         {
             "concept_id": "canonical_signal",
             "column": "exported_signal_any",
-            "basis": "planner_declared_operational_output_source_concept",
+            "basis": "planner_declared_context_input_source_concept",
             "predicate_contracts": [
                 {
                     "aggregation": "any",
@@ -802,6 +842,110 @@ def test_materialize_binds_unique_planner_input_by_source_concept(
             ],
         }
     ]
+
+
+def test_materialize_binds_unique_non_primary_qc_input_for_any_missingness(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    from easyicu.research_agent.cohort import schema as cohort_schema
+
+    monkeypatch.setattr(
+        cohort_contract,
+        "_EXTRA_COHORT_CONCEPT_IDS",
+        {"canonical_signal"},
+    )
+    definition = cohort_schema.CohortDefinition(
+        name="primary",
+        inclusion=(_synthetic_source_predicate(),),
+    )
+    universe_path = tmp_path / "cohort.parquet"
+    pd.DataFrame(
+        {
+            "stay_id": [1, 2, 3],
+            "selected_qc_value_max": [0.0, None, 2.0],
+            "unrelated_exposure": [4.0, 5.0, 6.0],
+        }
+    ).to_parquet(universe_path, index=False)
+    context = _synthetic_binding_context(
+        SimpleNamespace(
+            name="selected_qc_value_max",
+            source_concept="canonical_signal",
+            role="other",
+            analysis_window="icu_admission[0,24]h",
+        ),
+        SimpleNamespace(
+            name="unrelated_exposure",
+            source_concept="other_signal",
+            role="exposure",
+        ),
+        primary_exposure="unrelated_exposure",
+    )
+
+    result = cohort_schema.materialize_locked_analysis_cohort(
+        run_dir=tmp_path,
+        plan=_synthetic_binding_plan(
+            definition,
+            ["stay_id", "selected_qc_value_max", "unrelated_exposure"],
+        ),
+        universe_path=universe_path,
+        context=context,
+    )
+
+    assert result["status"] == "applied"
+    assert pd.read_parquet(tmp_path / "cohort_analysis.parquet")[
+        "stay_id"
+    ].tolist() == [1, 3]
+
+
+def test_materialize_rejects_ambiguous_any_missingness_inputs(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    from easyicu.research_agent.cohort import schema as cohort_schema
+
+    monkeypatch.setattr(
+        cohort_contract,
+        "_EXTRA_COHORT_CONCEPT_IDS",
+        {"canonical_signal"},
+    )
+    definition = cohort_schema.CohortDefinition(
+        name="primary",
+        inclusion=(_synthetic_source_predicate(),),
+    )
+    universe_path = tmp_path / "cohort.parquet"
+    pd.DataFrame(
+        {
+            "selected_qc_value_first": [0.0, None],
+            "selected_qc_value_max": [0.0, 2.0],
+        }
+    ).to_parquet(universe_path, index=False)
+    context = _synthetic_binding_context(
+        *(
+            SimpleNamespace(
+                name=name,
+                source_concept="canonical_signal",
+                role="other",
+                analysis_window="icu_admission[0,24]h",
+            )
+            for name in ("selected_qc_value_first", "selected_qc_value_max")
+        ),
+        primary_exposure="selected_qc_value_max",
+    )
+
+    result = cohort_schema.materialize_locked_analysis_cohort(
+        run_dir=tmp_path,
+        plan=_synthetic_binding_plan(
+            definition,
+            ["selected_qc_value_first", "selected_qc_value_max"],
+        ),
+        universe_path=universe_path,
+        context=context,
+    )
+
+    assert result["status"] == "error"
+    assert "ambiguous" in result["error"]
+    assert not (tmp_path / "cohort_analysis.parquet").exists()
 
 
 @pytest.mark.parametrize("exact_column", ["canonical_signal", "canonical_signal_any"])
@@ -920,9 +1064,7 @@ def test_materialize_rejects_cross_name_window_without_anchor(
     )
     definition = cohort_schema.CohortDefinition(
         name="primary",
-        inclusion=(
-            _synthetic_source_predicate(anchor="hospital_admit"),
-        ),
+        inclusion=(_synthetic_source_predicate(anchor="hospital_admit"),),
     )
     universe_path = tmp_path / "cohort.parquet"
     pd.DataFrame({"exported_signal_any": [0.0, 1.0]}).to_parquet(
@@ -1003,7 +1145,7 @@ def test_materialize_rejects_ambiguous_source_concept_bindings(
     assert not (tmp_path / "cohort_analysis.parquet").exists()
 
 
-def test_materialize_does_not_bind_non_operational_loader_sibling(
+def test_materialize_does_not_bind_unwindowed_loader_sibling(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -1047,5 +1189,6 @@ def test_materialize_does_not_bind_non_operational_loader_sibling(
     )
 
     assert result["status"] == "error"
-    assert "missing concept column 'canonical_signal'" in result["error"]
+    assert "no Planner-declared" in result["error"]
+    assert "matching aggregation and time window" in result["error"]
     assert not (tmp_path / "cohort_analysis.parquet").exists()

@@ -51,7 +51,9 @@ from ..intake.materialized_trajectory import (
     load_verified_materialized_trajectory_authority,
 )
 from ..cohort.artifact_facts import observed_domain_for_series
-from ..cohort.materializer import load_verified_legacy_materialization_provenance
+from ..intake.legacy_materialization import (
+    load_verified_legacy_materialization_provenance,
+)
 from .typed import (
     canonical_column_binding,
     ResearchContextAuthority,
@@ -132,7 +134,9 @@ def _concept_info_for_wide_column(
         # upstream concept catalog and project it into ResearchContext instead
         # of duplicating output aliases in the research-agent engine.
         try:
-            from easyicu.concept.catalog import COMPOSITE_CONCEPT_OUTPUT_SOURCES
+            from easyicu.concept_output_sources import (
+                COMPOSITE_CONCEPT_OUTPUT_SOURCES,
+            )
         except Exception:
             composite_source = None
         else:
