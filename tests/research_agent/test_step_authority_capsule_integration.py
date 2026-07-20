@@ -38,6 +38,7 @@ from easyicu.research_agent.authority.step_runtime import (
     execution_context_sha256,
     load_checkpoint_selected_step_capsule,
     load_explicit_failed_step_capsule,
+    load_explicit_success_step_capsule,
     materialize_sealed_run_result,
     persist_candidate_code,
     prepare_step_authority_coordinates,
@@ -721,6 +722,38 @@ def test_explicit_failed_capsule_rejects_nonterminal_or_unexecuted_record(
                 "status": "contract_failed",
                 "outputs_safe_to_collect": False,
             },
+        )
+        is None
+    )
+
+
+def test_explicit_success_capsule_reuses_code_but_requires_complete_execution(
+    tmp_path: Path,
+) -> None:
+    coordinates, code, candidate_ref, _budget, _receipt = _initial_candidate(tmp_path)
+    record = {
+        "step_id": coordinates.step_id,
+        "status": "ok",
+        "returncode": 0,
+        "timed_out": False,
+        "outputs_safe_to_collect": True,
+        "executed_code_sha256": code.sha256,
+        "concept_approved_code_sha256": code.sha256,
+        "step_authority_capsule_ref": candidate_ref.model_dump(mode="json"),
+    }
+
+    loaded = load_explicit_success_step_capsule(
+        tmp_path,
+        step_id=coordinates.step_id,
+        record=record,
+    )
+
+    assert loaded is not None and loaded.ref == candidate_ref
+    assert (
+        load_explicit_success_step_capsule(
+            tmp_path,
+            step_id=coordinates.step_id,
+            record={**record, "outputs_safe_to_collect": False},
         )
         is None
     )
