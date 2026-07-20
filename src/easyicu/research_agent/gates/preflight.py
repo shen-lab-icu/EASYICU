@@ -6752,6 +6752,361 @@ def _host_helper_call_signature_findings(
     return findings
 
 
+_BOOLEAN_REDUCTION_METHODS = frozenset({"all", "any"})
+_PANDAS_SERIES_METHODS = frozenset(
+    {
+        "astype",
+        "between",
+        "dropna",
+        "eq",
+        "ge",
+        "gt",
+        "isna",
+        "isin",
+        "le",
+        "lt",
+        "ne",
+        "notna",
+    }
+)
+_NUMPY_ARRAY_CONSTRUCTORS = frozenset(
+    {"array", "asarray", "empty", "full", "ones", "zeros"}
+)
+
+
+def _boolean_reduction_identity_findings(
+    tree: ast.Module,
+) -> list[ValidationFinding]:
+    """Reject identity comparison against pandas/numpy boolean reductions.
+
+    Python's ``True``/``False`` singletons are not identical to
+    ``numpy.bool_``.  Detection is intentionally broader than automatic
+    repair: unresolved ``.all()``/``.any()`` receivers remain blocking, while
+    only reductions proven to return a total scalar boolean are repairable.
+    Locally defined custom classes are outside this pandas/numpy contract.
+    """
+
+    parents = {
+        id(child): parent
+        for parent in ast.walk(tree)
+        for child in ast.iter_child_nodes(parent)
+    }
+    import_bindings: dict[int, dict[str, list[tuple[int, str, ast.AST]]]] = {}
+    custom_classes = {
+        node.name for node in ast.walk(tree) if isinstance(node, ast.ClassDef)
+    }
+    for node in ast.walk(tree):
+        scope_id = _scope_id_for_node(node, parents=parents, tree=tree)
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.name not in {"numpy", "pandas"}:
+                    continue
+                local_name = alias.asname or alias.name
+                import_bindings.setdefault(scope_id, {}).setdefault(
+                    local_name, []
+                ).append((int(node.lineno), f"{alias.name}_module", node))
+        elif isinstance(node, ast.ImportFrom) and node.level == 0:
+            if node.module not in {"numpy", "pandas"}:
+                continue
+            for alias in node.names:
+                if node.module == "numpy" and alias.name in _BOOLEAN_REDUCTION_METHODS:
+                    kind = f"numpy_{alias.name}"
+                elif node.module == "pandas" and alias.name in {
+                    "DataFrame",
+                    "Series",
+                }:
+                    kind = f"pandas_{alias.name.lower()}_constructor"
+                else:
+                    continue
+                local_name = alias.asname or alias.name
+                import_bindings.setdefault(scope_id, {}).setdefault(
+                    local_name, []
+                ).append((int(node.lineno), kind, node))
+
+    def _scope_chain(node: ast.AST) -> list[int]:
+        chain: list[int] = []
+        current: Optional[ast.AST] = node
+        while current is not None:
+            current = parents.get(id(current))
+            if isinstance(current, _LEXICAL_SCOPE_NODES):
+                chain.append(id(current))
+        if id(tree) not in chain:
+            chain.append(id(tree))
+        return chain
+
+    def _scope_binds_name(scope_id: int, name: str, *, ignore: ast.AST) -> bool:
+        for candidate in ast.walk(tree):
+            if (
+                candidate is ignore
+                or _scope_id_for_node(candidate, parents=parents, tree=tree) != scope_id
+            ):
+                continue
+            if (
+                isinstance(candidate, ast.Name)
+                and isinstance(candidate.ctx, (ast.Store, ast.Del))
+                and candidate.id == name
+            ):
+                return True
+            if isinstance(candidate, ast.arg) and candidate.arg == name:
+                return True
+            if (
+                isinstance(
+                    candidate, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
+                )
+                and candidate.name == name
+            ):
+                return True
+        return False
+
+    def _import_kind(name: str, at_node: ast.AST) -> Optional[str]:
+        line = int(getattr(at_node, "lineno", 0))
+        for scope_id in _scope_chain(at_node):
+            candidates = [
+                item
+                for item in import_bindings.get(scope_id, {}).get(name, [])
+                if item[0] <= line
+            ]
+            if candidates:
+                _, kind, import_node = max(candidates, key=lambda item: item[0])
+                if not _scope_binds_name(scope_id, name, ignore=import_node):
+                    return kind
+                return None
+            # Any local binding shadows an outer import for the whole scope.
+            sentinel = ast.Pass()
+            if _scope_binds_name(scope_id, name, ignore=sentinel):
+                return None
+        return None
+
+    def _latest_assignment(name: str, at_node: ast.AST) -> Optional[ast.AST]:
+        scope_id = _scope_id_for_node(at_node, parents=parents, tree=tree)
+        line = int(getattr(at_node, "lineno", 0))
+        candidates: list[tuple[int, ast.AST]] = []
+        for candidate in ast.walk(tree):
+            if (
+                _scope_id_for_node(candidate, parents=parents, tree=tree) != scope_id
+                or int(getattr(candidate, "lineno", 0)) >= line
+            ):
+                continue
+            if isinstance(candidate, (ast.Assign, ast.NamedExpr)):
+                targets = (
+                    candidate.targets
+                    if isinstance(candidate, ast.Assign)
+                    else [candidate.target]
+                )
+                if any(
+                    isinstance(target, ast.Name) and target.id == name
+                    for target in targets
+                ):
+                    candidates.append((int(candidate.lineno), candidate.value))
+            elif (
+                isinstance(candidate, ast.AnnAssign)
+                and isinstance(candidate.target, ast.Name)
+                and candidate.target.id == name
+                and candidate.value is not None
+            ):
+                candidates.append((int(candidate.lineno), candidate.value))
+        return max(candidates, default=(0, None), key=lambda item: item[0])[1]
+
+    def _expression_kind(
+        expression: ast.AST,
+        *,
+        at_node: ast.AST,
+        seen_names: frozenset[str] = frozenset(),
+    ) -> str:
+        if isinstance(expression, ast.Name):
+            if expression.id in seen_names:
+                return "unknown"
+            assigned = _latest_assignment(expression.id, at_node)
+            if assigned is None:
+                return "unknown"
+            return _expression_kind(
+                assigned,
+                at_node=at_node,
+                seen_names=seen_names | {expression.id},
+            )
+        if isinstance(expression, ast.Call):
+            if isinstance(expression.func, ast.Name):
+                if expression.func.id in custom_classes:
+                    return "custom"
+                imported = _import_kind(expression.func.id, expression)
+                if imported == "pandas_series_constructor":
+                    return "pandas_series"
+                if imported == "pandas_dataframe_constructor":
+                    return "pandas_dataframe"
+            if isinstance(expression.func, ast.Attribute):
+                base = expression.func.value
+                method = expression.func.attr
+                if isinstance(base, ast.Name):
+                    imported = _import_kind(base.id, expression)
+                    if imported == "pandas_module":
+                        if method == "Series":
+                            return "pandas_series"
+                        if method == "DataFrame" or method.startswith("read_"):
+                            return "pandas_dataframe"
+                    if imported == "numpy_module" and method in (
+                        _NUMPY_ARRAY_CONSTRUCTORS
+                    ):
+                        return "numpy_array"
+                receiver_kind = _expression_kind(
+                    base,
+                    at_node=at_node,
+                    seen_names=seen_names,
+                )
+                if method in _PANDAS_SERIES_METHODS and receiver_kind in {
+                    "pandas_series",
+                    "pandas_dataframe",
+                }:
+                    return receiver_kind
+                if receiver_kind == "numpy_array" and method in {
+                    "astype",
+                    "copy",
+                    "reshape",
+                    "ravel",
+                }:
+                    return receiver_kind
+            return "unknown"
+        if isinstance(expression, ast.Subscript):
+            owner_kind = _expression_kind(
+                expression.value,
+                at_node=at_node,
+                seen_names=seen_names,
+            )
+            if owner_kind == "pandas_dataframe":
+                if isinstance(expression.slice, ast.Constant) and isinstance(
+                    expression.slice.value, str
+                ):
+                    return "pandas_series"
+                return "pandas_dataframe"
+            if owner_kind == "numpy_array":
+                return "numpy_array"
+        return "unknown"
+
+    def _literal_keyword(call: ast.Call, name: str) -> tuple[bool, object]:
+        matches = [keyword for keyword in call.keywords if keyword.arg == name]
+        if len(matches) != 1 or not isinstance(matches[0].value, ast.Constant):
+            return False, None
+        return True, matches[0].value.value
+
+    def _reduction_info(expression: ast.AST) -> Optional[tuple[str, str, bool]]:
+        if not isinstance(expression, ast.Call):
+            return None
+        if any(
+            isinstance(argument, ast.Starred) for argument in expression.args
+        ) or any(keyword.arg is None for keyword in expression.keywords):
+            return "dynamic", "unknown", False
+
+        reduction: Optional[str] = None
+        provenance = "unknown"
+        if isinstance(expression.func, ast.Attribute) and isinstance(
+            expression.func.value, ast.Name
+        ):
+            imported = _import_kind(expression.func.value.id, expression)
+            if (
+                imported == "numpy_module"
+                and expression.func.attr in _BOOLEAN_REDUCTION_METHODS
+            ):
+                reduction = expression.func.attr
+                provenance = "numpy_function"
+        elif isinstance(expression.func, ast.Name):
+            imported = _import_kind(expression.func.id, expression)
+            if imported in {"numpy_all", "numpy_any"}:
+                reduction = imported.removeprefix("numpy_")
+                provenance = "numpy_function"
+        if reduction is not None:
+            scalar = len(expression.args) == 1
+            if any(keyword.arg != "axis" for keyword in expression.keywords):
+                scalar = False
+            axis_present, axis = _literal_keyword(expression, "axis")
+            if any(keyword.arg == "axis" for keyword in expression.keywords) and (
+                not axis_present or axis is not None
+            ):
+                scalar = False
+            return reduction, provenance, scalar
+
+        if isinstance(expression.func, ast.Attribute) and expression.func.attr in (
+            _BOOLEAN_REDUCTION_METHODS
+        ):
+            reduction = expression.func.attr
+            provenance = _expression_kind(
+                expression.func.value,
+                at_node=expression,
+            )
+            if provenance == "custom":
+                return None
+            scalar = provenance in {"pandas_series", "numpy_array"}
+            if expression.args:
+                scalar = False
+            allowed_keywords = (
+                {"axis", "skipna"} if provenance == "pandas_series" else {"axis"}
+            )
+            if any(
+                keyword.arg not in allowed_keywords for keyword in expression.keywords
+            ):
+                scalar = False
+            axis_present, axis = _literal_keyword(expression, "axis")
+            if any(keyword.arg == "axis" for keyword in expression.keywords) and (
+                not axis_present or axis is not None
+            ):
+                scalar = False
+            skipna_present, skipna = _literal_keyword(expression, "skipna")
+            if any(keyword.arg == "skipna" for keyword in expression.keywords) and (
+                not skipna_present or skipna is not True
+            ):
+                scalar = False
+            return reduction, provenance, scalar
+
+        return None
+
+    findings: list[ValidationFinding] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Compare):
+            continue
+        operands = [node.left, *node.comparators]
+        for index, operator in enumerate(node.ops):
+            if not isinstance(operator, (ast.Is, ast.IsNot)):
+                continue
+            left, right = operands[index], operands[index + 1]
+            if (
+                isinstance(left, ast.Constant)
+                and isinstance(left.value, bool)
+                and (info := _reduction_info(right)) is not None
+            ):
+                boolean_literal = left.value
+            elif (
+                isinstance(right, ast.Constant)
+                and isinstance(right.value, bool)
+                and (info := _reduction_info(left)) is not None
+            ):
+                boolean_literal = right.value
+            else:
+                continue
+            reduction, provenance, scalar = info
+            repair_safe = len(node.ops) == 1 and scalar
+            findings.append(
+                ValidationFinding(
+                    validator="mechanical_code_preflight",
+                    severity="error",
+                    message=(
+                        "A pandas/numpy boolean reduction is compared to a "
+                        "Python boolean singleton by identity; use value truth "
+                        "semantics only when the reduction is a proven scalar."
+                    ),
+                    detail={
+                        "reason": "boolean_reduction_identity_comparison",
+                        "line": int(node.lineno),
+                        "operator": (
+                            "is_not" if isinstance(operator, ast.IsNot) else "is"
+                        ),
+                        "boolean_literal": bool(boolean_literal),
+                        "reduction": reduction,
+                        "provenance": provenance,
+                        "repair_safe": repair_safe,
+                    },
+                )
+            )
+    return findings
+
+
 def _local_helper_unpack_arity_findings(
     tree: ast.Module,
 ) -> list[ValidationFinding]:
@@ -7580,6 +7935,7 @@ def audit_mechanical_code_contracts(
     findings.extend(_scalar_cast_before_reduction_findings(tree))
     findings.extend(_first_time_companion_findings(tree))
     findings.extend(_host_helper_call_signature_findings(tree))
+    findings.extend(_boolean_reduction_identity_findings(tree))
     findings.extend(_local_helper_unpack_arity_findings(tree))
     findings.extend(_host_helper_runtime_introspection_findings(tree))
     findings.extend(_lossy_numeric_coercion_findings(tree))
