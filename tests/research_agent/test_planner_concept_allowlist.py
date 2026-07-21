@@ -76,6 +76,15 @@ def test_planner_prompt_forbids_concept_id_synthesis() -> None:
     assert '"sepsis_onset_window"' not in prompt
 
 
+def test_planner_prompt_keeps_literature_eligibility_data_bound() -> None:
+    prompt = _build_planner_user_prompt(_context())
+
+    assert "design candidates, not automatic authority" in prompt
+    assert "unverifiable literature criterion" in prompt
+    assert "Never claim first admission, one stay per patient" in prompt
+    assert "patient identifier" in prompt
+
+
 def test_planner_prompt_has_non_null_cohort_override_example() -> None:
     prompt = _build_planner_user_prompt(_context())
 

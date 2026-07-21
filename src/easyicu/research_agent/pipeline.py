@@ -337,6 +337,7 @@ from .literature import (
     LiteratureBundle,
     render_hypothesis_blueprint_for_prompt,
 )
+from .planning.preplan_literature import prepare_preplan_literature
 from .providers.llm import (
     LLMRouter,
     llm_is_mockish,
@@ -2340,24 +2341,18 @@ class ResearchAgentPipeline:
                     "Building pre-plan literature and hypothesis blueprint.",
                     run_id=run_id,
                 )
-                preplan_literature = LiteratureAgent(None).run(agent_context)
-                preplan_lit_path = run_dir / "preplan_literature_bundle.json"
-                preplan_lit_path.write_text(
-                    preplan_literature.model_dump_json(indent=2),
-                    encoding="utf-8",
+                preplan_literature = prepare_preplan_literature(
+                    context=agent_context,
+                    run_dir=run_dir,
+                    evidence=evidence,
+                    enable_pubmed=self._enable_pubmed,
+                    pubmed_email=self._pubmed_email,
+                    pubmed_api_key=self._pubmed_api_key,
+                    enable_tavily=self._enable_tavily,
+                    tavily_api_key=self._tavily_api_key,
+                    tavily_retmax=self._tavily_retmax,
+                    tavily_include_domains=self._tavily_include_domains,
                 )
-                if evidence.get("preplan_literature_bundle") is None:
-                    evidence.register_file(
-                        kind="log",
-                        description=(
-                            "Pre-plan LiteratureBundle used to shape the hypothesis "
-                            "blueprint before planner execution."
-                        ),
-                        source_path=preplan_lit_path,
-                        evidence_id="preplan_literature_bundle",
-                        producer="hypothesis_blueprint",
-                        generation_mode="deterministic_skill",
-                    )
                 # O17 — Front-door hypothesis generation. Opt-in; writes
                 # ``hypothesis_candidates.json`` + ``.md`` so the paper
                 # Methods section can quote "Out of N candidates we
@@ -2492,7 +2487,10 @@ class ResearchAgentPipeline:
                         resume_state=resume_state,
                         aborted_result=aborted,
                     )
-                note = render_hypothesis_blueprint_for_prompt(blueprint)
+                note = render_hypothesis_blueprint_for_prompt(
+                    blueprint,
+                    literature=preplan_literature,
+                )
                 agent_notes = (
                     f"{agent_context.notes}\n\n{note}" if agent_context.notes else note
                 )
