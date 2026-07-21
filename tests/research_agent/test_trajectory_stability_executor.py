@@ -156,6 +156,23 @@ def _write_upstream_bundle(
         representation_schema_path
     )
     solution_schema_path.write_text(json.dumps(solution_schema), encoding="utf-8")
+    selection_path = upstream / "cluster_selection.json"
+    selection_path.write_text(
+        json.dumps(
+            {
+                "criterion": "bic",
+                "selection_rule": "minimum",
+                "direction": "minimize",
+                "selected_n_clusters": n_clusters,
+                "candidates": [
+                    {"n_clusters": max(1, n_clusters - 1), "criterion_value": 200.0},
+                    {"n_clusters": n_clusters, "criterion_value": 123.0},
+                    {"n_clusters": n_clusters + 1, "criterion_value": 180.0},
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
 
     resolved_inputs: dict[str, object] = {
         "inputs": {
@@ -173,6 +190,11 @@ def _write_upstream_bundle(
                 run_dir,
                 representation_schema_path,
                 evidence_id="step_owned_representation_schema_34567890",
+            ),
+            "manifest:cluster_selection": _binding(
+                run_dir,
+                selection_path,
+                evidence_id="log_opaque_selection_ef56ab78",
             ),
             "manifest:candidate_cluster_solution_schema": _binding(
                 run_dir,
@@ -300,6 +322,7 @@ def _assert_complete_input_receipts(
         assignment_n
     )
     assert "row_count" not in receipts["manifest:trajectory_representation_schema"]
+    assert "row_count" not in receipts["manifest:cluster_selection"]
     assert "row_count" not in receipts["manifest:candidate_cluster_solution_schema"]
 
 
@@ -443,6 +466,10 @@ def test_executor_is_case_neutral_and_replayable(
         "schema_digest_mismatch",
         "candidate_assignment_schema_digest_mismatch",
         "representation_schema_link_digest_mismatch",
+        "missing_cluster_selection",
+        "cluster_selection_k_mismatch",
+        "cluster_selection_criterion_mismatch",
+        "cluster_selection_value_mismatch",
         "coordinate_order_mismatch",
         "schema_version_mismatch",
         "fractional_cluster_count",
@@ -473,6 +500,21 @@ def test_executor_fails_closed_on_untrusted_input_binding(
         representation_binding = inputs["artifact:trajectory_representation"]
         assert isinstance(representation_binding, dict)
         representation_binding["sha256"] = "0" * 64
+    elif violation == "missing_cluster_selection":
+        inputs.pop("manifest:cluster_selection")
+    elif violation.startswith("cluster_selection_"):
+        selection_path = tmp_path / "upstream" / "cluster_selection.json"
+        selection = json.loads(selection_path.read_text(encoding="utf-8"))
+        if violation == "cluster_selection_k_mismatch":
+            selection["selected_n_clusters"] = 3
+        elif violation == "cluster_selection_criterion_mismatch":
+            selection["criterion"] = "aic"
+        else:
+            selection["candidates"][1]["criterion_value"] = 124.0
+        selection_path.write_text(json.dumps(selection), encoding="utf-8")
+        selection_binding = inputs["manifest:cluster_selection"]
+        assert isinstance(selection_binding, dict)
+        selection_binding["sha256"] = _sha256(selection_path)
     elif violation in {
         "schema_digest_mismatch",
         "missing_policy_field",
@@ -531,6 +573,11 @@ def test_executor_fails_closed_on_untrusted_input_binding(
         assert "outcome_by_cluster" in error_text
     elif violation == "binding_digest_mismatch":
         assert "digest mismatch" in error_text
+    elif violation == "missing_cluster_selection":
+        assert "required typed bindings are absent" in error_text
+        assert "manifest:cluster_selection" in error_text
+    elif violation.startswith("cluster_selection_"):
+        assert "cluster selection manifest disagrees" in error_text
     elif violation == "schema_digest_mismatch":
         assert "representation_sha256 does not bind" in error_text
     elif violation == "candidate_assignment_schema_digest_mismatch":

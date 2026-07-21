@@ -24,7 +24,12 @@ from scipy.optimize import linear_sum_assignment
 from scipy.special import logsumexp
 from sklearn.metrics import adjusted_rand_score
 
-from ...schema import AnalysisPlan, AnalysisStep, TrajectoryStabilitySpec
+from ...schema import (
+    AnalysisPlan,
+    AnalysisStep,
+    ClusterSelectionManifest,
+    TrajectoryStabilitySpec,
+)
 from ...trajectory.plan_contract import (
     STABILITY_EXECUTOR_INPUTS,
     STABILITY_EXECUTOR_OUTPUTS,
@@ -696,6 +701,48 @@ def validate_trajectory_stability_schema_pair(
     )
 
 
+def _validate_cluster_selection_binding(
+    *,
+    selection_payload: object,
+    solution_schema: Mapping[str, Any],
+) -> None:
+    """Bind the full Planner-owned selection manifest to the chosen schema."""
+
+    selection = ClusterSelectionManifest.model_validate(selection_payload)
+    selected_value = next(
+        candidate.criterion_value
+        for candidate in selection.candidates
+        if candidate.n_clusters == selection.selected_n_clusters
+    )
+    expected = {
+        "criterion": selection.criterion,
+        "selection_rule": selection.selection_rule,
+        "direction": selection.direction,
+        "selected_n_clusters": selection.selected_n_clusters,
+    }
+    mismatches = [
+        field
+        for field, value in expected.items()
+        if solution_schema.get(field) != value
+    ]
+    try:
+        recorded_value = float(solution_schema.get("selected_criterion_value"))
+    except (TypeError, ValueError):
+        recorded_value = math.nan
+    if not math.isclose(
+        recorded_value,
+        float(selected_value),
+        rel_tol=1e-12,
+        abs_tol=1e-12,
+    ):
+        mismatches.append("selected_criterion_value")
+    if mismatches:
+        raise ValueError(
+            "cluster selection manifest disagrees with candidate solution schema: "
+            f"{sorted(mismatches)}"
+        )
+
+
 def validate_trajectory_stability_upstream(
     *,
     representation: pd.DataFrame,
@@ -844,13 +891,16 @@ def run_trajectory_stability(
         representation_schema = loaded_inputs[
             "manifest:trajectory_representation_schema"
         ]
+        selection_manifest = loaded_inputs["manifest:cluster_selection"]
         solution_schema = loaded_inputs["manifest:candidate_cluster_solution_schema"]
         if not isinstance(representation, pd.DataFrame) or not isinstance(
             assignments, pd.DataFrame
         ):
             raise ValueError("trajectory representation and assignments must be tables")
-        if not isinstance(representation_schema, Mapping) or not isinstance(
-            solution_schema, Mapping
+        if (
+            not isinstance(representation_schema, Mapping)
+            or not isinstance(selection_manifest, Mapping)
+            or not isinstance(solution_schema, Mapping)
         ):
             raise ValueError("trajectory schemas must be JSON objects")
         _require_artifact_digest_link(
@@ -886,6 +936,10 @@ def run_trajectory_stability(
             representation=representation,
             assignments=assignments,
             representation_schema=representation_schema,
+            solution_schema=solution_schema,
+        )
+        _validate_cluster_selection_binding(
+            selection_payload=selection_manifest,
             solution_schema=solution_schema,
         )
         _empty_outputs(out_dir, id_column=id_column)
