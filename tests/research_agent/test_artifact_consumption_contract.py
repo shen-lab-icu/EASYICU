@@ -197,6 +197,33 @@ def test_existing_multi_table_visualization_gets_all_rows_contracts() -> None:
     )
 
 
+def test_split_figure_contracts_cover_tables_without_claiming_statistic_inputs() -> None:
+    plan = AnalysisPlan(
+        research_question="Fit a model and render its result table.",
+        steps=[
+            AnalysisStep(
+                step_id="model",
+                intent="Fit the model and render its declared figure.",
+                inputs=["exposure", "outcome"],
+                expected_outputs=[
+                    "table:model_results",
+                    "statistic:primary_effect",
+                    "figure:effect_summary",
+                ],
+                method="logistic_regression",
+            )
+        ],
+    )
+
+    revised, _ = _split_table_and_figure_outputs_in_plan(plan)
+
+    figure_step = revised.steps[1]
+    assert figure_step.inputs == ["table:model_results", "statistic:primary_effect"]
+    assert [
+        contract.input_key for contract in figure_step.input_consumption_contracts
+    ] == ["table:model_results"]
+
+
 def test_planner_normalizer_preserves_only_closed_consumption_fields() -> None:
     payload, dropped = _normalise_plan_payload(
         {
