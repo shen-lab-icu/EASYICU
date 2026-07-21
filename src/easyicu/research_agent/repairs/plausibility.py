@@ -23,20 +23,30 @@ def patch_flag_only_plausibility_range_rejection(
     code unchanged for provider repair.
     """
 
-    matching = []
+    matching: list[set[str] | None] = []
     for finding in repair_findings:
         detail = finding.detail or {}
         if (
             finding.validator == "llm_concept_auditor"
             and detail.get("issue_code") == "plausibility_range_exclusion_required"
             and detail.get("value_class") == "finite_outside_plausibility_range"
-            and isinstance(detail.get("variable"), str)
-            and str(detail["variable"]).isidentifier()
         ):
-            matching.append(str(detail["variable"]))
+            raw_variable = detail.get("variable")
+            if isinstance(raw_variable, str) and raw_variable.isidentifier():
+                matching.append({raw_variable})
+            elif (
+                isinstance(raw_variable, list)
+                and raw_variable
+                and all(isinstance(item, str) and item.strip() for item in raw_variable)
+            ):
+                # The auditor may report a semantic column family while the
+                # generated code validates it through one loop-local Series.
+                # In that case the structural match below must be globally
+                # unique because no local Python name can be inferred safely.
+                matching.append(None)
     if len(matching) != 1:
         return code
-    variable = matching[0]
+    accepted_variables = matching[0]
 
     try:
         tree = ast.parse(code)
@@ -54,7 +64,7 @@ def patch_flag_only_plausibility_range_rejection(
             and numeric_literal(node.operand)
         )
 
-    def bound_side(node: ast.AST) -> Optional[str]:
+    def bound_side(node: ast.AST) -> Optional[tuple[str, str]]:
         if not (
             isinstance(node, ast.Compare)
             and len(node.ops) == 1
@@ -63,32 +73,51 @@ def patch_flag_only_plausibility_range_rejection(
             return None
         left, right = node.left, node.comparators[0]
         operator = node.ops[0]
-        if (
-            isinstance(left, ast.Name)
-            and left.id == variable
-            and numeric_literal(right)
-        ):
+        if isinstance(left, ast.Name) and numeric_literal(right):
             if isinstance(operator, (ast.Lt, ast.LtE)):
-                return "lower"
+                return "lower", left.id
             if isinstance(operator, (ast.Gt, ast.GtE)):
-                return "upper"
-        if (
-            numeric_literal(left)
-            and isinstance(right, ast.Name)
-            and right.id == variable
-        ):
+                return "upper", left.id
+        if numeric_literal(left) and isinstance(right, ast.Name):
             if isinstance(operator, (ast.Gt, ast.GtE)):
-                return "lower"
+                return "lower", right.id
             if isinstance(operator, (ast.Lt, ast.LtE)):
-                return "upper"
+                return "upper", right.id
         return None
 
-    def range_mask(node: ast.AST) -> bool:
-        return (
-            isinstance(node, ast.BinOp)
-            and isinstance(node.op, ast.BitOr)
-            and {bound_side(node.left), bound_side(node.right)} == {"lower", "upper"}
-        )
+    def range_variable(node: ast.AST) -> Optional[str]:
+        if not (isinstance(node, ast.BinOp) and isinstance(node.op, ast.BitOr)):
+            return None
+        bounds = (bound_side(node.left), bound_side(node.right))
+        if any(bound is None for bound in bounds):
+            return None
+        assert bounds[0] is not None and bounds[1] is not None
+        if {bounds[0][0], bounds[1][0]} != {"lower", "upper"}:
+            return None
+        if bounds[0][1] != bounds[1][1]:
+            return None
+        return bounds[0][1]
+
+    def range_mask_variable(node: ast.AST) -> Optional[str]:
+        direct = range_variable(node)
+        if direct is not None:
+            return direct
+        if not (isinstance(node, ast.BinOp) and isinstance(node.op, ast.BitAnd)):
+            return None
+        for availability, bounds in ((node.left, node.right), (node.right, node.left)):
+            variable = range_variable(bounds)
+            if (
+                variable is not None
+                and isinstance(availability, ast.Call)
+                and isinstance(availability.func, ast.Attribute)
+                and availability.func.attr == "notna"
+                and isinstance(availability.func.value, ast.Name)
+                and availability.func.value.id == variable
+                and not availability.args
+                and not availability.keywords
+            ):
+                return variable
+        return None
 
     def is_raise_guard(node: ast.stmt, mask_name: str) -> bool:
         if not (
@@ -124,11 +153,20 @@ def patch_flag_only_plausibility_range_rejection(
             if not isinstance(statements, list):
                 continue
             for first, second in zip(statements, statements[1:]):
+                range_variable_name = (
+                    range_mask_variable(first.value)
+                    if isinstance(first, ast.Assign)
+                    else None
+                )
                 if not (
                     isinstance(first, ast.Assign)
                     and len(first.targets) == 1
                     and isinstance(first.targets[0], ast.Name)
-                    and range_mask(first.value)
+                    and range_variable_name is not None
+                    and (
+                        accepted_variables is None
+                        or range_variable_name in accepted_variables
+                    )
                 ):
                     continue
                 mask_name = first.targets[0].id
