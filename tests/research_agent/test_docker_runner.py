@@ -6,7 +6,8 @@ mock ``subprocess.run`` and ``shutil.which`` to verify:
 1. ``shutil.which("docker")`` is consulted at construction; missing
    binary raises a clean ``FileNotFoundError``.
 2. The composed argv contains the right safety knobs:
-   ``--rm``, ``--init``, ``--network=none``, RO cohort/run mounts, independent
+   explicit host removal, ``--init``, ``--network=none``, RO cohort/run mounts,
+   independent
    RW outputs-only mount, env injection, image trailer, and ``python -u``.
 3. ``cohort_parquet`` is mounted read-only at ``/cohort.parquet``
    and ``COHORT_PARQUET`` points there.
@@ -236,7 +237,7 @@ def test_build_command_has_safety_knobs(
 
     assert cmd[0] == runner.docker_executable
     assert cmd[1] == "run"
-    assert "--rm" in cmd
+    assert "--rm" not in cmd
     assert "--init" in cmd
     assert "--network=none" in cmd
     assert "--workdir=/easyicu-run/steps/step_x" in cmd
@@ -705,7 +706,7 @@ def test_runtime_provenance_timeout_tears_down_named_probe(
                 cmd=cmd,
                 timeout=kwargs.get("timeout", 0),
             )
-        if len(cmd) >= 2 and cmd[1] in {"stop", "wait"}:
+        if len(cmd) >= 2 and cmd[1] in {"stop", "wait", "rm"}:
             return _FakeProc()
         raise AssertionError(cmd)
 
@@ -732,6 +733,7 @@ def test_runtime_provenance_timeout_tears_down_named_probe(
     assert captured[2][1:3] == ["stop", "--timeout=5"]
     assert captured[2][-1] == container_name
     assert captured[3][1:] == ["wait", container_name]
+    assert captured[4][1:] == ["rm", "--force", container_name]
     assert not list(run_dir.glob(".docker-runtime-provenance-*.sentinel"))
     assert not list(run_dir.glob(".docker-runtime-provenance-*.cid"))
 
@@ -759,10 +761,13 @@ def test_run_handles_timeout(
     log_text = (result.cwd / "run.log").read_text(encoding="utf-8")
     assert "timed_out: True" in log_text
     assert "DockerRunner] timed out" in result.stderr
-    assert [cmd[1] for cmd in captured[-2:]] == ["stop", "wait"]
-    assert captured[-2][2] == "--timeout=5"
+    assert [cmd[1] for cmd in captured[-3:]] == ["stop", "wait", "rm"]
+    assert captured[-3][2] == "--timeout=5"
     cidfile_arg = next(
-        token for token in captured[-3] if token.startswith("--cidfile=")
+        token
+        for command in captured
+        for token in command
+        if token.startswith("--cidfile=")
     )
     assert not Path(cidfile_arg.split("=", 1)[1]).exists()
     assert not list((tmp_path / "run").glob("*.sentinel"))
@@ -791,7 +796,7 @@ def test_timeout_kills_when_graceful_stop_fails(
     result = runner.run(step_id="slow", code="print('hi')\n")
 
     assert result.timed_out is True
-    assert [cmd[1] for cmd in captured[-3:]] == ["stop", "kill", "wait"]
+    assert [cmd[1] for cmd in captured[-4:]] == ["stop", "kill", "wait", "rm"]
 
 
 def test_timeout_force_removes_when_stop_and_kill_fail(
@@ -816,8 +821,8 @@ def test_timeout_force_removes_when_stop_and_kill_fail(
 
     assert result.timed_out is True
     assert result.artefacts
-    assert [cmd[1] for cmd in captured[-4:]] == ["stop", "kill", "rm", "wait"]
-    assert captured[-2][2] == "--force"
+    assert [cmd[1] for cmd in captured[-4:]] == ["stop", "kill", "wait", "rm"]
+    assert captured[-1][2] == "--force"
     assert not list((tmp_path / "run").glob("*.sentinel"))
 
 
@@ -842,7 +847,7 @@ def test_nonzero_docker_return_collects_only_after_confirmed_teardown(
     assert result.timed_out is False
     assert result.outputs_safe_to_collect is True
     assert result.artefacts
-    assert [cmd[1] for cmd in captured[-2:]] == ["stop", "wait"]
+    assert [cmd[1] for cmd in captured[-3:]] == ["stop", "wait", "rm"]
     assert not list((tmp_path / "run").glob("*.sentinel"))
 
 
@@ -903,8 +908,8 @@ def test_successful_docker_return_hides_outputs_when_teardown_is_unconfirmed(
         "container",
         "stop",
         "kill",
-        "rm",
         "wait",
+        "rm",
         "container",
     ]
     assert len(list(run_dir.glob(".docker-successful-*.sentinel"))) == 1
@@ -940,8 +945,8 @@ def test_nonzero_docker_return_hides_outputs_when_teardown_is_unconfirmed(
     assert [cmd[1] for cmd in captured[-5:]] == [
         "stop",
         "kill",
-        "rm",
         "wait",
+        "rm",
         "container",
     ]
     assert len(list(run_dir.glob(".docker-failed-*.sentinel"))) == 1
@@ -967,14 +972,18 @@ def test_timeout_uses_unique_name_when_cidfile_is_unavailable(
     runner = ra.DockerRunner(workdir=tmp_path / "run", cohort_parquet=cohort)
     result = runner.run(step_id="slow", code="print('hi')\n")
 
-    run_cmd = captured[-3]
+    run_cmd = [
+        command
+        for command in captured
+        if any(token.startswith("--cidfile=") for token in command)
+    ][-1]
     container_name = next(
         token.removeprefix("--name=")
         for token in run_cmd
         if token.startswith("--name=")
     )
     assert result.timed_out is True
-    assert captured[-2][-1] == container_name
+    assert captured[-1][-1] == container_name
     assert not list((tmp_path / "run").glob("*.sentinel"))
 
 
@@ -1015,8 +1024,8 @@ def test_unconfirmed_timeout_hides_artifacts_and_retries_stale_cleanup(
     assert [cmd[1] for cmd in captured[-5:]] == [
         "stop",
         "kill",
-        "rm",
         "wait",
+        "rm",
         "container",
     ]
     sentinels = list(run_dir.glob(".docker-slow-*.sentinel"))
@@ -1030,7 +1039,7 @@ def test_unconfirmed_timeout_hides_artifacts_and_retries_stale_cleanup(
     succeeded = runner.run(step_id="slow", code="print('retry')\n")
 
     assert succeeded.succeeded
-    assert [cmd[1] for cmd in retry_commands[:2]] == ["stop", "wait"]
+    assert [cmd[1] for cmd in retry_commands[:3]] == ["stop", "wait", "rm"]
     assert not stale_output.exists()
     assert not list(run_dir.glob(".docker-slow-*.sentinel"))
     assert not list(run_dir.glob(".docker-slow-*.cid"))
@@ -1066,8 +1075,8 @@ def test_stale_sentinel_for_absent_container_does_not_block_retry(
     assert [cmd[1] for cmd in captured[:5]] == [
         "stop",
         "kill",
-        "rm",
         "wait",
+        "rm",
         "container",
     ]
     assert not sentinel.exists()

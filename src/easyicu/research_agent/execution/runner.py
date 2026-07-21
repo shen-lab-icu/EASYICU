@@ -1256,8 +1256,10 @@ class DockerRunner:
       mounted separately at ``/easyicu-step-output``.  Keeping the writable
       bind outside the read-only bind avoids Docker Desktop teardown stalls
       caused by nested bind mounts.
-    * ``--rm`` so containers don't pile up; ``--init`` so signal
-      handling is sane.
+    * analysis containers are explicitly removed by the host after ``wait``;
+      avoiding ``docker run --rm`` prevents Docker Desktop from blocking the
+      client while it releases bind mounts. ``--init`` keeps signal handling
+      sane.
     * the host's ``docker`` binary must be on PATH and the image
       must already be present (``docker pull`` is opt-in via
       ``pull_image=True``).
@@ -1571,7 +1573,6 @@ class DockerRunner:
         cmd: List[str] = [
             self.docker_executable,
             "run",
-            "--rm",
             "--init",
             "--read-only",
             "--cap-drop=ALL",
@@ -2110,23 +2111,25 @@ class DockerRunner:
             except (OSError, subprocess.TimeoutExpired):
                 return None
 
-        teardown_confirmed = False
         cleanup_notes: List[str] = []
-        teardown_commands = (
-            ("stop", ("stop", "--timeout=5", container_ref), 15.0),
-            ("kill", ("kill", container_ref), 10.0),
-            ("rm", ("rm", "--force", container_ref), 10.0),
-        )
-        for label, args, timeout in teardown_commands:
-            proc = _control(args, timeout=timeout)
-            teardown_confirmed = proc is not None and proc.returncode == 0
-            if teardown_confirmed:
-                break
-            cleanup_notes.append(f"{label} failed")
-
+        stop_proc = _control(("stop", "--timeout=5", container_ref), timeout=15.0)
+        if stop_proc is None or stop_proc.returncode != 0:
+            cleanup_notes.append("stop failed")
+            kill_proc = _control(("kill", container_ref), timeout=10.0)
+            if kill_proc is None or kill_proc.returncode != 0:
+                cleanup_notes.append("kill failed")
         wait_proc = _control(("wait", container_ref), timeout=10.0)
-        if not teardown_confirmed and (wait_proc is None or wait_proc.returncode != 0):
+        if wait_proc is None or wait_proc.returncode != 0:
             cleanup_notes.append("wait failed")
+
+        # Analysis containers deliberately omit ``--rm`` so the synchronous
+        # docker client returns as soon as PID 1 exits instead of waiting for
+        # Docker Desktop bind-mount teardown.  Removal is therefore always an
+        # explicit host-owned phase after ``wait``.
+        rm_proc = _control(("rm", "--force", container_ref), timeout=10.0)
+        teardown_confirmed = rm_proc is not None and rm_proc.returncode == 0
+        if not teardown_confirmed:
+            cleanup_notes.append("rm failed")
 
         if not teardown_confirmed:
             inspect_proc = _control(
@@ -2155,14 +2158,12 @@ class DockerRunner:
         self,
         container_ref: str,
     ) -> Tuple[bool, str]:
-        """Confirm that ``docker run --rm`` released the completed container.
+        """Confirm that the completed analysis container has been removed.
 
-        A zero process return code proves that the generated program exited,
-        but it does not prove that Docker Desktop has finished removing the
-        container and releasing its nested bind mounts.  Inspect once for the
-        normal already-removed case; if the container is still visible (or the
-        inspect result is ambiguous), use the existing fail-closed teardown
-        path before the host reuses or scans the output directory.
+        A zero process return code proves that the generated program exited.
+        It does not prove that its bind mounts are quiescent, so an analysis
+        container that remains visible is explicitly waited and removed before
+        the host reuses or scans the output directory.
         """
 
         try:
