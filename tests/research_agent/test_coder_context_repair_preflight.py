@@ -147,6 +147,54 @@ def test_step_scoped_context_keeps_all_declared_source_concept_companions(ra):
     assert len(scoped.variables) <= 36
 
 
+def test_step_scoped_context_does_not_auto_add_unrequested_time_siblings(ra):
+    variables = [
+        ra.ConceptDescriptor(
+            name="event_first", dtype="float64", source_concept="event"
+        ),
+        ra.ConceptDescriptor(name="event_n", dtype="int64", source_concept="event"),
+        ra.ConceptDescriptor(
+            name="event_measured", dtype="bool", source_concept="event"
+        ),
+        ra.ConceptDescriptor(
+            name="event_first_time", dtype="float64", source_concept="event"
+        ),
+        ra.ConceptDescriptor(
+            name="event_last_time", dtype="float64", source_concept="event"
+        ),
+    ]
+    context = ra.ResearchContext(
+        research_question="Audit the Planner-selected event value.",
+        cohort=ra.CohortDescriptor(
+            cohort_name="demo", database="synthetic", n_stays=20, n_patients=18
+        ),
+        variables=variables,
+    )
+    undeclared_time_step = ra.AnalysisStep(
+        step_id="event_qc",
+        intent="Audit value availability.",
+        inputs=["event_first"],
+        expected_outputs=["table:event_qc"],
+        method="data_quality_audit",
+    )
+    declared_time_step = undeclared_time_step.model_copy(
+        update={"inputs": ["event_first", "event_first_time"]}
+    )
+
+    automatic_names = {
+        variable.name
+        for variable in scoped_coder_context(context, undeclared_time_step).variables
+    }
+    declared_names = {
+        variable.name
+        for variable in scoped_coder_context(context, declared_time_step).variables
+    }
+
+    assert automatic_names == {"event_first", "event_n", "event_measured"}
+    assert "event_first_time" in declared_names
+    assert "event_last_time" not in declared_names
+
+
 def test_step_scoped_context_drops_unrequested_sibling_summaries(ra):
     variables = [
         ra.ConceptDescriptor(

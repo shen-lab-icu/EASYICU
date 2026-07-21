@@ -292,6 +292,65 @@ def test_lossy_coercion_guard_is_a_typed_deterministic_minimal_repair(ra):
     assert _lossy_findings(repaired, ra) == []
 
 
+def test_lossy_guard_repairs_exact_scalar_count_before_audit_append(ra):
+    from easyicu.research_agent.repairs.source import (
+        deterministic_concept_audit_repair,
+    )
+
+    script = """
+import pandas as pd
+
+def strict_numeric(series, audit):
+    original = series.copy()
+    coerced = pd.to_numeric(original, errors="coerce")
+    newly_invalid = int((original.notna() & coerced.isna()).sum())
+    audit.append({"newly_invalid_n": newly_invalid})
+    if newly_invalid > 0:
+        raise ValueError("numeric coercion invalidated observed values")
+    return coerced
+"""
+
+    repaired, names = deterministic_concept_audit_repair(
+        script,
+        [],
+        repair_reasons=[RepairReason.LOSSY_NUMERIC_COERCION],
+        repair_findings=_lossy_findings(script, ra),
+    )
+
+    assert names == ["lossy_numeric_coercion_guard_v1"]
+    assert repaired.index("_easyicu_lossy_numeric_coercion_guard_v1") < repaired.index(
+        "audit.append"
+    )
+    assert _lossy_findings(repaired, ra) == []
+
+
+def test_lossy_guard_refuses_ambiguous_scalar_counts(ra):
+    from easyicu.research_agent.repairs.source import (
+        deterministic_concept_audit_repair,
+    )
+
+    script = """
+import pandas as pd
+
+raw_a = cohort["a"]
+num_a = pd.to_numeric(raw_a, errors="coerce")
+loss_a = int((raw_a.notna() & num_a.isna()).sum())
+raw_b = cohort["b"]
+num_b = pd.to_numeric(raw_b, errors="coerce")
+loss_b = int((raw_b.notna() & num_b.isna()).sum())
+"""
+
+    repaired, names = deterministic_concept_audit_repair(
+        script,
+        [],
+        repair_reasons=[RepairReason.LOSSY_NUMERIC_COERCION],
+        repair_findings=_lossy_findings(script, ra),
+    )
+
+    assert repaired == script
+    assert names == []
+
+
 @pytest.mark.parametrize(
     ("key_source", "runtime_key"),
     [

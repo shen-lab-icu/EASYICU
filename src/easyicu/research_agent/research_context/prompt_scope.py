@@ -585,6 +585,25 @@ def _is_required_source_companion(variable: object) -> bool:
     )
 
 
+def _is_automatically_required_source_companion(variable: object) -> bool:
+    """Return provenance fields that follow a selected value automatically.
+
+    Count/measurement/status coordinates are needed to distinguish observed,
+    missing, and structurally unavailable values. Timing columns are distinct
+    scientific inputs: include them when the Planner declares them, but do not
+    pull every unrequested sibling time column into a wide step merely because
+    another representation from the same source concept was selected.
+    """
+
+    name = str(getattr(variable, "name", "") or "").strip().lower()
+    return bool(
+        re.search(
+            r"(?:_n|_measured|_status|_valid)(?:_\d+(?:h|d))?$",
+            name,
+        )
+    )
+
+
 def scoped_coder_context(
     context: ResearchContext,
     step: AnalysisStep,
@@ -638,7 +657,7 @@ def scoped_coder_context(
             or name in direct
             or name in code_referenced
             or (
-                _is_required_source_companion(variable)
+                _is_automatically_required_source_companion(variable)
                 and (
                     _variable_family(name) in families
                     or (source_concept and source_concept in source_concepts)
