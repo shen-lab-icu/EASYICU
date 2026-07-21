@@ -4,6 +4,14 @@ from __future__ import annotations
 
 import ast
 import importlib.util
+import re
+
+_KNOWN_HOST_HELPER_RELOCATIONS = {
+    (
+        "easyicu.research_agent.methods.validation",
+        "strict_numeric_input",
+    ): "easyicu.research_agent.methods.descriptive_inputs",
+}
 
 
 def host_module_is_available(module_name: str) -> bool:
@@ -37,4 +45,51 @@ def insert_after_imports(source: str, block: str) -> str:
     return "\n".join(lines)
 
 
-__all__ = ["host_module_is_available", "insert_after_imports"]
+def patch_known_host_helper_import(source: str, diagnostic: str) -> str | None:
+    """Relocate one exact known host helper without inventing an implementation.
+
+    This handles both the original bad import and the one-line fail-closed stub
+    previously emitted by the generic missing-module repair.  Only a closed
+    source-module/helper mapping is accepted.
+    """
+
+    lowered = str(diagnostic or "").lower()
+    for (old_module, helper), new_module in _KNOWN_HOST_HELPER_RELOCATIONS.items():
+        old_import = f"from {old_module} import {helper}"
+        new_import = f"from {new_module} import {helper}"
+        if (
+            old_import in source
+            and f"no module named '{old_module}'" in lowered
+            and source.count(old_import) == 1
+        ):
+            repaired = source.replace(old_import, new_import, 1)
+        else:
+            stub_pattern = re.compile(
+                r"# auto-stubs for stripped fake imports\n"
+                + rf"def {re.escape(helper)}\(\*args, \*\*kwargs\): "
+                + rf"raise NotImplementedError\(\"{re.escape(helper)} from "
+                + rf"{re.escape(old_module)} is not available; "
+                + r"reimplement inline using numpy/scipy/statsmodels\.\"\)\n?"
+            )
+            stripped_comment = f"# stripped: import from non-existent {old_module}"
+            if not (
+                stub_pattern.search(source)
+                and stripped_comment in source
+                and f"{helper} from {old_module} is not available" in lowered
+            ):
+                continue
+            repaired = stub_pattern.sub(new_import + "\n", source, count=1)
+            repaired = repaired.replace(stripped_comment, "", 1)
+        try:
+            ast.parse(repaired)
+        except SyntaxError:
+            return None
+        return repaired
+    return None
+
+
+__all__ = [
+    "host_module_is_available",
+    "insert_after_imports",
+    "patch_known_host_helper_import",
+]

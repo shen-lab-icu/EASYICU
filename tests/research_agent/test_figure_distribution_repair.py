@@ -3,6 +3,7 @@ from __future__ import annotations
 from easyicu.research_agent.repairs.figure_distribution import (
     patch_categorical_distribution_clinical_bin_role,
 )
+from easyicu.research_agent.repairs.import_repair import patch_known_host_helper_import
 from easyicu.research_agent.repairs.source import _deterministic_summary_repair
 
 SUMMARY = {
@@ -79,3 +80,53 @@ def test_is_idempotent() -> None:
     once = patch_categorical_distribution_clinical_bin_role(CODE, SUMMARY)
     assert once is not None
     assert patch_categorical_distribution_clinical_bin_role(once, SUMMARY) is None
+
+
+def test_relocates_exact_known_host_helper_import_after_module_error() -> None:
+    code = (
+        "from easyicu.research_agent.methods.validation "
+        "import strict_numeric_input\n"
+    )
+    repaired = patch_known_host_helper_import(
+        code,
+        "ModuleNotFoundError: No module named "
+        "'easyicu.research_agent.methods.validation'",
+    )
+    assert repaired == (
+        "from easyicu.research_agent.methods.descriptive_inputs "
+        "import strict_numeric_input\n"
+    )
+
+
+def test_recovers_exact_fail_closed_stub_to_known_host_helper() -> None:
+    code = """# auto-stubs for stripped fake imports
+def strict_numeric_input(*args, **kwargs): raise NotImplementedError("strict_numeric_input from easyicu.research_agent.methods.validation is not available; reimplement inline using numpy/scipy/statsmodels.")
+# stripped: import from non-existent easyicu.research_agent.methods.validation
+value = strict_numeric_input(series).values
+"""
+    repaired = patch_known_host_helper_import(
+        code,
+        {
+            "error": (
+                "strict_numeric_input from easyicu.research_agent.methods.validation "
+                "is not available; reimplement inline using numpy/scipy/statsmodels."
+            )
+        },
+    )
+    assert repaired is not None
+    assert "methods.descriptive_inputs import strict_numeric_input" in repaired
+    assert "auto-stubs" not in repaired
+    assert "stripped: import" not in repaired
+    assert "value = strict_numeric_input(series).values" in repaired
+
+
+def test_known_host_helper_relocation_rejects_unclosed_helpers() -> None:
+    code = "from easyicu.research_agent.methods.validation import fit_model\n"
+    assert (
+        patch_known_host_helper_import(
+            code,
+            "ModuleNotFoundError: No module named "
+            "'easyicu.research_agent.methods.validation'",
+        )
+        is None
+    )

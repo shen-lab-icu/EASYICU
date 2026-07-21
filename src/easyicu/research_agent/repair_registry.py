@@ -278,6 +278,7 @@ _SYNTACTIC_REPAIRS = {
     "replace_hallucinated_figure_utils_import_v1",
     "prediction_calibration_import_fix_v1",
     "publication_export_audit_paths_v1",
+    "relocate_known_host_helper_import_v1",
     "resolved_context_digest_load_v1",
     "resolved_input_manifest_env_v1",
     "resolved_input_identity_key_v1",

@@ -80,7 +80,11 @@ from .helpers import (  # noqa: F401  (re-exported for back-compat)
     _statsmodels_repair_allowed_for_family,
     _strip_columns_from_list_literals,
 )
-from .import_repair import host_module_is_available, insert_after_imports
+from .import_repair import (
+    host_module_is_available,
+    insert_after_imports,
+    patch_known_host_helper_import,
+)
 from .reasons import RepairReason
 from .typed_input import (
     patch_resolved_input_cohort_env_shadow,
@@ -4047,6 +4051,11 @@ def _deterministic_summary_repair(
 ) -> Optional[tuple[str, str]]:
     if not isinstance(step_summary, dict) or not step_summary:
         return None
+    host_helper_import_repair = "relocate_known_host_helper_import_v1"
+    if previous_repair != host_helper_import_repair:
+        repaired = patch_known_host_helper_import(code, str(step_summary))
+        if repaired is not None and repaired != code:
+            return host_helper_import_repair, repaired
     clinical_bin_repair = "categorical_distribution_clinical_bin_role_v1"
     if previous_repair != clinical_bin_repair:
         repaired = patch_categorical_distribution_clinical_bin_role(
@@ -4993,6 +5002,12 @@ def _deterministic_runner_repair(
     binary_model_repair_allowed = _family_allows_binary_model_repair(analysis_family)
     if repair := _finding_json_repair(code, run_log, previous_repair):
         return repair
+
+    host_helper_import_repair = "relocate_known_host_helper_import_v1"
+    if previous_repair != host_helper_import_repair:
+        repaired = patch_known_host_helper_import(code, run_log)
+        if repaired is not None and repaired != code:
+            return host_helper_import_repair, repaired
 
     manifest_env_repair = "resolved_input_manifest_env_v1"
     if previous_repair != manifest_env_repair:
