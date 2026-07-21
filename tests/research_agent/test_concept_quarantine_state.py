@@ -300,3 +300,19 @@ def test_execute_phase_keeps_quarantine_lifecycle_on_one_state_object() -> None:
         and node.name == "_use_quarantined_draft"
     )
     assert not any(isinstance(node, ast.Nonlocal) for node in ast.walk(use_draft))
+
+
+def test_execute_phase_defers_only_host_authorized_provider_failure_quarantine() -> (
+    None
+):
+    execute_one_step = _execute_one_step_node()
+    guarded_blocks = [
+        node
+        for node in ast.walk(execute_one_step)
+        if isinstance(node, ast.If)
+        and "quarantine_state.draft_active" in ast.unparse(node.test)
+        and "quarantine_state.repair_succeeded" in ast.unparse(node.test)
+    ]
+
+    assert len(guarded_blocks) == 1
+    assert "provider_failure_deferred" in ast.unparse(guarded_blocks[0].test)

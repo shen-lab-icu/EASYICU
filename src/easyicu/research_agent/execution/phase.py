@@ -7539,7 +7539,14 @@ def run_execute_phase(
                 )
                 return step_record
 
-        if quarantine_state.draft_active and not quarantine_state.repair_succeeded:
+        provider_failure_deferred = bool(
+            step_record.get("concept_audit_provider_failure_deferred")
+        )
+        if (
+            quarantine_state.draft_active
+            and not quarantine_state.repair_succeeded
+            and not provider_failure_deferred
+        ):
             hard_gate_finding = ValidationFinding(
                 validator="resume",
                 severity="error",
@@ -7574,7 +7581,7 @@ def run_execute_phase(
             quarantine_state.repair_succeeded
             or quarantine_state.policy_superseded
             or quarantine_state.deterministic_revalidated
-        ):
+        ) and not provider_failure_deferred:
             try:
                 clear_quarantined_concept_draft(
                     run_dir=run_dir,
