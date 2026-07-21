@@ -795,8 +795,9 @@ def test_sealed_figure_preflight_supersedes_stale_resume_capsule_candidate():
     from easyicu.research_agent.execution import phase as pipeline_execute
 
     source = inspect.getsource(pipeline_execute.run_execute_phase)
-    selection_start = source.index(
-        "if preflight_trajectory_stability_code is not None:"
+    selection_start = source.index("standard_executor = select_standard_executor(")
+    standard_branch = source.index(
+        "if preflight_standard_code is not None:", selection_start
     )
     figure_branch = source.index(
         "elif preflight_figure_code is not None:", selection_start
@@ -806,7 +807,7 @@ def test_sealed_figure_preflight_supersedes_stale_resume_capsule_candidate():
         selection_start,
     )
 
-    assert figure_branch < resumed_branch
+    assert standard_branch < figure_branch < resumed_branch
     figure_body = source[figure_branch:resumed_branch]
     assert "code = preflight_figure_code" in figure_body
     assert "code = step_attempt_state.selected_resume_capsule.candidate_code" not in (
@@ -818,9 +819,7 @@ def test_authorized_resume_repair_supersedes_failed_candidate_capsule():
     from easyicu.research_agent.execution import phase as pipeline_execute
 
     source = inspect.getsource(pipeline_execute.run_execute_phase)
-    selection_start = source.index(
-        "if preflight_trajectory_stability_code is not None:"
-    )
+    selection_start = source.index("standard_executor = select_standard_executor(")
     repair_branch = source.index(
         "elif resume_deterministic_repair_code is not None:", selection_start
     )
@@ -834,12 +833,16 @@ def test_authorized_resume_repair_supersedes_failed_candidate_capsule():
 
 def test_stability_standard_executor_supersedes_stale_resume_capsule():
     from easyicu.research_agent.execution import phase as pipeline_execute
+    from easyicu.research_agent.execution.runners import selection
 
     source = inspect.getsource(pipeline_execute.run_execute_phase)
-    assignment = source[source.index("preflight_trajectory_stability_code =") :]
+    assignment = source[source.index("standard_executor = select_standard_executor(") :]
     assignment = assignment[: assignment.index("preflight_figure_code =")]
+    selector_source = inspect.getsource(selection.select_standard_executor)
 
-    assert "_deterministic_trajectory_stability_code(" in assignment
+    assert "trajectory_stability_executor_owns_step(" in selector_source
+    assert "trajectory_stability_executor_code(" in selector_source
+    assert "preflight_standard_code = standard_executor.code" in assignment
     assert "selected_resume_capsule" not in assignment
 
 
@@ -1004,9 +1007,47 @@ def test_execute_phase_preserves_repair_provenance_across_concept_and_runtime():
     assert source.count("worker_progress.llm_repair_used = True") == 5
     assert source.count("worker_progress.generation_mode(") == 4
     assert source.count("llm_repair_used=False") == 1
-    # A repaired resumed script must receive a fresh analyzer interpretation;
-    # only genuinely unchanged reuse and deterministic fallback skip it.
-    assert 'final_generation_mode in {"resumed_code_reuse", "fallback"}' in source
+    assert "_non_llm_interpretation_for_generation(" in source
+
+
+@pytest.mark.parametrize(
+    ("generation_mode", "expected_evidence_mode"),
+    [
+        ("resumed_code_reuse", "resumed_code_reuse"),
+        ("fallback", "deterministic_fallback"),
+        ("deterministic_standard", "deterministic_standard"),
+    ],
+)
+def test_unchanged_or_host_owned_code_skips_llm_interpretation(
+    generation_mode, expected_evidence_mode
+):
+    from easyicu.research_agent.execution.phase import (
+        _non_llm_interpretation_for_generation,
+    )
+
+    result = _non_llm_interpretation_for_generation(
+        step_id="02_table_one",
+        generation_mode=generation_mode,
+    )
+
+    assert result is not None
+    interpretation, evidence_mode = result
+    assert "no new LLM interpretation was requested" in interpretation
+    assert evidence_mode == expected_evidence_mode
+
+
+def test_agent_generated_code_keeps_llm_interpretation_path():
+    from easyicu.research_agent.execution.phase import (
+        _non_llm_interpretation_for_generation,
+    )
+
+    assert (
+        _non_llm_interpretation_for_generation(
+            step_id="03_primary_model",
+            generation_mode="llm_generated",
+        )
+        is None
+    )
 
 
 def test_execute_phase_routes_figure_contracts_through_early_repair_loop():

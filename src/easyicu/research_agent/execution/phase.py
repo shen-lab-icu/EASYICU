@@ -3508,6 +3508,30 @@ def _execution_input_authority_integrity_finding(
     )
 
 
+def _non_llm_interpretation_for_generation(
+    *, step_id: str, generation_mode: str
+) -> Optional[Tuple[str, str]]:
+    mode_labels = {
+        "resumed_code_reuse": "resumed agent-generated code",
+        "fallback": "deterministic fallback code",
+        "deterministic_standard": "host-owned deterministic standard code",
+    }
+    mode_label = mode_labels.get(generation_mode)
+    if mode_label is None:
+        return None
+    interpretation_mode = {
+        "resumed_code_reuse": "resumed_code_reuse",
+        "fallback": "deterministic_fallback",
+        "deterministic_standard": "deterministic_standard",
+    }[generation_mode]
+    return (
+        f"Step `{step_id}` was executed from {mode_label}. "
+        "Review the registered step summary and artefacts for numeric "
+        "interpretation; no new LLM interpretation was requested.",
+        interpretation_mode,
+    )
+
+
 def run_execute_phase(
     pipeline: ExecutePhaseHost,
     *,
@@ -6457,8 +6481,7 @@ def run_execute_phase(
         quarantined_resume_draft = (
             None
             if (
-                preflight_standard_code is not None
-                or preflight_figure_code is not None
+                preflight_standard_code is not None or preflight_figure_code is not None
             )
             else resume_controller.quarantined_concept_draft_for_step(step.step_id)
         )
@@ -10741,25 +10764,15 @@ def run_execute_phase(
             )
             _flush_partial_manifest()
 
-        interp_generation_mode = "llm"
         final_generation_mode = str(step_record.get("generation_mode") or "")
-        if final_generation_mode in {"resumed_code_reuse", "fallback"}:
-            mode_label = (
-                "resumed agent-generated code"
-                if final_generation_mode == "resumed_code_reuse"
-                else "deterministic fallback code"
-            )
-            interpretation = (
-                f"Step `{step.step_id}` was executed from {mode_label}. "
-                "Review the registered step summary and artefacts for numeric "
-                "interpretation; no new LLM interpretation was requested."
-            )
-            interp_generation_mode = (
-                "resumed_code_reuse"
-                if final_generation_mode == "resumed_code_reuse"
-                else "deterministic_fallback"
-            )
+        non_llm_interpretation = _non_llm_interpretation_for_generation(
+            step_id=step.step_id,
+            generation_mode=final_generation_mode,
+        )
+        if non_llm_interpretation is not None:
+            interpretation, interp_generation_mode = non_llm_interpretation
         else:
+            interp_generation_mode = "llm"
             final_code_digest = sha256_of_bytes(code.encode("utf-8"))
             final_audit_token = concept_audit.tokens_by_digest.get(final_code_digest)
             if (
