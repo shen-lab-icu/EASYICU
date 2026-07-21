@@ -1472,6 +1472,21 @@ def test_explicit_false_effect_created_flag_is_not_an_effect_result():
     assert "unauthorized_effect_product" not in _kinds(findings)
 
 
+def test_explicit_true_no_effect_flag_is_not_an_effect_result():
+    findings = declared_product_contract_findings(
+        step=_step(outputs=["table:distribution"]),
+        step_summary={
+            "output_files": {"table:distribution": "distribution.csv"},
+            "distribution_interpretation": {
+                "no_effect_estimate_or_model_fitted": True,
+            },
+        },
+        effect_method_authorized=False,
+    )
+
+    assert "unauthorized_effect_product" not in _kinds(findings)
+
+
 def test_explicit_true_effect_created_flag_remains_fail_closed():
     findings = declared_product_contract_findings(
         step=_step(outputs=["artifact:analysis_cohort"]),

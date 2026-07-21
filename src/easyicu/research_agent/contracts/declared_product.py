@@ -2623,6 +2623,7 @@ def _summary_scalar_products(value: Any) -> set[tuple[str, str]]:
                     child is not None
                     and child != ""
                     and not (isinstance(child, bool) and child is False)
+                    and not _is_explicit_effect_absence_flag(key, child)
                     and not _is_file_path(child)
                     and not _is_noncomputed_result_status(child)
                 )
@@ -2665,6 +2666,18 @@ def _is_noncomputed_result_status(value: Any) -> bool:
     """Return whether a scalar explicitly says no scientific result exists."""
 
     return isinstance(value, str) and _normalise(value) in _NONCOMPUTED_RESULT_STATUSES
+
+
+def _is_explicit_effect_absence_flag(name: object, value: Any) -> bool:
+    """Recognise a true boolean that explicitly says no effect result exists.
+
+    These flags document output scope; they are not themselves scientific
+    statistics.  Keep the rule deliberately narrow: only a literal boolean
+    ``True`` and a normalized ``no_effect...`` field qualify.  Positive flags
+    such as ``effect_estimates_created=True`` remain fail-closed.
+    """
+
+    return value is True and _normalise(name).startswith("no_effect")
 
 
 def _valid_inline_statistic_descriptor(
@@ -3159,6 +3172,7 @@ def _effect_summary_paths(summary: Mapping[str, Any]) -> list[str]:
                     and child is not None
                     and child != ""
                     and not (isinstance(child, bool) and child is False)
+                    and not _is_explicit_effect_absence_flag(key, child)
                     and not _is_file_path(child)
                     and not _is_noncomputed_result_status(child)
                 ):
