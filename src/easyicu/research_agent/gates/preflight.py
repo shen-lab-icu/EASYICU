@@ -21,8 +21,9 @@ from .ast_semantics import (
     literal_observational_getattr,
 )
 from .numeric_reduction import is_array_boolean_predicate as _is_array_boolean_predicate
+from .numeric_reduction import is_proven_array_boolean_predicate
 from .numeric_reduction import misnested_boolean_mask_reduction_expression
-from .numeric_reduction import unambiguous_boolean_predicate_aliases
+from .numeric_reduction import unambiguous_array_predicate_aliases
 from .coercion_guard import (
     audit_record_assignment_for_count,
     guard_failure_is_terminal as _guard_failure_escapes,
@@ -5385,11 +5386,16 @@ def _scalar_cast_before_reduction_findings(
     unsafe_lines.extend(
         int(node.lineno) for node in _unreduced_boolean_mask_count_casts(tree)
     )
-    aliases = unambiguous_boolean_predicate_aliases(tree)
+    aliases = unambiguous_array_predicate_aliases(tree)
     unsafe_lines.extend(
         int(node.lineno)
         for node in ast.walk(tree)
-        if misnested_boolean_mask_reduction_expression(node, aliases=aliases) is not None
+        if misnested_boolean_mask_reduction_expression(
+            node,
+            aliases=aliases.boolean,
+            array_aliases=aliases.values,
+        )
+        is not None
     )
 
     if not unsafe_lines:
@@ -5453,6 +5459,7 @@ def _unreduced_boolean_mask_count_casts(tree: ast.Module) -> list[ast.Call]:
     names.
     """
 
+    alias_proof = unambiguous_array_predicate_aliases(tree)
     scopes: list[list[ast.stmt]] = [tree.body]
     scopes.extend(
         node.body
@@ -5482,7 +5489,9 @@ def _unreduced_boolean_mask_count_casts(tree: ast.Module) -> list[ast.Call]:
                 and not value.keywords
                 and isinstance(value.args[0], ast.BinOp)
                 and isinstance(value.args[0].op, (ast.BitAnd, ast.BitOr))
-                and _is_array_boolean_predicate(value.args[0])
+                and is_proven_array_boolean_predicate(
+                    value.args[0], aliases=alias_proof
+                )
             ):
                 continue
             candidate_by_name[targets[0].id] = (node, value)

@@ -844,6 +844,44 @@ invalid_nonfinite = int(
     assert repaired == code
 
 
+def test_mechanical_preflight_repairs_composite_mask_with_array_value_alias(ra):
+    code = """
+import numpy as np
+import pandas as pd
+
+values = pd.Series([1.0, np.inf, -1.0, 1.5, np.nan])
+nonmissing = values.notna()
+array_values = values.to_numpy(dtype=float)
+invalid_n = int(
+    nonmissing
+    & (
+        ~np.isfinite(array_values)
+        | (array_values < 0)
+        | (array_values != np.floor(array_values))
+    )
+)
+if invalid_n != 0:
+    detected = True
+else:
+    detected = False
+"""
+    findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+    messages = [
+        finding.detail.get("reason")
+        for finding in findings
+        if finding.detail
+        and finding.detail.get("reason") == "scalar_cast_before_reduction"
+    ]
+    repaired, repair_names = deterministic_concept_audit_repair(code, messages)
+    namespace = {}
+    exec(repaired, namespace)
+
+    assert messages == ["scalar_cast_before_reduction"]
+    assert repair_names == ["scalar_cast_before_reduction_v1"]
+    assert namespace["invalid_n"] == 3
+    assert namespace["detected"] is True
+
+
 def test_mechanical_preflight_does_not_move_scalar_right_reduction(ra):
     code = """
 left = True
