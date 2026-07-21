@@ -798,6 +798,7 @@ def _resolved_typed_input_binding(
         break
     contract_required = product_name in {
         "assignment_model",
+        "exposure_definition",
         "primary_exposure_definition",
         "prespecified_confounder_set",
     }
@@ -812,11 +813,9 @@ def _resolved_typed_input_binding(
         "produced_by_step": binding["produced_by_step"],
     }
     if binding["evidence_kind"] == "table":
-        # Table schema v2/v3 is deliberately representation-only. Arbitrary
-        # producer-authored role prose must not become a second source of
-        # scientific authority. Use the verified physical evidence kind rather
-        # than the Planner-facing alias: dataset/cohort and generic artifact
-        # products may also resolve to a digest-bound table.
+        # Table schema v2/v3 is representation-only: producer-authored role prose
+        # must not become a second scientific authority. Use the verified physical
+        # kind because dataset/cohort/generic artifacts may resolve to a bound table.
         schema_receipt = typed_product_schema_receipt(
             artifact_path=verified_path,
             expected_sha256=binding["sha256"],
