@@ -9,6 +9,85 @@ from ..gates.typed_input import resolved_input_shadowed_by_cohort_env_findings
 from ..schema import ValidationFinding
 
 
+def patch_resolved_input_manifest_env(code: str, run_log: str) -> str:
+    """Use the host-issued resolved-input manifest path after an exact failure.
+
+    The generated script sometimes derives ``resolved_inputs.json`` from the
+    run directory even though the host provides its authoritative path through
+    ``EASYICU_RESOLVED_INPUTS_JSON``.  This repair is deliberately limited to
+    that exact runtime failure and to a script which proves both the run-dir
+    binding and one literal ``run_dir / "resolved_inputs.json"`` expression.
+    """
+
+    if "resolved input manifest not found:" not in (run_log or "").lower():
+        return code
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return code
+
+    def env_path_name(node: ast.AST, env_name: str) -> bool:
+        return (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "Path"
+            and len(node.args) == 1
+            and not node.keywords
+            and isinstance(node.args[0], ast.Subscript)
+            and isinstance(node.args[0].value, ast.Attribute)
+            and isinstance(node.args[0].value.value, ast.Name)
+            and node.args[0].value.value.id == "os"
+            and node.args[0].value.attr == "environ"
+            and isinstance(node.args[0].slice, ast.Constant)
+            and node.args[0].slice.value == env_name
+        )
+
+    run_dir_names = {
+        target.id
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Assign)
+        and len(node.targets) == 1
+        and isinstance((target := node.targets[0]), ast.Name)
+        and env_path_name(node.value, "EASYICU_RUN_DIR")
+    }
+    candidates = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.BinOp)
+        and isinstance(node.op, ast.Div)
+        and isinstance(node.left, ast.Name)
+        and node.left.id in run_dir_names
+        and isinstance(node.right, ast.Constant)
+        and node.right.value == "resolved_inputs.json"
+        and node.end_lineno is not None
+        and node.end_col_offset is not None
+    ]
+    if len(candidates) != 1:
+        return code
+    candidate = candidates[0]
+    lines = code.splitlines(keepends=True)
+    line_starts: list[int] = []
+    offset = 0
+    for line in lines:
+        line_starts.append(offset)
+        offset += len(line)
+
+    def absolute_offset(lineno: int, utf8_col: int) -> int:
+        line = lines[lineno - 1]
+        char_col = len(line.encode("utf-8")[:utf8_col].decode("utf-8"))
+        return line_starts[lineno - 1] + char_col
+
+    start = absolute_offset(candidate.lineno, candidate.col_offset)
+    end = absolute_offset(candidate.end_lineno, candidate.end_col_offset)
+    replacement = 'Path(os.environ["EASYICU_RESOLVED_INPUTS_JSON"])'
+    repaired = code[:start] + replacement + code[end:]
+    try:
+        ast.parse(repaired)
+    except SyntaxError:
+        return code
+    return repaired
+
+
 def patch_resolved_input_relative_path_root(
     code: str,
     *,
@@ -195,6 +274,7 @@ def patch_resolved_input_cohort_env_shadow(
 
 
 __all__ = [
+    "patch_resolved_input_manifest_env",
     "patch_resolved_input_cohort_env_shadow",
     "patch_resolved_input_relative_path_root",
 ]

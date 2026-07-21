@@ -77,6 +77,7 @@ from .import_repair import host_module_is_available, insert_after_imports
 from .reasons import RepairReason
 from .typed_input import (
     patch_resolved_input_cohort_env_shadow,
+    patch_resolved_input_manifest_env,
     patch_resolved_input_relative_path_root,
 )
 from ..schema import ValidationFinding
@@ -5107,6 +5108,12 @@ def _deterministic_runner_repair(
     binary_model_repair_allowed = _family_allows_binary_model_repair(analysis_family)
     if repair := _finding_json_repair(code, run_log, previous_repair):
         return repair
+
+    manifest_env_repair = "resolved_input_manifest_env_v1"
+    if previous_repair != manifest_env_repair:
+        repaired = patch_resolved_input_manifest_env(code, run_log)
+        if repaired != code:
+            return manifest_env_repair, repaired
 
     merge_collision_repair = "pandas_merge_dynamic_column_collision_guard_v1"
     if previous_repair != merge_collision_repair:

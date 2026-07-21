@@ -17,9 +17,12 @@ def patch_flag_only_plausibility_range_rejection(
 
     The ConceptDescriptor plausibility range is not an exclusion contract.  A
     deterministic repair is permitted only when the typed auditor identifies
-    one variable and the script contains exactly one adjacent
-    ``range-mask = lower | upper`` / ``if range-mask.any(): raise`` pair.  Any
-    additional use, side effect, ambiguity, or non-literal boundary leaves the
+    one variable and the script contains exactly one closed range-rejection
+    shape.  Supported shapes are a direct adjacent
+    ``range-mask = lower | upper`` / ``if range-mask.any(): raise`` pair, or a
+    mask/count/terminal-failure chain where the mask and count remain available
+    for audit reporting and only the failure guard is removed.  Any ambiguity,
+    scientific filtering use, side effect, or non-literal boundary leaves the
     code unchanged for provider repair.
     """
 
@@ -121,11 +124,76 @@ def patch_flag_only_plausibility_range_rejection(
                 return variable
         return None
 
+    semantic_aliases: dict[str, set[str]] = {}
+    assignments = [node for node in ast.walk(tree) if isinstance(node, ast.Assign)]
+    for _ in range(len(assignments) + 1):
+        changed = False
+        for node in assignments:
+            if not (len(node.targets) == 1 and isinstance(node.targets[0], ast.Name)):
+                continue
+            target = node.targets[0].id
+            inferred: set[str] = {target}
+            value = node.value
+            if (
+                isinstance(value, ast.Subscript)
+                and isinstance(value.slice, ast.Constant)
+                and isinstance(value.slice.value, str)
+                and value.slice.value.isidentifier()
+            ):
+                inferred.add(value.slice.value)
+            elif isinstance(value, ast.Name):
+                inferred.update(semantic_aliases.get(value.id, {value.id}))
+            elif (
+                isinstance(value, ast.Call)
+                and isinstance(value.func, ast.Attribute)
+                and isinstance(value.func.value, ast.Name)
+                and value.func.value.id == "pd"
+                and value.func.attr == "to_numeric"
+                and value.args
+                and isinstance(value.args[0], ast.Name)
+            ):
+                source = value.args[0].id
+                inferred.update(semantic_aliases.get(source, {source}))
+            before = semantic_aliases.get(target, set())
+            after = before | inferred
+            if after != before:
+                semantic_aliases[target] = after
+                changed = True
+        if not changed:
+            break
+
+    def variable_is_authorized(variable: str) -> bool:
+        return (
+            accepted_variables is None
+            or variable in accepted_variables
+            or bool(semantic_aliases.get(variable, set()) & accepted_variables)
+        )
+
+    terminating_helpers = {
+        node.name
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and len(node.body) == 1
+        and isinstance(node.body[0], ast.Raise)
+    }
+
+    def is_terminal_failure_body(body: list[ast.stmt]) -> bool:
+        if len(body) != 1:
+            return False
+        statement = body[0]
+        if isinstance(statement, ast.Raise):
+            return True
+        return (
+            isinstance(statement, ast.Expr)
+            and isinstance(statement.value, ast.Call)
+            and isinstance(statement.value.func, ast.Name)
+            and statement.value.func.id in terminating_helpers
+        )
+
     def is_raise_guard(node: ast.stmt, mask_name: str) -> bool:
         if not (
             isinstance(node, ast.If)
-            and len(node.body) == 1
-            and isinstance(node.body[0], ast.Raise)
+            and is_terminal_failure_body(node.body)
             and not node.orelse
         ):
             return False
@@ -148,7 +216,64 @@ def patch_flag_only_plausibility_range_rejection(
             and not test.keywords
         )
 
-    candidates: list[tuple[ast.Assign, ast.If]] = []
+    def count_assignment_mask(node: ast.stmt, mask_name: str) -> Optional[str]:
+        if not (
+            isinstance(node, ast.Assign)
+            and len(node.targets) == 1
+            and isinstance(node.targets[0], ast.Name)
+            and isinstance(node.value, ast.Call)
+            and isinstance(node.value.func, ast.Name)
+            and node.value.func.id == "int"
+            and len(node.value.args) == 1
+            and not node.value.keywords
+        ):
+            return None
+        reduction = node.value.args[0]
+        if not (
+            isinstance(reduction, ast.Call)
+            and isinstance(reduction.func, ast.Attribute)
+            and reduction.func.attr == "sum"
+            and isinstance(reduction.func.value, ast.Name)
+            and reduction.func.value.id == mask_name
+            and not reduction.args
+            and not reduction.keywords
+        ):
+            return None
+        return node.targets[0].id
+
+    def is_positive_count_guard(node: ast.stmt, count_name: str) -> bool:
+        if not (
+            isinstance(node, ast.If)
+            and not node.orelse
+            and is_terminal_failure_body(node.body)
+            and isinstance(node.test, ast.Compare)
+            and len(node.test.ops) == 1
+            and len(node.test.comparators) == 1
+        ):
+            return False
+        left, right = node.test.left, node.test.comparators[0]
+        operator = node.test.ops[0]
+        return (
+            isinstance(left, ast.Name)
+            and left.id == count_name
+            and isinstance(right, ast.Constant)
+            and right.value == 0
+            and isinstance(operator, ast.Gt)
+        ) or (
+            isinstance(left, ast.Constant)
+            and left.value == 0
+            and isinstance(right, ast.Name)
+            and right.id == count_name
+            and isinstance(operator, ast.Lt)
+        )
+
+    parent_by_id = {
+        id(child): parent
+        for parent in ast.walk(tree)
+        for child in ast.iter_child_nodes(parent)
+    }
+    direct_candidates: list[tuple[ast.Assign, ast.If]] = []
+    counted_candidates: list[tuple[ast.Assign, ast.Assign, ast.If]] = []
     for parent in ast.walk(tree):
         for field in ("body", "orelse", "finalbody"):
             statements = getattr(parent, field, None)
@@ -165,10 +290,7 @@ def patch_flag_only_plausibility_range_rejection(
                     and len(first.targets) == 1
                     and isinstance(first.targets[0], ast.Name)
                     and range_variable_name is not None
-                    and (
-                        accepted_variables is None
-                        or range_variable_name in accepted_variables
-                    )
+                    and variable_is_authorized(range_variable_name)
                 ):
                     continue
                 mask_name = first.targets[0].id
@@ -182,17 +304,67 @@ def patch_flag_only_plausibility_range_rejection(
                     and node.id == mask_name
                 ]
                 if len(loads) == 1:
-                    candidates.append((first, second))
-    if len(candidates) != 1:
+                    direct_candidates.append((first, second))
+            for first, second, third in zip(statements, statements[1:], statements[2:]):
+                range_variable_name = (
+                    range_mask_variable(first.value)
+                    if isinstance(first, ast.Assign)
+                    else None
+                )
+                if not (
+                    isinstance(first, ast.Assign)
+                    and len(first.targets) == 1
+                    and isinstance(first.targets[0], ast.Name)
+                    and range_variable_name is not None
+                    and variable_is_authorized(range_variable_name)
+                ):
+                    continue
+                mask_name = first.targets[0].id
+                count_name = count_assignment_mask(second, mask_name)
+                if count_name is None or not is_positive_count_guard(third, count_name):
+                    continue
+                mask_loads = [
+                    node
+                    for node in ast.walk(tree)
+                    if isinstance(node, ast.Name)
+                    and isinstance(node.ctx, ast.Load)
+                    and node.id == mask_name
+                ]
+                if len(mask_loads) != 1 or mask_loads[0] not in set(ast.walk(second)):
+                    continue
+                guard_nodes = set(ast.walk(third))
+                count_loads = [
+                    node
+                    for node in ast.walk(tree)
+                    if isinstance(node, ast.Name)
+                    and isinstance(node.ctx, ast.Load)
+                    and node.id == count_name
+                ]
+                if not count_loads or any(
+                    load not in guard_nodes
+                    and not (
+                        isinstance(parent_by_id.get(id(load)), ast.Dict)
+                        and load in parent_by_id[id(load)].values
+                    )
+                    for load in count_loads
+                ):
+                    continue
+                counted_candidates.append((first, second, third))
+    if len(direct_candidates) + len(counted_candidates) != 1:
         return code
-    assignment, guard = candidates[0]
-    if assignment.end_lineno is None or guard.end_lineno is None:
+    if direct_candidates:
+        assignment, guard = direct_candidates[0]
+        replace_start = assignment.lineno
+    else:
+        _, _, guard = counted_candidates[0]
+        replace_start = guard.lineno
+    if guard.end_lineno is None:
         return code
     lines = code.splitlines(keepends=True)
-    source_line = lines[assignment.lineno - 1]
+    source_line = lines[replace_start - 1]
     indent = source_line[: len(source_line) - len(source_line.lstrip(" \t"))]
     replacement = f"{indent}pass  # _easyicu_flag_only_plausibility_range_retained_v1\n"
-    lines[assignment.lineno - 1 : guard.end_lineno] = [replacement]
+    lines[replace_start - 1 : guard.end_lineno] = [replacement]
     repaired = "".join(lines)
     try:
         ast.parse(repaired)
