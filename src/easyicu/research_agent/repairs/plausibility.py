@@ -44,9 +44,11 @@ def patch_flag_only_plausibility_range_rejection(
                 # In that case the structural match below must be globally
                 # unique because no local Python name can be inferred safely.
                 matching.append(None)
-    if len(matching) != 1:
+    if not matching:
         return code
-    accepted_variables = matching[0]
+    accepted_variables = (
+        None if any(item is None for item in matching) else set().union(*matching)
+    )
 
     try:
         tree = ast.parse(code)
@@ -189,7 +191,7 @@ def patch_flag_only_plausibility_range_rejection(
     lines = code.splitlines(keepends=True)
     source_line = lines[assignment.lineno - 1]
     indent = source_line[: len(source_line) - len(source_line.lstrip(" \t"))]
-    replacement = f"{indent}# _easyicu_flag_only_plausibility_range_retained_v1\n"
+    replacement = f"{indent}pass  # _easyicu_flag_only_plausibility_range_retained_v1\n"
     lines[assignment.lineno - 1 : guard.end_lineno] = [replacement]
     repaired = "".join(lines)
     try:

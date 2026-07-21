@@ -100,6 +100,30 @@ if second_bad.any():
     assert _repair(code, _finding(variable=["first", "second"])) == (code, [])
 
 
+def test_stale_single_variable_finding_does_not_block_current_grouped_repair():
+    code = """
+# _easyicu_flag_only_plausibility_range_retained_v1
+for column, values in numeric_columns.items():
+    out_of_domain = values.notna() & ((values < 0.0) | (values > 24.0))
+    if out_of_domain.any():
+        raise ValueError(f"{column} outside plausibility range")
+"""
+    findings = [
+        _finding(variable="age"),
+        _finding(variable=["score_h0_6", "score_h6_12"]),
+    ]
+
+    repaired, names = deterministic_concept_audit_repair(
+        code,
+        [finding.message for finding in findings],
+        repair_reasons=[RepairReason.SCIENTIFIC_SEMANTICS_VIOLATION],
+        repair_findings=findings,
+    )
+
+    assert names == ["flag_only_plausibility_range_retention_v1"]
+    assert "out_of_domain" not in repaired
+
+
 def test_wrong_value_class_or_variable_is_not_rewritten():
     code = """
 age_out_of_domain = (age < 0.0) | (age > 120.0)
