@@ -319,6 +319,7 @@ from .plan_utils import (
     _enforce_advanced_plan_contract,
     _plan_expects_analysis_cohort,
     _infer_primary_predictor_from_context,
+    _migrate_render_step_contract,
     _parent_step_id_for_figure_step,
     _prediction_contract_applies,
     _predictor_tokens,
@@ -939,6 +940,7 @@ def _migrate_legacy_resume_figure_render_edges(
 
     revised_steps = list(plan.steps)
     migrated_step_ids: List[str] = []
+
     for index in range(1, len(plan.steps)):
         parent = plan.steps[index - 1]
         child = plan.steps[index]
@@ -1033,11 +1035,8 @@ def _migrate_legacy_resume_figure_render_edges(
         ):
             continue
 
-        revised_steps[index] = child.model_copy(
-            update={
-                "inputs": source_tokens,
-                "method": "visualization",
-            }
+        revised_steps[index] = _migrate_render_step_contract(
+            child, source_tokens, method="visualization"
         )
         migrated_step_ids.append(child_id)
 
@@ -1101,11 +1100,12 @@ def _migrate_legacy_resume_figure_render_edges(
             source_step_id=source_step_id,
             figure_outputs=figure_outputs,
         )
-        if list(child.inputs) == source_tokens and child.intent == intended:
-            continue
-        revised_steps[index] = child.model_copy(
-            update={"inputs": source_tokens, "intent": intended}
+        migrated_child = _migrate_render_step_contract(
+            child, source_tokens, intent=intended
         )
+        if child == migrated_child:
+            continue
+        revised_steps[index] = migrated_child
         if child_id not in migrated_step_ids:
             migrated_step_ids.append(child_id)
 

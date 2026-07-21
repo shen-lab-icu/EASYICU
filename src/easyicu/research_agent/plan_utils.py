@@ -93,6 +93,37 @@ _WIDE_MEASUREMENT_VALUE_SUFFIXES = (
 )
 
 
+def _migrate_render_step_contract(
+    child: AnalysisStep,
+    source_tokens: Sequence[str],
+    *,
+    intent: Optional[str] = None,
+    method: Optional[str] = None,
+) -> AnalysisStep:
+    """Rebind one render step and its cardinality contracts atomically."""
+
+    existing = {
+        str(contract.input_key): contract
+        for contract in child.input_consumption_contracts
+    }
+    contracts = [
+        existing.get(token)
+        or ArtifactConsumptionContract(input_key=token, mode="all_rows")
+        for token in source_tokens
+        if (parsed := typed_product(token)) is not None
+        and parsed[0] in {"table", "statistic"}
+    ]
+    update: Dict[str, Any] = {
+        "inputs": list(source_tokens),
+        "input_consumption_contracts": contracts,
+    }
+    if intent is not None:
+        update["intent"] = intent
+    if method is not None:
+        update["method"] = method
+    return child.model_copy(update=update)
+
+
 def _augment_measurement_companion_inputs(
     *,
     plan: AnalysisPlan,

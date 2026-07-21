@@ -29,10 +29,7 @@ from .numeric_reduction import is_array_boolean_predicate as _is_array_boolean_p
 from .numeric_reduction import is_proven_array_boolean_predicate
 from .numeric_reduction import misnested_boolean_mask_reduction_expression
 from .numeric_reduction import unambiguous_array_predicate_aliases
-from .coercion_guard import (
-    audit_record_assignment_for_count,
-    guard_failure_is_terminal as _guard_failure_escapes,
-)
+from . import coercion_guard
 from .typed_input import (
     resolved_input_relative_path_root_findings,
     resolved_input_shadowed_by_cohort_env_findings,
@@ -6449,7 +6446,7 @@ def _statement_is_fail_closed_guard(
     positions: dict[int, _StatementPosition],
     builtin_int_unmodified: bool,
 ) -> bool:
-    if not _guard_failure_escapes(
+    if not coercion_guard.guard_failure_is_terminal(
         statement,
         scope=position.scope,
         parents=parents,
@@ -6540,7 +6537,7 @@ def _grouped_loss_guard_for_statement(
         id(position.block[next_index]) in audit_statement_ids
         or (
             binding.kind == "name"
-            and audit_record_assignment_for_count(
+            and coercion_guard.audit_record_assignment_for_count(
                 position.block[next_index], count_name=binding.name
             )
         )
@@ -7684,26 +7681,7 @@ def _lossy_numeric_coercion_findings(tree: ast.Module) -> list[ValidationFinding
                 "lines": unguarded_loss_lines,
             }
         )
-    returned_loss_lines: set[int] = set()
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.Return) or node.value is None:
-            continue
-        scope_id = _scope_id_for_node(node, parents=parents, tree=tree)
-        for candidate in ast.walk(node.value):
-            site = _coercion_loss_site(
-                candidate,
-                coercion_sites,
-                scope_id=scope_id,
-            )
-            if site is not None and site not in guarded_roots:
-                returned_loss_lines.add(int(candidate.lineno))
-    if returned_loss_lines:
-        issues.append(
-            {
-                "gap": "returned_coercion_loss_count_not_fail_closed",
-                "lines": sorted(returned_loss_lines),
-            }
-        )
+    issues.extend(coercion_guard.returned_coercion_loss_issues(tree))
     domain_lines = sorted(
         {
             line
