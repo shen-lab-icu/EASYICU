@@ -1741,6 +1741,105 @@ checks = [
     ) == (out, [])
 
 
+def test_concept_repair_removes_superseded_manual_provenance_audit():
+    code = """
+import pandas as pd
+from easyicu.research_agent.methods.descriptive_inputs import measurement_provenance_receipt
+
+df = pd.read_parquet(input_path)
+invalid_pair_n = int((df["measured"].notna() & df["count"].isna()).sum())
+discordant_n = int((df["measured"] != (df["count"] > 0)).sum())
+measurement_provenance_audit = {
+    "checks": [{
+        "role": "audit_only",
+        "invalid_pair_n": invalid_pair_n,
+        "discordant_n": discordant_n,
+    }],
+}
+receipts = []
+receipts.append(measurement_provenance_receipt(
+    frame,
+    measured_column="measured",
+    count_column="count",
+))
+measurement_provenance_audit = {"source": "COHORT_PARQUET", "checks": receipts}
+step_summary = {"measurement_provenance_audit": measurement_provenance_audit}
+""".lstrip()
+    finding = ValidationFinding(
+        validator="mechanical_code_preflight",
+        severity="error",
+        message="module provenance scope is not proven fail-closed",
+        detail={
+            "reason": "provenance_audit_not_fail_closed",
+            "issues": [
+                {
+                    "failure_mode": "module_provenance_scope_not_proven_fail_closed",
+                    "helper_name": "<module>",
+                }
+            ],
+        },
+    )
+
+    out, names = deterministic_concept_audit_repair(
+        code,
+        [finding.message],
+        repair_reasons=[RepairReason.PROVENANCE_NOT_FAIL_CLOSED],
+        repair_findings=[finding],
+    )
+
+    assert names == ["superseded_manual_provenance_receipt_v1"]
+    assert '"invalid_pair_n": invalid_pair_n' not in out
+    assert "measurement_provenance_receipt(\n    df," in out
+    assert deterministic_concept_audit_repair(
+        out,
+        [finding.message],
+        repair_reasons=[RepairReason.PROVENANCE_NOT_FAIL_CLOSED],
+        repair_findings=[finding],
+    ) == (out, [])
+
+
+def test_concept_repair_refuses_ambiguous_provenance_frame_source():
+    code = """
+import pandas as pd
+from easyicu.research_agent.methods.descriptive_inputs import measurement_provenance_receipt
+
+left = pd.read_parquet(left_path)
+right = pd.read_parquet(right_path)
+measurement_provenance_audit = {
+    "checks": [{"role": "audit_only", "invalid_pair_n": 0, "discordant_n": 0}],
+}
+receipts = []
+receipts.append(measurement_provenance_receipt(
+    frame,
+    measured_column="measured",
+    count_column="count",
+))
+measurement_provenance_audit = {"source": "COHORT_PARQUET", "checks": receipts}
+step_summary = {"measurement_provenance_audit": measurement_provenance_audit}
+""".lstrip()
+    finding = ValidationFinding(
+        validator="mechanical_code_preflight",
+        severity="error",
+        message="module provenance scope is not proven fail-closed",
+        detail={
+            "reason": "provenance_audit_not_fail_closed",
+            "issues": [
+                {
+                    "failure_mode": "module_provenance_scope_not_proven_fail_closed",
+                    "helper_name": "<module>",
+                }
+            ],
+        },
+    )
+
+    assert deterministic_concept_audit_repair(
+        code,
+        [finding.message],
+        repair_reasons=[RepairReason.PROVENANCE_NOT_FAIL_CLOSED],
+        repair_findings=[finding],
+    ) == (code, [])
+
+
 def test_concept_repair_adds_only_exact_llm_proven_domain_guards():
     code = """continuous_covariates = ["mech_support"]
 availability_covariates = []

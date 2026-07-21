@@ -52,6 +52,7 @@ from .provenance_summary import (
     patch_custom_measurement_provenance_receipts,
     patch_direct_host_provenance_summary,
     patch_nested_host_provenance_summary,
+    repair_superseded_provenance,
 )
 from .helpers import (  # noqa: F401  (re-exported for back-compat)
     _BINARY_MODEL_REPAIR_FAMILIES,
@@ -2534,6 +2535,8 @@ def deterministic_concept_audit_repair(
             repair_names.append(repair_name)
 
     if RepairReason.PROVENANCE_NOT_FAIL_CLOSED in set(repair_reasons):
+        repaired, applied = repair_superseded_provenance(repaired, repair_findings)
+        repair_names.extend(applied)
         host_bound = _patch_custom_provenance_helper_to_host_receipt(
             repaired,
             coordinate=_provenance_custom_helper_coordinate(repair_findings),

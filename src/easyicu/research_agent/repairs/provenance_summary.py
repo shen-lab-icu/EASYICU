@@ -113,6 +113,226 @@ def _node_span(
     )
 
 
+def patch_superseded_manual_provenance_audit(
+    code: str,
+    *,
+    findings: Sequence[Any],
+) -> str:
+    """Drop one dead manual audit superseded by an exact host receipt.
+
+    Generated code sometimes computes a provisional literal
+    ``invalid_pair_n``/``discordant_n`` audit and later replaces that same
+    variable with receipts from ``measurement_provenance_receipt`` before any
+    output reads it.  The literal assignment is dead but still triggers the
+    conservative module-level preflight.  Remove only that proven-dead
+    assignment.  If the host call's frame name is unbound, replace it only
+    when there is exactly one preceding top-level pandas table reader.
+    """
+
+    matching = []
+    for finding in findings:
+        validator, severity, _message, detail = _finding_parts(finding)
+        if (
+            validator == "mechanical_code_preflight"
+            and severity == "error"
+            and isinstance(detail, dict)
+            and detail.get("reason") == "provenance_audit_not_fail_closed"
+        ):
+            matching.append(detail)
+    if len(matching) != 1:
+        return code
+    issues = matching[0].get("issues")
+    if not (
+        isinstance(issues, list)
+        and len(issues) == 1
+        and issues[0]
+        == {
+            "failure_mode": "module_provenance_scope_not_proven_fail_closed",
+            "helper_name": "<module>",
+        }
+    ):
+        return code
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return code
+
+    exact_imports = [
+        node
+        for node in tree.body
+        if isinstance(node, ast.ImportFrom)
+        and node.level == 0
+        and node.module == "easyicu.research_agent.methods.descriptive_inputs"
+        and any(
+            alias.name == "measurement_provenance_receipt" and alias.asname is None
+            for alias in node.names
+        )
+    ]
+    if len(exact_imports) != 1:
+        return code
+
+    assignments = [
+        node
+        for node in tree.body
+        if isinstance(node, ast.Assign)
+        and len(node.targets) == 1
+        and isinstance(node.targets[0], ast.Name)
+    ]
+    manual_assignments = []
+    for node in assignments:
+        literals = {
+            item.value
+            for item in ast.walk(node.value)
+            if isinstance(item, ast.Constant) and isinstance(item.value, str)
+        }
+        if {"audit_only", "invalid_pair_n", "discordant_n"} <= literals:
+            manual_assignments.append(node)
+    if len(manual_assignments) != 1:
+        return code
+    manual = manual_assignments[0]
+    audit_name = manual.targets[0].id
+
+    host_assignments: list[tuple[ast.Assign, str]] = []
+    for node in assignments:
+        if node.lineno <= manual.lineno or node.targets[0].id != audit_name:
+            continue
+        if not isinstance(node.value, ast.Dict):
+            continue
+        mapping = {
+            key.value: value
+            for key, value in zip(node.value.keys, node.value.values, strict=True)
+            if isinstance(key, ast.Constant) and isinstance(key.value, str)
+        }
+        checks = mapping.get("checks")
+        if isinstance(checks, ast.Name):
+            host_assignments.append((node, checks.id))
+    if len(host_assignments) != 1:
+        return code
+    host_assignment, receipts_name = host_assignments[0]
+
+    between = [
+        statement
+        for statement in tree.body
+        if manual.lineno < statement.lineno < host_assignment.lineno
+    ]
+    if any(
+        isinstance(node, ast.Name)
+        and isinstance(node.ctx, ast.Load)
+        and node.id == audit_name
+        for statement in between
+        for node in ast.walk(statement)
+    ):
+        return code
+    if not any(
+        isinstance(node, ast.Name)
+        and isinstance(node.ctx, ast.Load)
+        and node.id == audit_name
+        and int(getattr(node, "lineno", 0) or 0) > host_assignment.lineno
+        for node in ast.walk(tree)
+    ):
+        return code
+
+    receipt_initializers = [
+        node
+        for node in assignments
+        if node.targets[0].id == receipts_name
+        and isinstance(node.value, ast.List)
+        and not node.value.elts
+        and node.lineno < host_assignment.lineno
+    ]
+    if len(receipt_initializers) != 1:
+        return code
+    receipt_calls = [
+        node.args[0]
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and isinstance(node.func.value, ast.Name)
+        and node.func.value.id == receipts_name
+        and node.func.attr == "append"
+        and len(node.args) == 1
+        and not node.keywords
+        and isinstance(node.args[0], ast.Call)
+    ]
+    if not receipt_calls:
+        return code
+    if any(
+        not (
+            isinstance(call.func, ast.Name)
+            and call.func.id == "measurement_provenance_receipt"
+            and len(call.args) == 1
+            and isinstance(call.args[0], ast.Name)
+            and {keyword.arg for keyword in call.keywords}
+            == {"measured_column", "count_column"}
+        )
+        for call in receipt_calls
+    ):
+        return code
+
+    direct_reader_assignments = [
+        node
+        for node in assignments
+        if isinstance(node.value, ast.Call)
+        and isinstance(node.value.func, ast.Attribute)
+        and isinstance(node.value.func.value, ast.Name)
+        and node.value.func.value.id == "pd"
+        and node.value.func.attr
+        in {"read_csv", "read_excel", "read_parquet", "read_table"}
+    ]
+    replacements: list[tuple[ast.AST, str]] = []
+    for call in receipt_calls:
+        frame = call.args[0]
+        assert isinstance(frame, ast.Name)
+        existing_bindings = [
+            node
+            for node in assignments
+            if node.targets[0].id == frame.id and node.lineno < call.lineno
+        ]
+        if existing_bindings:
+            continue
+        candidates = [
+            node
+            for node in direct_reader_assignments
+            if node.lineno < call.lineno
+            and sum(other.targets[0].id == node.targets[0].id for other in assignments)
+            == 1
+        ]
+        if len(candidates) != 1:
+            return code
+        replacements.append((frame, candidates[0].targets[0].id))
+
+    lines, starts = _source_offsets(code)
+    edits: list[tuple[int, int, str]] = []
+    manual_span = _node_span(manual, lines=lines, starts=starts)
+    if manual_span is None:
+        return code
+    edits.append((*manual_span, ""))
+    for node, replacement in replacements:
+        span = _node_span(node, lines=lines, starts=starts)
+        if span is None:
+            return code
+        edits.append((*span, replacement))
+    repaired = code
+    for start, end, replacement in sorted(edits, reverse=True):
+        repaired = repaired[:start] + replacement + repaired[end:]
+    try:
+        ast.parse(repaired)
+    except SyntaxError:
+        return code
+    return repaired
+
+
+def repair_superseded_provenance(
+    code: str,
+    findings: Sequence[Any],
+) -> tuple[str, list[str]]:
+    """Return the exact patch plus its central-registry repair identifier."""
+
+    repaired = patch_superseded_manual_provenance_audit(code, findings=findings)
+    applied = ["superseded_manual_provenance_receipt_v1"] if repaired != code else []
+    return repaired, applied
+
+
 def patch_custom_measurement_provenance_receipts(
     code: str,
     *,
