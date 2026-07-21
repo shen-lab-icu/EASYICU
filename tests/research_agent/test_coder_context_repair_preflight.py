@@ -861,6 +861,66 @@ exposure_column = product_executable_column(binding)
     assert repair_names == []
 
 
+def _binary_feasibility_script(*, with_fit_gate: bool = True) -> str:
+    fit_body = "pipeline.fit(X, A)" if with_fit_gate else "pipeline.predict(X)"
+    return f"""
+def series_to_binary(series, name):
+    numeric = strict_numeric(series, name)
+    levels = sorted(pd.Series(numeric.dropna().unique()).tolist())
+    if levels != [0, 1]:
+        raise RuntimeError(f"{{name}} must be binary, got {{levels}}")
+    return numeric
+
+treatment = series_to_binary(df[exposure_column], exposure_column)
+outcome = series_to_binary(df["death"], "death")
+df["_treatment"] = treatment
+df["_death"] = outcome
+fit_note = None
+if int(df.loc[complete_mask, "_treatment"].sum()) < 10:
+    fit_note = "too few treated"
+elif int((1 - df.loc[complete_mask, "_treatment"]).sum()) < 10:
+    fit_note = "too few untreated"
+if fit_note is None:
+    {fit_body}
+"""
+
+
+def test_binary_domain_guard_defers_sample_variation_to_authored_fit_gate(ra):
+    code = _binary_feasibility_script()
+    findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+    target = [
+        finding
+        for finding in findings
+        if (finding.detail or {}).get("reason")
+        == "binary_domain_preempts_authored_feasibility"
+    ]
+
+    repaired, repair_names = deterministic_concept_audit_repair(
+        code,
+        [finding.message for finding in target],
+        repair_findings=target,
+    )
+
+    assert len(target) == 1
+    assert repair_names == ["binary_domain_authored_feasibility_v1"]
+    assert "if not set(levels).issubset({0, 1}):" in repaired
+    assert not any(
+        (finding.detail or {}).get("reason")
+        == "binary_domain_preempts_authored_feasibility"
+        for finding in audit_mechanical_code_contracts(repaired, _figure_step(ra))
+    )
+
+
+def test_binary_domain_guard_is_not_relaxed_without_two_group_fit_gate(ra):
+    code = _binary_feasibility_script(with_fit_gate=False)
+
+    assert not any(
+        (finding.detail or {}).get("reason")
+        == "binary_domain_preempts_authored_feasibility"
+        for finding in audit_mechanical_code_contracts(code, _figure_step(ra))
+    )
+
+
 def test_mechanical_preflight_repairs_unreduced_boolean_mask_count(ra):
     code = """
 import pandas as pd

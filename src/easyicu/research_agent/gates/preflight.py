@@ -20,6 +20,7 @@ from .ast_semantics import (
     contains_literal_provenance_audit_row,
     literal_observational_getattr,
 )
+from .binary_feasibility import binary_feasibility_guard_findings
 from .numeric_reduction import is_array_boolean_predicate as _is_array_boolean_predicate
 from .numeric_reduction import is_proven_array_boolean_predicate
 from .numeric_reduction import misnested_boolean_mask_reduction_expression
@@ -6359,15 +6360,12 @@ def _grouped_loss_guard_for_statement(
     if position is None:
         return False
     next_index = position.index + 1
-    while (
-        next_index < len(position.block)
-        and (
-            id(position.block[next_index]) in audit_statement_ids
-            or (
-                binding.kind == "name"
-                and audit_record_assignment_for_count(
-                    position.block[next_index], count_name=binding.name
-                )
+    while next_index < len(position.block) and (
+        id(position.block[next_index]) in audit_statement_ids
+        or (
+            binding.kind == "name"
+            and audit_record_assignment_for_count(
+                position.block[next_index], count_name=binding.name
             )
         )
     ):
@@ -8117,6 +8115,7 @@ def audit_mechanical_code_contracts(
     findings.extend(_conditional_nonfinite_guard_findings(tree))
     findings.extend(_strict_numeric_nonfinite_findings(tree))
     findings.extend(_categorical_level_reconciliation_findings(tree))
+    findings.extend(binary_feasibility_guard_findings(tree))
     return findings
 
 
