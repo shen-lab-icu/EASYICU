@@ -1,10 +1,11 @@
 {
-  "schema_version": "easyicu.research_know_how/1",
+  "schema_version": "easyicu.research_know_how/2",
   "card_id": "lactate_trajectory_outcome",
   "version": "1.0.0",
   "title": "Lactate trajectories and clinical outcomes",
   "summary": "Candidate design coordinates for repeated-lactate trajectory or clearance studies. Sampling is treatment- and severity-dependent, so measurement intensity, landmark timing, and immortal-time risk must be handled explicitly.",
   "clinical_topics": ["lactate", "lactate clearance", "trajectory", "shock", "serial biomarker", "mortality"],
+  "topic_aliases": ["lactate", "lactic acid", "lactate clearance", "lactate trajectory", "乳酸", "乳酸清除率", "乳酸轨迹"],
   "study_families": ["association", "time_to_event", "phenotyping"],
   "applicable_databases": ["miiv", "mimic_iv", "mimic_iii", "eicu", "hirid", "aumc", "sicdb"],
   "design_candidates": {
@@ -21,6 +22,7 @@
   },
   "required_concepts": ["lactate", "measurement_time", "icu_admission_time", "death"],
   "stop_conditions": ["Lactate timestamps or units cannot be harmonized", "Trajectory exposure uses measurements occurring after outcome follow-up begins", "Selected sampling requirements induce unquantifiable survivor bias"],
+  "requires_confirmation": ["Confirm whether the exposure is baseline lactate, change, clearance, or a longitudinal trajectory", "Confirm the landmark and the minimum measurement support without conditioning on future survival"],
   "citations": [
     {
       "citation_id": "surviving_sepsis_2021",
@@ -41,5 +43,30 @@
       "supports": ["candidate lactate exposure definitions", "mortality association context"]
     }
   ],
-  "review_status": "curated_mvp"
+  "claims": [
+    {"claim_id":"serial_lactate_population","field":"population","text":"ICU patients with enough temporally ordered lactate observations for the declared trajectory or landmark analysis.","citation_ids":["surviving_sepsis_2021","ryoo_lactate_2018"],"evidence_scope":"representative_study"},
+    {"claim_id":"lactate_landmark","field":"time_zero","text":"ICU admission, shock recognition, or first qualifying lactate; select one landmark before deriving exposure trajectories.","citation_ids":["surviving_sepsis_2021","ryoo_lactate_2018"],"evidence_scope":"guideline"},
+    {"claim_id":"early_measurement_window","field":"observation_window","text":"A fixed early window for lactate measurements and treatments, with sampling density reported.","citation_ids":["surviving_sepsis_2021","ryoo_lactate_2018"],"evidence_scope":"representative_study"},
+    {"claim_id":"post_classification_followup","field":"followup_window","text":"Outcomes begin after trajectory classification or use a correctly specified time-varying analysis.","citation_ids":["ryoo_lactate_2018"],"evidence_scope":"representative_study"},
+    {"claim_id":"minimum_observations","field":"eligibility","text":"Specify minimum observations without conditioning on future survival","citation_ids":["ryoo_lactate_2018"],"evidence_scope":"representative_study"},
+    {"claim_id":"unit_harmonization","field":"eligibility","text":"Report assay units and harmonization","citation_ids":["surviving_sepsis_2021"],"evidence_scope":"guideline"},
+    {"claim_id":"measurement_frequency_audit","field":"eligibility","text":"Audit informative measurement frequency","citation_ids":["ryoo_lactate_2018"],"evidence_scope":"representative_study"},
+    {"claim_id":"lactate_exposure","field":"exposure","text":"Baseline lactate, prespecified change or clearance, or a validated longitudinal trajectory assignment.","citation_ids":["surviving_sepsis_2021","ryoo_lactate_2018"],"evidence_scope":"representative_study"},
+    {"claim_id":"post_exposure_outcome","field":"outcome","text":"Mortality or organ-support outcome beginning after exposure ascertainment, with horizon and censoring defined.","citation_ids":["ryoo_lactate_2018"],"evidence_scope":"representative_study"},
+    {"claim_id":"pattern_contrast_estimand","field":"estimand","text":"Outcome contrast across prespecified lactate patterns in patients observable at the selected landmark.","citation_ids":["ryoo_lactate_2018"],"evidence_scope":"representative_study"},
+    {"claim_id":"landmark_or_time_varying","field":"method","text":"Landmark analysis or time-varying model","citation_ids":["ryoo_lactate_2018"],"evidence_scope":"representative_study"},
+    {"claim_id":"trajectory_stability","field":"method","text":"Trajectory stability diagnostics when clustering","citation_ids":["ryoo_lactate_2018"],"evidence_scope":"representative_study"},
+    {"claim_id":"severity_measurement_adjustment","field":"method","text":"Adjustment for baseline severity and measurement process","citation_ids":["surviving_sepsis_2021","ryoo_lactate_2018"],"evidence_scope":"expert_consensus"},
+    {"claim_id":"trajectory_window_sensitivity","field":"sensitivity","text":"Alternative trajectory window","citation_ids":["ryoo_lactate_2018"],"evidence_scope":"representative_study"},
+    {"claim_id":"change_clearance_sensitivity","field":"sensitivity","text":"Absolute change versus relative clearance","citation_ids":["surviving_sepsis_2021","ryoo_lactate_2018"],"evidence_scope":"representative_study"},
+    {"claim_id":"sampling_intensity_sensitivity","field":"sensitivity","text":"Adjustment or stratification by lactate sampling intensity","citation_ids":["ryoo_lactate_2018"],"evidence_scope":"representative_study"},
+    {"claim_id":"stop_unharmonized_lactate","field":"stop_condition","text":"Lactate timestamps or units cannot be harmonized","citation_ids":["surviving_sepsis_2021"],"evidence_scope":"guideline"},
+    {"claim_id":"stop_temporal_leakage","field":"stop_condition","text":"Trajectory exposure uses measurements occurring after outcome follow-up begins","citation_ids":["ryoo_lactate_2018"],"evidence_scope":"representative_study"},
+    {"claim_id":"stop_survivor_bias","field":"stop_condition","text":"Selected sampling requirements induce unquantifiable survivor bias","citation_ids":["ryoo_lactate_2018"],"evidence_scope":"representative_study"},
+    {"claim_id":"confirm_lactate_exposure","field":"requires_confirmation","text":"Confirm whether the exposure is baseline lactate, change, clearance, or a longitudinal trajectory","citation_ids":["surviving_sepsis_2021","ryoo_lactate_2018"],"evidence_scope":"expert_consensus"},
+    {"claim_id":"confirm_landmark_support","field":"requires_confirmation","text":"Confirm the landmark and the minimum measurement support without conditioning on future survival","citation_ids":["ryoo_lactate_2018"],"evidence_scope":"representative_study"}
+  ],
+  "trust_level": "built_in_reviewed",
+  "review_status": "curated_mvp",
+  "review_attestation": null
 }

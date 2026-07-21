@@ -20,6 +20,8 @@ from easyicu.research_agent.know_how import (
 )
 from easyicu.research_agent.know_how.registry import MAX_CARD_BYTES
 from easyicu.research_agent.planning.preplan_know_how import (
+    PlannerKnowHowBinding,
+    PreplanKnowHow,
     prepare_preplan_know_how,
 )
 from easyicu.research_agent.pipeline import _load_compatible_resume_plan
@@ -66,6 +68,36 @@ def _card_payload() -> dict[str, object]:
     return registry.get("aki_onset_prediction").model_dump(mode="json")
 
 
+def _plan_with_one_adopted_aki_claim() -> AnalysisPlan:
+    registry = KnowHowRegistry.load()
+    hit = registry.retrieve(
+        query="acute kidney injury prediction",
+        study_family="prediction",
+        top_k=1,
+    )[0]
+    claim = next(
+        item
+        for item in registry.get(hit.card_id).claims
+        if item.claim_id == "prediction_landmark"
+    )
+    return AnalysisPlan(
+        research_question="Predict AKI",
+        steps=[],
+        know_how_decisions=[
+            {
+                "card_id": hit.card_id,
+                "card_version": hit.version,
+                "card_sha256": hit.file_sha256,
+                "claim_id": claim.claim_id,
+                "disposition": "adopted",
+                "reason_code": "fits_prediction_landmark",
+                "rationale": "The question requires a pre-outcome prediction landmark.",
+                "citation_ids": claim.citation_ids,
+            }
+        ],
+    )
+
+
 def test_builtin_registry_contains_exactly_eight_curated_cards() -> None:
     from easyicu import research_agent as public_api
 
@@ -74,6 +106,8 @@ def test_builtin_registry_contains_exactly_eight_curated_cards() -> None:
     assert public_api.KnowHowRegistry is KnowHowRegistry
     assert len(registry.cards) == 8
     assert {card.review_status for card in registry.cards} == {"curated_mvp"}
+    assert {card.trust_level for card in registry.cards} == {"built_in_reviewed"}
+    assert all(len(card.claims) == 21 for card in registry.cards)
     assert all(len(card.citations) >= 2 for card in registry.cards)
 
 
@@ -99,6 +133,7 @@ def test_card_schema_rejects_invalid_contracts(mutation, match: str) -> None:
 
 def test_registry_rejects_duplicate_ids_and_oversized_cards(tmp_path: Path) -> None:
     payload = _card_payload()
+    payload["trust_level"] = "user_supplied_unreviewed"
     first = tmp_path / "first.json"
     second = tmp_path / "second.json"
     first.write_text(json.dumps(payload), encoding="utf-8")
@@ -128,7 +163,8 @@ def test_retrieval_is_deterministic_bounded_and_relevance_gated() -> None:
 
     assert first == second
     assert first[0].card_id == "aki_onset_prediction"
-    assert first[0].score > first[1].score
+    assert first[0].topic_applicable is True
+    assert first[0].data_readiness == "partial"
     assert "death" in first[0].unresolved_concepts
     assert len(first) <= 3
     assert (
@@ -157,10 +193,40 @@ def test_prompt_projection_obeys_per_card_and_total_budgets() -> None:
     prompt = registry.render_prompt(hits)
 
     assert len(prompt) <= 8_000
-    assert prompt.count("## Card") <= 5
+    projection = json.loads(prompt[prompt.index('{"cards"') :])
+    assert len(projection["cards"]) <= 5
     assert "unresolved_concepts" in prompt
-    for block in prompt.split("## Card")[1:]:
-        assert len("## Card" + block) <= 1_200
+    assert "stop_condition" in prompt
+    assert "requires_confirmation" in prompt
+    assert "citations" in prompt
+    assert "truncated" not in prompt
+    for card in projection["cards"]:
+        assert (
+            len(
+                json.dumps(
+                    card, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+                )
+            )
+            <= 3_500
+        )
+
+
+def test_zero_hit_binding_adds_no_planner_context_or_false_authority() -> None:
+    registry = KnowHowRegistry.load()
+    prepared = PreplanKnowHow(
+        registry=registry,
+        hits=(),
+        prompt=registry.render_prompt([]),
+    )
+
+    binding = PlannerKnowHowBinding.from_prepared(prepared)
+
+    assert binding.enabled is True
+    assert binding.prompt == ""
+    assert binding.planner_kwargs == {
+        "allowed_know_how_decisions": {},
+        "know_how_context": "",
+    }
 
 
 def test_preplan_artifacts_are_registered_resume_safe_and_tamper_evident(
@@ -208,6 +274,7 @@ def test_preplan_artifacts_are_registered_resume_safe_and_tamper_evident(
 
 def test_registry_detects_card_source_tampering(tmp_path: Path) -> None:
     payload = _card_payload()
+    payload["trust_level"] = "user_supplied_unreviewed"
     card_path = tmp_path / "card.json"
     card_path.write_text(json.dumps(payload), encoding="utf-8")
     registry = KnowHowRegistry.load([card_path], include_builtin=False)
@@ -216,6 +283,7 @@ def test_registry_detects_card_source_tampering(tmp_path: Path) -> None:
         study_family="prediction",
         top_k=1,
         min_score=0.01,
+        allowed_trust_levels=["user_supplied_unreviewed"],
     )[0]
     card_path.write_text(
         json.dumps({**payload, "summary": "changed"}), encoding="utf-8"
@@ -225,56 +293,80 @@ def test_registry_detects_card_source_tampering(tmp_path: Path) -> None:
         registry.verify_hit_source(hit)
 
 
-def test_planner_accepts_only_this_retrievals_unique_refs() -> None:
+def test_planner_accepts_only_this_retrievals_claim_authority() -> None:
     planner = PlannerAgent.__new__(PlannerAgent)
     planner.last_dropped_plan_keys = {"top_level": [], "steps": []}
+    hit = KnowHowRegistry.load().retrieve(
+        query="acute kidney injury prediction",
+        study_family="prediction",
+        top_k=1,
+    )[0]
+    card = KnowHowRegistry.load().get(hit.card_id)
+    claim = next(item for item in card.claims if item.claim_id == "prediction_landmark")
+    authority = {
+        hit.card_id: {
+            "version": hit.version,
+            "file_sha256": hit.file_sha256,
+            "claims": {claim.claim_id: tuple(claim.citation_ids)},
+        }
+    }
+    decision = {
+        "card_id": hit.card_id,
+        "card_version": hit.version,
+        "card_sha256": hit.file_sha256,
+        "claim_id": claim.claim_id,
+        "disposition": "adopted",
+        "reason_code": "fits_prediction_landmark",
+        "rationale": "The question requires a pre-outcome prediction landmark.",
+        "citation_ids": claim.citation_ids,
+    }
     base = {"research_question": "Predict AKI", "steps": []}
-    raw = json.dumps({**base, "know_how_refs": ["aki_onset_prediction"]})
+    raw = json.dumps(
+        {
+            **base,
+            "know_how_decisions": [decision],
+        }
+    )
 
     plan = planner._parse(
         raw,
         _context(),
-        allowed_know_how_refs=["aki_onset_prediction"],
+        allowed_know_how_decisions=authority,
     )
-    assert plan.know_how_refs == ["aki_onset_prediction"]
-    with pytest.raises(ValueError, match="unknown or unretrieved"):
-        planner._parse(raw, _context(), allowed_know_how_refs=[])
-    with pytest.raises(ValidationError, match="duplicates"):
-        AnalysisPlan(
-            research_question="Predict AKI",
-            steps=[],
-            know_how_refs=["aki_onset_prediction", "aki_onset_prediction"],
+    assert plan.know_how_decisions[0].claim_id == "prediction_landmark"
+    with pytest.raises(ValueError, match="unretrieved card"):
+        planner._parse(
+            raw,
+            _context(),
+            allowed_know_how_decisions={},
         )
 
 
-def test_replanner_cannot_change_adopted_refs() -> None:
+def test_replanner_cannot_remove_claim_decisions() -> None:
     class RemovingLLM:
         name = "removing"
 
         def complete(self, messages, **kwargs):
             return json.dumps({"research_question": "Predict AKI", "steps": []})
 
-    current = AnalysisPlan(
-        research_question="Predict AKI",
-        steps=[],
-        know_how_refs=["aki_onset_prediction"],
-    )
-    with pytest.raises(StructuredResponseFailure, match="preserve know_how_refs"):
+    current = _plan_with_one_adopted_aki_claim()
+    with pytest.raises(StructuredResponseFailure, match="claim-level disposition"):
         ReplannerAgent(RemovingLLM()).run(context=_context(), current_plan=current)
 
 
-def test_empty_refs_do_not_change_legacy_plan_serialization() -> None:
+def test_empty_decisions_do_not_change_legacy_plan_serialization() -> None:
     plan = AnalysisPlan(research_question="No know-how", steps=[])
 
-    assert "know_how_refs" not in plan.model_dump()
-    assert "know_how_refs" not in plan.model_dump_json()
+    assert "know_how_decisions" not in plan.model_dump()
 
 
-def test_resume_plan_loader_preserves_adopted_refs(tmp_path: Path) -> None:
-    plan = AnalysisPlan(
-        research_question="Predict AKI",
-        steps=[AnalysisStep(step_id="01_prepare", intent="Prepare analysis data.")],
-        know_how_refs=["aki_onset_prediction"],
+def test_resume_plan_loader_preserves_claim_decisions(tmp_path: Path) -> None:
+    plan = _plan_with_one_adopted_aki_claim().model_copy(
+        update={
+            "steps": [
+                AnalysisStep(step_id="01_prepare", intent="Prepare analysis data.")
+            ]
+        }
     )
     plan_path = tmp_path / "analysis_plan.json"
     plan_path.write_text(plan.model_dump_json(indent=2), encoding="utf-8")
@@ -290,7 +382,7 @@ def test_resume_plan_loader_preserves_adopted_refs(tmp_path: Path) -> None:
     restored, _ = _load_compatible_resume_plan(run_dir=tmp_path, resume_state={})
 
     assert restored is not None
-    assert restored.know_how_refs == ["aki_onset_prediction"]
+    assert restored.know_how_decisions == plan.know_how_decisions
 
 
 def test_builtin_cards_are_package_resources() -> None:
@@ -312,6 +404,18 @@ def test_opt_in_pipeline_smoke_adopts_card_without_extra_provider_calls(
             self.adopt = adopt
             self.calls = 0
             self.planner_prompts: list[str] = []
+            registry = KnowHowRegistry.load()
+            self.hit = registry.retrieve(
+                query="Build an ICU mortality prediction model.",
+                study_family="prediction",
+                database="miiv",
+                top_k=1,
+            )[0]
+            self.claim = next(
+                item
+                for item in registry.get(self.hit.card_id).claims
+                if item.claim_id == "prediction_time"
+            )
 
         def complete(self, messages, *, max_tokens=2048, temperature=0.2):
             self.calls += 1
@@ -332,7 +436,18 @@ def test_opt_in_pipeline_smoke_adopts_card_without_extra_provider_calls(
                 self.planner_prompts.append(user_prompt)
                 if self.adopt:
                     payload = json.loads(raw)
-                    payload["know_how_refs"] = ["icu_mortality_prediction"]
+                    payload["know_how_decisions"] = [
+                        {
+                            "card_id": self.hit.card_id,
+                            "card_version": self.hit.version,
+                            "card_sha256": self.hit.file_sha256,
+                            "claim_id": self.claim.claim_id,
+                            "disposition": "adopted",
+                            "reason_code": "fits_prediction_landmark",
+                            "rationale": "The prediction task requires an explicit landmark.",
+                            "citation_ids": self.claim.citation_ids,
+                        }
+                    ]
                     return json.dumps(payload)
             return raw
 
@@ -386,10 +501,19 @@ def test_opt_in_pipeline_smoke_adopts_card_without_extra_provider_calls(
     enabled_dir = Path(enabled.plan_path).parent
     disabled_dir = Path(disabled.plan_path).parent
     plan = json.loads(Path(enabled.plan_path).read_text(encoding="utf-8"))
-    assert plan["know_how_refs"] == ["icu_mortality_prediction"]
+    assert "know_how_refs" not in plan
+    assert plan["know_how_decisions"][0]["card_id"] == "icu_mortality_prediction"
+    assert plan["know_how_decisions"][0]["claim_id"] == "prediction_time"
+    assert "RESEARCH KNOW-HOW CONTEXT" in enabled_planner.planner_prompts[0]
     assert "Retrieved Research Know-How" in enabled_planner.planner_prompts[0]
     assert (enabled_dir / "know_how_retrieval.json").exists()
     assert (enabled_dir / "know_how_prompt.md").exists()
+    metrics = json.loads(
+        (enabled_dir / "planner_prompt_metrics.json").read_text(encoding="utf-8")
+    )
+    assert 0 < metrics["know_how_added_bytes"] <= 8_000
+    assert metrics["total_bytes"] <= metrics["limit_bytes"]
+    assert metrics["know_how_selected_count"] == 1
     assert not (disabled_dir / "know_how_retrieval.json").exists()
     assert not (disabled_dir / "know_how_prompt.md").exists()
     assert disabled_planner.calls == enabled_planner.calls

@@ -172,6 +172,7 @@ def _preserve_completed_step_snapshots_after_replan(
             "cohort",
             "robustness_specs",
             "display_labels",
+            "know_how_decisions",
             "rationale",
         ):
             if getattr(revised_plan, field_name) != getattr(current_plan, field_name):
@@ -188,6 +189,7 @@ def _preserve_completed_step_snapshots_after_replan(
                 "cohort": current_plan.cohort,
                 "robustness_specs": current_plan.robustness_specs,
                 "display_labels": current_plan.display_labels,
+                "know_how_decisions": current_plan.know_how_decisions,
                 "rationale": current_plan.rationale,
             }
         )

@@ -31,6 +31,7 @@ from easyicu.research_agent.orchestration.profiles import (
     NPJ_DM_2026_07_17,
     NPJ_DM_2026_07_18,
     NPJ_DM_2026_07_19,
+    NPJ_DM_2026_07_21_KNOW_HOW,
     SUBMISSION_PROFILE_REGISTRY,
     get_submission_profile,
 )
@@ -346,6 +347,10 @@ def test_new_canonical_profile_pins_cross_run_memory_off() -> None:
         "enable_deterministic_code_fallback": False,
         "enable_deterministic_planner_fallback": False,
     }
+    assert NPJ_DM_2026_07_21_KNOW_HOW.as_pipeline_options() == {
+        **NPJ_DM_2026_07_19.as_pipeline_options(),
+        "enable_know_how": True,
+    }
     # The default profile pins memory and fixture fallbacks off.
     assert DEFAULT_SUBMISSION_PROFILE_REF == NPJ_DM_2026_07_19.ref
 
@@ -470,6 +475,7 @@ def test_current_profile_is_reexported_by_package_identity() -> None:
 
     assert research_agent.NPJ_DM_2026_07_18 is NPJ_DM_2026_07_18
     assert research_agent.NPJ_DM_2026_07_19 is NPJ_DM_2026_07_19
+    assert research_agent.NPJ_DM_2026_07_21_KNOW_HOW is NPJ_DM_2026_07_21_KNOW_HOW
 
 
 # Frozen canonical to_dict() snapshots for the archival profiles. Key-set

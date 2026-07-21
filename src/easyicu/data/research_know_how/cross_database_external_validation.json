@@ -1,10 +1,11 @@
 {
-  "schema_version": "easyicu.research_know_how/1",
+  "schema_version": "easyicu.research_know_how/2",
   "card_id": "cross_database_external_validation",
   "version": "1.0.0",
   "title": "Cross-database external validation",
   "summary": "Candidate coordinates for transporting a locked ICU analysis or prediction model across databases. Harmonization must preserve concept meaning, time zero, eligibility, outcome horizon, units, and missingness provenance rather than forcing superficial column alignment.",
   "clinical_topics": ["external validation", "cross database", "transportability", "generalizability", "model validation", "data harmonization"],
+  "topic_aliases": ["external validation", "cross database validation", "cross-database validation", "model transportability", "跨数据库验证", "外部验证"],
   "study_families": ["prediction", "association", "descriptive"],
   "applicable_databases": ["miiv", "mimic_iv", "mimic_iii", "eicu", "hirid", "aumc", "sicdb"],
   "design_candidates": {
@@ -21,6 +22,7 @@
   },
   "required_concepts": ["patient_id", "icu_admission_time", "age", "sex", "death"],
   "stop_conditions": ["Time zero or outcome horizon is not meaningfully harmonizable", "The source specification was modified using target outcomes without labeling redevelopment", "Required concepts have incompatible clinical meaning across databases"],
+  "requires_confirmation": ["Confirm the source database and independently sampled target databases", "Confirm whether recalibration is allowed or the source specification must remain fully locked"],
   "citations": [
     {
       "citation_id": "tripod_ai_2024",
@@ -41,5 +43,30 @@
       "supports": ["external validation design", "transportability and model updating"]
     }
   ],
-  "review_status": "curated_mvp"
+  "claims": [
+    {"claim_id":"source_target_populations","field":"population","text":"A source population and one or more independently sampled target-database populations mapped to a common, clinically defensible eligibility definition.","citation_ids":["tripod_ai_2024","ramspek_external_validation_2021"],"evidence_scope":"methods"},
+    {"claim_id":"common_time_zero","field":"time_zero","text":"The same clinical landmark in every database, with any implementation differences documented.","citation_ids":["ramspek_external_validation_2021"],"evidence_scope":"methods"},
+    {"claim_id":"semantic_observation_window","field":"observation_window","text":"Semantically equivalent pre-landmark variables, units, aggregation rules, and missingness states in each database.","citation_ids":["ramspek_external_validation_2021"],"evidence_scope":"methods"},
+    {"claim_id":"harmonized_outcome_horizon","field":"followup_window","text":"A consistently ascertainable outcome horizon; database-specific approximations must be labeled and tested.","citation_ids":["tripod_ai_2024","ramspek_external_validation_2021"],"evidence_scope":"methods"},
+    {"claim_id":"lock_source_analysis","field":"eligibility","text":"Lock the source model or analysis before target evaluation","citation_ids":["tripod_ai_2024"],"evidence_scope":"reporting_standard"},
+    {"claim_id":"attrition_by_database","field":"eligibility","text":"Report cohort attrition by database","citation_ids":["tripod_ai_2024"],"evidence_scope":"reporting_standard"},
+    {"claim_id":"concept_unit_equivalence","field":"eligibility","text":"Audit concept and unit equivalence before pooling","citation_ids":["ramspek_external_validation_2021"],"evidence_scope":"methods"},
+    {"claim_id":"locked_source_specification","field":"exposure","text":"The locked source model, score, exposure definition, or analysis specification applied without target-outcome-guided redesign.","citation_ids":["tripod_ai_2024","ramspek_external_validation_2021"],"evidence_scope":"methods"},
+    {"claim_id":"harmonized_outcome","field":"outcome","text":"A harmonized outcome with equivalent horizon and ascertainment, plus database-specific limitations.","citation_ids":["tripod_ai_2024"],"evidence_scope":"reporting_standard"},
+    {"claim_id":"target_performance_estimand","field":"estimand","text":"Target-database performance or effect estimate, with heterogeneity and transportability described rather than obscured by pooling.","citation_ids":["ramspek_external_validation_2021"],"evidence_scope":"methods"},
+    {"claim_id":"stratified_validation","field":"method","text":"Database-stratified validation before pooled summaries","citation_ids":["ramspek_external_validation_2021"],"evidence_scope":"methods"},
+    {"claim_id":"prediction_performance","field":"method","text":"Calibration and discrimination for prediction","citation_ids":["tripod_ai_2024"],"evidence_scope":"reporting_standard"},
+    {"claim_id":"heterogeneity_availability_audit","field":"method","text":"Heterogeneity and concept-availability audit","citation_ids":["ramspek_external_validation_2021"],"evidence_scope":"methods"},
+    {"claim_id":"common_core_sensitivity","field":"sensitivity","text":"Common-core variable set","citation_ids":["ramspek_external_validation_2021"],"evidence_scope":"methods"},
+    {"claim_id":"recalibration_sensitivity","field":"sensitivity","text":"Database-specific versus pooled recalibration","citation_ids":["tripod_ai_2024","ramspek_external_validation_2021"],"evidence_scope":"methods"},
+    {"claim_id":"leave_one_database_out","field":"sensitivity","text":"Leave-one-database-out analysis","citation_ids":["ramspek_external_validation_2021"],"evidence_scope":"methods"},
+    {"claim_id":"stop_unharmonizable_time","field":"stop_condition","text":"Time zero or outcome horizon is not meaningfully harmonizable","citation_ids":["ramspek_external_validation_2021"],"evidence_scope":"methods"},
+    {"claim_id":"stop_target_guided_redesign","field":"stop_condition","text":"The source specification was modified using target outcomes without labeling redevelopment","citation_ids":["tripod_ai_2024"],"evidence_scope":"reporting_standard"},
+    {"claim_id":"stop_incompatible_concepts","field":"stop_condition","text":"Required concepts have incompatible clinical meaning across databases","citation_ids":["ramspek_external_validation_2021"],"evidence_scope":"methods"},
+    {"claim_id":"confirm_source_targets","field":"requires_confirmation","text":"Confirm the source database and independently sampled target databases","citation_ids":["tripod_ai_2024"],"evidence_scope":"reporting_standard"},
+    {"claim_id":"confirm_recalibration_scope","field":"requires_confirmation","text":"Confirm whether recalibration is allowed or the source specification must remain fully locked","citation_ids":["tripod_ai_2024","ramspek_external_validation_2021"],"evidence_scope":"methods"}
+  ],
+  "trust_level": "built_in_reviewed",
+  "review_status": "curated_mvp",
+  "review_attestation": null
 }

@@ -1,4 +1,4 @@
-# AGENT-KNOW-HOW-MVP — Research Know-How retrieval layer
+# AGENT-KNOW-HOW-GOVERNANCE-V2 — evidence-bound protocol retrieval
 
 Date: 2026-07-21
 
@@ -6,57 +6,56 @@ Branch: `codex/research-know-how-mvp`
 
 Base: rebased onto `refactor/agent-control-plane@82427bb`
 
-Scope: default-off planner context only; no Canonical9 refresh and no new execution tools
+Scope: default-off Planner knowledge layer; no Canonical9 refresh, no API run,
+no new extraction, and no tool/software capability retrieval.
 
-## Delivered
+## Delivered: K1–K4 governance and offline acceptance
 
-- Added strict `KnowHowCard`, `KnowHowCitation`, `KnowHowHit`, and
-  `KnowHowRegistry` contracts under `research_agent/know_how/`.
-- Added deterministic offline retrieval using question overlap, mapped analysis
-  family, database, and available `ResearchContext` concepts. The hard limits
-  are top-k 5, default top-k 3, 1,200 characters per card, and 8,000 characters
-  for the full Planner projection.
+- Card schema v2 binds every design, stop, and confirmation item to one stable
+  `claim_id`, exact text, evidence scope, and one or more `citation_ids`.
+- Retrieval separates `topic_applicable` from `data_readiness`; a relevant card
+  remains visible when required concepts are missing. It permits zero hits and
+  never pads the result to a nominal top-k.
+- Prompt projection is canonical structured JSON. Mandatory stop, confirmation,
+  readiness, version/SHA, and citation coordinates are never truncated.
+- Know-How is passed to `PlannerAgent` in its own labeled context section, not
+  mixed into `ResearchContext.notes`.
+- Plans persist only claim-level `know_how_decisions`. The earlier coarse
+  `know_how_refs` list was removed before merge; adopted cards are derived from
+  decisions with `disposition=adopted`.
+- Source trust (`built_in_reviewed`, `project_reviewed`,
+  `user_supplied_unreviewed`) is independent of scientific review status.
+  User-controlled cards cannot self-assert trust or enter the default Planner.
+- `clinical_reviewed` requires a version/content-digest-bound dual clinical and
+  methods attestation; editing a card invalidates it. All bundled cards remain
+  honestly `curated_mvp`.
 - Added eight `curated_mvp` cards with at least two URL/DOI-backed sources each:
   AKI prediction, sepsis prognosis, lactate trajectories, vasopressor
   comparative effectiveness, ventilation liberation, mortality prediction,
   longitudinal phenotyping, and cross-database external validation.
-- Added default-off `PipelineConfig` fields and pre-plan integration after the
-  existing literature/blueprint stage. Enabled runs register
-  `know_how_retrieval.json` and `know_how_prompt.md` in `EvidenceStore`.
-- Added typed Planner adoption through `AnalysisPlan.know_how_refs`. Initial
-  Planner output is restricted to this run's retrieved ids; duplicates and
-  unknown ids fail structured parsing. Replanner preserves refs exactly, and
-  resume revalidates the retrieved authority before reusing a plan.
-- Kept empty refs out of serialized plans, so default-off plan bytes and
-  provider call count remain unchanged. The opt-in smoke test compares enabled
-  and disabled runs directly.
-- Updated package data, public lazy exports, architecture description, and
-  usage documentation. Built sdist/wheel and verified an isolated offline wheel
-  install loads all eight cards.
+- Canonical9 A offline matrix is 9/9: E2/M2/M3/H1/H2/H3 retrieve their intended
+  card; E3 and M1 honestly retrieve none; bilingual aliases and missing-concept
+  negatives are locked by tests.
+- Full initial Planner request has an 80,000-byte pre-provider hard gate.
+  `planner_prompt_metrics.json` records system/user/total bytes, approximate
+  tokens, exact Know-How delta, selected-card count, and limit.
+- Historical submission profiles remain byte-identical. The additive,
+  non-default `npj_dm_know_how_dev/20260721` profile pins Know-How on; profile
+  mismatch fails closed and the profile coordinate is written to the manifest.
+- `PlannerKnowHowBinding` owns resume verification, prompt metrics, and evidence
+  persistence outside `pipeline.py`; v2 adds only three net pipeline lines over
+  the original MVP.
 
 ## Verification
 
-- Feature/config/planner suite on `14243b8`: `41 passed`; after the final
-  rebase onto `82427bb`, the focused schema/retrieval/evidence/Planner/resume/
-  opt-in smoke suite passed again: `16 passed`.
-- Package-boundary and module-graph gates passed.
-- ExperienceBank, PubMed/pre-plan literature, ResearchContext, Planner group:
-  `84 passed`; its one initial Docker source-digest failure passed when rerun
-  through the macOS subprocess sandbox.
-- Resume failure reruns with Docker deliberately disabled: `17 passed`; one
-  existing deterministic-policy test failed. A second existing resume test
-  also fails. Both failures were reproduced unchanged on the parent baseline
-  `c947105`, so they are not caused by this branch:
-  - `test_resume_retires_unchanged_draft_after_deterministic_policy_supersession`
-  - `test_resume_reaudits_material_deterministic_quarantine_repair[already-repaired-stale-finding]`
-- The earlier adjacent Table 1 / execution / golden run on `14243b8` produced
-  `103 passed` and four baseline-reproducible failures. Three source-contract
-  failures were subsequently handled by upstream `82427bb`; this branch does
-  not alter the execution phase. The remaining historical failure was a stale
-  parent golden digest, not a Know-How behavior difference.
-- `ruff`, `black`, `git diff --check`, and
-  `research_agent_module_graph.py --diff` passed.
-- Wheel inspection and isolated install: `offline_installed_cards 8`.
+- Know-How/profile focused suite: 64/64 after the claim-only plan migration.
+- Expanded Know-How + plan/replan/resume authority suite: 121/122. The only
+  failure is Docker source-image SHA mismatch against this uninstalled
+  worktree, before the test reaches changed logic.
+- Ruff, Black, py_compile, diff-check, and module graph pass.
+- Architecture integration was moved out of `pipeline.py`; the additive feature
+  baseline is re-emitted only after this extraction and recorded with the tool
+  SHA.
 
 ## Safety boundary
 
@@ -64,3 +63,14 @@ Cards remain advisory. Missing concepts are shown as unresolved. Retrieval does
 not exclude patients, choose a time zero, choose an estimand, install software,
 query a network service, or mutate the global case-neutral prompt. The feature
 is disabled unless `enable_know_how=True`.
+
+## Not complete
+
+- K5: the eight cards have not received clinical/methods claim-by-claim review;
+  none is authorized for paper-facing science.
+- K6: repeated blinded E2 Planner A/B (2–3 runs/arm or fixed recorded response
+  component comparison first) has not run.
+- K7: frozen B/C held-out generalization has not run. Tool/software capability
+  retrieval is a separate later workstream and does not block this MVP.
+- The fixed experiment data source is
+  `/Volumes/外置硬盘/easyicu_data/full6_20260717`; do not re-extract six databases.
