@@ -41,6 +41,7 @@ from ..scalar_utils import (
     _flatten_scalar_dict,
 )
 from .attrition import patch_attrition_rule_id_canonicalization
+from .binary_feasibility import patch_binary_domain_before_authored_feasibility
 from .lossy_coercion import (
     patch_lossy_numeric_coercion_guard as _patch_lossy_numeric_coercion_guard,
 )
@@ -2347,6 +2348,14 @@ def deterministic_concept_audit_repair(
     )
     repaired = code
     repair_names: List[str] = []
+
+    binary_feasibility_repaired = patch_binary_domain_before_authored_feasibility(
+        repaired,
+        repair_findings=repair_findings,
+    )
+    if binary_feasibility_repaired != repaired:
+        repaired = binary_feasibility_repaired
+        repair_names.append("binary_domain_authored_feasibility_v1")
 
     local_binding_repaired = patch_local_read_before_assignment_hoist(
         repaired,
