@@ -177,11 +177,34 @@ def filter_success_alias_bindings(
         unique_claimants = list(dict.fromkeys(claimants))
         if len(unique_claimants) <= 1:
             continue
+        explicit_claimants = [
+            evidence_id
+            for evidence_id in unique_claimants
+            if alias in filtered[evidence_id]
+        ]
         product_claimants = [
             evidence_id
             for evidence_id in unique_claimants
             if _is_product_authority(evidence_id)
         ]
+        product_stems = {
+            Path(_record_source_name(evidence_id)).stem
+            for evidence_id in product_claimants
+        }
+        # A producer may deliberately declare both ``artifact:x`` and
+        # ``table:x`` with JSON/CSV files sharing basename ``x``. Typed input
+        # resolution uses the declared kind + exact summary path, so an
+        # unqualified basename alias is neither necessary nor truthful. When
+        # the collision is implicit-only, suppress it for every format rather
+        # than arbitrarily making one physical product the generic authority.
+        # Any explicit semantic claim remains strict and fail-closed below.
+        if (
+            not explicit_claimants
+            and len(product_claimants) == len(unique_claimants)
+            and len(product_stems) == 1
+        ):
+            suppressed_basename_evidence_ids.update(unique_claimants)
+            continue
         selected_product: Optional[str] = None
         if len(product_claimants) == 1:
             selected_product = product_claimants[0]
