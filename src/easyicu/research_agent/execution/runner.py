@@ -1837,7 +1837,6 @@ class DockerRunner:
                 "run",
                 f"--cidfile={cidfile}",
                 f"--name={container_name}",
-                "--rm",
                 "--network=none",
                 "--read-only",
                 "--cap-drop=ALL",
@@ -1876,6 +1875,17 @@ class DockerRunner:
                     "Docker execution-runtime dependency capture timed out. "
                     + cleanup_note.strip()
                 ) from exc
+            container_ref = self._container_reference(
+                cidfile,
+                fallback_name=container_name,
+            )
+            assert container_ref is not None
+            teardown_confirmed, cleanup_note = self._teardown_container(container_ref)
+            if not teardown_confirmed:
+                raise RuntimeError(
+                    "Docker execution-runtime dependency capture completed, but "
+                    "container teardown could not be confirmed. " + cleanup_note.strip()
+                )
             sentinel.unlink(missing_ok=True)
             cidfile.unlink(missing_ok=True)
             requirements = capture_proc.stdout.strip()
