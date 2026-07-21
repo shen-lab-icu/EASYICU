@@ -1252,8 +1252,10 @@ class DockerRunner:
     * cohort parquet is mounted **read-only** at a fixed container
       path (``/cohort.parquet``) and ``COHORT_PARQUET`` points at it.
     * the run root, including the script and step directory, is mounted
-      read-only at ``/easyicu-run``; only the current step's ``outputs``
-      directory is overlaid read-write.
+      read-only at ``/easyicu-run``; the current attempt's output directory is
+      mounted separately at ``/easyicu-step-output``.  Keeping the writable
+      bind outside the read-only bind avoids Docker Desktop teardown stalls
+      caused by nested bind mounts.
     * ``--rm`` so containers don't pile up; ``--init`` so signal
       handling is sane.
     * the host's ``docker`` binary must be on PATH and the image
@@ -1279,6 +1281,7 @@ class DockerRunner:
     DEFAULT_IMAGE = "easyicu-research-agent:1.0.0"
     manages_output_cleanup = True
     CONTAINER_RUN_ROOT = "/easyicu-run"
+    CONTAINER_OUTPUT_ROOT = "/easyicu-step-output"
     CONTAINER_COHORT_PATH = "/cohort.parquet"
     CONTAINER_INPUT_ROOT = "/easyicu-inputs"
     CONTAINER_EXTRA_ROOT = "/easyicu-extra"
@@ -1562,11 +1565,8 @@ class DockerRunner:
                 "authority_snapshot_path is required when its digest is supplied"
             )
         container_step_dir = self._container_step_dir(step_id)
-        container_output_name = _safe_path_component(
-            out_dir.name,
-            label="output directory name",
-        )
-        container_output_dir = f"{container_step_dir}/{container_output_name}"
+        _safe_path_component(out_dir.name, label="output directory name")
+        container_output_dir = self.CONTAINER_OUTPUT_ROOT
         cmd: List[str] = [
             self.docker_executable,
             "run",
@@ -1588,10 +1588,11 @@ class DockerRunner:
         if self.memory_limit:
             cmd.append(f"--memory={self.memory_limit}")
 
-        # Mount the complete run tree read-only so deterministic runners can
-        # resolve ``STEP_OUT_DIR.parents[2]`` to the run root. Overlay only the
-        # current outputs directory read-write; the script, cwd, all other run
-        # artefacts, and the cohort remain immutable to generated code.
+        # Mount the complete run tree read-only.  Mount the writable attempt
+        # output at an independent container path rather than overlaying it
+        # below /easyicu-run: nested read-only/read-write bind targets can leave
+        # Docker Desktop's ``docker run --rm`` blocked after the workload has
+        # exited.  Generated code must use EASYICU_RUN_DIR for run-root reads.
         cmd.extend(
             [
                 "--mount",
@@ -1653,6 +1654,7 @@ class DockerRunner:
             "OUTPUT_DIR": container_output_dir,
             "EASYICU_OUTPUT_DIR": container_output_dir,
             "EASYICU_STEP_OUT_DIR": container_output_dir,
+            "EASYICU_STEP_ID": step_id,
             "EASYICU_RUN_DIR": self.CONTAINER_RUN_ROOT,
             "EASYICU_EVIDENCE_DIR": f"{self.CONTAINER_RUN_ROOT}/evidence",
             "EASYICU_MANIFEST_PARTIAL": (

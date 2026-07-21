@@ -6,8 +6,8 @@ mock ``subprocess.run`` and ``shutil.which`` to verify:
 1. ``shutil.which("docker")`` is consulted at construction; missing
    binary raises a clean ``FileNotFoundError``.
 2. The composed argv contains the right safety knobs:
-   ``--rm``, ``--init``, ``--network=none``, RO cohort/run mounts, RW
-   outputs-only mount, env injection, image trailer, and ``python -u``.
+   ``--rm``, ``--init``, ``--network=none``, RO cohort/run mounts, independent
+   RW outputs-only mount, env injection, image trailer, and ``python -u``.
 3. ``cohort_parquet`` is mounted read-only at ``/cohort.parquet``
    and ``COHORT_PARQUET`` points there.
 4. Custom image, network, mounts, cpu/memory limits, user, and
@@ -259,14 +259,12 @@ def test_build_command_has_safety_knobs(
         "type=bind" in s and "readonly" in s and "target=/cohort.parquet" in s
         for s in cmd
     ), f"cohort mount missing in {joined}"
-    # Run root is RO, with only the current outputs directory overlaid RW.
+    # Run root is RO and the current attempt output is an independent RW bind.
     assert any(
         "type=bind" in s and "target=/easyicu-run" in s and "readonly" in s for s in cmd
     ), f"run-root mount missing in {joined}"
     assert any(
-        "type=bind" in s
-        and "target=/easyicu-run/steps/step_x/outputs" in s
-        and "readonly" not in s
+        "type=bind" in s and "target=/easyicu-step-output" in s and "readonly" not in s
         for s in cmd
     ), f"output mount missing in {joined}"
     assert not any(
@@ -277,7 +275,8 @@ def test_build_command_has_safety_knobs(
     env_pairs = [cmd[i + 1] for i, tok in enumerate(cmd) if tok == "-e"]
     env_dict = dict(p.split("=", 1) for p in env_pairs)
     assert env_dict["COHORT_PARQUET"] == "/cohort.parquet"
-    assert env_dict["STEP_OUT_DIR"] == "/easyicu-run/steps/step_x/outputs"
+    assert env_dict["STEP_OUT_DIR"] == "/easyicu-step-output"
+    assert env_dict["EASYICU_STEP_ID"] == "step_x"
     assert env_dict["EASYICU_RUN_DIR"] == "/easyicu-run"
     assert env_dict["MPLBACKEND"] == "Agg"
     assert env_dict["HOME"] == "/tmp"
@@ -1195,14 +1194,13 @@ def test_each_run_recreates_the_output_mount_directory(
         )
         for command in run_commands
         for entry in command
-        if ",target=/easyicu-run/steps/repeat/.outputs-" in entry
+        if ",target=/easyicu-step-output" in entry
     ]
     assert len(output_mounts) == 2
-    assert output_mounts[0][1:] != output_mounts[1][1:]
+    assert output_mounts[0][1] != output_mounts[1][1]
     assert all("/.outputs-" in source for _command, source, _target in output_mounts)
     assert all(
-        target.startswith("/easyicu-run/steps/repeat/.outputs-")
-        for _command, _source, target in output_mounts
+        target == "/easyicu-step-output" for _command, _source, target in output_mounts
     )
     for command, _source, target in output_mounts:
         assert f"STEP_OUT_DIR={target}" in command

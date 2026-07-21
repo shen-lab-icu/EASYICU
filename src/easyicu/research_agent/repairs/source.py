@@ -6486,8 +6486,8 @@ def _deterministic_runner_repair(
 
                 out_dir = Path(os.environ["STEP_OUT_DIR"])
                 out_dir.mkdir(parents=True, exist_ok=True)
-                run_dir = out_dir.parents[2]
-                current_step_id = out_dir.parent.name
+                run_dir = Path(os.environ.get("EASYICU_RUN_DIR") or out_dir.parents[2])
+                current_step_id = os.environ.get("EASYICU_STEP_ID") or out_dir.parent.name
                 figure_suffixes = [".png", ".svg", ".pdf", ".tiff", ".tif", ".pptx"]
                 contract_suffix = ".figure_contract.json"
 
