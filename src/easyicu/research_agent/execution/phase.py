@@ -264,6 +264,10 @@ from ..gates.semantics import (
     blocking_validator_findings as _blocking_validator_findings,
 )
 from ..providers.mocks import MockLLMClient
+from ..planning.replan_gate import (
+    replan_candidate_contract_findings,
+    replan_candidate_rejection_finding,
+)
 from ..contracts.ordered_stratified import ordered_stratified_numeric_findings
 from ..repairs.reasons import (
     RepairPromptAuthority,
@@ -4385,6 +4389,25 @@ def run_execute_phase(
         )
         revised = normalized_candidate.plan
         findings.extend(normalized_candidate.findings)
+
+        candidate_contract_findings = replan_candidate_contract_findings(
+            plan=revised,
+            context=context,
+        )
+        candidate_contract_errors = [
+            finding
+            for finding in candidate_contract_findings
+            if finding.severity == "error"
+        ]
+        if candidate_contract_errors:
+            findings.append(
+                replan_candidate_rejection_finding(
+                    contract_errors=candidate_contract_errors,
+                    trigger=reason,
+                    candidate_revision=revised.revision,
+                )
+            )
+            return current_plan
 
         # The typed authority result owns only candidate normalization. The
         # orchestration state transition and any durable registration stay here.
