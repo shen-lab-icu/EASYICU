@@ -14,6 +14,12 @@ from typing import Callable, Optional, Sequence
 
 from ..research_context.prompt_scope import normalised_method_head
 from ..schema import AnalysisStep, ValidationFinding
+from .ast_semantics import (
+    DYNAMIC_NAMESPACE_MUTATORS as _DYNAMIC_NAMESPACE_MUTATORS,
+    DYNAMIC_NAMESPACE_PRIMITIVES as _DYNAMIC_NAMESPACE_PRIMITIVES,
+    contains_literal_provenance_audit_row,
+    literal_observational_getattr,
+)
 from .numeric_reduction import is_array_boolean_predicate as _is_array_boolean_predicate
 from .numeric_reduction import misnested_boolean_mask_reduction_expression
 from .typed_input import (
@@ -548,22 +554,6 @@ def _target_names(node: ast.AST) -> set[str]:
     return set()
 
 
-_DYNAMIC_NAMESPACE_PRIMITIVES = frozenset(
-    {
-        "__import__",
-        "compile",
-        "eval",
-        "exec",
-        "getattr",
-        "globals",
-        "import_module",
-        "locals",
-        "vars",
-    }
-)
-_DYNAMIC_NAMESPACE_MUTATORS = frozenset(
-    {"__delattr__", "__setattr__", "delattr", "setattr"}
-)
 _REFLECTION_MODULE_ROOTS = frozenset(
     {"__main__", "gc", "importlib", "inspect", "pkgutil", "pydoc", "unittest"}
 )
@@ -1110,28 +1100,12 @@ def _provenance_fail_closed_findings(tree: ast.Module) -> list[ValidationFinding
         return current
 
     def _contains_literal_audit_row(scope: ast.AST) -> bool:
-        """Require an actual provenance audit row, not matching prose tokens."""
-
-        expected_function = None if scope is tree else scope
-        for node in ast.walk(scope):
-            if (
-                not isinstance(node, ast.Dict)
-                or _nearest_function(node) is not expected_function
-            ):
-                continue
-            fields = {
-                str(key.value): value
-                for key, value in zip(node.keys, node.values)
-                if isinstance(key, ast.Constant) and isinstance(key.value, str)
-            }
-            role = fields.get("role")
-            if (
-                _PROVENANCE_FAILURE_KEYS <= fields.keys()
-                and isinstance(role, ast.Constant)
-                and str(role.value).strip().lower() == "audit_only"
-            ):
-                return True
-        return False
+        return contains_literal_provenance_audit_row(
+            scope,
+            tree=tree,
+            parents=parents,
+            failure_keys=_PROVENANCE_FAILURE_KEYS,
+        )
 
     def _uses_host_provenance_receipt(scope: ast.AST) -> bool:
         """Leave fail-closed semantics of the host receipt to its own gate."""
@@ -1591,7 +1565,13 @@ def _provenance_fail_closed_findings(tree: ast.Module) -> list[ValidationFinding
                 call_name = _call_name(candidate.func).rsplit(".", 1)[-1]
                 if (
                     _is_provenance_result_sink_call(candidate)
-                    or call_name in _DYNAMIC_NAMESPACE_PRIMITIVES
+                    or (
+                        call_name in _DYNAMIC_NAMESPACE_PRIMITIVES
+                        and not literal_observational_getattr(
+                            candidate,
+                            protected_names=set(helper_aliases),
+                        )
+                    )
                     or call_name in _DYNAMIC_NAMESPACE_MUTATORS
                 ):
                     return True
@@ -1755,7 +1735,12 @@ def _provenance_fail_closed_findings(tree: ast.Module) -> list[ValidationFinding
             if not isinstance(candidate, ast.Call):
                 continue
             call_name = _call_name(candidate.func).rsplit(".", 1)[-1]
-            if call_name in dynamic_namespace_calls:
+            if call_name in dynamic_namespace_calls and not (
+                literal_observational_getattr(
+                    candidate,
+                    protected_names={function.name},
+                )
+            ):
                 return False
             if (
                 call_name in _DYNAMIC_NAMESPACE_MUTATORS
@@ -1776,7 +1761,12 @@ def _provenance_fail_closed_findings(tree: ast.Module) -> list[ValidationFinding
             if not isinstance(candidate, ast.Call):
                 continue
             call_name = _call_name(candidate.func).rsplit(".", 1)[-1]
-            if call_name in _DYNAMIC_NAMESPACE_PRIMITIVES:
+            if call_name in _DYNAMIC_NAMESPACE_PRIMITIVES and not (
+                literal_observational_getattr(
+                    candidate,
+                    protected_names=marker_names,
+                )
+            ):
                 return True
             if call_name in _DYNAMIC_NAMESPACE_MUTATORS:
                 return True
@@ -5337,7 +5327,12 @@ def _builtin_int_binding_is_unmodified(tree: ast.Module) -> bool:
         if not isinstance(node, ast.Call):
             continue
         call_name = _call_name(node.func)
-        if call_name.rsplit(".", 1)[-1] in _DYNAMIC_NAMESPACE_PRIMITIVES:
+        if call_name.rsplit(".", 1)[-1] in _DYNAMIC_NAMESPACE_PRIMITIVES and not (
+            literal_observational_getattr(
+                node,
+                protected_names={"int"},
+            )
+        ):
             return False
         if (
             call_name in _DYNAMIC_NAMESPACE_MUTATORS

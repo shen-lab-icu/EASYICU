@@ -17,13 +17,11 @@ def resolved_input_relative_path_root_findings(
 ) -> list[ValidationFinding]:
     """Require run-root resolution for host-issued ``relative_path`` values.
 
-    Resolved-input paths already include the ``evidence/`` component. Joining
-    one to ``EASYICU_EVIDENCE_DIR`` produces ``evidence/evidence/...``. The
-    finding is limited to bindings proven to descend from the resolved-input
-    manifest; arbitrary dictionaries remain outside host repair authority.
+    Resolved paths include ``evidence/``; joining them to the evidence directory
+    duplicates it. Only proven manifest bindings receive host repair authority.
     """
 
-    parents, _input_mappings, binding_names = _resolved_input_symbols(tree)
+    parents, _, binding_names, relative_path_names = _resolved_input_symbols(tree)
 
     def environment_key(node: ast.AST) -> ast.Constant | None:
         if (
@@ -52,6 +50,8 @@ def resolved_input_relative_path_root_findings(
         return None
 
     def is_binding_relative_path(node: ast.AST, *, scope: int) -> bool:
+        if isinstance(node, ast.Name):
+            return (scope, node.id) in relative_path_names
         if isinstance(node, ast.Subscript) and isinstance(node.value, ast.Name):
             return (scope, node.value.id) in binding_names and _subscript_key(
                 node.slice
@@ -122,7 +122,7 @@ def resolved_input_shadowed_by_cohort_env_findings(
     declared product and breaks development projections.
     """
 
-    parents, _input_mappings, binding_names = _resolved_input_symbols(tree)
+    parents, _, binding_names, _ = _resolved_input_symbols(tree)
 
     def environment_key(node: ast.AST, key: str) -> bool:
         return bool(

@@ -2295,6 +2295,97 @@ model.fit(frame)
     )
 
 
+def test_mechanical_preflight_allows_unrelated_literal_getattr_after_provenance(ra):
+    code = """
+def provenance_audit(frame):
+    invalid_pair_n = int(frame['measured'].isna().sum())
+    discordant_n = int((frame['measured'] != (frame['count'] > 0)).sum())
+    checks = [{'role': 'audit_only', 'invalid_pair_n': invalid_pair_n,
+               'discordant_n': discordant_n}]
+    if invalid_pair_n or discordant_n:
+        raise RuntimeError('invalid measurement provenance')
+
+provenance_audit(frame)
+iterations = getattr(model_result, "iterations", None)
+model.fit(frame)
+"""
+
+    findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+
+    assert not any(
+        finding.detail
+        and finding.detail.get("reason") == "provenance_audit_not_fail_closed"
+        for finding in findings
+    )
+
+
+def test_null_unavailable_receipt_does_not_create_numeric_guard_obligation(ra):
+    code = """
+from easyicu.research_agent.methods.descriptive_inputs import (
+    measurement_provenance_receipt,
+)
+
+checks = []
+if measured_column not in declared_columns or count_column not in declared_columns:
+    checks.append({
+        "role": "audit_only",
+        "status": "unavailable",
+        "invalid_pair_n": None,
+        "discordant_n": None,
+    })
+    raise ValueError("declared provenance pair is unavailable")
+checks.append(measurement_provenance_receipt(
+    frame,
+    measured_column=measured_column,
+    count_column=count_column,
+))
+iterations = getattr(model_result, "iterations", None)
+model.fit(frame)
+"""
+
+    findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+
+    assert not any(
+        finding.detail
+        and finding.detail.get("reason") == "provenance_audit_not_fail_closed"
+        for finding in findings
+    )
+
+
+@pytest.mark.parametrize(
+    "lookup",
+    [
+        "helper = getattr(holder, helper_name)",
+        'helper = getattr(holder, "provenance_audit")',
+    ],
+    ids=["dynamic-name", "protected-helper-name"],
+)
+def test_mechanical_preflight_rejects_getattr_that_can_select_provenance_helper(
+    ra, lookup
+):
+    code = f"""
+def provenance_audit(frame):
+    invalid_pair_n = int(frame['measured'].isna().sum())
+    discordant_n = int((frame['measured'] != (frame['count'] > 0)).sum())
+    checks = [{{'role': 'audit_only', 'invalid_pair_n': invalid_pair_n,
+               'discordant_n': discordant_n}}]
+    if invalid_pair_n or discordant_n:
+        raise RuntimeError('invalid measurement provenance')
+
+{lookup}
+helper(frame)
+model.fit(frame)
+"""
+
+    findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+
+    assert any(
+        finding.detail
+        and finding.detail.get("reason") == "provenance_audit_not_fail_closed"
+        for finding in findings
+    )
+
+
 def test_host_provenance_receipt_decoy_does_not_authorize_custom_audit(ra):
     code = """
 from easyicu.research_agent.methods.descriptive_inputs import (

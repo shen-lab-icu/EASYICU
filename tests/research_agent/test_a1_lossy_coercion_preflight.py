@@ -84,6 +84,45 @@ def test_t1_unchecked_loss_count_is_flagged_by_ast(ra):
     assert "unchecked_coercion_loss_count" in gaps
 
 
+def test_literal_result_getattr_does_not_hide_fail_closed_loss_guard(ra):
+    script = """
+import pandas as pd
+
+original = cohort["aki_stage_max"]
+coerced = pd.to_numeric(original, errors="coerce")
+newly_invalid = int((original.notna() & coerced.isna()).sum())
+if newly_invalid > 0:
+    raise ValueError("numeric coercion invalidated observed values")
+iterations = getattr(model_result, "iterations", None)
+"""
+
+    assert _lossy_findings(script, ra) == []
+
+
+@pytest.mark.parametrize(
+    "lookup",
+    [
+        "value = getattr(model_result, attribute_name)",
+        'replacement = getattr(holder, "int")',
+    ],
+    ids=["dynamic-name", "protected-int-name"],
+)
+def test_ambiguous_getattr_keeps_loss_guard_proof_fail_closed(ra, lookup):
+    script = f"""
+import pandas as pd
+
+original = cohort["aki_stage_max"]
+coerced = pd.to_numeric(original, errors="coerce")
+newly_invalid = int((original.notna() & coerced.isna()).sum())
+if newly_invalid > 0:
+    raise ValueError("numeric coercion invalidated observed values")
+{lookup}
+"""
+
+    lossy = _lossy_findings(script, ra)
+    assert lossy
+
+
 def test_t1_ast_finding_classifies_as_lossy_numeric_coercion(ra):
     finding = _lossy_findings(_T1_UNCHECKED_LOSS_COUNT, ra)[0]
     assert repair_reason_for_finding(finding) is RepairReason.LOSSY_NUMERIC_COERCION
