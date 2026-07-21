@@ -1,0 +1,35 @@
+{
+  "schema_version": "easyicu.agent_experiment_registry/1",
+  "experiments": [
+    {
+      "experiment_id": "FIG2-E2-DEV-001",
+      "benchmark_item": "E2_lactate_mortality",
+      "phase": "development",
+      "run_id": "run_20260720T070558_0d27e3",
+      "code_commit": "eb6121e574ba0db2f60e4de8c443c28fda699cd9",
+      "local_package": "research_output/_packages/FIG2-E2-DEV-001",
+      "scientific_requirement_complete": false,
+      "paper_authorized": false
+    },
+    {
+      "experiment_id": "FIG2-E3-DEV-001",
+      "benchmark_item": "E3_kdigo_gradient",
+      "phase": "development",
+      "run_id": "run_20260721T012723_9dfcaf",
+      "code_commit": "2f6b4711c4d9de68af987a18af68f3c0f6656795",
+      "local_package": "research_output/_packages/FIG2-E3-DEV-001",
+      "scientific_requirement_complete": false,
+      "paper_authorized": false
+    },
+    {
+      "experiment_id": "FIG2-H2-NEGCTRL-001",
+      "benchmark_item": "H2_vasopressor_causal",
+      "phase": "negative_control",
+      "run_id": "run_20260721T072653_0abd97",
+      "code_commit": "89fb23699b66a9677c38db024a2f55138413d50d",
+      "local_package": "research_output/_packages/FIG2-H2-NEGCTRL-001",
+      "scientific_requirement_complete": false,
+      "paper_authorized": false
+    }
+  ]
+}
