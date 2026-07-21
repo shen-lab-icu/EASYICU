@@ -620,6 +620,218 @@ def _lexical_scope(
     return current
 
 
+def patch_unplanned_measurement_provenance_summary(
+    code: str,
+    *,
+    findings: Sequence[Any],
+) -> str:
+    """Replace one rejected hand-written audit with the exact host receipt.
+
+    Authority comes from one validator-owned missing measured/count coordinate
+    plus the rejected check paths.  The source must contain one literal
+    ``measurement_provenance_audit`` envelope, one reader-bound frame in the
+    same lexical scope, and no competing provenance-column literals.  The
+    repair changes only the summary receipt; it does not alter cohort rows or
+    scientific outputs.
+    """
+
+    missing: list[tuple[str, str]] = []
+    unplanned_paths: set[str] = set()
+    for finding in findings:
+        validator, severity, _message, detail = _finding_parts(finding)
+        if (
+            validator != "step_summary_integrity"
+            or severity != "error"
+            or not isinstance(detail, dict)
+        ):
+            continue
+        issue = detail.get("issue")
+        if issue == "measurement_provenance_check_missing":
+            measured = detail.get("measured_column")
+            count = detail.get("expected_count_column")
+            if not (
+                isinstance(measured, str)
+                and measured.strip()
+                and isinstance(count, str)
+                and count.strip()
+                and measured != count
+            ):
+                return code
+            missing.append((measured, count))
+        elif issue == "measurement_provenance_check_unplanned":
+            path = detail.get("summary_path")
+            if not (
+                isinstance(path, str)
+                and path.startswith("measurement_provenance_audit.checks.")
+            ):
+                return code
+            unplanned_paths.add(path)
+    if len(missing) != 1 or not unplanned_paths:
+        return code
+    measured_column, count_column = missing[0]
+
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return code
+    parents = {
+        child: parent
+        for parent in ast.walk(tree)
+        for child in ast.iter_child_nodes(parent)
+    }
+    audit_nodes: list[ast.Dict] = []
+    for node in ast.walk(tree):
+        if not (
+            isinstance(node, ast.Assign)
+            and len(node.targets) == 1
+            and isinstance(node.targets[0], ast.Name)
+            and node.targets[0].id == "step_summary"
+            and isinstance(node.value, ast.Dict)
+        ):
+            continue
+        for key, value in zip(node.value.keys, node.value.values, strict=True):
+            if (
+                isinstance(key, ast.Constant)
+                and key.value == "measurement_provenance_audit"
+                and isinstance(value, ast.Dict)
+            ):
+                audit_nodes.append(value)
+    if len(audit_nodes) != 1:
+        return code
+    audit = audit_nodes[0]
+    envelope = {
+        str(key.value): value
+        for key, value in zip(audit.keys, audit.values, strict=True)
+        if isinstance(key, ast.Constant) and isinstance(key.value, str)
+    }
+    checks = envelope.get("checks")
+    if not (
+        set(envelope) == {"source", "checks"}
+        and isinstance(envelope["source"], ast.Constant)
+        and envelope["source"].value == "COHORT_PARQUET"
+        and isinstance(checks, ast.List)
+        and len(checks.elts) == len(unplanned_paths)
+        and all(isinstance(item, ast.Dict) for item in checks.elts)
+    ):
+        return code
+    provenance_literals: set[str] = set()
+    for check in checks.elts:
+        assert isinstance(check, ast.Dict)
+        fields = {
+            str(key.value): value
+            for key, value in zip(check.keys, check.values, strict=True)
+            if isinstance(key, ast.Constant) and isinstance(key.value, str)
+        }
+        for field_name in {
+            "measured_column",
+            "measurement_column",
+            "status_column",
+            "count_column",
+        }:
+            value = fields.get(field_name)
+            if isinstance(value, ast.Constant) and isinstance(value.value, str):
+                if value.value.endswith("_measured") or value.value.endswith("_n"):
+                    provenance_literals.add(str(value.value))
+    if not provenance_literals or not provenance_literals <= {
+        measured_column,
+        count_column,
+    }:
+        return code
+
+    scope = _lexical_scope(audit, parents)
+    reader_assignments = [
+        node
+        for node in ast.walk(scope)
+        if isinstance(node, ast.Assign)
+        and _lexical_scope(node, parents) is scope
+        and len(node.targets) == 1
+        and isinstance(node.targets[0], ast.Name)
+        and isinstance(node.value, ast.Call)
+        and isinstance(node.value.func, ast.Attribute)
+        and isinstance(node.value.func.value, ast.Name)
+        and node.value.func.value.id in {"pd", "pl"}
+        and node.value.func.attr in {"read_csv", "read_parquet", "read_table"}
+        and node.lineno < audit.lineno
+    ]
+    if len(reader_assignments) != 1:
+        return code
+    frame_name = reader_assignments[0].targets[0].id
+    if any(
+        isinstance(node, ast.Name)
+        and isinstance(node.ctx, (ast.Store, ast.Del))
+        and node.id == frame_name
+        and node is not reader_assignments[0].targets[0]
+        and _lexical_scope(node, parents) is scope
+        for node in ast.walk(scope)
+    ):
+        return code
+    if any(
+        (
+            isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
+            and node.name == "measurement_provenance_receipt"
+        )
+        or (
+            isinstance(node, ast.Name)
+            and isinstance(node.ctx, (ast.Store, ast.Del))
+            and node.id == "measurement_provenance_receipt"
+        )
+        for node in ast.walk(tree)
+    ):
+        return code
+
+    lines, starts = _source_offsets(code)
+    audit_span = _node_span(audit, lines=lines, starts=starts)
+    if audit_span is None:
+        return code
+    replacement = (
+        '{"source": "COHORT_PARQUET", "checks": ['
+        f"measurement_provenance_receipt({frame_name}, "
+        f"measured_column={measured_column!r}, count_column={count_column!r})"
+        "]}"
+    )
+    edits: list[tuple[int, int, str]] = [(*audit_span, replacement)]
+    exact_imports = [
+        node
+        for node in tree.body
+        if isinstance(node, ast.ImportFrom)
+        and node.level == 0
+        and node.module == "easyicu.research_agent.methods.descriptive_inputs"
+        and any(
+            alias.name == "measurement_provenance_receipt" and alias.asname is None
+            for alias in node.names
+        )
+    ]
+    if len(exact_imports) > 1:
+        return code
+    if not exact_imports:
+        imports = [
+            node for node in tree.body if isinstance(node, (ast.Import, ast.ImportFrom))
+        ]
+        if not imports or imports[-1].end_lineno is None:
+            return code
+        import_at = (
+            starts[imports[-1].end_lineno]
+            if imports[-1].end_lineno < len(lines)
+            else len(code)
+        )
+        edits.append(
+            (
+                import_at,
+                import_at,
+                "from easyicu.research_agent.methods.descriptive_inputs "
+                "import measurement_provenance_receipt\n",
+            )
+        )
+    repaired = code
+    for start, end, rendered in sorted(edits, reverse=True):
+        repaired = repaired[:start] + rendered + repaired[end:]
+    try:
+        ast.parse(repaired)
+    except SyntaxError:
+        return code
+    return repaired
+
+
 def patch_direct_host_provenance_summary(code: str) -> str:
     """Wrap one direct host receipt in the required source/checks envelope.
 
@@ -817,6 +1029,159 @@ def patch_nested_host_provenance_summary(code: str) -> str:
     return repaired
 
 
+def _patch_named_provenance_summary(code: str) -> str:
+    """Wrap one top-level named receipt collection in the closed envelope."""
+
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return code
+    summary_values: list[ast.Name] = []
+    for node in tree.body:
+        if not (
+            isinstance(node, ast.Assign)
+            and len(node.targets) == 1
+            and isinstance(node.targets[0], ast.Name)
+            and node.targets[0].id == "step_summary"
+            and isinstance(node.value, ast.Dict)
+        ):
+            continue
+        for key, value in zip(node.value.keys, node.value.values, strict=True):
+            if (
+                isinstance(key, ast.Constant)
+                and key.value == "measurement_provenance_audit"
+                and isinstance(value, ast.Name)
+            ):
+                summary_values.append(value)
+    if len(summary_values) != 1:
+        return code
+    audit_name = summary_values[0].id
+    assignments = [
+        node
+        for node in tree.body
+        if isinstance(node, ast.Assign)
+        and len(node.targets) == 1
+        and isinstance(node.targets[0], ast.Name)
+        and node.targets[0].id == audit_name
+    ]
+    audit_loads = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Name)
+        and isinstance(node.ctx, ast.Load)
+        and node.id == audit_name
+    ]
+    if len(assignments) != 1 or len(audit_loads) != 1:
+        return code
+    assignment = assignments[0]
+    value = assignment.value
+    receipts_name: str | None = None
+    if (
+        isinstance(value, ast.Call)
+        and isinstance(value.func, ast.Attribute)
+        and value.func.attr == "from_records"
+        and isinstance(value.func.value, ast.Attribute)
+        and value.func.value.attr == "DataFrame"
+        and isinstance(value.func.value.value, ast.Name)
+        and value.func.value.value.id == "pd"
+        and len(value.args) == 1
+        and isinstance(value.args[0], ast.Name)
+        and not value.keywords
+    ):
+        receipts_name = value.args[0].id
+    elif isinstance(value, ast.Name) and value.id != audit_name:
+        candidate_name = value.id
+        exact_imports = [
+            node
+            for node in tree.body
+            if isinstance(node, ast.ImportFrom)
+            and node.level == 0
+            and node.module == "easyicu.research_agent.methods.descriptive_inputs"
+            and any(
+                alias.name == "measurement_provenance_receipt" and alias.asname is None
+                for alias in node.names
+            )
+        ]
+        receipt_assignments = [
+            node
+            for node in tree.body
+            if isinstance(node, ast.Assign)
+            and len(node.targets) == 1
+            and isinstance(node.targets[0], ast.Name)
+            and node.targets[0].id == candidate_name
+            and isinstance(node.value, ast.List)
+        ]
+        append_calls = [
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and isinstance(node.func.value, ast.Name)
+            and node.func.value.id == candidate_name
+            and node.func.attr == "append"
+        ]
+        other_attribute_calls = [
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and isinstance(node.func.value, ast.Name)
+            and node.func.value.id == candidate_name
+            and node.func.attr != "append"
+        ]
+        stored_names = [
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Name)
+            and isinstance(node.ctx, ast.Store)
+            and node.id == candidate_name
+        ]
+        if (
+            len(exact_imports) != 1
+            or len(receipt_assignments) != 1
+            or len(stored_names) != 1
+            or other_attribute_calls
+        ):
+            return code
+        receipt_calls = list(receipt_assignments[0].value.elts) + [
+            node.args[0]
+            for node in append_calls
+            if len(node.args) == 1 and not node.keywords
+        ]
+        if not receipt_calls or len(receipt_calls) != (
+            len(receipt_assignments[0].value.elts) + len(append_calls)
+        ):
+            return code
+        if any(
+            not (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Name)
+                and node.func.id == "measurement_provenance_receipt"
+                and len(node.args) == 1
+                and not any(keyword.arg is None for keyword in node.keywords)
+                and {keyword.arg for keyword in node.keywords}
+                == {"measured_column", "count_column"}
+            )
+            for node in receipt_calls
+        ):
+            return code
+        receipts_name = candidate_name
+    if receipts_name is None:
+        return code
+    assignment_source = ast.get_source_segment(code, assignment)
+    if not assignment_source or code.count(assignment_source) != 1:
+        return code
+    replacement = (
+        f'{audit_name} = {{"source": "COHORT_PARQUET", ' f'"checks": {receipts_name}}}'
+    )
+    repaired = code.replace(assignment_source, replacement, 1)
+    try:
+        ast.parse(repaired)
+    except SyntaxError:
+        return code
+    return repaired
+
+
 def patch_measurement_provenance_summary(code: str) -> str:
     """Apply one proven provenance-envelope normalization, fail-closed."""
 
@@ -824,6 +1189,7 @@ def patch_measurement_provenance_summary(code: str) -> str:
         patch_table_one_left_provenance_source,
         patch_direct_host_provenance_summary,
         patch_nested_host_provenance_summary,
+        _patch_named_provenance_summary,
     ):
         repaired = patcher(code)
         if repaired != code:
@@ -831,8 +1197,24 @@ def patch_measurement_provenance_summary(code: str) -> str:
     return code
 
 
+def patch_measurement_provenance_contract(
+    code: str,
+    *,
+    findings: Sequence[Any],
+) -> str:
+    """Normalize one validator-proven provenance contract representation."""
+
+    repaired = patch_unplanned_measurement_provenance_summary(
+        code,
+        findings=findings,
+    )
+    return repaired if repaired != code else patch_measurement_provenance_summary(code)
+
+
 __all__ = [
     "patch_direct_host_provenance_summary",
+    "patch_measurement_provenance_contract",
     "patch_measurement_provenance_summary",
     "patch_nested_host_provenance_summary",
+    "patch_unplanned_measurement_provenance_summary",
 ]
