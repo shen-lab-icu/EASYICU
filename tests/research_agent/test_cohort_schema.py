@@ -547,6 +547,17 @@ def test_materialize_locked_analysis_cohort_applies_inclusion(tmp_path: Path) ->
     assert out.exists()
     assert len(pd.read_parquet(out)) == 3
     assert (tmp_path / "cohort_analysis_provenance.json").exists()
+    flow_path = tmp_path / "cohort_analysis_flow.csv"
+    assert result["flow_path"] == flow_path
+    flow = pd.read_csv(flow_path)
+    assert flow[["n_before", "n_excluded", "n_remaining"]].to_dict("records") == [
+        {"n_before": 4, "n_excluded": 0, "n_remaining": 4},
+        {"n_before": 4, "n_excluded": 1, "n_remaining": 3},
+    ]
+    provenance = json.loads(
+        (tmp_path / "cohort_analysis_provenance.json").read_text(encoding="utf-8")
+    )
+    assert provenance["cohort_flow"][-1]["n_remaining"] == 3
 
 
 def test_materialize_no_definition_returns_no_file(tmp_path: Path) -> None:

@@ -31,9 +31,20 @@ def _is_extraction(user: str) -> bool:
     )
 
 
-@pytest.mark.parametrize("development_sample_size", [None, 100])
+@pytest.mark.parametrize(
+    ("development_sample_size", "cohort_products"),
+    [
+        (None, ["table:analysis_cohort"]),
+        (100, ["table:analysis_cohort"]),
+        (None, ["artifact:analysis_cohort", "table:cohort_flow"]),
+    ],
+)
 def test_prose_cohort_is_extracted_materialised_and_enforced(
-    ra, synthetic_cohort, tmp_path: Path, development_sample_size: int | None
+    ra,
+    synthetic_cohort,
+    tmp_path: Path,
+    development_sample_size: int | None,
+    cohort_products: list[str],
 ):
     from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep
 
@@ -77,7 +88,7 @@ def test_prose_cohort_is_extracted_materialised_and_enforced(
                                 "age >= 18 and ICU LoS >= 1 day; report attrition."
                             ),
                             inputs=[],
-                            expected_outputs=["table:analysis_cohort"],
+                            expected_outputs=cohort_products,
                             method="cohort_definition",
                         ),
                     )
@@ -149,3 +160,20 @@ def test_prose_cohort_is_extracted_materialised_and_enforced(
 
     statuses = [r.get("status") for r in manifest.get("per_step_records", [])]
     assert statuses and all(s == "ok" for s in statuses), statuses
+    if "table:cohort_flow" in cohort_products:
+        flow = pd.read_csv(run_dir / "cohort_analysis_flow.csv")
+        assert int(flow.iloc[0]["n_before"]) == 800
+        assert int(flow.iloc[-1]["n_remaining"]) == n_cohort
+        cohort_step = next(
+            record
+            for record in manifest["per_step_records"]
+            if record["step_id"] == "01_cohort_definition"
+        )
+        assert cohort_step["generation_mode"] == "deterministic_cohort_materializer"
+        assert cohort_step["evidence_ids"] == [
+            "analysis_cohort_execute_repair",
+            "cohort_flow_execute_repair",
+        ]
+        assert cohort_step["step_provider_call_categories"] == [
+            "cohort_definition_translation"
+        ]

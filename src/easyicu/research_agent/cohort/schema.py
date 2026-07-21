@@ -538,6 +538,7 @@ def materialize_locked_analysis_cohort(
     result: Dict[str, Any] = {
         "status": "no_definition",
         "path": None,
+        "flow_path": None,
         "authority_path": None,
         "authority_ref": None,
         "cohort_definition_sha256": None,
@@ -580,7 +581,7 @@ def materialize_locked_analysis_cohort(
             context=context,
             columns=filter_input.columns,
         )
-        cohort = build_cohort(
+        cohort, cohort_flow = _build_cohort_with_flow(
             definition,
             filter_input,
             column_bindings=column_bindings,
@@ -609,6 +610,7 @@ def materialize_locked_analysis_cohort(
         "n_universe": int(len(universe)),
         "n_analysis_cohort": int(len(cohort)),
         "predicate_column_bindings": predicate_bindings,
+        "cohort_flow": cohort_flow,
     }
     authority_ref = None
     authority_path = None
@@ -649,9 +651,12 @@ def materialize_locked_analysis_cohort(
             json.dumps(semantic_provenance, indent=2, ensure_ascii=False),
             encoding="utf-8",
         )
+    flow_path = Path(run_dir) / f"{stem}_flow.csv"
+    pd.DataFrame(cohort_flow).to_csv(flow_path, index=False)
     result.update(
         status="applied",
         path=out_path,
+        flow_path=flow_path,
         authority_path=authority_path,
         authority_ref=authority_ref,
         cohort_definition_sha256=cohort_definition_sha(definition),
@@ -703,12 +708,73 @@ def build_cohort(
 
     if not isinstance(data, pd.DataFrame):
         raise TypeError("build_cohort data must be a pandas DataFrame")
+    cohort, _ = _build_cohort_with_flow(
+        definition,
+        data,
+        column_bindings=column_bindings,
+    )
+    return cohort
+
+
+def _build_cohort_with_flow(
+    definition: CohortDefinition,
+    data: Any,
+    *,
+    column_bindings: Optional[Dict[str, str]] = None,
+) -> tuple[Any, list[Dict[str, Any]]]:
+    """Apply locked predicates once and return their exact attrition ledger."""
+
+    import pandas as pd  # type: ignore
+
     mask = pd.Series(True, index=data.index)
-    for pred in definition.inclusion:
-        mask &= _predicate_mask(data, pred, column_bindings=column_bindings)
-    for pred in definition.exclusion:
-        mask &= ~_predicate_mask(data, pred, column_bindings=column_bindings)
-    return data.loc[mask].copy()
+    flow: list[Dict[str, Any]] = [
+        {
+            "step_order": 0,
+            "predicate_kind": "universe",
+            "concept_id": None,
+            "resolved_column": None,
+            "aggregation": None,
+            "op": None,
+            "value": None,
+            "n_before": int(len(data)),
+            "n_excluded": 0,
+            "n_remaining": int(len(data)),
+        }
+    ]
+    ordered = [
+        *(("inclusion", predicate) for predicate in definition.inclusion),
+        *(("exclusion", predicate) for predicate in definition.exclusion),
+    ]
+    for order, (kind, predicate) in enumerate(ordered, start=1):
+        before = int(mask.sum())
+        predicate_mask = _predicate_mask(
+            data,
+            predicate,
+            column_bindings=column_bindings,
+        )
+        keep = predicate_mask if kind == "inclusion" else ~predicate_mask
+        mask &= keep
+        remaining = int(mask.sum())
+        flow.append(
+            {
+                "step_order": order,
+                "predicate_kind": kind,
+                "concept_id": predicate.concept_id,
+                "resolved_column": _resolve_predicate_column(
+                    data.columns,
+                    predicate.concept_id,
+                    predicate.aggregation,
+                    column_bindings=column_bindings,
+                ),
+                "aggregation": predicate.aggregation,
+                "op": predicate.op,
+                "value": predicate.value,
+                "n_before": before,
+                "n_excluded": before - remaining,
+                "n_remaining": remaining,
+            }
+        )
+    return data.loc[mask].copy(), flow
 
 
 def _catalog_output_stems(concept_id: str) -> tuple[str, ...]:

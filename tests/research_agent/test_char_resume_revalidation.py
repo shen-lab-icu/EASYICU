@@ -8,6 +8,7 @@ changing validator or engine code.
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 from pathlib import Path
 
@@ -372,6 +373,101 @@ def test_host_cohort_materializer_exact_authority_passes(ra, tmp_path: Path):
             records=records,
         )
         is None
+    )
+
+
+def test_host_cohort_materializer_accepts_bound_attrition_ledger(ra, tmp_path: Path):
+    from easyicu.research_agent.authority.run_input import (
+        _host_cohort_materializer_authority_error,
+    )
+
+    checkpoint, records, cohort, _ = _cohort_materializer_fixture(ra, tmp_path)
+    flow_path = tmp_path / "cohort_analysis_flow.csv"
+    pd.DataFrame(
+        [
+            {
+                "step_order": 0,
+                "predicate_kind": "universe",
+                "n_before": 3,
+                "n_excluded": 0,
+                "n_remaining": 3,
+            },
+            {
+                "step_order": 1,
+                "predicate_kind": "inclusion",
+                "n_before": 3,
+                "n_excluded": 1,
+                "n_remaining": 2,
+            },
+        ]
+    ).to_csv(flow_path, index=False)
+    store = ra.EvidenceStore(tmp_path)
+    flow = store.register_file(
+        kind="table",
+        description="Host materialized attrition ledger.",
+        source_path=flow_path,
+        evidence_id="cohort_flow_execute_repair",
+        produced_by_step="01_cohort",
+        producer="cohort_repair",
+        generation_mode="llm",
+        metadata={"reason": "mechanical cohort materialization"},
+        publish_aliases=False,
+    )
+    records[flow.evidence_id] = flow.model_dump(mode="json")
+    checkpoint.update(
+        {
+            "cohort_flow_evidence_id": flow.evidence_id,
+            "evidence_ids": [cohort.evidence_id, flow.evidence_id],
+            "step_summary": {
+                "output_files": {
+                    "artifact:analysis_cohort": "cohort_analysis.parquet",
+                    "table:cohort_flow": "cohort_analysis_flow.csv",
+                },
+                "n_universe": 3,
+                "n_analysis_cohort": 2,
+            },
+        }
+    )
+
+    assert (
+        _host_cohort_materializer_authority_error(
+            record=checkpoint,
+            evidence_ids=checkpoint["evidence_ids"],
+            step_id="01_cohort",
+            run_dir=tmp_path,
+            records=records,
+        )
+        is None
+    )
+
+    invalid_flow = (
+        "step_order,predicate_kind,n_before,n_excluded,n_remaining\n"
+        "0,universe,3,0,3\n1,inclusion,3,0,2\n"
+    )
+    flow_path.write_text(invalid_flow, encoding="utf-8")
+    assert "differs from sealed evidence" in str(
+        _host_cohort_materializer_authority_error(
+            record=checkpoint,
+            evidence_ids=checkpoint["evidence_ids"],
+            step_id="01_cohort",
+            run_dir=tmp_path,
+            records=records,
+        )
+    )
+
+    registered_flow_path = tmp_path / records[flow.evidence_id]["relative_path"]
+    registered_flow_path.write_text(invalid_flow, encoding="utf-8")
+    records[flow.evidence_id]["sha256"] = hashlib.sha256(
+        invalid_flow.encode()
+    ).hexdigest()
+    assert "does not reconcile" in str(
+        _host_cohort_materializer_authority_error(
+            record=checkpoint,
+            evidence_ids=checkpoint["evidence_ids"],
+            step_id="01_cohort",
+            run_dir=tmp_path,
+            records=records,
+        )
     )
 
 
