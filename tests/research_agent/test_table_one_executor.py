@@ -6,6 +6,10 @@ import pandas as pd
 import pytest
 
 from easyicu.research_agent.contracts.table_one import table_one_output_findings
+from easyicu.research_agent.audits import StepSummaryIntegrityValidator
+from easyicu.research_agent.authority.typed_binding import (
+    _write_host_input_binding_receipts,
+)
 from easyicu.research_agent.execution.runners.table_one_executor import (
     table_one_executor_code,
     table_one_executor_owns_step,
@@ -21,7 +25,15 @@ def _step(*, outputs: list[str] | None = None) -> AnalysisStep:
     return AnalysisStep(
         step_id="02_table_one",
         intent="Describe the locked analysis cohort by outcome.",
-        inputs=["death", "age", "sex", "lact_max", "lact_measured"],
+        inputs=[
+            "artifact:analysis_cohort",
+            "death",
+            "age",
+            "sex",
+            "lact_max",
+            "lact_measured",
+            "lact_n",
+        ],
         expected_outputs=outputs or ["table:table_one"],
         method="grouped baseline characteristics",
         table_one_spec={
@@ -67,6 +79,7 @@ def _frame() -> pd.DataFrame:
             "sex": ["Female", "Male", "Female", "Male", "Female", "Male"],
             "lact_max": [1.1, None, 2.0, 3.0, 4.0, None],
             "lact_measured": [1, 0, 1, 1, 1, 0],
+            "lact_n": [1, 0, 2, 1, 3, 0],
         }
     )
 
@@ -112,6 +125,53 @@ def test_table_one_executor_code_passes_preflight_and_executes_exact_spec(
     assert summary["cohort_n"] == 6
     assert summary["output_files"] == {"table:table_one": "table_one.csv"}
     assert summary["adjusted_effect"] is None
+    assert summary["measurement_provenance_audit"] == {
+        "source": "COHORT_PARQUET",
+        "checks": [
+            {
+                "measured_column": "lact_measured",
+                "count_column": "lact_n",
+                "status": "checked",
+                "comparison_n": 6,
+                "invalid_pair_n": 0,
+                "discordant_n": 0,
+                "role": "audit_only",
+            }
+        ],
+    }
+
+
+def test_host_seals_standard_executor_input_and_measurement_receipts(
+    tmp_path, monkeypatch
+):
+    step = _step()
+    cohort_path = tmp_path / "cohort.parquet"
+    out_dir = tmp_path / "outputs"
+    _frame().to_parquet(cohort_path, index=False)
+    monkeypatch.setenv("COHORT_PARQUET", str(cohort_path))
+    monkeypatch.setenv("STEP_OUT_DIR", str(out_dir))
+    exec(compile(table_one_executor_code(step), "<table-one-executor>", "exec"), {})
+
+    binding = {
+        "absolute_path": str(cohort_path),
+        "evidence_id": "step01_analysis_cohort",
+        "sha256": "a" * 64,
+    }
+    summary = _write_host_input_binding_receipts(
+        out_dir=out_dir,
+        step_summary=json.loads((out_dir / "step_summary.json").read_text("utf-8")),
+        resolved_input_bindings={"artifact:analysis_cohort": binding},
+    )
+
+    assert (
+        StepSummaryIntegrityValidator().audit(
+            step=step,
+            step_summary=summary,
+            resolved_input_bindings={"artifact:analysis_cohort": binding},
+            cohort_path=cohort_path,
+        )
+        == []
+    )
 
 
 def test_table_one_executor_does_not_silently_claim_a_figure_step():
