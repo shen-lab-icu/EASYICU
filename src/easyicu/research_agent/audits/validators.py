@@ -6251,6 +6251,45 @@ class CrossStepSourceStatusValidator:
         return int(number)
 
     @classmethod
+    def _flat_status_counts(
+        cls, value: Any
+    ) -> Optional[tuple[List[tuple[str, int]], Set[str]]]:
+        """Parse one explicit four-role status mapping without guessing roles."""
+
+        if not isinstance(value, dict):
+            return None
+        parsed = [
+            (str(category), count)
+            for category, raw_count in value.items()
+            if (count := cls._as_count(raw_count)) is not None
+        ]
+        if not parsed or len(parsed) != len(value):
+            return None
+        present_roles = {
+            role
+            for category, _ in parsed
+            if (role := cls._status_role(category)) is not None
+        }
+        return parsed, present_roles
+
+    @classmethod
+    def _declared_primary_source_summary(cls, summary: Dict[str, Any]) -> Optional[str]:
+        """Return an explicitly declared primary summary column, if unique."""
+
+        primary = summary.get("primary_exposure")
+        if isinstance(primary, str) and primary.strip():
+            return primary.strip()
+        if isinstance(primary, dict):
+            candidates = [
+                str(primary.get(key) or "").strip()
+                for key in ("column", "summary_variable", "source_summary")
+            ]
+            candidates = [value for value in candidates if value]
+            if len(set(candidates)) == 1:
+                return candidates[0]
+        return None
+
+    @classmethod
     def _prior_locks(
         cls, completed_step_records: Sequence[Dict[str, Any]]
     ) -> List[Dict[str, Any]]:
@@ -6269,6 +6308,42 @@ class CrossStepSourceStatusValidator:
             summary = record.get("step_summary")
             if not isinstance(summary, dict):
                 continue
+            # A value-quality step may publish one exact top-level status map
+            # bound to its explicit primary exposure.  This is the same closed
+            # contract as the older nested ``missingness`` representation.
+            source_summary = cls._declared_primary_source_summary(summary)
+            flat = cls._flat_status_counts(summary.get("source_status_counts"))
+            if source_summary and flat is not None:
+                parsed, present_roles = flat
+                required_roles = {
+                    "valid_observed",
+                    "no_source",
+                    "measured_summary_missing",
+                    "contradictory_invalid",
+                }
+                valid_counts = [
+                    count
+                    for category, count in parsed
+                    if cls._is_valid_observed_label(category)
+                ]
+                if len(valid_counts) == 1 and required_roles <= present_roles:
+                    role_counts = {
+                        role: count
+                        for category, count in parsed
+                        if (role := cls._status_role(category)) is not None
+                    }
+                    locks.append(
+                        {
+                            "concept": cls._normalise(source_summary),
+                            "source_summary": source_summary,
+                            "scope": "step_summary.source_status_counts",
+                            "total_n": sum(count for _, count in parsed),
+                            "valid_observed_n": valid_counts[0],
+                            "role_counts": role_counts,
+                            "step_id": str(record.get("step_id") or "prior_step"),
+                            "record_index": record_index,
+                        }
+                    )
             missingness = summary.get("missingness")
             if not isinstance(missingness, dict):
                 continue
@@ -6309,6 +6384,42 @@ class CrossStepSourceStatusValidator:
     @classmethod
     def _current_status_blocks(cls, summary: Dict[str, Any]) -> List[Dict[str, Any]]:
         blocks: List[Dict[str, Any]] = []
+
+        # Current descriptive steps may use ``source_status_schema`` for the
+        # same four-category count contract.  Bind it only to an explicit
+        # primary exposure; a free-standing map is intentionally ignored.
+        source_summary = cls._declared_primary_source_summary(summary)
+        flat = cls._flat_status_counts(summary.get("source_status_schema"))
+        if source_summary and flat is not None:
+            parsed, present_roles = flat
+            valid_counts = [
+                count
+                for category, count in parsed
+                if cls._is_valid_observed_label(category)
+            ]
+            required_roles = {
+                "valid_observed",
+                "no_source",
+                "measured_summary_missing",
+                "contradictory_invalid",
+            }
+            if len(valid_counts) == 1:
+                role_counts = {
+                    role: count
+                    for category, count in parsed
+                    if (role := cls._status_role(category)) is not None
+                }
+                blocks.append(
+                    {
+                        "concept": cls._normalise(source_summary),
+                        "source_summary": source_summary,
+                        "path": "source_status_schema",
+                        "total_n": sum(count for _, count in parsed),
+                        "valid_observed_n": valid_counts[0],
+                        "role_counts": role_counts,
+                        "missing_status_roles": sorted(required_roles - present_roles),
+                    }
+                )
 
         declarations: List[Dict[str, str]] = []
 
@@ -6626,6 +6737,39 @@ class CrossStepSourceStatusValidator:
                         },
                     )
                 )
+            expected_role_counts = expected.get("role_counts")
+            current_role_counts = current.get("role_counts")
+            if (
+                isinstance(expected_role_counts, dict)
+                and isinstance(current_role_counts, dict)
+                and not missing_status_roles
+                and current_role_counts != expected_role_counts
+            ):
+                findings.append(
+                    ValidationFinding(
+                        validator=self.name,
+                        severity="error",
+                        message=(
+                            f"Source-status category drift for "
+                            f"{current['source_summary']}: step {step.step_id} "
+                            "reallocated rows among observed, no-source, "
+                            "measured-summary-missing, or contradictory states "
+                            f"relative to completed step {expected['step_id']}. "
+                            "Preserve the earlier closed source-status mapping."
+                        ),
+                        detail={
+                            "step_id": step.step_id,
+                            "summary_path": current["path"],
+                            "source_summary": current["source_summary"],
+                            "cohort_n": current["total_n"],
+                            "reported_status_counts": current_role_counts,
+                            "expected_status_counts": expected_role_counts,
+                            "expected_from_step": expected["step_id"],
+                            "expected_scope": expected["scope"],
+                        },
+                    )
+                )
+                continue
             if current["valid_observed_n"] == expected["valid_observed_n"]:
                 continue
             findings.append(

@@ -198,9 +198,10 @@ def _sealed_renderer_figure_step_matches_parent(
         for raw in (step.inputs or [])
         if (parsed := typed_product(raw)) is not None
     }
-    if renderer_repair_id == (
-        "ordered_category_distribution_availability_publication_bundle_v2"
-    ):
+    if renderer_repair_id in {
+        "ordered_category_distribution_availability_publication_bundle_v2",
+        "continuous_measurement_audit_publication_bundle_v1",
+    }:
         return {
             product
             for product in child_typed_inputs

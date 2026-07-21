@@ -12,6 +12,7 @@ from easyicu.research_agent.authority.figure_renderer import (
     _sealed_renderer_figure_step_matches_parent,
 )
 from easyicu.research_agent.figures.continuous_measurement_audit import (
+    COMPACT_CONTROLLED_METHOD,
     CONTROLLED_METHOD,
     REPAIR_ID,
     _continuous_measurement_audit_parent_digest_seal,
@@ -192,6 +193,114 @@ def _figure_step() -> AnalysisStep:
     )
 
 
+def _write_compact_parent(tmp_path: Path) -> None:
+    parent = tmp_path / "steps" / PARENT_STEP / "outputs"
+    parent.mkdir(parents=True)
+    pd.DataFrame(
+        [
+            {
+                "row_type": "measurement_summary",
+                "variable": "marker_peak",
+                "unit": "units",
+                "statistic": statistic,
+                "value": value,
+                "n": 8,
+                "denominator": 8,
+            }
+            for statistic, value in (
+                ("median", 2.5),
+                ("q25", 1.5),
+                ("q75", 4.0),
+                ("minimum", 0.5),
+                ("maximum", 8.0),
+            )
+        ]
+    ).to_csv(parent / "marker_distribution.csv", index=False)
+    status_counts = {
+        "valid observed": 8,
+        "no source": 2,
+        "measured/source present but summary missing": 0,
+        "contradictory/invalid": 0,
+    }
+    pd.DataFrame(
+        [
+            {
+                "row_type": "source_status",
+                "variable": "marker_peak",
+                "status": status,
+                "count": count,
+                "denominator": 10,
+                "percentage": count * 10.0,
+            }
+            for status, count in status_counts.items()
+        ]
+    ).to_csv(parent / "marker_missingness.csv", index=False)
+    summary = {
+        "step": PARENT_STEP,
+        "method": COMPACT_CONTROLLED_METHOD,
+        "primary_exposure": "marker_peak",
+        "exposure_unit": "units",
+        "cohort_policy": {"final_cohort_n": 10},
+        "authoritative_value_denominator": {"complete_case_n": 8},
+        "source_status_schema": status_counts,
+        "output_files": {
+            "table:marker_distribution": "marker_distribution.csv",
+            "table:marker_missingness": "marker_missingness.csv",
+        },
+    }
+    (parent / "step_summary.json").write_text(json.dumps(summary), encoding="utf-8")
+    store = EvidenceStore(tmp_path)
+    records = [
+        store.register_file(
+            kind="table",
+            description=name,
+            source_path=parent / name,
+            produced_by_step=PARENT_STEP,
+            producer="coder",
+            generation_mode="llm",
+        )
+        for name in ("marker_distribution.csv", "marker_missingness.csv")
+    ]
+    summary_record = store.register_file(
+        kind="statistic",
+        description="Structured compact parent summary.",
+        source_path=parent / "step_summary.json",
+        produced_by_step=PARENT_STEP,
+        producer="runner",
+        generation_mode="llm",
+    )
+    records.append(summary_record)
+    (tmp_path / "manifest_partial.json").write_text(
+        json.dumps(
+            {
+                "per_step_records": [
+                    {
+                        "step_id": PARENT_STEP,
+                        "status": "ok",
+                        "analysis_request": {
+                            "step": {
+                                "step_id": PARENT_STEP,
+                                "method": COMPACT_CONTROLLED_METHOD,
+                                "inputs": ["marker_peak"],
+                                "expected_outputs": [
+                                    "table:marker_distribution",
+                                    "table:marker_missingness",
+                                ],
+                            }
+                        },
+                        "evidence_ids": [record.evidence_id for record in records],
+                        "step_summary_evidence_id": summary_record.evidence_id,
+                    }
+                ],
+                "evidence": [
+                    record.model_dump(mode="json") for record in store.records()
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
 def test_closed_three_table_parent_routes_and_renders(tmp_path: Path) -> None:
     _write_parent(tmp_path)
     step = _figure_step()
@@ -229,6 +338,40 @@ def test_closed_three_table_parent_routes_and_renders(tmp_path: Path) -> None:
         "marker_missingness.csv",
         "marker_measurement_process.csv",
     ]
+
+
+def test_closed_compact_two_table_parent_routes_without_llm(tmp_path: Path) -> None:
+    _write_compact_parent(tmp_path)
+    step = AnalysisStep(
+        step_id=FIGURE_STEP,
+        intent="Render the two registered parent tables.",
+        inputs=["table:marker_distribution", "table:marker_missingness"],
+        expected_outputs=["figure:marker_distribution"],
+        method="visualization",
+    )
+
+    assert (
+        deterministic_figure_repair_id_for_upstream(tmp_path, FIGURE_STEP) == REPAIR_ID
+    )
+    assert _sealed_renderer_figure_step_matches_parent(tmp_path, step, REPAIR_ID)
+    seal = _continuous_measurement_audit_parent_digest_seal(tmp_path, FIGURE_STEP)
+    assert set(seal or {}) == {
+        "step_summary.json",
+        "marker_distribution.csv",
+        "marker_missingness.csv",
+    }
+
+
+def test_old_three_table_method_rejects_compact_parent_shape(tmp_path: Path) -> None:
+    _write_compact_parent(tmp_path)
+    summary_path = tmp_path / "steps" / PARENT_STEP / "outputs" / "step_summary.json"
+    summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    summary["method"] = CONTROLLED_METHOD
+    summary_path.write_text(json.dumps(summary), encoding="utf-8")
+
+    assert (
+        _continuous_measurement_audit_parent_digest_seal(tmp_path, FIGURE_STEP) is None
+    )
 
 
 def test_renderer_rejects_summary_column_identity_swap(tmp_path: Path) -> None:
