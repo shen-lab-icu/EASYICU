@@ -422,6 +422,7 @@ _SEALED_RENDERER_PLANNER_METHODS: Dict[str, Tuple[str, ...]] = {
     ),
     "continuous_measurement_audit_publication_bundle_v1": (
         "right_skewed_distribution_and_measurement_availability_audit",
+        "distribution_summary_and_missingness_audit",
     ),
     "absolute_risk_incidence_prevalence_publication_bundle_v1": (
         "binary_outcome_incidence_and_absolute_risk",
@@ -458,7 +459,6 @@ _SEALED_RENDERER_PARENT_OUTPUT_ROLE_GROUPS: Dict[
     "continuous_measurement_audit_publication_bundle_v1": (
         (("distribution",),),
         (("missingness",),),
-        (("measurement", "process"),),
     ),
     "absolute_risk_incidence_prevalence_publication_bundle_v1": (
         (("outcome", "incidence"),),

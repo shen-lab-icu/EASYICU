@@ -36,6 +36,7 @@ from .publication import (
 
 REPAIR_ID = "continuous_measurement_audit_publication_bundle_v1"
 CONTROLLED_METHOD = "right_skewed_distribution_and_measurement_availability_audit"
+COMPACT_CONTROLLED_METHOD = "distribution_summary_and_missingness_audit"
 
 _ROLE_SUFFIXES = {
     "distribution": ("distribution",),
@@ -139,10 +140,17 @@ def _planner_table_roles(expected_outputs: Sequence[Any]) -> Optional[dict[str, 
             for product in products
             if tuple(product.split("_")[-len(suffix) :]) == suffix
         ]
+        if not matches and role == "measurement_process":
+            continue
         if len(matches) != 1:
             return None
         selected[role] = matches[0]
-    return selected if len(set(selected.values())) == 3 else None
+    required = {"distribution", "missingness"}
+    return (
+        selected
+        if required <= set(selected) and len(set(selected.values())) == len(selected)
+        else None
+    )
 
 
 @dataclass(frozen=True)
@@ -169,12 +177,15 @@ def prepare_continuous_measurement_audit_inputs(
     planner_roles: Mapping[str, str],
     preverified_table_bytes: Mapping[str, bytes],
 ) -> Optional[ContinuousMeasurementAuditInputs]:
-    """Validate one exact three-table parent snapshot."""
+    """Validate one exact two- or three-table parent snapshot."""
 
-    if _normalise(parent_summary.get("method")) != CONTROLLED_METHOD:
+    method = _normalise(parent_summary.get("method"))
+    if method not in {CONTROLLED_METHOD, COMPACT_CONTROLLED_METHOD}:
         return None
     exposure = str(parent_summary.get("primary_exposure") or "").strip()
-    unit = str(parent_summary.get("unit") or "").strip()
+    unit = str(
+        parent_summary.get("unit") or parent_summary.get("exposure_unit") or ""
+    ).strip()
     output_files = parent_summary.get("output_files")
     cohort_policy = parent_summary.get("cohort_policy")
     if (
@@ -193,10 +204,31 @@ def prepare_continuous_measurement_audit_inputs(
         if name is None:
             return None
         names[role] = name
-    if len(set(names.values())) != 3 or set(names.values()) != set(
-        preverified_table_bytes
-    ):
+    if set(names.values()) != set(preverified_table_bytes):
         return None
+
+    if method == CONTROLLED_METHOD and set(names) != {
+        "distribution",
+        "missingness",
+        "measurement_process",
+    }:
+        return None
+    if method == COMPACT_CONTROLLED_METHOD and set(names) != {
+        "distribution",
+        "missingness",
+    }:
+        return None
+
+    if method == COMPACT_CONTROLLED_METHOD:
+        return _prepare_compact_continuous_measurement_audit_inputs(
+            parent_out=parent_out,
+            parent_summary=parent_summary,
+            names=names,
+            preverified_table_bytes=preverified_table_bytes,
+            exposure=exposure,
+            unit=unit,
+            denominator_n=denominator_n,
+        )
 
     distribution = _read_csv(
         preverified_table_bytes[names["distribution"]], _DISTRIBUTION_COLUMNS
@@ -350,15 +382,200 @@ def prepare_continuous_measurement_audit_inputs(
     )
 
 
+def _prepare_compact_continuous_measurement_audit_inputs(
+    *,
+    parent_out: Path,
+    parent_summary: Mapping[str, Any],
+    names: Mapping[str, str],
+    preverified_table_bytes: Mapping[str, bytes],
+    exposure: str,
+    unit: str,
+    denominator_n: int,
+) -> Optional[ContinuousMeasurementAuditInputs]:
+    """Validate the compact long-form distribution + status-table contract."""
+
+    try:
+        distribution = pd.read_csv(
+            io.BytesIO(preverified_table_bytes[names["distribution"]])
+        )
+        missingness = pd.read_csv(
+            io.BytesIO(preverified_table_bytes[names["missingness"]])
+        )
+    except (KeyError, ValueError, pd.errors.ParserError):
+        return None
+    distribution_required = {
+        "row_type",
+        "variable",
+        "unit",
+        "statistic",
+        "value",
+        "n",
+        "denominator",
+    }
+    missingness_required = {
+        "row_type",
+        "variable",
+        "status",
+        "count",
+        "denominator",
+        "percentage",
+    }
+    if not distribution_required <= set(
+        distribution
+    ) or not missingness_required <= set(missingness):
+        return None
+
+    authoritative = parent_summary.get("authoritative_value_denominator")
+    status_counts = parent_summary.get("source_status_schema")
+    if not isinstance(authoritative, Mapping) or not isinstance(status_counts, Mapping):
+        return None
+    observed_n = _integer(authoritative.get("complete_case_n"))
+    if observed_n is None or observed_n <= 0:
+        return None
+
+    distribution_stem = re.sub(
+        r"_distribution$", "", _normalise(Path(names["distribution"]).stem)
+    )
+    allowed_row_types = {
+        "summary",
+        "measurement_summary",
+        "distribution_summary",
+        f"{distribution_stem}_summary",
+    }
+    metric_rows = distribution.loc[
+        distribution["variable"].astype(str).eq(exposure)
+        & distribution["row_type"].map(_normalise).isin(allowed_row_types)
+    ].copy()
+    metric_rows["__metric"] = (
+        metric_rows["statistic"]
+        .map(_normalise)
+        .replace({"minimum": "min", "maximum": "max"})
+    )
+    required_metrics = ("median", "q25", "q75", "min", "max")
+    selected_metrics = metric_rows.loc[metric_rows["__metric"].isin(required_metrics)]
+    if (
+        selected_metrics["__metric"].duplicated().any()
+        or set(selected_metrics["__metric"]) != set(required_metrics)
+        or {_integer(value) for value in selected_metrics["n"]} != {observed_n}
+        or {_integer(value) for value in selected_metrics["denominator"]}
+        != {observed_n}
+        or (unit and selected_metrics["unit"].map(_normalise).nunique() != 1)
+        or (unit and _normalise(selected_metrics["unit"].iloc[0]) != _normalise(unit))
+    ):
+        return None
+    finite_metrics = {
+        str(row["__metric"]): _finite(row["value"])
+        for row in selected_metrics.to_dict("records")
+    }
+    if any(value is None for value in finite_metrics.values()):
+        return None
+    metric_values = {key: float(value) for key, value in finite_metrics.items()}
+    if not (
+        metric_values["min"]
+        <= metric_values["q25"]
+        <= metric_values["median"]
+        <= metric_values["q75"]
+        <= metric_values["max"]
+    ):
+        return None
+
+    measurement_rows = missingness.loc[
+        missingness["variable"].astype(str).eq(exposure)
+        & missingness["row_type"].map(_normalise).eq("source_status")
+    ].copy()
+    measurement_rows["__status"] = measurement_rows["status"].map(_normalise)
+    if measurement_rows["__status"].duplicated().any() or set(
+        measurement_rows["__status"]
+    ) != set(_MEASUREMENT_STATUSES):
+        return None
+    measurement_rows.insert(0, "source_row_index", measurement_rows.index.astype(int))
+    measurement_rows = (
+        measurement_rows.set_index("__status")
+        .loc[list(_MEASUREMENT_STATUSES)]
+        .reset_index(drop=True)
+    )
+    measurement_counts = [_integer(value) for value in measurement_rows["count"]]
+    if (
+        any(value is None for value in measurement_counts)
+        or {_integer(value) for value in measurement_rows["denominator"]}
+        != {denominator_n}
+        or sum(int(value) for value in measurement_counts if value is not None)
+        != denominator_n
+        or int(measurement_counts[0] or 0) != observed_n
+    ):
+        return None
+    normalized_summary_counts = {
+        _normalise(key): _integer(value) for key, value in status_counts.items()
+    }
+    if normalized_summary_counts != {
+        status: int(count)
+        for status, count in zip(_MEASUREMENT_STATUSES, measurement_counts, strict=True)
+    }:
+        return None
+    for percentage, count in zip(measurement_rows["percentage"], measurement_counts):
+        parsed = _finite(percentage)
+        if (
+            count is None
+            or parsed is None
+            or not _same(parsed, 100.0 * count / denominator_n)
+        ):
+            return None
+
+    unavailable_n = denominator_n - observed_n
+    missingness_rows = pd.DataFrame(
+        [
+            {
+                "source_row_index": int(measurement_rows.loc[0, "source_row_index"]),
+                "variable": exposure,
+                "status": "authoritative value observed",
+                "count": observed_n,
+                "denominator": denominator_n,
+                "percentage": 100.0 * observed_n / denominator_n,
+                "missing_n": unavailable_n,
+                "missing_pct": 100.0 * unavailable_n / denominator_n,
+            },
+            {
+                "source_row_index": ";".join(
+                    str(value)
+                    for value in measurement_rows.loc[1:, "source_row_index"].tolist()
+                ),
+                "variable": exposure,
+                "status": "authoritative value unavailable",
+                "count": unavailable_n,
+                "denominator": denominator_n,
+                "percentage": 100.0 * unavailable_n / denominator_n,
+                "missing_n": unavailable_n,
+                "missing_pct": 100.0 * unavailable_n / denominator_n,
+            },
+        ]
+    )
+    selected_metrics.insert(0, "source_row_index", selected_metrics.index.astype(int))
+    compact_path = parent_out / names["missingness"]
+    return ContinuousMeasurementAuditInputs(
+        distribution_path=parent_out / names["distribution"],
+        missingness_path=compact_path,
+        measurement_path=compact_path,
+        exposure_column=exposure,
+        exposure_label=exposure.replace("_", " ").strip(),
+        unit=unit,
+        metric_values=metric_values,
+        distribution_row=selected_metrics,
+        missingness_rows=missingness_rows,
+        measurement_rows=measurement_rows,
+        observed_n=observed_n,
+        denominator_n=denominator_n,
+        status_schema=_MEASUREMENT_STATUSES,
+    )
+
+
 def _continuous_measurement_audit_parent_digest_seal(
     run_dir: Path,
     figure_step_id: str,
 ) -> Optional[dict[str, str]]:
     request_step = _resolve_upstream_manifest_step(run_dir, figure_step_id)
-    if (
-        not isinstance(request_step, Mapping)
-        or _normalise(request_step.get("method")) != CONTROLLED_METHOD
-    ):
+    if not isinstance(request_step, Mapping) or _normalise(
+        request_step.get("method")
+    ) not in {CONTROLLED_METHOD, COMPACT_CONTROLLED_METHOD}:
         return None
     planner_roles = _planner_table_roles(request_step.get("expected_outputs") or [])
     if planner_roles is None:
@@ -385,7 +602,7 @@ def _continuous_measurement_audit_parent_digest_seal(
         _safe_csv_name(output_files.get(f"table:{product}"))
         for product in planner_roles.values()
     }
-    if None in table_names or len(table_names) != 3:
+    if None in table_names or len(table_names) not in {2, 3}:
         return None
     names = {str(name) for name in table_names}
     if not names <= set(full_snapshot):
@@ -590,6 +807,7 @@ def render_continuous_measurement_audit_bundle(
 
 
 __all__ = [
+    "COMPACT_CONTROLLED_METHOD",
     "CONTROLLED_METHOD",
     "REPAIR_ID",
     "_continuous_measurement_audit_parent_digest_seal",

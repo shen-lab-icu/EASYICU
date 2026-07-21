@@ -91,6 +91,20 @@ def test_table_one_executor_owns_only_the_closed_table_contract():
     )
 
 
+def test_table_one_executor_does_not_ignore_a_second_typed_artifact():
+    step = _step()
+    step.inputs.insert(1, "artifact:validated_measurement_analysis_set")
+
+    assert not table_one_executor_owns_step(step)
+    assert (
+        select_standard_executor(
+            step,
+            plan=AnalysisPlan(research_question="Test", steps=[step]),
+        )
+        is None
+    )
+
+
 def test_standard_executor_selects_table_one_before_any_coder_path():
     step = _step()
     selection = select_standard_executor(

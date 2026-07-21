@@ -1329,6 +1329,45 @@ def test_cross_step_source_status_accepts_matching_denominator() -> None:
     assert findings == []
 
 
+def test_cross_step_source_status_locks_top_level_quality_summary() -> None:
+    prior = {
+        "step_id": "02_value_quality",
+        "status": "ok",
+        "step_summary": {
+            "primary_exposure": {"column": "lab_max"},
+            "source_status_counts": {
+                "valid observed": 41_210,
+                "no source": 53_246,
+                "measured/source present but summary missing": 0,
+                "contradictory/invalid": 2,
+            },
+        },
+    }
+    current = {
+        "primary_exposure": "lab_max",
+        "source_status_schema": {
+            "valid observed": 41_210,
+            "no source": 0,
+            "measured/source present but summary missing": 53_246,
+            "contradictory/invalid": 2,
+        },
+    }
+
+    findings = CrossStepSourceStatusValidator().audit(
+        step=AnalysisStep(step_id="03_distribution", intent="Describe values."),
+        step_summary=current,
+        completed_step_records=[prior],
+    )
+
+    # Matching valid-observed totals alone are insufficient: the complete
+    # four-role mapping must remain stable, including no-source vs measured-
+    # source-present-but-summary-missing.
+    assert len(findings) == 1
+    assert findings[0].severity == "error"
+    assert findings[0].detail["reported_status_counts"]["no_source"] == 0
+    assert findings[0].detail["expected_status_counts"]["no_source"] == 53_246
+
+
 def test_cross_step_source_status_skips_a_different_cohort_total() -> None:
     findings = CrossStepSourceStatusValidator().audit(
         step=AnalysisStep(step_id="03_table_one", intent="Build Table 1"),
