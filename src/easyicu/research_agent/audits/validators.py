@@ -2472,7 +2472,18 @@ def _reclassify_flag_only_plausibility_range_findings(
     """Keep plausible-range metadata from silently changing the analysis set."""
 
     issue_code = "plausibility_range_exclusion_required"
-    exclusion_actions = {"drop", "exclude", "fail_closed", "invalidate"}
+    exclusion_actions = {"drop", "exclude", "fail_close", "fail_closed", "invalidate"}
+
+    def _requests_exclusion(value: object) -> bool:
+        """Recognize the typed action when an auditor appends its target."""
+
+        normalized = re.sub(
+            r"[^a-z0-9]+", "_", str(value or "").lower()
+        ).strip("_")
+        return any(
+            normalized == action or normalized.startswith(f"{action}_")
+            for action in exclusion_actions
+        )
     reclassified: List[ValidationFinding] = []
     for finding in findings:
         detail = dict(finding.detail or {})
@@ -2480,8 +2491,7 @@ def _reclassify_flag_only_plausibility_range_findings(
             finding.validator == LLMConceptAuditor.name
             and finding.severity == "error"
             and str(detail.get("issue_code") or "") == issue_code
-            and str(detail.get("requested_action") or "").strip().lower()
-            in exclusion_actions
+            and _requests_exclusion(detail.get("requested_action"))
             and str(detail.get("value_class") or "").strip().lower()
             == "finite_outside_plausibility_range"
         ):
