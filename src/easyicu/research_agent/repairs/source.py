@@ -51,6 +51,7 @@ from .nonfinite_audit import patch_strict_numeric_nonfinite_audit_conflict
 from .plausibility import patch_flag_only_plausibility_range_rejection
 from .provenance_summary import (
     patch_custom_measurement_provenance_receipts,
+    patch_late_measurement_provenance_receipt,
     patch_measurement_provenance_contract,
     repair_superseded_provenance,
 )
@@ -2371,6 +2372,15 @@ def deterministic_concept_audit_repair(
     if nonfinite_audit_preserved != repaired:
         repair_name = "nonfinite_audit_preserve_observed_v1"
         repaired = nonfinite_audit_preserved
+        repair_names.append(repair_name)
+
+    provenance_gated_before_outputs = patch_late_measurement_provenance_receipt(
+        repaired,
+        findings=repair_findings,
+    )
+    if provenance_gated_before_outputs != repaired:
+        repair_name = "measurement_provenance_before_outputs_v1"
+        repaired = provenance_gated_before_outputs
         repair_names.append(repair_name)
 
     range_retained = patch_flag_only_plausibility_range_rejection(

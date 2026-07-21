@@ -832,6 +832,158 @@ def patch_unplanned_measurement_provenance_summary(
     return repaired
 
 
+def patch_late_measurement_provenance_receipt(
+    code: str,
+    *,
+    findings: Sequence[Any],
+) -> str:
+    """Move one exact host receipt ahead of all result-file writes.
+
+    The LLM concept auditor owns the ordering finding.  The host only moves an
+    already-authored, self-raising receipt into the same lexical scope and
+    replaces the later inline expression with the bound mapping.  It does not
+    alter the receipt arguments, dataframe, output rows, or scientific policy.
+    """
+
+    ordering_findings = []
+    for finding in findings:
+        validator, severity, _message, detail = _finding_parts(finding)
+        if (
+            validator == "llm_concept_auditor"
+            and severity == "error"
+            and isinstance(detail, dict)
+            and detail.get("issue_code") == "audit_only_companion_row_gating_required"
+        ):
+            ordering_findings.append(detail)
+    if len(ordering_findings) != 1:
+        return code
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return code
+    exact_imports = [
+        node
+        for node in tree.body
+        if isinstance(node, ast.ImportFrom)
+        and node.level == 0
+        and node.module == "easyicu.research_agent.methods.descriptive_inputs"
+        and any(
+            alias.name == "measurement_provenance_receipt" and alias.asname is None
+            for alias in node.names
+        )
+    ]
+    if len(exact_imports) != 1:
+        return code
+    parents = {
+        child: parent
+        for parent in ast.walk(tree)
+        for child in ast.iter_child_nodes(parent)
+    }
+    receipt_calls = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "measurement_provenance_receipt"
+        and len(node.args) == 1
+        and isinstance(node.args[0], ast.Name)
+        and not any(keyword.arg is None for keyword in node.keywords)
+        and {keyword.arg for keyword in node.keywords}
+        == {"measured_column", "count_column"}
+    ]
+    if len(receipt_calls) != 1:
+        return code
+    call = receipt_calls[0]
+    current: ast.AST = call
+    summary_assignment: ast.Assign | None = None
+    while current in parents:
+        current = parents[current]
+        if (
+            isinstance(current, ast.Assign)
+            and len(current.targets) == 1
+            and isinstance(current.targets[0], ast.Name)
+            and current.targets[0].id == "step_summary"
+        ):
+            summary_assignment = current
+            break
+        if isinstance(current, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Module)):
+            break
+    if summary_assignment is None:
+        return code
+    scope = _lexical_scope(call, parents)
+
+    output_methods = {
+        "savefig",
+        "to_csv",
+        "to_excel",
+        "to_feather",
+        "to_json",
+        "to_parquet",
+        "to_pickle",
+    }
+    output_statements: list[ast.stmt] = []
+    for node in ast.walk(scope):
+        if not (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr in output_methods
+            and node.lineno < call.lineno
+            and _lexical_scope(node, parents) is scope
+        ):
+            continue
+        statement: ast.AST = node
+        while statement in parents and parents[statement] is not scope:
+            statement = parents[statement]
+        if isinstance(statement, ast.stmt):
+            output_statements.append(statement)
+    if not output_statements:
+        return code
+    first_output = min(output_statements, key=lambda node: int(node.lineno))
+    frame_name = call.args[0].id
+    frame_bindings = [
+        node
+        for node in ast.walk(scope)
+        if isinstance(node, ast.Assign)
+        and _lexical_scope(node, parents) is scope
+        and len(node.targets) == 1
+        and isinstance(node.targets[0], ast.Name)
+        and node.targets[0].id == frame_name
+        and node.lineno < first_output.lineno
+    ]
+    if len(frame_bindings) != 1:
+        return code
+
+    receipt_name = "_easyicu_measurement_provenance_receipt_v1"
+    if any(
+        (isinstance(node, ast.Name) and node.id == receipt_name)
+        or (isinstance(node, ast.arg) and node.arg == receipt_name)
+        for node in ast.walk(tree)
+    ):
+        return code
+    lines, starts = _source_offsets(code)
+    call_span = _node_span(call, lines=lines, starts=starts)
+    if call_span is None:
+        return code
+    call_source = ast.get_source_segment(code, call)
+    if not call_source:
+        return code
+    insert_at = starts[first_output.lineno - 1]
+    indent = lines[first_output.lineno - 1][: first_output.col_offset]
+    assignment = f"{indent}{receipt_name} = {call_source}\n\n"
+    edits = [
+        (*call_span, receipt_name),
+        (insert_at, insert_at, assignment),
+    ]
+    repaired = code
+    for start, end, replacement in sorted(edits, reverse=True):
+        repaired = repaired[:start] + replacement + repaired[end:]
+    try:
+        ast.parse(repaired)
+    except SyntaxError:
+        return code
+    return repaired
+
+
 def patch_direct_host_provenance_summary(code: str) -> str:
     """Wrap one direct host receipt in the required source/checks envelope.
 
@@ -1216,5 +1368,6 @@ __all__ = [
     "patch_measurement_provenance_contract",
     "patch_measurement_provenance_summary",
     "patch_nested_host_provenance_summary",
+    "patch_late_measurement_provenance_receipt",
     "patch_unplanned_measurement_provenance_summary",
 ]
