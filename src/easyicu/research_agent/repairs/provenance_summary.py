@@ -147,4 +147,75 @@ def patch_direct_host_provenance_summary(code: str) -> str:
     return repaired
 
 
-__all__ = ["patch_direct_host_provenance_summary"]
+def patch_nested_host_provenance_summary(code: str) -> str:
+    """Reference one already-authored closed provenance mapping in the summary."""
+
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return code
+    sources: list[str] = []
+    summaries: list[ast.Dict] = []
+    for node in tree.body:
+        if not (
+            isinstance(node, ast.Assign)
+            and len(node.targets) == 1
+            and isinstance(node.targets[0], ast.Name)
+            and isinstance(node.value, ast.Dict)
+        ):
+            continue
+        keys = {
+            str(key.value): value
+            for key, value in zip(node.value.keys, node.value.values, strict=True)
+            if isinstance(key, ast.Constant) and isinstance(key.value, str)
+        }
+        if node.targets[0].id == "step_summary":
+            if "measurement_provenance_audit" not in keys:
+                summaries.append(node.value)
+            continue
+        provenance = keys.get("measurement_provenance_audit")
+        if not isinstance(provenance, ast.Dict):
+            continue
+        envelope = {
+            str(key.value): value
+            for key, value in zip(
+                provenance.keys,
+                provenance.values,
+                strict=True,
+            )
+            if isinstance(key, ast.Constant) and isinstance(key.value, str)
+        }
+        if (
+            set(envelope) == {"source", "checks"}
+            and isinstance(envelope["source"], ast.Constant)
+            and envelope["source"].value == "COHORT_PARQUET"
+            and isinstance(envelope["checks"], ast.Name)
+        ):
+            sources.append(node.targets[0].id)
+    if len(sources) != 1 or len(summaries) != 1:
+        return code
+    summary = summaries[0]
+    if summary.end_lineno is None:
+        return code
+    lines = code.splitlines(keepends=True)
+    closing_index = int(summary.end_lineno) - 1
+    closing = lines[closing_index]
+    closing_indent = closing[: len(closing) - len(closing.lstrip())]
+    if closing.strip() not in {"}", "},"}:
+        return code
+    field = (
+        f'{closing_indent}    "measurement_provenance_audit": '
+        f'{sources[0]}["measurement_provenance_audit"],\n'
+    )
+    repaired = "".join(lines[:closing_index] + [field] + lines[closing_index:])
+    try:
+        ast.parse(repaired)
+    except SyntaxError:
+        return code
+    return repaired
+
+
+__all__ = [
+    "patch_direct_host_provenance_summary",
+    "patch_nested_host_provenance_summary",
+]
