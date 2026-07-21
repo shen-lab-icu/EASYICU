@@ -10,9 +10,16 @@ from easyicu.research_agent.plan_utils import (
 from easyicu.research_agent.pipeline import (
     _defer_typed_plan_dag_findings_until_probe,
 )
+from easyicu.research_agent.planning.replan_gate import (
+    replan_candidate_contract_findings,
+)
 from easyicu.research_agent.schema import (
     AnalysisPlan,
     AnalysisStep,
+    CohortDescriptor,
+    ConceptDescriptor,
+    ResearchContext,
+    VariableRole,
     ValidationFinding,
 )
 
@@ -121,6 +128,40 @@ def test_missing_typed_producer_remains_fail_closed():
     assert any(
         (finding.detail or {}).get("reason") == "typed_input_producer_missing"
         for finding in dag_findings
+    )
+
+
+def test_replan_candidate_contract_rejects_ambiguous_producer():
+    plan = AnalysisPlan(
+        research_question="Audit a measured exposure.",
+        steps=[
+            _step("01_audit", outputs=["table:quality_audit"]),
+            _step("02_validate", outputs=["table:quality_audit"]),
+            _step(
+                "03_figure",
+                inputs=["table:quality_audit"],
+                outputs=["figure:quality_audit"],
+                method="visualization",
+            ),
+        ],
+        revision=2,
+    )
+    context = ResearchContext(
+        research_question="Audit a measured exposure.",
+        cohort=CohortDescriptor(
+            cohort_name="cohort", database="synthetic", n_patients=10, n_stays=10
+        ),
+        variables=[
+            ConceptDescriptor(name="exposure", role=VariableRole.LAB, dtype="float64")
+        ],
+    )
+
+    findings = replan_candidate_contract_findings(plan=plan, context=context)
+
+    assert any(
+        finding.severity == "error"
+        and (finding.detail or {}).get("reason") == "typed_input_producer_ambiguous"
+        for finding in findings
     )
 
 
