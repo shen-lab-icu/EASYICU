@@ -4,11 +4,42 @@ These do not touch a real database; they exercise the per-stay summarisation,
 windowing, predicate-column, binary-outcome helpers, and the CTAS 纳排
 integration on synthetic frames so the logic is covered in CI.
 """
+
 import pandas as pd
 import pytest
 
 from easyicu.research_agent.cohort import materializer as M
 from easyicu.research_agent.cohort.schema import CohortDefinition, build_cohort
+
+
+def test_load_concept_uses_public_easyicu_api_after_package_move(monkeypatch, tmp_path):
+    from easyicu import api as easyicu_api
+
+    expected = pd.DataFrame({"stay_id": [1], "lact": [2.5]})
+    calls = []
+
+    def fake_load_concepts(concepts, **kwargs):
+        calls.append((concepts, kwargs))
+        return expected
+
+    monkeypatch.setattr(easyicu_api, "load_concepts", fake_load_concepts)
+
+    loaded = M._load_concept(
+        "converted",
+        tmp_path,
+        "lact",
+        "miiv",
+        None,
+        [],
+    )
+
+    pd.testing.assert_frame_equal(loaded, expected)
+    assert calls == [
+        (
+            ["lact"],
+            {"database": "miiv", "data_path": str(tmp_path), "patient_ids": None},
+        )
+    ]
 
 
 def test_summarize_timeseries_basic():
@@ -87,7 +118,13 @@ def test_build_trajectory_long_emits_per_timepoint_series(monkeypatch, tmp_path)
     long_df, prov = M.build_trajectory_long(
         data_path=tmp_path, concepts=["map", "peep", "absent"]
     )
-    assert set(long_df.columns) == {"stay_id", "charttime", "concept", "value_num", "value_str"}
+    assert set(long_df.columns) == {
+        "stay_id",
+        "charttime",
+        "concept",
+        "value_num",
+        "value_str",
+    }
     # the None MAP row is dropped (not recorded); 3 map + 2 peep = 5 rows
     assert len(long_df) == 5
     assert prov["trajectory_concepts_materialized"] == ["map", "peep"]
@@ -107,7 +144,9 @@ def test_build_trajectory_long_respects_window(monkeypatch, tmp_path):
     monkeypatch.setattr(
         M,
         "_load_concept",
-        lambda sm, r, c, db, pid, un: synthetic.get(c, pd.DataFrame(columns=["stay_id"])),
+        lambda sm, r, c, db, pid, un: synthetic.get(
+            c, pd.DataFrame(columns=["stay_id"])
+        ),
     )
     monkeypatch.setattr(M, "_resolve_source", lambda *a, **k: ("export", tmp_path))
     long_df, _ = M.build_trajectory_long(
@@ -152,7 +191,10 @@ def test_first_time_absent_when_concept_never_recorded():
     )
     out = M._summarize_timeseries(df, "norepi_rate", (0.0, 24.0))
     # no recorded value -> no timing row for this stay
-    assert "norepi_rate_first_time" not in out.columns or out["norepi_rate_first_time"].isna().all()
+    assert (
+        "norepi_rate_first_time" not in out.columns
+        or out["norepi_rate_first_time"].isna().all()
+    )
 
 
 def test_summarize_timeseries_categorical_concept_becomes_presence():
@@ -180,9 +222,7 @@ def test_summarize_timeseries_categorical_concept_becomes_presence():
 def test_summarize_timeseries_numeric_stored_as_text_uses_numeric_view():
     # Numbers stored as strings stay numeric (the object branch coerces);
     # an unparseable cell honestly drops to NaN, not a crash.
-    df = pd.DataFrame(
-        {"stay_id": [1, 1], "charttime": [1, 2], "crea": ["1.2", "bad"]}
-    )
+    df = pd.DataFrame({"stay_id": [1, 1], "charttime": [1, 2], "crea": ["1.2", "bad"]})
     out = M._summarize_timeseries(df, "crea", (0.0, 24.0))
     r1 = out[out.stay_id == 1].iloc[0]
     assert r1.crea_max == 1.2
@@ -219,7 +259,11 @@ def test_predicate_column_supports_last_aggregation():
 
 def test_predicate_column_all_requires_observed_truthy_values():
     df = pd.DataFrame(
-        {"stay_id": [1, 1, 2, 2], "charttime": [1, 2, 1, 2], "flag": [None, None, "1", "true"]}
+        {
+            "stay_id": [1, 1, 2, 2],
+            "charttime": [1, 2, 1, 2],
+            "flag": [None, None, "1", "true"],
+        }
     )
     out = M._predicate_column(df, "flag", (0.0, 24.0), "all")
     got = dict(zip(out.stay_id.tolist(), out.flag.tolist()))
@@ -255,21 +299,31 @@ def test_binary_event_column_treats_event_rows_without_value_as_positive():
 
 
 def test_ctas_inclusion_filters_cohort():
-    wide = pd.DataFrame({"stay_id": [1, 2, 3], "age": [40, 10, 80], "lact": [5.0, 9.0, 1.0]})
+    wide = pd.DataFrame(
+        {"stay_id": [1, 2, 3], "age": [40, 10, 80], "lact": [5.0, 9.0, 1.0]}
+    )
     cdef = CohortDefinition.from_dict(
         {
             "name": "adult_hyperlactatemia",
             "inclusion": [
                 {
                     "concept_id": "age",
-                    "time_window": {"anchor": "icu_admit", "start_offset_hours": 0, "end_offset_hours": 24},
+                    "time_window": {
+                        "anchor": "icu_admit",
+                        "start_offset_hours": 0,
+                        "end_offset_hours": 24,
+                    },
                     "aggregation": "max",
                     "op": ">=",
                     "value": 18,
                 },
                 {
                     "concept_id": "lact",
-                    "time_window": {"anchor": "icu_admit", "start_offset_hours": 0, "end_offset_hours": 24},
+                    "time_window": {
+                        "anchor": "icu_admit",
+                        "start_offset_hours": 0,
+                        "end_offset_hours": 24,
+                    },
                     "aggregation": "max",
                     "op": ">=",
                     "value": 2,
@@ -291,7 +345,11 @@ def test_ctas_builder_accepts_schema_declared_aggregations_on_materialised_colum
             "inclusion": [
                 {
                     "concept_id": "lact",
-                    "time_window": {"anchor": "icu_admit", "start_offset_hours": 0, "end_offset_hours": 24},
+                    "time_window": {
+                        "anchor": "icu_admit",
+                        "start_offset_hours": 0,
+                        "end_offset_hours": 24,
+                    },
                     "aggregation": "mean",
                     "op": ">=",
                     "value": 2,
@@ -306,6 +364,7 @@ def test_ctas_builder_accepts_schema_declared_aggregations_on_materialised_colum
 
 # ----------- event-indicator NA normalization (sep3-style flags) -----------
 
+
 def test_is_positive_only_boolean_distinguishes_event_from_numeric():
     # event flag: only True observed, rest NA
     assert M._is_positive_only_boolean(pd.Series([True, None, True])) is True
@@ -318,13 +377,15 @@ def test_is_positive_only_boolean_distinguishes_event_from_numeric():
 
 
 def test_normalize_event_indicator_decodes_na_as_zero():
-    wide = pd.DataFrame({
-        "stay_id": [1, 2, 3],
-        "sep3_max": pd.Series([True, None, True], dtype=object),
-        "sep3_first": pd.Series([True, None, True], dtype=object),
-        "sep3_mean": pd.Series([1.0, None, 1.0]),
-        "sofa_max": pd.Series([3.0, None, 8.0]),  # numeric: must stay untouched
-    })
+    wide = pd.DataFrame(
+        {
+            "stay_id": [1, 2, 3],
+            "sep3_max": pd.Series([True, None, True], dtype=object),
+            "sep3_first": pd.Series([True, None, True], dtype=object),
+            "sep3_mean": pd.Series([1.0, None, 1.0]),
+            "sofa_max": pd.Series([3.0, None, 8.0]),  # numeric: must stay untouched
+        }
+    )
     normalized = M._normalize_event_indicator_columns(wide)
     # the sep3_* event family is decoded; the absent stay becomes 0, not NA
     assert wide["sep3_max"].tolist() == [1, 0, 1]
@@ -390,7 +451,7 @@ def test_windowed_death_exclusion_uses_event_time_not_wholestay_flag():
         {
             "stay_id": [1, 2, 3, 4, 5],
             "age": [65, 70, 55, 80, 60],
-            "death": [1, 1, 0, 1, 0],            # whole-stay flag
+            "death": [1, 1, 0, 1, 0],  # whole-stay flag
             "death_time": [10.0, 87.0, None, 5.0, None],  # hours from admit
         }
     )
@@ -398,14 +459,30 @@ def test_windowed_death_exclusion_uses_event_time_not_wholestay_flag():
         {
             "name": "landmark",
             "inclusion": [
-                {"concept_id": "age",
-                 "time_window": {"anchor": "icu_admit", "start_offset_hours": 0.0, "end_offset_hours": 24.0},
-                 "aggregation": "first", "op": ">=", "value": 18},
+                {
+                    "concept_id": "age",
+                    "time_window": {
+                        "anchor": "icu_admit",
+                        "start_offset_hours": 0.0,
+                        "end_offset_hours": 24.0,
+                    },
+                    "aggregation": "first",
+                    "op": ">=",
+                    "value": 18,
+                },
             ],
             "exclusion": [
-                {"concept_id": "death",
-                 "time_window": {"anchor": "icu_admit", "start_offset_hours": 0.0, "end_offset_hours": 24.0},
-                 "aggregation": "any", "op": "==", "value": 1},
+                {
+                    "concept_id": "death",
+                    "time_window": {
+                        "anchor": "icu_admit",
+                        "start_offset_hours": 0.0,
+                        "end_offset_hours": 24.0,
+                    },
+                    "aggregation": "any",
+                    "op": "==",
+                    "value": 1,
+                },
             ],
         }
     )
@@ -428,9 +505,17 @@ def test_windowed_predicate_without_event_time_column_is_unchanged():
             "name": "assoc",
             "inclusion": [],
             "exclusion": [
-                {"concept_id": "death",
-                 "time_window": {"anchor": "icu_admit", "start_offset_hours": 0.0, "end_offset_hours": 24.0},
-                 "aggregation": "any", "op": "==", "value": 1},
+                {
+                    "concept_id": "death",
+                    "time_window": {
+                        "anchor": "icu_admit",
+                        "start_offset_hours": 0.0,
+                        "end_offset_hours": 24.0,
+                    },
+                    "aggregation": "any",
+                    "op": "==",
+                    "value": 1,
+                },
             ],
         }
     )
