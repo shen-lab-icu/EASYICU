@@ -1,0 +1,54 @@
+{
+  "schema_version": "easyicu.know_how_review_packet/1",
+  "card_id": "early_peak_lactate_association",
+  "card_version": "1.0.0",
+  "reviewed_content_sha256": "5a4d49b1362ce42e9a8c770e46cfdd165d34eb6a1bf84402d8d171aee7593fc7",
+  "status": "methods_evidence_pre_review_complete_formal_attestation_pending",
+  "authorization": false,
+  "split_rationale": "E2 asks for a descriptive first-24-hour peak-lactate association. The former lactate trajectory card required serial measurements, clearance, landmarking, and trajectory stability, so generic lactate aliases were removed and a peak-specific card was created.",
+  "evidence_groups": [
+    {
+      "claim_group": "locked early peak lactate and mortality association",
+      "citation_ids": ["goutay_peak_lactate_2021", "villar_peak_lactate_2019"],
+      "pre_review_conclusion": "Directly supports an observational association, not a causal effect."
+    },
+    {
+      "claim_group": "clinical interpretation of lactate",
+      "citation_ids": ["surviving_sepsis_2021"],
+      "pre_review_conclusion": "Lactate requires clinical context; the guideline does not make one window or threshold universal."
+    },
+    {
+      "claim_group": "informative measurement and denominator",
+      "citation_ids": ["sisk_informative_observation_2021"],
+      "pre_review_conclusion": "Supports auditing measured versus unmeasured patients without prescribing one universal correction model."
+    },
+    {
+      "claim_group": "exposure and follow-up temporal overlap",
+      "citation_ids": ["gleiss_landmark_2018"],
+      "pre_review_conclusion": "Prospective claims require landmark or time-varying handling; descriptive same-admission associations must disclose overlap."
+    },
+    {
+      "claim_group": "transparent observational reporting",
+      "citation_ids": ["strobe_2007"],
+      "pre_review_conclusion": "Supports reporting cohort, variables, missing data, and analysis methods, not disease-specific choices."
+    }
+  ],
+  "required_signoff": [
+    "The target is a descriptive association, not a treatment effect or deployable prediction.",
+    "Time zero is ICU admission and the primary exposure window is the first 24 hours unless the benchmark owner changes it.",
+    "Values after death or discharge are excluded from the peak.",
+    "The full eligible cohort remains available for measured-versus-unmeasured comparison and unmeasured lactate is never zero-coded.",
+    "Specimen, assay, and unit harmonization are available from the typed data contract.",
+    "The primary model reports uncertainty and assesses nonlinearity.",
+    "Adjustment variables have prespecified baseline roles rather than being every available column.",
+    "Early deaths and measurement intensity are addressed for the declared estimand."
+  ],
+  "attestation_fields_required_after_signoff": [
+    "reviewer_owner",
+    "review_date",
+    "review_scope",
+    "literature_search_cutoff",
+    "clinical_reviewed",
+    "methods_reviewed"
+  ]
+}
