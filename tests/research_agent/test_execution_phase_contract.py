@@ -825,6 +825,17 @@ def test_authorized_resume_repair_supersedes_failed_candidate_capsule():
     assert repair_branch < capsule_branch
 
 
+def test_stability_standard_executor_supersedes_stale_resume_capsule():
+    from easyicu.research_agent.execution import phase as pipeline_execute
+
+    source = inspect.getsource(pipeline_execute.run_execute_phase)
+    assignment = source[source.index("preflight_trajectory_stability_code =") :]
+    assignment = assignment[: assignment.index("preflight_figure_code =")]
+
+    assert "_deterministic_trajectory_stability_code(" in assignment
+    assert "selected_resume_capsule" not in assignment
+
+
 @pytest.mark.parametrize(
     ("step_id", "intent"),
     [
