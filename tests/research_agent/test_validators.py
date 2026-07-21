@@ -181,9 +181,7 @@ def test_cross_step_cohort_lock_skips_explicit_alternative_cohort() -> None:
 
 
 def test_cross_step_cohort_lock_uses_latest_successful_analysis_lock() -> None:
-    failed = _prior_cohort_record(
-        cohort_n=74_829, step_id="04_failed_reconciliation"
-    )
+    failed = _prior_cohort_record(cohort_n=74_829, step_id="04_failed_reconciliation")
     failed["status"] = "contract_failed"
     figure = _prior_cohort_record(cohort_n=3, step_id="04_absolute_risk_figure")
     figure["step_summary"]["rendering_only"] = True
@@ -271,9 +269,10 @@ def test_cross_step_registered_output_blocks_false_unavailable_gap() -> None:
     assert findings[0].severity == "error"
     assert findings[0].validator == "cross_step_registered_output"
     assert findings[0].detail["upstream_step"] == "04_absolute_risk_context"
-    assert "exposure_outcome_summary.csv" in findings[0].detail[
-        "registered_table_artifacts"
-    ]
+    assert (
+        "exposure_outcome_summary.csv"
+        in findings[0].detail["registered_table_artifacts"]
+    )
 
 
 def test_cross_step_registered_output_accepts_readable_parent_table() -> None:
@@ -464,11 +463,7 @@ def test_step_summary_fraction_scale_does_not_drop_mixed_category_values() -> No
             "overall_risk.interval.estimate",
         ),
         (
-            {
-                "observed_fraction": {
-                    "by_group": [{"group": "a", "value": 40.0}]
-                }
-            },
+            {"observed_fraction": {"by_group": [{"group": "a", "value": 40.0}]}},
             "observed_fraction.by_group.0.value",
         ),
     ),
@@ -488,9 +483,7 @@ def test_step_summary_fraction_scale_follows_explicit_metric_wrappers(
 def test_step_summary_fraction_scale_ignores_structured_record_metadata() -> None:
     findings = StepSummaryFractionValidator().audit(
         step=AnalysisStep(step_id="04_model", intent="Report absolute risk."),
-        step_summary={
-            "overall_risk": {"risk": 0.2, "bootstrap_replicates": 1_000}
-        },
+        step_summary={"overall_risk": {"risk": 0.2, "bootstrap_replicates": 1_000}},
     )
 
     assert findings == []
@@ -515,11 +508,7 @@ def test_step_summary_fraction_scale_ignores_structured_record_metadata() -> Non
         {"observed_fraction": {"unit": "unknown", "value": 40.0}},
         {"observed_fraction": {"unit": 1, "value": 40.0}},
         {"observed_fraction": {"metric": "availability", "value": 40.0}},
-        {
-            "observed_fraction": {
-                "summary": {"group_a": 0.2, "group_b": 40.0}
-            }
-        },
+        {"observed_fraction": {"summary": {"group_a": 0.2, "group_b": 40.0}}},
         {"observed_fraction": {"data": [0.2, 40.0]}},
         {"observed_fraction": {"payload": {"group_a": 40.0}}},
         {"observed_fraction": {"items": [0.2, 40.0]}},
@@ -664,9 +653,7 @@ def test_step_summary_fraction_scale_rejects_fraction_stored_as_percent() -> Non
 
     assert len(findings) == 1
     assert "Rename the first field to *_fraction" in findings[0].message
-    assert findings[0].detail["summary_path"] == (
-        "valid_level_distribution_percent"
-    )
+    assert findings[0].detail["summary_path"] == ("valid_level_distribution_percent")
 
 
 def _write_reconciliation_trace_fixture(
@@ -720,9 +707,7 @@ def _write_reconciliation_trace_fixture(
                 "registered_event_n": 2 if correct else 20,
                 "registered_risk": 0.2 if correct else 0.1,
                 "registered_n_field": "n" if correct else "n_denominator",
-                "registered_event_n_field": (
-                    "event_n" if correct else "n_positive"
-                ),
+                "registered_event_n_field": ("event_n" if correct else "n_positive"),
                 "registered_risk_field": "outcome_risk" if correct else "estimate",
             },
             {
@@ -858,9 +843,7 @@ def test_cross_step_reconciliation_trace_normalises_semantic_row_schema(
                 "row_supported": False,
             },
         ]
-    ).to_csv(
-        out_dir / "absolute_risk_representation_reconciliation.csv", index=False
-    )
+    ).to_csv(out_dir / "absolute_risk_representation_reconciliation.csv", index=False)
 
     findings = CrossStepReconciliationTraceValidator().audit(
         step=AnalysisStep(step_id="04_reconciliation", intent="Reconcile parent."),
@@ -870,9 +853,10 @@ def test_cross_step_reconciliation_trace_normalises_semantic_row_schema(
 
     assert len(findings) == 1
     issues = findings[0].detail["issues"]
-    assert sum(
-        item["issue"] == "supported_parent_row_reported_missing" for item in issues
-    ) == 3
+    assert (
+        sum(item["issue"] == "supported_parent_row_reported_missing" for item in issues)
+        == 3
+    )
 
 
 def test_cross_step_reconciliation_trace_normalises_requested_estimate_schema(
@@ -923,9 +907,7 @@ def test_cross_step_reconciliation_trace_normalises_requested_estimate_schema(
                 "registered_selected_fields": np.nan,
             },
         ]
-    ).to_csv(
-        out_dir / "absolute_risk_representation_reconciliation.csv", index=False
-    )
+    ).to_csv(out_dir / "absolute_risk_representation_reconciliation.csv", index=False)
 
     findings = CrossStepReconciliationTraceValidator().audit(
         step=AnalysisStep(step_id="04_reconciliation", intent="Reconcile parent."),
@@ -935,9 +917,10 @@ def test_cross_step_reconciliation_trace_normalises_requested_estimate_schema(
 
     assert len(findings) == 1
     issues = findings[0].detail["issues"]
-    assert sum(
-        item["issue"] == "supported_parent_row_reported_missing" for item in issues
-    ) == 3
+    assert (
+        sum(item["issue"] == "supported_parent_row_reported_missing" for item in issues)
+        == 3
+    )
 
 
 def test_cross_step_reconciliation_trace_accepts_generic_registered_table_path(
@@ -967,9 +950,7 @@ def test_cross_step_reconciliation_trace_accepts_generic_registered_table_path(
                 "registered_outcome_risk": np.nan,
             }
         ]
-    ).to_csv(
-        out_dir / "absolute_risk_representation_reconciliation.csv", index=False
-    )
+    ).to_csv(out_dir / "absolute_risk_representation_reconciliation.csv", index=False)
 
     findings = CrossStepReconciliationTraceValidator().audit(
         step=AnalysisStep(step_id="04_reconciliation", intent="Reconcile parent."),
@@ -1029,9 +1010,7 @@ def test_cross_step_reconciliation_trace_normalises_row_role_schema(
                 ),
             },
         ]
-    ).to_csv(
-        out_dir / "absolute_risk_representation_reconciliation.csv", index=False
-    )
+    ).to_csv(out_dir / "absolute_risk_representation_reconciliation.csv", index=False)
 
     findings = CrossStepReconciliationTraceValidator().audit(
         step=AnalysisStep(step_id="04_reconciliation", intent="Reconcile parent."),
@@ -1041,10 +1020,10 @@ def test_cross_step_reconciliation_trace_normalises_row_role_schema(
 
     assert len(findings) == 1
     issues = findings[0].detail["issues"]
-    assert sum(
-        item["issue"] == "supported_parent_row_reported_missing"
-        for item in issues
-    ) == 2
+    assert (
+        sum(item["issue"] == "supported_parent_row_reported_missing" for item in issues)
+        == 2
+    )
 
 
 def test_cross_step_reconciliation_trace_normalises_requested_group_schema(
@@ -1090,9 +1069,7 @@ def test_cross_step_reconciliation_trace_normalises_requested_group_schema(
                 "selected_parent_field_names": "n;median;q25;q75",
             },
         ]
-    ).to_csv(
-        out_dir / "absolute_risk_representation_reconciliation.csv", index=False
-    )
+    ).to_csv(out_dir / "absolute_risk_representation_reconciliation.csv", index=False)
 
     findings = CrossStepReconciliationTraceValidator().audit(
         step=AnalysisStep(step_id="04_reconciliation", intent="Reconcile parent."),
@@ -1178,9 +1155,7 @@ def test_cross_step_reconciliation_trace_fails_closed_on_unknown_schema(
                 "registered_n": np.nan,
             }
         ]
-    ).to_csv(
-        out_dir / "absolute_risk_representation_reconciliation.csv", index=False
-    )
+    ).to_csv(out_dir / "absolute_risk_representation_reconciliation.csv", index=False)
 
     findings = CrossStepReconciliationTraceValidator().audit(
         step=AnalysisStep(step_id="04_reconciliation", intent="Reconcile parent."),
@@ -1427,16 +1402,20 @@ def test_cross_step_source_status_supports_scalar_status_summary_schema() -> Non
 def _ctx_with_sofa(ra) -> "ra.ResearchContext":
     """Tiny context with a sofa2 column — the SOFA-aware validators
     fire on this shape."""
-    df = pd.DataFrame({
-        "stay_id": list(range(1, 11)),
-        "age": [60, 70, 50, 80, 65, 75, 90, 40, 55, 60],
-        "sofa2": [0, 0, 1, 2, 3, 4, 5, 6, 7, 8],
-        "lact": [1.0, 2.0, 1.5, 3.0, 4.0, 5.0, 2.5, 1.2, 3.3, 7.0],
-        "death": [1, 1, 0, 0, 0, 1, 1, 0, 1, 1],
-    })
+    df = pd.DataFrame(
+        {
+            "stay_id": list(range(1, 11)),
+            "age": [60, 70, 50, 80, 65, 75, 90, 40, 55, 60],
+            "sofa2": [0, 0, 1, 2, 3, 4, 5, 6, 7, 8],
+            "lact": [1.0, 2.0, 1.5, 3.0, 4.0, 5.0, 2.5, 1.2, 3.3, 7.0],
+            "death": [1, 1, 0, 0, 0, 1, 1, 0, 1, 1],
+        }
+    )
     return ra.build_research_context(
         research_question="sofa2 → death?",
-        cohort=df, cohort_name="t", database="synthetic",
+        cohort=df,
+        cohort_name="t",
+        database="synthetic",
         target_outcome="death",
     )
 
@@ -1451,7 +1430,8 @@ def test_concept_usage_flags_mean_of_sofa(ra):
     code = "x = df['sofa2'].mean()  # advisory"
     findings = auditor.audit(context=ctx, script_text=code)
     matched = [
-        f for f in findings
+        f
+        for f in findings
         if f.validator == auditor.name
         and ("sofa" in f.message.lower() or "ordinal" in f.message.lower())
     ]
@@ -1459,8 +1439,7 @@ def test_concept_usage_flags_mean_of_sofa(ra):
     assert all(f.severity == "warning" for f in matched), matched
     # ...and no forbidden-aggregation finding is escalated to a blocking error.
     assert not any(
-        f.severity == "error" and "misleading" in f.message.lower()
-        for f in findings
+        f.severity == "error" and "misleading" in f.message.lower() for f in findings
     ), findings
 
 
@@ -1562,7 +1541,9 @@ def test_concept_usage_flags_mean_of_lact_without_median(ra):
     code = "lact_avg = df['lact'].mean()"
     findings = auditor.audit(context=ctx, script_text=code)
     # Lab + mean without median → warning
-    assert any(f.severity == "warning" and "lact" in f.message.lower() for f in findings)
+    assert any(
+        f.severity == "warning" and "lact" in f.message.lower() for f in findings
+    )
 
 
 def test_concept_usage_silences_lab_mean_when_median_present(ra):
@@ -1604,8 +1585,10 @@ def test_concept_usage_flags_fillna_zero(ra):
     auditor = ra.ConceptUsageAuditor()
     code = "df['lact'] = df['lact'].fillna(0)"
     findings = auditor.audit(context=ctx, script_text=code)
-    assert any("fillna" in f.message.lower() or "imputation" in f.message.lower()
-               for f in findings)
+    assert any(
+        "fillna" in f.message.lower() or "imputation" in f.message.lower()
+        for f in findings
+    )
 
 
 def test_concept_usage_allows_boolean_mask_fillna_false(ra):
@@ -1627,8 +1610,10 @@ def test_concept_usage_fillna_zero_ignores_env_string_subscripts(ra):
         context=ctx,
         script_text='import os\npath = os.environ["COHORT_PARQUET"]',
     )
-    assert not any("fillna" in f.message.lower() or "imputation" in f.message.lower()
-                   for f in findings)
+    assert not any(
+        "fillna" in f.message.lower() or "imputation" in f.message.lower()
+        for f in findings
+    )
 
 
 def test_concept_usage_flags_agg_mean_of_sofa(ra):
@@ -1638,7 +1623,9 @@ def test_concept_usage_flags_agg_mean_of_sofa(ra):
         context=ctx,
         script_text='x = df["sofa2"].agg("mean")',
     )
-    assert any(f.severity == "warning" and "sofa" in f.message.lower() for f in findings)
+    assert any(
+        f.severity == "warning" and "sofa" in f.message.lower() for f in findings
+    )
 
 
 def test_concept_usage_flags_numpy_mean_of_sofa(ra):
@@ -1647,7 +1634,9 @@ def test_concept_usage_flags_numpy_mean_of_sofa(ra):
         context=ctx,
         script_text='import numpy as np\nx = np.mean(df["sofa2"])',
     )
-    assert any(f.severity == "warning" and "sofa" in f.message.lower() for f in findings)
+    assert any(
+        f.severity == "warning" and "sofa" in f.message.lower() for f in findings
+    )
 
 
 def test_concept_usage_flags_rolling_mean_of_sofa(ra):
@@ -1656,20 +1645,24 @@ def test_concept_usage_flags_rolling_mean_of_sofa(ra):
         context=ctx,
         script_text='x = df["sofa2"].rolling(3).mean()',
     )
-    assert any(f.severity == "warning" and "sofa" in f.message.lower() for f in findings)
+    assert any(
+        f.severity == "warning" and "sofa" in f.message.lower() for f in findings
+    )
 
 
 def test_statistical_validator_flags_outcome_mismatch(ra, tmp_path: Path):
     ctx = _ctx_with_sofa(ra)
     cohort_path = tmp_path / "cohort.parquet"
     pd.read_parquet  # touch import
-    df = pd.DataFrame({
-        "stay_id": list(range(1, 11)),
-        "age": [60] * 10,
-        "sofa2": [0, 0, 1, 2, 3, 4, 5, 6, 7, 8],
-        "lact": [1.0] * 10,
-        "death": [1, 1, 0, 0, 0, 0, 0, 0, 0, 0],  # 0.2 incidence
-    })
+    df = pd.DataFrame(
+        {
+            "stay_id": list(range(1, 11)),
+            "age": [60] * 10,
+            "sofa2": [0, 0, 1, 2, 3, 4, 5, 6, 7, 8],
+            "lact": [1.0] * 10,
+            "death": [1, 1, 0, 0, 0, 0, 0, 0, 0, 0],  # 0.2 incidence
+        }
+    )
     df.to_parquet(cohort_path, index=False)
 
     out_dir = tmp_path / "out"
@@ -1678,11 +1671,16 @@ def test_statistical_validator_flags_outcome_mismatch(ra, tmp_path: Path):
     (out_dir / "step_summary.json").write_text("{}", encoding="utf-8")
 
     schema = ra.schema
-    step = schema.AnalysisStep(step_id="02_outcome_incidence",
-                               intent="incidence", expected_outputs=["statistic:outcome_rate"])
+    step = schema.AnalysisStep(
+        step_id="02_outcome_incidence",
+        intent="incidence",
+        expected_outputs=["statistic:outcome_rate"],
+    )
     validator = ra.StatisticalValidator()
     findings = validator.audit(
-        context=ctx, cohort_path=cohort_path, step=step,
+        context=ctx,
+        cohort_path=cohort_path,
+        step=step,
         out_dir=out_dir,
         # report a clearly wrong outcome rate
         step_summary={"outcome_rate": 0.99},
@@ -1698,24 +1696,46 @@ def test_statistical_validator_ignores_outcome_blind_component_qc_table(
 ):
     ctx = _ctx_with_sofa(ra)
     cohort_path = tmp_path / "cohort.parquet"
-    df = pd.DataFrame({
-        "stay_id": list(range(1, 21)),
-        "age": [60] * 20,
-        "sofa2": [0] * 5 + [1] * 5 + [2] * 5 + [3] * 5,
-        "death": [1, 1, 1, 1, 0,  # rate at 0 = 0.8
-                  0, 0, 0, 0, 0,  # rate at 1 = 0.0
-                  0, 0, 0, 1, 0,  # rate at 2 = 0.2
-                  1, 1, 1, 1, 1], # rate at 3 = 1.0
-    })
+    df = pd.DataFrame(
+        {
+            "stay_id": list(range(1, 21)),
+            "age": [60] * 20,
+            "sofa2": [0] * 5 + [1] * 5 + [2] * 5 + [3] * 5,
+            "death": [
+                1,
+                1,
+                1,
+                1,
+                0,  # rate at 0 = 0.8
+                0,
+                0,
+                0,
+                0,
+                0,  # rate at 1 = 0.0
+                0,
+                0,
+                0,
+                1,
+                0,  # rate at 2 = 0.2
+                1,
+                1,
+                1,
+                1,
+                1,
+            ],  # rate at 3 = 1.0
+        }
+    )
     df.to_parquet(cohort_path, index=False)
     out_dir = tmp_path / "out"
     out_dir.mkdir()
-    pd.DataFrame({
-        "variable": ["sofa2"],
-        "n_rows": [20],
-        "n_low_completeness": [5],
-        "frac_low_completeness": [0.25],
-    }).to_csv(out_dir / "component_completeness_qc.csv", index=False)
+    pd.DataFrame(
+        {
+            "variable": ["sofa2"],
+            "n_rows": [20],
+            "n_low_completeness": [5],
+            "frac_low_completeness": [0.25],
+        }
+    ).to_csv(out_dir / "component_completeness_qc.csv", index=False)
 
     schema = ra.schema
     step = schema.AnalysisStep(
@@ -1724,8 +1744,11 @@ def test_statistical_validator_ignores_outcome_blind_component_qc_table(
     )
     validator = ra.StatisticalValidator()
     findings = validator.audit(
-        context=ctx, cohort_path=cohort_path, step=step,
-        out_dir=out_dir, step_summary={},
+        context=ctx,
+        cohort_path=cohort_path,
+        step=step,
+        out_dir=out_dir,
+        step_summary={},
     )
     assert not any(
         "non-monotonic" in f.message.lower() or "exceeds" in f.message.lower()
@@ -1736,18 +1759,24 @@ def test_statistical_validator_ignores_outcome_blind_component_qc_table(
 def test_statistical_validator_no_artefacts_is_error(ra, tmp_path: Path):
     ctx = _ctx_with_sofa(ra)
     cohort_path = tmp_path / "cohort.parquet"
-    pd.DataFrame({"stay_id": [1], "age": [60], "sofa2": [3], "lact": [1.0], "death": [0]}
-                 ).to_parquet(cohort_path, index=False)
+    pd.DataFrame(
+        {"stay_id": [1], "age": [60], "sofa2": [3], "lact": [1.0], "death": [0]}
+    ).to_parquet(cohort_path, index=False)
     out_dir = tmp_path / "out"
     out_dir.mkdir()  # deliberately empty
     schema = ra.schema
     step = schema.AnalysisStep(step_id="99_empty", intent="x")
     findings = ra.StatisticalValidator().audit(
-        context=ctx, cohort_path=cohort_path, step=step,
-        out_dir=out_dir, step_summary={},
+        context=ctx,
+        cohort_path=cohort_path,
+        step=step,
+        out_dir=out_dir,
+        step_summary={},
     )
-    assert any(f.severity == "error" and "no output artefacts" in f.message.lower()
-               for f in findings), findings
+    assert any(
+        f.severity == "error" and "no output artefacts" in f.message.lower()
+        for f in findings
+    ), findings
 
 
 def test_statistical_validator_blocks_all_unavailable_primary_exposure(
@@ -1785,9 +1814,7 @@ def test_statistical_validator_blocks_all_unavailable_primary_exposure(
     ), findings
 
 
-def test_statistical_validator_accepts_reconciled_primary_exposure(
-    ra, tmp_path: Path
-):
+def test_statistical_validator_accepts_reconciled_primary_exposure(ra, tmp_path: Path):
     ctx = _ctx_with_sofa(ra)
     cohort_path = tmp_path / "cohort.parquet"
     pd.DataFrame({"stay_id": [1, 2], "death": [0, 1]}).to_parquet(
@@ -1891,33 +1918,43 @@ def test_statistical_validator_flags_primary_or_mismatch(ra, tmp_path: Path):
     the validator must surface an error finding."""
     ctx = _ctx_with_sofa(ra)
     cohort_path = tmp_path / "cohort.parquet"
-    df = pd.DataFrame({
-        "stay_id": list(range(1, 11)),
-        "age": [60] * 10,
-        "sofa2": [0, 0, 1, 2, 3, 4, 5, 6, 7, 8],
-        "lact": [1.0] * 10,
-        "death": [0, 0, 0, 0, 0, 1, 1, 1, 1, 1],
-    })
+    df = pd.DataFrame(
+        {
+            "stay_id": list(range(1, 11)),
+            "age": [60] * 10,
+            "sofa2": [0, 0, 1, 2, 3, 4, 5, 6, 7, 8],
+            "lact": [1.0] * 10,
+            "death": [0, 0, 0, 0, 0, 1, 1, 1, 1, 1],
+        }
+    )
     df.to_parquet(cohort_path, index=False)
     out_dir = tmp_path / "out"
     out_dir.mkdir()
-    pd.DataFrame([
-        {"variable": "intercept", "coef": -2.0, "odds_ratio": 0.135},
-        {"variable": "sofa2", "coef": 0.4, "odds_ratio": 1.491825},
-        {"variable": "age", "coef": 0.01, "odds_ratio": 1.01005},
-    ]).to_csv(out_dir / "primary_association.csv", index=False)
+    pd.DataFrame(
+        [
+            {"variable": "intercept", "coef": -2.0, "odds_ratio": 0.135},
+            {"variable": "sofa2", "coef": 0.4, "odds_ratio": 1.491825},
+            {"variable": "age", "coef": 0.01, "odds_ratio": 1.01005},
+        ]
+    ).to_csv(out_dir / "primary_association.csv", index=False)
 
     schema = ra.schema
     step = schema.AnalysisStep(step_id="04_primary_association", intent="logit")
     findings = ra.StatisticalValidator().audit(
-        context=ctx, cohort_path=cohort_path, step=step,
+        context=ctx,
+        cohort_path=cohort_path,
+        step=step,
         out_dir=out_dir,
         # report a wildly wrong OR
-        step_summary={"predictor": "sofa2", "primary_or": 5.0,
-                      "outcome_rate": float(df["death"].mean())},
+        step_summary={
+            "predictor": "sofa2",
+            "primary_or": 5.0,
+            "outcome_rate": float(df["death"].mean()),
+        },
     )
-    assert any(f.severity == "error" and "primary or" in f.message.lower()
-               for f in findings), findings
+    assert any(
+        f.severity == "error" and "primary or" in f.message.lower() for f in findings
+    ), findings
 
 
 def _figure_source_fixture(tmp_path: Path) -> tuple[Path, Path]:
@@ -2165,10 +2202,7 @@ def test_figure_source_data_validator_blocks_inconsistent_percent_counts(
 ):
     run_dir = tmp_path / "run"
     upstream = (
-        run_dir
-        / "steps"
-        / "02_baseline_characteristics_and_data_quality"
-        / "outputs"
+        run_dir / "steps" / "02_baseline_characteristics_and_data_quality" / "outputs"
     )
     figure = (
         run_dir
@@ -2223,10 +2257,7 @@ def test_figure_source_data_validator_accepts_derived_missingness_source_data(
 ):
     run_dir = tmp_path / "run"
     upstream = (
-        run_dir
-        / "steps"
-        / "02_baseline_characteristics_and_data_quality"
-        / "outputs"
+        run_dir / "steps" / "02_baseline_characteristics_and_data_quality" / "outputs"
     )
     figure = (
         run_dir
@@ -2330,7 +2361,9 @@ def test_figure_contract_quality_blocks_rescue_publication_contract(ra, tmp_path
     ), findings
 
 
-def test_figure_contract_quality_requires_contract_for_figure_exports(ra, tmp_path: Path):
+def test_figure_contract_quality_requires_contract_for_figure_exports(
+    ra, tmp_path: Path
+):
     run_dir = tmp_path / "run"
     out_dir = run_dir / "steps" / "04_primary_association_figure" / "outputs"
     out_dir.mkdir(parents=True)
@@ -2354,7 +2387,9 @@ def test_figure_contract_quality_requires_contract_for_figure_exports(ra, tmp_pa
     ), findings
 
 
-def test_figure_contract_quality_blocks_single_panel_result_contract(ra, tmp_path: Path):
+def test_figure_contract_quality_blocks_single_panel_result_contract(
+    ra, tmp_path: Path
+):
     contract_path = tmp_path / "easyicu_publication_figure.figure_contract.json"
     contract_path.write_text(
         json.dumps(
@@ -2381,8 +2416,7 @@ def test_figure_contract_quality_blocks_single_panel_result_contract(ra, tmp_pat
     )
 
     assert any(
-        f.severity == "error" and "only 1 panel" in f.message
-        for f in findings
+        f.severity == "error" and "only 1 panel" in f.message for f in findings
     ), findings
 
 
@@ -2430,30 +2464,41 @@ def test_figure_contract_quality_accepts_multipanel_result_contract(ra, tmp_path
 
 
 def test_cohort_auditor_row_count_mismatch(ra, tmp_path: Path):
-    df = pd.DataFrame({
-        "stay_id": [1, 2, 3, 4, 5],
-        "age": [60.0] * 5,
-        "death": [0, 1, 0, 1, 0],
-    })
+    df = pd.DataFrame(
+        {
+            "stay_id": [1, 2, 3, 4, 5],
+            "age": [60.0] * 5,
+            "death": [0, 1, 0, 1, 0],
+        }
+    )
     cohort_path = tmp_path / "cohort.parquet"
     df.to_parquet(cohort_path, index=False)
     ctx = ra.build_research_context(
-        research_question="x", cohort=df,
-        cohort_name="c", database="synthetic", target_outcome="death",
+        research_question="x",
+        cohort=df,
+        cohort_name="c",
+        database="synthetic",
+        target_outcome="death",
     )
     # Pretend the descriptor was written when there were 99 rows.
     ctx.cohort.n_stays = 99
     findings = ra.CohortAuditor().audit(context=ctx, cohort_path=cohort_path)
-    assert any(f.severity == "error" and "row count mismatch" in f.message.lower()
-               for f in findings)
+    assert any(
+        f.severity == "error" and "row count mismatch" in f.message.lower()
+        for f in findings
+    )
 
 
-def test_cohort_auditor_allows_correlation_context_without_target_outcome(ra, tmp_path: Path):
-    df = pd.DataFrame({
-        "stay_id": [1, 2, 3],
-        "sofa2_max_24h": [1, 3, 5],
-        "sofa2_resp_max_24h": [0, 1, 2],
-    })
+def test_cohort_auditor_allows_correlation_context_without_target_outcome(
+    ra, tmp_path: Path
+):
+    df = pd.DataFrame(
+        {
+            "stay_id": [1, 2, 3],
+            "sofa2_max_24h": [1, 3, 5],
+            "sofa2_resp_max_24h": [0, 1, 2],
+        }
+    )
     cohort_path = tmp_path / "cohort.parquet"
     df.to_parquet(cohort_path, index=False)
     ctx = ra.build_research_context(
@@ -2471,10 +2516,13 @@ def test_cohort_auditor_allows_correlation_context_without_target_outcome(ra, tm
 
 # ---------------- cohort-hygiene flags (impartial, advisory) -------------
 
+
 def _hygiene_ctx(ra, df):
     return ra.build_research_context(
         research_question="Does sepsis predict ICU mortality?",
-        cohort=df, cohort_name="c", database="synthetic",
+        cohort=df,
+        cohort_name="c",
+        database="synthetic",
         target_outcome="death",
     )
 
@@ -2482,14 +2530,19 @@ def _hygiene_ctx(ra, df):
 def test_cohort_hygiene_flags_missing_patient_id_when_outcome(ra):
     from easyicu.research_agent.audits.validators import cohort_hygiene_findings
 
-    df = pd.DataFrame({
-        "stay_id": [1, 2, 3],
-        "los_icu": [2.0, 3.0, 5.0],
-        "death": [0, 1, 0],
-    })
+    df = pd.DataFrame(
+        {
+            "stay_id": [1, 2, 3],
+            "los_icu": [2.0, 3.0, 5.0],
+            "death": [0, 1, 0],
+        }
+    )
     findings = cohort_hygiene_findings(df, _hygiene_ctx(ra, df))
-    pid = [f for f in findings
-           if f.detail.get("subkind") == "patient_independence_unassessable"]
+    pid = [
+        f
+        for f in findings
+        if f.detail.get("subkind") == "patient_independence_unassessable"
+    ]
     assert len(pid) == 1
     assert pid[0].severity == "warning"
     assert pid[0].detail["structural_no_source"] is True
@@ -2500,16 +2553,17 @@ def test_cohort_hygiene_flags_missing_patient_id_when_outcome(ra):
 def test_cohort_hygiene_no_patient_flag_with_patient_id(ra):
     from easyicu.research_agent.audits.validators import cohort_hygiene_findings
 
-    df = pd.DataFrame({
-        "subject_id": [10, 10, 11],
-        "stay_id": [1, 2, 3],
-        "los_icu": [2.0, 3.0, 5.0],
-        "death": [0, 1, 0],
-    })
+    df = pd.DataFrame(
+        {
+            "subject_id": [10, 10, 11],
+            "stay_id": [1, 2, 3],
+            "los_icu": [2.0, 3.0, 5.0],
+            "death": [0, 1, 0],
+        }
+    )
     findings = cohort_hygiene_findings(df, _hygiene_ctx(ra, df))
     assert not any(
-        f.detail.get("subkind") == "patient_independence_unassessable"
-        for f in findings
+        f.detail.get("subkind") == "patient_independence_unassessable" for f in findings
     )
 
 
@@ -2518,27 +2572,30 @@ def test_cohort_hygiene_no_patient_flag_without_outcome(ra):
 
     df = pd.DataFrame({"stay_id": [1, 2, 3], "los_icu": [2.0, 3.0, 5.0]})
     ctx = ra.build_research_context(
-        research_question="Describe LoS.", cohort=df,
-        cohort_name="c", database="synthetic", target_outcome=None,
+        research_question="Describe LoS.",
+        cohort=df,
+        cohort_name="c",
+        database="synthetic",
+        target_outcome=None,
     )
     findings = cohort_hygiene_findings(df, ctx)
     assert not any(
-        f.detail.get("subkind") == "patient_independence_unassessable"
-        for f in findings
+        f.detail.get("subkind") == "patient_independence_unassessable" for f in findings
     )
 
 
 def test_cohort_hygiene_short_stay_reported_not_enforced(ra):
     from easyicu.research_agent.audits.validators import cohort_hygiene_findings
 
-    df = pd.DataFrame({
-        "stay_id": [1, 2, 3, 4],
-        "los_icu": [0.2, 0.5, 3.0, 5.0],  # half are <1 day
-        "death": [0, 1, 0, 1],
-    })
+    df = pd.DataFrame(
+        {
+            "stay_id": [1, 2, 3, 4],
+            "los_icu": [0.2, 0.5, 3.0, 5.0],  # half are <1 day
+            "death": [0, 1, 0, 1],
+        }
+    )
     findings = cohort_hygiene_findings(df, _hygiene_ctx(ra, df))
-    short = [f for f in findings
-             if f.detail.get("subkind") == "short_stay_exposure"]
+    short = [f for f in findings if f.detail.get("subkind") == "short_stay_exposure"]
     assert len(short) == 1
     assert short[0].severity == "warning"
     assert short[0].detail["fraction_los_under_1_day"] == 0.5
@@ -2549,11 +2606,13 @@ def test_cohort_hygiene_findings_never_block(ra):
     """Impartiality: hygiene flags are advisory and must never fail-close."""
     from easyicu.research_agent.audits.validators import cohort_hygiene_findings
 
-    df = pd.DataFrame({
-        "stay_id": [1, 2, 3],
-        "los_icu": [0.1, 0.2, 5.0],
-        "death": [0, 1, 0],
-    })
+    df = pd.DataFrame(
+        {
+            "stay_id": [1, 2, 3],
+            "los_icu": [0.1, 0.2, 5.0],
+            "death": [0, 1, 0],
+        }
+    )
     findings = cohort_hygiene_findings(df, _hygiene_ctx(ra, df))
     assert findings  # both flags fire
     assert all(f.severity == "warning" for f in findings)
@@ -2562,12 +2621,14 @@ def test_cohort_hygiene_findings_never_block(ra):
 
 def test_cohort_auditor_surfaces_hygiene_flags(ra, tmp_path: Path):
     """The hygiene flags reach callers through CohortAuditor.audit."""
-    df = pd.DataFrame({
-        "stay_id": [1, 2, 3],
-        "los_icu": [0.2, 3.0, 5.0],
-        "age": [60.0, 70.0, 80.0],
-        "death": [0, 1, 0],
-    })
+    df = pd.DataFrame(
+        {
+            "stay_id": [1, 2, 3],
+            "los_icu": [0.2, 3.0, 5.0],
+            "age": [60.0, 70.0, 80.0],
+            "death": [0, 1, 0],
+        }
+    )
     cohort_path = tmp_path / "cohort.parquet"
     df.to_parquet(cohort_path, index=False)
     ctx = _hygiene_ctx(ra, df)
@@ -2576,7 +2637,9 @@ def test_cohort_auditor_surfaces_hygiene_flags(ra, tmp_path: Path):
 
 
 def test_llm_concept_auditor_parses_findings(ra):
-    from easyicu.research_agent.audits.validators import parse_llm_concept_audit_response
+    from easyicu.research_agent.audits.validators import (
+        parse_llm_concept_audit_response,
+    )
 
     raw = """```json
 {"findings":[{"severity":"warning","message":"ICU mortality may be confused with hospital mortality.","detail":{"issue_code":"other","column":"death_hosp"}}]}
@@ -2616,9 +2679,7 @@ def test_llm_concept_auditor_invalid_schema_fails_closed(
 
     assert len(findings) == 1
     assert findings[0].severity == "error"
-    assert findings[0].detail["issue_code"] == (
-        "llm_concept_audit_response_invalid"
-    )
+    assert findings[0].detail["issue_code"] == ("llm_concept_audit_response_invalid")
     assert findings[0].detail["response_issue"] == response_issue
     assert findings[0].detail["step_id"] == "04_primary"
 
@@ -2642,9 +2703,7 @@ def test_llm_concept_auditor_does_not_downgrade_invalid_schema(ra) -> None:
 
     assert len(findings) == 1
     assert findings[0].severity == "error"
-    assert findings[0].detail["issue_code"] == (
-        "llm_concept_audit_response_invalid"
-    )
+    assert findings[0].detail["issue_code"] == ("llm_concept_audit_response_invalid")
 
 
 def test_llm_concept_auditor_provider_failure_fails_closed(ra) -> None:
@@ -2683,11 +2742,13 @@ def test_llm_concept_auditor_prompt_includes_outcome_semantics(ra):
     auditor = ra.LLMConceptAuditor(ra.MockLLMClient())
     ctx = ra.build_research_context(
         research_question="Is age associated with ICU mortality?",
-        cohort=pd.DataFrame({
-            "stay_id": [1, 2, 3],
-            "age": [60, 70, 80],
-            "death": [0, 1, 0],
-        }),
+        cohort=pd.DataFrame(
+            {
+                "stay_id": [1, 2, 3],
+                "age": [60, 70, 80],
+                "death": [0, 1, 0],
+            }
+        ),
         cohort_name="c",
         database="synthetic",
         target_outcome="death",
@@ -2864,12 +2925,14 @@ def test_llm_concept_auditor_checks_summary_source_status_bypasses(ra):
     auditor = ra.LLMConceptAuditor(ra.MockLLMClient())
     ctx = ra.build_research_context(
         research_question="Summarize an early ICU measurement.",
-        cohort=pd.DataFrame({
-            "stay_id": [1, 2, 3],
-            "marker_first": [1.0, None, 2.0],
-            "marker_n": [1, 0, 1],
-            "marker_measured": [1, 0, 1],
-        }),
+        cohort=pd.DataFrame(
+            {
+                "stay_id": [1, 2, 3],
+                "marker_first": [1.0, None, 2.0],
+                "marker_n": [1, 0, 1],
+                "marker_measured": [1, 0, 1],
+            }
+        ),
         cohort_name="c",
         database="synthetic",
     )
@@ -2932,7 +2995,9 @@ def test_llm_concept_auditor_trusts_exact_step_input_metadata_binding(ra):
 
     assert "host-owned binding" in prompt
     assert "do not require generated code to re-prove the host metadata" in prompt
-    assert "flag it merely because its column name contains first/max/min/mean" in prompt
+    assert (
+        "flag it merely because its column name contains first/max/min/mean" in prompt
+    )
 
 
 def test_llm_concept_auditor_downgrades_finalized_exposure_rederivation_demand(ra):
@@ -2953,7 +3018,7 @@ def test_llm_concept_auditor_downgrades_finalized_exposure_rederivation_demand(r
                                     "The row-aligned values are validated but the "
                                     "script does not call "
                                     "reconcile_binary_event_presence."
-                                )
+                                ),
                             },
                         }
                     ]
@@ -3022,7 +3087,7 @@ if isinstance(exposure_definition, pd.DataFrame):
                     "context": (
                         "The script ignores its values and overwrites them with "
                         "raw companion reconciliation."
-                    )
+                    ),
                 },
             )
         ],
@@ -3079,7 +3144,7 @@ model = sm.Logit(outcome, pd.DataFrame({'vasopressor': treatment}))
                         "After resolving the finalized artifact, the script "
                         "unconditionally replaces treatment with "
                         "reconcile_binary_event_presence."
-                    )
+                    ),
                 },
             ),
             ValidationFinding(
@@ -3176,7 +3241,7 @@ treatment = resolve_raw_exposure(exposure_definition, frame).values
                     "context": (
                         "The script replaces the finalized values with "
                         "reconcile_binary_event_presence."
-                    )
+                    ),
                 },
             )
         ],
@@ -3239,7 +3304,7 @@ model = sm.Logit(outcome, pd.DataFrame({'treatment': treatment}))
                         "It unconditionally runs "
                         "reconcile_binary_event_presence after resolving the "
                         "artifact."
-                    )
+                    ),
                 },
             )
         ],
@@ -3376,7 +3441,9 @@ model = sm.Logit(outcome, pd.DataFrame({'treatment': treatment}))
     )
 
 
-def test_authoritative_exposure_flow_rejects_conditional_expression_helper_return() -> None:
+def test_authoritative_exposure_flow_rejects_conditional_expression_helper_return() -> (
+    None
+):
     from easyicu.research_agent.audits.validators import (
         _verified_authoritative_exposure_flow,
     )
@@ -3451,7 +3518,9 @@ primary = sm.MixedLM(outcome, raw_design, groups=frame['hospital_id']).fit()
     )
 
 
-def test_authoritative_exposure_flow_rejects_unlisted_estimator_after_decoy_model() -> None:
+def test_authoritative_exposure_flow_rejects_unlisted_estimator_after_decoy_model() -> (
+    None
+):
     from easyicu.research_agent.audits.validators import (
         _verified_authoritative_exposure_flow,
     )
@@ -3477,7 +3546,9 @@ primary = sm.Probit(
     )
 
 
-def test_authoritative_exposure_flow_rejects_generic_train_sink_after_decoy_model() -> None:
+def test_authoritative_exposure_flow_rejects_generic_train_sink_after_decoy_model() -> (
+    None
+):
     from easyicu.research_agent.audits.validators import (
         _verified_authoritative_exposure_flow,
     )
@@ -3504,7 +3575,9 @@ primary = xgb.train({}, raw_design)
     )
 
 
-def test_authoritative_exposure_flow_accepts_generic_train_sink_with_authority() -> None:
+def test_authoritative_exposure_flow_accepts_generic_train_sink_with_authority() -> (
+    None
+):
     from easyicu.research_agent.audits.validators import (
         _verified_authoritative_exposure_flow,
     )
@@ -3553,7 +3626,9 @@ plt.plot(calibration_x, calibration_y)
     )
 
 
-@pytest.mark.parametrize("resolver_name", ["resolve_finalized_exposure", "resolve_exposure"])
+@pytest.mark.parametrize(
+    "resolver_name", ["resolve_finalized_exposure", "resolve_exposure"]
+)
 def test_llm_concept_auditor_accepts_finalized_only_consumer_without_helper_call(
     ra, resolver_name
 ):
@@ -3597,7 +3672,7 @@ model = sm.Logit(outcome, pd.DataFrame({{'treatment': treatment}}))
                     "context": (
                         "It assigns reconcile_binary_event_presence values after "
                         "the finalized binding."
-                    )
+                    ),
                 },
             ),
             ValidationFinding(
@@ -3611,7 +3686,7 @@ model = sm.Logit(outcome, pd.DataFrame({{'treatment': treatment}}))
                     "issue_code": "finalized_exposure_forced_raw_reconciliation",
                     "context": (
                         "It requires source_count_column and raw companion fields."
-                    )
+                    ),
                 },
             ),
         ],
@@ -3642,7 +3717,7 @@ def test_llm_concept_auditor_downgrades_companion_value_gating_false_positive(ra
                                     "The script audits measured/count pairs on the "
                                     "original dataframe, but the flags do not mask or "
                                     "invalidate modeled first-value covariates."
-                                )
+                                ),
                             },
                         }
                     ]
@@ -3661,17 +3736,17 @@ if provenance_failed:
     raise RuntimeError('invalid measurement provenance')
 model.fit(frame[['marker_first']], assignment)
 """
-    findings = ra.LLMConceptAuditor(
-        _CompanionGatingFalsePositiveLLM()
-    ).audit(
+    findings = ra.LLMConceptAuditor(_CompanionGatingFalsePositiveLLM()).audit(
         context=ra.build_research_context(
             research_question="Model assignment from early physiology.",
-            cohort=pd.DataFrame({
-                "stay_id": [1, 2],
-                "marker_first": [1.0, 2.0],
-                "marker_measured": [1, 1],
-                "marker_n": [1, 1],
-            }),
+            cohort=pd.DataFrame(
+                {
+                    "stay_id": [1, 2],
+                    "marker_first": [1.0, 2.0],
+                    "marker_measured": [1, 1],
+                    "marker_n": [1, 1],
+                }
+            ),
             cohort_name="c",
             database="synthetic",
         ),
@@ -3708,17 +3783,114 @@ model.fit(frame[['marker_first']], assignment)
     assert "downgraded_reason" not in conditional_findings[0].detail
 
 
+def test_llm_concept_auditor_accepts_value_owned_distribution_after_direct_audit(
+    ra,
+):
+    class _FindingLLM:
+        def complete(self, messages, *, max_tokens=1024, temperature=0.0):
+            return json.dumps(
+                {
+                    "findings": [
+                        {
+                            "severity": "error",
+                            "message": "Companions gate the value distribution.",
+                            "detail": {
+                                "issue_code": "audit_only_companion_row_gating_required",
+                                "variables": ["support_mask", "valid_distribution"],
+                            },
+                        }
+                    ]
+                }
+            )
+
+    script = """
+measurement_provenance_audit = {
+    'checks': [{'invalid_pair_n': 0, 'discordant_n': 0, 'role': 'audit_only'}]
+}
+invalid_pair_n = 0
+discordant_n = 0
+if invalid_pair_n or discordant_n:
+    raise RuntimeError('invalid measurement provenance')
+support_mask = measured_series.eq(1) & count_series.gt(0)
+in_range_mask = value_series.notna() & value_series.between(0.0, 30.0)
+valid_distribution = value_series.loc[in_range_mask]
+"""
+    findings = ra.LLMConceptAuditor(_FindingLLM()).audit(
+        context=ra.build_research_context(
+            research_question="Audit one continuous measurement.",
+            cohort=pd.DataFrame({"stay_id": [1, 2], "value": [1.0, 2.0]}),
+            cohort_name="c",
+            database="synthetic",
+        ),
+        script_text=script,
+        step=None,
+    )
+
+    assert findings[0].severity == "warning"
+    assert findings[0].detail["downgraded_reason"]
+
+
+def test_llm_concept_auditor_keeps_companion_gated_distribution_blocking(ra):
+    class _FindingLLM:
+        def complete(self, messages, *, max_tokens=1024, temperature=0.0):
+            return json.dumps(
+                {
+                    "findings": [
+                        {
+                            "severity": "error",
+                            "message": "Companions gate the value distribution.",
+                            "detail": {
+                                "issue_code": "audit_only_companion_row_gating_required",
+                                "variables": ["support_mask", "valid_distribution"],
+                            },
+                        }
+                    ]
+                }
+            )
+
+    script = """
+measurement_provenance_audit = {
+    'checks': [{'invalid_pair_n': 0, 'discordant_n': 0, 'role': 'audit_only'}]
+}
+invalid_pair_n = 0
+discordant_n = 0
+if invalid_pair_n or discordant_n:
+    raise RuntimeError('invalid measurement provenance')
+support_mask = measured_series.eq(1) & count_series.gt(0)
+valid_distribution = value_series.loc[support_mask]
+"""
+    findings = ra.LLMConceptAuditor(_FindingLLM()).audit(
+        context=ra.build_research_context(
+            research_question="Audit one continuous measurement.",
+            cohort=pd.DataFrame({"stay_id": [1, 2], "value": [1.0, 2.0]}),
+            cohort_name="c",
+            database="synthetic",
+        ),
+        script_text=script,
+        step=None,
+    )
+
+    assert findings[0].severity == "error"
+    assert "downgraded_reason" not in findings[0].detail
+
+
 def test_llm_concept_auditor_accepts_direct_self_raising_host_receipts(ra):
     class _FalsePositiveLLM:
         def complete(self, messages, *, max_tokens=1024, temperature=0.0):
-            return json.dumps({"findings": [{
-                "severity": "error",
-                "message": "The receipt status is not inspected.",
-                "detail": {
-                    "issue_code": "audit_only_companion_row_gating_required",
-                    "variables": ["marker_first"],
-                },
-            }]})
+            return json.dumps(
+                {
+                    "findings": [
+                        {
+                            "severity": "error",
+                            "message": "The receipt status is not inspected.",
+                            "detail": {
+                                "issue_code": "audit_only_companion_row_gating_required",
+                                "variables": ["marker_first"],
+                            },
+                        }
+                    ]
+                }
+            )
 
     script = """
 from easyicu.research_agent.methods.descriptive_inputs import measurement_provenance_receipt
@@ -3737,12 +3909,14 @@ if __name__ == "__main__":
     findings = ra.LLMConceptAuditor(_FalsePositiveLLM()).audit(
         context=ra.build_research_context(
             research_question="Model assignment from early physiology.",
-            cohort=pd.DataFrame({
-                "stay_id": [1, 2],
-                "marker_first": [1.0, 2.0],
-                "marker_measured": [1, 1],
-                "marker_n": [1, 1],
-            }),
+            cohort=pd.DataFrame(
+                {
+                    "stay_id": [1, 2],
+                    "marker_first": [1.0, 2.0],
+                    "marker_measured": [1, 1],
+                    "marker_n": [1, 1],
+                }
+            ),
             cohort_name="c",
             database="synthetic",
         ),
@@ -3757,14 +3931,20 @@ if __name__ == "__main__":
 def test_llm_concept_auditor_does_not_accept_unused_host_receipt_decoy(ra):
     class _FindingLLM:
         def complete(self, messages, *, max_tokens=1024, temperature=0.0):
-            return json.dumps({"findings": [{
-                "severity": "error",
-                "message": "Provenance is not fail-closed.",
-                "detail": {
-                    "issue_code": "audit_only_companion_row_gating_required",
-                    "variables": ["marker_first"],
-                },
-            }]})
+            return json.dumps(
+                {
+                    "findings": [
+                        {
+                            "severity": "error",
+                            "message": "Provenance is not fail-closed.",
+                            "detail": {
+                                "issue_code": "audit_only_companion_row_gating_required",
+                                "variables": ["marker_first"],
+                            },
+                        }
+                    ]
+                }
+            )
 
     script = """
 from easyicu.research_agent.methods.descriptive_inputs import measurement_provenance_receipt
@@ -3779,12 +3959,14 @@ model.fit(frame[["marker_first"]], assignment)
     findings = ra.LLMConceptAuditor(_FindingLLM()).audit(
         context=ra.build_research_context(
             research_question="Model assignment from early physiology.",
-            cohort=pd.DataFrame({
-                "stay_id": [1, 2],
-                "marker_first": [1.0, 2.0],
-                "marker_measured": [1, 1],
-                "marker_n": [1, 1],
-            }),
+            cohort=pd.DataFrame(
+                {
+                    "stay_id": [1, 2],
+                    "marker_first": [1.0, 2.0],
+                    "marker_measured": [1, 1],
+                    "marker_n": [1, 1],
+                }
+            ),
             cohort_name="c",
             database="synthetic",
         ),
@@ -3813,7 +3995,7 @@ def test_llm_concept_auditor_does_not_downgrade_unused_provenance_flag(ra):
                                 "context": (
                                     "The measured flags do not mask or invalidate "
                                     "modeled first-value covariates."
-                                )
+                                ),
                             },
                         }
                     ]
@@ -3956,12 +4138,14 @@ def test_llm_concept_auditor_sees_late_independent_count_qc(ra):
     auditor = ra.LLMConceptAuditor(ra.MockLLMClient())
     ctx = ra.build_research_context(
         research_question="Audit an ordered early ICU exposure.",
-        cohort=pd.DataFrame({
-            "stay_id": [1, 2, 3],
-            "stage_max": [0, 1, 2],
-            "stage_n": [1, 1, 1],
-            "stage_measured": [1, 1, 1],
-        }),
+        cohort=pd.DataFrame(
+            {
+                "stay_id": [1, 2, 3],
+                "stage_max": [0, 1, 2],
+                "stage_n": [1, 1, 1],
+                "stage_measured": [1, 1, 1],
+            }
+        ),
         cohort_name="c",
         database="synthetic",
     )
@@ -4015,7 +4199,9 @@ def test_llm_concept_auditor_makes_result_changing_figure_semantics_errors(ra):
 
 
 def test_llm_concept_auditor_downgrades_nonblocking_outcome_confusion(ra):
-    from easyicu.research_agent.audits.validators import parse_llm_concept_audit_response
+    from easyicu.research_agent.audits.validators import (
+        parse_llm_concept_audit_response,
+    )
 
     raw = """
     {
@@ -4056,11 +4242,13 @@ def test_llm_concept_auditor_uses_context_to_downgrade_outcome_ambiguity(ra):
 
     ctx = ra.build_research_context(
         research_question="Is early lactate associated with ICU mortality?",
-        cohort=pd.DataFrame({
-            "stay_id": [1, 2, 3],
-            "lactate_max_24h": [1.0, 2.0, 3.0],
-            "death": [0, 1, 0],
-        }),
+        cohort=pd.DataFrame(
+            {
+                "stay_id": [1, 2, 3],
+                "lactate_max_24h": [1.0, 2.0, 3.0],
+                "death": [0, 1, 0],
+            }
+        ),
         cohort_name="c",
         database="synthetic",
         target_outcome="death",
@@ -4093,11 +4281,13 @@ def test_llm_concept_auditor_preserves_error_for_conflicting_outcome_label(ra):
 
     ctx = ra.build_research_context(
         research_question="Is early lactate associated with ICU mortality?",
-        cohort=pd.DataFrame({
-            "stay_id": [1, 2, 3],
-            "lactate_max_24h": [1.0, 2.0, 3.0],
-            "death": [0, 1, 0],
-        }),
+        cohort=pd.DataFrame(
+            {
+                "stay_id": [1, 2, 3],
+                "lactate_max_24h": [1.0, 2.0, 3.0],
+                "death": [0, 1, 0],
+            }
+        ),
         cohort_name="c",
         database="synthetic",
         target_outcome="death",
@@ -4160,8 +4350,7 @@ def _full_stay_hospital_mortality_script(extra: str = "") -> str:
         "    'value': 1,\n"
         "}\n"
         "y = df['death']\n"
-        "model.fit(x, y)\n"
-        + extra
+        "model.fit(x, y)\n" + extra
     )
 
 
@@ -4176,9 +4365,7 @@ def test_llm_concept_auditor_downgrades_named_full_stay_horizon_false_positive(
 
     assert len(findings) == 1
     assert findings[0].severity == "warning"
-    assert "full_stay administrative window" in findings[0].detail[
-        "downgraded_reason"
-    ]
+    assert "full_stay administrative window" in findings[0].detail["downgraded_reason"]
 
 
 @pytest.mark.parametrize(
@@ -4258,7 +4445,9 @@ def test_clinical_constraint_validator_does_not_flag_prediction_feature_list_as_
         out_dir=out_dir,
         step_summary={"statistic:auroc": 0.8, "statistic:brier_score": 0.18},
     )
-    assert not any("immortal time bias" in f.message.lower() for f in findings), findings
+    assert not any(
+        "immortal time bias" in f.message.lower() for f in findings
+    ), findings
 
 
 def test_clinical_constraint_validator_does_not_flag_association_named_exposure(
@@ -4287,7 +4476,9 @@ def test_clinical_constraint_validator_does_not_flag_association_named_exposure(
             "method": "post_audit_modeling_dataset_validation_and_repair",
         },
     )
-    assert not any("immortal time bias" in f.message.lower() for f in findings), findings
+    assert not any(
+        "immortal time bias" in f.message.lower() for f in findings
+    ), findings
 
 
 def test_clinical_constraint_validator_does_not_treat_ordinal_dose_response_as_treatment(
@@ -4314,7 +4505,9 @@ def test_clinical_constraint_validator_does_not_treat_ordinal_dose_response_as_t
         out_dir=out_dir,
         step_summary={"analysis_family": "data_quality"},
     )
-    assert not any("immortal time bias" in f.message.lower() for f in findings), findings
+    assert not any(
+        "immortal time bias" in f.message.lower() for f in findings
+    ), findings
 
 
 def test_clinical_constraint_validator_does_not_flag_negated_noncausal_association(
@@ -4409,7 +4602,9 @@ def test_clinical_constraint_validator_accepts_causal_step_with_explicit_time_ze
     assert not any("immortal time bias" in f.message.lower() for f in findings)
 
 
-def test_statistical_guard_warns_when_prediction_outputs_lack_split_metadata(ra, tmp_path: Path):
+def test_statistical_guard_warns_when_prediction_outputs_lack_split_metadata(
+    ra, tmp_path: Path
+):
     ctx = _ctx_with_sofa(ra).model_copy(
         update={
             "user_preferences": ra.schema.UserPreferences(
@@ -4419,20 +4614,26 @@ def test_statistical_guard_warns_when_prediction_outputs_lack_split_metadata(ra,
         }
     )
     cohort_path = tmp_path / "cohort.parquet"
-    pd.DataFrame({
-        "stay_id": list(range(1, 11)),
-        "age": [60] * 10,
-        "sofa2": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9],
-        "death": [0, 1, 0, 1, 0, 1, 0, 0, 0, 1],
-    }).to_parquet(cohort_path, index=False)
+    pd.DataFrame(
+        {
+            "stay_id": list(range(1, 11)),
+            "age": [60] * 10,
+            "sofa2": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9],
+            "death": [0, 1, 0, 1, 0, 1, 0, 0, 0, 1],
+        }
+    ).to_parquet(cohort_path, index=False)
     out_dir = tmp_path / "out"
     out_dir.mkdir()
-    pd.DataFrame({
-        "model": ["logit"],
-        "auc": [0.76],
-        "brier": [0.18],
-    }).to_csv(out_dir / "model_performance_train_test.csv", index=False)
-    step = ra.schema.AnalysisStep(step_id="04_prediction", intent="prediction model analysis")
+    pd.DataFrame(
+        {
+            "model": ["logit"],
+            "auc": [0.76],
+            "brier": [0.18],
+        }
+    ).to_csv(out_dir / "model_performance_train_test.csv", index=False)
+    step = ra.schema.AnalysisStep(
+        step_id="04_prediction", intent="prediction model analysis"
+    )
     findings = ra.StatisticalGuard().audit(
         context=ctx,
         cohort_path=cohort_path,
@@ -4455,15 +4656,19 @@ def test_statistical_guard_accepts_v14_cv_prediction_summary(ra, tmp_path: Path)
         }
     )
     cohort_path = tmp_path / "cohort.parquet"
-    pd.DataFrame({
-        "stay_id": list(range(1, 41)),
-        "age": [60] * 40,
-        "sofa2": list(range(10)) * 4,
-        "death": [0, 1] * 20,
-    }).to_parquet(cohort_path, index=False)
+    pd.DataFrame(
+        {
+            "stay_id": list(range(1, 41)),
+            "age": [60] * 40,
+            "sofa2": list(range(10)) * 4,
+            "death": [0, 1] * 20,
+        }
+    ).to_parquet(cohort_path, index=False)
     out_dir = tmp_path / "out"
     out_dir.mkdir()
-    step = ra.schema.AnalysisStep(step_id="01_model_training", intent="prediction model analysis")
+    step = ra.schema.AnalysisStep(
+        step_id="01_model_training", intent="prediction model analysis"
+    )
 
     findings = ra.StatisticalGuard().audit(
         context=ctx,
@@ -4484,9 +4689,7 @@ def test_statistical_guard_accepts_v14_cv_prediction_summary(ra, tmp_path: Path)
     assert "calibration_slope" not in messages
 
 
-def test_statistical_guard_ignores_empty_p_value_placeholder_column(
-    ra, tmp_path: Path
-):
+def test_statistical_guard_ignores_empty_p_value_placeholder_column(ra, tmp_path: Path):
     ctx = _ctx_with_sofa(ra).model_copy(
         update={
             "user_preferences": ra.schema.UserPreferences(
@@ -4629,11 +4832,13 @@ def _cluster_sizes_dir(tmp_path: Path, sizes) -> Path:
     out = tmp_path / "out"
     out.mkdir(exist_ok=True)
     total = float(sum(sizes))
-    pd.DataFrame({
-        "cluster": list(range(len(sizes))),
-        "n": sizes,
-        "pct": [s / total * 100.0 for s in sizes],
-    }).to_csv(out / "cluster_sizes.csv", index=False)
+    pd.DataFrame(
+        {
+            "cluster": list(range(len(sizes))),
+            "n": sizes,
+            "pct": [s / total * 100.0 for s in sizes],
+        }
+    ).to_csv(out / "cluster_sizes.csv", index=False)
     return out
 
 
@@ -4649,7 +4854,10 @@ def test_statistical_validator_flags_degenerate_partition(ra, tmp_path: Path):
         step_id="01_phenotype_trajectory_clustering", intent="subphenotype clustering"
     )
     findings = ra.StatisticalValidator().audit(
-        context=ctx, cohort_path=cohort, step=step, out_dir=out_dir,
+        context=ctx,
+        cohort_path=cohort,
+        step=step,
+        out_dir=out_dir,
         step_summary={"silhouette": 0.808, "mean_ari": 1.0},
     )
     deg = [f for f in findings if "degenerate" in f.message.lower()]
@@ -4669,12 +4877,18 @@ def test_statistical_validator_silent_on_balanced_partition(ra, tmp_path: Path):
         step_id="01_phenotype_trajectory_clustering", intent="subphenotype clustering"
     )
     findings = ra.StatisticalValidator().audit(
-        context=ctx, cohort_path=cohort, step=step, out_dir=out_dir, step_summary={},
+        context=ctx,
+        cohort_path=cohort,
+        step=step,
+        out_dir=out_dir,
+        step_summary={},
     )
     assert not [f for f in findings if "degenerate" in f.message.lower()]
 
 
-def test_statistical_validator_degeneracy_silent_without_cluster_evidence(ra, tmp_path: Path):
+def test_statistical_validator_degeneracy_silent_without_cluster_evidence(
+    ra, tmp_path: Path
+):
     # Absence of a cluster-size distribution is not degeneracy: a non-clustering
     # step must never trip this caution.
     ctx = _ctx_with_sofa(ra)
@@ -4682,10 +4896,18 @@ def test_statistical_validator_degeneracy_silent_without_cluster_evidence(ra, tm
     pd.DataFrame({"stay_id": [1, 2], "death": [0, 1]}).to_parquet(cohort, index=False)
     out_dir = tmp_path / "out"
     out_dir.mkdir()
-    (out_dir / "primary_association.csv").write_text("variable,odds_ratio\nage,1.1\n", encoding="utf-8")
-    step = ra.schema.AnalysisStep(step_id="04_primary_association", intent="association")
+    (out_dir / "primary_association.csv").write_text(
+        "variable,odds_ratio\nage,1.1\n", encoding="utf-8"
+    )
+    step = ra.schema.AnalysisStep(
+        step_id="04_primary_association", intent="association"
+    )
     findings = ra.StatisticalValidator().audit(
-        context=ctx, cohort_path=cohort, step=step, out_dir=out_dir, step_summary={},
+        context=ctx,
+        cohort_path=cohort,
+        step=step,
+        out_dir=out_dir,
+        step_summary={},
     )
     assert not [f for f in findings if "degenerate" in f.message.lower()]
 
@@ -4699,7 +4921,15 @@ def test_statistical_validator_flags_single_group_partition(ra, tmp_path: Path):
         step_id="01_phenotype_trajectory_clustering", intent="subphenotype clustering"
     )
     findings = ra.StatisticalValidator().audit(
-        context=ctx, cohort_path=cohort, step=step, out_dir=out_dir, step_summary={},
+        context=ctx,
+        cohort_path=cohort,
+        step=step,
+        out_dir=out_dir,
+        step_summary={},
     )
-    deg = [f for f in findings if "single-group" in f.message.lower() or "degenerate" in f.message.lower()]
+    deg = [
+        f
+        for f in findings
+        if "single-group" in f.message.lower() or "degenerate" in f.message.lower()
+    ]
     assert deg and all(f.severity == "warning" for f in deg)
