@@ -33,6 +33,15 @@ def _unpack_findings(script: str, ra):
     ]
 
 
+def _level_index_findings(script: str, ra):
+    return [
+        finding
+        for finding in audit_mechanical_code_contracts(script, _step(ra))
+        if (finding.detail or {}).get("reason")
+        == "closed_counts_table_index_used_as_levels"
+    ]
+
+
 def test_positional_keyword_only_host_arguments_fail_before_execution(ra):
     script = """
 from easyicu.research_agent.methods.descriptive_inputs import measurement_provenance_receipt
@@ -258,6 +267,131 @@ def add_categorical(series, levels):
 """
 
     assert _signature_findings(script, ra) == []
+
+
+def test_closed_counts_table_index_is_not_a_category_level_contract(ra):
+    script = """
+from easyicu.research_agent.methods.descriptive_inputs import closed_categorical_counts
+counts = closed_categorical_counts(sex, declared_levels=["Female", "Male"])
+count_table = counts.table
+levels = list(count_table.index)
+if set(levels) != {"Female", "Male"}:
+    raise RuntimeError("unexpected levels")
+"""
+
+    findings = _level_index_findings(script, ra)
+
+    assert len(findings) == 1
+    assert findings[0].severity == "error"
+    assert findings[0].detail == {
+        "reason": "closed_counts_table_index_used_as_levels",
+        "helper_name": "closed_categorical_counts",
+        "line": 5,
+        "result_name": "counts",
+        "table_name": "count_table",
+    }
+    assert repair_reason_for_finding(findings[0]).value == ("INVALID_HELPER_SIGNATURE")
+
+
+def test_closed_counts_direct_table_index_is_repaired_to_level_column(ra):
+    script = """
+import easyicu.research_agent.methods.descriptive_inputs as host_inputs
+counts = host_inputs.closed_categorical_counts(
+    sex, declared_levels=["Female", "Male"]
+)
+levels = list(counts.table.index)
+if set(levels) != {"Female", "Male"}:
+    raise RuntimeError("unexpected levels")
+"""
+    findings = _level_index_findings(script, ra)
+
+    repaired, names = deterministic_concept_audit_repair(
+        script,
+        [finding.message for finding in findings],
+        repair_reasons=[repair_reason_for_finding(finding) for finding in findings],
+        repair_findings=findings,
+    )
+
+    assert names == ["closed_counts_level_column_v1"]
+    assert 'levels = list(counts.table["level"])' in repaired
+    assert _level_index_findings(repaired, ra) == []
+
+
+def test_closed_counts_named_table_index_is_repaired_to_level_column(ra):
+    script = """
+from easyicu.research_agent.methods.descriptive_inputs import closed_categorical_counts
+counts = closed_categorical_counts(sex, declared_levels=["Female", "Male"])
+count_table = counts.table
+levels = list(count_table.index)
+if set(levels) != {"Female", "Male"}:
+    raise RuntimeError("unexpected levels")
+"""
+    findings = _level_index_findings(script, ra)
+
+    repaired, names = deterministic_concept_audit_repair(
+        script,
+        [finding.message for finding in findings],
+        repair_reasons=[repair_reason_for_finding(finding) for finding in findings],
+        repair_findings=findings,
+    )
+
+    assert names == ["closed_counts_level_column_v1"]
+    assert 'levels = list(count_table["level"])' in repaired
+    assert _level_index_findings(repaired, ra) == []
+
+
+def test_closed_counts_explicit_level_column_passes(ra):
+    script = """
+from easyicu.research_agent.methods.descriptive_inputs import closed_categorical_counts
+counts = closed_categorical_counts(sex, declared_levels=["Female", "Male"])
+levels = list(counts.table["level"])
+if set(levels) != {"Female", "Male"}:
+    raise RuntimeError("unexpected levels")
+"""
+
+    assert _level_index_findings(script, ra) == []
+
+
+def test_generic_dataframe_index_is_outside_closed_counts_contract(ra):
+    script = """
+import pandas as pd
+table = pd.DataFrame({"level": ["Female", "Male"]})
+levels = list(table.index)
+if set(levels) != {"Female", "Male"}:
+    raise RuntimeError("unexpected levels")
+"""
+
+    assert _level_index_findings(script, ra) == []
+
+
+def test_unrelated_helper_table_index_is_not_claimed(ra):
+    script = """
+def custom_counts(series):
+    return build_result(series)
+
+counts = custom_counts(sex)
+count_table = counts.table
+levels = list(count_table.index)
+if set(levels) != {"Female", "Male"}:
+    raise RuntimeError("unexpected levels")
+"""
+
+    assert _level_index_findings(script, ra) == []
+
+
+def test_shadowed_closed_counts_import_is_not_claimed(ra):
+    script = """
+from easyicu.research_agent.methods.descriptive_inputs import closed_categorical_counts
+
+def summarize(closed_categorical_counts, sex):
+    counts = closed_categorical_counts(sex)
+    levels = list(counts.table.index)
+    if set(levels) != {"Female", "Male"}:
+        raise RuntimeError("unexpected levels")
+    return levels
+"""
+
+    assert _level_index_findings(script, ra) == []
 
 
 def test_closed_counts_missing_levels_is_repaired_without_inventing_categories(ra):
