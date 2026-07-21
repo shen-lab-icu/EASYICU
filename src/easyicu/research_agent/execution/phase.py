@@ -6444,12 +6444,8 @@ def run_execute_phase(
         # to reuse; a prior deterministic ``contract_failed`` attempt may reuse
         # only its exact evidence-bound code and scientific signature. Reused
         # code still runs through every current execution audit and repair gate.
-        preflight_trajectory_stability_code = (
-            None
-            if step_attempt_state.selected_resume_capsule is not None
-            else _deterministic_trajectory_stability_code(
-                "trajectory_stability_spec_preflight", preflight=True
-            )
+        preflight_trajectory_stability_code = _deterministic_trajectory_stability_code(
+            "trajectory_stability_spec_preflight", preflight=True
         )
         preflight_figure_code = (
             None
