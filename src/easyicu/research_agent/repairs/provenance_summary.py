@@ -5,6 +5,8 @@ from __future__ import annotations
 import ast
 from typing import Any, Optional, Sequence
 
+from .merge_collision import patch_table_one_left_provenance_source
+
 _HOST_RECEIPT_FIELDS = frozenset(
     {
         "role",
@@ -815,7 +817,22 @@ def patch_nested_host_provenance_summary(code: str) -> str:
     return repaired
 
 
+def patch_measurement_provenance_summary(code: str) -> str:
+    """Apply one proven provenance-envelope normalization, fail-closed."""
+
+    for patcher in (
+        patch_table_one_left_provenance_source,
+        patch_direct_host_provenance_summary,
+        patch_nested_host_provenance_summary,
+    ):
+        repaired = patcher(code)
+        if repaired != code:
+            return repaired
+    return code
+
+
 __all__ = [
     "patch_direct_host_provenance_summary",
+    "patch_measurement_provenance_summary",
     "patch_nested_host_provenance_summary",
 ]
