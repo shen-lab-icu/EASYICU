@@ -8670,8 +8670,9 @@ def run_execute_phase(
                         visual_step_summary = vloaded
                     else:
                         visual_step_summary = {"raw": vloaded}
-                if worker_progress.runner_repair_name and is_sealed_renderer_repair(
+                if worker_progress.deterministic_standard_executor_used or (
                     worker_progress.runner_repair_name
+                    and is_sealed_renderer_repair(worker_progress.runner_repair_name)
                 ):
                     visual_step_summary = _write_host_input_binding_receipts(
                         out_dir=run_result.out_dir,
