@@ -36,7 +36,7 @@ from .concept_availability import (
     hypothesis_cross_database_feasibility,
     normalize_concept_name,
 )
-from .gates.data_answerability import primary_exposure_answerability_findings
+from .gates.data_answerability import analysis_answerability_findings
 from .providers.mocks import MockLLMClient
 from .providers.protocol import LLMClient, LLMMessage
 from .schema import HypothesisBlueprint, ResearchContext, VariableRole
@@ -150,7 +150,7 @@ class HypothesisBlueprintAgent:
             status = (
                 "blocked" if "target_outcome" in missing_variables else "needs_data"
             )
-        answerability_findings = primary_exposure_answerability_findings(context)
+        answerability_findings = analysis_answerability_findings(context)
         if answerability_findings:
             status = "blocked"
             domain_gate_notes.extend(

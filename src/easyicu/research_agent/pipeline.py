@@ -132,6 +132,7 @@ from .research_context.builder import (
     build_retrieved_research_context,
 )
 from .research_context.typed import parse_research_context_json
+from .gates.preplan import preplan_data_failure_reason, preplan_data_findings
 from .authority.context_numeric_claims import register_context_numeric_claims
 from .authority.plan_scope import (
     _serializable_plan_scientific_scope_signature,
@@ -409,7 +410,6 @@ from .authority.run_input import (
 from .authority.run_lock import current_locked_run_id, exclusive_run_execution
 from .audits.validators import (
     ClinicalConstraintValidator,
-    CohortAuditor,
     ConceptUsageAuditor,
     LLMConceptAuditor,
     PublicationClaimAuditor,
@@ -2170,12 +2170,11 @@ class ResearchAgentPipeline:
                 generation_mode="system",
             )
 
-        findings: List[ValidationFinding] = []
-        findings += CohortAuditor().audit(context=context, cohort_path=cohort_path)
+        findings = preplan_data_findings(context=context, cohort_path=cohort_path)
         if any(f.severity == "error" for f in findings):
             emit_progress(
                 "audit",
-                "Cohort audit failed; aborting run.",
+                "Pre-plan data gate failed; aborting before provider execution.",
                 status="error",
                 run_id=run_id,
             )
@@ -2186,7 +2185,7 @@ class ResearchAgentPipeline:
                 context_path=context_path,
                 evidence=evidence,
                 findings=findings,
-                reason="cohort_audit_failed",
+                reason=preplan_data_failure_reason(findings),
             )
             return _PlanPhaseResult(
                 context=context,
