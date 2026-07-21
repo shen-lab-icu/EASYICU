@@ -44,6 +44,7 @@ from .attrition import patch_attrition_rule_id_canonicalization
 from .lossy_coercion import (
     patch_lossy_numeric_coercion_guard as _patch_lossy_numeric_coercion_guard,
 )
+from .local_binding import patch_local_read_before_assignment_hoist
 from .provenance_summary import patch_direct_host_provenance_summary
 from .helpers import (  # noqa: F401  (re-exported for back-compat)
     _BINARY_MODEL_REPAIR_FAMILIES,
@@ -2345,6 +2346,14 @@ def deterministic_concept_audit_repair(
     )
     repaired = code
     repair_names: List[str] = []
+
+    local_binding_repaired = patch_local_read_before_assignment_hoist(
+        repaired,
+        repair_findings=repair_findings,
+    )
+    if local_binding_repaired != repaired:
+        repaired = local_binding_repaired
+        repair_names.append("local_read_before_assignment_hoist_v1")
 
     if RepairReason.TYPED_CONTEXT_BINDING_INVALID in set(repair_reasons):
         context_loaded = _patch_resolved_context_digest_load(
