@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional
 
 from ..authority.evidence_store import EvidenceStore
+from ..authority.plan_scope import _serializable_plan_scientific_scope_signature
 from ..authority.run_input import (
     _declares_host_cohort_products,
     _planned_host_cohort_checkpoint,
@@ -50,6 +51,9 @@ def record_planned_host_cohort_checkpoint(
         budget_snapshot=budget_snapshot,
     )
     if checkpoint is not None and step_id is not None:
+        checkpoint["plan_scientific_signature"] = (
+            _serializable_plan_scientific_scope_signature(plan)
+        )
         per_step_records.append(checkpoint)
         preexecuted_step_ids.add(step_id)
     elif authority_error is not None and step_id is not None:

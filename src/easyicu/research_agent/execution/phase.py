@@ -3130,6 +3130,9 @@ def _selectively_revalidate_resume_successes(
                 **prior_record,
                 "status": "ok",
                 "step_summary": dict(prior_record["step_summary"]),
+                "plan_scientific_signature": (
+                    _serializable_plan_scientific_scope_signature(plan)
+                ),
                 "revalidated_without_execution": True,
                 "attempt_id": attempt_id,
                 "review_checkpoint_id": checkpoint_id,

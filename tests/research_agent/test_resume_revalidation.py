@@ -644,6 +644,7 @@ def test_host_cohort_materializer_revalidates_without_script_or_llm(
     assert latest["status"] == "ok"
     assert latest["revalidated_without_execution"] is True
     assert latest["deterministic_gate_fingerprint"]
+    assert latest["plan_scientific_signature"]
 
 
 def test_arbitrary_table_cannot_impersonate_host_cohort_materializer(

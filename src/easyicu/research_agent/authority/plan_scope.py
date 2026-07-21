@@ -9,9 +9,14 @@ from __future__ import annotations
 
 import json
 import re
-from typing import Any, List, Mapping, Optional, Tuple
+from typing import Any, List, Mapping, Optional, Sequence, Tuple
 
 from ..schema import AnalysisPlan, AnalysisStep
+from .planned_role import verified_planned_analysis_role
+from .run_input import (
+    _HOST_COHORT_MATERIALIZER_AUTHORITY_KIND,
+    _HOST_COHORT_MATERIALIZER_GENERATION_MODE,
+)
 
 __all__ = [
     "_normalise_scientific_text",
@@ -19,8 +24,68 @@ __all__ = [
     "_plan_scientific_scope_signature",
     "_serializable_plan_scientific_scope_signature",
     "_step_scientific_signature",
+    "completed_step_record_matches_plan",
+    "legacy_host_checkpoint_may_inherit_plan_scope",
     "verified_plan_evidence_rank",
 ]
+
+
+def legacy_host_checkpoint_may_inherit_plan_scope(
+    record: Mapping[str, Any],
+    *,
+    plan_candidate_count: int,
+    completed_records: Sequence[Mapping[str, Any]],
+) -> bool:
+    """Permit one unambiguous pre-scope host checkpoint to migrate once."""
+
+    return (
+        not list(record.get("plan_scientific_signature") or [])
+        and record.get("step_authority_kind")
+        == _HOST_COHORT_MATERIALIZER_AUTHORITY_KIND
+        and str(record.get("generation_mode") or "").strip().lower()
+        == _HOST_COHORT_MATERIALIZER_GENERATION_MODE
+        and (
+            plan_candidate_count == 1
+            or any(
+                list(item.get("plan_scientific_signature") or [])
+                for item in completed_records
+            )
+        )
+    )
+
+
+def completed_step_record_matches_plan(
+    record: Mapping[str, Any],
+    *,
+    step: AnalysisStep,
+    expected_plan_scope: Sequence[Optional[str]],
+    plan_candidate_count: int,
+    completed_records: Sequence[Mapping[str, Any]],
+) -> bool:
+    """Verify one completed step against a candidate immutable plan."""
+
+    analysis_request = record.get("analysis_request")
+    raw_step = (
+        analysis_request.get("step") if isinstance(analysis_request, Mapping) else None
+    )
+    try:
+        sealed_step = AnalysisStep.model_validate(raw_step)
+    except (TypeError, ValueError):
+        return False
+    recorded_plan_scope = list(record.get("plan_scientific_signature") or [])
+    legacy_host_without_scope = legacy_host_checkpoint_may_inherit_plan_scope(
+        record,
+        plan_candidate_count=plan_candidate_count,
+        completed_records=completed_records,
+    )
+    return (
+        verified_planned_analysis_role(record) is not None
+        and _step_scientific_signature(sealed_step) == _step_scientific_signature(step)
+        and (
+            legacy_host_without_scope
+            or recorded_plan_scope == list(expected_plan_scope)
+        )
+    )
 
 
 def verified_plan_evidence_rank(record: Mapping[str, Any]) -> Optional[int]:
