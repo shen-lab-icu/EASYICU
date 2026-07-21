@@ -2339,6 +2339,62 @@ def test_runner_repair_does_not_guess_ambiguous_merge_collision():
     )
 
 
+def _table_one_secondary_overlay_script(*, resolved_right: bool = True) -> str:
+    right_source = (
+        'loaded_products["artifact:validated_measurement_set"]'
+        if resolved_right
+        else "untrusted_frame"
+    )
+    return f"""import pandas as pd
+from easyicu.research_agent.methods.table_one import build_grouped_table_one
+table_one_spec = {{"group_by": "outcome", "variables": [{{"name": "marker"}}]}}
+loaded_products = {{
+    "artifact:validated_measurement_set": pd.DataFrame(
+        {{"stay_id": [1, 2], "marker": [1.0, 2.0]}}
+    )
+}}
+analysis_frame = pd.DataFrame(
+    {{"stay_id": [1, 2], "outcome": [0, 1], "marker": [999.0, 999.0]}}
+)
+validated_frame = {right_source}
+required_validated_columns = ["stay_id", "marker"]
+if any(column not in validated_frame.columns for column in required_validated_columns):
+    raise ValueError("validated input is incomplete")
+frame = analysis_frame.merge(
+    validated_frame,
+    on="stay_id",
+    how="left",
+    validate="one_to_one",
+)
+table_one = build_grouped_table_one(frame, table_one_spec)
+"""
+
+
+def test_runner_repair_preserves_authored_table_one_secondary_overlay():
+    repair = _deterministic_runner_repair(
+        code=_table_one_secondary_overlay_script(),
+        run_log="TableOneContractError: Table 1 input columns are missing: ['marker']",
+    )
+
+    assert repair is not None
+    repair_id, repaired = repair
+    assert repair_id == "pandas_merge_dynamic_column_collision_guard_v1"
+    assert "analysis_frame.drop(columns=['marker']).merge" in repaired
+
+
+def test_runner_repair_rejects_unresolved_table_one_secondary_overlay():
+    assert (
+        _deterministic_runner_repair(
+            code=_table_one_secondary_overlay_script(resolved_right=False),
+            run_log=(
+                "TableOneContractError: Table 1 input columns are missing: "
+                "['marker']"
+            ),
+        )
+        is None
+    )
+
+
 def test_runner_repair_uses_unique_near_match_mapping_alias():
     code = """propensity_diagnostics = {"fit": {}}
 positivity_diagnostics.update({"status": "not_fitted"})
