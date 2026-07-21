@@ -8,6 +8,7 @@ from easyicu.research_agent.pipeline import (
 )
 from easyicu.research_agent.plan_utils import _render_only_figure_step_intent
 from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep
+from easyicu.research_agent.schema import ArtifactConsumptionContract
 
 
 def _legacy_plan(
@@ -90,6 +91,12 @@ def test_resume_migrates_unique_parent_table_and_excludes_artifact(tmp_path) -> 
     assert migrated.revision == 4
     assert migrated.steps[0] == plan.steps[0]
     assert migrated.steps[1].inputs == ["table:cohort_flow"]
+    assert migrated.steps[1].input_consumption_contracts == [
+        ArtifactConsumptionContract(
+            input_key="table:cohort_flow",
+            mode="all_rows",
+        )
+    ]
     assert migrated.steps[1].method == "visualization"
     assert migrated.steps[1].intent == plan.steps[1].intent
     assert migrated.steps[1].expected_outputs == plan.steps[1].expected_outputs
@@ -173,6 +180,61 @@ def test_resume_rebinds_visualization_child_to_unique_exact_product_role(
     assert migrated.steps[2].inputs == ["table:cohort_flow"]
     assert "table:cohort_diagnostics" not in migrated.steps[2].inputs
     assert "01_define_cohort" in migrated.steps[2].intent
+
+
+def test_resume_reconciles_stale_contract_after_prior_input_only_migration(
+    tmp_path,
+) -> None:
+    source = AnalysisStep(
+        step_id="01_measurement_audit",
+        intent="Audit measurement quality and distribution.",
+        method="measurement_bias_and_distribution_audit",
+        expected_outputs=["table:data_quality", "table:distribution"],
+    )
+    child = AnalysisStep(
+        step_id="01_measurement_audit_figure",
+        intent=_render_only_figure_step_intent(
+            source_step_id=source.step_id,
+            figure_outputs=["figure:distribution"],
+        ),
+        method="visualization",
+        inputs=["table:data_quality", "table:distribution"],
+        input_consumption_contracts=[
+            ArtifactConsumptionContract(
+                input_key="table:data_quality",
+                mode="all_rows",
+            ),
+            ArtifactConsumptionContract(
+                input_key="table:distribution",
+                mode="all_rows",
+            ),
+        ],
+        expected_outputs=["figure:distribution"],
+    ).model_copy(update={"inputs": ["table:distribution"]})
+    plan = AnalysisPlan(
+        research_question="Describe a measurement distribution.",
+        revision=8,
+        steps=[source],
+    ).model_copy(update={"steps": [source, child]})
+
+    migrated, revision_path, step_ids, _ = _migrate(
+        tmp_path,
+        plan,
+        completed=("01_measurement_audit",),
+        resume_from="01_measurement_audit_figure",
+    )
+
+    assert revision_path == tmp_path / "analysis_plan_revision_9.json"
+    assert step_ids == ("01_measurement_audit_figure",)
+    assert migrated.steps[1].inputs == ["table:distribution"]
+    assert migrated.steps[1].input_consumption_contracts == [
+        ArtifactConsumptionContract(
+            input_key="table:distribution",
+            mode="all_rows",
+        )
+    ]
+    # The migrated step must be valid when rebuilt at the public schema edge.
+    AnalysisStep.model_validate(migrated.steps[1].model_dump())
 
 
 def test_resume_figure_edge_migration_is_idempotent(tmp_path) -> None:
@@ -287,7 +349,9 @@ def test_resume_does_not_migrate_child_before_explicit_resume_cut(tmp_path) -> N
     assert step_ids == ()
 
 
-def test_resume_migrates_neither_unverified_parent_nor_completed_child(tmp_path) -> None:
+def test_resume_migrates_neither_unverified_parent_nor_completed_child(
+    tmp_path,
+) -> None:
     plan = _legacy_plan()
     unchanged, revision_path, step_ids, _ = _migrate(
         tmp_path / "unverified",
@@ -335,7 +399,9 @@ def test_resume_requires_full_framework_authored_legacy_intent(tmp_path) -> None
     assert step_ids == ()
 
 
-def _legacy_adjusted_effect_plan(*, figure_output: str, with_roster: bool) -> AnalysisPlan:
+def _legacy_adjusted_effect_plan(
+    *, figure_output: str, with_roster: bool
+) -> AnalysisPlan:
     requirements = (
         [
             {

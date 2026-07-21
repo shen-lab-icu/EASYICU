@@ -81,6 +81,105 @@ def audit_record_assignment_for_count(
     return True
 
 
+def returned_coercion_loss_issues(tree: ast.Module) -> list[dict[str, object]]:
+    """Report one exact coercion-loss count returned without a guard."""
+
+    lines: set[int] = set()
+    for function in (
+        node for node in ast.walk(tree) if isinstance(node, ast.FunctionDef)
+    ):
+        assignments = {
+            target.id: statement
+            for statement in function.body
+            if isinstance(statement, ast.Assign)
+            and len(statement.targets) == 1
+            and isinstance((target := statement.targets[0]), ast.Name)
+        }
+        coercions: list[tuple[str, str]] = []
+        for coerced_name, statement in assignments.items():
+            call = statement.value
+            if not (
+                isinstance(call, ast.Call)
+                and isinstance(call.func, ast.Attribute)
+                and call.func.attr == "to_numeric"
+                and call.args
+                and isinstance(call.args[0], ast.Name)
+                and call.args[0].id in assignments
+                and any(
+                    keyword.arg == "errors"
+                    and isinstance(keyword.value, ast.Constant)
+                    and keyword.value.value == "coerce"
+                    for keyword in call.keywords
+                )
+            ):
+                continue
+            coercions.append((call.args[0].id, coerced_name))
+        for statement in function.body:
+            if not (
+                isinstance(statement, ast.Return)
+                and isinstance(statement.value, ast.Tuple)
+            ):
+                continue
+            for item in statement.value.elts:
+                if any(
+                    _is_exact_returned_loss_count(
+                        item,
+                        raw_name=raw_name,
+                        coerced_name=coerced_name,
+                    )
+                    for raw_name, coerced_name in coercions
+                ):
+                    lines.add(int(item.lineno))
+    if not lines:
+        return []
+    return [
+        {
+            "gap": "returned_coercion_loss_count_not_fail_closed",
+            "lines": sorted(lines),
+        }
+    ]
+
+
+def _is_exact_returned_loss_count(
+    node: ast.AST,
+    *,
+    raw_name: str,
+    coerced_name: str,
+) -> bool:
+    if not (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "int"
+        and len(node.args) == 1
+        and not node.keywords
+        and isinstance((reduction := node.args[0]), ast.Call)
+        and isinstance(reduction.func, ast.Attribute)
+        and reduction.func.attr == "sum"
+        and not reduction.args
+        and not reduction.keywords
+        and isinstance((mask := reduction.func.value), ast.BinOp)
+        and isinstance(mask.op, ast.BitAnd)
+    ):
+        return False
+
+    def _method(candidate: ast.AST, owner: str, name: str) -> bool:
+        return bool(
+            isinstance(candidate, ast.Call)
+            and isinstance(candidate.func, ast.Attribute)
+            and candidate.func.attr == name
+            and isinstance(candidate.func.value, ast.Name)
+            and candidate.func.value.id == owner
+            and not candidate.args
+            and not candidate.keywords
+        )
+
+    return _method(mask.left, raw_name, "notna") and _method(
+        mask.right,
+        coerced_name,
+        "isna",
+    )
+
+
 def _summary_assignment(
     statement: ast.stmt,
 ) -> tuple[Optional[str], Optional[str], Optional[ast.AST]]:
@@ -226,4 +325,8 @@ def guard_failure_is_terminal(
     return True
 
 
-__all__ = ["audit_record_assignment_for_count", "guard_failure_is_terminal"]
+__all__ = [
+    "audit_record_assignment_for_count",
+    "guard_failure_is_terminal",
+    "returned_coercion_loss_issues",
+]
