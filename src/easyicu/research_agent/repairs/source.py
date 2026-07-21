@@ -42,7 +42,10 @@ from ..scalar_utils import (
 )
 from .attrition import patch_attrition_rule_id_canonicalization
 from .concept_preflight import patch_concept_preflight_repairs
-from .figure_distribution import patch_categorical_distribution_clinical_bin_role
+from .figure_distribution import (
+    patch_categorical_distribution_clinical_bin_role,
+    patch_text_distribution_denominator_from_counts,
+)
 from .lossy_coercion import (
     patch_lossy_numeric_coercion_guard as _patch_lossy_numeric_coercion_guard,
     patch_returned_coercion_loss_guard as _patch_returned_coercion_loss_guard,
@@ -5008,6 +5011,12 @@ def _deterministic_runner_repair(
         repaired = patch_known_host_helper_import(code, run_log)
         if repaired is not None and repaired != code:
             return host_helper_import_repair, repaired
+
+    text_denominator_repair = "text_distribution_denominator_from_counts_v1"
+    if previous_repair != text_denominator_repair:
+        repaired = patch_text_distribution_denominator_from_counts(code, run_log)
+        if repaired is not None and repaired != code:
+            return text_denominator_repair, repaired
 
     manifest_env_repair = "resolved_input_manifest_env_v1"
     if previous_repair != manifest_env_repair:
