@@ -1843,6 +1843,38 @@ def test_success_alias_filter_keeps_distinct_real_product_collision_fail_closed(
     assert suppressed == set()
 
 
+def test_success_alias_filter_suppresses_implicit_cross_kind_basename_collision():
+    from easyicu.research_agent.execution.phase import (
+        _filter_success_alias_bindings,
+    )
+
+    filtered, retained, suppressed = _filter_success_alias_bindings(
+        {
+            "table_result": [],
+            "artifact_result": [],
+        },
+        existing_aliases={},
+        owners_by_evidence_id={},
+        step_id="05_diagnostics",
+        records_by_evidence_id={
+            "table_result": {
+                "evidence_id": "table_result",
+                "kind": "table",
+                "relative_path": "evidence/table_result__positivity_diagnostics.csv",
+            },
+            "artifact_result": {
+                "evidence_id": "artifact_result",
+                "kind": "log",
+                "relative_path": "evidence/artifact_result__positivity_diagnostics.json",
+            },
+        },
+    )
+
+    assert filtered == {"table_result": [], "artifact_result": []}
+    assert retained == {}
+    assert suppressed == {"table_result", "artifact_result"}
+
+
 def test_success_alias_filter_prefers_vector_export_for_one_logical_figure():
     from easyicu.research_agent.execution.phase import (
         _filter_success_alias_bindings,
