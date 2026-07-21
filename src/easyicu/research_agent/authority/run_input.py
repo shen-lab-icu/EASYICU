@@ -1428,6 +1428,80 @@ _HOST_COHORT_MATERIALIZER_AUTHORITY_KIND = "host_deterministic_cohort_materializ
 _HOST_COHORT_MATERIALIZER_AUTHORITY_FIELD = "cohort_table_evidence_id"
 _HOST_COHORT_MATERIALIZER_EVIDENCE_ID = "analysis_cohort_execute_repair"
 _HOST_COHORT_MATERIALIZER_SOURCE_NAME = "cohort_analysis.parquet"
+_HOST_COHORT_FLOW_AUTHORITY_FIELD = "cohort_flow_evidence_id"
+_HOST_COHORT_FLOW_EVIDENCE_ID = "cohort_flow_execute_repair"
+_HOST_COHORT_FLOW_SOURCE_NAME = "cohort_analysis_flow.csv"
+
+
+def _register_host_cohort_materialization(
+    *,
+    evidence: Any,
+    result: Mapping[str, Any],
+    cohort_path: Path,
+    cohort_product_step: Any,
+    cohort_metadata: Mapping[str, Any],
+    prompt_pack_version: str,
+    run_dir: Path,
+) -> tuple[Any, Any, Dict[str, str], list[str]]:
+    """Register host-materialized cohort products under one closed authority."""
+
+    produced_by_step = (
+        cohort_product_step.step_id if cohort_product_step is not None else None
+    )
+    try:
+        cohort_record = evidence.register_file(
+            kind="table",
+            description=(
+                "Analysis cohort materialised from the agent's prose 纳排, "
+                "translated to typed CTAS predicates during execution."
+            ),
+            source_path=cohort_path,
+            evidence_id=_HOST_COHORT_MATERIALIZER_EVIDENCE_ID,
+            produced_by_step=produced_by_step,
+            producer="cohort_repair",
+            generation_mode="llm",
+            prompt_pack_version=prompt_pack_version,
+            metadata=dict(cohort_metadata),
+        )
+    except ValueError:
+        cohort_record = evidence.get(_HOST_COHORT_MATERIALIZER_EVIDENCE_ID)
+
+    output_files = {"table:analysis_cohort": str(cohort_path.relative_to(run_dir))}
+    evidence_ids = [cohort_record.evidence_id] if cohort_record is not None else []
+    flow_record = None
+    expects_flow = cohort_product_step is not None and (
+        "table:cohort_flow" in cohort_product_step.expected_outputs
+    )
+    if expects_flow:
+        flow_path = result.get("flow_path")
+        if not isinstance(flow_path, Path) or not flow_path.is_file():
+            raise RunInputIdentityError(
+                "host cohort materializer did not publish its attrition ledger"
+            )
+        try:
+            flow_record = evidence.register_file(
+                kind="table",
+                description=(
+                    "Exact sequential attrition ledger for the host-materialized "
+                    "analysis cohort."
+                ),
+                source_path=flow_path,
+                evidence_id=_HOST_COHORT_FLOW_EVIDENCE_ID,
+                produced_by_step=cohort_product_step.step_id,
+                producer="cohort_repair",
+                generation_mode="llm",
+                prompt_pack_version=prompt_pack_version,
+                metadata=dict(cohort_metadata),
+            )
+        except ValueError:
+            flow_record = evidence.get(_HOST_COHORT_FLOW_EVIDENCE_ID)
+        output_files = {
+            "artifact:analysis_cohort": str(cohort_path.relative_to(run_dir)),
+            "table:cohort_flow": str(flow_path.relative_to(run_dir)),
+        }
+        if flow_record is not None:
+            evidence_ids.append(flow_record.evidence_id)
+    return cohort_record, flow_record, output_files, evidence_ids
 
 
 def _registered_source_name(
@@ -1510,7 +1584,7 @@ def _host_cohort_materializer_authority_error(
     run_dir: Path,
     records: Mapping[str, Dict[str, Any]],
 ) -> Optional[str]:
-    """Validate the single-product, script-free cohort materializer.
+    """Validate the script-free cohort materializer's closed product set.
 
     This is deliberately a separate closed contract from the probe and from
     ordinary deterministic records.  The host only owns the mechanical
@@ -1534,17 +1608,29 @@ def _host_cohort_materializer_authority_error(
             f"{prefix} checkpoint is missing exact "
             f"{_HOST_COHORT_MATERIALIZER_AUTHORITY_FIELD}"
         )
+    flow_evidence_id = str(record.get(_HOST_COHORT_FLOW_AUTHORITY_FIELD) or "").strip()
+    if flow_evidence_id and flow_evidence_id != _HOST_COHORT_FLOW_EVIDENCE_ID:
+        return f"{prefix} checkpoint has an unexpected cohort-flow authority"
     listed = [str(value).strip() for value in evidence_ids if str(value).strip()]
-    if listed != [evidence_id]:
-        return f"{prefix} checkpoint must list only its cohort table authority"
+    expected_evidence_ids = [evidence_id] + (
+        [flow_evidence_id] if flow_evidence_id else []
+    )
+    if listed != expected_evidence_ids:
+        if not flow_evidence_id:
+            return f"{prefix} checkpoint must list only its cohort table authority"
+        return f"{prefix} checkpoint has an invalid product-authority list"
 
     step_summary = record.get("step_summary")
     if not isinstance(step_summary, Mapping):
         return f"{prefix} checkpoint lacks its inline product receipt"
     output_files = step_summary.get("output_files")
-    if not isinstance(output_files, Mapping) or dict(output_files) != {
-        "table:analysis_cohort": _HOST_COHORT_MATERIALIZER_SOURCE_NAME
-    }:
+    allowed_outputs = {"table:analysis_cohort": _HOST_COHORT_MATERIALIZER_SOURCE_NAME}
+    if flow_evidence_id:
+        allowed_outputs = {
+            "artifact:analysis_cohort": _HOST_COHORT_MATERIALIZER_SOURCE_NAME,
+            "table:cohort_flow": _HOST_COHORT_FLOW_SOURCE_NAME,
+        }
+    if not isinstance(output_files, Mapping) or dict(output_files) != allowed_outputs:
         return f"{prefix} checkpoint does not declare the analysis cohort product"
     n_universe = step_summary.get("n_universe")
     n_cohort = step_summary.get("n_analysis_cohort")
@@ -1595,6 +1681,80 @@ def _host_cohort_materializer_authority_error(
     )
     if closure_error is not None:
         return closure_error
+
+    if flow_evidence_id:
+        flow_authority = records.get(flow_evidence_id)
+        if not isinstance(flow_authority, Mapping):
+            return f"{prefix} checkpoint references missing {flow_evidence_id}"
+        if (
+            str(flow_authority.get("evidence_id") or "").strip() != flow_evidence_id
+            or str(flow_authority.get("script_evidence_id") or "").strip()
+            or list(flow_authority.get("inputs") or [])
+            or str(flow_authority.get("produced_by_step") or "").strip() != step_id
+            or str(flow_authority.get("kind") or "").strip().lower() != "table"
+            or str(flow_authority.get("producer") or "").strip().lower()
+            != "cohort_repair"
+            or str(flow_authority.get("generation_mode") or "").strip().lower() != "llm"
+            or _registered_source_name(flow_authority) != _HOST_COHORT_FLOW_SOURCE_NAME
+        ):
+            return f"{prefix} cohort-flow evidence is not the host-owned product"
+        flow_metadata = flow_authority.get("metadata")
+        if (
+            not isinstance(flow_metadata, Mapping)
+            or not str(flow_metadata.get("reason") or "").strip()
+        ):
+            return f"{prefix} cohort-flow evidence lacks its materialization reason"
+        flow_closure_error = _evidence_closure_error(
+            evidence_id=flow_evidence_id,
+            step_id=step_id,
+            run_dir=run_dir,
+            records=records,
+            visited=set(),
+        )
+        if flow_closure_error is not None:
+            return flow_closure_error
+        flow_path = run_dir / _HOST_COHORT_FLOW_SOURCE_NAME
+        try:
+            if flow_path.is_symlink() or not flow_path.is_file():
+                return f"{prefix} canonical cohort flow is missing"
+            expected_flow_digest = str(flow_authority.get("sha256") or "").lower()
+            if sha256_of_file(flow_path).lower() != expected_flow_digest:
+                return f"{prefix} canonical cohort flow differs from sealed evidence"
+            flow = pd.read_csv(flow_path)
+            if flow.empty or not {
+                "step_order",
+                "predicate_kind",
+                "n_before",
+                "n_excluded",
+                "n_remaining",
+            } <= set(flow.columns):
+                return f"{prefix} canonical cohort flow has no accounting ledger"
+            rows = flow.to_dict("records")
+            first = rows[0]
+            if not (
+                int(first["step_order"]) == 0
+                and str(first["predicate_kind"]).strip().lower() == "universe"
+                and int(first["n_before"]) == n_universe
+                and int(first["n_excluded"]) == 0
+                and int(first["n_remaining"]) == n_universe
+                and int(rows[-1]["n_remaining"]) == n_cohort
+            ):
+                return f"{prefix} canonical cohort flow disagrees with cohort counts"
+            for index, (previous, current) in enumerate(zip(rows, rows[1:]), start=1):
+                n_before = int(current["n_before"])
+                n_excluded = int(current["n_excluded"])
+                n_remaining = int(current["n_remaining"])
+                if not (
+                    int(current["step_order"]) == index
+                    and str(current["predicate_kind"]).strip().lower()
+                    in {"inclusion", "exclusion"}
+                    and n_before == int(previous["n_remaining"])
+                    and 0 <= n_excluded <= n_before
+                    and n_before - n_excluded == n_remaining
+                ):
+                    return f"{prefix} canonical cohort flow does not reconcile"
+        except (OSError, TypeError, ValueError):
+            return f"{prefix} canonical cohort flow failed verification"
 
     canonical_path = run_dir / _HOST_COHORT_MATERIALIZER_SOURCE_NAME
     try:

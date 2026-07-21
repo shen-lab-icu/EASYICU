@@ -277,6 +277,18 @@ def test_cohort_translation_budget_owner_is_structural_not_prose_routed():
         == "01_cohort"
     )
 
+    host_cohort_with_flow = SimpleNamespace(
+        step_id="01_host_cohort_with_flow",
+        expected_outputs=["artifact:analysis_cohort", "table:cohort_flow"],
+        intent="Materialize the selected cohort and exact attrition ledger.",
+    )
+    assert (
+        _cohort_translation_budget_owner_step_id(
+            SimpleNamespace(steps=[host_cohort_with_flow, model])
+        )
+        == "01_host_cohort_with_flow"
+    )
+
     mixed = SimpleNamespace(
         step_id="01_mixed",
         expected_outputs=["table:analysis_cohort", "table:cohort_flow"],
