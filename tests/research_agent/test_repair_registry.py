@@ -191,6 +191,15 @@ def test_local_read_hoist_is_syntactic_and_automatic() -> None:
     assert automatic_repair_allowed(metadata.repair_id)
 
 
+def test_merge_collision_guard_is_syntactic_and_automatic() -> None:
+    metadata = repair_metadata_for("pandas_merge_dynamic_column_collision_guard_v1")
+
+    assert metadata.repair_class is RepairClass.SYNTACTIC
+    assert metadata.invariants == ()
+    assert metadata.introduces_numbers is False
+    assert automatic_repair_allowed(metadata.repair_id)
+
+
 def test_attrition_rule_id_canonicalization_is_syntactic_and_automatic() -> None:
     metadata = repair_metadata_for("attrition_rule_id_canonicalization_v1")
 

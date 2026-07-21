@@ -45,6 +45,7 @@ from .lossy_coercion import (
     patch_lossy_numeric_coercion_guard as _patch_lossy_numeric_coercion_guard,
 )
 from .local_binding import patch_local_read_before_assignment_hoist
+from .merge_collision import patch_pandas_merge_dynamic_column_collision
 from .provenance_summary import patch_direct_host_provenance_summary
 from .helpers import (  # noqa: F401  (re-exported for back-compat)
     _BINARY_MODEL_REPAIR_FAMILIES,
@@ -5060,6 +5061,12 @@ def _deterministic_runner_repair(
     binary_model_repair_allowed = _family_allows_binary_model_repair(analysis_family)
     if repair := _finding_json_repair(code, run_log, previous_repair):
         return repair
+
+    merge_collision_repair = "pandas_merge_dynamic_column_collision_guard_v1"
+    if previous_repair != merge_collision_repair:
+        repaired = patch_pandas_merge_dynamic_column_collision(code, run_log)
+        if repaired != code:
+            return merge_collision_repair, repaired
 
     mask_reduction_precedence_failure = "typeerror:" in lowered and (
         "only length-1 arrays can be converted to python scalars" in lowered
