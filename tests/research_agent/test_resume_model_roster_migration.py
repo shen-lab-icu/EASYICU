@@ -10,6 +10,10 @@ import pytest
 
 from easyicu.research_agent.research_context.builder import build_research_context
 from easyicu.research_agent.authority.evidence_store import EvidenceStore
+from easyicu.research_agent.authority.plan_scope import (
+    _serializable_plan_scientific_scope_signature,
+    verified_plan_evidence_rank,
+)
 from easyicu.research_agent.pipeline import (
     LegacyResumePlanMigrationError,
     _load_compatible_resume_plan,
@@ -107,6 +111,19 @@ def _evidence_with_base_plan(run_dir: Path, plan: AnalysisPlan) -> EvidenceStore
         generation_mode="llm",
     )
     return evidence
+
+
+def _successful_step_record(plan: AnalysisPlan, step_id: str) -> dict:
+    step = next(step for step in plan.steps if step.step_id == step_id)
+    return {
+        "step_id": step_id,
+        "status": "ok",
+        "planned_analysis_role": step.planned_analysis_role,
+        "analysis_request": {"step": step.model_dump(mode="json")},
+        "plan_scientific_signature": (
+            _serializable_plan_scientific_scope_signature(plan)
+        ),
+    }
 
 
 def _context(tmp_path: Path, plan: AnalysisPlan):
@@ -235,7 +252,11 @@ def test_resume_migration_uses_planner_packet_and_registers_revision(
 
     selected, selected_path = _load_compatible_resume_plan(
         run_dir=tmp_path,
-        resume_state=resume_state,
+        resume_state={
+            "per_step_records": [
+                _successful_step_record(revised, "01_completed_description")
+            ]
+        },
     )
     assert selected_path == verified_run_evidence_path(
         tmp_path,
@@ -275,7 +296,7 @@ def test_resume_loader_ignores_mutable_live_plan_and_unregistered_revision(
         resume_state={
             "plan_path": "analysis_plan_revision_99.json",
             "per_step_records": [
-                {"step_id": "01_completed_description", "status": "ok"},
+                _successful_step_record(plan, "01_completed_description"),
             ],
         },
     )
@@ -285,6 +306,62 @@ def test_resume_loader_ignores_mutable_live_plan_and_unregistered_revision(
         tmp_path,
         immutable_record,
     )
+
+
+def test_resume_loader_uses_digest_verified_host_input_closure_plan(
+    tmp_path: Path,
+) -> None:
+    planner_plan = _legacy_plan()
+    evidence = _evidence_with_base_plan(tmp_path, planner_plan)
+    closed_step = planner_plan.steps[0].model_copy(
+        update={"inputs": [*planner_plan.steps[0].inputs, "baseline_n"]}
+    )
+    closed_plan = planner_plan.model_copy(
+        update={"steps": [closed_step, *planner_plan.steps[1:]]}
+    )
+    closure_path = tmp_path / "analysis_plan_input_closure.json"
+    closure_path.write_text(closed_plan.model_dump_json(indent=2), encoding="utf-8")
+    closure_record = evidence.register_file(
+        kind="log",
+        description="Host measurement companion input closure.",
+        source_path=closure_path,
+        evidence_id="analysis_plan_input_closure",
+        producer="runtime_supervisor",
+        generation_mode="system",
+        metadata={"reason": "measurement_companion_input_closure"},
+    )
+    resume_state = {
+        "per_step_records": [
+            {
+                "step_id": closed_step.step_id,
+                "status": "ok",
+                "planned_analysis_role": closed_step.planned_analysis_role,
+                "analysis_request": {"step": closed_step.model_dump(mode="json")},
+                "plan_scientific_signature": (
+                    _serializable_plan_scientific_scope_signature(closed_plan)
+                ),
+            }
+        ]
+    }
+
+    selected, selected_path = _load_compatible_resume_plan(
+        run_dir=tmp_path,
+        resume_state=resume_state,
+    )
+
+    assert selected == closed_plan
+    assert selected_path == verified_run_evidence_path(tmp_path, closure_record)
+
+
+def test_host_input_closure_plan_rank_rejects_spoofed_authority() -> None:
+    record = {
+        "evidence_id": "analysis_plan_input_closure",
+        "producer": "planner",
+        "generation_mode": "llm",
+        "metadata": {"reason": "measurement_companion_input_closure"},
+    }
+
+    assert verified_plan_evidence_rank(record) is None
 
 
 def test_resume_migration_retries_real_incomplete_requirement_shape(

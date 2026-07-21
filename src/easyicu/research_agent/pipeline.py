@@ -137,6 +137,7 @@ from .authority.context_numeric_claims import register_context_numeric_claims
 from .authority.plan_scope import (
     _serializable_plan_scientific_scope_signature,
     _step_scientific_signature,
+    verified_plan_evidence_rank,
 )
 from .authority.planned_role import verified_planned_analysis_role
 from .authority import pipeline_cache as _pipeline_cache
@@ -483,17 +484,9 @@ def _resume_plan_candidate_paths(
     for index, record in enumerate(records):
         if not isinstance(record, dict):
             continue
-        evidence_id = str(record.get("evidence_id") or "").strip()
-        if evidence_id == "analysis_plan":
-            revision = -1
-        else:
-            match = re.fullmatch(
-                r"analysis_plan_revision_(\d+)(?:_[0-9a-f]{8})?",
-                evidence_id,
-            )
-            if match is None:
-                continue
-            revision = int(match.group(1))
+        revision = verified_plan_evidence_rank(record)
+        if revision is None:
+            continue
         verified_path = verified_run_evidence_path(run_dir, record)
         if verified_path is not None:
             ranked.append((revision, index, verified_path))

@@ -8,7 +8,8 @@ method, covariate set, or estimand.
 from __future__ import annotations
 
 import json
-from typing import Any, List, Optional, Tuple
+import re
+from typing import Any, List, Mapping, Optional, Tuple
 
 from ..schema import AnalysisPlan, AnalysisStep
 
@@ -18,7 +19,28 @@ __all__ = [
     "_plan_scientific_scope_signature",
     "_serializable_plan_scientific_scope_signature",
     "_step_scientific_signature",
+    "verified_plan_evidence_rank",
 ]
+
+
+def verified_plan_evidence_rank(record: Mapping[str, Any]) -> Optional[int]:
+    """Rank exact immutable plan evidence, rejecting unowned derivatives."""
+
+    evidence_id = str(record.get("evidence_id") or "").strip()
+    if evidence_id == "analysis_plan":
+        return -1
+    if evidence_id == "analysis_plan_input_closure":
+        metadata = record.get("metadata")
+        if (
+            record.get("producer") == "runtime_supervisor"
+            and record.get("generation_mode") == "system"
+            and isinstance(metadata, Mapping)
+            and metadata.get("reason") == "measurement_companion_input_closure"
+        ):
+            return 0
+        return None
+    match = re.fullmatch(r"analysis_plan_revision_(\d+)(?:_[0-9a-f]{8})?", evidence_id)
+    return int(match.group(1)) if match is not None else None
 
 
 def _step_scientific_signature(step: AnalysisStep) -> Tuple[Any, ...]:
