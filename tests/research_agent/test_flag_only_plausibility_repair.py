@@ -7,7 +7,9 @@ from easyicu.research_agent.schema import ValidationFinding
 
 
 def _finding(
-    *, variable: str = "age", value_class: str = "finite_outside_plausibility_range"
+    *,
+    variable: str | list[str] = "age",
+    value_class: str = "finite_outside_plausibility_range",
 ):
     return ValidationFinding(
         validator="llm_concept_auditor",
@@ -60,6 +62,42 @@ next_step()
     assert names == ["flag_only_plausibility_range_retention_v1"]
     assert twice == once
     assert second_names == []
+
+
+def test_semantic_column_family_repairs_one_loop_local_range_guard():
+    code = """
+for column, values in numeric_columns.items():
+    nonfinite = values.notna() & ~np.isfinite(values)
+    if nonfinite.any():
+        raise ValueError("nonfinite")
+    out_of_domain = values.notna() & ((values < 0.0) | (values > 24.0))
+    if bool(out_of_domain.any()):
+        raise ValueError(f"{column} outside plausibility range")
+publish(values)
+"""
+
+    repaired, names = _repair(
+        code,
+        _finding(variable=["score_h0_6", "score_h6_12"]),
+    )
+
+    assert names == ["flag_only_plausibility_range_retention_v1"]
+    assert "out_of_domain" not in repaired
+    assert "nonfinite.any()" in repaired
+    assert "publish(values)" in repaired
+
+
+def test_semantic_column_family_does_not_choose_between_two_range_guards():
+    code = """
+first_bad = (first < 0.0) | (first > 10.0)
+if first_bad.any():
+    raise ValueError("first")
+second_bad = (second < 0.0) | (second > 10.0)
+if second_bad.any():
+    raise ValueError("second")
+"""
+
+    assert _repair(code, _finding(variable=["first", "second"])) == (code, [])
 
 
 def test_wrong_value_class_or_variable_is_not_rewritten():
