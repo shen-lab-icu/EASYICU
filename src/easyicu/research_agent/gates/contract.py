@@ -109,6 +109,7 @@ _AGENT_OWNED_ROBUSTNESS_RESULT_METHODS = frozenset(
     {
         "cohort_definition_sensitivity",
         "prespecified_robustness_analysis",
+        "prespecified_sensitivity_analysis_grid",
     }
 )
 
