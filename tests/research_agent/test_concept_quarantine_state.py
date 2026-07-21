@@ -206,6 +206,29 @@ def test_final_audit_continuation_refuses_mixed_or_invalid_response_findings() -
     )
 
 
+def test_provider_failure_is_deferred_only_before_reserved_final_audit() -> None:
+    failure = _provider_failure()
+
+    assert concept_audit_execution._defer_provider_failure_until_final_audit(
+        include_llm=False,
+        reserved_final_category="concept_audit",
+        quarantine_findings=[failure],
+        step_id="05_analysis",
+    )
+    assert not concept_audit_execution._defer_provider_failure_until_final_audit(
+        include_llm=True,
+        reserved_final_category="concept_audit",
+        quarantine_findings=[failure],
+        step_id="05_analysis",
+    )
+    assert not concept_audit_execution._defer_provider_failure_until_final_audit(
+        include_llm=False,
+        reserved_final_category=None,
+        quarantine_findings=[failure],
+        step_id="05_analysis",
+    )
+
+
 def test_successful_final_audit_retires_only_prior_provider_failure() -> None:
     quarantine = concept_audit_execution.ConceptQuarantineState()
     quarantine.draft_active = True
