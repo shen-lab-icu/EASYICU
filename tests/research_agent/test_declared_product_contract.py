@@ -1459,6 +1459,32 @@ def test_noncomputed_effect_status_is_not_an_effect_result(status):
     assert "unauthorized_effect_product" not in _kinds(findings)
 
 
+def test_explicit_false_effect_created_flag_is_not_an_effect_result():
+    findings = declared_product_contract_findings(
+        step=_step(outputs=["artifact:analysis_cohort"]),
+        step_summary={
+            "output_files": {"artifact:analysis_cohort": "analysis_cohort.parquet"},
+            "output_scope": {"effect_estimates_created": False},
+        },
+        effect_method_authorized=False,
+    )
+
+    assert "unauthorized_effect_product" not in _kinds(findings)
+
+
+def test_explicit_true_effect_created_flag_remains_fail_closed():
+    findings = declared_product_contract_findings(
+        step=_step(outputs=["artifact:analysis_cohort"]),
+        step_summary={
+            "output_files": {"artifact:analysis_cohort": "analysis_cohort.parquet"},
+            "output_scope": {"effect_estimates_created": True},
+        },
+        effect_method_authorized=False,
+    )
+
+    assert "unauthorized_effect_product" in _kinds(findings)
+
+
 def test_textual_or_numeric_effect_value_remains_effect_bearing():
     for value in (1.4, "OR=1.4"):
         findings = declared_product_contract_findings(

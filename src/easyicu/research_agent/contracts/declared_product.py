@@ -2622,6 +2622,7 @@ def _summary_scalar_products(value: Any) -> set[tuple[str, str]]:
                 valid = (
                     child is not None
                     and child != ""
+                    and not (isinstance(child, bool) and child is False)
                     and not _is_file_path(child)
                     and not _is_noncomputed_result_status(child)
                 )
@@ -3157,6 +3158,7 @@ def _effect_summary_paths(summary: Mapping[str, Any]) -> list[str]:
                     and _effect_bearing_name(key)
                     and child is not None
                     and child != ""
+                    and not (isinstance(child, bool) and child is False)
                     and not _is_file_path(child)
                     and not _is_noncomputed_result_status(child)
                 ):
