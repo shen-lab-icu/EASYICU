@@ -92,3 +92,21 @@ def test_counting_client_records_each_retry_call() -> None:
         "prompt_tokens": 10,
         "completion_tokens": 2,
     }
+    assert len(client.calls[0]["raw_sha256"]) == 64
+
+
+def test_counting_client_fails_before_exceeding_trial_budget() -> None:
+    class FakeClient:
+        name = "fake"
+        last_usage = None
+
+        def complete(self, messages, *, max_tokens=2048, temperature=0.2):
+            return "{}"
+
+    client = MODULE.CountingClient(FakeClient(), max_calls=1)
+    client.complete([])
+
+    with pytest.raises(RuntimeError, match="budget exhausted"):
+        client.complete([])
+
+    assert len(client.calls) == 1
