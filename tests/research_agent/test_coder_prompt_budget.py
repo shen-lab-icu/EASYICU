@@ -512,6 +512,39 @@ def test_wide_generic_ordered_qc_prompt_stays_under_initial_transport_gate(ra):
     assert _payload_bytes(llm.calls[0][0]) <= 42_000
 
 
+def test_wide_positivity_diagnostic_uses_compact_model_contract(ra):
+    step = ra.AnalysisStep(
+        step_id="positivity_diagnostics",
+        intent="Assess the prespecified adjustment design and positivity.",
+        inputs=[
+            "artifact:analysis_cohort",
+            "artifact:exposure_definition",
+            *_quality_step(ra).inputs,
+        ],
+        expected_outputs=[
+            "artifact:confounder_set",
+            "artifact:positivity_diagnostics",
+            "table:positivity_diagnostics",
+        ],
+        method="propensity_score_positivity_diagnostics",
+    )
+    guide = coder_guide_for_step(load_prompt_pack()["coder"], step)
+    llm = _CaptureLLM(["import os\nvalue = 1\n"])
+    authority = HostCoderAuthority.from_values(["x" * 5_000])
+
+    CoderAgent(llm).run(
+        context=_wide_context(ra),
+        step=step,
+        host_authority=authority,
+    )
+
+    assert "ADJUSTED-MODEL CLINICAL INPUT CONTRACT:" in guide
+    assert "CLINICAL SCORE AND MISSINGNESS SEMANTICS:" not in guide
+    assert "Before fitting, audit every categorical predictor" in guide
+    assert coder_context_requires_method_constraints(step) is False
+    assert _payload_bytes(llm.calls[0][0]) <= 42_000
+
+
 def test_declared_provenance_companions_use_compact_typed_coordinates(ra):
     llm = _CaptureLLM(["import os\nvalue = 1\n"])
 

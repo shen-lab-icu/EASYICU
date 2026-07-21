@@ -136,6 +136,13 @@ _COMPACT_SERIALIZATION_GUIDANCE = """OUTPUT SERIALIZATION CONTRACT:
 - Every CSV cell must be one scalar. Emit separate columns for median, quartiles, counts, and percentages; emit one row per categorical level.
 - Never assign the result of an inplace pandas operation, and prefer stable `.agg`/`.transform` over mixed-shape `groupby.apply`."""
 
+_COMPACT_ADJUSTED_CLINICAL_GUIDANCE = """ADJUSTED-MODEL CLINICAL INPUT CONTRACT:
+- Treat declared measured/count/status companions as audit-only provenance; never use them to redefine the authoritative value, denominator, cohort, exposure, or outcome.
+- For every declared measured/count pair, call the host `measurement_provenance_receipt` with the locked cohort and exact keyword column names, let any validation error propagate, and publish the unchanged receipts as `measurement_provenance_audit={"source":"COHORT_PARQUET","checks":[...]}`.
+- Preserve missing physiological values. Never recode unmeasured laboratory, vital-sign, exposure, or outcome values to zero; implement only the Planner-declared complete-case or missing-indicator strategy and report the resulting model denominator.
+- Preserve ordinal variables as declared ordered categories or an explicitly justified rank-preserving representation; do not average an ordinal score merely to make a model fit.
+- Numeric coercion must count newly invalid values and fail closed on any lossy or non-finite non-missing input before model fitting or scientific output."""
+
 
 def normalised_method_head(method: object) -> str:
     """Return the exact scientific method head before an optional rider."""
@@ -460,15 +467,19 @@ def coder_guide_for_step(
         for name in [str(raw or "").strip().lower()]
         if ":" not in name
     )
+    compact_adjusted_clinical = False
     if (
         is_quality_control
         or is_ordered
         or is_table
         or not (is_figure or is_trajectory or is_reporting)
     ):
-        selected.add("clinical")
-        if is_quality_control or has_provenance_inputs:
-            selected.add("clinical_tail")
+        if is_adjusted and not (is_quality_control or is_ordered or is_table):
+            compact_adjusted_clinical = True
+        else:
+            selected.add("clinical")
+            if is_quality_control or has_provenance_inputs:
+                selected.add("clinical_tail")
         if not is_ordered_semantics and _binary_event_presence_contract_applies(step):
             selected.add("binary_event")
     # The long generic tutorial is transport-heavy. Keep its few residual
@@ -511,6 +522,8 @@ def coder_guide_for_step(
         parts.append(_COMPACT_MECHANICAL_GUIDANCE)
     if "serialization" not in _exclude_sections:
         parts.append(_COMPACT_SERIALIZATION_GUIDANCE)
+    if compact_adjusted_clinical:
+        parts.append(_COMPACT_ADJUSTED_CLINICAL_GUIDANCE)
     return "\n\n".join(parts).strip()
 
 
@@ -541,6 +554,23 @@ def coder_context_requires_method_constraints(step: AnalysisStep) -> bool:
         return True
     if effect_output_authorized(step):
         return True
+    method_tokens = frozenset(normalised_method_head(step.method).split("_"))
+    output_products = _typed_products(step.expected_outputs or [])
+    output_kinds = {kind for kind, _ in output_products}
+    output_tokens = {
+        token for _, name in output_products for token in str(name or "").split("_")
+    }
+    if (
+        output_kinds
+        and output_kinds <= {"artifact", "statistic", "table"}
+        and (method_tokens | output_tokens)
+        & {"balance", "diagnostic", "diagnostics", "positivity"}
+    ):
+        # These steps diagnose a prespecified model design but do not own the
+        # final effect. The compact model-safety guide plus deterministic
+        # compatibility gate carry the same host rules without repeating the
+        # full variable-by-variable compatibility prose in every prompt.
+        return False
     if canonical_analysis_family(
         method
     ) == "data_quality_audit" or _quality_control_contract_applies(step):
