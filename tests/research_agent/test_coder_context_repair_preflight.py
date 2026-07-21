@@ -802,6 +802,65 @@ groups.loc[exposure > 0] = "Exposure"
     assert repaired == code
 
 
+def test_local_read_before_assignment_repair_moves_existing_call(ra):
+    code = """
+binding = {"column": "exposure"}
+frame = load_frame()
+if "stay_id" not in frame:
+    if exposure_column not in cohort:
+        raise RuntimeError("missing exposure")
+    frame = cohort[["stay_id", exposure_column]].copy()
+exposure_column = product_executable_column(binding)
+result = frame[["stay_id", exposure_column]]
+"""
+    findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+    finding = next(
+        finding
+        for finding in findings
+        if (finding.detail or {}).get("reason") == "local_read_before_assignment"
+    )
+
+    repaired, repair_names = deterministic_concept_audit_repair(
+        code,
+        [finding.message],
+        repair_findings=[finding],
+    )
+
+    assert repair_names == ["local_read_before_assignment_hoist_v1"]
+    assert repaired.count("exposure_column = product_executable_column(binding)") == 1
+    assert repaired.index("exposure_column =") < repaired.index(
+        'if "stay_id" not in frame:'
+    )
+    assert not any(
+        (item.detail or {}).get("reason") == "local_read_before_assignment"
+        for item in audit_mechanical_code_contracts(repaired, _figure_step(ra))
+    )
+
+
+def test_local_read_repair_refuses_dependency_rebound_before_assignment(ra):
+    code = """
+binding = {"column": "first"}
+if exposure_column not in cohort:
+    raise RuntimeError("missing exposure")
+binding = {"column": "second"}
+exposure_column = product_executable_column(binding)
+"""
+    finding = next(
+        finding
+        for finding in audit_mechanical_code_contracts(code, _figure_step(ra))
+        if (finding.detail or {}).get("reason") == "local_read_before_assignment"
+    )
+
+    repaired, repair_names = deterministic_concept_audit_repair(
+        code,
+        [finding.message],
+        repair_findings=[finding],
+    )
+
+    assert repaired == code
+    assert repair_names == []
+
+
 def test_mechanical_preflight_repairs_unreduced_boolean_mask_count(ra):
     code = """
 import pandas as pd

@@ -182,6 +182,15 @@ def test_preflight_only_helper_repairs_are_syntactic_and_automatic() -> None:
         assert automatic_repair_allowed(repair_id)
 
 
+def test_local_read_hoist_is_syntactic_and_automatic() -> None:
+    metadata = repair_metadata_for("local_read_before_assignment_hoist_v1")
+
+    assert metadata.repair_class is RepairClass.SYNTACTIC
+    assert metadata.invariants == ()
+    assert metadata.introduces_numbers is False
+    assert automatic_repair_allowed(metadata.repair_id)
+
+
 def test_attrition_rule_id_canonicalization_is_syntactic_and_automatic() -> None:
     metadata = repair_metadata_for("attrition_rule_id_canonicalization_v1")
 
