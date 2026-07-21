@@ -15,6 +15,9 @@ Replanning contract:
   revision justified by probe or completed evidence. Do not add this roster to
   survival, prediction, mixed-effects, clustering, or other families whose
   contracts it does not represent.
+- Preserve planner-owned `input_consumption_contracts`. A rendering-only
+  consumer with `mode="all_rows"` must not collapse a multi-row typed table to
+  one row; role-specific selection requires the existing explicit role roster.
 - If the probe or completed steps reveal missingness artefacts, component
   completeness failures, outcome mismatches, or impossible cross-database assumptions,
   insert targeted audit or protocol steps rather than ignoring the issue.

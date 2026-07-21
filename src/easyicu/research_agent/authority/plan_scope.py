@@ -52,6 +52,14 @@ def _step_scientific_signature(step: AnalysisStep) -> Tuple[Any, ...]:
             )
             for requirement in step.model_requirements
         ),
+        tuple(
+            json.dumps(
+                contract.model_dump(mode="json"),
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+            for contract in step.input_consumption_contracts
+        ),
         (
             json.dumps(
                 step.trajectory_stability_spec.model_dump(mode="json"),

@@ -44,6 +44,12 @@ PlannedAnalysisRole = Literal[
     "auxiliary",
 ]
 
+ArtifactConsumptionMode = Literal[
+    "all_rows",
+    "single_row",
+    "one_per_role",
+]
+
 _PRIMARY_RESULT_KIND_ALIASES = {
     "cohort": "dataset",
     "metric": "statistic",
@@ -691,6 +697,46 @@ class TrajectoryStabilitySpec(BaseModel):
         return self
 
 
+class ArtifactConsumptionContract(BaseModel):
+    """Planner-owned rule for consuming one exact typed tabular input.
+
+    The contract prevents a downstream consumer from silently treating a
+    multi-row result as a singleton or selecting one scientific role by row
+    position.  It never assigns roles itself: ``expected_roles`` must be
+    declared by the Planner when role-specific consumption is intended.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal["easyicu.artifact_consumption/1"] = (
+        "easyicu.artifact_consumption/1"
+    )
+    input_key: str = Field(
+        ...,
+        description="Exact kind:product input declared on the same step.",
+    )
+    mode: ArtifactConsumptionMode
+    role_column: Optional[str] = None
+    expected_roles: List[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _mode_coordinates_are_closed(self) -> "ArtifactConsumptionContract":
+        if not re.fullmatch(r"[a-z][a-z0-9_]*:[a-z][a-z0-9_]*", self.input_key):
+            raise ValueError("input_key must be one canonical typed kind:product")
+        roles = [str(value).strip() for value in self.expected_roles]
+        if any(not value for value in roles) or len(set(roles)) != len(roles):
+            raise ValueError("expected_roles must contain unique non-empty values")
+        if self.mode == "one_per_role":
+            if not str(self.role_column or "").strip() or not roles:
+                raise ValueError("one_per_role requires role_column and expected_roles")
+        elif self.role_column is not None or roles:
+            raise ValueError(
+                "all_rows/single_row must not declare role_column or expected_roles"
+            )
+        self.expected_roles[:] = roles
+        return self
+
+
 class AnalysisStep(BaseModel):
     """One step in a planner-emitted analysis plan."""
 
@@ -727,6 +773,15 @@ class AnalysisStep(BaseModel):
             "step contract and is required for other analysis families."
         ),
     )
+    input_consumption_contracts: List[ArtifactConsumptionContract] = Field(
+        default_factory=list,
+        description=(
+            "Optional Planner-owned cardinality/role rules for exact typed table "
+            "inputs. Rendering-only children synthesized by the host receive "
+            "all_rows contracts so they cannot silently collapse a multi-row "
+            "source to one row."
+        ),
+    )
     trajectory_stability_spec: Optional[TrajectoryStabilitySpec] = Field(
         default=None,
         description=(
@@ -738,6 +793,34 @@ class AnalysisStep(BaseModel):
 
     @model_validator(mode="after")
     def _model_requirement_ids_are_unique(self) -> "AnalysisStep":
+        consumption_keys = [
+            contract.input_key for contract in self.input_consumption_contracts
+        ]
+        if len(consumption_keys) != len(set(consumption_keys)):
+            raise ValueError(
+                "input_consumption_contracts input_key values must be unique"
+            )
+        missing_consumption_inputs = sorted(set(consumption_keys) - set(self.inputs))
+        if missing_consumption_inputs:
+            raise ValueError(
+                "input_consumption_contracts must target exact inputs on the same "
+                f"step; missing {missing_consumption_inputs!r}"
+            )
+        if (
+            str(self.method or "").strip().lower().split(" with ", 1)[0]
+            == "visualization"
+            and consumption_keys
+        ):
+            typed_table_inputs = {
+                value
+                for value in self.inputs
+                if re.fullmatch(r"table:[a-z][a-z0-9_]*", str(value))
+            }
+            if set(consumption_keys) != typed_table_inputs:
+                raise ValueError(
+                    "visualization input_consumption_contracts must cover every "
+                    "exact typed table input"
+                )
         requirement_ids = [item.requirement_id for item in self.model_requirements]
         if len(requirement_ids) != len(set(requirement_ids)):
             raise ValueError("model_requirements requirement_id values must be unique")

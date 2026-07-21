@@ -69,6 +69,7 @@ from .schema import (
     ADJUSTED_ASSOCIATION_BINARY_METHOD_FAMILIES,
     AnalysisPlan,
     AnalysisStep,
+    ArtifactConsumptionContract,
     ClusterSelectionManifest,
     ResearchContext,
     ValidationFinding,
@@ -1020,10 +1021,9 @@ def _cohort_change_contract_applies(step: AnalysisStep) -> bool:
     """Whether a cohort owner declares a closed attrition/overlap product."""
 
     method = str(step.method or "")
-    method_matches = (
-        _normalised_method_head(method) in _COHORT_CHANGE_OWNER_METHODS
-        or _is_primary_analysis_cohort_method(method)
-    )
+    method_matches = _normalised_method_head(
+        method
+    ) in _COHORT_CHANGE_OWNER_METHODS or _is_primary_analysis_cohort_method(method)
     return method_matches and _has_closed_contract_product(
         step.expected_outputs or [],
         products=_COHORT_CHANGE_PRODUCTS,
@@ -1925,6 +1925,45 @@ def _split_table_and_figure_outputs_in_plan(
             else step.model_copy(update={"expected_outputs": outputs})
         )
         method = _normalised_method_head(str(working_step.method or ""))
+        typed_table_inputs = [
+            str(raw_input)
+            for raw_input in working_step.inputs
+            if (parsed_input := typed_product(raw_input)) is not None
+            and parsed_input[0] == "table"
+        ]
+        if (
+            method == "visualization"
+            and typed_table_inputs
+            and not working_step.input_consumption_contracts
+        ):
+            working_step = working_step.model_copy(
+                update={
+                    "input_consumption_contracts": [
+                        ArtifactConsumptionContract(
+                            input_key=input_key,
+                            mode="all_rows",
+                        )
+                        for input_key in typed_table_inputs
+                    ]
+                }
+            )
+            findings.append(
+                ValidationFinding(
+                    validator="plan_contract",
+                    severity="warning",
+                    message=(
+                        f"Bound visualization step '{working_step.step_id}' to "
+                        "preserve all rows from each exact typed table input; "
+                        "role-specific row selection requires an explicit Planner "
+                        "consumption contract."
+                    ),
+                    detail={
+                        "reason": "visualization_all_rows_consumption_default",
+                        "step_id": working_step.step_id,
+                        "inputs": typed_table_inputs,
+                    },
+                )
+            )
         if method in {
             "association_robustness",
             "bias_audit_association",
@@ -2020,6 +2059,13 @@ def _split_table_and_figure_outputs_in_plan(
             method="visualization",
             icu_rule_refs=list(working_step.icu_rule_refs or [])
             + ["visualization_rule"],
+            input_consumption_contracts=[
+                ArtifactConsumptionContract(
+                    input_key=str(input_key),
+                    mode="all_rows",
+                )
+                for input_key in render_source_outputs
+            ],
         )
         new_steps.append(figure_step)
         findings.append(
@@ -2141,6 +2187,10 @@ def _ensure_publication_figure_step_in_plan(
         inputs=render_inputs,
         expected_outputs=["figure:overview"],
         icu_rule_refs=["visualization_rule"],
+        input_consumption_contracts=[
+            ArtifactConsumptionContract(input_key=input_key, mode="all_rows")
+            for input_key in render_inputs
+        ],
     )
     new_steps = list(plan.steps or []) + [fallback_step]
     preserved = plan.model_copy(update={"steps": new_steps})

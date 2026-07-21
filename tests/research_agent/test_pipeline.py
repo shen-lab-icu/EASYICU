@@ -4378,6 +4378,18 @@ def test_split_table_and_figure_outputs_in_plan_splits_mixed_step(ra):
     assert figure_step.expected_outputs == ["figure:table_one_visual"]
     assert figure_step.inputs == ["table:table_one"]
     assert figure_step.method == "visualization"
+    assert [
+        contract.model_dump(mode="json")
+        for contract in figure_step.input_consumption_contracts
+    ] == [
+        {
+            "schema_version": "easyicu.artifact_consumption/1",
+            "input_key": "table:table_one",
+            "mode": "all_rows",
+            "role_column": None,
+            "expected_roles": [],
+        }
+    ]
     assert findings and findings[0].severity == "warning"
     assert "01_table_one_figure" in findings[0].message
 
@@ -4739,9 +4751,13 @@ def test_split_table_and_figure_does_not_create_duplicate_child_id(ra):
 
     revised, findings = _split_table_and_figure_outputs_in_plan(plan=plan)
 
-    assert revised is plan
-    assert findings == []
+    assert revised is not plan
+    assert any(
+        finding.detail.get("reason") == "visualization_all_rows_consumption_default"
+        for finding in findings
+    )
     assert [step.step_id for step in revised.steps].count("01_primary_figure") == 1
+    assert revised.steps[1].input_consumption_contracts[0].mode == "all_rows"
 
 
 def test_split_table_and_figure_outputs_in_plan_no_op_for_advanced_self_contained_step(

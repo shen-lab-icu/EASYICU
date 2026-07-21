@@ -441,7 +441,7 @@
       "artifact:trajectory_representation": {
         "evidence_id": "table_step_artifact_bc9948eb94935595",
         "identity_row_sha256": "76715c7723596cdd7b81d4c7d41ed1b28f23143f6ae9eee2581eb48df3c61269",
-        "product_contract_sha256": "117f519424b75ad61f96fbf36b0bbe82b7b8b1d44584cbce40a0fe5fd3c36e7c",
+        "product_contract_sha256": "ed8c813ccfb0116281f0dbe8fab41b8d11cfbf2d63f0fadf043f3000156eee7b",
         "sha256": "91024f30535fbf636fe7453e7e4af85d0645261a146e69f9a92617735376107c"
       },
       "manifest:trajectory_representation_schema": {
@@ -455,13 +455,13 @@
       "artifact:candidate_cluster_assignments": {
         "evidence_id": "table_step_artifact_b727decb45ffd129",
         "identity_row_sha256": "d3c3b218964cb7f28fc48e70eb7fcedc23c55dd9cd340a567f445c010a4509d0",
-        "product_contract_sha256": "46cd254b25a51ca2bd66e10813142bcaa027372d7d209a2ff6570029ad19d440",
+        "product_contract_sha256": "ff1297d31c0afc4a36bfdd52c754749c3885818ce178dfdf99ed3e153f01cce1",
         "sha256": "2b93c86ac49157764325a833567fea729d386112c3ea0716ef477a56a3c4a749"
       },
       "artifact:trajectory_representation": {
         "evidence_id": "table_step_artifact_bc9948eb94935595",
         "identity_row_sha256": "76715c7723596cdd7b81d4c7d41ed1b28f23143f6ae9eee2581eb48df3c61269",
-        "product_contract_sha256": "117f519424b75ad61f96fbf36b0bbe82b7b8b1d44584cbce40a0fe5fd3c36e7c",
+        "product_contract_sha256": "ed8c813ccfb0116281f0dbe8fab41b8d11cfbf2d63f0fadf043f3000156eee7b",
         "sha256": "91024f30535fbf636fe7453e7e4af85d0645261a146e69f9a92617735376107c"
       },
       "manifest:candidate_cluster_solution_schema": {
@@ -487,7 +487,7 @@
       "artifact:cluster_assignments": {
         "evidence_id": "table_step_artifact_b50c9b24510b60cc",
         "identity_row_sha256": "a59e9ed27128c40c19e051df0a12f3158c648e2d65f8d822be8ce50b058d2dac",
-        "product_contract_sha256": "715d6774267b00db8631b59cbaa369088a69a9307066aa711fd191f0de9d605a",
+        "product_contract_sha256": "21e7763e76547e5fb1dd06c0b1069444718d329204db7329b49dc230786a6571",
         "sha256": "b3626090b553c9fadc160e7de410a2804c752995f4d611095af81b5645d0404c"
       }
     }
