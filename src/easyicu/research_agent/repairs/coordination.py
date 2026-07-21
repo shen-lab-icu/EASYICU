@@ -32,6 +32,7 @@ import json
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 from .patch import CodePatchError, apply_code_patch
+from .binary_domain import patch_observed_binary_primary_exposure_guard
 from .source import deterministic_concept_audit_repair
 from .reasons import RepairReason
 from ..schema import ValidationFinding
@@ -524,6 +525,7 @@ def authorized_deterministic_concept_repair(
     authorize: Callable[..., Optional[Any]],
     step: Any,
     source: str,
+    context: Optional[Any] = None,
 ) -> Tuple[str, List[str]]:
     """Return an all-or-nothing centrally authorized mechanical repair."""
 
@@ -533,6 +535,15 @@ def authorized_deterministic_concept_repair(
         repair_reasons=repair_reasons,
         repair_findings=repair_findings,
     )
+    if context is not None:
+        binary_guarded = patch_observed_binary_primary_exposure_guard(
+            candidate_code,
+            context=context,
+            repair_findings=repair_findings,
+        )
+        if binary_guarded != candidate_code:
+            candidate_code = binary_guarded
+            repair_names.append("observed_binary_primary_exposure_guard_v1")
     if not repair_names or candidate_code == script_text:
         return script_text, []
     for repair_name in repair_names:

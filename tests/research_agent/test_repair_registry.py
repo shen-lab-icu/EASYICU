@@ -206,6 +206,15 @@ def test_measurement_provenance_summary_mapping_is_structural_and_automatic() ->
         assert automatic_repair_allowed(metadata.repair_id)
 
 
+def test_observed_binary_domain_guard_is_structural_and_automatic() -> None:
+    metadata = repair_metadata_for("observed_binary_primary_exposure_guard_v1")
+
+    assert metadata.repair_class is RepairClass.STRUCTURAL
+    assert metadata.introduces_numbers is False
+    assert metadata.requires_disclosure is False
+    assert automatic_repair_allowed(metadata.repair_id)
+
+
 def test_provenance_checked_status_contract_is_structural_and_automatic() -> None:
     metadata = repair_metadata_for("provenance_checked_status_contract_v1")
 
