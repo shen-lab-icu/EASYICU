@@ -41,11 +41,10 @@ from ..scalar_utils import (
     _flatten_scalar_dict,
 )
 from .attrition import patch_attrition_rule_id_canonicalization
-from .binary_feasibility import patch_binary_domain_before_authored_feasibility
+from .concept_preflight import patch_concept_preflight_repairs
 from .lossy_coercion import (
     patch_lossy_numeric_coercion_guard as _patch_lossy_numeric_coercion_guard,
 )
-from .local_binding import patch_local_read_before_assignment_hoist
 from .merge_collision import patch_pandas_merge_dynamic_column_collision
 from .name_alias import patch_undefined_mapping_near_match_alias
 from .provenance_summary import (
@@ -2354,21 +2353,11 @@ def deterministic_concept_audit_repair(
     repaired = code
     repair_names: List[str] = []
 
-    binary_feasibility_repaired = patch_binary_domain_before_authored_feasibility(
+    repaired, preflight_repair_names = patch_concept_preflight_repairs(
         repaired,
-        repair_findings=repair_findings,
+        findings=repair_findings,
     )
-    if binary_feasibility_repaired != repaired:
-        repaired = binary_feasibility_repaired
-        repair_names.append("binary_domain_authored_feasibility_v1")
-
-    local_binding_repaired = patch_local_read_before_assignment_hoist(
-        repaired,
-        repair_findings=repair_findings,
-    )
-    if local_binding_repaired != repaired:
-        repaired = local_binding_repaired
-        repair_names.append("local_read_before_assignment_hoist_v1")
+    repair_names.extend(preflight_repair_names)
 
     if RepairReason.TYPED_CONTEXT_BINDING_INVALID in set(repair_reasons):
         context_loaded = _patch_resolved_context_digest_load(

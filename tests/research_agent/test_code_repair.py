@@ -1657,6 +1657,82 @@ checks = [
     ) == (out, [])
 
 
+def test_concept_repair_adds_only_exact_llm_proven_domain_guards():
+    code = """continuous_covariates = ["mech_support"]
+availability_covariates = []
+for col in continuous_covariates + availability_covariates:
+    df[col] = strict_numeric(df[col], col)
+
+gcs_numeric = strict_numeric(df["score"], "score")
+if ((gcs_numeric.dropna() < 3) | (gcs_numeric.dropna() > 15)).any():
+    raise RuntimeError("score outside range")
+df["score_level"] = gcs_numeric.round().astype("Int64").astype("object")
+"""
+    findings = [
+        ValidationFinding(
+            validator="llm_concept_auditor",
+            severity="error",
+            message="ordinal is rounded",
+            detail={
+                "issue_code": "other",
+                "variable": "score",
+                "problem": "invalid ordinal levels are not rejected before rounding",
+            },
+        ),
+        ValidationFinding(
+            validator="llm_concept_auditor",
+            severity="error",
+            message="binary input lacks a guard",
+            detail={
+                "issue_code": "other",
+                "variable": "mech_support",
+                "problem": "binary domain validation is missing",
+            },
+        ),
+    ]
+
+    patched, names = deterministic_concept_audit_repair(
+        code,
+        [finding.message for finding in findings],
+        repair_reasons=[RepairReason.SCIENTIFIC_SEMANTICS_VIOLATION],
+        repair_findings=findings,
+    )
+
+    assert names == ["llm_proven_numeric_domain_guards_v1"]
+    assert "gcs_numeric.dropna().mod(1).eq(0).all()" in patched
+    assert "set(df['mech_support'].dropna().unique()).issubset({0, 1})" in patched
+    assert deterministic_concept_audit_repair(
+        patched,
+        [finding.message for finding in findings],
+        repair_reasons=[RepairReason.SCIENTIFIC_SEMANTICS_VIOLATION],
+        repair_findings=findings,
+    ) == (patched, [])
+
+
+def test_concept_repair_refuses_unproven_domain_guard_shapes():
+    finding = ValidationFinding(
+        validator="llm_concept_auditor",
+        severity="error",
+        message="binary input lacks a guard",
+        detail={
+            "issue_code": "other",
+            "variable": "mech_support",
+            "problem": "binary domain validation is missing",
+        },
+    )
+    code = """continuous_covariates = build_covariates()
+for col in continuous_covariates:
+    df[col] = strict_numeric(df[col], col)
+"""
+
+    assert deterministic_concept_audit_repair(
+        code,
+        [finding.message],
+        repair_reasons=[RepairReason.SCIENTIFIC_SEMANTICS_VIOLATION],
+        repair_findings=[finding],
+    ) == (code, [])
+
+
 def test_concept_repair_inserts_provenance_fail_closed_guard():
     code = """
 def measurement_provenance_audit(frame):
