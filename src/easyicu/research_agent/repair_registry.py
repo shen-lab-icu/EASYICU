@@ -306,6 +306,7 @@ _STRUCTURAL_REPAIRS = {
     "include_outcome_in_all_vars_v1",
     "inline_missing_to_jsonable_utils_v1",
     "json_dump_numpy_key_sanitizer_v1",
+    "host_validation_helper_reraise_v1",
     "local_wilson_proportion_confint_v1",
     "lossy_numeric_coercion_guard_v1",
     "llm_proven_numeric_domain_guards_v1",
