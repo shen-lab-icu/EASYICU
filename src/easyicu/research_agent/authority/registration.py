@@ -153,12 +153,12 @@ def filter_success_alias_bindings(
         return name[len(prefix) :] if name.startswith(prefix) else name
 
     def _is_product_authority(evidence_id: str) -> bool:
-        record = records.get(evidence_id)
-        kind = str(_record_field(record, "kind") or "").lower()
         source_name = _record_source_name(evidence_id)
-        if kind in {"table", "figure"}:
-            return True
-        return kind == "statistic" and source_name != "step_summary.json"
+        # ``step_summary.json`` is the generic index/claim envelope.  A sibling
+        # physical artifact with the same basename as one of the summary's
+        # convenience aliases is the actual product authority regardless of
+        # suffix-derived evidence kind (JSON artifacts are registered as logs).
+        return source_name != "step_summary.json"
 
     implicit_basename_aliases = {
         evidence_id: Path(_record_source_name(evidence_id)).stem
