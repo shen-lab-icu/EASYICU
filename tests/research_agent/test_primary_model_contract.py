@@ -1077,7 +1077,7 @@ def test_primary_model_contract_accepts_encoded_term_with_raw_source(
     assert "denominator_contract_unresolvable" not in issues
 
 
-def test_primary_model_contract_replays_derived_source_and_host_valid_range(
+def test_primary_model_contract_replays_derived_source_without_range_exclusion(
     tmp_path: Path,
 ):
     cohort_path, out_dir = _write_inputs(tmp_path)
@@ -1089,7 +1089,7 @@ def test_primary_model_contract_replays_derived_source_and_host_valid_range(
         {
             "exposure_source": "organ_score_quartiles",
             "exposure_expression": "qcut(organ_score, q=4)",
-            "n": 4,
+            "n": 5,
             "event_n": 2,
         }
     )

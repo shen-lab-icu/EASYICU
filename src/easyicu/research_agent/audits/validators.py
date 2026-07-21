@@ -4575,7 +4575,6 @@ class PrimaryModelContractValidator:
         covariates: Sequence[str],
         contract: Mapping[str, Any],
         raw_exposure_source: Optional[str] = None,
-        exposure_valid_range: Optional[tuple[float, float]] = None,
     ) -> Optional[tuple[int, Optional[int]]]:
         if outcome not in frame.columns:
             return None
@@ -4609,9 +4608,6 @@ class PrimaryModelContractValidator:
                 mask &= numeric.map(
                     lambda value: pd.notna(value) and abs(value) != float("inf")
                 )
-                if exposure_valid_range is not None:
-                    lower, upper = exposure_valid_range
-                    mask &= numeric.between(lower, upper, inclusive="both")
         elif analysis_set != "source_aware":
             return None
         event_n = (
@@ -4651,25 +4647,6 @@ class PrimaryModelContractValidator:
         ):
             return None
         return source
-
-    @classmethod
-    def _context_valid_range(
-        cls,
-        *,
-        context: ResearchContext,
-        source: Optional[str],
-    ) -> Optional[tuple[float, float]]:
-        if not source:
-            return None
-        descriptor = context.variable(source)
-        values = getattr(descriptor, "valid_range", None)
-        if not isinstance(values, (list, tuple)) or len(values) != 2:
-            return None
-        lower = cls._finite_number(values[0])
-        upper = cls._finite_number(values[1])
-        if lower is None or upper is None or lower > upper:
-            return None
-        return lower, upper
 
     @classmethod
     def _coefficient_source_authority_issues(
@@ -5411,10 +5388,6 @@ class PrimaryModelContractValidator:
                     covariates=model_covariates,
                     contract=contract,
                     raw_exposure_source=raw_exposure_source,
-                    exposure_valid_range=self._context_valid_range(
-                        context=context,
-                        source=raw_exposure_source,
-                    ),
                 )
                 if expected is None:
                     issues.append(
