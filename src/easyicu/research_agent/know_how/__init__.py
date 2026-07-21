@@ -9,18 +9,24 @@ authority merely by being selected.
 
 from .registry import (
     KnowHowCard,
+    KnowHowClaim,
     KnowHowCitation,
     KnowHowDesignCandidates,
     KnowHowHit,
     KnowHowIntegrityError,
+    KnowHowReviewAttestation,
     KnowHowRegistry,
+    reviewable_card_content_sha256,
 )
 
 __all__ = [
     "KnowHowCard",
+    "KnowHowClaim",
     "KnowHowCitation",
     "KnowHowDesignCandidates",
     "KnowHowHit",
     "KnowHowIntegrityError",
+    "KnowHowReviewAttestation",
     "KnowHowRegistry",
+    "reviewable_card_content_sha256",
 ]

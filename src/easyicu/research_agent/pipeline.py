@@ -339,7 +339,10 @@ from .literature import (
     render_hypothesis_blueprint_for_prompt,
 )
 from .planning.preplan_literature import prepare_preplan_literature
-from .planning.preplan_know_how import prepare_preplan_know_how
+from .planning.preplan_know_how import (
+    PlannerKnowHowBinding,
+    prepare_preplan_know_how,
+)
 from .providers.llm import (
     LLMRouter,
     llm_is_mockish,
@@ -1759,6 +1762,13 @@ class ResearchAgentPipeline:
             raise ValueError("know_how_top_k must be between 0 and 5")
         if not 0.0 <= self._know_how_min_score <= 1.0:
             raise ValueError("know_how_min_score must be between 0 and 1")
+        from .orchestration.profiles import require_profile_know_how_setting
+
+        require_profile_know_how_setting(
+            name=submission_profile_name,
+            version=submission_profile_version,
+            enabled=self._enable_know_how,
+        )
         # T3.1 — runner backend selection. ``auto`` prefers a probed Docker
         # image and uses macOS sandbox-exec only when Docker is unavailable;
         # ``docker`` explicitly selects :class:`DockerRunner`
@@ -2513,7 +2523,8 @@ class ResearchAgentPipeline:
                     )
                 )
 
-        allowed_know_how_refs: tuple[str, ...] = ()
+        planner_prompt_metrics: Optional[Dict[str, Any]] = None
+        know_how_binding = PlannerKnowHowBinding()
         if self._enable_know_how and skill_obj is None:
             prepared_know_how = prepare_preplan_know_how(
                 context=agent_context,
@@ -2524,14 +2535,7 @@ class ResearchAgentPipeline:
                 top_k=self._know_how_top_k,
                 min_score=self._know_how_min_score,
             )
-            allowed_know_how_refs = prepared_know_how.selected_ids
-            know_how_note = prepared_know_how.prompt
-            agent_notes = (
-                f"{agent_context.notes}\n\n{know_how_note}"
-                if agent_context.notes
-                else know_how_note
-            )
-            agent_context = agent_context.model_copy(update={"notes": agent_notes})
+            know_how_binding = PlannerKnowHowBinding.from_prepared(prepared_know_how)
 
         study_design_brief = None
         article_contract = None
@@ -2733,19 +2737,10 @@ class ResearchAgentPipeline:
                 resume_state=resume_state,
             )
             if plan is not None and plan.steps:
-                unknown_resume_refs = sorted(
-                    set(plan.know_how_refs) - set(allowed_know_how_refs)
+                know_how_binding.verify_resume(
+                    plan.know_how_decisions,
+                    enabled=self._enable_know_how,
                 )
-                if unknown_resume_refs:
-                    raise ValueError(
-                        "resume plan references know-how cards not retrieved for "
-                        f"this run: {unknown_resume_refs!r}"
-                    )
-                if plan.know_how_refs and not self._enable_know_how:
-                    raise ValueError(
-                        "resume plan contains know_how_refs but know-how retrieval "
-                        "is disabled"
-                    )
                 reused_prior_plan = True
                 reused_plan_path = _prior_plan_path
                 plan_generation_mode = "resumed"
@@ -2914,7 +2909,10 @@ class ResearchAgentPipeline:
             try:
                 plan = planner.run(
                     agent_context,
-                    allowed_know_how_refs=allowed_know_how_refs,
+                    **know_how_binding.planner_kwargs,
+                )
+                planner_prompt_metrics = know_how_binding.prompt_metrics(
+                    planner, agent_context
                 )
             except Exception as exc:
                 if not self._enable_deterministic_planner_fallback:
@@ -2932,7 +2930,7 @@ class ResearchAgentPipeline:
                 )
                 plan = PlannerAgent(MockLLMClient(context=agent_context)).run(
                     agent_context,
-                    allowed_know_how_refs=allowed_know_how_refs,
+                    **know_how_binding.planner_kwargs,
                 )
                 used_mock_llm = True
                 plan_generation_mode = "fallback"
@@ -2962,7 +2960,7 @@ class ResearchAgentPipeline:
                 try:
                     retry_plan = planner.run(
                         agent_context,
-                        allowed_know_how_refs=allowed_know_how_refs,
+                        **know_how_binding.planner_kwargs,
                     )
                 except Exception:
                     retry_plan = None
@@ -2990,7 +2988,7 @@ class ResearchAgentPipeline:
                     )
                     plan = PlannerAgent(MockLLMClient(context=agent_context)).run(
                         agent_context,
-                        allowed_know_how_refs=allowed_know_how_refs,
+                        **know_how_binding.planner_kwargs,
                     )
                     used_mock_llm = True
                     plan_generation_mode = "fallback"
@@ -3008,7 +3006,7 @@ class ResearchAgentPipeline:
                 try:
                     cohort_retry = planner.run(
                         agent_context,
-                        allowed_know_how_refs=allowed_know_how_refs,
+                        **know_how_binding.planner_kwargs,
                     )
                 except Exception:
                     cohort_retry = None
@@ -3215,6 +3213,11 @@ class ResearchAgentPipeline:
                     "used_mock_llm": used_mock_llm,
                 },
             )
+        know_how_binding.persist_prompt_metrics(
+            planner_prompt_metrics,
+            run_dir=run_dir,
+            evidence=evidence,
+        )
         write_locked_cohort_definition(
             run_dir=run_dir,
             plan=plan,

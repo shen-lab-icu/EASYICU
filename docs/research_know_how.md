@@ -1,46 +1,107 @@
-# Research Know-How MVP
+# Research Know-How: bounded, evidence-bound protocol retrieval
 
 EasyICU has an opt-in, offline retrieval layer for source-backed ICU research
-design candidates. It is disabled by default and does not add execution tools,
-query external databases, or modify a cohort, time zero, exclusion rule, or
-estimand automatically.
+design candidates. It does not grant cohort, exclusion, time-zero, estimand, or
+method authority. The Planner must record the exact claims it adopted, rejected,
+left unresolved, or returned for user confirmation.
 
-## Enable it
+## Why this differs from a generic RAG/agent library
 
-```python
-from easyicu.research_agent import PipelineConfig, ResearchAgentPipeline
+EasyICU borrows the useful part of systems such as Biomni: retrieve only the
+resources relevant to the current task. It deliberately does not copy a broad
+LLM selector or inject arbitrary full-text instructions. The host first closes
+the permitted analysis family and trust boundary; deterministic topic matching
+then selects cards from that set.
 
-config = PipelineConfig(
-    workdir="./research_output",
-    enable_know_how=True,
-    know_how_top_k=3,
-    know_how_min_score=0.15,
-)
-pipeline = ResearchAgentPipeline.from_config(config)
+Missing data does not hide a relevant card. Retrieval records two separate
+coordinates:
+
+- `topic_applicable`: the protocol topic and analysis family match the task;
+- `data_readiness`: `ready`, `partial`, or `not_ready`, with exact unresolved
+  concepts.
+
+Thus an AKI prediction card remains visible when urine output is unavailable,
+but tells the Planner that a urine-output definition is not implementable.
+
+## Card v2 contract
+
+Every design, stop, and confirmation item has a stable `claim_id`, exact text,
+field, evidence scope, and one or more `citation_ids`. The schema rejects a card
+when any advice lacks a claim or when a claim cites an unknown source.
+
+Trust and scientific review are separate:
+
+- `built_in_reviewed` / `project_reviewed`: prompt-safety provenance accepted by
+  default retrieval;
+- `user_supplied_unreviewed`: never enters the canonical Planner prompt;
+- `curated_mvp`: structured and source-linked, but not yet dual expert reviewed;
+- `clinical_reviewed`: requires clinical and methods review, reviewer/date/scope,
+  literature cutoff, card version, and a content digest. Editing the card makes
+  the attestation invalid.
+
+The eight bundled cards remain honestly labeled `curated_mvp`. They must not be
+described as expert consensus until the review protocol is completed.
+
+## Prompt projection and budget
+
+Planner receives compact canonical JSON labeled as advisory data. Projection
+always retains stop conditions, confirmation requirements, data readiness, and
+claim-to-citation coordinates. Optional claims are included only as complete
+objects; strings are never cut mid-field. If mandatory content or the total
+projection exceeds its budget, the run fails closed and must reduce `top_k`.
+
+The runtime also measures the complete initial Planner request:
+
+- system, user, and total bytes;
+- approximate input tokens;
+- exact Know-How-added bytes after all other deterministic planning scaffolds;
+- selected-card count and the 80,000-byte hard limit.
+
+These metrics are registered as `planner_prompt_metrics.json`. The Know-How
+projection remains capped at 8,000 characters; observed one-card projections are
+about 4 KB.
+
+## Runtime evidence and plan authority
+
+- `know_how_retrieval.json`: query, topic match, data readiness, versions, SHA,
+  citations, trust policy, and selected hits;
+- `know_how_prompt.md`: exact structured Planner projection;
+- `planner_prompt_metrics.json`: full request budget evidence;
+- `analysis_plan.json`: claim-level `know_how_decisions`; adopted cards are
+  derived from decisions whose disposition is `adopted`, so there is no second
+  card-id list that can drift.
+
+Each decision repeats the exact card version/SHA, claim ID, citation IDs,
+disposition, reason code, and short rationale. The Planner cannot cite an
+unretrieved claim or change its citations. Replanner and resume preserve the
+decision list exactly; the decisions are part of plan scientific scope.
+
+## Submission profiles
+
+Historical profiles remain byte-identical and keep Know-How off. Opt-in is a
+study-design change and cannot be combined with an old profile. The additive
+development profile is:
+
+```text
+npj_dm_know_how_dev/20260721
 ```
 
-`know_how_paths` may contain additional JSON files or directories. Card ids
-must be unique across built-in and additional paths. Retrieval is deterministic
-and uses the research question, inferred analysis family, database tag, and
-available `ResearchContext` concepts. It does not call an LLM or the network.
+It is not the paper default. A later paper profile may be created only after
+expert review and the repeated A/B acceptance described below.
 
-## Runtime artifacts
+## Acceptance before online experiments
 
-- `know_how_retrieval.json` records the query, matching scores and reasons,
-  unresolved concepts, card versions, citation ids, and source-file SHA-256.
-- `know_how_prompt.md` is the exact bounded text supplied to Planner.
-- `analysis_plan.json` contains `know_how_refs` only when Planner explicitly
-  adopts one or more cards retrieved in that run.
+1. Canonical9 A offline retrieval matrix: correct card or honest no-card, plus
+   Chinese/English aliases and adversarial negatives.
+2. Clinical and methods review of every claim and citation; produce valid
+   content-digest attestations.
+3. Freeze an E2 blind rubric before comparison.
+4. Run Know-How off/on under identical data, model, prompt pack, and provider
+   coordinates, at least 2–3 runs per arm (or first use fixed recorded Planner
+   responses for component testing).
+5. Compare unsupported exclusions, incorrect-card adoption, time-zero/estimand
+   quality, requests for confirmation, retries, calls, tokens, and wall time.
+6. Freeze retrieval rules, then use sealed B/C tasks to test generalization.
 
-Planner may cite only selected cards. Replanner and resume preserve adopted
-references exactly. A changed source card or changed persisted retrieval
-artifact fails closed.
-
-## Built-in scope
-
-The MVP ships eight `curated_mvp` cards: AKI onset prediction, sepsis
-prognosis, lactate trajectories, vasopressor comparative effectiveness,
-mechanical-ventilation liberation, ICU mortality prediction, longitudinal ICU
-phenotyping, and cross-database external validation. `curated_mvp` means the
-sources and structure were curated for this implementation; it does not claim
-expert consensus review.
+No new extraction is required: experiments consume the existing six-database
+export at `/Volumes/外置硬盘/easyicu_data/full6_20260717`.

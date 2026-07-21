@@ -48,6 +48,10 @@ class SubmissionProfile:
     # the explicit ``--allow-mock-aware`` smoke escape hatch is incompatible
     # with this paper-facing profile.
     requires_real_provider: Optional[bool] = None
+    # Research Know-How can alter study design, so enabling it is a
+    # submission-defining coordinate. Historical profiles leave this None and
+    # remain byte-identical; only an additive profile may opt in.
+    enable_know_how: Optional[bool] = None
 
     @property
     def ref(self) -> str:
@@ -91,6 +95,8 @@ class SubmissionProfile:
             options["enable_deterministic_planner_fallback"] = (
                 self.enable_deterministic_planner_fallback
             )
+        if self.enable_know_how is not None:
+            options["enable_know_how"] = self.enable_know_how
         return options
 
     def pipeline_options(self) -> Dict[str, Any]:
@@ -118,6 +124,7 @@ class SubmissionProfile:
             "enable_deterministic_code_fallback",
             "enable_deterministic_planner_fallback",
             "requires_real_provider",
+            "enable_know_how",
         ):
             if payload.get(field_name) is None:
                 payload.pop(field_name, None)
@@ -264,6 +271,25 @@ NPJ_DM_2026_07_19 = SubmissionProfile(
     requires_real_provider=True,
 )
 
+NPJ_DM_2026_07_21_KNOW_HOW = SubmissionProfile(
+    name="npj_dm_know_how_dev",
+    version="20260721",
+    locked_at="2026-07-21T12:00:00-04:00",
+    evidence_enforcement_mode="strict",
+    writer_digest_widened=True,
+    enable_reproducibility_envelope=True,
+    requires_arm="aware",
+    requires_runner="docker",
+    expected_concept_dict_sha=NPJ_DM_2026_07_19.expected_concept_dict_sha,
+    expected_sofa2_dict_sha=NPJ_DM_2026_07_19.expected_sofa2_dict_sha,
+    enable_memory=False,
+    enable_experience_bank=False,
+    enable_deterministic_code_fallback=False,
+    enable_deterministic_planner_fallback=False,
+    requires_real_provider=True,
+    enable_know_how=True,
+)
+
 DEFAULT_SUBMISSION_PROFILE_REF = NPJ_DM_2026_07_19.ref
 SUBMISSION_PROFILE_REGISTRY: Dict[str, SubmissionProfile] = {
     NPJ_DM_2026_05.ref: NPJ_DM_2026_05,
@@ -273,6 +299,7 @@ SUBMISSION_PROFILE_REGISTRY: Dict[str, SubmissionProfile] = {
     NPJ_DM_2026_07_17.ref: NPJ_DM_2026_07_17,
     NPJ_DM_2026_07_18.ref: NPJ_DM_2026_07_18,
     NPJ_DM_2026_07_19.ref: NPJ_DM_2026_07_19,
+    NPJ_DM_2026_07_21_KNOW_HOW.ref: NPJ_DM_2026_07_21_KNOW_HOW,
 }
 
 
@@ -289,6 +316,25 @@ def get_submission_profile(ref: Optional[str] = None) -> SubmissionProfile:
         ) from exc
 
 
+def require_profile_know_how_setting(
+    *,
+    name: Optional[str],
+    version: Optional[str],
+    enabled: bool,
+) -> None:
+    """Keep the study-design-affecting Know-How flag profile-owned."""
+    if name is None:
+        return
+    ref = f"{name}/{version}"
+    expected = bool(get_submission_profile(ref).enable_know_how)
+    if bool(enabled) != expected:
+        raise ValueError(
+            "Research Know-How changes study design and must match an additive "
+            f"submission profile coordinate; profile {ref!r} pins "
+            f"enable_know_how={expected}"
+        )
+
+
 __all__ = [
     "SubmissionProfile",
     "NPJ_DM_2026_05",
@@ -298,7 +344,9 @@ __all__ = [
     "NPJ_DM_2026_07_17",
     "NPJ_DM_2026_07_18",
     "NPJ_DM_2026_07_19",
+    "NPJ_DM_2026_07_21_KNOW_HOW",
     "DEFAULT_SUBMISSION_PROFILE_REF",
     "SUBMISSION_PROFILE_REGISTRY",
     "get_submission_profile",
+    "require_profile_know_how_setting",
 ]

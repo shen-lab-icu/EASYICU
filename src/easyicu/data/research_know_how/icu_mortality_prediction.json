@@ -1,10 +1,11 @@
 {
-  "schema_version": "easyicu.research_know_how/1",
+  "schema_version": "easyicu.research_know_how/2",
   "card_id": "icu_mortality_prediction",
   "version": "1.0.0",
   "title": "ICU mortality prediction",
   "summary": "Candidate coordinates for developing or validating mortality prediction models in ICU data. The prediction time, target population, mortality horizon, validation design, calibration, and missing-data workflow must be declared before model fitting.",
   "clinical_topics": ["ICU mortality", "risk prediction", "prognostic model", "calibration", "external validation"],
+  "topic_aliases": ["mortality prediction", "mortality risk prediction", "mortality risk model", "prognostic mortality model", "hospital mortality prediction", "死亡预测", "死亡风险预测", "死亡风险模型"],
   "study_families": ["prediction"],
   "applicable_databases": ["miiv", "mimic_iv", "mimic_iii", "eicu", "hirid", "aumc", "sicdb"],
   "design_candidates": {
@@ -21,6 +22,7 @@
   },
   "required_concepts": ["death", "icu_admission_time", "age", "sex"],
   "stop_conditions": ["Prediction time occurs after candidate predictors", "Mortality horizon differs irreconcilably between development and validation data", "Patient identifiers cannot prevent split leakage"],
+  "requires_confirmation": ["Confirm the mortality horizon and ascertainment source", "Confirm whether repeated ICU stays may cross development and validation splits"],
   "citations": [
     {
       "citation_id": "tripod_ai_2024",
@@ -41,5 +43,30 @@
       "supports": ["risk-of-bias domains", "participant, predictor, outcome, and analysis checks"]
     }
   ],
-  "review_status": "curated_mvp"
+  "claims": [
+    {"claim_id":"target_population","field":"population","text":"A clinically defined ICU target population with patient-level independence between development and validation data.","citation_ids":["tripod_ai_2024","probast_2019"],"evidence_scope":"reporting_standard"},
+    {"claim_id":"prediction_time","field":"time_zero","text":"The intended prediction time, commonly ICU admission or a prespecified later landmark.","citation_ids":["tripod_ai_2024"],"evidence_scope":"reporting_standard"},
+    {"claim_id":"predictor_window","field":"observation_window","text":"Only information available by the prediction time, with preprocessing and imputation learned inside training data.","citation_ids":["tripod_ai_2024","probast_2019"],"evidence_scope":"reporting_standard"},
+    {"claim_id":"mortality_horizon","field":"followup_window","text":"ICU, hospital, or fixed-horizon mortality defined consistently across datasets.","citation_ids":["tripod_ai_2024"],"evidence_scope":"reporting_standard"},
+    {"claim_id":"stay_handling","field":"eligibility","text":"Define first versus repeated stays","citation_ids":["probast_2019"],"evidence_scope":"methods"},
+    {"claim_id":"split_leakage_prevention","field":"eligibility","text":"Prevent patient leakage across splits","citation_ids":["tripod_ai_2024","probast_2019"],"evidence_scope":"methods"},
+    {"claim_id":"site_missingness_reporting","field":"eligibility","text":"Report missingness and outcome ascertainment by site","citation_ids":["tripod_ai_2024"],"evidence_scope":"reporting_standard"},
+    {"claim_id":"landmark_predictors","field":"exposure","text":"A prespecified predictor set available at the prediction landmark.","citation_ids":["tripod_ai_2024"],"evidence_scope":"reporting_standard"},
+    {"claim_id":"mortality_outcome","field":"outcome","text":"Mortality at a declared horizon with source, censoring, and transfer handling documented.","citation_ids":["tripod_ai_2024"],"evidence_scope":"reporting_standard"},
+    {"claim_id":"individual_risk_estimand","field":"estimand","text":"Individual predicted probability of mortality at the declared horizon in the target population.","citation_ids":["tripod_ai_2024"],"evidence_scope":"reporting_standard"},
+    {"claim_id":"patient_level_validation","field":"method","text":"Patient-level temporal or external validation","citation_ids":["tripod_ai_2024"],"evidence_scope":"reporting_standard"},
+    {"claim_id":"calibration_and_discrimination","field":"method","text":"Calibration plot, slope, intercept, and discrimination","citation_ids":["tripod_ai_2024"],"evidence_scope":"reporting_standard"},
+    {"claim_id":"uncertainty_estimation","field":"method","text":"Bootstrap or appropriate interval estimation","citation_ids":["tripod_ai_2024"],"evidence_scope":"reporting_standard"},
+    {"claim_id":"missingness_workflow","field":"sensitivity","text":"Complete-case versus prespecified imputation workflow","citation_ids":["probast_2019"],"evidence_scope":"methods"},
+    {"claim_id":"temporal_site_performance","field":"sensitivity","text":"Temporal and site-stratified performance","citation_ids":["tripod_ai_2024"],"evidence_scope":"reporting_standard"},
+    {"claim_id":"recalibration_sensitivity","field":"sensitivity","text":"Model recalibration without feature refitting","citation_ids":["tripod_ai_2024"],"evidence_scope":"reporting_standard"},
+    {"claim_id":"stop_predictor_leakage","field":"stop_condition","text":"Prediction time occurs after candidate predictors","citation_ids":["probast_2019"],"evidence_scope":"methods"},
+    {"claim_id":"stop_horizon_mismatch","field":"stop_condition","text":"Mortality horizon differs irreconcilably between development and validation data","citation_ids":["tripod_ai_2024"],"evidence_scope":"reporting_standard"},
+    {"claim_id":"stop_no_patient_identity","field":"stop_condition","text":"Patient identifiers cannot prevent split leakage","citation_ids":["probast_2019"],"evidence_scope":"methods"},
+    {"claim_id":"confirm_mortality_horizon","field":"requires_confirmation","text":"Confirm the mortality horizon and ascertainment source","citation_ids":["tripod_ai_2024"],"evidence_scope":"reporting_standard"},
+    {"claim_id":"confirm_repeated_stays","field":"requires_confirmation","text":"Confirm whether repeated ICU stays may cross development and validation splits","citation_ids":["probast_2019"],"evidence_scope":"methods"}
+  ],
+  "trust_level": "built_in_reviewed",
+  "review_status": "curated_mvp",
+  "review_attestation": null
 }

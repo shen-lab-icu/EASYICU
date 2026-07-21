@@ -4,32 +4,32 @@
   "shim_import_paths": [],
   "files": {
     "execution/phase.py": {
-      "loc": 11481,
-      "sha256": "9b898a1d2656e5d36a67e64da727bc63f86ea20eb05e1927ab60f74a2e0edc45",
-      "intra_package_import_edges": 68,
+      "loc": 11462,
+      "sha256": "fd1205ec75492e9fcf877555c781e87bc2d9cd234ca61e863546850f4f28abf2",
+      "intra_package_import_edges": 70,
       "shim_bypass_violations": []
     },
     "pipeline.py": {
-      "loc": 10747,
-      "sha256": "f2757939d7bdd9f1c5567fd51bdf037333928fc650850c110f1489daa78bdddb",
-      "intra_package_import_edges": 85,
+      "loc": 10804,
+      "sha256": "7988622bc864ef9f2d6f39f57cb5e4dab4050723bc4752c1da06208ddc62360a",
+      "intra_package_import_edges": 89,
       "shim_bypass_violations": []
     },
     "reporting/readiness.py": {
-      "loc": 2953,
-      "sha256": "3bf7336b6fffc78d1571d15884ea5baa9d82a2845628300e1f50517af63169fd",
-      "intra_package_import_edges": 12,
+      "loc": 2940,
+      "sha256": "e3769b9fb98b8b761b0fba4511adb1008f9f8598263f44058d77f26a1338dd2b",
+      "intra_package_import_edges": 13,
       "shim_bypass_violations": []
     },
     "authority/typed_binding.py": {
-      "loc": 1362,
-      "sha256": "66c8fb821d224a892b61ef8f782602efa1ed8dbbf111620bba958e60b8981643",
-      "intra_package_import_edges": 9,
+      "loc": 1318,
+      "sha256": "96851605e61c5f86d08b2a82cb6412328256eec46ad15b0ac44e922d456ea420",
+      "intra_package_import_edges": 11,
       "shim_bypass_violations": []
     },
     "authority/plan_authority.py": {
-      "loc": 365,
-      "sha256": "b614e144c12d1e0548fae93ad1f9e295a9ea039aa5b1abdb5f170a05a0e3a280",
+      "loc": 367,
+      "sha256": "96881c071ed1d7494b4b2e542ff9e14f798c31323727b8682494cc7cc337924e",
       "intra_package_import_edges": 7,
       "shim_bypass_violations": []
     },
@@ -53,20 +53,20 @@
     },
     "gates/preflight.py": {
       "loc": 8125,
-      "sha256": "d692521a4139547d7e01735221c622069823bd6ea87d523e9bed3d7e7ff6ab10",
-      "intra_package_import_edges": 4,
+      "sha256": "29104794f4862eb2c28a6c956d92be1eb0f124554d1cec6d5829940717c5fd13",
+      "intra_package_import_edges": 8,
       "shim_bypass_violations": []
     },
     "gates/typed_input.py": {
       "loc": 308,
-      "sha256": "0d88b47f006111765f5c803bb028eb2986f05387ec4f960a5f5f8a13579e3e73",
+      "sha256": "024d5e332283f181704200a2740a4eefa6f9a80f6ec1df12088d7616db2bbb6e",
       "intra_package_import_edges": 2,
       "shim_bypass_violations": []
     },
     "repairs/source.py": {
-      "loc": 6852,
-      "sha256": "20956e7519d11c8537539a2a4287cdbb7b37162b7f48f81378bb7f04797fa8ed",
-      "intra_package_import_edges": 8,
+      "loc": 6847,
+      "sha256": "81080b6a3bf3e1ed6323e7b2908c0f132f8faab41ee7a960bf41e26601b83b02",
+      "intra_package_import_edges": 15,
       "shim_bypass_violations": []
     },
     "repairs/typed_input.py": {
@@ -78,22 +78,22 @@
   },
   "functions": {
     "execution/phase.py::_execute_one_step": {
-      "lines": 6180,
-      "line_start": 4845,
-      "direct_nested_funcs": 24,
-      "total_nested_funcs": 26,
-      "own_bound_names": 343,
+      "lines": 6137,
+      "line_start": 4869,
+      "direct_nested_funcs": 22,
+      "total_nested_funcs": 24,
+      "own_bound_names": 342,
       "own_nonlocal_names": [
         "runtime_state"
       ],
       "own_nonlocal_count": 1,
-      "callable_closure_captured_names": 31
+      "callable_closure_captured_names": 30
     },
     "execution/phase.py::run_execute_phase": {
-      "lines": 7952,
-      "line_start": 3530,
+      "lines": 7928,
+      "line_start": 3535,
       "direct_nested_funcs": 15,
-      "total_nested_funcs": 45,
+      "total_nested_funcs": 43,
       "own_bound_names": 145,
       "own_nonlocal_names": [],
       "own_nonlocal_count": 0,

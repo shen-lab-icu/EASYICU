@@ -1,10 +1,11 @@
 {
-  "schema_version": "easyicu.research_know_how/1",
+  "schema_version": "easyicu.research_know_how/2",
   "card_id": "mechanical_ventilation_liberation",
   "version": "1.0.0",
   "title": "Mechanical ventilation liberation outcomes",
   "summary": "Candidate coordinates for invasive-ventilation duration, liberation, extubation, or weaning outcomes. Ventilation episodes, readiness landmarks, competing death, reintubation, and discharge must be operationalized from observable timestamps.",
   "clinical_topics": ["mechanical ventilation", "weaning", "liberation", "extubation", "reintubation", "ventilator-free days"],
+  "topic_aliases": ["mechanical ventilation", "mechanical ventilation liberation", "ventilator liberation", "ventilator weaning", "extubation failure", "ventilator-free days", "机械通气", "机械通气脱机", "拔管失败", "呼吸机脱离"],
   "study_families": ["association", "time_to_event", "prediction"],
   "applicable_databases": ["miiv", "mimic_iv", "mimic_iii", "eicu", "hirid", "aumc", "sicdb"],
   "design_candidates": {
@@ -21,6 +22,7 @@
   },
   "required_concepts": ["mechanical_ventilation", "ventilation_start_time", "ventilation_end_time", "death", "discharge"],
   "stop_conditions": ["Invasive ventilation episodes cannot be distinguished from non-invasive support", "Outcome timing cannot be ordered relative to the landmark", "Death or discharge status is unavailable for the selected outcome"],
+  "requires_confirmation": ["Confirm the ventilation episode and durable-liberation definitions", "Confirm how tracheostomy, death, discharge, and transfer enter the outcome"],
   "citations": [
     {
       "citation_id": "ats_chest_liberation_2017",
@@ -41,5 +43,30 @@
       "supports": ["weaning classification candidates", "episode and outcome definitions"]
     }
   ],
-  "review_status": "curated_mvp"
+  "claims": [
+    {"claim_id":"ventilated_population","field":"population","text":"Patients with a reproducibly identified invasive-mechanical-ventilation episode and adequate episode timing.","citation_ids":["ats_chest_liberation_2017","wind_2017"],"evidence_scope":"guideline"},
+    {"claim_id":"ventilation_landmark","field":"time_zero","text":"Intubation, start of invasive ventilation, or a defined readiness-to-wean landmark selected before exposure classification.","citation_ids":["ats_chest_liberation_2017","wind_2017"],"evidence_scope":"guideline"},
+    {"claim_id":"pre_landmark_support_window","field":"observation_window","text":"Pre-landmark respiratory support, physiology, sedation, and severity data with episode gaps explicitly handled.","citation_ids":["ats_chest_liberation_2017","wind_2017"],"evidence_scope":"representative_study"},
+    {"claim_id":"liberation_followup","field":"followup_window","text":"Follow to successful liberation, reintubation, death, discharge, or a fixed horizon using explicit competing-event rules.","citation_ids":["ats_chest_liberation_2017","wind_2017"],"evidence_scope":"guideline"},
+    {"claim_id":"episode_construction","field":"eligibility","text":"Define ventilation episode construction","citation_ids":["wind_2017"],"evidence_scope":"representative_study"},
+    {"claim_id":"durable_liberation","field":"eligibility","text":"Distinguish extubation from durable liberation","citation_ids":["ats_chest_liberation_2017","wind_2017"],"evidence_scope":"guideline"},
+    {"claim_id":"tracheostomy_transfer_handling","field":"eligibility","text":"State tracheostomy and transfer handling","citation_ids":["ats_chest_liberation_2017"],"evidence_scope":"guideline"},
+    {"claim_id":"pre_landmark_exposure","field":"exposure","text":"Question-specific baseline or time-varying respiratory, sedation, or treatment factor measured before the relevant landmark.","citation_ids":["ats_chest_liberation_2017"],"evidence_scope":"guideline"},
+    {"claim_id":"liberation_outcome","field":"outcome","text":"Successful liberation, extubation failure, ventilation duration, or ventilator-free days using a prespecified operational definition.","citation_ids":["ats_chest_liberation_2017","wind_2017"],"evidence_scope":"guideline"},
+    {"claim_id":"liberation_estimand","field":"estimand","text":"Probability, time, or adjusted contrast for the declared liberation outcome in the target ventilated population.","citation_ids":["ats_chest_liberation_2017"],"evidence_scope":"guideline"},
+    {"claim_id":"competing_risk_method","field":"method","text":"Competing-risk or multistate analysis when death precludes liberation","citation_ids":["ats_chest_liberation_2017"],"evidence_scope":"guideline"},
+    {"claim_id":"episode_audit","field":"method","text":"Patient-level episode construction audit","citation_ids":["wind_2017"],"evidence_scope":"representative_study"},
+    {"claim_id":"prediction_performance","field":"method","text":"Calibration and discrimination for prediction tasks","citation_ids":["ats_chest_liberation_2017"],"evidence_scope":"expert_consensus"},
+    {"claim_id":"liberation_gap_sensitivity","field":"sensitivity","text":"Alternative durable-liberation gap","citation_ids":["wind_2017"],"evidence_scope":"representative_study"},
+    {"claim_id":"death_vfd_sensitivity","field":"sensitivity","text":"Death handling in ventilator-free days","citation_ids":["ats_chest_liberation_2017"],"evidence_scope":"guideline"},
+    {"claim_id":"episode_count_sensitivity","field":"sensitivity","text":"First episode versus all episodes","citation_ids":["wind_2017"],"evidence_scope":"representative_study"},
+    {"claim_id":"stop_invasive_status_unknown","field":"stop_condition","text":"Invasive ventilation episodes cannot be distinguished from non-invasive support","citation_ids":["wind_2017"],"evidence_scope":"representative_study"},
+    {"claim_id":"stop_unordered_outcome","field":"stop_condition","text":"Outcome timing cannot be ordered relative to the landmark","citation_ids":["ats_chest_liberation_2017"],"evidence_scope":"guideline"},
+    {"claim_id":"stop_missing_terminal_status","field":"stop_condition","text":"Death or discharge status is unavailable for the selected outcome","citation_ids":["ats_chest_liberation_2017"],"evidence_scope":"guideline"},
+    {"claim_id":"confirm_episode_definition","field":"requires_confirmation","text":"Confirm the ventilation episode and durable-liberation definitions","citation_ids":["ats_chest_liberation_2017","wind_2017"],"evidence_scope":"expert_consensus"},
+    {"claim_id":"confirm_competing_events","field":"requires_confirmation","text":"Confirm how tracheostomy, death, discharge, and transfer enter the outcome","citation_ids":["ats_chest_liberation_2017"],"evidence_scope":"guideline"}
+  ],
+  "trust_level": "built_in_reviewed",
+  "review_status": "curated_mvp",
+  "review_attestation": null
 }

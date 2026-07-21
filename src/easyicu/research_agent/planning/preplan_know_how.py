@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any, Mapping, Sequence
 
 from ..know_how import KnowHowHit, KnowHowIntegrityError, KnowHowRegistry
 from ..schema import ResearchContext
@@ -36,6 +36,140 @@ class PreplanKnowHow:
     @property
     def selected_ids(self) -> tuple[str, ...]:
         return tuple(hit.card_id for hit in self.hits)
+
+    @property
+    def decision_authority(self) -> Mapping[str, Mapping[str, Any]]:
+        """Exact card/claim coordinates the Planner may cite for this run."""
+        authority: dict[str, Mapping[str, Any]] = {}
+        for hit in self.hits:
+            card = self.registry.get(hit.card_id)
+            authority[hit.card_id] = {
+                "version": hit.version,
+                "file_sha256": hit.file_sha256,
+                "claims": {
+                    claim.claim_id: tuple(claim.citation_ids) for claim in card.claims
+                },
+            }
+        return authority
+
+
+@dataclass(frozen=True)
+class PlannerKnowHowBinding:
+    """All Planner-facing runtime coordinates for one retrieved card set."""
+
+    prompt: str = ""
+    selected_ids: tuple[str, ...] = ()
+    decision_authority: Mapping[str, Mapping[str, Any]] | None = None
+    enabled: bool = False
+
+    @classmethod
+    def from_prepared(cls, prepared: PreplanKnowHow) -> "PlannerKnowHowBinding":
+        return cls(
+            prompt=(prepared.prompt if prepared.hits else ""),
+            selected_ids=prepared.selected_ids,
+            decision_authority=prepared.decision_authority,
+            enabled=True,
+        )
+
+    @property
+    def planner_kwargs(self) -> dict[str, Any]:
+        return {
+            "allowed_know_how_decisions": self.decision_authority,
+            "know_how_context": self.prompt,
+        }
+
+    def verify_resume(self, decisions: Sequence[Any], *, enabled: bool) -> None:
+        if decisions and not enabled:
+            raise KnowHowIntegrityError(
+                "resume plan contains know_how_decisions but know-how retrieval "
+                "is disabled"
+            )
+        if enabled:
+            verify_know_how_decisions(decisions, self.decision_authority or {})
+
+    def prompt_metrics(self, planner: Any, context: ResearchContext) -> dict[str, Any]:
+        baseline = planner.request_metrics(context)
+        metrics = dict(planner.last_prompt_metrics)
+        return {
+            **metrics,
+            "without_know_how_total_bytes": baseline["total_bytes"],
+            "know_how_added_bytes": metrics["total_bytes"] - baseline["total_bytes"],
+            "know_how_selected_count": len(self.selected_ids),
+            "know_how_enabled": self.enabled,
+        }
+
+    def persist_prompt_metrics(
+        self,
+        metrics: Mapping[str, Any] | None,
+        *,
+        run_dir: Path,
+        evidence: Any,
+    ) -> None:
+        if metrics is None:
+            return
+        path = run_dir / "planner_prompt_metrics.json"
+        path.write_text(
+            json.dumps(
+                {"schema_version": "easyicu.planner_prompt_metrics/1", **metrics},
+                ensure_ascii=False,
+                indent=2,
+                sort_keys=True,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        if evidence.get("planner_prompt_metrics") is None:
+            evidence.register_file(
+                kind="log",
+                description=(
+                    "Exact initial Planner request byte metrics and bounded "
+                    "know-how contribution."
+                ),
+                source_path=path,
+                evidence_id="planner_prompt_metrics",
+                producer="planner",
+                generation_mode="deterministic_skill",
+                inputs=(["know_how_prompt"] if self.prompt else []),
+            )
+
+
+def verify_know_how_decisions(
+    decisions: Sequence[Any],
+    authority: Mapping[str, Mapping[str, Any]],
+) -> None:
+    """Fail closed unless decisions exactly match this run's retrieval authority."""
+    decided_cards: set[str] = set()
+    for decision in decisions:
+        card_id = str(decision.card_id)
+        card = authority.get(card_id)
+        if card is None:
+            raise KnowHowIntegrityError(
+                f"know-how decision references unretrieved card {card_id!r}"
+            )
+        if str(decision.card_version) != str(card.get("version")) or str(
+            decision.card_sha256
+        ) != str(card.get("file_sha256")):
+            raise KnowHowIntegrityError(
+                f"know-how decision changed version/SHA for {card_id!r}"
+            )
+        expected_citations = (card.get("claims") or {}).get(decision.claim_id)
+        if expected_citations is None:
+            raise KnowHowIntegrityError(
+                "know-how decision references unknown claim "
+                f"{card_id}.{decision.claim_id}"
+            )
+        if tuple(decision.citation_ids) != tuple(expected_citations):
+            raise KnowHowIntegrityError(
+                "know-how decision changed citation binding for "
+                f"{card_id}.{decision.claim_id}"
+            )
+        decided_cards.add(card_id)
+    missing = sorted(set(authority) - decided_cards)
+    if missing:
+        raise KnowHowIntegrityError(
+            "Planner omitted claim-level dispositions for retrieved cards: "
+            f"{missing!r}"
+        )
 
 
 def _write_or_verify(

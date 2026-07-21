@@ -1005,6 +1005,65 @@ class AnalysisStep(BaseModel):
         return self
 
 
+class KnowHowDecision(BaseModel):
+    """Planner disposition for one retrieved, evidence-bound protocol claim."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    card_id: str
+    card_version: str
+    card_sha256: str
+    claim_id: str
+    disposition: Literal["adopted", "rejected", "unresolved", "requires_confirmation"]
+    reason_code: str
+    rationale: str = Field(max_length=500)
+    citation_ids: List[str] = Field(min_length=1, max_length=8)
+
+    @field_validator("card_id", "claim_id", "reason_code")
+    @classmethod
+    def _validate_stable_id(cls, value: str) -> str:
+        value = str(value or "").strip()
+        if not re.fullmatch(r"[a-z][a-z0-9_]{2,79}", value):
+            raise ValueError(
+                "know-how decision ids must be stable lowercase identifiers"
+            )
+        return value
+
+    @field_validator("card_version")
+    @classmethod
+    def _validate_card_version(cls, value: str) -> str:
+        value = str(value or "").strip()
+        if not re.fullmatch(r"[1-9][0-9]*\.[0-9]+\.[0-9]+", value):
+            raise ValueError("know-how decision card_version must be semantic x.y.z")
+        return value
+
+    @field_validator("card_sha256")
+    @classmethod
+    def _validate_card_sha(cls, value: str) -> str:
+        value = str(value or "").strip()
+        if not re.fullmatch(r"[0-9a-f]{64}", value):
+            raise ValueError("know-how decision card_sha256 must be SHA-256")
+        return value
+
+    @field_validator("rationale")
+    @classmethod
+    def _validate_rationale(cls, value: str) -> str:
+        value = " ".join(str(value or "").split())
+        if not value:
+            raise ValueError("know-how decision rationale must be non-empty")
+        return value
+
+    @field_validator("citation_ids")
+    @classmethod
+    def _validate_citations(cls, values: List[str]) -> List[str]:
+        cleaned = [str(value or "").strip() for value in values]
+        if any(not re.fullmatch(r"[a-z][a-z0-9_]{2,79}", item) for item in cleaned):
+            raise ValueError("know-how decision citation_ids must be stable ids")
+        if len(cleaned) != len(set(cleaned)):
+            raise ValueError("know-how decision citation_ids must be unique")
+        return cleaned
+
+
 class AnalysisPlan(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -1042,38 +1101,32 @@ class AnalysisPlan(BaseModel):
             "column name."
         ),
     )
-    know_how_refs: List[str] = Field(
+    know_how_decisions: List[KnowHowDecision] = Field(
         default_factory=list,
         description=(
-            "Retrieved research know-how card ids explicitly adopted by the "
-            "Planner. Empty refs are omitted from serialization to preserve "
-            "the legacy default-off plan contract."
+            "Claim-level dispositions for retrieved protocol advice. Card, claim, "
+            "citation, version, and SHA coordinates are validated against this run's "
+            "deterministic retrieval. Empty decisions are omitted for legacy/default-off runs."
         ),
     )
     rationale: Optional[str] = None
     revision: int = 1
 
-    @field_validator("know_how_refs", mode="before")
+    @field_validator("know_how_decisions")
     @classmethod
-    def _validate_know_how_refs(cls, value: Any) -> List[str]:
-        if value is None:
-            return []
-        if not isinstance(value, list):
-            raise ValueError("know_how_refs must be an array")
-        refs = [str(item or "").strip() for item in value]
-        if len(refs) > 5:
-            raise ValueError("know_how_refs must contain at most 5 card ids")
-        if any(not re.fullmatch(r"[a-z][a-z0-9_]{2,79}", item) for item in refs):
-            raise ValueError("know_how_refs must contain stable lowercase card ids")
-        if len(refs) != len(set(refs)):
-            raise ValueError("know_how_refs must not contain duplicates")
-        return refs
+    def _validate_know_how_decisions(
+        cls, values: List[KnowHowDecision]
+    ) -> List[KnowHowDecision]:
+        coordinates = [(item.card_id, item.claim_id) for item in values]
+        if len(coordinates) != len(set(coordinates)):
+            raise ValueError("know_how_decisions must not repeat a card/claim pair")
+        return values
 
     @model_serializer(mode="wrap")
-    def _serialize_optional_know_how_refs(self, handler: Any) -> Dict[str, Any]:
+    def _serialize_optional_know_how_decisions(self, handler: Any) -> Dict[str, Any]:
         payload = handler(self)
-        if not self.know_how_refs:
-            payload.pop("know_how_refs", None)
+        if not self.know_how_decisions:
+            payload.pop("know_how_decisions", None)
         return payload
 
     @field_validator("display_labels", mode="before")
