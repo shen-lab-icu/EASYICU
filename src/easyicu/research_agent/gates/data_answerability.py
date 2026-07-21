@@ -1,4 +1,4 @@
-"""Outcome-blind, pre-Planner answerability checks for declared predictors.
+"""Pre-Planner answerability checks for declared exposure/outcome contrasts.
 
 These checks use typed ``ResearchContext`` facts only.  They never turn a
 missing value into an event-absent value, choose an exposure definition, or
@@ -14,6 +14,16 @@ from ..authority.source_status import (
     source_status_contract_from_context,
 )
 from ..schema import ResearchContext, ValidationFinding
+
+
+def _domain_has_fewer_than_two_levels(domain: dict[str, object]) -> bool:
+    n_unique = domain.get("n_unique")
+    if domain.get("is_constant") is True:
+        return True
+    try:
+        return int(n_unique) < 2
+    except (TypeError, ValueError):
+        return False
 
 
 def primary_exposure_answerability_findings(
@@ -35,13 +45,7 @@ def primary_exposure_answerability_findings(
     if descriptor is None or not isinstance(descriptor.observed_domain, dict):
         return []
     domain = descriptor.observed_domain
-    n_unique = domain.get("n_unique")
-    is_constant = domain.get("is_constant") is True
-    try:
-        fewer_than_two = int(n_unique) < 2
-    except (TypeError, ValueError):
-        fewer_than_two = False
-    if not is_constant and not fewer_than_two:
+    if not _domain_has_fewer_than_two_levels(domain):
         return []
 
     missing = descriptor.missingness
@@ -188,4 +192,66 @@ def primary_exposure_answerability_findings(
     ]
 
 
-__all__ = ["primary_exposure_answerability_findings"]
+def target_outcome_answerability_findings(
+    context: ResearchContext,
+) -> list[ValidationFinding]:
+    """Block a requested contrast with no observed outcome variation.
+
+    Missing outcomes never create an event/non-event contrast.  The gate stays
+    silent when the context lacks a sealed observed-domain fact, but when the
+    exact target has fewer than two observed levels no association, causal, or
+    prediction contrast can be fitted truthfully.
+    """
+
+    exposure_name = str(context.primary_exposure or "").strip()
+    outcome_name = str(context.target_outcome or "").strip()
+    if not exposure_name or not outcome_name:
+        return []
+    descriptor = context.variable(outcome_name)
+    if descriptor is None or not isinstance(descriptor.observed_domain, dict):
+        return []
+    domain = descriptor.observed_domain
+    if not _domain_has_fewer_than_two_levels(domain):
+        return []
+    missing = descriptor.missingness
+    missing_n = int(missing.n_missing) if missing is not None else 0
+    missing_fraction = float(missing.fraction_missing) if missing is not None else 0.0
+    return [
+        ValidationFinding(
+            validator="data_answerability_gate",
+            severity="error",
+            message=(
+                f"Target outcome `{outcome_name}` has fewer than two observed "
+                "levels in the locked cohort. Missing outcome rows cannot be "
+                "relabelled as events or non-events, so the requested contrast is "
+                "not estimable before any model is generated."
+            ),
+            detail={
+                "kind": "scientifically_infeasible_no_outcome_contrast",
+                "primary_exposure": exposure_name,
+                "target_outcome": outcome_name,
+                "observed_domain": dict(domain),
+                "missing_n": missing_n,
+                "missing_fraction": missing_fraction,
+                "required_action": "revise_question_cohort_or_outcome",
+            },
+        )
+    ]
+
+
+def analysis_answerability_findings(
+    context: ResearchContext,
+) -> list[ValidationFinding]:
+    """Return every proven pre-Planner exposure/outcome infeasibility."""
+
+    return [
+        *primary_exposure_answerability_findings(context),
+        *target_outcome_answerability_findings(context),
+    ]
+
+
+__all__ = [
+    "analysis_answerability_findings",
+    "primary_exposure_answerability_findings",
+    "target_outcome_answerability_findings",
+]

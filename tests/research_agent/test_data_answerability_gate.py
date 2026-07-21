@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
+import pandas as pd
 import pytest
 
 from easyicu.research_agent.authority.source_status import (
@@ -7,7 +11,9 @@ from easyicu.research_agent.authority.source_status import (
     source_status_contract_digest,
 )
 from easyicu.research_agent.gates.data_answerability import (
+    analysis_answerability_findings,
     primary_exposure_answerability_findings,
+    target_outcome_answerability_findings,
 )
 from easyicu.research_agent.literature import (
     HypothesisBlueprintAgent,
@@ -27,6 +33,8 @@ def _context(
     missing_n: int,
     missingness_semantics: str | None = None,
     source_status_contract: dict[str, object] | None = None,
+    outcome_domain: dict[str, object] | None = None,
+    outcome_missing_n: int = 0,
 ) -> ResearchContext:
     provenance: dict[str, object] = {}
     if source_status_contract is not None:
@@ -53,7 +61,21 @@ def _context(
                     n_total=100,
                 ),
             ),
-            ConceptDescriptor(name="outcome_y", role="outcome", dtype="int64"),
+            ConceptDescriptor(
+                name="outcome_y",
+                role="outcome",
+                dtype="int64",
+                observed_domain=outcome_domain,
+                missingness=(
+                    MissingnessProfile(
+                        fraction_missing=outcome_missing_n / 100,
+                        n_missing=outcome_missing_n,
+                        n_total=100,
+                    )
+                    if outcome_domain is not None
+                    else None
+                ),
+            ),
         ],
         primary_exposure="exposure_x",
         target_outcome="outcome_y",
@@ -107,6 +129,143 @@ def test_two_observed_levels_remain_answerable():
     )
 
     assert primary_exposure_answerability_findings(context) == []
+
+
+def test_single_observed_outcome_level_blocks_before_planner() -> None:
+    context = _context(
+        domain={
+            "n_unique": 2,
+            "is_constant": False,
+            "is_binary": True,
+            "min": 0.0,
+            "max": 1.0,
+        },
+        missing_n=0,
+        outcome_domain={
+            "n_unique": 1,
+            "is_constant": True,
+            "is_binary": True,
+            "min": 0.0,
+            "max": 0.0,
+        },
+    )
+
+    findings = target_outcome_answerability_findings(context)
+
+    assert len(findings) == 1
+    assert findings[0].detail["kind"] == (
+        "scientifically_infeasible_no_outcome_contrast"
+    )
+    blueprint = HypothesisBlueprintAgent().run(
+        context=context,
+        literature=LiteratureBundle(
+            research_question=context.research_question,
+            citations=[],
+        ),
+    )
+    assert blueprint.feasibility_status == "blocked"
+
+
+def test_missing_outcomes_cannot_be_treated_as_the_absent_event_level() -> None:
+    context = _context(
+        domain={
+            "n_unique": 2,
+            "is_constant": False,
+            "is_binary": True,
+            "min": 0.0,
+            "max": 1.0,
+        },
+        missing_n=0,
+        outcome_domain={
+            "n_unique": 1,
+            "is_constant": True,
+            "is_binary": True,
+            "min": 1.0,
+            "max": 1.0,
+        },
+        outcome_missing_n=40,
+    )
+
+    findings = analysis_answerability_findings(context)
+
+    assert len(findings) == 1
+    assert findings[0].detail["missing_n"] == 40
+    assert findings[0].detail["required_action"] == (
+        "revise_question_cohort_or_outcome"
+    )
+
+
+def test_two_observed_outcome_levels_remain_answerable() -> None:
+    context = _context(
+        domain={
+            "n_unique": 2,
+            "is_constant": False,
+            "is_binary": True,
+            "min": 0.0,
+            "max": 1.0,
+        },
+        missing_n=0,
+        outcome_domain={
+            "n_unique": 2,
+            "is_constant": False,
+            "is_binary": True,
+            "min": 0.0,
+            "max": 1.0,
+        },
+    )
+
+    assert analysis_answerability_findings(context) == []
+
+
+def test_constant_outcome_aborts_pipeline_before_any_provider_call(
+    ra,
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cohort = tmp_path / "constant_outcome.parquet"
+    pd.DataFrame(
+        {
+            "stay_id": [1, 2, 3, 4],
+            "exposure_x": [0, 1, 0, 1],
+            "outcome_y": [0, 0, 0, 0],
+        }
+    ).to_parquet(cohort, index=False)
+    llm = ra.MockLLMClient()
+    provider_calls = 0
+
+    def forbidden_provider_call(*_args, **_kwargs):
+        nonlocal provider_calls
+        provider_calls += 1
+        raise AssertionError("answerability failure must precede the provider")
+
+    monkeypatch.setattr(llm, "complete", forbidden_provider_call)
+    skill = ra.ClinicalSkill(
+        key="constant_outcome_answerability",
+        name="Constant outcome answerability",
+        description="Verify pre-Planner outcome feasibility.",
+        research_question_template="Is exposure_x associated with outcome_y?",
+        target_outcome="outcome_y",
+        primary_predictor="exposure_x",
+        expected_variables=["exposure_x", "outcome_y"],
+    )
+    pipeline = ra.ResearchAgentPipeline(
+        workdir=tmp_path / "work",
+        llm=llm,
+        enable_literature=False,
+    )
+
+    result = pipeline.run(
+        cohort=cohort,
+        cohort_name="constant_outcome",
+        database="synthetic",
+        primary_exposure="exposure_x",
+        skill=skill,
+    )
+
+    assert provider_calls == 0
+    assert result.plan_path == ""
+    manifest = json.loads(Path(result.manifest_path).read_text())
+    assert manifest["notes"] == "aborted: data_answerability_failed"
 
 
 def test_free_text_missingness_semantics_cannot_authorize_absence():
