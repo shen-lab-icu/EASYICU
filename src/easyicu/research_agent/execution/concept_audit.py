@@ -38,9 +38,42 @@ from ..authority.provider_budget import (
 from ..authority.run_input import canonical_sha256
 from ..schema import AnalysisStep, ResearchContext
 from ..authority.step_attempt import StepAttemptState
+from ..authority.step_runtime import read_concept_audit_findings
 from .step_worker_state import StepWorkerProgress
 
 _RETRYABLE_FINAL_AUDIT_ISSUE_CODE = "llm_concept_audit_provider_failure"
+_NON_SEMANTIC_AUDIT_VALIDATORS = frozenset(
+    {"provider_call_budget", "provider_call_budget_receipt"}
+)
+
+
+def verified_capsule_concept_audit_replay(
+    verified: Any,
+    *,
+    run_dir: Path,
+    auditor_identity_sha256: str,
+    environment_sha256: str,
+    validator_implementation_sha256: str,
+) -> Optional[tuple[list[ValidationFinding], str]]:
+    """Return exact sealed findings only under current audit dependencies.
+
+    Provider-budget and receipt failures describe control-plane availability,
+    not the candidate's scientific semantics. They must never be replayed as
+    a completed concept review, including for capsules written by older code.
+    """
+
+    audit = verified.capsule.concept_audit
+    if (
+        audit is None
+        or audit.auditor_identity_sha256 != auditor_identity_sha256
+        or audit.environment_sha256 != environment_sha256
+        or audit.validator_implementation_sha256 != validator_implementation_sha256
+    ):
+        return None
+    findings = read_concept_audit_findings(verified, run_dir=run_dir)
+    if any(finding.validator in _NON_SEMANTIC_AUDIT_VALIDATORS for finding in findings):
+        return None
+    return findings, audit.audit_key
 
 
 def _retryable_final_audit_provider_failure(

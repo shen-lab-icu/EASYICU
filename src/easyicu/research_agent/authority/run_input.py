@@ -621,12 +621,55 @@ def validator_code_sha256() -> str:
     return _tree_sha256(root, relative_paths=paths)
 
 
+@lru_cache(maxsize=1)
+def concept_audit_code_sha256() -> str:
+    """Fingerprint only code that can change concept-audit semantics.
+
+    Evidence registration, reporting, and runner lifecycle fixes must not
+    invalidate an already sealed LLM review of identical code and scientific
+    inputs.  The exact prompt is bound separately by the audit cache, while
+    this bundle covers response parsing, deterministic reclassification, and
+    the cache/continuation policy that turns the response into findings.
+    """
+
+    root = Path(__file__).resolve().parents[1]
+    paths = [
+        root / "audits" / "validators.py",
+        root / "execution" / "concept_audit.py",
+        root / "execution" / "concept_audit_cache.py",
+    ]
+    return _tree_sha256(root, relative_paths=paths)
+
+
 def build_environment_identity(*, llm_signature: str) -> Dict[str, Any]:
     prompt_files = prompt_pack_files()
     return {
         "llm_signature": llm_signature,
         "llm_signature_sha256": canonical_sha256(llm_signature),
         "engine_code_sha256": engine_code_sha256(),
+        "validator_code_sha256": validator_code_sha256(),
+        "prompt_pack_version": PROMPT_PACK_VERSION,
+        "prompt_pack_files": prompt_files,
+        "prompt_pack_sha256": canonical_sha256(prompt_files),
+        **dict(metadata_implementation_identity()),
+    }
+
+
+def build_concept_audit_environment_identity(*, llm_signature: str) -> Dict[str, Any]:
+    """Return the dependency identity for digest-bound concept review.
+
+    This intentionally excludes the full research-agent tree hash.  Candidate
+    code, scoped context, step specification, resolved input bindings, exact
+    audit prompt, and auditor identity are already bound by the cache key and
+    capsule.  Keeping the full tree here caused an unrelated evidence-alias
+    fix to demand a duplicate paid review of byte-identical code.
+    """
+
+    prompt_files = prompt_pack_files()
+    return {
+        "llm_signature": llm_signature,
+        "llm_signature_sha256": canonical_sha256(llm_signature),
+        "concept_audit_code_sha256": concept_audit_code_sha256(),
         "validator_code_sha256": validator_code_sha256(),
         "prompt_pack_version": PROMPT_PACK_VERSION,
         "prompt_pack_files": prompt_files,
@@ -2552,9 +2595,11 @@ __all__ = [
     "ResumeInputAuthority",
     "PreparedResumeInput",
     "adopt_verified_legacy_run_input_capsule",
+    "build_concept_audit_environment_identity",
     "build_environment_identity",
     "build_scientific_identity",
     "canonical_sha256",
+    "concept_audit_code_sha256",
     "invalidate_unverified_successful_steps",
     "load_verified_run_input_capsule",
     "prepare_existing_resume_input",

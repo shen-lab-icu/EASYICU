@@ -117,6 +117,7 @@ from .concept_audit import (
     ConceptAuditCoordinator,
     ConceptAuditRuntime,
     ConceptQuarantineState,
+    verified_capsule_concept_audit_replay as _verified_capsule_concept_audit_replay,
 )
 from ..gates.concept import (
     DETERMINISTIC_CODE_GATE_VALIDATORS as _DETERMINISTIC_CODE_GATE_VALIDATORS,
@@ -348,7 +349,7 @@ from ..authority.run_input import (
     _HOST_PROBE_AUTHORITY_KIND,
     _host_cohort_materializer_authority_error,
     _host_probe_authority_error,
-    build_environment_identity,
+    build_concept_audit_environment_identity as _concept_audit_environment,
     canonical_sha256,
     engine_code_sha256,
     verify_legacy_trajectory_capsule_receipt,
@@ -383,7 +384,6 @@ from ..authority.step_runtime import (
     materialize_sealed_run_result,
     persist_candidate_code,
     prepare_step_authority_coordinates,
-    read_concept_audit_findings,
     repair_code_ref,
     seal_concept_audit_capsule,
     seal_deterministic_candidate,
@@ -3647,7 +3647,7 @@ def run_execute_phase(
         llm_concept_auditor_signature
     )
     concept_audit_environment_sha256 = canonical_sha256(
-        build_environment_identity(llm_signature=llm_concept_auditor_signature)
+        _concept_audit_environment(llm_signature=llm_concept_auditor_signature)
     )
     prompt_version = plan_result.prompt_version
     prompt_files = plan_result.prompt_files
@@ -5685,6 +5685,22 @@ def run_execute_phase(
                             expected_step_id=step.step_id,
                         )
                     )
+                current_validator_identity = (
+                    llm_concept_auditor_implementation_sha256
+                    or canonical_sha256("llm_concept_auditor_unavailable")
+                )
+                if step_attempt_state.selected_resume_capsule is not None:
+                    source_audit_replay = _verified_capsule_concept_audit_replay(
+                        step_attempt_state.selected_resume_capsule,
+                        run_dir=run_dir,
+                        auditor_identity_sha256=(llm_concept_auditor_identity_sha256),
+                        environment_sha256=concept_audit_environment_sha256,
+                        validator_implementation_sha256=(current_validator_identity),
+                    )
+                    if source_audit_replay is not None:
+                        step_attempt_state.capsule_audit_findings_by_digest[
+                            step_attempt_state.selected_resume_capsule.capsule.candidate_code.sha256
+                        ] = source_audit_replay
                 if step_attempt_state.selected_resume_capsule is not None and not (
                     capsule_matches_coordinates(
                         step_attempt_state.selected_resume_capsule,
@@ -5748,35 +5764,18 @@ def run_execute_phase(
                     step_record["step_authority_capsule_stage"] = (
                         step_attempt_state.selected_resume_capsule.capsule.stage
                     )
-                    audit = (
-                        step_attempt_state.selected_resume_capsule.capsule.concept_audit
+                    selected_digest = (
+                        step_attempt_state.selected_resume_capsule.capsule.candidate_code.sha256
                     )
-                    if audit is not None:
-                        current_auditor_identity = llm_concept_auditor_identity_sha256
-                        current_validator_identity = (
-                            llm_concept_auditor_implementation_sha256
-                            or canonical_sha256("llm_concept_auditor_unavailable")
+                    if (
+                        step_attempt_state.selected_resume_capsule.capsule.concept_audit
+                        is not None
+                        and selected_digest
+                        not in step_attempt_state.capsule_audit_findings_by_digest
+                    ):
+                        step_record["step_authority_audit_cache_miss"] = (
+                            "audit_identity_drift"
                         )
-                        if (
-                            audit.auditor_identity_sha256 == current_auditor_identity
-                            and audit.environment_sha256
-                            == concept_audit_environment_sha256
-                            and audit.validator_implementation_sha256
-                            == current_validator_identity
-                        ):
-                            step_attempt_state.capsule_audit_findings_by_digest[
-                                step_attempt_state.selected_resume_capsule.capsule.candidate_code.sha256
-                            ] = (
-                                read_concept_audit_findings(
-                                    step_attempt_state.selected_resume_capsule,
-                                    run_dir=run_dir,
-                                ),
-                                audit.audit_key,
-                            )
-                        else:
-                            step_record["step_authority_audit_cache_miss"] = (
-                                "audit_identity_drift"
-                            )
                     checkpoint_authority.checkpoint_state(
                         "capsule_revalidation_pending"
                     )
@@ -8095,8 +8094,15 @@ def run_execute_phase(
                         step_record["llm_concept_audit_status"] = (
                             "skipped_no_auditor_client"
                         )
+                    audit_authority_complete = bool(
+                        candidate_code_digest in concept_audit.completed_digests
+                        or not pipeline._enable_llm_concept_audit
+                        or worker_progress.deterministic_fallback_used
+                        or worker_progress.deterministic_standard_executor_used
+                    )
                     if (
-                        step_attempt_state.coordinates is not None
+                        audit_authority_complete
+                        and step_attempt_state.coordinates is not None
                         and step_attempt_state.current_capsule_ref is not None
                     ):
                         current_authority = load_verified_step_authority_capsule(
