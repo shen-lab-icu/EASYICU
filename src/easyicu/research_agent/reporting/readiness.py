@@ -48,6 +48,14 @@ from .article_contract import (
     summarize_article_contract_coverage,
 )
 from .display_suite import summarize_display_suite_status
+from .completion import (
+    count_missing_evidence_markers as _count_missing_evidence_markers,
+    count_writer_attempts,
+    has_figure_only_output_contract,
+    publication_authorized,
+    run_completion_axes,
+    step_completion_projection,
+)
 from ..authority.evidence_store import EvidenceStore, sha256_of_file
 from ..planning.figure_strategy import summarize_article_figure_strategy_coverage
 from ..planning.study_design import study_design_family_for_analysis_type
@@ -67,24 +75,6 @@ from ..authority.runtime_artifacts import (
     verified_run_evidence_path,
 )
 from ..schema import AnalysisPlan, ResearchContext, ValidationFinding
-
-
-def _has_figure_only_output_contract(step: Any) -> bool:
-    outputs = [
-        str(output or "").strip()
-        for output in (getattr(step, "expected_outputs", None) or [])
-        if str(output or "").strip()
-    ]
-    if not outputs:
-        return False
-    for output in outputs:
-        kind, separator, _product = output.lower().partition(":")
-        if separator:
-            if kind.strip() not in {"figure", "plot", "chart", "fig", "heatmap"}:
-                return False
-        elif not _output_declares_figure(output):
-            return False
-    return True
 
 
 def _figure_steps_satisfied_by_repair(
@@ -179,7 +169,7 @@ def _figure_steps_satisfied_by_repair(
             target_step = plan_by_step.get(target_step_id)
             if (
                 target_step is None
-                or not _has_figure_only_output_contract(target_step)
+                or not has_figure_only_output_contract(target_step)
                 or _parent_step_id_for_figure_step(target_step) != source_step_id
             ):
                 continue
@@ -380,10 +370,15 @@ def execution_gate_status(
     # execution.phase._build_probe_summary. Excluding it here made the gate
     # mis-report `00_probe` as a permanently-missing required step. Surfacing
     # the deterministic probe record fixes the false negative.
-    status_by_step = {
-        str(record.get("step_id")): str(record.get("status") or "")
-        for record in current_step_records(per_step_records)
+    current_records = current_step_records(per_step_records)
+    record_by_step = {
+        str(record.get("step_id")): record
+        for record in current_records
         if record.get("step_id")
+    }
+    status_by_step = {
+        step_id: str(record.get("status") or "")
+        for step_id, record in record_by_step.items()
     }
     missing_steps = [
         step_id for step_id in required_step_ids if step_id not in status_by_step
@@ -411,25 +406,28 @@ def execution_gate_status(
         for step_id in required_step_ids
         if step_id in status_by_step and not _step_ok(step_id)
     ]
+    completion = step_completion_projection(
+        required_step_ids=required_step_ids,
+        record_by_step=record_by_step,
+        status_by_step=status_by_step,
+        step_ok=_step_ok,
+    )
+    scientific_incomplete_steps = completion["scientific_incomplete_steps"]
+    execution_complete = not missing_steps and not failed_steps
     return {
-        "execution_complete": not missing_steps and not failed_steps,
+        "execution_complete": execution_complete,
+        "step_scientific_requirements_complete": (
+            execution_complete and not scientific_incomplete_steps
+        ),
         "required_step_count": len(required_step_ids),
         "completed_step_count": sum(
             1 for step_id in required_step_ids if _step_ok(step_id)
         ),
         "missing_steps": missing_steps,
         "failed_steps": failed_steps,
+        "scientific_incomplete_steps": scientific_incomplete_steps,
+        "step_completion_states": completion["step_completion_states"],
     }
-
-
-def _count_missing_evidence_markers(text: str) -> int:
-    return len(
-        re.findall(
-            r"(?:\[evidence missing:\s*[^\]]+\]|<!--\s*evidence missing:\s*[^>]+-->)",
-            text or "",
-            flags=re.IGNORECASE,
-        )
-    )
 
 
 _OUTCOME_ENDPOINT_RE = re.compile(
@@ -2052,7 +2050,11 @@ def _compute_readiness_gates(
     analysis_errors = base_analysis_errors + (
         replan_budget_errors if replan_budget_exhausted else []
     )
-    analysis_validated = execution["execution_complete"] and not analysis_errors
+    analysis_validated = (
+        execution["execution_complete"]
+        and execution["step_scientific_requirements_complete"]
+        and not analysis_errors
+    )
     manuscript_ready = (
         execution["execution_complete"]
         and evidence_complete
@@ -2095,8 +2097,26 @@ def _compute_readiness_gates(
             else None
         ),
     )
+    publication_ready = publication_authorized(
+        manuscript_ready=manuscript_ready,
+        publication_figure_bundle_ready=publication["publication_figure_bundle_ready"],
+        publication_provenance_ready=publication_provenance[
+            "publication_provenance_ready"
+        ],
+        display_suite_complete=display_suite["display_suite_complete"],
+        article_contract_complete=article_contract["article_contract_complete"],
+        article_figure_strategy_complete=figure_strategy[
+            "article_figure_strategy_complete"
+        ],
+    )
     return {
         **execution,
+        **run_completion_axes(
+            execution_ok=execution["execution_complete"],
+            artifact_valid=evidence_complete,
+            scientific_requirement_complete=analysis_validated,
+            paper_authorized=publication_ready,
+        ),
         "evidence_complete": evidence_complete,
         "numeric_verified": numeric_verified,
         "analysis_validated": analysis_validated,
@@ -2104,12 +2124,7 @@ def _compute_readiness_gates(
         "replan_budget_exhausted": replan_budget_exhausted,
         "replan_budget_hit": replan_budget_hit,
         "replan_budget_advisory": replan_budget_hit and not replan_budget_exhausted,
-        "publication_ready": manuscript_ready
-        and publication["publication_figure_bundle_ready"]
-        and publication_provenance["publication_provenance_ready"]
-        and display_suite["display_suite_complete"]
-        and article_contract["article_contract_complete"]
-        and figure_strategy["article_figure_strategy_complete"],
+        "publication_ready": publication_ready,
         "manuscript_generated": manuscript_generated,
         **manuscript_text_gate,
         "writer_probe_mode": bool(writer_probe_mode),
@@ -2145,34 +2160,6 @@ def _compute_readiness_gates(
     }
 
 
-def _count_writer_attempts(run_dir: Path) -> Optional[int]:
-    """Count writer drafting passes from the run's audit_log.jsonl.
-
-    Each writer pass emits a ``"Drafting manuscript scaffold."`` event; on
-    a resumed run these accumulate, so the count is a cheap fragility proxy
-    (attempts-to-ready). Returns None when the audit log is absent — older
-    runs, or a run that failed before the writer phase.
-    """
-    audit_path = run_dir / "audit_log.jsonl"
-    if not audit_path.exists():
-        return None
-    count = 0
-    try:
-        for line in audit_path.read_text(encoding="utf-8").splitlines():
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                event = json.loads(line)
-            except Exception:
-                continue
-            if str(event.get("event", "")).startswith("Drafting manuscript scaffold"):
-                count += 1
-    except Exception:
-        return None
-    return count
-
-
 def write_readiness_artifacts(
     *,
     context: ResearchContext,
@@ -2202,7 +2189,7 @@ def write_readiness_artifacts(
     # gates were satisfied. Derived from the always-on audit_log.jsonl event
     # stream (no separate event artifact) so the gate story is quantitative
     # — a run that took 4 writer passes is more fragile than one that took 1.
-    gates["writer_attempt_count"] = _count_writer_attempts(run_dir)
+    gates["writer_attempt_count"] = count_writer_attempts(run_dir)
     status = (
         # Fail-closed floor: a run that exhausted its replan budget without
         # converging is diagnostic_only regardless of what limped through.
@@ -2227,7 +2214,7 @@ def write_readiness_artifacts(
 
     run_status_path = run_dir / "run_status.json"
     run_status_payload = {
-        "schema_version": "easyicu.run_status/1",
+        "schema_version": "easyicu.run_status/2",
         "status": status,
         "strict_fail_closed": True,
         "writer_probe_mode": bool(writer_probe_mode),
