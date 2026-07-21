@@ -116,8 +116,8 @@ It runs only Planner, alternates OFF/ON within each repeat pair, writes plans
 under opaque labels, and stores the arm key separately. It defaults to two
 runs per arm and refuses online use of `curated_mvp` cards unless the operator
 explicitly records the development-only override. A prepare-only run against
-the fixed full-parent E2 context measured 65,003 bytes without Know-How and
-68,982 bytes with the one selected card (+3,979 bytes), both below the 80KB
+the fixed full-parent E2 context measured 65,423 bytes without Know-How and
+69,932 bytes with the one selected card (+4,509 bytes), both below the 80KB
 hard gate.
 
 No new extraction is required: experiments consume the existing six-database
