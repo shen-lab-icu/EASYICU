@@ -21,7 +21,10 @@ from .ast_semantics import (
     literal_observational_getattr,
 )
 from .binary_feasibility import binary_feasibility_guard_findings
-from .host_helper_result import closed_counts_table_index_findings, table_one_spec_binding_findings
+from .host_helper_result import (
+    closed_counts_table_index_findings,
+    table_one_spec_binding_findings,
+)
 from .numeric_reduction import is_array_boolean_predicate as _is_array_boolean_predicate
 from .numeric_reduction import is_proven_array_boolean_predicate
 from .numeric_reduction import misnested_boolean_mask_reduction_expression
@@ -2293,12 +2296,165 @@ def _provenance_fail_closed_findings(tree: ast.Module) -> list[ValidationFinding
             isinstance(guard, ast.If) and _stable_local_failure_signals(guard, scope)
         )
 
+    def _separate_direct_failure_guards(
+        scope: ast.AST,
+    ) -> set[ast.If]:
+        """Prove complete fail-close coverage split across direct guards.
+
+        A generated entry point may reject the two stable provenance counts in
+        separate ``if`` statements before publishing outputs.  Treat that as
+        equivalent to one ``invalid_pair_n or discordant_n`` guard only when a
+        single literal audit row binds both roles to immutable built-in ``int``
+        locals, every role is covered by a direct raising branch, and no result
+        sink precedes either branch.  This is deliberately narrower than
+        general control-flow analysis and does not infer semantics from names.
+        """
+
+        if not isinstance(scope, (ast.FunctionDef, ast.AsyncFunctionDef)) or not (
+            _builtin_int_binding_is_unmodified(tree)
+        ):
+            return set()
+
+        audit_rows = [
+            (statement, row)
+            for statement in scope.body
+            if (row := _direct_audit_row(statement)) is not None
+        ]
+        if len(audit_rows) != 1:
+            return set()
+        audit_statement, (fields, _) = audit_rows[0]
+
+        signal_coverage: dict[str, set[str]] = {}
+        for key in _PROVENANCE_FAILURE_KEYS:
+            source = _provenance_signal_source(fields[key])
+            if source is None or source[1] != _PROVENANCE_FAILURE:
+                return set()
+            signal_coverage.setdefault(source[0], set()).add(key)
+        signal_names = set(signal_coverage)
+
+        def _builtin_int_call(node: ast.AST) -> bool:
+            return (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Name)
+                and node.func.id == "int"
+                and len(node.args) == 1
+                and not node.keywords
+            )
+
+        bindings: dict[str, ast.stmt] = {}
+        for signal_name in signal_names:
+            candidates: list[ast.stmt] = []
+            for statement in scope.body:
+                if not isinstance(statement, (ast.Assign, ast.AnnAssign)):
+                    continue
+                value = statement.value
+                if value is None:
+                    continue
+                targets = (
+                    statement.targets
+                    if isinstance(statement, ast.Assign)
+                    else [statement.target]
+                )
+                if any(signal_name in _target_names(target) for target in targets):
+                    candidates.append(statement)
+            if len(candidates) != 1 or not _builtin_int_call(candidates[0].value):
+                return set()
+            binding = candidates[0]
+            if scope.body.index(binding) >= scope.body.index(audit_statement):
+                return set()
+            bindings[signal_name] = binding
+
+            stores = [
+                candidate
+                for candidate in _local_nodes(scope)
+                if isinstance(candidate, ast.Name)
+                and candidate.id == signal_name
+                and isinstance(candidate.ctx, (ast.Store, ast.Del))
+            ]
+            if len(stores) != 1:
+                return set()
+
+        roles, signals, assignments, containers = environments.setdefault(
+            scope, _environment(scope)
+        )
+
+        def _direct_count_failure_coverage(node: ast.AST) -> set[str]:
+            """Read one non-zero comparison against an audit-bound count."""
+
+            if not isinstance(node, ast.Compare) or len(node.ops) != 1:
+                return set()
+            left, right = node.left, node.comparators[0]
+            operator = node.ops[0]
+            if (
+                isinstance(left, ast.Name)
+                and left.id in signal_coverage
+                and _literal_zero(right)
+                and isinstance(operator, (ast.NotEq, ast.IsNot, ast.Gt, ast.GtE))
+            ):
+                return set(signal_coverage[left.id])
+            if (
+                isinstance(right, ast.Name)
+                and right.id in signal_coverage
+                and _literal_zero(left)
+                and isinstance(operator, (ast.NotEq, ast.IsNot, ast.Lt, ast.LtE))
+            ):
+                return set(signal_coverage[right.id])
+            return set()
+
+        guards: set[ast.If] = set()
+        coverage: set[str] = set()
+        for guard in scope.body:
+            if not isinstance(guard, ast.If):
+                continue
+            meaning = _provenance_predicate_meaning(
+                guard.test,
+                expression_roles=roles,
+                signal_meanings=signals,
+                assignments=assignments,
+                audit_containers=containers,
+            )
+            role_coverage = (
+                set(meaning[1]) & set(_PROVENANCE_FAILURE_KEYS)
+                if meaning is not None and meaning[0] == _PROVENANCE_FAILURE
+                else _direct_count_failure_coverage(guard.test)
+            )
+            if not role_coverage or role_coverage == set(_PROVENANCE_FAILURE_KEYS):
+                continue
+            if not (
+                _branch_all_paths_raise(guard.body)
+                and not guard.orelse
+                and not _provenance_branch_contains_result_sink(guard.body)
+                and not _result_sink_precedes_guard(guard, parents)
+                and not _failure_exit_may_be_swallowed(guard)
+            ):
+                continue
+            guard_index = scope.body.index(guard)
+            if any(
+                scope.body.index(binding) >= guard_index
+                for binding in bindings.values()
+            ):
+                continue
+            guards.add(guard)
+            coverage.update(role_coverage)
+
+        return (
+            guards
+            if len(guards) >= 2 and coverage == set(_PROVENANCE_FAILURE_KEYS)
+            else set()
+        )
+
     returned_slots: dict[str, Optional[int]] = {}
     self_guarded: set[str] = set()
     self_raising: set[str] = set()
     self_raising_guards: dict[str, set[ast.If]] = {}
     for name, function in marker_functions.items():
         local_nodes = _local_nodes(function)
+
+        separate_guards = _separate_direct_failure_guards(function)
+        if separate_guards:
+            self_guarded.add(name)
+            self_raising.add(name)
+            self_raising_guards.setdefault(name, set()).update(separate_guards)
 
         def _direct_append_collection(
             statement: ast.stmt,
