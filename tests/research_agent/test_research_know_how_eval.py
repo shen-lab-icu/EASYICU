@@ -31,7 +31,7 @@ from easyicu.research_agent.schema import CohortDescriptor, ResearchContext
             "E2",
             "Estimate the association of peak lactate with in-hospital mortality.",
             "association",
-            ["lactate_trajectory_outcome"],
+            ["early_peak_lactate_association"],
         ),
         (
             "E3",
@@ -135,6 +135,47 @@ def test_topic_applicability_is_not_erased_by_missing_concepts() -> None:
     assert hit.topic_applicable is True
     assert hit.data_readiness == "partial"
     assert "urine_output" in hit.unresolved_concepts
+
+
+def test_peak_lactate_and_trajectory_questions_retrieve_different_cards() -> None:
+    registry = KnowHowRegistry.load()
+
+    peak = registry.retrieve(
+        query="Estimate first-24h peak lactate association with hospital mortality.",
+        study_family="association",
+        database="miiv",
+        top_k=3,
+    )
+    trajectory = registry.retrieve(
+        query="Model lactate trajectory and mortality after septic shock.",
+        study_family="association",
+        database="miiv",
+        top_k=1,
+    )
+
+    assert [hit.card_id for hit in peak] == ["early_peak_lactate_association"]
+    assert [hit.card_id for hit in trajectory] == ["lactate_trajectory_outcome"]
+
+
+def test_peak_lactate_review_packet_is_bound_to_exact_card_content() -> None:
+    repo_root = Path(__file__).resolve().parents[2]
+    card_payload = json.loads(
+        (
+            repo_root
+            / "src/easyicu/data/research_know_how/early_peak_lactate_association.json"
+        ).read_text(encoding="utf-8")
+    )
+    packet = json.loads(
+        (
+            repo_root / "docs/reviews/early_peak_lactate_association_20260721.json"
+        ).read_text(encoding="utf-8")
+    )
+
+    assert packet["authorization"] is False
+    assert packet["status"].endswith("formal_attestation_pending")
+    assert packet["reviewed_content_sha256"] == reviewable_card_content_sha256(
+        card_payload
+    )
 
 
 def test_claims_must_exactly_cover_design_stop_and_confirmation_items() -> None:

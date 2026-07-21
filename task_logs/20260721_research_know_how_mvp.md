@@ -29,10 +29,11 @@ no new extraction, and no tool/software capability retrieval.
 - `clinical_reviewed` requires a version/content-digest-bound dual clinical and
   methods attestation; editing a card invalidates it. All bundled cards remain
   honestly `curated_mvp`.
-- Added eight `curated_mvp` cards with at least two URL/DOI-backed sources each:
+- Added nine `curated_mvp` cards with at least two URL/DOI-backed sources each:
   AKI prediction, sepsis prognosis, lactate trajectories, vasopressor
   comparative effectiveness, ventilation liberation, mortality prediction,
-  longitudinal phenotyping, and cross-database external validation.
+  longitudinal phenotyping, cross-database external validation, and a narrow
+  early-peak-lactate association card separated from the trajectory card.
 - Canonical9 A offline matrix is 9/9: E2/M2/M3/H1/H2/H3 retrieve their intended
   card; E3 and M1 honestly retrieve none; bilingual aliases and missing-concept
   negatives are locked by tests.
@@ -56,6 +57,20 @@ no new extraction, and no tool/software capability retrieval.
 - Architecture integration was moved out of `pipeline.py`; the additive feature
   baseline is re-emitted only after this extraction and recorded with the tool
   SHA.
+- The E2 peak-lactate card was separated from the longitudinal
+  trajectory/clearance card. The Canonical9 retrieval matrix and explicit
+  peak-versus-trajectory negative control pass in a 46-test combined suite.
+- `tools/run_research_know_how_planner_ab.py` now owns the repeated Planner-only
+  comparison: paired OFF/ON order, opaque labels, a frozen blind rubric, exact
+  prompt/call/token/wall evidence, and a fail-closed review-status gate.
+- Prepare-only acceptance uses the immutable 94,458-stay E2 parent context
+  (`context_sha256=a8199c621f5ce7f3ddb426a78514ecdbab5fc6ea130b89dcb3b7a35fb816262c`).
+  OFF is 65,003 bytes and ON is 68,982 bytes (+3,979); ON selects only
+  `early_peak_lactate_association`.
+- The evidence review packet
+  `docs/reviews/early_peak_lactate_association_20260721.json` binds the exact
+  reviewable content SHA and remains `authorization=false` pending real dual
+  signoff.
 
 ## Safety boundary
 
@@ -66,10 +81,12 @@ is disabled unless `enable_know_how=True`.
 
 ## Not complete
 
-- K5: the eight cards have not received clinical/methods claim-by-claim review;
-  none is authorized for paper-facing science.
-- K6: repeated blinded E2 Planner A/B (2–3 runs/arm or fixed recorded response
-  component comparison first) has not run.
+- K5: the E2 card has completed methods/evidence pre-review, but formal clinical
+  and quantitative-methods attestation is still pending; the other eight cards
+  remain unreviewed and no card is authorized for paper-facing science.
+- K6: the deterministic preparation, prompt budget, blinding, rubric, and
+  reviewed-card fail-close gate are complete. The four online Planner calls
+  (two per arm) have not run.
 - K7: frozen B/C held-out generalization has not run. Tool/software capability
   retrieval is a separate later workstream and does not block this MVP.
 - The fixed experiment data source is

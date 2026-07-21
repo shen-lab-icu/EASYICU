@@ -98,13 +98,13 @@ def _plan_with_one_adopted_aki_claim() -> AnalysisPlan:
     )
 
 
-def test_builtin_registry_contains_exactly_eight_curated_cards() -> None:
+def test_builtin_registry_contains_nine_curated_cards() -> None:
     from easyicu import research_agent as public_api
 
     registry = KnowHowRegistry.load()
 
     assert public_api.KnowHowRegistry is KnowHowRegistry
-    assert len(registry.cards) == 8
+    assert len(registry.cards) == 9
     assert {card.review_status for card in registry.cards} == {"curated_mvp"}
     assert {card.trust_level for card in registry.cards} == {"built_in_reviewed"}
     assert all(len(card.claims) == 21 for card in registry.cards)
@@ -389,7 +389,7 @@ def test_builtin_cards_are_package_resources() -> None:
     card_dir = resources.files("easyicu").joinpath("data", "research_know_how")
 
     assert (
-        len([item for item in card_dir.iterdir() if item.name.endswith(".json")]) == 8
+        len([item for item in card_dir.iterdir() if item.name.endswith(".json")]) == 9
     )
 
 

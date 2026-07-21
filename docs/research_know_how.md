@@ -39,7 +39,7 @@ Trust and scientific review are separate:
   literature cutoff, card version, and a content digest. Editing the card makes
   the attestation invalid.
 
-The eight bundled cards remain honestly labeled `curated_mvp`. They must not be
+The nine bundled cards remain honestly labeled `curated_mvp`. They must not be
 described as expert consensus until the review protocol is completed.
 
 ## Prompt projection and budget
@@ -102,6 +102,23 @@ expert review and the repeated A/B acceptance described below.
 5. Compare unsupported exclusions, incorrect-card adoption, time-zero/estimand
    quality, requests for confirmation, retries, calls, tokens, and wall time.
 6. Freeze retrieval rules, then use sealed B/C tasks to test generalization.
+
+The basic E2 peak-lactate question retrieves
+`early_peak_lactate_association`. The separate
+`lactate_trajectory_outcome` card is reserved for questions that explicitly
+request clearance or longitudinal trajectories; a generic lactate mention is
+not enough to select it. The evidence pre-review packet is
+`docs/reviews/early_peak_lactate_association_20260721.json`; it is digest-bound
+to the card but explicitly carries `authorization=false` until dual review.
+
+The bounded comparison command is `tools/run_research_know_how_planner_ab.py`.
+It runs only Planner, alternates OFF/ON within each repeat pair, writes plans
+under opaque labels, and stores the arm key separately. It defaults to two
+runs per arm and refuses online use of `curated_mvp` cards unless the operator
+explicitly records the development-only override. A prepare-only run against
+the fixed full-parent E2 context measured 65,003 bytes without Know-How and
+68,982 bytes with the one selected card (+3,979 bytes), both below the 80KB
+hard gate.
 
 No new extraction is required: experiments consume the existing six-database
 export at `/Volumes/外置硬盘/easyicu_data/full6_20260717`.

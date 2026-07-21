@@ -5,7 +5,7 @@
   "title": "Lactate trajectories and clinical outcomes",
   "summary": "Candidate design coordinates for repeated-lactate trajectory or clearance studies. Sampling is treatment- and severity-dependent, so measurement intensity, landmark timing, and immortal-time risk must be handled explicitly.",
   "clinical_topics": ["lactate", "lactate clearance", "trajectory", "shock", "serial biomarker", "mortality"],
-  "topic_aliases": ["lactate", "lactic acid", "lactate clearance", "lactate trajectory", "乳酸", "乳酸清除率", "乳酸轨迹"],
+  "topic_aliases": ["lactate clearance", "lactate trajectory", "乳酸清除率", "乳酸轨迹"],
   "study_families": ["association", "time_to_event", "phenotyping"],
   "applicable_databases": ["miiv", "mimic_iv", "mimic_iii", "eicu", "hirid", "aumc", "sicdb"],
   "design_candidates": {
