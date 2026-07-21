@@ -228,9 +228,7 @@ def test_planner_normalizer_preserves_only_closed_consumption_fields() -> None:
         "input_key": "table:result",
         "mode": "all_rows",
     }
-    assert dropped["input_consumption_contracts"] == [
-        "table:result:invented_selector"
-    ]
+    assert dropped["input_consumption_contracts"] == ["table:result:invented_selector"]
 
 
 def test_consumption_contract_change_is_scientific_scope_change() -> None:
