@@ -2420,6 +2420,104 @@ step_summary = {
     assert "analysis_frame.drop(columns=['marker']).merge" in repaired
 
 
+def _repaired_table_one_overlay_with_provenance() -> str:
+    return (
+        _table_one_secondary_overlay_script().replace(
+            "analysis_frame.merge(",
+            "analysis_frame.drop(columns=['marker']).merge(",
+            1,
+        )
+        + """
+from easyicu.research_agent.methods.descriptive_inputs import measurement_provenance_receipt
+measurement_pairs = [("marker_measured", "marker_n")]
+required_analysis_columns = ["stay_id", "marker_measured", "marker_n"]
+if any(column not in analysis_frame.columns for column in required_analysis_columns):
+    raise ValueError("analysis cohort is incomplete")
+measurement_checks = [
+    measurement_provenance_receipt(
+        frame,
+        measured_column=measured_column,
+        count_column=count_column,
+    )
+    for measured_column, count_column in measurement_pairs
+]
+step_summary = {
+    "measurement_provenance_audit": {
+        "source": "artifact:analysis_cohort plus artifact:validated_measurement_set",
+        "checks": measurement_checks,
+    }
+}
+"""
+    )
+
+
+def _measurement_source_invalid_finding() -> dict:
+    return {
+        "validator": "step_summary_integrity",
+        "detail": {
+            "issue": "measurement_provenance_source_invalid",
+            "reported_source": (
+                "artifact:analysis_cohort plus " "artifact:validated_measurement_set"
+            ),
+        },
+    }
+
+
+def test_contract_repair_canonicalizes_proven_left_cohort_provenance_source():
+    code = _repaired_table_one_overlay_with_provenance()
+
+    repair = deterministic_contract_repair(
+        code=code,
+        findings=[_measurement_source_invalid_finding()],
+    )
+
+    assert repair is not None
+    repair_id, repaired = repair
+    assert repair_id == "measurement_provenance_summary_mapping_v2"
+    assert "\"source\": 'COHORT_PARQUET'" in repaired
+    assert "analysis_frame.drop(columns=['marker']).merge" in repaired
+    assert (
+        repaired.replace(
+            "'COHORT_PARQUET'",
+            '"artifact:analysis_cohort plus artifact:validated_measurement_set"',
+        )
+        == code
+    )
+
+
+def test_contract_repair_refuses_unbound_table_one_left_provenance_source():
+    code = _repaired_table_one_overlay_with_provenance().replace(
+        'analysis_frame = loaded_products["artifact:analysis_cohort"]',
+        "analysis_frame = untrusted_frame",
+        1,
+    )
+
+    assert (
+        deterministic_contract_repair(
+            code=code,
+            findings=[_measurement_source_invalid_finding()],
+        )
+        is None
+    )
+
+
+def test_contract_repair_refuses_unchecked_table_one_left_provenance_source():
+    code = _repaired_table_one_overlay_with_provenance().replace(
+        "if any(column not in analysis_frame.columns for column in required_analysis_columns):\n"
+        '    raise ValueError("analysis cohort is incomplete")\n',
+        "",
+        1,
+    )
+
+    assert (
+        deterministic_contract_repair(
+            code=code,
+            findings=[_measurement_source_invalid_finding()],
+        )
+        is None
+    )
+
+
 def test_runner_repair_rejects_unresolved_table_one_secondary_overlay():
     assert (
         _deterministic_runner_repair(

@@ -50,8 +50,7 @@ from .name_alias import patch_undefined_mapping_near_match_alias
 from .plausibility import patch_flag_only_plausibility_range_rejection
 from .provenance_summary import (
     patch_custom_measurement_provenance_receipts,
-    patch_direct_host_provenance_summary,
-    patch_nested_host_provenance_summary,
+    patch_measurement_provenance_summary,
     repair_superseded_provenance,
 )
 from .helpers import (  # noqa: F401  (re-exported for back-compat)
@@ -4376,12 +4375,9 @@ def _patch_measurement_provenance_summary_mapping(code: str) -> str:
     host-owned ``measurement_provenance_receipt`` helper.
     """
 
-    direct_host_mapping = patch_direct_host_provenance_summary(code)
-    if direct_host_mapping != code:
-        return direct_host_mapping
-    nested_host_mapping = patch_nested_host_provenance_summary(code)
-    if nested_host_mapping != code:
-        return nested_host_mapping
+    repaired = patch_measurement_provenance_summary(code)
+    if repaired != code:
+        return repaired
 
     try:
         tree = ast.parse(code)
@@ -4740,7 +4736,6 @@ def deterministic_contract_repair(
             validator == "step_summary_integrity"
             and isinstance(detail, dict)
             and detail.get("issue") == "measurement_provenance_source_invalid"
-            and detail.get("reported_source") is None
         ):
             provenance_source_findings.append(finding)
     provenance_repair_name = "measurement_provenance_summary_mapping_v2"

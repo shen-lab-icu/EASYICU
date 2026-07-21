@@ -224,6 +224,57 @@ def _canonicalize_table_one_left_provenance_source(
     return repaired
 
 
+def patch_table_one_left_provenance_source(code: str) -> str:
+    """Repair a proven left-cohort provenance label after Table One execution.
+
+    This entry point is deliberately narrower than the merge-collision repair.
+    It handles an already repaired overlay whose numeric execution succeeded but
+    whose summary still describes the value overlay as the source of the
+    measurement/count companions.  Infer one result/left-frame pair, then defer
+    to the full host-receipt and fail-closed column proof above.  Ambiguity or an
+    unsupported receiver is a no-op.
+    """
+
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return code
+
+    candidates: list[tuple[str, str]] = []
+    for node in tree.body:
+        if not (
+            isinstance(node, ast.Assign)
+            and len(node.targets) == 1
+            and isinstance(node.targets[0], ast.Name)
+            and isinstance(node.value, ast.Call)
+            and isinstance(node.value.func, ast.Attribute)
+            and node.value.func.attr == "merge"
+        ):
+            continue
+        receiver = node.value.func.value
+        left_name: str | None = None
+        if isinstance(receiver, ast.Name):
+            left_name = receiver.id
+        elif (
+            isinstance(receiver, ast.Call)
+            and isinstance(receiver.func, ast.Attribute)
+            and receiver.func.attr == "drop"
+            and isinstance(receiver.func.value, ast.Name)
+        ):
+            left_name = receiver.func.value.id
+        if left_name is not None:
+            candidates.append((left_name, node.targets[0].id))
+
+    if len(candidates) != 1:
+        return code
+    left_name, result_name = candidates[0]
+    return _canonicalize_table_one_left_provenance_source(
+        code,
+        left_name=left_name,
+        result_name=result_name,
+    )
+
+
 def _right_projection(
     tree: ast.Module,
     *,
