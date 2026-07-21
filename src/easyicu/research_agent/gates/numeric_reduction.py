@@ -54,18 +54,93 @@ def _is_numpy_boolean_predicate(node: ast.AST) -> bool:
     )
 
 
-def _is_proven_array_boolean_predicate(node: ast.AST) -> bool:
+def unambiguous_boolean_predicate_aliases(tree: ast.Module) -> dict[str, ast.AST]:
+    """Return uniquely bound names whose values are proven boolean predicates.
+
+    This deliberately uses a whole-module uniqueness proof.  A name is eligible
+    only when it has exactly one ``Store`` occurrence, that store is a simple
+    assignment, and the assigned expression is itself structurally proven.  A
+    parameter, loop target, rebinding, or assignment in another lexical scope
+    therefore makes the optional repair decline rather than guess.
+    """
+
+    if any(
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id in {"eval", "exec", "globals", "locals", "vars"}
+        for node in ast.walk(tree)
+    ):
+        return {}
+
+    store_counts: dict[str, int] = {}
+
+    def record(name: Optional[str]) -> None:
+        if name:
+            store_counts[name] = store_counts.get(name, 0) + 1
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name) and isinstance(node.ctx, (ast.Store, ast.Del)):
+            record(node.id)
+        elif isinstance(node, ast.arg):
+            record(node.arg)
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            record(node.name)
+        elif isinstance(node, (ast.Import, ast.ImportFrom)):
+            for alias in node.names:
+                record(alias.asname or alias.name.split(".", 1)[0])
+        elif isinstance(node, ast.ExceptHandler):
+            record(node.name)
+        elif isinstance(node, (ast.MatchAs, ast.MatchStar)):
+            record(node.name)
+        elif isinstance(node, ast.MatchMapping):
+            record(node.rest)
+        elif isinstance(node, (ast.TypeVar, ast.ParamSpec, ast.TypeVarTuple)):
+            record(node.name)
+
+    assignments: dict[str, ast.AST] = {}
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.Assign, ast.AnnAssign)) or node.value is None:
+            continue
+        targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+        if len(targets) != 1 or not isinstance(targets[0], ast.Name):
+            continue
+        name = targets[0].id
+        if store_counts.get(name) == 1:
+            assignments[name] = node.value
+
+    proven: dict[str, ast.AST] = {}
+    pending = dict(assignments)
+    changed = True
+    while changed:
+        changed = False
+        for name, value in list(pending.items()):
+            if _is_proven_array_boolean_predicate(value, aliases=proven):
+                proven[name] = value
+                pending.pop(name)
+                changed = True
+    return proven
+
+
+def _is_proven_array_boolean_predicate(
+    node: ast.AST,
+    *,
+    aliases: Optional[dict[str, ast.AST]] = None,
+) -> bool:
+    if isinstance(node, ast.Name) and aliases is not None:
+        return node.id in aliases
     if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.Invert):
-        return _is_proven_array_boolean_predicate(node.operand)
+        return _is_proven_array_boolean_predicate(node.operand, aliases=aliases)
     if isinstance(node, ast.BinOp) and isinstance(node.op, (ast.BitAnd, ast.BitOr)):
         return _is_proven_array_boolean_predicate(
-            node.left
-        ) and _is_proven_array_boolean_predicate(node.right)
+            node.left, aliases=aliases
+        ) and _is_proven_array_boolean_predicate(node.right, aliases=aliases)
     return is_array_boolean_predicate(node) or _is_numpy_boolean_predicate(node)
 
 
 def misnested_boolean_mask_reduction_expression(
     node: ast.AST,
+    *,
+    aliases: Optional[dict[str, ast.AST]] = None,
 ) -> Optional[ast.BinOp]:
     """Return the intended mask when exactly one operand was reduced early."""
 
@@ -92,7 +167,9 @@ def misnested_boolean_mask_reduction_expression(
             and candidate.func.attr == "sum"
             and not candidate.args
             and not candidate.keywords
-            and _is_proven_array_boolean_predicate(candidate.func.value)
+            and _is_proven_array_boolean_predicate(
+                candidate.func.value, aliases=aliases
+            )
         ):
             return operand, False
         predicate = candidate.func.value
@@ -105,8 +182,8 @@ def misnested_boolean_mask_reduction_expression(
     if left_reduced == right_reduced:
         return None
     if not (
-        _is_proven_array_boolean_predicate(left)
-        and _is_proven_array_boolean_predicate(right)
+        _is_proven_array_boolean_predicate(left, aliases=aliases)
+        and _is_proven_array_boolean_predicate(right, aliases=aliases)
     ):
         return None
     return ast.BinOp(left=left, op=operation.op, right=right)
@@ -119,6 +196,7 @@ def patch_misnested_boolean_mask_reduction(code: str) -> Optional[str]:
         tree = ast.parse(code)
     except SyntaxError:
         return None
+    aliases = unambiguous_boolean_predicate_aliases(tree)
     lines = code.splitlines(keepends=True)
     starts: list[int] = []
     offset = 0
@@ -133,7 +211,7 @@ def patch_misnested_boolean_mask_reduction(code: str) -> Optional[str]:
 
     replacements: list[tuple[int, int, str]] = []
     for node in ast.walk(tree):
-        combined = misnested_boolean_mask_reduction_expression(node)
+        combined = misnested_boolean_mask_reduction_expression(node, aliases=aliases)
         if combined is None or node.end_lineno is None or node.end_col_offset is None:
             continue
         replacements.append(
@@ -159,4 +237,5 @@ __all__ = [
     "is_array_boolean_predicate",
     "misnested_boolean_mask_reduction_expression",
     "patch_misnested_boolean_mask_reduction",
+    "unambiguous_boolean_predicate_aliases",
 ]

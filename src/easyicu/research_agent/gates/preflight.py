@@ -22,6 +22,7 @@ from .ast_semantics import (
 )
 from .numeric_reduction import is_array_boolean_predicate as _is_array_boolean_predicate
 from .numeric_reduction import misnested_boolean_mask_reduction_expression
+from .numeric_reduction import unambiguous_boolean_predicate_aliases
 from .typed_input import (
     resolved_input_relative_path_root_findings,
     resolved_input_shadowed_by_cohort_env_findings,
@@ -5380,10 +5381,11 @@ def _scalar_cast_before_reduction_findings(
     unsafe_lines.extend(
         int(node.lineno) for node in _unreduced_boolean_mask_count_casts(tree)
     )
+    aliases = unambiguous_boolean_predicate_aliases(tree)
     unsafe_lines.extend(
         int(node.lineno)
         for node in ast.walk(tree)
-        if misnested_boolean_mask_reduction_expression(node) is not None
+        if misnested_boolean_mask_reduction_expression(node, aliases=aliases) is not None
     )
 
     if not unsafe_lines:
