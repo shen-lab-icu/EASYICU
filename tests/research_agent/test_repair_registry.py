@@ -182,6 +182,16 @@ def test_preflight_only_helper_repairs_are_syntactic_and_automatic() -> None:
         assert automatic_repair_allowed(repair_id)
 
 
+def test_audit_only_companion_selector_repair_is_structural_and_automatic() -> None:
+    metadata = repair_metadata_for("audit_only_companion_value_selector_v1")
+
+    assert metadata.classification_source == "exact"
+    assert metadata.repair_class is RepairClass.STRUCTURAL
+    assert metadata.invariants
+    assert metadata.introduces_numbers is False
+    assert automatic_repair_allowed(metadata.repair_id)
+
+
 def test_local_read_hoist_is_syntactic_and_automatic() -> None:
     metadata = repair_metadata_for("local_read_before_assignment_hoist_v1")
 

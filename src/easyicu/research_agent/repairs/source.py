@@ -53,6 +53,7 @@ from .nonfinite_audit import (
 )
 from .plausibility import patch_flag_only_plausibility_range_rejection
 from .provenance_summary import (
+    patch_audit_only_companion_value_selector,
     patch_custom_measurement_provenance_receipts,
     patch_late_measurement_provenance_receipt,
     patch_measurement_provenance_contract,
@@ -2384,6 +2385,15 @@ def deterministic_concept_audit_repair(
     if nonfinite_audit_host_strict != repaired:
         repair_name = "nonfinite_audit_host_strict_boundary_v2"
         repaired = nonfinite_audit_host_strict
+        repair_names.append(repair_name)
+
+    companion_selector_detached = patch_audit_only_companion_value_selector(
+        repaired,
+        findings=repair_findings,
+    )
+    if companion_selector_detached != repaired:
+        repair_name = "audit_only_companion_value_selector_v1"
+        repaired = companion_selector_detached
         repair_names.append(repair_name)
 
     provenance_gated_before_outputs = patch_late_measurement_provenance_receipt(
