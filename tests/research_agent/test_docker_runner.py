@@ -609,16 +609,20 @@ def test_run_invokes_subprocess_and_writes_log(
     )
     result = runner.run(step_id="probe", code="print('hi')\n")
 
-    assert (
-        len(captured) == 4
-    ), "image inspect, metadata capture, run, and teardown confirmation are required"
     assert captured[0][1:3] == ["image", "inspect"]
-    assert "importlib.metadata" in " ".join(captured[1])
-    assert "EasyICU research-agent source mismatch" in " ".join(captured[1])
+    metadata_cmd = next(
+        cmd for cmd in captured if "importlib.metadata" in " ".join(cmd)
+    )
+    assert "EasyICU research-agent source mismatch" in " ".join(metadata_cmd)
+    assert "--rm" not in metadata_cmd
     immutable_id = "sha256:" + "a" * 64
-    assert immutable_id in captured[1]
-    assert "img:0" not in captured[1]
-    cmd = captured[2]
+    assert immutable_id in metadata_cmd
+    assert "img:0" not in metadata_cmd
+    cmd = next(
+        candidate
+        for candidate in captured
+        if candidate[1] == "run" and "importlib.metadata" not in " ".join(candidate)
+    )
     assert cmd[0] == runner.docker_executable and cmd[1] == "run"
     assert immutable_id in cmd
     assert "img:0" not in cmd
@@ -681,11 +685,14 @@ def test_docker_coder_capabilities_use_image_snapshot_before_first_step(
     block = method_capabilities.coder_method_capability_block()
     method_capabilities.set_runtime_capability_snapshot_provider(None)
 
-    assert len(captured) == 2
     assert captured[0][1:3] == ["image", "inspect"]
-    assert "importlib.metadata" in " ".join(captured[1])
-    assert "sha256:" + "a" * 64 in captured[1]
-    assert "img:tag" not in captured[1]
+    metadata_cmd = next(
+        cmd for cmd in captured if "importlib.metadata" in " ".join(cmd)
+    )
+    assert "--rm" not in metadata_cmd
+    assert "sha256:" + "a" * 64 in metadata_cmd
+    assert "img:tag" not in metadata_cmd
+    assert [cmd[1] for cmd in captured[-3:]] == ["stop", "wait", "rm"]
     assert "* lifelines" in block
     assert "* shap" not in block
 
@@ -729,6 +736,7 @@ def test_runtime_provenance_timeout_tears_down_named_probe(
 
     capture_cmd = captured[1]
     assert capture_cmd[1] == "run"
+    assert "--rm" not in capture_cmd
     assert any(token.startswith("--cidfile=") for token in capture_cmd)
     container_name = next(
         token.removeprefix("--name=")
@@ -933,6 +941,10 @@ def test_successful_docker_return_hides_outputs_when_teardown_is_unconfirmed(
     cohort = _make_cohort(tmp_path)
     _force_docker_present(monkeypatch)
     captured: List[List[str]] = []
+    _install_fake_subprocess(monkeypatch)
+    run_dir = tmp_path / "run"
+    runner = ra.DockerRunner(workdir=run_dir, cohort_parquet=cohort)
+    runner._capture_runtime_provenance()
     _install_fake_subprocess(
         monkeypatch,
         stop_returncode=1,
@@ -942,8 +954,6 @@ def test_successful_docker_return_hides_outputs_when_teardown_is_unconfirmed(
         container_inspect_returncode=0,
         captured=captured,
     )
-    run_dir = tmp_path / "run"
-    runner = ra.DockerRunner(workdir=run_dir, cohort_parquet=cohort)
 
     result = runner.run(step_id="successful", code="print('done')\n")
 
@@ -970,6 +980,10 @@ def test_nonzero_docker_return_hides_outputs_when_teardown_is_unconfirmed(
     cohort = _make_cohort(tmp_path)
     _force_docker_present(monkeypatch)
     captured: List[List[str]] = []
+    _install_fake_subprocess(monkeypatch)
+    run_dir = tmp_path / "run"
+    runner = ra.DockerRunner(workdir=run_dir, cohort_parquet=cohort)
+    runner._capture_runtime_provenance()
     _install_fake_subprocess(
         monkeypatch,
         proc=_FakeProc(stderr="docker transport failed", returncode=125),
@@ -980,8 +994,6 @@ def test_nonzero_docker_return_hides_outputs_when_teardown_is_unconfirmed(
         container_inspect_returncode=0,
         captured=captured,
     )
-    run_dir = tmp_path / "run"
-    runner = ra.DockerRunner(workdir=run_dir, cohort_parquet=cohort)
 
     result = runner.run(step_id="failed", code="print('unknown')\n")
 
@@ -1042,6 +1054,10 @@ def test_unconfirmed_timeout_hides_artifacts_and_retries_stale_cleanup(
     cohort = _make_cohort(tmp_path)
     _force_docker_present(monkeypatch)
     captured: List[List[str]] = []
+    _install_fake_subprocess(monkeypatch)
+    run_dir = tmp_path / "run"
+    runner = ra.DockerRunner(workdir=run_dir, cohort_parquet=cohort)
+    runner._capture_runtime_provenance()
     _install_fake_subprocess(
         monkeypatch,
         raise_timeout=True,
@@ -1052,8 +1068,6 @@ def test_unconfirmed_timeout_hides_artifacts_and_retries_stale_cleanup(
         container_inspect_returncode=0,
         captured=captured,
     )
-    run_dir = tmp_path / "run"
-    runner = ra.DockerRunner(workdir=run_dir, cohort_parquet=cohort)
 
     failed = runner.run(step_id="slow", code="print('hi')\n")
 
@@ -1343,12 +1357,18 @@ def test_pull_image_invoked_when_requested(
     )
     runner.run(step_id="s", code="print('x')\n")
 
-    # Pull is followed by image inspection, environment capture, then run.
+    # Pull is followed by image inspection, explicit metadata-probe teardown,
+    # then the analysis run.
     assert captured[0][:2] == [runner.docker_executable, "pull"]
     assert captured[0][2] == "img:1"
     assert captured[1][1:3] == ["image", "inspect"]
     assert "importlib.metadata" in " ".join(captured[2])
-    assert captured[3][:2] == [runner.docker_executable, "run"]
+    analysis_cmd = next(
+        cmd
+        for cmd in captured
+        if cmd[1] == "run" and "importlib.metadata" not in " ".join(cmd)
+    )
+    assert analysis_cmd[:2] == [runner.docker_executable, "run"]
 
 
 def test_pull_precedes_and_binds_authority_image_identity(
@@ -1379,6 +1399,8 @@ def test_pull_precedes_and_binds_authority_image_identity(
                     "statsmodels==0.14\nscikit-learn==1\npyarrow==23\n"
                 )
             )
+        if len(cmd) >= 2 and cmd[1] in {"stop", "wait", "rm"}:
+            return _FakeProc()
         raise AssertionError(cmd)
 
     import easyicu.research_agent.execution.runner as runner_module
