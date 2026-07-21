@@ -16,6 +16,214 @@ _SENTINELS = {
 }
 
 
+def _replace_node_source(code: str, node: ast.AST, replacement: str) -> str | None:
+    if node.end_lineno is None or node.end_col_offset is None:
+        return None
+    lines = code.splitlines(keepends=True)
+    starts: list[int] = []
+    offset = 0
+    for line in lines:
+        starts.append(offset)
+        offset += len(line)
+
+    def position(lineno: int, utf8_col: int) -> int:
+        line = lines[lineno - 1]
+        char_col = len(line.encode("utf-8")[:utf8_col].decode("utf-8"))
+        return starts[lineno - 1] + char_col
+
+    start = position(node.lineno, node.col_offset)
+    end = position(node.end_lineno, node.end_col_offset)
+    return code[:start] + replacement + code[end:]
+
+
+def _canonicalize_table_one_left_provenance_source(
+    code: str,
+    *,
+    left_name: str,
+    result_name: str,
+) -> str:
+    """Canonicalize only host receipts proven to retain left-cohort columns.
+
+    A Table One overlay may replace one validated value column from a secondary
+    typed product while its measurement/count companions remain in the exact
+    ``artifact:analysis_cohort`` left frame.  In that narrow shape the receipt
+    is still independently replayed against ``COHORT_PARQUET`` by the host.
+    Correct only the summary source label; never alter receipt values.
+    """
+
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return code
+    exact_imports = [
+        node
+        for node in tree.body
+        if isinstance(node, ast.ImportFrom)
+        and node.level == 0
+        and node.module == "easyicu.research_agent.methods.descriptive_inputs"
+        and any(
+            alias.name == "measurement_provenance_receipt" and alias.asname is None
+            for alias in node.names
+        )
+    ]
+    if len(exact_imports) != 1:
+        return code
+
+    left_bindings = [
+        node
+        for node in tree.body
+        if isinstance(node, ast.Assign)
+        and len(node.targets) == 1
+        and isinstance(node.targets[0], ast.Name)
+        and node.targets[0].id == left_name
+        and isinstance(node.value, ast.Subscript)
+        and isinstance(node.value.value, ast.Name)
+        and node.value.value.id == "loaded_products"
+        and isinstance(node.value.slice, ast.Constant)
+        and node.value.slice.value == "artifact:analysis_cohort"
+    ]
+    if len(left_bindings) != 1:
+        return code
+
+    pair_assignments = [
+        node
+        for node in tree.body
+        if isinstance(node, ast.Assign)
+        and len(node.targets) == 1
+        and isinstance(node.targets[0], ast.Name)
+        and node.targets[0].id == "measurement_pairs"
+        and isinstance(node.value, (ast.List, ast.Tuple))
+    ]
+    if len(pair_assignments) != 1:
+        return code
+    pair_columns: set[str] = set()
+    for element in pair_assignments[0].value.elts:
+        if not (
+            isinstance(element, (ast.List, ast.Tuple))
+            and len(element.elts) == 2
+            and all(
+                isinstance(value, ast.Constant) and isinstance(value.value, str)
+                for value in element.elts
+            )
+        ):
+            return code
+        pair_columns.update(str(value.value) for value in element.elts)
+    if not pair_columns:
+        return code
+
+    required_left_assignments = [
+        node
+        for node in tree.body
+        if isinstance(node, ast.Assign)
+        and len(node.targets) == 1
+        and isinstance(node.targets[0], ast.Name)
+        and node.targets[0].id == "required_analysis_columns"
+        and isinstance(node.value, (ast.List, ast.Tuple))
+        and all(
+            isinstance(value, ast.Constant) and isinstance(value.value, str)
+            for value in node.value.elts
+        )
+    ]
+    if len(required_left_assignments) != 1:
+        return code
+    required_left_columns = {
+        str(value.value) for value in required_left_assignments[0].value.elts
+    }
+    if not pair_columns <= required_left_columns:
+        return code
+    has_fail_closed_left_check = any(
+        isinstance(node, ast.If)
+        and any(
+            isinstance(child, ast.Name) and child.id == "required_analysis_columns"
+            for child in ast.walk(node.test)
+        )
+        and any(
+            isinstance(child, ast.Attribute)
+            and child.attr == "columns"
+            and isinstance(child.value, ast.Name)
+            and child.value.id == left_name
+            for child in ast.walk(node.test)
+        )
+        and any(isinstance(child, ast.Raise) for child in node.body)
+        for node in tree.body
+    )
+    if not has_fail_closed_left_check:
+        return code
+
+    checks_assignments: list[ast.Assign] = []
+    for node in tree.body:
+        if not (
+            isinstance(node, ast.Assign)
+            and len(node.targets) == 1
+            and isinstance(node.targets[0], ast.Name)
+            and node.targets[0].id == "measurement_checks"
+            and isinstance(node.value, ast.ListComp)
+            and isinstance(node.value.elt, ast.Call)
+        ):
+            continue
+        call = node.value.elt
+        if (
+            isinstance(call.func, ast.Name)
+            and call.func.id == "measurement_provenance_receipt"
+            and len(call.args) == 1
+            and isinstance(call.args[0], ast.Name)
+            and call.args[0].id == result_name
+            and {keyword.arg for keyword in call.keywords}
+            == {"measured_column", "count_column"}
+            and len(node.value.generators) == 1
+            and isinstance(node.value.generators[0].iter, ast.Name)
+            and node.value.generators[0].iter.id == "measurement_pairs"
+        ):
+            checks_assignments.append(node)
+    if len(checks_assignments) != 1:
+        return code
+
+    source_nodes: list[ast.Constant] = []
+    for node in tree.body:
+        if not (
+            isinstance(node, ast.Assign)
+            and len(node.targets) == 1
+            and isinstance(node.targets[0], ast.Name)
+            and node.targets[0].id in {"step_summary", "summary"}
+            and isinstance(node.value, ast.Dict)
+        ):
+            continue
+        summary = {
+            key.value: value
+            for key, value in zip(node.value.keys, node.value.values, strict=True)
+            if isinstance(key, ast.Constant) and isinstance(key.value, str)
+        }
+        audit = summary.get("measurement_provenance_audit")
+        if not isinstance(audit, ast.Dict):
+            continue
+        envelope = {
+            key.value: value
+            for key, value in zip(audit.keys, audit.values, strict=True)
+            if isinstance(key, ast.Constant) and isinstance(key.value, str)
+        }
+        source = envelope.get("source")
+        checks = envelope.get("checks")
+        if (
+            set(envelope) == {"source", "checks"}
+            and isinstance(source, ast.Constant)
+            and isinstance(source.value, str)
+            and source.value != "COHORT_PARQUET"
+            and isinstance(checks, ast.Name)
+            and checks.id == "measurement_checks"
+        ):
+            source_nodes.append(source)
+    if len(source_nodes) != 1:
+        return code
+    repaired = _replace_node_source(code, source_nodes[0], repr("COHORT_PARQUET"))
+    if repaired is None:
+        return code
+    try:
+        ast.parse(repaired)
+    except SyntaxError:
+        return code
+    return repaired
+
+
 def _right_projection(
     tree: ast.Module,
     *,
@@ -276,6 +484,7 @@ def patch_table_one_authored_secondary_overlay(code: str, run_log: str) -> str:
         return code
 
     statement, receiver, left_name = candidates[0]
+    result_name = statement.targets[0].id
     if statement.end_lineno is None or receiver.end_lineno is None:
         return code
     lines = code.splitlines(keepends=True)
@@ -289,6 +498,11 @@ def patch_table_one_authored_secondary_overlay(code: str, run_log: str) -> str:
         source_line[:receiver_start] + replacement + source_line[receiver_end:]
     )
     repaired = "".join(lines)
+    repaired = _canonicalize_table_one_left_provenance_source(
+        repaired,
+        left_name=left_name,
+        result_name=result_name,
+    )
     try:
         ast.parse(repaired)
     except SyntaxError:  # pragma: no cover - defensive

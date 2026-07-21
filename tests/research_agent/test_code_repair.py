@@ -2349,13 +2349,14 @@ def _table_one_secondary_overlay_script(*, resolved_right: bool = True) -> str:
 from easyicu.research_agent.methods.table_one import build_grouped_table_one
 table_one_spec = {{"group_by": "outcome", "variables": [{{"name": "marker"}}]}}
 loaded_products = {{
+    "artifact:analysis_cohort": pd.DataFrame(
+        {{"stay_id": [1, 2], "outcome": [0, 1], "marker": [999.0, 999.0]}}
+    ),
     "artifact:validated_measurement_set": pd.DataFrame(
         {{"stay_id": [1, 2], "marker": [1.0, 2.0]}}
     )
 }}
-analysis_frame = pd.DataFrame(
-    {{"stay_id": [1, 2], "outcome": [0, 1], "marker": [999.0, 999.0]}}
-)
+analysis_frame = loaded_products["artifact:analysis_cohort"]
 validated_frame = {right_source}
 required_validated_columns = ["stay_id", "marker"]
 if any(column not in validated_frame.columns for column in required_validated_columns):
@@ -2379,6 +2380,43 @@ def test_runner_repair_preserves_authored_table_one_secondary_overlay():
     assert repair is not None
     repair_id, repaired = repair
     assert repair_id == "pandas_merge_dynamic_column_collision_guard_v1"
+    assert "analysis_frame.drop(columns=['marker']).merge" in repaired
+
+
+def test_runner_repair_keeps_left_cohort_measurement_provenance_canonical():
+    code = _table_one_secondary_overlay_script() + """
+from easyicu.research_agent.methods.descriptive_inputs import (
+    measurement_provenance_receipt,
+)
+measurement_pairs = [("marker_measured", "marker_n")]
+required_analysis_columns = ["stay_id", "marker_measured", "marker_n"]
+if any(column not in analysis_frame.columns for column in required_analysis_columns):
+    raise ValueError("analysis cohort is incomplete")
+measurement_checks = [
+    measurement_provenance_receipt(
+        frame,
+        measured_column=measured_column,
+        count_column=count_column,
+    )
+    for measured_column, count_column in measurement_pairs
+]
+step_summary = {
+    "measurement_provenance_audit": {
+        "source": "artifact:analysis_cohort plus artifact:validated_measurement_set",
+        "checks": measurement_checks,
+    }
+}
+"""
+
+    repair = _deterministic_runner_repair(
+        code=code,
+        run_log="TableOneContractError: Table 1 input columns are missing: ['marker']",
+    )
+
+    assert repair is not None
+    repair_id, repaired = repair
+    assert repair_id == "pandas_merge_dynamic_column_collision_guard_v1"
+    assert "\"source\": 'COHORT_PARQUET'" in repaired
     assert "analysis_frame.drop(columns=['marker']).merge" in repaired
 
 
