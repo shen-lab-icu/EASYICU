@@ -353,8 +353,8 @@ from ..authority.run_input import (
     _HOST_COHORT_FLOW_AUTHORITY_FIELD,
     _HOST_PROBE_AUTHORITIES,
     _HOST_PROBE_AUTHORITY_KIND,
+    _declares_host_cohort_products as _declares_host_cohort_only_product,
     _host_cohort_materializer_authority_error,
-    _register_host_cohort_materialization,
     _host_probe_authority_error,
     build_concept_audit_environment_identity as _concept_audit_environment,
     canonical_sha256,
@@ -363,6 +363,10 @@ from ..authority.run_input import (
     validator_code_sha256,
 )
 from .run_coordination import RunCoordinator, RunExecutionState, RunTransition
+from .cohort_adoption import (
+    adopt_existing_host_cohort_materialization,
+    record_planned_host_cohort_checkpoint,
+)
 from ..authority.runtime_artifacts import (
     current_step_records,
     current_successful_step_records,
@@ -485,18 +489,6 @@ def _verified_run_input_capsule_digest(
             "run input capsule working copy differs from sealed evidence"
         )
     return digest
-
-
-def _declares_host_cohort_only_product(step: AnalysisStep) -> bool:
-    declared = {
-        str(value or "").strip().casefold()
-        for value in (step.expected_outputs or [])
-        if str(value or "").strip()
-    }
-    return declared in (
-        {"table:analysis_cohort"},
-        {"artifact:analysis_cohort", "table:cohort_flow"},
-    )
 
 
 def _cohort_translation_budget_owner_step_id(plan: AnalysisPlan) -> str:
@@ -3843,6 +3835,19 @@ def run_execute_phase(
                 f"already-completed step(s) — {sorted(resumed_step_ids)}"
             )
 
+    adopt_existing_host_cohort_materialization(
+        plan=plan,
+        run_dir=run_dir,
+        cohort_path=run_input_authority_state.analysis_path,
+        evidence=evidence,
+        prompt_pack_version=prompt_version,
+        llm_signature=llm_signature,
+        gate_stamp=_deterministic_gate_stamp(),
+        per_step_records=per_step_records,
+        preexecuted_step_ids=preexecuted_step_ids,
+        findings=findings,
+    )
+
     def _flush_partial_manifest(extra: Optional[Dict[str, Any]] = None) -> None:
         for record in per_step_records:
             snapshot = dict(record)
@@ -4098,108 +4103,26 @@ def run_execute_phase(
             context=context,
         )
         cohort_path = run_input_authority_state.selected_path
-        cohort_product_steps = [
-            step
-            for step in candidate_plan.steps
-            if _declares_host_cohort_only_product(step)
-        ]
-        cohort_product_step = (
-            cohort_product_steps[0] if len(cohort_product_steps) == 1 else None
+        record_planned_host_cohort_checkpoint(
+            plan=candidate_plan,
+            result=result,
+            cohort_path=cohort_path,
+            evidence=evidence,
+            prompt_pack_version=prompt_version,
+            llm_signature=llm_signature,
+            run_dir=run_dir,
+            reason=reason,
+            gate_stamp=_deterministic_gate_stamp(),
+            per_step_records=per_step_records,
+            preexecuted_step_ids=preexecuted_step_ids,
+            findings=findings,
+            budget_snapshot=(
+                budget_snapshot
+                if budget_owner_step_id
+                == _cohort_translation_budget_owner_step_id(candidate_plan)
+                else None
+            ),
         )
-        materialized_authority_ref = result.get("authority_ref")
-        cohort_definition_sha256 = result.get("cohort_definition_sha256")
-        cohort_metadata = {"llm_signature": llm_signature, "reason": reason}
-        if materialized_authority_ref is not None:
-            cohort_metadata.update(
-                {
-                    "materialized_cohort_authority_ref": materialized_authority_ref,
-                    "cohort_definition_sha256": cohort_definition_sha256,
-                }
-            )
-        cohort_record, flow_record, output_files, evidence_ids = (
-            _register_host_cohort_materialization(
-                evidence=evidence,
-                result=result,
-                cohort_path=cohort_path,
-                cohort_product_step=cohort_product_step,
-                cohort_metadata=cohort_metadata,
-                prompt_pack_version=prompt_version,
-                run_dir=run_dir,
-            )
-        )
-        if cohort_product_step is not None and cohort_record is not None:
-            # The deterministic materialiser has completely realised this
-            # single-product step using the cohort the Agent selected.  Record
-            # that product under the planned producer and do not ask the Coder
-            # to recreate or reinterpret the cohort scientifically.
-            cohort_checkpoint = {
-                "step_id": cohort_product_step.step_id,
-                "intent": cohort_product_step.intent,
-                "planned_analysis_role": cohort_product_step.planned_analysis_role,
-                "analysis_request": {
-                    "step": cohort_product_step.model_dump(mode="json")
-                },
-                "status": "ok",
-                "generation_mode": _HOST_COHORT_MATERIALIZER_GENERATION_MODE,
-                "step_authority_kind": _HOST_COHORT_MATERIALIZER_AUTHORITY_KIND,
-                _HOST_COHORT_MATERIALIZER_AUTHORITY_FIELD: (cohort_record.evidence_id),
-                "step_summary": {
-                    "output_files": output_files,
-                    "n_universe": int(result["n_universe"]),
-                    "n_analysis_cohort": int(result["n_cohort"]),
-                },
-                "evidence_ids": evidence_ids,
-                **_deterministic_gate_stamp(),
-            }
-            if flow_record is not None:
-                cohort_checkpoint[_HOST_COHORT_FLOW_AUTHORITY_FIELD] = (
-                    flow_record.evidence_id
-                )
-            if materialized_authority_ref is not None:
-                cohort_checkpoint["step_summary"].update(
-                    {
-                        "materialized_cohort_authority_ref": (
-                            materialized_authority_ref
-                        ),
-                        "cohort_definition_sha256": cohort_definition_sha256,
-                    }
-                )
-            if budget_owner_step_id == cohort_product_step.step_id:
-                cohort_checkpoint.update(
-                    {
-                        key: value
-                        for key, value in budget_snapshot.items()
-                        if key != "budget_owner_step_id"
-                    }
-                )
-            cohort_authority_error = _host_cohort_materializer_authority_error(
-                record=cohort_checkpoint,
-                evidence_ids=evidence_ids,
-                step_id=cohort_product_step.step_id,
-                run_dir=run_dir,
-                records={
-                    record.evidence_id: record.model_dump(mode="json")
-                    for record in evidence.records()
-                },
-            )
-            if cohort_authority_error is None:
-                per_step_records.append(cohort_checkpoint)
-                preexecuted_step_ids.add(cohort_product_step.step_id)
-            else:
-                findings.append(
-                    ValidationFinding(
-                        validator="cohort_materializer_authority",
-                        severity="error",
-                        message=(
-                            "Host cohort materializer could not seal its exact "
-                            "planned-product authority."
-                        ),
-                        detail={
-                            "step_id": cohort_product_step.step_id,
-                            "reason": cohort_authority_error,
-                        },
-                    )
-                )
         if pipeline._development_sample_size is not None:
             run_input_authority_state.apply_development_sample(
                 materialize_development_execution_sample(

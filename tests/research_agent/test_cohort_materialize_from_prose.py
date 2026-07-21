@@ -31,6 +31,85 @@ def _is_extraction(user: str) -> bool:
     )
 
 
+def test_plan_phase_materialized_cohort_is_adopted_without_coder(tmp_path: Path):
+    from easyicu.research_agent.authority.evidence_store import EvidenceStore
+    from easyicu.research_agent.cohort.schema import (
+        CohortDefinition,
+        ConceptPredicate,
+        TimeWindow,
+        materialize_locked_analysis_cohort,
+    )
+    from easyicu.research_agent.execution.cohort_adoption import (
+        adopt_existing_host_cohort_materialization,
+    )
+    from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep
+
+    universe_path = tmp_path / "cohort.parquet"
+    pd.DataFrame({"age": [10, 20, 30]}).to_parquet(universe_path, index=False)
+    definition = CohortDefinition(
+        name="adult",
+        inclusion=(
+            ConceptPredicate(
+                "age",
+                TimeWindow("icu_admit", 0, 24),
+                "max",
+                ">=",
+                18,
+            ),
+        ),
+    )
+    plan = AnalysisPlan(
+        research_question="Test host cohort adoption.",
+        cohort=definition,
+        steps=[
+            AnalysisStep(
+                step_id="01_cohort",
+                intent="Define and report the locked analysis cohort.",
+                expected_outputs=[
+                    "artifact:analysis_cohort",
+                    "table:cohort_flow",
+                ],
+            )
+        ],
+    )
+    result = materialize_locked_analysis_cohort(
+        run_dir=tmp_path,
+        plan=plan,
+        universe_path=universe_path,
+    )
+    evidence = EvidenceStore(tmp_path)
+    records: list[dict] = []
+    preexecuted: set[str] = set()
+    findings = []
+
+    adopt_existing_host_cohort_materialization(
+        plan=plan,
+        run_dir=tmp_path,
+        cohort_path=result["path"],
+        evidence=evidence,
+        prompt_pack_version="test",
+        llm_signature="test",
+        gate_stamp={
+            "deterministic_gate_schema_version": "test",
+            "deterministic_gate_engine_code_sha256": "a" * 64,
+            "deterministic_gate_fingerprint": "b" * 64,
+        },
+        per_step_records=records,
+        preexecuted_step_ids=preexecuted,
+        findings=findings,
+    )
+
+    assert findings == []
+    assert preexecuted == {"01_cohort"}
+    assert len(records) == 1
+    assert records[0]["generation_mode"] == "deterministic_cohort_materializer"
+    assert records[0]["evidence_ids"] == [
+        "analysis_cohort_execute_repair",
+        "cohort_flow_execute_repair",
+    ]
+    assert not any(key.startswith("step_provider_call_") for key in records[0])
+
+
 @pytest.mark.parametrize(
     ("development_sample_size", "cohort_products"),
     [
