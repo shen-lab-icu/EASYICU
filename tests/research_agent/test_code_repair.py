@@ -719,6 +719,110 @@ step_summary = {
     )
 
 
+def test_contract_repair_replaces_static_custom_measurement_receipts_and_adds_missing_pair():
+    code = """import pandas as pd
+
+def measurement_receipt(frame, measured_col, count_col, value_col):
+    if measured_col not in frame.columns or count_col not in frame.columns:
+        raise RuntimeError("missing provenance columns")
+    return {
+        "value_column": value_col,
+        "measured_column": measured_col,
+        "count_column": count_col,
+        "status": "checked",
+    }
+
+measurement_specs = [
+    ("marker", "marker_measured", "marker_n"),
+    ("other", "other_measured", "other_n"),
+]
+measurement_checks = [
+    measurement_receipt(df, measured, count, value)
+    for value, measured, count in measurement_specs
+]
+step_summary = {
+    "measurement_provenance_audit": {
+        "source": "COHORT_PARQUET",
+        "checks": measurement_checks,
+    }
+}
+"""
+    findings = [
+        {
+            "validator": "step_summary_integrity",
+            "severity": "error",
+            "detail": {
+                "issue": "measurement_provenance_check_invalid",
+                "measured_column": measured,
+                "expected_count_column": count,
+                "expected_status": "checked",
+                "invalid_fields": [
+                    "role",
+                    "comparison_n",
+                    "invalid_pair_n",
+                    "discordant_n",
+                ],
+            },
+        }
+        for measured, count in (
+            ("marker_measured", "marker_n"),
+            ("other_measured", "other_n"),
+        )
+    ]
+    findings.append(
+        {
+            "validator": "step_summary_integrity",
+            "severity": "error",
+            "detail": {
+                "issue": "measurement_provenance_check_missing",
+                "measured_column": "exposure_measured",
+                "expected_count_column": "exposure_n",
+            },
+        }
+    )
+
+    repaired = deterministic_contract_repair(code=code, findings=findings)
+
+    assert repaired is not None
+    name, patched = repaired
+    assert name == "measurement_provenance_host_receipts_v1"
+    assert "def measurement_receipt" not in patched
+    assert patched.count("measurement_provenance_receipt(") == 2
+    assert "for value, measured, count in measurement_specs" in patched
+    assert "measured_column='exposure_measured'" in patched
+    assert "count_column='exposure_n'" in patched
+    assert deterministic_contract_repair(code=patched, findings=findings) is None
+
+
+def test_contract_repair_refuses_dynamic_or_incomplete_measurement_receipt_coordinates():
+    code = """def measurement_receipt(frame, measured_col, count_col, value_col):
+    return {
+        "measured_column": measured_col,
+        "count_column": count_col,
+        "status": "checked",
+    }
+
+measurement_specs = build_measurement_specs()
+measurement_checks = [
+    measurement_receipt(df, measured, count, value)
+    for value, measured, count in measurement_specs
+]
+"""
+    finding = {
+        "validator": "step_summary_integrity",
+        "severity": "error",
+        "detail": {
+            "issue": "measurement_provenance_check_invalid",
+            "measured_column": "marker_measured",
+            "expected_count_column": "marker_n",
+            "expected_status": "checked",
+            "invalid_fields": ["comparison_n"],
+        },
+    }
+
+    assert deterministic_contract_repair(code=code, findings=[finding]) is None
+
+
 def test_contract_repair_reuses_closed_nested_provenance_mapping_in_summary():
     code = """measurement_checks = [{"status": "checked"}]
 diagnostics = {
