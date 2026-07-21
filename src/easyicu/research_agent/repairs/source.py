@@ -47,6 +47,7 @@ from .lossy_coercion import (
 )
 from .merge_collision import patch_pandas_merge_dynamic_column_collision
 from .name_alias import patch_undefined_mapping_near_match_alias
+from .nonfinite_audit import patch_strict_numeric_nonfinite_audit_conflict
 from .plausibility import patch_flag_only_plausibility_range_rejection
 from .provenance_summary import (
     patch_custom_measurement_provenance_receipts,
@@ -2361,6 +2362,16 @@ def deterministic_concept_audit_repair(
         findings=repair_findings,
     )
     repair_names.extend(preflight_repair_names)
+
+    nonfinite_audit_preserved = patch_strict_numeric_nonfinite_audit_conflict(
+        repaired,
+        audit_messages=audit_messages,
+        repair_findings=repair_findings,
+    )
+    if nonfinite_audit_preserved != repaired:
+        repair_name = "nonfinite_audit_preserve_observed_v1"
+        repaired = nonfinite_audit_preserved
+        repair_names.append(repair_name)
 
     range_retained = patch_flag_only_plausibility_range_rejection(
         repaired,
