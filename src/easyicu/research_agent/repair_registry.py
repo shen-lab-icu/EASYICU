@@ -262,6 +262,7 @@ _SYNTACTIC_REPAIRS = {
     "boolean_reduction_identity_v1",
     "closed_counts_declared_levels_binding_v1",
     "closed_counts_direct_host_call_v1",
+    "closed_counts_level_column_v1",
     "closed_counts_stable_keywords_v1",
     "figure_contract_source_data_schema_v1",
     "fstring_runtime_quote_compat_v1",
