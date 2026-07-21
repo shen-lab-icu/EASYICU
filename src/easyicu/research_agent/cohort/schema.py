@@ -666,6 +666,65 @@ def materialize_locked_analysis_cohort(
     return result
 
 
+def load_materialized_analysis_cohort_result(
+    *,
+    run_dir: Path,
+    plan: Any,
+    stem: str = "cohort_analysis",
+) -> Optional[Dict[str, Any]]:
+    """Recover a plan-phase materialization only from its closed host ledger."""
+
+    cohort_path = Path(run_dir) / f"{stem}.parquet"
+    flow_path = Path(run_dir) / f"{stem}_flow.csv"
+    provenance_path = Path(run_dir) / f"{stem}_provenance.json"
+    if not (
+        cohort_path.is_file() and flow_path.is_file() and provenance_path.is_file()
+    ):
+        return None
+    definition = coerce_cohort_definition(getattr(plan, "cohort", None))
+    if definition is None:
+        return None
+    try:
+        import pandas as pd  # type: ignore
+        import pyarrow.parquet as pq  # type: ignore
+
+        provenance = json.loads(provenance_path.read_text(encoding="utf-8"))
+        expected_definition_sha = cohort_definition_sha(definition)
+        if provenance.get("cohort_sha256") != expected_definition_sha:
+            return None
+        flow = pd.read_csv(flow_path)
+        if flow.empty:
+            return None
+        flow_records = (
+            flow.astype(object).where(pd.notna(flow), None).to_dict(orient="records")
+        )
+        n_universe = int(provenance["n_universe"])
+        n_cohort = int(provenance["n_analysis_cohort"])
+        if (
+            flow_records != provenance.get("cohort_flow")
+            or provenance.get("cohort_definition") != definition.to_dict()
+            or int(flow.iloc[0]["n_before"]) != n_universe
+            or int(flow.iloc[-1]["n_remaining"]) != n_cohort
+            or int(pq.ParquetFile(cohort_path).metadata.num_rows) != n_cohort
+        ):
+            return None
+    except Exception:
+        # This is an authority recovery path: malformed JSON/CSV/Parquet or a
+        # missing optional reader must disable adoption, never weaken it.
+        return None
+    return {
+        "status": "applied",
+        "path": cohort_path,
+        "flow_path": flow_path,
+        "authority_path": None,
+        "authority_ref": provenance.get("materialized_cohort_authority_ref"),
+        "cohort_definition_sha256": expected_definition_sha,
+        "n_universe": n_universe,
+        "n_cohort": n_cohort,
+        "error": None,
+    }
+
+
 def assert_cohort_definition_locked(*, run_dir: Path, plan: Any) -> None:
     definition = coerce_cohort_definition(getattr(plan, "cohort", None))
     if definition is None:

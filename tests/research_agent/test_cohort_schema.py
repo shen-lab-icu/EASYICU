@@ -560,6 +560,65 @@ def test_materialize_locked_analysis_cohort_applies_inclusion(tmp_path: Path) ->
     assert provenance["cohort_flow"][-1]["n_remaining"] == 3
 
 
+def test_load_materialized_analysis_cohort_result_reopens_closed_outputs(
+    tmp_path: Path,
+) -> None:
+    from easyicu.research_agent.cohort.schema import (
+        CohortDefinition,
+        load_materialized_analysis_cohort_result,
+        materialize_locked_analysis_cohort,
+    )
+
+    universe_path = tmp_path / "cohort.parquet"
+    pd.DataFrame({"age": [10, 18, 40, 70]}).to_parquet(universe_path, index=False)
+    plan = _plan_with_cohort(
+        CohortDefinition(name="adult", inclusion=(_age_predicate(0, 24),))
+    )
+    materialize_locked_analysis_cohort(
+        run_dir=tmp_path,
+        plan=plan,
+        universe_path=universe_path,
+    )
+
+    recovered = load_materialized_analysis_cohort_result(
+        run_dir=tmp_path,
+        plan=plan,
+    )
+
+    assert recovered is not None
+    assert recovered["n_universe"] == 4
+    assert recovered["n_cohort"] == 3
+    assert recovered["path"] == tmp_path / "cohort_analysis.parquet"
+    assert recovered["flow_path"] == tmp_path / "cohort_analysis_flow.csv"
+
+
+def test_load_materialized_analysis_cohort_result_rejects_flow_tampering(
+    tmp_path: Path,
+) -> None:
+    from easyicu.research_agent.cohort.schema import (
+        CohortDefinition,
+        load_materialized_analysis_cohort_result,
+        materialize_locked_analysis_cohort,
+    )
+
+    universe_path = tmp_path / "cohort.parquet"
+    pd.DataFrame({"age": [10, 18, 40, 70]}).to_parquet(universe_path, index=False)
+    plan = _plan_with_cohort(
+        CohortDefinition(name="adult", inclusion=(_age_predicate(0, 24),))
+    )
+    materialize_locked_analysis_cohort(
+        run_dir=tmp_path,
+        plan=plan,
+        universe_path=universe_path,
+    )
+    flow_path = tmp_path / "cohort_analysis_flow.csv"
+    flow = pd.read_csv(flow_path)
+    flow.loc[1, "n_excluded"] = 999
+    flow.to_csv(flow_path, index=False)
+
+    assert load_materialized_analysis_cohort_result(run_dir=tmp_path, plan=plan) is None
+
+
 def test_materialize_no_definition_returns_no_file(tmp_path: Path) -> None:
     from easyicu.research_agent.cohort.schema import (
         CohortDefinition,
