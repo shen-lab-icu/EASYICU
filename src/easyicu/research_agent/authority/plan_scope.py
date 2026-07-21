@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import re
+from pathlib import Path
 from typing import Any, List, Mapping, Optional, Sequence, Tuple
 
 from ..schema import AnalysisPlan, AnalysisStep
@@ -26,6 +27,7 @@ __all__ = [
     "_step_scientific_signature",
     "completed_step_record_matches_plan",
     "legacy_host_checkpoint_may_inherit_plan_scope",
+    "verified_plan_scientific_scope_count",
     "verified_plan_evidence_rank",
 ]
 
@@ -33,7 +35,7 @@ __all__ = [
 def legacy_host_checkpoint_may_inherit_plan_scope(
     record: Mapping[str, Any],
     *,
-    plan_candidate_count: int,
+    plan_scope_count: int,
     completed_records: Sequence[Mapping[str, Any]],
 ) -> bool:
     """Permit one unambiguous pre-scope host checkpoint to migrate once."""
@@ -45,7 +47,7 @@ def legacy_host_checkpoint_may_inherit_plan_scope(
         and str(record.get("generation_mode") or "").strip().lower()
         == _HOST_COHORT_MATERIALIZER_GENERATION_MODE
         and (
-            plan_candidate_count == 1
+            plan_scope_count == 1
             or any(
                 list(item.get("plan_scientific_signature") or [])
                 for item in completed_records
@@ -59,7 +61,7 @@ def completed_step_record_matches_plan(
     *,
     step: AnalysisStep,
     expected_plan_scope: Sequence[Optional[str]],
-    plan_candidate_count: int,
+    plan_scope_count: int,
     completed_records: Sequence[Mapping[str, Any]],
 ) -> bool:
     """Verify one completed step against a candidate immutable plan."""
@@ -75,7 +77,7 @@ def completed_step_record_matches_plan(
     recorded_plan_scope = list(record.get("plan_scientific_signature") or [])
     legacy_host_without_scope = legacy_host_checkpoint_may_inherit_plan_scope(
         record,
-        plan_candidate_count=plan_candidate_count,
+        plan_scope_count=plan_scope_count,
         completed_records=completed_records,
     )
     return (
@@ -86,6 +88,19 @@ def completed_step_record_matches_plan(
             or recorded_plan_scope == list(expected_plan_scope)
         )
     )
+
+
+def verified_plan_scientific_scope_count(paths: Sequence[Path]) -> int:
+    """Count distinct valid plan-level scopes among immutable candidates."""
+
+    scopes = set()
+    for path in paths:
+        try:
+            plan = AnalysisPlan.model_validate_json(path.read_text(encoding="utf-8"))
+        except (OSError, TypeError, ValueError):
+            continue
+        scopes.add(tuple(_serializable_plan_scientific_scope_signature(plan)))
+    return len(scopes)
 
 
 def verified_plan_evidence_rank(record: Mapping[str, Any]) -> Optional[int]:

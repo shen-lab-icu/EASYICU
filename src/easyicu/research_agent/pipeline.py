@@ -141,6 +141,7 @@ from .authority.context_numeric_claims import register_context_numeric_claims
 from .authority.plan_scope import (
     _serializable_plan_scientific_scope_signature,
     completed_step_record_matches_plan,
+    verified_plan_scientific_scope_count,
     verified_plan_evidence_rank,
 )
 from .authority import pipeline_cache as _pipeline_cache
@@ -535,6 +536,7 @@ def _load_compatible_resume_plan(
         run_dir=run_dir,
         resume_state=resume_state,
     )
+    plan_scope_count = verified_plan_scientific_scope_count(candidates)
     for candidate in candidates:
         try:
             plan = AnalysisPlan.model_validate(
@@ -561,7 +563,7 @@ def _load_compatible_resume_plan(
                 record,
                 step=step_by_id[step_id],
                 expected_plan_scope=expected_plan_scope,
-                plan_candidate_count=len(candidates),
+                plan_scope_count=plan_scope_count,
                 completed_records=completed_records,
             ):
                 compatible = False
