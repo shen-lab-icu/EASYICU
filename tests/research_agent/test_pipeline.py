@@ -3018,6 +3018,69 @@ contract = make_figure_contract(
     assert "easyicu.research_output.figure_utils" not in patched
 
 
+def test_deterministic_runner_repair_does_not_strip_real_host_module(ra):
+    from easyicu.research_agent.pipeline import _deterministic_runner_repair
+
+    code = """
+from easyicu.research_agent.methods.descriptive_inputs import (
+    strict_numeric_input,
+)
+from easyicu.research_agent.methods.table_one import build_grouped_table_one
+
+print(build_grouped_table_one)
+"""
+    repaired = _deterministic_runner_repair(
+        code=code,
+        run_log=(
+            "ModuleNotFoundError: No module named "
+            "'easyicu.research_agent.methods.table_one'"
+        ),
+    )
+    assert repaired is None
+
+
+def test_deterministic_runner_repair_inserts_stub_after_parenthesized_import(ra):
+    import ast
+
+    from easyicu.research_agent.pipeline import _deterministic_runner_repair
+
+    code = """
+from easyicu.research_agent.methods.descriptive_inputs import (
+    strict_numeric_input,
+)
+from easyicu.fake_table_sdk import fake_table
+
+print(fake_table)
+"""
+    repaired = _deterministic_runner_repair(
+        code=code,
+        run_log="ModuleNotFoundError: No module named 'easyicu.fake_table_sdk'",
+    )
+    assert repaired is not None
+    _repair_id, patched = repaired
+    ast.parse(patched)
+    assert patched.index("strict_numeric_input,") < patched.index("def fake_table")
+
+
+def test_deterministic_runner_repair_inserts_stub_before_late_import(ra):
+    from easyicu.research_agent.pipeline import _deterministic_runner_repair
+
+    code = """
+from pathlib import Path
+from easyicu.fake_table_sdk import fake_table
+
+print(fake_table)
+import json
+"""
+    repaired = _deterministic_runner_repair(
+        code=code,
+        run_log="ModuleNotFoundError: No module named 'easyicu.fake_table_sdk'",
+    )
+    assert repaired is not None
+    _repair_id, patched = repaired
+    assert patched.index("def fake_table") < patched.index("print(fake_table)")
+
+
 def test_deterministic_runner_repair_filters_x_cols_after_dummy_encoding(ra):
     from easyicu.research_agent.pipeline import _deterministic_runner_repair
 

@@ -99,6 +99,63 @@ def test_grouped_table_one_rejects_string_coercion_for_continuous_values():
         build_grouped_table_one(frame, _spec())
 
 
+def test_grouped_table_one_marks_structurally_empty_comparison_not_testable(
+    tmp_path,
+):
+    frame = _frame()
+    frame["exposure"] = [None, None, None, 1.0, 2.0, 3.0]
+    spec = _spec()
+    spec["variables"].append(
+        {
+            "name": "exposure",
+            "variable_kind": "continuous",
+            "summary": "median_iqr",
+            "test": "mann_whitney_or_kruskal",
+        }
+    )
+
+    table = build_grouped_table_one(frame, spec)
+    exposure = table[table["variable"] == "exposure"]
+    assert exposure["p_value"].isna().all()
+    assert set(exposure["test_name"]) == {"not_testable_empty_group"}
+
+    table.to_csv(tmp_path / "table_one.csv", index=False)
+    step = AnalysisStep(
+        step_id="02_table_one",
+        intent="Produce the grouped baseline table.",
+        inputs=["arm", "age", "sex", "exposure"],
+        expected_outputs=["table:table_one"],
+        method="table_one",
+        table_one_spec=spec,
+    )
+    assert table_one_output_findings(step=step, out_dir=tmp_path) == []
+
+
+def test_table_one_gate_rejects_unexplained_missing_p_value(tmp_path):
+    table = build_grouped_table_one(_frame(), _spec())
+    table.loc[table["variable"] == "age", "p_value"] = None
+    table.loc[table["variable"] == "age", "test_name"] = "not_testable_empty_group"
+    table.to_csv(tmp_path / "table_one.csv", index=False)
+
+    findings = table_one_output_findings(step=_step(), out_dir=tmp_path)
+    assert "table_one_p_value_invalid" in {
+        finding.detail["reason"] for finding in findings
+    }
+
+
+def test_grouped_table_one_marks_constant_category_not_testable(tmp_path):
+    frame = _frame()
+    frame["sex"] = "F"
+
+    table = build_grouped_table_one(frame, _spec())
+    sex = table[table["variable"] == "sex"]
+    assert sex["p_value"].isna().all()
+    assert set(sex["test_name"]) == {"not_testable_no_variation"}
+
+    table.to_csv(tmp_path / "table_one.csv", index=False)
+    assert table_one_output_findings(step=_step(), out_dir=tmp_path) == []
+
+
 def test_table_one_output_gate_accepts_exact_sdk_result(tmp_path):
     build_grouped_table_one(_frame(), _spec()).to_csv(
         tmp_path / "table_one.csv", index=False

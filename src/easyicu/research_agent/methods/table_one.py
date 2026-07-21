@@ -88,11 +88,9 @@ def _numeric_values(series: pd.Series, *, label: str) -> np.ndarray:
 
 def _numeric_test(
     groups: list[np.ndarray], spec: TableOneVariableSpec
-) -> tuple[float, str]:
+) -> tuple[float | None, str]:
     if any(values.size == 0 for values in groups):
-        raise TableOneContractError(
-            f"Table 1 variable {spec.name!r} has an empty comparison group"
-        )
+        return None, "not_testable_empty_group"
     if spec.test == "welch_t_or_anova":
         if any(values.size < 2 for values in groups):
             raise TableOneContractError(
@@ -114,7 +112,7 @@ def _categorical_test(
     series: pd.Series,
     group_masks: list[pd.Series],
     spec: TableOneVariableSpec,
-) -> tuple[float, str]:
+) -> tuple[float | None, str]:
     level_masks = _closed_masks(series, spec.levels, label=spec.name)
     table = np.asarray(
         [
@@ -124,10 +122,10 @@ def _categorical_test(
         dtype=int,
     )
     active = table[table.sum(axis=1) > 0]
+    if bool((table.sum(axis=0) == 0).any()):
+        return None, "not_testable_empty_group"
     if active.shape[0] < 2 or active.shape[1] < 2:
-        raise TableOneContractError(
-            f"Table 1 variable {spec.name!r} lacks two comparable levels/groups"
-        )
+        return None, "not_testable_no_variation"
     chi = stats.chi2_contingency(active, correction=False)
     if active.shape == (2, 2) and bool((chi.expected_freq < 5).any()):
         result = stats.fisher_exact(active, alternative="two-sided")
@@ -139,7 +137,7 @@ def _p_value(
     frame: pd.DataFrame,
     group_masks: list[pd.Series],
     variable: TableOneVariableSpec,
-) -> tuple[float, str]:
+) -> tuple[float | None, str]:
     series = frame[variable.name]
     if variable.summary == "count_percent":
         p_value, test_name = _categorical_test(series, group_masks, variable)
@@ -148,6 +146,8 @@ def _p_value(
             _numeric_values(series[mask], label=variable.name) for mask in group_masks
         ]
         p_value, test_name = _numeric_test(groups, variable)
+    if p_value is None:
+        return None, test_name
     if not math.isfinite(p_value) or not 0.0 <= p_value <= 1.0:
         raise TableOneContractError(
             f"Table 1 test for {variable.name!r} returned an invalid p-value"
@@ -164,7 +164,7 @@ def _base_row(
     denominator_n: int,
     nonmissing_n: int,
     missing_n: int,
-    p_value: float,
+    p_value: float | None,
     test_name: str,
     contract_sha256: str,
 ) -> dict[str, Any]:

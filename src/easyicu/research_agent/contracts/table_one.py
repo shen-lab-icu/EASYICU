@@ -37,6 +37,7 @@ _TESTS = {
         "fisher_exact",
     },
 }
+_NOT_TESTABLE = {"not_testable_empty_group", "not_testable_no_variation"}
 
 
 def _error(
@@ -132,11 +133,33 @@ def table_one_output_findings(
                 )
             )
         p_values = pd.to_numeric(rows["p_value"], errors="coerce").dropna().unique()
-        if (
-            len(p_values) != 1
-            or not math.isfinite(float(p_values[0]))
-            or not 0 <= float(p_values[0]) <= 1
-        ):
+        test_names = set(rows["test_name"].dropna().astype(str))
+        group_nonmissing = rows.groupby("group", dropna=False)["nonmissing_n"].first()
+        empty_comparison_group = any(
+            float(value) == 0
+            for group, value in group_nonmissing.items()
+            if str(group) != "Overall" and pd.notna(value)
+        )
+        declared_empty_group = test_names == {"not_testable_empty_group"}
+        declared_no_variation = test_names == {"not_testable_no_variation"}
+        overall_rows = rows[rows["group"].astype(str).eq("Overall")]
+        active_overall_categories = (
+            pd.to_numeric(overall_rows["count"], errors="coerce").gt(0).sum()
+        )
+        proven_no_variation = (
+            variable.summary == "count_percent" and active_overall_categories < 2
+        )
+        if declared_empty_group:
+            valid_p_value = len(p_values) == 0 and empty_comparison_group
+        elif declared_no_variation:
+            valid_p_value = len(p_values) == 0 and proven_no_variation
+        else:
+            valid_p_value = (
+                len(p_values) == 1
+                and math.isfinite(float(p_values[0]))
+                and 0 <= float(p_values[0]) <= 1
+            )
+        if not valid_p_value:
             findings.append(
                 _error(
                     step,
@@ -145,7 +168,7 @@ def table_one_output_findings(
                     variable=variable.name,
                 )
             )
-        if set(rows["test_name"].dropna().astype(str)) - _TESTS[variable.test]:
+        if test_names - (_TESTS[variable.test] | _NOT_TESTABLE):
             findings.append(
                 _error(
                     step,
