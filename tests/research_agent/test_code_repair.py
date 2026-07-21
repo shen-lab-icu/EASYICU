@@ -761,6 +761,84 @@ step_summary = {
     assert patched.count("measurement_provenance_receipt(") == 1
 
 
+def test_contract_repair_wraps_one_direct_host_receipt_in_function_scope():
+    code = """
+from easyicu.research_agent.methods.descriptive_inputs import (
+    measurement_provenance_receipt,
+)
+
+def main(frame, measured_column, count_column):
+    provenance = measurement_provenance_receipt(
+        frame,
+        measured_column=measured_column,
+        count_column=count_column,
+    )
+    if provenance is None:
+        raise RuntimeError("missing provenance receipt")
+    step_summary = {
+        "measurement_provenance_audit": provenance,
+    }
+    return step_summary
+""".lstrip()
+    finding = {
+        "validator": "step_summary_integrity",
+        "severity": "error",
+        "detail": {
+            "issue": "measurement_provenance_source_invalid",
+            "reported_source": None,
+        },
+    }
+
+    repaired = deterministic_contract_repair(code=code, findings=[finding])
+
+    assert repaired is not None
+    name, patched = repaired
+    assert name == "measurement_provenance_summary_mapping_v2"
+    assert patched.count("measurement_provenance_receipt(") == 1
+    assert (
+        '"measurement_provenance_audit": {"source": "COHORT_PARQUET", '
+        '"checks": [provenance]}'
+    ) in patched
+    assert "if provenance is None:" in patched
+
+
+def test_contract_repair_refuses_direct_receipt_with_another_consumer():
+    code = """
+from easyicu.research_agent.methods.descriptive_inputs import (
+    measurement_provenance_receipt,
+)
+
+def main(frame, measured_column, count_column):
+    provenance = measurement_provenance_receipt(
+        frame,
+        measured_column=measured_column,
+        count_column=count_column,
+    )
+    publish(provenance)
+    step_summary = {
+        "measurement_provenance_audit": provenance,
+    }
+    return step_summary
+""".lstrip()
+
+    assert (
+        deterministic_contract_repair(
+            code=code,
+            findings=[
+                {
+                    "validator": "step_summary_integrity",
+                    "severity": "error",
+                    "detail": {
+                        "issue": "measurement_provenance_source_invalid",
+                        "reported_source": None,
+                    },
+                }
+            ],
+        )
+        is None
+    )
+
+
 def test_contract_repair_refuses_unverified_direct_provenance_list():
     code = """
 provenance_receipts = [{"measured_column": "marker_measured"}]

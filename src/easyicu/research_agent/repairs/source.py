@@ -44,6 +44,7 @@ from .attrition import patch_attrition_rule_id_canonicalization
 from .lossy_coercion import (
     patch_lossy_numeric_coercion_guard as _patch_lossy_numeric_coercion_guard,
 )
+from .provenance_summary import patch_direct_host_provenance_summary
 from .helpers import (  # noqa: F401  (re-exported for back-compat)
     _BINARY_MODEL_REPAIR_FAMILIES,
     _KEYERROR_NOT_IN_INDEX_RE,
@@ -605,6 +606,175 @@ def _patch_host_helper_keyword_only_call(
     except SyntaxError:
         return code
     line = next(iter(finding_lines))
+
+    # Older generated scripts sometimes wrapped the stable helper in a
+    # signature-adaptation try/except and passed two selected Series plus a
+    # made-up keyword.  When the exact frame and both existing column-key
+    # expressions are structurally recoverable, replace the whole swallowing
+    # adapter with the stable host call.  This introduces no column name or
+    # scientific choice; it only restores the registered API contract.
+    legacy_adapters: list[tuple[ast.Try, ast.Call, ast.Subscript, ast.Subscript]] = []
+    for statement in ast.walk(tree):
+        if not (
+            isinstance(statement, ast.Try)
+            and len(statement.body) == 1
+            and isinstance(statement.body[0], ast.Expr)
+            and isinstance(statement.body[0].value, ast.Call)
+            and len(statement.handlers) == 1
+            and not statement.orelse
+            and not statement.finalbody
+        ):
+            continue
+        call = statement.body[0].value
+        handler = statement.handlers[0]
+        if not (
+            int(getattr(call, "lineno", 0)) == line
+            and _call_tail(call.func) == "measurement_provenance_receipt"
+            and len(call.args) == 2
+            and all(isinstance(argument, ast.Subscript) for argument in call.args)
+            and len(call.keywords) == 1
+            and call.keywords[0].arg == "variable_name"
+            and isinstance(handler.type, ast.Name)
+            and handler.type.id == "TypeError"
+            and len(handler.body) == 1
+            and isinstance(handler.body[0], ast.Expr)
+            and isinstance(handler.body[0].value, ast.Call)
+            and _call_tail(handler.body[0].value.func) == "call_helper_adaptively"
+            and handler.body[0].value.args
+            and _call_tail(handler.body[0].value.args[0])
+            == "measurement_provenance_receipt"
+        ):
+            continue
+        measured_arg, count_arg = call.args
+        assert isinstance(measured_arg, ast.Subscript)
+        assert isinstance(count_arg, ast.Subscript)
+        if not (
+            isinstance(measured_arg.value, ast.Name)
+            and isinstance(count_arg.value, ast.Name)
+            and measured_arg.value.id == count_arg.value.id
+        ):
+            continue
+        legacy_adapters.append((statement, call, measured_arg, count_arg))
+    if len(legacy_adapters) == 1:
+        statement, call, measured_arg, count_arg = legacy_adapters[0]
+        statement_source = ast.get_source_segment(code, statement)
+        function_source = ast.get_source_segment(code, call.func)
+        measured_source = ast.get_source_segment(code, measured_arg.slice)
+        count_source = ast.get_source_segment(code, count_arg.slice)
+        if (
+            statement_source
+            and function_source
+            and measured_source
+            and count_source
+            and code.count(statement_source) == 1
+        ):
+            frame_source = measured_arg.value.id
+            replacement = (
+                f"{function_source}({frame_source}, "
+                f"measured_column={measured_source}, "
+                f"count_column={count_source})"
+            )
+            repaired = code.replace(statement_source, replacement, 1)
+            try:
+                repaired_tree = ast.parse(repaired)
+            except SyntaxError:
+                return code
+            adaptive_calls = [
+                node
+                for node in ast.walk(repaired_tree)
+                if isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Name)
+                and node.func.id == "call_helper_adaptively"
+            ]
+            adaptive_replacements: list[tuple[str, str]] = []
+            for adaptive_call in adaptive_calls:
+                if not (
+                    len(adaptive_call.args) == 3
+                    and isinstance(adaptive_call.args[0], ast.Name)
+                    and adaptive_call.args[0].id == "closed_categorical_counts"
+                    and len(adaptive_call.keywords) == 1
+                    and adaptive_call.keywords[0].arg == "levels"
+                ):
+                    adaptive_replacements = []
+                    break
+                call_source = ast.get_source_segment(repaired, adaptive_call)
+                series_source = ast.get_source_segment(repaired, adaptive_call.args[1])
+                levels_source = ast.get_source_segment(
+                    repaired,
+                    adaptive_call.keywords[0].value,
+                )
+                if not call_source or not series_source or not levels_source:
+                    adaptive_replacements = []
+                    break
+                adaptive_replacements.append(
+                    (
+                        call_source,
+                        "closed_categorical_counts("
+                        f"{series_source}, declared_levels={levels_source})",
+                    )
+                )
+            if adaptive_calls and len(adaptive_replacements) == len(adaptive_calls):
+                for call_source, direct_source in adaptive_replacements:
+                    if repaired.count(call_source) != 1:
+                        return code
+                    repaired = repaired.replace(call_source, direct_source, 1)
+                try:
+                    repaired_tree = ast.parse(repaired)
+                except SyntaxError:
+                    return code
+            helper_defs = [
+                node
+                for node in repaired_tree.body
+                if isinstance(node, ast.FunctionDef)
+                and node.name == "call_helper_adaptively"
+            ]
+            helper_loads = [
+                node
+                for node in ast.walk(repaired_tree)
+                if isinstance(node, ast.Name)
+                and isinstance(node.ctx, ast.Load)
+                and node.id == "call_helper_adaptively"
+            ]
+            if len(helper_defs) == 1 and not helper_loads:
+                helper = helper_defs[0]
+                repaired_lines = repaired.splitlines(keepends=True)
+                del repaired_lines[
+                    int(helper.lineno) - 1 : int(helper.end_lineno or helper.lineno)
+                ]
+                repaired = "".join(repaired_lines)
+                try:
+                    repaired_tree = ast.parse(repaired)
+                except SyntaxError:
+                    return code
+                inspect_loads = [
+                    node
+                    for node in ast.walk(repaired_tree)
+                    if isinstance(node, ast.Name)
+                    and isinstance(node.ctx, ast.Load)
+                    and node.id == "inspect"
+                ]
+                inspect_imports = [
+                    node
+                    for node in repaired_tree.body
+                    if isinstance(node, ast.Import)
+                    and len(node.names) == 1
+                    and node.names[0].name == "inspect"
+                    and node.names[0].asname is None
+                ]
+                if not inspect_loads and len(inspect_imports) == 1:
+                    import_node = inspect_imports[0]
+                    repaired_lines = repaired.splitlines(keepends=True)
+                    del repaired_lines[
+                        int(import_node.lineno)
+                        - 1 : int(import_node.end_lineno or import_node.lineno)
+                    ]
+                    repaired = "".join(repaired_lines)
+                    try:
+                        ast.parse(repaired)
+                    except SyntaxError:
+                        return code
+            return repaired
+
     candidates = [
         node
         for node in ast.walk(tree)
@@ -2357,6 +2527,11 @@ def deterministic_concept_audit_repair(
             and "sum" in str(message).lower()
         )
         for message in audit_messages
+    ) or any(
+        finding.validator == "mechanical_code_preflight"
+        and finding.severity == "error"
+        and (finding.detail or {}).get("reason") == "scalar_cast_before_reduction"
+        for finding in repair_findings
     )
     if scalar_cast_finding:
         reduced = _patch_scalar_cast_before_reduction(repaired)
@@ -4172,6 +4347,10 @@ def _patch_measurement_provenance_summary_mapping(code: str) -> str:
     that list is uniquely initialized and populated exclusively by the
     host-owned ``measurement_provenance_receipt`` helper.
     """
+
+    direct_host_mapping = patch_direct_host_provenance_summary(code)
+    if direct_host_mapping != code:
+        return direct_host_mapping
 
     try:
         tree = ast.parse(code)
