@@ -101,6 +101,33 @@ def test_inputs_mapping_and_get_relative_path_are_supported(ra) -> None:
     assert "os.environ.get('EASYICU_RUN_DIR')" in repaired
 
 
+def test_path_open_json_load_proves_manifest_without_shape_probe(ra) -> None:
+    script = """
+import json
+import os
+from pathlib import Path
+
+manifest_path = Path(os.environ["EASYICU_RESOLVED_INPUTS_JSON"])
+with manifest_path.open("r", encoding="utf-8") as manifest_file:
+    resolved_manifest = json.load(manifest_file)
+binding = resolved_manifest["inputs"]["artifact:analysis_cohort"]
+relative_path = binding["relative_path"]
+cohort_path = Path(os.environ["EASYICU_EVIDENCE_DIR"]) / relative_path
+"""
+
+    findings = _findings(script, ra)
+
+    assert len(findings) == 1
+    repaired, names = deterministic_concept_audit_repair(
+        script,
+        [findings[0].message],
+        repair_reasons=[RepairReason.TYPED_PRODUCT_BINDING_INVALID],
+        repair_findings=findings,
+    )
+    assert names == ["resolved_input_run_root_v1"]
+    assert "Path(os.environ['EASYICU_RUN_DIR'])" in repaired
+
+
 def test_direct_host_manifest_read_is_proven_without_key_shape_inference(ra) -> None:
     script = """
 import json
