@@ -119,8 +119,6 @@ def _write_upstream_bundle(
         "anchor": "index_event",
         "anchor_provenance": "agent_declared",
         "anchor_source": "synthetic_contract_fixture",
-        "membership_evidence_id": "table_opaque_membership_de45fa67",
-        "membership_sha256": "a" * 64,
         "trailing_na_policy": {
             "zero_imputation": False,
             "eligibility_uses_observed_window_count": True,
@@ -138,8 +136,6 @@ def _write_upstream_bundle(
         "selected_n_clusters": n_clusters,
         "selected_model_id": f"opaque-model-k{n_clusters}",
         "assignment_column": assignment_column,
-        "candidate_models_evidence_id": "model_opaque_candidates_de45fa67",
-        "cluster_selection_evidence_id": "log_opaque_selection_ef56ab78",
         "criterion": "bic",
         "selection_rule": "minimum",
         "direction": "minimize",

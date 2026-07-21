@@ -31,8 +31,12 @@ from ...schema import (
     TrajectoryStabilitySpec,
 )
 from ...trajectory.plan_contract import (
+    OBSERVED_DATA_DIAG_GMM_FIT_METHOD,
+    OBSERVED_DATA_DIAG_GMM_MODEL_FAMILY,
     STABILITY_EXECUTOR_INPUTS,
     STABILITY_EXECUTOR_OUTPUTS,
+    TRAJECTORY_CANDIDATE_SOLUTION_SCHEMA_VERSION,
+    TRAJECTORY_REPRESENTATION_SCHEMA_VERSION,
     TRAJECTORY_STABILITY_METHOD_HEAD,
     trajectory_step_roles,
 )
@@ -48,11 +52,11 @@ __all__ = [
 ]
 
 
-_SUPPORTED_MODEL_FAMILY = "latent_class_diagonal_gaussian_mixture"
-_SUPPORTED_FIT_METHOD = "observed_data_em_diagonal_gaussian_mixture"
+_SUPPORTED_MODEL_FAMILY = OBSERVED_DATA_DIAG_GMM_MODEL_FAMILY
+_SUPPORTED_FIT_METHOD = OBSERVED_DATA_DIAG_GMM_FIT_METHOD
 _SUPPORTED_COVARIANCE = "diag"
-_SUPPORTED_REPRESENTATION_SCHEMA = "easyicu.trajectory_representation_schema/1"
-_SUPPORTED_SOLUTION_SCHEMA = "easyicu.candidate_cluster_solution_schema/2"
+_SUPPORTED_REPRESENTATION_SCHEMA = TRAJECTORY_REPRESENTATION_SCHEMA_VERSION
+_SUPPORTED_SOLUTION_SCHEMA = TRAJECTORY_CANDIDATE_SOLUTION_SCHEMA_VERSION
 _NATIVE_MATH_THREAD_ENV = (
     "VECLIB_MAXIMUM_THREADS",
     "OMP_NUM_THREADS",
@@ -592,13 +596,6 @@ def _validate_representation_policy(schema: Mapping[str, Any]) -> None:
         raise ValueError("anchor_provenance is unsupported")
     if not str(schema.get("anchor_source") or "").strip():
         raise ValueError("anchor_source is required")
-    if not str(schema.get("membership_evidence_id") or "").strip():
-        raise ValueError("membership_evidence_id is required")
-    membership_sha = str(schema.get("membership_sha256") or "").strip().lower()
-    if len(membership_sha) != 64 or any(
-        character not in "0123456789abcdef" for character in membership_sha
-    ):
-        raise ValueError("membership_sha256 must be a SHA-256 digest")
     trailing_policy = schema.get("trailing_na_policy")
     required_trailing = {
         "zero_imputation": False,
@@ -645,11 +642,7 @@ def validate_trajectory_stability_schema_pair(
         raise ValueError("candidate schema lacks assignment_column")
     if not str(solution_schema.get("selected_model_id") or "").strip():
         raise ValueError("candidate schema lacks selected_model_id")
-    for field in (
-        "candidate_models_evidence_id",
-        "cluster_selection_evidence_id",
-        "criterion",
-    ):
+    for field in ("criterion",):
         if not str(solution_schema.get(field) or "").strip():
             raise ValueError(f"candidate schema lacks {field}")
     if solution_schema.get("selection_rule") not in {
