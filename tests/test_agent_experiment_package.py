@@ -43,12 +43,14 @@ def _run(tmp_path: Path) -> Path:
                     {
                         "evidence_id": "ev_table",
                         "kind": "table",
+                        "produced_by_step": "01_model",
                         "relative_path": table.relative_to(run).as_posix(),
                         "sha256": _sha(table),
                     },
                     {
                         "evidence_id": "ev_figure",
                         "kind": "figure",
+                        "produced_by_step": "01_model_figure",
                         "relative_path": figure.relative_to(run).as_posix(),
                         "sha256": _sha(figure),
                     },
@@ -70,12 +72,13 @@ def test_builds_numbered_categorized_package_without_copying(tmp_path: Path):
         run_dir=run, package_root=root, experiment_id="FIG2-E2-DEV-001"
     )
 
-    assert (package / "code" / "01_model__analysis.py").is_symlink()
-    assert (package / "results" / "ev_table__result.csv").is_symlink()
-    assert (package / "figures" / "ev_figure__figure.svg").is_symlink()
-    assert (package / "reports" / "run_status.json").is_symlink()
+    assert (package / "code/01_model/S01-A001__analysis.py").is_symlink()
+    assert (package / "results/01_model/S01-A001__result.csv").is_symlink()
+    assert (package / "figures/01_model_figure/S01-A001__figure.svg").is_symlink()
+    assert (package / "reports/00_run/S00-A001__run_status.json").is_symlink()
     payload = json.loads((package / "package.json").read_text(encoding="utf-8"))
     assert payload["experiment_id"] == "FIG2-E2-DEV-001"
+    assert payload["schema_version"] == "easyicu.agent_experiment_package/2"
     assert payload["code_commit"] == "abc123"
     assert payload["completion"] == {
         "execution_ok": True,
@@ -84,6 +87,11 @@ def test_builds_numbered_categorized_package_without_copying(tmp_path: Path):
         "paper_authorized": False,
     }
     assert len(payload["inventory"]) == 5
+    table_record = next(
+        row for row in payload["inventory"] if row.get("evidence_id") == "ev_table"
+    )
+    assert table_record["step_id"] == "01_model"
+    assert table_record["artifact_no"] == "S01-A001"
     assert "FIG2-E2-DEV-001" in (root / "INDEX.md").read_text(encoding="utf-8")
 
 
