@@ -7,6 +7,7 @@ import pytest
 
 from easyicu.research_agent.methods.source_status import (
     reconcile_binary_event_presence,
+    reconcile_measurement_source_status,
 )
 
 
@@ -79,4 +80,84 @@ def test_sparse_event_helper_never_guesses_a_missing_column():
             count_column="event_n",
             measured_column="event_measured",
             representative_column="event_max",
+        )
+
+
+def test_measurement_source_status_uses_a_closed_audit_only_partition():
+    frame = pd.DataFrame(
+        {
+            "marker_n": [1, 0, 2, 0],
+            "marker_measured": [1, 0, 1, 0],
+            "marker_max": [2.5, None, None, None],
+        }
+    )
+
+    result = reconcile_measurement_source_status(
+        frame,
+        measured_column="marker_measured",
+        count_column="marker_n",
+        value_column="marker_max",
+    )
+
+    assert result.row_status.tolist() == [
+        "valid observed",
+        "no source",
+        "measured/source present but summary missing",
+        "no source",
+    ]
+    assert result.provenance_receipt == {
+        "measured_column": "marker_measured",
+        "count_column": "marker_n",
+        "status": "checked",
+        "comparison_n": 4,
+        "invalid_pair_n": 0,
+        "discordant_n": 0,
+        "role": "audit_only",
+    }
+    assert result.status_table["count"].sum() == len(frame)
+    assert result.status_table["percentage"].sum() == pytest.approx(100.0)
+    assert result.audit["valid_observed_n"] == 1
+    assert result.audit["no_source_n"] == 2
+    assert result.audit["measured_source_present_summary_missing_n"] == 1
+
+
+def test_measurement_source_status_fails_on_value_without_source():
+    frame = pd.DataFrame(
+        {
+            "marker_n": [0, 1],
+            "marker_measured": [0, 1],
+            "marker_max": [3.2, 1.4],
+        }
+    )
+
+    with pytest.raises(ValueError, match="source status is contradictory"):
+        reconcile_measurement_source_status(
+            frame,
+            measured_column="marker_measured",
+            count_column="marker_n",
+            value_column="marker_max",
+        )
+
+
+@pytest.mark.parametrize(
+    ("count", "measured"),
+    [([0, 1], [1, 1]), ([0, 1.5], [0, 1]), ([0, 1], [0, 2])],
+)
+def test_measurement_source_status_inherits_fail_closed_pair_validation(
+    count, measured
+):
+    frame = pd.DataFrame(
+        {
+            "marker_n": count,
+            "marker_measured": measured,
+            "marker_max": [None, 1.4],
+        }
+    )
+
+    with pytest.raises(ValueError, match="measurement provenance"):
+        reconcile_measurement_source_status(
+            frame,
+            measured_column="marker_measured",
+            count_column="marker_n",
+            value_column="marker_max",
         )

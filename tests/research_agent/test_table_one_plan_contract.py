@@ -145,5 +145,8 @@ def test_table_one_sdk_guidance_is_only_added_for_typed_table_one() -> None:
     legacy = AnalysisStep.model_validate(_step(include_spec=False))
     full = load_prompt_pack()["coder"]
 
-    assert "build_grouped_table_one" in coder_guide_for_step(full, typed)
+    typed_guide = coder_guide_for_step(full, typed)
+    assert "build_grouped_table_one" in typed_guide
+    assert "reconcile_measurement_source_status" in typed_guide
+    assert "per-group missingness" in typed_guide
     assert "build_grouped_table_one" not in coder_guide_for_step(full, legacy)

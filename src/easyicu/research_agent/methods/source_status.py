@@ -13,6 +13,8 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from .descriptive_inputs import measurement_provenance_receipt
+
 
 @dataclass(frozen=True)
 class BinaryEventPresenceResult:
@@ -20,6 +22,20 @@ class BinaryEventPresenceResult:
 
     values: pd.Series
     row_status: pd.Series
+    audit: dict[str, Any]
+    status_table: pd.DataFrame
+
+
+@dataclass(frozen=True)
+class MeasurementSourceStatusResult:
+    """Validated source states for one continuous/ordinal summary column.
+
+    The result is audit-only.  It never replaces, filters, or imputes the
+    authoritative value column supplied by the Planner.
+    """
+
+    row_status: pd.Series
+    provenance_receipt: dict[str, Any]
     audit: dict[str, Any]
     status_table: pd.DataFrame
 
@@ -69,9 +85,8 @@ def reconcile_binary_event_presence(
     pair_discordant = pair_valid & measured.ne(event_present.astype(int))
 
     representative_coercion_invalid = representative_raw.notna() & representative.isna()
-    representative_valid = (
-        ~representative_coercion_invalid
-        & (representative.isna() | representative.isin([0, 1]))
+    representative_valid = ~representative_coercion_invalid & (
+        representative.isna() | representative.isin([0, 1])
     )
     positive_missing = event_present & representative.ne(1)
     negative_positive = ~event_present & representative.eq(1)
@@ -92,9 +107,7 @@ def reconcile_binary_event_presence(
         "invalid_pair_n": int((~pair_valid).sum()),
         "discordant_n": int(pair_discordant.sum()),
         "representative_invalid_n": int((~representative_valid).sum()),
-        "representative_coercion_invalid_n": int(
-            representative_coercion_invalid.sum()
-        ),
+        "representative_coercion_invalid_n": int(representative_coercion_invalid.sum()),
         "positive_representative_missing_n": int(positive_missing.sum()),
         "negative_representative_positive_n": int(negative_positive.sum()),
         "event_present_n": int(event_present.sum()),
@@ -136,4 +149,97 @@ def reconcile_binary_event_presence(
     )
 
 
-__all__ = ["BinaryEventPresenceResult", "reconcile_binary_event_presence"]
+def reconcile_measurement_source_status(
+    frame: pd.DataFrame,
+    *,
+    measured_column: str,
+    count_column: str,
+    value_column: str,
+) -> MeasurementSourceStatusResult:
+    """Return mutually exclusive source states for one declared summary.
+
+    ``measurement_provenance_receipt`` first proves the measured/count pair.
+    The value column is then used only to distinguish an observed summary,
+    an unmeasured row, and a measured row whose requested summary is missing.
+    A value on a proven-unmeasured row is contradictory and fails closed.
+    """
+
+    selected = (measured_column, count_column, value_column)
+    if len(set(selected)) != len(selected):
+        raise ValueError("measurement source-status roles require distinct columns")
+    missing = [column for column in selected if column not in frame.columns]
+    if missing:
+        raise ValueError(f"measurement source-status columns missing: {missing}")
+
+    receipt = measurement_provenance_receipt(
+        frame,
+        measured_column=measured_column,
+        count_column=count_column,
+    )
+    measured = pd.to_numeric(frame[measured_column], errors="raise").eq(1)
+    value_present = frame[value_column].notna()
+
+    observed = measured & value_present
+    no_source = ~measured & ~value_present
+    summary_missing = measured & ~value_present
+    contradictory = ~measured & value_present
+    audit = {
+        "summary_semantics": "measurement_source_status",
+        "measured_column": measured_column,
+        "count_column": count_column,
+        "value_column": value_column,
+        "n_total": int(len(frame)),
+        "valid_observed_n": int(observed.sum()),
+        "no_source_n": int(no_source.sum()),
+        "measured_source_present_summary_missing_n": int(summary_missing.sum()),
+        "contradictory_invalid_n": int(contradictory.sum()),
+    }
+    if audit["contradictory_invalid_n"]:
+        raise ValueError(f"measurement source status is contradictory: {audit}")
+
+    labels = pd.Series(index=frame.index, dtype="string", name="source_status")
+    labels.loc[observed] = "valid observed"
+    labels.loc[no_source] = "no source"
+    labels.loc[summary_missing] = "measured/source present but summary missing"
+    if bool(labels.isna().any()):
+        raise ValueError("measurement source status did not form a closed partition")
+
+    counts = (
+        labels.value_counts(dropna=False)
+        .reindex(
+            [
+                "valid observed",
+                "no source",
+                "measured/source present but summary missing",
+                "contradictory/invalid",
+            ],
+            fill_value=0,
+        )
+        .astype(int)
+    )
+    status_table = pd.DataFrame(
+        {
+            "source_status": counts.index.astype(str),
+            "count": counts.to_numpy(dtype=int),
+            "denominator": int(len(frame)),
+            "percentage": (
+                100.0 * counts.to_numpy(dtype=float) / len(frame)
+                if len(frame)
+                else np.full(len(counts), np.nan)
+            ),
+        }
+    )
+    return MeasurementSourceStatusResult(
+        row_status=labels,
+        provenance_receipt=receipt,
+        audit=audit,
+        status_table=status_table,
+    )
+
+
+__all__ = [
+    "BinaryEventPresenceResult",
+    "MeasurementSourceStatusResult",
+    "reconcile_binary_event_presence",
+    "reconcile_measurement_source_status",
+]
