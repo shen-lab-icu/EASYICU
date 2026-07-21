@@ -260,6 +260,7 @@ _SYNTACTIC_REPAIRS = {
     "attrition_rule_id_canonicalization_v1",
     "boolean_mask_reduction_precedence_v1",
     "boolean_reduction_identity_v1",
+    "categorical_distribution_clinical_bin_role_v1",
     "closed_counts_declared_levels_binding_v1",
     "closed_counts_direct_host_call_v1",
     "closed_counts_level_column_v1",

@@ -42,6 +42,7 @@ from ..scalar_utils import (
 )
 from .attrition import patch_attrition_rule_id_canonicalization
 from .concept_preflight import patch_concept_preflight_repairs
+from .figure_distribution import patch_categorical_distribution_clinical_bin_role
 from .lossy_coercion import (
     patch_lossy_numeric_coercion_guard as _patch_lossy_numeric_coercion_guard,
     patch_returned_coercion_loss_guard as _patch_returned_coercion_loss_guard,
@@ -4046,6 +4047,14 @@ def _deterministic_summary_repair(
 ) -> Optional[tuple[str, str]]:
     if not isinstance(step_summary, dict) or not step_summary:
         return None
+    clinical_bin_repair = "categorical_distribution_clinical_bin_role_v1"
+    if previous_repair != clinical_bin_repair:
+        repaired = patch_categorical_distribution_clinical_bin_role(
+            code,
+            step_summary,
+        )
+        if repaired is not None and repaired != code:
+            return clinical_bin_repair, repaired
     summary_text = json.dumps(step_summary, ensure_ascii=False, default=str).lower()
     simple_imputer_bool = (
         "simpleimputer does not support data with dtype bool" in summary_text

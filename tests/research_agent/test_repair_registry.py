@@ -322,8 +322,20 @@ def test_every_generic_repair_entrypoint_crosses_central_authorization_gate() ->
     publication_figure_source = (
         research_agent_root / "execution" / "publication_figure.py"
     ).read_text(encoding="utf-8")
+    repair_coordination_source = (
+        research_agent_root / "repairs" / "coordination.py"
+    ).read_text(encoding="utf-8")
 
-    assert source.count("_deterministic_summary_repair(") == 3
+    # Two in-loop boundaries remain in the execute phase.  The resumed-failure
+    # boundary is owned by repairs.coordination and returns a candidate to the
+    # execute phase's central authorization callback before it can run.
+    assert source.count("_deterministic_summary_repair(") == 2
+    assert repair_coordination_source.count("_deterministic_summary_repair(") == 1
+    resume_boundary = source.index("candidate = resume_deterministic_repair_candidate(")
+    resume_authorization = source.index(
+        "repair = _authorize_automatic_repair(", resume_boundary
+    )
+    assert resume_authorization - resume_boundary < 500
     assert source.count("deterministic_contract_repair(") == 1
     assert source.count("_deterministic_runner_repair(") == 1
     # A2 batch-1 moved the concept-audit repair behind
