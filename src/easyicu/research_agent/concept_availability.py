@@ -46,6 +46,7 @@ _DATABASE_ALIASES = {
 _CONCEPT_ALIASES = {
     "creatinine": "crea",
     "creat": "crea",
+    "lactate": "lact",
     "urine_output": "urine",
     "uo": "urine",
     "aki": "kdigo_aki",
@@ -54,6 +55,7 @@ _CONCEPT_ALIASES = {
     "aki_stage": "kdigo_aki",
     "sofa-2": "sofa2",
     "mortality": "death",
+    "hospital_mortality": "death",
     "icu_mortality": "death",
 }
 

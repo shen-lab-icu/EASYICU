@@ -1042,11 +1042,15 @@ def _blueprint_concept_dependencies(
         if not name:
             continue
         variable = context.variable(name)
+        source_names: List[str] = []
         if variable is not None:
-            names.extend(variable.derived_from_concepts)
+            source_names.extend(variable.derived_from_concepts)
             if variable.source_concept:
-                names.append(variable.source_concept)
-        names.append(name)
+                source_names.append(variable.source_concept)
+        # A materialized column (for example ``marker_max``) is not itself an
+        # extractable concept.  Prefer its explicit source concepts and use the
+        # physical column name only for legacy descriptors without lineage.
+        names.extend(source_names or [name])
 
     q = context.research_question.lower()
     if "kdigo" in q or "aki" in q:
