@@ -207,10 +207,18 @@ def patch_strict_numeric_nonfinite_audit_conflict(
         return code
     raw_name = f"_easyicu_{strict_name}_raw_nonfinite_audit_v1"
     loss_name = f"_easyicu_{strict_name}_coercion_loss_v1"
+    numeric_name = f"_easyicu_{strict_name}_numeric_nonfinite_audit_v2"
+    nonfinite_name = f"_easyicu_{strict_name}_nonfinite_observed_v2"
     all_names = {node.id for node in ast.walk(tree) if isinstance(node, ast.Name)} | {
         node.arg for node in ast.walk(tree) if isinstance(node, ast.arg)
     }
-    if raw_name in all_names or loss_name in all_names:
+    if (
+        any(
+            name in all_names
+            for name in {raw_name, loss_name, numeric_name, nonfinite_name}
+        )
+        or "strict_numeric_input" in all_names
+    ):
         return code
 
     lines = code.splitlines(keepends=True)
@@ -218,17 +226,21 @@ def patch_strict_numeric_nonfinite_audit_conflict(
     body_indent = strict_indent + "    "
     strict_replacement = (
         f"{strict_indent}{raw_name} = ({source_text}).copy()\n"
-        f"{strict_indent}{strict_name} = {pandas_alias}.to_numeric("
+        f"{strict_indent}{numeric_name} = {pandas_alias}.to_numeric("
         f'{raw_name}, errors="coerce")\n'
         f"{strict_indent}{loss_name} = {raw_name}.notna() & "
-        f"{strict_name}.isna()\n"
+        f"{numeric_name}.isna()\n"
         f"{strict_indent}if int({loss_name}.sum()) > 0:\n"
         f'{body_indent}raise ValueError("lossy numeric coercion in audited input")\n'
+        f"{strict_indent}{nonfinite_name} = {numeric_name}.notna() & "
+        f"~{numpy_alias}.isfinite({numeric_name})\n"
+        f"{strict_indent}{strict_name} = strict_numeric_input("
+        f"{numeric_name}.mask({nonfinite_name})).values\n"
     )
     mask_indent = lines[mask_assignment.lineno - 1][: mask_assignment.col_offset]
     mask_replacement = (
         f"{mask_indent}{mask_assignment.targets[0].id} = "
-        f"{derived_name}.notna() & ~{numpy_alias}.isfinite({derived_name})\n"
+        f"{nonfinite_name}.reindex({derived_name}.index, fill_value=False)\n"
     )
     replacements = [
         (
@@ -245,6 +257,21 @@ def patch_strict_numeric_nonfinite_audit_conflict(
     for start, end, replacement in sorted(replacements, reverse=True):
         lines[start:end] = [replacement]
     repaired = "".join(lines)
+    repaired_tree = ast.parse(repaired)
+    imports = [
+        node
+        for node in repaired_tree.body
+        if isinstance(node, (ast.Import, ast.ImportFrom))
+    ]
+    if not imports or imports[-1].end_lineno is None:
+        return code
+    repaired_lines = repaired.splitlines(keepends=True)
+    repaired_lines.insert(
+        imports[-1].end_lineno,
+        "from easyicu.research_agent.methods.descriptive_inputs "
+        "import strict_numeric_input\n",
+    )
+    repaired = "".join(repaired_lines)
     try:
         ast.parse(repaired)
     except SyntaxError:
@@ -252,4 +279,155 @@ def patch_strict_numeric_nonfinite_audit_conflict(
     return repaired
 
 
-__all__ = ["patch_strict_numeric_nonfinite_audit_conflict"]
+def patch_nonfinite_audit_host_strict_boundary(
+    code: str,
+    *,
+    repair_findings: Sequence[ValidationFinding] = (),
+) -> str:
+    """Upgrade the v1 audit-preservation patch to the host strict SDK."""
+
+    variables = {
+        variable
+        for finding in repair_findings
+        if finding.validator == "llm_concept_auditor"
+        and finding.severity == "error"
+        and (finding.detail or {}).get("issue_code")
+        == "strict_numeric_nonfinite_guard_required"
+        for variable in ((finding.detail or {}).get("variables") or [])
+        if isinstance(variable, str) and variable.isidentifier()
+    }
+    if len(variables) != 1:
+        return code
+    variable = next(iter(variables))
+    raw_name = f"_easyicu_{variable}_raw_nonfinite_audit_v1"
+    loss_name = f"_easyicu_{variable}_coercion_loss_v1"
+    full_mask_name = f"_easyicu_{variable}_nonfinite_observed_v2"
+    if raw_name not in code or loss_name not in code or full_mask_name in code:
+        return code
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return code
+    pandas_alias = _import_alias(tree, "pandas")
+    numpy_alias = _import_alias(tree, "numpy")
+    if pandas_alias is None or numpy_alias is None:
+        return code
+    if any(
+        (isinstance(node, ast.Name) and node.id == "strict_numeric_input")
+        or (isinstance(node, ast.arg) and node.arg == "strict_numeric_input")
+        for node in ast.walk(tree)
+    ):
+        return code
+
+    assignments = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Assign)
+        and len(node.targets) == 1
+        and isinstance(node.targets[0], ast.Name)
+    ]
+    numeric_assignments = [
+        node
+        for node in assignments
+        if node.targets[0].id == variable
+        and isinstance(node.value, ast.Call)
+        and isinstance(node.value.func, ast.Attribute)
+        and isinstance(node.value.func.value, ast.Name)
+        and node.value.func.value.id == pandas_alias
+        and node.value.func.attr == "to_numeric"
+        and node.value.args
+        and isinstance(node.value.args[0], ast.Name)
+        and node.value.args[0].id == raw_name
+    ]
+    loss_guards = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.If)
+        and any(
+            isinstance(candidate, ast.Name) and candidate.id == loss_name
+            for candidate in ast.walk(node.test)
+        )
+        and node.body
+        and all(isinstance(statement, ast.Raise) for statement in node.body)
+    ]
+    mask_assignments = [
+        node
+        for node in assignments
+        if isinstance(node.value, ast.BinOp)
+        and any(
+            isinstance(candidate, ast.Name)
+            and any(
+                assignment.targets[0].id == candidate.id
+                and _root_name(assignment.value) == variable
+                for assignment in assignments
+            )
+            for candidate in ast.walk(node.value)
+        )
+        and any(
+            isinstance(candidate, ast.Call)
+            and isinstance(candidate.func, ast.Attribute)
+            and candidate.func.attr == "isfinite"
+            for candidate in ast.walk(node.value)
+        )
+        and _declares_nonfinite_output(tree, node.targets[0].id)
+    ]
+    if not (
+        len(numeric_assignments) == len(loss_guards) == len(mask_assignments) == 1
+        and loss_guards[0].end_lineno is not None
+        and mask_assignments[0].end_lineno is not None
+    ):
+        return code
+    mask_assignment = mask_assignments[0]
+    derived_names = {
+        candidate.id
+        for candidate in ast.walk(mask_assignment.value)
+        if isinstance(candidate, ast.Name) and candidate.id != variable
+    }
+    derived_names -= {numpy_alias}
+    if len(derived_names) != 1:
+        return code
+    derived_name = next(iter(derived_names))
+
+    lines = code.splitlines(keepends=True)
+    guard = loss_guards[0]
+    guard_indent = lines[guard.lineno - 1][: guard.col_offset]
+    upgrade = (
+        f"{guard_indent}{full_mask_name} = {variable}.notna() & "
+        f"~{numpy_alias}.isfinite({variable})\n"
+        f"{guard_indent}{variable} = strict_numeric_input("
+        f"{variable}.mask({full_mask_name})).values\n"
+    )
+    mask_indent = lines[mask_assignment.lineno - 1][: mask_assignment.col_offset]
+    mask_replacement = (
+        f"{mask_indent}{mask_assignment.targets[0].id} = "
+        f"{full_mask_name}.reindex({derived_name}.index, fill_value=False)\n"
+    )
+    lines[mask_assignment.lineno - 1 : mask_assignment.end_lineno] = [mask_replacement]
+    lines.insert(guard.end_lineno, upgrade)
+    repaired = "".join(lines)
+    repaired_tree = ast.parse(repaired)
+    imports = [
+        node
+        for node in repaired_tree.body
+        if isinstance(node, (ast.Import, ast.ImportFrom))
+    ]
+    if not imports or imports[-1].end_lineno is None:
+        return code
+    repaired_lines = repaired.splitlines(keepends=True)
+    repaired_lines.insert(
+        imports[-1].end_lineno,
+        "from easyicu.research_agent.methods.descriptive_inputs "
+        "import strict_numeric_input\n",
+    )
+    repaired = "".join(repaired_lines)
+    try:
+        ast.parse(repaired)
+    except SyntaxError:
+        return code
+    return repaired
+
+
+__all__ = [
+    "patch_nonfinite_audit_host_strict_boundary",
+    "patch_strict_numeric_nonfinite_audit_conflict",
+]
