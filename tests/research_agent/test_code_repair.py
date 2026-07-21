@@ -719,6 +719,62 @@ step_summary = {
     )
 
 
+def test_contract_repair_reuses_closed_nested_provenance_mapping_in_summary():
+    code = """measurement_checks = [{"status": "checked"}]
+diagnostics = {
+    "measurement_provenance_audit": {
+        "source": "COHORT_PARQUET",
+        "checks": measurement_checks,
+    },
+}
+step_summary = {
+    "step": "05_diagnostics",
+    "output_files": {"artifact:diagnostics": "diagnostics.json"},
+}
+"""
+    finding = {
+        "validator": "step_summary_integrity",
+        "severity": "error",
+        "detail": {
+            "issue": "measurement_provenance_source_invalid",
+            "reported_source": None,
+        },
+    }
+
+    repaired = deterministic_contract_repair(code=code, findings=[finding])
+
+    assert repaired is not None
+    name, patched = repaired
+    assert name == "measurement_provenance_summary_mapping_v2"
+    namespace: dict = {}
+    exec(patched, namespace)  # noqa: S102 - deterministic test source
+    assert namespace["step_summary"]["measurement_provenance_audit"] is (
+        namespace["diagnostics"]["measurement_provenance_audit"]
+    )
+
+
+def test_contract_repair_refuses_unclosed_nested_provenance_mapping():
+    code = """measurement_checks = []
+diagnostics = {
+    "measurement_provenance_audit": {
+        "source": selected_source,
+        "checks": measurement_checks,
+    },
+}
+step_summary = {"step": "05_diagnostics"}
+"""
+    finding = {
+        "validator": "step_summary_integrity",
+        "severity": "error",
+        "detail": {
+            "issue": "measurement_provenance_source_invalid",
+            "reported_source": None,
+        },
+    }
+
+    assert deterministic_contract_repair(code=code, findings=[finding]) is None
+
+
 def test_contract_repair_wraps_direct_host_provenance_receipt_list():
     code = """
 from easyicu.research_agent.methods.descriptive_inputs import (

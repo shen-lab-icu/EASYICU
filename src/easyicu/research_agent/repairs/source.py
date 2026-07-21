@@ -48,7 +48,10 @@ from .lossy_coercion import (
 from .local_binding import patch_local_read_before_assignment_hoist
 from .merge_collision import patch_pandas_merge_dynamic_column_collision
 from .name_alias import patch_undefined_mapping_near_match_alias
-from .provenance_summary import patch_direct_host_provenance_summary
+from .provenance_summary import (
+    patch_direct_host_provenance_summary,
+    patch_nested_host_provenance_summary,
+)
 from .helpers import (  # noqa: F401  (re-exported for back-compat)
     _BINARY_MODEL_REPAIR_FAMILIES,
     _KEYERROR_NOT_IN_INDEX_RE,
@@ -4371,6 +4374,9 @@ def _patch_measurement_provenance_summary_mapping(code: str) -> str:
     direct_host_mapping = patch_direct_host_provenance_summary(code)
     if direct_host_mapping != code:
         return direct_host_mapping
+    nested_host_mapping = patch_nested_host_provenance_summary(code)
+    if nested_host_mapping != code:
+        return nested_host_mapping
 
     try:
         tree = ast.parse(code)
