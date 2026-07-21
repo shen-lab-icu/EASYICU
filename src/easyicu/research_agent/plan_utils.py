@@ -2065,6 +2065,8 @@ def _split_table_and_figure_outputs_in_plan(
                     mode="all_rows",
                 )
                 for input_key in render_source_outputs
+                if (parsed_input := typed_product(input_key)) is not None
+                and parsed_input[0] == "table"
             ],
         )
         new_steps.append(figure_step)
