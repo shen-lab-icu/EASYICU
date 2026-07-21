@@ -590,11 +590,18 @@ def test_first_step_checkpoint_selector_preserves_agent_owned_step_id():
     assert _resolve_stop_after_step_selector(plan, "@index:2") == (
         "agent_generated_summary_name"
     )
+    assert _resolve_stop_after_step_selector(plan, "@product:table:summary") == (
+        "agent_generated_summary_name"
+    )
     assert _resolve_stop_after_step_selector(plan, "agent_generated_summary_name") == (
         "agent_generated_summary_name"
     )
     with pytest.raises(ValueError, match="exceeds the active plan"):
         _resolve_stop_after_step_selector(plan, "@index:3")
+
+    plan.steps[0].expected_outputs.append("table:summary")
+    with pytest.raises(ValueError, match="exactly one declared producer"):
+        _resolve_stop_after_step_selector(plan, "@product:table:summary")
 
 
 def test_failed_contract_code_reuse_requires_exact_checkpoint_authority():

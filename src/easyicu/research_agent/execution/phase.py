@@ -301,6 +301,9 @@ from ..orchestration.resume import (
     store_quarantined_concept_draft,
     upsert_step_record,
 )
+from ..orchestration.step_selector import (
+    resolve_stop_after_step_selector as _resolve_stop_after_step_selector,
+)
 from ..schema import AnalysisPlan, AnalysisStep, EvidenceRef, ResearchContext
 from ..contracts.robustness_execution import (
     ROBUSTNESS_COHORT_MEMBERSHIP_ALIASES,
@@ -742,30 +745,6 @@ def _planner_locked_cohort_prompt_payload(plan: AnalysisPlan) -> str:
         sort_keys=True,
         separators=(",", ":"),
     )
-
-
-def _resolve_stop_after_step_selector(
-    plan: AnalysisPlan,
-    requested: Optional[str],
-) -> Optional[str]:
-    """Resolve a structural checkpoint without guessing Agent-owned step ids."""
-
-    if requested is None:
-        return None
-    if requested == "@first":
-        if not plan.steps:
-            raise ValueError("stop_after_step_id='@first' requires a non-empty plan")
-        return str(plan.steps[0].step_id)
-    index_match = re.fullmatch(r"@index:([1-9][0-9]*)", requested)
-    if index_match is None:
-        return requested
-    one_based_index = int(index_match.group(1))
-    if one_based_index > len(plan.steps):
-        raise ValueError(
-            f"stop_after_step_id={requested!r} exceeds the active plan's "
-            f"{len(plan.steps)} step(s)."
-        )
-    return str(plan.steps[one_based_index - 1].step_id)
 
 
 def _failed_contract_code_can_be_reused_before_coder(
