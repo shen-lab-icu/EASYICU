@@ -81,6 +81,25 @@ def _final_audit_continuation_allowed(
     )
 
 
+def _defer_provider_failure_until_final_audit(
+    *,
+    include_llm: bool,
+    reserved_final_category: object,
+    quarantine_findings: Sequence[ValidationFinding],
+    step_id: str,
+) -> bool:
+    """Keep a proven transport failure from blocking pre-execution gates."""
+
+    return (
+        not include_llm
+        and reserved_final_category == "concept_audit"
+        and _retryable_final_audit_provider_failure(
+            quarantine_findings,
+            step_id=step_id,
+        )
+    )
+
+
 def _retire_completed_provider_failure_continuation(
     quarantine: ConceptQuarantineState,
     *,
@@ -583,7 +602,15 @@ class ConceptAuditCoordinator:
                 except Exception:
                     pass
             raise
-        if quarantine.pending_errors:
+        defer_provider_failure = _defer_provider_failure_until_final_audit(
+            include_llm=include_llm,
+            reserved_final_category=(
+                runtime.provider_budget.snapshot().get("reserved_final_category")
+            ),
+            quarantine_findings=quarantine.pending_errors,
+            step_id=step.step_id,
+        )
+        if quarantine.pending_errors and not defer_provider_failure:
             existing_keys = {
                 (finding.severity, finding_occurrence_identity(finding))
                 for finding in code_findings
@@ -598,6 +625,8 @@ class ConceptAuditCoordinator:
                 )
                 not in existing_keys
             )
+        elif defer_provider_failure:
+            runtime.step_record["concept_audit_provider_failure_deferred"] = True
         return code_findings
 
 
