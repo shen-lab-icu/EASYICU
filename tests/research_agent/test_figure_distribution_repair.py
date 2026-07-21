@@ -4,6 +4,10 @@ from easyicu.research_agent.repairs.figure_distribution import (
     patch_categorical_distribution_clinical_bin_role,
 )
 from easyicu.research_agent.repairs.import_repair import patch_known_host_helper_import
+from easyicu.research_agent.repairs.host_helper_failure import (
+    patch_host_validation_helper_reraise,
+)
+from easyicu.research_agent.schema import ValidationFinding
 from easyicu.research_agent.repairs.source import _deterministic_summary_repair
 
 SUMMARY = {
@@ -130,3 +134,48 @@ def test_known_host_helper_relocation_rejects_unclosed_helpers() -> None:
         )
         is None
     )
+
+
+def test_reraises_exact_preflight_named_host_helper_handler() -> None:
+    code = """from easyicu.research_agent.methods.descriptive_inputs import strict_numeric_input
+try:
+    values = strict_numeric_input(series).values
+    summary["status"] = "completed"
+except Exception as exc:
+    summary["diagnostics"].append({"error": str(exc)})
+finally:
+    write_summary(summary)
+"""
+    finding = ValidationFinding(
+        validator="mechanical_code_preflight",
+        severity="error",
+        message="caught host validation failure",
+        detail={
+            "reason": "host_validation_helper_error_swallowed",
+            "helper_names": ["strict_numeric_input"],
+            "line": 5,
+        },
+    )
+    repaired = patch_host_validation_helper_reraise(code, findings=[finding])
+    assert "# _easyicu_host_validation_helper_reraise_v1\n    raise\n" in repaired
+    assert 'summary["status"] = "completed"' in repaired
+    assert 'summary["diagnostics"].append' in repaired
+
+
+def test_host_helper_reraise_requires_exact_handler_and_helper() -> None:
+    code = """try:
+    values = other_helper(series)
+except Exception:
+    pass
+"""
+    finding = ValidationFinding(
+        validator="mechanical_code_preflight",
+        severity="error",
+        message="caught host validation failure",
+        detail={
+            "reason": "host_validation_helper_error_swallowed",
+            "helper_names": ["strict_numeric_input"],
+            "line": 3,
+        },
+    )
+    assert patch_host_validation_helper_reraise(code, findings=[finding]) == code
