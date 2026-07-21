@@ -282,6 +282,7 @@ _SYNTACTIC_REPAIRS = {
     "resolved_typed_input_precedence_v1",
     "scalar_cast_before_reduction_v1",
     "validation_finding_json_default_v1",
+    "undefined_mapping_near_match_alias_v1",
 }
 
 _STRUCTURAL_REPAIRS = {

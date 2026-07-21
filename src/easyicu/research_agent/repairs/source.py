@@ -47,6 +47,7 @@ from .lossy_coercion import (
 )
 from .local_binding import patch_local_read_before_assignment_hoist
 from .merge_collision import patch_pandas_merge_dynamic_column_collision
+from .name_alias import patch_undefined_mapping_near_match_alias
 from .provenance_summary import patch_direct_host_provenance_summary
 from .helpers import (  # noqa: F401  (re-exported for back-compat)
     _BINARY_MODEL_REPAIR_FAMILIES,
@@ -4768,6 +4769,26 @@ _NAME_ERROR_HELPER_RE = re.compile(
 )
 
 
+def _undefined_helper_reference_is_callable(code: str, name: str) -> bool:
+    """Prove the missing name is a callable/default hook, not an object alias."""
+
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return False
+    return any(
+        (isinstance(node.func, ast.Name) and node.func.id == name)
+        or any(
+            keyword.arg == "default"
+            and isinstance(keyword.value, ast.Name)
+            and keyword.value.id == name
+            for keyword in node.keywords
+        )
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+    )
+
+
 def _patch_boolean_mask_reduction_precedence(code: str) -> Optional[str]:
     """Move ``sum`` after a mistakenly scalarised boolean-mask operation.
 
@@ -5076,6 +5097,12 @@ def _deterministic_runner_repair(
         repaired = patch_pandas_merge_dynamic_column_collision(code, run_log)
         if repaired != code:
             return merge_collision_repair, repaired
+
+    name_alias_repair = "undefined_mapping_near_match_alias_v1"
+    if previous_repair != name_alias_repair:
+        repaired = patch_undefined_mapping_near_match_alias(code, run_log)
+        if repaired != code:
+            return name_alias_repair, repaired
 
     mask_reduction_precedence_failure = "typeerror:" in lowered and (
         "only length-1 arrays can be converted to python scalars" in lowered
@@ -6687,6 +6714,7 @@ def _deterministic_runner_repair(
         if (
             helper_name
             and re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", helper_name)
+            and _undefined_helper_reference_is_callable(code, helper_name)
             and f"def {helper_name}" not in code
             and f"{helper_name} =" not in code
         ):

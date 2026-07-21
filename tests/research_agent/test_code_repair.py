@@ -1918,3 +1918,40 @@ def test_runner_repair_does_not_guess_ambiguous_merge_collision():
     assert (
         _deterministic_runner_repair(code=code, run_log="KeyError: 'exposure'") is None
     )
+
+
+def test_runner_repair_uses_unique_near_match_mapping_alias():
+    code = """propensity_diagnostics = {"fit": {}}
+positivity_diagnostics.update({"status": "not_fitted"})
+result = positivity_diagnostics["fit"]
+"""
+    log = (
+        "NameError: name 'positivity_diagnostics' is not defined. "
+        "Did you mean: 'propensity_diagnostics'?"
+    )
+
+    repair = _deterministic_runner_repair(code=code, run_log=log)
+
+    assert repair is not None
+    assert repair[0] == "undefined_mapping_near_match_alias_v1"
+    assert "positivity_diagnostics" not in repair[1]
+    namespace: dict = {}
+    exec(repair[1], namespace)  # noqa: S102 - deterministic test source
+    assert namespace["propensity_diagnostics"]["status"] == "not_fitted"
+
+
+@pytest.mark.parametrize(
+    "code",
+    [
+        "propensity_diagnostics = object()\npositivity_diagnostics.update({})\n",
+        "propensity_diagnostics = {}\npositivity_diagnostics = {}\n",
+        "propensity_result = {}\npositivity_diagnostics.update({})\n",
+    ],
+)
+def test_runner_repair_refuses_unproven_near_match_alias(code):
+    log = (
+        "NameError: name 'positivity_diagnostics' is not defined. "
+        "Did you mean: 'propensity_diagnostics'?"
+    )
+
+    assert _deterministic_runner_repair(code=code, run_log=log) is None
