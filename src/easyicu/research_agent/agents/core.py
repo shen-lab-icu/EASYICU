@@ -91,6 +91,10 @@ from ..repairs.reasons import (
     repair_prompt_binding_sha256,
 )
 from ..research_context.typed import materialized_input_prompt_attachment
+from ..research_context.prompt_variables import (
+    compact_fixed_window_trajectory_prompt,
+    format_observed_domain,
+)
 from ..authority.step_capsule import ContentRef
 from ..schema import (
     AggregationRule,
@@ -119,6 +123,9 @@ from ..research_context.temporal_semantics import (
     ICUEpisodeResolver,
     TemporalAlignmentEngine,
 )
+
+# Compatibility alias for callers/tests that imported the former local helper.
+_format_observed_domain = format_observed_domain
 
 
 def _dump_raw(text: str, tag: str) -> Optional[Path]:
@@ -230,7 +237,7 @@ def _format_variable(
         compact_description = " ".join(str(v.description).split())
         description = f" description={compact_description!r}"
     ordinal = " is_ordinal=true" if v.is_ordinal else ""
-    obs = _format_observed_domain(v.observed_domain)
+    obs = format_observed_domain(v.observed_domain)
     trajectory = ""
     if v.fixed_window_trajectory is not None:
         metadata = v.fixed_window_trajectory
@@ -277,7 +284,7 @@ def _format_companion_variable(v: ConceptDescriptor) -> str:
         f"dtype={v.dtype}",
     ]
     if v.observed_domain:
-        fields.append(_format_observed_domain(v.observed_domain).strip())
+        fields.append(format_observed_domain(v.observed_domain).strip())
     if v.source_concept:
         fields.append(f"source_concept={v.source_concept}")
     if v.analysis_window:
@@ -287,36 +294,6 @@ def _format_companion_variable(v: ConceptDescriptor) -> str:
     if v.forbidden_transformations:
         fields.append(f"forbidden_transformations={v.forbidden_transformations!r}")
     return " | ".join(fields)
-
-
-def _format_observed_domain(domain: Optional[Dict[str, Any]]) -> str:
-    """Render the cohort-observed value domain as a compact, fact-only hint.
-
-    Surfaces ``is_binary`` / ``is_constant`` and the observed [min, max] so the
-    planner interprets a column by its real values, not its name (a
-    ``<score>_max`` column observed binary {0,1} must not be thresholded as a
-    0-24 scale). States facts only — never prescribes a derivation.
-    """
-    if not domain:
-        return ""
-    if domain.get("is_constant"):
-        return " observed=CONSTANT(single value; no variation to model)"
-    if domain.get("is_binary"):
-        return (
-            " observed={0,1} BINARY(already 2-level; a numeric cutoff >1 is degenerate)"
-        )
-    levels = domain.get("levels")
-    if levels:
-        shown = ",".join(levels[:6])
-        more = "…" if len(levels) > 6 else ""
-        return f" observed_levels={{{shown}{more}}}(categorical; encode as-is)"
-    lo, hi = domain.get("min"), domain.get("max")
-    n_unique = domain.get("n_unique")
-    if lo is not None and hi is not None:
-        return f" observed=[{lo:g},{hi:g}] n_unique={n_unique}"
-    if n_unique is not None:
-        return f" observed_n_unique={n_unique}"
-    return ""
 
 
 def _format_context(
@@ -351,12 +328,45 @@ def _format_context(
     for w in ctx.time_windows:
         lines.append(f"  - {w.name}: {w.start_hours}-{w.end_hours}h from {w.anchor}")
     lines.append("Variables:")
+    compact_trajectory_lines: dict[str, str] = {}
+    if not include_ctas_aggregation_guidance:
+        compact_candidates = [
+            variable
+            for variable in ctx.variables
+            if (
+                variable.fixed_window_trajectory is not None
+                and (
+                    detailed_variable_names is None
+                    or variable.name.strip().lower() in detailed_variable_names
+                )
+                and not (
+                    compact_declared_source_companions
+                    and _is_required_source_companion(variable)
+                )
+            )
+        ]
+        compact_projection = compact_fixed_window_trajectory_prompt(compact_candidates)
+        if compact_projection.shared_lines:
+            lines.append(
+                "Shared fixed-window trajectory policies "
+                "(binding for the member columns below):"
+            )
+            lines.extend(compact_projection.shared_lines)
+            lines.append(
+                "Window-column legend: g=shared trajectory policy; f=family; "
+                "t=[start,end) hours; "
+                "obs=min:max/u(unique count), binary, constant, or levels; "
+                "m=missing fraction/severity."
+            )
+            compact_trajectory_lines = dict(compact_projection.variable_lines)
     for v in ctx.variables:
         detailed = (
             detailed_variable_names is None
             or v.name.strip().lower() in detailed_variable_names
         )
-        if detailed and not (
+        if v.name in compact_trajectory_lines:
+            lines.append(compact_trajectory_lines[v.name])
+        elif detailed and not (
             compact_declared_source_companions and _is_required_source_companion(v)
         ):
             lines.append(
