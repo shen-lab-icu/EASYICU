@@ -305,6 +305,90 @@ def test_runner_repair_declines_validation_finding_json_without_default_hook():
     )
 
 
+def test_runner_repair_removes_runtime_objects_from_json_diagnostics_only():
+    code = """import json
+
+fitted_models = {}
+fitted_models[model_id] = {
+    "model": model,
+    "labels": labels,
+    "n_clusters": 4,
+    "criterion_value": -123.5,
+    "converged": True,
+}
+candidate_diagnostics = []
+for record in sorted(fitted_models.values(), key=lambda item: item["n_clusters"]):
+    candidate_diagnostics.append(record)
+step_summary = {"candidate_fit_diagnostics": candidate_diagnostics}
+json.dumps(step_summary)
+"""
+
+    repair = _deterministic_runner_repair(
+        code=code,
+        run_log=(
+            "TypeError: Unsupported JSON value: <class "
+            "'sklearn.mixture._gaussian_mixture.GaussianMixture'>"
+        ),
+    )
+
+    assert repair is not None
+    name, repaired = repair
+    assert name == "sklearn_runtime_object_diagnostics_v1"
+    assert '"model": model' in repaired
+    assert '"labels": labels' in repaired
+    assert (
+        "candidate_diagnostics.append({key: value for key, value in record.items() "
+        'if key not in {"model", "labels"}})'
+    ) in repaired
+    ast.parse(repaired)
+
+
+def test_runner_repair_declines_ambiguous_runtime_object_diagnostic_loops():
+    loop = """
+for record in fitted_models.values():
+    candidate_diagnostics.append(record)
+"""
+    code = (
+        'fitted_models[model_id] = {"model": model, "labels": labels}\n'
+        "candidate_diagnostics = []\n"
+        + loop
+        + loop
+        + 'step_summary = {"diagnostics": candidate_diagnostics}\n'
+    )
+
+    assert (
+        _deterministic_runner_repair(
+            code=code,
+            run_log=(
+                "TypeError: Unsupported JSON value: <class "
+                "'sklearn.base.BaseEstimator'>"
+            ),
+        )
+        is None
+    )
+
+
+def test_runner_repair_requires_runtime_registry_to_reach_summary_mapping():
+    code = """fitted_models = {}
+fitted_models[model_id] = {"model": model, "labels": labels}
+candidate_diagnostics = []
+for record in fitted_models.values():
+    candidate_diagnostics.append(record)
+print(candidate_diagnostics)
+"""
+
+    assert (
+        _deterministic_runner_repair(
+            code=code,
+            run_log=(
+                "TypeError: Unsupported JSON value: <class "
+                "'sklearn.base.BaseEstimator'>"
+            ),
+        )
+        is None
+    )
+
+
 def test_prediction_split_repair_requires_explicit_outcome_col():
     repaired = _deterministic_runner_repair(
         code=(
