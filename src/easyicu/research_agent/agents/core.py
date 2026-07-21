@@ -92,6 +92,10 @@ from ..repairs.reasons import (
     repair_prompt_binding_sha256,
 )
 from ..research_context.typed import materialized_input_prompt_attachment
+from ..research_context.prompt_scope import (
+    planner_variable_catalog,
+    scoped_planner_context,
+)
 from ..research_context.prompt_variables import (
     compact_fixed_window_trajectory_prompt,
     format_observed_domain,
@@ -702,6 +706,8 @@ def _build_planner_user_prompt(
 ) -> str:
     """Build the planner user prompt with runtime concept-id grounding."""
 
+    planner_context = scoped_planner_context(context)
+
     prompt = (
         "Produce an ICU-AWARE RESEARCH PLAN as JSON matching the "
         "AnalysisPlan schema. First infer the EHR analysis type, "
@@ -927,7 +933,9 @@ def _build_planner_user_prompt(
         '  "rationale": "<one paragraph>"\n'
         "}\n\n"
         "RESEARCH CONTEXT:\n"
-        + _format_context(context, include_materialized_input_facts=True)
+        + _format_context(planner_context, include_materialized_input_facts=True)
+        + "\n\n"
+        + planner_variable_catalog(context, planner_context)
     )
     if know_how_context:
         prompt += (
