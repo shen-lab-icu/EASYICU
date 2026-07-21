@@ -632,6 +632,7 @@ _LLM_CONCEPT_ISSUE_CODE_REASONS = {
     "plausibility_range_exclusion_required": (
         RepairReason.SCIENTIFIC_SEMANTICS_VIOLATION
     ),
+    "strict_numeric_nonfinite_guard_required": RepairReason.LOSSY_NUMERIC_COERCION,
 }
 
 

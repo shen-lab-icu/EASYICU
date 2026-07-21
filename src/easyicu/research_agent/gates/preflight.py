@@ -7684,6 +7684,26 @@ def _lossy_numeric_coercion_findings(tree: ast.Module) -> list[ValidationFinding
                 "lines": unguarded_loss_lines,
             }
         )
+    returned_loss_lines: set[int] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Return) or node.value is None:
+            continue
+        scope_id = _scope_id_for_node(node, parents=parents, tree=tree)
+        for candidate in ast.walk(node.value):
+            site = _coercion_loss_site(
+                candidate,
+                coercion_sites,
+                scope_id=scope_id,
+            )
+            if site is not None and site not in guarded_roots:
+                returned_loss_lines.add(int(candidate.lineno))
+    if returned_loss_lines:
+        issues.append(
+            {
+                "gap": "returned_coercion_loss_count_not_fail_closed",
+                "lines": sorted(returned_loss_lines),
+            }
+        )
     domain_lines = sorted(
         {
             line

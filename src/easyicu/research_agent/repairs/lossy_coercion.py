@@ -10,6 +10,7 @@ import ast
 from typing import Optional
 
 _GUARD_SENTINEL = "_easyicu_lossy_numeric_coercion_guard_v1"
+_RETURN_GUARD_SENTINEL = "_easyicu_returned_coercion_loss_guard_v1"
 
 
 def _expression_key(node: ast.AST) -> str:
@@ -304,4 +305,201 @@ def patch_lossy_numeric_coercion_guard(
     return repaired
 
 
-__all__ = ["patch_lossy_numeric_coercion_guard"]
+def _returned_loss_count(
+    node: ast.AST,
+    *,
+    raw_name: str,
+    coerced_name: str,
+) -> bool:
+    """Recognise ``int((raw.notna() & coerced.isna()).sum())`` exactly."""
+
+    if not (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "int"
+        and len(node.args) == 1
+        and not node.keywords
+    ):
+        return False
+    reduction = node.args[0]
+    if not (
+        isinstance(reduction, ast.Call)
+        and isinstance(reduction.func, ast.Attribute)
+        and reduction.func.attr == "sum"
+        and not reduction.args
+        and not reduction.keywords
+        and isinstance(reduction.func.value, ast.BinOp)
+        and isinstance(reduction.func.value.op, ast.BitAnd)
+    ):
+        return False
+
+    def _method_call(candidate: ast.AST, owner: str, method: str) -> bool:
+        return bool(
+            isinstance(candidate, ast.Call)
+            and isinstance(candidate.func, ast.Attribute)
+            and candidate.func.attr == method
+            and isinstance(candidate.func.value, ast.Name)
+            and candidate.func.value.id == owner
+            and not candidate.args
+            and not candidate.keywords
+        )
+
+    mask = reduction.func.value
+    return _method_call(mask.left, raw_name, "notna") and _method_call(
+        mask.right, coerced_name, "isna"
+    )
+
+
+def patch_returned_coercion_loss_guard(code: str) -> str:
+    """Fail closed when a helper merely returns its numeric coercion losses.
+
+    The repair is authorized separately by a structured concept finding.  It
+    only accepts one straight-line helper containing a proven
+    ``to_numeric(errors='coerce')`` assignment and returning the exact loss
+    count for that same raw/coerced pair.  Reporting the count is retained,
+    but a positive count now terminates before the caller can treat those
+    values as ordinary missingness.
+    """
+
+    if _RETURN_GUARD_SENTINEL in code:
+        return code
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return code
+    parents = {
+        child: parent
+        for parent in ast.walk(tree)
+        for child in ast.iter_child_nodes(parent)
+    }
+    if any(
+        (
+            isinstance(node, ast.Name)
+            and node.id == "RuntimeError"
+            and isinstance(node.ctx, (ast.Store, ast.Del))
+        )
+        or (isinstance(node, ast.arg) and node.arg == "RuntimeError")
+        or (
+            isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
+            and node.name == "RuntimeError"
+        )
+        for node in ast.walk(tree)
+    ):
+        return code
+
+    candidates: list[tuple[ast.Return, ast.AST, str]] = []
+    for function in (
+        node for node in ast.walk(tree) if isinstance(node, ast.FunctionDef)
+    ):
+        assignments = {
+            target.id: statement
+            for statement in function.body
+            if isinstance(statement, ast.Assign)
+            and len(statement.targets) == 1
+            and isinstance((target := statement.targets[0]), ast.Name)
+        }
+        coercions: list[tuple[str, str]] = []
+        for coerced_name, statement in assignments.items():
+            call = statement.value
+            if not (
+                isinstance(call, ast.Call)
+                and isinstance(call.func, ast.Attribute)
+                and call.func.attr == "to_numeric"
+                and call.args
+                and isinstance(call.args[0], ast.Name)
+                and any(
+                    keyword.arg == "errors"
+                    and isinstance(keyword.value, ast.Constant)
+                    and keyword.value.value == "coerce"
+                    for keyword in call.keywords
+                )
+            ):
+                continue
+            raw_name = call.args[0].id
+            if raw_name in assignments:
+                coercions.append((raw_name, coerced_name))
+        for statement in function.body:
+            if not (
+                isinstance(statement, ast.Return)
+                and isinstance(statement.value, ast.Tuple)
+            ):
+                continue
+            if any(
+                isinstance(parent, (ast.Try, ast.TryStar))
+                for parent in _ancestor_nodes(statement, parents)
+            ):
+                continue
+            for item in statement.value.elts:
+                matching = [
+                    (raw_name, coerced_name)
+                    for raw_name, coerced_name in coercions
+                    if _returned_loss_count(
+                        item,
+                        raw_name=raw_name,
+                        coerced_name=coerced_name,
+                    )
+                ]
+                if len(matching) == 1:
+                    candidates.append((statement, item, matching[0][1]))
+    if len(candidates) != 1:
+        return code
+    return_statement, loss_expression, coerced_name = candidates[0]
+    if (
+        return_statement.end_lineno is None
+        or loss_expression.end_lineno is None
+        or loss_expression.end_col_offset is None
+    ):
+        return code
+
+    count_name = f"_easyicu_{coerced_name}_coercion_loss_count_v1"
+    if any(
+        (isinstance(node, ast.Name) and node.id == count_name)
+        or (isinstance(node, ast.arg) and node.arg == count_name)
+        for node in ast.walk(tree)
+    ):
+        return code
+    lines = code.splitlines(keepends=True)
+    offsets = [0]
+    for line in lines:
+        offsets.append(offsets[-1] + len(line))
+    expression_start = offsets[loss_expression.lineno - 1] + loss_expression.col_offset
+    expression_end = (
+        offsets[loss_expression.end_lineno - 1] + loss_expression.end_col_offset
+    )
+    return_start = offsets[return_statement.lineno - 1]
+    line = lines[return_statement.lineno - 1]
+    indent = line[: len(line) - len(line.lstrip(" \t"))]
+    body_indent = indent + ("\t" if "\t" in indent else "    ")
+    expression_source = code[expression_start:expression_end]
+    guard = (
+        f"{indent}# {_RETURN_GUARD_SENTINEL}\n"
+        f"{indent}{count_name} = {expression_source}\n"
+        f"{indent}if {count_name} > 0:\n"
+        f'{body_indent}raise RuntimeError("numeric coercion invalidated observed '
+        'non-missing values")\n'
+    )
+    repaired = code[:expression_start] + count_name + code[expression_end:]
+    repaired = repaired[:return_start] + guard + repaired[return_start:]
+    try:
+        ast.parse(repaired)
+    except SyntaxError:
+        return code
+    return repaired
+
+
+def _ancestor_nodes(
+    node: ast.AST,
+    parents: dict[ast.AST, ast.AST],
+) -> list[ast.AST]:
+    ancestors: list[ast.AST] = []
+    current = node
+    while current in parents:
+        current = parents[current]
+        ancestors.append(current)
+    return ancestors
+
+
+__all__ = [
+    "patch_lossy_numeric_coercion_guard",
+    "patch_returned_coercion_loss_guard",
+]
