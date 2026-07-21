@@ -96,6 +96,11 @@ __all__ = [
     "ReplicationDeviationReport",
     "ProbeSummary",
     "StepRecord",
+    "KnowHowCard",
+    "KnowHowCitation",
+    "KnowHowHit",
+    "KnowHowRegistry",
+    "KnowHowIntegrityError",
     # Context builder
     "build_research_context",
     "build_naive_research_context",
@@ -504,6 +509,16 @@ def __getattr__(name: str):
     the module installed does not pull in pandas-heavy code paths or
     optional LLM SDKs unless the user actually uses them.
     """
+    if name in {
+        "KnowHowCard",
+        "KnowHowCitation",
+        "KnowHowHit",
+        "KnowHowRegistry",
+        "KnowHowIntegrityError",
+    }:
+        from . import know_how as _know_how
+
+        return getattr(_know_how, name)
     if name in {
         "SystemLayer",
         "AgentRole",

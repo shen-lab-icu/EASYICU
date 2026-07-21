@@ -1,0 +1,45 @@
+{
+  "schema_version": "easyicu.research_know_how/1",
+  "card_id": "vasopressor_comparative_effectiveness",
+  "version": "1.0.0",
+  "title": "Vasopressor comparative effectiveness",
+  "summary": "Candidate target-trial coordinates for comparing vasopressor strategies in ICU observational data. Treatment eligibility, assignment time, time-varying confounding, co-interventions, and positivity must be specified before estimating effects.",
+  "clinical_topics": ["vasopressor", "norepinephrine", "shock", "comparative effectiveness", "target trial", "causal inference"],
+  "study_families": ["causal_emulation", "time_to_event"],
+  "applicable_databases": ["miiv", "mimic_iv", "mimic_iii", "eicu", "hirid", "aumc", "sicdb"],
+  "design_candidates": {
+    "population": "Patients simultaneously eligible for the compared vasopressor strategies at a reproducible treatment-decision landmark.",
+    "time_zero": "The common treatment-eligibility and assignment time; avoid defining treatment using information after this point.",
+    "observation_window": "Pre-treatment confounders and severity measurements available before assignment, with treatment history represented when needed.",
+    "prediction_or_followup_window": "Follow from assignment to a prespecified mortality, organ-support, or discharge horizon with competing events defined.",
+    "eligibility_candidates": ["Specify active comparators and treatment grace period", "Exclude only according to target-trial eligibility", "Assess overlap before effect estimation"],
+    "exposure": "A prespecified initiation strategy, dose strategy, or active comparator measured from the common landmark.",
+    "outcome": "Mortality, shock resolution, or organ-support-free outcome with an explicit follow-up horizon.",
+    "estimand": "Intention-to-treat or per-protocol contrast between clearly defined vasopressor strategies in the eligible target population.",
+    "recommended_methods": ["Explicit target-trial protocol", "Propensity or outcome adjustment with overlap diagnostics", "Time-varying methods when treatment and confounding evolve"],
+    "sensitivity_analyses": ["Alternative treatment grace period", "Trimming or overlap weighting", "Negative-control or quantitative unmeasured-confounding analysis when justified"]
+  },
+  "required_concepts": ["vasopressor", "medication_start_time", "map", "icu_admission_time", "death"],
+  "stop_conditions": ["A common eligibility and treatment-assignment time cannot be identified", "Comparator strategies have inadequate positivity", "Key treatment timestamps or baseline severity variables are unavailable"],
+  "citations": [
+    {
+      "citation_id": "hernan_target_trial_2016",
+      "title": "Using Big Data to Emulate a Target Trial When a Randomized Trial Is Not Available",
+      "year": 2016,
+      "source_type": "methods",
+      "url": "https://pubmed.ncbi.nlm.nih.gov/26994063/",
+      "doi": "10.1093/aje/kwv254",
+      "supports": ["target-trial specification", "causal estimand and time zero"]
+    },
+    {
+      "citation_id": "ssc_vasopressor_2021",
+      "title": "Surviving Sepsis Campaign Guidelines 2021: Highlights for the Practicing Clinician",
+      "year": 2021,
+      "source_type": "guideline",
+      "url": "https://pubmed.ncbi.nlm.nih.gov/33731607/",
+      "doi": "10.1097/CCM.0000000000004864",
+      "supports": ["vasopressor clinical context", "active-comparator interpretation"]
+    }
+  ],
+  "review_status": "curated_mvp"
+}

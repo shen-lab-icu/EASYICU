@@ -1,0 +1,45 @@
+{
+  "schema_version": "easyicu.research_know_how/1",
+  "card_id": "mechanical_ventilation_liberation",
+  "version": "1.0.0",
+  "title": "Mechanical ventilation liberation outcomes",
+  "summary": "Candidate coordinates for invasive-ventilation duration, liberation, extubation, or weaning outcomes. Ventilation episodes, readiness landmarks, competing death, reintubation, and discharge must be operationalized from observable timestamps.",
+  "clinical_topics": ["mechanical ventilation", "weaning", "liberation", "extubation", "reintubation", "ventilator-free days"],
+  "study_families": ["association", "time_to_event", "prediction"],
+  "applicable_databases": ["miiv", "mimic_iv", "mimic_iii", "eicu", "hirid", "aumc", "sicdb"],
+  "design_candidates": {
+    "population": "Patients with a reproducibly identified invasive-mechanical-ventilation episode and adequate episode timing.",
+    "time_zero": "Intubation, start of invasive ventilation, or a defined readiness-to-wean landmark selected before exposure classification.",
+    "observation_window": "Pre-landmark respiratory support, physiology, sedation, and severity data with episode gaps explicitly handled.",
+    "prediction_or_followup_window": "Follow to successful liberation, reintubation, death, discharge, or a fixed horizon using explicit competing-event rules.",
+    "eligibility_candidates": ["Define ventilation episode construction", "Distinguish extubation from durable liberation", "State tracheostomy and transfer handling"],
+    "exposure": "Question-specific baseline or time-varying respiratory, sedation, or treatment factor measured before the relevant landmark.",
+    "outcome": "Successful liberation, extubation failure, ventilation duration, or ventilator-free days using a prespecified operational definition.",
+    "estimand": "Probability, time, or adjusted contrast for the declared liberation outcome in the target ventilated population.",
+    "recommended_methods": ["Competing-risk or multistate analysis when death precludes liberation", "Patient-level episode construction audit", "Calibration and discrimination for prediction tasks"],
+    "sensitivity_analyses": ["Alternative durable-liberation gap", "Death handling in ventilator-free days", "First episode versus all episodes"]
+  },
+  "required_concepts": ["mechanical_ventilation", "ventilation_start_time", "ventilation_end_time", "death", "discharge"],
+  "stop_conditions": ["Invasive ventilation episodes cannot be distinguished from non-invasive support", "Outcome timing cannot be ordered relative to the landmark", "Death or discharge status is unavailable for the selected outcome"],
+  "citations": [
+    {
+      "citation_id": "ats_chest_liberation_2017",
+      "title": "Liberation From Mechanical Ventilation in Critically Ill Adults: An Official ATS/CHEST Clinical Practice Guideline",
+      "year": 2017,
+      "source_type": "guideline",
+      "url": "https://pubmed.ncbi.nlm.nih.gov/27762595/",
+      "doi": "10.1164/rccm.201610-2075ST",
+      "supports": ["liberation clinical framework", "weaning outcome interpretation"]
+    },
+    {
+      "citation_id": "wind_2017",
+      "title": "Weaning according to a new definition, the WIND study",
+      "year": 2017,
+      "source_type": "representative_study",
+      "url": "https://pubmed.ncbi.nlm.nih.gov/27626706/",
+      "doi": "10.1164/rccm.201602-0320OC",
+      "supports": ["weaning classification candidates", "episode and outcome definitions"]
+    }
+  ],
+  "review_status": "curated_mvp"
+}

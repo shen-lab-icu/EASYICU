@@ -25,7 +25,14 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    field_validator,
+    model_serializer,
+    model_validator,
+)
 
 from .planning.cohort_contract import (
     CohortDefinition,
@@ -1035,8 +1042,39 @@ class AnalysisPlan(BaseModel):
             "column name."
         ),
     )
+    know_how_refs: List[str] = Field(
+        default_factory=list,
+        description=(
+            "Retrieved research know-how card ids explicitly adopted by the "
+            "Planner. Empty refs are omitted from serialization to preserve "
+            "the legacy default-off plan contract."
+        ),
+    )
     rationale: Optional[str] = None
     revision: int = 1
+
+    @field_validator("know_how_refs", mode="before")
+    @classmethod
+    def _validate_know_how_refs(cls, value: Any) -> List[str]:
+        if value is None:
+            return []
+        if not isinstance(value, list):
+            raise ValueError("know_how_refs must be an array")
+        refs = [str(item or "").strip() for item in value]
+        if len(refs) > 5:
+            raise ValueError("know_how_refs must contain at most 5 card ids")
+        if any(not re.fullmatch(r"[a-z][a-z0-9_]{2,79}", item) for item in refs):
+            raise ValueError("know_how_refs must contain stable lowercase card ids")
+        if len(refs) != len(set(refs)):
+            raise ValueError("know_how_refs must not contain duplicates")
+        return refs
+
+    @model_serializer(mode="wrap")
+    def _serialize_optional_know_how_refs(self, handler: Any) -> Dict[str, Any]:
+        payload = handler(self)
+        if not self.know_how_refs:
+            payload.pop("know_how_refs", None)
+        return payload
 
     @field_validator("display_labels", mode="before")
     @classmethod

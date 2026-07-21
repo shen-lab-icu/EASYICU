@@ -1,0 +1,45 @@
+{
+  "schema_version": "easyicu.research_know_how/1",
+  "card_id": "icu_mortality_prediction",
+  "version": "1.0.0",
+  "title": "ICU mortality prediction",
+  "summary": "Candidate coordinates for developing or validating mortality prediction models in ICU data. The prediction time, target population, mortality horizon, validation design, calibration, and missing-data workflow must be declared before model fitting.",
+  "clinical_topics": ["ICU mortality", "risk prediction", "prognostic model", "calibration", "external validation"],
+  "study_families": ["prediction"],
+  "applicable_databases": ["miiv", "mimic_iv", "mimic_iii", "eicu", "hirid", "aumc", "sicdb"],
+  "design_candidates": {
+    "population": "A clinically defined ICU target population with patient-level independence between development and validation data.",
+    "time_zero": "The intended prediction time, commonly ICU admission or a prespecified later landmark.",
+    "observation_window": "Only information available by the prediction time, with preprocessing and imputation learned inside training data.",
+    "prediction_or_followup_window": "ICU, hospital, or fixed-horizon mortality defined consistently across datasets.",
+    "eligibility_candidates": ["Define first versus repeated stays", "Prevent patient leakage across splits", "Report missingness and outcome ascertainment by site"],
+    "exposure": "A prespecified predictor set available at the prediction landmark.",
+    "outcome": "Mortality at a declared horizon with source, censoring, and transfer handling documented.",
+    "estimand": "Individual predicted probability of mortality at the declared horizon in the target population.",
+    "recommended_methods": ["Patient-level temporal or external validation", "Calibration plot, slope, intercept, and discrimination", "Bootstrap or appropriate interval estimation"],
+    "sensitivity_analyses": ["Complete-case versus prespecified imputation workflow", "Temporal and site-stratified performance", "Model recalibration without feature refitting"]
+  },
+  "required_concepts": ["death", "icu_admission_time", "age", "sex"],
+  "stop_conditions": ["Prediction time occurs after candidate predictors", "Mortality horizon differs irreconcilably between development and validation data", "Patient identifiers cannot prevent split leakage"],
+  "citations": [
+    {
+      "citation_id": "tripod_ai_2024",
+      "title": "TRIPOD+AI statement: updated guidance for reporting clinical prediction models",
+      "year": 2024,
+      "source_type": "reporting_standard",
+      "url": "https://pubmed.ncbi.nlm.nih.gov/38626948/",
+      "doi": "10.1136/bmj-2023-078378",
+      "supports": ["prediction model reporting", "validation and performance assessment"]
+    },
+    {
+      "citation_id": "probast_2019",
+      "title": "PROBAST: A Tool to Assess the Risk of Bias and Applicability of Prediction Model Studies",
+      "year": 2019,
+      "source_type": "methods",
+      "url": "https://pubmed.ncbi.nlm.nih.gov/30596875/",
+      "doi": "10.7326/M18-1376",
+      "supports": ["risk-of-bias domains", "participant, predictor, outcome, and analysis checks"]
+    }
+  ],
+  "review_status": "curated_mvp"
+}

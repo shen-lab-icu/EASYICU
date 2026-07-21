@@ -1,0 +1,45 @@
+{
+  "schema_version": "easyicu.research_know_how/1",
+  "card_id": "longitudinal_icu_phenotyping",
+  "version": "1.0.0",
+  "title": "Longitudinal ICU phenotype clustering",
+  "summary": "Candidate coordinates for data-driven longitudinal phenotypes. Cohort construction, feature scaling, missingness, distance or model choice, cluster-number selection, stability, and external reproducibility must be separated from downstream outcome association.",
+  "clinical_topics": ["longitudinal phenotype", "trajectory clustering", "subphenotype", "organ dysfunction trajectory", "cluster stability"],
+  "study_families": ["phenotyping"],
+  "applicable_databases": ["miiv", "mimic_iv", "mimic_iii", "eicu", "hirid", "aumc", "sicdb"],
+  "design_candidates": {
+    "population": "A reproducibly defined ICU cohort with enough repeated measurements in a common observation window.",
+    "time_zero": "A shared clinical landmark such as ICU admission or syndrome onset, before trajectory extraction.",
+    "observation_window": "A fixed longitudinal window and grid with explicit aggregation, missingness, and survivor-selection handling.",
+    "prediction_or_followup_window": "Outcome comparisons begin after phenotype assignment unless outcomes are strictly descriptive labels.",
+    "eligibility_candidates": ["Prespecify minimum measurement support", "Avoid selecting clusters by outcome separation", "Separate discovery from external validation"],
+    "exposure": "Unsupervised phenotype assignment derived only from prespecified longitudinal features.",
+    "outcome": "Cluster stability, reproducibility, and secondary clinical outcomes not used to choose the clustering solution.",
+    "estimand": "Descriptive phenotype structure and, secondarily, adjusted outcome contrasts across stable assignments.",
+    "recommended_methods": ["Multiple internal validity and stability criteria", "Bootstrap or subsampling assignment stability", "External transportability or reproducibility assessment"],
+    "sensitivity_analyses": ["Alternative feature scaling and distance", "Alternative observation window or grid", "Alternative cluster number and algorithm"]
+  },
+  "required_concepts": ["repeated_measurements", "measurement_time", "icu_admission_time", "death"],
+  "stop_conditions": ["Repeated measurements cannot be aligned to a common landmark", "Cluster number is selected solely by outcome association", "No stability assessment can be performed"],
+  "citations": [
+    {
+      "citation_id": "lange_cluster_stability_2004",
+      "title": "Stability-based validation of clustering solutions",
+      "year": 2004,
+      "source_type": "methods",
+      "url": "https://pubmed.ncbi.nlm.nih.gov/15130251/",
+      "doi": "10.1162/089976604773717621",
+      "supports": ["cluster stability", "selection and validation principles"]
+    },
+    {
+      "citation_id": "xu_sepsis_trajectory_2022",
+      "title": "Temporal trends in sepsis phenotypes and clinical outcomes",
+      "year": 2022,
+      "source_type": "representative_study",
+      "url": "https://pmc.ncbi.nlm.nih.gov/articles/PMC9250715/",
+      "doi": "10.1186/s13054-022-04071-4",
+      "supports": ["ICU trajectory phenotyping example", "outcome interpretation"]
+    }
+  ],
+  "review_status": "curated_mvp"
+}
