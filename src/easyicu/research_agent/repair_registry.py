@@ -312,6 +312,7 @@ _STRUCTURAL_REPAIRS = {
     "measurement_provenance_host_receipts_v1",
     "measurement_provenance_before_outputs_v1",
     "nonfinite_audit_preserve_observed_v1",
+    "nonfinite_audit_host_strict_boundary_v2",
     "normalize_first_time_companion_v1",
     "observed_binary_primary_exposure_guard_v1",
     "primary_predictor_safe_summary_lookup_v1",
