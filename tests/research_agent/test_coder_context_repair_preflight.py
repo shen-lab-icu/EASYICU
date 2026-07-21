@@ -3873,6 +3873,37 @@ main(frame)
     )
 
 
+def test_provenance_preflight_accepts_module_guard_before_audit_row(ra):
+    code = '''
+def fail(message):
+    raise RuntimeError(message)
+
+def strict_numeric(values):
+    return pd.to_numeric(values, errors="coerce")
+
+frame = pd.read_parquet(path)
+measured = strict_numeric(frame["measured"])
+invalid_pair_n = int(measured.isna().sum())
+discordant_n = int((measured != (frame["count"] > 0)).sum())
+if invalid_pair_n > 0 or discordant_n > 0:
+    fail("invalid provenance")
+measurement_provenance_audit = {"checks": [{
+    "role": "audit_only",
+    "invalid_pair_n": invalid_pair_n,
+    "discordant_n": discordant_n,
+}]}
+model.fit(frame)
+'''
+
+    findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+
+    assert not any(
+        finding.detail
+        and finding.detail.get("reason") == "provenance_audit_not_fail_closed"
+        for finding in findings
+    )
+
+
 def test_provenance_preflight_requires_post_guard_audit_row_to_be_immediate(ra):
     code = """
 def main(frame):
