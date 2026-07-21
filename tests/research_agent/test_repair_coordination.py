@@ -29,6 +29,7 @@ from easyicu.research_agent.repairs.coordination import (
     RepairCoordinator,
     StepRepairBudget,
     authorized_deterministic_concept_repair,
+    resume_deterministic_repair_candidate,
 )
 from easyicu.research_agent.schema import ValidationFinding
 
@@ -93,6 +94,40 @@ def _complete_attempt(
             f"# repaired {attempt_id}\n".encode("utf-8")
         ).hexdigest(),
     )
+
+
+def test_resume_preflight_repairs_prior_runtime_failure_before_provider(tmp_path):
+    step_dir = tmp_path / "steps" / "cluster_selection"
+    (step_dir / "outputs").mkdir(parents=True)
+    (step_dir / "run.log").write_text(
+        "TypeError: Unsupported JSON value: <class "
+        "'sklearn.mixture._gaussian_mixture.GaussianMixture'>",
+        encoding="utf-8",
+    )
+    # A torn summary must not suppress the exact prior runtime repair.
+    (step_dir / "outputs" / "step_summary.json").write_text(
+        '{"candidate_fit_diagnostics": [', encoding="utf-8"
+    )
+    code = """fitted_models = {}
+fitted_models[model_id] = {"model": model, "labels": labels, "n_clusters": 4}
+candidate_diagnostics = []
+for record in fitted_models.values():
+    candidate_diagnostics.append(record)
+step_summary = {"candidate_fit_diagnostics": candidate_diagnostics}
+"""
+
+    candidate = resume_deterministic_repair_candidate(
+        code=code,
+        step_dir=step_dir,
+        analysis_family="trajectory_clustering",
+    )
+
+    assert candidate is not None
+    (repair_id, repaired), source, trigger = candidate
+    assert repair_id == "sklearn_runtime_object_diagnostics_v1"
+    assert source == "resume_runner_repair_preflight"
+    assert trigger["run_log_path"] == str(step_dir / "run.log")
+    assert 'if key not in {"model", "labels"}' in repaired
 
 
 def test_sync_provider_writes_exact_key_set(tmp_path):
