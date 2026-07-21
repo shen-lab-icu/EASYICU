@@ -74,7 +74,9 @@ def patch_resolved_json_document_adapter(code: str, run_log: str) -> str:
 
 
 _NON_TABULAR_CONTRACT_ERROR = re.compile(
-    r"Typed input (?P<input_key>[^\s]+) lacks a tabular product contract"
+    r"^(?:ValueError:\s*)?Typed input (?P<input_key>[^\s{}]+) "
+    r"lacks a tabular product contract\s*$",
+    re.MULTILINE,
 )
 
 

@@ -93,6 +93,24 @@ def test_v1_json_summary_cannot_act_as_patient_level_selector() -> None:
     assert "fit_model" in repaired
 
 
+def test_traceback_source_echo_cannot_shadow_actual_input_key() -> None:
+    traceback = """Traceback (most recent call last):
+  File "/easyicu-analysis.py", line 156, in require_tabular_contract
+    raise ValueError(f"Typed input {key} lacks a tabular product contract")
+ValueError: Typed input artifact:quality_summary lacks a tabular product contract
+"""
+
+    repaired = patch_non_tabular_companion_row_gate(
+        _SCRIPT,
+        traceback,
+        resolved_input_bindings=_BINDINGS,
+    )
+
+    assert repaired != _SCRIPT
+    assert "summary_valid" not in repaired
+    assert "df = cohort_df.copy()" in repaired
+
+
 def test_runtime_router_requires_host_binding_and_registers_structural_repair() -> None:
     assert _deterministic_runner_repair(code=_SCRIPT, run_log=_ERROR) is None
     repair = _deterministic_runner_repair(
