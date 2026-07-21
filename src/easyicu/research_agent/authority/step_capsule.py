@@ -788,6 +788,89 @@ def _authority_identity(capsule: StepAuthorityCapsule) -> tuple[object, ...]:
     )
 
 
+_EXPOSURE_DEFINITION_REQUIRED_FIELDS = frozenset(
+    {
+        "artifact_type",
+        "executable_column",
+        "exposure_column",
+        "authoritative_primary_exposure",
+        "derived_exposure",
+        "rule",
+        "locked_cohort_n",
+    }
+)
+_EXPOSURE_DEFINITION_OPTIONAL_FIELDS = frozenset(
+    {
+        "window",
+        "aggregation_rule",
+        "usable_variation",
+        "weighted_association_feasibility",
+        "failure_reason",
+    }
+)
+
+
+def _exposure_definition_contract_upgrade_matches(
+    historical_binding: Mapping[str, object],
+    current_binding: Mapping[str, object],
+    historical_contract: Mapping[str, object],
+    current_contract: Mapping[str, object],
+) -> bool:
+    """Accept one bounded host-derived executable-coordinate enrichment."""
+
+    if not (
+        historical_binding.get("product")
+        == current_binding.get("product")
+        == "exposure_definition"
+        and set(historical_contract) == {"schema_version", "identity_row"}
+        and historical_contract.get("schema_version")
+        == current_contract.get("schema_version")
+        == "easyicu.host_typed_product.v1"
+        and historical_contract.get("identity_row")
+        == current_contract.get("identity_row")
+    ):
+        return False
+    added = set(current_contract).difference(historical_contract)
+    if not (
+        _EXPOSURE_DEFINITION_REQUIRED_FIELDS <= added
+        and added
+        <= _EXPOSURE_DEFINITION_REQUIRED_FIELDS | _EXPOSURE_DEFINITION_OPTIONAL_FIELDS
+    ):
+        return False
+    authoritative = current_contract.get("authoritative_primary_exposure")
+    derived = current_contract.get("derived_exposure")
+    locked_n = current_contract.get("locked_cohort_n")
+    if not (
+        isinstance(authoritative, str)
+        and authoritative.isidentifier()
+        and current_contract.get("executable_column") == authoritative
+        and current_contract.get("exposure_column") == authoritative
+        and isinstance(derived, str)
+        and derived.isidentifier()
+        and isinstance(current_contract.get("rule"), str)
+        and bool(str(current_contract.get("rule") or "").strip())
+        and isinstance(locked_n, int)
+        and not isinstance(locked_n, bool)
+        and locked_n >= 0
+        and current_contract.get("artifact_type") == "exposure_definition"
+    ):
+        return False
+    for key in (
+        "window",
+        "aggregation_rule",
+        "weighted_association_feasibility",
+        "failure_reason",
+    ):
+        if key in current_contract and not (
+            isinstance(current_contract[key], str)
+            and bool(str(current_contract[key]).strip())
+        ):
+            return False
+    return "usable_variation" not in current_contract or isinstance(
+        current_contract["usable_variation"], bool
+    )
+
+
 def input_representation_upgrade_matches(
     *,
     historical_manifest: object,
@@ -846,6 +929,13 @@ def input_representation_upgrade_matches(
             current_contract, Mapping
         ):
             return False
+        if _exposure_definition_contract_upgrade_matches(
+            historical_binding,
+            current_binding,
+            historical_contract,
+            current_contract,
+        ):
+            continue
         if (
             historical_contract.get("schema_version") != "easyicu.host_typed_product.v2"
             or current_contract.get("schema_version") != "easyicu.host_typed_product.v3"

@@ -134,20 +134,23 @@ def _resolved_table_coordinates(
     artifact_sha256: str = SHA_B,
     cohort_sha256: str = SHA_C,
     scoped_coder_context: object = None,
+    input_key: str = "artifact:analysis_cohort",
+    product: str = "analysis_cohort",
+    evidence_kind: str = "table",
 ):
     identity = {
-        "input_key": "artifact:analysis_cohort",
+        "input_key": input_key,
         "declared_kind": "artifact",
-        "product": "analysis_cohort",
+        "product": product,
         "evidence_id": "cohort_evidence",
         "sha256": artifact_sha256,
         "produced_by_step": "01_cohort",
     }
     binding = {
         "declared_kind": "artifact",
-        "product": "analysis_cohort",
+        "product": product,
         "evidence_id": "cohort_evidence",
-        "evidence_kind": "table",
+        "evidence_kind": evidence_kind,
         "sha256": artifact_sha256,
         "produced_by_step": "01_cohort",
         "relative_path": "evidence/cohort.parquet",
@@ -161,8 +164,8 @@ def _resolved_table_coordinates(
             {
                 "schema_version": "easyicu.resolved_inputs/2",
                 "step_id": "02_table_one",
-                "planner_declared_inputs": ["artifact:analysis_cohort"],
-                "inputs": {"artifact:analysis_cohort": binding},
+                "planner_declared_inputs": [input_key],
+                "inputs": {input_key: binding},
                 "context": "context.json",
             },
             sort_keys=True,
@@ -171,7 +174,7 @@ def _resolved_table_coordinates(
     )
     upstream = {
         "resolved_input_evidence_ids": ["cohort_evidence"],
-        "resolved_input_bindings": {"artifact:analysis_cohort": binding},
+        "resolved_input_bindings": {input_key: binding},
         "cohort_sha256": cohort_sha256,
         "universe_sha256": SHA_D,
     }
@@ -198,7 +201,7 @@ def _resolved_table_coordinates(
             else scoped_coder_context
         ),
         resolved_inputs_path=resolved,
-        typed_bindings={"artifact:analysis_cohort": binding},
+        typed_bindings={input_key: binding},
         upstream_authority=upstream,
         deterministic_gate_fingerprint=SHA_C,
         engine_code_sha256=SHA_D,
@@ -207,6 +210,21 @@ def _resolved_table_coordinates(
         prompt_pack={"coder.txt": SHA_A},
     )
     return coordinates, upstream
+
+
+def _exposure_contract(*, executable_column: str = "vaso_ind_max") -> dict[str, object]:
+    return {
+        "schema_version": "easyicu.host_typed_product.v1",
+        "artifact_type": "exposure_definition",
+        "executable_column": executable_column,
+        "exposure_column": executable_column,
+        "authoritative_primary_exposure": executable_column,
+        "derived_exposure": "vaso_ind_any_0_24h",
+        "rule": "Any exposure in the locked first-24-hour window.",
+        "locked_cohort_n": 1000,
+        "usable_variation": False,
+        "weighted_association_feasibility": "failed_no_usable_exposure_variation",
+    }
 
 
 def _typed_schema_scoped_context(
@@ -363,6 +381,83 @@ def test_control_plane_revalidation_accepts_only_additive_v2_to_v3_table_facts(
         match="disagrees with its verified scientific source",
     ):
         seal_step_authority_capsule(tmp_path, forged_capsule)
+
+
+def test_control_plane_revalidation_accepts_bounded_exposure_contract_enrichment(
+    tmp_path: Path,
+) -> None:
+    shared = {
+        "input_key": "artifact:exposure_definition",
+        "product": "exposure_definition",
+        "evidence_kind": "log",
+    }
+    historical, _ = _resolved_table_coordinates(
+        tmp_path,
+        filename="resolved_exposure_identity.json",
+        contract={"schema_version": "easyicu.host_typed_product.v1"},
+        **shared,
+    )
+    code_ref = persist_candidate_code(historical, "print('positivity')\n")
+    historical_ref = seal_legacy_candidate(historical, code_ref=code_ref)
+    verified = load_verified_step_authority_capsule(tmp_path, ref=historical_ref)
+    current, _ = _resolved_table_coordinates(
+        tmp_path,
+        filename="resolved_exposure_coordinates.json",
+        contract=_exposure_contract(),
+        **shared,
+    )
+
+    adopted = adopt_candidate_for_control_plane_revalidation(verified, current)
+
+    assert adopted is not None
+    _context, _coordinates, adopted_ref = adopted
+    adopted_capsule = load_verified_step_authority_capsule(tmp_path, ref=adopted_ref)
+    assert adopted_capsule.capsule.candidate_code == code_ref
+    assert (
+        adopted_capsule.capsule.candidate_origin.input_representation_upgrade_proof
+        is not None
+    )
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    ["column_disagreement", "missing_required", "invalid_count", "extra_field"],
+)
+def test_exposure_contract_enrichment_rejects_unproven_drift(
+    tmp_path: Path,
+    mutation: str,
+) -> None:
+    shared = {
+        "input_key": "artifact:exposure_definition",
+        "product": "exposure_definition",
+        "evidence_kind": "log",
+    }
+    historical, _ = _resolved_table_coordinates(
+        tmp_path,
+        filename="resolved_exposure_identity.json",
+        contract={"schema_version": "easyicu.host_typed_product.v1"},
+        **shared,
+    )
+    code_ref = persist_candidate_code(historical, "print('positivity')\n")
+    historical_ref = seal_legacy_candidate(historical, code_ref=code_ref)
+    verified = load_verified_step_authority_capsule(tmp_path, ref=historical_ref)
+    contract = _exposure_contract()
+    if mutation == "column_disagreement":
+        contract["exposure_column"] = "different_column"
+    elif mutation == "missing_required":
+        contract.pop("rule")
+    elif mutation == "invalid_count":
+        contract["locked_cohort_n"] = -1
+    else:
+        contract["unproved_scientific_role"] = "invented"
+    current, _ = _resolved_table_coordinates(
+        tmp_path,
+        filename="resolved_exposure_coordinates.json",
+        contract=contract,
+        **shared,
+    )
+
+    assert adopt_candidate_for_control_plane_revalidation(verified, current) is None
 
 
 @pytest.mark.parametrize(
