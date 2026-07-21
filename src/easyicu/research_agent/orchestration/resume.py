@@ -350,6 +350,10 @@ class ResumeController:
             for rec in (self.resume_state or {}).get("step_attempt_history", []) or []
             if isinstance(rec, dict) and rec.get("step_id")
         ]
+        audit_history = list(saved_attempt_history)
+        for record in prior_history:
+            if record not in audit_history:
+                audit_history.append(dict(record))
         # The checkpoint ledger is append-only, but resume authority is not:
         # only the newest outer record for a step may be reused.  In
         # particular, an old ``ok`` must not survive a later contract failure.
@@ -428,11 +432,7 @@ class ResumeController:
             resumed_step_ids=resumed_step_ids,
             findings=findings,
             probe_summary=probe_summary,
-            audit_history=(
-                saved_attempt_history
-                if saved_attempt_history
-                else [dict(record) for record in prior_history]
-            ),
+            audit_history=audit_history,
             dropped_step_ids=set(dropped_step_ids),
         )
 
