@@ -2327,9 +2327,9 @@ def main() -> int:
         default=None,
         help=(
             "Stop execution after the named plan step. Useful for reviewing one "
-            "resumed step at a time. Use '@first' to stop after the Agent's "
-            "first planned step or '@index:N' for the one-based Nth planned "
-            "step without depending on a generated step id."
+            "resumed step at a time. Use '@first' for the first planned step, "
+            "'@index:N' for the one-based Nth step, or "
+            "'@product:kind:name' for the unique producer of a typed output."
         ),
     )
     parser.add_argument(
