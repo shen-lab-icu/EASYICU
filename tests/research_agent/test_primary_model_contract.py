@@ -1077,6 +1077,52 @@ def test_primary_model_contract_accepts_encoded_term_with_raw_source(
     assert "denominator_contract_unresolvable" not in issues
 
 
+def test_primary_model_contract_replays_derived_source_and_host_valid_range(
+    tmp_path: Path,
+):
+    cohort_path, out_dir = _write_inputs(tmp_path)
+    contracts = copy.deepcopy(_contracts())
+    target = next(
+        item for item in contracts if item["model_id"] == "organ_complete_case"
+    )
+    target.update(
+        {
+            "exposure_source": "organ_score_quartiles",
+            "exposure_expression": "qcut(organ_score, q=4)",
+            "n": 4,
+            "event_n": 2,
+        }
+    )
+    context = _context()
+    organ = next(item for item in context.variables if item.name == "organ_score")
+    organ.valid_range = (0.0, 3.0)
+
+    findings = PrimaryModelContractValidator().audit(
+        step=_step(),
+        step_summary={"model_contracts": contracts},
+        context=context,
+        completed_step_records=_prior_records(),
+        out_dir=out_dir,
+        cohort_path=cohort_path,
+    )
+
+    target_issues = [
+        issue
+        for finding in findings
+        for issue in (finding.detail or {}).get("issues", [])
+        if issue.get("model_id") == "organ_complete_case"
+    ]
+    assert "exposure_terms_do_not_match_model_source" not in {
+        issue.get("issue") for issue in target_issues
+    }
+    assert "denominator_contract_unresolvable" not in {
+        issue.get("issue") for issue in target_issues
+    }
+    assert "model_denominator_or_event_mismatch" not in {
+        issue.get("issue") for issue in target_issues
+    }
+
+
 def test_primary_model_contract_does_not_expand_legacy_simple_steps(
     tmp_path: Path,
 ):
