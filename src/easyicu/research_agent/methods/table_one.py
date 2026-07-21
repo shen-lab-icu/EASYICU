@@ -45,12 +45,24 @@ def _python_scalar(value: Any) -> Any:
 
 def _token(value: Any) -> str:
     value = _python_scalar(value)
-    if isinstance(value, float) and not math.isfinite(value):
-        raise TableOneContractError("Table 1 levels must be finite JSON scalars")
-    if not isinstance(value, (str, bool, int, float)):
+    if isinstance(value, bool):
+        scalar_type = "bool"
+        scalar_value = value
+    elif isinstance(value, int):
+        scalar_type = "number"
+        scalar_value = value
+    elif isinstance(value, float):
+        if not math.isfinite(value):
+            raise TableOneContractError("Table 1 levels must be finite JSON scalars")
+        scalar_type = "number"
+        scalar_value = int(value) if value.is_integer() else value
+    elif isinstance(value, str):
+        scalar_type = "str"
+        scalar_value = value
+    else:
         raise TableOneContractError("Table 1 levels must be JSON scalar values")
     return json.dumps(
-        {"type": type(value).__name__, "value": value},
+        {"type": scalar_type, "value": scalar_value},
         sort_keys=True,
         separators=(",", ":"),
     )

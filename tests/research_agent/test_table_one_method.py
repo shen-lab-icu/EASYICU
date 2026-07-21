@@ -76,6 +76,17 @@ def test_grouped_table_one_has_overall_groups_tests_and_correct_missingness():
     assert set(table["test_name"]) == {"mann_whitney_u", "fisher_exact"}
 
 
+def test_grouped_table_one_matches_json_integer_levels_to_parquet_floats():
+    frame = _frame()
+    frame["arm"] = frame["arm"].astype(float)
+
+    table = build_grouped_table_one(frame, _spec())
+
+    assert set(table["group"]) == {"Overall", "0", "1"}
+    assert table.loc[table["group"] == "0", "denominator_n"].eq(3).all()
+    assert table.loc[table["group"] == "1", "denominator_n"].eq(3).all()
+
+
 def test_grouped_table_one_rejects_missing_group_values():
     frame = _frame()
     frame.loc[0, "arm"] = None
