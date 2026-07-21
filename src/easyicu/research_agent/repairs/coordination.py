@@ -29,11 +29,16 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 import hashlib
 import json
+from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 from .patch import CodePatchError, apply_code_patch
 from .binary_domain import patch_observed_binary_primary_exposure_guard
-from .source import deterministic_concept_audit_repair
+from .source import (
+    _deterministic_runner_repair,
+    _deterministic_summary_repair,
+    deterministic_concept_audit_repair,
+)
 from .reasons import RepairReason
 from ..schema import ValidationFinding
 from ..authority.provider_budget import (
@@ -44,6 +49,63 @@ from ..authority.provider_budget import (
 )
 
 REPAIR_AUTHORITY_BINDING_SCHEMA_VERSION = "easyicu.repair_authority_binding/2"
+
+
+def resume_deterministic_repair_candidate(
+    *,
+    code: str,
+    step_dir: Path,
+    analysis_family: str | None,
+) -> tuple[tuple[str, str], str, dict[str, Any]] | None:
+    """Select a proven runtime/summary repair for an explicitly resumed step."""
+
+    run_log_path = step_dir / "run.log"
+    if run_log_path.is_file():
+        run_log = run_log_path.read_text(encoding="utf-8", errors="replace")
+        repair = _deterministic_runner_repair(
+            code=code,
+            run_log=run_log,
+            previous_repair=None,
+            analysis_family=analysis_family,
+        )
+        if repair is not None:
+            source = "resume_runner_repair_preflight"
+            return (
+                repair,
+                source,
+                {
+                    "source": source,
+                    "run_log_path": str(run_log_path),
+                },
+            )
+
+    summary_path = step_dir / "outputs" / "step_summary.json"
+    if not summary_path.is_file():
+        return None
+    try:
+        summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return None
+    if not isinstance(summary, dict) or not summary:
+        return None
+    repair = _deterministic_summary_repair(
+        code=code,
+        step_summary=summary,
+        previous_repair=None,
+        analysis_family=analysis_family or summary.get("analysis_family"),
+    )
+    if repair is None:
+        return None
+    source = "resume_summary_repair_preflight"
+    return (
+        repair,
+        source,
+        {
+            "source": source,
+            "step_summary_path": str(summary_path),
+            "step_summary_keys": sorted(str(key) for key in summary),
+        },
+    )
 
 
 def _is_sha256_hex(value: str) -> bool:
@@ -567,4 +629,5 @@ __all__ = [
     "RepairTransportResult",
     "StepRepairBudget",
     "authorized_deterministic_concept_repair",
+    "resume_deterministic_repair_candidate",
 ]

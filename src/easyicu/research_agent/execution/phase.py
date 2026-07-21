@@ -100,6 +100,7 @@ from ..repairs.coordination import (
     RepairAuthorityBinding,
     StepRepairBudget,
     authorized_deterministic_concept_repair,
+    resume_deterministic_repair_candidate,
 )
 from .concept_audit_cache import LLMConceptAuditCache
 from .development_sample import (
@@ -6112,7 +6113,7 @@ def run_execute_phase(
                 return None
             return step_repair_budget.llm_repair_attempts
 
-        def _resume_summary_repair_code() -> Optional[str]:
+        def _resume_deterministic_repair_code() -> Optional[str]:
             if (
                 requested_resume_from_step_id != step.step_id
                 or not pipeline._enable_deterministic_runner_repair
@@ -6122,32 +6123,18 @@ def run_execute_phase(
             if resumed_code is None:
                 return None
             prior_code, _resumed_record = resumed_code
-            prior_summary_path = (
-                run_dir / "steps" / step.step_id / "outputs" / "step_summary.json"
-            )
-            if not prior_summary_path.exists():
-                return None
-            try:
-                prior_summary = json.loads(
-                    prior_summary_path.read_text(encoding="utf-8")
-                )
-            except Exception:
-                return None
-            if not isinstance(prior_summary, dict) or not prior_summary:
-                return None
-            repair = _deterministic_summary_repair(
+            candidate = resume_deterministic_repair_candidate(
                 code=prior_code,
-                step_summary=prior_summary,
-                previous_repair=None,
-                analysis_family=(
-                    local_runtime_state.analysis_family
-                    or prior_summary.get("analysis_family")
-                ),
+                step_dir=run_dir / "steps" / step.step_id,
+                analysis_family=local_runtime_state.analysis_family,
             )
+            if candidate is None:
+                return None
+            repair, source, trigger = candidate
             repair = _authorize_automatic_repair(
                 repair,
                 step=step,
-                source="resume_summary_repair_preflight",
+                source=source,
                 before_code=prior_code,
             )
             if repair is None:
@@ -6156,18 +6143,14 @@ def run_execute_phase(
             _use_resumed_code(resumed_code)
             worker_progress.preexecution_runner_repair_name = repair_name
             step_record["runner_repair"] = repair_name
-            step_record["resume_summary_repair"] = repair_name
+            step_record["resume_deterministic_repair"] = repair_name
             _record_repair(
                 repair_id=repair_name,
                 step_id=step.step_id,
-                trigger={
-                    "source": "resume_summary_repair_preflight",
-                    "step_summary_path": str(prior_summary_path),
-                    "step_summary_keys": sorted(str(k) for k in prior_summary),
-                },
+                trigger=trigger,
                 transformation=(
                     "Reused the explicitly resumed step's prior generated code "
-                    "after deterministic summary repair, before requesting a "
+                    "after deterministic runtime/summary repair, before requesting a "
                     "new coder script."
                 ),
                 before_code=prior_code,
@@ -6183,20 +6166,20 @@ def run_execute_phase(
                         validator="coder",
                         severity="info",
                         message=(
-                            f"Applied deterministic resume-summary repair for "
+                            f"Applied deterministic resume repair for "
                             f"step {step.step_id}: {repair_name}."
                         ),
                         detail={
                             "step_id": step.step_id,
                             "repair_id": repair_name,
-                            "step_summary_path": str(prior_summary_path),
+                            "source": source,
                         },
                     )
                 )
             emit_progress(
                 "runner_repair",
                 (
-                    f"Applied deterministic resume-summary repair for "
+                    f"Applied deterministic resume repair for "
                     f"{step.step_id}: {repair_name}."
                 ),
                 run_id=run_id,
@@ -6502,7 +6485,7 @@ def run_execute_phase(
             )
             else _resume_critic_repair_code()
         )
-        resume_summary_repair_code = (
+        resume_deterministic_repair_code = (
             None
             if (
                 preflight_trajectory_stability_code is not None
@@ -6510,7 +6493,7 @@ def run_execute_phase(
                 or quarantined_resume_draft is not None
                 or resume_critic_repair_code is not None
             )
-            else _resume_summary_repair_code()
+            else _resume_deterministic_repair_code()
         )
         preflight_resumed_code = None
         failed_contract_code_preflight_reuse = False
@@ -6518,7 +6501,7 @@ def run_execute_phase(
             preflight_trajectory_stability_code is None
             and preflight_figure_code is None
             and quarantined_resume_draft is None
-            and resume_summary_repair_code is None
+            and resume_deterministic_repair_code is None
             and resume_critic_repair_code is None
         ):
             resumed_code_candidate = resume_controller.prior_code_for_step(step.step_id)
@@ -6576,8 +6559,8 @@ def run_execute_phase(
             code = _use_quarantined_draft(quarantined_resume_draft)
         elif resume_critic_repair_code is not None:
             code = resume_critic_repair_code
-        elif resume_summary_repair_code is not None:
-            code = resume_summary_repair_code
+        elif resume_deterministic_repair_code is not None:
+            code = resume_deterministic_repair_code
         elif preflight_resumed_code is not None:
             if failed_contract_code_preflight_reuse:
                 step_record["resumed_failed_contract_code_preflight"] = True
