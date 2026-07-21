@@ -40,11 +40,15 @@ def test_execution_phase_uses_typed_binding_objects_with_identity() -> None:
 
 def test_standard_executors_receive_host_owned_input_receipts() -> None:
     source = inspect.getsource(execution_phase.run_execute_phase)
-    assert (
-        "if worker_progress.deterministic_standard_executor_used or (\n"
-        "            worker_progress.runner_repair_name"
-    ) in source
-    assert "step_summary = _write_host_input_binding_receipts(" in source
+    receipt_call = "visual_step_summary = _write_host_input_binding_receipts("
+    receipt_index = source.index(receipt_call)
+    guard_index = source.rindex(
+        "if worker_progress.deterministic_standard_executor_used or (",
+        0,
+        receipt_index,
+    )
+    assert receipt_index - guard_index < 300
+    assert receipt_index < source.index("visual_gate = collect_visual_gate_result(")
 
 
 def test_typed_binding_has_no_orchestration_or_scientific_owner_dependency() -> None:
