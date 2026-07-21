@@ -103,6 +103,23 @@ def test_benchmark_options_record_runner_kind() -> None:
     assert "runner_kind" not in CANONICAL_PROFILE.as_pipeline_options()
 
 
+def test_benchmark_options_enable_preplan_pubmed_explicitly() -> None:
+    default = _benchmark_pipeline_options(
+        max_total_steps=None,
+        disable_replanning=False,
+        max_code_repair_attempts=None,
+    )
+    enabled = _benchmark_pipeline_options(
+        max_total_steps=None,
+        disable_replanning=False,
+        max_code_repair_attempts=None,
+        enable_pubmed=True,
+    )
+
+    assert "enable_pubmed" not in default
+    assert enabled["enable_pubmed"] is True
+
+
 def test_benchmark_options_enable_post_qc_development_sample_explicitly() -> None:
     full_data = _benchmark_pipeline_options(
         max_total_steps=None,

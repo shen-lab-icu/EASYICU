@@ -1860,6 +1860,7 @@ def _benchmark_pipeline_options(
     writer_digest_widened: bool = False,
     strict_evidence: bool = False,
     enable_cross_run_memory: bool = False,
+    enable_pubmed: bool = False,
     submission_profile: Optional["SubmissionProfile"] = None,
     runner_kind: Optional[str] = None,
     development_sample_size: Optional[int] = None,
@@ -1885,6 +1886,8 @@ def _benchmark_pipeline_options(
             raise SystemExit("--development-sample-size must be positive.")
         options["development_sample_size"] = int(development_sample_size)
         options["development_sample_seed"] = int(development_sample_seed)
+    if enable_pubmed:
+        options["enable_pubmed"] = True
     # These are independent execution budgets.  The ordinary timeout bounds
     # model-generated scripts; registered standards use their own longer
     # planner-owned workload budget.
@@ -2381,6 +2384,15 @@ def main() -> int:
         ),
     )
     parser.add_argument(
+        "--enable-pubmed",
+        action="store_true",
+        help=(
+            "Retrieve similar PubMed studies before planning and pass bounded, "
+            "source-backed study-design excerpts to the Planner. Network failure "
+            "degrades to the curated offline literature registry."
+        ),
+    )
+    parser.add_argument(
         "--max-code-repair-attempts",
         type=int,
         default=None,
@@ -2598,6 +2610,7 @@ def main() -> int:
         writer_digest_widened=bool(args.writer_digest_widened),
         strict_evidence=bool(args.strict_evidence),
         enable_cross_run_memory=bool(getattr(args, "enable_cross_run_memory", False)),
+        enable_pubmed=bool(getattr(args, "enable_pubmed", False)),
         submission_profile=submission_profile,
         runner_kind=runner_kind,
         development_sample_size=getattr(args, "development_sample_size", None),
