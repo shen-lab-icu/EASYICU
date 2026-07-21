@@ -739,6 +739,111 @@ else:
     )
 
 
+def test_mechanical_preflight_repairs_uniquely_bound_left_mask_alias(ra):
+    code = """
+import numpy as np
+import pandas as pd
+
+values = pd.Series([1.0, np.inf, np.nan])
+authoritative_nonmissing = values.notna()
+invalid_nonfinite = int(
+    authoritative_nonmissing
+    & ~np.isfinite(values.to_numpy(dtype=float))
+    .sum()
+)
+if invalid_nonfinite > 0:
+    detected = True
+else:
+    detected = False
+"""
+    findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+    messages = [
+        finding.detail.get("reason")
+        for finding in findings
+        if finding.detail
+        and finding.detail.get("reason") == "scalar_cast_before_reduction"
+    ]
+
+    repaired, repair_names = deterministic_concept_audit_repair(code, messages)
+    namespace = {}
+    exec(repaired, namespace)
+
+    assert messages == ["scalar_cast_before_reduction"]
+    assert repair_names == ["scalar_cast_before_reduction_v1"]
+    assert namespace["invalid_nonfinite"] == 1
+    assert namespace["detected"] is True
+    assert not any(
+        finding.detail
+        and finding.detail.get("reason") == "scalar_cast_before_reduction"
+        for finding in audit_mechanical_code_contracts(repaired, _figure_step(ra))
+    )
+
+
+def test_mechanical_preflight_does_not_repair_rebound_mask_alias(ra):
+    code = """
+import numpy as np
+import pandas as pd
+
+values = pd.Series([1.0, np.inf, np.nan])
+authoritative_nonmissing = values.notna()
+authoritative_nonmissing = custom_mask
+invalid_nonfinite = int(
+    authoritative_nonmissing
+    & ~np.isfinite(values.to_numpy(dtype=float))
+    .sum()
+)
+"""
+    findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+    repaired, repair_names = deterministic_concept_audit_repair(
+        code, ["scalar_cast_before_reduction"]
+    )
+
+    assert not any(
+        finding.detail
+        and finding.detail.get("reason") == "scalar_cast_before_reduction"
+        for finding in findings
+    )
+    assert repair_names == []
+    assert repaired == code
+
+
+@pytest.mark.parametrize(
+    "shadowing",
+    [
+        "def authoritative_nonmissing():\n    return custom_mask",
+        "from custom_masks import authoritative_nonmissing",
+        "globals()['authoritative_nonmissing'] = custom_mask",
+    ],
+    ids=["function-binding", "import-binding", "dynamic-namespace"],
+)
+def test_mechanical_preflight_does_not_repair_shadowed_mask_alias(ra, shadowing):
+    code = f"""
+import numpy as np
+import pandas as pd
+
+values = pd.Series([1.0, np.inf, np.nan])
+authoritative_nonmissing = values.notna()
+{shadowing}
+invalid_nonfinite = int(
+    authoritative_nonmissing
+    & ~np.isfinite(values.to_numpy(dtype=float))
+    .sum()
+)
+"""
+    findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+    repaired, repair_names = deterministic_concept_audit_repair(
+        code, ["scalar_cast_before_reduction"]
+    )
+
+    assert not any(
+        finding.detail
+        and finding.detail.get("reason") == "scalar_cast_before_reduction"
+        for finding in findings
+    )
+    assert repair_names == []
+    assert repaired == code
+
+
 def test_mechanical_preflight_does_not_move_scalar_right_reduction(ra):
     code = """
 left = True
