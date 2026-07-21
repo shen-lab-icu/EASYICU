@@ -60,6 +60,7 @@ from .contracts.ordered_stratified import (
     is_ordered_stratified_analysis_step,
     ordered_stratified_structure_findings,
 )
+from .contracts.table_one import table_one_output_findings
 from .scalar_utils import (
     _first_numeric_scalar_with_key_fragment,
     _first_present_scalar,
@@ -4196,6 +4197,7 @@ def _step_contract_findings(
             step_summary=step_summary,
         )
     )
+    findings.extend(table_one_output_findings(step=step, out_dir=out_dir))
 
     # Figure-only follow-up steps (created by ``_split_table_and_figure_outputs_in_plan``)
     # inherit the parent's step_id with a ``_figure`` suffix, e.g.

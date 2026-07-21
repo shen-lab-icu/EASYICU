@@ -56,6 +56,7 @@ from ..icu_rules import (
     default_time_windows,
 )
 from ..providers.protocol import LLMClient, LLMMessage
+from ..providers.llm import llm_is_mockish
 from ..repairs.patch import (
     PATCH_FORMAT,
     looks_like_executable_python,
@@ -712,7 +713,17 @@ def _build_planner_user_prompt(context: ResearchContext) -> str:
         "the primary analysis. Omit it only when the family genuinely "
         "does not call for one (e.g. a pure feasibility/protocol task, "
         "or a clustering task whose per-cluster characteristics table "
-        "already carries the descriptive reporting). If cross-database "
+        "already carries the descriptive reporting). "
+        "A step that declares the exact output `table:table_one` MUST also "
+        "declare `table_one_spec`: group_by, at least two closed group_levels, "
+        "and a variables roster whose name/kind/summary/test/closed levels "
+        "encode the scientific comparison. Table 1 means Overall plus grouped "
+        "columns, per-group missing n (%), one variable-appropriate P value, "
+        "and the test name. If only an ungrouped cohort description is wanted, "
+        "emit `table:cohort_summary` instead and omit table_one_spec. "
+        "The host executes the declared Table 1 design; it does not choose the "
+        "grouping variable or tests for you. "
+        "If cross-database "
         "replication is requested, include a cross-database step, "
         "but mark it as a feasibility / protocol step unless the "
         "ResearchContext explicitly provides external cohort files. "
@@ -841,6 +852,19 @@ def _build_planner_user_prompt(context: ResearchContext) -> str:
         '      "icu_rule_refs": ["aggregation_rule_for"],\n'
         '      "model_requirements": [],\n'
         '      "input_consumption_contracts": [],\n'
+        '      "table_one_spec": {\n'
+        '        "group_by": "<declared grouping variable>",\n'
+        '        "group_levels": ["<closed level 1>", "<closed level 2>"],\n'
+        '        "variables": [\n'
+        "          {\n"
+        '            "name": "<declared row variable>",\n'
+        '            "variable_kind": "continuous",\n'
+        '            "summary": "median_iqr",\n'
+        '            "test": "mann_whitney_or_kruskal",\n'
+        '            "levels": []\n'
+        "          }\n"
+        "        ]\n"
+        "      },\n"
         '      "trajectory_stability_spec": null\n'
         "    }\n"
         "  ],\n"
@@ -947,7 +971,8 @@ class PlannerAgent:
                 "steps (array of objects "
                 "each with step_id, planned_analysis_role, intent, inputs, expected_outputs, "
                 "method, icu_rule_refs, optional model_requirements, optional "
-                "input_consumption_contracts, and optional trajectory_stability_spec), "
+                "input_consumption_contracts, optional table_one_spec, and optional "
+                "trajectory_stability_spec), "
                 "rationale (string). "
                 "All string values must be plain ASCII or UTF-8 quoted strings; "
                 "do not use special Unicode whitespace inside values."
@@ -997,6 +1022,18 @@ class PlannerAgent:
         data, dropped = _normalise_plan_payload(data)
         self.last_dropped_plan_keys = dropped
         plan = AnalysisPlan.model_validate(data)
+        missing_table_one_specs = [
+            step.step_id
+            for step in plan.steps
+            if "table:table_one" in step.expected_outputs
+            and step.table_one_spec is None
+        ]
+        if missing_table_one_specs and not llm_is_mockish(getattr(self, "llm", None)):
+            raise ValueError(
+                "Planner Table 1 steps must declare table_one_spec; missing for "
+                f"{missing_table_one_specs!r}. Use table:cohort_summary for an "
+                "ungrouped descriptive table."
+            )
         # Family inference is a planner hint, not execution authority. Preserve
         # a valid agent-selected family (and its rationale); only fill the field
         # when the agent omitted it. A non-empty declaration is nevertheless a
@@ -3382,6 +3419,7 @@ def _normalise_plan_payload(
         "icu_rule_refs",
         "model_requirements",
         "input_consumption_contracts",
+        "table_one_spec",
         "trajectory_stability_spec",
     }
     allowed_model_requirement = {
@@ -3401,6 +3439,24 @@ def _normalise_plan_payload(
         "role_column",
         "expected_roles",
     }
+    allowed_table_one_spec = {
+        "schema_version",
+        "group_by",
+        "group_levels",
+        "variables",
+        "include_overall",
+        "missing_group_policy",
+        "missingness_display",
+        "p_values_required",
+        "p_value_adjustment",
+    }
+    allowed_table_one_variable = {
+        "name",
+        "variable_kind",
+        "summary",
+        "test",
+        "levels",
+    }
     allowed_robustness_spec = {
         "spec_id",
         "axis",
@@ -3414,6 +3470,7 @@ def _normalise_plan_payload(
         "steps": [],
         "model_requirements": [],
         "input_consumption_contracts": [],
+        "table_one_spec": [],
         "robustness_specs": [],
     }
     out = {}
@@ -3474,6 +3531,36 @@ def _normalise_plan_payload(
                 consumption_contracts.append(contract_payload)
             if "input_consumption_contracts" in step_payload:
                 step_payload["input_consumption_contracts"] = consumption_contracts
+            raw_table_one = step_payload.get("table_one_spec")
+            if isinstance(raw_table_one, dict):
+                table_one_payload = {
+                    key: value
+                    for key, value in raw_table_one.items()
+                    if key in allowed_table_one_spec
+                }
+                for key in raw_table_one:
+                    if key not in allowed_table_one_spec:
+                        dropped["table_one_spec"].append(f"step[{idx}]:{key}")
+                variables = []
+                for variable_index, raw_variable in enumerate(
+                    table_one_payload.get("variables", []) or []
+                ):
+                    if not isinstance(raw_variable, dict):
+                        variables.append(raw_variable)
+                        continue
+                    variable_payload = {
+                        key: value
+                        for key, value in raw_variable.items()
+                        if key in allowed_table_one_variable
+                    }
+                    for key in raw_variable:
+                        if key not in allowed_table_one_variable:
+                            dropped["table_one_spec"].append(
+                                f"step[{idx}].variables[{variable_index}]:{key}"
+                            )
+                    variables.append(variable_payload)
+                table_one_payload["variables"] = variables
+                step_payload["table_one_spec"] = table_one_payload
             steps.append(step_payload)
     out["steps"] = steps
     specs = []
