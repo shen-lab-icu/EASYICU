@@ -10,9 +10,9 @@
       "shim_bypass_violations": []
     },
     "pipeline.py": {
-      "loc": 10797,
-      "sha256": "0efe53586e73103961ca81622c6d349c600eb0edd1c3f66e319c78662b39a49c",
-      "intra_package_import_edges": 89,
+      "loc": 10787,
+      "sha256": "352b295221ecdbd9def44a7d02e1ebdab561775c0650b54ded213d8901a7d8ba",
+      "intra_package_import_edges": 90,
       "shim_bypass_violations": []
     },
     "reporting/readiness.py": {
@@ -52,8 +52,8 @@
       "shim_bypass_violations": []
     },
     "gates/preflight.py": {
-      "loc": 8144,
-      "sha256": "2c9ee8852d3f92c2523ac9358bf58fbab16c16db90a2f3dee715613e907f1acf",
+      "loc": 8300,
+      "sha256": "9b566958f1183a2561aaeaea96ffb4d4879f5dea10e569daacca1cebaf831fc2",
       "intra_package_import_edges": 8,
       "shim_bypass_violations": []
     },

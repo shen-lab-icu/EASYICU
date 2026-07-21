@@ -1572,6 +1572,64 @@ main(frame)
     )
 
 
+def test_mechanical_preflight_accepts_separate_complete_provenance_guards(ra):
+    code = """
+def fail(message):
+    raise RuntimeError(message)
+
+def main(frame):
+    invalid_pair_n = int(frame['invalid_pair'].sum())
+    discordant_n = int(frame['discordant'].sum())
+    if invalid_pair_n > 0:
+        fail('invalid measurement-provenance pairs')
+    if discordant_n > 0:
+        fail('discordant measurement-provenance pairs')
+    checks = [{
+        'role': 'audit_only',
+        'invalid_pair_n': int(invalid_pair_n),
+        'discordant_n': int(discordant_n),
+    }]
+    model.fit(frame)
+
+main(frame)
+"""
+    findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+
+    assert not any(
+        finding.detail
+        and finding.detail.get("reason") == "provenance_audit_not_fail_closed"
+        for finding in findings
+    )
+
+
+def test_mechanical_preflight_rejects_incomplete_separate_provenance_guards(ra):
+    code = """
+def fail(message):
+    raise RuntimeError(message)
+
+def main(frame):
+    invalid_pair_n = int(frame['invalid_pair'].sum())
+    discordant_n = int(frame['discordant'].sum())
+    if invalid_pair_n > 0:
+        fail('invalid measurement-provenance pairs')
+    checks = [{
+        'role': 'audit_only',
+        'invalid_pair_n': int(invalid_pair_n),
+        'discordant_n': int(discordant_n),
+    }]
+    model.fit(frame)
+
+main(frame)
+"""
+    findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+
+    assert any(
+        finding.detail
+        and finding.detail.get("reason") == "provenance_audit_not_fail_closed"
+        for finding in findings
+    )
+
+
 def test_mechanical_preflight_rejects_rebound_returned_provenance_count(ra):
     code = """
 def fail(message):
@@ -3874,7 +3932,7 @@ main(frame)
 
 
 def test_provenance_preflight_accepts_module_guard_before_audit_row(ra):
-    code = '''
+    code = """
 def fail(message):
     raise RuntimeError(message)
 
@@ -3893,7 +3951,7 @@ measurement_provenance_audit = {"checks": [{
     "discordant_n": discordant_n,
 }]}
 model.fit(frame)
-'''
+"""
 
     findings = audit_mechanical_code_contracts(code, _figure_step(ra))
 
