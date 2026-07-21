@@ -50,15 +50,13 @@ _VALUE_SUFFIXES = (
 def absolute_risk_context_code() -> str:
     """Return the small script consumed by the instrumented step runner."""
 
-    return textwrap.dedent(
-        """
+    return textwrap.dedent("""
         from easyicu.research_agent.execution.runners.deterministic_descriptive import (
             run_absolute_risk_context,
         )
 
         run_absolute_risk_context()
-        """
-    ).strip()
+        """).strip()
 
 
 def _read_json(path: Path) -> Dict[str, Any]:
@@ -102,9 +100,8 @@ def _load_current_step(run_dir: Path, step_id: str) -> Dict[str, Any]:
 
 def _variable_metadata(context: Mapping[str, Any], column: str) -> Dict[str, Any]:
     for variable in context.get("variables") or []:
-        if (
-            isinstance(variable, dict)
-            and str(variable.get("name") or "") == str(column)
+        if isinstance(variable, dict) and str(variable.get("name") or "") == str(
+            column
         ):
             return variable
     return {}
@@ -152,11 +149,7 @@ def _wilson(
     rate = float(count / n)
     denominator = 1.0 + z * z / n
     centre = (rate + z * z / (2.0 * n)) / denominator
-    half = (
-        z
-        * math.sqrt(rate * (1.0 - rate) / n + z * z / (4.0 * n * n))
-        / denominator
-    )
+    half = z * math.sqrt(rate * (1.0 - rate) / n + z * z / (4.0 * n * n)) / denominator
     return rate, max(0.0, centre - half), min(1.0, centre + half)
 
 
@@ -373,8 +366,8 @@ def run_absolute_risk_context() -> Dict[str, Any]:
 
     out_dir = Path(os.environ["STEP_OUT_DIR"])
     out_dir.mkdir(parents=True, exist_ok=True)
-    run_dir = out_dir.parents[2]
-    step_id = out_dir.parent.name
+    run_dir = Path(os.environ.get("EASYICU_RUN_DIR") or out_dir.parents[2])
+    step_id = os.environ.get("EASYICU_STEP_ID") or out_dir.parent.name
     cohort_path = Path(os.environ["COHORT_PARQUET"])
     context = _read_json(run_dir / "research_context.json")
     step = _load_current_step(run_dir, step_id)
@@ -388,9 +381,7 @@ def run_absolute_risk_context() -> Dict[str, Any]:
             reason="Analysis cohort is empty; absolute risk is undefined.",
         )
 
-    requested_outcome = os.environ.get("OUTCOME_COL") or context.get(
-        "target_outcome"
-    )
+    requested_outcome = os.environ.get("OUTCOME_COL") or context.get("target_outcome")
     outcome_col = _resolve_column(requested_outcome, frame.columns)
     if outcome_col is None:
         return _write_blocked(
@@ -422,7 +413,11 @@ def run_absolute_risk_context() -> Dict[str, Any]:
             exposures.append(column)
     if not exposures:
         fallback = _resolve_column(context.get("primary_exposure"), frame.columns)
-        if fallback is not None and fallback != outcome_col and not _is_companion_column(fallback):
+        if (
+            fallback is not None
+            and fallback != outcome_col
+            and not _is_companion_column(fallback)
+        ):
             exposures.append(fallback)
     if not exposures:
         return _write_blocked(

@@ -249,8 +249,8 @@ import os
 from pathlib import Path
 
 out_dir = Path(os.environ["STEP_OUT_DIR"])
-run_dir = out_dir.parents[2]
-current_step_id = out_dir.parent.name
+run_dir = Path(os.environ.get("EASYICU_RUN_DIR") or out_dir.parents[2])
+current_step_id = os.environ.get("EASYICU_STEP_ID", "").strip() or out_dir.parent.name
 
 expected_source_digests = __EXPECTED_SOURCE_DIGESTS__
 loaded_modules = {}

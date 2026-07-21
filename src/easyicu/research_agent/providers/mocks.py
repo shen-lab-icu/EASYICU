@@ -662,7 +662,7 @@ def _mock_code_declared_figure(*, step_id: str, prompt: str) -> str:
     figure_products = __FIGURE_PRODUCTS__
     out_dir = Path(os.environ["STEP_OUT_DIR"])
     out_dir.mkdir(parents=True, exist_ok=True)
-    run_dir = Path(os.environ["EASYICU_RUN_DIR"])
+    run_dir = Path(os.environ.get("EASYICU_RUN_DIR") or out_dir.parents[2])
 
     manifest_path = Path(os.environ["EASYICU_RESOLVED_INPUTS_JSON"])
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -1561,7 +1561,7 @@ def _mock_code_publication_figure(
 
     out_dir = Path(os.environ["STEP_OUT_DIR"])
     out_dir.mkdir(parents=True, exist_ok=True)
-    run_dir = out_dir.parents[2]
+    run_dir = Path(os.environ["EASYICU_RUN_DIR"])
     source_dir = out_dir / "publication_figure_source_tables"
     source_dir.mkdir(parents=True, exist_ok=True)
 
