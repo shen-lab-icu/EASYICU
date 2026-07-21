@@ -1282,6 +1282,7 @@ class DockerRunner:
     manages_output_cleanup = True
     CONTAINER_RUN_ROOT = "/easyicu-run"
     CONTAINER_OUTPUT_ROOT = "/easyicu-step-output"
+    CONTAINER_SCRIPT_PATH = "/easyicu-analysis.py"
     CONTAINER_COHORT_PATH = "/cohort.parquet"
     CONTAINER_INPUT_ROOT = "/easyicu-inputs"
     CONTAINER_EXTRA_ROOT = "/easyicu-extra"
@@ -1588,11 +1589,13 @@ class DockerRunner:
         if self.memory_limit:
             cmd.append(f"--memory={self.memory_limit}")
 
-        # Mount the complete run tree read-only.  Mount the writable attempt
-        # output at an independent container path rather than overlaying it
-        # below /easyicu-run: nested read-only/read-write bind targets can leave
-        # Docker Desktop's ``docker run --rm`` blocked after the workload has
-        # exited.  Generated code must use EASYICU_RUN_DIR for run-root reads.
+        # Mount the complete run tree read-only.  Mount both the writable
+        # attempt output and immutable script at independent container paths.
+        # Docker Desktop can leave ``docker run --rm`` blocked after PID 1 has
+        # exited when *any* child bind target is nested below the read-only run
+        # root, even when that child is also read-only.  Generated code must use
+        # EASYICU_RUN_DIR for run-root reads rather than deriving paths from
+        # ``__file__``.
         cmd.extend(
             [
                 "--mount",
@@ -1625,7 +1628,7 @@ class DockerRunner:
                     "--mount",
                     _docker_mount_entry(
                         str(immutable_script_path),
-                        f"{container_step_dir}/{script_path.name}",
+                        self.CONTAINER_SCRIPT_PATH,
                         readonly=True,
                     ),
                 ]
@@ -1698,7 +1701,7 @@ class DockerRunner:
             [
                 "python",
                 "-u",
-                f"{container_step_dir}/{script_path.name}",
+                self.CONTAINER_SCRIPT_PATH,
             ]
         )
         return cmd

@@ -248,11 +248,12 @@ def test_build_command_has_safety_knobs(
     assert "my/image:latest" in cmd
     # Image must appear before "python" trailer.
     assert cmd.index("my/image:latest") < cmd.index("python")
-    # The command end runs the script from the mounted run-tree layout.
+    # The command runs the immutable script outside the read-only run-root
+    # mount so Docker Desktop has no nested bind target to tear down.
     assert cmd[-3:] == [
         "python",
         "-u",
-        "/easyicu-run/steps/step_x/analysis.py",
+        "/easyicu-analysis.py",
     ]
     # Cohort mount: read-only, container path /cohort.parquet.
     assert any(
@@ -1226,11 +1227,18 @@ def test_each_run_executes_an_immutable_attempt_owned_script(
         entry.split(",target=", 1)[0].removeprefix("type=bind,source=")
         for command in run_commands
         for entry in command
-        if ",target=/easyicu-run/steps/repeat/analysis.py" in entry
+        if ",target=/easyicu-analysis.py" in entry
     ]
     assert len(script_sources) == 2
     assert script_sources[0] != script_sources[1]
     assert all(source.endswith(".analysis.py") for source in script_sources)
+    assert all(
+        not any(
+            entry.startswith("type=bind") and ",target=/easyicu-run/" in entry
+            for entry in command
+        )
+        for command in run_commands
+    )
     assert not list((tmp_path / "run").glob(".docker-repeat-*.analysis.py"))
 
 
