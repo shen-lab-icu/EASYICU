@@ -47,6 +47,7 @@ from .lossy_coercion import (
 )
 from .merge_collision import patch_pandas_merge_dynamic_column_collision
 from .name_alias import patch_undefined_mapping_near_match_alias
+from .plausibility import patch_flag_only_plausibility_range_rejection
 from .provenance_summary import (
     patch_custom_measurement_provenance_receipts,
     patch_direct_host_provenance_summary,
@@ -2358,6 +2359,15 @@ def deterministic_concept_audit_repair(
         findings=repair_findings,
     )
     repair_names.extend(preflight_repair_names)
+
+    range_retained = patch_flag_only_plausibility_range_rejection(
+        repaired,
+        repair_findings=repair_findings,
+    )
+    if range_retained != repaired:
+        repair_name = "flag_only_plausibility_range_retention_v1"
+        repaired = range_retained
+        repair_names.append(repair_name)
 
     if RepairReason.TYPED_CONTEXT_BINDING_INVALID in set(repair_reasons):
         context_loaded = _patch_resolved_context_digest_load(
