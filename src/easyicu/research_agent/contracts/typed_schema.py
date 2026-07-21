@@ -125,6 +125,36 @@ def _tabular_artifact_pandas_dtypes(
     }
 
 
+def _tabular_artifact_row_count(
+    path: Path,
+    *,
+    expected_sha256: str,
+) -> int | None:
+    """Return the physical data-row count for exact digest-bound bytes."""
+
+    try:
+        if _sha256_file(path) != expected_sha256:
+            return None
+        suffix = path.suffix.lower()
+        if suffix in {".parquet", ".pq"}:
+            import pyarrow.parquet as pq
+
+            row_count = int(pq.ParquetFile(path).metadata.num_rows)
+        elif suffix in {".csv", ".tsv"}:
+            delimiter = "\t" if suffix == ".tsv" else ","
+            with path.open("r", encoding="utf-8-sig", newline="") as handle:
+                rows = csv.reader(handle, delimiter=delimiter)
+                next(rows, None)
+                row_count = sum(1 for _ in rows)
+        else:  # pragma: no cover - caller keeps formats closed
+            return None
+        if _sha256_file(path) != expected_sha256:
+            return None
+        return row_count
+    except Exception:
+        return None
+
+
 def typed_product_schema_receipt(
     *,
     artifact_path: Path,
@@ -162,6 +192,13 @@ def typed_product_schema_receipt(
         "column_count": len(columns),
         "columns": list(columns),
     }
+    row_count = _tabular_artifact_row_count(
+        artifact_path,
+        expected_sha256=expected_sha256,
+    )
+    if row_count is None:
+        return None
+    receipt["row_count"] = row_count
     dtype_profile = _tabular_artifact_pandas_dtypes(
         artifact_path,
         expected_sha256=expected_sha256,
@@ -189,14 +226,11 @@ def merge_host_table_contract(
         "semantic_roles_scope",
         "column_dtypes",
         "numeric_columns",
+        "row_count",
     ):
         contract.pop(reserved, None)
     contract.update(schema_receipt)
-    contract["schema_version"] = (
-        "easyicu.host_typed_product.v3"
-        if "column_dtypes" in schema_receipt
-        else "easyicu.host_typed_product.v2"
-    )
+    contract["schema_version"] = "easyicu.host_typed_product.v4"
     return contract
 
 
@@ -206,7 +240,10 @@ def typed_product_prompt_facts(
 ) -> dict[str, Any]:
     """Return prompt-bounded facts only from a complete host v3 receipt."""
 
-    if contract.get("schema_version") != "easyicu.host_typed_product.v3":
+    if contract.get("schema_version") not in {
+        "easyicu.host_typed_product.v3",
+        "easyicu.host_typed_product.v4",
+    }:
         return {}
     columns = contract.get("columns")
     column_dtypes = contract.get("column_dtypes")

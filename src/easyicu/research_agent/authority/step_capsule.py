@@ -64,6 +64,18 @@ _TYPED_PARENT_SCHEMA_SUFFIX_V3 = (
     "dtype-order, or nonexistent-column fallbacks; fail closed when the schema "
     "cannot support the declared product."
 )
+_TYPED_PARENT_SCHEMA_SUFFIX_V4 = (
+    "Column order and names are physical schema facts, not scientific role "
+    "assignments. column_dtypes/numeric_columns, when present, are host-observed "
+    "pandas representation facts for the exact artifact, not scientific roles. "
+    "Choose columns only inside the Planner-declared typed product using the "
+    "Planner-owned method and scientific context. Do not use first-numeric, "
+    "dtype-order, or nonexistent-column fallbacks; fail closed when the schema "
+    "cannot support the declared product. A present consumption_contract is "
+    "mandatory: all_rows means preserve every row, single_row is valid only for "
+    "the verified singleton, and one_per_role requires every declared role "
+    "exactly once."
+)
 
 Sha256 = Annotated[str, Field(pattern=_DIGEST_PATTERN)]
 MediaType = Literal[
@@ -882,7 +894,7 @@ def input_representation_upgrade_matches(
     historical_upstream_authority: object,
     current_upstream_authority: object,
 ) -> bool:
-    """Prove that v3 adds representation facts without changing input science."""
+    """Prove additive host representation upgrades without changing science."""
 
     if not isinstance(historical_manifest, dict) or not isinstance(
         current_manifest, dict
@@ -905,7 +917,6 @@ def input_representation_upgrade_matches(
     if set(historical_inputs) != set(current_inputs):
         return False
 
-    added_contract_fields = {"column_dtypes", "numeric_columns"}
     for input_key in historical_inputs:
         historical_binding = historical_inputs[input_key]
         current_binding = current_inputs[input_key]
@@ -936,11 +947,36 @@ def input_representation_upgrade_matches(
             current_contract,
         ):
             continue
+        historical_version = historical_contract.get("schema_version")
+        current_version = current_contract.get("schema_version")
+        legacy_v3_upgrade = (
+            historical_version == "easyicu.host_typed_product.v2"
+            and current_version == "easyicu.host_typed_product.v3"
+        )
+        row_count_v4_upgrade = (
+            historical_version
+            in {
+                "easyicu.host_typed_product.v2",
+                "easyicu.host_typed_product.v3",
+            }
+            and current_version == "easyicu.host_typed_product.v4"
+        )
+        if not (legacy_v3_upgrade or row_count_v4_upgrade):
+            return False
+        added_contract_fields = (
+            {"column_dtypes", "numeric_columns"} if legacy_v3_upgrade else {"row_count"}
+        )
         if (
-            historical_contract.get("schema_version") != "easyicu.host_typed_product.v2"
-            or current_contract.get("schema_version") != "easyicu.host_typed_product.v3"
-            or set(current_contract)
-            != set(historical_contract).union(added_contract_fields)
+            row_count_v4_upgrade
+            and historical_version == ("easyicu.host_typed_product.v2")
+            and (
+                "column_dtypes" in current_contract
+                or "numeric_columns" in current_contract
+            )
+        ):
+            added_contract_fields.update({"column_dtypes", "numeric_columns"})
+        if set(current_contract) != set(historical_contract).union(
+            added_contract_fields
         ):
             return False
         historical_core = {
@@ -956,12 +992,24 @@ def input_representation_upgrade_matches(
         columns = current_contract.get("columns")
         column_dtypes = current_contract.get("column_dtypes")
         numeric_columns = current_contract.get("numeric_columns")
+        row_count = current_contract.get("row_count")
         if not (
             historical_core == current_core
             and isinstance(columns, list)
             and all(isinstance(column, str) for column in columns)
             and len(columns) == len(set(columns))
-            and isinstance(column_dtypes, Mapping)
+            and (
+                "row_count" not in added_contract_fields
+                or (
+                    isinstance(row_count, int)
+                    and not isinstance(row_count, bool)
+                    and row_count >= 0
+                )
+            )
+        ):
+            return False
+        if "column_dtypes" in added_contract_fields and not (
+            isinstance(column_dtypes, Mapping)
             and set(column_dtypes) == set(columns)
             and all(isinstance(dtype, str) for dtype in column_dtypes.values())
             and isinstance(numeric_columns, list)
@@ -1012,7 +1060,7 @@ def _typed_parent_schema_attachment_upgrade_matches(
     historical_attachment: object,
     current_attachment: object,
 ) -> bool:
-    """Accept only the host's bounded v2 -> v3 schema-receipt rendering."""
+    """Accept only bounded additive host schema-receipt rendering upgrades."""
 
     if not isinstance(historical_attachment, str) or not isinstance(
         current_attachment, str
@@ -1023,9 +1071,18 @@ def _typed_parent_schema_attachment_upgrade_matches(
     if not (
         len(historical_lines) == len(current_lines) == 3
         and historical_lines[0] == current_lines[0] == _TYPED_PARENT_SCHEMA_HEADER
-        and historical_lines[2] == _TYPED_PARENT_SCHEMA_SUFFIX_V2
-        and current_lines[2] == _TYPED_PARENT_SCHEMA_SUFFIX_V3
     ):
+        return False
+    legacy_v3_upgrade = (
+        historical_lines[2] == _TYPED_PARENT_SCHEMA_SUFFIX_V2
+        and current_lines[2] == _TYPED_PARENT_SCHEMA_SUFFIX_V3
+    )
+    row_count_v4_upgrade = (
+        historical_lines[2]
+        in {_TYPED_PARENT_SCHEMA_SUFFIX_V2, _TYPED_PARENT_SCHEMA_SUFFIX_V3}
+        and current_lines[2] == _TYPED_PARENT_SCHEMA_SUFFIX_V4
+    )
+    if not (legacy_v3_upgrade or row_count_v4_upgrade):
         return False
     try:
         historical_payload = json.loads(historical_lines[1])
@@ -1053,7 +1110,6 @@ def _typed_parent_schema_attachment_upgrade_matches(
     if not historical_receipts or set(historical_receipts) != set(current_receipts):
         return False
 
-    additions = {"column_dtypes", "numeric_columns"}
     upgraded_n = 0
     for input_key in historical_receipts:
         historical_receipt = historical_receipts[input_key]
@@ -1064,6 +1120,18 @@ def _typed_parent_schema_attachment_upgrade_matches(
             return False
         if current_receipt == historical_receipt:
             continue
+        additions = (
+            {"column_dtypes", "numeric_columns"} if legacy_v3_upgrade else {"row_count"}
+        )
+        if (
+            row_count_v4_upgrade
+            and historical_lines[2] == (_TYPED_PARENT_SCHEMA_SUFFIX_V2)
+            and (
+                "column_dtypes" in current_receipt
+                or "numeric_columns" in current_receipt
+            )
+        ):
+            additions.update({"column_dtypes", "numeric_columns"})
         if set(current_receipt) != set(historical_receipt).union(additions):
             return False
         if any(
@@ -1075,6 +1143,7 @@ def _typed_parent_schema_attachment_upgrade_matches(
         column_count = historical_receipt.get("column_count")
         column_dtypes = current_receipt.get("column_dtypes")
         numeric_columns = current_receipt.get("numeric_columns")
+        row_count = current_receipt.get("row_count")
         if not (
             isinstance(columns, list)
             and all(isinstance(column, str) for column in columns)
@@ -1082,7 +1151,18 @@ def _typed_parent_schema_attachment_upgrade_matches(
             and not isinstance(column_count, bool)
             and isinstance(column_count, int)
             and column_count >= len(columns)
-            and isinstance(column_dtypes, Mapping)
+            and (
+                "row_count" not in additions
+                or (
+                    isinstance(row_count, int)
+                    and not isinstance(row_count, bool)
+                    and row_count >= 0
+                )
+            )
+        ):
+            return False
+        if "column_dtypes" in additions and not (
+            isinstance(column_dtypes, Mapping)
             and set(column_dtypes) == set(columns)
             and all(isinstance(dtype, str) for dtype in column_dtypes.values())
             and isinstance(numeric_columns, list)

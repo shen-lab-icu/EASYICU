@@ -753,6 +753,13 @@ def _build_planner_user_prompt(context: ResearchContext) -> str:
         "for survival, prediction, "
         "mixed-effects, clustering, and every other analysis family; those use "
         "their own family-specific planning and validation contracts.\n\n"
+        "Use `input_consumption_contracts` when a step consumes typed result "
+        "tables and cardinality matters. `all_rows` preserves the complete "
+        "table; `single_row` is valid only for a true singleton; "
+        "`one_per_role` requires an exact `role_column` and complete "
+        "`expected_roles` roster. Never select the first row or assume a table "
+        "has one result merely because the downstream step renders one figure. "
+        "Leave this array empty when no typed-table cardinality rule is needed.\n\n"
         "When a plan requests a manuscript-facing figure, declare a top-level "
         "`display_labels` object for every variable, contrast, endpoint, or "
         "robustness spec id whose human-facing wording matters. Labels are "
@@ -833,6 +840,7 @@ def _build_planner_user_prompt(context: ResearchContext) -> str:
         '      "method": "descriptive",\n'
         '      "icu_rule_refs": ["aggregation_rule_for"],\n'
         '      "model_requirements": [],\n'
+        '      "input_consumption_contracts": [],\n'
         '      "trajectory_stability_spec": null\n'
         "    }\n"
         "  ],\n"
@@ -938,8 +946,8 @@ class PlannerAgent:
                 "research_question (string), cohort (object or null), "
                 "steps (array of objects "
                 "each with step_id, planned_analysis_role, intent, inputs, expected_outputs, "
-                "method, icu_rule_refs, optional model_requirements, and optional "
-                "trajectory_stability_spec), "
+                "method, icu_rule_refs, optional model_requirements, optional "
+                "input_consumption_contracts, and optional trajectory_stability_spec), "
                 "rationale (string). "
                 "All string values must be plain ASCII or UTF-8 quoted strings; "
                 "do not use special Unicode whitespace inside values."
@@ -3373,6 +3381,7 @@ def _normalise_plan_payload(
         "method",
         "icu_rule_refs",
         "model_requirements",
+        "input_consumption_contracts",
         "trajectory_stability_spec",
     }
     allowed_model_requirement = {
@@ -3384,6 +3393,13 @@ def _normalise_plan_payload(
         "analysis_role",
         "analysis_set",
         "required_for_step_success",
+    }
+    allowed_consumption_contract = {
+        "schema_version",
+        "input_key",
+        "mode",
+        "role_column",
+        "expected_roles",
     }
     allowed_robustness_spec = {
         "spec_id",
@@ -3397,6 +3413,7 @@ def _normalise_plan_payload(
         "top_level": [],
         "steps": [],
         "model_requirements": [],
+        "input_consumption_contracts": [],
         "robustness_specs": [],
     }
     out = {}
@@ -3435,6 +3452,28 @@ def _normalise_plan_payload(
                 requirements.append(requirement_payload)
             if "model_requirements" in step_payload:
                 step_payload["model_requirements"] = requirements
+            consumption_contracts = []
+            for contract_idx, raw_contract in enumerate(
+                step_payload.get("input_consumption_contracts", []) or []
+            ):
+                if not isinstance(raw_contract, dict):
+                    consumption_contracts.append(raw_contract)
+                    continue
+                contract_payload = {}
+                contract_id = (
+                    raw_contract.get("input_key")
+                    or f"step[{idx}].input_consumption_contracts[{contract_idx}]"
+                )
+                for key, value in raw_contract.items():
+                    if key in allowed_consumption_contract:
+                        contract_payload[key] = value
+                    else:
+                        dropped["input_consumption_contracts"].append(
+                            f"{contract_id}:{key}"
+                        )
+                consumption_contracts.append(contract_payload)
+            if "input_consumption_contracts" in step_payload:
+                step_payload["input_consumption_contracts"] = consumption_contracts
             steps.append(step_payload)
     out["steps"] = steps
     specs = []

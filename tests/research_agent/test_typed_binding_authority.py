@@ -100,6 +100,13 @@ def test_execute_loop_uses_one_typed_resolver_without_nested_implementation() ->
     ]
     assert len(constructor_calls) == 1
     assert len(resolver_calls) == 2
+    assert (
+        sum(
+            any(keyword.arg == "consumer_step" for keyword in call.keywords)
+            for call in resolver_calls
+        )
+        == 1
+    )
 
 
 def test_resolver_snapshots_current_records_under_the_shared_lock(tmp_path) -> None:

@@ -720,7 +720,7 @@ def test_typed_table_uses_current_resume_authority_and_writes_exact_manifest(
     assert binding["product_contract"]["value_column"] == "x"
     assert binding["product_contract"]["scale"] == "standardized"
     assert binding["product_contract"]["schema_version"] == (
-        "easyicu.host_typed_product.v3"
+        "easyicu.host_typed_product.v4"
     )
     assert binding["product_contract"]["identity_row"] == binding["identity_row"]
     assert binding["identity_row"]["input_key"] == "table:scaling_summary"
@@ -931,7 +931,7 @@ def test_generic_artifact_backed_by_table_gets_host_schema_contract(
 
     assert binding is not None
     assert binding["product_contract"]["schema_version"] == (
-        "easyicu.host_typed_product.v3"
+        "easyicu.host_typed_product.v4"
     )
     assert binding["product_contract"]["columns"] == ["row_id", "value"]
     assert binding["product_contract"]["column_count"] == 2
@@ -995,7 +995,7 @@ def test_dataset_aliases_backed_by_tables_get_host_schema_contract(
     assert binding["declared_kind"] == "dataset"
     assert binding["evidence_kind"] == "table"
     contract = binding["product_contract"]
-    assert contract["schema_version"] == "easyicu.host_typed_product.v3"
+    assert contract["schema_version"] == "easyicu.host_typed_product.v4"
     assert contract["columns"] == ["stay_id", "value"]
     assert contract["column_count"] == 2
     assert contract["tabular_format"] == expected_format
@@ -1090,7 +1090,7 @@ def test_typed_parent_table_receipt_exposes_host_schema_without_guessing_roles(
     }
     assert contract["numeric_columns"] == ["point", "lower", "upper"]
     assert "semantic_roles" not in contract
-    assert contract["schema_version"] == "easyicu.host_typed_product.v3"
+    assert contract["schema_version"] == "easyicu.host_typed_product.v4"
 
     context_block = _typed_parent_schema_context_block(
         {"table:display_summary": binding}
@@ -1149,6 +1149,7 @@ def test_optional_dtype_profile_falls_back_to_base_schema(
     assert receipt == {
         "tabular_format": "csv",
         "column_count": 2,
+        "row_count": 1,
         "columns": ["label", "value"],
     }
 

@@ -231,6 +231,7 @@ def _typed_schema_scoped_context(
     *,
     columns: list[str],
     with_representation: bool,
+    with_row_count: bool = False,
 ) -> dict[str, object]:
     context = ResearchContext(
         research_question="Describe the analysis cohort.",
@@ -275,6 +276,14 @@ def _typed_schema_scoped_context(
             "product using the Planner-owned method and scientific context. Do not "
             "use first-numeric, dtype-order, or nonexistent-column fallbacks; fail "
             "closed when the schema cannot support the declared product."
+        )
+    if with_row_count:
+        receipt["row_count"] = 3
+        suffix += (
+            " A present consumption_contract is mandatory: all_rows means "
+            "preserve every row, single_row is valid only for the verified "
+            "singleton, and one_per_role requires every declared role exactly "
+            "once."
         )
     attachment = (
         "HOST-VERIFIED TYPED PARENT TABLE SCHEMAS (binding facts only):\n"
@@ -381,6 +390,55 @@ def test_control_plane_revalidation_accepts_only_additive_v2_to_v3_table_facts(
         match="disagrees with its verified scientific source",
     ):
         seal_step_authority_capsule(tmp_path, forged_capsule)
+
+
+def test_control_plane_revalidation_accepts_additive_v3_to_v4_row_count(
+    tmp_path: Path,
+) -> None:
+    columns = ["stay_id", "group", "age"]
+    shared = {
+        "tabular_format": "parquet",
+        "column_count": len(columns),
+        "columns": columns,
+        "column_dtypes": {
+            "stay_id": "int64",
+            "group": "object",
+            "age": "float64",
+        },
+        "numeric_columns": ["stay_id", "age"],
+    }
+    historical, _ = _resolved_table_coordinates(
+        tmp_path,
+        filename="resolved_v3.json",
+        contract={"schema_version": "easyicu.host_typed_product.v3", **shared},
+        scoped_coder_context=_typed_schema_scoped_context(
+            columns=columns,
+            with_representation=True,
+        ),
+    )
+    code_ref = persist_candidate_code(historical, "print('table one')\n")
+    historical_ref = seal_legacy_candidate(historical, code_ref=code_ref)
+    verified = load_verified_step_authority_capsule(tmp_path, ref=historical_ref)
+    current, _ = _resolved_table_coordinates(
+        tmp_path,
+        filename="resolved_v4.json",
+        contract={
+            "schema_version": "easyicu.host_typed_product.v4",
+            **shared,
+            "row_count": 3,
+        },
+        scoped_coder_context=_typed_schema_scoped_context(
+            columns=columns,
+            with_representation=True,
+            with_row_count=True,
+        ),
+    )
+
+    adopted = adopt_candidate_for_control_plane_revalidation(verified, current)
+
+    assert adopted is not None
+    assert adopted[1].resolved_inputs == current.resolved_inputs
+    assert adopted[1].scoped_coder_context == current.scoped_coder_context
 
 
 def test_control_plane_revalidation_accepts_bounded_exposure_contract_enrichment(

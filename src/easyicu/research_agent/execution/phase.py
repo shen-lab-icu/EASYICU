@@ -5409,7 +5409,11 @@ def run_execute_phase(
                 existing_refs,
                 resolved_input_evidence_ids,
                 resolved_input_bindings,
-            ) = typed_binding_resolver.resolve_names(step.inputs, plan=plan)
+            ) = typed_binding_resolver.resolve_names(
+                step.inputs,
+                plan=plan,
+                consumer_step=step,
+            )
         except _EvidenceLineageResolutionError as exc:
             step_record.update(
                 {

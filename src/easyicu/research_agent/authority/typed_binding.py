@@ -21,9 +21,12 @@ from ..contracts.declared_product import (
     RUNTIME_TYPED_INPUT_EVIDENCE_KINDS,
     merge_host_table_contract,
     typed_product_binding_contract,
-    typed_product_prompt_facts,
     typed_product_schema_receipt,
     typed_product as _canonical_typed_product,
+)
+from ..contracts.artifact_consumption import (
+    ArtifactConsumptionError,
+    verify_artifact_consumption,
 )
 from ..authority.evidence_store import sha256_of_file
 from ..authority.development_projection import (
@@ -39,6 +42,9 @@ from ..schema import AnalysisPlan, AnalysisStep, EvidenceRef
 from .plan_scope import (
     _serializable_plan_scientific_scope_signature,
     _step_scientific_signature,
+)
+from .typed_schema_prompt import (
+    typed_parent_schema_context_block as _typed_parent_schema_context_block,
 )
 
 __all__ = [
@@ -68,8 +74,31 @@ __all__ = [
 ]
 
 _RESUME_TYPED_INPUT_BINDING_FINGERPRINT_SCHEMA_VERSION = (
-    "easyicu.resume_typed_input_bindings/1"
+    "easyicu.resume_typed_input_bindings/2"
 )
+
+
+def _attach_verified_consumption_contract(
+    *,
+    step: AnalysisStep,
+    input_name: str,
+    binding: Dict[str, Any],
+) -> Dict[str, Any]:
+    contracts = [
+        contract
+        for contract in step.input_consumption_contracts
+        if contract.input_key == input_name
+    ]
+    if not contracts:
+        return binding
+    if len(contracts) != 1:  # schema validation already prevents this
+        raise ArtifactConsumptionError("ambiguous input consumption contract")
+    updated = dict(binding)
+    updated["consumption_contract"] = verify_artifact_consumption(
+        contract=contracts[0],
+        binding=binding,
+    )
+    return updated
 
 
 class _EvidenceLineageResolutionError(RuntimeError):
@@ -853,108 +882,6 @@ def _resolved_typed_input_binding(
     return binding
 
 
-_CODER_PARENT_SCHEMA_PROMPT_COLUMN_LIMIT = 32
-
-
-_CODER_PARENT_SCHEMA_CONTEXT_BYTE_LIMIT = 16 * 1024
-
-
-def _typed_parent_schema_context_block(
-    bindings: Mapping[str, Mapping[str, Any]],
-) -> str:
-    """Render bounded host facts about typed parent table schemas for Coder."""
-
-    def render(selected: Mapping[str, Mapping[str, Any]], omitted_n: int) -> str:
-        payload: dict[str, Any] = {"receipts": dict(selected)}
-        if omitted_n:
-            payload.update(
-                {
-                    "omitted_typed_parent_receipt_n": omitted_n,
-                    "full_receipts_location": (
-                        "EASYICU_RESOLVED_INPUTS_JSON inputs.*.product_contract"
-                    ),
-                }
-            )
-        return (
-            "HOST-VERIFIED TYPED PARENT TABLE SCHEMAS (binding facts only):\n"
-            + json.dumps(
-                payload,
-                ensure_ascii=False,
-                sort_keys=True,
-                separators=(",", ":"),
-            )
-            + "\nColumn order and names are physical schema facts, not scientific "
-            "role assignments. column_dtypes/numeric_columns, when present, are "
-            "host-observed pandas representation facts for the exact artifact, not "
-            "scientific roles. Choose columns only inside the Planner-declared typed "
-            "product using the Planner-owned method and scientific context. Do not "
-            "use first-numeric, dtype-order, or nonexistent-column fallbacks; fail "
-            "closed when the schema cannot support the declared product."
-        )
-
-    receipts: dict[str, dict[str, Any]] = {}
-    omitted_n = 0
-    for input_key in sorted(bindings):
-        binding = bindings[input_key]
-        contract = binding.get("product_contract")
-        if not isinstance(contract, Mapping):
-            continue
-        columns = contract.get("columns")
-        column_count = contract.get("column_count")
-        tabular_format = contract.get("tabular_format")
-        if not isinstance(columns, list) or any(
-            not isinstance(value, str) for value in columns
-        ):
-            continue
-        if (
-            isinstance(column_count, bool)
-            or not isinstance(column_count, int)
-            or column_count != len(columns)
-            or not isinstance(tabular_format, str)
-            or not tabular_format.strip()
-        ):
-            continue
-        prompt_columns = list(columns[:_CODER_PARENT_SCHEMA_PROMPT_COLUMN_LIMIT])
-        receipt: dict[str, Any] = {
-            "tabular_format": tabular_format,
-            "column_count": column_count,
-            "columns": prompt_columns,
-        }
-        receipt.update(typed_product_prompt_facts(contract, prompt_columns))
-        if len(prompt_columns) != len(columns):
-            receipt["columns_omitted_from_prompt_n"] = len(columns) - len(
-                prompt_columns
-            )
-            receipt["full_schema_location"] = (
-                "EASYICU_RESOLVED_INPUTS_JSON product_contract.columns"
-            )
-        candidate = {**receipts, input_key: receipt}
-        if (
-            len(render(candidate, omitted_n).encode("utf-8"))
-            > _CODER_PARENT_SCHEMA_CONTEXT_BYTE_LIMIT
-        ):
-            omitted_n += 1
-            continue
-        receipts[input_key] = receipt
-    if not receipts and not omitted_n:
-        return ""
-    block = render(receipts, omitted_n)
-    while (
-        len(block.encode("utf-8")) > _CODER_PARENT_SCHEMA_CONTEXT_BYTE_LIMIT
-        and receipts
-    ):
-        receipts.popitem()
-        omitted_n += 1
-        block = render(receipts, omitted_n)
-    if len(block.encode("utf-8")) > _CODER_PARENT_SCHEMA_CONTEXT_BYTE_LIMIT:
-        return (
-            "HOST-VERIFIED TYPED PARENT TABLE SCHEMAS: prompt receipt omitted "
-            "because it exceeded the transport limit. Load exact product contracts "
-            "from EASYICU_RESOLVED_INPUTS_JSON; do not guess columns."
-        )
-    return block
-
-
 def _assignment_model_authority_context_block(
     bindings: Mapping[str, Mapping[str, Any]],
 ) -> str:
@@ -1204,6 +1131,16 @@ def _resume_typed_input_bindings(
         )
         if binding is None:
             raise ValueError(f"typed input {input_name} has no verified host binding")
+        try:
+            binding = _attach_verified_consumption_contract(
+                step=step,
+                input_name=input_name,
+                binding=binding,
+            )
+        except ArtifactConsumptionError as exc:
+            raise ValueError(
+                f"typed input {input_name} violates its consumption contract: {exc}"
+            ) from exc
         bindings[input_name] = binding
         evidence_ids.append(ref.evidence_id)
         projected_evidence_id = str(binding.get("evidence_id") or "")
@@ -1236,6 +1173,7 @@ def _resume_typed_input_bindings_fingerprint(
                 "produced_by_step",
                 "identity_row",
                 "product_contract",
+                "consumption_contract",
                 "execution_projection",
             )
             if field in binding
@@ -1275,6 +1213,7 @@ class TypedBindingResolver:
         names: Sequence[str],
         *,
         plan: AnalysisPlan,
+        consumer_step: Optional[AnalysisStep] = None,
         allow_unpublished_direct_ids: bool = False,
     ) -> Tuple[List[EvidenceRef], List[str], Dict[str, Dict[str, Any]]]:
         """Return exact evidence refs, typed ids, and host-owned bindings."""
@@ -1321,6 +1260,24 @@ class TypedBindingResolver:
                             }
                         )
                     else:
+                        if consumer_step is not None:
+                            try:
+                                binding = _attach_verified_consumption_contract(
+                                    step=consumer_step,
+                                    input_name=value,
+                                    binding=binding,
+                                )
+                            except ArtifactConsumptionError as exc:
+                                failures.append(
+                                    {
+                                        "input": value,
+                                        "reason": (
+                                            "artifact_consumption_contract_invalid"
+                                        ),
+                                        "message": str(exc),
+                                    }
+                                )
+                                continue
                         typed_bindings[value] = binding
                         projected_evidence_id = str(binding.get("evidence_id") or "")
                         if projected_evidence_id and projected_evidence_id not in seen:
