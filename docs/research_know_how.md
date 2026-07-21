@@ -120,5 +120,13 @@ the fixed full-parent E2 context measured 65,423 bytes without Know-How and
 69,932 bytes with the one selected card (+4,509 bytes), both below the 80KB
 hard gate.
 
+The bounded development comparison completed 2/2 valid plans in both arms.
+Know-How OFF used two provider calls total; Know-How ON used three because one
+plan required a structured-output retry. The selected card improved explicit
+measurement-state, temporal, noncausal, and claim-evidence framing, but it did
+not improve latency or token use in this small comparison. The feature therefore
+remains default-off and is not authorized for paper-facing runs until the card
+has dual expert review and the opaque plans receive an independent blind review.
+
 No new extraction is required: experiments consume the existing six-database
 export at `/Volumes/外置硬盘/easyicu_data/full6_20260717`.
