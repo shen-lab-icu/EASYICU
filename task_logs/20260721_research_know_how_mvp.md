@@ -79,6 +79,19 @@ no new extraction, and no tool/software capability retrieval.
   spending the production five-retry budget. The case-neutral Planner prompt
   now lists the exact Table 1 enums and exact claim-decision object; focused
   tests lock both. This probe is diagnostic and is not counted as K6 acceptance.
+- The corrected bounded development A/B then completed all four Planner trials
+  against the same fixed context. OFF produced 2/2 valid plans with one call
+  each (43,186 total tokens; 203.1 s active wall). ON selected only
+  `early_peak_lactate_association` and produced 2/2 valid plans, but one plan
+  required a structured-output retry (3 calls, 73,996 total tokens; 324.0 s).
+  The ON plans more consistently separated measured from unmeasured lactate,
+  preserved the descriptive/noncausal estimand, recorded claim-level evidence,
+  and avoided an early-mortality sensitivity that overlapped the 0–24 h
+  exposure window. This is useful scientific framing, not a speed improvement.
+- `docs/reviews/early_peak_lactate_planner_ab_20260721.json` binds the source
+  manifest SHA and records the development comparison. Because the operator had
+  access to the run manifest, this is explicitly a structural pre-review rather
+  than an independent blind clinical review.
 
 ## Safety boundary
 
@@ -92,9 +105,10 @@ is disabled unless `enable_know_how=True`.
 - K5: the E2 card has completed methods/evidence pre-review, but formal clinical
   and quantitative-methods attestation is still pending; the other eight cards
   remain unreviewed and no card is authorized for paper-facing science.
-- K6: the deterministic preparation, prompt budget, blinding, rubric, and
-  reviewed-card fail-close gate are complete. The four online Planner calls
-  (two per arm) have not run.
+- K6: deterministic preparation, prompt budget, rubric, reviewed-card
+  fail-close, and the four-trial development A/B are complete. Formal K6
+  acceptance still requires independent blind scoring and may not use the
+  development override for an unreviewed card.
 - K7: frozen B/C held-out generalization has not run. Tool/software capability
   retrieval is a separate later workstream and does not block this MVP.
 - The fixed experiment data source is

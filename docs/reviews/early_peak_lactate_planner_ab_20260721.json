@@ -1,0 +1,56 @@
+{
+  "schema_version": "easyicu.research_know_how_planner_ab_review/1",
+  "evaluation_status": "development_pre_ab_complete",
+  "formal_blind_review_complete": false,
+  "paper_authorization": false,
+  "git_head": "81f95280923e99f3fa1f6ab9c88c86dce1853a26",
+  "model": "gpt-5.6-luna",
+  "provider": "openai",
+  "context_sha256": "a8199c621f5ce7f3ddb426a78514ecdbab5fc6ea130b89dcb3b7a35fb816262c",
+  "source_manifest": "research_output/evaluations/K6_E2_PLANNER_AB/development_81f9528_20260721/manifest.json",
+  "source_manifest_sha256": "9a5e6b60aa97ef87e624cfcb9ae9137ace7e8b60bacaf6764f6465781af3123a",
+  "development_override": "allow_curated_development_card",
+  "arms": {
+    "off": {
+      "successful_plans": 2,
+      "provider_calls": 2,
+      "active_wall_seconds": 203.120968,
+      "prompt_tokens": 32876,
+      "completion_tokens": 10310,
+      "total_tokens": 43186,
+      "mean_total_tokens_per_plan": 21593,
+      "mean_wall_seconds_per_plan": 101.560484
+    },
+    "on": {
+      "successful_plans": 2,
+      "provider_calls": 3,
+      "active_wall_seconds": 324.021067,
+      "prompt_tokens": 57483,
+      "completion_tokens": 16513,
+      "total_tokens": 73996,
+      "mean_total_tokens_per_plan": 36998,
+      "mean_wall_seconds_per_plan": 162.0105335
+    }
+  },
+  "prompt_contract": {
+    "off_bytes": 65423,
+    "on_bytes": 69932,
+    "know_how_delta_bytes": 4509,
+    "hard_limit_bytes": 80000
+  },
+  "structural_observations": {
+    "correct_card_selected_in_both_on_trials": true,
+    "off_trials_adopted_protocol_claims": 0,
+    "on_trials_recorded_claim_level_decisions": true,
+    "on_trials_preserved_noncausal_interpretation": true,
+    "on_trials_separated_measured_from_unmeasured_lactate": true,
+    "on_trials_avoided_early_mortality_sensitivity_overlapping_the_exposure_window": true,
+    "one_on_trial_required_structured_output_retry": true,
+    "decision_disposition_semantics_require_human_review": true
+  },
+  "decision": {
+    "technical_mvp": "accept_default_off",
+    "enable_for_paper_facing_runs": false,
+    "reason": "The selected protocol improved traceable scientific framing but increased calls, tokens, and wall time in this two-pair development comparison. Formal dual expert review and an independent blind plan review remain required before enabling it in a submission profile."
+  }
+}
