@@ -2,9 +2,10 @@
 """Build a numbered, non-duplicating view over one research-agent run.
 
 The source run remains immutable.  The package contains relative symlinks plus
-SHA-indexed metadata, grouped as ``code/results/figures/reports/provenance``.
-This gives humans the thesis-style numbered layout without copying large run
-artifacts or weakening the canonical manifest/evidence authority.
+SHA-indexed metadata, grouped first by responsibility and then by producing
+step.  Files within each step are numbered deterministically.  This gives
+humans the thesis-style layout without copying large run artifacts or
+weakening the canonical manifest/evidence authority.
 """
 
 from __future__ import annotations
@@ -94,7 +95,7 @@ def _category(kind: str, path: Path) -> str:
     return "results"
 
 
-def _unique_name(category: str, path: Path, identity: str, used: set[str]) -> str:
+def _unique_name(path: Path, identity: str, used: set[str]) -> str:
     basename = path.name
     name = basename if basename not in used else f"{identity}__{basename}"
     if name in used:
@@ -103,27 +104,65 @@ def _unique_name(category: str, path: Path, identity: str, used: set[str]) -> st
     return name
 
 
+def _logical_evidence_name(path: Path, evidence_id: str) -> Path:
+    """Hide the authority-id prefix in the human package view."""
+
+    prefix = f"{evidence_id}__"
+    name = path.name
+    return Path(name[len(prefix) :] if name.startswith(prefix) else name)
+
+
 def _relative_link(source: Path, destination: Path) -> None:
+    destination.parent.mkdir(parents=True, exist_ok=True)
     destination.symlink_to(os.path.relpath(source, start=destination.parent))
 
 
 def _record(
-    *, category: str, role: str, source: Path, run_dir: Path, link_name: str
+    *,
+    category: str,
+    role: str,
+    source: Path,
+    run_dir: Path,
+    package_relative_path: str,
+    step_id: str,
+    artifact_no: str,
+    evidence_id: str | None = None,
 ) -> dict[str, object]:
-    return {
+    record: dict[str, object] = {
+        "artifact_no": artifact_no,
         "category": category,
         "role": role,
+        "step_id": step_id,
         "source_relative_path": source.relative_to(run_dir).as_posix(),
-        "package_relative_path": f"{category}/{link_name}",
+        "package_relative_path": package_relative_path,
         "sha256": _sha256(source),
         "size_bytes": source.stat().st_size,
     }
+    if evidence_id:
+        record["evidence_id"] = evidence_id
+    return record
 
 
 def _iter_code(run_dir: Path) -> Iterable[tuple[str, Path]]:
     for path in sorted((run_dir / "steps").glob("*/analysis.py")):
         step_id = path.parent.name
-        yield f"{step_id}__analysis.py", _contained_file(run_dir, path)
+        yield step_id, _contained_file(run_dir, path)
+
+
+def _step_id(record: Mapping[str, Any]) -> str:
+    """Return the producing step or the numbered run-level bucket."""
+
+    value = str(record.get("produced_by_step") or "").strip()
+    if not value:
+        return "00_run"
+    if Path(value).name != value or value in {".", ".."}:
+        raise ExperimentPackageError(f"unsafe produced_by_step: {value!r}")
+    return value
+
+
+def _artifact_no(step_id: str, ordinal: int) -> str:
+    prefix = "S00" if step_id == "00_run" else "S" + step_id.split("_", 1)[0]
+    return f"{prefix}-A{ordinal:03d}"
 
 
 def _write_package_readme(path: Path, payload: Mapping[str, Any]) -> None:
@@ -146,11 +185,12 @@ def _write_package_readme(path: Path, payload: Mapping[str, Any]) -> None:
         "",
         "## Layout",
         "",
-        "- `code/` — generated step scripts",
-        "- `results/` — registered non-figure evidence",
-        "- `figures/` — registered figure evidence",
-        "- `reports/` — human-facing run/readiness reports",
-        "- `provenance/` — manifest, plan, context, cost, and run identity",
+        "- `code/<step>/` — generated step scripts",
+        "- `results/<step>/` — registered non-figure evidence",
+        "- `figures/<step>/` — registered figure evidence",
+        "- `reports/00_run/` — human-facing run/readiness reports",
+        "- `provenance/00_run/` — manifest, plan, context, cost, and run identity",
+        "- every filename starts with a stable per-step artifact number",
         "- `package.json` — SHA-indexed machine-readable inventory",
         "",
     ]
@@ -220,23 +260,37 @@ def build_experiment_package(
         for category in ("code", "results", "figures", "reports", "provenance"):
             (stage / category).mkdir()
         inventory: list[dict[str, object]] = []
-        used: dict[str, set[str]] = {
-            name: set()
-            for name in ("code", "results", "figures", "reports", "provenance")
-        }
+        used: dict[tuple[str, str], set[str]] = {}
 
-        for link_name, source in _iter_code(run_dir):
-            _relative_link(source, stage / "code" / link_name)
+        for step_id, source in _iter_code(run_dir):
+            artifact_no = _artifact_no(step_id, 1)
+            link_name = f"{artifact_no}__analysis.py"
+            relative = f"code/{step_id}/{link_name}"
+            _relative_link(source, stage / relative)
             inventory.append(
                 _record(
                     category="code",
                     role="step_script",
                     source=source,
                     run_dir=run_dir,
-                    link_name=link_name,
+                    package_relative_path=relative,
+                    step_id=step_id,
+                    artifact_no=artifact_no,
                 )
             )
-        for raw in manifest.get("evidence") or []:
+        evidence_records = [
+            raw for raw in manifest.get("evidence") or [] if isinstance(raw, Mapping)
+        ]
+        evidence_records.sort(
+            key=lambda raw: (
+                _step_id(raw),
+                str(raw.get("kind") or ""),
+                str(raw.get("relative_path") or ""),
+                str(raw.get("evidence_id") or ""),
+            )
+        )
+        ordinals: dict[tuple[str, str], int] = {}
+        for raw in evidence_records:
             if not isinstance(raw, Mapping):
                 continue
             source = _evidence_path(run_dir, raw)
@@ -250,34 +304,53 @@ def build_experiment_package(
                 )
             category = _category(str(raw.get("kind") or ""), source)
             identity = str(raw.get("evidence_id") or observed_sha[:16])
-            link_name = _unique_name(category, source, identity, used[category])
-            _relative_link(source, stage / category / link_name)
+            step_id = _step_id(raw)
+            bucket = (category, step_id)
+            ordinals[bucket] = ordinals.get(bucket, 0) + 1
+            artifact_no = _artifact_no(step_id, ordinals[bucket])
+            used_names = used.setdefault(bucket, set())
+            semantic_name = _unique_name(
+                _logical_evidence_name(source, identity), identity, used_names
+            )
+            link_name = f"{artifact_no}__{semantic_name}"
+            relative = f"{category}/{step_id}/{link_name}"
+            _relative_link(source, stage / relative)
             inventory.append(
                 _record(
                     category=category,
                     role=identity,
                     source=source,
                     run_dir=run_dir,
-                    link_name=link_name,
+                    package_relative_path=relative,
+                    step_id=step_id,
+                    artifact_no=artifact_no,
+                    evidence_id=identity,
                 )
             )
         for category, names in (
             ("reports", _REPORT_NAMES),
             ("provenance", _PROVENANCE_NAMES),
         ):
-            for name in names:
+            for ordinal, name in enumerate(names, start=1):
                 source = run_dir / name
                 if not source.is_file():
                     continue
-                link_name = _unique_name(category, source, name, used[category])
-                _relative_link(source, stage / category / link_name)
+                step_id = "00_run"
+                artifact_no = _artifact_no(step_id, ordinal)
+                used_names = used.setdefault((category, step_id), set())
+                semantic_name = _unique_name(source, name, used_names)
+                link_name = f"{artifact_no}__{semantic_name}"
+                relative = f"{category}/{step_id}/{link_name}"
+                _relative_link(source, stage / relative)
                 inventory.append(
                     _record(
                         category=category,
                         role=name,
                         source=source,
                         run_dir=run_dir,
-                        link_name=link_name,
+                        package_relative_path=relative,
+                        step_id=step_id,
+                        artifact_no=artifact_no,
                     )
                 )
 
@@ -300,7 +373,7 @@ def build_experiment_package(
             ),
         }
         payload = {
-            "schema_version": "easyicu.agent_experiment_package/1",
+            "schema_version": "easyicu.agent_experiment_package/2",
             "experiment_id": experiment_id,
             "benchmark_item": (
                 run_dir.parents[1].name if len(run_dir.parents) > 1 else None
