@@ -290,6 +290,7 @@ _STRUCTURAL_REPAIRS = {
     "binary_domain_authored_feasibility_v1",
     "cohort_csv_to_parquet_v1",
     "cohort_file_direct_read_v1",
+    "flag_only_plausibility_range_retention_v1",
     "categorical_level_reconciliation_guard_v1",
     "conditional_nonfinite_fail_closed_guard_v1",
     "host_schema_numeric_alias_v1",
