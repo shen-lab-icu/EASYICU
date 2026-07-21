@@ -984,6 +984,118 @@ def patch_late_measurement_provenance_receipt(
     return repaired
 
 
+def patch_audit_only_companion_value_selector(
+    code: str,
+    *,
+    findings: Sequence[Any],
+) -> str:
+    """Detach one physiological-value selector from audit-only companions.
+
+    The structured concept finding names a derived selector that combines a
+    provenance-support mask with the value's own validity mask. This repair
+    changes only one ``series.loc[selector]`` used for the value distribution,
+    and only when exactly one direct conjunct is demonstrably derived from that
+    same series. Source-status accounting remains intact. Ambiguous data flow
+    is left for agent repair.
+    """
+
+    issue_details = []
+    for finding in findings:
+        validator, severity, _message, detail = _finding_parts(finding)
+        if (
+            validator == "llm_concept_auditor"
+            and severity == "error"
+            and isinstance(detail, dict)
+            and detail.get("issue_code") == "audit_only_companion_row_gating_required"
+        ):
+            issue_details.append(detail)
+    if len(issue_details) != 1:
+        return code
+    raw_variables = issue_details[0].get("variables")
+    if not isinstance(raw_variables, list):
+        return code
+    named_variables = {
+        value
+        for value in raw_variables
+        if isinstance(value, str) and value.isidentifier()
+    }
+    if not named_variables:
+        return code
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return code
+
+    assignments: dict[str, list[ast.Assign]] = {}
+    for node in ast.walk(tree):
+        if (
+            isinstance(node, ast.Assign)
+            and len(node.targets) == 1
+            and isinstance(node.targets[0], ast.Name)
+        ):
+            assignments.setdefault(node.targets[0].id, []).append(node)
+
+    def bitand_names(node: ast.AST) -> list[str] | None:
+        if isinstance(node, ast.Name):
+            return [node.id]
+        if isinstance(node, ast.BinOp) and isinstance(node.op, ast.BitAnd):
+            left = bitand_names(node.left)
+            right = bitand_names(node.right)
+            if left is not None and right is not None:
+                return [*left, *right]
+        return None
+
+    candidates: list[tuple[ast.Name, str]] = []
+    for selector in sorted(named_variables):
+        selector_assignments = assignments.get(selector, [])
+        if len(selector_assignments) != 1:
+            continue
+        conjuncts = bitand_names(selector_assignments[0].value)
+        if not conjuncts or len(set(conjuncts)) < 2:
+            continue
+        uses = [
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Subscript)
+            and isinstance(node.value, ast.Attribute)
+            and node.value.attr == "loc"
+            and isinstance(node.value.value, ast.Name)
+            and isinstance(node.slice, ast.Name)
+            and node.slice.id == selector
+        ]
+        if len(uses) != 1:
+            continue
+        receiver = uses[0].value.value.id
+        value_masks = []
+        for conjunct in conjuncts:
+            definitions = assignments.get(conjunct, [])
+            if len(definitions) != 1:
+                continue
+            if any(
+                isinstance(candidate, ast.Name)
+                and candidate.id == receiver
+                and isinstance(candidate.ctx, ast.Load)
+                for candidate in ast.walk(definitions[0].value)
+            ):
+                value_masks.append(conjunct)
+        if len(value_masks) == 1:
+            candidates.append((uses[0].slice, value_masks[0]))
+    if len(candidates) != 1:
+        return code
+
+    selector_node, replacement = candidates[0]
+    lines, starts = _source_offsets(code)
+    span = _node_span(selector_node, lines=lines, starts=starts)
+    if span is None:
+        return code
+    repaired = code[: span[0]] + replacement + code[span[1] :]
+    try:
+        ast.parse(repaired)
+    except SyntaxError:
+        return code
+    return repaired
+
+
 def patch_direct_host_provenance_summary(code: str) -> str:
     """Wrap one direct host receipt in the required source/checks envelope.
 
@@ -1364,6 +1476,7 @@ def patch_measurement_provenance_contract(
 
 
 __all__ = [
+    "patch_audit_only_companion_value_selector",
     "patch_direct_host_provenance_summary",
     "patch_measurement_provenance_contract",
     "patch_measurement_provenance_summary",
