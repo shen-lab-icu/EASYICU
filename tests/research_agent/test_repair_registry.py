@@ -270,6 +270,15 @@ def test_provenance_checked_status_contract_is_structural_and_automatic() -> Non
     assert automatic_repair_allowed(metadata.repair_id)
 
 
+def test_sklearn_runtime_object_diagnostics_is_structural_and_automatic() -> None:
+    metadata = repair_metadata_for("sklearn_runtime_object_diagnostics_v1")
+
+    assert metadata.repair_class is RepairClass.STRUCTURAL
+    assert metadata.introduces_numbers is False
+    assert metadata.requires_disclosure is False
+    assert automatic_repair_allowed(metadata.repair_id)
+
+
 def test_all_method_substitutions_are_auto_denied() -> None:
     for repair_id in (
         "drop_overadjustment_covariates_v1",

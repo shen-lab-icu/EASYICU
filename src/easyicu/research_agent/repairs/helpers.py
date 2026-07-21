@@ -17,14 +17,14 @@ import re
 import textwrap
 from typing import List, Optional, Sequence
 
-from .serialization import validation_finding_json_runner_repair
+from .serialization import serialization_runner_repair
 from .typed_schema import patch_host_schema_numeric_alias
 
 
 def _finding_json_repair(
     code: str, run_log: str, previous_repair: str | None
 ) -> tuple[str, str] | None:
-    return validation_finding_json_runner_repair(
+    return serialization_runner_repair(
         code=code, run_log=run_log, previous_repair=previous_repair
     )
 

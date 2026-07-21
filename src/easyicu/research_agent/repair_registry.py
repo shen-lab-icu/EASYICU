@@ -342,6 +342,7 @@ _STRUCTURAL_REPAIRS = {
     "summary_salvage_stdout_json_v1",
     "summary_salvage_named_json_v1",
     "summary_output_registry_canonicalization_v1",
+    "sklearn_runtime_object_diagnostics_v1",
     # Adds the missing ``elif var == "age"`` branch to a covariate-coding
     # metadata table so the loop stops KeyError-ing on the one demographic
     # covariate that has no measured-indicator entry. The model, rows, and
