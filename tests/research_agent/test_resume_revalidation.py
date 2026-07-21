@@ -1117,6 +1117,38 @@ def test_resume_application_preserves_append_only_revalidation_history(tmp_path)
     assert applied.per_step_records == [history[-1]]
 
 
+def test_resume_application_merges_outer_records_missing_from_saved_history(tmp_path):
+    from easyicu.research_agent.orchestration.resume import ResumeController
+
+    first = AnalysisStep(step_id="01_first", intent="First step")
+    later = AnalysisStep(step_id="02_later", intent="Later step")
+    saved = {"step_id": first.step_id, "status": "ok", "attempt_id": "first:1"}
+    failed = {
+        "step_id": later.step_id,
+        "status": "execution_failed",
+        "attempt_id": "later:1",
+        "step_authority_capsule_ref": {
+            "schema_version": "easyicu.step_authority_capsule_ref/1",
+            "step_id": later.step_id,
+            "capsule_sha256": "a" * 64,
+        },
+    }
+
+    applied = ResumeController(
+        plan=AnalysisPlan(research_question="Question", steps=[first, later]),
+        run_dir=tmp_path,
+        resume_state={
+            "per_step_records": [saved, failed],
+            "step_attempt_history": [saved],
+            "findings": [],
+        },
+        resume_from_step_id=first.step_id,
+    ).apply()
+
+    assert applied.audit_history == [saved, failed]
+    assert applied.per_step_records == []
+
+
 def test_execute_phase_writes_resume_audit_history_separately_from_authority_view():
     import inspect
 
