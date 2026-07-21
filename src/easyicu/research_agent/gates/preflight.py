@@ -1613,6 +1613,18 @@ def _provenance_fail_closed_findings(tree: ast.Module) -> list[ValidationFinding
             if row is not None:
                 fields, containers = row
                 audit_rows.append((index, fields, containers))
+        audit_follows_guard = False
+        if not audit_rows:
+            following = _next_statement(guard)
+            following_audit_row = (
+                _direct_audit_row(following)
+                if isinstance(following, ast.stmt)
+                else None
+            )
+            if following_audit_row is not None:
+                fields, containers = following_audit_row
+                audit_rows.append((len(preceding), fields, containers))
+                audit_follows_guard = True
         if len(audit_rows) != 1:
             return False
 
@@ -1644,7 +1656,14 @@ def _provenance_fail_closed_findings(tree: ast.Module) -> list[ValidationFinding
             isinstance(value, ast.Constant) for value in direct_bindings.values()
         ):
             return False
-        if _module_pre_guard_has_indirect_effects(preceding):
+        # When the immutable count bindings and terminal guard precede the
+        # audit row, earlier helper calls cannot mutate audit authority that
+        # does not exist yet.  Stable-count, direct-raise, dynamic-namespace,
+        # and pre-result-sink proofs are enforced by the caller.  The stricter
+        # helper-effect scan remains necessary when the row already exists.
+        if not audit_follows_guard and _module_pre_guard_has_indirect_effects(
+            preceding
+        ):
             return False
         return _post_audit_alias_path_is_pure(
             preceding[audit_index + 1 :],
