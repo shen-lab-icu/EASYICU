@@ -23,6 +23,10 @@ from .ast_semantics import (
 from .numeric_reduction import is_array_boolean_predicate as _is_array_boolean_predicate
 from .numeric_reduction import misnested_boolean_mask_reduction_expression
 from .numeric_reduction import unambiguous_boolean_predicate_aliases
+from .coercion_guard import (
+    audit_record_assignment_for_count,
+    guard_failure_is_terminal as _guard_failure_escapes,
+)
 from .typed_input import (
     resolved_input_relative_path_root_findings,
     resolved_input_shadowed_by_cohort_env_findings,
@@ -5686,7 +5690,6 @@ _LEXICAL_SCOPE_NODES = (
     ast.AsyncFunctionDef,
     ast.ClassDef,
 )
-_FAILURE_SUPPRESSING_OWNERS = (ast.Try, ast.TryStar, ast.With, ast.AsyncWith)
 
 
 def _ast_parent_and_statement_positions(
@@ -6131,25 +6134,6 @@ def _zero_count_assertion(
     return False
 
 
-def _guard_failure_escapes(
-    guard: ast.stmt,
-    *,
-    scope: ast.AST,
-    parents: dict[int, ast.AST],
-) -> bool:
-    """Conservatively prove the guard cannot be swallowed in its scope."""
-
-    current: Optional[ast.AST] = guard
-    while current is not scope:
-        parent = parents.get(id(current)) if current is not None else None
-        if parent is None:
-            return False
-        if isinstance(parent, _FAILURE_SUPPRESSING_OWNERS):
-            return False
-        current = parent
-    return True
-
-
 def _stable_raise_only_helper_call(
     statement: ast.stmt,
     *,
@@ -6368,7 +6352,15 @@ def _grouped_loss_guard_for_statement(
     next_index = position.index + 1
     while (
         next_index < len(position.block)
-        and id(position.block[next_index]) in audit_statement_ids
+        and (
+            id(position.block[next_index]) in audit_statement_ids
+            or (
+                binding.kind == "name"
+                and audit_record_assignment_for_count(
+                    position.block[next_index], count_name=binding.name
+                )
+            )
+        )
     ):
         next_index += 1
     if next_index >= len(position.block):

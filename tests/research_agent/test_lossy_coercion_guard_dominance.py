@@ -233,6 +233,115 @@ except ValueError:
     assert _lossy_findings(script, ra)
 
 
+def test_terminal_figure_failure_summary_is_fail_closed(ra):
+    script = """
+import json
+import pandas as pd
+
+def main():
+    summary = {"status": "running", "figure_files": [], "output_files": {}, "errors": []}
+    try:
+        raw = cohort["declared_exposure"]
+        coerced = pd.to_numeric(raw, errors="coerce")
+        loss_n = int((raw.notna() & coerced.isna()).sum())
+        if loss_n > 0:
+            raise ValueError("numeric coercion lost observed values")
+        save_publication_figure(coerced)
+    except Exception as exc:
+        summary["status"] = "failed"
+        summary["errors"].append(str(exc))
+        summary["figure_files"] = []
+        summary["output_files"] = {}
+    finally:
+        json.dump(summary, sink)
+"""
+
+    assert _lossy_findings(script, ra) == []
+
+
+def test_failure_summary_cannot_hide_output_published_before_guard(ra):
+    script = """
+import json
+import pandas as pd
+
+def main():
+    summary = {"status": "running", "figure_files": [], "output_files": {}, "errors": []}
+    try:
+        raw = cohort["declared_exposure"]
+        coerced = pd.to_numeric(raw, errors="coerce")
+        save_publication_figure(coerced)
+        loss_n = int((raw.notna() & coerced.isna()).sum())
+        if loss_n > 0:
+            raise ValueError("numeric coercion lost observed values")
+    except Exception as exc:
+        summary["status"] = "failed"
+        summary["errors"].append(str(exc))
+        summary["figure_files"] = []
+        summary["output_files"] = {}
+    finally:
+        json.dump(summary, sink)
+"""
+
+    assert _lossy_findings(script, ra)
+
+
+def test_loss_count_audit_record_may_precede_terminal_guard(ra):
+    script = """
+import pandas as pd
+
+def audit_numeric(raw, audit):
+    coerced = pd.to_numeric(raw, errors="coerce")
+    loss_n = int((raw.notna() & coerced.isna()).sum())
+    audit["declared_exposure"] = {
+        "missing_n": int(raw.isna().sum()),
+        "newly_invalid_n": loss_n,
+    }
+    if loss_n > 0:
+        raise ValueError("numeric coercion lost observed values")
+    return coerced
+"""
+
+    assert _lossy_findings(script, ra) == []
+
+
+def test_loss_count_audit_record_may_use_declared_dynamic_key(ra):
+    script = """
+import pandas as pd
+
+def audit_numeric(raw, audit, column):
+    coerced = pd.to_numeric(raw, errors="coerce")
+    loss_n = int((raw.notna() & coerced.isna()).sum())
+    audit[column] = {
+        "missing_n": int(raw.isna().sum()),
+        "newly_invalid_n": loss_n,
+    }
+    if loss_n > 0:
+        raise ValueError("numeric coercion lost observed values")
+    return coerced
+"""
+
+    assert _lossy_findings(script, ra) == []
+
+
+def test_loss_count_guard_cannot_cross_arbitrary_call(ra):
+    script = """
+import pandas as pd
+
+def audit_numeric(raw, audit):
+    coerced = pd.to_numeric(raw, errors="coerce")
+    loss_n = int((raw.notna() & coerced.isna()).sum())
+    audit["declared_exposure"] = {
+        "published": publish_scientific_output(loss_n),
+        "newly_invalid_n": loss_n,
+    }
+    if loss_n > 0:
+        raise ValueError("numeric coercion lost observed values")
+    return coerced
+"""
+
+    assert _lossy_findings(script, ra)
+
+
 def test_integer_cast_of_fractional_loss_rate_is_not_a_guard(ra):
     script = """
 import pandas as pd
