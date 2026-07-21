@@ -225,3 +225,7 @@ def test_run_coordinator_is_science_neutral_and_pipeline_owns_transitions() -> N
         "and _successful_step_requests_replan(record)", directed
     )
     assert corruption < requested_stop < directed < ordinary
+    assert (
+        "if pipeline._enable_visual_qa and requested_stop_after_step_id is None:"
+        in phase_source
+    )

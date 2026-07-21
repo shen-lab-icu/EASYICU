@@ -11375,7 +11375,7 @@ def run_execute_phase(
             )
         )
 
-    if pipeline._enable_visual_qa:
+    if pipeline._enable_visual_qa and requested_stop_after_step_id is None:
         emit_progress(
             "visual_qa",
             "Auditing generated figures.",
