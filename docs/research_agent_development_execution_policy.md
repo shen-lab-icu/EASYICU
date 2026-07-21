@@ -5,6 +5,23 @@ the EasyICU research-agent workflow. It is deliberately separate from a frozen
 submission run: development results demonstrate that the workflow can execute
 and enforce its contracts, but they are not manuscript estimates.
 
+## Canonical pre-extracted six-database input
+
+The current internal Canonical9/Extension3 experiment program consumes the
+already completed six-database, all-module EasyICU export at:
+
+```text
+/Volumes/外置硬盘/easyicu_data/full6_20260717
+```
+
+Do **not** re-extract the six databases for Agent experiments. The benchmark is
+defined as the downstream user journey after a user has already completed data
+extraction with EasyICU. Experiments may build locked cohorts, post-QC
+development samples, and typed artifacts from this export, but they must not
+rerun raw conversion/extraction merely to start an Agent task. A newer export
+may replace it only through an explicit data-foundation version change with a
+new fingerprint and experiment ID.
+
 ## Post-QC sample: 1,000 stays
 
 Use `--development-sample-size 1000` for Canonical9 development runs.
