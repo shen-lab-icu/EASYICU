@@ -130,6 +130,11 @@ def _install_fake_subprocess(
     import easyicu.research_agent.execution.runner as runner_mod
 
     monkeypatch.setattr(runner_mod.subprocess, "run", fake_run)
+    monkeypatch.setattr(
+        runner_mod.DockerRunner,
+        "_start_ghost_container_monitor",
+        lambda self, **kwargs: None,
+    )
 
 
 def _force_docker_present(
@@ -876,6 +881,48 @@ def test_successful_docker_return_confirms_teardown_before_collecting_outputs(
     assert result.artefacts
     assert captured[-1][1:3] == ["container", "inspect"]
     assert not list((tmp_path / "run").glob("*.sentinel"))
+
+
+def test_macos_ghost_monitor_removes_container_after_two_empty_process_snapshots(
+    ra,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    cohort = _make_cohort(tmp_path)
+    _force_docker_present(monkeypatch)
+    runner = ra.DockerRunner(workdir=tmp_path / "run", cohort_parquet=cohort)
+    runner.GHOST_MONITOR_GRACE_SECONDS = 0.0
+    runner.GHOST_MONITOR_INTERVAL_SECONDS = 0.001
+    cidfile = tmp_path / "ghost.cid"
+    cidfile.write_text("c" * 64, encoding="utf-8")
+    captured: List[List[str]] = []
+
+    def fake_run(cmd, *args, **kwargs):
+        del args, kwargs
+        captured.append(list(cmd))
+        if cmd[1] == "top":
+            return _FakeProc(stdout="PID\n")
+        if cmd[1] == "rm":
+            return _FakeProc()
+        raise AssertionError(cmd)
+
+    import easyicu.research_agent.execution.runner as runner_mod
+
+    monkeypatch.setattr(runner_mod.sys, "platform", "darwin")
+    monkeypatch.setattr(runner_mod.subprocess, "run", fake_run)
+
+    monitor = runner._start_ghost_container_monitor(
+        cidfile=cidfile,
+        fallback_name="easyicu-ra-fallback",
+    )
+    assert monitor is not None
+    stop, thread = monitor
+    thread.join(timeout=1.0)
+    stop.set()
+
+    assert not thread.is_alive()
+    assert [command[1] for command in captured] == ["top", "top", "rm"]
+    assert captured[-1][-1] == "c" * 64
 
 
 def test_successful_docker_return_hides_outputs_when_teardown_is_unconfirmed(
