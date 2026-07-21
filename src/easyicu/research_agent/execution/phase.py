@@ -324,10 +324,7 @@ from ..trajectory.plan_contract import (
     trajectory_plan_contract_applies,
     trajectory_plan_dag_findings,
 )
-from .runners.trajectory_stability_executor import (
-    trajectory_stability_executor_code,
-    trajectory_stability_executor_owns_step,
-)
+from .runners.selection import select_standard_executor
 from ..repair_registry import (
     InvariantStatus,
     RepairClass,
@@ -6414,48 +6411,35 @@ def run_execute_phase(
             )
             return missingness_measurement_audit_code()
 
-        def _trajectory_stability_preflight_supported() -> bool:
-            return trajectory_stability_executor_owns_step(step, plan=plan)
-
-        def _deterministic_trajectory_stability_code(
-            reason: str,
-            *,
-            preflight: bool = False,
-        ) -> Optional[str]:
-            if worker_progress.deterministic_standard_executor_used or (
-                preflight and not _trajectory_stability_preflight_supported()
-            ):
-                return None
-            if not _trajectory_stability_preflight_supported():
-                return None
-            worker_progress.deterministic_standard_executor_used = True
-            step_record["deterministic_standard_selection_reason"] = reason
-            step_record["deterministic_standard_analysis"] = (
-                "trajectory_cluster_stability"
-            )
-            emit_progress(
-                "coder",
-                f"Using planner-specified trajectory stability executor for {step.step_id}.",
-                run_id=run_id,
-                step_id=step.step_id,
-                current_step=step_current,
-                total_steps=total_steps,
-                fallback_reason=reason,
-            )
-            return trajectory_stability_executor_code(step, plan=plan)
-
         # ``--resume-from-step-id`` means the selected step is intentionally
         # rerun. Completed predecessors stay checkpointed. A previously
         # successful step gets a fresh Coder draft unless the operator opts in
         # to reuse; a prior deterministic ``contract_failed`` attempt may reuse
         # only its exact evidence-bound code and scientific signature. Reused
         # code still runs through every current execution audit and repair gate.
-        preflight_trajectory_stability_code = _deterministic_trajectory_stability_code(
-            "trajectory_stability_spec_preflight", preflight=True
-        )
+        standard_executor = select_standard_executor(step, plan=plan)
+        preflight_standard_code = None
+        if standard_executor is not None:
+            worker_progress.deterministic_standard_executor_used = True
+            step_record["deterministic_standard_selection_reason"] = (
+                standard_executor.selection_reason
+            )
+            step_record["deterministic_standard_analysis"] = (
+                standard_executor.analysis_kind
+            )
+            emit_progress(
+                "coder",
+                f"{standard_executor.progress_message} for {step.step_id}.",
+                run_id=run_id,
+                step_id=step.step_id,
+                current_step=step_current,
+                total_steps=total_steps,
+                fallback_reason=standard_executor.selection_reason,
+            )
+            preflight_standard_code = standard_executor.code
         preflight_figure_code = (
             None
-            if preflight_trajectory_stability_code is not None
+            if preflight_standard_code is not None
             else _deterministic_publication_figure_code(
                 "publication_figure_parent_outputs_preflight",
                 run_dir=run_dir,
@@ -6473,7 +6457,7 @@ def run_execute_phase(
         quarantined_resume_draft = (
             None
             if (
-                preflight_trajectory_stability_code is not None
+                preflight_standard_code is not None
                 or preflight_figure_code is not None
             )
             else resume_controller.quarantined_concept_draft_for_step(step.step_id)
@@ -6481,7 +6465,7 @@ def run_execute_phase(
         resume_critic_repair_code = (
             None
             if (
-                preflight_trajectory_stability_code is not None
+                preflight_standard_code is not None
                 or preflight_figure_code is not None
                 or quarantined_resume_draft is not None
             )
@@ -6490,7 +6474,7 @@ def run_execute_phase(
         resume_deterministic_repair_code = (
             None
             if (
-                preflight_trajectory_stability_code is not None
+                preflight_standard_code is not None
                 or preflight_figure_code is not None
                 or quarantined_resume_draft is not None
                 or resume_critic_repair_code is not None
@@ -6500,7 +6484,7 @@ def run_execute_phase(
         preflight_resumed_code = None
         failed_contract_code_preflight_reuse = False
         if (
-            preflight_trajectory_stability_code is None
+            preflight_standard_code is None
             and preflight_figure_code is None
             and quarantined_resume_draft is None
             and resume_deterministic_repair_code is None
@@ -6519,8 +6503,8 @@ def run_execute_phase(
             )
             if reuse_selected_step_code_opt_in or failed_contract_code_preflight_reuse:
                 preflight_resumed_code = resumed_code_candidate
-        if preflight_trajectory_stability_code is not None:
-            code = preflight_trajectory_stability_code
+        if preflight_standard_code is not None:
+            code = preflight_standard_code
             with shared_lock:
                 findings.append(
                     ValidationFinding(
@@ -6528,10 +6512,13 @@ def run_execute_phase(
                         severity="info",
                         message=(
                             "Using the deterministic calculator for the complete "
-                            "planner-owned trajectory stability specification in "
+                            "Planner-owned standard-executor specification in "
                             f"step {step.step_id}."
                         ),
-                        detail={"step_id": step.step_id},
+                        detail={
+                            "step_id": step.step_id,
+                            "analysis_kind": standard_executor.analysis_kind,
+                        },
                     )
                 )
         elif preflight_figure_code is not None:
