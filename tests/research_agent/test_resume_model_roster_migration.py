@@ -19,7 +19,9 @@ from easyicu.research_agent.pipeline import (
     _load_compatible_resume_plan,
     _migrate_legacy_resume_model_requirements,
 )
-from easyicu.research_agent.authority.runtime_artifacts import verified_run_evidence_path
+from easyicu.research_agent.authority.runtime_artifacts import (
+    verified_run_evidence_path,
+)
 from easyicu.research_agent.schema import (
     AnalysisPlan,
     AnalysisStep,
@@ -124,6 +126,90 @@ def _successful_step_record(plan: AnalysisPlan, step_id: str) -> dict:
             _serializable_plan_scientific_scope_signature(plan)
         ),
     }
+
+
+def _legacy_host_cohort_record(plan: AnalysisPlan) -> dict:
+    step = plan.steps[0]
+    return {
+        "step_id": step.step_id,
+        "status": "ok",
+        "planned_analysis_role": step.planned_analysis_role,
+        "analysis_request": {"step": step.model_dump(mode="json")},
+        "generation_mode": "deterministic_cohort_materializer",
+        "step_authority_kind": "host_deterministic_cohort_materializer",
+    }
+
+
+def test_resume_accepts_one_unambiguous_legacy_host_cohort_plan(
+    tmp_path: Path,
+) -> None:
+    plan = AnalysisPlan(
+        research_question="Define the analysis cohort.",
+        steps=[
+            AnalysisStep(
+                step_id="01_cohort",
+                intent="Define the locked analysis cohort.",
+                expected_outputs=[
+                    "artifact:analysis_cohort",
+                    "table:cohort_flow",
+                ],
+            )
+        ],
+    )
+    _evidence_with_base_plan(tmp_path, plan)
+
+    loaded, path = _load_compatible_resume_plan(
+        run_dir=tmp_path,
+        resume_state={
+            "per_step_records": [_legacy_host_cohort_record(plan)],
+        },
+    )
+
+    assert loaded == plan
+    assert path is not None
+    assert path.name == "analysis_plan__analysis_plan.json"
+
+
+def test_resume_rejects_legacy_host_cohort_without_scope_when_plans_are_ambiguous(
+    tmp_path: Path,
+) -> None:
+    plan = AnalysisPlan(
+        research_question="Define the analysis cohort.",
+        steps=[
+            AnalysisStep(
+                step_id="01_cohort",
+                intent="Define the locked analysis cohort.",
+                expected_outputs=[
+                    "artifact:analysis_cohort",
+                    "table:cohort_flow",
+                ],
+            )
+        ],
+    )
+    evidence = _evidence_with_base_plan(tmp_path, plan)
+    revision = plan.model_copy(
+        update={"revision": 2, "rationale": "A different plan-level scope."}
+    )
+    revision_path = tmp_path / "analysis_plan_revision_2.json"
+    revision_path.write_text(revision.model_dump_json(indent=2), encoding="utf-8")
+    evidence.register_file(
+        kind="log",
+        description="Ambiguous later plan.",
+        source_path=revision_path,
+        evidence_id="analysis_plan_revision_2",
+        producer="planner",
+        generation_mode="llm",
+    )
+
+    loaded, path = _load_compatible_resume_plan(
+        run_dir=tmp_path,
+        resume_state={
+            "per_step_records": [_legacy_host_cohort_record(plan)],
+        },
+    )
+
+    assert loaded is None
+    assert path is None
 
 
 def _context(tmp_path: Path, plan: AnalysisPlan):
@@ -243,12 +329,8 @@ def test_resume_migration_uses_planner_packet_and_registers_revision(
     assert revision_evidence is not None
     assert revision_evidence.producer == "planner"
     assert revision_evidence.generation_mode == "llm"
-    assert revision_evidence.metadata["reason"] == (
-        "legacy_missing_model_requirements"
-    )
-    assert revision_evidence.metadata["target_step_ids"] == [
-        "02_remaining_closed"
-    ]
+    assert revision_evidence.metadata["reason"] == ("legacy_missing_model_requirements")
+    assert revision_evidence.metadata["target_step_ids"] == ["02_remaining_closed"]
 
     selected, selected_path = _load_compatible_resume_plan(
         run_dir=tmp_path,
@@ -472,18 +554,16 @@ def test_resume_migration_retries_zero_or_multiple_primary_roles(
                 return json.dumps(payload)
             return _valid_packet_json()
 
-    revised, revision_path, _target_ids = (
-        _migrate_legacy_resume_model_requirements(
-            plan=plan,
-            context=context,
-            run_dir=tmp_path,
-            resume_state={"per_step_records": []},
-            resume_from_step_id=None,
-            role_resolver=lambda _role: InvalidThenValidPrimaryPacketLLM(),
-            evidence=evidence,
-            prompt_version="test-pack",
-            llm_signature="test-planner",
-        )
+    revised, revision_path, _target_ids = _migrate_legacy_resume_model_requirements(
+        plan=plan,
+        context=context,
+        run_dir=tmp_path,
+        resume_state={"per_step_records": []},
+        resume_from_step_id=None,
+        role_resolver=lambda _role: InvalidThenValidPrimaryPacketLLM(),
+        evidence=evidence,
+        prompt_version="test-pack",
+        llm_signature="test-planner",
     )
 
     assert len(calls) == 2
@@ -491,8 +571,7 @@ def test_resume_migration_retries_zero_or_multiple_primary_roles(
     assert "exactly one analysis_role='primary'" in retry_prompt
     assert revision_path is not None
     assert [
-        requirement.analysis_role
-        for requirement in revised.steps[1].model_requirements
+        requirement.analysis_role for requirement in revised.steps[1].model_requirements
     ] == ["primary", "secondary"]
 
 

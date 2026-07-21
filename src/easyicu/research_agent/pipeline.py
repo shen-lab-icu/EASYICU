@@ -140,10 +140,9 @@ from .gates.preplan import preplan_data_failure_reason, preplan_data_findings
 from .authority.context_numeric_claims import register_context_numeric_claims
 from .authority.plan_scope import (
     _serializable_plan_scientific_scope_signature,
-    _step_scientific_signature,
+    completed_step_record_matches_plan,
     verified_plan_evidence_rank,
 )
-from .authority.planned_role import verified_planned_analysis_role
 from .authority import pipeline_cache as _pipeline_cache
 from .planning.analysis_blueprint import (
     build_analysis_blueprint,
@@ -532,10 +531,11 @@ def _load_compatible_resume_plan(
         if record.get("step_id") and record.get("step_id") != "00_probe"
     ]
     completed_step_ids = {str(record.get("step_id")) for record in completed_records}
-    for candidate in _resume_plan_candidate_paths(
+    candidates = _resume_plan_candidate_paths(
         run_dir=run_dir,
         resume_state=resume_state,
-    ):
+    )
+    for candidate in candidates:
         try:
             plan = AnalysisPlan.model_validate(
                 json.loads(candidate.read_text(encoding="utf-8"))
@@ -557,23 +557,12 @@ def _load_compatible_resume_plan(
         expected_plan_scope = _serializable_plan_scientific_scope_signature(plan)
         for record in completed_records:
             step_id = str(record.get("step_id") or "")
-            analysis_request = record.get("analysis_request")
-            raw_step = (
-                analysis_request.get("step")
-                if isinstance(analysis_request, Mapping)
-                else None
-            )
-            try:
-                sealed_step = AnalysisStep.model_validate(raw_step)
-            except (TypeError, ValueError):
-                compatible = False
-                break
-            if (
-                verified_planned_analysis_role(record) is None
-                or _step_scientific_signature(sealed_step)
-                != _step_scientific_signature(step_by_id[step_id])
-                or list(record.get("plan_scientific_signature") or [])
-                != expected_plan_scope
+            if not completed_step_record_matches_plan(
+                record,
+                step=step_by_id[step_id],
+                expected_plan_scope=expected_plan_scope,
+                plan_candidate_count=len(candidates),
+                completed_records=completed_records,
             ):
                 compatible = False
                 break

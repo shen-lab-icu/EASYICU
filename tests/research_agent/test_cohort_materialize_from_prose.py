@@ -103,6 +103,7 @@ def test_plan_phase_materialized_cohort_is_adopted_without_coder(tmp_path: Path)
     assert preexecuted == {"01_cohort"}
     assert len(records) == 1
     assert records[0]["generation_mode"] == "deterministic_cohort_materializer"
+    assert records[0]["plan_scientific_signature"]
     assert records[0]["evidence_ids"] == [
         "analysis_cohort_execute_repair",
         "cohort_flow_execute_repair",
