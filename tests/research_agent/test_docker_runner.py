@@ -607,6 +607,7 @@ def test_run_invokes_subprocess_and_writes_log(
     ), "image inspect, metadata capture, run, and teardown confirmation are required"
     assert captured[0][1:3] == ["image", "inspect"]
     assert "importlib.metadata" in " ".join(captured[1])
+    assert "EasyICU research-agent source mismatch" in " ".join(captured[1])
     immutable_id = "sha256:" + "a" * 64
     assert immutable_id in captured[1]
     assert "img:0" not in captured[1]
@@ -640,6 +641,7 @@ def test_run_invokes_subprocess_and_writes_log(
     )
     assert "numpy==2.0.0" in requirements_text
     assert "# capture_method=importlib.metadata.distributions" in requirements_text
+    assert "# research_agent_source_sha256=" in requirements_text
     assert (
         "# generated_by=easyicu.research_agent.execution.runner.DockerRunner"
         in requirements_text

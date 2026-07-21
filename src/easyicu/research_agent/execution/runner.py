@@ -75,6 +75,21 @@ _RUN_ARTIFACT_AUTHORITY_SNAPSHOT_SHA_ENV = (
 _RUN_ARTIFACT_AUTHORITY_ERROR_ENV = "EASYICU_RUN_ARTIFACT_AUTHORITY_ERROR"
 _ROBUSTNESS_AUTHORITY_ENTRYPOINT = "_run_robustness_preflight_from_env"
 
+
+def _python_source_tree_sha256(root: Path) -> str:
+    """Digest Python sources by relative path and bytes."""
+
+    digest = hashlib.sha256()
+    for path in sorted(Path(root).rglob("*.py")):
+        relative = path.relative_to(root).as_posix().encode("utf-8")
+        digest.update(len(relative).to_bytes(8, "big"))
+        digest.update(relative)
+        payload = path.read_bytes()
+        digest.update(len(payload).to_bytes(8, "big"))
+        digest.update(payload)
+    return digest.hexdigest()
+
+
 # These coordinates are owned by the host runtime.  ``extra_env`` remains a
 # supported extension surface for credentials and auxiliary read-only inputs,
 # but it must never redirect the cohort, outputs, evidence, or replay receipts
@@ -1763,6 +1778,9 @@ class DockerRunner:
                 )
             self._retry_stale_container_cleanup("runtime-provenance")
             image_id, repo_digests = self._inspect_image_identity()
+            host_source_sha256 = _python_source_tree_sha256(
+                Path(__file__).resolve().parents[1]
+            )
 
             attempt_id = uuid.uuid4().hex
             cidfile = self.workdir / (f".docker-runtime-provenance-{attempt_id}.cid")
@@ -1770,7 +1788,25 @@ class DockerRunner:
             container_name = f"easyicu-ra-{attempt_id}"
             self._write_regular_file(sentinel, f"name:{container_name}\n")
             distribution_script = (
+                "import hashlib\n"
+                "from pathlib import Path\n"
+                "import easyicu.research_agent as research_agent\n"
                 "from importlib.metadata import distributions\n"
+                "root = Path(research_agent.__file__).resolve().parent\n"
+                "digest = hashlib.sha256()\n"
+                "for path in sorted(root.rglob('*.py')):\n"
+                "    relative = path.relative_to(root).as_posix().encode('utf-8')\n"
+                "    digest.update(len(relative).to_bytes(8, 'big'))\n"
+                "    digest.update(relative)\n"
+                "    payload = path.read_bytes()\n"
+                "    digest.update(len(payload).to_bytes(8, 'big'))\n"
+                "    digest.update(payload)\n"
+                f"expected = {host_source_sha256!r}\n"
+                "if digest.hexdigest() != expected:\n"
+                "    raise RuntimeError(\n"
+                "        'EasyICU research-agent source mismatch: ' \n"
+                "        f'expected {expected}, observed {digest.hexdigest()}'\n"
+                "    )\n"
                 "rows = {}\n"
                 "for dist in distributions():\n"
                 "    name = str(dist.metadata.get('Name') or '').strip()\n"
@@ -1861,6 +1897,7 @@ class DockerRunner:
                 f"# docker_image_reference={self.image}\n"
                 f"# docker_image_id={image_id}\n"
                 f"# docker_repo_digests={','.join(repo_digests)}\n"
+                f"# research_agent_source_sha256={host_source_sha256}\n"
                 "# capture_method=importlib.metadata.distributions\n"
                 "# generated_by=easyicu.research_agent.execution.runner.DockerRunner\n"
                 f"{requirements}\n"
