@@ -545,7 +545,7 @@ def _load_concept(
             if isinstance(root, ExportPackage):
                 require_canonical_time_projection(root, concept)
             return _coerce_int_stay(read_exported_concept(root, concept))
-        from ..api import load_concepts  # local import: heavy module
+        from ...api import load_concepts  # local import: heavy module
 
         return _coerce_int_stay(
             load_concepts(
