@@ -101,6 +101,8 @@ def test_planner_prompt_lists_exact_table_one_enums_and_rejects_shorthand() -> N
     assert "a binary variable is `categorical`" in prompt
     assert "`chi_square_with_fisher_exact_for_sparse_2x2`" in prompt
     assert "Do not emit shorthand aliases" in prompt
+    assert "primary scientific comparison" in prompt
+    assert "Auxiliary measurement/source-status flags" in prompt
 
 
 def test_know_how_prompt_lists_exact_claim_decision_coordinates() -> None:

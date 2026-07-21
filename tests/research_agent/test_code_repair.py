@@ -878,6 +878,66 @@ step_summary = {
     assert deterministic_contract_repair(code=patched, findings=findings) is None
 
 
+def test_contract_repair_replaces_unplanned_split_provenance_checks_with_host_receipt():
+    code = """import pandas as pd
+
+def main(path):
+    frame = pd.read_parquet(path)
+    step_summary = {
+        "measurement_provenance_audit": {
+            "source": "COHORT_PARQUET",
+            "checks": [
+                {"measurement_column": "signal", "count_column": "signal_n"},
+                {"measurement_column": "signal", "status_column": "signal_measured"},
+            ],
+        },
+    }
+    return step_summary
+"""
+    findings = [
+        {
+            "validator": "step_summary_integrity",
+            "severity": "error",
+            "detail": {
+                "issue": "measurement_provenance_check_unplanned",
+                "summary_path": f"measurement_provenance_audit.checks.{index}",
+                "planned_measured_columns": ["signal_measured"],
+            },
+        }
+        for index in range(2)
+    ]
+    findings.append(
+        {
+            "validator": "step_summary_integrity",
+            "severity": "error",
+            "detail": {
+                "issue": "measurement_provenance_check_missing",
+                "measured_column": "signal_measured",
+                "expected_count_column": "signal_n",
+            },
+        }
+    )
+
+    repaired = deterministic_contract_repair(code=code, findings=findings)
+
+    assert repaired is not None
+    repair_id, patched = repaired
+    assert repair_id == "measurement_provenance_summary_mapping_v2"
+    assert "measurement_column" not in patched
+    assert "status_column" not in patched
+    assert patched.count("measurement_provenance_receipt(") == 1
+    assert "measured_column='signal_measured'" in patched
+    assert "count_column='signal_n'" in patched
+    assert (
+        deterministic_contract_repair(
+            code=patched,
+            findings=findings,
+            previous_repair=repair_id,
+        )
+        is None
+    )
+
+
 def test_contract_repair_refuses_dynamic_or_incomplete_measurement_receipt_coordinates():
     code = """def measurement_receipt(frame, measured_col, count_col, value_col):
     return {
