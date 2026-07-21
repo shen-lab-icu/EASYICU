@@ -661,7 +661,6 @@ TABLE-ONE / DESCRIPTIVE SUMMARIES:
 - A descriptive step expected to write `table:table_one` must save
   `table_one.csv` and `step_summary.json` even if some requested
   columns are missing; record missing variables under `"skipped"`.
-
 CLINICAL SCORE AND MISSINGNESS SEMANTICS:
 - AUTHORITATIVE-VALUE DENOMINATOR INVARIANT (check before writing any
   scientific output): once the Planner/typed contract declares a physiological

@@ -136,6 +136,11 @@ _COMPACT_SERIALIZATION_GUIDANCE = """OUTPUT SERIALIZATION CONTRACT:
 - Every CSV cell must be one scalar. Emit separate columns for median, quartiles, counts, and percentages; emit one row per categorical level.
 - Never assign the result of an inplace pandas operation, and prefer stable `.agg`/`.transform` over mixed-shape `groupby.apply`."""
 
+_TABLE_ONE_SDK_GUIDANCE = """GROUPED TABLE 1 CONTRACT:
+- `table_one_spec` is the sole authority for grouping, closed levels, summaries, and tests.
+- Call `easyicu.research_agent.methods.table_one.build_grouped_table_one(frame, table_one_spec)` and save its returned long-form source table unchanged as `table_one.csv`.
+- Do not hand-roll another test, coerce values, or replace the grouped table with an overall-only description."""
+
 _COMPACT_ADJUSTED_CLINICAL_GUIDANCE = """ADJUSTED-MODEL CLINICAL INPUT CONTRACT:
 - Treat declared measured/count/status companions as audit-only provenance; never use them to redefine the authoritative value, denominator, cohort, exposure, or outcome.
 - For every declared measured/count pair, call the host `measurement_provenance_receipt` with the locked cohort and exact keyword column names, let any validation error propagate, and publish the unchanged receipts as `measurement_provenance_audit={"source":"COHORT_PARQUET","checks":[...]}`.
@@ -522,6 +527,8 @@ def coder_guide_for_step(
         parts.append(_COMPACT_MECHANICAL_GUIDANCE)
     if "serialization" not in _exclude_sections:
         parts.append(_COMPACT_SERIALIZATION_GUIDANCE)
+    if step.table_one_spec is not None:
+        parts.append(_TABLE_ONE_SDK_GUIDANCE)
     if compact_adjusted_clinical:
         parts.append(_COMPACT_ADJUSTED_CLINICAL_GUIDANCE)
     return "\n\n".join(parts).strip()

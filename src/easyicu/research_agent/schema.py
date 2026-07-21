@@ -18,6 +18,7 @@ they are a stable v1 the rest of the module can lean on.
 
 from __future__ import annotations
 
+import math
 import re
 from datetime import datetime, timezone
 from enum import Enum
@@ -49,6 +50,28 @@ ArtifactConsumptionMode = Literal[
     "single_row",
     "one_per_role",
 ]
+
+TableOneVariableKind = Literal["continuous", "categorical", "ordinal"]
+TableOneSummary = Literal["mean_sd", "median_iqr", "both", "count_percent"]
+TableOneTest = Literal[
+    "welch_t_or_anova",
+    "mann_whitney_or_kruskal",
+    "chi_square_with_fisher_exact_for_sparse_2x2",
+]
+
+
+def _closed_table_one_levels(values: List[Any], *, label: str) -> List[Any]:
+    tokens: list[tuple[str, str]] = []
+    for value in values:
+        if not isinstance(value, (str, bool, int, float)):
+            raise ValueError(f"{label} must contain only JSON scalar values")
+        if isinstance(value, float) and not math.isfinite(value):
+            raise ValueError(f"{label} must contain only finite values")
+        tokens.append((type(value).__name__, repr(value)))
+    if len(tokens) != len(set(tokens)):
+        raise ValueError(f"{label} must contain unique typed values")
+    return list(values)
+
 
 _PRIMARY_RESULT_KIND_ALIASES = {
     "cohort": "dataset",
@@ -737,6 +760,102 @@ class ArtifactConsumptionContract(BaseModel):
         return self
 
 
+class TableOneVariableSpec(BaseModel):
+    """Planner-owned summary and comparison rule for one Table 1 variable."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str
+    variable_kind: TableOneVariableKind
+    summary: TableOneSummary
+    test: TableOneTest
+    levels: List[Any] = Field(default_factory=list)
+
+    @field_validator("levels")
+    @classmethod
+    def _closed_levels(cls, values: List[Any]) -> List[Any]:
+        return _closed_table_one_levels(values, label="Table 1 variable levels")
+
+    @model_validator(mode="after")
+    def _compatible_summary_and_test(self) -> "TableOneVariableSpec":
+        self.name = str(self.name or "").strip()
+        if not self.name:
+            raise ValueError("Table 1 variable name must be non-empty")
+        numeric_summary = self.summary in {"mean_sd", "median_iqr", "both"}
+        numeric_test = self.test in {
+            "welch_t_or_anova",
+            "mann_whitney_or_kruskal",
+        }
+        if self.variable_kind == "continuous":
+            if not numeric_summary or not numeric_test or self.levels:
+                raise ValueError(
+                    "continuous Table 1 variables require a numeric summary/test "
+                    "and must not declare categorical levels"
+                )
+        elif self.summary == "count_percent":
+            if self.test != "chi_square_with_fisher_exact_for_sparse_2x2":
+                raise ValueError(
+                    "count/percent Table 1 variables require the categorical test"
+                )
+            if len(self.levels) < 2:
+                raise ValueError(
+                    "categorical/ordinal count summaries require at least two "
+                    "Planner-declared closed levels"
+                )
+        else:
+            if (
+                self.variable_kind != "ordinal"
+                or not numeric_summary
+                or not numeric_test
+            ):
+                raise ValueError(
+                    "only ordinal variables may use a numeric Table 1 summary/test "
+                    "outside the continuous variable kind"
+                )
+            if self.levels:
+                raise ValueError(
+                    "numeric ordinal Table 1 summaries must not declare category levels"
+                )
+        return self
+
+
+class TableOneSpec(BaseModel):
+    """Planner-owned grouped baseline-table design.
+
+    The host executes this declaration but never selects the grouping variable,
+    variable roles, summary family, or inferential test.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal["easyicu.table_one/1"] = "easyicu.table_one/1"
+    group_by: str
+    group_levels: List[Any] = Field(min_length=2)
+    variables: List[TableOneVariableSpec] = Field(min_length=1)
+    include_overall: Literal[True] = True
+    missing_group_policy: Literal["fail_closed"] = "fail_closed"
+    missingness_display: Literal["n_percent_by_group"] = "n_percent_by_group"
+    p_values_required: Literal[True] = True
+    p_value_adjustment: Literal["none_descriptive_table"] = "none_descriptive_table"
+
+    @field_validator("group_levels")
+    @classmethod
+    def _closed_group_levels(cls, values: List[Any]) -> List[Any]:
+        return _closed_table_one_levels(values, label="Table 1 group_levels")
+
+    @model_validator(mode="after")
+    def _closed_design(self) -> "TableOneSpec":
+        self.group_by = str(self.group_by or "").strip()
+        if not self.group_by:
+            raise ValueError("Table 1 group_by must be non-empty")
+        names = [item.name for item in self.variables]
+        if len(names) != len(set(names)):
+            raise ValueError("Table 1 variable names must be unique")
+        if self.group_by in names:
+            raise ValueError("Table 1 group_by must not also be a row variable")
+        return self
+
+
 class AnalysisStep(BaseModel):
     """One step in a planner-emitted analysis plan."""
 
@@ -782,6 +901,14 @@ class AnalysisStep(BaseModel):
             "source to one row."
         ),
     )
+    table_one_spec: Optional[TableOneSpec] = Field(
+        default=None,
+        description=(
+            "Planner-owned grouping, variable summaries, and tests for an exact "
+            "table:table_one output. Overall-only descriptive summaries must use "
+            "a different product name instead of masquerading as Table 1."
+        ),
+    )
     trajectory_stability_spec: Optional[TrajectoryStabilitySpec] = Field(
         default=None,
         description=(
@@ -793,6 +920,21 @@ class AnalysisStep(BaseModel):
 
     @model_validator(mode="after")
     def _model_requirement_ids_are_unique(self) -> "AnalysisStep":
+        if self.table_one_spec is not None:
+            if "table:table_one" not in self.expected_outputs:
+                raise ValueError(
+                    "table_one_spec requires expected output 'table:table_one'"
+                )
+            required_inputs = {
+                self.table_one_spec.group_by,
+                *(item.name for item in self.table_one_spec.variables),
+            }
+            missing_inputs = sorted(required_inputs - set(self.inputs))
+            if missing_inputs:
+                raise ValueError(
+                    "table_one_spec variables must be explicit step inputs; "
+                    f"missing {missing_inputs!r}"
+                )
         consumption_keys = [
             contract.input_key for contract in self.input_consumption_contracts
         ]
