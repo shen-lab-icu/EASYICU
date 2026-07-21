@@ -6547,6 +6547,8 @@ def run_execute_phase(
                         detail={"step_id": step.step_id},
                     )
                 )
+        elif resume_deterministic_repair_code is not None:
+            code = resume_deterministic_repair_code
         elif step_attempt_state.selected_resume_capsule is not None:
             code = step_attempt_state.selected_resume_capsule.candidate_code
             worker_progress.resumed_code_reuse_used = True
@@ -6559,8 +6561,6 @@ def run_execute_phase(
             code = _use_quarantined_draft(quarantined_resume_draft)
         elif resume_critic_repair_code is not None:
             code = resume_critic_repair_code
-        elif resume_deterministic_repair_code is not None:
-            code = resume_deterministic_repair_code
         elif preflight_resumed_code is not None:
             if failed_contract_code_preflight_reuse:
                 step_record["resumed_failed_contract_code_preflight"] = True

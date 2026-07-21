@@ -807,6 +807,24 @@ def test_sealed_figure_preflight_supersedes_stale_resume_capsule_candidate():
     )
 
 
+def test_authorized_resume_repair_supersedes_failed_candidate_capsule():
+    from easyicu.research_agent.execution import phase as pipeline_execute
+
+    source = inspect.getsource(pipeline_execute.run_execute_phase)
+    selection_start = source.index(
+        "if preflight_trajectory_stability_code is not None:"
+    )
+    repair_branch = source.index(
+        "elif resume_deterministic_repair_code is not None:", selection_start
+    )
+    capsule_branch = source.index(
+        "elif step_attempt_state.selected_resume_capsule is not None:",
+        selection_start,
+    )
+
+    assert repair_branch < capsule_branch
+
+
 @pytest.mark.parametrize(
     ("step_id", "intent"),
     [
