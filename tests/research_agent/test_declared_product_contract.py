@@ -434,6 +434,77 @@ def test_primary_exposure_binding_contract_canonicalizes_one_declared_column(
     assert contract["time_window"] == "baseline"
 
 
+def test_exposure_definition_contract_joins_summary_artifact_and_cohort(tmp_path):
+    cohort = tmp_path / "cohort.csv"
+    cohort.write_text("stay_id,treatment\n1,0\n2,1\n", encoding="utf-8")
+    artifact = tmp_path / "exposure_definition.json"
+    artifact.write_text(
+        json.dumps(
+            {
+                "authoritative_exposure": "treatment",
+                "derived_exposure": "treatment_any",
+                "rule": "Use the sealed treatment indicator without recoding.",
+                "locked_cohort_n": 2,
+                "usable_variation": True,
+                "weighted_association_feasibility": "eligible",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    contract = typed_product_binding_contract(
+        product_name="exposure_definition",
+        step_summary={
+            "authoritative_exposure": "treatment",
+            "derived_exposure": "treatment_any",
+            "derived_exposure_rule": (
+                "Use the sealed treatment indicator without recoding."
+            ),
+            "locked_cohort_n": 2,
+        },
+        artifact_path=artifact,
+        authoritative_cohort_path=cohort,
+    )
+
+    assert contract is not None
+    assert contract["executable_column"] == "treatment"
+    assert contract["exposure_column"] == "treatment"
+    assert contract["derived_exposure"] == "treatment_any"
+    assert contract["usable_variation"] is True
+
+
+def test_exposure_definition_contract_refuses_cross_surface_drift(tmp_path):
+    cohort = tmp_path / "cohort.csv"
+    cohort.write_text("stay_id,treatment\n1,0\n", encoding="utf-8")
+    artifact = tmp_path / "exposure_definition.json"
+    artifact.write_text(
+        json.dumps(
+            {
+                "authoritative_exposure": "different_treatment",
+                "derived_exposure": "treatment_any",
+                "rule": "sealed rule",
+                "locked_cohort_n": 1,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert (
+        typed_product_binding_contract(
+            product_name="exposure_definition",
+            step_summary={
+                "authoritative_exposure": "treatment",
+                "derived_exposure": "treatment_any",
+                "derived_exposure_rule": "sealed rule",
+                "locked_cohort_n": 1,
+            },
+            artifact_path=artifact,
+            authoritative_cohort_path=cohort,
+        )
+        is None
+    )
+
+
 def test_primary_exposure_binding_contract_does_not_resolve_conflicting_columns(
     tmp_path,
 ):

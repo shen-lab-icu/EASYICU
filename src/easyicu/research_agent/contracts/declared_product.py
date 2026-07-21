@@ -314,6 +314,63 @@ def typed_product_binding_contract(
     """
 
     normalized_product = _normalise(product_name)
+    if normalized_product == "exposure_definition":
+        authoritative_exposure = str(
+            step_summary.get("authoritative_exposure") or ""
+        ).strip()
+        derived_exposure = str(step_summary.get("derived_exposure") or "").strip()
+        derived_rule = str(step_summary.get("derived_exposure_rule") or "").strip()
+        locked_cohort_n = step_summary.get("locked_cohort_n")
+        if not (
+            authoritative_exposure
+            and authoritative_exposure.isidentifier()
+            and derived_exposure
+            and derived_exposure.isidentifier()
+            and derived_rule
+            and isinstance(locked_cohort_n, int)
+            and not isinstance(locked_cohort_n, bool)
+            and locked_cohort_n >= 0
+            and artifact_path.suffix.lower() == ".json"
+            and authoritative_cohort_path is not None
+        ):
+            return None
+        try:
+            artifact_payload = json.loads(artifact_path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+            return None
+        if not isinstance(artifact_payload, Mapping):
+            return None
+        if (
+            str(artifact_payload.get("authoritative_exposure") or "").strip()
+            != authoritative_exposure
+            or str(artifact_payload.get("derived_exposure") or "").strip()
+            != derived_exposure
+            or str(artifact_payload.get("rule") or "").strip() != derived_rule
+            or artifact_payload.get("locked_cohort_n") != locked_cohort_n
+        ):
+            return None
+        cohort_columns = set(_tabular_artifact_columns(authoritative_cohort_path))
+        if authoritative_exposure not in cohort_columns:
+            return None
+        contract = {
+            "artifact_type": "exposure_definition",
+            "executable_column": authoritative_exposure,
+            "exposure_column": authoritative_exposure,
+            "authoritative_primary_exposure": authoritative_exposure,
+            "derived_exposure": derived_exposure,
+            "rule": derived_rule,
+            "locked_cohort_n": locked_cohort_n,
+        }
+        for key in (
+            "window",
+            "aggregation_rule",
+            "usable_variation",
+            "weighted_association_feasibility",
+            "failure_reason",
+        ):
+            if artifact_payload.get(key) is not None:
+                contract[key] = artifact_payload[key]
+        return contract
     exact_contract = step_summary.get(product_name)
     if isinstance(exact_contract, Mapping):
         contract = dict(exact_contract)
