@@ -73,6 +73,7 @@ from .helpers import (  # noqa: F401  (re-exported for back-compat)
     _statsmodels_repair_allowed_for_family,
     _strip_columns_from_list_literals,
 )
+from .import_repair import host_module_is_available, insert_after_imports
 from .reasons import RepairReason
 from .typed_input import (
     patch_resolved_input_cohort_env_shadow,
@@ -5149,6 +5150,8 @@ def _deterministic_runner_repair(
     )
     if _fake_easyicu_match:
         bad_module = _fake_easyicu_match.group(1)
+        if host_module_is_available(bad_module):
+            return None
         repair_name = f"strip_fake_easyicu_import_{bad_module.replace('.', '_')}_v1"
         if previous_repair != repair_name:
             stripped_names: list[str] = []
@@ -5187,19 +5190,11 @@ def _deterministic_runner_repair(
                     f'reimplement inline using numpy/scipy/statsmodels.")'
                     for n in dict.fromkeys(stripped_names)
                 )
-                # Insert after the first contiguous block of imports
-                lines = repaired.splitlines()
-                insert_at = 0
-                for i, ln in enumerate(lines[:80]):
-                    if ln.startswith(("import ", "from ", "#")) or not ln.strip():
-                        insert_at = i + 1
-                    else:
-                        break
-                lines.insert(
-                    insert_at,
-                    "\n# auto-stubs for stripped fake imports\n" + _stub_lines + "\n",
+                repaired = insert_after_imports(
+                    repaired,
+                    "# auto-stubs for stripped fake imports\n" + _stub_lines,
                 )
-                return repair_name, "\n".join(lines)
+                return repair_name, repaired
 
     pandas_cut_observed_keyword = (
         "got an unexpected keyword argument 'observed'" in lowered
