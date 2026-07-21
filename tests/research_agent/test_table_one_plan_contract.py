@@ -95,6 +95,24 @@ def test_fresh_planner_table_one_preserves_typed_design() -> None:
     assert plan.steps[0].table_one_spec.variables[0].test == ("mann_whitney_or_kruskal")
 
 
+def test_planner_prompt_lists_exact_table_one_enums_and_rejects_shorthand() -> None:
+    prompt = PlannerAgent.request_messages(_context())[1].content
+
+    assert "a binary variable is `categorical`" in prompt
+    assert "`chi_square_with_fisher_exact_for_sparse_2x2`" in prompt
+    assert "Do not emit shorthand aliases" in prompt
+
+
+def test_know_how_prompt_lists_exact_claim_decision_coordinates() -> None:
+    prompt = PlannerAgent.request_messages(_context(), know_how_context='{"cards":[]}')[
+        1
+    ].content
+
+    assert "KNOW-HOW DECISION OUTPUT CONTRACT" in prompt
+    assert "`card_sha256`" in prompt
+    assert "Do not use a `decision` key" in prompt
+
+
 def test_fresh_planner_preserves_observed_numeric_level_types() -> None:
     payload = json.loads(_raw(include_spec=True))
     step = payload["steps"][0]

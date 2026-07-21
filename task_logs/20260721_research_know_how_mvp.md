@@ -65,12 +65,20 @@ no new extraction, and no tool/software capability retrieval.
   prompt/call/token/wall evidence, and a fail-closed review-status gate.
 - Prepare-only acceptance uses the immutable 94,458-stay E2 parent context
   (`context_sha256=a8199c621f5ce7f3ddb426a78514ecdbab5fc6ea130b89dcb3b7a35fb816262c`).
-  OFF is 65,003 bytes and ON is 68,982 bytes (+3,979); ON selects only
+  After the exact enum/claim-output contract was added, OFF is 65,423 bytes
+  and ON is 69,932 bytes (+4,509); ON selects only
   `early_peak_lactate_association`.
 - The evidence review packet
   `docs/reviews/early_peak_lactate_association_20260721.json` binds the exact
   reviewable content SHA and remains `authorization=false` pending real dual
   signoff.
+- A bounded live pre-A/B probe returned HTTP 200 but exposed an output-contract
+  ambiguity before any scientific comparison: OFF used intuitive Table 1
+  aliases (`binary`, `mann_whitney_u`, `chi_square`), and ON also emitted
+  incomplete claim-decision coordinates. The probe was stopped rather than
+  spending the production five-retry budget. The case-neutral Planner prompt
+  now lists the exact Table 1 enums and exact claim-decision object; focused
+  tests lock both. This probe is diagnostic and is not counted as K6 acceptance.
 
 ## Safety boundary
 
