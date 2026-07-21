@@ -708,6 +708,31 @@ count = int(
     )
 
 
+def test_scalar_cast_repair_routes_from_structured_reason_not_prose(ra):
+    code = """
+import pandas as pd
+
+left = pd.Series([True, False, True])
+right = pd.Series([True, True, False])
+count = int(left & right).sum()
+"""
+    finding = next(
+        finding
+        for finding in audit_mechanical_code_contracts(code, _figure_step(ra))
+        if (finding.detail or {}).get("reason") == "scalar_cast_before_reduction"
+    )
+    assert "scalar_cast_before_reduction" not in finding.message
+
+    repaired, repair_names = deterministic_concept_audit_repair(
+        code,
+        [finding.message],
+        repair_findings=[finding],
+    )
+
+    assert repair_names == ["scalar_cast_before_reduction_v1"]
+    assert "int((left & right).sum())" in repaired
+
+
 def test_mechanical_preflight_repairs_unreduced_boolean_mask_count(ra):
     code = """
 import pandas as pd

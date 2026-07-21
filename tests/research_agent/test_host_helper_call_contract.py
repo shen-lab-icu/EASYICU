@@ -141,6 +141,73 @@ receipt = measurement_provenance_receipt(frame, measured_name, count_name)
     assert _signature_findings(repaired, ra) == []
 
 
+def test_deterministic_repair_removes_exact_legacy_helper_adapter(ra):
+    script = """
+import inspect
+from easyicu.research_agent.methods.descriptive_inputs import (
+    closed_categorical_counts,
+    measurement_provenance_receipt,
+)
+
+def call_helper_adaptively(helper, *args, **kwargs):
+    signature = inspect.signature(helper)
+    return helper(*args, **kwargs)
+
+def audit(df, measured_column, count_column, value_column, levels):
+    try:
+        measurement_provenance_receipt(
+            df[measured_column],
+            df[count_column],
+            variable_name=value_column,
+        )
+    except TypeError:
+        call_helper_adaptively(
+            measurement_provenance_receipt,
+            df[measured_column],
+            value_column,
+            count_series=df[count_column],
+        )
+    first = call_helper_adaptively(
+        closed_categorical_counts,
+        df[value_column],
+        value_column,
+        levels=levels,
+    )
+    second = call_helper_adaptively(
+        closed_categorical_counts,
+        df[count_column],
+        count_column,
+        levels=levels,
+    )
+    return first, second
+"""
+    findings = _signature_findings(script, ra)
+
+    repaired, names = deterministic_concept_audit_repair(
+        script,
+        [finding.message for finding in findings],
+        repair_reasons=[repair_reason_for_finding(finding) for finding in findings],
+        repair_findings=findings,
+    )
+
+    assert names == ["host_helper_keyword_only_call_v1"]
+    assert "call_helper_adaptively" not in repaired
+    assert "import inspect" not in repaired
+    assert (
+        "measurement_provenance_receipt(df, "
+        "measured_column=measured_column, count_column=count_column)"
+    ) in repaired
+    assert (
+        "closed_categorical_counts(df[value_column], declared_levels=levels)"
+        in repaired
+    )
+    assert (
+        "closed_categorical_counts(df[count_column], declared_levels=levels)"
+        in repaired
+    )
+    assert _signature_findings(repaired, ra) == []
+
+
 def test_deterministic_repair_refuses_ambiguous_same_line_calls(ra):
     script = """
 from easyicu.research_agent.methods.descriptive_inputs import measurement_provenance_receipt
