@@ -8,6 +8,8 @@ exposure, outcome, cohort, method, or estimand.
 
 from __future__ import annotations
 
+import hashlib
+import json
 import re
 from typing import Iterable, Optional
 
@@ -37,6 +39,31 @@ _COMPANION_SUFFIXES = (
     "_mean",
     "_n",
 )
+
+_PLANNER_TOPIC_STOPWORDS = frozenset(
+    {
+        "against",
+        "among",
+        "analysis",
+        "characterise",
+        "cohort",
+        "data",
+        "derive",
+        "first",
+        "hours",
+        "icu",
+        "patients",
+        "report",
+        "select",
+        "stage",
+        "study",
+        "table",
+        "using",
+        "with",
+    }
+)
+
+_PLANNER_FULL_DETAIL_TARGET = 36
 
 _FIGURE_METHODS = frozenset(
     {
@@ -644,6 +671,228 @@ def _is_automatically_required_source_companion(variable: object) -> bool:
     )
 
 
+def _planner_tokens(value: object) -> set[str]:
+    return {
+        token
+        for token in re.findall(r"[a-z0-9]+", str(value or "").lower())
+        if len(token) >= 3 and token not in _PLANNER_TOPIC_STOPWORDS
+    }
+
+
+def _planner_exact_name_is_mentioned(name: str, question: str) -> bool:
+    phrase = re.sub(r"[_\W]+", " ", str(name or "").lower()).strip()
+    normalized_question = re.sub(r"[_\W]+", " ", question.lower())
+    return bool(phrase and re.search(rf"\b{re.escape(phrase)}\b", normalized_question))
+
+
+def _planner_preferred_topic_representation(name: str) -> bool:
+    lowered = str(name or "").strip().lower()
+    if re.search(
+        r"(?:_n|_measured|_status|_valid)(?:_\d+(?:h|d))?$",
+        lowered,
+    ):
+        return False
+    if re.search(r"_(?:min|mean|first|first_time|last_time)$", lowered):
+        return False
+    return True
+
+
+def _planner_variable_catalog_line(variable: object) -> str:
+    fields = [
+        str(getattr(variable, "name", "")),
+        f"role={getattr(getattr(variable, 'role', None), 'value', 'other')}",
+        f"dtype={getattr(variable, 'dtype', 'unknown')}",
+    ]
+    source = str(getattr(variable, "source_concept", "") or "").strip()
+    if source:
+        fields.append(f"source={source}")
+    window = str(getattr(variable, "analysis_window", "") or "").strip()
+    if window:
+        fields.append(f"window={window}")
+    if bool(getattr(variable, "is_ordinal", False)):
+        fields.append("ordinal=true")
+    valid_range = getattr(variable, "valid_range", None)
+    if valid_range:
+        fields.append(f"plausibility_range={valid_range}(flag_only)")
+    missingness = getattr(variable, "missingness", None)
+    if missingness is not None:
+        fields.append(f"missing={missingness.fraction_missing:.3f}")
+    domain = getattr(variable, "observed_domain", None) or {}
+    if domain.get("is_constant"):
+        fields.append("observed=constant")
+    elif domain.get("is_binary"):
+        fields.append("observed=binary")
+    elif domain.get("levels"):
+        levels = ",".join(str(value) for value in domain["levels"][:6])
+        fields.append(f"levels={levels}")
+    elif domain.get("min") is not None and domain.get("max") is not None:
+        fields.append(f"observed={domain['min']:g}:{domain['max']:g}")
+    caveats = tuple(getattr(variable, "clinical_caveats", ()) or ()) or tuple(
+        getattr(variable, "pitfalls", ()) or ()
+    )
+    if caveats:
+        compact_caveat = " ".join(str(caveats[0]).split())
+        fields.append(f"caveat={compact_caveat[:160]}")
+    return "- " + " | ".join(fields)
+
+
+def scoped_planner_context(
+    context: ResearchContext,
+    *,
+    max_detailed_variables: int = _PLANNER_FULL_DETAIL_TARGET,
+) -> ResearchContext:
+    """Project wide context to the variables needing full Planner metadata.
+
+    This is transport scheduling, not scientific selection. Every omitted
+    variable remains discoverable in :func:`planner_variable_catalog`, and the
+    original context remains the authority used to validate the returned plan.
+    """
+
+    by_name = {variable.name.lower(): variable for variable in context.variables}
+    direct_names = {
+        str(value or "").strip().lower()
+        for value in (
+            context.target_outcome,
+            context.primary_exposure,
+            *context.cohort.id_columns,
+            *context.cohort.time_columns,
+            *context.cohort.outcome_columns,
+        )
+        if str(value or "").strip()
+    }
+    if context.user_preferences is not None:
+        direct_names.update(
+            str(value or "").strip().lower()
+            for value in context.user_preferences.covariates
+            if str(value or "").strip()
+        )
+    question = context.research_question
+    direct_names.update(
+        variable.name.lower()
+        for variable in context.variables
+        if _planner_exact_name_is_mentioned(variable.name, question)
+    )
+    direct_names.update(
+        variable.name.lower()
+        for variable in context.variables
+        if getattr(variable.role, "value", "") in {"id", "demographic", "outcome"}
+    )
+
+    selected_names = {name for name in direct_names if name in by_name}
+    selected_families = {_variable_family(name) for name in selected_names}
+    selected_sources = {
+        str(by_name[name].source_concept or "").strip().lower()
+        for name in selected_names
+        if by_name[name].source_concept
+    }
+    selected_names.update(
+        variable.name.lower()
+        for variable in context.variables
+        if _is_automatically_required_source_companion(variable)
+        and (
+            _variable_family(variable.name) in selected_families
+            or str(variable.source_concept or "").strip().lower() in selected_sources
+        )
+    )
+
+    topic_tokens = _planner_tokens(question)
+    topic_candidates = []
+    for index, variable in enumerate(context.variables):
+        name = variable.name.lower()
+        if name in selected_names or not _planner_preferred_topic_representation(name):
+            continue
+        variable_tokens = _planner_tokens(
+            " ".join(
+                (
+                    variable.name,
+                    str(variable.source_concept or ""),
+                    str(variable.description or ""),
+                )
+            )
+        )
+        overlap = topic_tokens & variable_tokens
+        if overlap:
+            topic_candidates.append((-len(overlap), index, variable))
+
+    target = max(1, int(max_detailed_variables))
+    for _score, _index, variable in sorted(topic_candidates):
+        if len(selected_names) >= target:
+            break
+        selected_names.add(variable.name.lower())
+        family = _variable_family(variable.name)
+        source = str(variable.source_concept or "").strip().lower()
+        for companion in context.variables:
+            if not _is_automatically_required_source_companion(companion):
+                continue
+            if _variable_family(companion.name) == family or (
+                source and str(companion.source_concept or "").strip().lower() == source
+            ):
+                selected_names.add(companion.name.lower())
+
+    selected = [
+        variable
+        for variable in context.variables
+        if variable.name.lower() in selected_names
+    ]
+    projected_sources = {
+        str(variable.source_concept or "").strip().lower()
+        for variable in selected
+        if variable.source_concept
+    }
+    return project_research_context_variables(
+        context,
+        selected,
+        additional_concept_ids=tuple(sorted(projected_sources)),
+        include_source_concept_siblings=False,
+    )
+
+
+def planner_variable_catalog(
+    full_context: ResearchContext,
+    scoped_context: ResearchContext,
+) -> str:
+    """Render the omitted-variable discovery roster and projection receipt."""
+
+    selected = {variable.name.lower() for variable in scoped_context.variables}
+    omitted = [
+        variable
+        for variable in full_context.variables
+        if variable.name.lower() not in selected
+    ]
+    full_roster = [
+        {
+            "name": variable.name,
+            "role": variable.role.value,
+            "dtype": variable.dtype,
+            "source_concept": variable.source_concept,
+            "analysis_window": variable.analysis_window,
+        }
+        for variable in full_context.variables
+    ]
+    roster_sha = hashlib.sha256(
+        json.dumps(
+            full_roster,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+    lines = [
+        "PLANNER VARIABLE RESOURCE PROJECTION (host-owned transport metadata):",
+        f"- full_variable_count={len(full_context.variables)}",
+        f"- detailed_variable_count={len(scoped_context.variables)}",
+        f"- catalog_variable_count={len(omitted)}",
+        f"- full_roster_sha256={roster_sha}",
+        "The detailed section above carries full scientific metadata. The "
+        "catalog below preserves every other exact available column for "
+        "discovery. You MAY select a catalog column when scientifically "
+        "justified; its full typed metadata will be attached to that step. "
+        "Do not infer units, transformations, or semantics not listed here.",
+    ]
+    lines.extend(_planner_variable_catalog_line(variable) for variable in omitted)
+    return "\n".join(lines)
+
+
 def scoped_coder_context(
     context: ResearchContext,
     step: AnalysisStep,
@@ -735,5 +984,7 @@ __all__ = [
     "coder_context_requires_method_constraints",
     "coder_guide_for_step",
     "normalised_method_head",
+    "planner_variable_catalog",
     "scoped_coder_context",
+    "scoped_planner_context",
 ]
