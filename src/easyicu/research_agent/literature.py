@@ -36,6 +36,7 @@ from .concept_availability import (
     hypothesis_cross_database_feasibility,
     normalize_concept_name,
 )
+from .gates.data_answerability import primary_exposure_answerability_findings
 from .providers.mocks import MockLLMClient
 from .providers.protocol import LLMClient, LLMMessage
 from .schema import HypothesisBlueprint, ResearchContext, VariableRole
@@ -147,10 +148,15 @@ class HypothesisBlueprintAgent:
         status = "ready"
         if missing_variables:
             status = (
-                "blocked"
-                if "target_outcome" in missing_variables
-                else "needs_data"
+                "blocked" if "target_outcome" in missing_variables else "needs_data"
             )
+        answerability_findings = primary_exposure_answerability_findings(context)
+        if answerability_findings:
+            status = "blocked"
+            domain_gate_notes.extend(
+                finding.message for finding in answerability_findings
+            )
+            critique.extend(finding.message for finding in answerability_findings)
 
         return HypothesisBlueprint(
             research_question=context.research_question,
@@ -179,13 +185,10 @@ def render_hypothesis_blueprint_for_prompt(blueprint: HypothesisBlueprint) -> st
     ]
     if blueprint.prior_literature_keys:
         lines.append(
-            "- prior_literature_keys: "
-            + ", ".join(blueprint.prior_literature_keys[:8])
+            "- prior_literature_keys: " + ", ".join(blueprint.prior_literature_keys[:8])
         )
     if blueprint.missing_variables:
-        lines.append(
-            "- missing_variables: " + ", ".join(blueprint.missing_variables)
-        )
+        lines.append("- missing_variables: " + ", ".join(blueprint.missing_variables))
     if blueprint.cross_database_feasibility:
         bits = [
             f"{db}={status}"
@@ -220,47 +223,54 @@ _CURATED: List[CitationRecord] = [
     CitationRecord(
         key="vincent_sofa_1996",
         title="The SOFA (Sepsis-related Organ Failure Assessment) score to describe organ dysfunction/failure.",
-        year="1996", venue="Intensive Care Medicine",
+        year="1996",
+        venue="Intensive Care Medicine",
         relevance="Defines SOFA components (0-4 ordinal); foundational for any SOFA-based analysis.",
         pmid="8844239",
     ),
     CitationRecord(
         key="singer_sepsis3_2016",
         title="The Third International Consensus Definitions for Sepsis and Septic Shock (Sepsis-3).",
-        year="2016", venue="JAMA",
+        year="2016",
+        venue="JAMA",
         relevance="Sepsis-3 reframes sepsis around SOFA-defined organ dysfunction.",
         pmid="26903338",
     ),
     CitationRecord(
         key="kdigo_aki_2012",
         title="KDIGO Clinical Practice Guideline for Acute Kidney Injury.",
-        year="2012", venue="Kidney International Supplements",
+        year="2012",
+        venue="Kidney International Supplements",
         relevance="Defines KDIGO AKI staging used by EasyICU's AKI module.",
     ),
     CitationRecord(
         key="ricu_2023",
         title="ricu: R's interface to intensive care data.",
-        year="2023", venue="Software",
+        year="2023",
+        venue="Software",
         relevance="Conceptual ancestor of EasyICU's concept dictionary and table model.",
         url="https://github.com/eth-mds/ricu",
     ),
     CitationRecord(
         key="pollard_eicu_2018",
         title="The eICU Collaborative Research Database, a freely available multi-center database for critical care research.",
-        year="2018", venue="Scientific Data",
+        year="2018",
+        venue="Scientific Data",
         relevance="Source database used in cross-database replication.",
         pmid="30204154",
     ),
     CitationRecord(
         key="johnson_mimiciv_2023",
         title="MIMIC-IV, a freely accessible electronic health record dataset.",
-        year="2023", venue="Scientific Data",
+        year="2023",
+        venue="Scientific Data",
         relevance="Primary source database used by EasyICU.",
     ),
     CitationRecord(
         key="hyland_hirid_2020",
         title="Early prediction of circulatory failure in the intensive care unit using machine learning.",
-        year="2020", venue="Nature Medicine",
+        year="2020",
+        venue="Nature Medicine",
         relevance="Source paper for HiRID and circEWS-style circulatory-failure definitions.",
     ),
 ]
@@ -283,7 +293,9 @@ def _curated_for(ctx: ResearchContext) -> List[CitationRecord]:
             out.append(c)
 
     def _matches_prefix(prefixes: Sequence[str]) -> bool:
-        return any(_matches_concept_prefix(n, prefix) for n in names for prefix in prefixes)
+        return any(
+            _matches_concept_prefix(n, prefix) for n in names for prefix in prefixes
+        )
 
     if _matches_prefix(("sofa", "sofa2")):
         _add(_CURATED[0])  # Vincent 1996
@@ -416,13 +428,18 @@ class PubMedLiteratureClient:
     # ------------------------------------------------------------------
 
     def _esearch(self, query: str, *, retmax: int) -> List[str]:
-        body = self._http_get("esearch.fcgi", self._with_etiquette({
-            "db": "pubmed",
-            "term": query,
-            "retmode": "json",
-            "retmax": str(int(retmax)),
-            "sort": "relevance",
-        }))
+        body = self._http_get(
+            "esearch.fcgi",
+            self._with_etiquette(
+                {
+                    "db": "pubmed",
+                    "term": query,
+                    "retmode": "json",
+                    "retmax": str(int(retmax)),
+                    "sort": "relevance",
+                }
+            ),
+        )
         if not body:
             return []
         try:
@@ -433,11 +450,16 @@ class PubMedLiteratureClient:
         return [str(x) for x in ids if x]
 
     def _esummary(self, pmids: Sequence[str]) -> List[CitationRecord]:
-        body = self._http_get("esummary.fcgi", self._with_etiquette({
-            "db": "pubmed",
-            "id": ",".join(pmids),
-            "retmode": "json",
-        }))
+        body = self._http_get(
+            "esummary.fcgi",
+            self._with_etiquette(
+                {
+                    "db": "pubmed",
+                    "id": ",".join(pmids),
+                    "retmode": "json",
+                }
+            ),
+        )
         if not body:
             return []
         try:
@@ -454,7 +476,7 @@ class PubMedLiteratureClient:
 
 
 _ICU_FILTER = (
-    "(intensive care[Title/Abstract] OR \"critical care\"[Title/Abstract] "
+    '(intensive care[Title/Abstract] OR "critical care"[Title/Abstract] '
     "OR ICU[Title/Abstract])"
 )
 
@@ -500,8 +522,20 @@ def build_pubmed_query_for_context(context: ResearchContext) -> str:
     return " AND ".join(terms)
 
 
-_SKIP_TITLE_WORDS = {"the", "and", "for", "with", "from", "into", "this", "that",
-                     "study", "review", "analysis", "based"}
+_SKIP_TITLE_WORDS = {
+    "the",
+    "and",
+    "for",
+    "with",
+    "from",
+    "into",
+    "this",
+    "that",
+    "study",
+    "review",
+    "analysis",
+    "based",
+}
 
 
 def _slug_from_title(title: str) -> str:
@@ -657,7 +691,9 @@ class TavilyLiteratureClient:
         *,
         max_results: int = 5,
     ) -> List[CitationRecord]:
-        return self.search(build_tavily_query_for_context(context), max_results=max_results)
+        return self.search(
+            build_tavily_query_for_context(context), max_results=max_results
+        )
 
     def _http_post(self, path: str, payload: Dict[str, Any]) -> Optional[bytes]:
         url = f"{self.base_url}/{path.lstrip('/')}"
@@ -685,14 +721,15 @@ def build_tavily_query_for_context(context: ResearchContext) -> str:
     if db:
         pieces.append(db)
     role_terms = [
-        v.name for v in context.variables
-        if v.role in _QUERY_ROLES and len(v.name) >= 3
+        v.name for v in context.variables if v.role in _QUERY_ROLES and len(v.name) >= 3
     ]
     pieces.extend(role_terms[:4])
-    pieces.extend([
-        "critical care",
-        "guideline OR preprint OR clinical trial OR registry",
-    ])
+    pieces.extend(
+        [
+            "critical care",
+            "guideline OR preprint OR clinical trial OR registry",
+        ]
+    )
     return " ".join(p for p in pieces if p)
 
 
@@ -715,14 +752,17 @@ def parse_tavily_search_response(payload: Dict[str, Any]) -> List[CitationRecord
         digest = sha1(url.encode("utf-8")).hexdigest()[:8]
         key = f"tavily_{slug}_{year if year != 'n/a' else 'undated'}_{digest}"
         try:
-            out.append(CitationRecord(
-                key=key,
-                title=title.rstrip(" ."),
-                year=year,
-                venue=_venue_from_url(url),
-                relevance=content[:500] or "Tavily web-search result for this ICU question.",
-                url=url,
-            ))
+            out.append(
+                CitationRecord(
+                    key=key,
+                    title=title.rstrip(" ."),
+                    year=year,
+                    venue=_venue_from_url(url),
+                    relevance=content[:500]
+                    or "Tavily web-search result for this ICU question.",
+                    url=url,
+                )
+            )
         except Exception:
             continue
     return out
@@ -837,7 +877,9 @@ class LiteratureAgent:
         if self.enable_tavily:
             client = self.tavily_client or TavilyLiteratureClient()
             try:
-                hits = client.search_for_context(context, max_results=self.tavily_retmax)
+                hits = client.search_for_context(
+                    context, max_results=self.tavily_retmax
+                )
             except Exception:
                 hits = []
             identified += len(hits)
@@ -856,19 +898,25 @@ class LiteratureAgent:
         if self.llm is not None and not isinstance(self.llm, MockLLMClient):
             existing_keys = ", ".join(c.key for c in merged)
             msgs = [
-                LLMMessage(role="system", content=(
-                    "You are a literature-review agent for an ICU research pipeline. "
-                    "Return JSON with a 'citations' array; each item has key, title, year, "
-                    "venue, relevance, optionally doi/url/pmid. Cite only papers you are "
-                    "confident exist; do not fabricate."
-                )),
-                LLMMessage(role="user", content=(
-                    f"LITERATURE REVIEW request for the question: {context.research_question!r}. "
-                    f"Concepts in scope: {[v.name for v in context.variables]}. "
-                    f"Already-included keys (do not duplicate): {existing_keys}. "
-                    "Add 3-6 additional canonical references (or recent preprints) most "
-                    "relevant to this exact ICU question."
-                )),
+                LLMMessage(
+                    role="system",
+                    content=(
+                        "You are a literature-review agent for an ICU research pipeline. "
+                        "Return JSON with a 'citations' array; each item has key, title, year, "
+                        "venue, relevance, optionally doi/url/pmid. Cite only papers you are "
+                        "confident exist; do not fabricate."
+                    ),
+                ),
+                LLMMessage(
+                    role="user",
+                    content=(
+                        f"LITERATURE REVIEW request for the question: {context.research_question!r}. "
+                        f"Concepts in scope: {[v.name for v in context.variables]}. "
+                        f"Already-included keys (do not duplicate): {existing_keys}. "
+                        "Add 3-6 additional canonical references (or recent preprints) most "
+                        "relevant to this exact ICU question."
+                    ),
+                ),
             ]
             try:
                 raw = self.llm.complete(msgs, max_tokens=1024, temperature=0.0)
@@ -912,7 +960,7 @@ def _parse_citation_json(raw: str) -> List[Dict]:
     if text.startswith("```"):
         text = "\n".join(text.splitlines()[1:])
         if text.endswith("```"):
-            text = text[: -3]
+            text = text[:-3]
         text = text.strip()
     try:
         data = json.loads(text)
@@ -1080,7 +1128,9 @@ def _cross_database_gate_notes(degraded_reason: Dict[str, str]) -> List[str]:
     notes: List[str] = []
     for db, reason in sorted(degraded_reason.items()):
         if reason:
-            notes.append(f"{db}: cross-database concept feasibility is limited: {reason}")
+            notes.append(
+                f"{db}: cross-database concept feasibility is limited: {reason}"
+            )
     return notes
 
 
@@ -1098,8 +1148,12 @@ def _blueprint_steps(
         steps.append("Map prior literature claims to the available EasyICU concepts.")
     steps.append("Freeze cohort definition and variable/time-window semantics.")
     feasibility = cross_database_feasibility or {}
-    blocked_dbs = sorted(db for db, status in feasibility.items() if status == "blocked")
-    degraded_dbs = sorted(db for db, status in feasibility.items() if status == "degraded")
+    blocked_dbs = sorted(
+        db for db, status in feasibility.items() if status == "blocked"
+    )
+    degraded_dbs = sorted(
+        db for db, status in feasibility.items() if status == "degraded"
+    )
     if blocked_dbs:
         steps.append(
             "Drop blocked databases from the replication scope before analysis: "
@@ -1113,9 +1167,7 @@ def _blueprint_steps(
             reason_bits.append(f"{db} ({reason})" if reason else db)
         steps.append(
             "For degraded databases, run a sensitivity analysis with the reduced "
-            "concept set: "
-            + "; ".join(reason_bits)
-            + "."
+            "concept set: " + "; ".join(reason_bits) + "."
         )
     if predictor:
         steps.append(
@@ -1128,7 +1180,9 @@ def _blueprint_steps(
         )
         steps.append("Run stratum-level and sensitivity checks before drafting claims.")
     if has_cross_db:
-        steps.append("Emit a replication protocol for requested external ICU databases.")
+        steps.append(
+            "Emit a replication protocol for requested external ICU databases."
+        )
     steps.append("Bind every reported result to registered evidence ids.")
     return steps
 
@@ -1147,7 +1201,9 @@ def _blueprint_self_critique(
             "as exploratory."
         )
     if predictor is None:
-        critique.append("No primary predictor could be inferred from context variables.")
+        critique.append(
+            "No primary predictor could be inferred from context variables."
+        )
     if outcome is None:
         critique.append(
             "No target outcome is available, so the planner should not emit "
