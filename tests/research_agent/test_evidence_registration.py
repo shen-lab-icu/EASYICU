@@ -137,6 +137,38 @@ def test_registrar_allows_same_step_retry_to_replace_its_alias(tmp_path: Path) -
     assert store.get("primary_association").evidence_id == second.evidence_id
 
 
+def test_physical_json_product_owns_alias_over_step_summary(tmp_path: Path) -> None:
+    store = EvidenceStore(tmp_path)
+    summary = _register(
+        store,
+        step_id="01_protocol",
+        evidence_id="summary_record",
+        filename="step_summary.json",
+    )
+    product = store.register_text(
+        kind="log",
+        description="Declared machine-readable protocol artifact.",
+        text='{"status":"completed"}',
+        filename="target_protocol.json",
+        produced_by_step="01_protocol",
+        evidence_id="protocol_record",
+        publish_aliases=False,
+    )
+
+    result = EvidenceRegistrar(store).promote_validated_step(
+        step_id="01_protocol",
+        pending_aliases={
+            summary.evidence_id: ["01_protocol", "target_protocol"],
+            product.evidence_id: [],
+        },
+        allowed_evidence_ids=[summary.evidence_id, product.evidence_id],
+    )
+
+    assert store.get("01_protocol").evidence_id == summary.evidence_id
+    assert store.get("target_protocol").evidence_id == product.evidence_id
+    assert result.retained_cross_step_aliases == {}
+
+
 def test_identical_artifact_bytes_keep_distinct_step_authority(tmp_path: Path) -> None:
     store = EvidenceStore(tmp_path)
     payload = '{"runtime":"docker","image_id":"sha256:fixed"}'
