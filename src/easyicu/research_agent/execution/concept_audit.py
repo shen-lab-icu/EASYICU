@@ -40,6 +40,68 @@ from ..schema import AnalysisStep, ResearchContext
 from ..authority.step_attempt import StepAttemptState
 from .step_worker_state import StepWorkerProgress
 
+_RETRYABLE_FINAL_AUDIT_ISSUE_CODE = "llm_concept_audit_provider_failure"
+
+
+def _retryable_final_audit_provider_failure(
+    findings: Sequence[ValidationFinding],
+    *,
+    step_id: str,
+) -> bool:
+    """Return whether one exact quarantine contains only transport failure.
+
+    The quarantine draft itself binds these findings to the candidate digest.
+    A semantic finding, invalid response, or finding from another step must
+    never authorize another paid final-audit call.
+    """
+
+    return bool(findings) and all(
+        finding.validator == "llm_concept_auditor"
+        and finding.severity == "error"
+        and str((finding.detail or {}).get("issue_code") or "")
+        == _RETRYABLE_FINAL_AUDIT_ISSUE_CODE
+        and str((finding.detail or {}).get("step_id") or "") == step_id
+        for finding in findings
+    )
+
+
+def _final_audit_continuation_allowed(
+    *,
+    reservation_status: str,
+    quarantine_findings: Sequence[ValidationFinding],
+    step_id: str,
+) -> bool:
+    """Authorize a paid continuation without erasing its prior attempt."""
+
+    return reservation_status == "attempted_incomplete" and (
+        _retryable_final_audit_provider_failure(
+            quarantine_findings,
+            step_id=step_id,
+        )
+    )
+
+
+def _retire_completed_provider_failure_continuation(
+    quarantine: ConceptQuarantineState,
+    *,
+    step_id: str,
+    fresh_findings: Sequence[ValidationFinding],
+) -> bool:
+    """Retire an old transport failure only after a later audit returned."""
+
+    if not _retryable_final_audit_provider_failure(
+        quarantine.pending_errors,
+        step_id=step_id,
+    ) or any(
+        str((finding.detail or {}).get("issue_code") or "")
+        == _RETRYABLE_FINAL_AUDIT_ISSUE_CODE
+        for finding in fresh_findings
+    ):
+        return False
+    quarantine.pending_errors = []
+    quarantine.draft_active = False
+    return True
+
 
 class ConceptQuarantineState:
     """Mutable per-step concept-audit quarantine state.
@@ -417,11 +479,21 @@ class ConceptAuditCoordinator:
                         "concept_audit",
                         token=audit_key,
                     )
-                    if cached_findings is None and reservation_status in {
-                        "attempted_incomplete",
-                        "completed",
-                        "released",
-                    }:
+                    continuation_allowed = _final_audit_continuation_allowed(
+                        reservation_status=reservation_status,
+                        quarantine_findings=quarantine.pending_errors,
+                        step_id=step.step_id,
+                    )
+                    if (
+                        cached_findings is None
+                        and reservation_status
+                        in {
+                            "attempted_incomplete",
+                            "completed",
+                            "released",
+                        }
+                        and not continuation_allowed
+                    ):
                         raise ProviderCallBudgetReceiptError(
                             "Final concept audit has a durable paid/completed "
                             "reservation but no matching digest-bound cache; "
@@ -435,6 +507,14 @@ class ConceptAuditCoordinator:
                         )
                         code_findings.extend(cached_findings)
                         self.completed_digests.add(audited_code_digest)
+                        if _retire_completed_provider_failure_continuation(
+                            quarantine,
+                            step_id=step.step_id,
+                            fresh_findings=cached_findings,
+                        ):
+                            runtime.step_record[
+                                "concept_audit_provider_failure_continued"
+                            ] = True
                         runtime.step_record["llm_concept_audit_cache_hits"] = (
                             int(
                                 runtime.step_record.get("llm_concept_audit_cache_hits")
@@ -453,6 +533,14 @@ class ConceptAuditCoordinator:
                         runtime.cache.put(audit_key, llm_findings)
                         code_findings.extend(llm_findings)
                         self.completed_digests.add(audited_code_digest)
+                        if _retire_completed_provider_failure_continuation(
+                            quarantine,
+                            step_id=step.step_id,
+                            fresh_findings=llm_findings,
+                        ):
+                            runtime.step_record[
+                                "concept_audit_provider_failure_continued"
+                            ] = True
         except ProviderCallBudgetError as exc:
             runtime.sync_provider_budget()
             receipt_error = isinstance(exc, ProviderCallBudgetReceiptError)

@@ -145,6 +145,94 @@ def test_mixed_quarantine_retirement_keeps_every_unproved_subset(monkeypatch) ->
     assert decision.policy_provenance == ()
 
 
+def _provider_failure(*, step_id: str = "05_analysis") -> ValidationFinding:
+    return ValidationFinding(
+        validator="llm_concept_auditor",
+        severity="error",
+        message="provider unavailable",
+        detail={
+            "issue_code": "llm_concept_audit_provider_failure",
+            "step_id": step_id,
+        },
+    )
+
+
+def test_final_audit_continuation_requires_exact_transport_failure_quarantine() -> None:
+    provider_failure = _provider_failure()
+
+    assert concept_audit_execution._final_audit_continuation_allowed(
+        reservation_status="attempted_incomplete",
+        quarantine_findings=[provider_failure],
+        step_id="05_analysis",
+    )
+    assert not concept_audit_execution._final_audit_continuation_allowed(
+        reservation_status="completed",
+        quarantine_findings=[provider_failure],
+        step_id="05_analysis",
+    )
+    assert not concept_audit_execution._final_audit_continuation_allowed(
+        reservation_status="attempted_incomplete",
+        quarantine_findings=[_provider_failure(step_id="other_step")],
+        step_id="05_analysis",
+    )
+
+
+def test_final_audit_continuation_refuses_mixed_or_invalid_response_findings() -> None:
+    semantic = ValidationFinding(
+        validator="llm_concept_auditor",
+        severity="error",
+        message="scientific issue",
+        detail={"issue_code": "scientific_semantics_violation"},
+    )
+    invalid_response = ValidationFinding(
+        validator="llm_concept_auditor",
+        severity="error",
+        message="invalid response",
+        detail={
+            "issue_code": "llm_concept_audit_response_invalid",
+            "step_id": "05_analysis",
+        },
+    )
+
+    assert not concept_audit_execution._final_audit_continuation_allowed(
+        reservation_status="attempted_incomplete",
+        quarantine_findings=[_provider_failure(), semantic],
+        step_id="05_analysis",
+    )
+    assert not concept_audit_execution._final_audit_continuation_allowed(
+        reservation_status="attempted_incomplete",
+        quarantine_findings=[invalid_response],
+        step_id="05_analysis",
+    )
+
+
+def test_successful_final_audit_retires_only_prior_provider_failure() -> None:
+    quarantine = concept_audit_execution.ConceptQuarantineState()
+    quarantine.draft_active = True
+    quarantine.pending_errors = [_provider_failure()]
+    warning = ValidationFinding(
+        validator="llm_concept_auditor",
+        severity="warning",
+        message="nonblocking note",
+    )
+
+    assert concept_audit_execution._retire_completed_provider_failure_continuation(
+        quarantine,
+        step_id="05_analysis",
+        fresh_findings=[warning],
+    )
+    assert quarantine.pending_errors == []
+    assert quarantine.draft_active is False
+
+    quarantine.pending_errors = [_provider_failure()]
+    assert not concept_audit_execution._retire_completed_provider_failure_continuation(
+        quarantine,
+        step_id="05_analysis",
+        fresh_findings=[_provider_failure()],
+    )
+    assert quarantine.pending_errors
+
+
 def test_execute_phase_keeps_quarantine_lifecycle_on_one_state_object() -> None:
     execute_one_step = _execute_one_step_node()
     constructors = [
