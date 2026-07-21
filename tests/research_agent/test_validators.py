@@ -3708,6 +3708,53 @@ model.fit(frame[['marker_first']], assignment)
     assert "downgraded_reason" not in conditional_findings[0].detail
 
 
+@pytest.mark.parametrize(
+    ("selector", "expected_severity"),
+    [("in_range_mask", "warning"), ("support_mask", "error")],
+)
+def test_llm_concept_auditor_checks_named_value_selector_ownership(
+    ra, selector, expected_severity
+):
+    class _FindingLLM:
+        def complete(self, messages, *, max_tokens=1024, temperature=0.0):
+            return json.dumps({"findings": [{
+                "severity": "error",
+                "message": "Companions gate the value distribution.",
+                "detail": {
+                    "issue_code": "audit_only_companion_row_gating_required",
+                    "variables": ["support_mask", "valid_distribution"],
+                },
+            }]})
+
+    script = f"""
+measurement_provenance_audit = {{
+    'checks': [{{'invalid_pair_n': 0, 'discordant_n': 0, 'role': 'audit_only'}}]
+}}
+invalid_pair_n = 0
+discordant_n = 0
+if invalid_pair_n or discordant_n:
+    raise RuntimeError('invalid measurement provenance')
+support_mask = measured_series.eq(1) & count_series.gt(0)
+in_range_mask = value_series.notna() & value_series.between(0.0, 30.0)
+valid_distribution = value_series.loc[{selector}]
+"""
+    findings = ra.LLMConceptAuditor(_FindingLLM()).audit(
+        context=ra.build_research_context(
+            research_question="Audit one continuous measurement.",
+            cohort=pd.DataFrame({"stay_id": [1, 2], "value": [1.0, 2.0]}),
+            cohort_name="c",
+            database="synthetic",
+        ),
+        script_text=script,
+        step=None,
+    )
+
+    assert findings[0].severity == expected_severity
+    assert ("downgraded_reason" in findings[0].detail) is (
+        expected_severity == "warning"
+    )
+
+
 def test_llm_concept_auditor_accepts_direct_self_raising_host_receipts(ra):
     class _FalsePositiveLLM:
         def complete(self, messages, *, max_tokens=1024, temperature=0.0):

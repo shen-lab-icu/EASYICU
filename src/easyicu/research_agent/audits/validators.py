@@ -1421,9 +1421,60 @@ def _downgrade_audit_only_companion_gating_findings(
     issue_code = "audit_only_companion_row_gating_required"
     derived_provenance_flags: Dict[str, bool] = {}
 
+    def _named_value_selectors_are_value_owned(
+        detail: Mapping[str, Any], tree: ast.AST
+    ) -> Optional[bool]:
+        raw_variables = detail.get("variables")
+        if not isinstance(raw_variables, list):
+            return None
+        names = {
+            value
+            for value in raw_variables
+            if isinstance(value, str) and value.isidentifier()
+        }
+        assignments: Dict[str, List[ast.Assign]] = {}
+        for node in ast.walk(tree):
+            if (
+                isinstance(node, ast.Assign)
+                and len(node.targets) == 1
+                and isinstance(node.targets[0], ast.Name)
+            ):
+                assignments.setdefault(node.targets[0].id, []).append(node)
+        observed = False
+        for name in names:
+            definitions = assignments.get(name, [])
+            if len(definitions) != 1:
+                continue
+            selectors = [
+                node
+                for node in ast.walk(definitions[0].value)
+                if isinstance(node, ast.Subscript)
+                and isinstance(node.value, ast.Attribute)
+                and node.value.attr == "loc"
+                and isinstance(node.value.value, ast.Name)
+                and isinstance(node.slice, ast.Name)
+            ]
+            for selector in selectors:
+                observed = True
+                mask_definitions = assignments.get(selector.slice.id, [])
+                if len(mask_definitions) != 1:
+                    return False
+                receiver = selector.value.value.id
+                if not any(
+                    isinstance(candidate, ast.Name)
+                    and candidate.id == receiver
+                    and isinstance(candidate.ctx, ast.Load)
+                    for candidate in ast.walk(mask_definitions[0].value)
+                ):
+                    return False
+        return True if observed else None
+
     def _failure_guard(test: ast.AST) -> bool:
         if isinstance(test, ast.Name):
-            return derived_provenance_flags.get(test.id.lower()) is True
+            name = test.id.lower()
+            return name in {"invalid_pair_n", "discordant_n"} or (
+                derived_provenance_flags.get(name) is True
+            )
         if isinstance(test, ast.UnaryOp) and isinstance(test.op, ast.Not):
             return (
                 isinstance(test.operand, ast.Name)
@@ -1523,6 +1574,14 @@ def _downgrade_audit_only_companion_gating_findings(
         if finding.validator == LLMConceptAuditor.name and finding.severity == "error":
             if str((finding.detail or {}).get("issue_code") or "") == issue_code:
                 detail = dict(finding.detail or {})
+                value_selector_proof = (
+                    _named_value_selectors_are_value_owned(detail, tree)
+                    if tree is not None
+                    else None
+                )
+                if value_selector_proof is False:
+                    downgraded.append(finding)
+                    continue
                 variables = {
                     _measurement_concept_root(str(value))
                     for value in detail.get("variables", [])
