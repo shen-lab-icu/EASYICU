@@ -41,6 +41,7 @@ import shutil
 import stat
 import subprocess
 import sys
+import tempfile
 import textwrap
 import threading
 import time
@@ -1390,6 +1391,12 @@ class DockerRunner:
             validated.append((str(resolved_source), str(target), "ro"))
         return validated
 
+    @staticmethod
+    def _docker_cidfile_path(attempt_id: str) -> Path:
+        """Keep Docker control paths short and outside mounted run trees."""
+
+        return Path(tempfile.gettempdir()) / f"easyicu-docker-{attempt_id}.cid"
+
     def _container_step_dir(self, step_id: str) -> str:
         safe_step_id = _safe_path_component(step_id, label="step_id")
         _reject_docker_mount_field(safe_step_id, label="step_id")
@@ -1783,8 +1790,10 @@ class DockerRunner:
             )
 
             attempt_id = uuid.uuid4().hex
-            cidfile = self.workdir / (f".docker-runtime-provenance-{attempt_id}.cid")
-            sentinel = cidfile.with_suffix(".sentinel")
+            cidfile = self._docker_cidfile_path(attempt_id)
+            sentinel = self.workdir / (
+                f".docker-runtime-provenance-{attempt_id}.sentinel"
+            )
             container_name = f"easyicu-ra-{attempt_id}"
             self._write_regular_file(sentinel, f"name:{container_name}\n")
             distribution_script = (
@@ -2204,6 +2213,7 @@ class DockerRunner:
             sentinel.unlink(missing_ok=True)
             for suffix in (".cid", ".analysis.py", ".run.log"):
                 sentinel.with_suffix(suffix).unlink(missing_ok=True)
+            self._docker_cidfile_path(attempt_id).unlink(missing_ok=True)
 
     # ------------------------------------------------------------------
     # Main entry point
@@ -2249,7 +2259,7 @@ class DockerRunner:
         # inside the long-lived run-root bind mount.  Execute an immutable,
         # attempt-owned copy overlaid at the canonical container path; publish
         # the same bytes back to ``steps/<id>/analysis.py`` only after teardown.
-        cidfile = self.workdir / f".docker-{step_id}-{attempt_id}.cid"
+        cidfile = self._docker_cidfile_path(attempt_id)
         sentinel = self.workdir / f".docker-{step_id}-{attempt_id}.sentinel"
         control_script_path = sentinel.with_suffix(".analysis.py")
         control_log_path = sentinel.with_suffix(".run.log")

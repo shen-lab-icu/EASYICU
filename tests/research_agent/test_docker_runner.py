@@ -27,6 +27,7 @@ import shlex
 import shutil
 import socket
 import subprocess
+import tempfile
 import uuid
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
@@ -617,7 +618,9 @@ def test_run_invokes_subprocess_and_writes_log(
     assert "img:0" not in cmd
     assert not any("EASYICU_RUN_ARTIFACT_AUTHORITY_SNAPSHOT=" in token for token in cmd)
     cidfile_arg = next(token for token in cmd if token.startswith("--cidfile="))
-    assert not Path(cidfile_arg.split("=", 1)[1]).exists()
+    cidfile_path = Path(cidfile_arg.split("=", 1)[1])
+    assert cidfile_path.parent == Path(tempfile.gettempdir())
+    assert not cidfile_path.exists()
 
     assert result.succeeded
     assert result.outputs_safe_to_collect is True
