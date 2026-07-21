@@ -2,7 +2,7 @@
   "audit_log_authority_events": [],
   "authoritative_numeric_claims": {
     "count": 28,
-    "set_sha256": "7e030d504af22603b21c2d101bb102325893f037e201f9ffae302ac2baa1d443"
+    "set_sha256": "6d0ca89e6fa651576b02bee7cc851532f760825bd27af80ed1eb9938193a3d29"
   },
   "authority_transition_order": {
     "01_representation": [
@@ -284,7 +284,7 @@
   },
   "current_evidence": {
     "count": 29,
-    "mapping_sha256": "da17ecaa33e13c8bf2acf2c6b560ab61040b47e98ba5908c89df8d5647aba807"
+    "mapping_sha256": "3a3e2ba284ecf89b84c4debec123ff80badcd962576b2dc9e0999673684c33a2"
   },
   "current_self_aliases": {
     "count": 29
@@ -499,7 +499,7 @@
       "warning": 15
     },
     "count": 18,
-    "set_sha256": "0d98c4e23c89a0257dfb243c339f911224b310bb5d2e7fc0d4a9b68dc6b12209"
+    "set_sha256": "86c154c912f6a06a212e5aaf850f88586c26e134ea13bbf7b8c3f164e2ed775a"
   },
   "volatile_field_allowlist": [
     "absolute_path",
