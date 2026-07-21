@@ -44,6 +44,7 @@ from .attrition import patch_attrition_rule_id_canonicalization
 from .concept_preflight import patch_concept_preflight_repairs
 from .lossy_coercion import (
     patch_lossy_numeric_coercion_guard as _patch_lossy_numeric_coercion_guard,
+    patch_returned_coercion_loss_guard as _patch_returned_coercion_loss_guard,
 )
 from .merge_collision import patch_pandas_merge_dynamic_column_collision
 from .name_alias import patch_undefined_mapping_near_match_alias
@@ -2535,6 +2536,12 @@ def deterministic_concept_audit_repair(
         if guarded != repaired:
             repair_name = "lossy_numeric_coercion_guard_v1"
             repaired = guarded
+            repair_names.append(repair_name)
+
+        returned_loss_guarded = _patch_returned_coercion_loss_guard(repaired)
+        if returned_loss_guarded != repaired:
+            repair_name = "returned_coercion_loss_guard_v1"
+            repaired = returned_loss_guarded
             repair_names.append(repair_name)
 
     if RepairReason.BOOLEAN_REDUCTION_IDENTITY in set(repair_reasons):
