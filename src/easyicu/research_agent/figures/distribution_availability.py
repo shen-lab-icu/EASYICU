@@ -27,6 +27,7 @@ from ..contracts.declared_product import (
     read_digest_bound_artifact_snapshot,
     typed_product,
 )
+from ..schema import AnalysisStep
 from .publication import (
     add_panel_label,
     apply_publication_style,
@@ -147,6 +148,31 @@ def _distribution_availability_parent_digest_seal(
     if not required_names <= set(digests):
         return None
     return {name: digests[name] for name in sorted(required_names)}
+
+
+def _distribution_availability_figure_step_matches_parent(
+    run_dir: Path,
+    step: AnalysisStep,
+) -> bool:
+    """Require a Planner-owned typed edge to the sealed parent tables."""
+
+    seal = _distribution_availability_parent_digest_seal(run_dir, step.step_id)
+    request_step = _resolve_upstream_manifest_step(run_dir, step.step_id)
+    if seal is None or not isinstance(request_step, Mapping):
+        return False
+    required_inputs = {
+        ("table", Path(name).stem) for name in seal if name != "step_summary.json"
+    }
+    child_typed_inputs = {
+        parsed
+        for raw in (step.inputs or [])
+        if (parsed := typed_product(raw)) is not None
+    }
+    if required_inputs <= child_typed_inputs:
+        return True
+    return str(step.method or "").strip().lower() == CONTROLLED_METHOD and tuple(
+        str(value) for value in (step.inputs or [])
+    ) == tuple(str(value) for value in (request_step.get("inputs") or []))
 
 
 def _normalise(value: Any) -> str:
@@ -1089,6 +1115,7 @@ def render_distribution_availability_bundle_from_prior_outputs(
 __all__ = [
     "CONTROLLED_METHOD",
     "REPAIR_ID",
+    "_distribution_availability_figure_step_matches_parent",
     "distribution_availability_parent_contract_issue",
     "distribution_availability_planner_table_roles",
     "prepare_distribution_availability_inputs",

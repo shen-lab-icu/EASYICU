@@ -78,6 +78,10 @@ from .authority.figure_renderer import (
 from .providers.cost import CostMeter, metered_role_resolver
 from .figures.distribution_availability import (
     _distribution_availability_parent_digest_seal,
+    _distribution_availability_figure_step_matches_parent,
+)
+from .figures.continuous_measurement_audit import (
+    _continuous_measurement_audit_parent_digest_seal,
 )
 from .replication.envelope import (
     ENVELOPE_SCHEMA_VERSION,
@@ -9909,6 +9913,8 @@ def _sealed_renderer_parent_digest_seal(
     )
     if repair_id == distribution_id:
         return _distribution_availability_parent_digest_seal(run_dir, figure_step_id)
+    if repair_id == "continuous_measurement_audit_publication_bundle_v1":
+        return _continuous_measurement_audit_parent_digest_seal(run_dir, figure_step_id)
     if repair_id == "absolute_risk_incidence_prevalence_publication_bundle_v1":
         return _absolute_risk_parent_digest_seal(run_dir, figure_step_id)
     if repair_id == (
@@ -10044,6 +10050,17 @@ def _render_authorized_sealed_publication_bundle(
             out_dir=out_dir,
             preverified_parent_artifacts=snapshot,
         )
+    elif repair_id == "continuous_measurement_audit_publication_bundle_v1":
+        from .figures.continuous_measurement_audit import (
+            render_continuous_measurement_audit_bundle,
+        )
+
+        observed = render_continuous_measurement_audit_bundle(
+            run_dir=run_dir,
+            current_step_id=current_step_id,
+            out_dir=out_dir,
+            preverified_parent_artifacts=snapshot,
+        )
     elif repair_id == "ordered_category_distribution_publication_bundle_v1":
         from .figures.ordered_distribution import (
             render_ordered_distribution_bundle_from_prior_outputs,
@@ -10095,40 +10112,6 @@ def _render_authorized_sealed_publication_bundle(
     else:
         return None
     return observed if observed == repair_id else None
-
-
-def _distribution_availability_figure_step_matches_parent(
-    run_dir: Path,
-    step: AnalysisStep,
-) -> bool:
-    """Require a structural child edge before the automatic renderer runs.
-
-    Modern plans bind the two parent tables as typed inputs.  Older planner
-    packets represented a split analysis/figure pair by repeating the exact
-    controlled method and inputs on the ``*_figure`` child.  Either structure
-    is evidence of planner ownership; prose and step-name keywords are not.
-    """
-
-    seal = _distribution_availability_parent_digest_seal(run_dir, step.step_id)
-    request_step = _resolve_upstream_manifest_step(run_dir, step.step_id)
-    if seal is None or not isinstance(request_step, Mapping):
-        return False
-    from .contracts.declared_product import typed_product
-    from .figures.distribution_availability import CONTROLLED_METHOD
-
-    required_inputs = {
-        ("table", Path(name).stem) for name in seal if name != "step_summary.json"
-    }
-    child_typed_inputs = {
-        parsed
-        for raw in (step.inputs or [])
-        if (parsed := typed_product(raw)) is not None
-    }
-    if required_inputs <= child_typed_inputs:
-        return True
-    return str(step.method or "").strip().lower() == CONTROLLED_METHOD and tuple(
-        str(value) for value in (step.inputs or [])
-    ) == tuple(str(value) for value in (request_step.get("inputs") or []))
 
 
 def deterministic_figure_repair_id_for_upstream(
@@ -10201,6 +10184,13 @@ def deterministic_figure_repair_id_for_upstream(
         return (
             repair_id
             if _distribution_availability_parent_digest_seal(run_dir, step_id)
+            is not None
+            else None
+        )
+    if repair_id == "continuous_measurement_audit_publication_bundle_v1":
+        return (
+            repair_id
+            if _continuous_measurement_audit_parent_digest_seal(run_dir, step_id)
             is not None
             else None
         )

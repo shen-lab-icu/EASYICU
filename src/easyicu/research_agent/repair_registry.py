@@ -336,6 +336,7 @@ _STRUCTURAL_REPAIRS = {
     "ordered_category_distribution_publication_bundle_v1",
     "ordered_category_distribution_availability_publication_bundle_v2",
     "distribution_availability_publication_bundle_from_parent_outputs_v1",
+    "continuous_measurement_audit_publication_bundle_v1",
     "absolute_risk_incidence_prevalence_publication_bundle_v1",
     "association_publication_bundle_from_planned_model_contract_v1",
     "cohort_flow_publication_bundle_from_parent_outputs_v1",
@@ -364,6 +365,7 @@ _SEALED_RENDERER_REPAIRS = {
     "ordered_category_distribution_publication_bundle_v1",
     "ordered_category_distribution_availability_publication_bundle_v2",
     "distribution_availability_publication_bundle_from_parent_outputs_v1",
+    "continuous_measurement_audit_publication_bundle_v1",
     "absolute_risk_incidence_prevalence_publication_bundle_v1",
     "association_publication_bundle_from_planned_model_contract_v1",
     "cohort_flow_publication_bundle_from_parent_outputs_v1",
@@ -380,6 +382,10 @@ _SEALED_RENDERER_PRODUCT_SLOTS: Dict[str, Tuple[str, ...]] = {
         "availability",
     ),
     "distribution_availability_publication_bundle_from_parent_outputs_v1": (
+        "distribution",
+        "availability",
+    ),
+    "continuous_measurement_audit_publication_bundle_v1": (
         "distribution",
         "availability",
     ),
@@ -414,6 +420,9 @@ _SEALED_RENDERER_PLANNER_METHODS: Dict[str, Tuple[str, ...]] = {
     "distribution_availability_publication_bundle_from_parent_outputs_v1": (
         "exposure_distribution_and_missingness_audit",
     ),
+    "continuous_measurement_audit_publication_bundle_v1": (
+        "right_skewed_distribution_and_measurement_availability_audit",
+    ),
     "absolute_risk_incidence_prevalence_publication_bundle_v1": (
         "binary_outcome_incidence_and_absolute_risk",
     ),
@@ -445,6 +454,11 @@ _SEALED_RENDERER_PARENT_OUTPUT_ROLE_GROUPS: Dict[
             ("source", "coverage"),
             ("missingness",),
         ),
+    ),
+    "continuous_measurement_audit_publication_bundle_v1": (
+        (("distribution",),),
+        (("missingness",),),
+        (("measurement", "process"),),
     ),
     "absolute_risk_incidence_prevalence_publication_bundle_v1": (
         (("outcome", "incidence"),),
@@ -481,6 +495,10 @@ _SEALED_RENDERER_IMPLEMENTATION_MODULES: Dict[str, Tuple[str, ...]] = {
     "distribution_availability_publication_bundle_from_parent_outputs_v1": (
         *_COMMON_SEALED_RENDERER_MODULES,
         "easyicu.research_agent.figures.distribution_availability",
+    ),
+    "continuous_measurement_audit_publication_bundle_v1": (
+        *_COMMON_SEALED_RENDERER_MODULES,
+        "easyicu.research_agent.figures.continuous_measurement_audit",
     ),
     "absolute_risk_incidence_prevalence_publication_bundle_v1": (
         *_COMMON_SEALED_RENDERER_MODULES,
