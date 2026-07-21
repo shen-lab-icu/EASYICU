@@ -270,6 +270,7 @@ _SYNTACTIC_REPAIRS = {
     "local_read_before_assignment_hoist_v1",
     "missing_os_import_v1",
     "pandas_boolean_index_alignment_v1",
+    "pandas_merge_dynamic_column_collision_guard_v1",
     "strip_python_prefix_v1",
     "restore_shadowed_json_module_v1",
     "replace_hallucinated_figure_utils_import_v1",

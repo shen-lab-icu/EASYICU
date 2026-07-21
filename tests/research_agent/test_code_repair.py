@@ -1867,3 +1867,54 @@ def test_seaborn_fallback_common_statistical_plots_draw_without_error():
     ):
         assert call() is ax
     plt.close(_fig)
+
+
+def _merge_collision_script(*, disagree: bool = False) -> str:
+    right_value = 9 if disagree else 1
+    return f"""import pandas as pd
+analysis_df = pd.DataFrame({{"stay_id": [1, 2], "exposure": [0, 1]}})
+exposure_column = "exposure"
+exposure_product = pd.DataFrame({{
+    "stay_id": [1, 2], "exposure": [0, {right_value}]
+}})
+exposure_part = exposure_product[["stay_id", exposure_column]].copy()
+df = analysis_df.merge(exposure_part, on="stay_id", how="left", validate="one_to_one")
+result = df[exposure_column].tolist()
+"""
+
+
+def test_runner_repair_guards_equal_dynamic_merge_column_before_deduplication():
+    repair = _deterministic_runner_repair(
+        code=_merge_collision_script(),
+        run_log="KeyError: 'exposure'",
+    )
+
+    assert repair is not None
+    repair_id, repaired = repair
+    assert repair_id == "pandas_merge_dynamic_column_collision_guard_v1"
+    assert "_easyicu_merge_left_values_v1.equals" in repaired
+    namespace: dict = {}
+    exec(repaired, namespace)  # noqa: S102 - deterministic test source
+    assert namespace["result"] == [0, 1]
+
+
+def test_runner_repair_fails_closed_when_duplicate_merge_columns_disagree():
+    repair = _deterministic_runner_repair(
+        code=_merge_collision_script(disagree=True),
+        run_log="KeyError: 'exposure'",
+    )
+
+    assert repair is not None
+    with pytest.raises(RuntimeError, match="disagrees across typed inputs"):
+        exec(repair[1], {})  # noqa: S102 - deterministic test source
+
+
+def test_runner_repair_does_not_guess_ambiguous_merge_collision():
+    code = _merge_collision_script() + (
+        'df2 = analysis_df.merge(exposure_part, on="stay_id")\n'
+        "other = df2[exposure_column]\n"
+    )
+
+    assert (
+        _deterministic_runner_repair(code=code, run_log="KeyError: 'exposure'") is None
+    )
