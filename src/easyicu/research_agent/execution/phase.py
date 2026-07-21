@@ -434,12 +434,15 @@ def _repair_prompt_binding_sha256(
 
 def _untrusted_runtime_repair_allowed(*, repair_id: str, source: str) -> bool:
     """Allow raw runtime diagnostics to authorize syntactic transforms only."""
-
     if source == "case_plugin_repair":
         return False
     if source != "deterministic_runner_repair":
         return True
-    return repair_metadata_for(repair_id).repair_class is RepairClass.SYNTACTIC
+    metadata = repair_metadata_for(repair_id)
+    return (
+        repair_id == "non_tabular_companion_row_gate_v1"
+        or metadata.repair_class is RepairClass.SYNTACTIC
+    )
 
 
 _STANDARD_EXECUTOR_INTERNAL_PENDING_ARTIFACTS = frozenset(
@@ -9750,6 +9753,7 @@ def run_execute_phase(
                         run_log=run_log,
                         previous_repair=worker_progress.runner_repair_name,
                         analysis_family=local_runtime_state.analysis_family,
+                        resolved_input_bindings=resolved_input_bindings,
                     )
                 runner_repair = _authorize_automatic_repair(
                     runner_repair,
@@ -9787,7 +9791,6 @@ def run_execute_phase(
                 )
                 _clear_output_dir(run_result.out_dir)
                 continue
-
             if (
                 worker_progress.runtime_repair_attempts
                 >= pipeline._max_code_repair_attempts
@@ -9823,7 +9826,6 @@ def run_execute_phase(
                     total_steps=total_steps,
                 )
                 return step_record
-
             runtime_repair_applied = False
             runtime_repair_fallback_applied = False
             runtime_repair_authority = RepairPromptAuthority()
@@ -9961,10 +9963,8 @@ def run_execute_phase(
                         total_steps=total_steps,
                     )
                     return step_record
-
             if runtime_repair_applied or runtime_repair_fallback_applied:
                 continue
-
         publication_step = _step_requires_publication_figure_exports(
             step
         ) and not step_record.get("deterministic_standard_analysis")

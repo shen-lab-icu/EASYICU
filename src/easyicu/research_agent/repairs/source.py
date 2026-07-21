@@ -28,7 +28,7 @@ import json
 import math
 import re
 import textwrap
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, List, Mapping, Optional, Sequence
 
 import numpy as np
 import pandas as pd
@@ -41,6 +41,7 @@ from ..scalar_utils import (
     _flatten_scalar_dict,
 )
 from .attrition import patch_attrition_rule_id_canonicalization
+from .categorical import patch_categorical_declared_order_check
 from .concept_preflight import patch_concept_preflight_repairs
 from .figure_distribution import (
     patch_categorical_distribution_clinical_bin_role,
@@ -94,7 +95,10 @@ from .typed_input import (
     patch_resolved_input_manifest_env,
     patch_resolved_input_relative_path_root,
 )
-from .typed_artifact import patch_resolved_json_document_adapter
+from .typed_artifact import (
+    patch_non_tabular_companion_row_gate,
+    patch_resolved_json_document_adapter,
+)
 from .typed_binding_identity import patch_direct_resolved_input_identity_key
 from ..gates.typed_binding_identity import direct_resolved_input_key_findings
 from ..schema import ValidationFinding
@@ -5005,6 +5009,7 @@ def _deterministic_runner_repair(
     run_log: str,
     previous_repair: Optional[str] = None,
     analysis_family: Optional[str] = None,
+    resolved_input_bindings: Mapping[str, Any] | None = None,
 ) -> Optional[tuple[str, str]]:
     """Best-effort execution-layer patch for common numeric model failures.
 
@@ -5039,6 +5044,16 @@ def _deterministic_runner_repair(
         )
         if repaired != code:
             return identity_key_repair, repaired
+
+    non_tabular_gate_repair = "non_tabular_companion_row_gate_v1"
+    if previous_repair != non_tabular_gate_repair:
+        repaired = patch_non_tabular_companion_row_gate(
+            code,
+            run_log,
+            resolved_input_bindings=resolved_input_bindings,
+        )
+        if repaired != code:
+            return non_tabular_gate_repair, repaired
 
     json_document_repair = "resolved_input_json_document_adapter_v1"
     if previous_repair != json_document_repair:
@@ -5157,6 +5172,12 @@ def _deterministic_runner_repair(
             repaired = re.sub(r",\s*observed\s*=\s*(?:True|False)", "", code)
             if repaired != code:
                 return repair_name, repaired
+
+    categorical_order_repair = "categorical_declared_order_check_v1"
+    if previous_repair != categorical_order_repair:
+        repaired = patch_categorical_declared_order_check(code, run_log)
+        if repaired != code:
+            return categorical_order_repair, repaired
 
     missing_seaborn = (
         "modulenotfounderror: no module named 'seaborn'" in lowered
