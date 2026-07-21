@@ -10165,8 +10165,9 @@ def run_execute_phase(
         # replaces the entire output directory, so running it after registration
         # would leave evidence digests and claims bound to a retired draft.
         step_summary = _load_step_summary_from_outputs(run_result.out_dir)
-        if worker_progress.runner_repair_name and is_sealed_renderer_repair(
+        if worker_progress.deterministic_standard_executor_used or (
             worker_progress.runner_repair_name
+            and is_sealed_renderer_repair(worker_progress.runner_repair_name)
         ):
             step_summary = _write_host_input_binding_receipts(
                 out_dir=run_result.out_dir,

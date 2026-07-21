@@ -38,6 +38,15 @@ def test_execution_phase_uses_typed_binding_objects_with_identity() -> None:
         assert getattr(execution_phase, name) is getattr(typed_binding, name)
 
 
+def test_standard_executors_receive_host_owned_input_receipts() -> None:
+    source = inspect.getsource(execution_phase.run_execute_phase)
+    assert (
+        "if worker_progress.deterministic_standard_executor_used or (\n"
+        "            worker_progress.runner_repair_name"
+    ) in source
+    assert "step_summary = _write_host_input_binding_receipts(" in source
+
+
 def test_typed_binding_has_no_orchestration_or_scientific_owner_dependency() -> None:
     tree = ast.parse(inspect.getsource(typed_binding))
     imported_leaves = {

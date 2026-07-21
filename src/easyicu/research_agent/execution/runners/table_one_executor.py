@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import textwrap
 
+from ...icu_rules import companion_count_column_for_measured
 from ...schema import AnalysisStep
 
 __all__ = ["table_one_executor_code", "table_one_executor_owns_step"]
@@ -34,6 +35,18 @@ def table_one_executor_code(step: AnalysisStep) -> str:
         raise ValueError("The step is not owned by the grouped Table 1 executor")
     assert step.table_one_spec is not None
     specification = step.table_one_spec.model_dump(mode="python")
+    declared_inputs = {
+        str(value).strip()
+        for value in step.inputs
+        if str(value).strip() and ":" not in str(value)
+    }
+    measurement_pairs = sorted(
+        (measured_column, count_column)
+        for measured_column in declared_inputs
+        if (count_column := companion_count_column_for_measured(measured_column))
+        is not None
+        and count_column in declared_inputs
+    )
     return textwrap.dedent(f"""
         import json
         import os
@@ -45,8 +58,12 @@ def table_one_executor_code(step: AnalysisStep) -> str:
             build_grouped_table_one,
             table_one_spec_sha256,
         )
+        from easyicu.research_agent.methods.descriptive_inputs import (
+            measurement_provenance_receipt,
+        )
 
         table_one_spec = {specification!r}
+        measurement_pairs = {measurement_pairs!r}
         cohort_path = Path(os.environ["COHORT_PARQUET"])
         out_dir = Path(os.environ["STEP_OUT_DIR"])
         out_dir.mkdir(parents=True, exist_ok=True)
@@ -55,6 +72,15 @@ def table_one_executor_code(step: AnalysisStep) -> str:
         table_one = build_grouped_table_one(frame, table_one_spec)
         table_path = out_dir / "table_one.csv"
         table_one.to_csv(table_path, index=False)
+
+        measurement_checks = [
+            measurement_provenance_receipt(
+                frame,
+                measured_column=measured_column,
+                count_column=count_column,
+            )
+            for measured_column, count_column in measurement_pairs
+        ]
 
         summary = {{
             "step_id": {step.step_id!r},
@@ -72,6 +98,10 @@ def table_one_executor_code(step: AnalysisStep) -> str:
             "table_one_path": table_path.name,
             "adjusted_effect": None,
             "output_files": {{"table:table_one": table_path.name}},
+            "measurement_provenance_audit": {{
+                "source": "COHORT_PARQUET",
+                "checks": measurement_checks,
+            }},
             "notes": [
                 "Overall and comparison groups use the exact Planner-declared levels.",
                 "Missing n (%) uses each displayed group's full denominator.",
