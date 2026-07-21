@@ -685,7 +685,6 @@ def patch_unplanned_measurement_provenance_summary(
             isinstance(node, ast.Assign)
             and len(node.targets) == 1
             and isinstance(node.targets[0], ast.Name)
-            and node.targets[0].id == "step_summary"
             and isinstance(node.value, ast.Dict)
         ):
             continue
@@ -705,17 +704,41 @@ def patch_unplanned_measurement_provenance_summary(
         if isinstance(key, ast.Constant) and isinstance(key.value, str)
     }
     checks = envelope.get("checks")
+    shadowed_host_helper = any(
+        (
+            isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
+            and node.name == "measurement_provenance_receipt"
+        )
+        or (
+            isinstance(node, ast.Name)
+            and isinstance(node.ctx, (ast.Store, ast.Del))
+            and node.id == "measurement_provenance_receipt"
+        )
+        for node in ast.walk(tree)
+    )
+    referenced_receipt_name = None
+    literal_checks = bool(
+        isinstance(checks, ast.List)
+        and len(checks.elts) == len(unplanned_paths)
+        and all(isinstance(item, ast.Dict) for item in checks.elts)
+    )
+    if (
+        shadowed_host_helper
+        and isinstance(checks, ast.List)
+        and len(checks.elts) == 1
+        and isinstance(checks.elts[0], ast.Name)
+        and len(unplanned_paths) == 1
+    ):
+        referenced_receipt_name = checks.elts[0].id
     if not (
         set(envelope) == {"source", "checks"}
         and isinstance(envelope["source"], ast.Constant)
         and envelope["source"].value == "COHORT_PARQUET"
-        and isinstance(checks, ast.List)
-        and len(checks.elts) == len(unplanned_paths)
-        and all(isinstance(item, ast.Dict) for item in checks.elts)
+        and (literal_checks or referenced_receipt_name is not None)
     ):
         return code
     provenance_literals: set[str] = set()
-    for check in checks.elts:
+    for check in checks.elts if literal_checks else []:
         assert isinstance(check, ast.Dict)
         fields = {
             str(key.value): value
@@ -732,7 +755,7 @@ def patch_unplanned_measurement_provenance_summary(
             if isinstance(value, ast.Constant) and isinstance(value.value, str):
                 if value.value.endswith("_measured") or value.value.endswith("_n"):
                     provenance_literals.add(str(value.value))
-    if not provenance_literals or not provenance_literals <= {
+    if provenance_literals and not provenance_literals <= {
         measured_column,
         count_column,
     }:
@@ -765,31 +788,64 @@ def patch_unplanned_measurement_provenance_summary(
         for node in ast.walk(scope)
     ):
         return code
-    if any(
-        (
-            isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
-            and node.name == "measurement_provenance_receipt"
-        )
-        or (
-            isinstance(node, ast.Name)
-            and isinstance(node.ctx, (ast.Store, ast.Del))
-            and node.id == "measurement_provenance_receipt"
-        )
+    receipt_name = (
+        "_easyicu_measurement_provenance_receipt_v1"
+        if shadowed_host_helper
+        else "measurement_provenance_receipt"
+    )
+    if shadowed_host_helper and any(
+        isinstance(node, ast.Name)
+        and isinstance(node.ctx, (ast.Store, ast.Del))
+        and node.id == receipt_name
         for node in ast.walk(tree)
     ):
         return code
 
     lines, starts = _source_offsets(code)
-    audit_span = _node_span(audit, lines=lines, starts=starts)
-    if audit_span is None:
-        return code
     replacement = (
         '{"source": "COHORT_PARQUET", "checks": ['
-        f"measurement_provenance_receipt({frame_name}, "
+        f"{receipt_name}({frame_name}, "
         f"measured_column={measured_column!r}, count_column={count_column!r})"
         "]}"
     )
-    edits: list[tuple[int, int, str]] = [(*audit_span, replacement)]
+    edits: list[tuple[int, int, str]] = []
+    if referenced_receipt_name is None:
+        audit_span = _node_span(audit, lines=lines, starts=starts)
+        if audit_span is None:
+            return code
+        edits.append((*audit_span, replacement))
+    else:
+        receipt_assignments = [
+            node
+            for node in ast.walk(scope)
+            if isinstance(node, ast.Assign)
+            and _lexical_scope(node, parents) is scope
+            and len(node.targets) == 1
+            and isinstance(node.targets[0], ast.Name)
+            and node.targets[0].id == referenced_receipt_name
+            and isinstance(node.value, ast.Call)
+            and isinstance(node.value.func, ast.Name)
+            and node.value.func.id == "measurement_provenance_receipt"
+            and len(node.value.args) == 1
+            and isinstance(node.value.args[0], ast.Name)
+            and node.value.args[0].id == frame_name
+            and not any(keyword.arg is None for keyword in node.value.keywords)
+            and node.lineno < audit.lineno
+        ]
+        if len(receipt_assignments) != 1:
+            return code
+        call = receipt_assignments[0].value
+        call_span = _node_span(call, lines=lines, starts=starts)
+        if call_span is None:
+            return code
+        edits.append(
+            (
+                *call_span,
+                f"{receipt_name}({frame_name}, "
+                f"measured_column={measured_column!r}, "
+                f"count_column={count_column!r})",
+            )
+        )
     exact_imports = [
         node
         for node in tree.body
@@ -797,7 +853,8 @@ def patch_unplanned_measurement_provenance_summary(
         and node.level == 0
         and node.module == "easyicu.research_agent.methods.descriptive_inputs"
         and any(
-            alias.name == "measurement_provenance_receipt" and alias.asname is None
+            alias.name == "measurement_provenance_receipt"
+            and (alias.asname or alias.name) == receipt_name
             for alias in node.names
         )
     ]
@@ -819,7 +876,13 @@ def patch_unplanned_measurement_provenance_summary(
                 import_at,
                 import_at,
                 "from easyicu.research_agent.methods.descriptive_inputs "
-                "import measurement_provenance_receipt\n",
+                "import measurement_provenance_receipt"
+                + (
+                    " as _easyicu_measurement_provenance_receipt_v1"
+                    if shadowed_host_helper
+                    else ""
+                )
+                + "\n",
             )
         )
     repaired = code

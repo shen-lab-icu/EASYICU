@@ -1001,6 +1001,58 @@ step_summary = {
     )
 
 
+def test_contract_repair_bypasses_one_shadowed_local_provenance_helper():
+    code = """import pandas as pd
+
+def measurement_provenance_receipt(*args, **kwargs):
+    return {"status": "local_source_audit"}
+
+frame = pd.read_parquet(input_path)
+provenance_receipt = measurement_provenance_receipt(
+    frame, value_column="marker"
+)
+summary = {
+    "measurement_provenance_audit": {
+        "source": "COHORT_PARQUET",
+        "checks": [provenance_receipt],
+    }
+}
+"""
+    findings = [
+        {
+            "validator": "step_summary_integrity",
+            "severity": "error",
+            "detail": {
+                "issue": "measurement_provenance_check_unplanned",
+                "summary_path": "measurement_provenance_audit.checks.0",
+                "planned_measured_columns": ["marker_measured"],
+            },
+        },
+        {
+            "validator": "step_summary_integrity",
+            "severity": "error",
+            "detail": {
+                "issue": "measurement_provenance_check_missing",
+                "measured_column": "marker_measured",
+                "expected_count_column": "marker_n",
+            },
+        },
+    ]
+
+    repaired = deterministic_contract_repair(code=code, findings=findings)
+
+    assert repaired is not None
+    repair_id, patched = repaired
+    assert repair_id == "measurement_provenance_summary_mapping_v2"
+    assert (
+        "measurement_provenance_receipt as "
+        "_easyicu_measurement_provenance_receipt_v1"
+    ) in patched
+    assert "_easyicu_measurement_provenance_receipt_v1(frame," in patched
+    assert "measured_column='marker_measured'" in patched
+    assert "count_column='marker_n'" in patched
+
+
 def test_contract_repair_refuses_unclosed_nested_provenance_mapping():
     code = """measurement_checks = []
 diagnostics = {

@@ -4574,6 +4574,8 @@ class PrimaryModelContractValidator:
         outcome_type: str,
         covariates: Sequence[str],
         contract: Mapping[str, Any],
+        raw_exposure_source: Optional[str] = None,
+        exposure_valid_range: Optional[tuple[float, float]] = None,
     ) -> Optional[tuple[int, Optional[int]]]:
         if outcome not in frame.columns:
             return None
@@ -4595,7 +4597,9 @@ class PrimaryModelContractValidator:
 
         analysis_set = cls._normalise(contract.get("analysis_set"))
         if analysis_set == "complete_case":
-            exposure = str(contract.get("exposure_source") or "")
+            exposure = raw_exposure_source or str(
+                contract.get("exposure_source") or ""
+            )
             if exposure not in frame.columns:
                 return None
             values = frame[exposure]
@@ -4605,12 +4609,67 @@ class PrimaryModelContractValidator:
                 mask &= numeric.map(
                     lambda value: pd.notna(value) and abs(value) != float("inf")
                 )
+                if exposure_valid_range is not None:
+                    lower, upper = exposure_valid_range
+                    mask &= numeric.between(lower, upper, inclusive="both")
         elif analysis_set != "source_aware":
             return None
         event_n = (
             int(outcome_values.loc[mask].sum()) if outcome_type == "binary" else None
         )
         return int(mask.sum()), event_n
+
+    @classmethod
+    def _raw_exposure_source(
+        cls,
+        *,
+        frame: Optional[pd.DataFrame],
+        contract: Mapping[str, Any],
+        exposure_rows: pd.DataFrame,
+    ) -> Optional[str]:
+        """Resolve a derived exposure to one host-verifiable physical column."""
+
+        declared = str(contract.get("exposure_source") or "").strip()
+        if frame is not None and declared in frame.columns:
+            return declared
+        if exposure_rows.empty:
+            return None
+        sources = {
+            str(value).strip()
+            for value in exposure_rows["_source"].tolist()
+            if str(value).strip() and str(value).strip().lower() != "nan"
+        }
+        if len(sources) != 1:
+            return None
+        source = next(iter(sources))
+        if frame is not None and source not in frame.columns:
+            return None
+        expression = str(contract.get("exposure_expression") or "")
+        if not re.search(
+            rf"(?<![A-Za-z0-9_]){re.escape(source)}(?![A-Za-z0-9_])",
+            expression,
+        ):
+            return None
+        return source
+
+    @classmethod
+    def _context_valid_range(
+        cls,
+        *,
+        context: ResearchContext,
+        source: Optional[str],
+    ) -> Optional[tuple[float, float]]:
+        if not source:
+            return None
+        descriptor = context.variable(source)
+        values = getattr(descriptor, "valid_range", None)
+        if not isinstance(values, (list, tuple)) or len(values) != 2:
+            return None
+        lower = cls._finite_number(values[0])
+        upper = cls._finite_number(values[1])
+        if lower is None or upper is None or lower > upper:
+            return None
+        return lower, upper
 
     @classmethod
     def _coefficient_source_authority_issues(
@@ -4670,6 +4729,7 @@ class PrimaryModelContractValidator:
         outcome_type: str,
         covariates: Sequence[str],
         contract: Mapping[str, Any],
+        raw_exposure_source: Optional[str] = None,
     ) -> Dict[str, Any]:
         policy = cls._normalise(contract.get("baseline_missing_policy"))
         analysis_set = cls._normalise(contract.get("analysis_set"))
@@ -4677,7 +4737,10 @@ class PrimaryModelContractValidator:
         if policy in {"drop_missing", "drop_missing_baseline", "complete_case"}:
             required_sources.extend(str(value) for value in covariates)
         if analysis_set == "complete_case":
-            required_sources.append(str(contract.get("exposure_source") or ""))
+            required_sources.append(
+                raw_exposure_source
+                or str(contract.get("exposure_source") or "")
+            )
         required_sources = [value for value in dict.fromkeys(required_sources) if value]
         authoritative_columns = [str(column) for column in frame.columns]
         missing = [
@@ -4998,10 +5061,20 @@ class PrimaryModelContractValidator:
                     )
                     continue
                 exposure_rows = rows[rows["_term_role"].eq("exposure")]
-                if exposure_rows.empty or any(
-                    not self._names_match(source, value)
+                raw_exposure_source = self._raw_exposure_source(
+                    frame=None,
+                    contract=contract,
+                    exposure_rows=exposure_rows,
+                )
+                exposure_source_matches = not exposure_rows.empty and all(
+                    self._names_match(source, value)
+                    or (
+                        raw_exposure_source is not None
+                        and self._names_match(raw_exposure_source, value)
+                    )
                     for value in exposure_rows["_source"]
-                ):
+                )
+                if not exposure_source_matches:
                     issues.append(
                         {
                             "model_id": model_id,
@@ -5318,12 +5391,30 @@ class PrimaryModelContractValidator:
                     }
                 )
             if cohort is not None:
+                model_rows = (
+                    coefficient_rows[
+                        coefficient_rows["_model_id"].eq(model_id)
+                        & coefficient_rows["_term_role"].eq("exposure")
+                    ]
+                    if coefficient_rows is not None
+                    else pd.DataFrame()
+                )
+                raw_exposure_source = self._raw_exposure_source(
+                    frame=cohort,
+                    contract=contract,
+                    exposure_rows=model_rows,
+                )
                 expected = self._expected_denominator(
                     frame=cohort,
                     outcome=outcome,
                     outcome_type=outcome_type,
                     covariates=model_covariates,
                     contract=contract,
+                    raw_exposure_source=raw_exposure_source,
+                    exposure_valid_range=self._context_valid_range(
+                        context=context,
+                        source=raw_exposure_source,
+                    ),
                 )
                 if expected is None:
                     issues.append(
@@ -5336,6 +5427,7 @@ class PrimaryModelContractValidator:
                                 outcome_type=outcome_type,
                                 covariates=model_covariates,
                                 contract=contract,
+                                raw_exposure_source=raw_exposure_source,
                             ),
                         }
                     )
