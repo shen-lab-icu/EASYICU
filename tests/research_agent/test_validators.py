@@ -2751,6 +2751,41 @@ def test_llm_concept_auditor_reclassifies_typed_flag_only_range_demand(ra):
     )
 
 
+def test_llm_concept_auditor_reclassifies_scoped_flag_only_range_demand(ra):
+    class _ScopedRangeDemandLLM:
+        def complete(self, messages, *, max_tokens=1024, temperature=0.0):
+            return json.dumps(
+                {
+                    "findings": [
+                        {
+                            "severity": "error",
+                            "message": "The finite value should not remain valid.",
+                            "detail": {
+                                "issue_code": "plausibility_range_exclusion_required",
+                                "variable": "marker",
+                                "requested_action": (
+                                    "exclude from valid_observed and classify as "
+                                    "contradictory/invalid"
+                                ),
+                                "value_class": "finite_outside_plausibility_range",
+                            },
+                        }
+                    ]
+                }
+            )
+
+    findings = ra.LLMConceptAuditor(_ScopedRangeDemandLLM()).audit(
+        context=_plausibility_range_context(ra),
+        script_text="model.fit(frame[['marker']])",
+    )
+
+    assert len(findings) == 1
+    assert findings[0].severity == "warning"
+    assert findings[0].detail["range_policy_authority"] == (
+        "concept_descriptor_flag_only"
+    )
+
+
 @pytest.mark.parametrize(
     ("binary", "variable", "value_class"),
     [
