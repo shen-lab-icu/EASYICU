@@ -3362,6 +3362,7 @@ def declared_product_contract_findings(
         trajectory_role_result_findings(
             step=step,
             step_summary=step_summary,
+            out_dir=out_dir,
         )
     )
     findings.extend(

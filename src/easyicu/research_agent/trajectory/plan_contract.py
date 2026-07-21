@@ -9,6 +9,7 @@ clustering method, cluster count, eligibility threshold, or scientific runner.
 
 from __future__ import annotations
 
+import json
 import math
 import re
 from collections import defaultdict, deque
@@ -67,6 +68,16 @@ STABILITY_EXECUTOR_INPUTS = frozenset(
 # prevents an unrelated method (for example cluster-robust regression) from
 # claiming the calculator merely by declaring stability-shaped filenames.
 TRAJECTORY_STABILITY_METHOD_HEAD = "trajectory_cluster_stability"
+
+TRAJECTORY_REPRESENTATION_SCHEMA_VERSION = "easyicu.trajectory_representation_schema/1"
+TRAJECTORY_CANDIDATE_SOLUTION_SCHEMA_VERSION = (
+    "easyicu.candidate_cluster_solution_schema/2"
+)
+OBSERVED_DATA_DIAG_GMM_METHOD = (
+    "observed_data_diagonal_gaussian_mixture_candidate_selection"
+)
+OBSERVED_DATA_DIAG_GMM_MODEL_FAMILY = "latent_class_diagonal_gaussian_mixture"
+OBSERVED_DATA_DIAG_GMM_FIT_METHOD = "observed_data_em_diagonal_gaussian_mixture"
 
 STABILITY_EXECUTOR_OUTPUTS = frozenset(
     {
@@ -515,17 +526,28 @@ def trajectory_role_result_findings(
     *,
     step: AnalysisStep,
     step_summary: Mapping[str, object],
+    out_dir: Path | None = None,
 ) -> List[ValidationFinding]:
     """Validate role-local replay metadata without choosing the science."""
 
     roles = trajectory_step_roles(step)
+    findings: List[ValidationFinding] = []
+    if out_dir is not None and "representation" in roles:
+        findings.extend(
+            _trajectory_representation_schema_findings(step=step, out_dir=out_dir)
+        )
+    if out_dir is not None and "candidate_selection" in roles:
+        findings.extend(
+            _trajectory_candidate_schema_findings(step=step, out_dir=out_dir)
+        )
     if "candidate_selection" not in roles:
-        return []
+        return findings
     raw_selection = step_summary.get("cluster_selection")
     try:
         selection = ClusterSelectionManifest.model_validate(raw_selection)
     except Exception as exc:
         return [
+            *findings,
             ValidationFinding(
                 validator="trajectory_role_result",
                 severity="error",
@@ -538,7 +560,7 @@ def trajectory_role_result_findings(
                     "step_id": step.step_id,
                     "validation_error": str(exc),
                 },
-            )
+            ),
         ]
 
     selected_value = next(
@@ -574,8 +596,9 @@ def trajectory_role_result_findings(
         if reported_count != selection.selected_n_clusters:
             issues.append(f"{count_key} differs from selected_n_clusters")
     if not issues:
-        return []
+        return findings
     return [
+        *findings,
         ValidationFinding(
             validator="trajectory_role_result",
             severity="error",
@@ -589,6 +612,140 @@ def trajectory_role_result_findings(
                 "issues": issues,
                 "selection": selection.model_dump(mode="json"),
             },
+        ),
+    ]
+
+
+def _read_role_manifest(path: Path) -> tuple[Mapping[str, object] | None, str | None]:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        return None, f"{type(exc).__name__}: {exc}"
+    if not isinstance(payload, Mapping):
+        return None, "manifest root is not an object"
+    return payload, None
+
+
+def _role_schema_finding(
+    *, step: AnalysisStep, kind: str, message: str, issues: Sequence[str]
+) -> ValidationFinding:
+    return ValidationFinding(
+        validator="trajectory_role_result",
+        severity="error",
+        message=message,
+        detail={"kind": kind, "step_id": step.step_id, "issues": list(issues)},
+    )
+
+
+def _trajectory_representation_schema_findings(
+    *, step: AnalysisStep, out_dir: Path
+) -> List[ValidationFinding]:
+    path = out_dir / "trajectory_representation_schema.json"
+    payload, read_error = _read_role_manifest(path)
+    if payload is None:
+        return [
+            _role_schema_finding(
+                step=step,
+                kind="trajectory_representation_schema_invalid",
+                message="The trajectory representation schema is absent or unreadable.",
+                issues=[read_error or "unknown read error"],
+            )
+        ]
+    issues: List[str] = []
+    if payload.get("schema_version") != TRAJECTORY_REPRESENTATION_SCHEMA_VERSION:
+        issues.append("schema_version is missing or unsupported")
+    if payload.get("anchor_provenance") not in {"task_contract", "agent_declared"}:
+        issues.append("anchor_provenance is not task_contract or agent_declared")
+    trailing = payload.get("trailing_na_policy")
+    required_trailing = {
+        "zero_imputation": False,
+        "eligibility_uses_observed_window_count": True,
+        "profile_summaries_ignore_missing": True,
+    }
+    if not isinstance(trailing, Mapping) or any(
+        trailing.get(key) is not value for key, value in required_trailing.items()
+    ):
+        issues.append("trailing_na_policy is not the structured missingness contract")
+    for field in (
+        "id_column",
+        "observation_family",
+        "observation_columns",
+        "profile_columns",
+        "representation_columns",
+        "frozen_population_n",
+        "representation_sha256",
+    ):
+        if payload.get(field) in (None, "", []):
+            issues.append(f"{field} is missing")
+    if not issues:
+        return []
+    return [
+        _role_schema_finding(
+            step=step,
+            kind="trajectory_representation_schema_incomplete",
+            message=(
+                "The representation step executed, but its typed schema cannot "
+                "authorize a downstream stability calculation."
+            ),
+            issues=issues,
+        )
+    ]
+
+
+def _trajectory_candidate_schema_findings(
+    *, step: AnalysisStep, out_dir: Path
+) -> List[ValidationFinding]:
+    path = out_dir / "candidate_cluster_solution_schema.json"
+    payload, read_error = _read_role_manifest(path)
+    if payload is None:
+        return [
+            _role_schema_finding(
+                step=step,
+                kind="trajectory_candidate_schema_invalid",
+                message="The candidate solution schema is absent or unreadable.",
+                issues=[read_error or "unknown read error"],
+            )
+        ]
+    issues: List[str] = []
+    if payload.get("schema_version") != TRAJECTORY_CANDIDATE_SOLUTION_SCHEMA_VERSION:
+        issues.append("schema_version is missing or unsupported")
+    if _normalise_token(step.method) == OBSERVED_DATA_DIAG_GMM_METHOD:
+        expected = {
+            "model_family": OBSERVED_DATA_DIAG_GMM_MODEL_FAMILY,
+            "fit_method": OBSERVED_DATA_DIAG_GMM_FIT_METHOD,
+            "covariance_type": "diag",
+        }
+        for field, value in expected.items():
+            if _normalise_token(payload.get(field)) != value:
+                issues.append(
+                    f"{field} does not match the declared observed-data method"
+                )
+    for field in (
+        "id_column",
+        "representation_columns",
+        "selected_n_clusters",
+        "selected_model_id",
+        "assignment_column",
+        "criterion",
+        "selection_rule",
+        "direction",
+        "selected_criterion_value",
+        "representation_schema_sha256",
+        "candidate_assignments_sha256",
+    ):
+        if payload.get(field) in (None, "", []):
+            issues.append(f"{field} is missing")
+    if not issues:
+        return []
+    return [
+        _role_schema_finding(
+            step=step,
+            kind="trajectory_candidate_schema_incomplete",
+            message=(
+                "The candidate-selection step executed, but its typed method/schema "
+                "contract does not authorize the declared stability refit."
+            ),
+            issues=issues,
         )
     ]
 
@@ -1481,12 +1638,17 @@ def trajectory_role_code_contract(
             "min_observed_windows, profile_columns, "
             "profile_summary_statistic (mean or median), time_axis='relative_hours', "
             "anchor, anchor_provenance, anchor_source, and trailing_na_policy. "
-            "Also write trajectory_representation_schema.json with those exact "
+            "Also write trajectory_representation_schema.json with "
+            "schema_version='easyicu.trajectory_representation_schema/1' and those exact "
             "agent-chosen fields plus id_column, representation_columns in model "
             "order, frozen_population_n, and representation_sha256 computed from "
             "the exact representation artifact bytes. This typed manifest is the downstream "
             "authority for representation semantics; do not make later roles infer "
-            "them from filenames, column substrings, or prose. "
+            "them from filenames, column substrings, or prose. Set "
+            "anchor_provenance to task_contract or agent_declared, and encode "
+            "trailing_na_policy as the object {zero_imputation:false, "
+            "eligibility_uses_observed_window_count:true, "
+            "profile_summaries_ignore_missing:true}, never as prose. "
             "Do not impute unobserved trajectory cells with zero. This role only "
             "builds the representation: do not fit clusters, select k, freeze "
             "assignments, characterize profiles, or analyze outcomes here."
@@ -1534,10 +1696,18 @@ def trajectory_role_code_contract(
             "record's id into cluster_selection.selected_model_id. Also copy the exact "
             "clustering_method/model_family into the cluster-selection manifest. "
             "Consume trajectory_representation_schema.json and write "
-            "candidate_cluster_solution_schema.json with its exact id_column and "
+            "candidate_cluster_solution_schema.json with "
+            "schema_version='easyicu.candidate_cluster_solution_schema/2', its exact id_column and "
             "representation_columns plus clustering_method/model_family, "
             "fit_method, covariance_type, selected_n_clusters, selected_model_id, "
-            "assignment_column, criterion, direction, and selected criterion value. "
+            "assignment_column, criterion, selection_rule, direction, and selected "
+            "criterion value. For method "
+            "observed_data_diagonal_gaussian_mixture_candidate_selection, the "
+            "implementation and schema must use "
+            "model_family='latent_class_diagonal_gaussian_mixture', "
+            "fit_method='observed_data_em_diagonal_gaussian_mixture', and "
+            "covariance_type='diag'; median/zero imputation followed by sklearn "
+            "GaussianMixture is a different method and is not permitted. "
             "Bind the exact consumed bytes by copying the host-provided SHA-256 "
             "digests into representation_schema_sha256 and "
             "candidate_assignments_sha256; do not predict or reconstruct host "
