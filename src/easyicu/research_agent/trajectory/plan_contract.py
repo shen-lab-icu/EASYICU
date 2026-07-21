@@ -56,6 +56,7 @@ STABILITY_EXECUTOR_INPUTS = frozenset(
     {
         "artifact:trajectory_representation",
         "artifact:candidate_cluster_assignments",
+        "manifest:cluster_selection",
         "manifest:trajectory_representation_schema",
         "manifest:candidate_cluster_solution_schema",
     }
@@ -1406,6 +1407,7 @@ def trajectory_planner_contract_guide(
         f"{TRAJECTORY_STABILITY_METHOD_HEAD}; its inputs must be exactly "
         "artifact:trajectory_representation, "
         "artifact:candidate_cluster_assignments, "
+        "manifest:cluster_selection, "
         "manifest:trajectory_representation_schema, and "
         "manifest:candidate_cluster_solution_schema. Its outputs must be exactly "
         "artifact:stability_freeze, artifact:cluster_assignments, "
