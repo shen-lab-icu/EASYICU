@@ -94,6 +94,7 @@ from .typed_input import (
     patch_resolved_input_manifest_env,
     patch_resolved_input_relative_path_root,
 )
+from .typed_artifact import patch_resolved_json_document_adapter
 from .typed_binding_identity import patch_direct_resolved_input_identity_key
 from ..gates.typed_binding_identity import direct_resolved_input_key_findings
 from ..schema import ValidationFinding
@@ -5038,6 +5039,12 @@ def _deterministic_runner_repair(
         )
         if repaired != code:
             return identity_key_repair, repaired
+
+    json_document_repair = "resolved_input_json_document_adapter_v1"
+    if previous_repair != json_document_repair:
+        repaired = patch_resolved_json_document_adapter(code, run_log)
+        if repaired != code:
+            return json_document_repair, repaired
 
     text_denominator_repair = "text_distribution_denominator_from_counts_v1"
     if previous_repair != text_denominator_repair:
