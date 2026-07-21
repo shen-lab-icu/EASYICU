@@ -1539,6 +1539,107 @@ main(frame)
     )
 
 
+def test_mechanical_preflight_accepts_proven_unavailable_provenance_branch(ra):
+    code = """
+def provenance_audit(frame):
+    measured_column = 'measured'
+    count_column = 'count'
+    measured = frame[measured_column]
+    count_exists = count_column in frame.columns
+    measured_numeric = pd.to_numeric(measured, errors='coerce')
+    measured_invalid = (
+        measured.notna()
+        & (measured_numeric.isna()
+           | ~np.isfinite(measured_numeric.to_numpy(dtype=float))
+           | ~measured_numeric.isin([0, 1]))
+    )
+    if not count_exists:
+        check = {
+            'measured_column': measured_column,
+            'count_column': count_column,
+            'status': 'unavailable',
+            'invalid_pair_n': None,
+            'discordant_n': None,
+            'role': 'audit_only',
+        }
+        if bool(measured_invalid.any()):
+            raise RuntimeError('invalid measured flag')
+        return {'checks': [check]}
+    invalid_pair_n = int(measured_invalid.sum())
+    discordant_n = int((measured_numeric != (frame[count_column] > 0)).sum())
+    check = {
+        'measured_column': measured_column,
+        'count_column': count_column,
+        'status': 'checked',
+        'invalid_pair_n': invalid_pair_n,
+        'discordant_n': discordant_n,
+        'role': 'audit_only',
+    }
+    if invalid_pair_n or discordant_n:
+        raise RuntimeError('invalid measurement provenance')
+    return {'checks': [check]}
+
+audit = provenance_audit(frame)
+if not audit.get('checks'):
+    raise RuntimeError('missing audit checks')
+model.fit(frame)
+"""
+    findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+
+    assert not any(
+        finding.detail
+        and finding.detail.get("reason") == "provenance_audit_not_fail_closed"
+        for finding in findings
+    )
+
+
+def test_mechanical_preflight_rejects_early_branch_claiming_checked_audit(ra):
+    code = """
+def provenance_audit(frame, debug):
+    measured_column = 'measured'
+    count_column = 'count'
+    measured = frame[measured_column]
+    count_exists = count_column in frame.columns
+    measured_numeric = pd.to_numeric(measured, errors='coerce')
+    measured_invalid = measured.notna() & measured_numeric.isna()
+    if not count_exists:
+        check = {
+            'measured_column': measured_column,
+            'count_column': count_column,
+            'status': 'checked',
+            'invalid_pair_n': 0,
+            'discordant_n': 0,
+            'role': 'audit_only',
+        }
+        if debug:
+            raise RuntimeError('debug only')
+        return {'checks': [check]}
+    invalid_pair_n = int(measured_invalid.sum())
+    discordant_n = int((measured_numeric != (frame[count_column] > 0)).sum())
+    check = {
+        'measured_column': measured_column,
+        'count_column': count_column,
+        'status': 'checked',
+        'invalid_pair_n': invalid_pair_n,
+        'discordant_n': discordant_n,
+        'role': 'audit_only',
+    }
+    if invalid_pair_n or discordant_n:
+        raise RuntimeError('invalid measurement provenance')
+    return {'checks': [check]}
+
+provenance_audit(frame, debug)
+model.fit(frame)
+"""
+    findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+
+    assert any(
+        finding.detail
+        and finding.detail.get("reason") == "provenance_audit_not_fail_closed"
+        for finding in findings
+    )
+
+
 def test_mechanical_preflight_accepts_immediately_returned_provenance_audit_row(ra):
     code = """
 def fail(message):

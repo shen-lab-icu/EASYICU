@@ -5,13 +5,13 @@
   "files": {
     "execution/phase.py": {
       "loc": 11462,
-      "sha256": "fd1205ec75492e9fcf877555c781e87bc2d9cd234ca61e863546850f4f28abf2",
+      "sha256": "82e16da87b748efae6e10771bebf2e77205115671936d27f87c867531dd20eb0",
       "intra_package_import_edges": 70,
       "shim_bypass_violations": []
     },
     "pipeline.py": {
       "loc": 10787,
-      "sha256": "352b295221ecdbd9def44a7d02e1ebdab561775c0650b54ded213d8901a7d8ba",
+      "sha256": "917f4865f76202cb69a2c02ca286a642e9a5c61e35afae403051d335fa0f1947",
       "intra_package_import_edges": 90,
       "shim_bypass_violations": []
     },
@@ -52,8 +52,8 @@
       "shim_bypass_violations": []
     },
     "gates/preflight.py": {
-      "loc": 8300,
-      "sha256": "9b566958f1183a2561aaeaea96ffb4d4879f5dea10e569daacca1cebaf831fc2",
+      "loc": 8364,
+      "sha256": "7bdaced8b67d9a3423c403ce4127e483d5a8c68f33828fcbdae48cc9c5fb1b13",
       "intra_package_import_edges": 8,
       "shim_bypass_violations": []
     },
@@ -64,9 +64,9 @@
       "shim_bypass_violations": []
     },
     "repairs/source.py": {
-      "loc": 6854,
-      "sha256": "728176d2ac106e0f583cdd3acc3ef57d94351e29c1ff79fad3e80a0a271eaf17",
-      "intra_package_import_edges": 15,
+      "loc": 6818,
+      "sha256": "1994338611f7d9a8881d2e5bd9785a7c44ead87813029d00841d2e59a445c720",
+      "intra_package_import_edges": 21,
       "shim_bypass_violations": []
     },
     "repairs/typed_input.py": {
@@ -78,8 +78,8 @@
   },
   "functions": {
     "execution/phase.py::_execute_one_step": {
-      "lines": 6137,
-      "line_start": 4869,
+      "lines": 6134,
+      "line_start": 4872,
       "direct_nested_funcs": 22,
       "total_nested_funcs": 24,
       "own_bound_names": 342,
@@ -90,8 +90,8 @@
       "callable_closure_captured_names": 30
     },
     "execution/phase.py::run_execute_phase": {
-      "lines": 7928,
-      "line_start": 3535,
+      "lines": 7925,
+      "line_start": 3538,
       "direct_nested_funcs": 15,
       "total_nested_funcs": 43,
       "own_bound_names": 145,
