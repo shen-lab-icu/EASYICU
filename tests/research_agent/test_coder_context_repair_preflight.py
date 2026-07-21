@@ -8,6 +8,9 @@ import pytest
 
 from easyicu.research_agent.agents.core import CoderAgent, _looks_like_python_script
 from easyicu.research_agent.gates.preflight import audit_mechanical_code_contracts
+from easyicu.research_agent.repairs.binary_domain import (
+    patch_observed_binary_primary_exposure_guard,
+)
 from easyicu.research_agent.repairs.source import deterministic_concept_audit_repair
 from easyicu.research_agent.research_context.prompt_scope import (
     coder_guide_for_step,
@@ -731,6 +734,72 @@ count = int(left & right).sum()
 
     assert repair_names == ["scalar_cast_before_reduction_v1"]
     assert "int((left & right).sum())" in repaired
+
+
+def test_binary_primary_exposure_guard_uses_host_observed_domain(ra):
+    context = _context(ra)
+    context = context.model_copy(
+        update={
+            "variables": [
+                (
+                    variable.model_copy(
+                        update={"observed_domain": {"is_binary": True, "n_unique": 2}}
+                    )
+                    if variable.name == context.primary_exposure
+                    else variable
+                )
+                for variable in context.variables
+            ]
+        }
+    )
+    code = """
+numeric = {"selected_first": frame["selected_first"]}
+exposure = numeric["selected_first"]
+groups = exposure.copy().astype(object)
+groups.loc[exposure.astype(float) <= 0] = "No exposure"
+groups.loc[exposure.astype(float) > 0] = "Exposure"
+"""
+    finding = ValidationFinding(
+        validator="llm_concept_auditor",
+        severity="error",
+        message="Untrusted prose is not routing authority.",
+        detail={"issue_code": "other", "variables": ["selected_first"]},
+    )
+
+    repaired = patch_observed_binary_primary_exposure_guard(
+        code,
+        context=context,
+        repair_findings=[finding],
+    )
+
+    assert repaired != code
+    assert "if not bool(exposure.dropna().isin([0, 1]).all()):" in repaired
+    assert "groups.loc[exposure.astype(float) > 0]" in repaired
+
+
+def test_binary_primary_exposure_guard_refuses_unproven_domain(ra):
+    context = _context(ra)
+    code = """
+numeric = {"selected_first": frame["selected_first"]}
+exposure = numeric["selected_first"]
+groups = exposure.copy().astype(object)
+groups.loc[exposure <= 0] = "No exposure"
+groups.loc[exposure > 0] = "Exposure"
+"""
+    finding = ValidationFinding(
+        validator="llm_concept_auditor",
+        severity="error",
+        message="Untrusted prose is not routing authority.",
+        detail={"issue_code": "other", "variables": ["selected_first"]},
+    )
+
+    repaired = patch_observed_binary_primary_exposure_guard(
+        code,
+        context=context,
+        repair_findings=[finding],
+    )
+
+    assert repaired == code
 
 
 def test_mechanical_preflight_repairs_unreduced_boolean_mask_count(ra):

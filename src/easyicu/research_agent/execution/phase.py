@@ -6917,6 +6917,7 @@ def run_execute_phase(
                 authorize=_authorize_automatic_repair,
                 step=step,
                 source=source,
+                context=context,
             )
 
         worker_progress.concept_repair_attempts = 0

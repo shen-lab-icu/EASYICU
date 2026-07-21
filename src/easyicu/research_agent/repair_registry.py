@@ -300,6 +300,7 @@ _STRUCTURAL_REPAIRS = {
     "measurement_provenance_summary_mapping_v1",
     "measurement_provenance_summary_mapping_v2",
     "normalize_first_time_companion_v1",
+    "observed_binary_primary_exposure_guard_v1",
     "primary_predictor_safe_summary_lookup_v1",
     "provenance_bidirectional_pair_scan_v1",
     "provenance_checked_status_contract_v1",

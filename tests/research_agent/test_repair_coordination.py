@@ -14,6 +14,7 @@ import ast
 import hashlib
 import inspect
 import json
+from types import SimpleNamespace
 
 import pytest
 
@@ -29,6 +30,7 @@ from easyicu.research_agent.repairs.coordination import (
     StepRepairBudget,
     authorized_deterministic_concept_repair,
 )
+from easyicu.research_agent.schema import ValidationFinding
 
 STEP_ID = "02_exposure_derivation_and_qc"
 
@@ -382,6 +384,44 @@ def test_authorized_repair_is_all_or_nothing():
     )
     assert code == script
     assert names == []
+
+
+def test_authorized_repair_applies_host_proven_binary_domain_guard():
+    script = """
+numeric = {"exposure": frame["exposure"]}
+selected = numeric["exposure"]
+group = selected.copy().astype(object)
+group.loc[selected <= 0] = "No exposure"
+group.loc[selected > 0] = "Exposure"
+"""
+    context = SimpleNamespace(
+        primary_exposure="exposure",
+        variables=[
+            SimpleNamespace(
+                name="exposure",
+                observed_domain={"is_binary": True, "n_unique": 2},
+            )
+        ],
+    )
+    finding = ValidationFinding(
+        validator="llm_concept_auditor",
+        severity="error",
+        message="Untrusted prose is not routing authority.",
+        detail={"issue_code": "other", "variables": ["exposure"]},
+    )
+
+    code, names = authorized_deterministic_concept_repair(
+        script,
+        [finding.message],
+        repair_findings=[finding],
+        authorize=lambda payload, **_: payload,
+        step=None,
+        source="test",
+        context=context,
+    )
+
+    assert names == ["observed_binary_primary_exposure_guard_v1"]
+    assert "if not bool(selected.dropna().isin([0, 1]).all()):" in code
 
 
 def test_receipt_on_disk_matches_snapshot_projection(tmp_path):
