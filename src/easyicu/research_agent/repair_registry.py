@@ -278,6 +278,7 @@ _SYNTACTIC_REPAIRS = {
     "prediction_calibration_import_fix_v1",
     "publication_export_audit_paths_v1",
     "resolved_context_digest_load_v1",
+    "resolved_input_manifest_env_v1",
     "resolved_input_identity_key_v1",
     "resolved_input_run_root_v1",
     "resolved_typed_input_precedence_v1",

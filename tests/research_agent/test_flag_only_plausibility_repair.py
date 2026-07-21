@@ -146,6 +146,49 @@ if age_out_of_domain.any():
     assert _repair(code, _finding()) == (code, [])
 
 
+def test_flag_only_count_is_retained_while_terminal_rejection_is_removed():
+    code = """
+def fail(message):
+    raise RuntimeError(message)
+
+age_original = df["age"]
+age_numeric = pd.to_numeric(age_original, errors="coerce")
+age_out_of_domain_mask = (age_numeric < 0) | (age_numeric > 120)
+age_out_of_domain_n = int(age_out_of_domain_mask.sum())
+if age_out_of_domain_n > 0:
+    fail(f"age outside flag-only range: {age_out_of_domain_n}")
+retained_mask = age_numeric >= 18
+step_summary = {"out_of_domain_n": age_out_of_domain_n}
+"""
+
+    repaired, names = _repair(code, _finding(variable="age"))
+
+    assert names == ["flag_only_plausibility_range_retention_v1"]
+    assert "age_out_of_domain_mask =" in repaired
+    assert "age_out_of_domain_n = int(age_out_of_domain_mask.sum())" in repaired
+    assert '"out_of_domain_n": age_out_of_domain_n' in repaired
+    assert "retained_mask = age_numeric >= 18" in repaired
+    assert "if age_out_of_domain_n > 0" not in repaired
+    assert "_easyicu_flag_only_plausibility_range_retained_v1" in repaired
+
+
+def test_counted_range_guard_does_not_rewrite_a_filtering_mask():
+    code = """
+def fail(message):
+    raise RuntimeError(message)
+
+age_original = df["age"]
+age_numeric = pd.to_numeric(age_original, errors="coerce")
+age_out_of_domain_mask = (age_numeric < 0) | (age_numeric > 120)
+age_out_of_domain_n = int(age_out_of_domain_mask.sum())
+if age_out_of_domain_n > 0:
+    fail("outside flag-only range")
+analysis_cohort = df.loc[~age_out_of_domain_mask]
+"""
+
+    assert _repair(code, _finding(variable="age")) == (code, [])
+
+
 def test_guard_with_side_effect_is_not_rewritten():
     code = """
 age_out_of_domain = (age < 0.0) | (age > 120.0)
