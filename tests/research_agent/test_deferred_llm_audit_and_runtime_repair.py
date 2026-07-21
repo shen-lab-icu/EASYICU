@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import replace
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pandas as pd
 import pytest
@@ -59,6 +60,46 @@ def _latest_step_record(run_dir: Path) -> dict:
         for record in partial["per_step_records"]
         if record.get("step_id") == "01_summary"
     ][-1]
+
+
+def test_provider_budget_failure_is_not_replayed_as_concept_authority(
+    monkeypatch, tmp_path: Path
+) -> None:
+    from easyicu.research_agent.contracts.runtime import ValidationFinding
+    from easyicu.research_agent.execution import concept_audit
+
+    audit = SimpleNamespace(
+        auditor_identity_sha256="a" * 64,
+        environment_sha256="b" * 64,
+        validator_implementation_sha256="c" * 64,
+        audit_key="d" * 64,
+    )
+    verified = SimpleNamespace(
+        capsule=SimpleNamespace(concept_audit=audit),
+    )
+    monkeypatch.setattr(
+        concept_audit,
+        "read_concept_audit_findings",
+        lambda *_args, **_kwargs: [
+            ValidationFinding(
+                validator="provider_call_budget",
+                severity="error",
+                message="budget exhausted before audit",
+                detail={"step_id": "01_summary"},
+            )
+        ],
+    )
+
+    assert (
+        concept_audit.verified_capsule_concept_audit_replay(
+            verified,
+            run_dir=tmp_path,
+            auditor_identity_sha256="a" * 64,
+            environment_sha256="b" * 64,
+            validator_implementation_sha256="c" * 64,
+        )
+        is None
+    )
 
 
 def test_llm_concept_audit_runs_once_only_after_local_contracts_pass(
@@ -749,19 +790,10 @@ def test_exact_capsule_resume_skips_generation_audit_and_execution_but_reruns_ga
     assert runner_calls == ["01_summary"]
     assert gate_calls == ["01_summary"] * 4
 
-    original_environment_identity = pipeline_execute.build_environment_identity
     monkeypatch.setattr(
         pipeline_execute,
         "engine_code_sha256",
         lambda: "f" * 64,
-    )
-    monkeypatch.setattr(
-        pipeline_execute,
-        "build_environment_identity",
-        lambda *, llm_signature: {
-            **original_environment_identity(llm_signature=llm_signature),
-            "engine_code_sha256": "f" * 64,
-        },
     )
     fifth = build_pipeline(auditor_b).run(
         **run_kwargs,
@@ -778,8 +810,9 @@ def test_exact_capsule_resume_skips_generation_audit_and_execution_but_reruns_ga
     assert fifth_record["step_authority_capsule_cache_miss"] == (
         "control_plane_drift_revalidation"
     )
+    assert fifth_record["capsule_concept_audit_replayed"] is True
     assert llm.generation_calls == 1
-    assert auditor_b.calls == 2
+    assert auditor_b.calls == 1
     assert runner_calls == ["01_summary", "01_summary"]
     assert fifth_capsule.capsule.candidate_origin.kind == "legacy_adoption"
     assert (
@@ -795,7 +828,7 @@ def test_exact_capsule_resume_skips_generation_audit_and_execution_but_reruns_ga
     assert sixth_record["capsule_execution_replayed"] is True
     assert sixth_record["capsule_concept_audit_replayed"] is True
     assert llm.generation_calls == 1
-    assert auditor_b.calls == 2
+    assert auditor_b.calls == 1
     assert runner_calls == ["01_summary", "01_summary"]
     assert gate_calls == ["01_summary"] * 6
 

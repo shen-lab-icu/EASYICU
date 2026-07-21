@@ -145,3 +145,41 @@ def test_metadata_sidecar_implementation_change_invalidates_runtime_identities(
     assert changed_cache_identity != baseline_cache_identity
     assert _selected_metadata_identity(changed_environment) == changed_identity
     assert _selected_metadata_identity(changed_cache_identity) == changed_identity
+
+
+def test_concept_audit_identity_excludes_unrelated_engine_tree_hash(
+    monkeypatch,
+) -> None:
+    baseline = run_input_capsule.build_concept_audit_environment_identity(
+        llm_signature="audit-identity-contract-test"
+    )
+    monkeypatch.setattr(
+        run_input_capsule,
+        "engine_code_sha256",
+        lambda: "f" * 64,
+    )
+    changed = run_input_capsule.build_concept_audit_environment_identity(
+        llm_signature="audit-identity-contract-test"
+    )
+
+    assert changed == baseline
+    assert "engine_code_sha256" not in changed
+
+
+def test_concept_audit_identity_binds_its_semantic_implementation(
+    monkeypatch,
+) -> None:
+    baseline = run_input_capsule.build_concept_audit_environment_identity(
+        llm_signature="audit-identity-contract-test"
+    )
+    monkeypatch.setattr(
+        run_input_capsule,
+        "concept_audit_code_sha256",
+        lambda: "a" * 64,
+    )
+    changed = run_input_capsule.build_concept_audit_environment_identity(
+        llm_signature="audit-identity-contract-test"
+    )
+
+    assert changed != baseline
+    assert changed["concept_audit_code_sha256"] == "a" * 64
