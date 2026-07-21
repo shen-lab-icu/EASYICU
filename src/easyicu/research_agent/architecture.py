@@ -109,6 +109,14 @@ def default_architecture_profile() -> ArchitectureProfile:
                 ],
             ),
             LayerComponent(
+                name="Research Know-How Registry (opt-in)",
+                layer=SystemLayer.AGENT_ORCHESTRATION,
+                responsibilities=[
+                    "Retrieve a bounded set of versioned, source-backed ICU design candidates offline.",
+                    "Expose unresolved concepts and preserve Planner adoption as typed, content-hashed references without changing cohort or estimand authority.",
+                ],
+            ),
+            LayerComponent(
                 name="ScientificDiscovery hooks",
                 layer=SystemLayer.SCIENTIFIC_DISCOVERY,
                 responsibilities=[

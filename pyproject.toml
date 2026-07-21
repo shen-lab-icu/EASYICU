@@ -85,7 +85,7 @@ package-dir = {"" = "src"}
 where = ["src"]
 
 [tool.setuptools.package-data]
-easyicu = ["data/*.json"]
+easyicu = ["data/*.json", "data/research_know_how/*.json"]
 "easyicu.webserver" = [
   "static/index.html",
   "static/css/*.css",

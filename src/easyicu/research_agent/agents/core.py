@@ -1016,7 +1016,12 @@ class PlannerAgent:
             "steps": [],
         }
 
-    def run(self, context: ResearchContext) -> AnalysisPlan:
+    def run(
+        self,
+        context: ResearchContext,
+        *,
+        allowed_know_how_refs: Sequence[str] = (),
+    ) -> AnalysisPlan:
         messages = [
             LLMMessage(role="system", content=_SYSTEM_GUIDE + _PRINCIPLES_GUIDE),
             LLMMessage(role="user", content=_build_planner_user_prompt(context)),
@@ -1026,14 +1031,19 @@ class PlannerAgent:
         return call_llm_with_structured_retry(
             self.llm,
             messages,
-            parser=lambda raw: self._parse(raw, context),
+            parser=lambda raw: self._parse(
+                raw,
+                context,
+                allowed_know_how_refs=allowed_know_how_refs,
+            ),
             role="planner",
             max_retries=PLANNER_MAX_RETRIES,
             max_tokens=4096,
             temperature=0.2,
             format_reminder=(
                 "The JSON must be a single object with keys: "
-                "research_question (string), cohort (object or null), "
+                "research_question (string), cohort (object or null), optional "
+                "know_how_refs (array containing only retrieved card ids), "
                 "steps (array of objects "
                 "each with step_id, planned_analysis_role, intent, inputs, expected_outputs, "
                 "method, icu_rule_refs, optional model_requirements, optional "
@@ -1045,7 +1055,13 @@ class PlannerAgent:
             ),
         )
 
-    def _parse(self, raw: str, context: ResearchContext) -> AnalysisPlan:
+    def _parse(
+        self,
+        raw: str,
+        context: ResearchContext,
+        *,
+        allowed_know_how_refs: Sequence[str] = (),
+    ) -> AnalysisPlan:
         text = raw.strip()
         # Strip a fenced block anywhere in the response (already
         # tolerant of the leading-prose case).
@@ -1088,6 +1104,13 @@ class PlannerAgent:
         data, dropped = _normalise_plan_payload(data)
         self.last_dropped_plan_keys = dropped
         plan = AnalysisPlan.model_validate(data)
+        allowed_refs = frozenset(str(item).strip() for item in allowed_know_how_refs)
+        unknown_refs = sorted(set(plan.know_how_refs) - allowed_refs)
+        if unknown_refs:
+            raise ValueError(
+                "Planner know_how_refs must be selected from this run's retrieval; "
+                f"unknown or unretrieved ids: {unknown_refs!r}"
+            )
         _validate_table_one_observed_levels(plan, context)
         missing_table_one_specs = [
             step.step_id
@@ -1299,17 +1322,31 @@ class ReplannerAgent(PlannerAgent):
         ]
         from ..providers.structured_retry import call_llm_with_structured_retry
 
+        def parse_revised(raw: str) -> AnalysisPlan:
+            candidate = self._parse(
+                raw,
+                context,
+                allowed_know_how_refs=current_plan.know_how_refs,
+            )
+            if candidate.know_how_refs != current_plan.know_how_refs:
+                raise ValueError(
+                    "Replanner must preserve know_how_refs exactly; it may not "
+                    "add, remove, duplicate, or reorder retrieved authority."
+                )
+            return candidate
+
         revised = call_llm_with_structured_retry(
             self.llm,
             messages,
-            parser=lambda raw: self._parse(raw, context),
+            parser=parse_revised,
             role="replanner",
             max_retries=2,
             max_tokens=4096,
             temperature=0.1,
             format_reminder=(
                 "The JSON must be a single AnalysisPlan object with keys: "
-                "research_question, steps, rationale. Every step must include "
+                "research_question, steps, rationale, and the exact CURRENT PLAN "
+                "know_how_refs when present. Every step must include "
                 "planned_analysis_role. Keep completed step_ids "
                 "from the CURRENT PLAN unchanged; only revise the remaining steps."
             ),
@@ -3473,6 +3510,7 @@ def _normalise_plan_payload(
         "steps",
         "robustness_specs",
         "display_labels",
+        "know_how_refs",
         "rationale",
         "revision",
     }

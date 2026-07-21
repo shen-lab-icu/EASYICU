@@ -1,0 +1,45 @@
+{
+  "schema_version": "easyicu.research_know_how/1",
+  "card_id": "lactate_trajectory_outcome",
+  "version": "1.0.0",
+  "title": "Lactate trajectories and clinical outcomes",
+  "summary": "Candidate design coordinates for repeated-lactate trajectory or clearance studies. Sampling is treatment- and severity-dependent, so measurement intensity, landmark timing, and immortal-time risk must be handled explicitly.",
+  "clinical_topics": ["lactate", "lactate clearance", "trajectory", "shock", "serial biomarker", "mortality"],
+  "study_families": ["association", "time_to_event", "phenotyping"],
+  "applicable_databases": ["miiv", "mimic_iv", "mimic_iii", "eicu", "hirid", "aumc", "sicdb"],
+  "design_candidates": {
+    "population": "ICU patients with enough temporally ordered lactate observations for the declared trajectory or landmark analysis.",
+    "time_zero": "ICU admission, shock recognition, or first qualifying lactate; select one landmark before deriving exposure trajectories.",
+    "observation_window": "A fixed early window for lactate measurements and treatments, with sampling density reported.",
+    "prediction_or_followup_window": "Outcomes begin after trajectory classification or use a correctly specified time-varying analysis.",
+    "eligibility_candidates": ["Specify minimum observations without conditioning on future survival", "Report assay units and harmonization", "Audit informative measurement frequency"],
+    "exposure": "Baseline lactate, prespecified change or clearance, or a validated longitudinal trajectory assignment.",
+    "outcome": "Mortality or organ-support outcome beginning after exposure ascertainment, with horizon and censoring defined.",
+    "estimand": "Outcome contrast across prespecified lactate patterns in patients observable at the selected landmark.",
+    "recommended_methods": ["Landmark analysis or time-varying model", "Trajectory stability diagnostics when clustering", "Adjustment for baseline severity and measurement process"],
+    "sensitivity_analyses": ["Alternative trajectory window", "Absolute change versus relative clearance", "Adjustment or stratification by lactate sampling intensity"]
+  },
+  "required_concepts": ["lactate", "measurement_time", "icu_admission_time", "death"],
+  "stop_conditions": ["Lactate timestamps or units cannot be harmonized", "Trajectory exposure uses measurements occurring after outcome follow-up begins", "Selected sampling requirements induce unquantifiable survivor bias"],
+  "citations": [
+    {
+      "citation_id": "surviving_sepsis_2021",
+      "title": "Surviving Sepsis Campaign: international guidelines for management of sepsis and septic shock 2021",
+      "year": 2021,
+      "source_type": "guideline",
+      "url": "https://pubmed.ncbi.nlm.nih.gov/34599691/",
+      "doi": "10.1007/s00134-021-06506-y",
+      "supports": ["clinical interpretation of lactate", "serial assessment context"]
+    },
+    {
+      "citation_id": "ryoo_lactate_2018",
+      "title": "Lactate Level Versus Lactate Clearance for Predicting Mortality in Patients With Septic Shock",
+      "year": 2018,
+      "source_type": "representative_study",
+      "url": "https://pubmed.ncbi.nlm.nih.gov/29432347/",
+      "doi": "10.1097/CCM.0000000000003030",
+      "supports": ["candidate lactate exposure definitions", "mortality association context"]
+    }
+  ],
+  "review_status": "curated_mvp"
+}

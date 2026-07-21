@@ -339,6 +339,7 @@ from .literature import (
     render_hypothesis_blueprint_for_prompt,
 )
 from .planning.preplan_literature import prepare_preplan_literature
+from .planning.preplan_know_how import prepare_preplan_know_how
 from .providers.llm import (
     LLMRouter,
     llm_is_mockish,
@@ -1497,6 +1498,10 @@ class ResearchAgentPipeline:
         experience_bank_path: Optional[Union[str, Path]] = None,
         experience_bank_top_k: int = 5,
         experience_bank_min_similarity: float = 0.2,
+        enable_know_how: bool = False,
+        know_how_paths: Sequence[Union[str, Path]] = (),
+        know_how_top_k: int = 3,
+        know_how_min_score: float = 0.15,
         runner_kind: str = "auto",
         runner_image: Optional[str] = None,
         runner_network: str = "none",
@@ -1746,6 +1751,14 @@ class ResearchAgentPipeline:
         )
         self._experience_bank_top_k = max(0, int(experience_bank_top_k))
         self._experience_bank_min_similarity = float(experience_bank_min_similarity)
+        self._enable_know_how = bool(enable_know_how)
+        self._know_how_paths = tuple(Path(path) for path in know_how_paths)
+        self._know_how_top_k = int(know_how_top_k)
+        self._know_how_min_score = float(know_how_min_score)
+        if not 0 <= self._know_how_top_k <= 5:
+            raise ValueError("know_how_top_k must be between 0 and 5")
+        if not 0.0 <= self._know_how_min_score <= 1.0:
+            raise ValueError("know_how_min_score must be between 0 and 1")
         # T3.1 — runner backend selection. ``auto`` prefers a probed Docker
         # image and uses macOS sandbox-exec only when Docker is unavailable;
         # ``docker`` explicitly selects :class:`DockerRunner`
@@ -2500,6 +2513,26 @@ class ResearchAgentPipeline:
                     )
                 )
 
+        allowed_know_how_refs: tuple[str, ...] = ()
+        if self._enable_know_how and skill_obj is None:
+            prepared_know_how = prepare_preplan_know_how(
+                context=agent_context,
+                run_dir=run_dir,
+                evidence=evidence,
+                database=database,
+                paths=self._know_how_paths,
+                top_k=self._know_how_top_k,
+                min_score=self._know_how_min_score,
+            )
+            allowed_know_how_refs = prepared_know_how.selected_ids
+            know_how_note = prepared_know_how.prompt
+            agent_notes = (
+                f"{agent_context.notes}\n\n{know_how_note}"
+                if agent_context.notes
+                else know_how_note
+            )
+            agent_context = agent_context.model_copy(update={"notes": agent_notes})
+
         study_design_brief = None
         article_contract = None
         article_figure_strategy = None
@@ -2700,6 +2733,19 @@ class ResearchAgentPipeline:
                 resume_state=resume_state,
             )
             if plan is not None and plan.steps:
+                unknown_resume_refs = sorted(
+                    set(plan.know_how_refs) - set(allowed_know_how_refs)
+                )
+                if unknown_resume_refs:
+                    raise ValueError(
+                        "resume plan references know-how cards not retrieved for "
+                        f"this run: {unknown_resume_refs!r}"
+                    )
+                if plan.know_how_refs and not self._enable_know_how:
+                    raise ValueError(
+                        "resume plan contains know_how_refs but know-how retrieval "
+                        "is disabled"
+                    )
                 reused_prior_plan = True
                 reused_plan_path = _prior_plan_path
                 plan_generation_mode = "resumed"
@@ -2866,7 +2912,10 @@ class ResearchAgentPipeline:
             plan_generation_mode = "llm"
             planner = PlannerAgent(role_resolver("planner"))
             try:
-                plan = planner.run(agent_context)
+                plan = planner.run(
+                    agent_context,
+                    allowed_know_how_refs=allowed_know_how_refs,
+                )
             except Exception as exc:
                 if not self._enable_deterministic_planner_fallback:
                     raise
@@ -2882,7 +2931,8 @@ class ResearchAgentPipeline:
                     )
                 )
                 plan = PlannerAgent(MockLLMClient(context=agent_context)).run(
-                    agent_context
+                    agent_context,
+                    allowed_know_how_refs=allowed_know_how_refs,
                 )
                 used_mock_llm = True
                 plan_generation_mode = "fallback"
@@ -2910,7 +2960,10 @@ class ResearchAgentPipeline:
             if not plan.steps and self._enable_deterministic_planner_fallback:
                 retry_plan = None
                 try:
-                    retry_plan = planner.run(agent_context)
+                    retry_plan = planner.run(
+                        agent_context,
+                        allowed_know_how_refs=allowed_know_how_refs,
+                    )
                 except Exception:
                     retry_plan = None
                 if retry_plan is not None and retry_plan.steps:
@@ -2936,7 +2989,8 @@ class ResearchAgentPipeline:
                         )
                     )
                     plan = PlannerAgent(MockLLMClient(context=agent_context)).run(
-                        agent_context
+                        agent_context,
+                        allowed_know_how_refs=allowed_know_how_refs,
                     )
                     used_mock_llm = True
                     plan_generation_mode = "fallback"
@@ -2952,7 +3006,10 @@ class ResearchAgentPipeline:
             ):
                 cohort_retry = None
                 try:
-                    cohort_retry = planner.run(agent_context)
+                    cohort_retry = planner.run(
+                        agent_context,
+                        allowed_know_how_refs=allowed_know_how_refs,
+                    )
                 except Exception:
                     cohort_retry = None
                 if (

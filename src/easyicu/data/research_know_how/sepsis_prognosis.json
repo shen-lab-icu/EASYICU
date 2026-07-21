@@ -1,0 +1,45 @@
+{
+  "schema_version": "easyicu.research_know_how/1",
+  "card_id": "sepsis_prognosis",
+  "version": "1.0.0",
+  "title": "Sepsis prognosis in the ICU",
+  "summary": "Candidate design coordinates for prognosis after a reproducible sepsis landmark. The card does not authorize a sepsis label, cohort exclusion, mortality horizon, or causal interpretation without matching typed variables and the user's question.",
+  "clinical_topics": ["sepsis", "septic shock", "prognosis", "organ dysfunction", "mortality"],
+  "study_families": ["association", "time_to_event", "prediction"],
+  "applicable_databases": ["miiv", "mimic_iv", "mimic_iii", "eicu", "hirid", "aumc", "sicdb"],
+  "design_candidates": {
+    "population": "ICU patients meeting a reproducible, data-observable sepsis definition; distinguish general sepsis from septic shock when the question requires it.",
+    "time_zero": "First qualifying sepsis landmark or ICU admission, chosen before exposure assessment and outcomes.",
+    "observation_window": "Baseline physiology, organ dysfunction, treatment, and measurement-process variables available by the declared landmark.",
+    "prediction_or_followup_window": "In-hospital or prespecified fixed-horizon follow-up with discharge and censoring defined explicitly.",
+    "eligibility_candidates": ["Declare infection and organ-dysfunction operationalization", "Prevent duplicate stays from crossing validation sets", "Separate prevalent from incident sepsis when relevant"],
+    "exposure": "Question-specific baseline severity, biomarker, treatment, or predictor set measured before or at the landmark.",
+    "outcome": "Prespecified mortality or organ-support outcome with a defined horizon and ascertainment source.",
+    "estimand": "Association, survival probability, or prognostic risk at the declared horizon for the target sepsis population.",
+    "recommended_methods": ["Model outcome type and censoring explicitly", "Report absolute risks with adjusted estimates", "Audit missingness and treatment timing"],
+    "sensitivity_analyses": ["Alternative sepsis landmark or operational definition", "Fixed-horizon versus time-to-event analysis", "Restriction to first ICU stay"]
+  },
+  "required_concepts": ["suspected_infection", "sofa", "icu_admission_time", "death", "discharge"],
+  "stop_conditions": ["A reproducible sepsis landmark cannot be constructed", "Outcome timing is unavailable", "Exposure is measured after the outcome window begins without an explicit landmark design"],
+  "citations": [
+    {
+      "citation_id": "sepsis3_2016",
+      "title": "The Third International Consensus Definitions for Sepsis and Septic Shock",
+      "year": 2016,
+      "source_type": "consensus",
+      "url": "https://pubmed.ncbi.nlm.nih.gov/26903338/",
+      "doi": "10.1001/jama.2016.0287",
+      "supports": ["sepsis concept", "organ dysfunction", "septic shock distinction"]
+    },
+    {
+      "citation_id": "surviving_sepsis_2021",
+      "title": "Surviving Sepsis Campaign: international guidelines for management of sepsis and septic shock 2021",
+      "year": 2021,
+      "source_type": "guideline",
+      "url": "https://pubmed.ncbi.nlm.nih.gov/34599691/",
+      "doi": "10.1007/s00134-021-06506-y",
+      "supports": ["clinical context", "outcome and treatment interpretation"]
+    }
+  ],
+  "review_status": "curated_mvp"
+}

@@ -32,12 +32,15 @@ Definition: LLM roles that choose the analysis shape, write code, repair
 failed steps, interpret outputs, and draft manuscript text.
 
 Includes: planner, replanner, coder, analyzer, writer, literature helper,
-and their prompts.
+their prompts, and the default-off Research Know-How Registry. The registry
+retrieves a bounded set of source-backed design candidates offline; cards do
+not acquire cohort, time-zero, exclusion, or estimand authority.
 
 Reviewer-facing claim: LLMs make bounded research-workflow decisions, but
 they do not directly create numeric results or rewrite ICU rules.
 
-Code examples: `agents/core.py`, `providers/prompts/`, and `plan_utils.py`.
+Code examples: `agents/core.py`, `providers/prompts/`, `plan_utils.py`,
+`know_how/registry.py`, and `planning/preplan_know_how.py`.
 
 ## Layer 3: Safe Analytical Runtime
 

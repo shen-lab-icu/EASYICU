@@ -1,0 +1,44 @@
+{
+  "schema_version": "easyicu.research_know_how/1",
+  "card_id": "aki_onset_prediction",
+  "version": "1.0.0",
+  "title": "Acute kidney injury onset prediction",
+  "summary": "Candidate design coordinates for predicting incident AKI from longitudinal ICU data. Confirm baseline kidney status, measurement cadence, prediction horizon, and whether both creatinine and urine-output definitions are observable before adopting the card.",
+  "clinical_topics": ["acute kidney injury", "AKI", "creatinine", "urine output", "renal outcome", "onset prediction"],
+  "study_families": ["prediction"],
+  "applicable_databases": ["miiv", "mimic_iv", "mimic_iii", "eicu", "hirid", "aumc", "sicdb"],
+  "design_candidates": {
+    "population": "Adult ICU stays at risk for a new AKI event; pre-existing renal dysfunction and renal-replacement therapy require explicit, question-specific handling rather than automatic exclusion.",
+    "time_zero": "A clinically observable landmark such as ICU admission or a rolling prediction landmark, fixed before the prediction window.",
+    "observation_window": "Use only measurements available before each landmark; document baseline creatinine ascertainment and urine-output completeness.",
+    "prediction_or_followup_window": "Choose and justify a clinically useful near-term horizon; prevent overlap between feature and outcome windows.",
+    "eligibility_candidates": ["Define adult and first-stay handling", "Confirm patients are event-free at the landmark", "Report availability of baseline creatinine and urine output separately"],
+    "exposure": "A prespecified predictor set measured before the landmark, not a post-outcome proxy.",
+    "outcome": "Incident AKI stage derived from an explicitly implementable KDIGO-aligned creatinine and/or urine-output rule.",
+    "estimand": "Risk of a new AKI event within the declared horizon among patients event-free and observable at the landmark.",
+    "recommended_methods": ["Patient-level temporal split or external validation", "Calibration and discrimination with uncertainty", "Preprocessing fitted within each training fold"],
+    "sensitivity_analyses": ["Creatinine-only versus urine-output-capable definitions", "Alternative baseline-creatinine assumptions", "Competing discharge or death handling" ]
+  },
+  "required_concepts": ["creatinine", "urine_output", "icu_admission_time", "death", "discharge"],
+  "stop_conditions": ["AKI onset cannot be temporally separated from predictors", "Neither creatinine nor urine output supports an implementable outcome", "Patient-level split identifiers are unavailable"],
+  "citations": [
+    {
+      "citation_id": "kdigo_aki_2012",
+      "title": "KDIGO Clinical Practice Guideline for Acute Kidney Injury",
+      "year": 2012,
+      "source_type": "guideline",
+      "url": "https://kdigo.org/wp-content/uploads/2016/10/KDIGO-2012-AKI-Guideline-English.pdf",
+      "supports": ["AKI definition candidates", "creatinine and urine-output criteria"]
+    },
+    {
+      "citation_id": "tripod_ai_2024",
+      "title": "TRIPOD+AI statement: updated guidance for reporting clinical prediction models",
+      "year": 2024,
+      "source_type": "reporting_standard",
+      "url": "https://pubmed.ncbi.nlm.nih.gov/38626948/",
+      "doi": "10.1136/bmj-2023-078378",
+      "supports": ["prediction design", "validation and reporting"]
+    }
+  ],
+  "review_status": "curated_mvp"
+}

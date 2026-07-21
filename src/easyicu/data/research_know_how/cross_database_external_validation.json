@@ -1,0 +1,45 @@
+{
+  "schema_version": "easyicu.research_know_how/1",
+  "card_id": "cross_database_external_validation",
+  "version": "1.0.0",
+  "title": "Cross-database external validation",
+  "summary": "Candidate coordinates for transporting a locked ICU analysis or prediction model across databases. Harmonization must preserve concept meaning, time zero, eligibility, outcome horizon, units, and missingness provenance rather than forcing superficial column alignment.",
+  "clinical_topics": ["external validation", "cross database", "transportability", "generalizability", "model validation", "data harmonization"],
+  "study_families": ["prediction", "association", "descriptive"],
+  "applicable_databases": ["miiv", "mimic_iv", "mimic_iii", "eicu", "hirid", "aumc", "sicdb"],
+  "design_candidates": {
+    "population": "A source population and one or more independently sampled target-database populations mapped to a common, clinically defensible eligibility definition.",
+    "time_zero": "The same clinical landmark in every database, with any implementation differences documented.",
+    "observation_window": "Semantically equivalent pre-landmark variables, units, aggregation rules, and missingness states in each database.",
+    "prediction_or_followup_window": "A consistently ascertainable outcome horizon; database-specific approximations must be labeled and tested.",
+    "eligibility_candidates": ["Lock the source model or analysis before target evaluation", "Report cohort attrition by database", "Audit concept and unit equivalence before pooling"],
+    "exposure": "The locked source model, score, exposure definition, or analysis specification applied without target-outcome-guided redesign.",
+    "outcome": "A harmonized outcome with equivalent horizon and ascertainment, plus database-specific limitations.",
+    "estimand": "Target-database performance or effect estimate, with heterogeneity and transportability described rather than obscured by pooling.",
+    "recommended_methods": ["Database-stratified validation before pooled summaries", "Calibration and discrimination for prediction", "Heterogeneity and concept-availability audit"],
+    "sensitivity_analyses": ["Common-core variable set", "Database-specific versus pooled recalibration", "Leave-one-database-out analysis"]
+  },
+  "required_concepts": ["patient_id", "icu_admission_time", "age", "sex", "death"],
+  "stop_conditions": ["Time zero or outcome horizon is not meaningfully harmonizable", "The source specification was modified using target outcomes without labeling redevelopment", "Required concepts have incompatible clinical meaning across databases"],
+  "citations": [
+    {
+      "citation_id": "tripod_ai_2024",
+      "title": "TRIPOD+AI statement: updated guidance for reporting clinical prediction models",
+      "year": 2024,
+      "source_type": "reporting_standard",
+      "url": "https://pubmed.ncbi.nlm.nih.gov/38626948/",
+      "doi": "10.1136/bmj-2023-078378",
+      "supports": ["external validation reporting", "model performance and updating"]
+    },
+    {
+      "citation_id": "ramspek_external_validation_2021",
+      "title": "External validation of prognostic models: what, why, how, when and where?",
+      "year": 2021,
+      "source_type": "methods",
+      "url": "https://pmc.ncbi.nlm.nih.gov/articles/PMC7857818/",
+      "doi": "10.1093/ckj/sfaa188",
+      "supports": ["external validation design", "transportability and model updating"]
+    }
+  ],
+  "review_status": "curated_mvp"
+}
