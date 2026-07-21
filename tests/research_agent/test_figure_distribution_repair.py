@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from easyicu.research_agent.repairs.figure_distribution import (
     patch_categorical_distribution_clinical_bin_role,
+    patch_text_distribution_denominator_from_counts,
 )
 from easyicu.research_agent.repairs.import_repair import patch_known_host_helper_import
 from easyicu.research_agent.repairs.host_helper_failure import (
@@ -179,3 +180,71 @@ except Exception:
         },
     )
     assert patch_host_validation_helper_reraise(code, findings=[finding]) == code
+
+
+DENOMINATOR_CODE = """import numpy as np
+import pandas as pd
+
+distribution = pd.DataFrame(
+    {
+        "count": [2, 3],
+        "denominator": ["valid observed", "valid observed"],
+    }
+)
+original_count = distribution["count"].copy()
+original_denominator = distribution["denominator"].copy()
+distribution["count"] = pd.to_numeric(original_count, errors="coerce")
+distribution["denominator_numeric"] = pd.to_numeric(
+    original_denominator, errors="coerce"
+)
+"""
+
+
+def test_text_denominator_uses_complete_same_role_category_counts() -> None:
+    repaired = patch_text_distribution_denominator_from_counts(
+        DENOMINATOR_CODE,
+        "ValueError: Distribution denominator must be numeric for figure reconciliation",
+    )
+    assert repaired is not None
+    namespace: dict[str, object] = {}
+    exec(repaired, namespace)
+    distribution = namespace["distribution"]
+    assert distribution["denominator_numeric"].tolist() == [5.0, 5.0]
+
+
+def test_text_denominator_rejects_multiple_semantic_roles() -> None:
+    code = DENOMINATOR_CODE.replace(
+        '["valid observed", "valid observed"]',
+        '["valid observed", "locked cohort"]',
+    )
+    repaired = patch_text_distribution_denominator_from_counts(
+        code,
+        "ValueError: Distribution denominator must be numeric for figure reconciliation",
+    )
+    assert repaired is not None
+    try:
+        exec(repaired, {})
+    except ValueError as exc:
+        assert "not one complete semantic role" in str(exc)
+    else:
+        raise AssertionError("ambiguous semantic denominator must fail closed")
+
+
+def test_text_denominator_repair_requires_exact_failure_and_numeric_counts() -> None:
+    assert (
+        patch_text_distribution_denominator_from_counts(
+            DENOMINATOR_CODE,
+            "ValueError: another failure",
+        )
+        is None
+    )
+    assert (
+        patch_text_distribution_denominator_from_counts(
+            DENOMINATOR_CODE.replace(
+                'distribution["count"] = pd.to_numeric(original_count, errors="coerce")',
+                'distribution["count"] = original_count',
+            ),
+            "ValueError: Distribution denominator must be numeric for figure reconciliation",
+        )
+        is None
+    )
