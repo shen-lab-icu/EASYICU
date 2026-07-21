@@ -544,6 +544,7 @@ _DETAIL_REASON_CODES = {
     "closed_counts_table_index_used_as_levels": (
         RepairReason.INVALID_HELPER_SIGNATURE
     ),
+    "table_one_spec_not_planner_owned": RepairReason.INVALID_HELPER_SIGNATURE,
     "local_helper_unpack_arity_mismatch": RepairReason.INVALID_HELPER_SIGNATURE,
     "host_helper_runtime_introspection": RepairReason.INVALID_HELPER_SIGNATURE,
     "string_suffix_trim_length_mismatch": (RepairReason.STRING_SUFFIX_TRIM_MISMATCH),
