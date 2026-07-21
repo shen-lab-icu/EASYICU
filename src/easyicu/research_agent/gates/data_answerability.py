@@ -8,6 +8,11 @@ unestimable contrast before any Planner/Coder provider call.
 
 from __future__ import annotations
 
+from ..authority.source_status import (
+    SourceStatusContractError,
+    source_status_contract_digest,
+    source_status_contract_from_context,
+)
 from ..schema import ResearchContext, ValidationFinding
 
 
@@ -43,15 +48,109 @@ def primary_exposure_answerability_findings(
     missing_n = int(missing.n_missing) if missing is not None else 0
     missing_fraction = float(missing.fraction_missing) if missing is not None else 0.0
     missingness_semantics = str(descriptor.missingness_semantics or "").strip()
-    if missing_n > 0 and not missingness_semantics:
-        kind = "scientifically_infeasible_requires_data_contract"
-        message = (
-            f"Primary exposure `{exposure_name}` has only one observed level and "
-            f"{missing_n} missing rows ({missing_fraction:.1%}), but upstream "
-            "metadata does not define whether missing means event absence, "
-            "unmeasured, or source-unavailable. The requested contrast cannot be "
-            "estimated until a host-owned source/absence contract is supplied."
+    try:
+        source_contract = source_status_contract_from_context(
+            context,
+            variable=exposure_name,
         )
+    except SourceStatusContractError as exc:
+        return [
+            ValidationFinding(
+                validator="data_answerability_gate",
+                severity="error",
+                message=(
+                    f"Primary exposure `{exposure_name}` has an invalid host-owned "
+                    f"source-status contract: {exc}"
+                ),
+                detail={
+                    "kind": "source_status_contract_invalid",
+                    "primary_exposure": exposure_name,
+                    "validation_error": str(exc),
+                },
+            )
+        ]
+    if source_contract is not None:
+        counts = source_contract.counts
+        expected_nonmissing = source_contract.n_total - missing_n
+        missing_partition = (
+            counts.verified_absent
+            + counts.unmeasured
+            + counts.source_missing
+            + counts.contradictory
+        )
+        binding_issues: list[str] = []
+        if counts.observed != expected_nonmissing:
+            binding_issues.append("observed count disagrees with variable nonmissing_n")
+        if missing_partition != missing_n:
+            binding_issues.append(
+                "non-observed source-status counts disagree with missing_n"
+            )
+        if counts.contradictory:
+            binding_issues.append("contract contains contradictory rows")
+        if binding_issues:
+            return [
+                ValidationFinding(
+                    validator="data_answerability_gate",
+                    severity="error",
+                    message=(
+                        f"Primary exposure `{exposure_name}` source-status authority "
+                        "does not reconcile with the locked ResearchContext."
+                    ),
+                    detail={
+                        "kind": "source_status_contract_binding_mismatch",
+                        "primary_exposure": exposure_name,
+                        "issues": binding_issues,
+                        "contract_sha256": source_status_contract_digest(
+                            source_contract
+                        ),
+                    },
+                )
+            ]
+        if counts.observed > 0 and counts.verified_absent > 0:
+            return [
+                ValidationFinding(
+                    validator="data_answerability_gate",
+                    severity="error",
+                    message=(
+                        f"Primary exposure `{exposure_name}` has verified-absence "
+                        "authority, but the locked exposure column still contains "
+                        "a single observed level. The host must materialize the "
+                        "verified-absent rows before scientific planning."
+                    ),
+                    detail={
+                        "kind": "source_status_contract_not_materialized",
+                        "primary_exposure": exposure_name,
+                        "contract_sha256": source_status_contract_digest(
+                            source_contract
+                        ),
+                        "row_status_artifact_sha256": (
+                            source_contract.row_status_artifact_sha256
+                        ),
+                        "row_identity_sha256": source_contract.row_identity_sha256,
+                        "verified_absent_n": counts.verified_absent,
+                        "required_action": (
+                            "host_materialize_verified_absence_into_bound_exposure"
+                        ),
+                    },
+                )
+            ]
+    if missing_n > 0:
+        kind = "scientifically_infeasible_requires_data_contract"
+        if source_contract is None:
+            message = (
+                f"Primary exposure `{exposure_name}` has only one observed level and "
+                f"{missing_n} missing rows ({missing_fraction:.1%}), but upstream "
+                "metadata does not define whether missing means event absence, "
+                "unmeasured, or source-unavailable. The requested contrast cannot "
+                "be estimated until a host-owned source/absence contract is "
+                "supplied."
+            )
+        else:
+            message = (
+                f"Primary exposure `{exposure_name}` has only one observed level. "
+                "Its host-owned source-status contract does not establish a usable "
+                "verified-absence contrast for the locked cohort."
+            )
     elif missing_n == 0:
         kind = "scientifically_infeasible_no_exposure_contrast"
         message = (
@@ -60,10 +159,7 @@ def primary_exposure_answerability_findings(
             "estimable in this cohort."
         )
     else:
-        # Explicit missingness semantics exist.  A later source-status gate may
-        # decide whether those rows create a valid second level; this narrow
-        # gate does not parse prose or recode them.
-        return []
+        raise AssertionError("unreachable answerability state")
     return [
         ValidationFinding(
             validator="data_answerability_gate",
@@ -77,10 +173,15 @@ def primary_exposure_answerability_findings(
                 "missing_n": missing_n,
                 "missing_fraction": missing_fraction,
                 "missingness_semantics_present": bool(missingness_semantics),
+                "typed_source_status_contract_present": source_contract is not None,
                 "required_action": (
                     "supply_host_owned_source_absence_contract"
-                    if missing_n > 0
-                    else "revise_question_or_cohort"
+                    if missing_n > 0 and source_contract is None
+                    else (
+                        "revise_source_contract_or_materialize_exposure"
+                        if missing_n > 0
+                        else "revise_question_or_cohort"
+                    )
                 ),
             },
         )
