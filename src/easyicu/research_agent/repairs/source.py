@@ -94,6 +94,8 @@ from .typed_input import (
     patch_resolved_input_manifest_env,
     patch_resolved_input_relative_path_root,
 )
+from .typed_binding_identity import patch_direct_resolved_input_identity_key
+from ..gates.typed_binding_identity import direct_resolved_input_key_findings
 from ..schema import ValidationFinding
 
 _NULL_PRIMARY_EFFECT_MARKERS = (
@@ -2460,6 +2462,15 @@ def deterministic_concept_audit_repair(
             repair_name = "resolved_input_identity_key_v1"
             repaired = identity_keyed
             repair_names.append(repair_name)
+        direct_identity_keyed = patch_direct_resolved_input_identity_key(
+            repaired,
+            findings=repair_findings,
+        )
+        if direct_identity_keyed != repaired:
+            repair_name = "resolved_input_identity_key_v1"
+            repaired = direct_identity_keyed
+            if repair_name not in repair_names:
+                repair_names.append(repair_name)
 
     if RepairReason.RUNTIME_SYNTAX_INCOMPATIBLE in set(repair_reasons):
         runtime_compatible = _patch_pre312_fstring_subscript_quotes(
@@ -5011,6 +5022,22 @@ def _deterministic_runner_repair(
         repaired = patch_known_host_helper_import(code, run_log)
         if repaired is not None and repaired != code:
             return host_helper_import_repair, repaired
+
+    identity_key_repair = "resolved_input_identity_key_v1"
+    if previous_repair != identity_key_repair and (
+        "typed input binding lacks exact input_key" in lowered
+        or "typed binding key mismatch" in lowered
+    ):
+        try:
+            identity_findings = direct_resolved_input_key_findings(ast.parse(code))
+        except SyntaxError:
+            identity_findings = []
+        repaired = patch_direct_resolved_input_identity_key(
+            code,
+            findings=identity_findings,
+        )
+        if repaired != code:
+            return identity_key_repair, repaired
 
     text_denominator_repair = "text_distribution_denominator_from_counts_v1"
     if previous_repair != text_denominator_repair:

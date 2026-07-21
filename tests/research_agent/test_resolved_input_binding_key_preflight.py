@@ -10,7 +10,10 @@ from easyicu.research_agent.repairs.reasons import (
     RepairReason,
     repair_reason_for_finding,
 )
-from easyicu.research_agent.repairs.source import deterministic_concept_audit_repair
+from easyicu.research_agent.repairs.source import (
+    _deterministic_runner_repair,
+    deterministic_concept_audit_repair,
+)
 
 
 def _step(ra):
@@ -140,3 +143,63 @@ def test_resolved_input_identity_key_repair_is_syntactic_and_automatic() -> None
     assert metadata.introduces_numbers is False
     assert metadata.requires_disclosure is False
     assert automatic_repair_allowed(metadata.repair_id)
+
+
+_DIRECT_SCRIPT = """
+manifest = {
+    "planner_declared_inputs": ["table:upstream"],
+    "inputs": {
+        "table:upstream": {
+            "relative_path": "evidence/upstream.csv",
+            "sha256": "abc",
+            "product_contract": {"columns": ["x"]},
+            "identity_row": {"input_key": "table:upstream"},
+        }
+    },
+}
+typed_bindings = manifest.get("inputs", {})
+for expected_key in manifest.get("planner_declared_inputs", []):
+    binding = typed_bindings[expected_key]
+    binding_input_key = binding.get("input_key")
+"""
+
+
+def test_direct_resolved_binding_key_is_found_and_repaired(ra) -> None:
+    findings = _findings(_DIRECT_SCRIPT, ra)
+
+    assert len(findings) == 1
+    assert findings[0].detail["binding_name"] == "binding"
+    repaired, names = deterministic_concept_audit_repair(
+        _DIRECT_SCRIPT,
+        [findings[0].message],
+        repair_reasons=[repair_reason_for_finding(findings[0])],
+        repair_findings=findings,
+    )
+
+    assert names == ["resolved_input_identity_key_v1"]
+    assert 'binding["identity_row"]["input_key"]' in repaired
+    namespace: dict[str, object] = {}
+    exec(repaired, namespace)
+    assert namespace["binding_input_key"] == "table:upstream"
+
+
+def test_runtime_failure_reuses_direct_identity_key_repair() -> None:
+    repair = _deterministic_runner_repair(
+        code=_DIRECT_SCRIPT,
+        run_log=(
+            "ValueError: Typed input binding lacks exact input_key: table:upstream"
+        ),
+    )
+
+    assert repair is not None
+    assert repair[0] == "resolved_input_identity_key_v1"
+    assert 'binding["identity_row"]["input_key"]' in repair[1]
+
+
+def test_direct_unproven_binding_mapping_is_not_claimed(ra) -> None:
+    unrelated = """
+config = {"input_key": "external"}
+binding_input_key = config.get("input_key")
+"""
+
+    assert _findings(unrelated, ra) == []
