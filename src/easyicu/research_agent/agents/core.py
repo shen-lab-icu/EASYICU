@@ -718,7 +718,9 @@ def _build_planner_user_prompt(context: ResearchContext) -> str:
         "declare `table_one_spec`: group_by, at least two closed group_levels, "
         "and a variables roster whose name/kind/summary/test/closed levels "
         "encode the scientific comparison. Table 1 means Overall plus grouped "
-        "columns, per-group missing n (%), one variable-appropriate P value, "
+        "columns. Preserve observed scalar types exactly: numeric 0/1 levels "
+        "must be JSON numbers, never the strings '0'/'1'. "
+        "Report per-group missing n (%), one variable-appropriate P value, "
         "and the test name. If only an ungrouped cohort description is wanted, "
         "emit `table:cohort_summary` instead and omit table_one_spec. "
         "The host executes the declared Table 1 design; it does not choose the "
@@ -935,6 +937,63 @@ def _render_methodological_principles() -> str:
 _PRINCIPLES_GUIDE = _render_methodological_principles()
 
 
+def _validate_table_one_observed_levels(
+    plan: AnalysisPlan,
+    context: ResearchContext,
+) -> None:
+    """Reject Table 1 level types that cannot match the observed columns."""
+
+    variables = {variable.name: variable for variable in context.variables}
+
+    def _token(value: object) -> tuple[str, str]:
+        return type(value).__name__, repr(value)
+
+    def _observed_tokens(name: str) -> set[tuple[str, str]]:
+        variable = variables.get(name)
+        if variable is None or not variable.observed_domain:
+            return set()
+        domain = variable.observed_domain
+        levels = domain.get("levels")
+        if isinstance(levels, list):
+            return {_token(value) for value in levels}
+        if not domain.get("is_binary"):
+            return set()
+        dtype = str(variable.dtype or "").lower()
+        if dtype.startswith(("int", "uint")):
+            values: tuple[object, object] = (0, 1)
+        elif dtype.startswith("bool"):
+            values = (False, True)
+        elif dtype.startswith(("float", "double")):
+            values = (0.0, 1.0)
+        else:
+            return set()
+        return {_token(value) for value in values}
+
+    for step in plan.steps:
+        spec = step.table_one_spec
+        if spec is None:
+            continue
+        observed_groups = _observed_tokens(spec.group_by)
+        declared_groups = {_token(value) for value in spec.group_levels}
+        if observed_groups and declared_groups != observed_groups:
+            raise ValueError(
+                f"Planner Table 1 step {step.step_id!r} group_levels must preserve "
+                f"the exact observed scalar types for {spec.group_by!r}; "
+                f"declared={spec.group_levels!r}"
+            )
+        for variable_spec in spec.variables:
+            if variable_spec.summary != "count_percent":
+                continue
+            observed = _observed_tokens(variable_spec.name)
+            declared = {_token(value) for value in variable_spec.levels}
+            if observed and not observed <= declared:
+                raise ValueError(
+                    f"Planner Table 1 step {step.step_id!r} levels for "
+                    f"{variable_spec.name!r} must preserve exact observed scalar "
+                    f"types; declared={variable_spec.levels!r}"
+                )
+
+
 class PlannerAgent:
     """Produces an :class:`AnalysisPlan` from the research context.
 
@@ -1022,6 +1081,7 @@ class PlannerAgent:
         data, dropped = _normalise_plan_payload(data)
         self.last_dropped_plan_keys = dropped
         plan = AnalysisPlan.model_validate(data)
+        _validate_table_one_observed_levels(plan, context)
         missing_table_one_specs = [
             step.step_id
             for step in plan.steps

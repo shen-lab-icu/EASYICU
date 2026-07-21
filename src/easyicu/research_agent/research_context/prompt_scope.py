@@ -138,6 +138,7 @@ _COMPACT_SERIALIZATION_GUIDANCE = """OUTPUT SERIALIZATION CONTRACT:
 
 _TABLE_ONE_SDK_GUIDANCE = """GROUPED TABLE 1 CONTRACT:
 - `table_one_spec` is the sole authority for grouping, closed levels, summaries, and tests.
+- Use the exact `table_one_spec` attached to this step; do not recreate, extend, or rename its fields in local code.
 - Call `easyicu.research_agent.methods.table_one.build_grouped_table_one(frame, table_one_spec)` and save its returned long-form source table unchanged as `table_one.csv`.
 - Do not hand-roll another test, coerce values, or replace the grouped table with an overall-only description."""
 

@@ -5,7 +5,7 @@ from __future__ import annotations
 import ast
 from typing import Sequence
 
-from ..schema import ValidationFinding
+from ..schema import TableOneSpec, ValidationFinding
 
 _HELPER_MODULE = "easyicu.research_agent.methods.descriptive_inputs"
 
@@ -139,4 +139,76 @@ def patch_closed_counts_level_column(
     return repaired
 
 
-__all__ = ["patch_closed_counts_level_column"]
+def patch_table_one_planner_spec(
+    code: str,
+    *,
+    findings: Sequence[ValidationFinding],
+) -> str:
+    """Replace one local SDK schema with its exact Planner-owned declaration."""
+
+    coordinates = []
+    for finding in findings:
+        detail = finding.detail or {}
+        if detail.get("reason") != "table_one_spec_not_planner_owned":
+            continue
+        expected = detail.get("expected_spec")
+        try:
+            validated = TableOneSpec.model_validate(expected).model_dump(mode="python")
+        except (ValueError, TypeError):
+            continue
+        coordinates.append(
+            (
+                int(detail.get("line") or 0),
+                str(detail.get("spec_name") or ""),
+                validated,
+            )
+        )
+    if len(coordinates) != 1:
+        return code
+    line, spec_name, expected = coordinates[0]
+    if line <= 0 or not spec_name:
+        return code
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return code
+    sites = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Assign)
+        and len(node.targets) == 1
+        and isinstance(node.targets[0], ast.Name)
+        and node.targets[0].id == spec_name
+        and int(node.value.lineno) == line
+    ]
+    if len(sites) != 1:
+        return code
+    value = sites[0].value
+    if value.end_lineno is None or value.end_col_offset is None:
+        return code
+    offsets = [0]
+    for source_line in code.splitlines(keepends=True):
+        offsets.append(offsets[-1] + len(source_line))
+    start = offsets[value.lineno - 1] + value.col_offset
+    end = offsets[value.end_lineno - 1] + value.end_col_offset
+    replacement = repr(expected)
+    repaired = code[:start] + replacement + code[end:]
+    try:
+        repaired_tree = ast.parse(repaired)
+        repaired_sites = [
+            node
+            for node in ast.walk(repaired_tree)
+            if isinstance(node, ast.Assign)
+            and len(node.targets) == 1
+            and isinstance(node.targets[0], ast.Name)
+            and node.targets[0].id == spec_name
+        ]
+        if len(repaired_sites) != 1:
+            return code
+        TableOneSpec.model_validate(ast.literal_eval(repaired_sites[0].value))
+    except (SyntaxError, ValueError, TypeError):
+        return code
+    return repaired
+
+
+__all__ = ["patch_closed_counts_level_column", "patch_table_one_planner_spec"]

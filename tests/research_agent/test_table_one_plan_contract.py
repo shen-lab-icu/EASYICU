@@ -11,6 +11,7 @@ from easyicu.research_agent.research_context.prompt_scope import coder_guide_for
 from easyicu.research_agent.schema import (
     AnalysisStep,
     CohortDescriptor,
+    ConceptDescriptor,
     ResearchContext,
 )
 
@@ -26,6 +27,23 @@ def _context() -> ResearchContext:
         ),
         variables=[],
     )
+
+
+def _binary_context() -> ResearchContext:
+    context = _context()
+    context.variables.append(
+        ConceptDescriptor(
+            name="death",
+            dtype="int64",
+            observed_domain={
+                "n_unique": 2,
+                "is_binary": True,
+                "min": 0.0,
+                "max": 1.0,
+            },
+        )
+    )
+    return context
 
 
 def _step(*, include_spec: bool) -> dict:
@@ -75,6 +93,22 @@ def test_fresh_planner_table_one_preserves_typed_design() -> None:
     assert plan.steps[0].table_one_spec is not None
     assert plan.steps[0].table_one_spec.group_by == "arm"
     assert plan.steps[0].table_one_spec.variables[0].test == ("mann_whitney_or_kruskal")
+
+
+def test_fresh_planner_preserves_observed_numeric_level_types() -> None:
+    payload = json.loads(_raw(include_spec=True))
+    step = payload["steps"][0]
+    step["inputs"] = ["death", "age"]
+    step["table_one_spec"]["group_by"] = "death"
+    step["table_one_spec"]["group_levels"] = ["0", "1"]
+    planner = PlannerAgent.__new__(PlannerAgent)
+
+    with pytest.raises(ValueError, match="exact observed scalar types"):
+        planner._parse(json.dumps(payload), _binary_context())
+
+    step["table_one_spec"]["group_levels"] = [0, 1]
+    parsed = planner._parse(json.dumps(payload), _binary_context())
+    assert parsed.steps[0].table_one_spec.group_levels == [0, 1]
 
 
 def test_archival_analysis_step_remains_readable_without_new_optional_spec() -> None:

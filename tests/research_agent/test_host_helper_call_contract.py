@@ -17,6 +17,35 @@ def _step(ra):
     )
 
 
+def _table_step(ra):
+    return ra.AnalysisStep(
+        step_id="table_one",
+        intent="Produce the grouped baseline table.",
+        inputs=["death", "age", "sex"],
+        expected_outputs=["table:table_one"],
+        method="table_one",
+        table_one_spec={
+            "group_by": "death",
+            "group_levels": [0, 1],
+            "variables": [
+                {
+                    "name": "age",
+                    "variable_kind": "continuous",
+                    "summary": "median_iqr",
+                    "test": "mann_whitney_or_kruskal",
+                },
+                {
+                    "name": "sex",
+                    "variable_kind": "categorical",
+                    "summary": "count_percent",
+                    "test": "chi_square_with_fisher_exact_for_sparse_2x2",
+                    "levels": ["Female", "Male"],
+                },
+            ],
+        },
+    )
+
+
 def _signature_findings(script: str, ra):
     return [
         finding
@@ -392,6 +421,51 @@ def summarize(closed_categorical_counts, sex):
 """
 
     assert _level_index_findings(script, ra) == []
+
+
+def test_table_one_sdk_repairs_local_schema_to_exact_planner_spec(ra):
+    script = """
+from easyicu.research_agent.methods.table_one import build_grouped_table_one
+table_one_spec = {
+    "group_by": "death",
+    "group_levels": [0, 1],
+    "group_labels": {0: "No", 1: "Yes"},
+    "variables": [{"name": "age", "type": "continuous"}],
+}
+result = build_grouped_table_one(frame, table_one_spec)
+"""
+    step = _table_step(ra)
+    findings = [
+        finding
+        for finding in audit_mechanical_code_contracts(script, step)
+        if (finding.detail or {}).get("reason") == "table_one_spec_not_planner_owned"
+    ]
+
+    repaired, names = deterministic_concept_audit_repair(
+        script,
+        [finding.message for finding in findings],
+        repair_reasons=[repair_reason_for_finding(finding) for finding in findings],
+        repair_findings=findings,
+    )
+
+    assert len(findings) == 1
+    assert names == ["table_one_planner_spec_binding_v1"]
+    assert audit_mechanical_code_contracts(repaired, step) == []
+    assert "group_labels" not in repaired
+    assert "variable_kind" in repaired
+
+
+def test_table_one_sdk_accepts_exact_planner_spec(ra):
+    step = _table_step(ra)
+    spec = step.table_one_spec.model_dump(mode="python")
+    script = (
+        "from easyicu.research_agent.methods.table_one import "
+        "build_grouped_table_one\n"
+        f"table_one_spec = {spec!r}\n"
+        "result = build_grouped_table_one(frame, table_one_spec)\n"
+    )
+
+    assert audit_mechanical_code_contracts(script, step) == []
 
 
 def test_closed_counts_missing_levels_is_repaired_without_inventing_categories(ra):

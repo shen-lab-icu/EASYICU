@@ -5,7 +5,7 @@ from __future__ import annotations
 import ast
 from typing import Optional
 
-from ..schema import ValidationFinding
+from ..schema import AnalysisStep, ValidationFinding
 
 _SCOPES = (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
 _HELPER_MODULE = "easyicu.research_agent.methods.descriptive_inputs"
@@ -208,4 +208,79 @@ def closed_counts_table_index_findings(
     return findings
 
 
-__all__ = ["closed_counts_table_index_findings"]
+def table_one_spec_binding_findings(
+    tree: ast.Module,
+    step: AnalysisStep,
+) -> list[ValidationFinding]:
+    """Require the SDK call to consume the exact Planner-owned Table 1 spec."""
+
+    if step.table_one_spec is None:
+        return []
+    call_names: set[str] = set()
+    for node in tree.body:
+        if (
+            isinstance(node, ast.ImportFrom)
+            and node.level == 0
+            and node.module == "easyicu.research_agent.methods.table_one"
+        ):
+            call_names.update(
+                alias.asname or alias.name
+                for alias in node.names
+                if alias.name == "build_grouped_table_one"
+            )
+    if not call_names:
+        return []
+    expected = step.table_one_spec.model_dump(mode="json")
+    assignments: dict[str, list[ast.Assign]] = {}
+    for node in ast.walk(tree):
+        if (
+            isinstance(node, ast.Assign)
+            and len(node.targets) == 1
+            and isinstance(node.targets[0], ast.Name)
+        ):
+            assignments.setdefault(node.targets[0].id, []).append(node)
+    findings: list[ValidationFinding] = []
+    for node in ast.walk(tree):
+        if not (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id in call_names
+            and len(node.args) >= 2
+            and isinstance(node.args[1], ast.Name)
+        ):
+            continue
+        spec_name = node.args[1].id
+        sites = assignments.get(spec_name, [])
+        if len(sites) != 1 or sites[0].lineno >= node.lineno:
+            continue
+        try:
+            actual = ast.literal_eval(sites[0].value)
+        except (ValueError, TypeError, SyntaxError):
+            actual = None
+        if actual == expected:
+            continue
+        findings.append(
+            ValidationFinding(
+                validator="mechanical_code_preflight",
+                severity="error",
+                message=(
+                    "The grouped Table 1 SDK call must consume the exact "
+                    "Planner-owned table_one_spec instead of a reconstructed "
+                    "or extended local schema."
+                ),
+                detail={
+                    "reason": "table_one_spec_not_planner_owned",
+                    "helper_name": "build_grouped_table_one",
+                    "line": int(sites[0].value.lineno),
+                    "spec_name": spec_name,
+                    "expected_spec": expected,
+                },
+            )
+        )
+    return findings
+
+
+__all__ = [
+    "closed_counts_table_index_findings",
+    "table_one_spec_binding_findings",
+]
