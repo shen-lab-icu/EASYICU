@@ -1288,6 +1288,8 @@ class DockerRunner:
     CONTAINER_COHORT_PATH = "/cohort.parquet"
     CONTAINER_INPUT_ROOT = "/easyicu-inputs"
     CONTAINER_EXTRA_ROOT = "/easyicu-extra"
+    GHOST_MONITOR_GRACE_SECONDS = 2.0
+    GHOST_MONITOR_INTERVAL_SECONDS = 0.25
 
     def __init__(
         self,
@@ -2194,6 +2196,91 @@ class DockerRunner:
                 )
         return self._teardown_container(container_ref)
 
+    def _start_ghost_container_monitor(
+        self,
+        *,
+        cidfile: Path,
+        fallback_name: str,
+    ) -> Optional[Tuple[threading.Event, threading.Thread]]:
+        """Release a Docker Desktop container whose PID 1 already vanished.
+
+        On macOS Docker Desktop can keep the attached ``docker run`` client
+        blocked while ``container inspect`` still says running, even though
+        ``docker top`` reports no process.  Two empty process snapshots after a
+        startup grace period prove there is no generated process left to kill.
+        Force-removing that ghost releases the attached client, which still
+        returns the generated process's original exit status. This monitor is
+        deliberately limited to macOS and requires two processless snapshots;
+        ordinary running containers and non-Docker-Desktop hosts are untouched.
+        """
+
+        if sys.platform != "darwin":
+            return None
+
+        stop = threading.Event()
+
+        def monitor() -> None:
+            if stop.wait(self.GHOST_MONITOR_GRACE_SECONDS):
+                return
+            empty_snapshots = 0
+            while not stop.is_set():
+                container_ref = self._container_reference(
+                    cidfile,
+                    fallback_name=fallback_name,
+                )
+                if container_ref is None:
+                    if stop.wait(self.GHOST_MONITOR_INTERVAL_SECONDS):
+                        return
+                    continue
+                try:
+                    top_proc = subprocess.run(  # noqa: S603 - fixed Docker argv
+                        [self.docker_executable, "top", container_ref, "-eo", "pid"],
+                        capture_output=True,
+                        text=True,
+                        timeout=5.0,
+                        encoding="utf-8",
+                        errors="replace",
+                    )
+                except (OSError, subprocess.TimeoutExpired):
+                    top_proc = None
+                if top_proc is not None and top_proc.returncode == 0:
+                    process_rows = [
+                        line
+                        for line in top_proc.stdout.splitlines()[1:]
+                        if line.strip()
+                    ]
+                    empty_snapshots = 0 if process_rows else empty_snapshots + 1
+                    if empty_snapshots >= 2:
+                        try:
+                            subprocess.run(  # noqa: S603 - fixed Docker argv
+                                [
+                                    self.docker_executable,
+                                    "rm",
+                                    "--force",
+                                    container_ref,
+                                ],
+                                capture_output=True,
+                                text=True,
+                                timeout=10.0,
+                                encoding="utf-8",
+                                errors="replace",
+                            )
+                        except (OSError, subprocess.TimeoutExpired):
+                            pass
+                        return
+                else:
+                    empty_snapshots = 0
+                if stop.wait(self.GHOST_MONITOR_INTERVAL_SECONDS):
+                    return
+
+        thread = threading.Thread(
+            target=monitor,
+            name=f"easyicu-docker-ghost-{fallback_name}",
+            daemon=True,
+        )
+        thread.start()
+        return stop, thread
+
     def _retry_stale_container_cleanup(self, step_id: str) -> None:
         """Resolve prior unconfirmed teardown before reusing a step directory."""
 
@@ -2291,6 +2378,10 @@ class DockerRunner:
         timed_out = False
         teardown_confirmed = False
         started = time.monotonic()
+        ghost_monitor = self._start_ghost_container_monitor(
+            cidfile=cidfile,
+            fallback_name=container_name,
+        )
         try:
             proc = subprocess.run(  # noqa: S603 - argv list, no shell
                 cmd,
@@ -2335,6 +2426,11 @@ class DockerRunner:
             stderr += cleanup_note
             returncode = -1
             timed_out = True
+        finally:
+            if ghost_monitor is not None:
+                monitor_stop, monitor_thread = ghost_monitor
+                monitor_stop.set()
+                monitor_thread.join(timeout=1.0)
         duration = time.monotonic() - started
 
         log_content = textwrap.dedent(f"""
