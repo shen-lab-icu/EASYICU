@@ -243,6 +243,15 @@ def test_observed_binary_domain_guard_is_structural_and_automatic() -> None:
     assert automatic_repair_allowed(metadata.repair_id)
 
 
+def test_llm_proven_numeric_domain_guards_are_structural_and_automatic() -> None:
+    metadata = repair_metadata_for("llm_proven_numeric_domain_guards_v1")
+
+    assert metadata.repair_class is RepairClass.STRUCTURAL
+    assert metadata.introduces_numbers is False
+    assert metadata.requires_disclosure is False
+    assert automatic_repair_allowed(metadata.repair_id)
+
+
 def test_authored_binary_feasibility_repair_is_structural_and_automatic() -> None:
     metadata = repair_metadata_for("binary_domain_authored_feasibility_v1")
 
