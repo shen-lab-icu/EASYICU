@@ -37,6 +37,16 @@ def test_hypothesis_cross_database_feasibility_summarizes_statuses(ra):
     assert isinstance(summary["degraded_reason"], dict)
 
 
+def test_common_clinical_aliases_resolve_to_packaged_concepts(ra):
+    summary = ra.hypothesis_cross_database_feasibility(
+        concepts=["lactate", "hospital_mortality"],
+        databases=["miiv"],
+    )
+
+    assert summary["concept_dependencies"] == ["lact", "death"]
+    assert summary["cross_database_feasibility"]["miiv"] != "blocked"
+
+
 def test_runtime_load_availability_maps_to_research_agent_status_terms():
     record = ConceptAvailabilityRecord(
         concept="norepi_rate",

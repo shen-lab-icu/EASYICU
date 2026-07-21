@@ -347,6 +347,50 @@ def test_hypothesis_blueprint_agent_uses_literature_and_domain_gates(ra):
     assert "recommended_step_skeleton" in prompt
 
 
+def test_hypothesis_blueprint_uses_source_concepts_not_materialized_column_names(ra):
+    schema = ra.schema
+    ctx = schema.ResearchContext(
+        research_question="Is peak marker associated with hospital mortality?",
+        cohort=schema.CohortDescriptor(
+            cohort_name="c",
+            database="miiv",
+            n_patients=10,
+            n_stays=10,
+        ),
+        variables=[
+            schema.ConceptDescriptor(
+                name="lact_max",
+                role="lab",
+                dtype="float64",
+                source_concept="lact",
+            ),
+            schema.ConceptDescriptor(
+                name="death",
+                role="outcome",
+                dtype="int64",
+                source_concept="hospital_mortality",
+            ),
+        ],
+        primary_exposure="lact_max",
+        target_outcome="death",
+    )
+    from easyicu.research_agent.literature import (
+        HypothesisBlueprintAgent,
+        LiteratureBundle,
+    )
+
+    blueprint = HypothesisBlueprintAgent().run(
+        context=ctx,
+        literature=LiteratureBundle(
+            research_question=ctx.research_question,
+            citations=[],
+        ),
+    )
+
+    assert blueprint.concept_dependencies == ["lact", "death"]
+    assert blueprint.cross_database_feasibility["miiv"] != "blocked"
+
+
 def test_blueprint_and_agent_context_honor_explicit_primary_exposure(ra):
     schema = ra.schema
     ctx = schema.ResearchContext(
