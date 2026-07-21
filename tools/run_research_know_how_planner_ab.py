@@ -165,6 +165,8 @@ class CountingClient:
     """Transparent LLM wrapper recording every structured-retry call."""
 
     inner: Any
+    max_calls: int = 2
+    raw_output_dir: Path | None = None
     calls: list[dict[str, Any]] = field(default_factory=list)
 
     @property
@@ -182,6 +184,11 @@ class CountingClient:
         max_tokens: int = 2048,
         temperature: float = 0.2,
     ) -> str:
+        if len(self.calls) >= self.max_calls:
+            raise RuntimeError(
+                "Planner A/B per-trial provider-call budget exhausted: "
+                f"{self.max_calls}"
+            )
         started = time.monotonic()
         response = self.inner.complete(
             messages,
@@ -189,9 +196,19 @@ class CountingClient:
             temperature=temperature,
         )
         usage = getattr(self.inner, "last_usage", None)
+        call_number = len(self.calls) + 1
+        if self.raw_output_dir is not None:
+            self.raw_output_dir.mkdir(parents=True, exist_ok=True)
+            (self.raw_output_dir / f"raw_response_{call_number:02d}.txt").write_text(
+                response or "",
+                encoding="utf-8",
+            )
         self.calls.append(
             {
                 "active_wall_seconds": round(time.monotonic() - started, 6),
+                "raw_chars": len(response or ""),
+                "raw_sha256": _sha256_bytes((response or "").encode("utf-8")),
+                "raw_head": (response or "").strip().replace("\n", " ")[:240],
                 "usage": dict(usage) if isinstance(usage, Mapping) else None,
             }
         )
@@ -232,6 +249,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--provider", default="openai")
     parser.add_argument("--model", default="gpt-5.6-luna")
     parser.add_argument("--request-timeout", type=float, default=300.0)
+    parser.add_argument("--max-provider-calls-per-trial", type=int, default=2)
     parser.add_argument("--repeats", type=int, default=2)
     parser.add_argument("--seed", type=int, default=20260721)
     parser.add_argument("--top-k", type=int, default=3)
@@ -244,6 +262,8 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv)
+    if args.max_provider_calls_per_trial < 1:
+        raise SystemExit("--max-provider-calls-per-trial must be at least 1")
     _load_env_file(args.env_file)
     raw_context = args.context_json.read_bytes()
     context = ResearchContext.model_validate_json(raw_context)
@@ -264,6 +284,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         "database": args.database,
         "repeats_per_arm": args.repeats,
         "randomization_seed": args.seed,
+        "max_provider_calls_per_trial": args.max_provider_calls_per_trial,
         "prepare_only": bool(args.prepare_only),
         "allow_curated_development_card": bool(
             args.allow_curated_development_card
@@ -311,27 +332,50 @@ def main(argv: Sequence[str] | None = None) -> int:
         }
         if not args.prepare_only:
             client = CountingClient(
-                _build_client(args.provider, args.model, args.request_timeout)
+                _build_client(args.provider, args.model, args.request_timeout),
+                max_calls=args.max_provider_calls_per_trial,
+                raw_output_dir=trial_dir,
             )
             planner = PlannerAgent(client)
             started = time.monotonic()
-            plan = planner.run(context, **binding.planner_kwargs)
-            trial_record.update(
-                {
-                    "active_wall_seconds": round(time.monotonic() - started, 6),
-                    "provider_calls": len(client.calls),
-                    "calls": client.calls,
-                }
-            )
-            _write_json(
-                out_dir / "blinded" / f"{label}.json",
-                {
+            try:
+                plan = planner.run(context, **binding.planner_kwargs)
+            except Exception as exc:  # noqa: BLE001 - failure is an A/B outcome
+                trial_record.update(
+                    {
+                        "status": "failed",
+                        "active_wall_seconds": round(time.monotonic() - started, 6),
+                        "provider_calls": len(client.calls),
+                        "calls": client.calls,
+                        "error_class": exc.__class__.__name__,
+                        "error_message": str(exc)[:1_000],
+                    }
+                )
+                blinded_payload = {
                     "schema_version": "easyicu.blinded_planner_plan/1",
                     "label": label,
+                    "status": "failed",
+                    "error_class": exc.__class__.__name__,
+                }
+            else:
+                trial_record.update(
+                    {
+                        "status": "ok",
+                        "active_wall_seconds": round(time.monotonic() - started, 6),
+                        "provider_calls": len(client.calls),
+                        "calls": client.calls,
+                    }
+                )
+                blinded_payload = {
+                    "schema_version": "easyicu.blinded_planner_plan/1",
+                    "label": label,
+                    "status": "ok",
                     "plan": plan.model_dump(mode="json"),
-                },
-            )
+                }
+            _write_json(out_dir / "blinded" / f"{label}.json", blinded_payload)
         run_manifest["trials"].append(trial_record)
+        _write_json(out_dir / "operator" / "arm_key.json", private_key)
+        _write_json(out_dir / "manifest.json", run_manifest)
 
     _write_json(out_dir / "operator" / "arm_key.json", private_key)
     _write_json(out_dir / "manifest.json", run_manifest)
