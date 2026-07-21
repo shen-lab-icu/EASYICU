@@ -2934,6 +2934,67 @@ def _provenance_fail_closed_findings(tree: ast.Module) -> list[ValidationFinding
     unsafe_call = False
     provenance_call_issues: list[dict[str, object]] = []
 
+    def _proven_unavailable_audit_return(
+        scope: ast.AST,
+        statement: ast.Return,
+    ) -> bool:
+        """Accept an explicit audit-only return when a source column is absent."""
+
+        branch = parents.get(statement)
+        if not (
+            isinstance(scope, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and isinstance(branch, ast.If)
+            and parents.get(branch) is scope
+            and not branch.orelse
+            and len(branch.body) >= 2
+            and branch.body[-1] is statement
+            and isinstance(branch.test, ast.UnaryOp)
+            and isinstance(branch.test.op, ast.Not)
+            and isinstance(branch.test.operand, ast.Name)
+        ):
+            return False
+
+        check_statement = branch.body[0]
+        audit_row = _direct_audit_row(check_statement)
+        if not (
+            audit_row is not None
+            and isinstance(check_statement, ast.Assign)
+            and len(check_statement.targets) == 1
+            and isinstance(check_statement.targets[0], ast.Name)
+            and not _provenance_branch_contains_result_sink(branch.body)
+            and not _result_sink_precedes_guard(branch, parents)
+        ):
+            return False
+
+        check_name = check_statement.targets[0].id
+        check_fields, _ = audit_row
+        status = check_fields.get("status")
+        if not (
+            isinstance(status, ast.Constant)
+            and str(status.value).strip().lower() == "unavailable"
+            and all(
+                isinstance(check_fields[key], ast.Constant)
+                and check_fields[key].value is None
+                for key in _PROVENANCE_FAILURE_KEYS
+            )
+            and "checks" in _literal_string_tokens(statement)
+            and check_name in _referenced_names(statement)
+        ):
+            return False
+
+        assignments = _preceding_direct_assignments(branch)
+        count_exists = assignments.get(branch.test.operand.id)
+        if not (
+            isinstance(count_exists, ast.Compare)
+            and len(count_exists.ops) == 1
+            and isinstance(count_exists.ops[0], ast.In)
+            and len(count_exists.comparators) == 1
+            and isinstance(count_exists.comparators[0], ast.Attribute)
+            and count_exists.comparators[0].attr == "columns"
+        ):
+            return False
+        return True
+
     def _record_call_issue(
         call: ast.Call,
         called: str,
@@ -3017,8 +3078,11 @@ def _provenance_fail_closed_findings(tree: ast.Module) -> list[ValidationFinding
             returns_follow_guard = not returns or (
                 bool(direct_guard_indexes)
                 and all(
-                    parents.get(candidate) is marker_function
-                    and direct_body.index(candidate) > min(direct_guard_indexes)
+                    (
+                        parents.get(candidate) is marker_function
+                        and direct_body.index(candidate) > min(direct_guard_indexes)
+                    )
+                    or _proven_unavailable_audit_return(marker_function, candidate)
                     for candidate in returns
                 )
             )
