@@ -49,6 +49,7 @@ from .local_binding import patch_local_read_before_assignment_hoist
 from .merge_collision import patch_pandas_merge_dynamic_column_collision
 from .name_alias import patch_undefined_mapping_near_match_alias
 from .provenance_summary import (
+    patch_custom_measurement_provenance_receipts,
     patch_direct_host_provenance_summary,
     patch_nested_host_provenance_summary,
 )
@@ -4663,6 +4664,12 @@ def deterministic_contract_repair(
     previous_repair: Optional[str] = None,
 ) -> Optional[tuple[str, str]]:
     """Patch objective contract/audit failures before asking the LLM to repair."""
+
+    host_receipts = patch_custom_measurement_provenance_receipts(
+        code, findings=findings
+    )
+    if host_receipts != code:
+        return "measurement_provenance_host_receipts_v1", host_receipts
 
     unavailable_source_findings = []
     for finding in findings:

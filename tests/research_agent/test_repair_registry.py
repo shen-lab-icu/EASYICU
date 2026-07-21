@@ -224,6 +224,7 @@ def test_measurement_provenance_summary_mapping_is_structural_and_automatic() ->
     for repair_id in (
         "measurement_provenance_summary_mapping_v1",
         "measurement_provenance_summary_mapping_v2",
+        "measurement_provenance_host_receipts_v1",
     ):
         metadata = repair_metadata_for(repair_id)
 
