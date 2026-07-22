@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 from ..know_how import KnowHowHit, KnowHowIntegrityError, KnowHowRegistry
+from ..resources import ResourceScheduler, ResourceSelectionQuery
 from ..schema import ResearchContext
 from .analysis_types import infer_analysis_type
 
@@ -212,17 +213,21 @@ def prepare_preplan_know_how(
             if concept
         }
     )
-    hits = tuple(
-        registry.retrieve(
+    selection = ResourceScheduler.select_protocols(
+        registry=registry,
+        query=ResourceSelectionQuery(
+            purpose="planner",
             query=context.research_question,
-            study_family=retrieval_family,
+            analysis_family=retrieval_family,
             database=database,
-            available_concepts=available_concepts,
-            top_k=top_k,
-            min_score=min_score,
-        )
+            available_input_roles=tuple(available_concepts),
+        ),
+        available_concepts=tuple(available_concepts),
+        top_k=top_k,
+        min_score=min_score,
     )
-    prompt = registry.render_prompt(hits)
+    hits = selection.hits
+    prompt = selection.prompt
     receipt = registry.retrieval_receipt(
         query=context.research_question,
         study_family=retrieval_family,
@@ -236,8 +241,12 @@ def prepare_preplan_know_how(
         json.dumps(receipt, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
     ).encode("utf-8")
     prompt_bytes = prompt.encode("utf-8")
+    resource_receipt_bytes = (
+        selection.receipt.model_dump_json(indent=2).encode("utf-8") + b"\n"
+    )
     receipt_path = run_dir / "know_how_retrieval.json"
     prompt_path = run_dir / "know_how_prompt.md"
+    resource_receipt_path = run_dir / "resource_selection_receipt.json"
 
     _write_or_verify(
         receipt_path,
@@ -250,6 +259,12 @@ def prepare_preplan_know_how(
         prompt_bytes,
         evidence=evidence,
         evidence_id="know_how_prompt",
+    )
+    _write_or_verify(
+        resource_receipt_path,
+        resource_receipt_bytes,
+        evidence=evidence,
+        evidence_id="resource_selection_receipt",
     )
     if evidence.get("know_how_retrieval") is None:
         evidence.register_file(
@@ -269,6 +284,16 @@ def prepare_preplan_know_how(
             producer="research_know_how",
             generation_mode="deterministic_skill",
             inputs=["know_how_retrieval"],
+        )
+    if evidence.get("resource_selection_receipt") is None:
+        evidence.register_file(
+            kind="log",
+            description=("Host-allowlisted deterministic resource-selection receipt."),
+            source_path=resource_receipt_path,
+            evidence_id="resource_selection_receipt",
+            producer="resource_scheduler",
+            generation_mode="deterministic_skill",
+            inputs=["know_how_retrieval", "know_how_prompt"],
         )
     return PreplanKnowHow(registry=registry, hits=hits, prompt=prompt)
 

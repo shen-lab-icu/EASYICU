@@ -10,10 +10,13 @@
   "source_sha256": {
     "src/easyicu/data/concept-dict.json": "fccadc53622dc82fe1dc8696617e52044168b6a84a9255e97e59df9e53bc5803",
     "src/easyicu/research_agent/agents/core.py": "9bdecee5eb7e8dba22f418eddb5f4677d72136b8b55518140c9ae1f8540fb218",
-    "src/easyicu/research_agent/know_how/registry.py": "5df2a69018505ec9d3888ec83df2ad9cc6d912d298ec6dbdb142415b5ca849a4",
+    "src/easyicu/research_agent/know_how/registry.py": "9e4e4a30c85d7ba62de565897a34808a0d2a5d1250f784f208f8b29bb3a2912e",
     "src/easyicu/research_agent/planning/analysis_types.py": "28e48c1c30a3057ecb7e9befcf550292cdc07563801d68040e20d634a02e1fa4",
     "src/easyicu/research_agent/planning/cohort_contract.py": "bd29eb63f41e3766c7e47ee0c2a502068cc311b0fc1f1412e118cc78f550a470",
-    "tools/research_agent_resource_baseline.py": "821d9ad99171ec2948d341920539ec413819ce8a9f0928a310c0f3d326a23e2d"
+    "src/easyicu/research_agent/resources/catalog.py": "d1df9901759c3a323ac6a9bb4998cefa7ca2deb978ddd8409851a68f2beeff2f",
+    "src/easyicu/research_agent/resources/scheduler.py": "5357ce45f1fe3edeeb88ac6e73e5082d7d38f716d3cfac8ecba5f8d9e61b4c88",
+    "src/easyicu/research_agent/resources/schema.py": "c734e64db6183354897478b11b68add4045941408cb16d572b234efee202242b",
+    "tools/research_agent_resource_baseline.py": "499929b3d85f0e68f527be8e5bff07cae164b5a761ec651568102516f81a38d2"
   },
   "summary": {
     "max_planner_with_resources_bytes": 37338,
@@ -58,6 +61,8 @@
       },
       "question": "Estimate Sepsis-3 prevalence and mortality association.",
       "resource_added_bytes": 4633,
+      "resource_allowlist_sha256": "b9a233f3842951c32fde94268c1df6b63643d2ca647a49d0283f738903d51fe4",
+      "resource_catalog_sha256": "0455a3d9f5d566725fa12514d2d41b6443546b3884a57b8fbfcf751e0ea34cd2",
       "resource_selection_provider_calls": 0,
       "retrieval_family": "descriptive",
       "selected_know_how": [
@@ -95,6 +100,8 @@
       },
       "question": "Estimate the association of first-24-hour peak lactate with in-hospital mortality.",
       "resource_added_bytes": 4499,
+      "resource_allowlist_sha256": "14e5be8b956224679ad7a2e35ff8595510acd78d532839d2c96de0cbca92c9c7",
+      "resource_catalog_sha256": "0455a3d9f5d566725fa12514d2d41b6443546b3884a57b8fbfcf751e0ea34cd2",
       "resource_selection_provider_calls": 0,
       "retrieval_family": "association",
       "selected_know_how": [
@@ -133,6 +140,8 @@
       },
       "question": "Estimate the KDIGO AKI stage gradient for mortality and length of stay.",
       "resource_added_bytes": 0,
+      "resource_allowlist_sha256": "14e5be8b956224679ad7a2e35ff8595510acd78d532839d2c96de0cbca92c9c7",
+      "resource_catalog_sha256": "0455a3d9f5d566725fa12514d2d41b6443546b3884a57b8fbfcf751e0ea34cd2",
       "resource_selection_provider_calls": 0,
       "retrieval_family": "association",
       "selected_know_how": [],
@@ -163,6 +172,8 @@
       },
       "question": "Assess hepatobiliary SOFA and bilirubin missingness in mortality analysis.",
       "resource_added_bytes": 0,
+      "resource_allowlist_sha256": "14e5be8b956224679ad7a2e35ff8595510acd78d532839d2c96de0cbca92c9c7",
+      "resource_catalog_sha256": "0455a3d9f5d566725fa12514d2d41b6443546b3884a57b8fbfcf751e0ea34cd2",
       "resource_selection_provider_calls": 0,
       "retrieval_family": "association",
       "selected_know_how": [],
@@ -193,6 +204,8 @@
       },
       "question": "Build a first-24-hour mortality risk prediction model.",
       "resource_added_bytes": 4616,
+      "resource_allowlist_sha256": "6a99b7f67cba82715dfb0caae867ada5eea545199143ae88b1936d55af54795a",
+      "resource_catalog_sha256": "0455a3d9f5d566725fa12514d2d41b6443546b3884a57b8fbfcf751e0ea34cd2",
       "resource_selection_provider_calls": 0,
       "retrieval_family": "prediction",
       "selected_know_how": [
@@ -231,6 +244,8 @@
       },
       "question": "Discover candidate sepsis subphenotypes from labs and vital signs.",
       "resource_added_bytes": 4618,
+      "resource_allowlist_sha256": "acd73a5ff5dfef9f7beb9f6f79ff19282995c4a0d1c0aa5698e113f0e1e2eb4f",
+      "resource_catalog_sha256": "0455a3d9f5d566725fa12514d2d41b6443546b3884a57b8fbfcf751e0ea34cd2",
       "resource_selection_provider_calls": 0,
       "retrieval_family": "phenotyping",
       "selected_know_how": [
@@ -268,6 +283,8 @@
       },
       "question": "Estimate mechanical ventilation survival and 28-day mortality.",
       "resource_added_bytes": 4619,
+      "resource_allowlist_sha256": "4f9cc616cb866318d71dbc497828d5b4827d717667bcf96508b9d20377be6d62",
+      "resource_catalog_sha256": "0455a3d9f5d566725fa12514d2d41b6443546b3884a57b8fbfcf751e0ea34cd2",
       "resource_selection_provider_calls": 0,
       "retrieval_family": "time_to_event",
       "selected_know_how": [
@@ -306,6 +323,8 @@
       },
       "question": "Compare vasopressor strategies with a confounding-aware causal analysis.",
       "resource_added_bytes": 4622,
+      "resource_allowlist_sha256": "1493617c9322705ef6edc2bf6f89448763786b3cb09de174191e524dc02c0a00",
+      "resource_catalog_sha256": "0455a3d9f5d566725fa12514d2d41b6443546b3884a57b8fbfcf751e0ea34cd2",
       "resource_selection_provider_calls": 0,
       "retrieval_family": "causal_emulation",
       "selected_know_how": [
@@ -342,6 +361,8 @@
       },
       "question": "Cluster longitudinal ICU trajectories into stable subphenotypes.",
       "resource_added_bytes": 4618,
+      "resource_allowlist_sha256": "acd73a5ff5dfef9f7beb9f6f79ff19282995c4a0d1c0aa5698e113f0e1e2eb4f",
+      "resource_catalog_sha256": "0455a3d9f5d566725fa12514d2d41b6443546b3884a57b8fbfcf751e0ea34cd2",
       "resource_selection_provider_calls": 0,
       "retrieval_family": "phenotyping",
       "selected_know_how": [
