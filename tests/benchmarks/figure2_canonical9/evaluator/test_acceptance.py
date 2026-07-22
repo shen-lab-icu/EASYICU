@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import asdict
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Callable
@@ -22,11 +23,7 @@ def _execution_identity(
     model: str = "frozen-model",
     input_authority_sha256: str | None = "c" * 64,
 ) -> dict[str, Any]:
-    class Client:
-        pass
-
-    client = Client()
-    client.__easyicu_provider_authorization__ = ProviderAuthorization.create(
+    authorization = ProviderAuthorization.create(
         provider="openai",
         model=model,
         base_url="https://provider.example/v1",
@@ -39,7 +36,14 @@ def _execution_identity(
         runner="docker",
         runner_image_digest="sha256:" + "a" * 64,
         network_policy="none",
-        provider_client=client,
+        # A fixture object cannot self-authorize after the provider-factory
+        # hardening.  Feed the sealed, non-secret authority manifest directly
+        # to the identity constructor, which is the same immutable provenance
+        # shape the real factory records after it has vetted a transport.
+        provider_authorization={
+            "schema_version": "easyicu.provider_authorization_manifest/1",
+            "clients": [asdict(authorization)],
+        },
         llm_seed=20260722,
         data_seed=7,
         input_authority_sha256=input_authority_sha256,
