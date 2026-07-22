@@ -457,6 +457,84 @@ def test_sealed_missingness_renderer_accepts_structural_no_source(
     assert "No source" in svg
 
 
+def test_sealed_missingness_panel_anchors_authorized_product_slot(
+    tmp_path: Path,
+) -> None:
+    """Regression (E3 archived-run root cause).
+
+    The sealed missingness renderer rendered all four figure formats, then died
+    at ``bind_declared_figure_products`` with ``ValueError: authorized product
+    slot is not anchored to a contract panel`` because its contract panel
+    carried ``metadata: {}`` -- no ``planner_product_slots``. The whole E3 run
+    dead-ended at the *already-rendered* figure step (4/7) and never reached the
+    primary model. This locks the emitted panel to the registry-authorized slot
+    and drives the real binding gate end-to-end.
+    """
+    import hashlib
+
+    from easyicu.research_agent.contracts.declared_product import (
+        bind_declared_figure_products,
+    )
+    from easyicu.research_agent.figures import missingness_source as _mod
+    from easyicu.research_agent.figures.missingness_source import (
+        REPAIR_ID,
+        render_missingness_source_bundle,
+    )
+    from easyicu.research_agent.repair_registry import repair_metadata_for
+
+    out = tmp_path / "steps" / "03_audit_figure" / "outputs"
+    snapshot = _sealed_missingness_snapshot(
+        kinds=["measurement_missing", "structural_no_source"],
+        measured=[60, 0],
+    )
+    assert (
+        render_missingness_source_bundle(
+            run_dir=tmp_path,
+            current_step_id="03_audit_figure",
+            out_dir=out,
+            preverified_parent_artifacts=snapshot,
+        )
+        == REPAIR_ID
+    )
+
+    # (1) The rendered contract panel anchors exactly the registry-authorized
+    #     figure product slot -- no drift between renderer and repair registry.
+    contract = json.loads(
+        (out / "missingness_measurement_panel.figure_contract.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    authorized = list(repair_metadata_for(REPAIR_ID).figure_product_slots)
+    panel_slots = [
+        slot
+        for panel in contract["panels"]
+        for slot in (panel.get("metadata") or {}).get("planner_product_slots", [])
+    ]
+    assert panel_slots == authorized == ["missingness_measurement"]
+
+    # (2) The real sealed binding gate now anchors the declared figure product
+    #     end-to-end. Before the panel carried the slot this raised
+    #     "authorized product slot is not anchored to a contract panel".
+    parent_digests = {
+        name: hashlib.sha256(payload).hexdigest() for name, payload in snapshot.items()
+    }
+    assert (
+        bind_declared_figure_products(
+            out_dir=out,
+            declared_products=["fig:missingness_measurement"],
+            authorized_product_slots={
+                "figure:missingness_measurement": "missingness_measurement"
+            },
+            renderer_repair_id=REPAIR_ID,
+            renderer_implementation_sha256=hashlib.sha256(
+                Path(_mod.__file__).read_bytes()
+            ).hexdigest(),
+            renderer_parent_digests=parent_digests,
+        )
+        is True
+    )
+
+
 def test_sealed_missingness_renderer_refuses_flag_conflict_rows(
     tmp_path: Path,
 ) -> None:

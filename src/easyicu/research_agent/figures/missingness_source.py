@@ -325,6 +325,16 @@ def render_missingness_source_bundle(
                     "a separate status."
                 ),
                 "evidence_ids": [source_path.name],
+                # Anchor the sealed renderer's authorized figure product slot to
+                # this panel.  ``bind_declared_figure_products`` fails closed with
+                # "authorized product slot is not anchored to a contract panel"
+                # unless a panel claims the slot via ``planner_product_slots``.
+                # The slot name is the one the repair registry authorizes for
+                # this renderer (``missingness_measurement``); mirror the pattern
+                # already used by absolute_risk / distribution_availability.
+                "metadata": {
+                    "planner_product_slots": ["missingness_measurement"],
+                },
             }
         ],
         source_data=[source_path.name],
