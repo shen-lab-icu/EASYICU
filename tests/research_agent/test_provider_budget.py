@@ -37,6 +37,7 @@ from easyicu.research_agent.providers.mocks import (
     PatternScriptedMockLLMClient,
     ScriptedMockLLMClient,
 )
+from easyicu.research_agent.providers.protocol import LLMMessage
 
 
 def _canonical_digest(payload: dict) -> str:
@@ -62,6 +63,26 @@ def _payload_digest_without_sha(payload: dict) -> str:
 
 def _audit_llm() -> ScriptedMockLLMClient:
     return ScriptedMockLLMClient(['{"findings":[]}'], repeat_last=True)
+
+
+def test_pattern_scripted_mock_prefers_later_specific_overlapping_marker() -> None:
+    client = PatternScriptedMockLLMClient(
+        [
+            ("ICU-AWARE RESEARCH PLAN", ["generic-plan"]),
+            ("REPAIR THE PYTHON CODE", ["repair"]),
+        ]
+    )
+
+    response = client.complete(
+        [
+            LLMMessage(
+                role="user",
+                content=("REPAIR THE PYTHON CODE using this ICU-AWARE RESEARCH PLAN"),
+            )
+        ]
+    )
+
+    assert response == "repair"
 
 
 def _context() -> ResearchContext:
@@ -637,23 +658,15 @@ def test_openai_transport_retries_consume_the_same_provider_budget(monkeypatch):
             )
 
     completions = _Completions()
-    client = OpenAIClient.__new__(OpenAIClient)
-    client._client = SimpleNamespace(chat=SimpleNamespace(completions=completions))
-    client._model = "gpt-test"
-    client._timeout = 1.0
-    client._extra_body = {}
-    client._local_noauth_mode = False
-    client._max_retries = 2
-    client._resolved_base_url = "http://127.0.0.1:8317/v1"
-    from easyicu.research_agent.providers.factory import (
-        _register_loopback_provider_client,
-    )
-
-    _register_loopback_provider_client(
-        client,
+    client = OpenAIClient(
         model="gpt-test",
-        base_url=client._resolved_base_url,
+        api_key="non-secret-test-key",
+        base_url="http://127.0.0.1:8317/v1",
+        request_timeout=1.0,
+        max_retries=2,
     )
+    client._client = SimpleNamespace(chat=SimpleNamespace(completions=completions))
+    client._local_noauth_mode = False
     monkeypatch.setattr("time.sleep", lambda _seconds: None)
     budget = StepProviderCallBudget(2, step_id="transport")
 
@@ -680,23 +693,15 @@ def test_openai_transport_retry_stops_before_exceeding_budget(monkeypatch):
             return SimpleNamespace(choices=[], usage=None)
 
     completions = _Completions()
-    client = OpenAIClient.__new__(OpenAIClient)
-    client._client = SimpleNamespace(chat=SimpleNamespace(completions=completions))
-    client._model = "gpt-test"
-    client._timeout = 1.0
-    client._extra_body = {}
-    client._local_noauth_mode = False
-    client._max_retries = 3
-    client._resolved_base_url = "http://127.0.0.1:8317/v1"
-    from easyicu.research_agent.providers.factory import (
-        _register_loopback_provider_client,
-    )
-
-    _register_loopback_provider_client(
-        client,
+    client = OpenAIClient(
         model="gpt-test",
-        base_url=client._resolved_base_url,
+        api_key="non-secret-test-key",
+        base_url="http://127.0.0.1:8317/v1",
+        request_timeout=1.0,
+        max_retries=3,
     )
+    client._client = SimpleNamespace(chat=SimpleNamespace(completions=completions))
+    client._local_noauth_mode = False
     sleeps = []
     monkeypatch.setattr("time.sleep", sleeps.append)
     budget = StepProviderCallBudget(1, step_id="transport")

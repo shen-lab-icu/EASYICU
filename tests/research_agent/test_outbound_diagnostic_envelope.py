@@ -375,6 +375,13 @@ def test_every_agent_context_uses_the_same_outbound_safe_projection(ra):
             "n": 10,
             "mortality_fraction": 0.2,
             "group": "PRIVATE_LEVEL_A",
+            "patient_id": 9918273,
+            "subject_id": 771122,
+            "stay_id": 881133,
+            "age": 93,
+            "lactate": 17.25,
+            "individual_values": [93, 17.25],
+            "unknown_nested": {"numeric_secret": 444555},
         },
         evidence_ids=["result"],
     )
@@ -407,6 +414,11 @@ def test_every_agent_context_uses_the_same_outbound_safe_projection(ra):
         "771.125",
         "882.875",
         '"observed_domain"',
+        "9918273",
+        "771122",
+        "881133",
+        "17.25",
+        "444555",
     ):
         assert forbidden not in outbound
     for required in (
@@ -420,7 +432,35 @@ def test_every_agent_context_uses_the_same_outbound_safe_projection(ra):
         assert required in outbound
     analyzer_prompt = _all_prompt_text(analyzer)
     assert '"mortality_fraction": 0.2' in analyzer_prompt
-    assert '"group": "__easyicu_value_' in analyzer_prompt
+    assert '"group": "__easyicu_category__"' in analyzer_prompt
+
+
+def test_step_summary_projection_rejects_numeric_phi_and_unknown_structure():
+    from easyicu.research_agent.research_context.outbound import (
+        project_outbound_step_summary,
+    )
+
+    projected = project_outbound_step_summary(
+        {
+            "status": "ok",
+            "n": 10,
+            "mortality_fraction": 0.2,
+            "patient_id": 9918273,
+            "subject_id": 771122,
+            "stay_id": 881133,
+            "age": 93,
+            "lactate": 17.25,
+            "individual_values": [93, 17.25],
+            "unknown_numeric": 444555,
+            "unknown_nested": {"count": 1, "numeric_secret": 444555},
+        }
+    )
+
+    assert projected == {
+        "status": "ok",
+        "n": 10,
+        "mortality_fraction": 0.2,
+    }
 
 
 def test_jury_receives_artifact_identity_not_arbitrary_artifact_text():
@@ -449,7 +489,17 @@ def test_jury_receives_artifact_identity_not_arbitrary_artifact_text():
                     "observed_domain": [sentinel],
                     "min": 1,
                     "max": 9,
+                    "patient_id": 9918273,
+                    "subject_id": 771122,
+                    "stay_id": 881133,
+                    "age": 93,
+                    "lactate": 17.25,
+                    "individual_values": [93, 17.25],
+                    "unknown_nested": {"numeric_secret": 444555},
                 }
+            ),
+            "arbitrary_results.json": json.dumps(
+                {"status": "ok", "patient_id": 123456, "n": 1}
             ),
         },
         NPJ_DM_RUBRIC_V1,
@@ -463,3 +513,17 @@ def test_jury_receives_artifact_identity_not_arbitrary_artifact_text():
     assert '"error_count":1' in prompt
     assert '"count":2' in prompt
     assert "a" * 64 in prompt
+    for forbidden in (
+        "9918273",
+        "771122",
+        "881133",
+        "17.25",
+        "444555",
+        "123456",
+        '"arbitrary_results.json":{"chars":',
+    ):
+        if forbidden.startswith('"arbitrary_results'):
+            continue
+        assert forbidden not in prompt
+    artifact_bundle = json.loads(prompt.split("Artifact bundle:\n", 1)[1])
+    assert "structured" not in artifact_bundle["arbitrary_results.json"]

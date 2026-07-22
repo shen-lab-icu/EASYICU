@@ -249,7 +249,8 @@ class PatternScriptedMockLLMClient:
 
     This is intentionally less expressive than a callback mock: tests may map
     literal prompt markers to fixed strings or exceptions, but cannot execute
-    arbitrary code at the trusted delivery boundary.
+    arbitrary code at the trusted delivery boundary. Rules are ordered from
+    generic to specific; a later matching rule has explicit priority.
     """
 
     name = "pattern-scripted-mock"
@@ -273,14 +274,18 @@ class PatternScriptedMockLLMClient:
         prompt = "\n".join(str(message.content or "") for message in copied)
         folded_prompt = prompt.casefold()
         response: str | Exception = self._default
-        for marker, responses in self._rules:
-            if marker.casefold() in folded_prompt:
-                if not responses:
-                    raise RuntimeError(
-                        f"pattern mock response sequence exhausted for {marker!r}"
-                    )
-                response = responses.pop(0)
-                break
+        matches = [
+            (index, marker, responses)
+            for index, (marker, responses) in enumerate(self._rules)
+            if marker.casefold() in folded_prompt
+        ]
+        if matches:
+            _priority, marker, responses = matches[-1]
+            if not responses:
+                raise RuntimeError(
+                    f"pattern mock response sequence exhausted for {marker!r}"
+                )
+            response = responses.pop(0)
         if isinstance(response, Exception):
             raise response
         return str(response)

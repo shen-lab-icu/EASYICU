@@ -9,6 +9,7 @@ plan or provider prompt.
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
 from typing import Any, Literal
 
@@ -40,6 +41,7 @@ class TableOneExecutionBinding(BaseModel):
     step_id: str
     planner_spec_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     observed_domain_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    token_key_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     execution_spec: TableOneSpec
     execution_spec_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     binding_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
@@ -135,13 +137,27 @@ def bind_table_one_execution_spec(
         payload["variables"][index]["levels"] = levels
         observed_payload[variable_spec.name] = observed
     execution_spec = TableOneSpec.model_validate(payload)
+    observed_domain_sha256 = hashlib.sha256(
+        _canonical_json(observed_payload).encode("utf-8")
+    ).hexdigest()
+    planner_spec_sha256 = table_one_spec_sha256(planner_spec)
+    token_key_sha256 = hashlib.sha256(
+        _canonical_json(
+            {
+                "schema": "easyicu.table_one_host_token_key/1",
+                "context_created_at": context.created_at.isoformat(),
+                "step_id": step.step_id,
+                "planner_spec_sha256": planner_spec_sha256,
+                "observed_domain_sha256": observed_domain_sha256,
+            }
+        ).encode("utf-8")
+    ).hexdigest()
     binding_payload: dict[str, Any] = {
         "schema_version": TABLE_ONE_EXECUTION_BINDING_SCHEMA,
         "step_id": step.step_id,
-        "planner_spec_sha256": table_one_spec_sha256(planner_spec),
-        "observed_domain_sha256": hashlib.sha256(
-            _canonical_json(observed_payload).encode("utf-8")
-        ).hexdigest(),
+        "planner_spec_sha256": planner_spec_sha256,
+        "observed_domain_sha256": observed_domain_sha256,
+        "token_key_sha256": token_key_sha256,
         "execution_spec": execution_spec.model_dump(mode="json"),
         "execution_spec_sha256": table_one_spec_sha256(execution_spec),
     }
@@ -196,9 +212,14 @@ def table_one_private_code_label_map(
     """Map private labels to unique reversible tokens for outbound code."""
 
     private = table_one_private_label_map(step)
+    binding = step._table_one_execution_binding
+    if not isinstance(binding, TableOneExecutionBinding):
+        return {}
+    token_key = bytes.fromhex(binding.token_key_sha256)
     return {
         typed_value: "__easyicu_table1_label_"
-        + hashlib.sha256(
+        + hmac.new(
+            token_key,
             _canonical_json(
                 {
                     "step_id": step.step_id,
@@ -206,7 +227,8 @@ def table_one_private_code_label_map(
                     "repr": typed_value[1],
                     "public": public,
                 }
-            ).encode("utf-8")
+            ).encode("utf-8"),
+            hashlib.sha256,
         ).hexdigest()[:16]
         + "__"
         for typed_value, public in private.items()

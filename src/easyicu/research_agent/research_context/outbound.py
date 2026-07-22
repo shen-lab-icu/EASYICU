@@ -353,34 +353,70 @@ _SAFE_TEXT_KEYS = frozenset(
         "semantics_family",
     }
 )
-_UNSAFE_VALUE_KEYS = frozenset(
+_SAFE_OPAQUE_CATEGORY_KEYS = frozenset(
     {
-        "observed_domain",
-        "levels",
-        "categories",
-        "values",
-        "rows",
-        "data",
-        "min",
-        "max",
-        "message",
-        "description",
-        "notes",
-        "text",
+        "category",
+        "comparison",
+        "group",
+        "stratum",
     }
 )
+_SAFE_AGGREGATE_NUMERIC_KEYS = frozenset(
+    {
+        "call_count",
+        "code_repair_attempts",
+        "completion_tokens",
+        "concept_audit_error_count",
+        "concept_repair_attempts",
+        "count",
+        "effect_estimate",
+        "error_count",
+        "estimate",
+        "event_count",
+        "finding_count",
+        "incidence",
+        "lower_ci",
+        "missing_count",
+        "missing_fraction",
+        "mortality_fraction",
+        "n",
+        "n_patients",
+        "n_stays",
+        "n_total",
+        "p_value",
+        "prevalence",
+        "prompt_tokens",
+        "returncode",
+        "step_count",
+        "total_tokens",
+        "upper_ci",
+        "warning_count",
+    }
+)
+_SAFE_AGGREGATE_BOOL_KEYS = frozenset(
+    {
+        "artifact_valid",
+        "deterministic_code_fallback",
+        "isolation_degraded",
+        "paper_authorized",
+        "scientific_requirement_complete",
+        "timed_out",
+    }
+)
+_SAFE_SUMMARY_MAPPING_KEYS = frozenset({"counts", "metrics"})
 
 
-def _opaque_scalar(value: str) -> str:
-    digest = hashlib.sha256(value.encode("utf-8")).hexdigest()[:12]
-    return f"__easyicu_value_{digest}__"
+def _opaque_scalar(_value: str) -> str:
+    # Summaries do not need a reversible label.  A constant token avoids
+    # exposing a dictionary-checkable digest of a private category literal.
+    return "__easyicu_category__"
 
 
 def _safe_summary_value(value: Any, *, key: str = "") -> Any:
     lowered = str(key).lower()
-    if lowered in _UNSAFE_VALUE_KEYS:
-        return None
     if isinstance(value, Mapping):
+        if lowered not in _SAFE_SUMMARY_MAPPING_KEYS:
+            return None
         return _compact(
             {
                 str(child_key): _safe_summary_value(child, key=str(child_key))
@@ -388,21 +424,28 @@ def _safe_summary_value(value: Any, *, key: str = "") -> Any:
             }
         )
     if isinstance(value, (list, tuple)):
-        projected = [_safe_summary_value(item, key=key) for item in value]
-        return [item for item in projected if item is not None]
+        return None
     if isinstance(value, str):
-        if lowered in _SAFE_TEXT_KEYS or lowered.endswith(
-            ("_sha256", "_digest", "_id", "_code", "_status")
-        ):
+        if lowered in _SAFE_TEXT_KEYS:
             return value
-        return _opaque_scalar(value)
-    if isinstance(value, (int, float, bool)) or value is None:
+        if lowered in _SAFE_OPAQUE_CATEGORY_KEYS:
+            return _opaque_scalar(value)
+        return None
+    if isinstance(value, bool):
+        return value if lowered in _SAFE_AGGREGATE_BOOL_KEYS else None
+    if isinstance(value, (int, float)):
+        return value if lowered in _SAFE_AGGREGATE_NUMERIC_KEYS else None
+    if value is None and (
+        lowered in _SAFE_TEXT_KEYS
+        or lowered in _SAFE_AGGREGATE_NUMERIC_KEYS
+        or lowered in _SAFE_AGGREGATE_BOOL_KEYS
+    ):
         return value
     return None
 
 
 def project_outbound_step_summary(summary: Mapping[str, Any]) -> dict[str, Any]:
-    """Keep aggregate host structure while opaque-tokenizing category text."""
+    """Project only the registered host-owned aggregate-summary schema."""
 
     return _compact(
         {
@@ -410,6 +453,43 @@ def project_outbound_step_summary(summary: Mapping[str, Any]) -> dict[str, Any]:
             for key, value in summary.items()
         }
     )
+
+
+def _project_process_manifest(parsed: Mapping[str, Any]) -> dict[str, Any]:
+    """Project the registered Tier-2 process-manifest schema only."""
+
+    projected = project_outbound_step_summary(parsed)
+    errors = parsed.get("errors")
+    if isinstance(errors, list):
+        safe_errors: list[dict[str, Any]] = []
+        for item in errors:
+            if not isinstance(item, Mapping):
+                continue
+            row = {
+                key: item[key]
+                for key in ("error_code", "severity", "validator")
+                if isinstance(item.get(key), str)
+            }
+            if row:
+                safe_errors.append(row)
+        if safe_errors:
+            projected["errors"] = safe_errors
+    evidence = parsed.get("evidence")
+    if isinstance(evidence, Mapping):
+        safe_evidence = {
+            key: evidence[key]
+            for key in ("count", "sha256", "digest")
+            if (
+                key in evidence
+                and (
+                    (key == "count" and isinstance(evidence[key], (int, float)))
+                    or (key != "count" and isinstance(evidence[key], str))
+                )
+            )
+        }
+        if safe_evidence:
+            projected["evidence"] = safe_evidence
+    return projected
 
 
 def project_outbound_artifact_bundle(bundle: Mapping[str, str]) -> dict[str, Any]:
@@ -423,14 +503,15 @@ def project_outbound_artifact_bundle(bundle: Mapping[str, str]) -> dict[str, Any
             "sha256": hashlib.sha256(str(content).encode("utf-8")).hexdigest(),
             "chars": len(str(content)),
         }
-        try:
-            parsed = json.loads(str(content))
-        except (TypeError, ValueError):
-            parsed = None
-        if isinstance(parsed, Mapping):
-            structured = project_outbound_step_summary(parsed)
-            if structured:
-                row["structured"] = structured
+        if str(name) in {"manifest.json", "run_manifest.json", "run_status.json"}:
+            try:
+                parsed = json.loads(str(content))
+            except (TypeError, ValueError):
+                parsed = None
+            if isinstance(parsed, Mapping):
+                structured = _project_process_manifest(parsed)
+                if structured:
+                    row["structured"] = structured
         projected[str(name)] = row
     return projected
 

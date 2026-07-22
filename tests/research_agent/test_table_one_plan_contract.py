@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import hashlib
 import json
+from datetime import timedelta
 
 import pandas as pd
 import pytest
@@ -14,6 +16,7 @@ from easyicu.research_agent.agents.core import (
 )
 from easyicu.research_agent.authority.table_one_binding import (
     bind_table_one_execution_spec,
+    table_one_private_code_label_map,
     table_one_execution_spec,
 )
 from easyicu.research_agent.authority.plan_authority import normalize_replan_candidate
@@ -300,6 +303,45 @@ def test_private_table_one_levels_use_opaque_tokens_and_bind_locally() -> None:
         assert private_label not in outbound_plan
 
 
+def test_private_code_tokens_are_host_keyed_and_stable_after_rebinding() -> None:
+    context, step = _private_table_one_bound_step()
+    first = table_one_private_code_label_map(step)
+    restored_step = AnalysisStep.model_validate(step.model_dump(mode="json"))
+    assert bind_table_one_execution_spec(restored_step, context) is not None
+    second = table_one_private_code_label_map(restored_step)
+    fresh_host_context = context.model_copy(
+        update={"created_at": context.created_at + timedelta(microseconds=1)}
+    )
+    fresh_host_step = AnalysisStep.model_validate(step.model_dump(mode="json"))
+    assert (
+        bind_table_one_execution_spec(fresh_host_step, fresh_host_context) is not None
+    )
+    fresh_host_tokens = table_one_private_code_label_map(fresh_host_step)
+
+    assert first == second
+    assert first
+    assert first != fresh_host_tokens
+    female_token = first[("str", repr("Female"))]
+    old_dictionary_token = (
+        "__easyicu_table1_label_"
+        + hashlib.sha256(
+            json.dumps(
+                {
+                    "step_id": step.step_id,
+                    "type": "str",
+                    "repr": repr("Female"),
+                    "public": "__easyicu_level_1__",
+                },
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()[:16]
+        + "__"
+    )
+    assert female_token != old_dictionary_token
+
+
 def test_private_table_one_labels_never_enter_agent_prompts() -> None:
     context = _private_label_context()
     payload = json.loads(_raw(include_spec=True))
@@ -336,6 +378,13 @@ def test_private_table_one_labels_never_enter_agent_prompts() -> None:
                 "step_summary": {
                     "group": "Female",
                     "category": "NeverSmokerLocal",
+                    "patient_id": 9918273,
+                    "subject_id": 771122,
+                    "stay_id": 881133,
+                    "age": 93,
+                    "lactate": 17.25,
+                    "individual_values": [93, 17.25],
+                    "unknown_nested": {"numeric_secret": 444555},
                 },
             }
         ],
@@ -427,6 +476,14 @@ def test_private_table_one_labels_never_enter_agent_prompts() -> None:
         "EverSmokerLocal",
     ):
         assert private_label not in outbound
+    for numeric_phi in (
+        "9918273",
+        "771122",
+        "881133",
+        "17.25",
+        "444555",
+    ):
+        assert numeric_phi not in _captured_prompt_text(replanner_llm)
 
 
 def test_table_one_contract_repair_never_sends_private_labels() -> None:
