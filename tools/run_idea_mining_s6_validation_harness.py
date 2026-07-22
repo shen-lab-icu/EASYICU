@@ -65,7 +65,9 @@ def _hash_payload(value: Any) -> str:
 
 
 def _request_json(url: str) -> dict[str, Any]:
-    req = urllib.request.Request(url, headers={"User-Agent": "EasyICU-S6-validation/1.0"})
+    req = urllib.request.Request(
+        url, headers={"User-Agent": "EasyICU-S6-validation/1.0"}
+    )
     last: Exception | None = None
     for attempt in range(8):
         try:
@@ -78,7 +80,9 @@ def _request_json(url: str) -> dict[str, Any]:
 
 
 def _request_text(url: str) -> str:
-    req = urllib.request.Request(url, headers={"User-Agent": "EasyICU-S6-validation/1.0"})
+    req = urllib.request.Request(
+        url, headers={"User-Agent": "EasyICU-S6-validation/1.0"}
+    )
     last: Exception | None = None
     for attempt in range(8):
         try:
@@ -126,7 +130,9 @@ def pubmed_fetch(pmids: Iterable[str]) -> list[dict[str, str]]:
     ids = [str(pmid) for pmid in pmids if str(pmid).strip()]
     if not ids:
         return []
-    params = urllib.parse.urlencode({"db": "pubmed", "id": ",".join(ids), "retmode": "xml"})
+    params = urllib.parse.urlencode(
+        {"db": "pubmed", "id": ",".join(ids), "retmode": "xml"}
+    )
     root = ET.fromstring(_request_text(f"{EUTILS}/efetch.fcgi?{params}"))
     out: list[dict[str, str]] = []
     for article in root.findall(".//PubmedArticle"):
@@ -277,9 +283,7 @@ def build_fulltext_materials(
     much of the run was mined from full text.
     """
     pmid_to_pmcid = pmids_to_pmcids(a["pmid"] for a in articles)
-    gap_by_pmid = pmc_fetch_gap_sections(
-        pmid_to_pmcid.values(), max_chars=max_chars
-    )
+    gap_by_pmid = pmc_fetch_gap_sections(pmid_to_pmcid.values(), max_chars=max_chars)
     materials: list[SourceMaterial] = []
     n_fulltext_gap = n_fulltext_body = n_abstract = 0
     for article in articles:
@@ -288,7 +292,9 @@ def build_fulltext_materials(
         if gap and gap.get("text"):
             body_text = str(gap["text"]).strip()
             text = f"{article['title']} {body_text}".strip()
-            locator = f"https://www.ncbi.nlm.nih.gov/pmc/articles/{pmid_to_pmcid[pmid]}/"
+            locator = (
+                f"https://www.ncbi.nlm.nih.gov/pmc/articles/{pmid_to_pmcid[pmid]}/"
+            )
             if gap.get("matched"):
                 n_fulltext_gap += 1
             else:
@@ -365,7 +371,9 @@ class OpenRouterSameTopicScreener:
             self.screen_cache_dir.mkdir(parents=True, exist_ok=True)
         self._opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
-    def screen(self, *, idea: LiteratureIdeaCandidate, hit: MappingLike) -> dict[str, Any]:
+    def screen(
+        self, *, idea: LiteratureIdeaCandidate, hit: MappingLike
+    ) -> dict[str, Any]:
         cache_path = self._screen_cache_path(idea=idea, hit=hit)
         if cache_path and cache_path.exists():
             cached = json.loads(cache_path.read_text(encoding="utf-8"))
@@ -442,7 +450,7 @@ class OpenRouterSameTopicScreener:
         try:
             with self._opener.open(request, timeout=self.timeout_seconds) as resp:
                 data = json.loads(resp.read().decode("utf-8"))
-            message = ((data.get("choices") or [{}])[0].get("message") or {})
+            message = (data.get("choices") or [{}])[0].get("message") or {}
             content = str(
                 message.get("content")
                 or message.get("reasoning")
@@ -540,6 +548,7 @@ class PubMedPriorArtScreenClient:
                 "max_results": max_results,
                 "idea_id": idea.literature_idea_id if idea else None,
                 "screen": bool(self.screener),
+                "top_n_screen": self.top_n_screen,
             }
         ).replace("sha256:", "")
         if cache_key in self.cache:
@@ -653,7 +662,9 @@ def run_screen_validation(
     output_dir.mkdir(parents=True, exist_ok=True)
     json_path = output_dir / "screen_validation_results.json"
     md_path = output_dir / "screen_validation_report.md"
-    json_path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
+    json_path.write_text(
+        json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8"
+    )
     md_path.write_text(_render_screen_validation_report(payload), encoding="utf-8")
     return {"json_path": str(json_path), "markdown_path": str(md_path), **payload}
 
@@ -661,7 +672,9 @@ def run_screen_validation(
 def _classification_metrics(rows: list[dict[str, Any]]) -> dict[str, Any]:
     tp = sum(row["truth_positive"] and row["predicted_positive"] for row in rows)
     fp = sum((not row["truth_positive"]) and row["predicted_positive"] for row in rows)
-    tn = sum((not row["truth_positive"]) and (not row["predicted_positive"]) for row in rows)
+    tn = sum(
+        (not row["truth_positive"]) and (not row["predicted_positive"]) for row in rows
+    )
     fn = sum(row["truth_positive"] and (not row["predicted_positive"]) for row in rows)
     precision = tp / (tp + fp) if tp + fp else None
     recall = tp / (tp + fn) if tp + fn else None
@@ -812,11 +825,11 @@ def _render_recall_curve_report(payload: dict[str, Any]) -> str:
 def fetch_review_editorial_articles(*, retmax: int) -> list[dict[str, str]]:
     term = (
         '("Intensive Care Med"[Journal] OR "Crit Care"[Journal]) '
-        'AND (review[Publication Type] OR editorial[Publication Type]) '
+        "AND (review[Publication Type] OR editorial[Publication Type]) "
         'AND (future[Title/Abstract] OR "future research"[Title/Abstract] '
         'OR "further studies"[Title/Abstract] OR unresolved[Title/Abstract] '
         'OR uncertainty[Title/Abstract] OR "research agenda"[Title/Abstract] '
-        'OR needs[Title/Abstract]) '
+        "OR needs[Title/Abstract]) "
         'AND ("critical care"[Title/Abstract] OR ICU[Title/Abstract] '
         'OR "intensive care"[Title/Abstract])'
     )
@@ -826,7 +839,7 @@ def fetch_review_editorial_articles(*, retmax: int) -> list[dict[str, str]]:
         return articles[:retmax]
     fallback = (
         '("Intensive Care Med"[Journal] OR "Crit Care"[Journal]) '
-        'AND (review[Publication Type] OR editorial[Publication Type]) '
+        "AND (review[Publication Type] OR editorial[Publication Type]) "
         'AND ("critical care"[Title/Abstract] OR ICU[Title/Abstract] '
         'OR "intensive care"[Title/Abstract])'
     )
@@ -886,21 +899,63 @@ def _topic_from_sentence(
 ) -> Optional[tuple[str, str, str, Optional[str], Optional[str]]]:
     s = sentence.lower()
     if "lactate" in s:
-        return ("lactate clearance trajectory", "mortality", "trajectory", "first 24 hours", "clearance")
+        return (
+            "lactate clearance trajectory",
+            "mortality",
+            "trajectory",
+            "first 24 hours",
+            "clearance",
+        )
     if "vasopressor" in s or "norepinephrine" in s:
         if "load" in s or "dose" in s:
-            return ("vasopressor load", "mortality", "association", "shock resuscitation", "load")
-        return ("vasopressor exposure", "mortality", "association", "shock resuscitation", None)
+            return (
+                "vasopressor load",
+                "mortality",
+                "association",
+                "shock resuscitation",
+                "load",
+            )
+        return (
+            "vasopressor exposure",
+            "mortality",
+            "association",
+            "shock resuscitation",
+            None,
+        )
     if "driving pressure" in s:
-        return ("driving pressure", "mortality", "association", "mechanical ventilation", None)
+        return (
+            "driving pressure",
+            "mortality",
+            "association",
+            "mechanical ventilation",
+            None,
+        )
     if "ventilat" in s:
         return ("mechanical ventilation", "mortality", "association", None, None)
     if "kidney" in s or "aki" in s or "creatinine" in s:
-        return ("creatinine trajectory", "mortality", "trajectory", "first 24 hours", "trajectory")
+        return (
+            "creatinine trajectory",
+            "mortality",
+            "trajectory",
+            "first 24 hours",
+            "trajectory",
+        )
     if "sofa" in s or "organ dysfunction" in s:
-        return ("SOFA score trajectory", "mortality", "trajectory", "first 24 hours", "trajectory")
+        return (
+            "SOFA score trajectory",
+            "mortality",
+            "trajectory",
+            "first 24 hours",
+            "trajectory",
+        )
     if "fluid" in s:
-        return ("fluid balance", "mortality", "association", "first 24 hours", "balance")
+        return (
+            "fluid balance",
+            "mortality",
+            "association",
+            "first 24 hours",
+            "balance",
+        )
     if "delirium" in s or "sedation" in s:
         return ("delirium", "mortality", "association", None, None)
     if "weakness" in s:
@@ -969,7 +1024,9 @@ class DeterministicGapExtractor:
         return json.dumps(ideas, ensure_ascii=False)
 
 
-def _aggregate_column(data_dir: Path, file_name: str, column: str, method: str) -> pd.DataFrame:
+def _aggregate_column(
+    data_dir: Path, file_name: str, column: str, method: str
+) -> pd.DataFrame:
     df = pd.read_parquet(data_dir / file_name, columns=["stay_id", column])
     if method == "median":
         return df.groupby("stay_id", as_index=False)[column].median()
@@ -986,12 +1043,36 @@ def build_wide_cohort(data_dir: Path, output_path: Path) -> dict[str, Any]:
         ("vitals_dbp_hr_map_resp_etc7.parquet", "map", "median"),
         ("blood_gas_be_cai_lact_methb_etc8.parquet", "lact", "max"),
         ("chemistry_alb_alp_alt_ast_etc20.parquet", "crea", "max"),
-        ("sofa2_score_sofa2_sofa2_cardio_sofa2_cns_sofa2_coag_etc7.parquet", "sofa2", "max"),
-        ("vasopressors_adh_rate_dobu60_dobu_dur_dobu_rate_etc17.parquet", "vaso_ind", "max"),
-        ("vasopressors_adh_rate_dobu60_dobu_dur_dobu_rate_etc17.parquet", "norepi_equiv", "max"),
-        ("ventilator_compliance_driving_pres_etco2_mean_airway_pres_etc12.parquet", "driving_pres", "median"),
-        ("respiratory_adv_resp_ecmo_ecmo_indication_ett_gcs_etc12.parquet", "vent_ind", "max"),
-        ("respiratory_adv_resp_ecmo_ecmo_indication_ett_gcs_etc12.parquet", "fio2", "median"),
+        (
+            "sofa2_score_sofa2_sofa2_cardio_sofa2_cns_sofa2_coag_etc7.parquet",
+            "sofa2",
+            "max",
+        ),
+        (
+            "vasopressors_adh_rate_dobu60_dobu_dur_dobu_rate_etc17.parquet",
+            "vaso_ind",
+            "max",
+        ),
+        (
+            "vasopressors_adh_rate_dobu60_dobu_dur_dobu_rate_etc17.parquet",
+            "norepi_equiv",
+            "max",
+        ),
+        (
+            "ventilator_compliance_driving_pres_etco2_mean_airway_pres_etc12.parquet",
+            "driving_pres",
+            "median",
+        ),
+        (
+            "respiratory_adv_resp_ecmo_ecmo_indication_ett_gcs_etc12.parquet",
+            "vent_ind",
+            "max",
+        ),
+        (
+            "respiratory_adv_resp_ecmo_ecmo_indication_ett_gcs_etc12.parquet",
+            "fio2",
+            "median",
+        ),
         (
             "renal_aki_aki_stage_aki_stage_creat_aki_stage_rrt_aki_stage_uo_creat_low_past_48hr_creat_low_past_7day_uo_rt_12hr_uo_rt_24hr_uo_rt_6hr.parquet",
             "aki",
@@ -1018,17 +1099,60 @@ def build_wide_cohort(data_dir: Path, output_path: Path) -> dict[str, Any]:
 
 def base_concepts() -> list[ConceptDescriptor]:
     return [
-        ConceptDescriptor(name="death", source_concept="death", role=VariableRole.OUTCOME, dtype="int64"),
-        ConceptDescriptor(name="lact", source_concept="lact", role=VariableRole.LAB, dtype="float64"),
-        ConceptDescriptor(name="crea", source_concept="crea", role=VariableRole.LAB, dtype="float64"),
-        ConceptDescriptor(name="map", source_concept="map", role=VariableRole.VITAL, dtype="float64"),
-        ConceptDescriptor(name="sofa2", source_concept="sofa2", role=VariableRole.COMPOSITE_SCORE, dtype="float64"),
-        ConceptDescriptor(name="vaso_ind", source_concept="vaso_ind", role=VariableRole.INTERVENTION, dtype="float64"),
-        ConceptDescriptor(name="norepi_equiv", source_concept="norepi_equiv", role=VariableRole.INTERVENTION, dtype="float64"),
-        ConceptDescriptor(name="driving_pres", source_concept="driving_pres", role=VariableRole.VITAL, dtype="float64"),
-        ConceptDescriptor(name="vent_ind", source_concept="vent_ind", role=VariableRole.INTERVENTION, dtype="float64"),
-        ConceptDescriptor(name="fio2", source_concept="fio2", role=VariableRole.VITAL, dtype="float64"),
-        ConceptDescriptor(name="aki", source_concept="aki", role=VariableRole.ORDINAL_SCORE, dtype="float64"),
+        ConceptDescriptor(
+            name="death",
+            source_concept="death",
+            role=VariableRole.OUTCOME,
+            dtype="int64",
+        ),
+        ConceptDescriptor(
+            name="lact", source_concept="lact", role=VariableRole.LAB, dtype="float64"
+        ),
+        ConceptDescriptor(
+            name="crea", source_concept="crea", role=VariableRole.LAB, dtype="float64"
+        ),
+        ConceptDescriptor(
+            name="map", source_concept="map", role=VariableRole.VITAL, dtype="float64"
+        ),
+        ConceptDescriptor(
+            name="sofa2",
+            source_concept="sofa2",
+            role=VariableRole.COMPOSITE_SCORE,
+            dtype="float64",
+        ),
+        ConceptDescriptor(
+            name="vaso_ind",
+            source_concept="vaso_ind",
+            role=VariableRole.INTERVENTION,
+            dtype="float64",
+        ),
+        ConceptDescriptor(
+            name="norepi_equiv",
+            source_concept="norepi_equiv",
+            role=VariableRole.INTERVENTION,
+            dtype="float64",
+        ),
+        ConceptDescriptor(
+            name="driving_pres",
+            source_concept="driving_pres",
+            role=VariableRole.VITAL,
+            dtype="float64",
+        ),
+        ConceptDescriptor(
+            name="vent_ind",
+            source_concept="vent_ind",
+            role=VariableRole.INTERVENTION,
+            dtype="float64",
+        ),
+        ConceptDescriptor(
+            name="fio2", source_concept="fio2", role=VariableRole.VITAL, dtype="float64"
+        ),
+        ConceptDescriptor(
+            name="aki",
+            source_concept="aki",
+            role=VariableRole.ORDINAL_SCORE,
+            dtype="float64",
+        ),
     ]
 
 
@@ -1086,9 +1210,7 @@ def dictionary_aliases_for_concepts(
                         else:
                             values.append(str(raw))
         cleaned = _ordered_unique_local(
-            value.replace("_", " ")
-            for value in values
-            if str(value or "").strip()
+            value.replace("_", " ") for value in values if str(value or "").strip()
         )
         if cleaned:
             aliases[key] = cleaned
@@ -1161,7 +1283,9 @@ def resolution_summary(
 
 
 def _status_counts(candidates: list[Any]) -> dict[str, int]:
-    return dict(Counter(candidate.feature_derivation_status for candidate in candidates))
+    return dict(
+        Counter(candidate.feature_derivation_status for candidate in candidates)
+    )
 
 
 def run_yield_smoke(
@@ -1207,8 +1331,7 @@ def run_yield_smoke(
         Path(payload["triage_report_path"]).read_text(encoding="utf-8")
     )
     novelty_labels = Counter(
-        record["prior_art"]["novelty_label"]
-        for record in payload["discovery_records"]
+        record["prior_art"]["novelty_label"] for record in payload["discovery_records"]
     )
     decisions = Counter(record["go_no_go"] for record in payload["discovery_records"])
     screen_status = Counter(
@@ -1237,11 +1360,15 @@ def run_yield_smoke(
             "skipped_generic_gap_sentence_count": len(
                 extractor.skipped_generic_gap_sentences
             ),
-            "skipped_generic_gap_sentence_examples": extractor.skipped_generic_gap_sentences[:8],
+            "skipped_generic_gap_sentence_examples": extractor.skipped_generic_gap_sentences[
+                :8
+            ],
         },
         "yield_report": payload["yield_report"],
         "resolution_recall_comparison": resolution_recall_comparison,
-        "feature_derivation_status_counts": _status_counts(result.executable_candidates),
+        "feature_derivation_status_counts": _status_counts(
+            result.executable_candidates
+        ),
         "novelty_label_distribution": dict(novelty_labels),
         "go_no_go_distribution": dict(decisions),
         "same_topic_screen_status_distribution": dict(screen_status),
@@ -1255,7 +1382,9 @@ def run_yield_smoke(
     }
     summary["snapshot_hash"] = _hash_payload(summary)
     summary_path = output_dir / "real_yield_summary.json"
-    summary_path.write_text(json.dumps(summary, indent=2, ensure_ascii=False), encoding="utf-8")
+    summary_path.write_text(
+        json.dumps(summary, indent=2, ensure_ascii=False), encoding="utf-8"
+    )
     (output_dir / "real_yield_report.md").write_text(
         _render_real_yield_report(summary),
         encoding="utf-8",
@@ -1340,7 +1469,11 @@ def parse_args() -> argparse.Namespace:
         default="all",
     )
     parser.add_argument("--seeds", type=Path, default=DEFAULT_SEEDS)
-    parser.add_argument("--out-dir", type=Path, default=DEFAULT_OUT / datetime.now().strftime("%Y%m%dT%H%M%S"))
+    parser.add_argument(
+        "--out-dir",
+        type=Path,
+        default=DEFAULT_OUT / datetime.now().strftime("%Y%m%dT%H%M%S"),
+    )
     parser.add_argument("--miiv-dir", type=Path, default=DEFAULT_MIIV)
     parser.add_argument("--top-n", type=int, default=3)
     parser.add_argument(
@@ -1452,7 +1585,9 @@ def main() -> None:
         )
     outputs["snapshot_hash"] = _hash_payload(outputs)
     summary_path = args.out_dir / "harness_summary.json"
-    summary_path.write_text(json.dumps(outputs, indent=2, ensure_ascii=False), encoding="utf-8")
+    summary_path.write_text(
+        json.dumps(outputs, indent=2, ensure_ascii=False), encoding="utf-8"
+    )
     compact = {
         "summary_path": str(summary_path),
         "snapshot_hash": outputs["snapshot_hash"],
