@@ -353,6 +353,7 @@ _STRUCTURAL_REPAIRS = {
     "association_publication_bundle_from_planned_model_contract_v1",
     "cohort_flow_publication_bundle_from_parent_outputs_v1",
     "sensitivity_publication_bundle_from_locked_summary_v1",
+    "missingness_publication_bundle_from_parent_outputs_v1",
     # Step-summary salvage that faithfully relocates the agent's own output
     # (stdout JSON / a named summary artefact) into step_summary.json. No new
     # numbers are introduced; it is a representation/location change.
@@ -382,6 +383,7 @@ _SEALED_RENDERER_REPAIRS = {
     "association_publication_bundle_from_planned_model_contract_v1",
     "cohort_flow_publication_bundle_from_parent_outputs_v1",
     "sensitivity_publication_bundle_from_locked_summary_v1",
+    "missingness_publication_bundle_from_parent_outputs_v1",
 }
 
 _SEALED_RENDERER_PRODUCT_SLOTS: Dict[str, Tuple[str, ...]] = {
@@ -414,6 +416,10 @@ _SEALED_RENDERER_PRODUCT_SLOTS: Dict[str, Tuple[str, ...]] = {
         "robustness_plot",
         "robustness_denominator_audit",
     ),
+    "missingness_publication_bundle_from_parent_outputs_v1": (
+        "missingness",
+        "measurement_availability",
+    ),
 }
 
 # Sealed renderers are selected only from the host-recorded Planner contract.
@@ -445,6 +451,9 @@ _SEALED_RENDERER_PLANNER_METHODS: Dict[str, Tuple[str, ...]] = {
     "cohort_flow_publication_bundle_from_parent_outputs_v1": ("cohort_definition",),
     "sensitivity_publication_bundle_from_locked_summary_v1": (
         "cohort_definition_sensitivity",
+    ),
+    "missingness_publication_bundle_from_parent_outputs_v1": (
+        "missingness_and_source_availability_audit",
     ),
 }
 _SEALED_RENDERER_PARENT_OUTPUT_ROLE_GROUPS: Dict[
@@ -486,6 +495,10 @@ _SEALED_RENDERER_PARENT_OUTPUT_ROLE_GROUPS: Dict[
     "sensitivity_publication_bundle_from_locked_summary_v1": (
         (("robustness", "summary"),),
     ),
+    "missingness_publication_bundle_from_parent_outputs_v1": (
+        (("missingness", "audit"),),
+        (("measurement", "source", "audit"),),
+    ),
 }
 
 _COMMON_SEALED_RENDERER_MODULES = (
@@ -524,6 +537,10 @@ _SEALED_RENDERER_IMPLEMENTATION_MODULES: Dict[str, Tuple[str, ...]] = {
     ),
     "sensitivity_publication_bundle_from_locked_summary_v1": (
         *_COMMON_SEALED_RENDERER_MODULES,
+    ),
+    "missingness_publication_bundle_from_parent_outputs_v1": (
+        *_COMMON_SEALED_RENDERER_MODULES,
+        "easyicu.research_agent.figures.missingness_source",
     ),
 }
 
