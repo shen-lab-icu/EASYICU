@@ -123,3 +123,55 @@ checkpoint adds 8 control-plane lines to `run_execute_phase` and 13 lines to
 `pipeline.py`. It adds no nested functions, closure captures, or module cycle;
 the post-emit diff is zero. This is a candidate for final incremental review,
 not a claim that PHI/outbound hardening has been merged or paper-authorized.
+
+## Increment from `debf447`: bind the complete outbound call chain
+
+This final scoped increment addresses two concrete code-object mutation
+attacks reported by supervision. It does not broaden provider capability or
+change the external-authorization policy.
+
+- Construction and trusted records now retain one immutable callable contract
+  for the concrete client type: `complete`, `complete_with_usage`,
+  `complete_with_images`, `_rebuild_openai_client`, `__getattribute__`, and
+  every available Python code object. Delivery rejects any instance override,
+  class replacement, or in-place code mutation before handing over a prompt.
+- Transport refresh no longer treats the current mutable rebuild method as its
+  authority. It requires the construction-time rebuild function and code
+  object, verifies that the actual caller frame is that reviewed code object,
+  and rechecks both construction and trusted registry records under the lock
+  before updating only the transport identity.
+- The reviewed rebuild remains functional. Tests now create OpenAI adapters
+  through the real constructor with an injected in-memory SDK transport;
+  transient retry/rebuild behavior is exercised without assigning a replacement
+  rebuild method after authorization.
+
+New negative regressions:
+
+- `test_authorized_openai_rejects_in_place_complete_with_usage_code_mutation`
+  mutates `OpenAIClient.complete_with_usage.__code__` and proves zero callback
+  invocations.
+- `test_malicious_rebuild_cannot_refresh_transport_authority` mutates the
+  rebuild code, swaps the transport, attempts registry refresh, restores the
+  original code, and proves both refresh and later delivery fail closed with
+  zero malicious transport calls.
+
+Positive preservation:
+
+- `test_reviewed_openai_rebuild_can_rotate_transport` uses the unchanged
+  reviewed rebuild path and proves the replacement in-memory transport can be
+  authorized and called once.
+- Existing retry, retry-after, streaming, response parsing, and provider-budget
+  tests use the real rebuild method rather than an authorization-bypassing test
+  override.
+
+Verification at the uncommitted increment:
+
+- Supervisor eight-file matrix: **178 passed** (the original 175 plus the three
+  tests above).
+- Provider factory + concrete LLM adapter focused suite: **77 passed**.
+- Ruff, Black check, `py_compile`, and `git diff --check`: pass.
+- Architecture diff: no lower-is-better regression.
+- Research-agent module graph diff: pass, no new cycle.
+
+This remains an isolated review candidate. It has not been merged or pushed,
+and no real Provider, Docker, patient data, or Canonical9 run was used.

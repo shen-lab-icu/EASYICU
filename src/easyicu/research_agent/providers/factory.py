@@ -53,18 +53,27 @@ _BASE_URL_UNSET = object()
 
 
 @dataclass(frozen=True)
+class _CallableContract:
+    client_type: type[Any] | None = None
+    complete_impl: object | None = None
+    complete_with_usage_impl: object | None = None
+    complete_with_images_impl: object | None = None
+    rebuild_impl: object | None = None
+    getattribute_impl: object | None = None
+    complete_code: object | None = None
+    complete_with_usage_code: object | None = None
+    complete_with_images_code: object | None = None
+    rebuild_code: object | None = None
+
+
+@dataclass(frozen=True)
 class _TrustedClientRecord:
     kind: str
     authorization: Optional[ProviderAuthorization]
     child_ids: tuple[int, ...] = ()
     children_getter: Optional[Callable[[], Sequence[Any]]] = None
-    client_type: type[Any] | None = None
     constructor_impl: object | None = None
-    complete_impl: object | None = None
-    complete_with_images_impl: object | None = None
-    getattribute_impl: object | None = None
-    complete_code: object | None = None
-    complete_with_images_code: object | None = None
+    callable_contract: _CallableContract | None = None
     dispatch_identity: tuple[Any, ...] = ()
 
 
@@ -72,11 +81,7 @@ class _TrustedClientRecord:
 class _ConstructedClientRecord:
     client_type: type[Any]
     constructor_impl: object
-    complete_impl: object
-    complete_with_images_impl: object | None
-    getattribute_impl: object
-    complete_code: object | None
-    complete_with_images_code: object | None
+    callable_contract: _CallableContract
     dispatch_identity: tuple[Any, ...]
 
 
@@ -133,12 +138,16 @@ def _reviewed_dispatch_identity(client: Any) -> tuple[Any, ...]:
     return ()
 
 
-def _callable_contract(
-    client: Any,
-) -> tuple[type[Any], object, object | None, object, object | None, object | None]:
+def _callable_contract(client: Any) -> _CallableContract:
     client_type = type(client)
     instance_vars = _safe_instance_vars(client)
-    if "complete" in instance_vars or "complete_with_images" in instance_vars:
+    protected_names = (
+        "complete",
+        "complete_with_usage",
+        "complete_with_images",
+        "_rebuild_openai_client",
+    )
+    if any(name in instance_vars for name in protected_names):
         raise ProviderConfigurationError(
             EXTERNAL_LLM_NOT_AUTHORIZED,
             client_type.__name__,
@@ -152,14 +161,34 @@ def _callable_contract(
             EXTERNAL_LLM_NOT_AUTHORIZED,
             client_type.__name__,
         )
+    usage_impl = _class_callable(client_type, "complete_with_usage")
     image_impl = _class_callable(client_type, "complete_with_images")
-    return (
-        client_type,
-        complete_impl,
-        image_impl,
-        getattribute_impl,
-        _callable_code(complete_impl),
-        _callable_code(image_impl),
+    rebuild_impl = _class_callable(client_type, "_rebuild_openai_client")
+    return _CallableContract(
+        client_type=client_type,
+        complete_impl=complete_impl,
+        complete_with_usage_impl=usage_impl,
+        complete_with_images_impl=image_impl,
+        rebuild_impl=rebuild_impl,
+        getattribute_impl=getattribute_impl,
+        complete_code=_callable_code(complete_impl),
+        complete_with_usage_code=_callable_code(usage_impl),
+        complete_with_images_code=_callable_code(image_impl),
+        rebuild_code=_callable_code(rebuild_impl),
+    )
+
+
+def _callable_contracts_match(
+    live: _CallableContract,
+    recorded: _CallableContract | None,
+) -> bool:
+    """Compare every dispatch callable and code object by identity."""
+
+    if recorded is None:
+        return False
+    return all(
+        getattr(live, field) is getattr(recorded, field)
+        for field in _CallableContract.__dataclass_fields__
     )
 
 
@@ -187,14 +216,8 @@ def _mark_reviewed_transport_constructed(client: Any) -> Any:
             EXTERNAL_LLM_NOT_AUTHORIZED,
             type(client).__name__,
         )
-    (
-        client_type,
-        complete_impl,
-        image_impl,
-        getattribute_impl,
-        complete_code,
-        image_code,
-    ) = _callable_contract(client)
+    contract = _callable_contract(client)
+    client_type = type(client)
     constructor_impl = inspect.getattr_static(client_type, "__init__")
     ident = id(client)
     reference = weakref.ref(
@@ -207,11 +230,7 @@ def _mark_reviewed_transport_constructed(client: Any) -> Any:
             _ConstructedClientRecord(
                 client_type=client_type,
                 constructor_impl=constructor_impl,
-                complete_impl=complete_impl,
-                complete_with_images_impl=image_impl,
-                getattribute_impl=getattribute_impl,
-                complete_code=complete_code,
-                complete_with_images_code=image_code,
+                callable_contract=contract,
                 dispatch_identity=_reviewed_dispatch_identity(client),
             ),
         )
@@ -235,30 +254,19 @@ def _new_trusted_record(
     children_getter: Optional[Callable[[], Sequence[Any]]] = None,
     construction: Optional[_ConstructedClientRecord] = None,
 ) -> _TrustedClientRecord:
-    (
-        client_type,
-        complete_impl,
-        image_impl,
-        getattribute_impl,
-        complete_code,
-        image_code,
-    ) = _callable_contract(client)
+    contract = _callable_contract(client)
+    client_type = type(client)
     return _TrustedClientRecord(
         kind=kind,
         authorization=authorization,
         child_ids=child_ids,
         children_getter=children_getter,
-        client_type=client_type,
         constructor_impl=(
             construction.constructor_impl
             if construction
             else inspect.getattr_static(client_type, "__init__", None)
         ),
-        complete_impl=complete_impl,
-        complete_with_images_impl=image_impl,
-        getattribute_impl=getattribute_impl,
-        complete_code=complete_code,
-        complete_with_images_code=image_code,
+        callable_contract=contract,
         dispatch_identity=(
             construction.dispatch_identity if construction is not None else ()
         ),
@@ -267,25 +275,13 @@ def _new_trusted_record(
 
 def _callables_match_record(client: Any, record: _TrustedClientRecord) -> bool:
     try:
-        (
-            client_type,
-            complete_impl,
-            image_impl,
-            getattribute_impl,
-            complete_code,
-            image_code,
-        ) = _callable_contract(client)
+        contract = _callable_contract(client)
     except ProviderConfigurationError:
         return False
     return bool(
-        client_type is record.client_type
-        and inspect.getattr_static(client_type, "__init__", None)
+        inspect.getattr_static(type(client), "__init__", None)
         is record.constructor_impl
-        and complete_impl is record.complete_impl
-        and image_impl is record.complete_with_images_impl
-        and getattribute_impl is record.getattribute_impl
-        and complete_code is record.complete_code
-        and image_code is record.complete_with_images_code
+        and _callable_contracts_match(contract, record.callable_contract)
     )
 
 
@@ -301,31 +297,57 @@ def _dispatch_matches_record(client: Any, record: _TrustedClientRecord) -> bool:
 def _refresh_reviewed_transport_dispatch(client: Any) -> None:
     """Rotate a bound OpenAI transport only from its reviewed rebuild method."""
 
-    rebuild = inspect.getattr_static(type(client), "_rebuild_openai_client", None)
+    ident = id(client)
+    with _TRUSTED_CLIENTS_LOCK:
+        constructed = _CONSTRUCTED_CLIENTS.get(ident)
+        trusted = _TRUSTED_CLIENTS.get(ident)
+    if constructed is None or constructed[0]() is not client:
+        raise ProviderConfigurationError(
+            EXTERNAL_LLM_NOT_AUTHORIZED,
+            type(client).__name__,
+        )
+    construction = constructed[1]
+    try:
+        live_contract = _callable_contract(client)
+    except ProviderConfigurationError as exc:
+        raise ProviderConfigurationError(
+            EXTERNAL_LLM_NOT_AUTHORIZED,
+            type(client).__name__,
+        ) from exc
     caller = inspect.currentframe().f_back
     if (
         not _is_reviewed_client_type(client, "OpenAIClient")
-        or not callable(rebuild)
+        or not _callable_contracts_match(
+            live_contract,
+            construction.callable_contract,
+        )
+        or live_contract.rebuild_impl is None
+        or live_contract.rebuild_code is None
         or caller is None
-        or getattr(rebuild, "__code__", None) is not caller.f_code
+        or construction.callable_contract.rebuild_impl is not live_contract.rebuild_impl
+        or construction.callable_contract.rebuild_code is not live_contract.rebuild_code
+        or caller.f_code is not construction.callable_contract.rebuild_code
     ):
         raise ProviderConfigurationError(
             EXTERNAL_LLM_NOT_AUTHORIZED,
             type(client).__name__,
         )
     dispatch_identity = _reviewed_dispatch_identity(client)
-    ident = id(client)
     with _TRUSTED_CLIENTS_LOCK:
-        constructed = _CONSTRUCTED_CLIENTS.get(ident)
-        trusted = _TRUSTED_CLIENTS.get(ident)
-        if constructed is None or constructed[0]() is not client:
+        current_constructed = _CONSTRUCTED_CLIENTS.get(ident)
+        current_trusted = _TRUSTED_CLIENTS.get(ident)
+        if (
+            current_constructed is None
+            or current_constructed != constructed
+            or current_trusted != trusted
+        ):
             raise ProviderConfigurationError(
                 EXTERNAL_LLM_NOT_AUTHORIZED,
                 type(client).__name__,
             )
         _CONSTRUCTED_CLIENTS[ident] = (
             constructed[0],
-            replace(constructed[1], dispatch_identity=dispatch_identity),
+            replace(construction, dispatch_identity=dispatch_identity),
         )
         if trusted is not None and trusted[0]() is client:
             _TRUSTED_CLIENTS[ident] = (
@@ -587,32 +609,17 @@ def _attach_provider_authorization(
             authorization.provider,
         )
     try:
-        (
-            live_type,
-            live_complete,
-            live_images,
-            live_getattribute,
-            live_complete_code,
-            live_image_code,
-        ) = _callable_contract(client)
+        live_contract = _callable_contract(client)
     except ProviderConfigurationError:
-        (
-            live_type,
-            live_complete,
-            live_images,
-            live_getattribute,
-            live_complete_code,
-            live_image_code,
-        ) = (None, None, None, None, None, None)
+        live_contract = None
     if not (
-        live_type is construction.client_type
+        live_contract is not None
         and inspect.getattr_static(type(client), "__init__", None)
         is construction.constructor_impl
-        and live_complete is construction.complete_impl
-        and live_images is construction.complete_with_images_impl
-        and live_getattribute is construction.getattribute_impl
-        and live_complete_code is construction.complete_code
-        and live_image_code is construction.complete_with_images_code
+        and _callable_contracts_match(
+            live_contract,
+            construction.callable_contract,
+        )
         and _reviewed_dispatch_identity(client) == construction.dispatch_identity
     ):
         raise ProviderConfigurationError(

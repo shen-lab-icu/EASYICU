@@ -22,7 +22,21 @@ def _mutated_openai_complete(self, *_args, **_kwargs):
     return "must not run"
 
 
-def _constructed_local_openai(monkeypatch, *, completions=None):
+def _mutated_openai_complete_with_usage(self, *_args, **_kwargs):
+    self._attack_callback_calls += 1
+    return "must not run", None
+
+
+def _mutated_openai_rebuild(self):
+    from easyicu.research_agent.providers.factory import (
+        _refresh_reviewed_transport_dispatch,
+    )
+
+    self._client = self._malicious_transport
+    _refresh_reviewed_transport_dispatch(self)
+
+
+def _constructed_local_openai(monkeypatch, *, completions=None, max_retries=0):
     from easyicu.research_agent.providers.llm import OpenAIClient
 
     transport = SimpleNamespace(
@@ -38,7 +52,7 @@ def _constructed_local_openai(monkeypatch, *, completions=None):
         api_key="non-secret-test-key",
         base_url="http://127.0.0.1:8787/v1",
         request_timeout=1.0,
-        max_retries=0,
+        max_retries=max_retries,
     )
     return client, transport
 
@@ -691,6 +705,118 @@ def test_authorized_openai_rejects_in_place_complete_code_mutation(monkeypatch):
 
     assert exc_info.value.issue == EXTERNAL_LLM_NOT_AUTHORIZED
     assert client._attack_callback_calls == 0
+
+
+def test_authorized_openai_rejects_in_place_complete_with_usage_code_mutation(
+    monkeypatch,
+):
+    from easyicu.research_agent.providers.factory import (
+        EXTERNAL_LLM_NOT_AUTHORIZED,
+        ProviderConfigurationError,
+        authorized_complete,
+    )
+    from easyicu.research_agent.providers.llm import OpenAIClient
+    from easyicu.research_agent.providers.protocol import LLMMessage
+
+    client, _transport = _constructed_local_openai(monkeypatch)
+    client._attack_callback_calls = 0
+    original_code = OpenAIClient.complete_with_usage.__code__
+    try:
+        OpenAIClient.complete_with_usage.__code__ = (
+            _mutated_openai_complete_with_usage.__code__
+        )
+        with pytest.raises(ProviderConfigurationError) as exc_info:
+            authorized_complete(client, [LLMMessage(role="user", content="secret")])
+    finally:
+        OpenAIClient.complete_with_usage.__code__ = original_code
+
+    assert exc_info.value.issue == EXTERNAL_LLM_NOT_AUTHORIZED
+    assert client._attack_callback_calls == 0
+
+
+def test_malicious_rebuild_cannot_refresh_transport_authority(monkeypatch):
+    from easyicu.research_agent.providers.factory import (
+        EXTERNAL_LLM_NOT_AUTHORIZED,
+        ProviderConfigurationError,
+        authorized_complete,
+    )
+    from easyicu.research_agent.providers.llm import OpenAIClient
+    from easyicu.research_agent.providers.protocol import LLMMessage
+
+    client, _transport = _constructed_local_openai(monkeypatch)
+    calls = 0
+
+    class _MaliciousCompletions:
+        def create(self, **_kwargs):
+            nonlocal calls
+            calls += 1
+            return SimpleNamespace(
+                choices=[
+                    SimpleNamespace(
+                        finish_reason="stop",
+                        message=SimpleNamespace(content="must not run"),
+                    )
+                ],
+                usage=None,
+            )
+
+    client._malicious_transport = SimpleNamespace(
+        chat=SimpleNamespace(completions=_MaliciousCompletions())
+    )
+    original_code = OpenAIClient._rebuild_openai_client.__code__
+    try:
+        OpenAIClient._rebuild_openai_client.__code__ = _mutated_openai_rebuild.__code__
+        with pytest.raises(ProviderConfigurationError) as refresh_exc:
+            client._rebuild_openai_client()
+    finally:
+        OpenAIClient._rebuild_openai_client.__code__ = original_code
+
+    assert refresh_exc.value.issue == EXTERNAL_LLM_NOT_AUTHORIZED
+    with pytest.raises(ProviderConfigurationError) as delivery_exc:
+        authorized_complete(client, [LLMMessage(role="user", content="secret")])
+    assert delivery_exc.value.issue == EXTERNAL_LLM_NOT_AUTHORIZED
+    assert calls == 0
+
+
+def test_reviewed_openai_rebuild_can_rotate_transport(monkeypatch):
+    from easyicu.research_agent.providers.factory import authorized_complete
+    from easyicu.research_agent.providers.protocol import LLMMessage
+
+    client, original_transport = _constructed_local_openai(monkeypatch)
+    calls = 0
+
+    class _ReviewedCompletions:
+        def create(self, **_kwargs):
+            nonlocal calls
+            calls += 1
+            return SimpleNamespace(
+                choices=[
+                    SimpleNamespace(
+                        finish_reason="stop",
+                        message=SimpleNamespace(content="reviewed rebuild"),
+                    )
+                ],
+                usage=None,
+            )
+
+    replacement = SimpleNamespace(
+        chat=SimpleNamespace(completions=_ReviewedCompletions())
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "openai",
+        SimpleNamespace(OpenAI=lambda **_kwargs: replacement),
+    )
+
+    client._rebuild_openai_client()
+
+    assert client._client is replacement
+    assert client._client is not original_transport
+    assert (
+        authorized_complete(client, [LLMMessage(role="user", content="safe")])
+        == "reviewed rebuild"
+    )
+    assert calls == 1
 
 
 def test_remote_openai_transport_cannot_be_authorized_as_local():
