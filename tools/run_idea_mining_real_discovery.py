@@ -578,6 +578,8 @@ def main() -> None:
         prior_art_top_n=args.prior_art_top_n,
         prior_art_candidate_limit=args.prior_art_candidate_limit,
         untraceable_quote_policy="skip",
+        malformed_extraction_batch_policy="skip",
+        extraction_batch_receipt_dir=out_dir / "extraction_batch_receipts",
         source_item_index=source_item_index,
     )
 

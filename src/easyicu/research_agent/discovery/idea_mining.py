@@ -140,6 +140,11 @@ from .idea_mining_priorart import (  # noqa: F401  (re-exported for back-compat)
     build_prior_art_queries,
     render_discovery_report,
 )
+from .idea_mining_extraction_receipts import (
+    extraction_batch_request,
+    load_verified_parsed_extraction_response,
+    persist_extraction_batch_receipt,
+)
 from .idea_mining_feasibility_tier import (  # noqa: F401  (re-exported)
     SourceItemIndex,
     classify_feasibility_tier,
@@ -517,6 +522,9 @@ def extract_literature_ideas(
     untraceable_quote_policy: Literal["raise", "skip"] = "raise",
     dropped_untraceable: Optional[List[str]] = None,
     dropped_invalid: Optional[List[str]] = None,
+    malformed_batch_policy: Literal["raise", "skip"] = "raise",
+    dropped_malformed_batches: Optional[List[List[str]]] = None,
+    batch_receipt_dir: Optional[str | Path] = None,
     batch_size: int = 6,
     max_tokens: int = 4096,
     reflection_rounds: int = 0,
@@ -552,18 +560,63 @@ def extract_literature_ideas(
         for material in parsed_materials
     }
 
+    if malformed_batch_policy not in {"raise", "skip"}:
+        raise ValueError("malformed_batch_policy must be 'raise' or 'skip'")
+
     candidates: List[LiteratureIdeaCandidate] = []
     step = max(1, int(batch_size))
     for start in range(0, len(parsed_materials), step):
         batch = parsed_materials[start : start + step]
+        batch_index = start // step
         messages = build_idea_extraction_messages(
             batch,
             source_snapshot_id=source_snapshot_id,
         )
-        raw = llm.complete(messages, max_tokens=max_tokens, temperature=0.0)
-        payload = _parse_json_payload(raw)
-        if not isinstance(payload, list):
-            raise IdeaExtractionError("idea extraction response must be a JSON array")
+        citation_keys = [material.citation.key for material in batch]
+        request = extraction_batch_request(
+            source_snapshot_id=source_snapshot_id,
+            batch_index=batch_index,
+            citation_keys=citation_keys,
+            messages=messages,
+            max_tokens=max_tokens,
+            temperature=0.0,
+            provider_name=str(getattr(llm, "name", type(llm).__name__)),
+        )
+        raw = None
+        if batch_receipt_dir is not None:
+            raw = load_verified_parsed_extraction_response(
+                batch_receipt_dir,
+                request=request,
+            )
+        if raw is None:
+            raw = llm.complete(messages, max_tokens=max_tokens, temperature=0.0)
+        try:
+            payload = _parse_json_payload(raw)
+            if not isinstance(payload, list):
+                raise IdeaExtractionError(
+                    "idea extraction response must be a JSON array"
+                )
+        except IdeaExtractionError as exc:
+            if batch_receipt_dir is not None:
+                persist_extraction_batch_receipt(
+                    batch_receipt_dir,
+                    request=request,
+                    raw_response=raw,
+                    parse_status="malformed",
+                    parse_error=str(exc),
+                )
+            if malformed_batch_policy == "skip":
+                if dropped_malformed_batches is not None:
+                    dropped_malformed_batches.append(citation_keys)
+                continue
+            raise
+        if batch_receipt_dir is not None:
+            persist_extraction_batch_receipt(
+                batch_receipt_dir,
+                request=request,
+                raw_response=raw,
+                parse_status="parsed",
+            )
         for item in payload:
             coerced = _coerce_extracted_idea_item(
                 item,
@@ -1664,6 +1717,8 @@ def run_idea_mining_dry_run(
     scope_reference_year: Optional[int] = None,
     scope_retmax: int = 20,
     untraceable_quote_policy: Literal["raise", "skip"] = "raise",
+    malformed_extraction_batch_policy: Literal["raise", "skip"] = "raise",
+    extraction_batch_receipt_dir: Optional[str | Path] = None,
     reflection_rounds: int = 0,
     reflection_search_client: Optional[Any] = None,
     novelty_judge: Optional[Callable[..., Mapping[str, Any]]] = None,
@@ -1741,6 +1796,7 @@ def run_idea_mining_dry_run(
 
     dropped_untraceable: List[str] = []
     dropped_invalid: List[str] = []
+    dropped_malformed_batches: List[List[str]] = []
     if precomputed_literature_ideas is None:
         literature_ideas = extract_literature_ideas(
             materials=parsed_materials,
@@ -1749,6 +1805,9 @@ def run_idea_mining_dry_run(
             untraceable_quote_policy=untraceable_quote_policy,
             dropped_untraceable=dropped_untraceable,
             dropped_invalid=dropped_invalid,
+            malformed_batch_policy=malformed_extraction_batch_policy,
+            dropped_malformed_batches=dropped_malformed_batches,
+            batch_receipt_dir=extraction_batch_receipt_dir,
             reflection_rounds=reflection_rounds,
             reflection_search_client=reflection_search_client,
         )
@@ -1826,6 +1885,27 @@ def run_idea_mining_dry_run(
             f"untraceable_quote_policy='skip' "
             f"(citation_keys: {sorted(set(dropped_invalid))}); one malformed "
             "LLM item did not abort the whole batch."
+        )
+    if dropped_malformed_batches:
+        malformed_keys = sorted(
+            {
+                citation_key
+                for batch_keys in dropped_malformed_batches
+                for citation_key in batch_keys
+            }
+        )
+        warnings.append(
+            "Isolated "
+            f"{len(dropped_malformed_batches)} malformed extraction batch(es) "
+            f"under malformed_extraction_batch_policy='skip' "
+            f"(source citation_keys: {malformed_keys}). No malformed JSON was "
+            "repaired or admitted."
+            + (
+                " Verified parsed batches remain reusable from their "
+                "content-bound receipts."
+                if extraction_batch_receipt_dir is not None
+                else ""
+            )
         )
     if parsed_materials and all(
         material.source_adapter_level == "metadata_only"
