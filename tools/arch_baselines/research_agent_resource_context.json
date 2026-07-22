@@ -10,13 +10,17 @@
   "source_sha256": {
     "src/easyicu/data/concept-dict.json": "fccadc53622dc82fe1dc8696617e52044168b6a84a9255e97e59df9e53bc5803",
     "src/easyicu/research_agent/agents/core.py": "81232d1b8ab9101c046e076a5c029587f31e372ce5a2aa0b74a34be98b927fa1",
+    "src/easyicu/research_agent/graph.py": "12680e6e4d67a4f4e65783322a7c562c0530eeda02ca0886d6e4e12769ae84d0",
     "src/easyicu/research_agent/know_how/registry.py": "9e4e4a30c85d7ba62de565897a34808a0d2a5d1250f784f208f8b29bb3a2912e",
+    "src/easyicu/research_agent/learning/store.py": "0cc58115331331d0a8fcc78983b87e58827a748e8224bd1c587ac36ad7b00997",
     "src/easyicu/research_agent/planning/analysis_types.py": "28e48c1c30a3057ecb7e9befcf550292cdc07563801d68040e20d634a02e1fa4",
     "src/easyicu/research_agent/planning/cohort_contract.py": "bd29eb63f41e3766c7e47ee0c2a502068cc311b0fc1f1412e118cc78f550a470",
+    "src/easyicu/research_agent/resources/capability.py": "ad2b84b9e121d896f3287a4636a85c23015855ee4cf753b52962494ffedf2458",
     "src/easyicu/research_agent/resources/catalog.py": "d1df9901759c3a323ac6a9bb4998cefa7ca2deb978ddd8409851a68f2beeff2f",
-    "src/easyicu/research_agent/resources/scheduler.py": "5357ce45f1fe3edeeb88ac6e73e5082d7d38f716d3cfac8ecba5f8d9e61b4c88",
-    "src/easyicu/research_agent/resources/schema.py": "c734e64db6183354897478b11b68add4045941408cb16d572b234efee202242b",
-    "tools/research_agent_resource_baseline.py": "499929b3d85f0e68f527be8e5bff07cae164b5a761ec651568102516f81a38d2"
+    "src/easyicu/research_agent/resources/context.py": "8ce42accd83398ff9972b8e50f2f64f9ac926ad610d2c386f2b763adf77af2e1",
+    "src/easyicu/research_agent/resources/scheduler.py": "4f8eab600627c999d5660919d01823610792072b46167f0fd5b80a009b081c94",
+    "src/easyicu/research_agent/resources/schema.py": "456053a9d96a8ee5fe0b3e8b2cfa22187f6bb0d8cc81b43d28569ffd311fd288",
+    "tools/research_agent_resource_baseline.py": "ef1d627265676964f2777594256b2832ef73899b30a0dc3c369ed6046d083c96"
   },
   "summary": {
     "max_planner_with_resources_bytes": 37338,

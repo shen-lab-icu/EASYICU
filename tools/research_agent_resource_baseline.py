@@ -117,7 +117,11 @@ SOURCE_FILES: tuple[str, ...] = (
     "src/easyicu/research_agent/planning/cohort_contract.py",
     "src/easyicu/research_agent/resources/schema.py",
     "src/easyicu/research_agent/resources/catalog.py",
+    "src/easyicu/research_agent/resources/capability.py",
+    "src/easyicu/research_agent/resources/context.py",
     "src/easyicu/research_agent/resources/scheduler.py",
+    "src/easyicu/research_agent/learning/store.py",
+    "src/easyicu/research_agent/graph.py",
     "src/easyicu/data/concept-dict.json",
 )
 
