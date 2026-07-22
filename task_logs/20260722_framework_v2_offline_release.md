@@ -1,5 +1,10 @@
 # Research Agent Framework v2 离线发布记录
 
+> 已被 `20260722_framework_v2_phase1_review_fixes.md` 与 schema-v2
+> `20260722_framework_v2_phase1_release.json` 取代。本文件记录的是审阅前
+> `26ca3ae` 状态；其中“0 provider calls / 0 patient-data reads”是命令清单的
+> 静态声明，不是运行时仪器观测，不能作为完整生产链完成证据。
+
 日期：2026-07-22
 分支：`refactor/agent-control-plane`
 状态：`offline_release_passed / online_experiments_paused`

@@ -1,6 +1,6 @@
 # EasyICU Research Agent：实验前完整架构优化计划（v2）
 
-状态：`framework_v2_offline_release_passed / online_experiments_paused_pending_review`
+状态：`framework_v2_phase1_release_passed / phase2_production_resource_wiring_pending`
 日期：2026-07-22
 适用范围：Research Agent；不得改变患者数据、EvidenceStore、provider receipt、capsule 或 paper authority。
 
@@ -26,13 +26,13 @@ EasyICU 复用 LangChain/LangGraph 的通用运行原语，但不把科研权威
 | Bundle | 状态 | 提交 / 证据 |
 |---|---|---|
 | 0 测量冻结 | done | `2c77d49`；resource/context baseline |
-| 1 统一资源与上下文 | done | `4fe8fea`、`c91b027`；Host allowlist、确定性选择、分段预算 |
-| 2 安全长期记忆 | done | `447049b`、`dfcfcdd`；reviewed/promoted 才可影响计划，旧经验只进 quarantine |
-| 3 能力与新方法入口 | done | `a34f7f7`；CapabilityRequest/approval/validation/image digest，不允许运行时安装 |
-| 4 LangGraph 默认 runtime | done | `404710b`、`01cd41e`；唯一默认 phase runtime、digest-bound HITL 原语、旧 dispatch 退役 |
-| 5 离线发布门 | done | `00c298e`；`task_logs/20260722_framework_v2_offline_release.json` |
+| 1 统一资源与上下文 | phase1 done | `4fe8fea`、`c91b027`；ProtocolCard 已接 Planner；通用 Action/Software/Data 尚未接 Coder |
+| 2 安全长期记忆 | phase1 done | `447049b`、`dfcfcdd`；旧经验只进 quarantine；reviewed memory 的生产读取尚未接线 |
+| 3 能力与新方法入口 | phase1 done | `a34f7f7`；request/approval/image schema 已有；实际 capability-gap 发单尚未接线 |
+| 4 LangGraph 默认 runtime | done | `404710b`、`01cd41e`、`667b6dc`；唯一默认 phase runtime、digest-bound HITL、重复 ID fail-close |
+| 5 Phase 1 离线发布门 | done | `8c6ea46`；`task_logs/20260722_framework_v2_phase1_release.json` |
 
-离线发布门最终结果：resource/context、architecture、module graph、framework tests **4/4 通过**；框架专项 **85 passed**；**0 provider calls、0 patient-data reads**。这是 Framework v2 的离线发布候选，不是临床知识审核完成，也不是 Canonical9 或论文结果完成。所有在线实验继续暂停，等待独立审阅后由用户明确解冻。
+Phase 1 离线发布门最终结果：resource/context、architecture、module graph、framework tests **4/4 通过**；框架专项 **89 passed**。报告绑定 clean Git commit `8c6ea461c25fea7ddc823bd1430b3e15f31781c8`。命令面由静态 allowlist 保证不包含在线 benchmark/API/患者数据入口，但没有做 OS 级网络或文件访问监测，因此不再宣称“观测到 0 provider/0 patient reads”。这是安全底座和核心 runtime 的 Phase 1，不是完整资源/记忆/新方法生产链，也不是 Canonical9 或论文结果完成。
 
 ## 2. 当前实现
 
@@ -41,9 +41,10 @@ EasyICU 复用 LangChain/LangGraph 的通用运行原语，但不把科研权威
 - Graph 提供 digest-bound `HumanReviewRequest/Decision`、interrupt/resume 与可选 checkpointer。EasyICU 自有 checkpoint/receipt/capsule 仍是完整 pipeline 的持久连续性和科学权威；LangGraph checkpointer 不建立第二套 current/evidence authority。
 - `planning/capability_registry.py` 已是分析族能力单一真相，但粒度是 family，不是逐步 Action/软件资源目录。
 - Know-How v2 已有确定性检索、claim/citation、信任状态、Prompt 预算和 receipt；默认关闭。
-- `resources/scheduler.py` 与 bounded context assembler 已统一投影 protocol/action/software/data；选择严格限制在 Host allowlist 内，允许 0 项且不增加 LLM 调用。
-- `learning/store.py` 已建立 permissioned memory。旧 `RunMemory`/`ExperienceBank` 只作为兼容写源，产出镜像到 `run_lessons/quarantine`，不再直接进入 Planner；reviewed/promoted 对象必须有 profile、SHA 与 promotion/review receipt。
-- `resources/capability.py` 已建立软件/新方法申请、人工批准、验证证据与不可变 image digest 的路径；它不执行安装。
+- `resources/scheduler.py` 与 bounded context assembler 已提供 protocol/action/software/data 的统一 schema 和确定性选择；**生产默认链目前只接入 Planner ProtocolCard**。Action/Software/Data 仍是可测底座，尚无 Coder 生产调用点。
+- `learning/store.py` 已建立 permissioned memory。旧 `RunMemory`/`ExperienceBank` 只作为兼容写源，产出镜像到 `run_lessons/quarantine`，不再直接进入 Planner；reviewed/promoted 对象必须有 profile、SHA 与 promotion/review receipt。**reviewed memory 尚未接入生产 context selection。**
+- `resources/capability.py` 已建立软件/新方法申请、人工批准、验证证据与不可变 image digest 的数据模型；**尚未由真实 capability gap 自动产生申请或注入已批准软件资源。**它不执行安装。
+- Protocol Scheduler 默认只接受 `clinical_reviewed`；唯一 development profile `npj_dm_know_how_dev/20260721` 可显式使用 `curated_mvp`。当前 9 张内置卡均为 `curated_mvp`，因此不能进入未来 paper profile。
 - EasyICU 的 checkpoint、receipt、capsule、EvidenceStore 和 sandbox 是已验证权威，不迁入或复制到 LangGraph Store。
 
 ## 3. 目标结构
@@ -211,7 +212,7 @@ Plan → Acquire → ExecuteStep → Gate → Repair/Continue → Seal → Revie
 - 默认 phase graph 已通过录制 golden；旧 `_use_graph` 分叉和直线 dispatch 已删除。
 - 公共 CLI/API 只保留一个默认运行面，并写入 `orchestration_runtime.json`。生产 UI 对各类审核请求的展示属于后续产品接线，不是新的科学 authority。
 
-## 10. Work package R6：减法清理与离线发布门（已完成）
+## 10. Work package R6：减法清理与 Phase 1 离线发布门（已完成）
 
 必须完成的退役决策：
 
@@ -228,7 +229,7 @@ Plan → Acquire → ExecuteStep → Gate → Repair/Continue → Seal → Revie
 - 恶意 memory、错误工具、未批准软件、Prompt overflow、checkpoint 篡改和旧 receipt 重放均 fail-close。
 - architecture baseline、zero-SCC、semantic golden、module graph 全绿。
 
-最终由 `tools/research_agent_framework_release.py` 固化为单一无网络发布命令；报告包含工具 SHA、逐门命令、return code 与 stdout/stderr SHA。2026-07-22 权威结果为 4/4 门通过、85 项专项测试通过、0 provider calls、0 patient-data reads。
+最终由 `tools/research_agent_framework_release.py` 固化为单一离线命令集；报告包含工具 SHA、Git commit/dirty 状态、逐门命令、return code 与 stdout/stderr SHA。2026-07-22 Phase 1 权威结果为 4/4 门通过、89 项专项测试通过。工具诚实标记 runtime monitoring 未仪器化，只声明命令 allowlist 禁止在线/患者数据入口。
 
 结构数字要求：
 
@@ -277,7 +278,7 @@ Plan → Acquire → ExecuteStep → Gate → Repair/Continue → Seal → Revie
 3. B/C 验证泛化与 memory OFF/ON。
 4. SOFA-2 使用冻结框架；不把 SOFA-2 变成第十个调参题。
 
-实际规模：6 个 bundle、9 个核心实现/发布提交，另 1 个兼容经验隔离收口提交。离线 Framework v2 已完成；实验仍须在独立审阅和用户解冻后进行。
+实际 Phase 1 规模：6 个 bundle、9 个核心实现/发布提交及审阅修复。核心 runtime 和安全底座已完成；Action/Software/Data、reviewed memory 与 capability-gap 的生产接线进入 Phase 2。
 
 停止条件：任何 bundle 若新增科学 authority、需要额外资源选择 LLM 调用、引入循环、破坏 golden，或只是把旧逻辑复制进新文件而未删除旧入口，则拒收并回到上一个可收提交。
 
@@ -292,6 +293,18 @@ Plan → Acquire → ExecuteStep → Gate → Repair/Continue → Seal → Revie
 
 ### 12.1 已通过与未宣称
 
-已通过：安全资源选择、bounded context、permissioned memory、CapabilityRequest、默认 LangGraph phase runtime、digest-bound HITL 原语、旧经验隔离、semantic golden、architecture/module graph 与离线发布门。
+已通过：安全资源 schema/选择底座、Planner ProtocolCard、bounded context、permissioned memory schema/store、CapabilityRequest schema、默认 LangGraph phase runtime、digest-bound HITL、旧经验隔离、semantic golden、architecture/module graph 与 Phase 1 离线发布门。
 
-未宣称：ProtocolCard 已完成临床/方法学签署；已建设 Biomni 规模的 Action/软件/数据库目录；所有产品 UI 已接入 HITL；Canonical9 在线 A 或 B/C 泛化已经通过；任何结果获得 paper authority。这些项目不能用本次离线发布报告替代。
+未完成/未宣称：Action/Software/Data 已进入 Coder 默认链；reviewed memory 已进入生产 context；capability gap 会实际生成 request；ProtocolCard 已完成临床/方法学签署；已建设 Biomni 规模的资源目录；所有产品 UI 已接入 HITL；Canonical9 在线 A 或 B/C 泛化已经通过；任何结果获得 paper authority。
+
+## 13. Phase 2：生产资源链最小闭环
+
+Phase 2 不扩充“大量工具”，只把 Phase 1 底座接入现有职责边界：
+
+1. 从现有 capability registry、host SDK 与固定运行镜像生成受审的 Action/Software/Data catalog；不手写第二套方法真相。
+2. 每个 Coder step 在 Host allowlist 内选择 Action/Software/Data，写 `ResourceSelectionReceipt`，作为独立 bounded context segment 注入；零匹配允许继续，未批准软件不可见。
+3. reviewed/promoted memory 只在显式新 profile 下选择并生成 context receipt；preferences 只能影响呈现，quarantine 永不可见。
+4. Planner/Coder 发现真实 capability gap 时输出结构化 `CapabilityRequest` 并进入 HITL；批准前零安装、零执行。
+5. 发布门必须用生产调用点测试证明上述三条链确实被调用，不能只测独立模块。
+
+Phase 2 通过后才可称“完整资源/记忆/新方法运行链完成”。是否在 Phase 2 前解冻默认 Know-How OFF 的 A 题，由用户决定；Phase 1 本身不会把未审核资源带入这些实验。
