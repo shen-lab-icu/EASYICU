@@ -144,11 +144,9 @@ def main(argv: Optional[list[str]] = None) -> int:
         rows,
         index=args.idea_index,
         require_analysis_ready=args.run_analysis,
-        # The handoff contract requires a frozen target outcome. When the
-        # operator did not supply one explicitly, keep automatic selection
-        # within rows whose outcome was resolved by idea mining rather than
-        # selecting a higher-ranked concept-set audit that cannot be handed off.
-        require_resolved_outcome=not bool(args.target_outcome),
+        # Pairwise ideas require a resolved endpoint; concept-set analyses such
+        # as trajectory phenotyping instead require resolved analysis concepts.
+        require_executable_shape=not bool(args.target_outcome),
     )
     handoff = build_handoff_from_row(
         selected,
@@ -200,7 +198,9 @@ def main(argv: Optional[list[str]] = None) -> int:
         stem="discovery_universe",
         target_outcome=handoff.target_outcome,
         outcome_concepts=outcome_concepts,
+        required_feature_concepts=handoff.resolved_analysis_concepts,
         database=handoff.database,
+        require_outcome=bool(handoff.target_outcome),
     )
     acquisition_path = out_root / "data_foundation_acquisition.json"
     acquisition_path.write_text(
@@ -312,7 +312,7 @@ def _normalise_endpoint(value: Any) -> str:
 
 def _outcome_concepts_for_handoff(
     *,
-    handoff_target: str,
+    handoff_target: Optional[str],
     requested: Optional[str],
 ) -> tuple[str, ...]:
     """Return the sole licensed outcome concept for universe materialisation.
@@ -324,7 +324,12 @@ def _outcome_concepts_for_handoff(
 
     target = str(handoff_target or "").strip()
     if not target:
-        raise SystemExit("discovery handoff has no target_outcome")
+        if requested is not None:
+            raise SystemExit(
+                "--outcome-concepts cannot be supplied for an outcome-free "
+                "concept-set handoff"
+            )
+        return ()
     if requested is not None:
         supplied = [item.strip() for item in requested.split(",") if item.strip()]
         if len(supplied) != 1 or _normalise_endpoint(
@@ -589,12 +594,28 @@ def _write_ehrflowbench_row(
         "name": handoff.candidate_topic[:120],
         "question": handoff.research_question,
         "cohort_path": str(cohort_path.resolve()),
-        "target_outcome": handoff.target_outcome,
-        "primary_predictor": handoff.resolved_predictor_concept or "agent_mined_idea",
         "expected_or_direction": 0,
-        "kind": "descriptive_association",
+        "kind": (
+            "longitudinal_trajectory_analysis"
+            if getattr(handoff, "analysis_family", None) == "trajectory_clustering"
+            else "descriptive_association"
+        ),
         "inclusion_criteria": list(handoff.inclusion_criteria),
     }
+    analysis_family = str(
+        getattr(handoff, "analysis_family", "association_study") or "association_study"
+    )
+    analysis_concepts = [
+        str(value) for value in getattr(handoff, "resolved_analysis_concepts", []) or []
+    ]
+    row["analysis_family"] = analysis_family
+    if analysis_concepts:
+        row["analysis_concepts"] = analysis_concepts
+        row["candidate_variables"] = analysis_concepts
+    if getattr(handoff, "target_outcome", None):
+        row["target_outcome"] = handoff.target_outcome
+    if getattr(handoff, "resolved_predictor_concept", None):
+        row["primary_predictor"] = handoff.resolved_predictor_concept
     if cohort_authority_path is not None and cohort_authority_ref is not None:
         row["cohort_authority_required"] = True
         row["cohort_authority_path"] = str(Path(cohort_authority_path).resolve())

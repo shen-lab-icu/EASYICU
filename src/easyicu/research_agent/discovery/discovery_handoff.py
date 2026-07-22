@@ -15,7 +15,12 @@ from typing import Any, Dict, List, Literal, Mapping, Optional, Sequence
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-DISCOVERY_HANDOFF_SCHEMA_VERSION = "easyicu.discovery_handoff/2"
+from ..planning.analysis_types import (
+    is_concept_set_family,
+    normalize_analysis_family,
+)
+
+DISCOVERY_HANDOFF_SCHEMA_VERSION = "easyicu.discovery_handoff/3"
 
 DiscoverySelectionMode = Literal[
     "agent_selected",
@@ -59,9 +64,11 @@ class DiscoveryHandoffPacket(BaseModel):
     novelty_label: Optional[str] = None
     feasibility_route: Optional[str] = None
     feasibility_next_action: Optional[str] = None
+    analysis_family: str = "association_study"
+    resolved_analysis_concepts: List[str] = Field(default_factory=list)
     resolved_predictor_concept: Optional[str] = None
     resolved_outcome_concept: Optional[str] = None
-    target_outcome: str = "death"
+    target_outcome: Optional[str] = None
     database: str = "miiv"
     research_question: str
     inclusion_criteria: List[str] = Field(default_factory=list)
@@ -77,7 +84,7 @@ class DiscoveryHandoffPacket(BaseModel):
         "candidate_topic",
         "go_no_go",
         "go_no_go_reason",
-        "target_outcome",
+        "analysis_family",
         "database",
         "research_question",
     )
@@ -96,6 +103,23 @@ class DiscoveryHandoffPacket(BaseModel):
             raise ValueError(
                 "human confirmation requires confirmed_at and a confirmation note"
             )
+        self.analysis_family = normalize_analysis_family(self.analysis_family)
+        self.resolved_analysis_concepts = list(
+            dict.fromkeys(
+                str(value).strip()
+                for value in self.resolved_analysis_concepts
+                if str(value).strip()
+            )
+        )
+        concept_set = is_concept_set_family(self.analysis_family)
+        if concept_set and not self.resolved_analysis_concepts:
+            raise ValueError(
+                "concept-set analysis family requires resolved_analysis_concepts"
+            )
+        if not concept_set and not str(self.target_outcome or "").strip():
+            raise ValueError(
+                "target_outcome is required for predictor/outcome analysis families"
+            )
         if self.resolved_outcome_concept and not _same_endpoint(
             self.resolved_outcome_concept, self.target_outcome
         ):
@@ -110,13 +134,7 @@ class DiscoveryHandoffPacket(BaseModel):
         return (
             _normalise_decision(self.go_no_go) in ANALYSIS_READY_DECISIONS
             and self.human_confirmed
-            and (
-                not self.resolved_outcome_concept
-                or _same_endpoint(
-                    self.resolved_outcome_concept,
-                    self.target_outcome,
-                )
-            )
+            and _handoff_shape_is_valid(self)
         )
 
 
@@ -139,6 +157,7 @@ def select_discovery_row(
     index: Optional[int] = None,
     require_analysis_ready: bool = False,
     require_resolved_outcome: bool = False,
+    require_executable_shape: bool = False,
 ) -> Dict[str, Any]:
     """Select the highest-priority idea row for downstream execution.
 
@@ -158,6 +177,8 @@ def select_discovery_row(
             )
         if require_resolved_outcome and not selected.get("resolved_outcome_concept"):
             raise ValueError("selected discovery row has no resolved outcome concept")
+        if require_executable_shape and not _row_has_executable_shape(selected):
+            raise ValueError("selected discovery row has no executable analysis shape")
         return selected
     if not rows:
         raise ValueError("cannot select from an empty discovery ledger")
@@ -168,6 +189,10 @@ def select_discovery_row(
     ]
     if not selectable:
         raise ValueError("discovery ledger has no row with a resolved outcome concept")
+    if require_executable_shape:
+        selectable = [row for row in selectable if _row_has_executable_shape(row)]
+        if not selectable:
+            raise ValueError("discovery ledger has no executable analysis shape")
     eligible = [row for row in selectable if _row_recommended(row)]
     if require_analysis_ready and not eligible:
         raise ValueError("discovery ledger has no go/recommend row for analysis")
@@ -192,7 +217,17 @@ def build_handoff_from_row(
     topic = str(row.get("candidate_topic") or "").strip()
     if not topic:
         raise ValueError("selected discovery row has no candidate_topic")
-    question = research_question or _default_research_question(topic)
+    analysis_family = normalize_analysis_family(row.get("analysis_family"))
+    resolved_analysis_concepts = [
+        str(value).strip()
+        for value in row.get("resolved_analysis_concepts") or []
+        if str(value).strip()
+    ]
+    concept_set = is_concept_set_family(analysis_family)
+    question = research_question or _default_research_question(
+        topic,
+        analysis_family=analysis_family,
+    )
     rationale = selection_rationale or _default_selection_rationale(row)
     resolved_outcome = str(row.get("resolved_outcome_concept") or "").strip()
     requested_outcome = str(target_outcome or "").strip()
@@ -207,10 +242,14 @@ def build_handoff_from_row(
             f"{resolved_outcome!r})"
         )
     effective_outcome = resolved_outcome or requested_outcome
-    if not effective_outcome:
+    if not effective_outcome and not concept_set:
         raise ValueError(
             "target_outcome is required when the selected row has no "
             "resolved_outcome_concept"
+        )
+    if concept_set and not resolved_analysis_concepts:
+        raise ValueError(
+            "resolved_analysis_concepts is required for a concept-set analysis"
         )
     confirmed_at = datetime.now(timezone.utc).isoformat() if human_confirmed else None
     confirmation_note = None
@@ -254,13 +293,15 @@ def build_handoff_from_row(
             if row.get("feasibility_next_action")
             else None
         ),
+        analysis_family=analysis_family,
+        resolved_analysis_concepts=resolved_analysis_concepts,
         resolved_predictor_concept=(
             str(row.get("resolved_predictor_concept"))
             if row.get("resolved_predictor_concept")
             else None
         ),
         resolved_outcome_concept=resolved_outcome or None,
-        target_outcome=effective_outcome,
+        target_outcome=effective_outcome or None,
         database=database,
         research_question=question,
         inclusion_criteria=list(inclusion_criteria or _default_inclusion_criteria()),
@@ -307,6 +348,15 @@ def _row_recommended(row: Mapping[str, Any]) -> bool:
     return _normalise_decision(row.get("go_no_go")) in ANALYSIS_READY_DECISIONS
 
 
+def _row_has_executable_shape(row: Mapping[str, Any]) -> bool:
+    family = normalize_analysis_family(row.get("analysis_family"))
+    if is_concept_set_family(family):
+        return any(
+            str(value).strip() for value in row.get("resolved_analysis_concepts") or []
+        )
+    return bool(str(row.get("resolved_outcome_concept") or "").strip())
+
+
 def _normalise_endpoint(value: Any) -> str:
     return str(value or "").strip().lower().replace("-", "_").replace(" ", "_")
 
@@ -325,16 +375,30 @@ def assert_discovery_analysis_ready(packet: DiscoveryHandoffPacket) -> bool:
         raise ValueError(f"discovery decision {packet.go_no_go!r} is not go/recommend")
     if not packet.human_confirmed:
         raise ValueError("explicit human confirmation is required before analysis")
-    if packet.resolved_outcome_concept and not _same_endpoint(
-        packet.resolved_outcome_concept, packet.target_outcome
-    ):
-        raise ValueError(
-            "resolved_outcome_concept and target_outcome must identify the same endpoint"
-        )
+    if not _handoff_shape_is_valid(packet):
+        raise ValueError("discovery handoff has no valid executable analysis shape")
     return True
 
 
-def _default_research_question(topic: str) -> str:
+def _handoff_shape_is_valid(packet: DiscoveryHandoffPacket) -> bool:
+    if is_concept_set_family(packet.analysis_family):
+        return bool(packet.resolved_analysis_concepts)
+    return bool(str(packet.target_outcome or "").strip()) and (
+        not packet.resolved_outcome_concept
+        or _same_endpoint(packet.resolved_outcome_concept, packet.target_outcome)
+    )
+
+
+def _default_research_question(topic: str, *, analysis_family: str) -> str:
+    if is_concept_set_family(analysis_family):
+        return (
+            "Starting from the agent-mined ICU literature idea, evaluate the "
+            f"following concept-set candidate in an adult ICU cohort: {topic}. "
+            "The analysis must prespecify time zero, observation window, "
+            "trajectory representation, stability criteria, and validation "
+            "across databases before fitting. Outcomes must not be used to "
+            "select trajectory classes."
+        )
     return (
         "Starting from the agent-mined ICU literature idea, evaluate the "
         f"following candidate in an adult ICU cohort: {topic}. The analysis "

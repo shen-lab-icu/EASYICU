@@ -158,3 +158,50 @@ def test_valid_row_status_field_cannot_impersonate_decoder_failure(
         == 0
     )
     assert seen["item"].key == "valid-status-field"
+
+
+def test_longitudinal_jsonl_can_run_without_invented_target_outcome(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    import tools.run_research_agent_bench as bench
+
+    cohort = tmp_path / "cohort.parquet"
+    pd.DataFrame({"stay_id": [1, 2]}).to_parquet(cohort, index=False)
+    jsonl = tmp_path / "items.jsonl"
+    jsonl.write_text(
+        json.dumps(
+            {
+                "key": "sofa2-trajectory",
+                "kind": "longitudinal_trajectory_analysis",
+                "question": "Are SOFA-2 trajectories reproducible?",
+                "cohort_path": str(cohort),
+                "analysis_concepts": ["sofa2"],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    seen = {}
+
+    def fake_run_one(**kwargs):
+        seen.update(kwargs)
+        return {"item_key": "sofa2-trajectory"}
+
+    monkeypatch.setattr(bench, "_run_one_item_from_cohort", fake_run_one)
+    monkeypatch.setattr(bench, "_aggregate", lambda _scores: {"aware": {}})
+    monkeypatch.setattr(bench, "_render_markdown", lambda **_kwargs: "ok")
+
+    assert (
+        bench._run_ehrflowbench_jsonl(
+            jsonl_path=jsonl,
+            out_root=tmp_path / "out",
+            seed=7,
+            arms=["aware"],
+            provider="openai",
+            model="model",
+        )
+        == 0
+    )
+    assert seen["item"].target_outcome is None
+    assert seen["item"].kind == "longitudinal_trajectory_analysis"

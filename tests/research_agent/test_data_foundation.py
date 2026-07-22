@@ -121,6 +121,75 @@ def test_acquire_proceeds_on_available_subset_when_outcome_present(monkeypatch):
     assert "re-extract" in res.note.lower()
 
 
+def test_outcome_free_acquisition_materialises_required_trajectory_concept(
+    monkeypatch,
+):
+    captured = {}
+
+    monkeypatch.setattr(
+        df_mod,
+        "build_available_catalog",
+        lambda _d: _catalog("sofa2", "age"),
+    )
+    import easyicu.research_agent.cohort.materializer as cm
+
+    monkeypatch.setattr(
+        cm,
+        "materialize_to_parquet",
+        lambda **kwargs: captured.update(kwargs)
+        or {"parquet": "u.parquet", "provenance": "u.json"},
+    )
+
+    result = acquire_universe_for_question(
+        export_dir="/nonexistent",
+        question="Are SOFA-2 trajectories reproducible?",
+        llm=_StubLLM('{"selected_concepts": []}'),
+        output_dir="/tmp/x",
+        target_outcome=None,
+        outcome_concepts=(),
+        required_feature_concepts=("sofa2",),
+        require_outcome=False,
+    )
+
+    assert result.blocked is False
+    assert captured["feature_concepts"] == ["sofa2"]
+    assert captured["outcome_concepts"] == []
+    assert captured["trajectory_concepts"] == ["sofa2"]
+
+
+def test_required_trajectory_concept_missing_blocks_before_materialisation(
+    monkeypatch,
+):
+    called = {"materialize": False}
+    monkeypatch.setattr(
+        df_mod,
+        "build_available_catalog",
+        lambda _d: _catalog("age"),
+    )
+    import easyicu.research_agent.cohort.materializer as cm
+
+    def _fake_materialize(**_kwargs):
+        called["materialize"] = True
+        return {"parquet": "u.parquet", "provenance": "u.json"}
+
+    monkeypatch.setattr(cm, "materialize_to_parquet", _fake_materialize)
+
+    result = acquire_universe_for_question(
+        export_dir="/nonexistent",
+        question="Are SOFA-2 trajectories reproducible?",
+        llm=_StubLLM('{"selected_concepts": []}'),
+        output_dir="/tmp/x",
+        target_outcome=None,
+        outcome_concepts=(),
+        required_feature_concepts=("sofa2",),
+        require_outcome=False,
+    )
+
+    assert result.blocked is True
+    assert called["materialize"] is False
+    assert "sofa2" in result.note
+
+
 def test_acquire_preserves_legacy_trajectory_without_typed_loader(
     monkeypatch, tmp_path
 ):
