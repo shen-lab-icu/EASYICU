@@ -88,8 +88,8 @@
       "shim_bypass_violations": []
     },
     "agents/core.py": {
-      "loc": 4148,
-      "sha256": "634bd3363f12dfd13e6f9dab21a09e05e39e6dbe8c6986e3e8ca8e0a06682e59",
+      "loc": 4165,
+      "sha256": "9bdecee5eb7e8dba22f418eddb5f4677d72136b8b55518140c9ae1f8540fb218",
       "intra_package_import_edges": 24,
       "shim_bypass_violations": []
     },
