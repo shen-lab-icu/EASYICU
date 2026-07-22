@@ -47,7 +47,7 @@ import re
 import subprocess
 import uuid
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
 import pandas as pd
 
@@ -193,6 +193,18 @@ def _sha256_size(path: Path) -> Tuple[str, int]:
 
 def _sha256_file(path: Path) -> str:
     return _sha256_size(path)[0]
+
+
+def _canonical_json_bytes(payload: Any) -> bytes:
+    """Deterministic bytes for digesting a manifest sub-block."""
+
+    return json.dumps(
+        payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    ).encode("utf-8")
 
 
 def _sealer_source_files() -> List[Path]:
@@ -707,6 +719,132 @@ def assert_sealed_export_paper_ready(export_dir: str | Path) -> Dict[str, Any]:
     return manifest
 
 
+RETROFIT_REVIEW_ATTESTATION_SCHEMA = "easyicu.retrofit_review_attestation/1"
+_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+
+
+def build_retrofit_review_attestation(
+    export_dir: str | Path,
+    *,
+    reviewer: str,
+    reviewed_at: str,
+) -> Dict[str, Any]:
+    """Mint a frozen paper-readiness attestation for a retrofit-sealed export.
+
+    This is the ONLY sanctioned producer of an attestation and it FAILS CLOSED
+    through :func:`assert_sealed_export_paper_ready`: an export that is unreviewed
+    or whose patient identity is insufficient (e.g. full6 ->
+    ``patient_identity_unavailable``) cannot yield an attestation, so it can never
+    become a paper-ready authority. Call this BEFORE freezing a task binding or
+    materialising a paper authority from the sealed export. The attestation binds
+    the source manifest + sidecar + review + identity digests so a downstream
+    verifier can re-derive and detect tamper/drift.
+    """
+
+    root = Path(export_dir).expanduser()
+    manifest = assert_sealed_export_paper_ready(root)  # fail-close before minting
+    manifest_path = root / NATIVE_MANIFEST
+    sidecar_ref = manifest.get("column_metadata") or {}
+    sidecar_file = str(sidecar_ref.get("file") or "")
+    sidecar_path = root / sidecar_file
+    if not sidecar_file or Path(sidecar_file).name != sidecar_file:
+        raise TypedRetrofitSealError(
+            "retrofit manifest references no single-component sidecar; cannot attest"
+        )
+    if not sidecar_path.is_file():
+        raise TypedRetrofitSealError(
+            f"retrofit manifest sidecar is missing: {sidecar_file}; cannot attest"
+        )
+    reviewer = reviewer.strip()
+    reviewed_at = reviewed_at.strip()
+    if not reviewer or not reviewed_at:
+        raise TypedRetrofitSealError(
+            "attestation requires a non-empty reviewer and reviewed_at"
+        )
+    return {
+        "schema_version": RETROFIT_REVIEW_ATTESTATION_SCHEMA,
+        "seal_kind": SEAL_KIND,
+        "value_vintage": str(manifest.get("value_vintage") or ""),
+        "source_manifest_sha256": _sha256_file(manifest_path),
+        "source_sidecar_file": sidecar_file,
+        "source_sidecar_sha256": _sha256_file(sidecar_path),
+        "semantic_review_sha256": hashlib.sha256(
+            _canonical_json_bytes(manifest.get("semantic_review"))
+        ).hexdigest(),
+        "patient_identity_sha256": hashlib.sha256(
+            _canonical_json_bytes(manifest.get("patient_identity"))
+        ).hexdigest(),
+        "reviewer": reviewer,
+        "reviewed_at": reviewed_at,
+        "paper_ready": True,
+    }
+
+
+def verify_retrofit_review_attestation(
+    attestation: Mapping[str, Any],
+    *,
+    export_dir: str | Path | None = None,
+) -> None:
+    """Re-verify a bound attestation; fail-closed (raises ``TypedRetrofitSealError``).
+
+    Offline structural + semantic checks always run (schema, seal kind,
+    ``paper_ready``, digest shape, reviewer). When ``export_dir`` is provided the
+    live artifacts are re-derived and the paper-readiness gate is re-run, so a
+    tampered or drifted manifest/sidecar digest fails closed.
+    """
+
+    if not isinstance(attestation, Mapping):
+        raise TypedRetrofitSealError("attestation must be a mapping")
+    if attestation.get("schema_version") != RETROFIT_REVIEW_ATTESTATION_SCHEMA:
+        raise TypedRetrofitSealError("unknown retrofit attestation schema")
+    if attestation.get("seal_kind") != SEAL_KIND:
+        raise TypedRetrofitSealError("attestation seal_kind is not a retrofit seal")
+    if attestation.get("paper_ready") is not True:
+        raise TypedRetrofitSealError("attestation is not paper_ready; fail-closed")
+    for key in (
+        "source_manifest_sha256",
+        "source_sidecar_sha256",
+        "semantic_review_sha256",
+        "patient_identity_sha256",
+    ):
+        value = attestation.get(key)
+        if not isinstance(value, str) or not _SHA256_RE.match(value):
+            raise TypedRetrofitSealError(f"attestation {key} is not a sha256 digest")
+    if not str(attestation.get("reviewer") or "").strip():
+        raise TypedRetrofitSealError("attestation has no reviewer")
+    if export_dir is None:
+        return
+
+    # Live re-derivation: re-run the gate and re-compute every bound digest.
+    root = Path(export_dir).expanduser()
+    manifest = assert_sealed_export_paper_ready(root)  # fail-close on drift
+    if _sha256_file(root / NATIVE_MANIFEST) != attestation["source_manifest_sha256"]:
+        raise TypedRetrofitSealError(
+            "attestation source_manifest_sha256 mismatch (tampered or drifted)"
+        )
+    sidecar_file = str((manifest.get("column_metadata") or {}).get("file") or "")
+    if sidecar_file != attestation.get("source_sidecar_file"):
+        raise TypedRetrofitSealError("attestation source_sidecar_file mismatch")
+    if _sha256_file(root / sidecar_file) != attestation["source_sidecar_sha256"]:
+        raise TypedRetrofitSealError(
+            "attestation source_sidecar_sha256 mismatch (tampered or drifted)"
+        )
+    if (
+        hashlib.sha256(
+            _canonical_json_bytes(manifest.get("semantic_review"))
+        ).hexdigest()
+        != attestation["semantic_review_sha256"]
+    ):
+        raise TypedRetrofitSealError("attestation semantic_review_sha256 mismatch")
+    if (
+        hashlib.sha256(
+            _canonical_json_bytes(manifest.get("patient_identity"))
+        ).hexdigest()
+        != attestation["patient_identity_sha256"]
+    ):
+        raise TypedRetrofitSealError("attestation patient_identity_sha256 mismatch")
+
+
 def seal_export_structural_typed(
     export_dir: str | Path,
     *,
@@ -926,9 +1064,12 @@ __all__ = [
     "SEAL_KIND",
     "BOUNDS_AUTHORITY_UNAVAILABLE",
     "METADATA_PROVENANCE",
+    "RETROFIT_REVIEW_ATTESTATION_SCHEMA",
     "ColumnCompat",
     "SealResult",
     "TypedRetrofitSealError",
     "assert_sealed_export_paper_ready",
+    "build_retrofit_review_attestation",
     "seal_export_structural_typed",
+    "verify_retrofit_review_attestation",
 ]

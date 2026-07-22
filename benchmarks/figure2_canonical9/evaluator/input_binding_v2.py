@@ -26,6 +26,10 @@ from easyicu.research_agent.authority.run_input import (
     RUN_INPUT_CAPSULE_SCHEMA_VERSION_V3,
 )
 
+from ..typed_export_seal import (
+    TypedRetrofitSealError,
+    verify_retrofit_review_attestation,
+)
 from .rubric_v1 import FIGURE2_TASK_IDS
 
 CANONICAL_RUN_INPUT_BINDING_SCHEMA = "easyicu.figure2_canonical_run_input_bindings/2"
@@ -69,6 +73,37 @@ class FrozenTypedAuthorityRef(_StrictFrozenModel):
         return value
 
 
+class RetrofitReviewAttestation(_StrictFrozenModel):
+    """Frozen paper-readiness attestation for a retrofit-sealed source export.
+
+    Minted only via ``typed_export_seal.build_retrofit_review_attestation`` (which
+    fail-closes through the paper-readiness gate), then bound into the ready task
+    binding so the review proof and source digests survive into the frozen
+    selector and are re-verified at resolve time — never checked once and dropped.
+    ``paper_ready`` is a ``Literal[True]`` so an unreviewed or identity-insufficient
+    attestation cannot validate.
+    """
+
+    schema_version: Literal["easyicu.retrofit_review_attestation/1"]
+    seal_kind: Literal["retrofitted_structural_typed_export"]
+    value_vintage: str = Field(min_length=1, max_length=64)
+    source_manifest_sha256: Sha256
+    source_sidecar_file: str = Field(min_length=1, max_length=255)
+    source_sidecar_sha256: Sha256
+    semantic_review_sha256: Sha256
+    patient_identity_sha256: Sha256
+    reviewer: str = Field(min_length=1, max_length=200)
+    reviewed_at: str = Field(min_length=1, max_length=64)
+    paper_ready: Literal[True]
+
+    @field_validator("source_sidecar_file")
+    @classmethod
+    def _one_component(cls, value: str) -> str:
+        if Path(value).name != value or value in {".", ".."} or "\\" in value:
+            raise ValueError("sidecar file must be one path component")
+        return value
+
+
 class BlockedCanonicalTaskBinding(_StrictFrozenModel):
     task_id: str = Field(min_length=3, max_length=128)
     state: Literal["blocked"]
@@ -99,6 +134,12 @@ class ReadyCanonicalTaskBinding(_StrictFrozenModel):
     scientific_identity_sha256: Sha256
     source_materialized_cohort_authority_ref: FrozenTypedAuthorityRef
     source_materialized_trajectory_authority_ref: FrozenTypedAuthorityRef | None
+    # Provenance of the materialized source authority. ``retrofit_sealed`` means it
+    # derives from a structural retrofit seal of an untyped export (full6-style) and
+    # MUST carry the paper-readiness attestation; ``official_typed`` is the official
+    # typed-authority path and must not.
+    source_kind: Literal["official_typed", "retrofit_sealed"] = "official_typed"
+    source_retrofit_review_attestation: RetrofitReviewAttestation | None = None
 
     @field_validator("database", "operational_exposure", "target_outcome")
     @classmethod
@@ -106,6 +147,20 @@ class ReadyCanonicalTaskBinding(_StrictFrozenModel):
         if value is not None and (not value.strip() or value != value.strip()):
             raise ValueError("ready scientific coordinates must be canonical text")
         return value
+
+    @model_validator(mode="after")
+    def _retrofit_source_requires_attestation(self) -> "ReadyCanonicalTaskBinding":
+        attestation = self.source_retrofit_review_attestation
+        if self.source_kind == "retrofit_sealed":
+            if attestation is None:
+                raise ValueError(
+                    "retrofit_sealed source requires a bound review attestation"
+                )
+        elif attestation is not None:
+            raise ValueError(
+                "official_typed source must not carry a retrofit review attestation"
+            )
+        return self
 
     @model_validator(mode="after")
     def _capsule_shape_matches_trajectory(self) -> "ReadyCanonicalTaskBinding":
@@ -245,13 +300,22 @@ def load_canonical_run_input_bindings() -> tuple[CanonicalRunInputBindingManifes
 
 def require_ready_task_binding(
     task_id: str,
+    *,
+    source_export_dir: str | Path | None = None,
 ) -> tuple[
     CanonicalRunInputBindingManifest,
     ReadyCanonicalTaskBinding,
     str,
     str,
 ]:
-    """Resolve one exact ready binding or fail closed before run sealing."""
+    """Resolve one exact ready binding or fail closed before run sealing.
+
+    A ``retrofit_sealed`` source is re-verified against its bound paper-readiness
+    attestation (never trusted from a single freeze-time check). Offline checks
+    always run; passing ``source_export_dir`` additionally re-derives the live
+    manifest/sidecar digests and re-runs the paper-readiness gate, so tamper or
+    drift fails closed.
+    """
 
     manifest, manifest_digest = load_canonical_run_input_bindings()
     matches = [item for item in manifest.tasks if item.task_id == task_id]
@@ -263,6 +327,19 @@ def require_ready_task_binding(
         raise PermissionError(
             f"Canonical9 task {task_id!r} is not input-frozen: {blockers}"
         )
+    if binding.source_kind == "retrofit_sealed":
+        attestation = binding.source_retrofit_review_attestation
+        # The model_validator guarantees a non-None attestation here; re-verify
+        # its paper-readiness proof and (when available) the live source digests.
+        try:
+            verify_retrofit_review_attestation(
+                attestation.model_dump(mode="json"),
+                export_dir=source_export_dir,
+            )
+        except TypedRetrofitSealError as exc:
+            raise CanonicalRunInputBindingError(
+                f"retrofit source attestation failed re-verification: {exc}"
+            ) from exc
     case_bytes = _canonical_json_bytes(binding.model_dump(mode="json"))
     return manifest, binding, manifest_digest, hashlib.sha256(case_bytes).hexdigest()
 
