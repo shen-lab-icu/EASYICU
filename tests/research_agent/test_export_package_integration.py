@@ -341,6 +341,7 @@ def test_materializer_reuses_one_content_bound_package_and_records_authority(
     authority = provenance["export_authority"]
     assert authority["manifest_sha256"]
     assert authority["authority_sha256"]
+    assert authority["seal_kind"] is None
     assert all(item["sha256"] for item in authority["files"])
 
 

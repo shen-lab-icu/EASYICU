@@ -860,6 +860,24 @@ def _verify_task_provenance(task, row: Optional[CanonicalJsonlRow]) -> None:
         raise ValueError(
             f"task {task.task_id} cohort authority did not verify against its cohort"
         )
+    # A structural retrofit can establish typed *columns*, but it cannot itself
+    # establish patient-level paper authority.  Preserve its source seal kind in
+    # the materializer's immutable semantic provenance, then reject it here rather
+    # than allowing a valid-looking sidecar to upgrade a legacy source into a real
+    # Canonical9 input.  A future, separately reviewed retrofit path needs an
+    # explicit source-attestation contract; this P4 gate must never infer one.
+    cohort_provenance = getattr(verified_cohort, "provenance", None)
+    export_provenance = (
+        cohort_provenance.get("export_authority")
+        if isinstance(cohort_provenance, Mapping)
+        else None
+    )
+    if isinstance(export_provenance, Mapping) and export_provenance.get("seal_kind"):
+        raise ValueError(
+            f"task {task.task_id} source export uses seal_kind "
+            f"{export_provenance['seal_kind']!r}; structural retrofit provenance "
+            "is not a production paper authority"
+        )
     trajectory_norm = None
     has_trajectory = bool(row.trajectory_path)
     has_trajectory_ref = row.trajectory_authority_ref is not None

@@ -546,6 +546,7 @@ class ExportPackage:
     column_metadata_sha256: Optional[str]
     column_metadata_file: Optional[str]
     column_metadata_scope: Optional[str]
+    source_seal_kind: Optional[str]
 
     def index_dict(self) -> Dict[str, Dict[str, object]]:
         """Return the compatibility index shape used by existing callers."""
@@ -1432,6 +1433,16 @@ def _open_export_package_impl(
     manifest_path, manifest_kind = _select_manifest(root)
 
     manifest, manifest_bytes = _read_json(manifest_path, label="export manifest")
+    raw_seal_kind = manifest.get("seal_kind") if manifest_kind == "native" else None
+    if raw_seal_kind is not None and (
+        not isinstance(raw_seal_kind, str)
+        or not raw_seal_kind.strip()
+        or raw_seal_kind != raw_seal_kind.strip()
+    ):
+        raise ExportPackageError(
+            "native export seal_kind must be a canonical string when present",
+            code="manifest_seal_kind_invalid",
+        )
     database = str(manifest.get("database") or "").strip()
     raw_manifest_format = (
         manifest.get("format")
@@ -1731,6 +1742,7 @@ def _open_export_package_impl(
             if column_metadata_sidecar is not None
             else None
         ),
+        source_seal_kind=raw_seal_kind,
     )
 
 

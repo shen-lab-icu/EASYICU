@@ -572,6 +572,11 @@ def _export_authority_provenance(
     return {
         "manifest": package.manifest_path.name,
         "manifest_kind": package.manifest_kind,
+        # This is a source-manifest fact, already covered by manifest_sha256.  It
+        # is copied into materialization provenance so a paper-facing gate can
+        # distinguish an official typed export from a structural retrofit without
+        # reopening a mutable export directory.
+        "seal_kind": package.source_seal_kind,
         "manifest_sha256": package.manifest_sha256,
         "authority_sha256": package.authority_sha256,
         "export_format": package.export_format,

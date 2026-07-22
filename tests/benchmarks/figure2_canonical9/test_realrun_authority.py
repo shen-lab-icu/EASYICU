@@ -17,6 +17,7 @@ import hashlib
 import json
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -306,7 +307,7 @@ def _synthetic_materialized_authorities(monkeypatch):
     monkeypatch.setattr(
         "easyicu.research_agent.intake.materialized_metadata."
         "load_verified_materialized_cohort_authority",
-        lambda *args, **kwargs: object(),
+        lambda *args, **kwargs: SimpleNamespace(provenance={}),
     )
     monkeypatch.setattr(
         "easyicu.research_agent.intake.materialized_trajectory."
@@ -336,6 +337,24 @@ def test_authorized_with_synthetic_production_authority(tmp_path) -> None:
     assert auth.status == "authorized", auth.issues
     assert auth.issues == ()
     assert auth.input_authority_digest is not None
+
+
+def test_structural_retrofit_source_never_gains_paper_authority(
+    tmp_path, monkeypatch
+) -> None:
+    request, _ = _authorized_setup(tmp_path)
+    monkeypatch.setattr(
+        "easyicu.research_agent.intake.materialized_metadata."
+        "load_verified_materialized_cohort_authority",
+        lambda *args, **kwargs: SimpleNamespace(
+            provenance={
+                "export_authority": {"seal_kind": "retrofitted_structural_typed_export"}
+            }
+        ),
+    )
+    auth = verify_realrun_authorization(request)
+    assert auth.status == "blocked"
+    assert "PRODUCTION_INPUT_AUTHORITY_INVALID" in _codes(auth)
 
 
 # ---------------------------------------------------------------------------
