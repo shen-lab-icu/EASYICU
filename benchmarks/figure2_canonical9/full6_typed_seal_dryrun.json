@@ -36,8 +36,12 @@
       "ventilator.manifest.json": "ad82824a125c9596e82fc45151f5c75d7a5e8e361da108e1d0ce4c316a48c0d7",
       "vitals.manifest.json": "168703ad1bdf8f5f81b1c6fba501be2de0d8bfe2cf8fc01f53c4dd4cb04bde6a"
     },
-    "sealer_code_sha256": "8aedfc0bbd22632dd5c9a27b52e254a1034ccc06dd2f553c60846f7e346b00d9",
-    "sealer_git_commit": "b0d6cd9d675a9865a22de13906bd166f4ad593c0"
+    "sealer_code_sha256": "83140d4d2d42632d080ecdfd07eaad7745da33ac6e3cc053d6bfdf948a4b1c40",
+    "sealer_git": {
+      "head": "856c7562de39799bd908f24d0a280e08383d359c",
+      "sealer_paths_dirty": false,
+      "head_describes_running_code": true
+    }
   },
   "patient_identity": {
     "subject_id_present": false,
@@ -259,6 +263,7 @@
       }
     ]
   },
+  "paper_ready": false,
   "sidecar_ref": {
     "file": "column_metadata.sha256-f28f88fd2e14c8ca51bfddb67703f1b8ab998694f02864def8dea02d950fb9f0.json",
     "sha256": "f28f88fd2e14c8ca51bfddb67703f1b8ab998694f02864def8dea02d950fb9f0",
