@@ -4,6 +4,7 @@ from concurrent.futures import ThreadPoolExecutor
 import hashlib
 import json
 from pathlib import Path
+import sys
 from types import SimpleNamespace
 
 import pandas as pd
@@ -658,6 +659,12 @@ def test_openai_transport_retries_consume_the_same_provider_budget(monkeypatch):
             )
 
     completions = _Completions()
+    transport = SimpleNamespace(chat=SimpleNamespace(completions=completions))
+    monkeypatch.setitem(
+        sys.modules,
+        "openai",
+        SimpleNamespace(OpenAI=lambda **_kwargs: transport),
+    )
     client = OpenAIClient(
         model="gpt-test",
         api_key="non-secret-test-key",
@@ -665,8 +672,6 @@ def test_openai_transport_retries_consume_the_same_provider_budget(monkeypatch):
         request_timeout=1.0,
         max_retries=2,
     )
-    client._client = SimpleNamespace(chat=SimpleNamespace(completions=completions))
-    client._local_noauth_mode = False
     monkeypatch.setattr("time.sleep", lambda _seconds: None)
     budget = StepProviderCallBudget(2, step_id="transport")
 
@@ -693,6 +698,12 @@ def test_openai_transport_retry_stops_before_exceeding_budget(monkeypatch):
             return SimpleNamespace(choices=[], usage=None)
 
     completions = _Completions()
+    transport = SimpleNamespace(chat=SimpleNamespace(completions=completions))
+    monkeypatch.setitem(
+        sys.modules,
+        "openai",
+        SimpleNamespace(OpenAI=lambda **_kwargs: transport),
+    )
     client = OpenAIClient(
         model="gpt-test",
         api_key="non-secret-test-key",
@@ -700,8 +711,6 @@ def test_openai_transport_retry_stops_before_exceeding_budget(monkeypatch):
         request_timeout=1.0,
         max_retries=3,
     )
-    client._client = SimpleNamespace(chat=SimpleNamespace(completions=completions))
-    client._local_noauth_mode = False
     sleeps = []
     monkeypatch.setattr("time.sleep", sleeps.append)
     budget = StepProviderCallBudget(1, step_id="transport")

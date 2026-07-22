@@ -485,6 +485,9 @@ class OpenAIClient:
             except Exception:
                 pass
         if getattr(self, "_client", None) is None:
+            from .factory import _refresh_reviewed_transport_dispatch
+
+            _refresh_reviewed_transport_dispatch(self)
             return
         try:
             from openai import OpenAI  # type: ignore
@@ -508,6 +511,9 @@ class OpenAIClient:
         try:
             new_client = OpenAI(**kwargs)
         except Exception:
+            from .factory import _refresh_reviewed_transport_dispatch
+
+            _refresh_reviewed_transport_dispatch(self)
             return
         # Swap in the fresh client with a plain reference assignment (atomic in
         # CPython). Do NOT close the old client synchronously: the single
@@ -519,6 +525,9 @@ class OpenAIClient:
         # The old pool is reclaimed by GC once no thread holds it; rebuilds are
         # rare and the client is per-run, so the transient leak is bounded.
         self._client = new_client
+        from .factory import _refresh_reviewed_transport_dispatch
+
+        _refresh_reviewed_transport_dispatch(self)
 
     def complete(
         self,
@@ -1679,37 +1688,13 @@ def llm_supports_vision(client: Any) -> bool:
 
 
 def llm_is_mockish(client: Any) -> bool:
-    """Return true when ``client`` is effectively a mock/offline stub."""
+    """Return true only for a factory-registered intact offline graph."""
 
     if client is None:
         return False
-    from .factory import provider_client_is_offline
+    from .factory import provider_client_is_mockish
 
-    if provider_client_is_offline(client):
-        return True
-    if hasattr(client, "for_role"):
-        try:
-            analyzer_client = client.for_role("analyzer")
-        except Exception:
-            analyzer_client = None
-        if analyzer_client is not None:
-            return llm_is_mockish(analyzer_client)
-    if hasattr(client, "iter_clients"):
-        try:
-            children = list(client.iter_clients())
-        except Exception:
-            children = []
-        if children:
-            return all(llm_is_mockish(child) for child in children)
-    lowered = " ".join(
-        str(part).lower()
-        for part in (
-            type(client).__name__,
-            getattr(client, "name", ""),
-            getattr(client, "_model", ""),
-        )
-    )
-    return "mock" in lowered
+    return provider_client_is_mockish(client)
 
 
 __all__ = [

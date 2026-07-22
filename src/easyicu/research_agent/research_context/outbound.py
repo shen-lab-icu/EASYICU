@@ -271,18 +271,27 @@ def project_outbound_records(
     ]
 
 
-def project_outbound_probe(value: Mapping[str, Any]) -> dict[str, Any]:
-    """Keep only host-defined scalar status/count/digest coordinates."""
+_SAFE_PROBE_SCALAR_KEYS = frozenset(
+    {
+        "error_code",
+        "n_columns",
+        "n_rows",
+        "outcome_rate",
+        "status",
+        "target_outcome",
+    }
+)
 
-    allowed: dict[str, Any] = {}
-    for key, item in value.items():
-        lowered = str(key).lower()
-        if lowered in {"status", "step_id", "error_code"} or lowered.endswith(
-            ("_count", "_sha256", "_digest", "_id")
-        ):
-            if isinstance(item, (str, int, float, bool)) or item is None:
-                allowed[str(key)] = item
-    return allowed
+
+def project_outbound_probe(value: Mapping[str, Any]) -> dict[str, Any]:
+    """Project the exact registered probe scalars; suffixes grant no authority."""
+
+    return {
+        str(key): item
+        for key, item in value.items()
+        if str(key) in _SAFE_PROBE_SCALAR_KEYS
+        and (isinstance(item, (str, int, float, bool)) or item is None)
+    }
 
 
 def outbound_safe_script(step: Optional[AnalysisStep], script_text: str) -> str:

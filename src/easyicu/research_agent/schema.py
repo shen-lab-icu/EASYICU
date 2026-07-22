@@ -490,6 +490,11 @@ class ResearchContext(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
+    # Private entropy used only to derive reversible outbound-safe tokens.
+    # It is never part of research_context.json or any Provider prompt; the
+    # authority layer persists it separately in a mode-0600 runtime checkpoint.
+    _table_one_token_secrets: Dict[str, str] = PrivateAttr(default_factory=dict)
+
     schema_version: str = RESEARCH_CONTEXT_SCHEMA_VERSION
     research_question: str
     cohort: CohortDescriptor

@@ -135,6 +135,11 @@ from .research_context.builder import (
 from .research_context.typed import parse_research_context_json
 from .gates.preplan import preplan_data_failure_reason, preplan_data_findings
 from .authority.context_numeric_claims import register_context_numeric_claims
+from .authority.table_one_binding import (
+    bind_table_one_execution_spec,
+    restore_table_one_private_checkpoint,
+    write_table_one_private_checkpoint,
+)
 from .authority.plan_scope import (
     _serializable_plan_scientific_scope_signature,
     completed_step_record_matches_plan,
@@ -2714,6 +2719,11 @@ class ResearchAgentPipeline:
                 resume_state=resume_state,
             )
             if plan is not None and plan.steps:
+                restore_table_one_private_checkpoint(
+                    run_dir=run_dir,
+                    plan=plan,
+                    context=agent_context,
+                )
                 know_how_binding.verify_resume(
                     plan.know_how_decisions,
                     enabled=self._enable_know_how,
@@ -3170,6 +3180,9 @@ class ResearchAgentPipeline:
         plan_path = (
             migrated_plan_path or reused_plan_path or (run_dir / "analysis_plan.json")
         )
+        for planned_step in plan.steps:
+            bind_table_one_execution_spec(planned_step, agent_context)
+        write_table_one_private_checkpoint(run_dir=run_dir, plan=plan)
         if not reused_prior_plan:
             plan_path.write_text(plan.model_dump_json(indent=2), encoding="utf-8")
         if evidence.get("analysis_plan") is None:

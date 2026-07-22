@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import sys
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -13,6 +15,32 @@ _PROVIDER_ENV_KEYS = (
     "OPENROUTER_BASE_URL",
     "EASYICU_ALLOW_EXTERNAL_LLM",
 )
+
+
+def _mutated_openai_complete(self, *_args, **_kwargs):
+    self._attack_callback_calls += 1
+    return "must not run"
+
+
+def _constructed_local_openai(monkeypatch, *, completions=None):
+    from easyicu.research_agent.providers.llm import OpenAIClient
+
+    transport = SimpleNamespace(
+        chat=SimpleNamespace(completions=completions or SimpleNamespace())
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "openai",
+        SimpleNamespace(OpenAI=lambda **_kwargs: transport),
+    )
+    client = OpenAIClient(
+        model="model",
+        api_key="non-secret-test-key",
+        base_url="http://127.0.0.1:8787/v1",
+        request_timeout=1.0,
+        max_retries=0,
+    )
+    return client, transport
 
 
 @pytest.fixture(autouse=True)
@@ -579,6 +607,90 @@ def test_unconstructed_exact_openai_object_cannot_gain_local_authority():
 
     assert exc_info.value.issue == EXTERNAL_LLM_NOT_AUTHORIZED
     assert calls == 0
+
+
+def test_authorized_openai_rejects_replaced_transport_before_callback(monkeypatch):
+    from easyicu.research_agent.providers.factory import (
+        EXTERNAL_LLM_NOT_AUTHORIZED,
+        ProviderConfigurationError,
+        authorized_complete,
+    )
+    from easyicu.research_agent.providers.protocol import LLMMessage
+
+    client, _transport = _constructed_local_openai(monkeypatch)
+    calls = 0
+
+    class _MaliciousCompletions:
+        def create(self, **_kwargs):
+            nonlocal calls
+            calls += 1
+            return SimpleNamespace()
+
+    client._client = SimpleNamespace(
+        chat=SimpleNamespace(completions=_MaliciousCompletions())
+    )
+    with pytest.raises(ProviderConfigurationError) as exc_info:
+        authorized_complete(client, [LLMMessage(role="user", content="secret")])
+
+    assert exc_info.value.issue == EXTERNAL_LLM_NOT_AUTHORIZED
+    assert calls == 0
+
+
+def test_authorized_openai_rejects_getattribute_dispatch_mutation_before_callback(
+    monkeypatch,
+):
+    from easyicu.research_agent.providers.factory import (
+        EXTERNAL_LLM_NOT_AUTHORIZED,
+        ProviderConfigurationError,
+        authorized_complete,
+    )
+    from easyicu.research_agent.providers.llm import OpenAIClient
+    from easyicu.research_agent.providers.protocol import LLMMessage
+
+    client, _transport = _constructed_local_openai(monkeypatch)
+    calls = 0
+    original = OpenAIClient.__getattribute__
+
+    def malicious_getattribute(self, name):
+        if name == "complete":
+
+            def callback(*_args, **_kwargs):
+                nonlocal calls
+                calls += 1
+                return "must not run"
+
+            return callback
+        return original(self, name)
+
+    monkeypatch.setattr(OpenAIClient, "__getattribute__", malicious_getattribute)
+    with pytest.raises(ProviderConfigurationError) as exc_info:
+        authorized_complete(client, [LLMMessage(role="user", content="secret")])
+
+    assert exc_info.value.issue == EXTERNAL_LLM_NOT_AUTHORIZED
+    assert calls == 0
+
+
+def test_authorized_openai_rejects_in_place_complete_code_mutation(monkeypatch):
+    from easyicu.research_agent.providers.factory import (
+        EXTERNAL_LLM_NOT_AUTHORIZED,
+        ProviderConfigurationError,
+        authorized_complete,
+    )
+    from easyicu.research_agent.providers.llm import OpenAIClient
+    from easyicu.research_agent.providers.protocol import LLMMessage
+
+    client, _transport = _constructed_local_openai(monkeypatch)
+    client._attack_callback_calls = 0
+    original_code = OpenAIClient.complete.__code__
+    try:
+        OpenAIClient.complete.__code__ = _mutated_openai_complete.__code__
+        with pytest.raises(ProviderConfigurationError) as exc_info:
+            authorized_complete(client, [LLMMessage(role="user", content="secret")])
+    finally:
+        OpenAIClient.complete.__code__ = original_code
+
+    assert exc_info.value.issue == EXTERNAL_LLM_NOT_AUTHORIZED
+    assert client._attack_callback_calls == 0
 
 
 def test_remote_openai_transport_cannot_be_authorized_as_local():

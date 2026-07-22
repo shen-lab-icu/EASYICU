@@ -3,8 +3,8 @@
 Date: 2026-07-22
 Branch: `codex/phi-outbound-hardening-20260722`
 Original base: `9401b3168d29f22ab657842f3a529bad479803d5`
-Current blocker-fix base: `e24d634d635da8efd99d49ea55a02ea2ca5688ba`
-Status: candidate commit awaiting independent review; not merged or pushed
+Current blocker-fix base: `7f2e699`
+Status: final blocker increment prepared for independent review; not merged or pushed
 
 ## Scope
 
@@ -36,17 +36,24 @@ It did not call a real Provider, Docker, patient data, or Canonical9.
   callbacks. Counting and provider-budget integration therefore remain usable
   without reopening a generic custom-client authorization seam.
 - Provider trust records bind the exact constructor, concrete client type,
-  `complete`, optional `complete_with_images`, and wrapper child graph. An
-  instance method override, later class-method mutation, or an exact-type
-  `object.__new__` pseudo-OpenAI object is rejected before its callback runs.
+  `complete`, optional `complete_with_images`, callable code objects,
+  `__getattribute__`, the actual OpenAI transport object, and wrapper child
+  graph. Instance/class method mutation, in-place `complete.__code__` mutation,
+  post-authorization `_client` replacement, or an exact-type `object.__new__`
+  pseudo-OpenAI object is rejected before its callback runs. Legitimate OpenAI
+  connection-pool rotation updates the binding only from the reviewed rebuild
+  method.
 - Step summaries now use an explicit host-owned aggregate field schema. Numeric
   values are not safe merely because they are numeric: patient/stay identifiers,
   individual ages/labs, arrays, and unknown nested values are dropped. Tier-2
   parses structured content only from its registered process-manifest filenames;
   arbitrary JSON artifacts remain identity-only.
-- Reversible Table 1 code tokens are HMACs under a host-only, context-stable
-  binding key rather than unsalted hashes of private labels. Rebinding the same
-  stopped/resumed context reproduces the token; a new host context does not.
+- Reversible Table 1 code tokens are HMACs under an independently random
+  32-byte host-only secret rather than unsalted hashes, public plan material,
+  or timestamps. The secret is excluded from the public plan/context and is
+  restored from a digest-checked mode-0600 private runtime checkpoint, so a
+  stopped/resumed run reproduces the token without making it dictionary-
+  guessable from candidate labels.
 
 ## Negative guarantees and tests
 
@@ -60,7 +67,10 @@ It did not call a real Provider, Docker, patient data, or Canonical9.
   `test_registered_mock_instance_method_override_is_rejected_before_callback`,
   `test_registered_mock_class_method_mutation_is_rejected_before_callback`,
   `test_registered_vision_mock_image_method_override_is_rejected_before_callback`,
-  and `test_unconstructed_exact_openai_object_cannot_gain_local_authority`.
+  `test_unconstructed_exact_openai_object_cannot_gain_local_authority`,
+  `test_authorized_openai_rejects_replaced_transport_before_callback`,
+  `test_authorized_openai_rejects_getattribute_dispatch_mutation_before_callback`,
+  and `test_authorized_openai_rejects_in_place_complete_code_mutation`.
 - Malicious URL parsing: `test_loopback_url_classification_is_parsed_and_strict`.
 - CountingClient production integration:
   `test_counting_client_remains_a_registered_planner_wrapper`.
@@ -74,6 +84,8 @@ It did not call a real Provider, Docker, patient data, or Canonical9.
 - Shared context / Concept Auditor / Analyzer:
   `test_every_agent_context_uses_the_same_outbound_safe_projection` and
   `test_step_summary_projection_rejects_numeric_phi_and_unknown_structure`.
+- Replanner probe identifier denial:
+  `test_replanner_probe_projection_rejects_all_identifier_suffixes`.
 - Tier-2 structured review without raw artifacts:
   `test_jury_receives_artifact_identity_not_arbitrary_artifact_text`.
 - Delivery surface scan across `src/`, `tools/`, `scripts/`, and `examples/`,
@@ -82,25 +94,32 @@ It did not call a real Provider, Docker, patient data, or Canonical9.
 - Wide trajectory preservation and transport budget:
   `test_wide_trajectory_projection_preserves_every_exact_window_coordinate`
   and `test_wide_trajectory_generation_prompts_stay_below_transport_gate`.
-- Host-keyed stable Table 1 token:
-  `test_private_code_tokens_are_host_keyed_and_stable_after_rebinding`.
+- Random host-keyed stable Table 1 token and private resume checkpoint:
+  `test_private_code_tokens_are_host_keyed_and_stable_after_rebinding` and
+  `test_private_code_token_secret_restores_from_private_checkpoint`.
+- Registry-only mock classification:
+  `test_mockish_classification_uses_only_registered_offline_graphs`.
 - Overlapping mock prompt routing:
   `test_pattern_scripted_mock_prefers_later_specific_overlapping_marker`.
 
 ## Verification
 
 - The exact canonical eight-file command requested by supervision collected
-  **169 tests and passed 169/169**. It includes both durable-budget pipeline
+  **175 tests and passed 175/175** outside the nested sandbox. It includes both durable-budget pipeline
   regressions; neither was deleted, relaxed, or deselected.
-- `pytest test_tier2_jury.py`: **13 passed, 2 skipped**.
+- Table One / PlanAuthority / resume-controller focused validation passed
+  **144 tests** before reaching 15 pre-existing full-pipeline Mock-subclass
+  failures; the new private checkpoint tests themselves passed. Those failures
+  already exist at the `7f2e699` trust boundary and were not bypassed by
+  weakening offline registration.
 - Ruff, changed-file Black check, `py_compile`, and `git diff --check`: pass.
 - `tools/arch_measure.py --diff tools/arch_baselines/execution_phase.json`:
   no lower-is-better regression.
 - `tools/research_agent_module_graph.py --diff
   tools/arch_baselines/research_agent_module_graph.json`: pass, no new cycle.
 
-The architecture baseline was re-emitted after the required three-line
-replan-binding call was added. It also freezes already-present reductions in
-`agents/core.py`, `execution/phase.py`, `pipeline.py`, and validators; the
-post-emit diff is zero. This is a candidate for final incremental review, not
-a claim that PHI/outbound hardening has been merged or paper-authorized.
+The architecture baseline was re-emitted because the private stop/resume
+checkpoint adds 8 control-plane lines to `run_execute_phase` and 13 lines to
+`pipeline.py`. It adds no nested functions, closure captures, or module cycle;
+the post-emit diff is zero. This is a candidate for final incremental review,
+not a claim that PHI/outbound hardening has been merged or paper-authorized.

@@ -85,6 +85,32 @@ assert 'easyicu.research_agent.providers.mocks' not in sys.modules
     subprocess.run([sys.executable, "-c", code], check=True)
 
 
+def test_mockish_classification_uses_only_registered_offline_graphs(ra) -> None:
+    from easyicu.research_agent.providers.llm import FallbackLLMClient, llm_is_mockish
+    from easyicu.research_agent.providers.mocks import MockLLMClient
+
+    class DuckMockRouter:
+        name = "mock-router"
+        _model = "definitely-mock"
+
+        def __init__(self, child):  # noqa: ANN001
+            self.child = child
+
+        def for_role(self, _role):  # noqa: ANN001
+            return self.child
+
+        def iter_clients(self):
+            return iter([self.child])
+
+        def complete(self, *_args, **_kwargs):  # noqa: ANN002, ANN003
+            return "mock"
+
+    child = MockLLMClient()
+    assert llm_is_mockish(child) is True
+    assert llm_is_mockish(FallbackLLMClient(child)) is True
+    assert llm_is_mockish(DuckMockRouter(child)) is False
+
+
 def test_protocol_has_no_concrete_provider_or_pipeline_dependency() -> None:
     path = Path(inspect.getsourcefile(protocol))
     tree = ast.parse(path.read_text(encoding="utf-8"))
