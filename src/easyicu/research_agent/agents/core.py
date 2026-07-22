@@ -3895,19 +3895,36 @@ def _normalise_plan_payload(
                             "to an exact output file."
                         )
                     normalised_outputs.append(_canonicalise_figure_output_alias(item))
-                figure_outputs = [
-                    out
-                    for out in normalised_outputs
-                    if isinstance(out, str) and out.startswith("figure:")
-                ]
-                duplicate_figures = sorted(
-                    {out for out in figure_outputs if figure_outputs.count(out) > 1}
-                )
-                if duplicate_figures:
+                # Collision is judged on the shared canonical ``(kind, product)``
+                # identity from ``_canonical_typed_product`` -- NOT on the raw
+                # ``figure:`` string -- so a case-only difference
+                # (``figure:Forest`` vs ``figure:forest``) or a file-suffix
+                # difference (``figure:forest`` vs ``figure:forest.svg`` /
+                # ``.png``) that collapses to the same physical figure is
+                # rejected as one product declared twice.  A raw string compare
+                # missed both classes.
+                figure_identity_aliases: Dict[Tuple[str, str], List[str]] = {}
+                for candidate in normalised_outputs:
+                    if not isinstance(candidate, str):
+                        continue
+                    identity = _canonical_typed_product(candidate)
+                    if identity is None or identity[0] != "figure":
+                        continue
+                    figure_identity_aliases.setdefault(identity, []).append(candidate)
+                collisions = {
+                    identity: aliases
+                    for identity, aliases in figure_identity_aliases.items()
+                    if len(aliases) > 1
+                }
+                if collisions:
+                    detail = "; ".join(
+                        f"figure:{product} declared as {sorted(set(aliases))}"
+                        for (_kind, product), aliases in sorted(collisions.items())
+                    )
                     raise ValueError(
                         f"Planner step {step_id!r} declares the same figure "
                         f"product under more than one output alias "
-                        f"({duplicate_figures}); declare each figure exactly once "
+                        f"({detail}); declare each figure exactly once "
                         "as 'figure:<name>'."
                     )
                 step_payload["expected_outputs"] = normalised_outputs

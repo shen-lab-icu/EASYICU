@@ -261,6 +261,57 @@ def test_plan_normalizer_rejects_duplicate_figure_after_alias_collision() -> Non
         _normalise_plan_payload(raw)
 
 
+def test_plan_normalizer_rejects_case_only_figure_collision() -> None:
+    """A case-only difference collapses to one physical figure identity."""
+
+    raw = json.loads(_raw_plan(include_role=True))
+    raw["steps"][0]["expected_outputs"] = [
+        "figure:Forest",
+        "figure:forest",
+    ]
+    with pytest.raises(ValueError, match="more than one output alias"):
+        _normalise_plan_payload(raw)
+
+
+def test_plan_normalizer_rejects_suffix_only_figure_collision() -> None:
+    """``figure:forest`` and ``figure:forest.svg`` are the same physical figure."""
+
+    raw = json.loads(_raw_plan(include_role=True))
+    raw["steps"][0]["expected_outputs"] = [
+        "figure:forest",
+        "figure:forest.svg",
+    ]
+    with pytest.raises(ValueError, match="more than one output alias"):
+        _normalise_plan_payload(raw)
+
+
+def test_plan_normalizer_rejects_alias_and_suffix_figure_collision() -> None:
+    """``fig:forest.png`` and ``figure:forest`` collapse to one identity."""
+
+    raw = json.loads(_raw_plan(include_role=True))
+    raw["steps"][0]["expected_outputs"] = [
+        "fig:forest.png",
+        "figure:forest",
+    ]
+    with pytest.raises(ValueError, match="more than one output alias"):
+        _normalise_plan_payload(raw)
+
+
+def test_plan_normalizer_allows_distinct_figures_including_suffix() -> None:
+    """Distinct figure identities are preserved even when one carries a suffix."""
+
+    raw = json.loads(_raw_plan(include_role=True))
+    raw["steps"][0]["expected_outputs"] = [
+        "figure:forest.svg",
+        "figure:km_curve",
+    ]
+    normalized, _dropped = _normalise_plan_payload(raw)
+    assert normalized["steps"][0]["expected_outputs"] == [
+        "figure:forest.svg",
+        "figure:km_curve",
+    ]
+
+
 def test_plan_normalizer_accepts_canonical_e3_figure_suite() -> None:
     """The typed form of the whole E3 figure suite passes and is preserved."""
 
