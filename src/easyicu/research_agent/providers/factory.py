@@ -8,6 +8,7 @@ real OpenAI or OpenRouter keys are present in the process environment.
 from __future__ import annotations
 
 import hashlib
+import inspect
 import ipaddress
 import json
 import os
@@ -57,12 +58,144 @@ class _TrustedClientRecord:
     authorization: Optional[ProviderAuthorization]
     child_ids: tuple[int, ...] = ()
     children_getter: Optional[Callable[[], Sequence[Any]]] = None
+    client_type: type[Any] | None = None
+    constructor_impl: object | None = None
+    complete_impl: object | None = None
+    complete_with_images_impl: object | None = None
+
+
+@dataclass(frozen=True)
+class _ConstructedClientRecord:
+    client_type: type[Any]
+    constructor_impl: object
+    complete_impl: object
+    complete_with_images_impl: object | None
 
 
 _TRUSTED_CLIENTS: dict[int, tuple[weakref.ReferenceType[Any], _TrustedClientRecord]] = (
     {}
 )
 _TRUSTED_CLIENTS_LOCK = threading.RLock()
+_CONSTRUCTED_CLIENTS: dict[
+    int, tuple[weakref.ReferenceType[Any], _ConstructedClientRecord]
+] = {}
+
+
+def _class_callable(client_type: type[Any], name: str) -> object | None:
+    value = inspect.getattr_static(client_type, name, None)
+    return value if callable(value) else None
+
+
+def _callable_contract(
+    client: Any,
+) -> tuple[type[Any], object, object | None]:
+    client_type = type(client)
+    instance_vars = vars(client) if hasattr(client, "__dict__") else {}
+    if "complete" in instance_vars or "complete_with_images" in instance_vars:
+        raise ProviderConfigurationError(
+            EXTERNAL_LLM_NOT_AUTHORIZED,
+            client_type.__name__,
+        )
+    complete_impl = _class_callable(client_type, "complete")
+    if complete_impl is None:
+        raise ProviderConfigurationError(UNSUPPORTED_PROVIDER, client_type.__name__)
+    return (
+        client_type,
+        complete_impl,
+        _class_callable(client_type, "complete_with_images"),
+    )
+
+
+def _caller_is_exact_constructor(client: Any, *, skip: int = 0) -> bool:
+    constructor = inspect.getattr_static(type(client), "__init__", None)
+    frame = inspect.currentframe()
+    caller = frame.f_back if frame is not None else None
+    for _ in range(skip):
+        caller = caller.f_back if caller is not None else None
+    return bool(
+        callable(constructor)
+        and caller is not None
+        and getattr(constructor, "__code__", None) is caller.f_code
+    )
+
+
+def _mark_reviewed_transport_constructed(client: Any) -> Any:
+    """Record one exact reviewed adapter only from its real constructor."""
+
+    if not (
+        _is_reviewed_client_type(client, "OpenAIClient")
+        or _is_reviewed_client_type(client, "CLIAgentLLMClient")
+    ) or not _caller_is_exact_constructor(client, skip=1):
+        raise ProviderConfigurationError(
+            EXTERNAL_LLM_NOT_AUTHORIZED,
+            type(client).__name__,
+        )
+    client_type, complete_impl, image_impl = _callable_contract(client)
+    constructor_impl = inspect.getattr_static(client_type, "__init__")
+    ident = id(client)
+    reference = weakref.ref(
+        client,
+        lambda _ref, key=ident, registry=_CONSTRUCTED_CLIENTS: registry.pop(key, None),
+    )
+    with _TRUSTED_CLIENTS_LOCK:
+        _CONSTRUCTED_CLIENTS[ident] = (
+            reference,
+            _ConstructedClientRecord(
+                client_type=client_type,
+                constructor_impl=constructor_impl,
+                complete_impl=complete_impl,
+                complete_with_images_impl=image_impl,
+            ),
+        )
+    return client
+
+
+def _constructed_client_record(client: Any) -> Optional[_ConstructedClientRecord]:
+    with _TRUSTED_CLIENTS_LOCK:
+        stored = _CONSTRUCTED_CLIENTS.get(id(client))
+    if stored is None or stored[0]() is not client:
+        return None
+    return stored[1]
+
+
+def _new_trusted_record(
+    client: Any,
+    *,
+    kind: str,
+    authorization: Optional[ProviderAuthorization],
+    child_ids: tuple[int, ...] = (),
+    children_getter: Optional[Callable[[], Sequence[Any]]] = None,
+    construction: Optional[_ConstructedClientRecord] = None,
+) -> _TrustedClientRecord:
+    client_type, complete_impl, image_impl = _callable_contract(client)
+    return _TrustedClientRecord(
+        kind=kind,
+        authorization=authorization,
+        child_ids=child_ids,
+        children_getter=children_getter,
+        client_type=client_type,
+        constructor_impl=(
+            construction.constructor_impl
+            if construction
+            else inspect.getattr_static(client_type, "__init__", None)
+        ),
+        complete_impl=complete_impl,
+        complete_with_images_impl=image_impl,
+    )
+
+
+def _callables_match_record(client: Any, record: _TrustedClientRecord) -> bool:
+    try:
+        client_type, complete_impl, image_impl = _callable_contract(client)
+    except ProviderConfigurationError:
+        return False
+    return bool(
+        client_type is record.client_type
+        and inspect.getattr_static(client_type, "__init__", None)
+        is record.constructor_impl
+        and complete_impl is record.complete_impl
+        and image_impl is record.complete_with_images_impl
+    )
 
 
 def _remember_trusted_client(client: Any, record: _TrustedClientRecord) -> None:
@@ -113,14 +246,19 @@ def register_offline_test_client(client: Any) -> Any:
         )
         if isinstance(candidate, type)
     )
-    if not allowed or type(client) not in allowed:
+    if (
+        not allowed
+        or type(client) not in allowed
+        or not _caller_is_exact_constructor(client, skip=1)
+    ):
         raise ProviderConfigurationError(
             EXTERNAL_LLM_NOT_AUTHORIZED,
             type(client).__name__,
         )
 
     _remember_trusted_client(
-        client, _TrustedClientRecord(kind="offline", authorization=None)
+        client,
+        _new_trusted_record(client, kind="offline", authorization=None),
     )
     return client
 
@@ -132,14 +270,18 @@ def _register_external_capture_test_client(client: Any) -> Any:
     capture_type = (
         getattr(module, "ExternalCaptureMockLLMClient", None) if module else None
     )
-    if not isinstance(capture_type, type) or type(client) is not capture_type:
+    if (
+        not isinstance(capture_type, type)
+        or type(client) is not capture_type
+        or not _caller_is_exact_constructor(client, skip=1)
+    ):
         raise ProviderConfigurationError(
             EXTERNAL_LLM_NOT_AUTHORIZED,
             type(client).__name__,
         )
     _remember_trusted_client(
         client,
-        _TrustedClientRecord(kind="external_capture", authorization=None),
+        _new_trusted_record(client, kind="external_capture", authorization=None),
     )
     return client
 
@@ -183,7 +325,8 @@ def _register_provider_wrapper(
         raise ProviderConfigurationError(UNSUPPORTED_PROVIDER, type(wrapper).__name__)
     _remember_trusted_client(
         wrapper,
-        _TrustedClientRecord(
+        _new_trusted_record(
+            wrapper,
             kind="wrapper",
             authorization=None,
             child_ids=tuple(id(child) for child in children),
@@ -268,6 +411,27 @@ def _attach_provider_authorization(
     ):
         return client
 
+    construction = _constructed_client_record(client)
+    if construction is None or construction.client_type is not type(client):
+        raise ProviderConfigurationError(
+            EXTERNAL_LLM_NOT_AUTHORIZED,
+            authorization.provider,
+        )
+    try:
+        live_type, live_complete, live_images = _callable_contract(client)
+    except ProviderConfigurationError:
+        live_type, live_complete, live_images = None, None, None
+    if not (
+        live_type is construction.client_type
+        and inspect.getattr_static(type(client), "__init__", None)
+        is construction.constructor_impl
+        and live_complete is construction.complete_impl
+        and live_images is construction.complete_with_images_impl
+    ):
+        raise ProviderConfigurationError(
+            EXTERNAL_LLM_NOT_AUTHORIZED,
+            authorization.provider,
+        )
     try:
         setattr(client, "__easyicu_provider_authorization__", authorization)
     except Exception as exc:  # pragma: no cover - custom-client boundary
@@ -277,7 +441,12 @@ def _attach_provider_authorization(
         ) from exc
     _remember_trusted_client(
         client,
-        _TrustedClientRecord(kind="transport", authorization=authorization),
+        _new_trusted_record(
+            client,
+            kind="transport",
+            authorization=authorization,
+            construction=construction,
+        ),
     )
     return client
 
@@ -441,6 +610,11 @@ def require_provider_client_authorization(client: Any) -> None:
             raise ProviderConfigurationError(
                 EXTERNAL_LLM_NOT_AUTHORIZED,
                 str(getattr(current, "name", type(current).__name__)),
+            )
+        if not _callables_match_record(current, record):
+            raise ProviderConfigurationError(
+                EXTERNAL_LLM_NOT_AUTHORIZED,
+                type(current).__name__,
             )
         if record.kind in {"offline", "external_capture"}:
             continue

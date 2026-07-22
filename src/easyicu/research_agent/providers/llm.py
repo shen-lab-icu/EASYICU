@@ -409,6 +409,9 @@ class OpenAIClient:
         self._timeout = request_timeout
         self._max_retries = int(max_retries)
         self._extra_body = dict(extra_body or {})
+        from .factory import _mark_reviewed_transport_constructed
+
+        _mark_reviewed_transport_constructed(self)
         if _is_local_openai_compatible_base_url(resolved_base_url):
             from .factory import _register_loopback_provider_client
 
@@ -1332,6 +1335,9 @@ class CLIAgentLLMClient:
         self._model = (model or "").strip()  # "" => CLI default
         self._timeout = float(request_timeout)
         self.name = f"{backend}-cli"
+        from .factory import _mark_reviewed_transport_constructed
+
+        _mark_reviewed_transport_constructed(self)
 
     @staticmethod
     def _flatten(messages: Sequence[LLMMessage]) -> tuple[str, str]:

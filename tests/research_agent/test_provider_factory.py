@@ -462,6 +462,125 @@ def test_custom_client_cannot_self_register_as_offline():
     assert exc_info.value.issue == EXTERNAL_LLM_NOT_AUTHORIZED
 
 
+def test_registered_mock_instance_method_override_is_rejected_before_callback():
+    from easyicu.research_agent.providers.factory import (
+        EXTERNAL_LLM_NOT_AUTHORIZED,
+        ProviderConfigurationError,
+        authorized_complete,
+    )
+    from easyicu.research_agent.providers.mocks import MockLLMClient
+    from easyicu.research_agent.providers.protocol import LLMMessage
+
+    client = MockLLMClient()
+    calls = 0
+
+    def custom_callback(*_args, **_kwargs):
+        nonlocal calls
+        calls += 1
+        return "must not run"
+
+    client.complete = custom_callback
+    with pytest.raises(ProviderConfigurationError) as exc_info:
+        authorized_complete(
+            client,
+            [LLMMessage(role="user", content="must remain local")],
+        )
+
+    assert exc_info.value.issue == EXTERNAL_LLM_NOT_AUTHORIZED
+    assert calls == 0
+
+
+def test_registered_mock_class_method_mutation_is_rejected_before_callback(
+    monkeypatch,
+):
+    from easyicu.research_agent.providers.factory import (
+        EXTERNAL_LLM_NOT_AUTHORIZED,
+        ProviderConfigurationError,
+        authorized_complete,
+    )
+    from easyicu.research_agent.providers.mocks import MockLLMClient
+    from easyicu.research_agent.providers.protocol import LLMMessage
+
+    client = MockLLMClient()
+    calls = 0
+
+    def custom_callback(*_args, **_kwargs):
+        nonlocal calls
+        calls += 1
+        return "must not run"
+
+    monkeypatch.setattr(MockLLMClient, "complete", custom_callback)
+    with pytest.raises(ProviderConfigurationError) as exc_info:
+        authorized_complete(
+            client,
+            [LLMMessage(role="user", content="must remain local")],
+        )
+
+    assert exc_info.value.issue == EXTERNAL_LLM_NOT_AUTHORIZED
+    assert calls == 0
+
+
+def test_registered_vision_mock_image_method_override_is_rejected_before_callback():
+    from easyicu.research_agent.providers.factory import (
+        EXTERNAL_LLM_NOT_AUTHORIZED,
+        ProviderConfigurationError,
+        authorized_complete_with_images,
+    )
+    from easyicu.research_agent.providers.mocks import ScriptedVisionMockLLMClient
+
+    client = ScriptedVisionMockLLMClient(["unused"])
+    calls = 0
+
+    def custom_callback(**_kwargs):
+        nonlocal calls
+        calls += 1
+        return "must not run"
+
+    client.complete_with_images = custom_callback
+    with pytest.raises(ProviderConfigurationError) as exc_info:
+        authorized_complete_with_images(
+            client,
+            messages=[],
+            images=[],
+        )
+
+    assert exc_info.value.issue == EXTERNAL_LLM_NOT_AUTHORIZED
+    assert calls == 0
+
+
+def test_unconstructed_exact_openai_object_cannot_gain_local_authority():
+    from easyicu.research_agent.providers.factory import (
+        EXTERNAL_LLM_NOT_AUTHORIZED,
+        ProviderConfigurationError,
+        authorize_provider_client,
+    )
+    from easyicu.research_agent.providers.llm import OpenAIClient
+
+    client = object.__new__(OpenAIClient)
+    client._model = "model"
+    client._resolved_base_url = "http://127.0.0.1:8787/v1"
+    calls = 0
+
+    def custom_callback(*_args, **_kwargs):
+        nonlocal calls
+        calls += 1
+        return "must not run"
+
+    client.complete = custom_callback
+    with pytest.raises(ProviderConfigurationError) as exc_info:
+        authorize_provider_client(
+            client,
+            provider="openai",
+            model="model",
+            base_url="http://127.0.0.1:8787/v1",
+            destination="local",
+            environment={},
+        )
+
+    assert exc_info.value.issue == EXTERNAL_LLM_NOT_AUTHORIZED
+    assert calls == 0
+
+
 def test_remote_openai_transport_cannot_be_authorized_as_local():
     from easyicu.research_agent.providers.factory import (
         EXTERNAL_LLM_NOT_AUTHORIZED,
@@ -501,30 +620,19 @@ def test_registered_openai_transport_mutation_is_rejected_before_delivery(
     from easyicu.research_agent.providers.factory import (
         EXTERNAL_LLM_NOT_AUTHORIZED,
         ProviderConfigurationError,
-        authorize_provider_client,
         authorized_complete,
+        build_provider_client,
     )
     from easyicu.research_agent.providers.llm import OpenAIClient
     from easyicu.research_agent.providers.protocol import LLMMessage
 
-    client = object.__new__(OpenAIClient)
-    client._model = "model"
-    client._resolved_base_url = "http://127.0.0.1:8787/v1"
-    calls = 0
-
-    def complete(*_args, **_kwargs):
-        nonlocal calls
-        calls += 1
-        return "must not run"
-
-    client.complete = complete
-    authorize_provider_client(
-        client,
+    client = build_provider_client(
         provider="openai",
         model="model",
-        base_url="http://127.0.0.1:8787/v1",
-        destination="local",
-        environment={},
+        request_timeout=1.0,
+        title="provider mutation test",
+        client_cls=OpenAIClient,
+        environment={"OPENAI_BASE_URL": "http://127.0.0.1:8787/v1"},
     )
     setattr(client, attribute, mutated_value)
 
@@ -535,7 +643,6 @@ def test_registered_openai_transport_mutation_is_rejected_before_delivery(
         )
 
     assert exc_info.value.issue == EXTERNAL_LLM_NOT_AUTHORIZED
-    assert calls == 0
 
 
 def test_forged_provider_authorization_attribute_never_authorizes_client():

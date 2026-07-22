@@ -7,20 +7,16 @@ import pytest
 
 
 def _mock_transport_client(client, *, model: str):
-    from easyicu.research_agent.providers.factory import authorize_provider_client
-
     # These tests exercise the concrete adapter against an in-memory fake SDK,
-    # but the adapter itself still receives exact loopback transport authority.
-    client._model = model
-    client._resolved_base_url = "http://127.0.0.1:8787/v1"
-    authorize_provider_client(
-        client,
-        provider="openai",
+    # but the adapter itself must go through its real constructor so provider
+    # authority cannot be minted for an ``object.__new__`` pseudo-instance.
+    client = type(client)(
         model=model,
-        base_url=client._resolved_base_url,
-        destination="local",
-        environment={},
+        base_url="http://127.0.0.1:8787/v1",
+        request_timeout=1.0,
+        max_retries=0,
     )
+    client._local_noauth_mode = False
     return client
 
 

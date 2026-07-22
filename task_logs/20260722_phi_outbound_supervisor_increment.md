@@ -2,7 +2,8 @@
 
 Date: 2026-07-22
 Branch: `codex/phi-outbound-hardening-20260722`
-Base: `9401b3168d29f22ab657842f3a529bad479803d5`
+Original base: `9401b3168d29f22ab657842f3a529bad479803d5`
+Current blocker-fix base: `e24d634d635da8efd99d49ea55a02ea2ca5688ba`
 Status: candidate commit awaiting independent review; not merged or pushed
 
 ## Scope
@@ -34,6 +35,18 @@ It did not call a real Provider, Docker, patient data, or Canonical9.
 - The closed static mocks used by offline tests cannot execute caller-provided
   callbacks. Counting and provider-budget integration therefore remain usable
   without reopening a generic custom-client authorization seam.
+- Provider trust records bind the exact constructor, concrete client type,
+  `complete`, optional `complete_with_images`, and wrapper child graph. An
+  instance method override, later class-method mutation, or an exact-type
+  `object.__new__` pseudo-OpenAI object is rejected before its callback runs.
+- Step summaries now use an explicit host-owned aggregate field schema. Numeric
+  values are not safe merely because they are numeric: patient/stay identifiers,
+  individual ages/labs, arrays, and unknown nested values are dropped. Tier-2
+  parses structured content only from its registered process-manifest filenames;
+  arbitrary JSON artifacts remain identity-only.
+- Reversible Table 1 code tokens are HMACs under a host-only, context-stable
+  binding key rather than unsalted hashes of private labels. Rebinding the same
+  stopped/resumed context reproduces the token; a new host context does not.
 
 ## Negative guarantees and tests
 
@@ -43,6 +56,11 @@ It did not call a real Provider, Docker, patient data, or Canonical9.
   `test_registered_wrapper_rejects_mutated_child_graph_before_delivery`,
   `test_remote_openai_transport_cannot_be_authorized_as_local`, and
   `test_registered_openai_transport_mutation_is_rejected_before_delivery`.
+- Callable/construction attacks:
+  `test_registered_mock_instance_method_override_is_rejected_before_callback`,
+  `test_registered_mock_class_method_mutation_is_rejected_before_callback`,
+  `test_registered_vision_mock_image_method_override_is_rejected_before_callback`,
+  and `test_unconstructed_exact_openai_object_cannot_gain_local_authority`.
 - Malicious URL parsing: `test_loopback_url_classification_is_parsed_and_strict`.
 - CountingClient production integration:
   `test_counting_client_remains_a_registered_planner_wrapper`.
@@ -54,7 +72,8 @@ It did not call a real Provider, Docker, patient data, or Canonical9.
   `test_table_one_minimal_patch_never_sends_private_deterministic_script`, and
   `test_table_one_full_rewrite_never_sends_private_deterministic_script`.
 - Shared context / Concept Auditor / Analyzer:
-  `test_every_agent_context_uses_the_same_outbound_safe_projection`.
+  `test_every_agent_context_uses_the_same_outbound_safe_projection` and
+  `test_step_summary_projection_rejects_numeric_phi_and_unknown_structure`.
 - Tier-2 structured review without raw artifacts:
   `test_jury_receives_artifact_identity_not_arbitrary_artifact_text`.
 - Delivery surface scan across `src/`, `tools/`, `scripts/`, and `examples/`,
@@ -63,16 +82,17 @@ It did not call a real Provider, Docker, patient data, or Canonical9.
 - Wide trajectory preservation and transport budget:
   `test_wide_trajectory_projection_preserves_every_exact_window_coordinate`
   and `test_wide_trajectory_generation_prompts_stay_below_transport_gate`.
+- Host-keyed stable Table 1 token:
+  `test_private_code_tokens_are_host_keyed_and_stable_after_rebinding`.
+- Overlapping mock prompt routing:
+  `test_pattern_scripted_mock_prefers_later_specific_overlapping_marker`.
 
 ## Verification
 
-- `pytest test_validators.py test_trajectory_prompt_compaction.py`:
-  **212 passed** (210 validator + 2 trajectory).
-- Supervisor regression matrix (original 317 plus new negative tests):
-  **326 passed, 2 skipped, 1 intentionally deselected pre-existing test**.
-- `pytest test_provider_budget.py`: **44 passed**.
-- `pytest test_execution_identity.py`: **14 passed**.
-- Call-scoped usage/concurrency selection: **4 passed**.
+- The exact canonical eight-file command requested by supervision collected
+  **169 tests and passed 169/169**. It includes both durable-budget pipeline
+  regressions; neither was deleted, relaxed, or deselected.
+- `pytest test_tier2_jury.py`: **13 passed, 2 skipped**.
 - Ruff, changed-file Black check, `py_compile`, and `git diff --check`: pass.
 - `tools/arch_measure.py --diff tools/arch_baselines/execution_phase.json`:
   no lower-is-better regression.
