@@ -1,6 +1,6 @@
 # EasyICU Research Agent：实验前完整架构优化计划（v2）
 
-状态：`framework_first_approved_design / implementation_not_started`
+状态：`framework_v2_offline_release_passed / online_experiments_paused_pending_review`
 日期：2026-07-22
 适用范围：Research Agent；不得改变患者数据、EvidenceStore、provider receipt、capsule 或 paper authority。
 
@@ -21,13 +21,29 @@ EasyICU 复用 LangChain/LangGraph 的通用运行原语，但不把科研权威
 
 不把 `ResearchAgentPipeline` 改造成自由 ReAct Agent，也不允许运行中联网安装软件。LangGraph 只编排现有职责节点，不接管 EasyICU 科学/证据 authority。新路径验收后必须删除或退役等价旧路径，不能长期维持两套实现。
 
-## 2. 当前基线
+### 1.1 2026-07-22 实施结果
 
-- `pyproject.toml` 已提供可选依赖 `langgraph>=1.0`。
-- `research_agent/graph.py` 已有 opt-in `plan → execute → write → finalise` PoC，但没有 persistence/store/HITL，也不是默认路径。
+| Bundle | 状态 | 提交 / 证据 |
+|---|---|---|
+| 0 测量冻结 | done | `2c77d49`；resource/context baseline |
+| 1 统一资源与上下文 | done | `4fe8fea`、`c91b027`；Host allowlist、确定性选择、分段预算 |
+| 2 安全长期记忆 | done | `447049b`、`dfcfcdd`；reviewed/promoted 才可影响计划，旧经验只进 quarantine |
+| 3 能力与新方法入口 | done | `a34f7f7`；CapabilityRequest/approval/validation/image digest，不允许运行时安装 |
+| 4 LangGraph 默认 runtime | done | `404710b`、`01cd41e`；唯一默认 phase runtime、digest-bound HITL 原语、旧 dispatch 退役 |
+| 5 离线发布门 | done | `00c298e`；`task_logs/20260722_framework_v2_offline_release.json` |
+
+离线发布门最终结果：resource/context、architecture、module graph、framework tests **4/4 通过**；框架专项 **85 passed**；**0 provider calls、0 patient-data reads**。这是 Framework v2 的离线发布候选，不是临床知识审核完成，也不是 Canonical9 或论文结果完成。所有在线实验继续暂停，等待独立审阅后由用户明确解冻。
+
+## 2. 当前实现
+
+- `langgraph>=1.0` 已成为基础 runtime 依赖；旧 `agentic` extra 保留为空的兼容入口。
+- `research_agent/graph.py` 是唯一默认 `plan → execute → write → finalise` phase runtime；公共 `run_with_graph()` 仅为同一路径别名，不再保留直线 dispatch 分支。
+- Graph 提供 digest-bound `HumanReviewRequest/Decision`、interrupt/resume 与可选 checkpointer。EasyICU 自有 checkpoint/receipt/capsule 仍是完整 pipeline 的持久连续性和科学权威；LangGraph checkpointer 不建立第二套 current/evidence authority。
 - `planning/capability_registry.py` 已是分析族能力单一真相，但粒度是 family，不是逐步 Action/软件资源目录。
 - Know-How v2 已有确定性检索、claim/citation、信任状态、Prompt 预算和 receipt；默认关闭。
-- `learning/memory.py` 与 `learning/experience.py` 已实现跨 run 经验，但 canonical profile 正确地将其关闭。当前经验可直接进入 Planner，因此不适合作为投稿运行的默认科学输入。
+- `resources/scheduler.py` 与 bounded context assembler 已统一投影 protocol/action/software/data；选择严格限制在 Host allowlist 内，允许 0 项且不增加 LLM 调用。
+- `learning/store.py` 已建立 permissioned memory。旧 `RunMemory`/`ExperienceBank` 只作为兼容写源，产出镜像到 `run_lessons/quarantine`，不再直接进入 Planner；reviewed/promoted 对象必须有 profile、SHA 与 promotion/review receipt。
+- `resources/capability.py` 已建立软件/新方法申请、人工批准、验证证据与不可变 image digest 的路径；它不执行安装。
 - EasyICU 的 checkpoint、receipt、capsule、EvidenceStore 和 sandbox 是已验证权威，不迁入或复制到 LangGraph Store。
 
 ## 3. 目标结构
@@ -181,7 +197,7 @@ requester and approval
 
 实验前完成 CapabilityRequest、批准状态、版本/镜像绑定和 fail-closed 响应；不要求在实验前扩充大量包或数据库。框架必须证明用户申请一个新方法时有明确入口，而不是让 Coder 临时安装。
 
-## 9. Work package R5：LangGraph 默认运行迁移
+## 9. Work package R5：LangGraph 默认运行迁移（已完成）
 
 迁移方式不是重写业务逻辑，而是把现有 phase 作为节点：
 
@@ -190,12 +206,12 @@ Plan → Acquire → ExecuteStep → Gate → Repair/Continue → Seal → Revie
 ```
 
 - Graph state 只保存不可变 authority reference，不保存第二份 Evidence/current selector。
-- LangGraph checkpointer 用于运行连续性和 HITL；EasyICU receipt/capsule 仍决定是否允许重放或付费。
-- interrupt 用于 ProtocolCard、CapabilityRequest 和科学 stop condition 的人工确认。
-- 新旧 dispatch 对同一录制输入做 shadow replay；产物 SHA、provider receipt 和终态一致后才切默认。
-- 切换后删除 opt-in PoC 与不再使用的直线 dispatch 分支；公共 CLI/API 只保留一个默认运行面。
+- LangGraph checkpointer 可用于可序列化的 HITL 流；完整研究运行继续由 EasyICU checkpoint 提供持久连续性，receipt/capsule 决定是否允许重放或付费。
+- digest-bound interrupt 原语覆盖 ProtocolCard、CapabilityRequest 和科学 stop condition 的人工确认类型；尚未审核的资源不会因缺少 UI 自动确认而进入 canonical 计划。
+- 默认 phase graph 已通过录制 golden；旧 `_use_graph` 分叉和直线 dispatch 已删除。
+- 公共 CLI/API 只保留一个默认运行面，并写入 `orchestration_runtime.json`。生产 UI 对各类审核请求的展示属于后续产品接线，不是新的科学 authority。
 
-## 10. Work package R6：减法清理与离线发布门
+## 10. Work package R6：减法清理与离线发布门（已完成）
 
 必须完成的退役决策：
 
@@ -211,6 +227,8 @@ Plan → Acquire → ExecuteStep → Gate → Repair/Continue → Seal → Revie
 - 固定 Planner/Coder 响应做 component replay，覆盖 plan、execute、gate、repair、seal、resume、HITL。
 - 恶意 memory、错误工具、未批准软件、Prompt overflow、checkpoint 篡改和旧 receipt 重放均 fail-close。
 - architecture baseline、zero-SCC、semantic golden、module graph 全绿。
+
+最终由 `tools/research_agent_framework_release.py` 固化为单一无网络发布命令；报告包含工具 SHA、逐门命令、return code 与 stdout/stderr SHA。2026-07-22 权威结果为 4/4 门通过、85 项专项测试通过、0 provider calls、0 patient-data reads。
 
 结构数字要求：
 
@@ -259,7 +277,7 @@ Plan → Acquire → ExecuteStep → Gate → Repair/Continue → Seal → Revie
 3. B/C 验证泛化与 memory OFF/ON。
 4. SOFA-2 使用冻结框架；不把 SOFA-2 变成第十个调参题。
 
-预计规模：5–6 个 bundle、10–15 个小提交。若保持逐批测试和审阅，现实工期约 3–5 个集中工作日；这会推迟九题结果，但避免再次中途换架构。
+实际规模：6 个 bundle、9 个核心实现/发布提交，另 1 个兼容经验隔离收口提交。离线 Framework v2 已完成；实验仍须在独立审阅和用户解冻后进行。
 
 停止条件：任何 bundle 若新增科学 authority、需要额外资源选择 LLM 调用、引入循环、破坏 golden，或只是把旧逻辑复制进新文件而未删除旧入口，则拒收并回到上一个可收提交。
 
@@ -271,3 +289,9 @@ Plan → Acquire → ExecuteStep → Gate → Repair/Continue → Seal → Revie
 - 科学：Planner 的 exposure/outcome/cohort/method/estimand 权威不转移给 retriever 或 LangGraph。
 - 结构：无双 memory、双 context assembler、双 runtime 或双 capability truth；旧路径确实删除。
 - 泛化：架构先由离线九题和对抗 fixture 验收；fresh A 题只做在线验证，冻结后 B/C 验证；SOFA-2 是独立 discovery vignette，不是调参题。
+
+### 12.1 已通过与未宣称
+
+已通过：安全资源选择、bounded context、permissioned memory、CapabilityRequest、默认 LangGraph phase runtime、digest-bound HITL 原语、旧经验隔离、semantic golden、architecture/module graph 与离线发布门。
+
+未宣称：ProtocolCard 已完成临床/方法学签署；已建设 Biomni 规模的 Action/软件/数据库目录；所有产品 UI 已接入 HITL；Canonical9 在线 A 或 B/C 泛化已经通过；任何结果获得 paper authority。这些项目不能用本次离线发布报告替代。
