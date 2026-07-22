@@ -938,12 +938,22 @@ def finalise_success(
     # exceptions are logged and swallowed so a flaky bank file
     # never breaks an otherwise-successful run.
     try:
-        pipeline.reflect_and_persist_experience(
+        experience_records = pipeline.reflect_and_persist_experience(
             run_dir=run_dir,
             context=context,
             database=database,
             cohort_name=str(getattr(context.cohort, "cohort_name", "") or ""),
         )
+        if pipeline._permissioned_memory_store is not None:
+            for experience_record in experience_records:
+                quarantine_run_lesson(
+                    pipeline._permissioned_memory_store,
+                    run_id=run_id,
+                    project=pipeline.workdir.name,
+                    payload=experience_record.to_dict(),
+                    created_at=experience_record.produced_at,
+                    producer="legacy_experience_bank",
+                )
     except Exception as exc:  # pragma: no cover — defence in depth
         logger.warning("experience-bank write-back failed (non-fatal): %s", exc)
     if cache_key is not None:
