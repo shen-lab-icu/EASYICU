@@ -95,6 +95,24 @@ def test_data_first_route_emits_standard_ledger_without_llm(tmp_path):
     assert shortlist["candidates"][0]["paper_authorized"] is False
 
 
+def test_automatic_predictors_do_not_recast_derived_outcomes_as_exposures():
+    from tools.run_idea_mining_data_first_discovery import _automatic_predictors
+
+    predictors = _automatic_predictors(
+        [
+            "stay_id",
+            "aki",
+            "persistent_critical_illness",
+            "modified_shock_index",
+            "death",
+        ],
+        ["death"],
+        derived_only=True,
+    )
+
+    assert predictors == ["modified_shock_index"]
+
+
 class _MustNotCallLLM:
     def complete(self, *args, **kwargs):
         raise AssertionError("precomputed route called the LLM")
@@ -439,3 +457,46 @@ def test_measurement_audit_route_fails_closed_when_its_prior_art_screen_fails(tm
         (tmp_path / "out" / "data_first_review_shortlist.json").read_text()
     )
     assert shortlist["candidates"] == []
+
+
+def test_external_validation_shortlist_is_bounded_and_diversified(tmp_path):
+    data_path = tmp_path / "prepared.parquet"
+    data_path.write_bytes(b"frozen test cohort")
+
+    run_data_first_idea_mining_dry_run(
+        predictor_concepts=["predictor_a", "predictor_b", "predictor_c"],
+        outcome_concepts=["outcome_a", "outcome_b"],
+        available_concepts=[
+            "predictor_a",
+            "predictor_b",
+            "predictor_c",
+            "outcome_a",
+            "outcome_b",
+        ],
+        outcome_determinability={
+            "outcome_a": {"outcome": "outcome_a", "status": "known_0_1"},
+            "outcome_b": {"outcome": "outcome_b", "status": "known_0_1"},
+        },
+        output_dir=tmp_path / "out",
+        data_path=data_path,
+        prior_art_search_client=_SparsePriorArt(),
+        databases=["db1", "db2", "db3", "db4"],
+        cross_database_feasibility_fn=_all_full,
+        feasibility_probe=_joint_feasible,
+    )
+
+    shortlist = json.loads(
+        (tmp_path / "out" / "data_first_review_shortlist.json").read_text()
+    )
+    candidates = shortlist["candidates"]
+    assert shortlist["schema_version"] == "easyicu.data_first_review_shortlist/5"
+    assert len(candidates) == 3
+    assert len({item["resolved_predictor_concept"] for item in candidates}) == 3
+    assert {item["resolved_outcome_concept"] for item in candidates} == {
+        "outcome_a",
+        "outcome_b",
+    }
+    assert all(
+        item["review_route"] == "cross_database_external_validation"
+        for item in candidates
+    )

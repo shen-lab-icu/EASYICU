@@ -332,3 +332,15 @@ def test_bracket_extraction_filters_dosing_route_and_formula_noise() -> None:
     assert _bracket_aliases("aspirin (any route)") == []
     # a genuine brand/chemical name is still kept
     assert "Lasix" in _bracket_aliases("furosemide (Lasix) administration")
+
+
+def test_catalog_exposes_host_owned_semantic_categories_for_mapping_guards() -> None:
+    catalog = load_concept_catalog(
+        restrict_to=["total_protein", "adh_rate", "ph"]
+    )
+
+    assert catalog.concept_categories == {
+        "total_protein": "chemistry",
+        "adh_rate": "medications",
+        "ph": "blood gas",
+    }

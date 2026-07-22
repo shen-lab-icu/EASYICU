@@ -40,6 +40,10 @@ _GENERIC_CONCEPT_WORDS = {
     "available",
     "average",
     "binary",
+    # Specimen/carrier word, not a standalone physiologic construct.  Keeping
+    # it as a concept signal allowed an unrelated phrase such as "pulsatile
+    # blood flow" to bind to "pH of blood" when the catalog was restricted.
+    "blood",
     "candidate",
     "change",
     "changes",

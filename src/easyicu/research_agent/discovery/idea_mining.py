@@ -144,6 +144,7 @@ from .idea_mining_feasibility_tier import (  # noqa: F401  (re-exported)
     SourceItemIndex,
     classify_feasibility_tier,
 )
+from .idea_mining_selection import select_actionable_prior_art_screen
 
 IDEA_EXTRACTION_SYSTEM_PROMPT = (
     "You extract candidate ICU research directions from review or editorial "
@@ -1346,6 +1347,7 @@ def map_literature_idea_to_executable_candidate(
     *,
     available_concepts: Sequence[ConceptDescriptor | str],
     concept_aliases: Optional[Mapping[str, Sequence[str]]] = None,
+    concept_categories: Optional[Mapping[str, str]] = None,
     outcome_determinability: Optional[
         Mapping[str, OutcomeDeterminability | Mapping[str, Any] | str]
     ] = None,
@@ -1381,6 +1383,13 @@ def map_literature_idea_to_executable_candidate(
         candidate.exposure_core_concept or ""
     ).strip() or candidate.exposure_or_predictor
     predictor_key = _resolve_concept(predictor_term, lookup)
+    predictor_category_conflict = _predictor_category_conflict(
+        predictor_term,
+        predictor_key,
+        concept_categories or {},
+    )
+    if predictor_category_conflict:
+        predictor_key = None
     feature_status, feature_requirements, feature_note = _feature_derivation_status(
         candidate.exposure_or_predictor,
         resolved_key=predictor_key,
@@ -1394,6 +1403,11 @@ def map_literature_idea_to_executable_candidate(
         reasons.append(
             "predictor requires derived feature engineering before execution: "
             f"{candidate.exposure_or_predictor}"
+        )
+    elif predictor_category_conflict:
+        reasons.append(
+            "predictor administration/treatment wording cannot bind to a "
+            "non-intervention measurement concept"
         )
     elif predictor_key is None:
         reasons.append(
@@ -1629,6 +1643,7 @@ def run_idea_mining_dry_run(
     available_concepts: Sequence[ConceptDescriptor | str],
     output_dir: str | Path,
     concept_aliases: Optional[Mapping[str, Sequence[str]]] = None,
+    concept_categories: Optional[Mapping[str, str]] = None,
     outcome_determinability: Optional[
         Mapping[str, OutcomeDeterminability | Mapping[str, Any] | str]
     ] = None,
@@ -1643,6 +1658,7 @@ def run_idea_mining_dry_run(
     prior_art_search_client: Optional[Any] = None,
     prior_art_searched_at: Optional[str] = None,
     prior_art_top_n: int = 20,
+    prior_art_candidate_limit: Optional[int] = None,
     scope: Optional[LiteratureScopeSpec] = None,
     source_search_client: Optional[Any] = None,
     scope_reference_year: Optional[int] = None,
@@ -1768,6 +1784,10 @@ def run_idea_mining_dry_run(
         default_catalog.concept_aliases,
         concept_aliases,
     )
+    effective_categories = {
+        **default_catalog.concept_categories,
+        **{str(key): str(value) for key, value in (concept_categories or {}).items()},
+    }
     effective_outcome_determinability: Mapping[
         str, OutcomeDeterminability | Mapping[str, Any] | str
     ] = (
@@ -1780,6 +1800,7 @@ def run_idea_mining_dry_run(
             idea,
             available_concepts=available_concepts,
             concept_aliases=effective_aliases,
+            concept_categories=effective_categories,
             outcome_determinability=effective_outcome_determinability,
         )
         for idea in literature_ideas
@@ -1824,32 +1845,9 @@ def run_idea_mining_dry_run(
             "an extraction failure."
         )
 
-    prior_art_assessments: List[PriorArtAssessment] = []
-    saturation_by_pair: Dict[Tuple[str, str], float] = {}
-    if prior_art_search_client is not None:
-        prior_art_assessments = assess_prior_art_for_candidates(
-            literature_ideas=literature_ideas,
-            executable_candidates=executable_candidates,
-            search_client=prior_art_search_client,
-            searched_at=prior_art_searched_at,
-            top_n=prior_art_top_n,
-            novelty_judge=novelty_judge,
-            cross_db_targets=cross_db_targets,
-        )
-        prior_art_by_literature_id = {
-            assessment.literature_idea_id: assessment
-            for assessment in prior_art_assessments
-        }
-        for candidate in executable_candidates:
-            if not candidate.feasibility_pair_key:
-                continue
-            assessment = prior_art_by_literature_id.get(candidate.literature_idea_id)
-            if assessment is None:
-                continue
-            saturation_by_pair[
-                _normalise_pair_tuple(candidate.feasibility_pair_key)
-            ] = assessment.literature_saturation_signal
-
+    # Probe the host-owned data contract before spending network/API work on
+    # prior art.  The default still screens the historical full candidate set;
+    # callers may opt into a bounded screen for large literature corpora.
     pair_feasibility, feasibility_records, feasibility_warnings = (
         _build_pair_feasibility_signals(
             candidates=executable_candidates,
@@ -1862,18 +1860,80 @@ def run_idea_mining_dry_run(
     )
     warnings.extend(feasibility_warnings)
 
+    screened_literature_ideas = list(literature_ideas)
+    screened_executable_candidates = list(executable_candidates)
+    if prior_art_candidate_limit is not None:
+        if prior_art_candidate_limit < 1:
+            raise IdeaMiningError("prior_art_candidate_limit must be >= 1")
+        (
+            screened_literature_ideas,
+            screened_executable_candidates,
+        ) = select_actionable_prior_art_screen(
+            literature_ideas=literature_ideas,
+            executable_candidates=executable_candidates,
+            feasibility_by_pair=pair_feasibility,
+            limit=prior_art_candidate_limit,
+        )
+        warnings.append(
+            "Prior-art screening was feasibility-first and bounded: "
+            f"screened={len(screened_literature_ideas)} of "
+            f"{len(literature_ideas)} literature ideas; unscreened ideas carry "
+            "no novelty verdict and cannot enter the proposed choice set."
+        )
+
+    prior_art_assessments: List[PriorArtAssessment] = []
+    saturation_by_pair: Dict[Tuple[str, str], float] = {}
+    if prior_art_search_client is not None:
+        prior_art_assessments = assess_prior_art_for_candidates(
+            literature_ideas=screened_literature_ideas,
+            executable_candidates=screened_executable_candidates,
+            search_client=prior_art_search_client,
+            searched_at=prior_art_searched_at,
+            top_n=prior_art_top_n,
+            novelty_judge=novelty_judge,
+            cross_db_targets=cross_db_targets,
+        )
+        prior_art_by_literature_id = {
+            assessment.literature_idea_id: assessment
+            for assessment in prior_art_assessments
+        }
+        for candidate in screened_executable_candidates:
+            if not candidate.feasibility_pair_key:
+                continue
+            assessment = prior_art_by_literature_id.get(candidate.literature_idea_id)
+            if assessment is None:
+                continue
+            saturation_by_pair[
+                _normalise_pair_tuple(candidate.feasibility_pair_key)
+            ] = assessment.literature_saturation_signal
+
+    downstream_unique_candidates = (
+        _unique_hypothesis_candidates(screened_executable_candidates)
+        if prior_art_candidate_limit is not None
+        else unique_candidates
+    )
+    downstream_pairs = {
+        _normalise_pair_tuple(candidate.feasibility_pair_key)
+        for candidate in downstream_unique_candidates
+        if candidate.feasibility_pair_key
+    }
+    ranking_feasibility = {
+        pair: signal
+        for pair, signal in pair_feasibility.items()
+        if pair in downstream_pairs
+    }
     ranking_results = _rank_executable_candidates(
-        candidates=unique_candidates,
+        candidates=downstream_unique_candidates,
         available_concepts=available_concepts,
         database=database,
         hypothesis_family_id=family_id,
-        feasibility_by_pair=pair_feasibility,
+        feasibility_by_pair=ranking_feasibility,
         saturation_by_pair=saturation_by_pair,
         citations=citations or [material.citation for material in parsed_materials],
         top_k=top_k,
     )
     ranked_json = _flatten_ranking_results(ranking_results)
-    warnings.extend(_feasibility_match_warnings(pair_feasibility, ranked_json))
+    warnings.extend(_feasibility_match_warnings(ranking_feasibility, ranked_json))
 
     registry_file = (
         Path(registry_path) if registry_path else out_dir / "idea_registry.json"
@@ -1886,7 +1946,7 @@ def run_idea_mining_dry_run(
     ranking_by_pair = _ranking_by_pair(ranked_json)
     registry_ids: Dict[str, str] = {}
     registry_id_by_key: Dict[Tuple[str, str, str, str], str] = {}
-    for candidate in unique_candidates:
+    for candidate in downstream_unique_candidates:
         pair_key = candidate.feasibility_pair_key
         ranked = ranking_by_pair.get(pair_key) if pair_key else None
         registry_candidate_id = (
@@ -1909,7 +1969,12 @@ def run_idea_mining_dry_run(
                 f"Candidate already present in registry; preserved append-only "
                 f"ledger entry: {registry_candidate_id}"
             )
-    for candidate in executable_candidates:
+    downstream_candidates = (
+        screened_executable_candidates
+        if prior_art_candidate_limit is not None
+        else executable_candidates
+    )
+    for candidate in downstream_candidates:
         key = _candidate_hypothesis_key(candidate)
         if (
             candidate.executable_candidate_id not in registry_ids
@@ -1918,7 +1983,7 @@ def run_idea_mining_dry_run(
             registry_ids[candidate.executable_candidate_id] = registry_id_by_key[key]
 
     candidate_records = _build_candidate_records(
-        candidates=executable_candidates,
+        candidates=downstream_candidates,
         ranking_by_pair=ranking_by_pair,
         registry_ids=registry_ids,
         registry=registry,
@@ -1979,7 +2044,7 @@ def run_idea_mining_dry_run(
     # run/user already mined this construct. Advisory only.
     registry_collisions: List[Dict[str, Any]] = []
     if prior_registry_ids:
-        for candidate in unique_candidates:
+        for candidate in downstream_unique_candidates:
             reg_id = registry_ids.get(candidate.executable_candidate_id)
             if reg_id and reg_id in prior_registry_ids:
                 registry_collisions.append(
@@ -2016,6 +2081,19 @@ def run_idea_mining_dry_run(
         "prior_art_assessments": [
             assessment.model_dump(mode="json") for assessment in prior_art_assessments
         ],
+        "prior_art_screening": {
+            "candidate_limit": prior_art_candidate_limit,
+            "literature_ideas_total": len(literature_ideas),
+            "literature_ideas_screened": len(screened_literature_ideas),
+            "screened_literature_idea_ids": [
+                str(idea.literature_idea_id) for idea in screened_literature_ideas
+            ],
+            "selection_basis": (
+                "host_mapped_data_feasible_then_specific_differentiator_coverage_contrast"
+                if prior_art_candidate_limit is not None
+                else "unbounded_historical_behavior"
+            ),
+        },
         "feasibility_signals": [
             record.model_dump(mode="json") for record in feasibility_records
         ],
@@ -3084,6 +3162,57 @@ def _token_specificity(lookup: Mapping[str, str]) -> Dict[str, float]:
     }
 
 
+_MIN_PARTIAL_CONCEPT_MATCH_SPECIFICITY = 0.5
+_INTERVENTION_PHRASE_TOKENS = frozenset(
+    {
+        "administer",
+        "administered",
+        "administration",
+        "bundle",
+        "dose",
+        "doses",
+        "dosing",
+        "infusion",
+        "initiation",
+        "protocol",
+        "regimen",
+        "strategy",
+        "therapy",
+        "treatment",
+    }
+)
+_INTERVENTION_CONCEPT_CATEGORIES = frozenset(
+    {"intervention", "medication", "medications", "treatment"}
+)
+
+
+def _predictor_category_conflict(
+    term: str,
+    resolved_key: Optional[str],
+    concept_categories: Mapping[str, str],
+) -> bool:
+    """Reject an administration phrase bound to a measurement concept.
+
+    This is deliberately one-way and conservative.  It does not infer that a
+    concept is a treatment; it only prevents a phrase that explicitly says
+    dose/initiation/therapy from being reinterpreted as a lab or vital merely
+    because both share a noun (for example protein dosing -> total protein).
+    Missing category metadata leaves the historical result unchanged.
+    """
+
+    if not resolved_key:
+        return False
+    phrase_tokens = {
+        token
+        for token in re.split(r"[^a-z0-9]+", normalize_concept_name(term))
+        if token
+    }
+    if not phrase_tokens.intersection(_INTERVENTION_PHRASE_TOKENS):
+        return False
+    category = str(concept_categories.get(resolved_key) or "").strip().lower()
+    return bool(category) and category not in _INTERVENTION_CONCEPT_CATEGORIES
+
+
 def _resolve_embedded_alias(term: str, lookup: Mapping[str, str]) -> Optional[str]:
     """Recover a first-class concept whose MULTI-WORD alias is embedded in a
     noisy phrase (e.g. "urea-to-creatinine ratio cutoff threshold" ->
@@ -3168,6 +3297,11 @@ def _resolve_concept(term: str, lookup: Mapping[str, str]) -> Optional[str]:
             if score > best_score:
                 best_score = score
                 best = canonical
+    # A one-token overlap in a two-token phrase (specificity == 0.5) is still
+    # too weak: ``marker c`` must not silently become ``marker a``.  Exact and
+    # embedded multi-word alias matches have already returned above.
+    if best_score[0] <= _MIN_PARTIAL_CONCEPT_MATCH_SPECIFICITY:
+        return None
     return best
 
 

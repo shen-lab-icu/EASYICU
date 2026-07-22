@@ -45,9 +45,27 @@ _DEFAULT_DICTS = ("concept-dict.json", "sofa2-dict.json")
 # Generic trailing/structural words to strip when deriving a short alias from a
 # concept description (so "norepinephrine rate" also yields "norepinephrine").
 _ALIAS_STRIP_WORDS = {
-    "rate", "dur", "duration", "dose", "dosage", "in", "use", "windows",
-    "window", "indicator", "ind", "level", "score", "value", "measurement",
-    "of", "the", "per", "total", "cumulative", "current",
+    "rate",
+    "dur",
+    "duration",
+    "dose",
+    "dosage",
+    "in",
+    "use",
+    "windows",
+    "window",
+    "indicator",
+    "ind",
+    "level",
+    "score",
+    "value",
+    "measurement",
+    "of",
+    "the",
+    "per",
+    "total",
+    "cumulative",
+    "current",
 }
 
 # EasyICU derived concepts that are produced in code (KDIGO AKI, circulatory
@@ -139,25 +157,60 @@ DERIVED_CONCEPT_HINTS: Dict[str, Tuple[List[str], bool]] = {
 SYNONYM_GROUPS: Tuple[frozenset, ...] = (
     frozenset({"norepinephrine", "noradrenaline"}),
     frozenset({"epinephrine", "adrenaline"}),
-    frozenset({"vasopressin", "antidiuretic hormone", "arginine vasopressin", "argipressin"}),
+    frozenset(
+        {"vasopressin", "antidiuretic hormone", "arginine vasopressin", "argipressin"}
+    ),
     frozenset({"phenylephrine", "neosynephrine"}),
     frozenset({"dobutamine", "dobutrex"}),
     frozenset({"dopamine", "intropin"}),
     frozenset({"milrinone", "primacor"}),
-    frozenset({
-        "renal replacement therapy", "dialysis", "hemodialysis", "haemodialysis",
-        "continuous renal replacement therapy", "crrt", "hemofiltration",
-        "haemofiltration", "cvvh", "cvvhd",
-    }),
-    frozenset({"mechanical ventilation", "invasive ventilation", "invasive mechanical ventilation"}),
-    frozenset({"positive end-expiratory pressure", "positive end expiratory pressure", "peep"}),
-    frozenset({"horowitz index", "p/f ratio", "pf ratio", "pao2/fio2", "pao2/fio2 ratio", "oxygenation index"}),
+    frozenset(
+        {
+            "renal replacement therapy",
+            "dialysis",
+            "hemodialysis",
+            "haemodialysis",
+            "continuous renal replacement therapy",
+            "crrt",
+            "hemofiltration",
+            "haemofiltration",
+            "cvvh",
+            "cvvhd",
+        }
+    ),
+    frozenset(
+        {
+            "mechanical ventilation",
+            "invasive ventilation",
+            "invasive mechanical ventilation",
+        }
+    ),
+    frozenset(
+        {"positive end-expiratory pressure", "positive end expiratory pressure", "peep"}
+    ),
+    frozenset(
+        {
+            "horowitz index",
+            "p/f ratio",
+            "pf ratio",
+            "pao2/fio2",
+            "pao2/fio2 ratio",
+            "oxygenation index",
+        }
+    ),
     frozenset({"sao2/fio2", "s/f ratio", "sf ratio"}),
-    frozenset({"rdw", "red cell distribution width", "red blood cell distribution width"}),
-    frozenset({
-        "nlr", "neutrophil lymphocyte ratio", "neutrophil-lymphocyte ratio",
-        "neutrophil-to-lymphocyte ratio", "neutrophil to lymphocyte ratio",
-    }),
+    frozenset(
+        {"rdw", "red cell distribution width", "red blood cell distribution width"}
+    ),
+    frozenset(
+        {
+            "nlr",
+            "neutrophil lymphocyte ratio",
+            "neutrophil-lymphocyte ratio",
+            "neutrophil-to-lymphocyte ratio",
+            "neutrophil to lymphocyte ratio",
+        }
+    ),
     frozenset({"acetaminophen", "paracetamol"}),
     frozenset({"furosemide", "frusemide"}),
     frozenset({"acute kidney injury", "acute renal failure"}),
@@ -167,11 +220,40 @@ SYNONYM_GROUPS: Tuple[frozenset, ...] = (
 # Words that signal a parenthetical fragment is a description, dosing, route, or
 # formula clause rather than a usable synonym/brand name.
 _BRACKET_NOISE = {
-    "route", "include", "includes", "including", "correction", "administration",
-    "resuscitation", "edema", "oedema", "covid", "compatibility", "alias",
-    "etc", "bolus", "infusion", "continuous", "colloid", "antiplatelet",
-    "inhibitor", "antiarrhythmic", "blocker", "sedation", "any", "via", "such",
-    "other", "iv", "po", "oral", "intravenous", "and", "or", "for", "with",
+    "route",
+    "include",
+    "includes",
+    "including",
+    "correction",
+    "administration",
+    "resuscitation",
+    "edema",
+    "oedema",
+    "covid",
+    "compatibility",
+    "alias",
+    "etc",
+    "bolus",
+    "infusion",
+    "continuous",
+    "colloid",
+    "antiplatelet",
+    "inhibitor",
+    "antiarrhythmic",
+    "blocker",
+    "sedation",
+    "any",
+    "via",
+    "such",
+    "other",
+    "iv",
+    "po",
+    "oral",
+    "intravenous",
+    "and",
+    "or",
+    "for",
+    "with",
 }
 
 
@@ -181,6 +263,11 @@ class ConceptCatalog:
 
     available_concepts: Tuple[str, ...]
     concept_aliases: Dict[str, List[str]] = field(default_factory=dict)
+    # Host-owned semantic category from the concept dictionary.  Idea Mining
+    # uses this only to prevent category errors such as resolving "protein
+    # dosing" to the total-serum-protein laboratory measurement.  It is not a
+    # scientific role chosen by the LLM.
+    concept_categories: Dict[str, str] = field(default_factory=dict)
     # plain dicts: run_idea_mining_dry_run accepts Mapping[str, Mapping] here,
     # so we avoid importing the (in-flux) idea_mining module.
     outcome_determinability: Dict[str, Dict[str, str]] = field(default_factory=dict)
@@ -413,6 +500,7 @@ def load_concept_catalog(
 
     aliases: Dict[str, List[str]] = {}
     outcomes: Dict[str, Dict[str, str]] = {}
+    categories: Dict[str, str] = {}
     # The alias-disambiguation guard below is scoped to BINARY outcomes only.
     # Non-binary determinable outcomes (continuous/ordinal/survival) are recorded
     # for the determinability gate but must NOT widen the guard, or shared
@@ -437,6 +525,9 @@ def load_concept_catalog(
     for key in keys:
         concept = dicts.get(key)
         if concept is not None:
+            category = str(concept.get("category") or "").strip().lower()
+            if category:
+                categories[key] = category
             derived = _expand_synonyms(
                 _aliases_from_description(concept.get("description", ""))
             )
@@ -476,6 +567,7 @@ def load_concept_catalog(
     return ConceptCatalog(
         available_concepts=tuple(keys),
         concept_aliases=aliases,
+        concept_categories=categories,
         outcome_determinability=outcomes,
     )
 

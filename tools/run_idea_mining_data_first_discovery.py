@@ -93,6 +93,15 @@ def _automatic_predictors(
     *,
     derived_only: bool,
 ) -> list[str]:
+    """Return host-defined exposure candidates, never derived endpoints.
+
+    The automatic route must not silently reinterpret a derived binary outcome
+    (for example AKI or persistent critical illness) as an exposure merely
+    because the caller selected a different outcome for this run.  Callers can
+    still request such a longitudinal relationship explicitly through
+    ``--predictor-concepts``; the automatic discovery pool stays conservative.
+    """
+
     excluded = _IDENTIFIER_COLUMNS | {str(item).strip() for item in outcomes}
     catalog = load_concept_catalog(restrict_to=columns)
     return sorted(
@@ -100,6 +109,7 @@ def _automatic_predictors(
         for concept in catalog.available_concepts
         if concept in columns
         and concept not in excluded
+        and not DERIVED_CONCEPT_HINTS.get(concept, ([], False))[1]
         and (not derived_only or concept in DERIVED_CONCEPT_HINTS)
     )
 
