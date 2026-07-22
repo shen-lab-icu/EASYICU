@@ -16,7 +16,9 @@ from easyicu.research_agent.discovery.discovery_package import (
     _valid_figure_artifact,
     validate_discovery_manuscript_package,
 )
-from easyicu.research_agent.discovery.discovery_story_figure import render_discovery_story_figure
+from easyicu.research_agent.discovery.discovery_story_figure import (
+    render_discovery_story_figure,
+)
 from easyicu.research_agent.authority.evidence_store import EvidenceStore
 
 
@@ -254,6 +256,44 @@ def test_select_discovery_row_requires_go_or_recommend_for_analysis() -> None:
 
     selected = select_discovery_row(rows)
     assert selected["literature_idea_id"] == "b"
+
+
+def test_select_discovery_row_can_require_resolved_outcome_for_handoff() -> None:
+    rows = [
+        {
+            "literature_idea_id": "concept_set",
+            "candidate_topic": "measurement-bias audit",
+            "go_no_go": "hold",
+            "go_no_go_reason": "needs human differentiation",
+            "novelty_label": "apparently_gap",
+        },
+        {
+            "literature_idea_id": "pair",
+            "candidate_topic": "routine marker and mortality",
+            "go_no_go": "hold",
+            "go_no_go_reason": "needs human differentiation",
+            "novelty_label": "crowded_but_differentiable",
+            "resolved_outcome_concept": "death",
+        },
+    ]
+
+    selected = select_discovery_row(rows, require_resolved_outcome=True)
+
+    assert selected["literature_idea_id"] == "pair"
+
+
+def test_select_discovery_row_rejects_missing_resolved_outcome_for_handoff() -> None:
+    rows = [
+        {
+            "literature_idea_id": "concept_set",
+            "candidate_topic": "measurement-bias audit",
+            "go_no_go": "hold",
+            "go_no_go_reason": "needs human differentiation",
+        }
+    ]
+
+    with pytest.raises(ValueError, match="no row with a resolved outcome"):
+        select_discovery_row(rows, require_resolved_outcome=True)
 
 
 def test_discovery_package_accepts_agent_handoff_and_multi_panel_story(tmp_path: Path):

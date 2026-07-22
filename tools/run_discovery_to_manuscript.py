@@ -144,6 +144,11 @@ def main(argv: Optional[list[str]] = None) -> int:
         rows,
         index=args.idea_index,
         require_analysis_ready=args.run_analysis,
+        # The handoff contract requires a frozen target outcome. When the
+        # operator did not supply one explicitly, keep automatic selection
+        # within rows whose outcome was resolved by idea mining rather than
+        # selecting a higher-ranked concept-set audit that cannot be handed off.
+        require_resolved_outcome=not bool(args.target_outcome),
     )
     handoff = build_handoff_from_row(
         selected,
