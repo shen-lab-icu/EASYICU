@@ -70,6 +70,11 @@ from easyicu.research_agent.concept_dict_audit import (
     compute_concept_dict_fingerprint,
 )
 from easyicu.research_agent.graph import HumanReviewDecision, HumanReviewRequest
+from benchmarks.figure2_canonical9.retrofit_hitl import (
+    checkpoint_receipt_sha256,
+    run_human_review_interrupt,
+    verify_checkpoint_receipt_binds_request,
+)
 from easyicu.research_agent.intake.export_package import (
     IDENTIFIER_COLUMNS,
     LEGACY_MANIFEST,
@@ -657,11 +662,61 @@ def _module_name_for(parquet_path: Path) -> str:
     return parquet_path.stem
 
 
+# --------------------------------------------------------------------------- #
+# Task-level cohort identity policy
+# --------------------------------------------------------------------------- #
+# ``subject_id`` present is only the FLOOR. Whether a source is paper-ready for a
+# task depends on what that task's cohort demands of patient identity. A source
+# with repeat ICU admissions (or unverifiable first-stay ordering) must NOT be
+# paper-ready for a one-stay-per-patient or first-ICU-stay task — it may only be
+# used when the task explicitly permits repeat admissions with patient clustering.
+COHORT_IDENTITY_POLICIES = (
+    "unique_stay_per_patient",  # exactly one ICU stay per patient (n_subjects==n_stays)
+    "first_icu_stay",  # first ICU stay per patient (needs verified admission ordering)
+    "repeat_admissions_clustered",  # multi-stay allowed; patient-clustered downstream
+)
+CohortIdentityPolicy = str  # one of COHORT_IDENTITY_POLICIES (kept as a str alias)
+DEFAULT_COHORT_IDENTITY_POLICY = "unique_stay_per_patient"
+
+
 def _patient_identity_sufficient(identity: Dict[str, Any]) -> bool:
     """A retrofit export has sufficient identity only if subject_id is proven and
-    no blocker remains. Stay-level-only identity is NOT sufficient for paper use."""
+    no blocker remains. Stay-level-only identity is NOT sufficient for paper use.
+
+    This is the FLOOR, not the whole gate: a task's cohort identity policy
+    (:func:`_identity_satisfies_cohort_policy`) decides whether the *structure*
+    (repeat admissions, first-stay ordering) is acceptable for that task."""
 
     return bool(identity.get("subject_id_present")) and not identity.get("blocker")
+
+
+def _identity_satisfies_cohort_policy(
+    identity: Mapping[str, Any], policy: str
+) -> Tuple[bool, Optional[str]]:
+    """Does the re-derived identity structure satisfy the task cohort policy?
+
+    Returns ``(ok, reason_if_not)``. Never fabricates: a merely consistent
+    stay->subject mapping does NOT satisfy ``unique_stay_per_patient`` unless the
+    counts prove 1:1, and ``first_icu_stay`` cannot be satisfied without verified
+    admission ordering (which the retrofit export does not carry), so it fails
+    closed by design until that ordering is proven upstream.
+    """
+
+    if policy not in COHORT_IDENTITY_POLICIES:
+        return False, f"unknown_cohort_identity_policy:{policy}"
+    if not _patient_identity_sufficient(identity):
+        return False, str(identity.get("blocker") or "patient_identity_insufficient")
+    if policy == "unique_stay_per_patient":
+        if identity.get("patient_level_uniqueness_verified") is not True:
+            return False, "repeat_icu_admissions_present"
+        return True, None
+    if policy == "first_icu_stay":
+        if identity.get("first_icu_stay_verified") is not True:
+            return False, "first_icu_stay_unverified"
+        return True, None
+    # repeat_admissions_clustered: subject_id present is enough; the task owns the
+    # patient-clustered handling of the multiple stays downstream.
+    return True, None
 
 
 def _paper_ready(
@@ -737,14 +792,22 @@ def _canonical_sha(payload: Any) -> str:
 
 def build_retrofit_review_request(
     export_dir: str | Path,
-) -> Tuple["HumanReviewRequest", Dict[str, Any]]:
+    *,
+    cohort_identity_policy: str = DEFAULT_COHORT_IDENTITY_POLICY,
+) -> Tuple["HumanReviewRequest", Dict[str, Any], Dict[str, Any]]:
     """Build the digest-bound Framework v2 review request for a retrofit source.
 
     The reviewed authority is the tuple of live artifact digests (manifest,
-    sidecar, column-derived patient identity). Its ``review_id`` is DERIVED from
-    that authority by ``HumanReviewRequest`` — a caller cannot choose it — so an
-    operator ``HumanReviewDecision`` is only valid for THIS exact source. Fails
-    closed if the export is not a retrofit seal or identity is insufficient.
+    sidecar, column-derived patient identity) AND the ``cohort_identity_policy``
+    the source is reviewed FOR. Its ``review_id`` is DERIVED from that authority by
+    ``HumanReviewRequest`` — a caller cannot choose it — so an operator
+    ``HumanReviewDecision`` is only valid for THIS exact source AND THIS policy: a
+    review for ``repeat_admissions_clustered`` cannot be silently reused for a task
+    that needs ``unique_stay_per_patient`` (different digest, different review id).
+
+    Fails closed if the export is not a retrofit seal, identity is insufficient, or
+    the re-derived identity structure does not satisfy ``cohort_identity_policy``.
+    Returns ``(request, authority, identity)``.
     """
 
     root = Path(export_dir).expanduser()
@@ -754,6 +817,10 @@ def build_retrofit_review_request(
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     if not isinstance(manifest, dict) or manifest.get("seal_kind") != SEAL_KIND:
         raise TypedRetrofitSealError("not a retrofit seal; cannot review")
+    if cohort_identity_policy not in COHORT_IDENTITY_POLICIES:
+        raise TypedRetrofitSealError(
+            f"unknown cohort identity policy: {cohort_identity_policy!r}"
+        )
     sidecar_file = str((manifest.get("column_metadata") or {}).get("file") or "")
     if not sidecar_file or Path(sidecar_file).name != sidecar_file:
         raise TypedRetrofitSealError(
@@ -770,10 +837,21 @@ def build_retrofit_review_request(
             f"columns (blocker={identity.get('blocker')!r}) — this export can only be "
             "a development input, never a paper-ready authority"
         )
+    ok, reason = _identity_satisfies_cohort_policy(identity, cohort_identity_policy)
+    if not ok:
+        raise TypedRetrofitSealError(
+            f"cannot review for cohort policy {cohort_identity_policy!r}: {reason} "
+            f"(n_subjects={identity.get('n_subjects')}, "
+            f"n_stays={identity.get('n_stays_with_subject')}, "
+            f"multi_stay={identity.get('multi_stay_patients_present')}, "
+            f"first_icu_stay_verified={identity.get('first_icu_stay_verified')}) — "
+            "review this source only for a task whose cohort policy it satisfies"
+        )
 
     authority = {
         "seal_kind": SEAL_KIND,
         "value_vintage": str(manifest.get("value_vintage") or ""),
+        "cohort_identity_policy": cohort_identity_policy,
         "source_manifest_sha256": _sha256_file(manifest_path),
         "source_sidecar_file": sidecar_file,
         "source_sidecar_sha256": _sha256_file(sidecar_path),
@@ -782,30 +860,45 @@ def build_retrofit_review_request(
     authority_sha256 = _canonical_sha(authority)
     request = HumanReviewRequest.create(
         kind=RETROFIT_REVIEW_KIND,
-        summary=f"retrofit typed-seal paper-readiness review: {root.name}",
+        summary=(
+            f"retrofit typed-seal paper-readiness review: {root.name} "
+            f"[{cohort_identity_policy}]"
+        ),
         authority_sha256=authority_sha256,
         payload=authority,
     )
-    return request, authority
+    return request, authority, identity
 
 
 def write_retrofit_review_decision(
     export_dir: str | Path,
     *,
     decision: Mapping[str, Any],
+    checkpoint_receipt: Mapping[str, Any],
+    cohort_identity_policy: str = DEFAULT_COHORT_IDENTITY_POLICY,
 ) -> Path:
     """Record a write-once retrofit review from a Framework v2 HumanReviewDecision.
 
     ``decision`` MUST be a ``HumanReviewDecision`` bound to the digest-derived
-    ``HumanReviewRequest`` for this exact source: its ``review_id`` and
-    ``authority_sha256`` must match, and ``decision`` must be ``approved``. A
-    caller cannot ``reviewer='me', review_id='whatever'`` its way to approval —
-    the review id is derived from the reviewed authority, not free text. The
-    write-once receipt binds BOTH the request and decision canonical SHAs.
+    ``HumanReviewRequest`` for this exact source AND ``cohort_identity_policy``:
+    its ``review_id`` and ``authority_sha256`` must match, and ``decision`` must be
+    ``approved``. A caller cannot ``reviewer='me', review_id='whatever'`` its way to
+    approval — the review id is derived from the reviewed authority, not free text.
+
+    ``checkpoint_receipt`` MUST be a :class:`HumanReviewCheckpointReceipt` proving
+    the decision flowed through a real LangGraph interrupt + checkpoint resume (see
+    :mod:`retrofit_hitl`): a bare constructed decision is not enough. It is bound to
+    this request + decision (interrupt/resume digests re-derived and matched).
+
+    The write-once receipt binds the request, decision, and checkpoint canonical
+    SHAs. (Honest boundary: the interrupt/checkpoint prove the pause/resume
+    MECHANISM; the operator identity remains a trusted local claim.)
     """
 
     root = Path(export_dir).expanduser()
-    request, authority = build_retrofit_review_request(root)
+    request, authority, identity = build_retrofit_review_request(
+        root, cohort_identity_policy=cohort_identity_policy
+    )
     try:
         parsed = HumanReviewDecision.model_validate(dict(decision))
     except Exception as exc:  # noqa: BLE001 - surfaced as a fail-close
@@ -822,13 +915,23 @@ def write_retrofit_review_decision(
         raise TypedRetrofitSealError(
             f"review decision is not approved (decision={parsed.decision!r})"
         )
+    try:
+        checkpoint = verify_checkpoint_receipt_binds_request(
+            checkpoint_receipt, request=request, decision=parsed
+        )
+    except ValueError as exc:
+        raise TypedRetrofitSealError(
+            f"human review checkpoint receipt does not bind this decision: {exc}"
+        ) from exc
 
     request_json = request.model_dump(mode="json")
     decision_json = parsed.model_dump(mode="json")
+    checkpoint_json = checkpoint.model_dump(mode="json")
     receipt: Dict[str, Any] = {
         "schema_version": RETROFIT_REVIEW_DECISION_SCHEMA,
         "seal_kind": SEAL_KIND,
         "value_vintage": authority["value_vintage"],
+        "cohort_identity_policy": cohort_identity_policy,
         "review_id": request.review_id,
         "reviewer": parsed.reviewer,
         "reviewed_at": parsed.decided_at,
@@ -839,14 +942,152 @@ def write_retrofit_review_decision(
         "patient_identity_authority_sha256": authority[
             "patient_identity_authority_sha256"
         ],
+        # Honest identity facts, so the task-level consumer can enforce its policy.
+        "n_subjects": int(identity.get("n_subjects") or 0),
+        "n_stays_with_subject": int(identity.get("n_stays_with_subject") or 0),
+        "multi_stay_patients_present": bool(
+            identity.get("multi_stay_patients_present")
+        ),
+        "first_icu_stay_verified": bool(identity.get("first_icu_stay_verified")),
         "review_request": request_json,
         "review_decision": decision_json,
+        "human_review_checkpoint": checkpoint_json,
         "request_sha256": _canonical_sha(request_json),
         "decision_sha256": _canonical_sha(decision_json),
+        "checkpoint_receipt_sha256": checkpoint_receipt_sha256(checkpoint_json),
     }
     path = root / RETROFIT_DECISION_FILE
     _write_once_json(path, receipt)
     return path
+
+
+def review_retrofit_export(
+    export_dir: str | Path,
+    *,
+    reviewer: str,
+    decided_at: str,
+    cohort_identity_policy: str = DEFAULT_COHORT_IDENTITY_POLICY,
+    note: str = "",
+) -> Path:
+    """Run a real interrupt-backed HITL review and record the write-once decision.
+
+    This is the operator entry point: it builds the digest-bound request for
+    ``cohort_identity_policy``, drives a genuine LangGraph interrupt + checkpoint
+    resume (:func:`retrofit_hitl.run_human_review_interrupt`) with the operator's
+    approval, and writes the write-once decision receipt binding the checkpoint.
+    Fails closed if the source cannot be reviewed for the policy.
+    """
+
+    root = Path(export_dir).expanduser()
+    request, _authority, _identity = build_retrofit_review_request(
+        root, cohort_identity_policy=cohort_identity_policy
+    )
+
+    def _decide(
+        requests: Tuple[HumanReviewRequest, ...],
+    ) -> List[HumanReviewDecision]:
+        req = requests[0]
+        return [
+            HumanReviewDecision(
+                review_id=req.review_id,
+                authority_sha256=req.authority_sha256,
+                decision="approved",
+                reviewer=reviewer,
+                decided_at=decided_at,
+                note=note,
+            )
+        ]
+
+    decisions, checkpoint = run_human_review_interrupt(
+        [request],
+        decide=_decide,
+        thread_id="retrofit-" + request.authority_sha256[:16],
+    )
+    return write_retrofit_review_decision(
+        root,
+        decision=decisions[0].model_dump(mode="json"),
+        checkpoint_receipt=checkpoint.model_dump(mode="json"),
+        cohort_identity_policy=cohort_identity_policy,
+    )
+
+
+def _reconcile_embedded_review(
+    receipt: Mapping[str, Any],
+    *,
+    expected_request: "HumanReviewRequest",
+    manifest_sha: str,
+    sidecar_file: str,
+    sidecar_sha: str,
+    identity_digest: str,
+) -> None:
+    """Re-validate the embedded HITL artifacts against a source authority.
+
+    Shared by the live gate (authority = live parquet columns + files) and the
+    content-addressed staged gate (authority = staged, SHA-verified blobs). Checks
+    the embedded request binds ``expected_request``, the decision binds the request
+    and is approved, the checkpoint receipt binds both, and every recorded source
+    digest equals the caller-provided (re-derived / re-digested) value. Fails closed.
+    """
+
+    try:
+        req = HumanReviewRequest.model_validate(receipt.get("review_request"))
+        dec = HumanReviewDecision.model_validate(receipt.get("review_decision"))
+    except Exception as exc:  # noqa: BLE001 - surfaced as a fail-close
+        raise TypedRetrofitSealError(
+            f"review request/decision is not a valid Framework v2 artifact: {exc}"
+        ) from exc
+    if req.review_id != expected_request.review_id:
+        raise TypedRetrofitSealError(
+            "review request does not bind this source (review_id mismatch — the "
+            "reviewed authority differs from the resolved artifacts)"
+        )
+    if req.authority_sha256 != expected_request.authority_sha256:
+        raise TypedRetrofitSealError("review request authority_sha256 mismatch")
+    if dec.review_id != req.review_id or dec.authority_sha256 != req.authority_sha256:
+        raise TypedRetrofitSealError("review decision is not bound to the request")
+    if dec.decision != "approved":
+        raise TypedRetrofitSealError(
+            f"review decision is not approved (decision={dec.decision!r})"
+        )
+    if receipt.get("request_sha256") != _canonical_sha(req.model_dump(mode="json")):
+        raise TypedRetrofitSealError("review request canonical sha mismatch (tampered)")
+    if receipt.get("decision_sha256") != _canonical_sha(dec.model_dump(mode="json")):
+        raise TypedRetrofitSealError(
+            "review decision canonical sha mismatch (tampered)"
+        )
+    # The decision must have flowed through a real LangGraph interrupt + checkpoint
+    # resume: a bare (non-interrupt) decision has no valid checkpoint receipt.
+    try:
+        checkpoint = verify_checkpoint_receipt_binds_request(
+            receipt.get("human_review_checkpoint") or {}, request=req, decision=dec
+        )
+    except ValueError as exc:
+        raise TypedRetrofitSealError(
+            f"review checkpoint receipt does not bind this decision: {exc}"
+        ) from exc
+    if receipt.get("checkpoint_receipt_sha256") != checkpoint_receipt_sha256(
+        checkpoint.model_dump(mode="json")
+    ):
+        raise TypedRetrofitSealError(
+            "review checkpoint receipt canonical sha mismatch (tampered)"
+        )
+    if receipt.get("source_manifest_sha256") != manifest_sha:
+        raise TypedRetrofitSealError(
+            "review decision source_manifest_sha256 mismatch (manifest changed since "
+            "review)"
+        )
+    if receipt.get("source_sidecar_file") != sidecar_file:
+        raise TypedRetrofitSealError("review decision sidecar reference mismatch")
+    if receipt.get("source_sidecar_sha256") != sidecar_sha:
+        raise TypedRetrofitSealError(
+            "review decision source_sidecar_sha256 mismatch (sidecar changed since "
+            "review)"
+        )
+    if receipt.get("patient_identity_authority_sha256") != identity_digest:
+        raise TypedRetrofitSealError(
+            "review decision patient_identity_authority_sha256 mismatch (identity "
+            "differs from the reviewed authority)"
+        )
 
 
 def assert_sealed_export_paper_ready(export_dir: str | Path) -> Dict[str, Any]:
@@ -910,59 +1151,37 @@ def assert_sealed_export_paper_ready(export_dir: str | Path) -> Dict[str, Any]:
     if receipt.get("schema_version") != RETROFIT_REVIEW_DECISION_SCHEMA:
         raise TypedRetrofitSealError("unknown review decision schema")
 
+    # (req 2) The cohort identity policy the source was reviewed FOR travels in the
+    # receipt; rebuild the request with it so the derived review_id matches, and
+    # re-check the live identity still satisfies it (build_retrofit_review_request
+    # fail-closes if a repeat-admissions/unverified-first source no longer meets the
+    # reviewed policy). The review_id binds the policy, so a downgrade fails closed.
+    reviewed_policy = receipt.get("cohort_identity_policy")
+    if reviewed_policy not in COHORT_IDENTITY_POLICIES:
+        raise TypedRetrofitSealError(
+            f"review decision has an unknown cohort identity policy: "
+            f"{reviewed_policy!r}"
+        )
     # The request the operator MUST have signed, rebuilt from the LIVE artifacts.
     # Its review_id is derived from the reviewed authority, so any manifest /
-    # sidecar / identity drift changes review_id and fails closed here.
-    expected_request, _authority = build_retrofit_review_request(root)
-    try:
-        req = HumanReviewRequest.model_validate(receipt.get("review_request"))
-        dec = HumanReviewDecision.model_validate(receipt.get("review_decision"))
-    except Exception as exc:  # noqa: BLE001 - surfaced as a fail-close
-        raise TypedRetrofitSealError(
-            f"review request/decision is not a valid Framework v2 artifact: {exc}"
-        ) from exc
-    if req.review_id != expected_request.review_id:
-        raise TypedRetrofitSealError(
-            "review request does not bind this source (review_id mismatch — the "
-            "reviewed authority differs from the live artifacts)"
-        )
-    if req.authority_sha256 != expected_request.authority_sha256:
-        raise TypedRetrofitSealError("review request authority_sha256 mismatch")
-    if dec.review_id != req.review_id or dec.authority_sha256 != req.authority_sha256:
-        raise TypedRetrofitSealError("review decision is not bound to the request")
-    if dec.decision != "approved":
-        raise TypedRetrofitSealError(
-            f"review decision is not approved (decision={dec.decision!r})"
-        )
-    if receipt.get("request_sha256") != _canonical_sha(req.model_dump(mode="json")):
-        raise TypedRetrofitSealError("review request canonical sha mismatch (tampered)")
-    if receipt.get("decision_sha256") != _canonical_sha(dec.model_dump(mode="json")):
-        raise TypedRetrofitSealError(
-            "review decision canonical sha mismatch (tampered)"
-        )
+    # sidecar / identity / policy drift changes review_id and fails closed here.
+    expected_request, _authority, _live_identity = build_retrofit_review_request(
+        root, cohort_identity_policy=reviewed_policy
+    )
 
-    # (req 1) Recompute every bound source digest from the live artifacts too.
+    # (req 1) Recompute every bound source digest from the LIVE artifacts, then
+    # re-validate the embedded request / decision / checkpoint against them.
     sidecar_file = str((manifest.get("column_metadata") or {}).get("file") or "")
-    if receipt.get("source_manifest_sha256") != _sha256_file(manifest_path):
-        raise TypedRetrofitSealError(
-            "review decision source_manifest_sha256 mismatch (manifest changed since "
-            "review)"
-        )
-    if (
-        receipt.get("source_sidecar_file") != sidecar_file
-        or not (root / sidecar_file).is_file()
-    ):
+    if not sidecar_file or not (root / sidecar_file).is_file():
         raise TypedRetrofitSealError("review decision sidecar reference mismatch")
-    if receipt.get("source_sidecar_sha256") != _sha256_file(root / sidecar_file):
-        raise TypedRetrofitSealError(
-            "review decision source_sidecar_sha256 mismatch (sidecar changed since "
-            "review)"
-        )
-    if receipt.get("patient_identity_authority_sha256") != identity_digest:
-        raise TypedRetrofitSealError(
-            "review decision patient_identity_authority_sha256 mismatch (identity "
-            "re-derived from columns differs from the reviewed authority)"
-        )
+    _reconcile_embedded_review(
+        receipt,
+        expected_request=expected_request,
+        manifest_sha=_sha256_file(manifest_path),
+        sidecar_file=sidecar_file,
+        sidecar_sha=_sha256_file(root / sidecar_file),
+        identity_digest=identity_digest,
+    )
     return manifest
 
 
@@ -971,16 +1190,22 @@ _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 
 
 _ATTESTATION_RECEIPT_FIELDS = (
+    "cohort_identity_policy",
     "review_id",
     "reviewer",
     "reviewed_at",
     "authority_sha256",
     "request_sha256",
     "decision_sha256",
+    "checkpoint_receipt_sha256",
     "source_manifest_sha256",
     "source_sidecar_file",
     "source_sidecar_sha256",
     "patient_identity_authority_sha256",
+    "n_subjects",
+    "n_stays_with_subject",
+    "multi_stay_patients_present",
+    "first_icu_stay_verified",
 )
 
 
@@ -1038,6 +1263,7 @@ def verify_retrofit_review_attestation(
         "authority_sha256",
         "request_sha256",
         "decision_sha256",
+        "checkpoint_receipt_sha256",
     ):
         value = attestation.get(key)
         if not isinstance(value, str) or not _SHA256_RE.match(value):
@@ -1046,6 +1272,8 @@ def verify_retrofit_review_attestation(
         raise TypedRetrofitSealError("attestation has no reviewer")
     if not str(attestation.get("review_id") or "").strip():
         raise TypedRetrofitSealError("attestation has no review_id")
+    if attestation.get("cohort_identity_policy") not in COHORT_IDENTITY_POLICIES:
+        raise TypedRetrofitSealError("attestation has no known cohort identity policy")
     if export_dir is None:
         return
 
@@ -1060,6 +1288,222 @@ def verify_retrofit_review_attestation(
                 f"attestation {field} disagrees with the live decision receipt "
                 "(tampered or drifted)"
             )
+
+
+# --------------------------------------------------------------------------- #
+# Content-addressed source-authority staging (production acceptance without the
+# live external parquet export dir)
+# --------------------------------------------------------------------------- #
+STAGED_AUTHORITY_SCHEMA = "easyicu.retrofit_staged_authority/1"
+STAGED_AUTHORITY_INDEX = "staged_authority_index.json"
+
+
+def _stage_blob(path: Path, data: bytes) -> None:
+    """Write a content-addressed blob once; a byte-differing collision fails closed."""
+
+    if path.exists():
+        if path.read_bytes() != data:
+            raise TypedRetrofitSealError(f"staged blob sha collision at {path}")
+        return
+    tmp = path.parent / f".{path.name}.{uuid.uuid4().hex}.tmp"
+    try:
+        tmp.write_bytes(data)
+        os.replace(tmp, path)
+    except OSError:
+        tmp.unlink(missing_ok=True)
+        raise
+
+
+def stage_retrofit_source_authority(
+    export_dir: str | Path, dest_dir: str | Path
+) -> Dict[str, Any]:
+    """Register a reviewed retrofit source as content-addressed authority blobs.
+
+    Fails closed through :func:`assert_sealed_export_paper_ready` (only a
+    legitimately reviewed, identity-sufficient source can be staged), then writes
+    the manifest, sidecar, column-derived patient-identity authority, and write-once
+    HITL decision receipt as SHA-named blobs plus a canonical index. Production
+    acceptance can then re-digest these blobs WITHOUT the live external export dir —
+    the trust root becomes the reviewed, content-addressed authority, not a mutable
+    path. Returns the staged index. Writes nothing to ``export_dir``.
+    """
+
+    root = Path(export_dir).expanduser()
+    manifest = assert_sealed_export_paper_ready(root)  # fail-close (receipt-backed)
+    if manifest.get("seal_kind") != SEAL_KIND:
+        raise TypedRetrofitSealError("cannot stage a non-retrofit export")
+    manifest_path = root / NATIVE_MANIFEST
+    sidecar_file = str((manifest.get("column_metadata") or {}).get("file") or "")
+    sidecar_path = root / sidecar_file
+    receipt_path = root / RETROFIT_DECISION_FILE
+    receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+    identity, identity_digest = _rederive_patient_identity_authority(root)
+
+    manifest_bytes = manifest_path.read_bytes()
+    sidecar_bytes = sidecar_path.read_bytes()
+    receipt_bytes = receipt_path.read_bytes()
+    identity_bytes = _canonical_json_bytes(identity)
+    manifest_sha = hashlib.sha256(manifest_bytes).hexdigest()
+    sidecar_sha = hashlib.sha256(sidecar_bytes).hexdigest()
+    receipt_sha = hashlib.sha256(receipt_bytes).hexdigest()
+
+    dest = Path(dest_dir).expanduser()
+    dest.mkdir(parents=True, exist_ok=True)
+    names = {
+        "source_manifest_file": f"{manifest_sha}.manifest.json",
+        "source_sidecar_blob": f"{sidecar_sha}.sidecar.json",
+        "patient_identity_blob": f"{identity_digest}.identity.json",
+        "decision_receipt_blob": f"{receipt_sha}.decision.json",
+    }
+    _stage_blob(dest / names["source_manifest_file"], manifest_bytes)
+    _stage_blob(dest / names["source_sidecar_blob"], sidecar_bytes)
+    _stage_blob(dest / names["patient_identity_blob"], identity_bytes)
+    _stage_blob(dest / names["decision_receipt_blob"], receipt_bytes)
+
+    index = {
+        "schema_version": STAGED_AUTHORITY_SCHEMA,
+        "seal_kind": SEAL_KIND,
+        "value_vintage": str(manifest.get("value_vintage") or ""),
+        "cohort_identity_policy": receipt.get("cohort_identity_policy"),
+        "source_manifest_sha256": manifest_sha,
+        "source_manifest_file": names["source_manifest_file"],
+        "source_sidecar_file": sidecar_file,
+        "source_sidecar_sha256": sidecar_sha,
+        "source_sidecar_blob": names["source_sidecar_blob"],
+        "patient_identity_authority_sha256": identity_digest,
+        "patient_identity_blob": names["patient_identity_blob"],
+        "decision_receipt_sha256": receipt_sha,
+        "decision_receipt_blob": names["decision_receipt_blob"],
+    }
+    _atomic_write_json(dest / STAGED_AUTHORITY_INDEX, index)
+    return index
+
+
+def verify_retrofit_review_attestation_from_staged(
+    attestation: Mapping[str, Any], staged_dir: str | Path
+) -> None:
+    """Re-verify a bound attestation from content-addressed staged authority.
+
+    The paper-facing production analogue of :func:`verify_retrofit_review_attestation`
+    that needs no live external export dir. Every staged blob is loaded by SHA
+    (content-addressed integrity), the operator-signed review authority (bound into
+    the derived ``review_id``) must reference exactly those staged digests, the
+    decision + checkpoint are re-validated, the staged identity must still satisfy
+    the reviewed cohort policy, and the frozen attestation is reconciled against the
+    staged decision receipt. Any tamper or drift fails closed.
+    """
+
+    verify_retrofit_review_attestation(attestation)  # offline shape checks (no dir)
+    staged = Path(staged_dir).expanduser()
+    index_path = staged / STAGED_AUTHORITY_INDEX
+    if not index_path.is_file():
+        raise TypedRetrofitSealError(f"no staged authority index at {staged}")
+    try:
+        index = json.loads(index_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise TypedRetrofitSealError(
+            f"unreadable staged authority index: {exc}"
+        ) from exc
+    if not isinstance(index, dict):
+        raise TypedRetrofitSealError("staged authority index is not an object")
+    if index.get("schema_version") != STAGED_AUTHORITY_SCHEMA:
+        raise TypedRetrofitSealError("unknown staged authority schema")
+    if index.get("seal_kind") != SEAL_KIND:
+        raise TypedRetrofitSealError("staged authority is not a retrofit seal")
+
+    def _load(sha: Any, blob_name: Any) -> bytes:
+        name = str(blob_name or "")
+        if not name or Path(name).name != name:
+            raise TypedRetrofitSealError(
+                f"staged blob reference invalid: {blob_name!r}"
+            )
+        path = staged / name
+        if not path.is_file():
+            raise TypedRetrofitSealError(f"staged blob missing: {name}")
+        data = path.read_bytes()
+        if not isinstance(sha, str) or hashlib.sha256(data).hexdigest() != sha:
+            raise TypedRetrofitSealError(f"staged blob sha mismatch: {name}")
+        return data
+
+    manifest_sha = index.get("source_manifest_sha256")
+    sidecar_sha = index.get("source_sidecar_sha256")
+    identity_sha = index.get("patient_identity_authority_sha256")
+    receipt_sha = index.get("decision_receipt_sha256")
+    manifest_bytes = _load(manifest_sha, index.get("source_manifest_file"))
+    _sidecar_bytes = _load(sidecar_sha, index.get("source_sidecar_blob"))
+    identity_bytes = _load(identity_sha, index.get("patient_identity_blob"))
+    receipt_bytes = _load(receipt_sha, index.get("decision_receipt_blob"))
+
+    staged_manifest = json.loads(manifest_bytes)
+    identity = json.loads(identity_bytes)
+    if hashlib.sha256(_canonical_json_bytes(identity)).hexdigest() != identity_sha:
+        raise TypedRetrofitSealError("staged identity authority is not canonical")
+    receipt = json.loads(receipt_bytes)
+    if (
+        not isinstance(receipt, dict)
+        or receipt.get("schema_version") != RETROFIT_REVIEW_DECISION_SCHEMA
+    ):
+        raise TypedRetrofitSealError("staged decision receipt schema mismatch")
+
+    policy = index.get("cohort_identity_policy")
+    if policy not in COHORT_IDENTITY_POLICIES:
+        raise TypedRetrofitSealError("staged authority has an unknown cohort policy")
+    ok, reason = _identity_satisfies_cohort_policy(identity, policy)
+    if not ok:
+        raise TypedRetrofitSealError(
+            f"staged identity does not satisfy cohort policy {policy!r}: {reason}"
+        )
+
+    # The operator-signed review authority (its review_id binds the whole payload)
+    # must reference EXACTLY the staged, SHA-verified content — this is what ties
+    # the human decision to the content address instead of a mutable path.
+    try:
+        req = HumanReviewRequest.model_validate(receipt.get("review_request"))
+    except Exception as exc:  # noqa: BLE001 - surfaced as a fail-close
+        raise TypedRetrofitSealError(
+            f"staged review request is not a valid Framework v2 artifact: {exc}"
+        ) from exc
+    payload = req.payload
+    if req.authority_sha256 != _canonical_sha(payload):
+        raise TypedRetrofitSealError(
+            "staged review request authority_sha256 does not digest its payload"
+        )
+    sidecar_file = str((staged_manifest.get("column_metadata") or {}).get("file") or "")
+    if (
+        payload.get("seal_kind") != SEAL_KIND
+        or payload.get("cohort_identity_policy") != policy
+        or payload.get("source_manifest_sha256") != manifest_sha
+        or payload.get("source_sidecar_sha256") != sidecar_sha
+        or payload.get("source_sidecar_file") != sidecar_file
+        or payload.get("patient_identity_authority_sha256") != identity_sha
+    ):
+        raise TypedRetrofitSealError(
+            "staged review authority does not match the content-addressed source"
+        )
+
+    _reconcile_embedded_review(
+        receipt,
+        expected_request=req,
+        manifest_sha=str(manifest_sha),
+        sidecar_file=sidecar_file,
+        sidecar_sha=str(sidecar_sha),
+        identity_digest=str(identity_sha),
+    )
+
+    for field in _ATTESTATION_RECEIPT_FIELDS:
+        if attestation.get(field) != receipt.get(field):
+            raise TypedRetrofitSealError(
+                f"attestation {field} disagrees with the staged decision receipt "
+                "(tampered or drifted)"
+            )
+    if (
+        attestation.get("source_manifest_sha256") != manifest_sha
+        or attestation.get("source_sidecar_sha256") != sidecar_sha
+        or attestation.get("patient_identity_authority_sha256") != identity_sha
+    ):
+        raise TypedRetrofitSealError(
+            "attestation source digests differ from the staged content-addressed source"
+        )
 
 
 def seal_export_structural_typed(

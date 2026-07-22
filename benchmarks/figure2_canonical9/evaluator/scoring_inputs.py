@@ -1231,6 +1231,22 @@ class _VerifiedFigure2RunAuthority:
     task_authority: Figure2RunTaskAuthority
 
 
+RETROFIT_STAGED_AUTHORITY_DIR = "retrofit_source_authority"
+
+
+def _retrofit_staged_authority_dir(run_dir: Path) -> Path | None:
+    """The in-capsule content-addressed retrofit authority, if the run staged one.
+
+    A ``retrofit_sealed`` task's source is re-validated at acceptance from these
+    staged, SHA-verified blobs — no external mutable export dir. ``official_typed``
+    runs (the canonical suite) never stage this, so acceptance is unchanged for
+    them; a retrofit binding whose capsule lacks it fails closed in acceptance.
+    """
+
+    staged = run_dir / RETROFIT_STAGED_AUTHORITY_DIR
+    return staged if staged.is_dir() else None
+
+
 def _build_expected_task_authority_locked(
     root: Path,
     *,
@@ -1265,8 +1281,12 @@ def _build_expected_task_authority_locked(
     )
     if outcome_concept is None:
         raise ValueError("paper task lacks a required outcome validity coordinate")
+    # A retrofit_sealed task re-validates its source from the content-addressed
+    # authority staged inside THIS run capsule (no external export dir); official_typed
+    # tasks stage nothing here and are governed by the official typed-authority path.
     manifest, ready_binding, manifest_sha256, case_sha256 = require_ready_task_binding(
-        task_id
+        task_id,
+        staged_authority_dir=_retrofit_staged_authority_dir(root),
     )
     _require_run_submission_authority(
         selected,

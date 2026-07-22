@@ -29,6 +29,7 @@ from easyicu.research_agent.authority.run_input import (
 from ..typed_export_seal import (
     TypedRetrofitSealError,
     verify_retrofit_review_attestation,
+    verify_retrofit_review_attestation_from_staged,
 )
 from .rubric_v1 import FIGURE2_TASK_IDS
 
@@ -40,6 +41,12 @@ Sha256 = Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
 CapsuleSchema = Literal[
     "easyicu.run_input_capsule/2",
     "easyicu.run_input_capsule/3",
+]
+# Task-level cohort identity policy (mirrors typed_export_seal.COHORT_IDENTITY_POLICIES).
+CohortIdentityPolicy = Literal[
+    "unique_stay_per_patient",
+    "first_icu_stay",
+    "repeat_admissions_clustered",
 ]
 
 
@@ -87,16 +94,24 @@ class RetrofitReviewAttestation(_StrictFrozenModel):
     schema_version: Literal["easyicu.retrofit_review_attestation/1"]
     seal_kind: Literal["retrofitted_structural_typed_export"]
     value_vintage: str = Field(min_length=1, max_length=64)
+    cohort_identity_policy: CohortIdentityPolicy
     review_id: str = Field(pattern=r"^review-[0-9a-f]{16}$")
     reviewer: str = Field(min_length=1, max_length=200)
     reviewed_at: str = Field(min_length=1, max_length=80)
     authority_sha256: Sha256
     request_sha256: Sha256
     decision_sha256: Sha256
+    # Proof the decision flowed through a real LangGraph interrupt + checkpoint.
+    checkpoint_receipt_sha256: Sha256
     source_manifest_sha256: Sha256
     source_sidecar_file: str = Field(min_length=1, max_length=255)
     source_sidecar_sha256: Sha256
     patient_identity_authority_sha256: Sha256
+    # Honest patient-level facts the reviewer signed off, for task-level enforcement.
+    n_subjects: int = Field(ge=0)
+    n_stays_with_subject: int = Field(ge=0)
+    multi_stay_patients_present: bool
+    first_icu_stay_verified: bool
     paper_ready: Literal[True]
 
     @field_validator("source_sidecar_file")
@@ -105,6 +120,24 @@ class RetrofitReviewAttestation(_StrictFrozenModel):
         if Path(value).name != value or value in {".", ".."} or "\\" in value:
             raise ValueError("sidecar file must be one path component")
         return value
+
+    @model_validator(mode="after")
+    def _policy_matches_identity_facts(self) -> "RetrofitReviewAttestation":
+        # The reviewed policy must be consistent with the frozen identity facts, so
+        # a repeat-admissions source can never carry a unique-stay/first-ICU claim.
+        policy = self.cohort_identity_policy
+        if policy == "unique_stay_per_patient" and (
+            self.multi_stay_patients_present
+            or self.n_subjects != self.n_stays_with_subject
+        ):
+            raise ValueError(
+                "unique_stay_per_patient attestation cannot carry repeat admissions"
+            )
+        if policy == "first_icu_stay" and not self.first_icu_stay_verified:
+            raise ValueError(
+                "first_icu_stay attestation requires verified first-ICU ordering"
+            )
+        return self
 
 
 class BlockedCanonicalTaskBinding(_StrictFrozenModel):
@@ -143,6 +176,10 @@ class ReadyCanonicalTaskBinding(_StrictFrozenModel):
     # typed-authority path and must not.
     source_kind: Literal["official_typed", "retrofit_sealed"] = "official_typed"
     source_retrofit_review_attestation: RetrofitReviewAttestation | None = None
+    # The cohort identity policy THIS task requires of its patient identity. For a
+    # retrofit source it is mandatory and MUST equal the reviewed attestation policy,
+    # so a source reviewed for repeat-admissions can never satisfy a unique-stay task.
+    required_cohort_identity_policy: CohortIdentityPolicy | None = None
 
     @field_validator("database", "operational_exposure", "target_outcome")
     @classmethod
@@ -159,10 +196,27 @@ class ReadyCanonicalTaskBinding(_StrictFrozenModel):
                 raise ValueError(
                     "retrofit_sealed source requires a bound review attestation"
                 )
-        elif attestation is not None:
-            raise ValueError(
-                "official_typed source must not carry a retrofit review attestation"
-            )
+            if self.required_cohort_identity_policy is None:
+                raise ValueError(
+                    "retrofit_sealed task must declare required_cohort_identity_policy"
+                )
+            if (
+                attestation.cohort_identity_policy
+                != self.required_cohort_identity_policy
+            ):
+                raise ValueError(
+                    "retrofit attestation policy does not satisfy the task's required "
+                    "cohort identity policy"
+                )
+        else:
+            if attestation is not None:
+                raise ValueError(
+                    "official_typed source must not carry a retrofit review attestation"
+                )
+            if self.required_cohort_identity_policy is not None:
+                raise ValueError(
+                    "official_typed source must not declare a cohort identity policy"
+                )
         return self
 
     @model_validator(mode="after")
@@ -305,6 +359,7 @@ def require_ready_task_binding(
     task_id: str,
     *,
     source_export_dir: str | Path | None = None,
+    staged_authority_dir: str | Path | None = None,
 ) -> tuple[
     CanonicalRunInputBindingManifest,
     ReadyCanonicalTaskBinding,
@@ -313,12 +368,14 @@ def require_ready_task_binding(
 ]:
     """Resolve one exact ready binding or fail closed before run sealing.
 
-    For a ``retrofit_sealed`` source, live content-addressed re-validation is
-    MANDATORY: ``source_export_dir`` must be provided and the receipt-backed gate
-    is re-run (patient identity re-derived from columns, manifest/sidecar/identity
-    digests recomputed, write-once decision receipt reconciled). Offline-only
-    acceptance of a retrofit source is refused — a retrofit binding without a
-    resolvable live source fails closed rather than trusting frozen strings.
+    For a ``retrofit_sealed`` source, content-addressed re-validation is MANDATORY.
+    Provide EITHER a live ``source_export_dir`` (identity re-derived from parquet
+    columns; manifest/sidecar/identity digests recomputed) OR a content-addressed
+    ``staged_authority_dir`` (staged, SHA-verified authority blobs re-digested — the
+    production path, needing no external mutable export dir). Either way the frozen
+    attestation, its bound HITL decision, checkpoint receipt, and cohort identity
+    policy are re-verified. A retrofit binding with neither source resolvable fails
+    closed rather than trusting frozen strings.
     """
 
     manifest, manifest_digest = load_canonical_run_input_bindings()
@@ -332,20 +389,25 @@ def require_ready_task_binding(
             f"Canonical9 task {task_id!r} is not input-frozen: {blockers}"
         )
     if binding.source_kind == "retrofit_sealed":
-        if source_export_dir is None:
-            raise CanonicalRunInputBindingError(
-                "retrofit_sealed acceptance requires live content-addressed "
-                "re-validation: source_export_dir is mandatory, offline-only "
-                "acceptance is refused"
-            )
-        attestation = binding.source_retrofit_review_attestation
-        # The model_validator guarantees a non-None attestation here; re-run the
-        # receipt-backed gate and reconcile the frozen attestation against it.
+        # The model_validator guarantees a non-None attestation whose policy matches
+        # the task's required_cohort_identity_policy; re-verify against a content
+        # source (live columns or staged content-addressed blobs).
+        attestation = binding.source_retrofit_review_attestation.model_dump(mode="json")
         try:
-            verify_retrofit_review_attestation(
-                attestation.model_dump(mode="json"),
-                export_dir=source_export_dir,
-            )
+            if source_export_dir is not None:
+                verify_retrofit_review_attestation(
+                    attestation, export_dir=source_export_dir
+                )
+            elif staged_authority_dir is not None:
+                verify_retrofit_review_attestation_from_staged(
+                    attestation, staged_authority_dir
+                )
+            else:
+                raise CanonicalRunInputBindingError(
+                    "retrofit_sealed acceptance requires content-addressed "
+                    "re-validation: pass source_export_dir (live) or "
+                    "staged_authority_dir (staged); offline-only acceptance is refused"
+                )
         except TypedRetrofitSealError as exc:
             raise CanonicalRunInputBindingError(
                 f"retrofit source attestation failed re-verification: {exc}"

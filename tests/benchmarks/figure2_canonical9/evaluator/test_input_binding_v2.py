@@ -136,18 +136,10 @@ def _mint_paper_ready_attestation(export: Path) -> dict:
         json.dumps({"database": "miiv"}), encoding="utf-8"
     )
     seal_mod.seal_export_structural_typed(export, value_vintage="20260717")
-    # The real write-once Framework v2 HITL sign-off: a HumanReviewDecision bound
-    # to the digest-derived request (not a hand-edited manifest flag).
-    request, _authority = seal_mod.build_retrofit_review_request(export)
-    seal_mod.write_retrofit_review_decision(
-        export,
-        decision={
-            "review_id": request.review_id,
-            "authority_sha256": request.authority_sha256,
-            "decision": "approved",
-            "reviewer": "dr. reviewer",
-            "decided_at": "2026-07-22",
-        },
+    # The real write-once Framework v2 HITL sign-off: driven through a genuine
+    # LangGraph interrupt + checkpoint resume (not a hand-edited manifest flag).
+    seal_mod.review_retrofit_export(
+        export, reviewer="dr. reviewer", decided_at="2026-07-22"
     )
     return seal_mod.build_retrofit_review_attestation(export)
 
@@ -176,6 +168,7 @@ def _ready_selector_payload(*, attestation: dict | None) -> tuple[dict, str]:
         "source_materialized_trajectory_authority_ref": None,
         "source_kind": "retrofit_sealed",
         "source_retrofit_review_attestation": attestation,
+        "required_cohort_identity_policy": "unique_stay_per_patient",
     }
     payload["tasks"] = tuple(
         (
@@ -231,9 +224,9 @@ def test_retrofit_binding_without_source_dir_fails_closed(
     monkeypatch.setattr(
         input_binding_v2, "_canonical_run_input_binding_path", lambda: selector
     )
-    # No source_export_dir -> retrofit live re-validation is mandatory -> refuse.
+    # Neither a live export dir nor staged authority -> offline-only -> refuse.
     with pytest.raises(
-        input_binding_v2.CanonicalRunInputBindingError, match="mandatory"
+        input_binding_v2.CanonicalRunInputBindingError, match="offline-only"
     ):
         input_binding_v2.require_ready_task_binding(target)
 
@@ -278,3 +271,68 @@ def test_retrofit_binding_live_digest_mismatch_fails_closed(
         input_binding_v2.CanonicalRunInputBindingError, match="re-verification"
     ):
         input_binding_v2.require_ready_task_binding(target, source_export_dir=export)
+
+
+# --------------------------------------------------------------------------- #
+# Content-addressed staged acceptance: the production path (no live export dir)
+# --------------------------------------------------------------------------- #
+def _install_retrofit_selector(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> tuple[Path, str]:
+    """Seal+review an export, freeze a retrofit binding, and return (export, task)."""
+
+    export = tmp_path / "export_20260717"
+    attestation = _mint_paper_ready_attestation(export)
+    payload, target = _ready_selector_payload(attestation=attestation)
+    selector = tmp_path / "selector.json"
+    manifest = input_binding_v2.CanonicalRunInputBindingManifest.model_validate_json(
+        json.dumps(payload), strict=True
+    )
+    selector.write_bytes(
+        input_binding_v2._canonical_json_bytes(manifest.model_dump(mode="json")) + b"\n"
+    )
+    monkeypatch.setattr(
+        input_binding_v2, "_canonical_run_input_binding_path", lambda: selector
+    )
+    return export, target
+
+
+def test_ready_retrofit_binding_reverifies_via_staged_authority(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    export, target = _install_retrofit_selector(tmp_path, monkeypatch)
+    # Stage the content-addressed authority, then accept WITHOUT the export dir.
+    staged = tmp_path / "run_dir" / "retrofit_source_authority"
+    seal_mod.stage_retrofit_source_authority(export, staged)
+    _, binding, _, _ = input_binding_v2.require_ready_task_binding(
+        target, staged_authority_dir=staged
+    )
+    assert binding.source_kind == "retrofit_sealed"
+    assert binding.required_cohort_identity_policy == "unique_stay_per_patient"
+
+
+def test_retrofit_binding_staged_tamper_fails_closed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    export, target = _install_retrofit_selector(tmp_path, monkeypatch)
+    staged = tmp_path / "run_dir" / "retrofit_source_authority"
+    index = seal_mod.stage_retrofit_source_authority(export, staged)
+    blob = staged / index["source_sidecar_blob"]
+    blob.write_bytes(blob.read_bytes() + b" ")  # break content-address integrity
+    with pytest.raises(
+        input_binding_v2.CanonicalRunInputBindingError, match="re-verification"
+    ):
+        input_binding_v2.require_ready_task_binding(target, staged_authority_dir=staged)
+
+
+def test_scoring_inputs_resolves_staged_authority_dir(tmp_path: Path) -> None:
+    from benchmarks.figure2_canonical9.evaluator import scoring_inputs
+
+    run_dir = tmp_path / "run_dir"
+    run_dir.mkdir()
+    assert scoring_inputs._retrofit_staged_authority_dir(run_dir) is None
+    (run_dir / scoring_inputs.RETROFIT_STAGED_AUTHORITY_DIR).mkdir()
+    assert (
+        scoring_inputs._retrofit_staged_authority_dir(run_dir)
+        == run_dir / scoring_inputs.RETROFIT_STAGED_AUTHORITY_DIR
+    )
