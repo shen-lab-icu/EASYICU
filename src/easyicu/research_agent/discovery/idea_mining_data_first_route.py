@@ -30,15 +30,25 @@ from ..providers.protocol import LLMMessage
 from ..schema import ConceptDescriptor
 from .idea_mining import freeze_source_snapshot, run_idea_mining_dry_run
 from .idea_mining_data_first import DataFirstCandidate, generate_data_first_candidates
+from .idea_mining_priorart import (
+    _call_prior_art_search,
+    _coerce_prior_art_query_record,
+)
+from .idea_mining_pubmed import (
+    _ordered_unique,
+    _pubmed_or_clause,
+    _pubmed_phrase_clause,
+)
 from .idea_mining_schema import (
     IdeaMiningDryRunResult,
     LiteratureIdeaCandidate,
     OutcomeDeterminability,
+    PriorArtQueryRecord,
     SourceMaterial,
 )
 
 DATA_FIRST_ROUTE_SCHEMA_VERSION = "easyicu.data_first_discovery_route/2"
-DATA_FIRST_SHORTLIST_SCHEMA_VERSION = "easyicu.data_first_review_shortlist/2"
+DATA_FIRST_SHORTLIST_SCHEMA_VERSION = "easyicu.data_first_review_shortlist/3"
 
 _MIN_EXTERNAL_VALIDATION_COMPLETENESS = 0.90
 _MIN_MEASUREMENT_AUDIT_COMPLETENESS = 0.20
@@ -85,6 +95,60 @@ def _review_candidate_id(*, route: str, origin_id: str, topic: str) -> str:
         f"{route}\0{origin_id}\0{topic}".encode("utf-8")
     ).hexdigest()[:16]
     return f"reviewidea_{digest}"
+
+
+def _measurement_audit_query(idea: LiteratureIdeaCandidate) -> str:
+    predictor = _pubmed_or_clause(
+        [
+            _pubmed_phrase_clause(item)
+            for item in _ordered_unique(
+                [idea.exposure_or_predictor, *idea.exposure_literature_aliases]
+            )
+        ]
+    )
+    population = _pubmed_or_clause(
+        [
+            _pubmed_phrase_clause("intensive care"),
+            "ICU[Title/Abstract]",
+            _pubmed_phrase_clause("critically ill"),
+        ]
+    )
+    audit = _pubmed_or_clause(
+        [
+            "missingness[Title/Abstract]",
+            _pubmed_phrase_clause("measurement availability"),
+            _pubmed_phrase_clause("measurement bias"),
+            _pubmed_phrase_clause("data quality"),
+            _pubmed_phrase_clause("source status"),
+        ]
+    )
+    return " AND ".join([predictor, population, audit])
+
+
+def _screen_measurement_audit_prior_art(
+    *,
+    idea: LiteratureIdeaCandidate,
+    search_client: Any,
+    max_results: int,
+) -> PriorArtQueryRecord:
+    """Run a route-specific PubMed screen without reusing association counts."""
+
+    query = _measurement_audit_query(idea)
+    try:
+        raw = _call_prior_art_search(
+            search_client,
+            query,
+            max_results=max_results,
+            idea=None,
+        )
+    except Exception:
+        raw = None
+    record = _coerce_prior_art_query_record(
+        raw,
+        query_type="exact",
+        query=query,
+    )
+    return record.model_copy(update={"search_ok": raw is not None and record.search_ok})
 
 
 def _candidate_evidence_text(
@@ -189,7 +253,12 @@ def _source_materials_and_ideas(
     return materials, ideas
 
 
-def _review_shortlist(result: IdeaMiningDryRunResult) -> list[dict[str, Any]]:
+def _review_shortlist(
+    result: IdeaMiningDryRunResult,
+    *,
+    prior_art_search_client: Any,
+    prior_art_top_n: int,
+) -> list[dict[str, Any]]:
     """Select bounded, differentiated human-review routes from standard rows.
 
     The shortlist is deliberately not a second novelty or acceptance gate.  It
@@ -209,6 +278,7 @@ def _review_shortlist(result: IdeaMiningDryRunResult) -> list[dict[str, Any]]:
 
     external_validation: list[tuple[tuple[Any, ...], dict[str, Any]]] = []
     measurement_audit: list[tuple[tuple[Any, ...], dict[str, Any]]] = []
+    idea_by_id = {idea.literature_idea_id: idea for idea in result.literature_ideas}
     for record in result.discovery_records:
         if record.executable_candidate_id is None or record.go_no_go == "db-cannot-do":
             continue
@@ -279,6 +349,16 @@ def _review_shortlist(result: IdeaMiningDryRunResult) -> list[dict[str, Any]]:
             <= completeness
             < _MAX_MEASUREMENT_AUDIT_COMPLETENESS
         ):
+            idea = idea_by_id.get(record.literature_idea_id)
+            if idea is None:
+                continue
+            audit_prior_art = _screen_measurement_audit_prior_art(
+                idea=idea,
+                search_client=prior_art_search_client,
+                max_results=prior_art_top_n,
+            )
+            if not audit_prior_art.search_ok:
+                continue
             route = "cross_database_measurement_bias_audit"
             predictor = record.prior_art.predictor_literature_phrase
             audit_topic = (
@@ -296,6 +376,23 @@ def _review_shortlist(result: IdeaMiningDryRunResult) -> list[dict[str, Any]]:
                     record.prior_art.outcome_literature_phrase
                 ),
                 "review_route": route,
+                "route_prior_art": {
+                    "query": audit_prior_art.query,
+                    "search_ok": audit_prior_art.search_ok,
+                    "hit_count": audit_prior_art.hit_count,
+                    "top_hits": [
+                        {
+                            "pmid": hit.pmid,
+                            "title": hit.title,
+                            "year": hit.year,
+                        }
+                        for hit in audit_prior_art.top_hits
+                    ],
+                    "interpretation": (
+                        "ranking signal for human review only; a low PubMed count "
+                        "is not a novelty claim"
+                    ),
+                },
                 "selection_reason": (
                     "dictionary-resolvable across harmonized databases but only "
                     "20-70% jointly observed in the prepared cohort; association "
@@ -309,7 +406,15 @@ def _review_shortlist(result: IdeaMiningDryRunResult) -> list[dict[str, Any]]:
                 ),
             }
             measurement_audit.append(
-                ((exact_hits, completeness, record.candidate_topic), payload)
+                (
+                    (
+                        audit_prior_art.hit_count,
+                        exact_hits,
+                        completeness,
+                        record.candidate_topic,
+                    ),
+                    payload,
+                )
             )
 
     external_validation.sort(key=lambda item: item[0])
@@ -400,7 +505,11 @@ def run_data_first_idea_mining_dry_run(
         cross_db_targets=effective_databases,
     )
 
-    shortlist = _review_shortlist(result)
+    shortlist = _review_shortlist(
+        result,
+        prior_art_search_client=prior_art_search_client,
+        prior_art_top_n=prior_art_top_n,
+    )
     shortlist_path = out_dir / "data_first_review_shortlist.json"
     shortlist_path.write_text(
         json.dumps(

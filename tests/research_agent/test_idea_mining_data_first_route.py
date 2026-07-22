@@ -281,3 +281,54 @@ def test_data_first_shortlist_separates_validation_from_measurement_audit(tmp_pa
     )
     assert audit["origin_candidate_topic"].startswith("partly_observed -> death")
     assert audit["review_candidate_id"] != audit["origin_executable_candidate_id"]
+    assert audit["route_prior_art"]["search_ok"] is True
+    assert "partly_observed" in audit["route_prior_art"]["query"]
+    assert "measurement availability" in audit["route_prior_art"]["query"]
+
+
+def test_measurement_audit_route_fails_closed_when_its_prior_art_screen_fails(tmp_path):
+    data_path = tmp_path / "prepared.parquet"
+    data_path.write_bytes(b"frozen test cohort")
+
+    def partly_observed_probe(*, concepts, **kwargs):
+        del kwargs
+        return {
+            concepts[0]: {
+                "joint_fraction_complete": 0.5,
+                "n_joint_complete": 500,
+                "denominator_n": 1000,
+                "source": "test_prepared_cohort",
+                "note": "fixture",
+                "predictor_contrast_fraction": 0.4,
+            }
+        }
+
+    class RouteSearchFails:
+        def search_prior_art(self, query, *, max_results, idea=None):
+            del query, max_results
+            if idea is None:
+                return None
+            return {
+                "hit_count": 2,
+                "pmids": [],
+                "top_hits": [],
+                "search_ok": True,
+            }
+
+    run_data_first_idea_mining_dry_run(
+        predictor_concepts=["partly_observed"],
+        outcome_concepts=["death"],
+        available_concepts=["partly_observed", "death"],
+        outcome_determinability={"death": {"outcome": "death", "status": "known_0_1"}},
+        output_dir=tmp_path / "out",
+        data_path=data_path,
+        prior_art_search_client=RouteSearchFails(),
+        databases=["db1", "db2", "db3", "db4"],
+        cross_database_feasibility_fn=_all_full,
+        feasibility_probe=partly_observed_probe,
+    )
+
+    shortlist = json.loads(
+        (tmp_path / "out" / "data_first_review_shortlist.json").read_text()
+    )
+    assert shortlist["candidates"] == []
