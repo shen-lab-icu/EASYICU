@@ -4,10 +4,12 @@ This gate is enforced INSIDE the real launcher (``tools/run_research_agent_bench
 before any pipeline, subprocess, Provider, or data load.  It never launches a run,
 calls a Provider, runs Docker, reads patient data, or grants paper authority.
 
-The binding is an **operator freeze declaration**: every identity is PINNED by the
-operator ahead of the run and the gate only verifies that the on-disk artifacts
-still hash to those pins.  No runtime-computed SHA is ever written back and then
-trusted as a binding.
+The binding is an **operator freeze declaration** verified against the **actual
+parsed invocation** — not against the declaration's own restated fields.  Every
+identity is PINNED by the operator ahead of the run, and the gate proves that BOTH
+(a) the on-disk artifacts still hash to those pins AND (b) the real command line
+the launcher is about to execute matches those pins knob-for-knob.  No runtime
+value is ever written back into the receipt and then trusted as a binding.
 
 Reused, never re-implemented:
 
@@ -19,13 +21,17 @@ Reused, never re-implemented:
 * ``ExpectedExecutionIdentity`` (engine) — clean-tree commit, docker image digest,
   non-secret provider authorization, prompt pack, network policy, ``paper_eligible``.
 * ``FIGURE2_TASK_IDS`` (evaluator) — exact ordered 9-task coverage.
+* ``_benchmark_input_authority_sha256`` (launcher file branch) — the launcher
+  delegates to :func:`production_cohort_input_sha256` here so the frozen per-task
+  input digest and the runtime input digest are computed by ONE algorithm.
 
 The authorized path additionally requires a real **typed production input
 authority** covering the exact nine tasks in fixed order with per-task input and
-provenance digests, whose ``authority_digest`` must equal both the operator pin
-and ``ExecutionIdentity.input_authority_sha256`` (a direct comparison).  No such
-production authority exists yet, so against the current repository the gate always
-blocks — which is the honest state.
+provenance digests.  Its ``authority_digest`` (the nine-task mapping-table summary)
+must equal both the operator pin and ``ExecutionIdentity.input_authority_sha256``;
+and each task's *real* cohort file must hash to that task's frozen ``input_sha256``.
+No such production authority exists yet, so against the current repository the gate
+always blocks — which is the honest state.
 
 The one operation this gate never performs is launching the real run.
 """
@@ -38,7 +44,7 @@ import os
 import stat
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Annotated, Literal, Optional, Sequence
+from typing import Annotated, Any, Literal, Mapping, Optional, Sequence
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -58,9 +64,13 @@ OPERATOR_FREEZE_DECLARATION_SCHEMA = "easyicu.figure2_operator_freeze_declaratio
 PRODUCTION_INPUT_AUTHORITY_SCHEMA = "easyicu.figure2_production_input_authority/1"
 AUTHORIZED_ARMS: tuple[str, ...] = ("aware",)
 _MAX_DOC_BYTES = 8 * 1024 * 1024
+_COHORT_READ_BLOCK = 1024 * 1024
 
 Sha256 = Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
 Sha1Hex = Annotated[str, Field(pattern=r"^[0-9a-f]{40}$")]
+# A docker image digest as stored on the frozen identity — bare 64-hex or the
+# registry ``sha256:`` form; the gate compares it verbatim to the identity's value.
+ImageDigest = Annotated[str, Field(pattern=r"^(sha256:)?[0-9a-f]{64}$")]
 
 
 class _StrictFrozenModel(BaseModel):
@@ -110,13 +120,112 @@ def _sha256_of(path: Path) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Shared per-task cohort input digest (ONE algorithm for freeze + runtime)
+# ---------------------------------------------------------------------------
+
+
+def _launcher_input_canonical_bytes(payload: object) -> bytes:
+    """The exact canonical encoding used by the launcher input-authority hash."""
+
+    return json.dumps(
+        payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+        default=str,
+    ).encode("utf-8")
+
+
+def production_cohort_input_sha256(path: Path | str) -> str:
+    """Per-task cohort FILE input digest.
+
+    This is byte-for-byte the launcher's ``_benchmark_input_authority_sha256`` file
+    branch; the launcher imports and delegates to this function so the frozen
+    per-task ``input_sha256`` and the runtime-bound digest are the SAME algorithm.
+    """
+
+    candidate = Path(path).expanduser()
+    if candidate.is_symlink() or not candidate.is_file():
+        raise ValueError("benchmark cohort must be a regular non-symlink file")
+    content = hashlib.sha256()
+    with candidate.open("rb") as handle:
+        for block in iter(lambda: handle.read(_COHORT_READ_BLOCK), b""):
+            content.update(block)
+    payload = {
+        "kind": "file",
+        "content_sha256": content.hexdigest(),
+        "size_bytes": int(candidate.stat().st_size),
+    }
+    return hashlib.sha256(_launcher_input_canonical_bytes(payload)).hexdigest()
+
+
+# ---------------------------------------------------------------------------
+# Minimal, strict JSONL manifest reader (handoff manifest only, never cohorts)
+# ---------------------------------------------------------------------------
+
+
+def _reject_duplicate_jsonl_keys(pairs: Sequence[tuple[str, object]]) -> dict:
+    decoded: dict[str, object] = {}
+    for key, value in pairs:
+        if key in decoded:
+            raise ValueError(f"duplicate JSON key: {key!r}")
+        decoded[key] = value
+    return decoded
+
+
+def read_canonical_jsonl_invocation(
+    path: Path | str,
+) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """Return ``(task_ids, cohort_paths)`` from an EHRFlow handoff JSONL.
+
+    Only the handoff manifest is read (keys + declared cohort paths), never the
+    cohort payloads themselves.  Rows are decoded strictly (duplicate JSON keys are
+    rejected) so an ambiguous manifest cannot silently authorize.
+    """
+
+    safe = _require_safe_path(path)
+    raw = _read_regular_file(safe)
+    task_ids: list[str] = []
+    cohort_paths: list[str] = []
+    for line in raw.decode("utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        obj = json.loads(line, object_pairs_hook=_reject_duplicate_jsonl_keys)
+        if not isinstance(obj, dict):
+            raise ValueError("benchmark JSONL row must be an object")
+        key = obj.get("key")
+        if key is None:
+            key = obj.get("id")
+        cohort = obj.get("cohort_path")
+        if cohort is None:
+            cohort = obj.get("cohort")
+        task_ids.append(str(key) if key is not None else "")
+        cohort_paths.append(str(cohort) if cohort is not None else "")
+    return tuple(task_ids), tuple(cohort_paths)
+
+
+def jsonl_references_canonical9(task_ids: Sequence[str]) -> bool:
+    """True if the JSONL declares ANY frozen Canonical9 task id.
+
+    Used for *mandatory activation*: a run that references even one canonical task
+    cannot bypass the gate by omitting the declaration.  Full authorization still
+    requires the exact ordered nine.
+    """
+
+    canonical = set(FIGURE2_TASK_IDS)
+    return any(task_id in canonical for task_id in task_ids)
+
+
+# ---------------------------------------------------------------------------
 # Typed production input authority (the future authorized full-9 input)
 # ---------------------------------------------------------------------------
 
 
 class ProductionInputTask(_StrictFrozenModel):
     task_id: str
-    input_sha256: Sha256
+    input_sha256: Sha256  # == production_cohort_input_sha256(cohort file)
     provenance_sha256: Sha256
 
 
@@ -141,6 +250,11 @@ class ProductionInputAuthority(_StrictFrozenModel):
         ):
             raise ValueError("production input authority digest mismatch")
         return self
+
+    def frozen_input_by_task(self) -> dict[str, str]:
+        """The per-task frozen input digest map (task_id -> input_sha256)."""
+
+        return {task.task_id: task.input_sha256 for task in self.tasks}
 
     @classmethod
     def build(
@@ -198,7 +312,12 @@ class OperatorFreezeDeclaration(_StrictFrozenModel):
     code_commit_sha: Sha1Hex
     runner: Literal["docker"]
     network_policy: Literal["none", "disabled"]
-    runner_image_digest: Sha256
+    runner_image_digest: ImageDigest
+    provider: str
+    model: str
+    submission_profile_ref: str
+    ehrflowbench_jsonl_path: str
+    ehrflowbench_jsonl_sha256: Sha256
     task_ids: tuple[str, ...]
     arms: tuple[str, ...]
     cross_run_memory: Literal[False]
@@ -211,12 +330,58 @@ class OperatorFreezeDeclaration(_StrictFrozenModel):
             raise ValueError("declaration must pin the exact ordered nine task ids")
         if self.arms != AUTHORIZED_ARMS:
             raise ValueError("declaration must pin exactly the aware arm")
-        root = Path(self.output_root)
-        if not root.is_absolute():
+        if self.provider.strip().lower() in {"", "mock"}:
+            raise ValueError("declaration provider must be a real (non-mock) provider")
+        if not self.model.strip():
+            raise ValueError("declaration must pin a concrete model")
+        if not self.submission_profile_ref.strip():
+            raise ValueError("declaration must pin a submission profile ref")
+        if not Path(self.output_root).is_absolute():
             raise ValueError("declaration output_root must be absolute")
+        if not Path(self.ehrflowbench_jsonl_path).is_absolute():
+            raise ValueError("declaration ehrflowbench_jsonl_path must be absolute")
         if not self.run_id.startswith("run_"):
             raise ValueError("declaration run_id must start with 'run_'")
         return self
+
+
+# ---------------------------------------------------------------------------
+# The concrete parsed invocation the launcher is about to execute
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class RealRunInvocation:
+    """The real, already-parsed launch intent handed to the gate.
+
+    Built from the actual argv (and the handoff JSONL keys/cohort paths), NOT from
+    the declaration.  Every field here is compared against a declared pin so an
+    authorized declaration cannot be paired with a divergent command line.
+    """
+
+    arms: tuple[str, ...]
+    task_ids: tuple[str, ...]
+    task_cohort_paths: tuple[tuple[str, str], ...]
+    ehrflowbench_jsonl_path: Optional[Path]
+    provider: str
+    model: str
+    submission_profile_enabled: bool
+    submission_profile_ref: Optional[str]
+    runner: str
+    out_root: Path
+    require_paper_acceptance: bool
+    reuse_existing: bool = False
+    repeat: int = 1
+    force_writer_probe: bool = False
+    development_sample_size: Optional[int] = None
+    allow_host_runner: bool = False
+    allow_mock_aware: bool = False
+    resume_run_id: Optional[str] = None
+    resume_from_step_id: Optional[str] = None
+    cross_run_memory: bool = False
+
+    def cohort_by_task(self) -> dict[str, str]:
+        return {task_id: cohort for task_id, cohort in self.task_cohort_paths}
 
 
 # ---------------------------------------------------------------------------
@@ -259,11 +424,12 @@ class RealRunAuthorizationRequest:
     expected_execution_identity_path: Path
     input_freeze_path: Path
     rubric_path: Path
-    output_root: Path
+    invocation: RealRunInvocation
     production_input_authority_path: Optional[Path] = None
-    resume_run_id: Optional[str] = None
-    resume_from_step_id: Optional[str] = None
-    cross_run_memory: bool = False
+    # The LIVE checkout state (git_sha / git_dirty). ``None`` means "measure it now"
+    # via ``capture_code_version()`` — the real launcher leaves it None; tests inject
+    # a value so the running-tree binding is exercised without a real git tree.
+    live_code_version: Optional[Mapping[str, Any]] = None
 
 
 class RealRunAuthorizationBlocked(RuntimeError):
@@ -319,22 +485,193 @@ def _verify_fresh_output_root(root: Path, run_id: str) -> list:
     return issues
 
 
+def _verify_invocation_binding(
+    declaration: OperatorFreezeDeclaration, invocation: RealRunInvocation
+) -> list:
+    """Every real command-line knob must equal the operator's declared pin."""
+
+    issues: list[RealRunAuthorizationIssue] = []
+
+    def bad(code: str, detail: str) -> None:
+        issues.append(_issue(code, detail))
+
+    # Arms — must be exactly the aware arm and equal to the pin.
+    if tuple(invocation.arms) != AUTHORIZED_ARMS:
+        bad(
+            "INVOCATION_ARM_NOT_AWARE",
+            f"real arms {list(invocation.arms)} are not exactly {list(AUTHORIZED_ARMS)}",
+        )
+    if tuple(invocation.arms) != tuple(declaration.arms):
+        bad("INVOCATION_ARM_MISMATCH", "real arms differ from the declared pin")
+
+    # Task ids — exact ordered nine, equal to the pin.
+    if tuple(invocation.task_ids) != tuple(FIGURE2_TASK_IDS):
+        bad(
+            "INVOCATION_TASKS_NOT_CANONICAL",
+            "real task ids are not the exact ordered Canonical9",
+        )
+    if tuple(invocation.task_ids) != tuple(declaration.task_ids):
+        bad("INVOCATION_TASKS_MISMATCH", "real task ids differ from the declared pin")
+
+    # EHRFlow JSONL — exact path AND exact bytes.
+    try:
+        if invocation.ehrflowbench_jsonl_path is None:
+            raise ValueError("no ehrflowbench JSONL supplied for a canonical run")
+        actual_jsonl = _require_safe_path(invocation.ehrflowbench_jsonl_path)
+        declared_jsonl = Path(declaration.ehrflowbench_jsonl_path).expanduser()
+        if not declared_jsonl.is_absolute() or actual_jsonl != declared_jsonl.resolve(
+            strict=True
+        ):
+            raise ValueError("real JSONL path differs from the declared pin")
+        if _sha256_of(actual_jsonl) != declaration.ehrflowbench_jsonl_sha256:
+            raise ValueError("real JSONL bytes differ from the declared pin")
+    except Exception as exc:  # noqa: BLE001
+        bad("INVOCATION_JSONL_MISMATCH", f"{type(exc).__name__}: {exc}")
+
+    # Provider / model — real, non-mock, equal to the pin.
+    if invocation.provider.strip().lower() == "mock":
+        bad("INVOCATION_PROVIDER_IS_MOCK", "a real run cannot use the mock provider")
+    if invocation.provider != declaration.provider:
+        bad(
+            "INVOCATION_PROVIDER_MISMATCH",
+            "real provider differs from the declared pin",
+        )
+    if invocation.model != declaration.model:
+        bad("INVOCATION_MODEL_MISMATCH", "real model differs from the declared pin")
+    if invocation.allow_mock_aware:
+        bad("INVOCATION_MOCK_AWARE", "--allow-mock-aware is never valid for a real run")
+
+    # Submission profile — enabled and equal to the pin.
+    if not invocation.submission_profile_enabled:
+        bad("INVOCATION_PROFILE_DISABLED", "a real run requires --submission-profile")
+    if (invocation.submission_profile_ref or "") != declaration.submission_profile_ref:
+        bad(
+            "INVOCATION_PROFILE_MISMATCH",
+            "real submission profile differs from the declared pin",
+        )
+
+    # Runner — docker, equal to the pin, never the host runner.
+    if invocation.runner != "docker":
+        bad(
+            "INVOCATION_RUNNER_NOT_DOCKER",
+            f"real runner {invocation.runner!r} is not the docker runner",
+        )
+    if invocation.runner != declaration.runner:
+        bad("INVOCATION_RUNNER_MISMATCH", "real runner differs from the declared pin")
+    if invocation.allow_host_runner:
+        bad("INVOCATION_HOST_RUNNER", "--allow-host-runner is never paper authority")
+
+    # Output root — resolved exact equality with the pin.
+    try:
+        real_root = Path(invocation.out_root).expanduser().resolve()
+        declared_root = Path(declaration.output_root).expanduser().resolve()
+        if real_root != declared_root:
+            raise ValueError("real output root differs from the declared pin")
+    except Exception as exc:  # noqa: BLE001
+        bad("INVOCATION_OUTPUT_ROOT_MISMATCH", f"{type(exc).__name__}: {exc}")
+
+    # Fresh single canonical run — reject every run-semantics-altering flag.
+    if invocation.repeat != 1:
+        bad("UNSAFE_RUN_FLAG_REPEAT", "--repeat is not a fresh single canonical run")
+    if invocation.reuse_existing:
+        bad("UNSAFE_RUN_FLAG_REUSE", "--reuse-existing is not a fresh canonical run")
+    if invocation.force_writer_probe:
+        bad(
+            "UNSAFE_RUN_FLAG_FORCE_WRITER",
+            "--force-writer-probe is diagnostic only, never archival",
+        )
+    if invocation.development_sample_size is not None:
+        bad(
+            "UNSAFE_RUN_FLAG_DEV_SAMPLE",
+            "--development-sample-size is not a paper cohort",
+        )
+
+    # A real canonical run must be scored by the paper-acceptance gate.
+    if not invocation.require_paper_acceptance:
+        bad(
+            "PAPER_ACCEPTANCE_NOT_REQUIRED",
+            "a real canonical run must set --require-figure2-paper-acceptance",
+        )
+    return issues
+
+
+def _verify_production_input_authority(
+    request: RealRunAuthorizationRequest,
+    declaration: OperatorFreezeDeclaration,
+    identity,
+) -> list:
+    """The typed production authority + each real cohort must hash to its pin."""
+
+    issues: list[RealRunAuthorizationIssue] = []
+    if request.production_input_authority_path is None:
+        issues.append(
+            _issue(
+                "PRODUCTION_INPUT_AUTHORITY_ABSENT",
+                "no typed production input authority supplied; the full-9 input is "
+                "not yet frozen for a real run (the v1 assessment stays blocked)",
+            )
+        )
+        return issues
+    try:
+        authority, _ = load_production_input_authority(
+            request.production_input_authority_path
+        )
+        if authority.authority_digest != declaration.input_authority_digest:
+            raise ValueError("production authority digest differs from the pin")
+        if (
+            identity is not None
+            and identity.input_authority_sha256 != authority.authority_digest
+        ):
+            raise ValueError(
+                "execution identity input authority differs from the production "
+                "authority digest"
+            )
+        if authority.submission_profile_ref != declaration.submission_profile_ref:
+            raise ValueError(
+                "production authority submission profile differs from the pin"
+            )
+        # Per-task: the REAL cohort file (from the JSONL) must hash to the frozen
+        # per-task input digest, using the launcher's own algorithm.
+        cohort_by_task = request.invocation.cohort_by_task()
+        for task in authority.tasks:
+            cohort_path = cohort_by_task.get(task.task_id)
+            if not cohort_path:
+                raise ValueError(
+                    f"invocation is missing a cohort path for task {task.task_id}"
+                )
+            actual = production_cohort_input_sha256(cohort_path)
+            if actual != task.input_sha256:
+                raise ValueError(
+                    f"cohort for task {task.task_id} does not hash to its frozen "
+                    "production input authority"
+                )
+    except Exception as exc:  # noqa: BLE001
+        issues.append(
+            _issue("PRODUCTION_INPUT_AUTHORITY_INVALID", f"{type(exc).__name__}: {exc}")
+        )
+    return issues
+
+
 def verify_realrun_authorization(
     request: RealRunAuthorizationRequest,
 ) -> RealRunAuthorization:
     """Fail-closed pre-run authorization; ``authorized`` only if every pin holds."""
 
     declaration, declaration_sha, issues = _load_declaration(request.declaration_path)
+    invocation = request.invocation
 
     # Runtime intent (independent of the declaration bytes).
-    if request.resume_run_id is not None or request.resume_from_step_id is not None:
+    if (
+        invocation.resume_run_id is not None
+        or invocation.resume_from_step_id is not None
+    ):
         issues.append(
             _issue(
                 "NON_FRESH_RUN",
                 "a canonical run must be fresh; refusing to resume a diagnostic run",
             )
         )
-    if request.cross_run_memory:
+    if invocation.cross_run_memory:
         issues.append(
             _issue(
                 "CROSS_RUN_MEMORY_ENABLED",
@@ -350,9 +687,32 @@ def verify_realrun_authorization(
             issues=tuple(issues),
         )
 
-    issues.extend(_verify_fresh_output_root(request.output_root, declaration.run_id))
+    # Fresh output root (the real out_root, keyed by the declared run id).
+    issues.extend(_verify_fresh_output_root(invocation.out_root, declaration.run_id))
 
-    # 1) Execution identity: pin the file bytes, then require paper eligibility.
+    # Declaration <-> real invocation, knob for knob.
+    issues.extend(_verify_invocation_binding(declaration, invocation))
+
+    # Live checkout: the tree that will actually run must be clean AND equal to the
+    # declared commit pin — not merely the commit baked into the frozen identity.
+    try:
+        version = request.live_code_version
+        if version is None:
+            from easyicu.research_agent.authority.runtime_artifacts import (
+                capture_code_version,
+            )
+
+            version = capture_code_version() or {}
+        live_sha = version.get("git_sha")
+        if not live_sha or live_sha != declaration.code_commit_sha:
+            raise ValueError("live checkout commit differs from the declared pin")
+        if version.get("git_dirty") is not False:
+            raise ValueError("live checkout tree is dirty")
+    except Exception as exc:  # noqa: BLE001
+        issues.append(_issue("LIVE_CHECKOUT_MISMATCH", f"{type(exc).__name__}: {exc}"))
+
+    # 1) Execution identity: pin the file bytes, then require paper eligibility and
+    #    equality with every declared engine pin.
     identity = None
     try:
         actual_identity_sha = _sha256_of(request.expected_execution_identity_path)
@@ -372,6 +732,12 @@ def verify_realrun_authorization(
             raise ValueError("execution identity commit differs from the declared pin")
         if identity.runner != declaration.runner:
             raise ValueError("execution identity runner differs from the declared pin")
+        if identity.submission_profile_ref != declaration.submission_profile_ref:
+            raise ValueError("execution identity profile ref differs from the pin")
+        if identity.network_policy != declaration.network_policy:
+            raise ValueError("execution identity network policy differs from the pin")
+        if identity.runner_image_digest != declaration.runner_image_digest:
+            raise ValueError("execution identity image digest differs from the pin")
         if identity.input_authority_sha256 is None:
             raise ValueError("execution identity lacks a bound input authority sha")
         if identity.input_authority_sha256 != declaration.input_authority_digest:
@@ -394,37 +760,9 @@ def verify_realrun_authorization(
     except Exception as exc:  # noqa: BLE001
         issues.append(_issue("INPUT_FREEZE_INVALID", f"{type(exc).__name__}: {exc}"))
 
-    # 3) Production input authority: the ONLY thing that can authorize the input.
-    if request.production_input_authority_path is None:
-        issues.append(
-            _issue(
-                "PRODUCTION_INPUT_AUTHORITY_ABSENT",
-                "no typed production input authority supplied; the full-9 input is "
-                "not yet frozen for a real run (the v1 assessment stays blocked)",
-            )
-        )
-    else:
-        try:
-            authority, _ = load_production_input_authority(
-                request.production_input_authority_path
-            )
-            if authority.authority_digest != declaration.input_authority_digest:
-                raise ValueError("production authority digest differs from the pin")
-            if (
-                identity is not None
-                and identity.input_authority_sha256 != authority.authority_digest
-            ):
-                raise ValueError(
-                    "execution identity input authority differs from the production "
-                    "authority digest"
-                )
-        except Exception as exc:  # noqa: BLE001
-            issues.append(
-                _issue(
-                    "PRODUCTION_INPUT_AUTHORITY_INVALID",
-                    f"{type(exc).__name__}: {exc}",
-                )
-            )
+    # 3) Production input authority: the ONLY thing that can authorize the input,
+    #    bound per-task to the real cohorts.
+    issues.extend(_verify_production_input_authority(request, declaration, identity))
 
     # 4) Rubric identity.
     try:
@@ -456,6 +794,56 @@ def enforce_realrun_authorization(
     return authorization
 
 
+# ---------------------------------------------------------------------------
+# Post-run per-manifest cross-check (launcher layer; evaluator stays locked)
+# ---------------------------------------------------------------------------
+
+
+def verify_results_frozen_input_authority(
+    results_payload: Mapping[str, object],
+    frozen_by_task: Mapping[str, str],
+) -> list[tuple[str, str]]:
+    """Return ``(task_id, reason)`` for every aware manifest whose bound input
+    authority does not equal that task's frozen per-task digest.
+
+    An empty list means every frozen task produced an aware score whose
+    ``execution_identity.input_authority_sha256`` equals its frozen ``input_sha256``.
+    """
+
+    mismatches: list[tuple[str, str]] = []
+    raw_scores = results_payload.get("scores")
+    if not isinstance(raw_scores, list):
+        return [("<results>", "scores ledger is not a list")]
+    seen: set[str] = set()
+    for score in raw_scores:
+        if not isinstance(score, dict):
+            mismatches.append(("<score>", "score row is not an object"))
+            continue
+        key = score.get("item_key")
+        if key not in frozen_by_task:
+            continue
+        seen.add(str(key))
+        expected = frozen_by_task[key]
+        aware = score.get("aware")
+        identity = aware.get("execution_identity") if isinstance(aware, dict) else None
+        actual = (
+            identity.get("input_authority_sha256")
+            if isinstance(identity, dict)
+            else None
+        )
+        if actual != expected:
+            mismatches.append(
+                (
+                    str(key),
+                    f"manifest input authority {actual!r} != frozen {expected!r}",
+                )
+            )
+    for task_id in frozen_by_task:
+        if task_id not in seen:
+            mismatches.append((task_id, "no aware score produced for a frozen task"))
+    return mismatches
+
+
 def write_realrun_authorization_receipt(
     authorization: RealRunAuthorization, out_path: Path
 ) -> Path:
@@ -470,34 +858,72 @@ def _cli(argv: Optional[Sequence[str]] = None) -> int:
 
     parser = argparse.ArgumentParser(
         prog="figure2-realrun-authority",
-        description="Verify (never launch) the pre-run freeze authority. 0=authorized, 2=blocked.",
+        description=(
+            "Verify (never launch) the pre-run freeze authority against the REAL "
+            "invocation flags. 0=authorized, 2=blocked."
+        ),
     )
     parser.add_argument("--declaration", required=True)
     parser.add_argument("--expected-identity", required=True)
     parser.add_argument("--input-freeze", required=True)
     parser.add_argument("--rubric", required=True)
-    parser.add_argument("--output-root", required=True)
     parser.add_argument("--production-input-authority", default=None)
+    # The real invocation flags (mirrors the launcher; never self-derived).
+    parser.add_argument("--ehrflowbench-jsonl", required=True)
+    parser.add_argument("--arms", nargs="+", required=True)
+    parser.add_argument("--provider", required=True)
+    parser.add_argument("--model", required=True)
+    parser.add_argument("--submission-profile", action="store_true")
+    parser.add_argument("--submission-profile-ref", default=None)
+    parser.add_argument("--runner", default=None)
+    parser.add_argument("--out-root", required=True)
+    parser.add_argument("--require-figure2-paper-acceptance", action="store_true")
+    parser.add_argument("--reuse-existing", action="store_true")
+    parser.add_argument("--repeat", type=int, default=1)
+    parser.add_argument("--force-writer-probe", action="store_true")
+    parser.add_argument("--development-sample-size", type=int, default=None)
+    parser.add_argument("--allow-host-runner", action="store_true")
+    parser.add_argument("--allow-mock-aware", action="store_true")
     parser.add_argument("--resume-run-id", default=None)
     parser.add_argument("--resume-from-step-id", default=None)
     parser.add_argument("--enable-cross-run-memory", action="store_true")
     parser.add_argument("--receipt-out", default=None)
     args = parser.parse_args(argv)
 
+    task_ids, cohort_paths = read_canonical_jsonl_invocation(args.ehrflowbench_jsonl)
+    invocation = RealRunInvocation(
+        arms=tuple(args.arms),
+        task_ids=task_ids,
+        task_cohort_paths=tuple(zip(task_ids, cohort_paths)),
+        ehrflowbench_jsonl_path=Path(args.ehrflowbench_jsonl),
+        provider=str(args.provider),
+        model=str(args.model),
+        submission_profile_enabled=bool(args.submission_profile),
+        submission_profile_ref=args.submission_profile_ref,
+        runner=str(args.runner or "auto"),
+        out_root=Path(args.out_root),
+        require_paper_acceptance=bool(args.require_figure2_paper_acceptance),
+        reuse_existing=bool(args.reuse_existing),
+        repeat=int(args.repeat),
+        force_writer_probe=bool(args.force_writer_probe),
+        development_sample_size=args.development_sample_size,
+        allow_host_runner=bool(args.allow_host_runner),
+        allow_mock_aware=bool(args.allow_mock_aware),
+        resume_run_id=args.resume_run_id,
+        resume_from_step_id=args.resume_from_step_id,
+        cross_run_memory=bool(args.enable_cross_run_memory),
+    )
     request = RealRunAuthorizationRequest(
         declaration_path=Path(args.declaration),
         expected_execution_identity_path=Path(args.expected_identity),
         input_freeze_path=Path(args.input_freeze),
         rubric_path=Path(args.rubric),
-        output_root=Path(args.output_root),
+        invocation=invocation,
         production_input_authority_path=(
             Path(args.production_input_authority)
             if args.production_input_authority
             else None
         ),
-        resume_run_id=args.resume_run_id,
-        resume_from_step_id=args.resume_from_step_id,
-        cross_run_memory=bool(args.enable_cross_run_memory),
     )
     authorization = verify_realrun_authorization(request)
     if args.receipt_out:
@@ -517,15 +943,20 @@ __all__ = [
     "OPERATOR_FREEZE_DECLARATION_SCHEMA",
     "PRODUCTION_INPUT_AUTHORITY_SCHEMA",
     "AUTHORIZED_ARMS",
+    "production_cohort_input_sha256",
+    "read_canonical_jsonl_invocation",
+    "jsonl_references_canonical9",
     "ProductionInputTask",
     "ProductionInputAuthority",
     "load_production_input_authority",
     "OperatorFreezeDeclaration",
+    "RealRunInvocation",
     "RealRunAuthorizationIssue",
     "RealRunAuthorization",
     "RealRunAuthorizationRequest",
     "RealRunAuthorizationBlocked",
     "verify_realrun_authorization",
     "enforce_realrun_authorization",
+    "verify_results_frozen_input_authority",
     "write_realrun_authorization_receipt",
 ]

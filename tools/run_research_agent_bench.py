@@ -1467,19 +1467,14 @@ def _benchmark_input_authority_sha256(cohort: Any) -> str:
         ).encode("utf-8")
 
     if isinstance(cohort, (str, Path)):
-        path = Path(cohort).expanduser()
-        if path.is_symlink() or not path.is_file():
-            raise ValueError("benchmark cohort must be a regular non-symlink file")
-        content = hashlib.sha256()
-        with path.open("rb") as handle:
-            for block in iter(lambda: handle.read(1024 * 1024), b""):
-                content.update(block)
-        payload = {
-            "kind": "file",
-            "content_sha256": content.hexdigest(),
-            "size_bytes": int(path.stat().st_size),
-        }
-        return hashlib.sha256(_canonical_bytes(payload)).hexdigest()
+        from benchmarks.figure2_canonical9.realrun_authority import (
+            production_cohort_input_sha256,
+        )
+
+        # ONE algorithm, shared with the real-run freeze gate's per-task input
+        # digest, so the frozen ``input_sha256`` and this runtime-bound digest can
+        # never silently diverge.
+        return production_cohort_input_sha256(cohort)
 
     try:
         import pandas as pd
@@ -2382,16 +2377,56 @@ def _render_model_matrix(runs: List[Dict[str, Any]]) -> str:
 def _figure2_realrun_authorization_gate(args):
     """Fail-closed real-run authorization, enforced before anything is launched.
 
-    Returns ``None`` to proceed (no declaration supplied, or the authority is
-    verified) or an integer exit code to stop the launcher immediately.  This is
-    called right after argument parsing, so a blocked/missing/tampered authority
-    exits with zero pipeline / subprocess / Provider / data-load activity.
+    Returns ``(exit_code_or_None, frozen_input_by_task_or_None)``.  A non-None exit
+    code stops the launcher immediately; ``None`` proceeds.  Called right after
+    argument parsing, so a blocked / missing / tampered authority — and a Canonical9
+    or paper-acceptance run that omits the declaration entirely — exits with zero
+    pipeline / subprocess / Provider / data-load activity.
+
+    The gate does NOT trust the declaration's own restated fields: it builds a
+    :class:`RealRunInvocation` from the actual argv (plus the handoff JSONL keys and
+    cohort paths) and verifies the declaration matches that real intent knob-for-knob.
     """
 
+    from benchmarks.figure2_canonical9.realrun_authority import (
+        RealRunAuthorizationRequest,
+        RealRunInvocation,
+        jsonl_references_canonical9,
+        load_production_input_authority,
+        read_canonical_jsonl_invocation,
+        verify_realrun_authorization,
+    )
+
     declaration = getattr(args, "figure2_realrun_authorization", None)
+    jsonl = getattr(args, "ehrflowbench_jsonl", None)
+    require_acceptance = bool(getattr(args, "require_figure2_paper_acceptance", False))
+
+    # Read the handoff manifest (keys + declared cohort paths) only — never cohorts.
+    task_ids: tuple = ()
+    cohort_paths: tuple = ()
+    if jsonl:
+        try:
+            task_ids, cohort_paths = read_canonical_jsonl_invocation(jsonl)
+        except Exception:  # noqa: BLE001 — unreadable JSONL cannot be canonical here
+            task_ids, cohort_paths = (), ()
+
+    references_canonical = bool(task_ids) and jsonl_references_canonical9(task_ids)
+    real_canonical_run = require_acceptance or references_canonical
+
+    # 1) Mandatory activation: a Canonical9 / paper-acceptance run cannot bypass the
+    #    gate by omitting the declaration.
     if not declaration:
-        return None
-    repo_root = Path(__file__).resolve().parents[1]
+        if real_canonical_run:
+            print(
+                "[realrun-authority] a Canonical9 / paper-acceptance run REQUIRES "
+                "--figure2-realrun-authorization (plus "
+                "--figure2-expected-execution-identity and "
+                "--figure2-production-input-authority); refusing to launch.",
+                file=sys.stderr,
+            )
+            return 2, None
+        return None, None
+
     identity = getattr(args, "figure2_expected_execution_identity", None)
     if not identity:
         print(
@@ -2399,13 +2434,49 @@ def _figure2_realrun_authorization_gate(args):
             "--figure2-expected-execution-identity",
             file=sys.stderr,
         )
-        return 2
-    from benchmarks.figure2_canonical9.realrun_authority import (
-        RealRunAuthorizationRequest,
-        verify_realrun_authorization,
+        return 2, None
+
+    repo_root = Path(__file__).resolve().parents[1]
+    production = getattr(args, "figure2_production_input_authority", None)
+
+    # Effective model + runner, exactly as the launcher will resolve them downstream.
+    provider = str(getattr(args, "provider", "mock"))
+    effective_model = (
+        str(getattr(args, "model", "mock")) if provider != "mock" else "mock"
+    )
+    models = getattr(args, "models", None)
+    if models:
+        effective_model = str(models[0])
+    requested_runner = getattr(args, "runner", None)
+    profile_enabled = bool(getattr(args, "submission_profile", False))
+    effective_runner = (
+        str(requested_runner)
+        if requested_runner
+        else ("docker" if profile_enabled else "auto")
     )
 
-    production = getattr(args, "figure2_production_input_authority", None)
+    invocation = RealRunInvocation(
+        arms=tuple(_normalize_arms(getattr(args, "arms", None))),
+        task_ids=task_ids,
+        task_cohort_paths=tuple(zip(task_ids, cohort_paths)),
+        ehrflowbench_jsonl_path=(Path(jsonl) if jsonl else None),
+        provider=provider,
+        model=effective_model,
+        submission_profile_enabled=profile_enabled,
+        submission_profile_ref=(str(getattr(args, "profile", "")) or None),
+        runner=effective_runner,
+        out_root=Path(getattr(args, "out_root", ".")),
+        require_paper_acceptance=require_acceptance,
+        reuse_existing=bool(getattr(args, "reuse_existing", False)),
+        repeat=int(getattr(args, "repeat", 1) or 1),
+        force_writer_probe=bool(getattr(args, "force_writer_probe", False)),
+        development_sample_size=getattr(args, "development_sample_size", None),
+        allow_host_runner=bool(getattr(args, "allow_host_runner", False)),
+        allow_mock_aware=bool(getattr(args, "allow_mock_aware", False)),
+        resume_run_id=getattr(args, "resume_run_id", None),
+        resume_from_step_id=getattr(args, "resume_from_step_id", None),
+        cross_run_memory=bool(getattr(args, "enable_cross_run_memory", False)),
+    )
     request = RealRunAuthorizationRequest(
         declaration_path=Path(declaration),
         expected_execution_identity_path=Path(identity),
@@ -2415,11 +2486,8 @@ def _figure2_realrun_authorization_gate(args):
         rubric_path=(
             repo_root / "benchmarks/figure2_canonical9/figure2_paper_rubric_v3.json"
         ),
-        output_root=Path(args.out_root),
+        invocation=invocation,
         production_input_authority_path=(Path(production) if production else None),
-        resume_run_id=getattr(args, "resume_run_id", None),
-        resume_from_step_id=getattr(args, "resume_from_step_id", None),
-        cross_run_memory=bool(getattr(args, "enable_cross_run_memory", False)),
     )
     authorization = verify_realrun_authorization(request)
     print(authorization.model_dump_json(indent=2))
@@ -2429,13 +2497,20 @@ def _figure2_realrun_authorization_gate(args):
             "data load has started.",
             file=sys.stderr,
         )
-        return 2
+        return 2, None
+
+    # Authorized: derive the per-task frozen input digest map for the runtime
+    # binding so each run's manifest carries its own task's input authority.
+    frozen_by_task = None
+    if production:
+        authority, _ = load_production_input_authority(Path(production))
+        frozen_by_task = authority.frozen_input_by_task()
     print(
         "[realrun-authority] authority verified; launching the real run still "
         "requires the operator's explicit action.",
         file=sys.stderr,
     )
-    return None
+    return None, frozen_by_task
 
 
 def main() -> int:
@@ -2795,7 +2870,9 @@ def main() -> int:
         ),
     )
     args = parser.parse_args()
-    _realrun_gate_rc = _figure2_realrun_authorization_gate(args)
+    _realrun_gate_rc, _figure2_frozen_input_by_task = (
+        _figure2_realrun_authorization_gate(args)
+    )
     if _realrun_gate_rc is not None:
         return _realrun_gate_rc
     case_registration = _register_case_patterns(args.case)
@@ -2936,6 +3013,7 @@ def main() -> int:
                     if expected_execution_identity_path
                     else None
                 ),
+                frozen_input_authority_by_task=_figure2_frozen_input_by_task,
             )
 
         if n_repeat == 1:
@@ -3563,6 +3641,7 @@ def _run_ehrflowbench_jsonl(
     allow_mock_aware: bool = False,
     require_figure2_paper_acceptance: bool = False,
     expected_execution_identity_path: Path | None = None,
+    frozen_input_authority_by_task: Optional[Mapping[str, str]] = None,
 ) -> int:
     """Run an external EHRFlowBench-style JSONL export when available."""
     import pandas as pd
@@ -3883,6 +3962,13 @@ def _run_ehrflowbench_jsonl(
                 else None
             ),
         )
+        row_pipeline_options = dict(pipeline_options or {})
+        if frozen_input_authority_by_task and key in frozen_input_authority_by_task:
+            # Bind THIS task's frozen input digest so _bind_benchmark_execution_input
+            # fails closed if the runtime cohort differs from the authorized input.
+            row_pipeline_options["execution_input_authority_sha256"] = (
+                frozen_input_authority_by_task[key]
+            )
         # Exact reuse is decided inside ``_run_one_item_from_cohort`` after the
         # current ExecutionIdentity is constructed. A broad "execution complete"
         # shortcut here would bypass profile/image/provider/prompt/git matching.
@@ -3900,7 +3986,7 @@ def _run_ehrflowbench_jsonl(
                 seed=seed,
                 out_root=out_root,
                 arms=arms,
-                pipeline_options=dict(pipeline_options or {}),
+                pipeline_options=row_pipeline_options,
                 provider=provider,
                 model=model,
                 request_timeout=request_timeout,
@@ -4021,6 +4107,23 @@ def _run_ehrflowbench_jsonl(
         print(f"  -> {acceptance_path}")
     print(f"  -> {results_path}")
     print(f"  -> {out_root / 'ehrflowbench_results.md'}")
+    if frozen_input_authority_by_task:
+        # Post-run: each written aware manifest must carry ITS task's frozen input
+        # authority (the evaluator, being scorer-tree-locked, only checks presence).
+        from benchmarks.figure2_canonical9.realrun_authority import (
+            verify_results_frozen_input_authority,
+        )
+
+        input_authority_mismatches = verify_results_frozen_input_authority(
+            payload, frozen_input_authority_by_task
+        )
+        if input_authority_mismatches:
+            for task_id, reason in input_authority_mismatches:
+                print(
+                    "[realrun-authority] POST-RUN input authority mismatch for "
+                    f"{task_id}: {reason}"
+                )
+            return 2
     if require_figure2_paper_acceptance and acceptance_status != "accepted":
         return _FIGURE2_PAPER_ACCEPTANCE_EXIT_CODE
     return 0
