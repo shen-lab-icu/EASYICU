@@ -35,10 +35,13 @@ def _exec_runner(
     context: dict,
     *,
     requested_inputs: list[str] | None = None,
+    requested_outputs: list[str] | None = None,
 ):
     out_dir = run_dir / "steps" / "02_missingness_measurement_audit" / "outputs"
     out_dir.mkdir(parents=True, exist_ok=True)
-    (run_dir / "research_context.json").write_text(json.dumps(context), encoding="utf-8")
+    (run_dir / "research_context.json").write_text(
+        json.dumps(context), encoding="utf-8"
+    )
     if requested_inputs is not None:
         (run_dir / "analysis_plan.json").write_text(
             json.dumps(
@@ -48,8 +51,13 @@ def _exec_runner(
                             "step_id": "02_missingness_measurement_audit",
                             "inputs": requested_inputs,
                             "expected_outputs": [
-                                "table:missingness_measurement_audit",
-                                "table:analytic_denominators",
+                                *(
+                                    requested_outputs
+                                    or [
+                                        "table:missingness_measurement_audit",
+                                        "table:analytic_denominators",
+                                    ]
+                                ),
                             ],
                         }
                     ]
@@ -123,8 +131,47 @@ def test_missingness_audit_counts_from_measured_indicator(tmp_path: Path):
     assert lact["measured_one_n"] + lact["value_missing_n"] == 1000
     assert abs(lact["value_missing_pct"] - 100.0 * (1000 - exp_measured) / 1000) < 1e-6
     # schema aliases the figure renderer resolves are all present.
-    for col in ("n_total", "measured_n", "n_nonmissing", "missing_n", "missing_pct", "measured_pct"):
+    for col in (
+        "n_total",
+        "measured_n",
+        "n_nonmissing",
+        "missing_n",
+        "missing_pct",
+        "measured_pct",
+    ):
         assert col in audit.columns
+
+
+def test_missingness_and_source_outputs_are_distinct_declared_products(tmp_path: Path):
+    cohort = _cohort(n=100, seed=11)
+    summary, out_dir = _exec_runner(
+        tmp_path,
+        cohort,
+        {},
+        requested_inputs=[
+            "artifact:analysis_cohort",
+            "lactate",
+            "lactate_measured",
+        ],
+        requested_outputs=[
+            "table:missingness_audit",
+            "table:measurement_source_audit",
+        ],
+    )
+
+    missingness = pd.read_csv(out_dir / "missingness_audit.csv")
+    source = pd.read_csv(out_dir / "measurement_source_audit.csv")
+    lactate_missingness = missingness.loc[missingness["concept"] == "lactate"].iloc[0]
+    lactate_source = source.loc[source["concept"] == "lactate"].iloc[0]
+    assert lactate_missingness["missing_n"] == int(cohort["lactate"].isna().sum())
+    assert lactate_missingness["n_nonmissing"] == int(cohort["lactate"].notna().sum())
+    assert lactate_source["indicator_semantics"] == "measurement_availability"
+    assert summary["status"] == "ok"
+    assert summary["missing_declared_inputs"] == []
+    assert summary["output_files"] == {
+        "table:missingness_audit": "missingness_audit.csv",
+        "table:measurement_source_audit": "measurement_source_audit.csv",
+    }
 
 
 def test_structural_no_source_distinguished_from_measurement_missing(tmp_path: Path):
@@ -264,7 +311,9 @@ def test_family_aggregate_and_declared_analytic_denominator(tmp_path: Path):
     assert summary["missing_declared_inputs"] == []
 
 
-def test_bare_concept_declared_input_resolves_to_value_column_not_blocked(tmp_path: Path):
+def test_bare_concept_declared_input_resolves_to_value_column_not_blocked(
+    tmp_path: Path,
+):
     # Regression: a plan may declare a time-series concept by its BARE name
     # (``crea``) while the cohort materialises it only as aggregates
     # (``crea_first``/``crea_measured``). The audit resolves it via
@@ -341,9 +390,7 @@ def test_missing_declared_input_blocks_joint_denominator(tmp_path: Path):
     assert summary["missing_declared_inputs"] == ["column_not_in_cohort"]
 
     denominators = pd.read_csv(out_dir / "analytic_denominators.csv")
-    joint = denominators[
-        denominators["analysis_set"] == "all_requested_inputs"
-    ].iloc[0]
+    joint = denominators[denominators["analysis_set"] == "all_requested_inputs"].iloc[0]
     assert pd.isna(joint["n_complete"])
 
 
