@@ -32,10 +32,10 @@ from __future__ import annotations
 
 from collections import defaultdict
 from dataclasses import dataclass, field
+from threading import RLock
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from ..schema import CostRecord
-
 
 # Approx 4 chars per token for English / code mix (OpenAI's own rule of
 # thumb). Used only when the inner client does not report usage.
@@ -44,16 +44,16 @@ _CHARS_PER_TOKEN = 4
 # (prompt USD/1M tokens, completion USD/1M tokens) — order matters.
 _DEFAULT_PRICES: Dict[str, Tuple[float, float]] = {
     # OpenAI (cached as of mid-2025; treat as approximate).
-    "gpt-4o":            (2.50, 10.00),
-    "gpt-4o-mini":       (0.15, 0.60),
-    "gpt-4.1":           (2.00, 8.00),
-    "gpt-4.1-mini":      (0.40, 1.60),
-    "gpt-4.1-nano":      (0.10, 0.40),
-    "o3-mini":           (1.10, 4.40),
+    "gpt-4o": (2.50, 10.00),
+    "gpt-4o-mini": (0.15, 0.60),
+    "gpt-4.1": (2.00, 8.00),
+    "gpt-4.1-mini": (0.40, 1.60),
+    "gpt-4.1-nano": (0.10, 0.40),
+    "o3-mini": (1.10, 4.40),
     # Anthropic via API gateway (configured providers).
-    "claude-3-5-sonnet-latest":   (3.00, 15.00),
-    "claude-3-5-haiku-latest":    (0.80, 4.00),
-    "claude-3-opus-latest":       (15.00, 75.00),
+    "claude-3-5-sonnet-latest": (3.00, 15.00),
+    "claude-3-5-haiku-latest": (0.80, 4.00),
+    "claude-3-opus-latest": (15.00, 75.00),
     # Common OpenRouter free / cheap aliases (zero-cost rows kept so
     # the meter still records a row even when cost is exactly $0).
     "google/gemini-2.0-flash-exp:free": (0.0, 0.0),
@@ -65,10 +65,10 @@ _DEFAULT_PRICES: Dict[str, Tuple[float, float]] = {
     # CONFIRM against the current DeepSeek pricing page before quoting in
     # the manuscript; token counts are recorded exactly regardless, and a
     # precise table can always be passed via ``cost_price_table``.
-    "deepseek-chat":     (0.27, 1.10),
+    "deepseek-chat": (0.27, 1.10),
     "deepseek-reasoner": (0.55, 2.19),
     "deepseek-v4-flash": (0.27, 1.10),  # APPROX — confirm on pricing page
-    "deepseek-v4-pro":   (0.55, 2.19),  # APPROX — confirm on pricing page
+    "deepseek-v4-pro": (0.55, 2.19),  # APPROX — confirm on pricing page
 }
 
 
@@ -93,7 +93,10 @@ class CostMeter:
     records: List[CostRecord] = field(default_factory=list)
 
     def estimate_cost(
-        self, model: str, prompt_tokens: int, completion_tokens: int,
+        self,
+        model: str,
+        prompt_tokens: int,
+        completion_tokens: int,
     ) -> Optional[float]:
         """Return USD cost or ``None`` if the model is not in the price table."""
         prices = self.price_table.get(model)
@@ -117,7 +120,9 @@ class CostMeter:
             prompt_tokens=int(prompt_tokens),
             completion_tokens=int(completion_tokens),
             total_tokens=int(prompt_tokens) + int(completion_tokens),
-            estimated_cost_usd=self.estimate_cost(model, prompt_tokens, completion_tokens),
+            estimated_cost_usd=self.estimate_cost(
+                model, prompt_tokens, completion_tokens
+            ),
             is_heuristic=is_heuristic,
         )
         self.records.append(rec)
@@ -140,12 +145,22 @@ class CostMeter:
                 "any_heuristic": False,
             }
         by_role: Dict[str, Dict[str, Any]] = defaultdict(
-            lambda: {"n_calls": 0, "prompt_tokens": 0, "completion_tokens": 0,
-                     "total_tokens": 0, "cost_usd": 0.0}
+            lambda: {
+                "n_calls": 0,
+                "prompt_tokens": 0,
+                "completion_tokens": 0,
+                "total_tokens": 0,
+                "cost_usd": 0.0,
+            }
         )
         by_model: Dict[str, Dict[str, Any]] = defaultdict(
-            lambda: {"n_calls": 0, "prompt_tokens": 0, "completion_tokens": 0,
-                     "total_tokens": 0, "cost_usd": 0.0}
+            lambda: {
+                "n_calls": 0,
+                "prompt_tokens": 0,
+                "completion_tokens": 0,
+                "total_tokens": 0,
+                "cost_usd": 0.0,
+            }
         )
         any_heuristic = False
         for r in self.records:
@@ -163,9 +178,7 @@ class CostMeter:
             "total_prompt_tokens": sum(r.prompt_tokens for r in self.records),
             "total_completion_tokens": sum(r.completion_tokens for r in self.records),
             "total_tokens": sum(r.total_tokens for r in self.records),
-            "total_cost_usd": sum(
-                (r.estimated_cost_usd or 0.0) for r in self.records
-            ),
+            "total_cost_usd": sum((r.estimated_cost_usd or 0.0) for r in self.records),
             "by_role": {k: dict(v) for k, v in by_role.items()},
             "by_model": {k: dict(v) for k, v in by_model.items()},
             "any_heuristic": any_heuristic,
@@ -196,28 +209,34 @@ class MeteredClient:
         role: Optional[str],
         meter: CostMeter,
         model_override: Optional[str] = None,
+        usage_lock: Optional[RLock] = None,
     ) -> None:
         self._inner = inner
         self._role = role
         self._meter = meter
         self._model_override = model_override
+        # Separate role wrappers may share one provider whose ``last_usage``
+        # attribute is mutable. They must share this lock or one concurrent
+        # response can be charged to another role.
+        self._usage_lock = usage_lock or RLock()
 
     # The protocol methods the agents call.
 
-    def complete(self, messages, *, max_tokens: int = 2048,
-                 temperature: float = 0.2) -> str:
-        # Reset any previous reading; if the inner client doesn't set
-        # last_usage on this call, we won't accidentally double-count
-        # an earlier one.
-        try:
-            self._inner.last_usage = None  # type: ignore[attr-defined]
-        except Exception:
-            pass
-        result = self._inner.complete(
-            messages, max_tokens=max_tokens, temperature=temperature,
-        )
-
-        usage = getattr(self._inner, "last_usage", None)
+    def complete(
+        self, messages, *, max_tokens: int = 2048, temperature: float = 0.2
+    ) -> str:
+        with self._usage_lock:
+            # Reset/read and the provider call form one attribution transaction.
+            try:
+                self._inner.last_usage = None  # type: ignore[attr-defined]
+            except Exception:
+                pass
+            result = self._inner.complete(
+                messages,
+                max_tokens=max_tokens,
+                temperature=temperature,
+            )
+            usage = getattr(self._inner, "last_usage", None)
         if isinstance(usage, dict) and usage.get("prompt_tokens") is not None:
             prompt_tokens = int(usage.get("prompt_tokens", 0))
             completion_tokens = int(usage.get("completion_tokens", 0))
@@ -281,6 +300,8 @@ def metered_role_resolver(llm: Any, meter: CostMeter):
     """
     from .llm import resolve_role_client
 
+    usage_locks: Dict[int, RLock] = {}
+
     def resolver(role: str):
         base = resolve_role_client(llm, role)
         if base is None:
@@ -288,7 +309,13 @@ def metered_role_resolver(llm: Any, meter: CostMeter):
         if isinstance(base, MeteredClient):
             # Don't stack meters on top of each other.
             return base
-        return MeteredClient(base, role=role, meter=meter)
+        usage_lock = usage_locks.setdefault(id(base), RLock())
+        return MeteredClient(
+            base,
+            role=role,
+            meter=meter,
+            usage_lock=usage_lock,
+        )
 
     return resolver
 

@@ -934,6 +934,7 @@ def _score_arm(*, run_dir: Path, item, label: str) -> Dict[str, Any]:
         "cost_summary": _load_cost_summary(run_dir),
     }
     if _is_figure2_task_id(getattr(item, "key", None)):
+        result["execution_identity"] = manifest.get("execution_identity")
         result["figure2_evaluation_attempt"] = _figure2_evaluation_attempt(
             run_dir=run_dir,
             item=item,
@@ -1360,7 +1361,7 @@ def _figure2_run_is_reusable(run_dir: Path, item: object) -> bool:
 
 
 def _reuse_arm_if_complete(
-    *, arm_dir: Path, item, label: str
+    *, arm_dir: Path, item, label: str, expected_execution_identity_sha256: str
 ) -> Optional[Dict[str, Any]]:
     if not arm_dir.exists():
         return None
@@ -1369,6 +1370,10 @@ def _reuse_arm_if_complete(
             p
             for p in arm_dir.glob("run_*")
             if (p / "manifest.json").exists()
+            and _manifest_execution_identity_matches(
+                p,
+                expected_execution_identity_sha256,
+            )
             and (
                 _figure2_run_is_reusable(p, item)
                 if _is_figure2_task_id(getattr(item, "key", None))
@@ -1393,6 +1398,59 @@ def _reuse_arm_if_complete(
     return result
 
 
+def _manifest_execution_identity_matches(
+    run_dir: Path,
+    expected_sha256: str,
+) -> bool:
+    """Require an exact validated ExecutionIdentity before reusing a run."""
+
+    from easyicu.research_agent.authority.execution_identity import ExecutionIdentity
+
+    try:
+        manifest = _load_manifest(run_dir)
+        identity = ExecutionIdentity.model_validate(
+            manifest.get("execution_identity"),
+            strict=True,
+        )
+    except Exception:
+        return False
+    return identity.identity_sha256 == expected_sha256
+
+
+def _benchmark_execution_identity(
+    pipeline_options: Optional[Dict[str, Any]],
+    llm: Any = None,
+    *,
+    provider: str | None = None,
+    model: str | None = None,
+):
+    from easyicu.research_agent.authority.execution_identity import ExecutionIdentity
+    from easyicu.research_agent.providers.factory import (
+        provider_authorization_for_configuration,
+    )
+
+    options = dict(pipeline_options or {})
+    provider_authorization = None
+    if llm is None:
+        if provider is None or model is None:
+            raise ValueError("benchmark execution identity requires provider/model")
+        provider_authorization = provider_authorization_for_configuration(
+            provider=provider,
+            model=model,
+        )
+    return ExecutionIdentity.create(
+        submission_profile_name=options.get("submission_profile_name"),
+        submission_profile_version=options.get("submission_profile_version"),
+        runner=str(options.get("runner_kind") or "auto"),
+        runner_image_digest=options.get("expected_runner_image_digest"),
+        network_policy=str(options.get("runner_network") or "none"),
+        provider_client=llm,
+        provider_authorization=provider_authorization,
+        seed=options.get("llm_seed"),
+        host_runner_authorized=bool(options.get("host_runner_authorized", False)),
+    )
+
+
 def _run_one_item_with_reuse(
     *,
     item,
@@ -1413,17 +1471,24 @@ def _run_one_item_with_reuse(
     cohort = item.cohort_factory(seed)
     item_root = out_root / item.key
     selected = set(_normalize_arms(arms))
+    expected_identity = _benchmark_execution_identity(pipeline_options, llm)
 
     naive = _skipped_arm("naive")
     aware = _skipped_arm("aware")
     if reuse_existing and not resume_run_id:
         if "naive" in selected:
             naive = _reuse_arm_if_complete(
-                arm_dir=item_root / "naive", item=item, label="naive"
+                arm_dir=item_root / "naive",
+                item=item,
+                label="naive",
+                expected_execution_identity_sha256=expected_identity.identity_sha256,
             ) or _skipped_arm("naive")
         if "aware" in selected:
             aware = _reuse_arm_if_complete(
-                arm_dir=item_root / "aware", item=item, label="aware"
+                arm_dir=item_root / "aware",
+                item=item,
+                label="aware",
+                expected_execution_identity_sha256=expected_identity.identity_sha256,
             ) or _skipped_arm("aware")
 
     if "naive" in selected and not _arm_was_run(naive):
@@ -1863,6 +1928,7 @@ def _benchmark_pipeline_options(
     enable_pubmed: bool = False,
     submission_profile: Optional["SubmissionProfile"] = None,
     runner_kind: Optional[str] = None,
+    host_runner_authorized: bool = False,
     development_sample_size: Optional[int] = None,
     development_sample_seed: int = 20260719,
 ) -> Dict[str, Any]:
@@ -1875,6 +1941,8 @@ def _benchmark_pipeline_options(
         # the run manifest / bench_results.json document the execution
         # isolation the manuscript Methods section cites.
         options["runner_kind"] = runner_kind
+    if host_runner_authorized:
+        options["host_runner_authorized"] = True
     if development_sample_size is not None:
         if submission_profile is not None:
             raise SystemExit(
@@ -2613,6 +2681,7 @@ def main() -> int:
         enable_pubmed=bool(getattr(args, "enable_pubmed", False)),
         submission_profile=submission_profile,
         runner_kind=runner_kind,
+        host_runner_authorized=bool(getattr(args, "allow_host_runner", False)),
         development_sample_size=getattr(args, "development_sample_size", None),
         development_sample_seed=int(getattr(args, "development_sample_seed", 20260719)),
     )
@@ -3609,19 +3678,9 @@ def _run_ehrflowbench_jsonl(
                 else None
             ),
         )
-        # Resume support: skip items that already finished cleanly so a quota
-        # 502 mid-batch never forces a full redo. An item counts as "done" only
-        # if its latest run reached execution_complete — quota-disrupted
-        # diagnostic_only runs are redone.
-        if (
-            reuse_existing
-            and not resume_run_id
-            and not _is_figure2_task_id(key)
-            and _ehrflow_item_done(out_root / key)
-        ):
-            print(f"\n=== {key} — reuse existing complete run ===")
-            pending.append({"key": key, "status": "reused_complete"})
-            continue
+        # Exact reuse is decided inside ``_run_one_item_from_cohort`` after the
+        # current ExecutionIdentity is constructed. A broad "execution complete"
+        # shortcut here would bypass profile/image/provider/prompt/git matching.
         # Per-item isolation: a provider 502 / crash on one item must not abort
         # the remaining items. Record the failure and continue.
         try:
@@ -3778,18 +3837,25 @@ def _run_one_item_from_cohort(
     selected = set(_normalize_arms(arms))
     naive = _skipped_arm("naive")
     aware = _skipped_arm("aware")
+    expected_identity = _benchmark_execution_identity(
+        pipeline_options,
+        provider=provider,
+        model=model,
+    )
     if reuse_existing and not resume_run_id:
         if "naive" in selected:
             naive = _reuse_arm_if_complete(
                 arm_dir=item_root / "naive",
                 item=item,
                 label="naive",
+                expected_execution_identity_sha256=expected_identity.identity_sha256,
             ) or _skipped_arm("naive")
         if "aware" in selected:
             aware = _reuse_arm_if_complete(
                 arm_dir=item_root / "aware",
                 item=item,
                 label="aware",
+                expected_execution_identity_sha256=expected_identity.identity_sha256,
             ) or _skipped_arm("aware")
     run_naive = "naive" in selected and not _arm_was_run(naive)
     run_aware = "aware" in selected and not _arm_was_run(aware)

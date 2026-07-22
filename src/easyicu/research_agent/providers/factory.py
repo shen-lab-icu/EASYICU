@@ -37,6 +37,7 @@ def _loopback_forwards_real_key(env: Mapping[str, str]) -> bool:
     raw = str(env.get(TRUST_LOOPBACK_PROXY_KEY_ENV, "") or "").strip().lower()
     return raw in {"1", "true", "yes", "on"}
 
+
 MISSING_OPENAI_KEY = "missing_openai_key"
 MISSING_OPENROUTER_KEY = "missing_openrouter_key"
 INVALID_OPENAI_BASE_URL_OVERRIDE = "invalid_openai_base_url_override"
@@ -199,6 +200,58 @@ def provider_authorization_manifest(client: Any) -> dict[str, Any]:
     return {
         "schema_version": "easyicu.provider_authorization_manifest/1",
         "clients": [unique[key] for key in sorted(unique)],
+    }
+
+
+def provider_authorization_for_configuration(
+    *,
+    provider: str,
+    model: str,
+    environment: Optional[Mapping[str, str]] = None,
+) -> dict[str, Any]:
+    """Mint non-secret identity coordinates without constructing a client."""
+
+    env = os.environ if environment is None else environment
+    normalized = str(provider or "").strip().lower()
+    if normalized == "mock":
+        return {
+            "schema_version": "easyicu.provider_authorization_manifest/1",
+            "clients": [
+                {
+                    "provider": "mock",
+                    "model": "mock",
+                    "base_url": "",
+                    "destination": "mock",
+                    "authorization_mode": "mock_exempt",
+                    "authorization_sha256": "",
+                }
+            ],
+        }
+    if normalized not in {"openai", "openrouter"}:
+        raise ProviderConfigurationError(UNSUPPORTED_PROVIDER, normalized)
+    base_url = resolve_provider_base_url(normalized, environment=env)
+    loopback = normalized == "openai" and is_loopback_openai_base_url(base_url)
+    if not loopback and not _external_llm_allowed(env):
+        raise ProviderConfigurationError(EXTERNAL_LLM_NOT_AUTHORIZED, normalized)
+    authorization = ProviderAuthorization.create(
+        provider=normalized,
+        model=model,
+        base_url=base_url,
+        destination="local" if loopback else "external",
+        authorization_mode="local_exempt" if loopback else "operator_env",
+    )
+    return {
+        "schema_version": "easyicu.provider_authorization_manifest/1",
+        "clients": [
+            {
+                "provider": authorization.provider,
+                "model": authorization.model,
+                "base_url": authorization.base_url,
+                "destination": authorization.destination,
+                "authorization_mode": authorization.authorization_mode,
+                "authorization_sha256": authorization.authorization_sha256,
+            }
+        ],
     }
 
 
@@ -410,9 +463,7 @@ def build_provider_client(
                 model=model,
                 base_url=resolved_url,
                 destination="local" if loopback else "external",
-                authorization_mode=(
-                    "local_exempt" if loopback else "operator_env"
-                ),
+                authorization_mode=("local_exempt" if loopback else "operator_env"),
             ),
         )
 

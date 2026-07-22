@@ -263,6 +263,7 @@ class PipelineConfig:
     runner_kind: str = "auto"
     runner_image: Optional[str] = None
     runner_network: str = "none"
+    host_runner_authorized: bool = False
     runner_factory: Optional[Callable[..., Any]] = None
     runner_kwargs: Optional[Dict[str, Any]] = None
 

@@ -1504,6 +1504,13 @@ class AnalysisManifest(BaseModel):
             "factory authorization decision used by this run."
         ),
     )
+    execution_identity: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description=(
+            "Content-addressed profile/runner/image/network/provider/prompt/git/seed "
+            "identity required for exact reuse and paper acceptance."
+        ),
+    )
     code_version: Optional[Dict[str, Any]] = Field(
         default=None,
         description=(
