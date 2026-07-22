@@ -220,6 +220,15 @@ def test_discovery_outcome_materialisation_uses_only_frozen_handoff_target():
         launcher._outcome_concepts_for_handoff(
             handoff_target="aki", requested="aki,death"
         )
+    assert (
+        launcher._outcome_concepts_for_handoff(handoff_target=None, requested=None)
+        == ()
+    )
+    with pytest.raises(SystemExit, match="outcome-free concept-set handoff"):
+        launcher._outcome_concepts_for_handoff(
+            handoff_target=None,
+            requested="death",
+        )
 
 
 def test_discovery_handoff_registration_blocks_existing_id_hash_mismatch(tmp_path):

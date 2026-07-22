@@ -2286,6 +2286,8 @@ def _discovery_ledger_rows(
                 "literature_source": record.literature_source,
                 "gap_evidence_quote": record.gap_evidence_quote,
                 "candidate_topic": record.candidate_topic,
+                "analysis_family": record.analysis_family,
+                "resolved_analysis_concepts": list(record.resolved_analysis_concepts),
                 "go_no_go": record.go_no_go,
                 "go_no_go_reason": record.go_no_go_reason,
                 "feasibility_route": record.feasibility_route,
@@ -2422,6 +2424,12 @@ def build_discovery_candidate_records(
                 literature_source=_format_citation_source(source, idea.citation_key),
                 gap_evidence_quote=idea.source_quote,
                 candidate_topic=_format_literature_candidate_topic(idea),
+                analysis_family=(
+                    candidate.analysis_family if candidate else idea.analysis_family
+                ),
+                resolved_analysis_concepts=(
+                    list(candidate.resolved_analysis_concepts) if candidate else []
+                ),
                 prior_art=assessment,
                 database_feasibility=feasibility,
                 go_no_go=decision,

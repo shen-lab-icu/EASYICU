@@ -488,6 +488,8 @@ class DiscoveryCandidateRecord(BaseModel):
     literature_source: str
     gap_evidence_quote: str
     candidate_topic: str
+    analysis_family: str = "association_study"
+    resolved_analysis_concepts: List[str] = Field(default_factory=list)
     prior_art: PriorArtAssessment
     database_feasibility: Dict[str, Any] = Field(default_factory=dict)
     go_no_go: GoNoGoDecision

@@ -228,6 +228,40 @@ def test_discovery_jsonl_declares_trajectory_path(tmp_path):
     assert row["trajectory_path"] == str(trajectory.resolve())
 
 
+def test_discovery_jsonl_preserves_outcome_free_trajectory_task_shape(tmp_path):
+    import tools.run_discovery_to_manuscript as launcher
+
+    cohort = tmp_path / "universe.parquet"
+    trajectory = tmp_path / "universe_trajectory.parquet"
+    cohort.write_bytes(b"cohort")
+    trajectory.write_bytes(b"trajectory")
+    handoff = SimpleNamespace(
+        literature_idea_id="sofa2-transportability",
+        candidate_topic="SOFA-2 trajectory transportability",
+        research_question="Are SOFA-2 trajectories reproducible across databases?",
+        target_outcome=None,
+        resolved_predictor_concept=None,
+        analysis_family="trajectory_clustering",
+        resolved_analysis_concepts=["sofa2"],
+        inclusion_criteria=[],
+    )
+
+    jsonl = launcher._write_ehrflowbench_row(
+        out_root=tmp_path,
+        handoff=handoff,
+        cohort_path=cohort,
+        trajectory_path=trajectory,
+    )
+    row = json.loads(jsonl.read_text(encoding="utf-8"))
+
+    assert row["kind"] == "longitudinal_trajectory_analysis"
+    assert row["analysis_family"] == "trajectory_clustering"
+    assert row["analysis_concepts"] == ["sofa2"]
+    assert row["candidate_variables"] == ["sofa2"]
+    assert "target_outcome" not in row
+    assert "primary_predictor" not in row
+
+
 def test_discovery_jsonl_declares_complete_typed_trajectory_authority(tmp_path):
     import tools.run_discovery_to_manuscript as launcher
 

@@ -265,8 +265,9 @@ def acquire_universe_for_question(
     llm: LLMClient,
     output_dir: Union[str, Path],
     stem: str = "universe",
-    target_outcome: str,
+    target_outcome: Optional[str],
     outcome_concepts: Sequence[str],
+    required_feature_concepts: Sequence[str] = (),
     static_concepts: Sequence[str] = (),
     cohort_window: tuple = (0.0, 24.0),
     database: str = "miiv",
@@ -303,6 +304,37 @@ def acquire_universe_for_question(
         for c in available_selected
         if c not in set(outcome_concepts) | set(static_concepts)
     ]
+    required_feature_coverage = assess_coverage(
+        list(required_feature_concepts), catalog
+    )
+    if required_feature_concepts and not required_feature_coverage.sufficient:
+        return AcquisitionResult(
+            universe_path=None,
+            provenance_path=None,
+            selection=selection,
+            materialized_concepts=[],
+            coverage=coverage,
+            blocked=True,
+            note=(
+                "Required analysis concepts are not available in the prepared "
+                f"export: {list(required_feature_coverage.missing)}"
+            ),
+            selection_usage=sel_usage,
+            selection_cost_usd=sel_cost,
+            selection_model=sel_model,
+        )
+    feature_concepts = list(
+        dict.fromkeys(
+            [
+                *feature_concepts,
+                *[
+                    concept
+                    for concept in required_feature_concepts
+                    if concept not in set(outcome_concepts) | set(static_concepts)
+                ],
+            ]
+        )
+    )
     typed_catalog = any(item.typed_metadata for item in catalog.concepts)
     if typed_catalog:
         static_coverage = assess_coverage(list(static_concepts), catalog)

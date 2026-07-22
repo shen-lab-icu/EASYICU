@@ -672,6 +672,66 @@ def test_discovery_handoff_rejects_endpoint_drift(tmp_path: Path):
         )
 
 
+def test_discovery_handoff_accepts_outcome_free_trajectory_concept_set(
+    tmp_path: Path,
+):
+    row = {
+        "literature_idea_id": "sofa2_transportability",
+        "candidate_topic": "SOFA-2 trajectory transportability",
+        "analysis_family": "trajectory_clustering",
+        "resolved_analysis_concepts": ["sofa2"],
+        "go_no_go": "recommend",
+        "go_no_go_reason": "six prepared databases expose repeated SOFA-2",
+    }
+
+    handoff = build_handoff_from_row(
+        row,
+        triage_report_path=tmp_path / "triage.json",
+        human_confirmed=True,
+        human_confirmation_note="Approved the candidate, not a final protocol.",
+    )
+
+    assert handoff.analysis_family == "trajectory_clustering"
+    assert handoff.resolved_analysis_concepts == ["sofa2"]
+    assert handoff.target_outcome is None
+    assert handoff.resolved_predictor_concept is None
+    assert assert_discovery_analysis_ready(handoff) is True
+
+
+def test_discovery_handoff_rejects_empty_trajectory_concept_set(tmp_path: Path):
+    row = {
+        "literature_idea_id": "empty_trajectory",
+        "candidate_topic": "trajectory transportability",
+        "analysis_family": "trajectory_clustering",
+        "go_no_go": "recommend",
+        "go_no_go_reason": "candidate",
+    }
+
+    with pytest.raises(ValueError, match="resolved_analysis_concepts"):
+        build_handoff_from_row(
+            row,
+            triage_report_path=tmp_path / "triage.json",
+        )
+
+
+def test_select_discovery_row_accepts_concept_set_execution_shape() -> None:
+    selected = select_discovery_row(
+        [
+            {
+                "literature_idea_id": "trajectory",
+                "candidate_topic": "SOFA trajectory",
+                "analysis_family": "trajectory_clustering",
+                "resolved_analysis_concepts": ["sofa2"],
+                "go_no_go": "recommend",
+                "go_no_go_reason": "ready for protocol review",
+            }
+        ],
+        require_executable_shape=True,
+    )
+
+    assert selected["literature_idea_id"] == "trajectory"
+
+
 def test_discovery_package_rejects_unregistered_source_and_invalid_figure(
     tmp_path: Path,
 ):

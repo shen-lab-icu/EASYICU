@@ -3010,7 +3010,7 @@ def _external_item_from_row(
     row: Mapping[str, Any],
     key: str,
     question: str,
-    target: str,
+    target: Optional[str],
     cohort_columns: Sequence[Any],
     cohort_size: int,
     cohort_authority_path: Optional[Path] = None,
@@ -3214,7 +3214,7 @@ def _external_item_from_row(
         key=key,
         name=str(row.get("name") or key),
         research_question=str(question),
-        target_outcome=str(target),
+        target_outcome=(str(target) if target is not None else None),
         database=database,
         primary_predictor=scoring_predictor,
         operational_exposure=operational_exposure or None,
@@ -3353,12 +3353,21 @@ def _run_ehrflowbench_jsonl(
         cohort_path = row.get("cohort_path") or row.get("cohort")
         question = row.get("question") or row.get("research_question")
         target = row.get("target_outcome") or row.get("outcome")
-        if not cohort_path or not question or not target:
+        task_kind = str(row.get("kind") or "descriptive_association").strip()
+        outcome_optional = task_kind in {
+            "longitudinal_trajectory_analysis",
+            "subphenotype_clustering",
+        }
+        if not cohort_path or not question or (not target and not outcome_optional):
             pending.append(
                 {
                     "key": key,
                     "status": "pending_missing_fields",
-                    "required": ["question", "cohort_path", "target_outcome"],
+                    "required": (
+                        ["question", "cohort_path"]
+                        if outcome_optional
+                        else ["question", "cohort_path", "target_outcome"]
+                    ),
                 }
             )
             continue
@@ -3583,7 +3592,7 @@ def _run_ehrflowbench_jsonl(
             row=row,
             key=key,
             question=str(question),
-            target=str(target),
+            target=(str(target) if target else None),
             cohort_size=int(len(cohort)),
             cohort_columns=list(cohort.columns),
             cohort_authority_path=cohort_authority_path,
