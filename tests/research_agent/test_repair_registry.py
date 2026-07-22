@@ -370,6 +370,7 @@ def test_only_closed_source_figure_renderers_are_structural_and_automatic() -> N
         "association_publication_bundle_from_planned_model_contract_v1",
         "cohort_flow_publication_bundle_from_parent_outputs_v1",
         "sensitivity_publication_bundle_from_locked_summary_v1",
+        "missingness_publication_bundle_from_parent_outputs_v1",
     ):
         metadata = repair_metadata_for(repair_id)
         assert metadata.repair_class is RepairClass.STRUCTURAL, repair_id
@@ -404,7 +405,6 @@ def test_only_closed_source_figure_renderers_are_structural_and_automatic() -> N
         "sensitivity_publication_bundle_from_parent_outputs_v2",
         "survival_publication_bundle_from_parent_outputs_v1",
         "cohort_overlap_publication_bundle_from_parent_outputs_v1",
-        "missingness_publication_bundle_from_parent_outputs_v1",
         "phenotype_publication_bundle_from_parent_outputs_v1",
         "descriptive_publication_bundle_from_parent_outputs_v1",
         "absolute_risk_publication_bundle_from_parent_outputs_v1",

@@ -83,6 +83,7 @@ from .figures.distribution_availability import (
 from .figures.continuous_measurement_audit import (
     _continuous_measurement_audit_parent_digest_seal,
 )
+from .figures.sealed_registry import sealed_renderer_adapter
 from .replication.envelope import (
     ENVELOPE_SCHEMA_VERSION,
     ReproEnvelope,
@@ -9899,6 +9900,8 @@ def _sealed_renderer_parent_digest_seal(
 ) -> Optional[dict[str, str]]:
     """Return the exact evidence digests one sealed renderer may consume."""
 
+    if adapter := sealed_renderer_adapter(repair_id):
+        return adapter.seal(run_dir, figure_step_id)
     distribution_id = (
         "distribution_availability_publication_bundle_from_parent_outputs_v1"
     )
@@ -10017,7 +10020,10 @@ def _render_authorized_sealed_publication_bundle(
     if "step_summary.json" not in snapshot:
         return None
 
-    if repair_id == "absolute_risk_incidence_prevalence_publication_bundle_v1":
+    adapter = sealed_renderer_adapter(repair_id)
+    if adapter:
+        observed = adapter.render(run_dir, current_step_id, out_dir, snapshot)
+    elif repair_id == "absolute_risk_incidence_prevalence_publication_bundle_v1":
         from .figures.absolute_risk import (
             render_absolute_risk_bundle_from_prior_outputs,
         )
@@ -10169,6 +10175,8 @@ def deterministic_figure_repair_id_for_upstream(
     if len(candidates) != 1:
         return None
     repair_id = candidates[0].repair_id
+    if adapter := sealed_renderer_adapter(repair_id):
+        return repair_id if adapter.seal(run_dir, step_id) is not None else None
     if repair_id == (
         "distribution_availability_publication_bundle_from_parent_outputs_v1"
     ):
