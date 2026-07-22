@@ -136,14 +136,18 @@ def _mint_paper_ready_attestation(export: Path) -> dict:
         json.dumps({"database": "miiv"}), encoding="utf-8"
     )
     seal_mod.seal_export_structural_typed(export, value_vintage="20260717")
-    # The real write-once HITL sign-off (re-derives identity from columns), not a
-    # hand-edited manifest flag.
+    # The real write-once Framework v2 HITL sign-off: a HumanReviewDecision bound
+    # to the digest-derived request (not a hand-edited manifest flag).
+    request, _authority = seal_mod.build_retrofit_review_request(export)
     seal_mod.write_retrofit_review_decision(
         export,
-        review_id="rev-v2-0001",
-        reviewer="dr. reviewer",
-        review_scope="canonical9 binding re-verification test",
-        reviewed_at="2026-07-22",
+        decision={
+            "review_id": request.review_id,
+            "authority_sha256": request.authority_sha256,
+            "decision": "approved",
+            "reviewer": "dr. reviewer",
+            "decided_at": "2026-07-22",
+        },
     )
     return seal_mod.build_retrofit_review_attestation(export)
 

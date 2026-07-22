@@ -27,6 +27,7 @@ from benchmarks.figure2_canonical9.typed_export_seal import (
     TypedRetrofitSealError,
     assert_sealed_export_paper_ready,
     build_retrofit_review_attestation,
+    build_retrofit_review_request,
     seal_export_structural_typed,
     verify_retrofit_review_attestation,
     write_retrofit_review_decision,
@@ -177,6 +178,32 @@ def test_patient_identity_unavailable_when_no_subject_id(tmp_path: Path) -> None
     assert result.patient_identity["blocker"] == "patient_identity_unavailable"
 
 
+def test_patient_level_uniqueness_not_overclaimed_for_multi_stay(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "export_20260717"
+    root.mkdir(parents=True, exist_ok=True)
+    # subject 10 has TWO stays (1, 2) -> subjects (2) != stays (3): NOT unique.
+    pd.DataFrame(
+        {
+            "stay_id": [1, 2, 3],
+            "subject_id": [10, 10, 30],
+            "age": [65.0, 66.0, 55.0],
+            "sex": ["Male", "Male", "Female"],
+        }
+    ).to_parquet(root / "demographics.parquet", index=False)
+    (root / "easyicu_export_manifest.json").write_text(
+        json.dumps({"database": "miiv"}), encoding="utf-8"
+    )
+    pid = _seal(root).patient_identity
+    assert pid["subject_id_present"] is True
+    assert pid["n_stays_with_subject"] == 3 and pid["n_subjects"] == 2
+    assert pid["n_multi_stay_patients"] == 1 and pid["max_stays_per_subject"] == 2
+    assert pid["multi_stay_patients_present"] is True
+    assert pid["patient_level_uniqueness_verified"] is False
+    assert pid["first_icu_stay_verified"] is False
+
+
 def test_parquet_bytes_immutable(tmp_path: Path) -> None:
     root = tmp_path / "export_20260717"
     pre = _write_synthetic_export(root)
@@ -213,21 +240,29 @@ def test_sealed_export_is_a_typed_package(tmp_path: Path) -> None:
 # --------------------------------------------------------------------------- #
 # Receipt-backed paper-readiness gate (fail-closed; no trusted manifest flags)
 # --------------------------------------------------------------------------- #
+def _decision_for(
+    root: Path, *, reviewer: str = "dr. reviewer", decided_at: str = "2026-07-22"
+) -> dict:
+    """A Framework v2 HumanReviewDecision bound to the derived review request."""
+
+    request, _authority = build_retrofit_review_request(root)
+    return {
+        "review_id": request.review_id,
+        "authority_sha256": request.authority_sha256,
+        "decision": "approved",
+        "reviewer": reviewer,
+        "decided_at": decided_at,
+    }
+
+
 def _review(root: Path) -> Path:
-    """The write-once HITL review sign-off (re-derives identity from columns)."""
+    """The write-once HITL sign-off (real HumanReviewDecision, not free text)."""
 
-    return write_retrofit_review_decision(
-        root,
-        review_id="rev-0001",
-        reviewer="dr. reviewer",
-        review_scope="canonical9 full6 miiv structural typed retrofit",
-        reviewed_at="2026-07-22",
-    )
+    return write_retrofit_review_decision(root, decision=_decision_for(root))
 
 
-def _write_paper_ready_export(root: Path) -> None:
-    """Seal an export WITH cross-file-consistent subject_id, then record a
-    write-once HITL review decision — the real sign-off, not a hand-edited flag."""
+def _write_export_with_subject_id(root: Path) -> None:
+    """Write a patient-level-unique export (each subject maps to one stay)."""
 
     root.mkdir(parents=True, exist_ok=True)
     pd.DataFrame(
@@ -249,6 +284,13 @@ def _write_paper_ready_export(root: Path) -> None:
     (root / "easyicu_export_manifest.json").write_text(
         json.dumps({"database": "miiv"}), encoding="utf-8"
     )
+
+
+def _write_paper_ready_export(root: Path) -> None:
+    """Seal a subject-id export, then record a write-once Framework v2 HITL
+    decision — the real sign-off, not a hand-edited flag."""
+
+    _write_export_with_subject_id(root)
     seal_export_structural_typed(root, value_vintage="20260717")
     _review(root)
 
@@ -318,24 +360,45 @@ def test_gate_ignores_hand_edited_manifest_paper_ready(tmp_path: Path) -> None:
 def test_write_once_decision_rejects_reapproval(tmp_path: Path) -> None:
     root = tmp_path / "export_20260717"
     _write_paper_ready_export(root)
+    second = _decision_for(root, reviewer="dr. other", decided_at="2026-07-23")
     with pytest.raises(TypedRetrofitSealError, match="different bytes"):
-        write_retrofit_review_decision(
-            root,
-            review_id="rev-0002",
-            reviewer="dr. other",
-            review_scope="a different scope",
-            reviewed_at="2026-07-23",
-        )
+        write_retrofit_review_decision(root, decision=second)
 
 
-def test_gate_detects_decision_self_digest_tamper(tmp_path: Path) -> None:
+def test_write_rejected_decision_is_refused(tmp_path: Path) -> None:
+    root = tmp_path / "export_20260717"
+    _write_export_with_subject_id(root)
+    seal_export_structural_typed(root, value_vintage="20260717")
+    rejected = dict(_decision_for(root), decision="rejected")
+    with pytest.raises(TypedRetrofitSealError, match="not approved"):
+        write_retrofit_review_decision(root, decision=rejected)
+    assert not (root / RETROFIT_DECISION_FILE).exists()
+
+
+def test_write_forged_review_id_is_refused(tmp_path: Path) -> None:
+    root = tmp_path / "export_20260717"
+    _write_export_with_subject_id(root)
+    seal_export_structural_typed(root, value_vintage="20260717")
+    forged = {
+        "review_id": "review-" + "0" * 16,  # not derived from this authority
+        "authority_sha256": "a" * 64,
+        "decision": "approved",
+        "reviewer": "attacker",
+        "decided_at": "2026-07-22",
+    }
+    with pytest.raises(TypedRetrofitSealError, match="does not bind|authority_sha256"):
+        write_retrofit_review_decision(root, decision=forged)
+
+
+def test_gate_detects_decision_tamper(tmp_path: Path) -> None:
     root = tmp_path / "export_20260717"
     _write_paper_ready_export(root)
     d_path = root / RETROFIT_DECISION_FILE
     receipt = json.loads(d_path.read_text(encoding="utf-8"))
-    receipt["reviewer"] = "attacker"  # changed without recomputing decision_sha256
+    # Change the embedded decision's reviewer without recomputing decision_sha256.
+    receipt["review_decision"]["reviewer"] = "attacker"
     d_path.write_text(json.dumps(receipt), encoding="utf-8")
-    with pytest.raises(TypedRetrofitSealError, match="self-digest mismatch"):
+    with pytest.raises(TypedRetrofitSealError, match="canonical sha mismatch"):
         assert_sealed_export_paper_ready(root)
 
 
@@ -346,7 +409,12 @@ def test_gate_detects_manifest_tamper_after_review(tmp_path: Path) -> None:
     manifest = json.loads(m_path.read_text(encoding="utf-8"))
     manifest["benign_marker"] = "tampered"
     m_path.write_text(json.dumps(manifest), encoding="utf-8")
-    with pytest.raises(TypedRetrofitSealError, match="source_manifest_sha256 mismatch"):
+    # Tampering changes the reviewed-authority digest -> the derived review_id no
+    # longer binds; caught before the explicit per-digest check.
+    with pytest.raises(
+        TypedRetrofitSealError,
+        match="does not bind this source|source_manifest_sha256 mismatch",
+    ):
         assert_sealed_export_paper_ready(root)
 
 

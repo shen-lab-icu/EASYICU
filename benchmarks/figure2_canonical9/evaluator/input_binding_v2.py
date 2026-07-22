@@ -87,10 +87,11 @@ class RetrofitReviewAttestation(_StrictFrozenModel):
     schema_version: Literal["easyicu.retrofit_review_attestation/1"]
     seal_kind: Literal["retrofitted_structural_typed_export"]
     value_vintage: str = Field(min_length=1, max_length=64)
-    review_id: str = Field(min_length=1, max_length=200)
+    review_id: str = Field(pattern=r"^review-[0-9a-f]{16}$")
     reviewer: str = Field(min_length=1, max_length=200)
-    review_scope: str = Field(min_length=1, max_length=400)
     reviewed_at: str = Field(min_length=1, max_length=80)
+    authority_sha256: Sha256
+    request_sha256: Sha256
     decision_sha256: Sha256
     source_manifest_sha256: Sha256
     source_sidecar_file: str = Field(min_length=1, max_length=255)
