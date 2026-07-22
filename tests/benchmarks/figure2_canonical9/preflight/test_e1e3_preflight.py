@@ -32,11 +32,16 @@ from benchmarks.figure2_canonical9.preflight import runtime as rt
 from benchmarks.figure2_canonical9.preflight.fixtures import (
     E1,
     E1E3_CASES,
+    FULFILLMENT_NOT_PRODUCED_OFFLINE,
+    FULFILLMENT_PLANNED_ONLY,
+    FULFILLMENT_PRODUCED,
     PreflightCase,
 )
+from benchmarks.figure2_canonical9.preflight import harness
 from benchmarks.figure2_canonical9.preflight.harness import (
     ProviderTransportBlocked,
     ScriptedPreflightLLM,
+    paper_acceptance_verdict,
     paper_acceptance_status,
     preflight_runtime_manifest,
     provider_transport_spy,
@@ -130,6 +135,32 @@ def test_expected_products_pairwise_distinct() -> None:
             ), f"{keys[i]} and {keys[j]} must have distinct expected products"
 
 
+def test_every_live_expected_product_has_an_honest_scope_mapping(
+    case: PreflightCase,
+) -> None:
+    """A green offline smoke cannot silently become a formal-output claim."""
+
+    mapped = case.product_mapping()
+    assert [product for product, _mapping in mapped] == list(case.expected_products)
+    plan_step_ids = {step.step_id for step in case.build_plan().steps}
+    for _product, mapping in mapped:
+        if mapping.declared_fulfillment == FULFILLMENT_NOT_PRODUCED_OFFLINE:
+            assert mapping.step_id is None
+        else:
+            assert mapping.step_id in plan_step_ids
+    produced = [
+        (product, mapping)
+        for product, mapping in mapped
+        if mapping.declared_fulfillment == FULFILLMENT_PRODUCED
+    ]
+    assert len(produced) == 1
+    assert produced[0][0] == "table one"
+    assert any(
+        mapping.declared_fulfillment == FULFILLMENT_PLANNED_ONLY
+        for _product, mapping in mapped
+    )
+
+
 def test_plan_reflects_distinct_task_shape(case: PreflightCase) -> None:
     methods = set(case.plan_methods())
     required = _DISTINCT_METHODS[case.task_id]
@@ -160,7 +191,60 @@ def test_llm_offline_classified_is_descriptive_only(case: PreflightCase) -> None
     llm = ScriptedPreflightLLM(case)
     from easyicu.research_agent.providers.llm import llm_is_mockish
 
-    assert llm_is_mockish(llm) is True
+    assert llm_is_mockish(llm.client) is True
+
+
+def test_preflight_uses_a_reviewed_offline_client_not_a_custom_subclass(
+    case: PreflightCase,
+) -> None:
+    """The controller never crosses the prompt boundary as a custom client."""
+
+    from easyicu.research_agent.providers.llm import llm_is_mockish
+
+    llm = ScriptedPreflightLLM(case)
+    assert type(llm.client).__name__ == "PatternScriptedMockLLMClient"
+    assert llm_is_mockish(llm.client) is True
+
+
+def test_preflight_runner_forbids_network_and_host_fallback(tmp_path) -> None:
+    llm = ScriptedPreflightLLM(E1)
+    pipeline = harness.build_pipeline(E1, workdir=tmp_path, llm=llm.client)
+    assert pipeline._runner_kind == "subprocess"
+    assert pipeline._runner_network == "none"
+    assert pipeline._runner_kwargs["allow_unsafe_host_fallback"] is False
+
+
+def test_unavailable_runtime_blocks_before_pipeline_launch(
+    monkeypatch, tmp_path
+) -> None:
+    unavailable = rt.RuntimeManifest(
+        parent={"role": "parent"},
+        subprocess={"role": "subprocess"},
+        isolation=rt.IsolationCapability(
+            backend="macos_sandbox_exec",
+            available=False,
+            returncode=71,
+            detail="sandbox-exec: sandbox_apply: Operation not permitted",
+        ),
+    )
+    launches = 0
+
+    def _runtime(_run_dir=None):
+        return unavailable
+
+    def _must_not_launch(*_args, **_kwargs):
+        nonlocal launches
+        launches += 1
+        raise AssertionError("pipeline must not launch without usable isolation")
+
+    monkeypatch.setattr(harness, "preflight_runtime_manifest", _runtime)
+    monkeypatch.setattr(harness, "build_pipeline", _must_not_launch)
+    run = harness.run_preflight(E1, workdir=tmp_path)
+
+    assert launches == 0
+    assert run.blocked_reason == unavailable.blocked_reason
+    assert run.runtime["integration_ready"] is False
+    assert run.llm.total_calls == 0
 
 
 # ---------------------------------------------------------------------------
@@ -344,6 +428,28 @@ def test_final_verdict_is_diagnostic_only(normal_run) -> None:
     assert normal_run.case.expected_tristate == "diagnostic_only"
 
 
+def test_runtime_receipt_is_persisted_for_the_actual_run(normal_run) -> None:
+    runtime_path = normal_run.run_dir / "preflight_runtime_manifest.json"
+    assert runtime_path.is_file()
+    assert normal_run.runtime["integration_ready"] is True
+    assert normal_run.blocked_reason is None
+
+
+def test_product_mapping_describes_actual_preflight_scope(normal_run) -> None:
+    """Planned nodes run; only declared produced output is asserted as output."""
+
+    for _product, mapping in normal_run.case.product_mapping():
+        if mapping.declared_fulfillment == FULFILLMENT_NOT_PRODUCED_OFFLINE:
+            assert mapping.step_id is None
+            continue
+        record = normal_run.record(mapping.step_id or "")
+        assert record, f"mapped step {mapping.step_id!r} did not execute"
+        if mapping.declared_fulfillment == FULFILLMENT_PRODUCED:
+            assert record.get("status") == "ok"
+            assert record.get("generation_mode") == "deterministic_standard"
+    assert normal_run.tristate == "diagnostic_only"
+
+
 def test_loop_terminates_bounded(normal_run) -> None:
     # No unbounded orchestration: the graph completes in a small bounded number
     # of steps.
@@ -352,6 +458,12 @@ def test_loop_terminates_bounded(normal_run) -> None:
 
 def test_paper_acceptance_rejects_mock_run(normal_run) -> None:
     assert paper_acceptance_status(normal_run) == "invalid"
+    verdict = paper_acceptance_verdict(normal_run)
+    issue_codes = {issue.code for issue in verdict.issues}
+    # A single task is rejected for exact Canonical9 coverage, not merely
+    # labelled invalid by a mock-only convention.
+    assert "TASK_COVERAGE_INVALID" in issue_codes
+    assert "EXPECTED_EXECUTION_IDENTITY_MISSING" in issue_codes
 
 
 def test_single_planner_call(normal_run) -> None:
