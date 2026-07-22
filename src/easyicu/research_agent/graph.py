@@ -1,13 +1,12 @@
-"""LangGraph-based dispatch for the research-agent pipeline (PoC).
+"""LangGraph orchestration for the research-agent pipeline.
 
-This module is an **opt-in** wrapper that orchestrates the existing
+This module is the default wrapper that orchestrates the existing
 ``plan → execute → write → finalise`` phases of
 :class:`~easyicu.research_agent.pipeline.ResearchAgentPipeline` as a
-``langgraph.graph.StateGraph``. It is *not* the default execution path —
-:meth:`ResearchAgentPipeline.run` still uses straight-line dispatch and
-remains the canonical entry point. Enable the graph dispatch either by
-calling :meth:`ResearchAgentPipeline.run_with_graph` or by passing
-``_use_graph=True`` to :meth:`ResearchAgentPipeline.run`.
+``langgraph.graph.StateGraph``. LangGraph is the default phase dispatcher; the
+existing EasyICU receipts, capsules, evidence and checkpoint remain the sole
+scientific and replay authority. A private legacy-dispatch switch is retained
+only for parity tests and bounded rollback.
 
 Why this design:
 
@@ -25,13 +24,15 @@ Why this design:
   already been called inside ``_run_plan_phase`` in that branch, so the
   ``final_result`` is populated by the plan node.
 
-Optional dependency: requires ``langgraph`` to be installed
-(``pip install easyicu[agentic]``).
+``langgraph`` is a core dependency of the research-agent runtime.
 """
 
 from __future__ import annotations
 
-from typing import Any, Callable, Optional
+from importlib import metadata
+from typing import Any, Callable, Literal, Optional
+
+from pydantic import BaseModel, ConfigDict
 
 try:
     from typing import TypedDict
@@ -39,7 +40,48 @@ except ImportError:  # pragma: no cover - py<3.8 not supported anyway
     from typing_extensions import TypedDict  # type: ignore[no-redef]
 
 
-__all__ = ["PipelineGraphState", "build_pipeline_graph"]
+__all__ = [
+    "OrchestrationRuntimeReceipt",
+    "PipelineGraphState",
+    "build_pipeline_graph",
+    "orchestration_runtime_receipt",
+]
+
+
+class OrchestrationRuntimeReceipt(BaseModel):
+    """Non-scientific receipt identifying the phase dispatcher."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal["easyicu.orchestration_runtime/1"] = (
+        "easyicu.orchestration_runtime/1"
+    )
+    backend: Literal["langgraph", "legacy_sequential"]
+    backend_version: str
+    phase_order: tuple[str, ...] = ("plan", "execute", "write", "finalise")
+    checkpoint_authority: Literal["easyicu_receipt_capsule_checkpoint"] = (
+        "easyicu_receipt_capsule_checkpoint"
+    )
+    scientific_authority: Literal["easyicu_host_control_plane"] = (
+        "easyicu_host_control_plane"
+    )
+
+
+def orchestration_runtime_receipt(*, use_graph: bool) -> OrchestrationRuntimeReceipt:
+    """Return the exact dispatcher identity without changing scientific state."""
+
+    if use_graph:
+        try:
+            version = metadata.version("langgraph")
+        except metadata.PackageNotFoundError as exc:
+            raise RuntimeError(
+                "LangGraph is required by the default research-agent runtime; "
+                "reinstall EasyICU so its core dependencies are complete"
+            ) from exc
+        return OrchestrationRuntimeReceipt(backend="langgraph", backend_version=version)
+    return OrchestrationRuntimeReceipt(
+        backend="legacy_sequential", backend_version="easyicu-legacy-1"
+    )
 
 
 class PipelineGraphState(TypedDict, total=False):
