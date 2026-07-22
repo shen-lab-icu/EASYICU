@@ -36,9 +36,9 @@
       "ventilator.manifest.json": "ad82824a125c9596e82fc45151f5c75d7a5e8e361da108e1d0ce4c316a48c0d7",
       "vitals.manifest.json": "168703ad1bdf8f5f81b1c6fba501be2de0d8bfe2cf8fc01f53c4dd4cb04bde6a"
     },
-    "sealer_code_sha256": "d3d2caff5fd992e719512d1161fce9312d0b76a0bf0116b645dabc152cf8c78c",
+    "sealer_code_sha256": "ff206e0f9e6cad6ec4631095a9f9d33f59f7beca9593a6ba1aa346ad06854642",
     "sealer_git": {
-      "head": "8844fb1e5434dbf4868de9dcf3de333b3ae6df6c",
+      "head": "0088fb88ba460b34ab6f0fac5c518dc6093b3501",
       "sealer_paths_dirty": false,
       "head_describes_running_code": true
     }
@@ -46,6 +46,11 @@
   "patient_identity": {
     "subject_id_present": false,
     "row_identity": "stay_id",
+    "n_stays_with_subject": 0,
+    "n_subjects": 0,
+    "n_multi_stay_patients": 0,
+    "max_stays_per_subject": 0,
+    "multi_stay_patients_present": false,
     "patient_level_uniqueness_verified": false,
     "first_icu_stay_verified": false,
     "blocker": "patient_identity_unavailable"
