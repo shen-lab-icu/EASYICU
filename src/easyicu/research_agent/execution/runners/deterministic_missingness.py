@@ -282,6 +282,8 @@ def missingness_measurement_audit_code() -> str:
             flag_col = base + "_measured"
             value_col = _representative_value_column(base)
             has_flag = flag_col in df.columns
+            raw_measured_flag = pd.Series(np.nan, index=df.index, dtype=float)
+            measured_flag = pd.Series(np.nan, index=df.index, dtype=float)
 
             if has_flag:
                 raw_measured_flag = pd.to_numeric(df[flag_col], errors="coerce")
