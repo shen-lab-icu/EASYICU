@@ -1,18 +1,22 @@
-"""Reusable zero-Provider graph-level preflight harness for E1-E3.
+"""Reusable zero-Provider partial-flow smoke harness for E1-E3.
 
 This module drives the real :class:`ResearchAgentPipeline` graph fully offline
-and returns a structured :class:`PreflightRun` summary.  It never calls an
-external Provider, never reads patient data, and never grants paper authority
-(see the package docstring for the enforced boundaries).
+and returns a structured :class:`PreflightRun` summary. It never calls an
+external Provider, never reads patient data, and never grants paper authority.
+It is deliberately a *partial-flow smoke*, not E1/E2/E3 readiness: formal
+outputs are resolved against the run manifest, and only the deterministic Table
+1 artifact is actually produced offline.
 
 The zero-Provider guarantee is **not** taken on the client's word.  Every run is
 wrapped in :func:`provider_transport_spy`, which replaces the real lowest-layer
 HTTP transport (``httpx.Client.send`` / ``httpx.AsyncClient.send`` — the path all
 production OpenAI/Anthropic SDK calls funnel through) with a counter that raises
-on first use.  ``PreflightRun.external_provider_calls`` is that spy's count, so
-``== 0`` is authoritative and independent of the (forgeable)
+on first use. ``PreflightRun.external_provider_calls`` is that spy's count, so
+``== 0`` is authoritative for the parent process and independent of the (forgeable)
 ``__easyicu_mock_client__`` / class-name markers.  ``llm_is_mockish`` is recorded
-only as *descriptive* colour, never as the security boundary.
+only as *descriptive* colour, never as the security boundary. Generated-code
+subprocesses have their own explicit ``network_policy="none"`` and
+``allow_unsafe_host_fallback=False`` boundary, verified from step records.
 
 Run one case directly (development smoke)::
 
@@ -43,7 +47,11 @@ from benchmarks.figure2_canonical9.evaluator.acceptance import (
 from benchmarks.figure2_canonical9.preflight import runtime as rt
 from benchmarks.figure2_canonical9.preflight.fixtures import (
     E1E3_CASES,
+    FULFILLMENT_NOT_PRODUCED_OFFLINE,
+    FULFILLMENT_PLANNED_ONLY,
+    FULFILLMENT_PRODUCED,
     PreflightCase,
+    ProductMapping,
 )
 
 _PLAN_ANCHORS = (
@@ -58,6 +66,17 @@ _FAULT_CODE = (
     "# injected preflight coder fault (deterministic, offline)\n"
     "raise RuntimeError('injected preflight coder fault')\n"
 )
+
+# Both values must be passed to CodeRunner explicitly.  ``runner_network`` is
+# a DockerRunner option; it does not configure the subprocess runner used by
+# this diagnostic preflight.  The explicit False also prevents an ambient
+# EASYICU_ALLOW_UNSAFE_HOST_FALLBACK environment variable from weakening the
+# boundary (CodeRunner only reads that variable when the kwarg is None).
+PREFLIGHT_RUNNER_KWARGS: Dict[str, Any] = {
+    "network_policy": "none",
+    "allow_unsafe_host_fallback": False,
+}
+READINESS_CLASS = "partial_flow_smoke"
 
 
 # ---------------------------------------------------------------------------
@@ -254,8 +273,15 @@ class PreflightRun:
     readiness: Dict[str, Any] = field(default_factory=dict)
     runtime: Dict[str, Any] = field(default_factory=dict)
     blocked_reason: Optional[str] = None
+    pipeline_ran: bool = False
 
     # -- derived views ----------------------------------------------------
+    @property
+    def readiness_class(self) -> str:
+        """This offline harness can exercise a flow, never grant readiness."""
+
+        return READINESS_CLASS
+
     @property
     def step_ids(self) -> List[str]:
         return [r.get("step_id") for r in self.manifest.get("per_step_records", [])]
@@ -282,6 +308,21 @@ class PreflightRun:
 
         return llm_is_mockish(self.llm.client)
 
+    def resolved_product_map(self) -> List[Dict[str, Any]]:
+        """Resolve formal outputs against this run's persisted evidence."""
+
+        return resolve_product_map(self)
+
+    def produced_suite_outputs(self) -> List[str]:
+        return [
+            row["suite_output"]
+            for row in self.resolved_product_map()
+            if row["observed_fulfillment"] == FULFILLMENT_PRODUCED
+        ]
+
+    def network_policy_report(self) -> Dict[str, Any]:
+        return network_policy_report(self.manifest)
+
 
 def load_manifest(run_dir: Path) -> Dict[str, Any]:
     """Prefer the final manifest; fall back to the partial (stopped) manifest."""
@@ -303,6 +344,90 @@ def _routing(manifest: Dict[str, Any]) -> List[Dict[str, Any]]:
         }
         for r in manifest.get("per_step_records", [])
     ]
+
+
+def observe_product_fulfillment(mapping: ProductMapping, run: PreflightRun) -> str:
+    """Read a product's honest fulfillment from the real manifest/evidence."""
+
+    if mapping.step_id is None:
+        return FULFILLMENT_NOT_PRODUCED_OFFLINE
+    record = run.record(mapping.step_id)
+    if not record:
+        return "absent"
+    prefix = mapping.artifact_evidence_prefix
+    has_artifact = bool(prefix) and any(
+        str(evidence_id).startswith(prefix)
+        for evidence_id in record.get("evidence_ids", [])
+    )
+    if record.get("status") == "ok" and has_artifact:
+        return FULFILLMENT_PRODUCED
+    return FULFILLMENT_PLANNED_ONLY
+
+
+def resolve_product_map(run: PreflightRun) -> List[Dict[str, Any]]:
+    """Bind every live suite output to its observed offline fulfillment."""
+
+    resolved: List[Dict[str, Any]] = []
+    for suite_output, mapping in run.case.product_mapping():
+        observed = observe_product_fulfillment(mapping, run)
+        resolved.append(
+            {
+                "output_index": mapping.output_index,
+                "suite_output": suite_output,
+                "step_id": mapping.step_id,
+                "artifact_evidence_prefix": mapping.artifact_evidence_prefix,
+                "declared_fulfillment": mapping.declared_fulfillment,
+                "observed_fulfillment": observed,
+                "matches": observed == mapping.declared_fulfillment,
+            }
+        )
+    return resolved
+
+
+def network_policy_report(manifest: Dict[str, Any]) -> Dict[str, Any]:
+    """Report whether every recorded subprocess step stayed no-network/strict."""
+
+    subprocess_steps = [
+        {
+            "step_id": record.get("step_id"),
+            "requested_network_policy": record.get("requested_network_policy"),
+            "effective_isolation": record.get("effective_isolation"),
+            "isolation_degraded": record.get("isolation_degraded"),
+        }
+        for record in manifest.get("per_step_records", [])
+        if record.get("requested_network_policy") is not None
+    ]
+    return {
+        "ok": bool(subprocess_steps)
+        and all(
+            step["requested_network_policy"] == "none"
+            and step["isolation_degraded"] is False
+            for step in subprocess_steps
+        ),
+        "subprocess_steps": subprocess_steps,
+    }
+
+
+def _write_product_map_artifact(run: PreflightRun) -> Path:
+    """Persist the resolved, diagnostic-only formal-output ledger for a run."""
+
+    path = run.run_dir / "preflight_product_map.json"
+    path.write_text(
+        json.dumps(
+            {
+                "task_id": run.case.task_id,
+                "readiness_class": run.readiness_class,
+                "expected_products": list(run.case.expected_products),
+                "product_map": run.resolved_product_map(),
+                "produced_suite_outputs": run.produced_suite_outputs(),
+                "network_policy": run.network_policy_report(),
+            },
+            indent=2,
+            default=str,
+        ),
+        encoding="utf-8",
+    )
+    return path
 
 
 def _replan_responses(case: PreflightCase, *, strategy: str) -> List[str]:
@@ -371,8 +496,10 @@ def build_pipeline(
         workdir=str(workdir),
         llm=llm,
         runner_kind="subprocess",
+        # ``runner_network`` applies to DockerRunner.  The real subprocess
+        # preflight boundary is explicitly pinned in runner_kwargs.
         runner_network="none",
-        runner_kwargs={"allow_unsafe_host_fallback": False},
+        runner_kwargs=dict(PREFLIGHT_RUNNER_KWARGS),
         timeout_seconds=timeout_seconds,
         standard_executor_timeout_seconds=standard_executor_timeout_seconds,
         max_code_repair_attempts=max_code_repair_attempts,
@@ -431,6 +558,7 @@ def run_preflight(
             llm=llm,
             runtime=runtime_manifest.as_dict(),
             blocked_reason=runtime_manifest.blocked_reason,
+            pipeline_ran=False,
         )
     pipeline = build_pipeline(
         case,
@@ -486,7 +614,7 @@ def run_preflight(
         None,
     )
     blocked_reason = final_runtime.blocked_reason if isolation_reason else None
-    return PreflightRun(
+    run = PreflightRun(
         case=case,
         run_dir=run_dir,
         run_id=run_id,
@@ -499,7 +627,10 @@ def run_preflight(
         readiness=manifest.get("readiness", {}),
         runtime=final_runtime.as_dict(),
         blocked_reason=blocked_reason,
+        pipeline_ran=True,
     )
+    _write_product_map_artifact(run)
+    return run
 
 
 def preflight_runtime_manifest(run_dir: Optional[Path] = None) -> rt.RuntimeManifest:
@@ -565,10 +696,28 @@ def _cli(task_key: str) -> int:
         raise SystemExit(f"unknown task key {task_key!r}; try e1/e2/e3")
     tmp = Path(tempfile.mkdtemp(prefix=f"preflight_{task_key}_"))
     run = run_preflight(case, workdir=tmp)
+    if not run.pipeline_ran:
+        print(
+            json.dumps(
+                {
+                    "task_id": run.case.task_id,
+                    "readiness_class": run.readiness_class,
+                    "blocked": True,
+                    "pipeline_ran": False,
+                    "runtime_integration_ready": False,
+                    "runtime_blocked_reason": run.blocked_reason,
+                },
+                indent=2,
+                default=str,
+            )
+        )
+        return 2
     print(
         json.dumps(
             {
                 "task_id": run.case.task_id,
+                "readiness_class": run.readiness_class,
+                "pipeline_ran": True,
                 "runtime_integration_ready": run.runtime.get("integration_ready"),
                 "runtime_blocked_reason": run.blocked_reason,
                 "llm_offline_classified": run.llm_offline_classified,
@@ -577,6 +726,9 @@ def _cli(task_key: str) -> int:
                 "total_llm_calls": run.llm.total_calls,
                 "plan_calls": run.llm.plan_calls,
                 "expected_products": list(run.case.expected_products),
+                "product_map": run.resolved_product_map(),
+                "produced_suite_outputs": run.produced_suite_outputs(),
+                "network_policy": run.network_policy_report(),
                 "step_ids": run.step_ids,
                 "routing": run.routing,
                 "tristate": run.tristate,
@@ -597,6 +749,8 @@ if __name__ == "__main__":
 
 
 __all__ = [
+    "PREFLIGHT_RUNNER_KWARGS",
+    "READINESS_CLASS",
     "ProviderTransportBlocked",
     "TransportSpy",
     "provider_transport_spy",
@@ -605,6 +759,9 @@ __all__ = [
     "run_preflight",
     "build_pipeline",
     "preflight_runtime_manifest",
+    "observe_product_fulfillment",
+    "resolve_product_map",
+    "network_policy_report",
     "load_manifest",
     "paper_acceptance_verdict",
     "paper_acceptance_status",
