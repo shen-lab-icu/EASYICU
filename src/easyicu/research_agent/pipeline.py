@@ -2435,6 +2435,9 @@ class ResearchAgentPipeline:
                 paths=self._know_how_paths,
                 top_k=self._know_how_top_k,
                 min_score=self._know_how_min_score,
+                allow_curated_mvp=(
+                    self._submission_profile_name == "npj_dm_know_how_dev"
+                ),
             )
             know_how_binding = PlannerKnowHowBinding.from_prepared(prepared_know_how)
 

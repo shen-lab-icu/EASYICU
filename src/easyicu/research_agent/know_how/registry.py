@@ -629,6 +629,9 @@ class KnowHowRegistry:
             "built_in_reviewed",
             "project_reviewed",
         ),
+        allowed_review_statuses: Sequence[
+            Literal["curated_mvp", "clinical_reviewed"]
+        ] = ("curated_mvp", "clinical_reviewed"),
     ) -> list[KnowHowHit]:
         if top_k < 0 or top_k > MAX_RETRIEVAL_HITS:
             raise ValueError(f"top_k must be between 0 and {MAX_RETRIEVAL_HITS}")
@@ -641,6 +644,7 @@ class KnowHowRegistry:
         if not query_normalised:
             return []
         allowed_trust = frozenset(allowed_trust_levels)
+        allowed_reviews = frozenset(allowed_review_statuses)
         available = {str(value).casefold() for value in available_concepts if value}
         family = str(study_family or "").casefold()
         db = str(database or "").casefold()
@@ -648,6 +652,8 @@ class KnowHowRegistry:
         for entry in self._entries.values():
             card = entry.card
             if card.trust_level not in allowed_trust:
+                continue
+            if card.review_status not in allowed_reviews:
                 continue
             matched_aliases = sorted(
                 {

@@ -172,6 +172,9 @@ def _task_measurement(
         ),
         available_concepts=fixture["concepts"],
         top_k=3,
+        # This is the frozen development-context measurement, not a paper
+        # profile. Paper-facing selection defaults to clinical_reviewed only.
+        allowed_review_statuses=("curated_mvp", "clinical_reviewed"),
     )
     hits = selection.hits
     know_how_prompt = selection.prompt if hits else ""

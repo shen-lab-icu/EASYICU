@@ -196,6 +196,7 @@ def prepare_preplan_know_how(
     paths: Sequence[str | Path] = (),
     top_k: int = 3,
     min_score: float = 0.15,
+    allow_curated_mvp: bool = False,
 ) -> PreplanKnowHow:
     """Retrieve cards, persist exact inputs, and register both evidence files."""
     registry = KnowHowRegistry.load(paths)
@@ -225,6 +226,11 @@ def prepare_preplan_know_how(
         available_concepts=tuple(available_concepts),
         top_k=top_k,
         min_score=min_score,
+        allowed_review_statuses=(
+            ("curated_mvp", "clinical_reviewed")
+            if allow_curated_mvp
+            else ("clinical_reviewed",)
+        ),
     )
     hits = selection.hits
     prompt = selection.prompt

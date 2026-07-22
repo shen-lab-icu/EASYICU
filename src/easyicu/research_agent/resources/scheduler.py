@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from ..know_how import KnowHowHit, KnowHowIntegrityError, KnowHowRegistry
 from .catalog import ResourceCatalog, protocol_catalog_from_know_how
 from .schema import (
+    ResourceReviewStatus,
     ResourceSelectionPolicy,
     ResourceSelectionQuery,
     ResourceSelectionReceipt,
@@ -50,12 +51,15 @@ class ResourceScheduler:
         available_concepts: tuple[str, ...],
         top_k: int = 3,
         min_score: float = 0.15,
+        allowed_review_statuses: tuple[ResourceReviewStatus, ...] = (
+            "clinical_reviewed",
+        ),
     ) -> ProtocolResourceSelection:
         if query.purpose != "planner":
             raise ValueError("protocol resources may only be selected for Planner")
         policy = ResourceSelectionPolicy(
             allowed_kinds=("protocol",),
-            allowed_review_statuses=("curated_mvp", "clinical_reviewed"),
+            allowed_review_statuses=allowed_review_statuses,
             allowed_permissions=("planner_context",),
             max_protocols=top_k,
         )
@@ -72,6 +76,7 @@ class ResourceScheduler:
                 available_concepts=available_concepts,
                 top_k=min(top_k, policy.max_protocols),
                 min_score=min_score,
+                allowed_review_statuses=allowed_review_statuses,
             )
         )
         escaped = sorted(
