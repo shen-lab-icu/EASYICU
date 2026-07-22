@@ -90,6 +90,7 @@ def main(argv: list[str] | None = None) -> int:
                 "dict_fingerprint": result.dict_fingerprint,
                 "patient_identity": result.patient_identity,
                 "paper_authorized": result.semantic_review["paper_authorized"],
+                "paper_ready": result.paper_ready,
                 "sidecar_file": result.sidecar_file,
                 "manifest_path": result.manifest_path,
                 "parquet_immutability_verified": result.parquet_immutability_verified,

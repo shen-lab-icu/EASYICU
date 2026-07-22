@@ -145,6 +145,7 @@ class SealResult:
     source_evidence: Dict[str, Any]
     patient_identity: Dict[str, Any]
     semantic_review: Dict[str, Any]
+    paper_ready: bool
     sidecar_ref: Dict[str, Any]
     sidecar_file: Optional[str]
     manifest_path: Optional[str]
@@ -171,6 +172,7 @@ class SealResult:
             "source_evidence": self.source_evidence,
             "patient_identity": self.patient_identity,
             "semantic_review": self.semantic_review,
+            "paper_ready": self.paper_ready,
             "sidecar_ref": self.sidecar_ref,
             "sidecar_file": self.sidecar_file,
             "manifest_path": self.manifest_path,
@@ -193,18 +195,24 @@ def _sha256_file(path: Path) -> str:
     return _sha256_size(path)[0]
 
 
-def _sealer_code_sha256() -> str:
-    """SHA of the sealing implementation (this module + the shared binding leaf)."""
+def _sealer_source_files() -> List[Path]:
+    """The exact source files whose bytes constitute the sealing implementation."""
 
     import easyicu.concept.export_column_binding as leaf
 
+    return sorted({Path(__file__).resolve(), Path(leaf.__file__).resolve()})
+
+
+def _sealer_code_sha256() -> str:
+    """SHA of the sealing implementation (this module + the shared binding leaf)."""
+
     digest = hashlib.sha256()
-    for source in sorted({Path(__file__), Path(leaf.__file__)}):
+    for source in _sealer_source_files():
         digest.update(source.read_bytes())
     return digest.hexdigest()
 
 
-def _git_commit(repo_hint: Path) -> Optional[str]:
+def _git_head(repo_hint: Path) -> Optional[str]:
     try:
         out = subprocess.run(
             ["git", "-C", str(repo_hint), "rev-parse", "HEAD"],
@@ -216,6 +224,55 @@ def _git_commit(repo_hint: Path) -> Optional[str]:
         return out.stdout.strip() or None
     except Exception:
         return None
+
+
+def _git_paths_dirty(repo_hint: Path, paths: Sequence[Path]) -> Optional[bool]:
+    """Whether the given paths differ from HEAD (staged, unstaged, or untracked).
+
+    Returns ``None`` when git cannot answer (not a repo, git absent). A dirty
+    result means HEAD does NOT faithfully describe those files' running bytes.
+    """
+
+    try:
+        out = subprocess.run(
+            [
+                "git",
+                "-C",
+                str(repo_hint),
+                "status",
+                "--porcelain",
+                "--",
+                *map(str, paths),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=True,
+        )
+        return bool(out.stdout.strip())
+    except Exception:
+        return None
+
+
+def _sealer_git_provenance() -> Dict[str, Any]:
+    """Honest HEAD/dirty provenance for the running sealer code.
+
+    ``sealer_code_sha256`` is the byte-exact authority; the git commit is only a
+    faithful cross-reference when the sealer's OWN source files are clean at
+    HEAD. A dirty (or untracked) sealer file means the running bytes are NOT the
+    committed ones, so ``head_describes_running_code`` is False and the bare
+    commit must never be read as the provenance of this seal.
+    """
+
+    sources = _sealer_source_files()
+    repo_hint = sources[0].parent
+    head = _git_head(repo_hint)
+    dirty = _git_paths_dirty(repo_hint, sources)
+    return {
+        "head": head,
+        "sealer_paths_dirty": dirty,
+        "head_describes_running_code": bool(head) and dirty is False,
+    }
 
 
 def _strip_value_range_claims(
@@ -473,10 +530,12 @@ def _source_evidence(root: Path, parquet_paths: Sequence[Path]) -> Dict[str, Any
         ),
         "per_module_manifest_sha256": per_module,
         "sealer_code_sha256": _sealer_code_sha256(),
-        # Bind the SEALER's code repo, not the export data dir (which lives on an
-        # external drive and is not a git repo). ``sealer_code_sha256`` above is
-        # the byte-exact authority; the commit is a convenience cross-reference.
-        "sealer_git_commit": _git_commit(Path(__file__).resolve().parent),
+        # HEAD/dirty provenance of the SEALER's code repo (not the export data
+        # dir, which lives on an external drive and is not a git repo). The bare
+        # HEAD is only a faithful pointer when the sealer's own files are clean —
+        # see ``head_describes_running_code``. ``sealer_code_sha256`` above is the
+        # byte-exact authority regardless.
+        "sealer_git": _sealer_git_provenance(),
     }
 
 
@@ -557,6 +616,95 @@ def _module_name_for(parquet_path: Path) -> str:
         except (json.JSONDecodeError, OSError):
             pass
     return parquet_path.stem
+
+
+def _patient_identity_sufficient(identity: Dict[str, Any]) -> bool:
+    """A retrofit export has sufficient identity only if subject_id is proven and
+    no blocker remains. Stay-level-only identity is NOT sufficient for paper use."""
+
+    return bool(identity.get("subject_id_present")) and not identity.get("blocker")
+
+
+def _paper_ready(
+    semantic_review: Dict[str, Any], patient_identity: Dict[str, Any]
+) -> bool:
+    """The single producer/consumer predicate: a retrofit seal is paper-ready only
+    when a human has authorized the projected structure AND identity is sufficient."""
+
+    return semantic_review.get("paper_authorized") is True and (
+        _patient_identity_sufficient(patient_identity)
+    )
+
+
+def assert_sealed_export_paper_ready(export_dir: str | Path) -> Dict[str, Any]:
+    """Consumer half of the retrofit producer→consumer gate — fail-closed.
+
+    A paper-facing run over a RETROFIT-sealed export MUST route through this gate
+    before using the sealed metadata as authoritative. It reads the native
+    ``_manifest.json`` the seal wrote and, for a retrofit seal, raises unless the
+    seal is paper-ready by the SAME predicate the producer records:
+
+    * the per-field semantic review has been human-signed
+      (``semantic_review.paper_authorized is True``), AND
+    * patient identity is sufficient (``subject_id`` proven, no blocker).
+
+    A non-retrofit native export (no ``seal_kind``) is governed by the official
+    typed-authority path, so this gate returns its manifest unchanged. Returns
+    the verified manifest on success.
+    """
+
+    root = Path(export_dir).expanduser()
+    manifest_path = root / NATIVE_MANIFEST
+    if not manifest_path.is_file():
+        raise TypedRetrofitSealError(
+            f"no {NATIVE_MANIFEST} at {root}: export is not sealed; refusing "
+            "paper-facing use"
+        )
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise TypedRetrofitSealError(
+            f"unreadable native manifest at {manifest_path}: {exc}"
+        ) from exc
+    if not isinstance(manifest, dict):
+        raise TypedRetrofitSealError(
+            f"native manifest is not an object: {manifest_path}"
+        )
+
+    if manifest.get("seal_kind") != SEAL_KIND:
+        # Not a retrofit seal — the official typed-authority path governs it.
+        return manifest
+
+    review = manifest.get("semantic_review")
+    identity = manifest.get("patient_identity")
+    if not isinstance(review, dict) or not isinstance(identity, dict):
+        raise TypedRetrofitSealError(
+            "retrofit seal is missing its semantic_review / patient_identity "
+            "provenance; refusing paper-facing use"
+        )
+    if manifest.get("paper_ready") is not _paper_ready(review, identity):
+        raise TypedRetrofitSealError(
+            "retrofit manifest paper_ready flag disagrees with its own "
+            "semantic_review/patient_identity; refusing paper-facing use"
+        )
+    if not _paper_ready(review, identity):
+        reasons: List[str] = []
+        if review.get("paper_authorized") is not True:
+            reasons.append(
+                f"semantic review unsigned (paper_authorized="
+                f"{review.get('paper_authorized')!r})"
+            )
+        if not _patient_identity_sufficient(identity):
+            reasons.append(
+                f"patient identity insufficient (blocker={identity.get('blocker')!r}, "
+                f"subject_id_present={identity.get('subject_id_present')!r})"
+            )
+        raise TypedRetrofitSealError(
+            "retrofit-sealed export is NOT paper-authorized: "
+            + "; ".join(reasons)
+            + " — a human must review before any paper-facing run"
+        )
+    return manifest
 
 
 def seal_export_structural_typed(
@@ -715,6 +863,10 @@ def seal_export_structural_typed(
         "source_evidence": source_evidence,
         "patient_identity": patient_identity,
         "semantic_review": semantic_review,
+        # The producer's own paper-readiness verdict, enforced by the consumer
+        # gate ``assert_sealed_export_paper_ready``. False until a human signs the
+        # semantic review AND patient identity is sufficient.
+        "paper_ready": _paper_ready(semantic_review, patient_identity),
         "retrofit_note": (
             "Structural typed retrofit of an untyped module export. Parquet bytes "
             "unchanged. role/unit/time are a CURRENT-dictionary projection (not "
@@ -760,6 +912,7 @@ def seal_export_structural_typed(
         source_evidence=source_evidence,
         patient_identity=patient_identity,
         semantic_review=semantic_review,
+        paper_ready=_paper_ready(semantic_review, patient_identity),
         sidecar_ref=sidecar_ref,
         sidecar_file=written_sidecar,
         manifest_path=None if dry_run else str(manifest_path),
@@ -776,5 +929,6 @@ __all__ = [
     "ColumnCompat",
     "SealResult",
     "TypedRetrofitSealError",
+    "assert_sealed_export_paper_ready",
     "seal_export_structural_typed",
 ]
