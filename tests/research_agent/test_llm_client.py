@@ -6,18 +6,28 @@ from types import SimpleNamespace
 import pytest
 
 
-def _mock_transport_client(client, *, model: str):
+def _mock_transport_client(client, *, model: str, completions=None, max_retries=0):
     # These tests exercise the concrete adapter against an in-memory fake SDK,
     # but the adapter itself must go through its real constructor so provider
     # authority cannot be minted for an ``object.__new__`` pseudo-instance.
-    client = type(client)(
-        model=model,
-        base_url="http://127.0.0.1:8787/v1",
-        request_timeout=1.0,
-        max_retries=0,
+    transport = SimpleNamespace(
+        chat=SimpleNamespace(completions=completions or SimpleNamespace())
     )
-    client._local_noauth_mode = False
-    return client
+    previous = sys.modules.get("openai")
+    sys.modules["openai"] = SimpleNamespace(OpenAI=lambda **_kwargs: transport)
+    try:
+        return type(client)(
+            model=model,
+            api_key="non-secret-test-key",
+            base_url="http://127.0.0.1:8787/v1",
+            request_timeout=1.0,
+            max_retries=max_retries,
+        )
+    finally:
+        if previous is None:
+            sys.modules.pop("openai", None)
+        else:
+            sys.modules["openai"] = previous
 
 
 def _retry_test_client(ra, failures):
@@ -37,14 +47,11 @@ def _retry_test_client(ra, failures):
 
     completions = _Completions()
     client = _mock_transport_client(
-        OpenAIClient.__new__(OpenAIClient), model="gpt-test"
+        OpenAIClient.__new__(OpenAIClient),
+        model="gpt-test",
+        completions=completions,
+        max_retries=2,
     )
-    client._client = SimpleNamespace(chat=SimpleNamespace(completions=completions))
-    client._model = "gpt-test"
-    client._timeout = 1.0
-    client._extra_body = {}
-    client._local_noauth_mode = False
-    client._max_retries = 2
     client._rebuild_openai_client = lambda: None
     return client, completions
 
@@ -108,12 +115,10 @@ def test_openai_client_strips_reasoning_blocks_from_content(ra):
             return SimpleNamespace(choices=[choice], usage=None)
 
     client = _mock_transport_client(
-        OpenAIClient.__new__(OpenAIClient), model="qwen3-8b"
+        OpenAIClient.__new__(OpenAIClient),
+        model="qwen3-8b",
+        completions=_Completions(),
     )
-    client._client = SimpleNamespace(chat=SimpleNamespace(completions=_Completions()))
-    client._model = "qwen3-8b"
-    client._timeout = 120.0
-    client._extra_body = {}
 
     out, call_usage = client.complete_with_usage(
         [LLMMessage(role="user", content="return json")]
@@ -172,13 +177,10 @@ def test_openai_client_streaming_is_transport_only(monkeypatch, ra):
             return stream
 
     client = _mock_transport_client(
-        OpenAIClient.__new__(OpenAIClient), model="gpt-5.6-luna"
+        OpenAIClient.__new__(OpenAIClient),
+        model="gpt-5.6-luna",
+        completions=_Completions(),
     )
-    client._client = SimpleNamespace(chat=SimpleNamespace(completions=_Completions()))
-    client._model = "gpt-5.6-luna"
-    client._timeout = 120.0
-    client._extra_body = {}
-    client._local_noauth_mode = False
     monkeypatch.setenv("EASYICU_LLM_STREAM", "1")
 
     out, call_usage = client.complete_with_usage(
@@ -246,13 +248,10 @@ def test_openai_client_stream_closes_on_iteration_error(monkeypatch, ra):
             return stream
 
     client = _mock_transport_client(
-        OpenAIClient.__new__(OpenAIClient), model="gpt-5.6-luna"
+        OpenAIClient.__new__(OpenAIClient),
+        model="gpt-5.6-luna",
+        completions=_Completions(),
     )
-    client._client = SimpleNamespace(chat=SimpleNamespace(completions=_Completions()))
-    client._model = "gpt-5.6-luna"
-    client._timeout = 120.0
-    client._extra_body = {}
-    client._local_noauth_mode = False
     monkeypatch.setenv("EASYICU_LLM_STREAM", "1")
 
     with pytest.raises(ValueError, match="broken stream"):
@@ -271,20 +270,19 @@ def test_openai_client_recovers_unclosed_reasoning_prefix_for_debuggability(ra):
             return SimpleNamespace(choices=[choice], usage=None)
 
     client = _mock_transport_client(
-        OpenAIClient.__new__(OpenAIClient), model="qwen3-8b"
+        OpenAIClient.__new__(OpenAIClient),
+        model="qwen3-8b",
+        completions=_Completions(),
     )
-    client._client = SimpleNamespace(chat=SimpleNamespace(completions=_Completions()))
-    client._model = "qwen3-8b"
-    client._timeout = 120.0
-    client._extra_body = {}
 
     out = client.complete([LLMMessage(role="user", content="return json")])
 
     assert out == "still thinking"
 
 
-def test_openai_client_supports_local_noauth_proxy_mode(ra):
+def test_openai_client_supports_local_noauth_proxy_mode(monkeypatch, ra):
     from easyicu.research_agent.providers.llm import LLMMessage, OpenAIClient
+    import httpx
 
     class _Response:
         def raise_for_status(self):
@@ -314,13 +312,19 @@ def test_openai_client_supports_local_noauth_proxy_mode(ra):
             return _Response()
 
     http_client = _HttpClient()
-    client = _mock_transport_client(OpenAIClient.__new__(OpenAIClient), model="gpt-5.4")
-    client._client = None
-    client._model = "gpt-5.4"
-    client._timeout = 120.0
-    client._extra_body = {}
-    client._local_noauth_mode = True
-    client._local_http_client = http_client
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    monkeypatch.setattr(
+        httpx,
+        "Client",
+        lambda **kwargs: (http_client if kwargs.get("base_url") else SimpleNamespace()),
+    )
+    client = OpenAIClient(
+        model="gpt-5.4",
+        base_url="http://127.0.0.1:8787/v1",
+        request_timeout=1.0,
+        max_retries=0,
+    )
 
     out = client.complete(
         [LLMMessage(role="user", content="Reply with the single word OK.")],
@@ -351,14 +355,11 @@ def test_openai_client_zero_manual_retry_budget_makes_one_attempt(monkeypatch, r
 
     completions = _Completions()
     client = _mock_transport_client(
-        OpenAIClient.__new__(OpenAIClient), model="gpt-5.6-luna"
+        OpenAIClient.__new__(OpenAIClient),
+        model="gpt-5.6-luna",
+        completions=completions,
+        max_retries=0,
     )
-    client._client = SimpleNamespace(chat=SimpleNamespace(completions=completions))
-    client._model = "gpt-5.6-luna"
-    client._timeout = 1.0
-    client._extra_body = {}
-    client._local_noauth_mode = False
-    client._max_retries = 0
     monkeypatch.delenv("EASYICU_LLM_STREAM", raising=False)
     sleeps = []
     monkeypatch.setattr("time.sleep", sleeps.append)

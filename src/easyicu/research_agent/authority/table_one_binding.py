@@ -11,15 +11,22 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import os
+import secrets
+from pathlib import Path
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from ..methods.table_one import table_one_spec_sha256
 from ..research_context.prompt_variables import opaque_level_tokens
-from ..schema import AnalysisStep, ResearchContext, TableOneSpec
+from ..schema import AnalysisPlan, AnalysisStep, ResearchContext, TableOneSpec
 
 TABLE_ONE_EXECUTION_BINDING_SCHEMA = "easyicu.table_one_execution_binding/1"
+TABLE_ONE_PRIVATE_CHECKPOINT_SCHEMA = "easyicu.table_one_private_checkpoint/1"
+TABLE_ONE_PRIVATE_CHECKPOINT_RELATIVE_PATH = Path(
+    ".runtime/table_one_private_checkpoint.json"
+)
 
 
 def _canonical_json(value: Any) -> str:
@@ -41,7 +48,7 @@ class TableOneExecutionBinding(BaseModel):
     step_id: str
     planner_spec_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     observed_domain_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
-    token_key_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    token_secret_hex: str = Field(pattern=r"^[0-9a-f]{64}$")
     execution_spec: TableOneSpec
     execution_spec_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     binding_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
@@ -110,6 +117,8 @@ def _resolve_levels(
 def bind_table_one_execution_spec(
     step: AnalysisStep,
     context: ResearchContext,
+    *,
+    token_secret_hex: str | None = None,
 ) -> TableOneExecutionBinding | None:
     """Attach and return the local binding without mutating the public spec."""
 
@@ -141,23 +150,36 @@ def bind_table_one_execution_spec(
         _canonical_json(observed_payload).encode("utf-8")
     ).hexdigest()
     planner_spec_sha256 = table_one_spec_sha256(planner_spec)
-    token_key_sha256 = hashlib.sha256(
+    secret_coordinate = hashlib.sha256(
         _canonical_json(
             {
-                "schema": "easyicu.table_one_host_token_key/1",
-                "context_created_at": context.created_at.isoformat(),
                 "step_id": step.step_id,
                 "planner_spec_sha256": planner_spec_sha256,
                 "observed_domain_sha256": observed_domain_sha256,
             }
         ).encode("utf-8")
     ).hexdigest()
+    private_secrets = context._table_one_token_secrets
+    if token_secret_hex is None:
+        token_secret_hex = private_secrets.get(secret_coordinate)
+    if token_secret_hex is None:
+        token_secret_hex = secrets.token_hex(32)
+    if (
+        not isinstance(token_secret_hex, str)
+        or not all(char in "0123456789abcdef" for char in token_secret_hex)
+        or len(token_secret_hex) != 64
+    ):
+        raise ValueError("Table 1 token secret must be 32-byte lowercase hex")
+    prior_secret = private_secrets.get(secret_coordinate)
+    if prior_secret is not None and prior_secret != token_secret_hex:
+        raise ValueError("Table 1 private checkpoint secret mismatch")
+    private_secrets[secret_coordinate] = token_secret_hex
     binding_payload: dict[str, Any] = {
         "schema_version": TABLE_ONE_EXECUTION_BINDING_SCHEMA,
         "step_id": step.step_id,
         "planner_spec_sha256": planner_spec_sha256,
         "observed_domain_sha256": observed_domain_sha256,
-        "token_key_sha256": token_key_sha256,
+        "token_secret_hex": token_secret_hex,
         "execution_spec": execution_spec.model_dump(mode="json"),
         "execution_spec_sha256": table_one_spec_sha256(execution_spec),
     }
@@ -215,7 +237,7 @@ def table_one_private_code_label_map(
     binding = step._table_one_execution_binding
     if not isinstance(binding, TableOneExecutionBinding):
         return {}
-    token_key = bytes.fromhex(binding.token_key_sha256)
+    token_key = bytes.fromhex(binding.token_secret_hex)
     return {
         typed_value: "__easyicu_table1_label_"
         + hmac.new(
@@ -254,12 +276,130 @@ def table_one_code_token_value_map(step: AnalysisStep) -> dict[str, Any]:
     return restored
 
 
+def _private_checkpoint_payload(plan: AnalysisPlan) -> dict[str, Any]:
+    steps: list[dict[str, str]] = []
+    for step in plan.steps:
+        binding = step._table_one_execution_binding
+        if not isinstance(binding, TableOneExecutionBinding):
+            if step.table_one_spec is not None:
+                raise ValueError(
+                    f"Table 1 step {step.step_id!r} lacks a private execution binding"
+                )
+            continue
+        if not table_one_private_label_map(step):
+            continue
+        steps.append(
+            {
+                "step_id": step.step_id,
+                "planner_spec_sha256": binding.planner_spec_sha256,
+                "observed_domain_sha256": binding.observed_domain_sha256,
+                "token_secret_hex": binding.token_secret_hex,
+                "binding_sha256": binding.binding_sha256,
+            }
+        )
+    payload: dict[str, Any] = {
+        "schema_version": TABLE_ONE_PRIVATE_CHECKPOINT_SCHEMA,
+        "steps": steps,
+    }
+    payload["checkpoint_sha256"] = hashlib.sha256(
+        _canonical_json(payload).encode("utf-8")
+    ).hexdigest()
+    return payload
+
+
+def write_table_one_private_checkpoint(*, run_dir: Path, plan: AnalysisPlan) -> Path:
+    """Persist random token secrets outside the public plan with mode 0600."""
+
+    path = Path(run_dir) / TABLE_ONE_PRIVATE_CHECKPOINT_RELATIVE_PATH
+    payload = _private_checkpoint_payload(plan)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    temporary.write_text(_canonical_json(payload), encoding="utf-8")
+    os.chmod(temporary, 0o600)
+    temporary.replace(path)
+    os.chmod(path, 0o600)
+    return path
+
+
+def restore_table_one_private_checkpoint(
+    *,
+    run_dir: Path,
+    plan: AnalysisPlan,
+    context: ResearchContext,
+) -> None:
+    """Restore and rebind Table 1 tokens from the private runtime checkpoint."""
+
+    def _uses_opaque_levels(step: AnalysisStep) -> bool:
+        spec = step.table_one_spec
+        if spec is None:
+            return False
+        levels = [*spec.group_levels]
+        for variable in spec.variables:
+            levels.extend(variable.levels)
+        return any(
+            isinstance(value, str) and value.startswith("__easyicu_level_")
+            for value in levels
+        )
+
+    table_steps = [step for step in plan.steps if _uses_opaque_levels(step)]
+    if not table_steps:
+        return
+    path = Path(run_dir) / TABLE_ONE_PRIVATE_CHECKPOINT_RELATIVE_PATH
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError) as exc:
+        raise ValueError("Table 1 private checkpoint is missing or invalid") from exc
+    if not isinstance(payload, dict) or payload.get("schema_version") != (
+        TABLE_ONE_PRIVATE_CHECKPOINT_SCHEMA
+    ):
+        raise ValueError("Table 1 private checkpoint schema mismatch")
+    checkpoint_sha256 = payload.pop("checkpoint_sha256", None)
+    expected_checkpoint_sha256 = hashlib.sha256(
+        _canonical_json(payload).encode("utf-8")
+    ).hexdigest()
+    if checkpoint_sha256 != expected_checkpoint_sha256:
+        raise ValueError("Table 1 private checkpoint digest mismatch")
+    rows = payload.get("steps")
+    if not isinstance(rows, list):
+        raise ValueError("Table 1 private checkpoint steps are invalid")
+    by_step: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        if not isinstance(row, dict) or not isinstance(row.get("step_id"), str):
+            raise ValueError("Table 1 private checkpoint row is invalid")
+        step_id = row["step_id"]
+        if step_id in by_step:
+            raise ValueError("Table 1 private checkpoint repeats a step")
+        by_step[step_id] = row
+    if set(by_step) != {step.step_id for step in table_steps}:
+        raise ValueError("Table 1 private checkpoint does not match the plan")
+    for step in table_steps:
+        row = by_step[step.step_id]
+        binding = bind_table_one_execution_spec(
+            step,
+            context,
+            token_secret_hex=row.get("token_secret_hex"),
+        )
+        if binding is None or any(
+            row.get(field) != getattr(binding, field)
+            for field in (
+                "planner_spec_sha256",
+                "observed_domain_sha256",
+                "binding_sha256",
+            )
+        ):
+            raise ValueError("Table 1 private checkpoint authority mismatch")
+
+
 __all__ = [
     "TABLE_ONE_EXECUTION_BINDING_SCHEMA",
+    "TABLE_ONE_PRIVATE_CHECKPOINT_RELATIVE_PATH",
+    "TABLE_ONE_PRIVATE_CHECKPOINT_SCHEMA",
     "TableOneExecutionBinding",
     "bind_table_one_execution_spec",
     "table_one_private_label_map",
     "table_one_private_code_label_map",
     "table_one_code_token_value_map",
     "table_one_execution_spec",
+    "restore_table_one_private_checkpoint",
+    "write_table_one_private_checkpoint",
 ]

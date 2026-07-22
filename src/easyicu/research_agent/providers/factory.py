@@ -15,7 +15,7 @@ import os
 import sys
 import threading
 import weakref
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Callable, Mapping, Optional, Sequence
 from urllib.parse import urlsplit
 
@@ -62,6 +62,10 @@ class _TrustedClientRecord:
     constructor_impl: object | None = None
     complete_impl: object | None = None
     complete_with_images_impl: object | None = None
+    getattribute_impl: object | None = None
+    complete_code: object | None = None
+    complete_with_images_code: object | None = None
+    dispatch_identity: tuple[Any, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -70,6 +74,10 @@ class _ConstructedClientRecord:
     constructor_impl: object
     complete_impl: object
     complete_with_images_impl: object | None
+    getattribute_impl: object
+    complete_code: object | None
+    complete_with_images_code: object | None
+    dispatch_identity: tuple[Any, ...]
 
 
 _TRUSTED_CLIENTS: dict[int, tuple[weakref.ReferenceType[Any], _TrustedClientRecord]] = (
@@ -86,11 +94,50 @@ def _class_callable(client_type: type[Any], name: str) -> object | None:
     return value if callable(value) else None
 
 
+def _callable_code(value: object | None) -> object | None:
+    if isinstance(value, (classmethod, staticmethod)):
+        value = value.__func__
+    return getattr(value, "__code__", None)
+
+
+def _safe_instance_vars(client: Any) -> Mapping[str, Any]:
+    try:
+        value = object.__getattribute__(client, "__dict__")
+    except (AttributeError, TypeError):
+        return {}
+    return value if isinstance(value, Mapping) else {}
+
+
+def _reviewed_dispatch_identity(client: Any) -> tuple[Any, ...]:
+    """Bind the concrete transport object used by a reviewed adapter."""
+
+    if _is_reviewed_client_type(client, "OpenAIClient"):
+        instance_vars = _safe_instance_vars(client)
+        local_noauth = bool(instance_vars.get("_local_noauth_mode", False))
+        attribute = "_local_http_client" if local_noauth else "_client"
+        transport = instance_vars.get(attribute)
+        if transport is None:
+            raise ProviderConfigurationError(
+                EXTERNAL_LLM_NOT_AUTHORIZED,
+                "openai",
+            )
+        return ("openai", local_noauth, attribute, id(transport), type(transport))
+    if _is_reviewed_client_type(client, "CLIAgentLLMClient"):
+        instance_vars = _safe_instance_vars(client)
+        return (
+            "cli",
+            str(instance_vars.get("_backend", "")),
+            str(instance_vars.get("_command", "")),
+            str(instance_vars.get("_model", "")),
+        )
+    return ()
+
+
 def _callable_contract(
     client: Any,
-) -> tuple[type[Any], object, object | None]:
+) -> tuple[type[Any], object, object | None, object, object | None, object | None]:
     client_type = type(client)
-    instance_vars = vars(client) if hasattr(client, "__dict__") else {}
+    instance_vars = _safe_instance_vars(client)
     if "complete" in instance_vars or "complete_with_images" in instance_vars:
         raise ProviderConfigurationError(
             EXTERNAL_LLM_NOT_AUTHORIZED,
@@ -99,10 +146,20 @@ def _callable_contract(
     complete_impl = _class_callable(client_type, "complete")
     if complete_impl is None:
         raise ProviderConfigurationError(UNSUPPORTED_PROVIDER, client_type.__name__)
+    getattribute_impl = inspect.getattr_static(client_type, "__getattribute__", None)
+    if getattribute_impl is not object.__getattribute__:
+        raise ProviderConfigurationError(
+            EXTERNAL_LLM_NOT_AUTHORIZED,
+            client_type.__name__,
+        )
+    image_impl = _class_callable(client_type, "complete_with_images")
     return (
         client_type,
         complete_impl,
-        _class_callable(client_type, "complete_with_images"),
+        image_impl,
+        getattribute_impl,
+        _callable_code(complete_impl),
+        _callable_code(image_impl),
     )
 
 
@@ -130,7 +187,14 @@ def _mark_reviewed_transport_constructed(client: Any) -> Any:
             EXTERNAL_LLM_NOT_AUTHORIZED,
             type(client).__name__,
         )
-    client_type, complete_impl, image_impl = _callable_contract(client)
+    (
+        client_type,
+        complete_impl,
+        image_impl,
+        getattribute_impl,
+        complete_code,
+        image_code,
+    ) = _callable_contract(client)
     constructor_impl = inspect.getattr_static(client_type, "__init__")
     ident = id(client)
     reference = weakref.ref(
@@ -145,6 +209,10 @@ def _mark_reviewed_transport_constructed(client: Any) -> Any:
                 constructor_impl=constructor_impl,
                 complete_impl=complete_impl,
                 complete_with_images_impl=image_impl,
+                getattribute_impl=getattribute_impl,
+                complete_code=complete_code,
+                complete_with_images_code=image_code,
+                dispatch_identity=_reviewed_dispatch_identity(client),
             ),
         )
     return client
@@ -167,7 +235,14 @@ def _new_trusted_record(
     children_getter: Optional[Callable[[], Sequence[Any]]] = None,
     construction: Optional[_ConstructedClientRecord] = None,
 ) -> _TrustedClientRecord:
-    client_type, complete_impl, image_impl = _callable_contract(client)
+    (
+        client_type,
+        complete_impl,
+        image_impl,
+        getattribute_impl,
+        complete_code,
+        image_code,
+    ) = _callable_contract(client)
     return _TrustedClientRecord(
         kind=kind,
         authorization=authorization,
@@ -181,12 +256,25 @@ def _new_trusted_record(
         ),
         complete_impl=complete_impl,
         complete_with_images_impl=image_impl,
+        getattribute_impl=getattribute_impl,
+        complete_code=complete_code,
+        complete_with_images_code=image_code,
+        dispatch_identity=(
+            construction.dispatch_identity if construction is not None else ()
+        ),
     )
 
 
 def _callables_match_record(client: Any, record: _TrustedClientRecord) -> bool:
     try:
-        client_type, complete_impl, image_impl = _callable_contract(client)
+        (
+            client_type,
+            complete_impl,
+            image_impl,
+            getattribute_impl,
+            complete_code,
+            image_code,
+        ) = _callable_contract(client)
     except ProviderConfigurationError:
         return False
     return bool(
@@ -195,7 +283,55 @@ def _callables_match_record(client: Any, record: _TrustedClientRecord) -> bool:
         is record.constructor_impl
         and complete_impl is record.complete_impl
         and image_impl is record.complete_with_images_impl
+        and getattribute_impl is record.getattribute_impl
+        and complete_code is record.complete_code
+        and image_code is record.complete_with_images_code
     )
+
+
+def _dispatch_matches_record(client: Any, record: _TrustedClientRecord) -> bool:
+    if not record.dispatch_identity:
+        return True
+    try:
+        return _reviewed_dispatch_identity(client) == record.dispatch_identity
+    except ProviderConfigurationError:
+        return False
+
+
+def _refresh_reviewed_transport_dispatch(client: Any) -> None:
+    """Rotate a bound OpenAI transport only from its reviewed rebuild method."""
+
+    rebuild = inspect.getattr_static(type(client), "_rebuild_openai_client", None)
+    caller = inspect.currentframe().f_back
+    if (
+        not _is_reviewed_client_type(client, "OpenAIClient")
+        or not callable(rebuild)
+        or caller is None
+        or getattr(rebuild, "__code__", None) is not caller.f_code
+    ):
+        raise ProviderConfigurationError(
+            EXTERNAL_LLM_NOT_AUTHORIZED,
+            type(client).__name__,
+        )
+    dispatch_identity = _reviewed_dispatch_identity(client)
+    ident = id(client)
+    with _TRUSTED_CLIENTS_LOCK:
+        constructed = _CONSTRUCTED_CLIENTS.get(ident)
+        trusted = _TRUSTED_CLIENTS.get(ident)
+        if constructed is None or constructed[0]() is not client:
+            raise ProviderConfigurationError(
+                EXTERNAL_LLM_NOT_AUTHORIZED,
+                type(client).__name__,
+            )
+        _CONSTRUCTED_CLIENTS[ident] = (
+            constructed[0],
+            replace(constructed[1], dispatch_identity=dispatch_identity),
+        )
+        if trusted is not None and trusted[0]() is client:
+            _TRUSTED_CLIENTS[ident] = (
+                trusted[0],
+                replace(trusted[1], dispatch_identity=dispatch_identity),
+            )
 
 
 def _remember_trusted_client(client: Any, record: _TrustedClientRecord) -> None:
@@ -291,6 +427,39 @@ def provider_client_is_offline(client: Any) -> bool:
 
     record = _trusted_client_record(client)
     return bool(record is not None and record.kind == "offline")
+
+
+def provider_client_is_mockish(client: Any) -> bool:
+    """Classify only factory-registered, intact offline graphs as mockish."""
+
+    stack = [client]
+    seen: set[int] = set()
+    found_leaf = False
+    while stack:
+        current = stack.pop()
+        if current is None or id(current) in seen:
+            continue
+        seen.add(id(current))
+        record = _trusted_client_record(current)
+        if (
+            record is None
+            or not _callables_match_record(current, record)
+            or not _dispatch_matches_record(current, record)
+        ):
+            return False
+        if record.kind == "offline":
+            found_leaf = True
+            continue
+        if record.kind != "wrapper" or record.children_getter is None:
+            return False
+        try:
+            children = tuple(record.children_getter())
+        except Exception:
+            return False
+        if tuple(id(child) for child in children) != record.child_ids:
+            return False
+        stack.extend(children)
+    return found_leaf
 
 
 def _register_loopback_provider_client(
@@ -418,15 +587,33 @@ def _attach_provider_authorization(
             authorization.provider,
         )
     try:
-        live_type, live_complete, live_images = _callable_contract(client)
+        (
+            live_type,
+            live_complete,
+            live_images,
+            live_getattribute,
+            live_complete_code,
+            live_image_code,
+        ) = _callable_contract(client)
     except ProviderConfigurationError:
-        live_type, live_complete, live_images = None, None, None
+        (
+            live_type,
+            live_complete,
+            live_images,
+            live_getattribute,
+            live_complete_code,
+            live_image_code,
+        ) = (None, None, None, None, None, None)
     if not (
         live_type is construction.client_type
         and inspect.getattr_static(type(client), "__init__", None)
         is construction.constructor_impl
         and live_complete is construction.complete_impl
         and live_images is construction.complete_with_images_impl
+        and live_getattribute is construction.getattribute_impl
+        and live_complete_code is construction.complete_code
+        and live_image_code is construction.complete_with_images_code
+        and _reviewed_dispatch_identity(client) == construction.dispatch_identity
     ):
         raise ProviderConfigurationError(
             EXTERNAL_LLM_NOT_AUTHORIZED,
@@ -611,7 +798,9 @@ def require_provider_client_authorization(client: Any) -> None:
                 EXTERNAL_LLM_NOT_AUTHORIZED,
                 str(getattr(current, "name", type(current).__name__)),
             )
-        if not _callables_match_record(current, record):
+        if not _callables_match_record(current, record) or not _dispatch_matches_record(
+            current, record
+        ):
             raise ProviderConfigurationError(
                 EXTERNAL_LLM_NOT_AUTHORIZED,
                 type(current).__name__,
@@ -649,14 +838,16 @@ def authorized_complete(client: Any, messages: Any, **kwargs: Any) -> str:
     """Deliver a prompt only after the entire provider graph is authorized."""
 
     require_provider_client_authorization(client)
-    return client.complete(messages, **kwargs)
+    complete = object.__getattribute__(client, "complete")
+    return complete(messages, **kwargs)
 
 
 def authorized_complete_with_images(client: Any, **kwargs: Any) -> str:
     """Deliver image prompts only after provider-graph authorization."""
 
     require_provider_client_authorization(client)
-    return client.complete_with_images(**kwargs)
+    complete_with_images = object.__getattribute__(client, "complete_with_images")
+    return complete_with_images(**kwargs)
 
 
 def provider_transport_destination(client: Any) -> str:

@@ -8,6 +8,7 @@ from easyicu.research_agent.agents.core import (
     AnalyzerAgent,
     CoderAgent,
     PlannerAgent,
+    ReplannerAgent,
     WriterAgent,
 )
 from easyicu.research_agent.audits.validators import LLMConceptAuditor
@@ -527,3 +528,46 @@ def test_jury_receives_artifact_identity_not_arbitrary_artifact_text():
         assert forbidden not in prompt
     artifact_bundle = json.loads(prompt.split("Artifact bundle:\n", 1)[1])
     assert "structured" not in artifact_bundle["arbitrary_results.json"]
+
+
+def test_replanner_probe_projection_rejects_all_identifier_suffixes(ra):
+    context, step = _context_and_step(ra)
+    plan = ra.AnalysisPlan(
+        research_question=context.research_question,
+        steps=[step],
+    )
+    capture = ExternalCaptureMockLLMClient([plan.model_dump_json()])
+
+    ReplannerAgent(capture).run(
+        context=context,
+        current_plan=plan,
+        probe_summary={
+            "n_rows": 10,
+            "n_columns": 2,
+            "patient_id": 9918273,
+            "subject_id": 771122,
+            "stay_id": 881133,
+            "visit_id": 445566,
+            "unknown_count": 778899,
+            "unknown_sha256": "private-digest-sentinel",
+        },
+    )
+
+    prompt = _all_prompt_text(capture)
+    assert '"n_rows": 10' in prompt
+    assert '"n_columns": 2' in prompt
+    for forbidden in (
+        "patient_id",
+        "subject_id",
+        "stay_id",
+        "visit_id",
+        "unknown_count",
+        "unknown_sha256",
+        "9918273",
+        "771122",
+        "881133",
+        "445566",
+        "778899",
+        "private-digest-sentinel",
+    ):
+        assert forbidden not in prompt

@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
-from datetime import timedelta
 
 import pandas as pd
 import pytest
@@ -16,8 +16,10 @@ from easyicu.research_agent.agents.core import (
 )
 from easyicu.research_agent.authority.table_one_binding import (
     bind_table_one_execution_spec,
+    restore_table_one_private_checkpoint,
     table_one_private_code_label_map,
     table_one_execution_spec,
+    write_table_one_private_checkpoint,
 )
 from easyicu.research_agent.authority.plan_authority import normalize_replan_candidate
 from easyicu.research_agent.audits.validators import LLMConceptAuditor
@@ -31,6 +33,7 @@ from easyicu.research_agent.repairs.reasons import (
 )
 from easyicu.research_agent.research_context.prompt_scope import coder_guide_for_step
 from easyicu.research_agent.schema import (
+    AnalysisPlan,
     AnalysisStep,
     CohortDescriptor,
     ConceptDescriptor,
@@ -309,9 +312,7 @@ def test_private_code_tokens_are_host_keyed_and_stable_after_rebinding() -> None
     restored_step = AnalysisStep.model_validate(step.model_dump(mode="json"))
     assert bind_table_one_execution_spec(restored_step, context) is not None
     second = table_one_private_code_label_map(restored_step)
-    fresh_host_context = context.model_copy(
-        update={"created_at": context.created_at + timedelta(microseconds=1)}
-    )
+    fresh_host_context = ResearchContext.model_validate(context.model_dump(mode="json"))
     fresh_host_step = AnalysisStep.model_validate(step.model_dump(mode="json"))
     assert (
         bind_table_one_execution_spec(fresh_host_step, fresh_host_context) is not None
@@ -340,6 +341,43 @@ def test_private_code_tokens_are_host_keyed_and_stable_after_rebinding() -> None
         + "__"
     )
     assert female_token != old_dictionary_token
+
+    public_plan = AnalysisPlan(
+        research_question=context.research_question,
+        steps=[AnalysisStep.model_validate(step.model_dump(mode="json"))],
+    )
+    public_key_guess = hashlib.sha256(
+        public_plan.model_dump_json().encode("utf-8")
+    ).digest()
+    for candidate in ("Female", "Male", "NeverSmokerLocal", "EverSmokerLocal"):
+        dictionary_guess = hmac.new(
+            public_key_guess,
+            candidate.encode("utf-8"),
+            hashlib.sha256,
+        ).hexdigest()[:16]
+        assert dictionary_guess not in female_token
+
+
+def test_private_code_token_secret_restores_from_private_checkpoint(tmp_path) -> None:
+    context, step = _private_table_one_bound_step()
+    original_tokens = table_one_private_code_label_map(step)
+    plan = AnalysisPlan(
+        research_question=context.research_question,
+        steps=[step],
+    )
+    checkpoint = write_table_one_private_checkpoint(run_dir=tmp_path, plan=plan)
+    assert checkpoint.stat().st_mode & 0o077 == 0
+    assert "Female" not in checkpoint.read_text(encoding="utf-8")
+
+    resumed_context = ResearchContext.model_validate(context.model_dump(mode="json"))
+    resumed_plan = AnalysisPlan.model_validate(plan.model_dump(mode="json"))
+    restore_table_one_private_checkpoint(
+        run_dir=tmp_path,
+        plan=resumed_plan,
+        context=resumed_context,
+    )
+
+    assert table_one_private_code_label_map(resumed_plan.steps[0]) == original_tokens
 
 
 def test_private_table_one_labels_never_enter_agent_prompts() -> None:
