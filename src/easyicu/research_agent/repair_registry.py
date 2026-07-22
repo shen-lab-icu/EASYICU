@@ -417,8 +417,7 @@ _SEALED_RENDERER_PRODUCT_SLOTS: Dict[str, Tuple[str, ...]] = {
         "robustness_denominator_audit",
     ),
     "missingness_publication_bundle_from_parent_outputs_v1": (
-        "missingness",
-        "measurement_availability",
+        "missingness_measurement",
     ),
 }
 

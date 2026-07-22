@@ -329,6 +329,19 @@ def test_exact_missingness_source_contract_uses_sealed_renderer(
     assert deterministic_figure_repair_id_for_upstream(tmp_path, figure_step) == (
         repair_id
     )
+    from easyicu.research_agent.contracts.declared_product import (
+        authorize_declared_figure_product_slots,
+    )
+
+    assert authorize_declared_figure_product_slots(
+        declared_products=["fig:missingness_measurement"],
+        renderer_repair_id=repair_id,
+        planner_parent_anchors=(
+            "table:missingness_audit",
+            "table:measurement_source_audit",
+        ),
+        authoritative_display_subjects=(),
+    ) == {"figure:missingness_measurement": "missingness_measurement"}
     out = tmp_path / "steps" / figure_step / "outputs"
     assert (
         _render_authorized_sealed_publication_bundle(
