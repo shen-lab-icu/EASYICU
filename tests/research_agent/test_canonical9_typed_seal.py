@@ -24,6 +24,7 @@ from benchmarks.figure2_canonical9.typed_export_seal import (
     METADATA_PROVENANCE,
     SEAL_KIND,
     TypedRetrofitSealError,
+    assert_sealed_export_paper_ready,
     seal_export_structural_typed,
 )
 
@@ -155,6 +156,13 @@ def test_source_evidence_bound(tmp_path: Path) -> None:
     )
     assert len(ev["sealer_code_sha256"]) == 64
     assert ev["per_module_manifest_sha256"] == {}  # synthetic per-module absent
+    git = ev["sealer_git"]
+    assert set(git) == {"head", "sealer_paths_dirty", "head_describes_running_code"}
+    # HEAD may describe the running code ONLY when we have a HEAD and the sealer's
+    # own files are clean at it; a dirty/untracked/unknown tree must never claim so.
+    assert git["head_describes_running_code"] is (
+        bool(git["head"]) and git["sealer_paths_dirty"] is False
+    )
 
 
 def test_patient_identity_unavailable_when_no_subject_id(tmp_path: Path) -> None:
@@ -196,6 +204,92 @@ def test_sealed_export_is_a_typed_package(tmp_path: Path) -> None:
         if c.typed_metadata
     }
     assert {"age", "sex", "lact", "death"} <= typed and "mort_28d" not in typed
+
+
+# --------------------------------------------------------------------------- #
+# Producer -> consumer paper-readiness gate (fail-closed)
+# --------------------------------------------------------------------------- #
+def _sign_manifest(root: Path, **changes) -> dict:
+    """Load, mutate, and rewrite the retrofit manifest; return the new payload."""
+
+    path = root / "_manifest.json"
+    manifest = json.loads(path.read_text(encoding="utf-8"))
+    manifest.update(changes)
+    path.write_text(json.dumps(manifest), encoding="utf-8")
+    return manifest
+
+
+def test_paper_ready_is_false_for_full6_shape(tmp_path: Path) -> None:
+    root = tmp_path / "export_20260717"
+    _write_synthetic_export(root)
+    result = _seal(root)
+    assert result.paper_ready is False
+    manifest = json.loads((root / "_manifest.json").read_text(encoding="utf-8"))
+    assert manifest["paper_ready"] is False
+
+
+def test_consumer_gate_fails_closed_when_unreviewed(tmp_path: Path) -> None:
+    root = tmp_path / "export_20260717"
+    _write_synthetic_export(root)
+    _seal(root)  # default: paper_authorized False, patient_identity_unavailable
+    with pytest.raises(TypedRetrofitSealError, match="NOT paper-authorized"):
+        assert_sealed_export_paper_ready(root)
+
+
+def test_consumer_gate_fails_closed_on_insufficient_identity(tmp_path: Path) -> None:
+    root = tmp_path / "export_20260717"
+    _write_synthetic_export(root)
+    result = _seal(root)
+    # Sign the review, but identity stays stay-level only -> still not paper-ready.
+    review = dict(result.semantic_review, paper_authorized=True, reviewed=True)
+    _sign_manifest(root, semantic_review=review, paper_ready=False)
+    with pytest.raises(TypedRetrofitSealError, match="patient identity insufficient"):
+        assert_sealed_export_paper_ready(root)
+
+
+def test_consumer_gate_passes_when_signed_and_identity_sufficient(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "export_20260717"
+    _write_synthetic_export(root)
+    result = _seal(root)
+    review = dict(result.semantic_review, paper_authorized=True, reviewed=True)
+    identity = {
+        "subject_id_present": True,
+        "row_identity": "stay_id",
+        "blocker": None,
+    }
+    manifest = _sign_manifest(
+        root, semantic_review=review, patient_identity=identity, paper_ready=True
+    )
+    got = assert_sealed_export_paper_ready(root)
+    assert got == manifest and got["paper_ready"] is True
+
+
+def test_consumer_gate_detects_paper_ready_forgery(tmp_path: Path) -> None:
+    root = tmp_path / "export_20260717"
+    _write_synthetic_export(root)
+    _seal(root)
+    # Flip only the summary flag; review still unsigned + identity still blocked.
+    _sign_manifest(root, paper_ready=True)
+    with pytest.raises(TypedRetrofitSealError, match="disagrees with its own"):
+        assert_sealed_export_paper_ready(root)
+
+
+def test_consumer_gate_passthrough_for_non_retrofit_manifest(tmp_path: Path) -> None:
+    root = tmp_path / "native_export"
+    root.mkdir()
+    payload = {"schema_version": "easyicu_native_export_v2", "files": []}
+    (root / "_manifest.json").write_text(json.dumps(payload), encoding="utf-8")
+    # No seal_kind -> official typed-authority path governs; gate returns as-is.
+    assert assert_sealed_export_paper_ready(root) == payload
+
+
+def test_consumer_gate_requires_a_sealed_manifest(tmp_path: Path) -> None:
+    root = tmp_path / "unsealed"
+    root.mkdir()
+    with pytest.raises(TypedRetrofitSealError, match="not sealed"):
+        assert_sealed_export_paper_ready(root)
 
 
 # --------------------------------------------------------------------------- #
