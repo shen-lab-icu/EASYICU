@@ -1,0 +1,360 @@
+{
+  "online_runtime_metrics": {
+    "reason": "Bundle 0 freezes the offline resource/context envelope only; provider latency and repair counts remain run-artifact metrics.",
+    "status": "not_measured_no_provider_calls"
+  },
+  "patient_data_reads": 0,
+  "provider_calls": 0,
+  "schema_version": "easyicu.research_agent_resource_baseline/1",
+  "scope": "offline_minimal_context_fixture_not_paper_input_authority",
+  "source_sha256": {
+    "src/easyicu/data/concept-dict.json": "fccadc53622dc82fe1dc8696617e52044168b6a84a9255e97e59df9e53bc5803",
+    "src/easyicu/research_agent/agents/core.py": "9bdecee5eb7e8dba22f418eddb5f4677d72136b8b55518140c9ae1f8540fb218",
+    "src/easyicu/research_agent/know_how/registry.py": "5df2a69018505ec9d3888ec83df2ad9cc6d912d298ec6dbdb142415b5ca849a4",
+    "src/easyicu/research_agent/planning/analysis_types.py": "28e48c1c30a3057ecb7e9befcf550292cdc07563801d68040e20d634a02e1fa4",
+    "src/easyicu/research_agent/planning/cohort_contract.py": "bd29eb63f41e3766c7e47ee0c2a502068cc311b0fc1f1412e118cc78f550a470",
+    "tools/research_agent_resource_baseline.py": "821d9ad99171ec2948d341920539ec413819ce8a9f0928a310c0f3d326a23e2d"
+  },
+  "summary": {
+    "max_planner_with_resources_bytes": 37338,
+    "max_planner_without_resources_bytes": 32782,
+    "max_resource_added_bytes": 4633,
+    "selected_resource_count": 7,
+    "task_count": 9
+  },
+  "task_order": [
+    "E1",
+    "E2",
+    "E3",
+    "M1",
+    "M2",
+    "M3",
+    "H1",
+    "H2",
+    "H3"
+  ],
+  "tasks": [
+    {
+      "fixture_concepts": [
+        "sepsis3",
+        "death",
+        "stay_id",
+        "subject_id"
+      ],
+      "know_how_prompt_bytes": 4005,
+      "planner_with_resources": {
+        "approx_input_tokens": 9302,
+        "limit_bytes": 80000,
+        "system_bytes": 7156,
+        "total_bytes": 37208,
+        "user_bytes": 30052
+      },
+      "planner_without_resources": {
+        "approx_input_tokens": 8144,
+        "limit_bytes": 80000,
+        "system_bytes": 7156,
+        "total_bytes": 32575,
+        "user_bytes": 25419
+      },
+      "question": "Estimate Sepsis-3 prevalence and mortality association.",
+      "resource_added_bytes": 4633,
+      "resource_selection_provider_calls": 0,
+      "retrieval_family": "descriptive",
+      "selected_know_how": [
+        {
+          "card_id": "sepsis_prognosis",
+          "data_readiness": "partial",
+          "file_sha256": "30fcb80694d0f528a948e3a5dd7574640bd39858fb081e7b5b0587be758f767f",
+          "score": 0.845385,
+          "version": "1.0.0"
+        }
+      ],
+      "task_id": "E1"
+    },
+    {
+      "fixture_concepts": [
+        "lactate",
+        "death",
+        "stay_id",
+        "subject_id"
+      ],
+      "know_how_prompt_bytes": 3871,
+      "planner_with_resources": {
+        "approx_input_tokens": 9321,
+        "limit_bytes": 80000,
+        "system_bytes": 7156,
+        "total_bytes": 37281,
+        "user_bytes": 30125
+      },
+      "planner_without_resources": {
+        "approx_input_tokens": 8196,
+        "limit_bytes": 80000,
+        "system_bytes": 7156,
+        "total_bytes": 32782,
+        "user_bytes": 25626
+      },
+      "question": "Estimate the association of first-24-hour peak lactate with in-hospital mortality.",
+      "resource_added_bytes": 4499,
+      "resource_selection_provider_calls": 0,
+      "retrieval_family": "association",
+      "selected_know_how": [
+        {
+          "card_id": "early_peak_lactate_association",
+          "data_readiness": "partial",
+          "file_sha256": "ae3bfa59b00efd806617171c4046fc4959031b017c7f95622d6a23e40a66f37e",
+          "score": 0.893182,
+          "version": "1.0.0"
+        }
+      ],
+      "task_id": "E2"
+    },
+    {
+      "fixture_concepts": [
+        "kdigo",
+        "death",
+        "los_icu",
+        "stay_id",
+        "subject_id"
+      ],
+      "know_how_prompt_bytes": 0,
+      "planner_with_resources": {
+        "approx_input_tokens": 8173,
+        "limit_bytes": 80000,
+        "system_bytes": 7156,
+        "total_bytes": 32690,
+        "user_bytes": 25534
+      },
+      "planner_without_resources": {
+        "approx_input_tokens": 8173,
+        "limit_bytes": 80000,
+        "system_bytes": 7156,
+        "total_bytes": 32690,
+        "user_bytes": 25534
+      },
+      "question": "Estimate the KDIGO AKI stage gradient for mortality and length of stay.",
+      "resource_added_bytes": 0,
+      "resource_selection_provider_calls": 0,
+      "retrieval_family": "association",
+      "selected_know_how": [],
+      "task_id": "E3"
+    },
+    {
+      "fixture_concepts": [
+        "bilirubin",
+        "sofa",
+        "death",
+        "stay_id",
+        "subject_id"
+      ],
+      "know_how_prompt_bytes": 0,
+      "planner_with_resources": {
+        "approx_input_tokens": 8194,
+        "limit_bytes": 80000,
+        "system_bytes": 7156,
+        "total_bytes": 32776,
+        "user_bytes": 25620
+      },
+      "planner_without_resources": {
+        "approx_input_tokens": 8194,
+        "limit_bytes": 80000,
+        "system_bytes": 7156,
+        "total_bytes": 32776,
+        "user_bytes": 25620
+      },
+      "question": "Assess hepatobiliary SOFA and bilirubin missingness in mortality analysis.",
+      "resource_added_bytes": 0,
+      "resource_selection_provider_calls": 0,
+      "retrieval_family": "association",
+      "selected_know_how": [],
+      "task_id": "M1"
+    },
+    {
+      "fixture_concepts": [
+        "death",
+        "age",
+        "sex",
+        "stay_id",
+        "subject_id"
+      ],
+      "know_how_prompt_bytes": 3988,
+      "planner_with_resources": {
+        "approx_input_tokens": 9332,
+        "limit_bytes": 80000,
+        "system_bytes": 7156,
+        "total_bytes": 37326,
+        "user_bytes": 30170
+      },
+      "planner_without_resources": {
+        "approx_input_tokens": 8178,
+        "limit_bytes": 80000,
+        "system_bytes": 7156,
+        "total_bytes": 32710,
+        "user_bytes": 25554
+      },
+      "question": "Build a first-24-hour mortality risk prediction model.",
+      "resource_added_bytes": 4616,
+      "resource_selection_provider_calls": 0,
+      "retrieval_family": "prediction",
+      "selected_know_how": [
+        {
+          "card_id": "icu_mortality_prediction",
+          "data_readiness": "partial",
+          "file_sha256": "62f3d0edd406f48c5db20fc8970f207012b4bfd8b977da5a8a258b7d93c5b4db",
+          "score": 0.9375,
+          "version": "1.0.0"
+        }
+      ],
+      "task_id": "M2"
+    },
+    {
+      "fixture_concepts": [
+        "sepsis3",
+        "heart_rate",
+        "lactate",
+        "stay_id",
+        "subject_id"
+      ],
+      "know_how_prompt_bytes": 3990,
+      "planner_with_resources": {
+        "approx_input_tokens": 9315,
+        "limit_bytes": 80000,
+        "system_bytes": 7156,
+        "total_bytes": 37258,
+        "user_bytes": 30102
+      },
+      "planner_without_resources": {
+        "approx_input_tokens": 8160,
+        "limit_bytes": 80000,
+        "system_bytes": 7156,
+        "total_bytes": 32640,
+        "user_bytes": 25484
+      },
+      "question": "Discover candidate sepsis subphenotypes from labs and vital signs.",
+      "resource_added_bytes": 4618,
+      "resource_selection_provider_calls": 0,
+      "retrieval_family": "phenotyping",
+      "selected_know_how": [
+        {
+          "card_id": "longitudinal_icu_phenotyping",
+          "data_readiness": "not_ready",
+          "file_sha256": "58c9229e946f0680a30f93ab9fc77f81854e04810158a9ddd8616d2080a0ee62",
+          "score": 0.8,
+          "version": "1.0.0"
+        }
+      ],
+      "task_id": "M3"
+    },
+    {
+      "fixture_concepts": [
+        "mechvent",
+        "death",
+        "stay_id",
+        "subject_id"
+      ],
+      "know_how_prompt_bytes": 3991,
+      "planner_with_resources": {
+        "approx_input_tokens": 9335,
+        "limit_bytes": 80000,
+        "system_bytes": 7156,
+        "total_bytes": 37338,
+        "user_bytes": 30182
+      },
+      "planner_without_resources": {
+        "approx_input_tokens": 8180,
+        "limit_bytes": 80000,
+        "system_bytes": 7156,
+        "total_bytes": 32719,
+        "user_bytes": 25563
+      },
+      "question": "Estimate mechanical ventilation survival and 28-day mortality.",
+      "resource_added_bytes": 4619,
+      "resource_selection_provider_calls": 0,
+      "retrieval_family": "time_to_event",
+      "selected_know_how": [
+        {
+          "card_id": "mechanical_ventilation_liberation",
+          "data_readiness": "partial",
+          "file_sha256": "44a8ec17d899e612489455c942285284b50f49de69f8951441a3511a4e6a262f",
+          "score": 0.840526,
+          "version": "1.0.0"
+        }
+      ],
+      "task_id": "H1"
+    },
+    {
+      "fixture_concepts": [
+        "vaso",
+        "death",
+        "age",
+        "stay_id",
+        "subject_id"
+      ],
+      "know_how_prompt_bytes": 3994,
+      "planner_with_resources": {
+        "approx_input_tokens": 9319,
+        "limit_bytes": 80000,
+        "system_bytes": 7156,
+        "total_bytes": 37276,
+        "user_bytes": 30120
+      },
+      "planner_without_resources": {
+        "approx_input_tokens": 8164,
+        "limit_bytes": 80000,
+        "system_bytes": 7156,
+        "total_bytes": 32654,
+        "user_bytes": 25498
+      },
+      "question": "Compare vasopressor strategies with a confounding-aware causal analysis.",
+      "resource_added_bytes": 4622,
+      "resource_selection_provider_calls": 0,
+      "retrieval_family": "causal_emulation",
+      "selected_know_how": [
+        {
+          "card_id": "vasopressor_comparative_effectiveness",
+          "data_readiness": "partial",
+          "file_sha256": "fae72ce5c8976843d3949c5632600857f3b3d416f14f9990e2d681def1bba04b",
+          "score": 0.840526,
+          "version": "1.0.0"
+        }
+      ],
+      "task_id": "H2"
+    },
+    {
+      "fixture_concepts": [
+        "sofa",
+        "stay_id",
+        "subject_id"
+      ],
+      "know_how_prompt_bytes": 3990,
+      "planner_with_resources": {
+        "approx_input_tokens": 9279,
+        "limit_bytes": 80000,
+        "system_bytes": 7156,
+        "total_bytes": 37113,
+        "user_bytes": 29957
+      },
+      "planner_without_resources": {
+        "approx_input_tokens": 8124,
+        "limit_bytes": 80000,
+        "system_bytes": 7156,
+        "total_bytes": 32495,
+        "user_bytes": 25339
+      },
+      "question": "Cluster longitudinal ICU trajectories into stable subphenotypes.",
+      "resource_added_bytes": 4618,
+      "resource_selection_provider_calls": 0,
+      "retrieval_family": "phenotyping",
+      "selected_know_how": [
+        {
+          "card_id": "longitudinal_icu_phenotyping",
+          "data_readiness": "not_ready",
+          "file_sha256": "58c9229e946f0680a30f93ab9fc77f81854e04810158a9ddd8616d2080a0ee62",
+          "score": 0.811765,
+          "version": "1.0.0"
+        }
+      ],
+      "task_id": "H3"
+    }
+  ],
+  "tool_version": "1.0.0"
+}
