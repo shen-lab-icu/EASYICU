@@ -57,6 +57,7 @@ from ..authority.runtime_artifacts import (
 )
 from ..robustness.panel import PANEL_FILENAME, load_robustness_panel
 from ..schema import AnalysisManifest, PipelineResult, ResearchContext
+from ..learning.store import quarantine_run_lesson
 from ..reporting.side_findings import collect_side_findings, write_side_findings
 
 logger = logging.getLogger(__name__)
@@ -903,7 +904,7 @@ def finalise_success(
     write_run_checkpoint(manifest_path, manifest.model_dump(mode="json"))
 
     if pipeline._memory is not None:
-        pipeline._memory.record(
+        memory_record = pipeline._memory.record(
             run_id=run_id,
             research_question=context.research_question,
             database=database,
@@ -911,6 +912,14 @@ def finalise_success(
             findings=findings,
             workdir=run_dir,
         )
+        if pipeline._permissioned_memory_store is not None:
+            quarantine_run_lesson(
+                pipeline._permissioned_memory_store,
+                run_id=run_id,
+                project=pipeline.workdir.name,
+                payload=memory_record.to_dict(),
+                created_at=memory_record.finished_at,
+            )
 
     result = PipelineResult(
         run_id=run_id,

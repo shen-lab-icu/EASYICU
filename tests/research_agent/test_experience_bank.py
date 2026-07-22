@@ -37,7 +37,6 @@ from easyicu.research_agent.learning.experience import (
     mine_experience_from_run,
 )
 
-
 # ---------------------------------------------------------------------
 # 1. Jaccard similarity
 # ---------------------------------------------------------------------
@@ -185,7 +184,9 @@ def test_retrieve_top_k_and_min_similarity(tmp_path: Path) -> None:
     # Unrelated record below threshold
     bank.add(_rec(research_question="completely unrelated topic", summary="N"))
     hits = bank.retrieve(
-        research_question="lactate sepsis target", top_k=2, min_similarity=0.3,
+        research_question="lactate sepsis target",
+        top_k=2,
+        min_similarity=0.3,
     )
     assert len(hits) == 2
     for rec, score in hits:
@@ -412,7 +413,7 @@ def test_pipeline_retrieve_returns_hits_when_enabled(tmp_path: Path) -> None:
     assert hits[0][0].summary.startswith("Prefer load_sepsis3")
 
 
-def test_pipeline_surfaces_experience_hints_to_planner_prompt(
+def test_pipeline_does_not_surface_unreviewed_experience_to_planner_prompt(
     ra,
     synthetic_cohort,
     tmp_path: Path,
@@ -452,8 +453,10 @@ def test_pipeline_surfaces_experience_hints_to_planner_prompt(
     pipeline = ra.ResearchAgentPipeline(
         workdir=tmp_path / "runs",
         llm=router,
+        enable_memory=True,
         enable_experience_bank=True,
         experience_bank_path=bank_path,
+        runner_kind="subprocess",
     )
 
     result = pipeline.run(
@@ -467,19 +470,16 @@ def test_pipeline_surfaces_experience_hints_to_planner_prompt(
 
     assert planner.planner_prompts, "planner prompt was not captured"
     prompt = "\n".join(planner.planner_prompts)
-    assert "Experience hints for planner:" in prompt
-    assert "Prefer load_sepsis3 over manual ICD regex." in prompt
-    assert "not ICU rules" in prompt
-    assert (
-        "cohort definitions and clinical rules still come from the "
-        "concept dictionary and validators"
-    ) in prompt
+    assert "Experience hints for planner:" not in prompt
+    assert "Prefer load_sepsis3 over manual ICD regex." not in prompt
 
     audit_path = Path(result.workdir) / "experience_hints.md"
-    audit_text = audit_path.read_text(encoding="utf-8")
-    assert "Selected 1 card(s)" in audit_text
-    assert "Prefer load_sepsis3 over manual ICD regex." in audit_text
-    assert "not ICU rules" in audit_text
+    assert not audit_path.exists()
+    quarantined = list((tmp_path / "runs" / ".memory_v2").rglob("*.json"))
+    assert len(quarantined) == 1
+    payload = json.loads(quarantined[0].read_text(encoding="utf-8"))
+    assert payload["review_status"] == "quarantined"
+    assert payload["namespace"].startswith("run_lessons/quarantine/")
 
 
 def test_pipeline_reflect_handles_missing_run_status(tmp_path: Path) -> None:
