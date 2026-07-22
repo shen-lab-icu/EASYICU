@@ -34,7 +34,7 @@ class ResourceDescriptor(BaseModel):
         RESOURCE_DESCRIPTOR_SCHEMA
     )
     resource_id: str = Field(pattern=r"^[a-z][a-z0-9_.:-]{2,127}$")
-    version: str = Field(pattern=r"^[1-9][0-9]*\.[0-9]+\.[0-9]+$")
+    version: str = Field(pattern=r"^(?:0|[1-9][0-9]*)\.[0-9]+\.[0-9]+$")
     sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     kind: ResourceKind
     analysis_families: tuple[str, ...] = ()
