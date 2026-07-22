@@ -39,7 +39,7 @@ from easyicu.research_agent.schema import (
     ResearchContext,
 )
 
-TOOL_VERSION = "2.1.0"
+TOOL_VERSION = "2.2.0"
 SCHEMA_VERSION = "easyicu.research_agent_resource_baseline/2"
 REPO_ROOT = Path(__file__).resolve().parents[1]
 FIXED_CREATED_AT = datetime(2026, 7, 22, tzinfo=timezone.utc)
@@ -117,6 +117,7 @@ TASK_FIXTURES: tuple[dict[str, Any], ...] = (
 
 SOURCE_FILES: tuple[str, ...] = (
     "src/easyicu/research_agent/agents/core.py",
+    "src/easyicu/research_agent/research_context/outbound.py",
     "src/easyicu/research_agent/know_how/registry.py",
     "src/easyicu/research_agent/planning/analysis_types.py",
     "src/easyicu/research_agent/planning/cohort_contract.py",

@@ -14,13 +14,14 @@ import json
 from easyicu.research_agent.cohort.repair import (
     extract_cohort_definition_from_prose,
 )
+from easyicu.research_agent.providers.factory import register_offline_test_client
 
 
 class _StubLLM:
     name = "stub"
-    __easyicu_mock_client__ = True
 
     def __init__(self, reply: str):
+        register_offline_test_client(self)
         self._reply = reply
 
     def complete(self, messages, *, max_tokens=2048, temperature=0.2):

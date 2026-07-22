@@ -21,6 +21,13 @@ import sys
 import types
 from pathlib import Path
 
+from easyicu.research_agent.providers.factory import register_offline_test_client
+
+
+def _offline(client):
+    register_offline_test_client(client)
+    return client
+
 
 def _load_agents_helpers(ra):
     """Load parser helpers from their canonical implementation module."""
@@ -189,7 +196,6 @@ def test_planner_uses_enough_completion_budget(ra):
 
     class _CapturingLLM:
         name = "dummy"
-        __easyicu_mock_client__ = True
 
         def __init__(self):
             self.kwargs = None
@@ -204,7 +210,7 @@ def test_planner_uses_enough_completion_budget(ra):
 
     from easyicu.research_agent.agents.core import PlannerAgent
 
-    llm = _CapturingLLM()
+    llm = _offline(_CapturingLLM())
     PlannerAgent(llm).run(ctx)
     assert llm.kwargs["max_tokens"] >= 4096
 
@@ -245,15 +251,7 @@ def test_openai_client_passes_provider_extra_body(ra, monkeypatch):
         base_url="https://openrouter.ai/api/v1",
         extra_body=extra_body,
     )
-    from easyicu.research_agent.providers.factory import ProviderAuthorization
-
-    client.__easyicu_provider_authorization__ = ProviderAuthorization.create(
-        provider="openrouter",
-        model="z-ai/glm-4.5-air:free",
-        base_url="https://openrouter.ai/api/v1",
-        destination="external",
-        authorization_mode="operator_env",
-    )
+    register_offline_test_client(client)
     assert client.complete([LLMMessage(role="user", content="hi")]) == "ok"
     assert calls["create"]["extra_body"] == extra_body
 
@@ -265,7 +263,6 @@ def test_writer_strips_markdown_fence(ra, tmp_path: Path):
 
     class _DummyLLM:
         name = "dummy"
-        __easyicu_mock_client__ = True
 
         def complete(self, messages, **kwargs):
             return raw
@@ -280,7 +277,9 @@ def test_writer_strips_markdown_fence(ra, tmp_path: Path):
         ),
         variables=[],
     )
-    out = WriterAgent(_DummyLLM()).run(context=ctx, evidence_ids=["table_one"])
+    out = WriterAgent(_offline(_DummyLLM())).run(
+        context=ctx, evidence_ids=["table_one"]
+    )
     # The fence must be stripped so the binder regex matches.
     assert "{evidence:table_one}" in out
     assert "```markdown" not in out
@@ -292,7 +291,6 @@ def test_writer_language_prompt_preserves_evidence_ids(ra):
 
     class _DummyLLM:
         name = "dummy"
-        __easyicu_mock_client__ = True
 
         def complete(self, messages, **kwargs):
             captured["prompt"] = messages[-1].content
@@ -309,7 +307,7 @@ def test_writer_language_prompt_preserves_evidence_ids(ra):
         variables=[],
     )
 
-    out = WriterAgent(_DummyLLM(), language="zh").run(
+    out = WriterAgent(_offline(_DummyLLM()), language="zh").run(
         context=ctx,
         evidence_ids=["table_one"],
     )
@@ -328,7 +326,6 @@ def test_writer_prompt_discourages_tbd_and_manifest_narration(ra):
 
     class _DummyLLM:
         name = "dummy"
-        __easyicu_mock_client__ = True
 
         def complete(self, messages, **kwargs):
             for msg in messages:
@@ -346,7 +343,9 @@ def test_writer_prompt_discourages_tbd_and_manifest_narration(ra):
         variables=[],
     )
 
-    out = WriterAgent(_DummyLLM()).run(context=ctx, evidence_ids=["table_one"])
+    out = WriterAgent(_offline(_DummyLLM())).run(
+        context=ctx, evidence_ids=["table_one"]
+    )
 
     # Writer contract assertions land in the system prompt.
     assert "`[TBD]`" in captured["system"]

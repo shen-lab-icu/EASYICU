@@ -49,6 +49,10 @@ from easyicu.research_agent.providers import (  # noqa: E402
     ProviderConfigurationError,
     build_provider_client,
 )
+from easyicu.research_agent.providers.factory import (  # noqa: E402
+    _register_provider_wrapper,
+    authorized_complete,
+)
 from easyicu.research_agent.schema import ResearchContext  # noqa: E402
 
 
@@ -169,6 +173,9 @@ class CountingClient:
     raw_output_dir: Path | None = None
     calls: list[dict[str, Any]] = field(default_factory=list)
 
+    def __post_init__(self) -> None:
+        _register_provider_wrapper(self, children_getter=lambda: (self.inner,))
+
     @property
     def name(self) -> str:
         return str(getattr(self.inner, "name", self.inner.__class__.__name__))
@@ -176,6 +183,9 @@ class CountingClient:
     @property
     def last_usage(self) -> Any:
         return getattr(self.inner, "last_usage", None)
+
+    def iter_clients(self):
+        return iter((self.inner,))
 
     def complete(
         self,
@@ -190,7 +200,8 @@ class CountingClient:
                 f"{self.max_calls}"
             )
         started = time.monotonic()
-        response = self.inner.complete(
+        response = authorized_complete(
+            self.inner,
             messages,
             max_tokens=max_tokens,
             temperature=temperature,
@@ -289,9 +300,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         "randomization_seed": args.seed,
         "max_provider_calls_per_trial": args.max_provider_calls_per_trial,
         "prepare_only": bool(args.prepare_only),
-        "allow_curated_development_card": bool(
-            args.allow_curated_development_card
-        ),
+        "allow_curated_development_card": bool(args.allow_curated_development_card),
         "trials": [],
     }
     private_key: dict[str, str] = {}

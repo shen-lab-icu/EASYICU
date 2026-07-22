@@ -181,10 +181,9 @@ def _is_retryable_transport_error(exc: Exception) -> bool:
 
 
 def _is_local_openai_compatible_base_url(base_url: Optional[str]) -> bool:
-    lowered = (base_url or "").strip().lower()
-    if not lowered:
-        return False
-    return any(token in lowered for token in ("localhost", "127.0.0.1", "0.0.0.0"))
+    from .factory import is_loopback_openai_base_url
+
+    return is_loopback_openai_base_url(base_url)
 
 
 def _no_keepalive_limits():
@@ -410,6 +409,14 @@ class OpenAIClient:
         self._timeout = request_timeout
         self._max_retries = int(max_retries)
         self._extra_body = dict(extra_body or {})
+        if _is_local_openai_compatible_base_url(resolved_base_url):
+            from .factory import _register_loopback_provider_client
+
+            _register_loopback_provider_client(
+                self,
+                model=model,
+                base_url=str(resolved_base_url),
+            )
         self.supports_vision = (
             bool(supports_vision)
             if supports_vision is not None
@@ -436,23 +443,15 @@ class OpenAIClient:
     def _require_outbound_authorization(self) -> None:
         """Reject unmanaged external transports before serializing messages."""
 
-        if bool(getattr(self, "__easyicu_mock_client__", False)):
-            return
-        if _is_local_openai_compatible_base_url(
-            getattr(self, "_resolved_base_url", None)
-        ):
-            return
-        from .factory import ProviderAuthorization
+        from .factory import require_provider_client_authorization
 
-        authorization = getattr(self, "__easyicu_provider_authorization__", None)
-        if not isinstance(authorization, ProviderAuthorization) or (
-            authorization.destination != "external"
-            or authorization.authorization_mode != "operator_env"
-        ):
+        try:
+            require_provider_client_authorization(self)
+        except Exception as exc:
             raise PermissionError(
                 "external OpenAI-compatible calls require factory-minted "
                 "provider authorization"
-            )
+            ) from exc
 
     def _rebuild_openai_client(self) -> None:
         """Recreate the OpenAI client with a FRESH httpx connection pool.
@@ -1004,6 +1003,9 @@ class FallbackLLMClient:
         self.last_usage = None
         self.last_finish_reason = None
         self.last_client_name = None
+        from .factory import _register_provider_wrapper
+
+        _register_provider_wrapper(self, children_getter=lambda: tuple(self._clients))
 
     def complete(
         self,
@@ -1201,6 +1203,11 @@ class LLMRouter:
                 "LLMRouter needs at least one client. Pass a `default=` "
                 "and/or any subset of role-specific clients."
             )
+        from .factory import _register_provider_wrapper
+
+        _register_provider_wrapper(
+            self, children_getter=lambda: tuple(self.iter_clients())
+        )
 
     # ------------------------------------------------------------------
     # Routing
@@ -1670,7 +1677,9 @@ def llm_is_mockish(client: Any) -> bool:
 
     if client is None:
         return False
-    if getattr(client, "__easyicu_mock_client__", False) is True:
+    from .factory import provider_client_is_offline
+
+    if provider_client_is_offline(client):
         return True
     if hasattr(client, "for_role"):
         try:

@@ -11,8 +11,10 @@ import hashlib
 import ipaddress
 import json
 import os
+import threading
+import weakref
 from dataclasses import dataclass
-from typing import Any, Callable, Mapping, Optional
+from typing import Any, Callable, Mapping, Optional, Sequence
 from urllib.parse import urlsplit
 
 DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1"
@@ -46,6 +48,106 @@ UNSUPPORTED_PROVIDER = "unsupported_provider"
 EXTERNAL_LLM_NOT_AUTHORIZED = "external_llm_not_authorized"
 
 _BASE_URL_UNSET = object()
+
+
+@dataclass(frozen=True)
+class _TrustedClientRecord:
+    kind: str
+    authorization: Optional[ProviderAuthorization]
+    child_ids: tuple[int, ...] = ()
+    children_getter: Optional[Callable[[], Sequence[Any]]] = None
+
+
+_TRUSTED_CLIENTS: dict[int, tuple[weakref.ReferenceType[Any], _TrustedClientRecord]] = (
+    {}
+)
+_TRUSTED_CLIENTS_LOCK = threading.RLock()
+
+
+def _remember_trusted_client(client: Any, record: _TrustedClientRecord) -> None:
+    ident = id(client)
+    try:
+        reference = weakref.ref(
+            client,
+            lambda _ref, key=ident, registry=_TRUSTED_CLIENTS: registry.pop(key, None),
+        )
+    except TypeError as exc:
+        raise ProviderConfigurationError(
+            UNSUPPORTED_PROVIDER,
+            type(client).__name__,
+        ) from exc
+    with _TRUSTED_CLIENTS_LOCK:
+        _TRUSTED_CLIENTS[ident] = (reference, record)
+
+
+def _trusted_client_record(client: Any) -> Optional[_TrustedClientRecord]:
+    with _TRUSTED_CLIENTS_LOCK:
+        stored = _TRUSTED_CLIENTS.get(id(client))
+    if stored is None or stored[0]() is not client:
+        return None
+    return stored[1]
+
+
+def register_offline_test_client(client: Any) -> Any:
+    """Explicitly register one in-process, no-transport test double.
+
+    Trust is held in a private identity registry, never in an object attribute.
+    This helper is intended for deterministic tests and offline fixtures only.
+    """
+
+    _remember_trusted_client(
+        client, _TrustedClientRecord(kind="offline", authorization=None)
+    )
+    return client
+
+
+def provider_client_is_offline(client: Any) -> bool:
+    """Return whether *client* has explicit identity-bound offline trust."""
+
+    record = _trusted_client_record(client)
+    return bool(record is not None and record.kind == "offline")
+
+
+def _register_loopback_provider_client(
+    client: Any,
+    *,
+    model: str,
+    base_url: str,
+) -> Any:
+    if not is_loopback_openai_base_url(base_url):
+        raise ProviderConfigurationError(EXTERNAL_LLM_NOT_AUTHORIZED, "openai")
+    return _attach_provider_authorization(
+        client,
+        ProviderAuthorization.create(
+            provider="openai",
+            model=str(model),
+            base_url=str(base_url),
+            destination="local",
+            authorization_mode="local_exempt",
+        ),
+    )
+
+
+def _register_provider_wrapper(
+    wrapper: Any,
+    *,
+    children_getter: Callable[[], Sequence[Any]],
+) -> Any:
+    """Register one reviewed wrapper and bind its complete child graph."""
+
+    children = tuple(children_getter())
+    if not children or any(child is None or child is wrapper for child in children):
+        raise ProviderConfigurationError(UNSUPPORTED_PROVIDER, type(wrapper).__name__)
+    _remember_trusted_client(
+        wrapper,
+        _TrustedClientRecord(
+            kind="wrapper",
+            authorization=None,
+            child_ids=tuple(id(child) for child in children),
+            children_getter=children_getter,
+        ),
+    )
+    return wrapper
 
 
 def _openrouter_reasoning_extra_body(model: str) -> Optional[dict[str, Any]]:
@@ -119,6 +221,11 @@ def _attach_provider_authorization(
             UNSUPPORTED_PROVIDER,
             authorization.provider,
         ) from exc
+    if client is not None and not isinstance(client, Mapping):
+        _remember_trusted_client(
+            client,
+            _TrustedClientRecord(kind="transport", authorization=authorization),
+        )
     return client
 
 
@@ -155,33 +262,6 @@ def authorize_provider_client(
     return _attach_provider_authorization(client, authorization)
 
 
-def _provider_client_children(client: Any) -> list[Any]:
-    children: list[Any] = []
-    raw_clients = getattr(client, "_clients", None)
-    if isinstance(raw_clients, (list, tuple)):
-        children.extend(raw_clients)
-    iterator = getattr(client, "iter_clients", None)
-    if callable(iterator):
-        try:
-            children.extend(list(iterator()))
-        except Exception as exc:
-            raise ProviderConfigurationError(
-                UNSUPPORTED_PROVIDER,
-                type(client).__name__,
-            ) from exc
-    inner = getattr(client, "_inner", None)
-    if inner is not None:
-        children.append(inner)
-    unique: list[Any] = []
-    seen: set[int] = set()
-    for child in children:
-        if child is None or child is client or id(child) in seen:
-            continue
-        seen.add(id(child))
-        unique.append(child)
-    return unique
-
-
 def _valid_provider_authorization(value: object) -> bool:
     if not isinstance(value, ProviderAuthorization):
         return False
@@ -214,15 +294,31 @@ def require_provider_client_authorization(client: Any) -> None:
         if current is None or id(current) in seen:
             continue
         seen.add(id(current))
-        if bool(getattr(current, "__easyicu_mock_client__", False)):
+        record = _trusted_client_record(current)
+        if record is None:
+            raise ProviderConfigurationError(
+                EXTERNAL_LLM_NOT_AUTHORIZED,
+                str(getattr(current, "name", type(current).__name__)),
+            )
+        if record.kind == "offline":
             continue
-        authorization = getattr(current, "__easyicu_provider_authorization__", None)
-        children = _provider_client_children(current)
-        if _valid_provider_authorization(authorization):
-            if children:
-                stack.extend(children)
+        if record.kind == "transport" and _valid_provider_authorization(
+            record.authorization
+        ):
             continue
-        if children:
+        if record.kind == "wrapper" and record.children_getter is not None:
+            try:
+                children = tuple(record.children_getter())
+            except Exception as exc:
+                raise ProviderConfigurationError(
+                    UNSUPPORTED_PROVIDER,
+                    type(current).__name__,
+                ) from exc
+            if tuple(id(child) for child in children) != record.child_ids:
+                raise ProviderConfigurationError(
+                    EXTERNAL_LLM_NOT_AUTHORIZED,
+                    type(current).__name__,
+                )
             stack.extend(children)
             continue
         raise ProviderConfigurationError(
@@ -252,11 +348,22 @@ def provider_transport_destination(client: Any) -> str:
     before all legacy constructors have migrated into this factory.
     """
 
-    if bool(getattr(client, "__easyicu_mock_client__", False)):
+    record = _trusted_client_record(client)
+    if record is not None and record.kind == "offline":
         return "mock"
-    authorization = getattr(client, "__easyicu_provider_authorization__", None)
-    if isinstance(authorization, ProviderAuthorization):
-        return authorization.destination
+    if record is not None and record.kind == "wrapper" and record.children_getter:
+        destinations = {
+            provider_transport_destination(child) for child in record.children_getter()
+        }
+        if "external" in destinations:
+            return "external"
+        if destinations == {"mock"}:
+            return "mock"
+        if destinations and destinations <= {"mock", "local"}:
+            return "local"
+    if record is not None and _valid_provider_authorization(record.authorization):
+        assert record.authorization is not None
+        return record.authorization.destination
     if bool(getattr(client, "__easyicu_openai_transport__", False)):
         base_url = getattr(client, "_resolved_base_url", None)
         return "local" if is_loopback_openai_base_url(base_url) else "external"
@@ -271,16 +378,23 @@ def provider_transport_destination(client: Any) -> str:
 def provider_authorization_manifest(client: Any) -> dict[str, Any]:
     """Return exact non-secret endpoint authorization for run provenance."""
 
-    clients: list[Any]
-    if isinstance(getattr(client, "_clients", None), (list, tuple)):
-        clients = list(client._clients)
-    elif hasattr(client, "iter_clients"):
-        clients = list(client.iter_clients())
-    else:
-        clients = [client]
+    clients: list[Any] = []
+    stack = [client]
+    seen: set[int] = set()
+    while stack:
+        item = stack.pop()
+        if item is None or id(item) in seen:
+            continue
+        seen.add(id(item))
+        record = _trusted_client_record(item)
+        if record is not None and record.kind == "wrapper" and record.children_getter:
+            stack.extend(record.children_getter())
+        else:
+            clients.append(item)
     records: list[dict[str, Any]] = []
     for item in clients:
-        authorization = getattr(item, "__easyicu_provider_authorization__", None)
+        record = _trusted_client_record(item)
+        authorization = record.authorization if record is not None else None
         if isinstance(authorization, ProviderAuthorization):
             records.append(
                 {
@@ -293,7 +407,7 @@ def provider_authorization_manifest(client: Any) -> dict[str, Any]:
                 }
             )
             continue
-        if bool(getattr(item, "__easyicu_mock_client__", False)):
+        if record is not None and record.kind == "offline":
             records.append(
                 {
                     "provider": "mock",
@@ -433,6 +547,12 @@ def is_loopback_openai_base_url(base_url: Optional[str]) -> bool:
     except (TypeError, ValueError):
         return False
     if parsed.scheme.lower() not in {"http", "https"} or not hostname:
+        return False
+    if parsed.username is not None or parsed.password is not None:
+        return False
+    if parsed.query or parsed.fragment:
+        return False
+    if parsed.path not in {"", "/", "/v1", "/v1/"}:
         return False
     normalized_host = hostname.rstrip(".").lower()
     if normalized_host == "localhost":

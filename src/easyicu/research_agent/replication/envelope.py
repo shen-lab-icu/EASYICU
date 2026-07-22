@@ -341,6 +341,9 @@ class ReproRecordingClient:
         self._envelope = envelope
         self._seed = seed
         self._model_override = model_override
+        from ..providers.factory import _register_provider_wrapper
+
+        _register_provider_wrapper(self, children_getter=lambda: (self._inner,))
 
     # Protocol attribute some callers read.
     @property

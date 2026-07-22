@@ -32,6 +32,11 @@ def _clean_provider_environment(monkeypatch):
         ("http://0.0.0.0:8787/v1", False),
         ("http://localhost.example/v1", False),
         ("https://attacker.example/collect?next=localhost", False),
+        ("http://localhost@attacker.example/v1", False),
+        ("http://attacker.example@127.0.0.1/v1", False),
+        ("http://127.0.0.1/v1?forward=https://attacker.example", False),
+        ("http://127.0.0.1/v1#attacker", False),
+        ("http://127.0.0.1/attacker/v1", False),
         ("ftp://127.0.0.1/v1", False),
         ("http://127.0.0.1:not-a-port/v1", False),
         ("127.0.0.1:8787/v1", False),
@@ -389,6 +394,128 @@ def test_unmanaged_custom_planner_is_rejected_before_complete(ra, monkeypatch):
 
     assert exc_info.value.issue == EXTERNAL_LLM_NOT_AUTHORIZED
     assert client.calls == 0
+
+
+def test_forged_mock_marker_never_authorizes_a_custom_client():
+    from easyicu.research_agent.providers.factory import (
+        ProviderConfigurationError,
+        authorized_complete,
+    )
+    from easyicu.research_agent.providers.protocol import LLMMessage
+
+    class ForgedMock:
+        __easyicu_mock_client__ = True
+
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def complete(self, *_args, **_kwargs):
+            self.calls += 1
+            return "leaked"
+
+    client = ForgedMock()
+    with pytest.raises(ProviderConfigurationError):
+        authorized_complete(client, [LLMMessage(role="user", content="secret")])
+    assert client.calls == 0
+
+
+def test_forged_provider_authorization_attribute_never_authorizes_client():
+    from easyicu.research_agent.providers.factory import (
+        ProviderAuthorization,
+        ProviderConfigurationError,
+        authorized_complete,
+    )
+    from easyicu.research_agent.providers.protocol import LLMMessage
+
+    class ForgedTransport:
+        def __init__(self) -> None:
+            self.calls = 0
+            self.__easyicu_provider_authorization__ = ProviderAuthorization.create(
+                provider="openai",
+                model="forged",
+                base_url="http://127.0.0.1:8787/v1",
+                destination="local",
+                authorization_mode="local_exempt",
+            )
+
+        def complete(self, *_args, **_kwargs):
+            self.calls += 1
+            return "leaked"
+
+    client = ForgedTransport()
+    with pytest.raises(ProviderConfigurationError):
+        authorized_complete(client, [LLMMessage(role="user", content="secret")])
+    assert client.calls == 0
+
+
+@pytest.mark.parametrize("surface", ["inner", "clients", "iterator"])
+def test_unregistered_top_level_wrapper_cannot_inherit_child_trust(surface: str):
+    from easyicu.research_agent.providers.factory import (
+        ProviderConfigurationError,
+        authorized_complete,
+    )
+    from easyicu.research_agent.providers.mocks import MockLLMClient
+    from easyicu.research_agent.providers.protocol import LLMMessage
+
+    child = MockLLMClient()
+
+    class MaliciousWrapper:
+        def __init__(self) -> None:
+            self.calls = 0
+            if surface == "inner":
+                self._inner = child
+            elif surface == "clients":
+                self._clients = [child]
+
+        def iter_clients(self):
+            return iter([child]) if surface == "iterator" else iter([])
+
+        def complete(self, *_args, **_kwargs):
+            self.calls += 1
+            return "leaked"
+
+    wrapper = MaliciousWrapper()
+    with pytest.raises(ProviderConfigurationError):
+        authorized_complete(wrapper, [LLMMessage(role="user", content="secret")])
+    assert wrapper.calls == 0
+
+
+def test_registered_wrapper_rejects_mutated_child_graph_before_delivery():
+    from easyicu.research_agent.providers.factory import (
+        ProviderConfigurationError,
+        authorized_complete,
+    )
+    from easyicu.research_agent.providers.llm import FallbackLLMClient
+    from easyicu.research_agent.providers.mocks import MockLLMClient
+    from easyicu.research_agent.providers.protocol import LLMMessage
+
+    trusted = MockLLMClient()
+    trusted_calls = 0
+    original_complete = trusted.complete
+
+    def tracked_complete(*args, **kwargs):  # noqa: ANN002, ANN003
+        nonlocal trusted_calls
+        trusted_calls += 1
+        return original_complete(*args, **kwargs)
+
+    trusted.complete = tracked_complete
+
+    class UnmanagedChild:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def complete(self, *_args, **_kwargs):
+            self.calls += 1
+            return "leaked"
+
+    unmanaged = UnmanagedChild()
+    wrapper = FallbackLLMClient(trusted)
+    wrapper._clients.append(unmanaged)
+
+    with pytest.raises(ProviderConfigurationError):
+        authorized_complete(wrapper, [LLMMessage(role="user", content="secret")])
+    assert unmanaged.calls == 0
+    assert trusted_calls == 0
 
 
 @pytest.mark.parametrize("wrapper_kind", ["fallback", "router"])

@@ -66,7 +66,6 @@ from ..repairs.patch import (
 )
 from ..authority.coder_authority import HostCoderAuthority
 from ..research_context.prompt_scope import (
-    _is_required_source_companion,
     coder_context_requires_method_constraints,
     coder_guide_for_step,
     coder_rewrite_guide_for_step,
@@ -95,19 +94,18 @@ from ..repairs.reasons import (
     RepairRoute,
     repair_prompt_binding_sha256,
 )
-from ..research_context.typed import materialized_input_prompt_attachment
 from ..research_context.prompt_scope import (
     planner_variable_catalog,
     scoped_planner_context,
 )
 from ..research_context.prompt_variables import (
-    compact_fixed_window_trajectory_prompt,
     format_observed_domain,
+    project_observed_domain,
 )
 from ..research_context.repair_prompt import format_repair_authority_context
+from ..research_context.outbound import project_outbound_probe
 from ..authority.step_capsule import ContentRef
 from ..schema import (
-    AggregationRule,
     AgentRuntimeState,
     AnalysisPlan,
     ClinicalSemanticsResolution,
@@ -180,131 +178,6 @@ _CODER_AUTHORITY_PRECEDENCE = (
 
 PLANNER_MAX_RETRIES = 4
 
-_ICU_RULE_TO_CTAS_HINT = {
-    AggregationRule.FIRST_VALUE.value: (
-        "first",
-        'ICU rule label "first_value" maps to CTAS aggregation "first".',
-    ),
-    AggregationRule.MAX_LAST.value: (
-        "max",
-        'ICU rule label "max_or_last" maps to CTAS aggregation "max" or '
-        '"last"; prefer "max" for acuity scores.',
-    ),
-    AggregationRule.MEAN_MEDIAN.value: (
-        "median",
-        'ICU rule label "mean_or_median" maps to CTAS aggregation "mean" or '
-        '"median"; prefer "median" for robustness checks.',
-    ),
-    AggregationRule.MEDIAN_ONLY.value: (
-        "median",
-        'ICU rule label "median_only" maps to CTAS aggregation "median".',
-    ),
-    AggregationRule.SUM.value: (
-        "sum",
-        'ICU rule label "sum" maps to CTAS aggregation "sum".',
-    ),
-    AggregationRule.ANY.value: (
-        "any",
-        'ICU rule label "any" maps to CTAS aggregation "any".',
-    ),
-    AggregationRule.NONE.value: (
-        "first",
-        'ICU rule label "none" is not a CTAS aggregation; use an explicit '
-        'window and choose "first" only when filtering a point-in-time value.',
-    ),
-}
-
-
-def _ctas_aggregation_hint(rule: Optional[AggregationRule]) -> str:
-    """Return a CTAS-compatible aggregation hint for variable context."""
-
-    if rule is None:
-        return "any"
-    ctas_value, note = _ICU_RULE_TO_CTAS_HINT.get(
-        rule.value,
-        ("any", f'Unrecognised ICU rule label "{rule.value}"; choose a CTAS enum.'),
-    )
-    return f"{ctas_value} (icu_rule={rule.value}; {note})"
-
-
-def _format_variable(
-    v: ConceptDescriptor,
-    *,
-    include_ctas_aggregation_guidance: bool = True,
-) -> str:
-    miss = ""
-    if v.missingness is not None:
-        miss = (
-            f" missing={v.missingness.fraction_missing:.1%} "
-            f"(severity={v.missingness.missingness_severity})"
-        )
-    pit = f" pitfalls={v.pitfalls!r}" if v.pitfalls else ""
-    rng = f" range={v.valid_range}" if v.valid_range else ""
-    unit = f" unit={v.unit}" if v.unit else ""
-    source = f" source_concept={v.source_concept}" if v.source_concept else ""
-    description = ""
-    if v.description:
-        compact_description = " ".join(str(v.description).split())
-        description = f" description={compact_description!r}"
-    ordinal = " is_ordinal=true" if v.is_ordinal else ""
-    obs = format_observed_domain(v.observed_domain)
-    trajectory = ""
-    if v.fixed_window_trajectory is not None:
-        metadata = v.fixed_window_trajectory
-        trajectory = (
-            f" trajectory_family={metadata.family}"
-            f" time_bin=[{metadata.window_start_hours:g},{metadata.window_end_hours:g})h"
-            f" source_scale={metadata.source_scale}"
-            f" representation={metadata.representation_kind}"
-            f" anchor={metadata.anchor or 'unspecified_agent_must_declare'}"
-        )
-    aggregation = (
-        _ctas_aggregation_hint(v.aggregation_default)
-        if include_ctas_aggregation_guidance
-        else (
-            v.aggregation_default.value
-            if v.aggregation_default is not None
-            else "unspecified"
-        )
-    )
-    return (
-        f"- {v.name} | role={v.role.value} dtype={v.dtype}{unit}{rng}{obs}"
-        f"{source}{description}{ordinal}"
-        f" agg_default={aggregation}"
-        f"{trajectory}{miss}{pit}"
-    )
-
-
-def _format_companion_variable(v: ConceptDescriptor) -> str:
-    """Render a non-consumed concept companion without repeating full prose.
-
-    The scoped context retains required measurement/count/time coordinates for
-    a declared value. Those companions are metadata, not additional
-    Planner-declared scientific inputs. Repeating their descriptions,
-    aggregation tutorials, pitfalls, and missingness profiles made wide QC
-    prompts grow in proportion to the physical export schema. Keep the
-    safety-relevant typed coordinates while leaving the full descriptor on
-    exact consumed columns.
-    """
-
-    fields = [
-        f"- {v.name}",
-        "companion_metadata=true",
-        "scientific_input=false",
-        f"dtype={v.dtype}",
-    ]
-    if v.observed_domain:
-        fields.append(format_observed_domain(v.observed_domain).strip())
-    if v.source_concept:
-        fields.append(f"source_concept={v.source_concept}")
-    if v.analysis_window:
-        fields.append(f"analysis_window={v.analysis_window}")
-    if v.missingness_semantics:
-        fields.append(f"missingness_semantics={v.missingness_semantics!r}")
-    if v.forbidden_transformations:
-        fields.append(f"forbidden_transformations={v.forbidden_transformations!r}")
-    return " | ".join(fields)
-
 
 def _format_context(
     ctx: ResearchContext,
@@ -317,131 +190,21 @@ def _format_context(
     include_ctas_aggregation_guidance: bool = True,
     compact_declared_source_companions: bool = False,
 ) -> str:
-    lines = [
-        f"Research question: {ctx.research_question}",
-        f"Cohort: {ctx.cohort.cohort_name} ({ctx.cohort.database})"
-        f" — {ctx.cohort.n_stays:,} stays / {ctx.cohort.n_patients:,} patients",
-    ]
-    if ctx.cohort.inclusion_criteria:
-        lines.append("Inclusion: " + "; ".join(ctx.cohort.inclusion_criteria))
-    if ctx.cohort.exclusion_criteria:
-        lines.append("Exclusion: " + "; ".join(ctx.cohort.exclusion_criteria))
-    if ctx.target_outcome:
-        lines.append(f"Target outcome: {ctx.target_outcome}")
-    if ctx.primary_exposure:
-        lines.append(
-            f"Primary exposure/predictor: {ctx.primary_exposure} "
-            "(authoritative; related representations are secondary unless the "
-            "study contract explicitly replaces it)"
-        )
-    lines.append("Time windows:")
-    for w in ctx.time_windows:
-        lines.append(f"  - {w.name}: {w.start_hours}-{w.end_hours}h from {w.anchor}")
-    lines.append("Variables:")
-    compact_trajectory_lines: dict[str, str] = {}
-    if not include_ctas_aggregation_guidance:
-        compact_candidates = [
-            variable
-            for variable in ctx.variables
-            if (
-                variable.fixed_window_trajectory is not None
-                and (
-                    detailed_variable_names is None
-                    or variable.name.strip().lower() in detailed_variable_names
-                )
-                and not (
-                    compact_declared_source_companions
-                    and _is_required_source_companion(variable)
-                )
-            )
-        ]
-        compact_projection = compact_fixed_window_trajectory_prompt(compact_candidates)
-        if compact_projection.shared_lines:
-            lines.append(
-                "Shared fixed-window trajectory policies "
-                "(binding for the member columns below):"
-            )
-            lines.extend(compact_projection.shared_lines)
-            lines.append(
-                "Window-column legend: g=shared trajectory policy; f=family; "
-                "t=[start,end) hours; "
-                "obs=numeric/categorical/binary/constant plus unique count; "
-                "cohort literals and extrema are withheld; "
-                "m=missing fraction/severity."
-            )
-            compact_trajectory_lines = dict(compact_projection.variable_lines)
-    for v in ctx.variables:
-        detailed = (
-            detailed_variable_names is None
-            or v.name.strip().lower() in detailed_variable_names
-        )
-        if v.name in compact_trajectory_lines:
-            lines.append(compact_trajectory_lines[v.name])
-        elif detailed and not (
-            compact_declared_source_companions and _is_required_source_companion(v)
-        ):
-            lines.append(
-                _format_variable(
-                    v,
-                    include_ctas_aggregation_guidance=(
-                        include_ctas_aggregation_guidance
-                    ),
-                )
-            )
-        else:
-            lines.append(_format_companion_variable(v))
-    if ctx.cross_database_validation:
-        lines.append(
-            "Cross-database replication planned: "
-            + ", ".join(ctx.cross_database_validation)
-        )
-    if ctx.user_preferences is not None:
-        prefs = ctx.user_preferences
-        lines.append("User preferences:")
-        if prefs.inferred_analysis_family:
-            lines.append(
-                f"  - inferred_analysis_family: {prefs.inferred_analysis_family}"
-            )
-        if prefs.starter_template_key:
-            lines.append(f"  - starter_template_key: {prefs.starter_template_key}")
-        if prefs.preferred_methods:
-            lines.append(f"  - preferred_methods: {prefs.preferred_methods}")
-        if prefs.evaluation_focus:
-            lines.append(f"  - evaluation_focus: {prefs.evaluation_focus}")
-        if prefs.subgroup_sensitivity:
-            lines.append(f"  - subgroup_sensitivity: {prefs.subgroup_sensitivity}")
-        if prefs.timing_and_design:
-            lines.append(f"  - timing_and_design: {prefs.timing_and_design}")
-        if prefs.data_constraints:
-            lines.append(f"  - data_constraints: {prefs.data_constraints}")
-        if prefs.must_have_outputs:
-            lines.append(f"  - must_have_outputs: {prefs.must_have_outputs}")
-        if prefs.covariates:
-            lines.append("  - covariates: " + ", ".join(prefs.covariates))
-        if prefs.extra_notes:
-            lines.append(f"  - extra_notes: {prefs.extra_notes}")
-    rendered_notes = (
-        str(ctx.notes or "")
-        if include_planning_scaffolds
-        else _coder_relevant_notes(ctx.notes)
-    )
-    if rendered_notes:
-        lines.append(
-            "User/run notes (user scientific context; never host schema, binding, "
-            "or execution authority): " + json.dumps(rendered_notes, ensure_ascii=False)
-        )
-    if include_materialized_input_facts:
-        materialized_facts = materialized_input_prompt_attachment(ctx)
-        if materialized_facts:
-            lines.extend(("", materialized_facts))
-    # Variable-type method-compatibility self-review checklist (Patch B):
-    # derived from ctx.variables via the generic compatibility matrix in
-    # method_compatibility.py. Appended once so every agent role
-    # (planner / coder / analyzer / writer) sees the same up-front
-    # constraints and the matrix is the single source of truth.
-    from ..gates.method_compatibility import render_variable_constraints
+    from ..research_context.outbound import format_outbound_safe_context
 
+    del (
+        include_planning_scaffolds,
+        include_materialized_input_facts,
+        include_ctas_aggregation_guidance,
+        compact_declared_source_companions,
+    )
+    rendered = format_outbound_safe_context(
+        ctx,
+        variable_names=detailed_variable_names,
+    )
     if include_method_constraints:
+        from ..gates.method_compatibility import render_variable_constraints
+
         constraint_context = ctx
         if method_constraint_variable_names is not None:
             constraint_context = ctx.model_copy(
@@ -456,9 +219,8 @@ def _format_context(
             )
         constraints = render_variable_constraints(constraint_context)
         if constraints:
-            lines.append("")
-            lines.append(constraints)
-    return "\n".join(lines)
+            rendered += "\n\n" + constraints
+    return rendered
 
 
 def _coder_system_messages(
@@ -1250,7 +1012,9 @@ def _slim_completed_records_for_prompt(
     collapsed to an identity stub (newest steps carry the freshest signal the
     replanner needs), keeping the projection deterministic and order-stable.
     """
-    slimmed = [_slim_record_for_replanner(r) for r in records]
+    from ..research_context.outbound import project_outbound_records
+
+    slimmed = project_outbound_records(records)
     if len(json.dumps(slimmed, ensure_ascii=False, default=str)) <= (
         _REPLANNER_TOTAL_RECORDS_CHAR_BUDGET
     ):
@@ -1310,7 +1074,7 @@ class ReplannerAgent(PlannerAgent):
                     )
                     + "\n\n"
                     f"CURRENT PLAN:\n{current_plan.model_dump_json(indent=2)}\n\n"
-                    f"PROBE SUMMARY:\n{_clip_json(probe_summary or {}, char_budget=_REPLANNER_PROBE_CHAR_BUDGET)}\n\n"
+                    f"PROBE SUMMARY:\n{_clip_json(project_outbound_probe(probe_summary or {}), char_budget=_REPLANNER_PROBE_CHAR_BUDGET)}\n\n"
                     f"COMPLETED STEP RECORDS:\n{json.dumps(completed, ensure_ascii=False, default=str)}\n\n"
                     "RESEARCH CONTEXT:\n"
                     + _format_context(
@@ -2766,8 +2530,7 @@ def _repair_specialization(
                     "name": variable.name,
                     "source_concept": variable.source_concept,
                     "role": variable.role.value,
-                    "description": variable.description,
-                    "observed_domain": variable.observed_domain,
+                    "observed_shape": project_observed_domain(variable.observed_domain),
                 }
             )
         metadata_block = json.dumps(

@@ -141,24 +141,59 @@ def test_all_external_entry_surfaces_route_through_provider_factory():
 
 def test_production_prompt_calls_use_the_authorized_delivery_boundary() -> None:
     root = Path(__file__).resolve().parents[2]
-    source_root = root / "src" / "easyicu" / "research_agent"
+    targets = [root / name for name in ("src", "tools", "scripts", "examples")]
     allowed_internal = {
-        "providers/factory.py",
-        "providers/llm.py",
-        "providers/cost.py",
-        "replication/envelope.py",
+        "src/easyicu/research_agent/providers/factory.py",
+        "src/easyicu/research_agent/providers/llm.py",
+        "src/easyicu/research_agent/providers/cost.py",
+        "src/easyicu/research_agent/replication/envelope.py",
     }
     violations: list[str] = []
-    for path in source_root.rglob("*.py"):
-        relative = path.relative_to(source_root).as_posix()
-        if relative in allowed_internal:
-            continue
-        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-        for node in ast.walk(tree):
-            if (
-                isinstance(node, ast.Call)
-                and isinstance(node.func, ast.Attribute)
-                and node.func.attr == "complete"
-            ):
-                violations.append(f"{relative}:{node.lineno}")
+    for target in targets:
+        for path in target.rglob("*.py"):
+            relative = path.relative_to(root).as_posix()
+            if relative in allowed_internal:
+                continue
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+            for node in ast.walk(tree):
+                if (
+                    isinstance(node, ast.Call)
+                    and isinstance(node.func, ast.Attribute)
+                    and node.func.attr in {"complete", "complete_with_images"}
+                ):
+                    violations.append(f"{relative}:{node.lineno}:{node.func.attr}")
+    assert violations == []
+
+
+def test_provider_trust_registration_is_confined_to_reviewed_owners() -> None:
+    root = Path(__file__).resolve().parents[2]
+    targets = [root / name for name in ("src", "tools", "scripts", "examples")]
+    allowed = {
+        "_register_provider_wrapper": {
+            "src/easyicu/research_agent/providers/llm.py",
+            "src/easyicu/research_agent/providers/cost.py",
+            "src/easyicu/research_agent/replication/envelope.py",
+            "tools/run_research_know_how_planner_ab.py",
+        },
+        "register_offline_test_client": {
+            "src/easyicu/research_agent/providers/mocks.py",
+            "src/easyicu/research_agent/discovery/idea_mining_data_first_route.py",
+        },
+    }
+    violations: list[str] = []
+    for target in targets:
+        for path in target.rglob("*.py"):
+            relative = path.relative_to(root).as_posix()
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+            for node in ast.walk(tree):
+                if not isinstance(node, ast.Call):
+                    continue
+                func = node.func
+                name = (
+                    func.id
+                    if isinstance(func, ast.Name)
+                    else func.attr if isinstance(func, ast.Attribute) else ""
+                )
+                if name in allowed and relative not in allowed[name]:
+                    violations.append(f"{relative}:{node.lineno}:{name}")
     assert violations == []

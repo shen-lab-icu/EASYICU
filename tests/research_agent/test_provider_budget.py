@@ -33,6 +33,7 @@ from easyicu.research_agent.schema import (
     CohortDescriptor,
     ResearchContext,
 )
+from easyicu.research_agent.providers.factory import register_offline_test_client
 
 
 def _canonical_digest(payload: dict) -> str:
@@ -60,6 +61,7 @@ class _AuditLLM:
     name = "audit-budget-test"
 
     def __init__(self) -> None:
+        register_offline_test_client(self)
         self.calls = 0
 
     def complete(self, messages, **kwargs):  # noqa: ANN001, ANN003
@@ -85,6 +87,7 @@ def test_pre_step_cohort_translation_has_durable_shared_provider_budget(tmp_path
         name = "cohort-translation-budget-test"
 
         def __init__(self) -> None:
+            register_offline_test_client(self)
             self.calls = 0
 
         def complete(self, messages, **kwargs):  # noqa: ANN001, ANN003
@@ -207,6 +210,9 @@ def test_cohort_translation_preserves_existing_single_ledger_state(tmp_path):
 
     class _TranslationLLM:
         name = "preserve-ledger-test"
+
+        def __init__(self) -> None:
+            register_offline_test_client(self)
 
         def complete(self, messages, **kwargs):  # noqa: ANN001, ANN003
             del messages, kwargs
@@ -656,6 +662,7 @@ def test_openai_transport_retries_consume_the_same_provider_budget(monkeypatch):
     client._extra_body = {}
     client._local_noauth_mode = False
     client._max_retries = 2
+    register_offline_test_client(client)
     monkeypatch.setattr("time.sleep", lambda _seconds: None)
     budget = StepProviderCallBudget(2, step_id="transport")
 
@@ -689,6 +696,7 @@ def test_openai_transport_retry_stops_before_exceeding_budget(monkeypatch):
     client._extra_body = {}
     client._local_noauth_mode = False
     client._max_retries = 3
+    register_offline_test_client(client)
     sleeps = []
     monkeypatch.setattr("time.sleep", sleeps.append)
     budget = StepProviderCallBudget(1, step_id="transport")
@@ -1390,6 +1398,7 @@ def test_fallback_children_each_consume_a_real_provider_attempt():
 
     class _Child:
         def __init__(self, result=None, error=None):
+            register_offline_test_client(self)
             self.result = result
             self.error = error
             self.calls = 0
@@ -1423,13 +1432,21 @@ def test_fallback_does_not_double_charge_transparent_transport_aware_wrapper():
     class _AwareClient:
         provider_attempt_budget_aware = True
 
+        def __init__(self) -> None:
+            register_offline_test_client(self)
+
         def complete(self, messages, **kwargs):  # noqa: ANN001, ANN003
             consume_active_transport_attempt()
             return "ok"
 
     class _Wrapper:
         def __init__(self, inner):
+            from easyicu.research_agent.providers.factory import (
+                _register_provider_wrapper,
+            )
+
             self._inner = inner
+            _register_provider_wrapper(self, children_getter=lambda: (self._inner,))
 
         def complete(self, messages, **kwargs):  # noqa: ANN001, ANN003
             return self._inner.complete(messages, **kwargs)
@@ -1473,6 +1490,7 @@ with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as hand
         name = "provider-budget-pipeline-test"
 
         def __init__(self) -> None:
+            register_offline_test_client(self)
             self.plan_calls = 0
             self.write_calls = 0
             self.audit_calls = 0
@@ -1647,6 +1665,7 @@ with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as hand
         name = "two-semantic-repair-budget-test"
 
         def __init__(self) -> None:
+            register_offline_test_client(self)
             self.audit_calls = 0
             self.repair_calls = 0
 
