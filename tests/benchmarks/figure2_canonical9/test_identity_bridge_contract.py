@@ -158,6 +158,20 @@ def test_identity_bridge_rejects_duplicate_json_and_symlink(tmp_path: Path) -> N
     with pytest.raises(IdentityBridgeContractError, match="non-symlink"):
         load_identity_bridge_contract(alias)
 
+    with pytest.raises(IdentityBridgeContractError, match="cannot be opened safely"):
+        load_identity_bridge_contract(tmp_path / "missing.json")
+
+
+def test_identity_bridge_rejects_nonfinite_json(tmp_path: Path) -> None:
+    raw = json.dumps(
+        _payload(), ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    )
+    raw = raw.replace('"mapped_stay_count":1', '"mapped_stay_count":NaN', 1)
+    path = tmp_path / "nonfinite.json"
+    path.write_text(raw + "\n", encoding="utf-8")
+    with pytest.raises(IdentityBridgeContractError, match="non-finite"):
+        load_identity_bridge_contract(path)
+
 
 def test_identity_bridge_rejects_empty_mapping_artifact_and_forged_digest(
     tmp_path: Path,

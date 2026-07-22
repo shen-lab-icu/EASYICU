@@ -209,17 +209,30 @@ def _read_contract_bytes(path: Path) -> bytes:
             raise IdentityBridgeContractError(
                 "identity bridge contract must be an absolute, non-symlink file"
             )
-        descriptor = os.open(
-            path,
-            os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0),
-        )
+        try:
+            descriptor = os.open(
+                path,
+                os.O_RDONLY
+                | getattr(os, "O_CLOEXEC", 0)
+                | getattr(os, "O_NOFOLLOW", 0),
+            )
+        except OSError as exc:
+            raise IdentityBridgeContractError(
+                "identity bridge contract cannot be opened safely"
+            ) from exc
         info = os.fstat(descriptor)
         if not stat.S_ISREG(info.st_mode) or info.st_size > _MAX_CONTRACT_BYTES:
             raise IdentityBridgeContractError(
                 "identity bridge contract must be a small regular file"
             )
         pieces: list[bytes] = []
+        size = 0
         while block := os.read(descriptor, 64 * 1024):
+            size += len(block)
+            if size > _MAX_CONTRACT_BYTES:
+                raise IdentityBridgeContractError(
+                    "identity bridge contract exceeds the size limit while reading"
+                )
             pieces.append(block)
         return b"".join(pieces)
     finally:
@@ -253,7 +266,17 @@ def load_identity_bridge_contract(
         raise IdentityBridgeContractError(
             "identity bridge contract is not valid JSON"
         ) from exc
-    if not isinstance(decoded, dict) or raw != _canonical_json_bytes(decoded) + b"\n":
+    if not isinstance(decoded, dict):
+        raise IdentityBridgeContractError(
+            "identity bridge contract must be canonical JSON"
+        )
+    try:
+        canonical = _canonical_json_bytes(decoded) + b"\n"
+    except ValueError as exc:
+        raise IdentityBridgeContractError(
+            "identity bridge contract cannot contain non-finite values"
+        ) from exc
+    if raw != canonical:
         raise IdentityBridgeContractError(
             "identity bridge contract must be canonical JSON"
         )
