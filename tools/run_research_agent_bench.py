@@ -1446,9 +1446,104 @@ def _benchmark_execution_identity(
         network_policy=str(options.get("runner_network") or "none"),
         provider_client=llm,
         provider_authorization=provider_authorization,
-        seed=options.get("llm_seed"),
+        llm_seed=options.get("llm_seed"),
+        data_seed=options.get("execution_data_seed"),
+        input_authority_sha256=options.get(
+            "execution_input_authority_sha256"
+        ),
         host_runner_authorized=bool(options.get("host_runner_authorized", False)),
     )
+
+
+def _benchmark_input_authority_sha256(cohort: Any) -> str:
+    """Hash the exact benchmark input without exposing its values."""
+
+    def _canonical_bytes(payload: object) -> bytes:
+        return json.dumps(
+            payload,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+            default=str,
+        ).encode("utf-8")
+
+    if isinstance(cohort, (str, Path)):
+        path = Path(cohort).expanduser()
+        if path.is_symlink() or not path.is_file():
+            raise ValueError("benchmark cohort must be a regular non-symlink file")
+        content = hashlib.sha256()
+        with path.open("rb") as handle:
+            for block in iter(lambda: handle.read(1024 * 1024), b""):
+                content.update(block)
+        payload = {
+            "kind": "file",
+            "content_sha256": content.hexdigest(),
+            "size_bytes": int(path.stat().st_size),
+        }
+        return hashlib.sha256(_canonical_bytes(payload)).hexdigest()
+
+    try:
+        import pandas as pd
+
+        if isinstance(cohort, pd.DataFrame):
+            digest = hashlib.sha256()
+            digest.update(
+                _canonical_bytes(
+                    {
+                        "kind": "dataframe",
+                        "columns": [str(column) for column in cohort.columns],
+                        "dtypes": [str(dtype) for dtype in cohort.dtypes],
+                        "row_count": int(len(cohort)),
+                    }
+                )
+            )
+            try:
+                hashed = pd.util.hash_pandas_object(
+                    cohort,
+                    index=True,
+                    categorize=True,
+                )
+                digest.update(
+                    hashed.to_numpy(dtype="uint64", copy=False).tobytes()
+                )
+            except (TypeError, ValueError):
+                digest.update(
+                    cohort.to_json(
+                        orient="split",
+                        date_format="iso",
+                        date_unit="ns",
+                        default_handler=str,
+                    ).encode("utf-8")
+                )
+            return digest.hexdigest()
+    except ImportError:  # pragma: no cover - benchmark installs pandas
+        pass
+
+    return hashlib.sha256(
+        _canonical_bytes({"kind": "jsonable", "value": cohort})
+    ).hexdigest()
+
+
+def _bind_benchmark_execution_input(
+    pipeline_options: Optional[Mapping[str, Any]],
+    *,
+    cohort: Any,
+    data_seed: int | None,
+) -> Dict[str, Any]:
+    """Bind reuse and the persisted run identity to the current input."""
+
+    options = dict(pipeline_options or {})
+    input_digest = _benchmark_input_authority_sha256(cohort)
+    declared_digest = options.get("execution_input_authority_sha256")
+    if declared_digest is not None and declared_digest != input_digest:
+        raise ValueError("benchmark input authority override does not match cohort")
+    declared_seed = options.get("execution_data_seed")
+    if declared_seed is not None and declared_seed != data_seed:
+        raise ValueError("benchmark data seed override does not match invocation")
+    options["execution_input_authority_sha256"] = input_digest
+    options["execution_data_seed"] = data_seed
+    return options
 
 
 def _run_one_item_with_reuse(
@@ -1469,9 +1564,14 @@ def _run_one_item_with_reuse(
     if verbose:
         print(f"\n=== {item.key} — {item.name} ===")
     cohort = item.cohort_factory(seed)
+    bound_pipeline_options = _bind_benchmark_execution_input(
+        pipeline_options,
+        cohort=cohort,
+        data_seed=seed,
+    )
     item_root = out_root / item.key
     selected = set(_normalize_arms(arms))
-    expected_identity = _benchmark_execution_identity(pipeline_options, llm)
+    expected_identity = _benchmark_execution_identity(bound_pipeline_options, llm)
 
     naive = _skipped_arm("naive")
     aware = _skipped_arm("aware")
@@ -1499,7 +1599,7 @@ def _run_one_item_with_reuse(
             disable_icu_context=True,
             label="naive",
             llm=llm,
-            pipeline_options=pipeline_options,
+            pipeline_options=bound_pipeline_options,
             resume_run_id=resume_run_id,
             resume_from_step_id=resume_from_step_id,
             stop_after_step_id=stop_after_step_id,
@@ -1513,7 +1613,7 @@ def _run_one_item_with_reuse(
             disable_icu_context=False,
             label="aware",
             llm=llm,
-            pipeline_options=pipeline_options,
+            pipeline_options=bound_pipeline_options,
             resume_run_id=resume_run_id,
             resume_from_step_id=resume_from_step_id,
             stop_after_step_id=stop_after_step_id,
@@ -3719,6 +3819,7 @@ def _run_ehrflowbench_jsonl(
                 # eager DataFrame handoff (which also duplicates the full table
                 # in memory before post-QC development sampling).
                 cohort=path,
+                seed=seed,
                 out_root=out_root,
                 arms=arms,
                 pipeline_options=dict(pipeline_options or {}),
@@ -3851,6 +3952,7 @@ def _run_one_item_from_cohort(
     *,
     item,
     cohort,
+    seed: int | None = None,
     out_root: Path,
     arms: Sequence[str],
     pipeline_options: Optional[Dict[str, Any]] = None,
@@ -3865,10 +3967,15 @@ def _run_one_item_from_cohort(
 ) -> Dict[str, Any]:
     item_root = out_root / item.key
     selected = set(_normalize_arms(arms))
+    bound_pipeline_options = _bind_benchmark_execution_input(
+        pipeline_options,
+        cohort=cohort,
+        data_seed=seed,
+    )
     naive = _skipped_arm("naive")
     aware = _skipped_arm("aware")
     expected_identity = _benchmark_execution_identity(
-        pipeline_options,
+        bound_pipeline_options,
         provider=provider,
         model=model,
     )
@@ -3902,7 +4009,7 @@ def _run_one_item_from_cohort(
             disable_icu_context=True,
             label="naive",
             llm=llm,
-            pipeline_options=pipeline_options,
+            pipeline_options=bound_pipeline_options,
             reuse_existing=reuse_existing,
             resume_run_id=resume_run_id,
             resume_from_step_id=resume_from_step_id,
@@ -3917,7 +4024,7 @@ def _run_one_item_from_cohort(
             disable_icu_context=False,
             label="aware",
             llm=llm,
-            pipeline_options=pipeline_options,
+            pipeline_options=bound_pipeline_options,
             reuse_existing=reuse_existing,
             resume_run_id=resume_run_id,
             resume_from_step_id=resume_from_step_id,

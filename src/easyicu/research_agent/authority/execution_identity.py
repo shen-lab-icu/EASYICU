@@ -12,7 +12,7 @@ from ..providers.factory import provider_authorization_manifest
 from ..providers.prompts import PROMPT_PACK_VERSION, prompt_pack_files
 from .runtime_artifacts import capture_code_version
 
-EXECUTION_IDENTITY_SCHEMA = "easyicu.execution_identity/1"
+EXECUTION_IDENTITY_SCHEMA = "easyicu.execution_identity/2"
 EXPECTED_EXECUTION_IDENTITY_SCHEMA = "easyicu.expected_execution_identity/1"
 
 
@@ -42,7 +42,7 @@ class ExecutionIdentity(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
-    schema_version: Literal["easyicu.execution_identity/1"]
+    schema_version: Literal["easyicu.execution_identity/2"]
     submission_profile_ref: str | None
     runner: Literal["auto", "docker", "subprocess", "custom"]
     runner_image_digest: str | None
@@ -52,7 +52,13 @@ class ExecutionIdentity(BaseModel):
     prompt_pack_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     git_sha: str | None
     git_dirty: bool | None
-    seed: int | None
+    llm_seed: int | None
+    data_seed: int | None
+    input_authority_sha256: str | None = Field(
+        default=None,
+        pattern=r"^[0-9a-f]{64}$",
+    )
+    environment_identity_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     host_runner_authorized: bool
     paper_eligible: bool
     identity_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
@@ -65,6 +71,15 @@ class ExecutionIdentity(BaseModel):
         if provider_sha != self.provider_authorization_sha256:
             raise ValueError("provider authorization digest mismatch")
         payload = self.model_dump(mode="json", exclude={"identity_sha256"})
+        environment_payload = dict(payload)
+        environment_payload.pop("environment_identity_sha256", None)
+        environment_payload.pop("data_seed", None)
+        environment_payload.pop("input_authority_sha256", None)
+        environment_sha = hashlib.sha256(
+            _canonical_json(environment_payload).encode("utf-8")
+        ).hexdigest()
+        if environment_sha != self.environment_identity_sha256:
+            raise ValueError("execution environment identity digest mismatch")
         identity_sha = hashlib.sha256(
             _canonical_json(payload).encode("utf-8")
         ).hexdigest()
@@ -84,7 +99,9 @@ class ExecutionIdentity(BaseModel):
         runner: str,
         runner_image_digest: str | None,
         network_policy: str,
-        seed: int | None,
+        llm_seed: int | None,
+        data_seed: int | None = None,
+        input_authority_sha256: str | None = None,
         provider_client: Any = None,
         provider_authorization: Mapping[str, Any] | None = None,
         host_runner_authorized: bool = False,
@@ -132,10 +149,18 @@ class ExecutionIdentity(BaseModel):
             "prompt_pack_sha256": _prompt_pack_sha256(),
             "git_sha": version.get("git_sha"),
             "git_dirty": version.get("git_dirty"),
-            "seed": int(seed) if seed is not None else None,
+            "llm_seed": int(llm_seed) if llm_seed is not None else None,
+            "data_seed": int(data_seed) if data_seed is not None else None,
+            "input_authority_sha256": input_authority_sha256,
             "host_runner_authorized": bool(host_runner_authorized),
         }
         payload["paper_eligible"] = _paper_eligible(payload)
+        environment_payload = dict(payload)
+        environment_payload.pop("data_seed", None)
+        environment_payload.pop("input_authority_sha256", None)
+        payload["environment_identity_sha256"] = hashlib.sha256(
+            _canonical_json(environment_payload).encode("utf-8")
+        ).hexdigest()
         payload["identity_sha256"] = hashlib.sha256(
             _canonical_json(payload).encode("utf-8")
         ).hexdigest()
@@ -154,8 +179,11 @@ class ExpectedExecutionIdentity(BaseModel):
 
     @model_validator(mode="after")
     def _verify_frozen_identity(self) -> "ExpectedExecutionIdentity":
-        if self.expected_identity_sha256 != self.execution_identity.identity_sha256:
-            raise ValueError("expected execution identity digest mismatch")
+        if (
+            self.expected_identity_sha256
+            != self.execution_identity.environment_identity_sha256
+        ):
+            raise ValueError("expected execution environment identity digest mismatch")
         payload = self.model_dump(mode="json", exclude={"freeze_sha256"})
         expected_freeze_sha = hashlib.sha256(
             _canonical_json(payload).encode("utf-8")
@@ -171,7 +199,7 @@ class ExpectedExecutionIdentity(BaseModel):
         payload: dict[str, Any] = {
             "schema_version": EXPECTED_EXECUTION_IDENTITY_SCHEMA,
             "execution_identity": identity.model_dump(mode="json"),
-            "expected_identity_sha256": identity.identity_sha256,
+            "expected_identity_sha256": identity.environment_identity_sha256,
         }
         payload["freeze_sha256"] = hashlib.sha256(
             _canonical_json(payload).encode("utf-8")
@@ -218,7 +246,9 @@ def execution_identity_for_pipeline(pipeline: Any) -> ExecutionIdentity:
         runner_image_digest=pipeline._expected_runner_image_digest,
         network_policy=pipeline._runner_network,
         provider_client=pipeline._llm,
-        seed=pipeline._llm_seed,
+        llm_seed=pipeline._llm_seed,
+        data_seed=pipeline._config.execution_data_seed,
+        input_authority_sha256=pipeline._config.execution_input_authority_sha256,
         host_runner_authorized=pipeline._host_runner_authorized,
     )
     pipeline._execution_identity = identity

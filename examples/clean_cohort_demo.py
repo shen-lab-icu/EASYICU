@@ -13,6 +13,7 @@ Usage::
     export OPENROUTER_API_KEY='sk-or-v1-...'
     export OPENROUTER_BASE_URL='https://openrouter.ai/api/v1'
     export EASYICU_HOSTED_DEFAULT_MODEL='openai/gpt-oss-120b:free'
+    export EASYICU_ALLOW_EXTERNAL_LLM=1
     python examples/clean_cohort_demo.py
 
 Outputs land in  research_output/clean_demo/<run_id>/
@@ -106,22 +107,24 @@ def _make_client(model: str, api_key: str, base_url: str):
     """Return an OpenAIClient wrapped with exponential-backoff retry on 429/5xx."""
     import random
     from easyicu.research_agent import OpenAIClient
-    from easyicu.research_agent.providers.llm import openrouter_reasoning_extra_body
+    from easyicu.research_agent.providers.factory import build_provider_client
 
-    kwargs = dict(
+    provider = "openrouter" if "openrouter" in base_url.lower() else "openai"
+    environment = dict(os.environ)
+    if provider == "openrouter":
+        environment["OPENROUTER_API_KEY"] = api_key
+        environment["OPENROUTER_BASE_URL"] = base_url
+    else:
+        environment["OPENAI_API_KEY"] = api_key
+        environment["OPENAI_BASE_URL"] = base_url
+    inner = build_provider_client(
+        provider=provider,
         model=model,
-        api_key=api_key,
-        base_url=base_url,
         request_timeout=180.0,
-        extra_headers={
-            "HTTP-Referer": "https://github.com/shen-lab-icu/easyicu",
-            "X-Title": "EasyICU clean-cohort demo",
-        },
+        title="EasyICU clean-cohort demo",
+        client_cls=OpenAIClient,
+        environment=environment,
     )
-    extra_body = openrouter_reasoning_extra_body(model)
-    if extra_body is not None:
-        kwargs["extra_body"] = extra_body
-    inner = OpenAIClient(**kwargs)
 
     # Wrap complete() with retry logic so 429 / transient 5xx don't abort the run.
     _orig_complete = inner.complete

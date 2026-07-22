@@ -21,6 +21,9 @@ import pandas as pd
 from easyicu.research_agent.agents.core import _format_observed_domain
 from easyicu.research_agent.cohort.artifact_facts import observed_domain_for_series
 from easyicu.research_agent.research_context.builder import _observed_domain
+from easyicu.research_agent.research_context.prompt_variables import (
+    project_observed_domain,
+)
 
 
 def test_legacy_observed_domain_name_is_canonical_object() -> None:
@@ -96,6 +99,13 @@ def test_high_cardinality_categorical_omits_levels():
     d = _observed_domain(s)
     assert "levels" not in d
     assert d["is_binary"] is False
+
+
+def test_opaque_tokens_require_host_bindable_levels():
+    projection = project_observed_domain(
+        {"is_categorical": True, "is_binary": False, "n_unique": 2}
+    )
+    assert projection == {"shape": "unknown", "n_unique": 2}
 
 
 def test_descriptor_carries_observed_domain():

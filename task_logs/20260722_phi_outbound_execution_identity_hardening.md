@@ -29,6 +29,30 @@ Base: `1434aa9`
   wrappers.
 - Active and superseded findings remain distinct benchmark dimensions.
 
+## Second-review P1 follow-up
+
+Three additional review findings were reproduced and closed without relaxing
+the fail-closed boundaries:
+
+1. Exact run reuse now binds the benchmark data seed and a digest of the
+   actual input authority.  DataFrame values and external-file bytes are part
+   of the full execution identity, while the independently frozen submission
+   environment identity remains task-input agnostic so one operator freeze can
+   authorize all nine distinct tasks.
+2. External Planner prompts still withhold non-reviewed categorical literals,
+   but expose deterministic opaque level tokens.  The host maps those tokens
+   back to the locally observed labels before applying the existing exact
+   Table 1 contract, so privacy no longer makes the contract unsatisfiable.
+3. Executable entrypoints under `scripts/` and `examples/` now use the provider
+   factory.  The static ownership scan covers both trees, and `OpenAIClient`
+   itself rejects an unmanaged external destination before transport, so an
+   unscanned direct constructor cannot bypass operator authorization.
+
+The full reuse identity and the frozen paper-environment identity are
+deliberately separate coordinates: reuse must match the task data exactly;
+paper acceptance must match an operator-owned environment freeze outside the
+result tree and also verifies each score against its full manifest identity.
+
 ## Verification
 
 - Review-fix focused matrix: 168 passed, 7 pipeline tests deselected because
@@ -39,6 +63,16 @@ Base: `1434aa9`
 - Ruff, Black, py_compile: passed.
 - Architecture gate: zero lower-is-better regressions.
 - Module graph: zero cyclic SCC regressions.
+- Second-review focused matrix: 156 passed.
+- Pipeline configuration mirror, Ruff, py_compile, diff-check, architecture
+  gate, and module graph all passed after the follow-up.
+
+The wider 203-test diagnostic shard produced 197 passes plus six environment
+or baseline failures.  After fixing the one follow-up configuration omission,
+the remaining five failures are the existing Docker image/source-digest
+mismatch; they do not reach the changed identity, privacy, or provider code.
+The separately known cost-role expectation remains a baseline issue on both
+this branch and mainline and was not mixed into this security follow-up.
 
 The Docker-backed pipeline tests remain intentionally unrefreshed because the
 existing image source digest predates this branch. That environment mismatch

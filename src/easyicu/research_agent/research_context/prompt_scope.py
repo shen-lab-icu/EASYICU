@@ -727,6 +727,8 @@ def _planner_variable_catalog_line(variable: object) -> str:
         fields.append(f"observed={domain['shape']}")
     if domain.get("n_unique") is not None:
         fields.append(f"observed_n_unique={domain['n_unique']}")
+    if domain.get("opaque_levels"):
+        fields.append(f"opaque_levels={domain['opaque_levels']!r}")
     caveats = tuple(getattr(variable, "clinical_caveats", ()) or ()) or tuple(
         getattr(variable, "pitfalls", ()) or ()
     )

@@ -378,10 +378,12 @@ def evaluate_figure2_paper_acceptance(
             if frozen_identity is None:
                 raise ValueError("no valid independently frozen identity")
             if (
-                score_identity.identity_sha256
+                score_identity.environment_identity_sha256
                 != frozen_identity.expected_identity_sha256
             ):
-                raise ValueError("run identity differs from frozen submission identity")
+                raise ValueError(
+                    "run environment identity differs from frozen submission identity"
+                )
         except Exception as exc:
             issues.append(
                 _issue(

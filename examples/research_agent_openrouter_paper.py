@@ -3,6 +3,7 @@
 
 Usage:
     export OPENROUTER_API_KEY='sk-or-v1-...'
+    export EASYICU_ALLOW_EXTERNAL_LLM=1
     python examples/research_agent_openrouter_paper.py
 """
 
@@ -45,20 +46,22 @@ def main():
     sys.path.insert(0, str(repo_root / "src"))
 
     from easyicu.research_agent import OpenAIClient, ResearchAgentPipeline
+    from easyicu.research_agent.providers.factory import build_provider_client
 
     api_key = os.environ.get("OPENROUTER_API_KEY")
     if not api_key:
         print("Set OPENROUTER_API_KEY first.")
         return
 
-    llm = OpenAIClient(
+    llm = build_provider_client(
+        provider="openrouter",
         model="nousresearch/hermes-3-llama-3.1-405b:free",
-        api_key=api_key,
-        base_url="https://openrouter.ai/api/v1",
         request_timeout=120.0,
-        extra_headers={
-            "HTTP-Referer": "https://github.com/shen-lab-icu/easyicu",
-            "X-Title": "EasyICU research-agent",
+        title="EasyICU research-agent",
+        client_cls=OpenAIClient,
+        environment={
+            **os.environ,
+            "OPENROUTER_API_KEY": api_key,
         },
     )
     print("[openrouter] Using nousresearch/hermes-3-llama-3.1-405b:free")

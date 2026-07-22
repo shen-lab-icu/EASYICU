@@ -244,6 +244,15 @@ def test_openai_client_passes_provider_extra_body(ra, monkeypatch):
         base_url="https://openrouter.ai/api/v1",
         extra_body=extra_body,
     )
+    from easyicu.research_agent.providers.factory import ProviderAuthorization
+
+    client.__easyicu_provider_authorization__ = ProviderAuthorization.create(
+        provider="openrouter",
+        model="z-ai/glm-4.5-air:free",
+        base_url="https://openrouter.ai/api/v1",
+        destination="external",
+        authorization_mode="operator_env",
+    )
     assert client.complete([LLMMessage(role="user", content="hi")]) == "ok"
     assert calls["create"]["extra_body"] == extra_body
 
