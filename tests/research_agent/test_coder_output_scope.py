@@ -165,6 +165,23 @@ def test_coder_prompt_allows_only_declared_figure_products(ra):
     assert "declares no figure product" not in prompt
 
 
+def test_coder_prompt_recognises_fig_typed_alias_as_figure_product(ra):
+    llm = _RecordingLLM()
+    step = ra.AnalysisStep(
+        step_id="render_alias",
+        intent="Render the declared figure alias.",
+        inputs=["table:summary"],
+        expected_outputs=["fig:summary"],
+        method="visualization",
+    )
+
+    CoderAgent(llm).run(context=_context(ra), step=step)
+
+    prompt = llm.messages[-1].content
+    assert "Figure rendering is allowed only for the explicitly declared" in prompt
+    assert "declares no figure product" not in prompt
+
+
 def test_initial_and_repair_coder_receive_the_same_typed_parent_schema(ra):
     bindings = {
         "table:display_summary": {

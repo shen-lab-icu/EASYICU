@@ -77,6 +77,7 @@ from ..contracts.declared_product import (
 from ..plan_utils import (
     _cohort_predicate_partition_safety_rules,
     _primary_analysis_cohort_canonical_schema_rules,
+    _step_expects_figure,
     effect_output_authorized,
 )
 from ..providers.prompts import PROMPT_PACK_VERSION, load_prompt_pack
@@ -2102,7 +2103,10 @@ def _declared_output_scope_contract(step: AnalysisStep) -> str:
     """
 
     outputs = [str(item or "").strip() for item in step.expected_outputs]
-    has_figure = any(item.lower().startswith("figure:") for item in outputs)
+    # Use the single plan-level figure predicate so accepted typed aliases such
+    # as ``fig:*`` and rendering methods cannot receive the contradictory
+    # instruction that the step declares no figure product.
+    has_figure = _step_expects_figure(step)
     effect_authorized = effect_output_authorized(step)
     lines = [
         "DECLARED OUTPUT SCOPE (binding):",
