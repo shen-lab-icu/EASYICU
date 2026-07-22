@@ -169,6 +169,7 @@ def test_ladder_falls_back_to_api_when_cli_absent_but_key_present(monkeypatch):
     from easyicu.research_agent.providers.llm import build_llm_client
 
     _patch_cli(monkeypatch, set())
+    monkeypatch.setenv("EASYICU_ALLOW_EXTERNAL_LLM", "1")
     sel = build_llm_client(prefer="claude", api_key="sk-test", model="gpt-4o-mini")
     assert sel.backend == "openai"
     assert sel.fell_back is True

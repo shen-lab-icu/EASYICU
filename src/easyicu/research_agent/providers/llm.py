@@ -309,6 +309,7 @@ class OpenAIClient:
     """
 
     name = "openai"
+    __easyicu_openai_transport__ = True
     provider_attempt_budget_aware = True
 
     def __init__(
@@ -1412,19 +1413,28 @@ def _construct_backend(
     if backend in _CLI_BACKENDS:
         return CLIAgentLLMClient(backend=backend, model=model or None)
     if backend in _API_BACKENDS:
+        from .factory import build_provider_client
+
         resolved_base = base_url
         if backend == "openrouter" and not resolved_base:
             resolved_base = _OPENROUTER_BASE_URL
-        kwargs: Dict[str, Any] = {}
-        if model:
-            kwargs["model"] = model
+        provider_environment = dict(os.environ)
         if api_key:
-            kwargs["api_key"] = api_key
+            provider_environment[
+                "OPENROUTER_API_KEY" if backend == "openrouter" else "OPENAI_API_KEY"
+            ] = api_key
         if resolved_base:
-            kwargs["base_url"] = resolved_base
-        if extra_headers:
-            kwargs["extra_headers"] = extra_headers
-        return OpenAIClient(**kwargs)
+            provider_environment[
+                "OPENROUTER_BASE_URL" if backend == "openrouter" else "OPENAI_BASE_URL"
+            ] = resolved_base
+        return build_provider_client(
+            provider=backend,
+            model=model or "gpt-4o-mini",
+            request_timeout=120.0,
+            title=str((extra_headers or {}).get("X-Title") or "EasyICU LLM selector"),
+            client_cls=OpenAIClient,
+            environment=provider_environment,
+        )
     if backend == "mock":
         from .mocks import MockLLMClient
 

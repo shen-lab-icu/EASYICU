@@ -150,14 +150,31 @@ class OpenAIJudge(JudgeClient):
         if base_url is None and self.base_url_env:
             base_url = os.environ.get(self.base_url_env)
 
+        from ..providers.factory import build_provider_client
         from ..providers.llm import OpenAIClient
         from ..providers.protocol import LLMMessage
 
-        client = OpenAIClient(
+        provider = (
+            "openrouter"
+            if self.identity.provider == "openrouter"
+            else "openai"
+        )
+        provider_environment = dict(os.environ)
+        if provider == "openrouter":
+            provider_environment["OPENROUTER_API_KEY"] = api_key
+            if base_url:
+                provider_environment["OPENROUTER_BASE_URL"] = base_url
+        else:
+            provider_environment["OPENAI_API_KEY"] = api_key
+            if base_url:
+                provider_environment["OPENAI_BASE_URL"] = base_url
+        client = build_provider_client(
+            provider=provider,
             model=self.model,
-            api_key=api_key,
-            base_url=base_url,
-            max_retries=2,
+            request_timeout=120.0,
+            title=f"EasyICU Tier-2 judge: {self.identity.judge_id}",
+            client_cls=OpenAIClient,
+            environment=provider_environment,
         )
         response = client.complete(
             [

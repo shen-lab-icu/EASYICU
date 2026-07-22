@@ -1,11 +1,10 @@
 """Compact, lossless variable metadata for coder prompt transport.
 
 Wide fixed-window trajectory panels repeat the same family policy on every
-physical time-bin column.  The coder still needs every exact column, window,
-observed domain, and missingness fact, but it does not need the identical
-family policy copied dozens of times.  This module separates those shared and
-per-column coordinates without selecting variables or changing scientific
-authority.
+physical time-bin column. The coder still needs every exact column, window,
+domain shape/cardinality, and missingness fact, but cohort literals and extrema
+remain local evidence. This module separates shared and per-column coordinates
+without selecting variables or changing scientific authority.
 """
 
 from __future__ import annotations
@@ -25,27 +24,54 @@ class CompactTrajectoryPromptProjection:
     variable_lines: tuple[tuple[str, str], ...]
 
 
-def format_observed_domain(domain: Optional[Dict[str, Any]]) -> str:
-    """Render cohort-observed values as compact, fact-only prompt metadata."""
+def project_observed_domain(domain: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """Project local value-domain evidence onto non-literal prompt metadata.
+
+    Cohort values, extrema, and categorical labels are local evidence. They are
+    never prompt metadata by default. The projection preserves only shape and
+    cardinality needed for planning and mechanical validation.
+    """
 
     if not domain:
-        return ""
+        return {}
+    projected: Dict[str, Any] = {}
     if domain.get("is_constant"):
-        return " observed=CONSTANT(single value; no variation to model)"
-    if domain.get("is_binary"):
-        return (
-            " observed={0,1} BINARY(already 2-level; a numeric cutoff >1 is "
-            "degenerate)"
-        )
-    levels = domain.get("levels")
-    if levels:
-        shown = ",".join(str(value) for value in levels[:6])
-        more = "…" if len(levels) > 6 else ""
-        return f" observed_levels={{{shown}{more}}}(categorical; encode as-is)"
-    lo, hi = domain.get("min"), domain.get("max")
+        projected["shape"] = "constant"
+    elif domain.get("is_binary"):
+        projected["shape"] = "binary_numeric_indicator"
+    elif domain.get("levels"):
+        projected["shape"] = "categorical"
+    elif domain.get("min") is not None or domain.get("max") is not None:
+        projected["shape"] = "numeric"
+    else:
+        projected["shape"] = "unknown"
     n_unique = domain.get("n_unique")
-    if lo is not None and hi is not None:
-        return f" observed=[{lo:g},{hi:g}] n_unique={n_unique}"
+    if isinstance(n_unique, int) and not isinstance(n_unique, bool) and n_unique >= 0:
+        projected["n_unique"] = n_unique
+    return projected
+
+
+def format_observed_domain(domain: Optional[Dict[str, Any]]) -> str:
+    """Render cohort shape/cardinality without literal observed values."""
+
+    projected = project_observed_domain(domain)
+    if not projected:
+        return ""
+    shape = projected.get("shape")
+    n_unique = projected.get("n_unique")
+    if shape == "constant":
+        return " observed=CONSTANT(single value; no variation to model)"
+    if shape == "binary_numeric_indicator":
+        return (
+            " observed=BINARY_NUMERIC_INDICATOR(two-level; another numeric "
+            "cutoff is degenerate; literals withheld)"
+        )
+    if shape == "categorical":
+        suffix = f" n_unique={n_unique}" if n_unique is not None else ""
+        return f" observed=CATEGORICAL{suffix} (literal levels withheld)"
+    if shape == "numeric":
+        suffix = f" n_unique={n_unique}" if n_unique is not None else ""
+        return f" observed=NUMERIC{suffix} (cohort extrema withheld)"
     if n_unique is not None:
         return f" observed_n_unique={n_unique}"
     return ""
@@ -116,7 +142,12 @@ def _shared_line(
     fields.extend(
         [
             f"is_ordinal={str(variable.is_ordinal).lower()}",
-            f"ordinal_levels={variable.ordinal_levels or 'unspecified'}",
+            "ordinal_cardinality="
+            + (
+                str(len(variable.ordinal_levels))
+                if variable.ordinal_levels is not None
+                else "unspecified"
+            ),
             "agg_default="
             + (
                 variable.aggregation_default.value
@@ -149,19 +180,15 @@ def _variable_line(variable: ConceptDescriptor, *, group_id: str) -> str:
             f" m={variable.missingness.fraction_missing:.1%}/"
             f"{variable.missingness.missingness_severity}"
         )
-    domain = variable.observed_domain or {}
-    if domain.get("is_constant"):
+    domain = project_observed_domain(variable.observed_domain)
+    if domain.get("shape") == "constant":
         observed = " obs=constant(no-model-variation)"
-    elif domain.get("is_binary"):
-        observed = " obs=binary{0,1}(already-two-level)"
-    elif domain.get("levels"):
-        levels = domain["levels"]
-        shown = ",".join(str(value) for value in levels[:6])
-        observed = f" obs=levels{{{shown}{'…' if len(levels) > 6 else ''}}}"
-    elif domain.get("min") is not None and domain.get("max") is not None:
-        observed = (
-            f" obs={domain['min']:g}:{domain['max']:g}" f"/u{domain.get('n_unique')}"
-        )
+    elif domain.get("shape") == "binary_numeric_indicator":
+        observed = " obs=binary(two-level;literals-withheld)"
+    elif domain.get("shape") == "categorical":
+        observed = f" obs=categorical/u{domain.get('n_unique')}"
+    elif domain.get("shape") == "numeric":
+        observed = f" obs=numeric/u{domain.get('n_unique')}"
     elif domain.get("n_unique") is not None:
         observed = f" obs=u{domain['n_unique']}"
     else:
@@ -228,4 +255,5 @@ __all__ = [
     "CompactTrajectoryPromptProjection",
     "compact_fixed_window_trajectory_prompt",
     "format_observed_domain",
+    "project_observed_domain",
 ]

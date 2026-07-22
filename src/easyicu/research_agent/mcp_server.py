@@ -81,6 +81,9 @@ def _provider_configuration_error_payload(
     }:
         message = str(error)
         error_code = "llm_configuration_invalid"
+    elif error.issue == "external_llm_not_authorized":
+        message = str(error)
+        error_code = "llm_external_transport_not_authorized"
     else:
         message = f"unsupported provider {error.provider!r}"
         error_code = "llm_configuration_required"

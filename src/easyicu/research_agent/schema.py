@@ -1497,6 +1497,13 @@ class AnalysisManifest(BaseModel):
             "ResearchAgentPipeline(enable_reproducibility_envelope=True)."
         ),
     )
+    provider_authorization: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description=(
+            "Exact non-secret provider/model/endpoint destination and the "
+            "factory authorization decision used by this run."
+        ),
+    )
     code_version: Optional[Dict[str, Any]] = Field(
         default=None,
         description=(
