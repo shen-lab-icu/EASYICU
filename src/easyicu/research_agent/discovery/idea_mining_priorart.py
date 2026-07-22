@@ -33,6 +33,7 @@ from .idea_mining_pubmed import (
     _is_specific_differentiator,
     _ordered_unique,
     _pubmed_core_recall_clause,
+    _pubmed_or_clause,
     _pubmed_phrase_clause,
     _pubmed_population_recall_clause,
     _prior_art_synonym_phrases,
@@ -142,10 +143,23 @@ def build_prior_art_queries(
     if population_recall:
         broad_parts.append(population_recall)
 
-    exact_parts = [
-        _pubmed_phrase_clause(predictor_phrase),
-        _pubmed_phrase_clause(outcome_phrase),
-    ]
+    predictor_exact = _pubmed_or_clause(
+        [
+            _pubmed_phrase_clause(item)
+            for item in _ordered_unique(
+                [predictor_phrase, *idea.exposure_literature_aliases]
+            )
+        ]
+    )
+    outcome_exact = _pubmed_or_clause(
+        [
+            _pubmed_phrase_clause(item)
+            for item in _ordered_unique(
+                [outcome_phrase, *idea.outcome_literature_aliases]
+            )
+        ]
+    )
+    exact_parts = [predictor_exact, outcome_exact]
     for item in differentiators:
         exact_parts.append(_pubmed_phrase_clause(item))
 
@@ -553,10 +567,25 @@ def render_discovery_report(
 
 
 def _candidate_differentiators(idea: LiteratureIdeaCandidate) -> List[str]:
+    from ..planning.analysis_types import normalize_analysis_family
+
+    family = normalize_analysis_family(idea.analysis_family)
+    family_phrase: Optional[str] = None
+    # Cross-database replication is evaluated by the dedicated
+    # ``cross_db_targets`` screen after same-topic studies have been retrieved.
+    # Putting the internal family key (or a quoted display label) into the exact
+    # query would hide otherwise relevant single-database studies and create a
+    # false appearance of novelty.  Retrieve the same predictor/outcome topic
+    # first; then ask whether those studies already cover multiple databases.
+    if family not in {"association_study", "cross_database_replication"}:
+        # Preserve a literature-facing family phrase (including concise aliases
+        # such as ``trajectory``) rather than emitting an internal registry key
+        # or a UI display label containing slashes.
+        family_phrase = str(idea.analysis_family).replace("_", " ").strip()
     raw = [
         idea.time_window_hint,
         idea.aggregation_hint,
-        idea.analysis_family if idea.analysis_family != "association" else None,
+        family_phrase,
     ]
     out: List[str] = []
     for item in raw:
@@ -607,7 +636,6 @@ def _run_prior_art_query(
         )
     # A None response is the swallowed-error shape some clients return; treat it
     # as a failed screen, not a genuine zero-hit result.
-    search_ok = raw is not None
     record = _coerce_prior_art_query_record(
         raw,
         query_type=query_type,
@@ -615,7 +643,7 @@ def _run_prior_art_query(
     )
     return record.model_copy(
         update={
-            "search_ok": search_ok,
+            "search_ok": raw is not None and record.search_ok,
             "top_hits": [
                 _classify_direct_same_topic_hit(hit, idea) for hit in record.top_hits
             ],
@@ -667,6 +695,24 @@ def _coerce_prior_art_query_record(
     if isinstance(raw, PriorArtQueryRecord):
         return raw.model_copy(update={"query_type": query_type, "query": query})
     if isinstance(raw, Mapping):
+        response_markers = {
+            "hit_count",
+            "count",
+            "total",
+            "top_hits",
+            "hits",
+            "records",
+            "citations",
+            "pmids",
+            "search_ok",
+        }
+        search_ok = bool(
+            raw.get(
+                "search_ok",
+                bool(response_markers.intersection(raw))
+                and not bool(raw.get("search_error")),
+            )
+        )
         hits_raw = (
             raw.get("top_hits")
             or raw.get("hits")
@@ -693,6 +739,7 @@ def _coerce_prior_art_query_record(
             hit_count=hit_count,
             pmids=_ordered_unique(pmids),
             top_hits=hits,
+            search_ok=search_ok,
         )
     if isinstance(raw, Sequence) and not isinstance(raw, (str, bytes, bytearray)):
         hits = [_coerce_prior_art_hit(item) for item in raw]
@@ -709,6 +756,7 @@ def _coerce_prior_art_query_record(
         hit_count=0,
         pmids=[],
         top_hits=[],
+        search_ok=False,
     )
 
 
@@ -757,13 +805,21 @@ def _classify_direct_same_topic_hit(
             }
         )
     text = normalize_concept_name(" ".join([hit.title, hit.relevance or ""]))
-    predictor = normalize_concept_name(idea.exposure_or_predictor)
-    outcome = normalize_concept_name(idea.outcome)
+    predictors = [
+        normalize_concept_name(item)
+        for item in [idea.exposure_or_predictor, *idea.exposure_literature_aliases]
+        if str(item).strip()
+    ]
+    outcomes = [
+        normalize_concept_name(item)
+        for item in [idea.outcome, *idea.outcome_literature_aliases]
+        if str(item).strip()
+    ]
     differentiators = [
         normalize_concept_name(item) for item in _candidate_differentiators(idea)
     ]
-    has_predictor = predictor and predictor in text
-    has_outcome = outcome and outcome in text
+    has_predictor = any(item and item in text for item in predictors)
+    has_outcome = any(item and item in text for item in outcomes)
     has_differentiator = not differentiators or any(
         item in text for item in differentiators
     )
@@ -923,7 +979,9 @@ def _hit_mentions_cross_database_or_external(
     aliases: List[str] = list(_MULTI_DB_TERMS)
     for db in cross_db_targets or ():
         aliases.extend(_TARGET_DB_ALIASES.get(str(db).lower(), (str(db).lower(),)))
-    return any(alias in text for alias in aliases)
+    return any(alias in text for alias in aliases) or bool(
+        re.search(r"\b(?:multiple|\d+)\s+(?:[a-z-]+\s+){0,3}hospitals\b", text)
+    )
 
 
 # Decorator / method-shell tokens that carry no queryable clinical construct.
@@ -1194,11 +1252,18 @@ _MULTI_DB_TERMS = (
     "multiple databases",
     "external validation",
     "externally validated",
+    "validation cohort",
     "transportability",
     "cross-database",
     "multi-cohort",
     "multiple cohorts",
     "multicenter database",
+    "multicenter",
+    "multi-center",
+    "multiple centers",
+    "multiple hospitals",
+    "two populations",
+    "both populations",
 )
 
 
@@ -1211,23 +1276,17 @@ def _cross_db_prior_art_differentiator(
 
     Returns a differentiator string only when (a) the axis is enabled, (b) the
     field is crowded (there is same-topic prior art to differentiate from), and
-    (c) no retrieved hit's title/rationale references the target databases or
-    multi-database/external-validation work. Title-level detection is
-    deliberately conservative -- the differentiator is a human-confirm trigger,
-    not a novelty claim.
+    (c) no retrieved hit's title/abstract/rationale references the target
+    databases or multicenter/multi-database/external-validation work. The
+    differentiator remains a human-confirm trigger, not a novelty claim.
     """
     if not cross_db_targets or not direct_hits:
         return None
-    aliases: List[str] = []
-    for db in cross_db_targets:
-        aliases.extend(_TARGET_DB_ALIASES.get(str(db).lower(), (str(db).lower(),)))
-    aliases.extend(_MULTI_DB_TERMS)
-    blob = " \n ".join(
-        f"{hit.title} {hit.direct_same_topic_rationale or ''}".lower()
-        for record in query_records
-        for hit in record.top_hits
-    )
-    if any(alias in blob for alias in aliases):
+    del query_records
+    if any(
+        _hit_mentions_cross_database_or_external(hit, cross_db_targets)
+        for hit in direct_hits
+    ):
         return None  # prior art already uses these DBs / is multi-DB
     n = len(list(cross_db_targets))
     return (

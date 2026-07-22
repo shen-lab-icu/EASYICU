@@ -1578,6 +1578,50 @@ def fetch_source_materials_from_scope(
     ]
 
 
+def _validated_precomputed_ideas(
+    raw_ideas: Sequence[LiteratureIdeaCandidate | Mapping[str, Any]],
+    *,
+    materials: Sequence[SourceMaterial],
+    source_snapshot_id: str,
+) -> List[LiteratureIdeaCandidate]:
+    """Validate deterministic/data-first ideas against frozen source evidence.
+
+    This is the non-LLM entry into the existing S4→S1→S3→S2 pipeline.  It does
+    not relax source provenance: every idea must bind the snapshot produced in
+    this run, cite one supplied material, and quote bytes that occur verbatim in
+    that material.  Callers can therefore generate candidates from a frozen
+    data profile without pretending that an LLM extracted them from a paper.
+    """
+
+    material_by_key = {material.citation.key: material for material in materials}
+    ideas: List[LiteratureIdeaCandidate] = []
+    for raw in raw_ideas:
+        idea = (
+            raw
+            if isinstance(raw, LiteratureIdeaCandidate)
+            else LiteratureIdeaCandidate.model_validate(raw)
+        )
+        if idea.source_snapshot_id != source_snapshot_id:
+            raise IdeaMiningError(
+                "precomputed idea source_snapshot_id does not match the frozen "
+                f"source set: {idea.source_snapshot_id!r} != {source_snapshot_id!r}"
+            )
+        material = material_by_key.get(idea.citation_key)
+        if material is None:
+            raise IdeaMiningError(
+                "precomputed idea cites material absent from the frozen source "
+                f"set: {idea.citation_key!r}"
+            )
+        source_text = str(material.source_text or "")
+        if not source_text or idea.source_quote not in source_text:
+            raise IdeaMiningError(
+                "precomputed idea source_quote is not verbatim in its frozen "
+                f"source material: {idea.citation_key!r}"
+            )
+        ideas.append(idea)
+    return ideas
+
+
 def run_idea_mining_dry_run(
     *,
     materials: Sequence[SourceMaterial | Mapping[str, Any]] = (),
@@ -1613,6 +1657,9 @@ def run_idea_mining_dry_run(
     source_item_index: Optional["SourceItemIndex"] = None,
     extended_feasibility_index: Optional[object] = None,
     cross_db_targets: Optional[Sequence[str]] = None,
+    precomputed_literature_ideas: Optional[
+        Sequence[LiteratureIdeaCandidate | Mapping[str, Any]]
+    ] = None,
 ) -> IdeaMiningDryRunResult:
     """Run the S4→S1→S3→S2 idea-triage dry run and stop at the human gate.
 
@@ -1678,16 +1725,23 @@ def run_idea_mining_dry_run(
 
     dropped_untraceable: List[str] = []
     dropped_invalid: List[str] = []
-    literature_ideas = extract_literature_ideas(
-        materials=parsed_materials,
-        source_snapshot_id=manifest.source_snapshot_id,
-        llm=llm,
-        untraceable_quote_policy=untraceable_quote_policy,
-        dropped_untraceable=dropped_untraceable,
-        dropped_invalid=dropped_invalid,
-        reflection_rounds=reflection_rounds,
-        reflection_search_client=reflection_search_client,
-    )
+    if precomputed_literature_ideas is None:
+        literature_ideas = extract_literature_ideas(
+            materials=parsed_materials,
+            source_snapshot_id=manifest.source_snapshot_id,
+            llm=llm,
+            untraceable_quote_policy=untraceable_quote_policy,
+            dropped_untraceable=dropped_untraceable,
+            dropped_invalid=dropped_invalid,
+            reflection_rounds=reflection_rounds,
+            reflection_search_client=reflection_search_client,
+        )
+    else:
+        literature_ideas = _validated_precomputed_ideas(
+            precomputed_literature_ideas,
+            materials=parsed_materials,
+            source_snapshot_id=manifest.source_snapshot_id,
+        )
     # Gap A -- SciMON-style novelty optimisation. Runs BEFORE concept mapping so a
     # crowded idea is revised toward a differentiated angle while still an idea
     # (mapping/feasibility then re-evaluate the sharper construct). Reuses the

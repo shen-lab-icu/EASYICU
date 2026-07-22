@@ -133,7 +133,11 @@ class SourceMaterial(BaseModel):
     discovery_route: Optional[str] = None
     source_text_role: Optional[
         Literal[
-            "metadata_proxy", "gap_excerpt", "abstract_excerpt", "fulltext_hash_only"
+            "metadata_proxy",
+            "gap_excerpt",
+            "abstract_excerpt",
+            "fulltext_hash_only",
+            "data_profile_evidence",
         ]
     ] = None
     parent_citation_key: Optional[str] = None
@@ -162,7 +166,11 @@ class SourceSnapshotItem(BaseModel):
     discovery_route: Optional[str] = None
     source_text_role: Optional[
         Literal[
-            "metadata_proxy", "gap_excerpt", "abstract_excerpt", "fulltext_hash_only"
+            "metadata_proxy",
+            "gap_excerpt",
+            "abstract_excerpt",
+            "fulltext_hash_only",
+            "data_profile_evidence",
         ]
     ] = None
     parent_citation_key: Optional[str] = None
@@ -211,6 +219,12 @@ class LiteratureIdeaCandidate(BaseModel):
     # incidental qualifier concept ("lactate") that shares the phrase.
     exposure_core_concept: Optional[str] = None
     outcome_core_concept: Optional[str] = None
+    # Host-curated literature spellings used only to improve prior-art recall.
+    # They do not change the scientific identity or concept mapping of an idea.
+    # Data-first routes populate these from the concept catalog; ordinary LLM-
+    # extracted ideas may leave them empty.
+    exposure_literature_aliases: List[str] = Field(default_factory=list, max_length=8)
+    outcome_literature_aliases: List[str] = Field(default_factory=list, max_length=8)
     # Concept-SET shape for families that are not predictor->outcome pairs
     # (clustering / phenotyping, descriptive epidemiology, data-quality audit).
     # Optional + back-compatible: pairwise ideas leave it empty and keep using
@@ -247,6 +261,21 @@ class LiteratureIdeaCandidate(BaseModel):
                 "non-empty analysis_concepts set"
             )
         return self
+
+    @field_validator("exposure_literature_aliases", "outcome_literature_aliases")
+    @classmethod
+    def _clean_literature_aliases(cls, values: List[str]) -> List[str]:
+        cleaned: List[str] = []
+        seen: set[str] = set()
+        for raw in values:
+            text = " ".join(str(raw or "").split())
+            if not text:
+                raise ValueError("literature aliases must be non-empty strings")
+            key = text.casefold()
+            if key not in seen:
+                seen.add(key)
+                cleaned.append(text)
+        return cleaned
 
     @model_validator(mode="after")
     def _fill_stable_id(self) -> "LiteratureIdeaCandidate":
