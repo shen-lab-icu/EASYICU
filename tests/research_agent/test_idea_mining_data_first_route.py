@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 
 import pytest
 
@@ -234,6 +235,28 @@ def test_broad_query_does_not_expand_modified_shock_index_to_generic_singletons(
     assert '"shock index"[Title/Abstract]' in broad
     assert "modified[Title/Abstract]" not in broad
     assert "shock[Title/Abstract]" not in broad
+
+
+def test_adjacent_construct_without_specific_differentiator_is_not_a_gap():
+    from easyicu.research_agent.discovery.idea_mining_data_first_route import (
+        _has_external_validation_differentiation,
+    )
+
+    undifferentiated = SimpleNamespace(
+        evidence_map_counts={"adjacent_icu_background": 2},
+        has_specific_differentiator=False,
+    )
+    differentiated = SimpleNamespace(
+        evidence_map_counts={"adjacent_icu_background": 2},
+        has_specific_differentiator=True,
+    )
+    no_adjacent_work = SimpleNamespace(
+        evidence_map_counts={}, has_specific_differentiator=False
+    )
+
+    assert not _has_external_validation_differentiation(undifferentiated)
+    assert _has_external_validation_differentiation(differentiated)
+    assert _has_external_validation_differentiation(no_adjacent_work)
 
 
 def test_data_first_shortlist_separates_validation_from_measurement_audit(tmp_path):
