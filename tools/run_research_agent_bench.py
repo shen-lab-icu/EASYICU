@@ -2391,6 +2391,7 @@ def _canonical_execution_config_from_args(args):
         standard_executor_timeout_seconds=float(
             getattr(args, "standard_executor_timeout", 3600.0)
         ),
+        request_timeout_seconds=float(getattr(args, "request_timeout", 180.0)),
         stop_after_step_id=getattr(args, "stop_after_step_id", None),
         llm_seed=getattr(args, "llm_seed", None),
         disable_replanning=bool(getattr(args, "disable_replanning", False)),
@@ -2426,14 +2427,13 @@ def _figure2_realrun_authorization_gate(args):
     """
 
     from benchmarks.figure2_canonical9.realrun_authority import (
-        OperatorFreezeDeclaration,
         RealRunAuthorizationRequest,
         RealRunBatchBinding,
         RealRunInvocation,
         jsonl_references_canonical9,
-        load_production_input_authority,
         read_canonical_jsonl_invocation,
         resolve_strict_jsonl_path,
+        reserve_authorized_batch_root,
         verify_realrun_authorization,
     )
 
@@ -2441,27 +2441,46 @@ def _figure2_realrun_authorization_gate(args):
     jsonl = getattr(args, "ehrflowbench_jsonl", None)
     require_acceptance = bool(getattr(args, "require_figure2_paper_acceptance", False))
 
-    # Strict JSONL resolution shared with the launcher: a --ehrflowbench-jsonl that
-    # is relative, a symlink, missing, or otherwise not strictly readable can NEVER
-    # be downgraded to "not canonical" — it fails closed here before anything runs.
+    # First classify an existing JSONL without changing ordinary, non-canonical
+    # EHRFlowBench behavior.  If it references Canonical9 (or if explicit paper
+    # authority was requested), we immediately switch to the strict absolute,
+    # non-symlink resolver below.  A relative/symlink canonical manifest therefore
+    # cannot evade the gate, while legacy non-canonical fixtures retain their
+    # longstanding CLI semantics.
     strict_jsonl: Optional[Path] = None
     task_ids: tuple = ()
     cohort_paths: tuple = ()
     if jsonl:
         try:
+            probe_jsonl = Path(jsonl).expanduser().resolve(strict=True)
+            if not probe_jsonl.is_file():
+                raise ValueError("ehrflowbench JSONL must be a regular file")
+            task_ids, cohort_paths = read_canonical_jsonl_invocation(probe_jsonl)
+        except Exception as exc:  # noqa: BLE001
+            if declaration or require_acceptance:
+                print(
+                    "[realrun-authority] an authority-requested JSONL must be "
+                    "readable for Canonical9 classification; refusing to launch "
+                    f"({type(exc).__name__}: {exc}).",
+                    file=sys.stderr,
+                )
+                return 2, None
+
+    references_canonical = bool(task_ids) and jsonl_references_canonical9(task_ids)
+    real_canonical_run = require_acceptance or references_canonical
+
+    if declaration or real_canonical_run:
+        try:
             strict_jsonl = resolve_strict_jsonl_path(jsonl)
             task_ids, cohort_paths = read_canonical_jsonl_invocation(strict_jsonl)
         except Exception as exc:  # noqa: BLE001
             print(
-                "[realrun-authority] --ehrflowbench-jsonl must be an absolute, "
-                "regular, non-symlink, strictly-readable manifest; refusing to "
-                f"launch ({type(exc).__name__}: {exc}).",
+                "[realrun-authority] Canonical9 / authority-requested JSONL must "
+                "be an absolute, regular, non-symlink, strictly-readable manifest; "
+                f"refusing to launch ({type(exc).__name__}: {exc}).",
                 file=sys.stderr,
             )
             return 2, None
-
-    references_canonical = bool(task_ids) and jsonl_references_canonical9(task_ids)
-    real_canonical_run = require_acceptance or references_canonical
 
     # 1) Mandatory activation: a Canonical9 / paper-acceptance run cannot bypass the
     #    gate by omitting the declaration.
@@ -2550,22 +2569,27 @@ def _figure2_realrun_authorization_gate(args):
         )
         return 2, None
 
-    # Authorized: bind the batch identity + per-task frozen input map so each child
-    # run's manifest carries its own input authority and every child maps back to
-    # the declaration in the post-run ledger.
-    frozen_by_task: Dict[str, str] = {}
-    if production:
-        authority, _ = load_production_input_authority(Path(production))
-        frozen_by_task = authority.frozen_input_by_task()
-    declaration_obj = OperatorFreezeDeclaration.model_validate_json(
-        Path(declaration).read_text(encoding="utf-8"), strict=True
-    )
+    # ``authorization`` contains the *already verified* declaration and input
+    # authority values.  Do not reopen either mutable path after verification.
+    # Reserve the batch root with mkdir(O_EXCL semantics) before a Provider, runner,
+    # or data load can start; concurrent replay of a declaration loses this race.
     batch_binding = RealRunBatchBinding(
-        batch_id=declaration_obj.batch_id,
+        batch_id=authorization.batch_id,
         declaration_sha256=authorization.declaration_sha256,
         input_authority_digest=authorization.input_authority_digest,
-        frozen_input_by_task=frozen_by_task,
+        frozen_input_by_task=authorization.frozen_input_by_task,
     )
+    try:
+        batch_binding = reserve_authorized_batch_root(
+            invocation.out_root, batch_binding
+        )
+    except Exception as exc:  # noqa: BLE001
+        print(
+            "[realrun-authority] unable to atomically reserve the authorized batch "
+            f"root; refusing to launch ({type(exc).__name__}: {exc}).",
+            file=sys.stderr,
+        )
+        return 2, None
     print(
         "[realrun-authority] authority verified; launching the real run still "
         "requires the operator's explicit action.",
@@ -3048,13 +3072,17 @@ def main() -> int:
                 "start fresh runs, resume continues one existing run."
             )
 
-        # Same strict JSONL resolution the gate authorized (absolute/regular/
-        # non-symlink); never a laxly ``resolve()``-ed symlink/relative path.
-        from benchmarks.figure2_canonical9.realrun_authority import (
-            resolve_strict_jsonl_path as _resolve_strict_jsonl_path,
-        )
+        # Canonical9 batches run exactly the strict path verified by the gate.  An
+        # ordinary EHRFlowBench JSONL keeps the pre-existing relative/symlink CLI
+        # behavior, which is intentionally not paper authority.
+        if _figure2_batch_binding is not None:
+            from benchmarks.figure2_canonical9.realrun_authority import (
+                resolve_strict_jsonl_path as _resolve_strict_jsonl_path,
+            )
 
-        _ehrflow_jsonl_path = _resolve_strict_jsonl_path(args.ehrflowbench_jsonl)
+            _ehrflow_jsonl_path = _resolve_strict_jsonl_path(args.ehrflowbench_jsonl)
+        else:
+            _ehrflow_jsonl_path = Path(args.ehrflowbench_jsonl).expanduser().resolve()
 
         def _run_ehrflow_into(target_out_root: Path) -> int:
             return _run_ehrflowbench_jsonl(
@@ -3736,19 +3764,19 @@ def _run_ehrflowbench_jsonl(
     if not jsonl_path.exists():
         print(f"EHRFlowBench JSONL not found: {jsonl_path}")
         return 2
-    out_root.mkdir(parents=True, exist_ok=True)
     if batch_binding is not None:
-        # PRE-run: persist the batch identity + declaration binding into the reserved
-        # batch root so every child run maps back to an on-disk authorization.
+        # The gate atomically created this batch root and its immutable receipt
+        # before any data/Provider/runner work.  Re-check it instead of creating or
+        # overwriting a receipt here.
         from benchmarks.figure2_canonical9.realrun_authority import (
-            write_batch_authorization_receipt,
+            verify_batch_authorization_receipt,
         )
 
-        write_batch_authorization_receipt(
-            out_root,
-            batch_binding,
-            generated_at=datetime.now(timezone.utc).isoformat(),
-        )
+        if batch_binding.batch_root != Path(out_root).expanduser().resolve():
+            raise ValueError("EHRFlow batch root differs from the authorized binding")
+        verify_batch_authorization_receipt(batch_binding)
+    else:
+        out_root.mkdir(parents=True, exist_ok=True)
     rows: List[Dict[str, Any]] = []
     invalid_row_indices: set[int] = set()
     for line_number, line in enumerate(

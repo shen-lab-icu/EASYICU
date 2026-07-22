@@ -49,7 +49,9 @@ from benchmarks.figure2_canonical9.realrun_authority import (
     load_production_input_authority,
     production_cohort_input_sha256,
     production_provenance_sha256,
+    reserve_authorized_batch_root,
     resolve_strict_jsonl_path,
+    verify_batch_authorization_receipt,
     verify_realrun_authorization,
     verify_results_frozen_input_authority,
 )
@@ -203,7 +205,7 @@ def _declaration(path: Path, *, jsonl_path: Path, jsonl_sha: str, **overrides):
         task_ids=tuple(FIGURE2_TASK_IDS),
         arms=("aware",),
         cross_run_memory=False,
-        output_root="/tmp/canonical9_out",
+        output_root=f"/tmp/{_BATCH_ID}",
         batch_id=_BATCH_ID,
     )
     base.update(overrides)
@@ -255,7 +257,7 @@ def _authorized_setup(tmp_path: Path):
     rubric_path = tmp_path / "rubric.json"
     rubric_path.write_text(json.dumps({"rubric": "v3"}), encoding="utf-8")
     decl_path = tmp_path / "declaration.json"
-    out_root = tmp_path / "out"
+    out_root = tmp_path / _BATCH_ID
     _declaration(
         decl_path,
         jsonl_path=jsonl_path,
@@ -289,6 +291,28 @@ def _authorized_setup(tmp_path: Path):
         "out_root": out_root,
         "authority": authority,
     }
+
+
+@pytest.fixture(autouse=True)
+def _synthetic_materialized_authorities(monkeypatch):
+    """The authority loader itself is covered in intake tests.
+
+    These P4 tests use deliberately tiny non-Parquet payloads, so substitute only
+    the expensive typed-loader result while retaining exact JSONL path/ref/hash
+    checks here.  Individual negatives override this fixture to prove a rejected
+    loader result blocks preflight.
+    """
+
+    monkeypatch.setattr(
+        "easyicu.research_agent.intake.materialized_metadata."
+        "load_verified_materialized_cohort_authority",
+        lambda *args, **kwargs: object(),
+    )
+    monkeypatch.setattr(
+        "easyicu.research_agent.intake.materialized_trajectory."
+        "load_verified_materialized_trajectory_authority",
+        lambda *args, **kwargs: object(),
+    )
 
 
 def _codes(auth: RealRunAuthorization) -> set[str]:
@@ -769,10 +793,20 @@ def test_non_empty_output_root_blocks(tmp_path) -> None:
 
 def test_existing_run_dir_blocks(tmp_path) -> None:
     request, paths = _authorized_setup(tmp_path)
-    (paths["out_root"] / _BATCH_ID).mkdir(parents=True)
+    paths["out_root"].mkdir(parents=True)
     auth = verify_realrun_authorization(request)
     assert auth.status == "blocked"
     assert "OUTPUT_ROOT_NOT_FRESH" in _codes(auth)
+
+
+def test_batch_root_must_equal_declared_batch_id(tmp_path) -> None:
+    request, paths = _authorized_setup(tmp_path)
+    body = json.loads(paths["decl_path"].read_text(encoding="utf-8"))
+    body["output_root"] = str(tmp_path / "not_the_batch")
+    paths["decl_path"].write_text(json.dumps(body), encoding="utf-8")
+    auth = verify_realrun_authorization(request)
+    assert auth.status == "blocked"
+    assert "OPERATOR_DECLARATION_INVALID" in _codes(auth)
 
 
 def test_cross_run_memory_blocks(tmp_path) -> None:
@@ -840,13 +874,13 @@ def _launcher_files(tmp_path, *, with_identity=True):
         input_authority_digest=authority.authority_digest,
         input_freeze_manifest_sha256=canonical_input_freeze_manifest_sha256(_REAL_V1),
         rubric_sha256=_sha256_file(_REAL_RUBRIC),
-        output_root=str(tmp_path / "out"),
+        output_root=str(tmp_path / _BATCH_ID),
     )
     return {
         "jsonl_path": jsonl_path,
         "id_path": id_path,
         "decl_path": decl_path,
-        "out_root": tmp_path / "out",
+        "out_root": tmp_path / _BATCH_ID,
     }
 
 
@@ -1117,6 +1151,61 @@ def test_launcher_unreadable_jsonl_blocks(tmp_path, monkeypatch) -> None:
     assert calls == {"llm": 0, "suite": 0, "ehrflow": 0, "register": 0}
 
 
+def test_launcher_relative_canonical_jsonl_blocks(tmp_path, monkeypatch) -> None:
+    """A real Canonical9 JSONL cannot exploit the legacy relative-path route."""
+
+    bench, calls = _spies(monkeypatch)
+    files = _launcher_files(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "run_research_agent_bench.py",
+            "--ehrflowbench-jsonl",
+            files["jsonl_path"].name,
+            "--out-root",
+            str(files["out_root"]),
+            "--arms",
+            "aware",
+        ],
+    )
+    assert bench.main() == 2
+    assert calls == {"llm": 0, "suite": 0, "ehrflow": 0, "register": 0}
+
+
+def test_launcher_noncanonical_relative_jsonl_keeps_legacy_behavior(
+    tmp_path, monkeypatch
+) -> None:
+    """Ordinary external fixtures remain runnable through their legacy path."""
+
+    import tools.run_research_agent_bench as bench
+
+    fixture = tmp_path / "external_fixture.jsonl"
+    fixture.write_text(json.dumps({"key": "external_fixture"}) + "\n")
+    captured: dict = {}
+    monkeypatch.setattr(
+        bench, "_run_ehrflowbench_jsonl", lambda **kw: captured.update(kw) or 0
+    )
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "run_research_agent_bench.py",
+            "--ehrflowbench-jsonl",
+            fixture.name,
+            "--out-root",
+            str(tmp_path / "ordinary_out"),
+            "--arms",
+            "naive",
+        ],
+    )
+    assert bench.main() == 0
+    assert captured["jsonl_path"] == fixture.resolve()
+    assert captured["batch_binding"] is None
+
+
 # ---------------------------------------------------------------------------
 # R2-2 — provenance_sha256 is a real authority (typed sidecar bound)
 # ---------------------------------------------------------------------------
@@ -1207,6 +1296,52 @@ def test_missing_cohort_authority_ref_blocks(tmp_path) -> None:
     assert "PRODUCTION_INPUT_AUTHORITY_INVALID" in _codes(auth)
 
 
+def test_preflight_rejects_sidecar_path_that_disagrees_with_ref(tmp_path) -> None:
+    request, paths = _authorized_setup(tmp_path)
+    rows = [json.loads(line) for line in paths["jsonl_path"].read_text().splitlines()]
+    alternate = tmp_path / "cohorts" / "alternate.authority.json"
+    alternate.write_text("{}", encoding="utf-8")
+    rows[0]["cohort_authority_path"] = str(alternate)
+    paths["jsonl_path"].write_text(
+        "\n".join(json.dumps(row) for row in rows) + "\n", encoding="utf-8"
+    )
+    body = json.loads(paths["decl_path"].read_text(encoding="utf-8"))
+    body["ehrflowbench_jsonl_sha256"] = _sha256_file(paths["jsonl_path"])
+    paths["decl_path"].write_text(json.dumps(body), encoding="utf-8")
+    auth = verify_realrun_authorization(request)
+    assert auth.status == "blocked"
+    assert "PRODUCTION_INPUT_AUTHORITY_INVALID" in _codes(auth)
+
+
+def test_preflight_rejects_loader_that_cannot_bind_sidecar_to_cohort(
+    tmp_path, monkeypatch
+) -> None:
+    request, _ = _authorized_setup(tmp_path)
+    monkeypatch.setattr(
+        "easyicu.research_agent.intake.materialized_metadata."
+        "load_verified_materialized_cohort_authority",
+        lambda *args, **kwargs: None,
+    )
+    auth = verify_realrun_authorization(request)
+    assert auth.status == "blocked"
+    assert "PRODUCTION_INPUT_AUTHORITY_INVALID" in _codes(auth)
+
+
+def test_preflight_rejects_unpaired_trajectory_authority(tmp_path) -> None:
+    request, paths = _authorized_setup(tmp_path)
+    rows = [json.loads(line) for line in paths["jsonl_path"].read_text().splitlines()]
+    rows[0]["trajectory_path"] = str(paths["cohort_paths"][FIGURE2_TASK_IDS[0]])
+    paths["jsonl_path"].write_text(
+        "\n".join(json.dumps(row) for row in rows) + "\n", encoding="utf-8"
+    )
+    body = json.loads(paths["decl_path"].read_text(encoding="utf-8"))
+    body["ehrflowbench_jsonl_sha256"] = _sha256_file(paths["jsonl_path"])
+    paths["decl_path"].write_text(json.dumps(body), encoding="utf-8")
+    auth = verify_realrun_authorization(request)
+    assert auth.status == "blocked"
+    assert "PRODUCTION_INPUT_AUTHORITY_INVALID" in _codes(auth)
+
+
 # ---------------------------------------------------------------------------
 # R2-3 — one frozen execution-config digest folds every run-semantics knob
 # ---------------------------------------------------------------------------
@@ -1251,6 +1386,39 @@ def test_config_pubmed_mismatch_blocks(tmp_path) -> None:
     )
     assert auth.status == "blocked"
     assert "EXECUTION_CONFIG_MISMATCH" in _codes(auth)
+
+
+def test_config_request_timeout_mismatch_blocks(tmp_path) -> None:
+    request, _ = _authorized_setup(tmp_path)
+    changed = build_canonical_execution_config(
+        seed=7,
+        timeout_seconds=300.0,
+        standard_executor_timeout_seconds=3600.0,
+        request_timeout_seconds=12.0,
+    )
+    auth = verify_realrun_authorization(
+        _with_invocation(request, execution_config=changed)
+    )
+    assert auth.status == "blocked"
+    assert "EXECUTION_CONFIG_MISMATCH" in _codes(auth)
+
+
+def test_config_mutable_case_selector_blocks_even_when_pinned(tmp_path) -> None:
+    request, paths = _authorized_setup(tmp_path)
+    changed = build_canonical_execution_config(
+        seed=7,
+        timeout_seconds=300.0,
+        standard_executor_timeout_seconds=3600.0,
+        case="mutable_fixture_name",
+    )
+    body = json.loads(paths["decl_path"].read_text(encoding="utf-8"))
+    body["execution_config_sha256"] = changed.digest()
+    paths["decl_path"].write_text(json.dumps(body), encoding="utf-8")
+    auth = verify_realrun_authorization(
+        _with_invocation(request, execution_config=changed)
+    )
+    assert auth.status == "blocked"
+    assert "EXECUTION_CONFIG_INVALID" in _codes(auth)
 
 
 def _launcher_config_argv(tmp_path, extra: list[str]) -> list[str]:
@@ -1303,6 +1471,18 @@ def test_launcher_enable_pubmed_blocks(tmp_path, monkeypatch, capsys) -> None:
     assert "EXECUTION_CONFIG_MISMATCH" in capsys.readouterr().out
 
 
+def test_launcher_request_timeout_mismatch_blocks(
+    tmp_path, monkeypatch, capsys
+) -> None:
+    bench, calls = _spies(monkeypatch)
+    monkeypatch.setattr(
+        sys, "argv", _launcher_config_argv(tmp_path, ["--request-timeout", "12"])
+    )
+    assert bench.main() == 2
+    assert calls == {"llm": 0, "suite": 0, "ehrflow": 0, "register": 0}
+    assert "EXECUTION_CONFIG_MISMATCH" in capsys.readouterr().out
+
+
 # ---------------------------------------------------------------------------
 # R2-4 — batch identity: declaration pin, ledger, and the allowed end-to-end path
 # ---------------------------------------------------------------------------
@@ -1319,13 +1499,32 @@ def test_batch_id_must_start_with_batch(tmp_path) -> None:
         )
 
 
-def _binding(frozen) -> RealRunBatchBinding:
-    return RealRunBatchBinding(
+def _binding(frozen, out_root: Path | None = None) -> RealRunBatchBinding:
+    binding = RealRunBatchBinding(
         batch_id=_BATCH_ID,
         declaration_sha256="d" * 64,
         input_authority_digest="e" * 64,
         frozen_input_by_task=frozen,
     )
+    if out_root is not None:
+        return reserve_authorized_batch_root(
+            out_root, binding, generated_at="2026-07-22T00:00:00+00:00"
+        )
+    return binding
+
+
+def _manifest_identity(input_digest: str) -> dict:
+    return ExecutionIdentity.create(
+        submission_profile_name="npj_dm",
+        submission_profile_version="20260718",
+        runner="docker",
+        runner_image_digest=_IMAGE,
+        network_policy="none",
+        llm_seed=0,
+        input_authority_sha256=input_digest,
+        provider_authorization={"clients": [{"authorization_mode": "operator_env"}]},
+        code_version={"git_sha": _COMMIT, "git_dirty": False},
+    ).model_dump(mode="json")
 
 
 def _synthetic_scores(out_root: Path, frozen: dict[str, str]) -> list[dict]:
@@ -1334,10 +1533,7 @@ def _synthetic_scores(out_root: Path, frozen: dict[str, str]) -> list[dict]:
         run_id = f"run_{task_id}"
         workdir = out_root / task_id / "aware" / run_id
         workdir.mkdir(parents=True, exist_ok=True)
-        identity = {
-            "identity_sha256": hashlib.sha256(task_id.encode()).hexdigest(),
-            "input_authority_sha256": frozen[task_id],
-        }
+        identity = _manifest_identity(frozen[task_id])
         (workdir / "manifest.json").write_text(
             json.dumps({"run_id": run_id, "execution_identity": identity}),
             encoding="utf-8",
@@ -1358,9 +1554,10 @@ def _synthetic_scores(out_root: Path, frozen: dict[str, str]) -> list[dict]:
 
 def test_build_batch_ledger_records_nine(tmp_path) -> None:
     frozen = {t: hashlib.sha256(t.encode()).hexdigest() for t in FIGURE2_TASK_IDS}
-    out_root = tmp_path / "batch"
+    out_root = tmp_path / _BATCH_ID
+    binding = _binding(frozen, out_root)
     scores = _synthetic_scores(out_root, frozen)
-    ledger = build_batch_ledger({"scores": scores}, out_root, _binding(frozen))
+    ledger = build_batch_ledger({"scores": scores}, out_root, binding)
     assert ledger["complete"] is True
     assert ledger["batch_id"] == _BATCH_ID
     assert [c["task_id"] for c in ledger["children"]] == list(FIGURE2_TASK_IDS)
@@ -1370,10 +1567,56 @@ def test_build_batch_ledger_records_nine(tmp_path) -> None:
 
 def test_build_batch_ledger_incomplete_on_missing_child(tmp_path) -> None:
     frozen = {t: hashlib.sha256(t.encode()).hexdigest() for t in FIGURE2_TASK_IDS}
-    out_root = tmp_path / "batch"
+    out_root = tmp_path / _BATCH_ID
+    binding = _binding(frozen, out_root)
     scores = _synthetic_scores(out_root, frozen)[:-1]  # drop the last task
-    ledger = build_batch_ledger({"scores": scores}, out_root, _binding(frozen))
+    ledger = build_batch_ledger({"scores": scores}, out_root, binding)
     assert ledger["complete"] is False
+
+
+def test_batch_root_reservation_is_atomic_and_receipt_is_bound(tmp_path) -> None:
+    frozen = {t: hashlib.sha256(t.encode()).hexdigest() for t in FIGURE2_TASK_IDS}
+    out_root = tmp_path / _BATCH_ID
+    initial = _binding(frozen)
+    binding = reserve_authorized_batch_root(
+        out_root, initial, generated_at="2026-07-22T00:00:00+00:00"
+    )
+    assert binding.batch_root == out_root
+    assert binding.receipt_sha256
+    assert verify_batch_authorization_receipt(binding).is_file()
+    with pytest.raises(FileExistsError):
+        reserve_authorized_batch_root(
+            out_root, initial, generated_at="2026-07-22T00:00:01+00:00"
+        )
+
+
+def test_batch_ledger_uses_manifest_not_score_self_report(tmp_path) -> None:
+    frozen = {t: hashlib.sha256(t.encode()).hexdigest() for t in FIGURE2_TASK_IDS}
+    out_root = tmp_path / _BATCH_ID
+    binding = _binding(frozen, out_root)
+    scores = _synthetic_scores(out_root, frozen)
+    scores[0]["aware"]["execution_identity"] = {
+        "identity_sha256": "0" * 64,
+        "input_authority_sha256": "1" * 64,
+    }
+    ledger = build_batch_ledger({"scores": scores}, out_root, binding)
+    assert ledger["complete"] is False
+    child = ledger["children"][0]
+    assert child["status"].startswith("manifest_unreadable")
+    assert (
+        child["identity_sha256"]
+        == _manifest_identity(frozen[FIGURE2_TASK_IDS[0]])["identity_sha256"]
+    )
+
+
+def test_batch_ledger_rejects_tampered_receipt(tmp_path) -> None:
+    frozen = {t: hashlib.sha256(t.encode()).hexdigest() for t in FIGURE2_TASK_IDS}
+    out_root = tmp_path / _BATCH_ID
+    binding = _binding(frozen, out_root)
+    receipt = out_root / "figure2_realrun_authorization_receipt.json"
+    receipt.write_text("{}", encoding="utf-8")
+    with pytest.raises(ValueError, match="receipt"):
+        build_batch_ledger({"scores": []}, out_root, binding)
 
 
 def test_run_ehrflowbench_writes_receipt_and_ledger(tmp_path, monkeypatch) -> None:
@@ -1388,13 +1631,8 @@ def test_run_ehrflowbench_writes_receipt_and_ledger(tmp_path, monkeypatch) -> No
     frozen = {
         t: production_cohort_input_sha256(cohort_paths[t]) for t in FIGURE2_TASK_IDS
     }
-    out_root = tmp_path / "batch_out"
-    binding = RealRunBatchBinding(
-        batch_id=_BATCH_ID,
-        declaration_sha256="d" * 64,
-        input_authority_digest="e" * 64,
-        frozen_input_by_task=frozen,
-    )
+    out_root = tmp_path / _BATCH_ID
+    binding = _binding(frozen, out_root)
 
     # Stub the heavy cohort I/O and the pipeline execution (no real Provider).
     monkeypatch.setattr(
@@ -1410,12 +1648,9 @@ def test_run_ehrflowbench_writes_receipt_and_ledger(tmp_path, monkeypatch) -> No
         run_id = f"run_{item.key}"
         workdir = Path(out_root) / item.key / "aware" / run_id
         workdir.mkdir(parents=True, exist_ok=True)
-        identity = {
-            "identity_sha256": hashlib.sha256(item.key.encode()).hexdigest(),
-            "input_authority_sha256": kwargs["pipeline_options"].get(
-                "execution_input_authority_sha256"
-            ),
-        }
+        identity = _manifest_identity(
+            kwargs["pipeline_options"].get("execution_input_authority_sha256")
+        )
         (workdir / "manifest.json").write_text(
             json.dumps({"run_id": run_id, "execution_identity": identity}),
             encoding="utf-8",
@@ -1494,7 +1729,7 @@ def test_end_to_end_gate_authorizes_and_hands_batch_binding(
         profile_name=profile_name,
         profile_version=profile_version,
     )
-    out_root = tmp_path / "batch_out"
+    out_root = tmp_path / _BATCH_ID
     decl_path = tmp_path / "declaration.json"
     _declaration(
         decl_path,
@@ -1559,3 +1794,109 @@ def test_end_to_end_gate_authorizes_and_hands_batch_binding(
     assert binding.declaration_sha256 == _sha256_file(decl_path)
     assert set(binding.frozen_input_by_task) == set(FIGURE2_TASK_IDS)
     assert binding.frozen_input_by_task[FIGURE2_TASK_IDS[0]] == tasks[0].input_sha256
+    assert binding.batch_root == out_root
+    assert verify_batch_authorization_receipt(binding).is_file()
+
+
+def test_gate_does_not_reopen_production_authority_after_verification(
+    tmp_path, monkeypatch
+) -> None:
+    """The launcher consumes the immutable authorization result, not raw files."""
+
+    import benchmarks.figure2_canonical9.realrun_authority as authority_module
+    import tools.run_research_agent_bench as bench
+
+    profile_ref = bench._default_submission_profile_ref()
+    profile_name, profile_version = profile_ref.split("/", 1)
+    cohort_paths = _cohorts(tmp_path)
+    jsonl_path = tmp_path / "canonical.jsonl"
+    jsonl_sha = _write_jsonl(jsonl_path, cohort_paths)
+    production_path = tmp_path / "production.json"
+    tasks = [
+        ProductionInputTask(
+            task_id=task_id,
+            input_sha256=production_cohort_input_sha256(cohort_paths[task_id]),
+            provenance_sha256=production_provenance_sha256(
+                _cohort_ref(cohort_paths[task_id]), None
+            ),
+        )
+        for task_id in FIGURE2_TASK_IDS
+    ]
+    production = ProductionInputAuthority.build(
+        submission_profile_ref=profile_ref, tasks=tasks
+    )
+    production_path.write_text(production.model_dump_json(), encoding="utf-8")
+    identity_path = tmp_path / "identity.json"
+    _frozen_identity(
+        identity_path,
+        input_authority=production.authority_digest,
+        profile_name=profile_name,
+        profile_version=profile_version,
+    )
+    out_root = tmp_path / _BATCH_ID
+    declaration_path = tmp_path / "declaration.json"
+    _declaration(
+        declaration_path,
+        jsonl_path=jsonl_path,
+        jsonl_sha=jsonl_sha,
+        submission_profile_ref=profile_ref,
+        expected_execution_identity_sha256=_sha256_file(identity_path),
+        input_authority_digest=production.authority_digest,
+        input_freeze_manifest_sha256=canonical_input_freeze_manifest_sha256(_REAL_V1),
+        rubric_sha256=_sha256_file(_REAL_RUBRIC),
+        output_root=str(out_root),
+    )
+    original_load = authority_module.load_production_input_authority
+    calls = 0
+
+    def _load_once(path):
+        nonlocal calls
+        calls += 1
+        if calls > 1:
+            raise AssertionError("gate reopened production authority after verify")
+        return original_load(path)
+
+    monkeypatch.setattr(authority_module, "load_production_input_authority", _load_once)
+    monkeypatch.setattr(
+        "easyicu.research_agent.authority.runtime_artifacts.capture_code_version",
+        lambda: {"git_sha": _COMMIT, "git_dirty": False},
+    )
+    captured: dict = {}
+    monkeypatch.setattr(
+        bench, "_run_ehrflowbench_jsonl", lambda **kw: captured.update(kw) or 0
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "run_research_agent_bench.py",
+            "--figure2-realrun-authorization",
+            str(declaration_path),
+            "--figure2-expected-execution-identity",
+            str(identity_path),
+            "--figure2-production-input-authority",
+            str(production_path),
+            "--ehrflowbench-jsonl",
+            str(jsonl_path),
+            "--out-root",
+            str(out_root),
+            "--arms",
+            "aware",
+            "--provider",
+            _PROVIDER,
+            "--model",
+            _MODEL,
+            "--submission-profile",
+            "--profile",
+            profile_ref,
+            "--runner",
+            "docker",
+            "--require-figure2-paper-acceptance",
+        ],
+    )
+    assert bench.main() == 0
+    assert calls == 1
+    assert (
+        captured["batch_binding"].frozen_input_by_task
+        == production.frozen_input_by_task()
+    )
