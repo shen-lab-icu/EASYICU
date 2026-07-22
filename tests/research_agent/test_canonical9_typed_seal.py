@@ -19,7 +19,9 @@ import pandas as pd
 import pytest
 
 from easyicu.research_agent.concept_dict_audit import ConceptDictDriftError
+from easyicu.research_agent.graph import HumanReviewDecision
 from benchmarks.figure2_canonical9 import typed_export_seal as seal_mod
+from benchmarks.figure2_canonical9.retrofit_hitl import run_human_review_interrupt
 from benchmarks.figure2_canonical9.typed_export_seal import (
     METADATA_PROVENANCE,
     RETROFIT_DECISION_FILE,
@@ -28,8 +30,11 @@ from benchmarks.figure2_canonical9.typed_export_seal import (
     assert_sealed_export_paper_ready,
     build_retrofit_review_attestation,
     build_retrofit_review_request,
+    review_retrofit_export,
     seal_export_structural_typed,
+    stage_retrofit_source_authority,
     verify_retrofit_review_attestation,
+    verify_retrofit_review_attestation_from_staged,
     write_retrofit_review_decision,
 )
 
@@ -240,25 +245,44 @@ def test_sealed_export_is_a_typed_package(tmp_path: Path) -> None:
 # --------------------------------------------------------------------------- #
 # Receipt-backed paper-readiness gate (fail-closed; no trusted manifest flags)
 # --------------------------------------------------------------------------- #
-def _decision_for(
-    root: Path, *, reviewer: str = "dr. reviewer", decided_at: str = "2026-07-22"
-) -> dict:
-    """A Framework v2 HumanReviewDecision bound to the derived review request."""
+def _approved_inputs(
+    root: Path,
+    *,
+    reviewer: str = "dr. reviewer",
+    decided_at: str = "2026-07-22",
+    cohort_identity_policy: str = "unique_stay_per_patient",
+) -> tuple[dict, dict]:
+    """Drive a REAL LangGraph interrupt + checkpoint resume and return the
+    (decision, checkpoint_receipt) dicts the write-once gate requires."""
 
-    request, _authority = build_retrofit_review_request(root)
-    return {
-        "review_id": request.review_id,
-        "authority_sha256": request.authority_sha256,
-        "decision": "approved",
-        "reviewer": reviewer,
-        "decided_at": decided_at,
-    }
+    request, _authority, _identity = build_retrofit_review_request(
+        root, cohort_identity_policy=cohort_identity_policy
+    )
+
+    def _decide(requests):
+        req = requests[0]
+        return [
+            HumanReviewDecision(
+                review_id=req.review_id,
+                authority_sha256=req.authority_sha256,
+                decision="approved",
+                reviewer=reviewer,
+                decided_at=decided_at,
+            )
+        ]
+
+    decisions, checkpoint = run_human_review_interrupt(
+        [request], decide=_decide, thread_id="retrofit-" + request.authority_sha256[:16]
+    )
+    return decisions[0].model_dump(mode="json"), checkpoint.model_dump(mode="json")
 
 
 def _review(root: Path) -> Path:
-    """The write-once HITL sign-off (real HumanReviewDecision, not free text)."""
+    """The write-once HITL sign-off, driven through a real interrupt+checkpoint."""
 
-    return write_retrofit_review_decision(root, decision=_decision_for(root))
+    return review_retrofit_export(
+        root, reviewer="dr. reviewer", decided_at="2026-07-22"
+    )
 
 
 def _write_export_with_subject_id(root: Path) -> None:
@@ -360,18 +384,30 @@ def test_gate_ignores_hand_edited_manifest_paper_ready(tmp_path: Path) -> None:
 def test_write_once_decision_rejects_reapproval(tmp_path: Path) -> None:
     root = tmp_path / "export_20260717"
     _write_paper_ready_export(root)
-    second = _decision_for(root, reviewer="dr. other", decided_at="2026-07-23")
+    second, checkpoint = _approved_inputs(
+        root, reviewer="dr. other", decided_at="2026-07-23"
+    )
     with pytest.raises(TypedRetrofitSealError, match="different bytes"):
-        write_retrofit_review_decision(root, decision=second)
+        write_retrofit_review_decision(
+            root, decision=second, checkpoint_receipt=checkpoint
+        )
 
 
 def test_write_rejected_decision_is_refused(tmp_path: Path) -> None:
     root = tmp_path / "export_20260717"
     _write_export_with_subject_id(root)
     seal_export_structural_typed(root, value_vintage="20260717")
-    rejected = dict(_decision_for(root), decision="rejected")
+    request, _a, _i = build_retrofit_review_request(root)
+    rejected = {
+        "review_id": request.review_id,
+        "authority_sha256": request.authority_sha256,
+        "decision": "rejected",
+        "reviewer": "dr. reviewer",
+        "decided_at": "2026-07-22",
+    }
+    # 'not approved' is caught before the checkpoint check, so an empty receipt is fine.
     with pytest.raises(TypedRetrofitSealError, match="not approved"):
-        write_retrofit_review_decision(root, decision=rejected)
+        write_retrofit_review_decision(root, decision=rejected, checkpoint_receipt={})
     assert not (root / RETROFIT_DECISION_FILE).exists()
 
 
@@ -387,7 +423,31 @@ def test_write_forged_review_id_is_refused(tmp_path: Path) -> None:
         "decided_at": "2026-07-22",
     }
     with pytest.raises(TypedRetrofitSealError, match="does not bind|authority_sha256"):
-        write_retrofit_review_decision(root, decision=forged)
+        write_retrofit_review_decision(root, decision=forged, checkpoint_receipt={})
+
+
+def test_write_requires_a_real_checkpoint_receipt(tmp_path: Path) -> None:
+    # A perfectly valid approved decision is NOT enough: without a checkpoint
+    # receipt proving a real interrupt+resume, the write-once gate fails closed.
+    root = tmp_path / "export_20260717"
+    _write_export_with_subject_id(root)
+    seal_export_structural_typed(root, value_vintage="20260717")
+    decision, _checkpoint = _approved_inputs(root)
+    with pytest.raises(TypedRetrofitSealError, match="checkpoint receipt"):
+        write_retrofit_review_decision(root, decision=decision, checkpoint_receipt={})
+    assert not (root / RETROFIT_DECISION_FILE).exists()
+
+
+def test_gate_detects_checkpoint_receipt_tamper(tmp_path: Path) -> None:
+    root = tmp_path / "export_20260717"
+    _write_paper_ready_export(root)
+    d_path = root / RETROFIT_DECISION_FILE
+    receipt = json.loads(d_path.read_text(encoding="utf-8"))
+    # Swap the checkpoint's resume digest so it no longer binds the decision.
+    receipt["human_review_checkpoint"]["resume_sha256"] = "f" * 64
+    d_path.write_text(json.dumps(receipt), encoding="utf-8")
+    with pytest.raises(TypedRetrofitSealError, match="checkpoint receipt"):
+        assert_sealed_export_paper_ready(root)
 
 
 def test_gate_detects_decision_tamper(tmp_path: Path) -> None:
@@ -451,8 +511,95 @@ def test_build_and_verify_attestation_roundtrip(tmp_path: Path) -> None:
     assert att["paper_ready"] is True and att["seal_kind"] == SEAL_KIND
     assert len(att["decision_sha256"]) == 64
     assert len(att["patient_identity_authority_sha256"]) == 64
+    # Task-level policy + checkpoint proof + honest identity facts travel in it.
+    assert att["cohort_identity_policy"] == "unique_stay_per_patient"
+    assert len(att["checkpoint_receipt_sha256"]) == 64
+    assert att["n_subjects"] == 3 and att["n_stays_with_subject"] == 3
+    assert att["multi_stay_patients_present"] is False
+    assert att["first_icu_stay_verified"] is False
     verify_retrofit_review_attestation(att)  # offline
     verify_retrofit_review_attestation(att, export_dir=root)  # live reconcile
+
+
+# --------------------------------------------------------------------------- #
+# Task-level cohort identity policy gate
+# --------------------------------------------------------------------------- #
+def _write_multi_stay_export(root: Path) -> None:
+    """Two ICU stays for subject 10 -> repeat admissions (not unique-stay)."""
+
+    root.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame(
+        {
+            "stay_id": [1, 2, 3],
+            "subject_id": [10, 10, 30],
+            "age": [65.0, 66.0, 55.0],
+            "sex": ["Male", "Male", "Female"],
+        }
+    ).to_parquet(root / "demographics.parquet", index=False)
+    (root / "easyicu_export_manifest.json").write_text(
+        json.dumps({"database": "miiv"}), encoding="utf-8"
+    )
+
+
+def test_review_refuses_multi_stay_under_unique_policy(tmp_path: Path) -> None:
+    root = tmp_path / "export_20260717"
+    _write_multi_stay_export(root)
+    seal_export_structural_typed(root, value_vintage="20260717")
+    # Default policy is unique_stay_per_patient: a repeat-admissions source blocks.
+    with pytest.raises(TypedRetrofitSealError, match="repeat_icu_admissions_present"):
+        review_retrofit_export(root, reviewer="dr. reviewer", decided_at="2026-07-22")
+    assert not (root / RETROFIT_DECISION_FILE).exists()
+
+
+def test_review_refuses_first_icu_stay_unverifiable(tmp_path: Path) -> None:
+    root = tmp_path / "export_20260717"
+    _write_export_with_subject_id(root)  # unique, but no admission ordering
+    seal_export_structural_typed(root, value_vintage="20260717")
+    with pytest.raises(TypedRetrofitSealError, match="first_icu_stay_unverified"):
+        review_retrofit_export(
+            root,
+            reviewer="dr. reviewer",
+            decided_at="2026-07-22",
+            cohort_identity_policy="first_icu_stay",
+        )
+
+
+def test_multi_stay_paper_ready_only_under_repeat_policy(tmp_path: Path) -> None:
+    root = tmp_path / "export_20260717"
+    _write_multi_stay_export(root)
+    seal_export_structural_typed(root, value_vintage="20260717")
+    # A repeat-admissions source IS reviewable when the task allows clustering.
+    review_retrofit_export(
+        root,
+        reviewer="dr. reviewer",
+        decided_at="2026-07-22",
+        cohort_identity_policy="repeat_admissions_clustered",
+    )
+    att = build_retrofit_review_attestation(root)
+    assert att["cohort_identity_policy"] == "repeat_admissions_clustered"
+    assert att["multi_stay_patients_present"] is True
+    assert att["n_subjects"] == 2 and att["n_stays_with_subject"] == 3
+    verify_retrofit_review_attestation(att, export_dir=root)
+
+
+def test_gate_binds_reviewed_policy_no_downgrade(tmp_path: Path) -> None:
+    # A source reviewed for repeat_admissions_clustered cannot be re-labelled as a
+    # stricter policy in the receipt: the review_id no longer binds -> fail closed.
+    root = tmp_path / "export_20260717"
+    _write_multi_stay_export(root)
+    seal_export_structural_typed(root, value_vintage="20260717")
+    review_retrofit_export(
+        root,
+        reviewer="dr. reviewer",
+        decided_at="2026-07-22",
+        cohort_identity_policy="repeat_admissions_clustered",
+    )
+    d_path = root / RETROFIT_DECISION_FILE
+    receipt = json.loads(d_path.read_text(encoding="utf-8"))
+    receipt["cohort_identity_policy"] = "unique_stay_per_patient"
+    d_path.write_text(json.dumps(receipt), encoding="utf-8")
+    with pytest.raises(TypedRetrofitSealError):
+        assert_sealed_export_paper_ready(root)
 
 
 def test_verify_attestation_rejects_forged_unreviewed(tmp_path: Path) -> None:
@@ -473,6 +620,75 @@ def test_verify_attestation_detects_manifest_tamper(tmp_path: Path) -> None:
     m_path.write_text(json.dumps(manifest), encoding="utf-8")
     with pytest.raises(TypedRetrofitSealError):
         verify_retrofit_review_attestation(att, export_dir=root)
+
+
+# --------------------------------------------------------------------------- #
+# Content-addressed staging (production acceptance without the live export dir)
+# --------------------------------------------------------------------------- #
+def test_stage_and_verify_from_staged_roundtrip(tmp_path: Path) -> None:
+    root = tmp_path / "export_20260717"
+    _write_paper_ready_export(root)
+    att = build_retrofit_review_attestation(root)
+    staged = tmp_path / "run_capsule" / "retrofit_source_authority"
+    stage_retrofit_source_authority(root, staged)
+    # Re-verify from the staged blobs alone — the export dir is not consulted.
+    verify_retrofit_review_attestation_from_staged(att, staged)
+    # And the staged blobs are content-addressed (filename == sha256(bytes)).
+    for blob in staged.glob("*.json"):
+        if blob.name == "staged_authority_index.json":
+            continue
+        sha = blob.name.split(".", 1)[0]
+        assert hashlib.sha256(blob.read_bytes()).hexdigest() == sha
+
+
+def test_stage_refuses_unreviewed_source(tmp_path: Path) -> None:
+    root = tmp_path / "export_20260717"
+    _write_synthetic_export(root)  # no subject_id, no decision receipt
+    _seal(root)
+    staged = tmp_path / "run_capsule" / "retrofit_source_authority"
+    with pytest.raises(TypedRetrofitSealError):
+        stage_retrofit_source_authority(root, staged)
+
+
+def test_staged_verify_detects_blob_tamper(tmp_path: Path) -> None:
+    root = tmp_path / "export_20260717"
+    _write_paper_ready_export(root)
+    att = build_retrofit_review_attestation(root)
+    staged = tmp_path / "run_capsule" / "retrofit_source_authority"
+    index = stage_retrofit_source_authority(root, staged)
+    blob = staged / index["patient_identity_blob"]
+    blob.write_bytes(blob.read_bytes() + b" ")  # break content-address integrity
+    with pytest.raises(TypedRetrofitSealError, match="staged blob sha mismatch"):
+        verify_retrofit_review_attestation_from_staged(att, staged)
+
+
+def test_staged_verify_detects_attestation_drift(tmp_path: Path) -> None:
+    root = tmp_path / "export_20260717"
+    _write_paper_ready_export(root)
+    att = build_retrofit_review_attestation(root)
+    staged = tmp_path / "run_capsule" / "retrofit_source_authority"
+    stage_retrofit_source_authority(root, staged)
+    # An attestation whose reviewer disagrees with the staged receipt fails closed.
+    with pytest.raises(TypedRetrofitSealError):
+        verify_retrofit_review_attestation_from_staged(
+            dict(att, reviewer="attacker"), staged
+        )
+
+
+def test_staged_multi_stay_verifies_under_repeat_policy(tmp_path: Path) -> None:
+    root = tmp_path / "export_20260717"
+    _write_multi_stay_export(root)
+    seal_export_structural_typed(root, value_vintage="20260717")
+    review_retrofit_export(
+        root,
+        reviewer="dr. reviewer",
+        decided_at="2026-07-22",
+        cohort_identity_policy="repeat_admissions_clustered",
+    )
+    att = build_retrofit_review_attestation(root)
+    staged = tmp_path / "run_capsule" / "retrofit_source_authority"
+    stage_retrofit_source_authority(root, staged)
+    verify_retrofit_review_attestation_from_staged(att, staged)
 
 
 # --------------------------------------------------------------------------- #
