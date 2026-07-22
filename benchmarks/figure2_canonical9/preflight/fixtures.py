@@ -32,7 +32,7 @@ executor and the agent-owned primary both run on real data offline.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Callable, Dict, List, Tuple
+from typing import Callable, Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
@@ -79,6 +79,46 @@ class GuardrailCheck:
     holds: Callable[["PreflightCase"], bool]
 
 
+# Honest per-item fulfillment levels for the formal suite output contract.
+#   produced             -> a real, on-disk preflight artifact exists (verified)
+#   planned_only         -> a plan step executes for it but yields no publication
+#                           artifact offline (e.g. the offline Coder contract-fails)
+#   not_produced_offline -> the preflight deliberately does not produce this formal
+#                           product (sealed publication figures need real data + a
+#                           real Provider); this is why the harness is a
+#                           *partial-flow smoke*, not E1/E2/E3 readiness.
+FULFILLMENT_PRODUCED = "produced"
+FULFILLMENT_PLANNED_ONLY = "planned_only"
+FULFILLMENT_NOT_PRODUCED_OFFLINE = "not_produced_offline"
+_FULFILLMENTS = frozenset(
+    {FULFILLMENT_PRODUCED, FULFILLMENT_PLANNED_ONLY, FULFILLMENT_NOT_PRODUCED_OFFLINE}
+)
+
+
+@dataclass(frozen=True)
+class ProductMapping:
+    """Explicit, per-item mapping of ONE live suite ``expected_output`` to the
+    preflight plan step (if any) responsible for it and the honest fulfillment
+    level the real run is expected to reach.
+
+    ``output_index`` points into the case's live ``expected_products`` tuple, so
+    the mapping is bound to the suite text and cannot silently drift.
+    ``step_id`` is the plan step that would produce it (``None`` when the
+    preflight produces no such product).  ``artifact_evidence_prefix`` is the
+    evidence-id prefix that proves a real artifact (e.g. ``table_step_artifact_``)
+    for a ``produced`` item.
+    """
+
+    output_index: int
+    step_id: Optional[str]
+    artifact_evidence_prefix: Optional[str]
+    declared_fulfillment: str
+
+    def __post_init__(self) -> None:
+        if self.declared_fulfillment not in _FULFILLMENTS:
+            raise ValueError(f"bad fulfillment {self.declared_fulfillment!r}")
+
+
 @dataclass(frozen=True)
 class PreflightCase:
     """One diagnostic-only E-series preflight case bound to a suite task."""
@@ -96,6 +136,8 @@ class PreflightCase:
     _build_plan: Callable[[], AnalysisPlan]
     _build_cohort: Callable[[int], pd.DataFrame]
     guardrail_checks: Tuple[GuardrailCheck, ...] = ()
+    # One ProductMapping per live suite expected_output (checked one-to-one).
+    product_map: Tuple[ProductMapping, ...] = ()
     # A minimal synthetic dev fixture intentionally does not satisfy the full
     # article display contract, so the honest fail-closed verdict is
     # ``diagnostic_only`` (execution never completes the required suite).
@@ -528,6 +570,39 @@ _E3_CHECKS: Tuple[GuardrailCheck, ...] = (
 
 
 # ---------------------------------------------------------------------------
+# Per-item formal-output contract maps (one entry per live suite expected_output)
+#
+# Honest picture: the ONLY formal suite output the offline preflight genuinely
+# PRODUCES is "table one" (deterministic grouped Table 1 -> table_step_artifact_).
+# Sepsis/lactate/KDIGO sealed publication FIGURES are not produced offline; the
+# remaining audit/cohort-definition products execute as plan steps but the
+# offline Coder contract-fails them (planned_only).  This is why the harness is a
+# partial-flow smoke, not E1/E2/E3 readiness.
+# ---------------------------------------------------------------------------
+
+# E1 expected_outputs: [cohort definition summary, table one, prevalence figure]
+_E1_PRODUCTS: Tuple[ProductMapping, ...] = (
+    ProductMapping(0, "01_cohort_definition", None, FULFILLMENT_PLANNED_ONLY),
+    ProductMapping(1, _E1_TABLE_ONE, "table_step_artifact_", FULFILLMENT_PRODUCED),
+    ProductMapping(2, None, None, FULFILLMENT_NOT_PRODUCED_OFFLINE),
+)
+
+# E2 expected_outputs: [table one, association figure, missingness/aggregation audit]
+_E2_PRODUCTS: Tuple[ProductMapping, ...] = (
+    ProductMapping(0, _E2_TABLE_ONE, "table_step_artifact_", FULFILLMENT_PRODUCED),
+    ProductMapping(1, None, None, FULFILLMENT_NOT_PRODUCED_OFFLINE),
+    ProductMapping(2, "03_missingness_audit", None, FULFILLMENT_PLANNED_ONLY),
+)
+
+# E3 expected_outputs: [table one, stage-stratified figure, ordinal trend audit]
+_E3_PRODUCTS: Tuple[ProductMapping, ...] = (
+    ProductMapping(0, _E3_TABLE_ONE, "table_step_artifact_", FULFILLMENT_PRODUCED),
+    ProductMapping(1, None, None, FULFILLMENT_NOT_PRODUCED_OFFLINE),
+    ProductMapping(2, "03_ordinal_trend", None, FULFILLMENT_PLANNED_ONLY),
+)
+
+
+# ---------------------------------------------------------------------------
 # Case registry
 # ---------------------------------------------------------------------------
 
@@ -555,6 +630,7 @@ E1 = PreflightCase(
     _build_plan=_e1_plan,
     _build_cohort=_e1_cohort,
     guardrail_checks=_E1_CHECKS,
+    product_map=_E1_PRODUCTS,
 )
 
 E2 = PreflightCase(
@@ -577,6 +653,7 @@ E2 = PreflightCase(
     _build_plan=_e2_plan,
     _build_cohort=_e2_cohort,
     guardrail_checks=_E2_CHECKS,
+    product_map=_E2_PRODUCTS,
 )
 
 E3 = PreflightCase(
@@ -600,12 +677,17 @@ E3 = PreflightCase(
     _build_plan=_e3_plan,
     _build_cohort=_e3_cohort,
     guardrail_checks=_E3_CHECKS,
+    product_map=_E3_PRODUCTS,
 )
 
 E1E3_CASES: Dict[str, PreflightCase] = {case.task_id: case for case in (E1, E2, E3)}
 
 __all__ = [
     "GuardrailCheck",
+    "ProductMapping",
+    "FULFILLMENT_PRODUCED",
+    "FULFILLMENT_PLANNED_ONLY",
+    "FULFILLMENT_NOT_PRODUCED_OFFLINE",
     "PreflightCase",
     "E1",
     "E2",

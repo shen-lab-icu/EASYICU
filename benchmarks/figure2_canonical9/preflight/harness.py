@@ -1,18 +1,34 @@
-"""Reusable zero-Provider graph-level preflight harness for E1-E3.
+"""Reusable zero-Provider graph-level **partial-flow smoke** harness for E1-E3.
 
-This module drives the real :class:`ResearchAgentPipeline` graph fully offline
-and returns a structured :class:`PreflightRun` summary.  It never calls an
-external Provider, never reads patient data, and never grants paper authority
-(see the package docstring for the enforced boundaries).
+This drives the real :class:`ResearchAgentPipeline` graph fully offline and
+returns a structured :class:`PreflightRun`.  It is a *partial-flow smoke*, NOT
+E1/E2/E3 publication readiness: offline it genuinely produces only the
+deterministic Table 1 artifact; the sealed publication figures (and the
+data-dependent audit products) are not produced offline.  Each formal suite
+``expected_output`` is mapped item-by-item to its plan step and honest
+fulfillment level (see :mod:`.fixtures` ``ProductMapping``), and the mapping is
+verified against the real run manifest — never by "the three lists differ".
 
-The zero-Provider guarantee is **not** taken on the client's word.  Every run is
-wrapped in :func:`provider_transport_spy`, which replaces the real lowest-layer
-HTTP transport (``httpx.Client.send`` / ``httpx.AsyncClient.send`` — the path all
-production OpenAI/Anthropic SDK calls funnel through) with a counter that raises
-on first use.  ``PreflightRun.external_provider_calls`` is that spy's count, so
-``== 0`` is authoritative and independent of the (forgeable)
-``__easyicu_mock_client__`` / class-name markers.  ``llm_is_mockish`` is recorded
-only as *descriptive* colour, never as the security boundary.
+Enforced boundaries:
+
+* **Zero external Provider (measured).** Every run executes inside
+  :func:`provider_transport_spy`, which replaces ``httpx.Client.send`` /
+  ``httpx.AsyncClient.send`` (the parent-process transport under the OpenAI /
+  Anthropic SDKs) with a fail-on-call counter.  ``external_provider_calls == 0``
+  is that measured count.  This is the *parent-process* Provider measurement;
+  the **subprocess/CLI** no-network boundary is a separate guarantee, proven by
+  the runner's pinned ``network_policy="none"`` + ``allow_unsafe_host_fallback
+  =False`` (P1-C) recorded per step as ``requested_network_policy`` /
+  ``isolation_degraded``.  The forgeable ``llm_is_mockish`` marker is descriptive
+  colour only.
+* **Isolation fail-closed (wired).** ``run_preflight`` builds and persists a
+  :class:`RuntimeManifest`; when ``integration_ready`` is false (e.g. a nested
+  macOS sandbox) it returns a unique structured *blocked* outcome and **does not
+  start the pipeline**.  A per-step nested-sandbox denial is converted to the
+  same structured reason via ``step_isolation_unavailable`` — never left as a
+  generic ``repair_failed``.
+* **No paper authority.** Diagnostic-only; the production Figure 2 acceptance
+  gate rejects every run (asserted).
 
 Run one case directly (development smoke)::
 
@@ -41,9 +57,25 @@ from benchmarks.figure2_canonical9.evaluator.acceptance import (
 )
 from benchmarks.figure2_canonical9.preflight import runtime as rt
 from benchmarks.figure2_canonical9.preflight.fixtures import (
+    FULFILLMENT_NOT_PRODUCED_OFFLINE,
+    FULFILLMENT_PLANNED_ONLY,
+    FULFILLMENT_PRODUCED,
     E1E3_CASES,
     PreflightCase,
+    ProductMapping,
 )
+
+# P1-C: the preflight PINS a fail-closed no-network runner policy.  Passing an
+# explicit ``allow_unsafe_host_fallback=False`` makes the runner ignore the
+# ``EASYICU_ALLOW_UNSAFE_HOST_FALLBACK`` env var (runner reads the env only when
+# the kwarg is None), so no environment variable can relax the boundary.
+PREFLIGHT_RUNNER_KWARGS: Dict[str, Any] = {
+    "network_policy": "none",
+    "allow_unsafe_host_fallback": False,
+}
+
+# This harness is a partial-flow smoke, not readiness.
+READINESS_CLASS = "partial_flow_smoke"
 
 _PLAN_ANCHORS = (
     "ICU-AWARE RESEARCH PLAN",
@@ -60,7 +92,7 @@ _FAULT_CODE = (
 
 
 # ---------------------------------------------------------------------------
-# Zero-Provider transport spy (authoritative)
+# Zero-Provider transport spy (authoritative, parent-process)
 # ---------------------------------------------------------------------------
 
 
@@ -84,11 +116,7 @@ def provider_transport_spy() -> Iterator[TransportSpy]:
     ``httpx``.  We swap ``httpx.Client.send`` / ``httpx.AsyncClient.send`` for a
     counter that RAISES on first use, so any real network Provider call is both
     counted and hard-failed.  A mock client never touches ``httpx``, so the
-    counter stays 0 — that zero is the authoritative zero-Provider evidence.
-
-    Only ``send`` is patched (not client construction), so incidental
-    construction of an ``httpx.Client`` that never sends is untouched; the moment
-    a request would leave the process it is blocked.
+    counter stays 0 — the authoritative *parent-process* zero-Provider evidence.
     """
 
     spy = TransportSpy()
@@ -130,14 +158,6 @@ def _last_user(messages) -> str:
 class ScriptedPreflightLLM(ra.MockLLMClient):
     """Deterministic offline client: inject a typed plan + a correct primary.
 
-    * The planner request returns the fixture's typed ``AnalysisPlan`` (so the
-      deterministic grouped-Table-1 executor is eligible).
-    * The primary-association code request returns the mock's battle-tested
-      logistic-regression script *bound to the fixture's exact exposure* (so the
-      agent-owned primary does not depend on the mock's role-inference heuristic).
-    * Optional fault injection returns runtime-raising code for a target step on
-      both its initial write and every repair, to exercise the repair cap.
-
     Every response is produced locally.  This client's offline nature is recorded
     descriptively via ``llm_is_mockish``; the *authoritative* zero-Provider proof
     is the transport spy in :func:`provider_transport_spy`, not this class.
@@ -157,7 +177,6 @@ class ScriptedPreflightLLM(ra.MockLLMClient):
         self._fault_step = fault_step
         self.total_calls = 0
         self.plan_calls = 0
-        # code write/repair calls keyed by resolved step_id
         self.code_calls: Dict[str, int] = {}
 
     def complete(self, messages, **kwargs) -> str:
@@ -177,8 +196,6 @@ class ScriptedPreflightLLM(ra.MockLLMClient):
             if self._fault_step is not None and step_id == self._fault_step:
                 return _FAULT_CODE
             if step_id == self._case.primary_step_id and self.context is not None:
-                # Reuse the mock's tested primary script, bound to the exact
-                # fixture exposure so the agent-owned primary is deterministic.
                 return _mock_code_primary_association(
                     ctx=self.context,
                     step_id=step_id,
@@ -186,6 +203,100 @@ class ScriptedPreflightLLM(ra.MockLLMClient):
                     predictor=self._case.primary_exposure,
                 )
         return super().complete(messages, **kwargs)
+
+
+# ---------------------------------------------------------------------------
+# Isolation wiring (P1-B) + product-map / network-policy resolution (P1-A/P1-C)
+# ---------------------------------------------------------------------------
+
+
+def blocking_step_isolation(
+    manifest: Dict[str, Any], capability: rt.IsolationCapability
+) -> Optional[str]:
+    """Convert an actual per-step nested-sandbox denial into the structured block.
+
+    Scans the real per-step records; if any is a nested-sandbox denial (per
+    :func:`runtime.step_isolation_unavailable`, which requires the
+    ``macos_sandbox_exec`` backend, an unavailable probe, and the persisted
+    ``sandbox_apply`` stderr), returns the same ``isolation_backend_unavailable``
+    reason so it is never left as a generic ``repair_failed``.
+    """
+
+    for rec in manifest.get("per_step_records", []):
+        detail = rt.step_isolation_unavailable(rec, capability)
+        if detail:
+            return (
+                "isolation_backend_unavailable: "
+                f"{capability.backend} step {rec.get('step_id')} ({detail})"
+            )
+    return None
+
+
+def observe_product_fulfillment(mapping: ProductMapping, run: "PreflightRun") -> str:
+    """Read the REAL manifest to observe how a mapped suite output was fulfilled."""
+
+    if mapping.step_id is None:
+        return FULFILLMENT_NOT_PRODUCED_OFFLINE
+    rec = run.record(mapping.step_id)
+    if not rec:
+        return "absent"
+    ok = rec.get("status") == "ok"
+    prefix = mapping.artifact_evidence_prefix
+    has_artifact = bool(prefix) and any(
+        str(e).startswith(prefix) for e in (rec.get("evidence_ids") or [])
+    )
+    if ok and has_artifact:
+        return FULFILLMENT_PRODUCED
+    return FULFILLMENT_PLANNED_ONLY
+
+
+def resolve_product_map(run: "PreflightRun") -> List[Dict[str, Any]]:
+    """Per-item resolution of the formal suite output contract against the run."""
+
+    outputs = run.case.expected_products
+    resolved: List[Dict[str, Any]] = []
+    for mapping in run.case.product_map:
+        suite_output = (
+            outputs[mapping.output_index]
+            if 0 <= mapping.output_index < len(outputs)
+            else None
+        )
+        observed = observe_product_fulfillment(mapping, run)
+        resolved.append(
+            {
+                "output_index": mapping.output_index,
+                "suite_output": suite_output,
+                "step_id": mapping.step_id,
+                "artifact_evidence_prefix": mapping.artifact_evidence_prefix,
+                "declared_fulfillment": mapping.declared_fulfillment,
+                "observed_fulfillment": observed,
+                "matches": observed == mapping.declared_fulfillment,
+            }
+        )
+    return resolved
+
+
+def network_policy_report(manifest: Dict[str, Any]) -> Dict[str, Any]:
+    """P1-C: every subprocess-executing step must be no-network, non-degraded."""
+
+    steps: List[Dict[str, Any]] = []
+    for rec in manifest.get("per_step_records", []):
+        pol = rec.get("requested_network_policy")
+        if pol is None:
+            continue  # this step did not spawn a subprocess runner
+        steps.append(
+            {
+                "step_id": rec.get("step_id"),
+                "requested_network_policy": pol,
+                "effective_isolation": rec.get("effective_isolation"),
+                "isolation_degraded": rec.get("isolation_degraded"),
+            }
+        )
+    ok = bool(steps) and all(
+        s["requested_network_policy"] == "none" and s["isolation_degraded"] is False
+        for s in steps
+    )
+    return {"ok": ok, "subprocess_steps": steps}
 
 
 @dataclass
@@ -202,8 +313,15 @@ class PreflightRun:
     raised: Optional[str] = None
     routing: List[Dict[str, Any]] = field(default_factory=list)
     readiness: Dict[str, Any] = field(default_factory=dict)
+    runtime_manifest: Optional[rt.RuntimeManifest] = None
+    blocked_reason: Optional[str] = None
+    pipeline_ran: bool = False
 
     # -- derived views ----------------------------------------------------
+    @property
+    def readiness_class(self) -> str:
+        return READINESS_CLASS
+
     @property
     def step_ids(self) -> List[str]:
         return [r.get("step_id") for r in self.manifest.get("per_step_records", [])]
@@ -220,7 +338,7 @@ class PreflightRun:
 
     @property
     def external_provider_calls(self) -> int:
-        """Authoritative: the real httpx transport spy count, not a self-report."""
+        """Authoritative parent-process Provider count (the real httpx spy)."""
 
         return self.provider_transport_calls
 
@@ -229,6 +347,21 @@ class PreflightRun:
         """Descriptive only — ``llm_is_mockish`` is forgeable (package docstring)."""
 
         return llm_is_mockish(self.llm)
+
+    # -- P1-A product-map -------------------------------------------------
+    def resolved_product_map(self) -> List[Dict[str, Any]]:
+        return resolve_product_map(self)
+
+    def produced_suite_outputs(self) -> List[str]:
+        return [
+            row["suite_output"]
+            for row in self.resolved_product_map()
+            if row["observed_fulfillment"] == FULFILLMENT_PRODUCED
+        ]
+
+    # -- P1-C network policy ---------------------------------------------
+    def network_policy_report(self) -> Dict[str, Any]:
+        return network_policy_report(self.manifest)
 
 
 def load_manifest(run_dir: Path) -> Dict[str, Any]:
@@ -264,21 +397,22 @@ def build_pipeline(
     enable_replanning: bool = False,
     max_replans: Optional[int] = None,
 ) -> ra.ResearchAgentPipeline:
-    """Construct an offline pipeline.
+    """Construct an offline pipeline with a PINNED fail-closed no-network runner.
 
     ``runner_kind='subprocess'`` runs the real host runner (the documented
-    offline-diagnosis path).  The ``auto`` runner's Docker source-SHA integrity
-    gate is a *production* blocker and is deliberately NOT bypassed or weakened;
-    the subprocess runner is only for offline diagnosis.  Tangential
-    Provider-shaped audits (literature, visual QA, LaTeX, LLM concept audit) are
-    disabled so the run exercises the orchestration under test, not unrelated
-    quality validators.
+    offline-diagnosis path); the ``auto`` runner's Docker source-SHA integrity
+    gate is a production blocker and is NOT bypassed.  ``runner_kwargs`` pins
+    ``network_policy='none'`` and ``allow_unsafe_host_fallback=False`` so no
+    environment variable can relax the subprocess no-network boundary (P1-C).
+    Tangential Provider-shaped audits are disabled so the run exercises the
+    orchestration under test.
     """
 
     kwargs: Dict[str, Any] = dict(
         workdir=str(workdir),
         llm=llm,
         runner_kind="subprocess",
+        runner_kwargs=dict(PREFLIGHT_RUNNER_KWARGS),
         timeout_seconds=timeout_seconds,
         standard_executor_timeout_seconds=standard_executor_timeout_seconds,
         max_code_repair_attempts=max_code_repair_attempts,
@@ -291,6 +425,27 @@ def build_pipeline(
     if max_replans is not None:
         kwargs["max_replans"] = max_replans
     return ra.ResearchAgentPipeline(**kwargs)
+
+
+def _blocked_run(
+    case: PreflightCase,
+    *,
+    workdir: Path,
+    runtime: rt.RuntimeManifest,
+    fault_step: Optional[str],
+) -> "PreflightRun":
+    """Unique structured blocked outcome — the pipeline is NEVER started."""
+
+    return PreflightRun(
+        case=case,
+        run_dir=Path(workdir),
+        run_id="",
+        manifest={},
+        llm=ScriptedPreflightLLM(case, fault_step=fault_step),
+        runtime_manifest=runtime,
+        blocked_reason=runtime.blocked_reason or "integration_not_ready",
+        pipeline_ran=False,
+    )
 
 
 def run_preflight(
@@ -308,11 +463,22 @@ def run_preflight(
     enable_replanning: bool = False,
     max_replans: Optional[int] = None,
 ) -> PreflightRun:
-    """Run one offline graph-level preflight and return structured evidence.
+    """Run one offline partial-flow smoke and return structured evidence.
 
-    The whole pipeline run executes inside :func:`provider_transport_spy`, so the
-    returned ``provider_transport_calls`` is a real transport-layer measurement.
+    Fail-closed: the RuntimeManifest is built and persisted first; if the
+    isolation backend is unavailable (``integration_ready`` false) the pipeline
+    is NOT started and a structured blocked outcome is returned.
     """
+
+    workdir = Path(workdir)
+    workdir.mkdir(parents=True, exist_ok=True)
+    runtime = rt.build_runtime_manifest()
+    rt.write_runtime_manifest(workdir, runtime)
+
+    if not runtime.integration_ready:
+        return _blocked_run(
+            case, workdir=workdir, runtime=runtime, fault_step=fault_step
+        )
 
     llm = ScriptedPreflightLLM(case, fault_step=fault_step)
     pipeline = build_pipeline(
@@ -354,7 +520,11 @@ def run_preflight(
             raised = f"{type(exc).__name__}: {exc}"
 
     manifest = load_manifest(run_dir)
-    return PreflightRun(
+    rt.write_runtime_manifest(run_dir, runtime)
+    # Post-run: convert any per-step nested-sandbox denial into the same block.
+    step_block = blocking_step_isolation(manifest, runtime.isolation)
+
+    run = PreflightRun(
         case=case,
         run_dir=run_dir,
         run_id=run_id,
@@ -365,7 +535,28 @@ def run_preflight(
         raised=raised,
         routing=_routing(manifest),
         readiness=manifest.get("readiness", {}),
+        runtime_manifest=runtime,
+        blocked_reason=step_block,
+        pipeline_ran=True,
     )
+    _write_product_map_artifact(run)
+    return run
+
+
+def _write_product_map_artifact(run: PreflightRun) -> Path:
+    """Persist the resolved per-item product map as a verifiable diagnostic file."""
+
+    path = Path(run.run_dir) / "preflight_product_map.json"
+    payload = {
+        "task_id": run.case.task_id,
+        "readiness_class": run.readiness_class,
+        "expected_products": list(run.case.expected_products),
+        "product_map": run.resolved_product_map(),
+        "produced_suite_outputs": run.produced_suite_outputs(),
+        "network_policy": run.network_policy_report(),
+    }
+    path.write_text(json.dumps(payload, indent=2, default=str), encoding="utf-8")
+    return path
 
 
 def preflight_runtime_manifest(run_dir: Optional[Path] = None) -> rt.RuntimeManifest:
@@ -387,8 +578,6 @@ def paper_acceptance_status(run: PreflightRun) -> str:
 
     A single diagnostic-only mock run can never satisfy the exact 9-task,
     aware-arm, replay-verified acceptance contract, so this returns ``invalid``.
-    We write a minimal one-item results doc that references the run and evaluate
-    it through the real production gate — nothing here grants paper authority.
     """
 
     results_doc = {
@@ -425,22 +614,42 @@ def _cli(task_key: str) -> int:
     if case is None:
         raise SystemExit(f"unknown task key {task_key!r}; try e1/e2/e3")
     tmp = Path(tempfile.mkdtemp(prefix=f"preflight_{task_key}_"))
-    manifest = preflight_runtime_manifest(tmp)
     run = run_preflight(case, workdir=tmp)
+
+    # Structured blocked outcome: the pipeline was not started.
+    if not run.pipeline_ran:
+        print(
+            json.dumps(
+                {
+                    "task_id": run.case.task_id,
+                    "readiness_class": run.readiness_class,
+                    "blocked": True,
+                    "pipeline_ran": False,
+                    "blocked_reason": run.blocked_reason,
+                    "runtime_integration_ready": False,
+                },
+                indent=2,
+                default=str,
+            )
+        )
+        return 2
+
     print(
         json.dumps(
             {
                 "task_id": run.case.task_id,
-                "runtime_integration_ready": manifest.integration_ready,
-                "runtime_blocked_reason": manifest.blocked_reason,
+                "readiness_class": run.readiness_class,
+                "pipeline_ran": True,
+                "blocked_reason": run.blocked_reason,
+                "runtime_integration_ready": True,
                 "llm_offline_classified": run.llm_offline_classified,
                 "external_provider_calls": run.external_provider_calls,
                 "provider_transport_targets": run.provider_transport_targets,
-                "total_llm_calls": run.llm.total_calls,
-                "plan_calls": run.llm.plan_calls,
+                "network_policy": run.network_policy_report(),
                 "expected_products": list(run.case.expected_products),
+                "product_map": run.resolved_product_map(),
+                "produced_suite_outputs": run.produced_suite_outputs(),
                 "step_ids": run.step_ids,
-                "routing": run.routing,
                 "tristate": run.tristate,
                 "raised": run.raised,
                 "paper_acceptance": paper_acceptance_status(run),
@@ -459,6 +668,8 @@ if __name__ == "__main__":
 
 
 __all__ = [
+    "PREFLIGHT_RUNNER_KWARGS",
+    "READINESS_CLASS",
     "ProviderTransportBlocked",
     "TransportSpy",
     "provider_transport_spy",
@@ -467,6 +678,10 @@ __all__ = [
     "run_preflight",
     "build_pipeline",
     "preflight_runtime_manifest",
+    "blocking_step_isolation",
+    "observe_product_fulfillment",
+    "resolve_product_map",
+    "network_policy_report",
     "load_manifest",
     "paper_acceptance_status",
 ]
