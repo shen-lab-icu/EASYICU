@@ -3403,12 +3403,14 @@ class ResearchAgentPipeline:
         database: str,
         cohort_name: str,
     ) -> List[ExperienceRecord]:
-        """Mine experience records from a completed run and write them back.
+        """Mine legacy records and mirror them into permissioned quarantine.
 
         Reads ``run_status.json`` from ``run_dir`` for the gates +
         findings + superseded-error partition. Returns the records
-        that were registered (after dedup against the existing bank);
-        an empty list when the feature is disabled or the run dir
+        that were registered (after dedup against the existing bank); finalization
+        mirrors these records into ``run_lessons/quarantine`` and never injects
+        them into Planner context. Returns an empty list when the feature is
+        disabled or the run dir
         does not yet have a run_status.
 
         Idempotent on ``(kind, summary)``: re-running over the same
