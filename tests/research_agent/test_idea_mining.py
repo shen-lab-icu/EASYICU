@@ -26,6 +26,12 @@ from easyicu.research_agent.discovery.idea_registry import (
     CandidateNotExecutableError as RegistryCandidateNotExecutableError,
     IdeaCandidateRegistry,
 )
+from easyicu.research_agent.discovery.idea_mining_selection import (
+    select_actionable_prior_art_screen,
+)
+from easyicu.research_agent.discovery.hypothesis_generator import (
+    HypothesisFeasibilitySignal,
+)
 from easyicu.research_agent.literature import CitationRecord
 from easyicu.research_agent.providers.llm import LLMMessage
 from easyicu.research_agent.schema import ConceptDescriptor, VariableRole
@@ -3263,3 +3269,121 @@ def test_bounded_prior_art_screens_only_actionable_differentiated_candidates(
     assert not any(
         "did not match ranked candidate pairs" in warning for warning in result.warnings
     )
+
+
+def test_actionable_screen_rejects_zero_joint_zero_contrast_and_age_mismatch() -> None:
+    def _idea(key: str, population: str, family: str = "association"):
+        return LiteratureIdeaCandidate(
+            source_snapshot_id="source-snapshot/sha256:answerability",
+            citation_key=key,
+            source_adapter_level="user_supplied_excerpt",
+            population=population,
+            exposure_or_predictor=key,
+            outcome="mortality",
+            rationale="A source-grounded unresolved question.",
+            source_quote="future work should test this association",
+            analysis_family=family,
+        )
+
+    ideas = [
+        _idea("zero_joint", "adult ICU patients"),
+        _idea("zero_contrast", "adult ICU patients"),
+        _idea("pediatric_marker", "children with sepsis"),
+        _idea("valid_marker", "adult ICU patients"),
+    ]
+    candidates = [
+        ExecutableHypothesisCandidate(
+            executable_candidate_id=f"execidea_{idx:016d}",
+            literature_idea_id=str(idea.literature_idea_id),
+            source_snapshot_id=idea.source_snapshot_id,
+            citation_key=idea.citation_key,
+            population=idea.population,
+            predictor_label=idea.exposure_or_predictor,
+            outcome_label=idea.outcome,
+            resolved_predictor_concept=idea.exposure_or_predictor,
+            resolved_outcome_concept="death",
+            feasibility_pair_key=(idea.exposure_or_predictor, "death"),
+            analysis_family=idea.analysis_family,
+            research_question="test",
+            source_quote=idea.source_quote,
+        )
+        for idx, idea in enumerate(ideas, start=1)
+    ]
+    feasibility = {
+        ("zero_joint", "death"): HypothesisFeasibilitySignal(
+            joint_fraction_complete=0.0,
+            predictor_contrast_fraction=None,
+        ),
+        ("zero_contrast", "death"): HypothesisFeasibilitySignal(
+            joint_fraction_complete=0.9,
+            predictor_contrast_fraction=0.0,
+        ),
+        ("pediatric_marker", "death"): HypothesisFeasibilitySignal(
+            joint_fraction_complete=0.9,
+            predictor_contrast_fraction=0.3,
+        ),
+        ("valid_marker", "death"): HypothesisFeasibilitySignal(
+            joint_fraction_complete=0.9,
+            predictor_contrast_fraction=0.3,
+        ),
+    }
+
+    selected_ideas, selected_candidates = select_actionable_prior_art_screen(
+        literature_ideas=ideas,
+        executable_candidates=candidates,
+        feasibility_by_pair=feasibility,
+        limit=10,
+        analytic_population_age_group="adult",
+    )
+
+    assert [idea.exposure_or_predictor for idea in selected_ideas] == ["valid_marker"]
+    assert [
+        candidate.resolved_predictor_concept for candidate in selected_candidates
+    ] == ["valid_marker"]
+
+
+def test_actionable_screen_requires_broad_observation_for_treatment_without_absence_contract() -> (
+    None
+):
+    idea = LiteratureIdeaCandidate(
+        source_snapshot_id="source-snapshot/sha256:treatment-observation",
+        citation_key="treatment_review",
+        source_adapter_level="user_supplied_excerpt",
+        population="adult ICU patients",
+        exposure_or_predictor="vasopressin initiation",
+        outcome="mortality",
+        rationale="Timing remains unresolved.",
+        source_quote="future work should test vasopressin timing",
+        analysis_family="treatment_response",
+    )
+    candidate = ExecutableHypothesisCandidate(
+        executable_candidate_id="execidea_0000000000000001",
+        literature_idea_id=str(idea.literature_idea_id),
+        source_snapshot_id=idea.source_snapshot_id,
+        citation_key=idea.citation_key,
+        population=idea.population,
+        predictor_label=idea.exposure_or_predictor,
+        outcome_label=idea.outcome,
+        resolved_predictor_concept="adh_rate",
+        resolved_outcome_concept="death",
+        feasibility_pair_key=("adh_rate", "death"),
+        analysis_family=idea.analysis_family,
+        research_question="test",
+        source_quote=idea.source_quote,
+    )
+
+    selected, _ = select_actionable_prior_art_screen(
+        literature_ideas=[idea],
+        executable_candidates=[candidate],
+        feasibility_by_pair={
+            ("adh_rate", "death"): HypothesisFeasibilitySignal(
+                joint_fraction_complete=0.06,
+                n_joint_complete=5600,
+                denominator_n=94458,
+                predictor_contrast_fraction=0.3,
+            )
+        },
+        limit=1,
+    )
+
+    assert selected == []
