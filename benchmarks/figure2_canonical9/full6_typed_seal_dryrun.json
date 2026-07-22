@@ -36,9 +36,9 @@
       "ventilator.manifest.json": "ad82824a125c9596e82fc45151f5c75d7a5e8e361da108e1d0ce4c316a48c0d7",
       "vitals.manifest.json": "168703ad1bdf8f5f81b1c6fba501be2de0d8bfe2cf8fc01f53c4dd4cb04bde6a"
     },
-    "sealer_code_sha256": "ff206e0f9e6cad6ec4631095a9f9d33f59f7beca9593a6ba1aa346ad06854642",
+    "sealer_code_sha256": "932033fc33ffbefd413b3e9893d046bccaf7d3d77045db4eacc2d9ff728efa9f",
     "sealer_git": {
-      "head": "0088fb88ba460b34ab6f0fac5c518dc6093b3501",
+      "head": "7e00e82d7ddd624489b732b9dbd7be581258b89f",
       "sealer_paths_dirty": false,
       "head_describes_running_code": true
     }
