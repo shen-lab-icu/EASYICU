@@ -156,9 +156,14 @@ class ScriptedPreflightLLM:
         case: PreflightCase,
         *,
         fault_step: Optional[str] = None,
+        fault_code: str = _FAULT_CODE,
+        request_replan_from_primary: bool = False,
+        replan_strategy: str = "noop",
     ) -> None:
         self._case = case
         self._fault_step = fault_step
+        if replan_strategy not in {"noop", "substantive"}:
+            raise ValueError(f"unsupported replan strategy {replan_strategy!r}")
         plan_json = case.build_plan().model_dump_json(indent=2)
         context = ResearchContext(
             research_question=case.question,
@@ -178,9 +183,16 @@ class ScriptedPreflightLLM:
             outcome=case.target_outcome,
             predictor=case.primary_exposure,
         )
+        if request_replan_from_primary:
+            primary_code = primary_code.replace(
+                '"method": "logistic_regression",',
+                '"method": "logistic_regression",\n'
+                '        "replan_requested": True,',
+            )
         primary_responses: List[str] = [primary_code]
         if fault_step == case.primary_step_id:
-            primary_responses = [_FAULT_CODE] * 16
+            primary_responses = [fault_code] * 16
+        replan_responses = _replan_responses(case, strategy=replan_strategy)
         rules: List[tuple[str, List[str]]] = [
             # Rules are generic -> specific; PatternScriptedMock gives the
             # later matching rule priority.
@@ -189,7 +201,11 @@ class ScriptedPreflightLLM:
             (case.primary_step_id, primary_responses),
         ]
         if fault_step is not None and fault_step != case.primary_step_id:
-            rules.append((fault_step, [_FAULT_CODE] * 16))
+            rules.append((fault_step, [fault_code] * 16))
+        # This must come after the step-id rules: a Replanner prompt embeds the
+        # current plan (and therefore every step id), but it must receive a
+        # plan JSON rather than a code-fault response.
+        rules.append((_REPLAN_ANCHOR, replan_responses))
         self.client = PatternScriptedMockLLMClient(
             rules,
             default="MOCK RESPONSE — preflight default",
@@ -289,6 +305,45 @@ def _routing(manifest: Dict[str, Any]) -> List[Dict[str, Any]]:
     ]
 
 
+def _replan_responses(case: PreflightCase, *, strategy: str) -> List[str]:
+    """Build closed static candidates for real replan-cap control tests."""
+
+    initial = case.build_plan()
+    if strategy == "noop":
+        return [initial.model_dump_json(indent=2)] * 16
+    primary_index = next(
+        index
+        for index, step in enumerate(initial.steps)
+        if step.step_id == case.primary_step_id
+    )
+    # The first non-primary fixture step deliberately contract-fails offline,
+    # so it is not an immutable completed record when the second replan runs.
+    # Altering it gives the total-cap test a real second substantive candidate.
+    future_index = next(
+        (index for index in range(len(initial.steps)) if index != primary_index),
+        primary_index,
+    )
+    first_steps = list(initial.steps)
+    first_steps[primary_index] = first_steps[primary_index].model_copy(
+        update={"intent": first_steps[primary_index].intent + " [replan-A]"}
+    )
+    first = initial.model_copy(
+        update={"revision": initial.revision + 1, "steps": first_steps}
+    )
+    second_steps = list(first.steps)
+    second_steps[future_index] = second_steps[future_index].model_copy(
+        update={"intent": second_steps[future_index].intent + " [replan-B]"}
+    )
+    second = first.model_copy(
+        update={"revision": first.revision + 1, "steps": second_steps}
+    )
+    return [
+        first.model_dump_json(indent=2),
+        second.model_dump_json(indent=2),
+        second.model_dump_json(indent=2),
+    ]
+
+
 def build_pipeline(
     case: PreflightCase,
     *,
@@ -299,6 +354,7 @@ def build_pipeline(
     max_code_repair_attempts: int = 2,
     enable_replanning: bool = False,
     max_replans: Optional[int] = None,
+    max_consecutive_noop_replans: Optional[int] = None,
 ) -> ra.ResearchAgentPipeline:
     """Construct an offline pipeline.
 
@@ -328,6 +384,8 @@ def build_pipeline(
     )
     if max_replans is not None:
         kwargs["max_replans"] = max_replans
+    if max_consecutive_noop_replans is not None:
+        kwargs["max_consecutive_noop_replans"] = max_consecutive_noop_replans
     return ra.ResearchAgentPipeline(**kwargs)
 
 
@@ -337,6 +395,9 @@ def run_preflight(
     workdir: Path,
     n_rows: int = 80,
     fault_step: Optional[str] = None,
+    fault_code: str = _FAULT_CODE,
+    request_replan_from_primary: bool = False,
+    replan_strategy: str = "noop",
     stop_after_step_id: Optional[str] = None,
     resume_run_id: Optional[str] = None,
     resume_from_step_id: Optional[str] = None,
@@ -345,6 +406,7 @@ def run_preflight(
     max_code_repair_attempts: int = 2,
     enable_replanning: bool = False,
     max_replans: Optional[int] = None,
+    max_consecutive_noop_replans: Optional[int] = None,
 ) -> PreflightRun:
     """Run one offline graph-level preflight and return structured evidence.
 
@@ -353,7 +415,13 @@ def run_preflight(
     """
 
     runtime_manifest = preflight_runtime_manifest(workdir)
-    llm = ScriptedPreflightLLM(case, fault_step=fault_step)
+    llm = ScriptedPreflightLLM(
+        case,
+        fault_step=fault_step,
+        fault_code=fault_code,
+        request_replan_from_primary=request_replan_from_primary,
+        replan_strategy=replan_strategy,
+    )
     if not runtime_manifest.integration_ready:
         return PreflightRun(
             case=case,
@@ -373,6 +441,7 @@ def run_preflight(
         max_code_repair_attempts=max_code_repair_attempts,
         enable_replanning=enable_replanning,
         max_replans=max_replans,
+        max_consecutive_noop_replans=max_consecutive_noop_replans,
     )
     run_kwargs: Dict[str, Any] = dict(
         question=case.question,
