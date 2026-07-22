@@ -59,7 +59,7 @@ from ..contracts.declared_product import (
     primary_analysis_cohort_integrity_findings,
     primary_analysis_cohort_producer_uses_universe,
 )
-from ..execution.runners.deterministic_robustness import replay_locked_memberships
+from ..robustness.membership import replay_locked_memberships
 from ..contracts.ordered_stratified import ordered_stratified_numeric_findings
 from ..plan_utils import (
     _normalised_expected_output_names,

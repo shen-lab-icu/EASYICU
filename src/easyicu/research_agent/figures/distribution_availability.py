@@ -36,7 +36,11 @@ from .publication import (
 )
 
 REPAIR_ID = "distribution_availability_publication_bundle_from_parent_outputs_v1"
-CONTROLLED_METHOD = "exposure_distribution_and_missingness_audit"
+from ..planning.method_vocabulary import (
+    EXPOSURE_DISTRIBUTION_AND_MISSINGNESS_AUDIT,
+)
+
+CONTROLLED_METHOD = EXPOSURE_DISTRIBUTION_AND_MISSINGNESS_AUDIT
 _DISTRIBUTION_COLUMNS = {
     "row_type",
     "variable",

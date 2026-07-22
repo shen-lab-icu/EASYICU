@@ -825,3 +825,28 @@ standalone ablation script.
 
 These are deliberate v1 limits. The structure is in place to lift
 each of them without changing the public API.
+
+## Historical names in the provenance ledger (read before auditing evidence.json)
+
+Several identifiers in the evidence ledger predate the current architecture
+and read misleadingly today. They are kept byte-stable because golden runs,
+resume identity, and sealed capsules bind to them; renaming is queued for the
+next protocol-version bump. Until then:
+
+| Ledger name | What it actually is |
+|---|---|
+| evidence id `analysis_cohort_execute_repair`, producer `cohort_repair` | The **standard** host cohort materialization path (prose inclusion/exclusion criteria translated to typed CTAS predicates), not a repair. The name survives from the era when this ran only as a repair flow. |
+| evidence-level `generation_mode="llm"` on the cohort/flow records | Refers to the **origin of the cohort definition** (the Planner's LLM-authored criteria). The numbers themselves are host-computed; the checkpoint-level `generation_mode="deterministic_cohort_materializer"` is the execution-mode authority. |
+| "repair" across the codebase | Four distinct meanings: `repair_registry.py` (sealed renderer + structural repair registry), `repairs/` (LLM patch/rewrite transport), `cohort/repair.py` (prose→CTAS translation), and the `cohort_repair` producer above. |
+
+## The three knowledge packages (do not merge them)
+
+* `learning/` — automatic cross-run memory (`experience.py`, `memory.py`).
+  Default **off**; never enabled for canonical/benchmark runs.
+* `know_how/` — human-reviewed, citation-bound protocol cards. Default
+  **off** until sign-off; unreviewed cards fail closed.
+* `discovery/` — bounded hypothesis ranking and idea mining. Outputs are
+  human-curated candidates, never manuscript results.
+
+They look adjacent but have different authority models (automatic vs
+human-reviewed vs human-curated); keeping them separate is deliberate.

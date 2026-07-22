@@ -425,9 +425,21 @@ _SEALED_RENDERER_PRODUCT_SLOTS: Dict[str, Tuple[str, ...]] = {
 # Each outer tuple item is one required logical parent-output role; its inner
 # tuple lists exact terminal-token alternatives for that role.  No prose or
 # physical filename participates in this registry.
+from .planning.method_vocabulary import (
+    ADJUSTED_ASSOCIATION_MODELS,
+    BINARY_OUTCOME_INCIDENCE_AND_ABSOLUTE_RISK,
+    COHORT_DEFINITION,
+    COHORT_DEFINITION_SENSITIVITY,
+    DISTRIBUTION_SUMMARY_AND_MISSINGNESS_AUDIT,
+    EXPOSURE_DISTRIBUTION_AND_MISSINGNESS_AUDIT,
+    MISSINGNESS_SOURCE_AVAILABILITY_AUDIT,
+    ORDINAL_EXPOSURE_DERIVATION_AND_QUALITY_CONTROL,
+    RIGHT_SKEWED_DISTRIBUTION_AND_MEASUREMENT_AVAILABILITY_AUDIT,
+)
+
 _SEALED_RENDERER_PLANNER_METHODS: Dict[str, Tuple[str, ...]] = {
     "ordered_category_distribution_publication_bundle_v1": (
-        "ordinal_exposure_derivation_and_quality_control",
+        ORDINAL_EXPOSURE_DERIVATION_AND_QUALITY_CONTROL,
     ),
     # v2 is an additive compatibility renderer for an already-sealed Planner
     # product pair.  It is authorized by exact typed output roles plus a
@@ -435,24 +447,24 @@ _SEALED_RENDERER_PLANNER_METHODS: Dict[str, Tuple[str, ...]] = {
     # string.  Keeping this tuple empty prevents accidental text routing.
     "ordered_category_distribution_availability_publication_bundle_v2": (),
     "distribution_availability_publication_bundle_from_parent_outputs_v1": (
-        "exposure_distribution_and_missingness_audit",
+        EXPOSURE_DISTRIBUTION_AND_MISSINGNESS_AUDIT,
     ),
     "continuous_measurement_audit_publication_bundle_v1": (
-        "right_skewed_distribution_and_measurement_availability_audit",
-        "distribution_summary_and_missingness_audit",
+        RIGHT_SKEWED_DISTRIBUTION_AND_MEASUREMENT_AVAILABILITY_AUDIT,
+        DISTRIBUTION_SUMMARY_AND_MISSINGNESS_AUDIT,
     ),
     "absolute_risk_incidence_prevalence_publication_bundle_v1": (
-        "binary_outcome_incidence_and_absolute_risk",
+        BINARY_OUTCOME_INCIDENCE_AND_ABSOLUTE_RISK,
     ),
     "association_publication_bundle_from_planned_model_contract_v1": (
-        "adjusted_association_models",
+        ADJUSTED_ASSOCIATION_MODELS,
     ),
-    "cohort_flow_publication_bundle_from_parent_outputs_v1": ("cohort_definition",),
+    "cohort_flow_publication_bundle_from_parent_outputs_v1": (COHORT_DEFINITION,),
     "sensitivity_publication_bundle_from_locked_summary_v1": (
-        "cohort_definition_sensitivity",
+        COHORT_DEFINITION_SENSITIVITY,
     ),
     "missingness_publication_bundle_from_parent_outputs_v1": (
-        "missingness_and_source_availability_audit",
+        MISSINGNESS_SOURCE_AVAILABILITY_AUDIT,
     ),
 }
 _SEALED_RENDERER_PARENT_OUTPUT_ROLE_GROUPS: Dict[

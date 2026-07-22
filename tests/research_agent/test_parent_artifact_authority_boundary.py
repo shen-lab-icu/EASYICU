@@ -33,11 +33,28 @@ def test_pipeline_parent_artifact_exports_keep_object_identity() -> None:
         assert getattr(pipeline, name) is getattr(parent_artifact, name)
 
 
-def test_pipeline_distribution_seal_export_keeps_renderer_identity() -> None:
+def test_sealed_registry_distribution_seal_keeps_renderer_identity() -> None:
+    """The registry adapter must dispatch to the exact figures seal object.
+
+    The historical ``pipeline._distribution_availability_parent_digest_seal``
+    re-export was retired when the distribution renderer moved into
+    ``figures/sealed_registry.py`` (2026-07-22); the registry entry is now the
+    single dispatch surface and must not wrap or fork the canonical seal.
+    """
+
+    from easyicu.research_agent.figures.sealed_registry import (
+        sealed_renderer_adapter,
+    )
+
+    adapter = sealed_renderer_adapter(
+        "distribution_availability_publication_bundle_from_parent_outputs_v1"
+    )
+    assert adapter is not None
     assert (
-        pipeline._distribution_availability_parent_digest_seal
+        adapter.seal
         is distribution_availability._distribution_availability_parent_digest_seal
     )
+    assert not hasattr(pipeline, "_distribution_availability_parent_digest_seal")
 
 
 def test_parent_artifact_authority_never_imports_pipeline_or_renderer() -> None:

@@ -20,6 +20,7 @@ from ..authority.parent_artifact import (
     _verified_direct_parent_artifact_digests,
 )
 from ..contracts.declared_product import read_digest_bound_artifact_snapshot
+from ..planning.method_vocabulary import MISSINGNESS_SOURCE_AVAILABILITY_AUDIT
 from .publication import (
     add_panel_label,
     apply_publication_style,
@@ -28,7 +29,7 @@ from .publication import (
 )
 
 REPAIR_ID = "missingness_publication_bundle_from_parent_outputs_v1"
-CONTROLLED_METHOD = "missingness_and_source_availability_audit"
+CONTROLLED_METHOD = MISSINGNESS_SOURCE_AVAILABILITY_AUDIT
 _PRODUCT_FILES = {
     "table:missingness_audit": "missingness_audit.csv",
     "table:measurement_source_audit": "measurement_source_audit.csv",
@@ -163,7 +164,15 @@ def _validated_source_frame(
         merged["indicator_semantics"].astype(str) == "measurement_availability"
     ).all():
         return None
-    if not (merged["missingness_kind"].astype(str) == "measurement_missing").all():
+    kinds = merged["missingness_kind"].astype(str)
+    # Structural no-source rows are still pure sealed counts (measured == 0 by
+    # definition) and are exactly what a cross-database audit surfaces; render
+    # them instead of abandoning the whole sealed figure. Flag-conflict and
+    # binary-event rows keep refusing: their counts carry different semantics.
+    if not kinds.isin(["measurement_missing", "structural_no_source"]).all():
+        return None
+    structural = kinds == "structural_no_source"
+    if bool((merged.loc[structural, "measured_one_n"] != 0).any()):
         return None
 
     denominator = merged["n_total_missing"].astype(float)
@@ -240,20 +249,36 @@ def render_missingness_source_bundle(
     positions = list(range(len(source)))
     available = source["available_pct"].astype(float)
     missing = source["missing_pct"].astype(float)
+    structural_no_source = (
+        source["missingness_kind"].astype(str).eq("structural_no_source")
+    )
+    plotted_available = available.where(~structural_no_source, 0.0)
+    plotted_missing = missing.where(~structural_no_source, 0.0)
+    plotted_no_source = structural_no_source.astype(float) * 100.0
     ax.barh(
         positions,
-        available,
+        plotted_available,
         color=palette["blue_soft"],
         height=0.62,
         label="Available",
     )
     ax.barh(
         positions,
-        missing,
-        left=available,
+        plotted_missing,
+        left=plotted_available,
         color=palette["neutral_light"],
         height=0.62,
-        label="Missing",
+        label="Measurement missing",
+    )
+    ax.barh(
+        positions,
+        plotted_no_source,
+        color=palette["band"],
+        edgecolor=palette["neutral"],
+        hatch="////",
+        linewidth=0.6,
+        height=0.62,
+        label="No source",
     )
     ax.set_yticks(positions)
     ax.set_yticklabels([_label(value) for value in source["concept"]])
@@ -263,10 +288,18 @@ def render_missingness_source_bundle(
     ax.set_title("Availability of declared audit inputs", loc="left")
     ax.grid(axis="x", color=palette["neutral_light"], linewidth=0.5)
     ax.legend(loc="lower right", bbox_to_anchor=(1.0, 1.01), ncol=2)
-    for y, (missing_pct, missing_n, total_n) in enumerate(
-        zip(missing, source["missing_n"], source["n_total_missing"])
+    for y, (missing_pct, missing_n, total_n, kind) in enumerate(
+        zip(
+            missing,
+            source["missing_n"],
+            source["n_total_missing"],
+            source["missingness_kind"].astype(str),
+        )
     ):
-        label = f"Missing {missing_pct:.1f}% ({int(missing_n):,}/{int(total_n):,})"
+        if kind == "structural_no_source":
+            label = f"No source in cohort (0/{int(total_n):,})"
+        else:
+            label = f"Missing {missing_pct:.1f}% ({int(missing_n):,}/{int(total_n):,})"
         ax.text(101.0, y, label, va="center", ha="left", fontsize=6.2, clip_on=False)
     add_panel_label(ax, "A", x=-0.14, y=1.02)
     fig.subplots_adjust(left=0.20, right=0.76, bottom=0.14, top=0.88)
@@ -287,8 +320,9 @@ def render_missingness_source_bundle(
                 "title": "Measurement availability",
                 "role": "data_quality",
                 "claim": (
-                    "Available and missing counts partition each input's locked "
-                    "analysis-cohort denominator."
+                    "Available and measurement-missing counts partition inputs "
+                    "with a source; structural no-source inputs are displayed as "
+                    "a separate status."
                 ),
                 "evidence_ids": [source_path.name],
             }
@@ -296,7 +330,9 @@ def render_missingness_source_bundle(
         source_data=[source_path.name],
         statistics_note=(
             "Percentages are recomputed from digest-bound integer counts; this "
-            "renderer performs no cohort selection, imputation, or modelling."
+            "renderer performs no cohort selection, imputation, or modelling. "
+            "Concepts with no source in this cohort (structural no-source) are "
+            "labelled distinctly from measurement missingness."
         ),
     )
     outputs = save_publication_figure(

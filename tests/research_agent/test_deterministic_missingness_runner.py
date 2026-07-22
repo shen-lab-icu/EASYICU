@@ -464,3 +464,54 @@ def test_blocks_on_empty_cohort(tmp_path: Path):
     assert summary["status"] == "blocked"
     assert summary["adjusted_effect"] is None
     assert "empty" in summary["blocking_reason"].lower()
+
+
+def test_corrupt_analysis_plan_fails_loudly_instead_of_widening_scope(
+    tmp_path: Path,
+) -> None:
+    """A present-but-unparseable host plan must fail the step, not silently
+    fall back to auditing every paired concept (scope drift)."""
+    import pytest
+
+    out_dir = tmp_path / "steps" / "02_missingness_measurement_audit" / "outputs"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    (tmp_path / "research_context.json").write_text("{}", encoding="utf-8")
+    (tmp_path / "analysis_plan.json").write_text("{not json", encoding="utf-8")
+    cohort_path = tmp_path / "cohort_analysis.parquet"
+    _cohort(n=10).to_parquet(cohort_path, index=False)
+
+    saved = dict(os.environ)
+    os.environ["STEP_OUT_DIR"] = str(out_dir)
+    os.environ["COHORT_PARQUET"] = str(cohort_path)
+    try:
+        code = missingness_measurement_audit_code()
+        with pytest.raises(json.JSONDecodeError):
+            exec(compile(code, "<det_missingness>", "exec"), {"__name__": "__main__"})
+    finally:
+        os.environ.clear()
+        os.environ.update(saved)
+    assert not (out_dir / "step_summary.json").exists()
+
+
+def test_absent_plan_and_context_keep_legacy_discovery_mode(tmp_path: Path) -> None:
+    """Missing host files stay a legitimate legacy state (broad discovery)."""
+    out_dir = tmp_path / "steps" / "02_missingness_measurement_audit" / "outputs"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    cohort_path = tmp_path / "cohort_analysis.parquet"
+    _cohort(n=50).to_parquet(cohort_path, index=False)
+
+    saved = dict(os.environ)
+    os.environ["STEP_OUT_DIR"] = str(out_dir)
+    os.environ["COHORT_PARQUET"] = str(cohort_path)
+    try:
+        code = missingness_measurement_audit_code()
+        try:
+            exec(compile(code, "<det_missingness>", "exec"), {"__name__": "__main__"})
+        except SystemExit:
+            pass
+    finally:
+        os.environ.clear()
+        os.environ.update(saved)
+    summary = json.loads((out_dir / "step_summary.json").read_text(encoding="utf-8"))
+    assert summary["status"] == "ok"
+    assert summary["n_concepts_audited"] >= 3

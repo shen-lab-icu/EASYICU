@@ -65,7 +65,7 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
-TOOL_VERSION = "1.7.0"
+TOOL_VERSION = "1.8.0"
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 RA = REPO_ROOT / "src" / "easyicu" / "research_agent"
@@ -85,6 +85,19 @@ TARGET_FILES: List[Path] = [
     RA / "gates" / "typed_input.py",
     RA / "repairs" / "source.py",
     RA / "repairs" / "typed_input.py",
+    # 2026-07-21 review: the size gate previously watched only historically
+    # refactored files while stable large files went unmeasured
+    # (audits/validators.py was the single biggest). Append-only after a file's
+    # owning workstream is committed. discovery/idea_mining.py remains visible
+    # in the package top-N report but is added to TARGET_FILES only by its own
+    # active refactor batch, so one lane cannot baseline another lane's dirty
+    # working-tree bytes.
+    RA / "audits" / "validators.py",
+    RA / "plan_utils.py",
+    RA / "agents" / "core.py",
+    RA / "contracts" / "declared_product.py",
+    RA / "figures" / "skill.py",
+    RA / "authority" / "evidence_store.py",
 ]
 # (file, function name) — first match by name (top-level or nested).
 TARGET_FUNCTIONS: List[Tuple[str, str]] = [
@@ -510,11 +523,42 @@ def diff(baseline: Dict[str, Any], current: Dict[str, Any]) -> int:
             print(f"  SHIM-BYPASS VIOLATION in {name}: imports shim {v}")
             regressions += 1
     print()
+    _print_top_files_report()
     if regressions:
         print(f"FAIL: {regressions} regression(s) vs baseline.")
     else:
         print("OK: no lower-is-better metric regressed vs baseline.")
     return regressions
+
+
+def _print_top_files_report(top_n: int = 12) -> None:
+    """Informational package-wide size scan (never gates).
+
+    The gated TARGET_FILES list is append-only and historically grew from
+    refactor batches; this report exists so the next unmanaged monolith is
+    visible in every diff run instead of being discovered by accident.
+    """
+
+    measured = {p.relative_to(RA).as_posix() for p in TARGET_FILES}
+    sizes = sorted(
+        (
+            (len(p.read_text().splitlines()), p.relative_to(RA).as_posix())
+            for p in RA.rglob("*.py")
+            if "__pycache__" not in p.parts
+        ),
+        reverse=True,
+    )
+    print(f"package top-{top_n} files by LOC (informational; * = not gated):")
+    for loc, name in sizes[:top_n]:
+        marker = " " if name in measured else "*"
+        print(f"  {marker} {loc:>6}  {name}")
+    unmeasured = [name for _loc, name in sizes[:top_n] if name not in measured]
+    if unmeasured:
+        print(
+            f"  NOTE: {len(unmeasured)} of the top-{top_n} files are outside "
+            "TARGET_FILES — consider appending them."
+        )
+    print()
 
 
 def main() -> int:
