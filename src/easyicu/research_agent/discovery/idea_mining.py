@@ -1705,6 +1705,8 @@ def run_idea_mining_dry_run(
     registry_path: Optional[str | Path] = None,
     cohort: Optional[Mapping[str, Any]] = None,
     analytic_unit: Literal["stay", "patient"] = "stay",
+    analytic_population_age_group: Literal["adult", "pediatric", "mixed"]
+    | None = None,
     top_k: int = 5,
     citations: Sequence[Any] = (),
     feasibility_probe: Optional[FeasibilityProbe] = None,
@@ -1953,6 +1955,7 @@ def run_idea_mining_dry_run(
             executable_candidates=executable_candidates,
             feasibility_by_pair=pair_feasibility,
             limit=prior_art_candidate_limit,
+            analytic_population_age_group=analytic_population_age_group,
         )
         warnings.append(
             "Prior-art screening was feasibility-first and bounded: "
@@ -2169,10 +2172,12 @@ def run_idea_mining_dry_run(
                 str(idea.literature_idea_id) for idea in screened_literature_ideas
             ],
             "selection_basis": (
-                "host_mapped_data_feasible_then_specific_differentiator_coverage_contrast"
+                "host_mapped_answerable_population_compatible_then_"
+                "specific_differentiator_coverage_contrast"
                 if prior_art_candidate_limit is not None
                 else "unbounded_historical_behavior"
             ),
+            "analytic_population_age_group": analytic_population_age_group,
         },
         "feasibility_signals": [
             record.model_dump(mode="json") for record in feasibility_records

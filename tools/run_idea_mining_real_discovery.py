@@ -571,6 +571,7 @@ def main() -> None:
         database="miiv",
         data_path=wide_path,
         analytic_unit="stay",
+        analytic_population_age_group="adult",
         feasibility_probe=_event_aware_probe,
         top_k=args.top_k,
         prior_art_search_client=search_client,
