@@ -16,7 +16,7 @@ Two layers of assertion:
   pass and never a silent skip.  The formal gate must genuinely pass in a
   sandbox-permitting environment.
 
-Increment 2 adds the control-flow caps (repair/replan/no-op), real timeout +
+Increment 2 covers the control-flow caps (repair/replan/no-op), real timeout +
 watchdog, digest-based stop/resume, and the explicit paper-authority reason.
 
 Run just this batch::
@@ -25,6 +25,8 @@ Run just this batch::
 """
 
 from __future__ import annotations
+
+import os
 
 import pytest
 
@@ -95,6 +97,15 @@ def normal_run(request, tmp_path_factory):
     the_case = request.param
     workdir = tmp_path_factory.mktemp(f"pf_{the_case.task_id}")
     return run_preflight(the_case, workdir=workdir)
+
+
+def _control_run(case: PreflightCase, tmp_path, **kwargs):
+    """Run a control-flow test only with a usable real isolation backend."""
+
+    manifest = preflight_runtime_manifest()
+    if not manifest.integration_ready:
+        pytest.skip(manifest.blocked_reason or "integration_not_ready")
+    return run_preflight(case, workdir=tmp_path, **kwargs)
 
 
 # ---------------------------------------------------------------------------
@@ -187,7 +198,7 @@ def test_guardrail_structural_coverage(case: PreflightCase) -> None:
 def test_llm_offline_classified_is_descriptive_only(case: PreflightCase) -> None:
     # llm_is_mockish is recorded as descriptive colour; it is NOT the security
     # boundary (that is the transport spy).  Here we only assert it classifies
-    # the scripted client as offline, which the docstring calls out as forgeable.
+    # the reviewed scripted client as offline.
     llm = ScriptedPreflightLLM(case)
     from easyicu.research_agent.providers.llm import llm_is_mockish
 
@@ -469,6 +480,168 @@ def test_paper_acceptance_rejects_mock_run(normal_run) -> None:
 def test_single_planner_call(normal_run) -> None:
     # The scripted plan is accepted on the first planner call (no retry storm).
     assert normal_run.llm.plan_calls == 1
+
+
+# ---------------------------------------------------------------------------
+# Layer 2b — real control-flow boundaries (gated on integration_ready)
+# ---------------------------------------------------------------------------
+
+
+def test_runtime_repair_cap_is_consumed_exactly(tmp_path) -> None:
+    run = _control_run(
+        E1,
+        tmp_path,
+        fault_step=E1.primary_step_id,
+        max_code_repair_attempts=2,
+    )
+
+    record = run.record(E1.primary_step_id)
+    assert record.get("status") == "repair_failed"
+    assert record.get("code_repair_attempts") == 2
+    assert record.get("runtime_repair_attempts") == 2
+    # One initial code generation plus two repair proposals and two execution
+    # repair follow-ups: the cap must bound actual pipeline work, not a counter.
+    assert run.llm.code_calls[E1.primary_step_id] == 5
+    assert run.external_provider_calls == 0
+
+
+@pytest.mark.parametrize(
+    "fault_code",
+    ["import time\ntime.sleep(60)\n", "while True:\n    pass\n"],
+    ids=["sleep_timeout", "busy_loop_watchdog"],
+)
+def test_real_subprocess_timeout_and_watchdog_fail_closed(tmp_path, fault_code) -> None:
+    run = _control_run(
+        E1,
+        tmp_path,
+        fault_step=E1.primary_step_id,
+        fault_code=fault_code,
+        timeout_seconds=0.5,
+        max_code_repair_attempts=0,
+    )
+
+    record = run.record(E1.primary_step_id)
+    assert record.get("status") == "execution_failed"
+    assert record.get("timed_out") is True
+    assert record.get("returncode") == -1
+    assert record.get("code_repair_attempts") == 0
+    assert run.external_provider_calls == 0
+
+
+def test_noop_replan_cap_stops_real_replanner_loop(tmp_path) -> None:
+    run = _control_run(
+        E1,
+        tmp_path,
+        enable_replanning=True,
+        request_replan_from_primary=True,
+        replan_strategy="noop",
+        max_consecutive_noop_replans=2,
+    )
+
+    finding = next(
+        finding
+        for finding in run.manifest.get("findings", [])
+        if "consecutive no-op revisions" in finding.get("message", "")
+    )
+    assert finding["detail"]["reason"] == E1.primary_step_id
+    assert run.readiness.get("replan_budget_exhausted") is not True
+    assert run.external_provider_calls == 0
+
+
+def test_substantive_replan_cap_stops_real_replanner_loop(tmp_path) -> None:
+    run = _control_run(
+        E1,
+        tmp_path,
+        enable_replanning=True,
+        request_replan_from_primary=True,
+        replan_strategy="substantive",
+        max_replans=2,
+    )
+
+    finding = next(
+        finding
+        for finding in run.manifest.get("findings", [])
+        if finding.get("code") == "replan_budget"
+    )
+    assert finding["detail"] == {
+        "replan_budget_exhausted": True,
+        "cap": 2,
+        "substantive_revisions": 2,
+        "reason": E1.primary_step_id,
+    }
+    assert run.readiness["replan_budget_exhausted"] is True
+    assert run.tristate == "diagnostic_only"
+    assert run.external_provider_calls == 0
+
+
+def _evidence_by_id(manifest, evidence_id: str):
+    return next(
+        record
+        for record in manifest.get("evidence", [])
+        if record.get("evidence_id") == evidence_id
+    )
+
+
+def test_stop_resume_uses_digests_not_mtime(tmp_path) -> None:
+    first = _control_run(
+        E1,
+        tmp_path,
+        stop_after_step_id=E1.deterministic_step_id,
+    )
+    table_one = first.record(E1.deterministic_step_id)
+    evidence_ids = list(table_one.get("evidence_ids", []))
+    assert evidence_ids
+    original_hashes = {
+        evidence_id: _evidence_by_id(first.manifest, evidence_id).get("sha256")
+        for evidence_id in evidence_ids
+    }
+
+    # Make all persisted timestamps identical.  Resume must still recognize the
+    # completed immutable artifacts by content identity, not mtime heuristics.
+    fixed_time = 1_700_000_000
+    for path in tmp_path.rglob("*"):
+        if path.is_file():
+            os.utime(path, (fixed_time, fixed_time))
+
+    resumed = _control_run(E1, tmp_path, resume_run_id=first.run_id)
+    resumed_table_one = resumed.record(E1.deterministic_step_id)
+    assert resumed.run_id == first.run_id
+    assert resumed_table_one.get("evidence_ids") == evidence_ids
+    assert {
+        evidence_id: _evidence_by_id(resumed.manifest, evidence_id).get("sha256")
+        for evidence_id in evidence_ids
+    } == original_hashes
+    assert (
+        sum(
+            record.get("step_id") == E1.deterministic_step_id
+            for record in resumed.manifest.get("per_step_records", [])
+        )
+        == 1
+    )
+    assert resumed.llm.plan_calls == 0
+    assert resumed.external_provider_calls == 0
+
+
+def test_tampered_completed_artifact_fails_resume_before_llm_delivery(tmp_path) -> None:
+    first = _control_run(
+        E1,
+        tmp_path,
+        stop_after_step_id=E1.deterministic_step_id,
+    )
+    table_one = first.record(E1.deterministic_step_id)
+    artifact_id = next(
+        evidence_id
+        for evidence_id in table_one.get("evidence_ids", [])
+        if evidence_id.startswith("table_step_artifact_")
+    )
+    artifact = _evidence_by_id(first.manifest, artifact_id)
+    (first.run_dir / artifact["relative_path"]).write_text("tampered", encoding="utf-8")
+
+    resumed = _control_run(E1, tmp_path, resume_run_id=first.run_id)
+    assert resumed.raised is not None
+    assert resumed.raised.startswith("EvidenceAuthorityIntegrityError:")
+    assert resumed.llm.total_calls == 0
+    assert resumed.external_provider_calls == 0
 
 
 # ---------------------------------------------------------------------------
