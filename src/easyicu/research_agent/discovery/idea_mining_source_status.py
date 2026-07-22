@@ -52,6 +52,12 @@ class RowwiseDerivedConceptSpec(BaseModel):
     formula_id: str
     valid_range: tuple[float, float]
     materialized_column: str | None = None
+    predictor_authority: Literal["host_recomputed", "materialized_column"] = (
+        "host_recomputed"
+    )
+    materialized_comparison_semantics: Literal[
+        "same_row_expected", "nonlinear_post_aggregation_not_equivalent"
+    ] = "same_row_expected"
     comparison_source: ComparisonSourceSpec | None = None
     formula_tolerance: float = Field(default=1e-6, ge=0.0)
     material_difference_threshold: float = Field(default=0.1, gt=0.0)
@@ -93,6 +99,13 @@ class RowwiseDerivedConceptSpec(BaseModel):
         if self.material_difference_threshold < self.formula_tolerance:
             raise ValueError(
                 "material_difference_threshold must be at least formula_tolerance"
+            )
+        if (
+            self.predictor_authority == "materialized_column"
+            and not self.materialized_column
+        ):
+            raise ValueError(
+                "materialized_column is required when it is the predictor authority"
             )
         return self
 
@@ -159,6 +172,18 @@ class FormulaAgreement(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
 
+class PredictorOutcomePairCoverage(BaseModel):
+    """Stay-level overlap between a derived predictor and comparison outcome."""
+
+    predictor_valid_stays: int
+    outcome_valid_stays: int
+    joint_valid_stays: int
+    denominator_stays: int
+    joint_fraction: float
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+
 class DatabaseDerivedConceptProfile(BaseModel):
     """One database's exact source-status profile."""
 
@@ -177,6 +202,7 @@ class DatabaseDerivedConceptProfile(BaseModel):
     recomputed_valid_stays: int
     materialized_coverage: ColumnCoverage | None
     comparison_coverage: ColumnCoverage | None
+    predictor_outcome_pair_coverage: PredictorOutcomePairCoverage | None = None
     source_status: SourceStatusPartition
     formula_agreement: FormulaAgreement | None
     data_readiness: Literal[
@@ -226,6 +252,36 @@ class MeasurementAuditAnswerability(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
 
+class PairAnswerabilityCriteria(BaseModel):
+    """Predeclared feasibility floor for a predictor/outcome pair."""
+
+    min_databases_with_joint_observations: int = Field(default=3, ge=1)
+    min_joint_stays_per_database: int = Field(default=500, ge=1)
+    min_joint_fraction_per_database: float = Field(default=0.01, ge=0.0, le=1.0)
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+
+class PairAnswerability(BaseModel):
+    """Data feasibility only; timing and scientific design remain unresolved."""
+
+    status: Literal[
+        "answerable_requires_temporal_protocol",
+        "insufficient_joint_coverage",
+        "comparison_source_not_configured",
+    ]
+    criteria: PairAnswerabilityCriteria
+    eligible_databases: tuple[str, ...]
+    excluded_databases: tuple[str, ...]
+    reason: str
+    requires_temporal_protocol: bool = True
+    requires_human_confirmation: bool = True
+    analysis_authorized: bool = False
+    paper_authorized: bool = False
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+
 class CrossDatabaseDerivedConceptProfile(BaseModel):
     """Auditable cross-database result; never an analysis authorization."""
 
@@ -236,10 +292,72 @@ class CrossDatabaseDerivedConceptProfile(BaseModel):
     n_databases_ready: int
     n_databases_profiled: int
     measurement_audit_answerability: MeasurementAuditAnswerability | None = None
+    pair_answerability: PairAnswerability | None = None
     analysis_authorized: bool = False
     paper_authorized: bool = False
 
     model_config = ConfigDict(frozen=True, extra="forbid")
+
+
+def assess_pair_answerability(
+    databases: Sequence[DatabaseDerivedConceptProfile],
+    *,
+    criteria: PairAnswerabilityCriteria,
+) -> PairAnswerability:
+    """Require observed predictor/outcome overlap in multiple databases.
+
+    This gate deliberately does not infer a predictor window, outcome onset,
+    eligibility criteria, estimand, or causal direction.  Passing it only
+    means the existing exports contain enough stay-level overlap to justify
+    human design of a temporal protocol.
+    """
+
+    configured = [
+        row for row in databases if row.predictor_outcome_pair_coverage is not None
+    ]
+    if not configured:
+        return PairAnswerability(
+            status="comparison_source_not_configured",
+            criteria=criteria,
+            eligible_databases=(),
+            excluded_databases=tuple(row.database for row in databases),
+            reason="No comparison outcome source was configured for this profile.",
+        )
+
+    eligible: list[str] = []
+    excluded: list[str] = []
+    for row in databases:
+        pair = row.predictor_outcome_pair_coverage
+        if (
+            pair is not None
+            and pair.joint_valid_stays >= criteria.min_joint_stays_per_database
+            and pair.joint_fraction >= criteria.min_joint_fraction_per_database
+        ):
+            eligible.append(row.database)
+        else:
+            excluded.append(row.database)
+    if len(eligible) < criteria.min_databases_with_joint_observations:
+        return PairAnswerability(
+            status="insufficient_joint_coverage",
+            criteria=criteria,
+            eligible_databases=tuple(eligible),
+            excluded_databases=tuple(excluded),
+            reason=(
+                f"Only {len(eligible)} databases meet the predeclared joint "
+                f"coverage floor; {criteria.min_databases_with_joint_observations} "
+                "are required."
+            ),
+        )
+    return PairAnswerability(
+        status="answerable_requires_temporal_protocol",
+        criteria=criteria,
+        eligible_databases=tuple(eligible),
+        excluded_databases=tuple(excluded),
+        reason=(
+            f"{len(eligible)} databases meet the predictor/outcome overlap floor; "
+            "a pre-outcome predictor window and outcome-onset protocol remain required."
+        ),
+    )
 
 
 def assess_measurement_audit_answerability(
@@ -486,12 +604,18 @@ def _comparison_profile(
     id_column: str,
     denominator_ids: pa.ChunkedArray,
     spec: ComparisonSourceSpec,
-) -> tuple[ColumnCoverage, PreparedFileBinding | None, tuple[str, ...]]:
+) -> tuple[
+    ColumnCoverage,
+    set[object],
+    PreparedFileBinding | None,
+    tuple[str, ...],
+]:
     path = database_dir / f"{spec.table}.parquet"
     denominator_n = len(_non_null_unique_values(denominator_ids))
     if not path.is_file():
         return (
             _missing_coverage(spec.column, denominator_n),
+            set(),
             None,
             (f"comparison table missing: {path.name}",),
         )
@@ -500,6 +624,7 @@ def _comparison_profile(
     if any(column not in schema.names for column in required):
         return (
             _missing_coverage(spec.column, denominator_n),
+            set(),
             _file_binding(path, export_root=export_root, selected_columns=required),
             (f"comparison column missing: {spec.column}",),
         )
@@ -522,6 +647,7 @@ def _comparison_profile(
     )
     return (
         coverage,
+        observed,
         _file_binding(path, export_root=export_root, selected_columns=required),
         (),
     )
@@ -582,18 +708,23 @@ def _profile_database(
         )
         comparison_coverage: ColumnCoverage | None = None
         if spec.comparison_source is not None:
-            comparison_coverage, comparison_binding, comparison_warnings = (
-                _comparison_profile(
-                    database_dir=database_dir,
-                    export_root=export_root,
-                    id_column=profile.stay_id_col,
-                    denominator_ids=denominator_ids,
-                    spec=spec.comparison_source,
-                )
+            (
+                comparison_coverage,
+                comparison_ids,
+                comparison_binding,
+                comparison_warnings,
+            ) = _comparison_profile(
+                database_dir=database_dir,
+                export_root=export_root,
+                id_column=profile.stay_id_col,
+                denominator_ids=denominator_ids,
+                spec=spec.comparison_source,
             )
             if comparison_binding is not None:
                 files.append(comparison_binding)
             warnings.extend(comparison_warnings)
+        else:
+            comparison_ids = set()
         return DatabaseDerivedConceptProfile(
             database=profile.key,
             stay_id_column=profile.stay_id_col,
@@ -614,6 +745,17 @@ def _profile_database(
                 else None
             ),
             comparison_coverage=comparison_coverage,
+            predictor_outcome_pair_coverage=(
+                PredictorOutcomePairCoverage(
+                    predictor_valid_stays=0,
+                    outcome_valid_stays=len(comparison_ids),
+                    joint_valid_stays=0,
+                    denominator_stays=denominator_n,
+                    joint_fraction=0.0,
+                )
+                if spec.comparison_source is not None
+                else None
+            ),
             source_status=SourceStatusPartition(
                 structural_no_source=denominator_n,
                 source_present_unmeasured=0,
@@ -725,18 +867,23 @@ def _profile_database(
                 )
         partial_comparison: ColumnCoverage | None = None
         if spec.comparison_source is not None:
-            partial_comparison, comparison_binding, comparison_warnings = (
-                _comparison_profile(
-                    database_dir=database_dir,
-                    export_root=export_root,
-                    id_column=profile.stay_id_col,
-                    denominator_ids=denominator_ids,
-                    spec=spec.comparison_source,
-                )
+            (
+                partial_comparison,
+                comparison_ids,
+                comparison_binding,
+                comparison_warnings,
+            ) = _comparison_profile(
+                database_dir=database_dir,
+                export_root=export_root,
+                id_column=profile.stay_id_col,
+                denominator_ids=denominator_ids,
+                spec=spec.comparison_source,
             )
             if comparison_binding is not None:
                 files.append(comparison_binding)
             warnings.extend(comparison_warnings)
+        else:
+            comparison_ids = set()
         return DatabaseDerivedConceptProfile(
             database=profile.key,
             stay_id_column=profile.stay_id_col,
@@ -753,6 +900,17 @@ def _profile_database(
             recomputed_valid_stays=0,
             materialized_coverage=partial_materialized,
             comparison_coverage=partial_comparison,
+            predictor_outcome_pair_coverage=(
+                PredictorOutcomePairCoverage(
+                    predictor_valid_stays=0,
+                    outcome_valid_stays=len(comparison_ids),
+                    joint_valid_stays=0,
+                    denominator_stays=denominator_n,
+                    joint_fraction=0.0,
+                )
+                if spec.comparison_source is not None
+                else None
+            ),
             source_status=SourceStatusPartition(
                 structural_no_source=denominator_n,
                 source_present_unmeasured=0,
@@ -810,6 +968,7 @@ def _profile_database(
 
     materialized_coverage: ColumnCoverage | None = None
     agreement: FormulaAgreement | None = None
+    materialized_valid_ids: set[object] = set()
     if spec.materialized_column:
         if spec.materialized_column in source_schema.names:
             materialized_coverage = _coverage(
@@ -822,6 +981,13 @@ def _profile_database(
                 valid_recomputed,
                 _numeric_valid_mask(source[spec.materialized_column], spec.valid_range),
             )
+            materialized_valid = pc.and_(
+                pc.and_(pc.is_valid(source[profile.stay_id_col]), in_denominator),
+                _numeric_valid_mask(source[spec.materialized_column], spec.valid_range),
+            )
+            materialized_valid_ids = _non_null_unique_values(
+                source_ids, materialized_valid
+            )
             agreement = _formula_agreement(
                 recomputed,
                 source[spec.materialized_column],
@@ -829,9 +995,21 @@ def _profile_database(
                 tolerance=spec.formula_tolerance,
                 material_difference_threshold=spec.material_difference_threshold,
             )
-            if agreement.material_difference_rows:
+            if (
+                agreement.material_difference_rows
+                and spec.materialized_comparison_semantics == "same_row_expected"
+            ):
                 warnings.append(
                     "materialized values materially differ from host recomputation"
+                )
+            elif (
+                agreement.material_difference_rows
+                and spec.materialized_comparison_semantics
+                == "nonlinear_post_aggregation_not_equivalent"
+            ):
+                warnings.append(
+                    "materialized/recomputed comparison is descriptive only because "
+                    "the nonlinear derivation precedes wide-table aggregation"
                 )
         else:
             materialized_coverage = _missing_coverage(
@@ -841,18 +1019,30 @@ def _profile_database(
 
     comparison_coverage: ColumnCoverage | None = None
     if spec.comparison_source is not None:
-        comparison_coverage, comparison_binding, comparison_warnings = (
-            _comparison_profile(
-                database_dir=database_dir,
-                export_root=export_root,
-                id_column=profile.stay_id_col,
-                denominator_ids=denominator_ids,
-                spec=spec.comparison_source,
-            )
+        (
+            comparison_coverage,
+            comparison_ids,
+            comparison_binding,
+            comparison_warnings,
+        ) = _comparison_profile(
+            database_dir=database_dir,
+            export_root=export_root,
+            id_column=profile.stay_id_col,
+            denominator_ids=denominator_ids,
+            spec=spec.comparison_source,
         )
         if comparison_binding is not None:
             files.append(comparison_binding)
         warnings.extend(comparison_warnings)
+    else:
+        comparison_ids = set()
+
+    pair_predictor_ids = (
+        materialized_valid_ids
+        if spec.predictor_authority == "materialized_column"
+        else valid_ids
+    )
+    joint_ids = pair_predictor_ids & comparison_ids
 
     if not denominator_n:
         readiness = "invalid_denominator"
@@ -876,6 +1066,19 @@ def _profile_database(
         recomputed_valid_stays=len(valid_ids),
         materialized_coverage=materialized_coverage,
         comparison_coverage=comparison_coverage,
+        predictor_outcome_pair_coverage=(
+            PredictorOutcomePairCoverage(
+                predictor_valid_stays=len(pair_predictor_ids),
+                outcome_valid_stays=len(comparison_ids),
+                joint_valid_stays=len(joint_ids),
+                denominator_stays=denominator_n,
+                joint_fraction=(
+                    len(joint_ids) / denominator_n if denominator_n else 0.0
+                ),
+            )
+            if spec.comparison_source is not None
+            else None
+        ),
         source_status=SourceStatusPartition(
             structural_no_source=0,
             source_present_unmeasured=max(0, unmeasured),
@@ -896,6 +1099,7 @@ def profile_rowwise_derived_concept(
     spec: RowwiseDerivedConceptSpec,
     formula: ArrowFormula,
     measurement_audit_criteria: MeasurementAuditCriteria | None = None,
+    pair_answerability_criteria: PairAnswerabilityCriteria | None = None,
 ) -> CrossDatabaseDerivedConceptProfile:
     """Profile one host-defined derived construct over existing prepared data."""
 
@@ -924,6 +1128,11 @@ def profile_rowwise_derived_concept(
         if measurement_audit_criteria is not None
         else None
     )
+    pair_answerability = (
+        assess_pair_answerability(rows, criteria=pair_answerability_criteria)
+        if pair_answerability_criteria is not None
+        else None
+    )
     return CrossDatabaseDerivedConceptProfile(
         export_root=str(root),
         concept_spec=spec,
@@ -931,4 +1140,5 @@ def profile_rowwise_derived_concept(
         n_databases_ready=sum(row.data_readiness == "ready" for row in rows),
         n_databases_profiled=len(rows),
         measurement_audit_answerability=answerability,
+        pair_answerability=pair_answerability,
     )
