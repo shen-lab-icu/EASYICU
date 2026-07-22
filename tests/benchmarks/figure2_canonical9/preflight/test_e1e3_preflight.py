@@ -16,6 +16,13 @@ Two layers of assertion:
   pass and never a silent skip.  The formal gate must genuinely pass in a
   sandbox-permitting environment.
 
+Increment 1.1 (P1 closure) adds: (P1-A) a per-item formal-output contract map
+verified against the real manifest + honest downgrade to a *partial-flow smoke*
+(offline only "table one" is produced); (P1-B) the isolation structured block
+wired into ``run_preflight``/CLI (no pipeline start when unavailable; per-step
+denial converted, not left as ``repair_failed``); (P1-C) a pinned, env-var-proof
+no-network runner policy.
+
 Increment 2 adds the control-flow caps (repair/replan/no-op), real timeout +
 watchdog, digest-based stop/resume, and the explicit paper-authority reason.
 
@@ -26,17 +33,29 @@ Run just this batch::
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
+from benchmarks.figure2_canonical9.preflight import harness as hn
 from benchmarks.figure2_canonical9.preflight import runtime as rt
 from benchmarks.figure2_canonical9.preflight.fixtures import (
+    FULFILLMENT_NOT_PRODUCED_OFFLINE,
+    FULFILLMENT_PLANNED_ONLY,
+    FULFILLMENT_PRODUCED,
     E1,
     E1E3_CASES,
     PreflightCase,
 )
 from benchmarks.figure2_canonical9.preflight.harness import (
+    PREFLIGHT_RUNNER_KWARGS,
+    READINESS_CLASS,
+    PreflightRun,
     ProviderTransportBlocked,
     ScriptedPreflightLLM,
+    blocking_step_isolation,
+    build_pipeline,
+    observe_product_fulfillment,
     paper_acceptance_status,
     preflight_runtime_manifest,
     provider_transport_spy,
@@ -371,3 +390,238 @@ def test_case_registry_is_e_series() -> None:
         "e3_kdigo_gradient",
     }
     assert E1.task_id == "e1_sepsis3_prevalence_mortality"
+
+
+# ---------------------------------------------------------------------------
+# P1-A — formal task output contract (item-by-item, verified, honest downgrade)
+# ---------------------------------------------------------------------------
+
+
+def _fake_run(case: PreflightCase, records) -> PreflightRun:
+    return PreflightRun(
+        case=case,
+        run_dir=Path("/nonexistent-preflight"),
+        run_id="synthetic",
+        manifest={"per_step_records": records},
+        llm=ScriptedPreflightLLM(case),
+        pipeline_ran=True,
+    )
+
+
+def test_product_map_covers_suite_outputs(case: PreflightCase) -> None:
+    n = len(case.expected_products)
+    assert n >= 1
+    # Exactly one ProductMapping per live suite expected_output (one-to-one).
+    assert sorted(m.output_index for m in case.product_map) == list(range(n))
+
+
+def test_readiness_class_is_partial_flow_smoke(case: PreflightCase) -> None:
+    # Honest naming: NOT E1/E2/E3 readiness.
+    assert READINESS_CLASS == "partial_flow_smoke"
+    assert _fake_run(case, []).readiness_class == "partial_flow_smoke"
+
+
+def test_product_map_resolves_against_real_manifest(normal_run) -> None:
+    import json
+
+    rows = normal_run.resolved_product_map()
+    assert rows, "product map must resolve against the real manifest"
+    for row in rows:
+        assert row["matches"], f"declared != observed: {row}"
+    # A verifiable diagnostic artifact is persisted for the mapping.
+    artifact = Path(normal_run.run_dir) / "preflight_product_map.json"
+    assert artifact.is_file()
+    payload = json.loads(artifact.read_text(encoding="utf-8"))
+    assert payload["readiness_class"] == "partial_flow_smoke"
+    assert payload["task_id"] == normal_run.case.task_id
+
+
+def test_only_table_one_is_produced_offline(normal_run) -> None:
+    # Anti-overclaim: offline the ONLY genuinely produced formal suite output is
+    # "table one".  Figures are not_produced_offline; audits are planned_only.
+    assert normal_run.produced_suite_outputs() == ["table one"]
+
+
+def test_product_map_negative_missing_mapping(case: PreflightCase) -> None:
+    # Removing any single mapping breaks the one-to-one suite coverage.
+    trimmed = case.product_map[:-1]
+    n = len(case.expected_products)
+    assert sorted(m.output_index for m in trimmed) != list(range(n))
+
+
+def test_product_map_negative_dropped_produced_artifact() -> None:
+    # If the produced Table 1 artifact evidence is absent, the "produced" mapping
+    # resolves to planned_only -> a strict match would fail.
+    mapping = next(
+        m for m in E1.product_map if m.declared_fulfillment == FULFILLMENT_PRODUCED
+    )
+    prefix = mapping.artifact_evidence_prefix
+    good = _fake_run(
+        E1,
+        [
+            {
+                "step_id": mapping.step_id,
+                "status": "ok",
+                "evidence_ids": [prefix + "abc"],
+            }
+        ],
+    )
+    assert observe_product_fulfillment(mapping, good) == FULFILLMENT_PRODUCED
+    dropped = _fake_run(
+        E1, [{"step_id": mapping.step_id, "status": "ok", "evidence_ids": []}]
+    )
+    assert observe_product_fulfillment(mapping, dropped) == FULFILLMENT_PLANNED_ONLY
+
+
+def test_not_produced_offline_mapping_has_no_step() -> None:
+    # The sealed publication figure is honestly mapped to no plan step.
+    fig = next(
+        m
+        for m in E1.product_map
+        if m.declared_fulfillment == FULFILLMENT_NOT_PRODUCED_OFFLINE
+    )
+    assert fig.step_id is None
+
+
+# ---------------------------------------------------------------------------
+# P1-B — isolation structured block wired into the real harness/CLI
+# ---------------------------------------------------------------------------
+
+
+def _force_isolation_unavailable(monkeypatch) -> None:
+    monkeypatch.setattr(
+        rt,
+        "probe_isolation_backend",
+        lambda: rt.IsolationCapability(
+            backend="macos_sandbox_exec",
+            available=False,
+            returncode=71,
+            detail="sandbox-exec: sandbox_apply: Operation not permitted",
+        ),
+    )
+
+
+def test_run_preflight_does_not_start_pipeline_when_unavailable(
+    tmp_path, monkeypatch
+) -> None:
+    _force_isolation_unavailable(monkeypatch)
+    calls = {"n": 0}
+
+    def _spy_build(*args, **kwargs):
+        calls["n"] += 1
+        raise AssertionError("pipeline must not be built when isolation is blocked")
+
+    monkeypatch.setattr(hn, "build_pipeline", _spy_build)
+    run = run_preflight(E1, workdir=tmp_path)
+
+    assert calls["n"] == 0, "build_pipeline / pipeline.run must be called 0 times"
+    assert run.pipeline_ran is False
+    assert run.blocked_reason is not None
+    assert run.blocked_reason.startswith("isolation_backend_unavailable:")
+    assert run.runtime_manifest is not None
+    assert run.runtime_manifest.integration_ready is False
+    # RuntimeManifest is persisted to the real run_dir even when blocked.
+    assert (tmp_path / "preflight_runtime_manifest.json").is_file()
+
+
+def test_cli_returns_structured_blocked_exit_code(monkeypatch, capsys) -> None:
+    _force_isolation_unavailable(monkeypatch)
+
+    def _spy_build(*args, **kwargs):
+        raise AssertionError("CLI must not build the pipeline when blocked")
+
+    monkeypatch.setattr(hn, "build_pipeline", _spy_build)
+    rc = hn._cli("e1")
+    assert rc == 2
+    out = capsys.readouterr().out.lower()
+    assert '"blocked": true' in out
+    assert "isolation_backend_unavailable" in out
+
+
+def test_blocking_step_isolation_converts_a_denied_step() -> None:
+    manifest = {
+        "per_step_records": [
+            {
+                "step_id": "02_table_one",
+                "status": "repair_failed",
+                "returncode": 71,
+                "timed_out": False,
+                "stderr": "sandbox-exec: sandbox_apply: Operation not permitted",
+            }
+        ]
+    }
+    unavailable = rt.IsolationCapability("macos_sandbox_exec", False, 71, "denied")
+    reason = blocking_step_isolation(manifest, unavailable)
+    assert reason is not None
+    assert reason.startswith("isolation_backend_unavailable:")
+    assert "02_table_one" in reason
+    # An available backend never reclassifies a step (the step can't be denied).
+    available = rt.IsolationCapability("macos_sandbox_exec", True, 0, "")
+    assert blocking_step_isolation(manifest, available) is None
+
+
+def test_blocking_step_isolation_ignores_plain_exit_71() -> None:
+    manifest = {
+        "per_step_records": [
+            {
+                "step_id": "02_table_one",
+                "status": "repair_failed",
+                "returncode": 71,
+                "timed_out": False,
+                "stderr": "SystemExit: 71",
+            }
+        ]
+    }
+    unavailable = rt.IsolationCapability("macos_sandbox_exec", False, 71, "denied")
+    assert blocking_step_isolation(manifest, unavailable) is None
+
+
+# ---------------------------------------------------------------------------
+# P1-C — zero-network boundary cannot be relaxed by an environment variable
+# ---------------------------------------------------------------------------
+
+
+def test_preflight_pins_no_network_runner_kwargs() -> None:
+    assert PREFLIGHT_RUNNER_KWARGS["network_policy"] == "none"
+    assert PREFLIGHT_RUNNER_KWARGS["allow_unsafe_host_fallback"] is False
+
+
+def test_build_pipeline_forwards_pinned_runner_kwargs(tmp_path) -> None:
+    pipe = build_pipeline(E1, workdir=tmp_path, llm=ScriptedPreflightLLM(E1))
+    assert pipe._runner_kwargs.get("network_policy") == "none"
+    assert pipe._runner_kwargs.get("allow_unsafe_host_fallback") is False
+
+
+def test_env_var_cannot_relax_host_fallback_when_pinned(tmp_path, monkeypatch) -> None:
+    import pandas as pd
+
+    from easyicu.research_agent import CodeRunner
+
+    cohort = tmp_path / "cohort.parquet"
+    pd.DataFrame({"stay_id": [1, 2], "death": [0, 1]}).to_parquet(cohort)
+    monkeypatch.setenv("EASYICU_ALLOW_UNSAFE_HOST_FALLBACK", "1")
+
+    # Pinned explicit False -> the env var is IGNORED (fail-closed).
+    pinned = CodeRunner(
+        workdir=tmp_path / "w_pinned", cohort_parquet=cohort, **PREFLIGHT_RUNNER_KWARGS
+    )
+    assert pinned.allow_unsafe_host_fallback is False
+    assert pinned.network_policy == "none"
+
+    # Control: NOT pinned (None) -> the env var DOES relax it, proving the pin
+    # is what defeats the environment (this is the boundary we must not leave open).
+    unpinned = CodeRunner(
+        workdir=tmp_path / "w_unpinned",
+        cohort_parquet=cohort,
+        allow_unsafe_host_fallback=None,
+    )
+    assert unpinned.allow_unsafe_host_fallback is True
+
+
+def test_network_policy_report_all_none_and_non_degraded(normal_run) -> None:
+    report = normal_run.network_policy_report()
+    assert report["subprocess_steps"], "at least one subprocess step must run"
+    assert report["ok"] is True
+    for step in report["subprocess_steps"]:
+        assert step["requested_network_policy"] == "none"
+        assert step["isolation_degraded"] is False
