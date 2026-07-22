@@ -99,23 +99,36 @@ class ProductMapping:
     than duplicating a product name in a second handwritten list.  A mapping
     may point at a plan step, but ``planned_only`` is not an artifact claim and
     ``not_produced_offline`` explicitly records products reserved for the
-    paper-authority workflow (for example publication figures).
+    paper-authority workflow (for example publication figures).  A produced
+    output must also name an evidence-ID prefix; this makes the claim resolvable
+    against the real run manifest instead of a hand-written status label.
     """
 
     output_index: int
     step_id: Optional[str]
     declared_fulfillment: str
+    artifact_evidence_prefix: Optional[str] = None
 
     def __post_init__(self) -> None:
         if self.declared_fulfillment not in _FULFILLMENTS:
             raise ValueError(f"unknown fulfillment {self.declared_fulfillment!r}")
-        if self.declared_fulfillment == FULFILLMENT_PRODUCED and self.step_id is None:
-            raise ValueError("a produced output must identify its producing step")
-        if (
-            self.declared_fulfillment == FULFILLMENT_NOT_PRODUCED_OFFLINE
-            and self.step_id is not None
+        if self.declared_fulfillment == FULFILLMENT_PRODUCED and (
+            self.step_id is None or self.artifact_evidence_prefix is None
         ):
-            raise ValueError("an unproduced offline output must not name a plan step")
+            raise ValueError(
+                "a produced output must identify its producing step and evidence prefix"
+            )
+        if (
+            self.declared_fulfillment == FULFILLMENT_PLANNED_ONLY
+            and self.step_id is None
+        ):
+            raise ValueError("a planned-only output must identify its plan step")
+        if self.declared_fulfillment == FULFILLMENT_NOT_PRODUCED_OFFLINE and (
+            self.step_id is not None or self.artifact_evidence_prefix is not None
+        ):
+            raise ValueError(
+                "an unproduced offline output must not name a plan step or artifact"
+            )
 
 
 @dataclass(frozen=True)
@@ -595,18 +608,33 @@ _E3_CHECKS: Tuple[GuardrailCheck, ...] = (
 
 _E1_PRODUCTS: Tuple[ProductMapping, ...] = (
     ProductMapping(0, "01_cohort_definition", FULFILLMENT_PLANNED_ONLY),
-    ProductMapping(1, _E1_TABLE_ONE, FULFILLMENT_PRODUCED),
+    ProductMapping(
+        1,
+        _E1_TABLE_ONE,
+        FULFILLMENT_PRODUCED,
+        artifact_evidence_prefix="table_step_artifact_",
+    ),
     ProductMapping(2, None, FULFILLMENT_NOT_PRODUCED_OFFLINE),
 )
 
 _E2_PRODUCTS: Tuple[ProductMapping, ...] = (
-    ProductMapping(0, _E2_TABLE_ONE, FULFILLMENT_PRODUCED),
+    ProductMapping(
+        0,
+        _E2_TABLE_ONE,
+        FULFILLMENT_PRODUCED,
+        artifact_evidence_prefix="table_step_artifact_",
+    ),
     ProductMapping(1, None, FULFILLMENT_NOT_PRODUCED_OFFLINE),
     ProductMapping(2, "03_missingness_audit", FULFILLMENT_PLANNED_ONLY),
 )
 
 _E3_PRODUCTS: Tuple[ProductMapping, ...] = (
-    ProductMapping(0, _E3_TABLE_ONE, FULFILLMENT_PRODUCED),
+    ProductMapping(
+        0,
+        _E3_TABLE_ONE,
+        FULFILLMENT_PRODUCED,
+        artifact_evidence_prefix="table_step_artifact_",
+    ),
     ProductMapping(1, None, FULFILLMENT_NOT_PRODUCED_OFFLINE),
     ProductMapping(2, "03_ordinal_trend", FULFILLMENT_PLANNED_ONLY),
 )

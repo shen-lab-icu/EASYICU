@@ -26,7 +26,10 @@ Run just this batch::
 
 from __future__ import annotations
 
+import copy
+import json
 import os
+from dataclasses import replace
 
 import pytest
 
@@ -38,6 +41,7 @@ from benchmarks.figure2_canonical9.preflight.fixtures import (
     FULFILLMENT_PLANNED_ONLY,
     FULFILLMENT_PRODUCED,
     PreflightCase,
+    ProductMapping,
 )
 from benchmarks.figure2_canonical9.preflight import harness
 from benchmarks.figure2_canonical9.preflight.harness import (
@@ -45,6 +49,7 @@ from benchmarks.figure2_canonical9.preflight.harness import (
     ScriptedPreflightLLM,
     paper_acceptance_verdict,
     paper_acceptance_status,
+    PREFLIGHT_RUNNER_KWARGS,
     preflight_runtime_manifest,
     provider_transport_spy,
     run_preflight,
@@ -157,6 +162,7 @@ def test_every_live_expected_product_has_an_honest_scope_mapping(
     for _product, mapping in mapped:
         if mapping.declared_fulfillment == FULFILLMENT_NOT_PRODUCED_OFFLINE:
             assert mapping.step_id is None
+            assert mapping.artifact_evidence_prefix is None
         else:
             assert mapping.step_id in plan_step_ids
     produced = [
@@ -166,10 +172,22 @@ def test_every_live_expected_product_has_an_honest_scope_mapping(
     ]
     assert len(produced) == 1
     assert produced[0][0] == "table one"
+    assert produced[0][1].artifact_evidence_prefix == "table_step_artifact_"
     assert any(
         mapping.declared_fulfillment == FULFILLMENT_PLANNED_ONLY
         for _product, mapping in mapped
     )
+
+
+def test_product_map_fails_closed_when_a_live_output_is_unmapped() -> None:
+    incomplete = replace(E1, product_map=E1.product_map[:-1])
+    with pytest.raises(AssertionError, match="cover each live expected output"):
+        incomplete.product_mapping()
+
+
+def test_product_map_rejects_an_unsourced_produced_claim() -> None:
+    with pytest.raises(ValueError, match="producing step and evidence prefix"):
+        ProductMapping(0, E1.deterministic_step_id, FULFILLMENT_PRODUCED)
 
 
 def test_plan_reflects_distinct_task_shape(case: PreflightCase) -> None:
@@ -222,7 +240,34 @@ def test_preflight_runner_forbids_network_and_host_fallback(tmp_path) -> None:
     pipeline = harness.build_pipeline(E1, workdir=tmp_path, llm=llm.client)
     assert pipeline._runner_kind == "subprocess"
     assert pipeline._runner_network == "none"
-    assert pipeline._runner_kwargs["allow_unsafe_host_fallback"] is False
+    assert pipeline._runner_kwargs == PREFLIGHT_RUNNER_KWARGS
+
+
+def test_environment_cannot_relax_pinned_host_fallback(tmp_path, monkeypatch) -> None:
+    import pandas as pd
+
+    from easyicu.research_agent import CodeRunner
+
+    cohort = tmp_path / "cohort.parquet"
+    pd.DataFrame({"stay_id": [1, 2], "death": [0, 1]}).to_parquet(cohort)
+    monkeypatch.setenv("EASYICU_ALLOW_UNSAFE_HOST_FALLBACK", "1")
+
+    pinned = CodeRunner(
+        workdir=tmp_path / "pinned",
+        cohort_parquet=cohort,
+        **PREFLIGHT_RUNNER_KWARGS,
+    )
+    assert pinned.network_policy == "none"
+    assert pinned.allow_unsafe_host_fallback is False
+
+    # Control: the environment only wins when the caller leaves the argument
+    # unpinned.  This proves the explicit preflight pin is load-bearing.
+    unpinned = CodeRunner(
+        workdir=tmp_path / "unpinned",
+        cohort_parquet=cohort,
+        allow_unsafe_host_fallback=None,
+    )
+    assert unpinned.allow_unsafe_host_fallback is True
 
 
 def test_unavailable_runtime_blocks_before_pipeline_launch(
@@ -240,7 +285,9 @@ def test_unavailable_runtime_blocks_before_pipeline_launch(
     )
     launches = 0
 
-    def _runtime(_run_dir=None):
+    def _runtime(run_dir=None):
+        if run_dir is not None:
+            rt.write_runtime_manifest(run_dir, unavailable)
         return unavailable
 
     def _must_not_launch(*_args, **_kwargs):
@@ -253,9 +300,39 @@ def test_unavailable_runtime_blocks_before_pipeline_launch(
     run = harness.run_preflight(E1, workdir=tmp_path)
 
     assert launches == 0
+    assert run.pipeline_ran is False
     assert run.blocked_reason == unavailable.blocked_reason
     assert run.runtime["integration_ready"] is False
     assert run.llm.total_calls == 0
+    assert (tmp_path / "preflight_runtime_manifest.json").is_file()
+
+
+def test_cli_returns_structured_blocked_exit_code(monkeypatch, capsys) -> None:
+    unavailable = rt.RuntimeManifest(
+        parent={"role": "parent"},
+        subprocess={"role": "subprocess"},
+        isolation=rt.IsolationCapability(
+            backend="macos_sandbox_exec",
+            available=False,
+            returncode=71,
+            detail="sandbox-exec: sandbox_apply: Operation not permitted",
+        ),
+    )
+
+    def _runtime(run_dir=None):
+        if run_dir is not None:
+            rt.write_runtime_manifest(run_dir, unavailable)
+        return unavailable
+
+    def _must_not_launch(*_args, **_kwargs):
+        raise AssertionError("CLI must not build the pipeline when blocked")
+
+    monkeypatch.setattr(harness, "preflight_runtime_manifest", _runtime)
+    monkeypatch.setattr(harness, "build_pipeline", _must_not_launch)
+    assert harness._cli("e1") == 2
+    output = capsys.readouterr().out
+    assert '"blocked": true' in output
+    assert "isolation_backend_unavailable" in output
 
 
 # ---------------------------------------------------------------------------
@@ -459,6 +536,51 @@ def test_product_mapping_describes_actual_preflight_scope(normal_run) -> None:
             assert record.get("status") == "ok"
             assert record.get("generation_mode") == "deterministic_standard"
     assert normal_run.tristate == "diagnostic_only"
+
+
+def test_product_map_resolves_against_real_manifest_and_is_persisted(
+    normal_run,
+) -> None:
+    resolved = normal_run.resolved_product_map()
+    assert len(resolved) == len(normal_run.case.expected_products)
+    assert all(row["matches"] is True for row in resolved)
+    persisted = json.loads(
+        (normal_run.run_dir / "preflight_product_map.json").read_text(encoding="utf-8")
+    )
+    assert persisted["readiness_class"] == "partial_flow_smoke"
+    assert persisted["product_map"] == resolved
+
+
+def test_only_table_one_is_produced_offline(normal_run) -> None:
+    assert normal_run.readiness_class == "partial_flow_smoke"
+    assert normal_run.produced_suite_outputs() == ["table one"]
+
+
+def test_dropped_table_one_artifact_downgrades_product_claim(normal_run) -> None:
+    produced_mapping = next(
+        mapping
+        for _product, mapping in normal_run.case.product_mapping()
+        if mapping.declared_fulfillment == FULFILLMENT_PRODUCED
+    )
+    tampered = copy.deepcopy(normal_run)
+    record = tampered.record(produced_mapping.step_id or "")
+    record["evidence_ids"] = [
+        evidence_id
+        for evidence_id in record.get("evidence_ids", [])
+        if not evidence_id.startswith(produced_mapping.artifact_evidence_prefix or "")
+    ]
+    assert harness.observe_product_fulfillment(produced_mapping, tampered) == (
+        FULFILLMENT_PLANNED_ONLY
+    )
+
+
+def test_network_policy_report_is_no_network_and_non_degraded(normal_run) -> None:
+    report = normal_run.network_policy_report()
+    assert report["ok"] is True
+    assert report["subprocess_steps"]
+    for step in report["subprocess_steps"]:
+        assert step["requested_network_policy"] == "none"
+        assert step["isolation_degraded"] is False
 
 
 def test_loop_terminates_bounded(normal_run) -> None:
