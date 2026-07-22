@@ -127,6 +127,7 @@ _PRIOR_ART_SINGLETON_STOPWORDS = _PRIOR_ART_QUERY_STOPWORDS | {
     "index",
     "injury",
     "mechanical",
+    "modified",
     "pattern",
     "power",
     "pressure",
@@ -134,6 +135,7 @@ _PRIOR_ART_SINGLETON_STOPWORDS = _PRIOR_ART_QUERY_STOPWORDS | {
     "ratio",
     "red",
     "setting",
+    "shock",
     "signature",
     "strategy",
     "timing",
@@ -165,7 +167,9 @@ def _is_specific_differentiator(value: str) -> bool:
     if not text:
         return False
     normalised = normalize_concept_name(text)
-    generic = {normalize_concept_name(item) for item in _GENERIC_DIFFERENTIATOR_PATTERNS}
+    generic = {
+        normalize_concept_name(item) for item in _GENERIC_DIFFERENTIATOR_PATTERNS
+    }
     if normalised in generic:
         return False
     return not any(pattern in text for pattern in _GENERIC_DIFFERENTIATOR_PATTERNS)
@@ -216,7 +220,9 @@ def _pubmed_core_recall_clause(
         phrases.append(core)
         phrases.extend(_prior_art_synonym_phrases(core))
         clauses = [_pubmed_recall_clause(phrase) for phrase in phrases]
-        if fallback and normalize_concept_name(fallback) != normalize_concept_name(core):
+        if fallback and normalize_concept_name(fallback) != normalize_concept_name(
+            core
+        ):
             clauses.append(_pubmed_phrase_clause(fallback))
         return _pubmed_or_clause(clauses)
     if fallback:
@@ -304,7 +310,9 @@ def _prior_art_synonym_phrases(phrase: str) -> List[str]:
         group_keys = {normalize_concept_name(item) for item in group}
         if target_key in group_keys:
             out.extend(sorted(group))
-    return _ordered_unique([item for item in out if normalize_concept_name(item) != target_key])
+    return _ordered_unique(
+        [item for item in out if normalize_concept_name(item) != target_key]
+    )
 
 
 def _prior_art_query_tokens(phrase: str) -> List[str]:
