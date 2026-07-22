@@ -136,15 +136,16 @@ def _mint_paper_ready_attestation(export: Path) -> dict:
         json.dumps({"database": "miiv"}), encoding="utf-8"
     )
     seal_mod.seal_export_structural_typed(export, value_vintage="20260717")
-    manifest_path = export / "_manifest.json"
-    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    manifest["semantic_review"]["paper_authorized"] = True
-    manifest["semantic_review"]["reviewed"] = True
-    manifest["paper_ready"] = True
-    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
-    return seal_mod.build_retrofit_review_attestation(
-        export, reviewer="dr. reviewer", reviewed_at="2026-07-22"
+    # The real write-once HITL sign-off (re-derives identity from columns), not a
+    # hand-edited manifest flag.
+    seal_mod.write_retrofit_review_decision(
+        export,
+        review_id="rev-v2-0001",
+        reviewer="dr. reviewer",
+        review_scope="canonical9 binding re-verification test",
+        reviewed_at="2026-07-22",
     )
+    return seal_mod.build_retrofit_review_attestation(export)
 
 
 def _ready_selector_payload(*, attestation: dict | None) -> tuple[dict, str]:
@@ -208,6 +209,29 @@ def test_ready_retrofit_binding_reverifies_attestation_through_load(
     )
     assert binding.source_kind == "retrofit_sealed"
     assert binding.source_retrofit_review_attestation.paper_ready is True
+
+
+def test_retrofit_binding_without_source_dir_fails_closed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    export = tmp_path / "export_20260717"
+    attestation = _mint_paper_ready_attestation(export)
+    payload, target = _ready_selector_payload(attestation=attestation)
+    selector = tmp_path / "selector.json"
+    manifest = input_binding_v2.CanonicalRunInputBindingManifest.model_validate_json(
+        json.dumps(payload), strict=True
+    )
+    selector.write_bytes(
+        input_binding_v2._canonical_json_bytes(manifest.model_dump(mode="json")) + b"\n"
+    )
+    monkeypatch.setattr(
+        input_binding_v2, "_canonical_run_input_binding_path", lambda: selector
+    )
+    # No source_export_dir -> retrofit live re-validation is mandatory -> refuse.
+    with pytest.raises(
+        input_binding_v2.CanonicalRunInputBindingError, match="mandatory"
+    ):
+        input_binding_v2.require_ready_task_binding(target)
 
 
 def test_retrofit_binding_missing_attestation_rejected_on_load(

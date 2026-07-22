@@ -45,6 +45,7 @@ import json
 import os
 import re
 import subprocess
+import tempfile
 import uuid
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
@@ -648,21 +649,147 @@ def _paper_ready(
     )
 
 
+RETROFIT_REVIEW_DECISION_SCHEMA = "easyicu.retrofit_review_decision/1"
+RETROFIT_DECISION_FILE = "retrofit_review_decision.json"
+
+
+def _write_once_json(path: Path, payload: Dict[str, Any]) -> None:
+    """Publish a decision receipt exactly once; a differing rewrite fails closed.
+
+    A HITL decision cannot be silently re-decided: if the file already exists
+    with different bytes the write is rejected, so any content change to the
+    reviewed artifacts must produce a NEW review, never overwrite the old one.
+    """
+
+    raw = _canonical_json_bytes(payload) + b"\n"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if path.exists():
+        if path.read_bytes() != raw:
+            raise TypedRetrofitSealError(
+                f"retrofit review decision already exists with different bytes at "
+                f"{path}; a reviewed change requires a new review, not an overwrite"
+            )
+        return
+    fd, tmp = tempfile.mkstemp(prefix=".retrofit-decision-", dir=path.parent)
+    try:
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(raw)
+            handle.flush()
+            os.fsync(handle.fileno())
+        try:
+            os.link(tmp, path)
+        except FileExistsError:
+            if path.read_bytes() != raw:
+                raise TypedRetrofitSealError(
+                    f"retrofit review decision raced with different bytes at {path}"
+                ) from None
+    finally:
+        try:
+            os.unlink(tmp)
+        except FileNotFoundError:
+            pass
+
+
+def _rederive_patient_identity_authority(root: Path) -> Tuple[Dict[str, Any], str]:
+    """Re-derive patient identity from the ACTUAL parquet columns, never the
+    manifest boolean, and return (authority, its digest)."""
+
+    parquet_paths = sorted(
+        p for p in root.glob("*.parquet") if p.is_file() and not p.name.startswith(".")
+    )
+    if not parquet_paths:
+        raise TypedRetrofitSealError(f"no parquet files under {root}; cannot re-derive")
+    identity = _subject_identity(parquet_paths)  # cross-file stay_id -> subject_id
+    digest = hashlib.sha256(_canonical_json_bytes(identity)).hexdigest()
+    return identity, digest
+
+
+def _decision_self_digest(receipt: Dict[str, Any]) -> str:
+    body = {k: v for k, v in receipt.items() if k != "decision_sha256"}
+    return hashlib.sha256(_canonical_json_bytes(body)).hexdigest()
+
+
+def write_retrofit_review_decision(
+    export_dir: str | Path,
+    *,
+    review_id: str,
+    reviewer: str,
+    review_scope: str,
+    reviewed_at: str,
+) -> Path:
+    """Record a write-once HITL review decision for a retrofit-sealed export.
+
+    This REPLACES the hand-editable ``paper_authorized`` manifest boolean. It
+    re-derives patient identity from the actual parquet columns and REFUSES to
+    approve an identity-insufficient export (e.g. full6). It binds the source
+    manifest SHA, sidecar SHA, and the column-derived patient-identity authority
+    SHA, so any later change to those artifacts invalidates this decision. The
+    receipt is write-once. Returns the receipt path.
+    """
+
+    root = Path(export_dir).expanduser()
+    manifest_path = root / NATIVE_MANIFEST
+    if not manifest_path.is_file():
+        raise TypedRetrofitSealError(f"no {NATIVE_MANIFEST} at {root}; cannot review")
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    if not isinstance(manifest, dict) or manifest.get("seal_kind") != SEAL_KIND:
+        raise TypedRetrofitSealError("not a retrofit seal; cannot review")
+    sidecar_file = str((manifest.get("column_metadata") or {}).get("file") or "")
+    if not sidecar_file or Path(sidecar_file).name != sidecar_file:
+        raise TypedRetrofitSealError(
+            "retrofit manifest has no single-component sidecar"
+        )
+    sidecar_path = root / sidecar_file
+    if not sidecar_path.is_file():
+        raise TypedRetrofitSealError(f"retrofit sidecar missing: {sidecar_file}")
+
+    identity, identity_digest = _rederive_patient_identity_authority(root)
+    if not _patient_identity_sufficient(identity):
+        raise TypedRetrofitSealError(
+            "cannot approve: patient identity insufficient, re-derived from parquet "
+            f"columns (blocker={identity.get('blocker')!r}) — this export can only be "
+            "a development input, never a paper-ready authority"
+        )
+    for field, value in (
+        ("review_id", review_id),
+        ("reviewer", reviewer),
+        ("review_scope", review_scope),
+        ("reviewed_at", reviewed_at),
+    ):
+        if not str(value or "").strip():
+            raise TypedRetrofitSealError(
+                f"review decision requires a non-empty {field}"
+            )
+
+    receipt: Dict[str, Any] = {
+        "schema_version": RETROFIT_REVIEW_DECISION_SCHEMA,
+        "seal_kind": SEAL_KIND,
+        "decision": "approved",
+        "review_id": review_id.strip(),
+        "reviewer": reviewer.strip(),
+        "review_scope": review_scope.strip(),
+        "reviewed_at": reviewed_at.strip(),
+        "source_manifest_sha256": _sha256_file(manifest_path),
+        "source_sidecar_file": sidecar_file,
+        "source_sidecar_sha256": _sha256_file(sidecar_path),
+        "patient_identity_authority_sha256": identity_digest,
+    }
+    receipt["decision_sha256"] = _decision_self_digest(receipt)
+    path = root / RETROFIT_DECISION_FILE
+    _write_once_json(path, receipt)
+    return path
+
+
 def assert_sealed_export_paper_ready(export_dir: str | Path) -> Dict[str, Any]:
     """Consumer half of the retrofit producer→consumer gate — fail-closed.
 
-    A paper-facing run over a RETROFIT-sealed export MUST route through this gate
-    before using the sealed metadata as authoritative. It reads the native
-    ``_manifest.json`` the seal wrote and, for a retrofit seal, raises unless the
-    seal is paper-ready by the SAME predicate the producer records:
-
-    * the per-field semantic review has been human-signed
-      (``semantic_review.paper_authorized is True``), AND
-    * patient identity is sufficient (``subject_id`` proven, no blocker).
-
-    A non-retrofit native export (no ``seal_kind``) is governed by the official
-    typed-authority path, so this gate returns its manifest unchanged. Returns
-    the verified manifest on success.
+    This performs live content-addressed re-validation: it re-reads the manifest
+    and sidecar and RE-COMPUTES their digests, RE-DERIVES patient identity from
+    the actual parquet columns (never the manifest boolean), and requires a valid
+    write-once HITL review decision receipt whose bound digests match every
+    re-derived value. No hand-editable manifest field can make an export
+    paper-ready. A non-retrofit native export (no ``seal_kind``) is governed by
+    the official typed-authority path and is returned unchanged.
     """
 
     root = Path(export_dir).expanduser()
@@ -682,39 +809,64 @@ def assert_sealed_export_paper_ready(export_dir: str | Path) -> Dict[str, Any]:
         raise TypedRetrofitSealError(
             f"native manifest is not an object: {manifest_path}"
         )
-
     if manifest.get("seal_kind") != SEAL_KIND:
         # Not a retrofit seal — the official typed-authority path governs it.
         return manifest
 
-    review = manifest.get("semantic_review")
-    identity = manifest.get("patient_identity")
-    if not isinstance(review, dict) or not isinstance(identity, dict):
+    # (req 3) Re-derive patient identity from the actual columns, fail closed.
+    identity, identity_digest = _rederive_patient_identity_authority(root)
+    if not _patient_identity_sufficient(identity):
         raise TypedRetrofitSealError(
-            "retrofit seal is missing its semantic_review / patient_identity "
-            "provenance; refusing paper-facing use"
+            "retrofit export patient identity is insufficient, re-derived from "
+            f"parquet columns (blocker={identity.get('blocker')!r}); refusing "
+            "paper-facing use — development input only"
         )
-    if manifest.get("paper_ready") is not _paper_ready(review, identity):
+
+    # (req 2) A valid write-once HITL review decision is REQUIRED.
+    decision_path = root / RETROFIT_DECISION_FILE
+    if not decision_path.is_file():
         raise TypedRetrofitSealError(
-            "retrofit manifest paper_ready flag disagrees with its own "
-            "semantic_review/patient_identity; refusing paper-facing use"
+            "retrofit export has no write-once HITL review decision receipt; "
+            "refusing paper-facing use (paper_authorized manifest flags are not "
+            "trusted)"
         )
-    if not _paper_ready(review, identity):
-        reasons: List[str] = []
-        if review.get("paper_authorized") is not True:
-            reasons.append(
-                f"semantic review unsigned (paper_authorized="
-                f"{review.get('paper_authorized')!r})"
-            )
-        if not _patient_identity_sufficient(identity):
-            reasons.append(
-                f"patient identity insufficient (blocker={identity.get('blocker')!r}, "
-                f"subject_id_present={identity.get('subject_id_present')!r})"
-            )
+    try:
+        receipt = json.loads(decision_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise TypedRetrofitSealError(f"unreadable review decision: {exc}") from exc
+    if not isinstance(receipt, dict):
+        raise TypedRetrofitSealError("review decision is not an object")
+    if receipt.get("schema_version") != RETROFIT_REVIEW_DECISION_SCHEMA:
+        raise TypedRetrofitSealError("unknown review decision schema")
+    if receipt.get("decision") != "approved":
         raise TypedRetrofitSealError(
-            "retrofit-sealed export is NOT paper-authorized: "
-            + "; ".join(reasons)
-            + " — a human must review before any paper-facing run"
+            f"review decision is not approved (decision={receipt.get('decision')!r})"
+        )
+    if receipt.get("decision_sha256") != _decision_self_digest(receipt):
+        raise TypedRetrofitSealError("review decision self-digest mismatch (tampered)")
+
+    # (req 1) Recompute every bound digest from the live artifacts; never trust
+    # the recorded strings alone.
+    sidecar_file = str((manifest.get("column_metadata") or {}).get("file") or "")
+    if receipt.get("source_manifest_sha256") != _sha256_file(manifest_path):
+        raise TypedRetrofitSealError(
+            "review decision source_manifest_sha256 mismatch (manifest changed since "
+            "review)"
+        )
+    if (
+        receipt.get("source_sidecar_file") != sidecar_file
+        or not (root / sidecar_file).is_file()
+    ):
+        raise TypedRetrofitSealError("review decision sidecar reference mismatch")
+    if receipt.get("source_sidecar_sha256") != _sha256_file(root / sidecar_file):
+        raise TypedRetrofitSealError(
+            "review decision source_sidecar_sha256 mismatch (sidecar changed since "
+            "review)"
+        )
+    if receipt.get("patient_identity_authority_sha256") != identity_digest:
+        raise TypedRetrofitSealError(
+            "review decision patient_identity_authority_sha256 mismatch (identity "
+            "re-derived from columns differs from the reviewed authority)"
         )
     return manifest
 
@@ -723,61 +875,42 @@ RETROFIT_REVIEW_ATTESTATION_SCHEMA = "easyicu.retrofit_review_attestation/1"
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 
 
-def build_retrofit_review_attestation(
-    export_dir: str | Path,
-    *,
-    reviewer: str,
-    reviewed_at: str,
-) -> Dict[str, Any]:
-    """Mint a frozen paper-readiness attestation for a retrofit-sealed export.
+_ATTESTATION_RECEIPT_FIELDS = (
+    "review_id",
+    "reviewer",
+    "review_scope",
+    "reviewed_at",
+    "decision_sha256",
+    "source_manifest_sha256",
+    "source_sidecar_file",
+    "source_sidecar_sha256",
+    "patient_identity_authority_sha256",
+)
 
-    This is the ONLY sanctioned producer of an attestation and it FAILS CLOSED
-    through :func:`assert_sealed_export_paper_ready`: an export that is unreviewed
-    or whose patient identity is insufficient (e.g. full6 ->
-    ``patient_identity_unavailable``) cannot yield an attestation, so it can never
-    become a paper-ready authority. Call this BEFORE freezing a task binding or
-    materialising a paper authority from the sealed export. The attestation binds
-    the source manifest + sidecar + review + identity digests so a downstream
-    verifier can re-derive and detect tamper/drift.
+
+def build_retrofit_review_attestation(export_dir: str | Path) -> Dict[str, Any]:
+    """Mint a frozen paper-readiness attestation from the write-once review decision.
+
+    FAILS CLOSED through :func:`assert_sealed_export_paper_ready`, which re-derives
+    patient identity from columns and requires a valid write-once HITL decision
+    receipt whose digests match the live artifacts. An export that is unreviewed or
+    identity-insufficient (e.g. full6) cannot yield an attestation. The attestation
+    is a frozen mirror of the decision receipt, bound into a task binding so
+    acceptance can reconcile it against the live receipt.
     """
 
     root = Path(export_dir).expanduser()
-    manifest = assert_sealed_export_paper_ready(root)  # fail-close before minting
-    manifest_path = root / NATIVE_MANIFEST
-    sidecar_ref = manifest.get("column_metadata") or {}
-    sidecar_file = str(sidecar_ref.get("file") or "")
-    sidecar_path = root / sidecar_file
-    if not sidecar_file or Path(sidecar_file).name != sidecar_file:
-        raise TypedRetrofitSealError(
-            "retrofit manifest references no single-component sidecar; cannot attest"
-        )
-    if not sidecar_path.is_file():
-        raise TypedRetrofitSealError(
-            f"retrofit manifest sidecar is missing: {sidecar_file}; cannot attest"
-        )
-    reviewer = reviewer.strip()
-    reviewed_at = reviewed_at.strip()
-    if not reviewer or not reviewed_at:
-        raise TypedRetrofitSealError(
-            "attestation requires a non-empty reviewer and reviewed_at"
-        )
-    return {
+    manifest = assert_sealed_export_paper_ready(root)  # fail-close (receipt-backed)
+    receipt = json.loads((root / RETROFIT_DECISION_FILE).read_text(encoding="utf-8"))
+    attestation = {
         "schema_version": RETROFIT_REVIEW_ATTESTATION_SCHEMA,
         "seal_kind": SEAL_KIND,
         "value_vintage": str(manifest.get("value_vintage") or ""),
-        "source_manifest_sha256": _sha256_file(manifest_path),
-        "source_sidecar_file": sidecar_file,
-        "source_sidecar_sha256": _sha256_file(sidecar_path),
-        "semantic_review_sha256": hashlib.sha256(
-            _canonical_json_bytes(manifest.get("semantic_review"))
-        ).hexdigest(),
-        "patient_identity_sha256": hashlib.sha256(
-            _canonical_json_bytes(manifest.get("patient_identity"))
-        ).hexdigest(),
-        "reviewer": reviewer,
-        "reviewed_at": reviewed_at,
         "paper_ready": True,
     }
+    for field in _ATTESTATION_RECEIPT_FIELDS:
+        attestation[field] = receipt[field]
+    return attestation
 
 
 def verify_retrofit_review_attestation(
@@ -787,10 +920,11 @@ def verify_retrofit_review_attestation(
 ) -> None:
     """Re-verify a bound attestation; fail-closed (raises ``TypedRetrofitSealError``).
 
-    Offline structural + semantic checks always run (schema, seal kind,
-    ``paper_ready``, digest shape, reviewer). When ``export_dir`` is provided the
-    live artifacts are re-derived and the paper-readiness gate is re-run, so a
-    tampered or drifted manifest/sidecar digest fails closed.
+    Offline structural checks always run (schema, seal kind, ``paper_ready``, digest
+    shape, reviewer/review id). When ``export_dir`` is provided the receipt-backed
+    gate is re-run (identity re-derived from columns, live digests recomputed) and
+    the attestation is reconciled field-by-field against the live decision receipt,
+    so any tamper or drift fails closed.
     """
 
     if not isinstance(attestation, Mapping):
@@ -804,45 +938,30 @@ def verify_retrofit_review_attestation(
     for key in (
         "source_manifest_sha256",
         "source_sidecar_sha256",
-        "semantic_review_sha256",
-        "patient_identity_sha256",
+        "patient_identity_authority_sha256",
+        "decision_sha256",
     ):
         value = attestation.get(key)
         if not isinstance(value, str) or not _SHA256_RE.match(value):
             raise TypedRetrofitSealError(f"attestation {key} is not a sha256 digest")
     if not str(attestation.get("reviewer") or "").strip():
         raise TypedRetrofitSealError("attestation has no reviewer")
+    if not str(attestation.get("review_id") or "").strip():
+        raise TypedRetrofitSealError("attestation has no review_id")
     if export_dir is None:
         return
 
-    # Live re-derivation: re-run the gate and re-compute every bound digest.
+    # Live: re-run the receipt-backed gate, then reconcile the frozen attestation
+    # against the live decision receipt field-by-field.
     root = Path(export_dir).expanduser()
-    manifest = assert_sealed_export_paper_ready(root)  # fail-close on drift
-    if _sha256_file(root / NATIVE_MANIFEST) != attestation["source_manifest_sha256"]:
-        raise TypedRetrofitSealError(
-            "attestation source_manifest_sha256 mismatch (tampered or drifted)"
-        )
-    sidecar_file = str((manifest.get("column_metadata") or {}).get("file") or "")
-    if sidecar_file != attestation.get("source_sidecar_file"):
-        raise TypedRetrofitSealError("attestation source_sidecar_file mismatch")
-    if _sha256_file(root / sidecar_file) != attestation["source_sidecar_sha256"]:
-        raise TypedRetrofitSealError(
-            "attestation source_sidecar_sha256 mismatch (tampered or drifted)"
-        )
-    if (
-        hashlib.sha256(
-            _canonical_json_bytes(manifest.get("semantic_review"))
-        ).hexdigest()
-        != attestation["semantic_review_sha256"]
-    ):
-        raise TypedRetrofitSealError("attestation semantic_review_sha256 mismatch")
-    if (
-        hashlib.sha256(
-            _canonical_json_bytes(manifest.get("patient_identity"))
-        ).hexdigest()
-        != attestation["patient_identity_sha256"]
-    ):
-        raise TypedRetrofitSealError("attestation patient_identity_sha256 mismatch")
+    assert_sealed_export_paper_ready(root)  # fail-close: identity + receipt re-derived
+    receipt = json.loads((root / RETROFIT_DECISION_FILE).read_text(encoding="utf-8"))
+    for field in _ATTESTATION_RECEIPT_FIELDS:
+        if attestation.get(field) != receipt.get(field):
+            raise TypedRetrofitSealError(
+                f"attestation {field} disagrees with the live decision receipt "
+                "(tampered or drifted)"
+            )
 
 
 def seal_export_structural_typed(
@@ -1065,6 +1184,7 @@ __all__ = [
     "BOUNDS_AUTHORITY_UNAVAILABLE",
     "METADATA_PROVENANCE",
     "RETROFIT_REVIEW_ATTESTATION_SCHEMA",
+    "RETROFIT_REVIEW_DECISION_SCHEMA",
     "ColumnCompat",
     "SealResult",
     "TypedRetrofitSealError",
@@ -1072,4 +1192,5 @@ __all__ = [
     "build_retrofit_review_attestation",
     "seal_export_structural_typed",
     "verify_retrofit_review_attestation",
+    "write_retrofit_review_decision",
 ]
