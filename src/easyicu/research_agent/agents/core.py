@@ -3650,6 +3650,64 @@ def _first_json_block(text: str) -> Optional[str]:
     return None
 
 
+def _canonicalise_figure_output_alias(token: object) -> object:
+    """Rewrite a colon-typed figure-kind output alias to canonical ``figure:``.
+
+    The typed-product parser already treats ``fig`` / ``plot`` / ``chart`` /
+    ``heatmap`` / ``figure`` as one figure kind, but many downstream *raw*
+    detection sites string-match ``startswith("figure:")`` directly (the
+    execution-phase runner-owner guards, the figure skill, table-one ownership,
+    the mock matcher).  A ``fig:`` / ``plot:`` / ``chart:`` / ``heatmap:``
+    output slips past those guards, so a figure step can be mis-routed.
+    Canonicalising the alias once, at plan acceptance, keeps every layer on the
+    same identity.  Kind semantics are read from the shared
+    ``_canonical_typed_product`` so no private alias set can drift from the
+    ``plan_utils`` / ``declared_product`` copies.
+
+    Only a colon-typed figure token is rewritten; the product name after the
+    first colon is preserved verbatim (no suffix stripping).  Non-string,
+    non-``kind:name``, and non-figure tokens are returned unchanged.  The
+    no-colon ``fig_x`` form is deliberately NOT reinterpreted here — it is
+    rejected by :func:`_is_untyped_figure_alias_output` at acceptance so the
+    Planner re-emits the typed form instead of the engine guessing a name.
+    """
+
+    if not isinstance(token, str):
+        return token
+    parsed = _canonical_typed_product(token)
+    if parsed is None or parsed[0] != "figure":
+        return token
+    _kind, _separator, name = token.partition(":")
+    return f"figure:{name.strip()}"
+
+
+def _is_untyped_figure_alias_output(token: object) -> bool:
+    """True for a no-colon output that names a figure kind with ``_`` (``fig_x``).
+
+    ``fig_stage_outcomes`` / ``fig_adjusted_associations`` / ``fig_robustness``
+    (the exact malformed forms E3's planner emitted) have no ``kind:name``
+    separator, so ``typed_product`` returns ``None`` and every typed consumer
+    ignores them — the declared figure never binds and the step silently drops a
+    display role.  We refuse them at plan acceptance and require the ``figure:``
+    typed form rather than guessing the intended name.  A legitimate bare image
+    export (``x.png``) is not a malformed alias.  The figure-kind test reuses
+    ``_canonical_typed_product`` so no private alias set is introduced.
+    """
+
+    if not isinstance(token, str):
+        return False
+    text = token.strip()
+    if not text or ":" in text:
+        return False
+    if text.lower().endswith((".png", ".svg", ".pdf", ".tif", ".tiff")):
+        return False
+    head, separator, _rest = text.partition("_")
+    if not separator:
+        return False
+    probe = _canonical_typed_product(f"{head}:probe")
+    return probe is not None and probe[0] == "figure"
+
+
 def _normalise_plan_payload(
     data: Dict[str, Any],
 ) -> Tuple[Dict[str, Any], Dict[str, List[str]]]:
@@ -3822,6 +3880,37 @@ def _normalise_plan_payload(
                     variables.append(variable_payload)
                 table_one_payload["variables"] = variables
                 step_payload["table_one_spec"] = table_one_payload
+            raw_outputs = step_payload.get("expected_outputs")
+            if isinstance(raw_outputs, list):
+                step_id = step_payload.get("step_id") or f"step[{idx}]"
+                normalised_outputs: List[Any] = []
+                for item in raw_outputs:
+                    if _is_untyped_figure_alias_output(item):
+                        suggested = str(item).strip().partition("_")[2]
+                        raise ValueError(
+                            f"Planner step {step_id!r} declares figure output "
+                            f"{item!r} with an underscore instead of the typed "
+                            "'figure:' separator; re-emit it as "
+                            f"'figure:{suggested}' so the declared figure binds "
+                            "to an exact output file."
+                        )
+                    normalised_outputs.append(_canonicalise_figure_output_alias(item))
+                figure_outputs = [
+                    out
+                    for out in normalised_outputs
+                    if isinstance(out, str) and out.startswith("figure:")
+                ]
+                duplicate_figures = sorted(
+                    {out for out in figure_outputs if figure_outputs.count(out) > 1}
+                )
+                if duplicate_figures:
+                    raise ValueError(
+                        f"Planner step {step_id!r} declares the same figure "
+                        f"product under more than one output alias "
+                        f"({duplicate_figures}); declare each figure exactly once "
+                        "as 'figure:<name>'."
+                    )
+                step_payload["expected_outputs"] = normalised_outputs
             steps.append(step_payload)
     out["steps"] = steps
     specs = []
