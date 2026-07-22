@@ -87,13 +87,15 @@ class RetrofitReviewAttestation(_StrictFrozenModel):
     schema_version: Literal["easyicu.retrofit_review_attestation/1"]
     seal_kind: Literal["retrofitted_structural_typed_export"]
     value_vintage: str = Field(min_length=1, max_length=64)
+    review_id: str = Field(min_length=1, max_length=200)
+    reviewer: str = Field(min_length=1, max_length=200)
+    review_scope: str = Field(min_length=1, max_length=400)
+    reviewed_at: str = Field(min_length=1, max_length=80)
+    decision_sha256: Sha256
     source_manifest_sha256: Sha256
     source_sidecar_file: str = Field(min_length=1, max_length=255)
     source_sidecar_sha256: Sha256
-    semantic_review_sha256: Sha256
-    patient_identity_sha256: Sha256
-    reviewer: str = Field(min_length=1, max_length=200)
-    reviewed_at: str = Field(min_length=1, max_length=64)
+    patient_identity_authority_sha256: Sha256
     paper_ready: Literal[True]
 
     @field_validator("source_sidecar_file")
@@ -310,11 +312,12 @@ def require_ready_task_binding(
 ]:
     """Resolve one exact ready binding or fail closed before run sealing.
 
-    A ``retrofit_sealed`` source is re-verified against its bound paper-readiness
-    attestation (never trusted from a single freeze-time check). Offline checks
-    always run; passing ``source_export_dir`` additionally re-derives the live
-    manifest/sidecar digests and re-runs the paper-readiness gate, so tamper or
-    drift fails closed.
+    For a ``retrofit_sealed`` source, live content-addressed re-validation is
+    MANDATORY: ``source_export_dir`` must be provided and the receipt-backed gate
+    is re-run (patient identity re-derived from columns, manifest/sidecar/identity
+    digests recomputed, write-once decision receipt reconciled). Offline-only
+    acceptance of a retrofit source is refused — a retrofit binding without a
+    resolvable live source fails closed rather than trusting frozen strings.
     """
 
     manifest, manifest_digest = load_canonical_run_input_bindings()
@@ -328,9 +331,15 @@ def require_ready_task_binding(
             f"Canonical9 task {task_id!r} is not input-frozen: {blockers}"
         )
     if binding.source_kind == "retrofit_sealed":
+        if source_export_dir is None:
+            raise CanonicalRunInputBindingError(
+                "retrofit_sealed acceptance requires live content-addressed "
+                "re-validation: source_export_dir is mandatory, offline-only "
+                "acceptance is refused"
+            )
         attestation = binding.source_retrofit_review_attestation
-        # The model_validator guarantees a non-None attestation here; re-verify
-        # its paper-readiness proof and (when available) the live source digests.
+        # The model_validator guarantees a non-None attestation here; re-run the
+        # receipt-backed gate and reconcile the frozen attestation against it.
         try:
             verify_retrofit_review_attestation(
                 attestation.model_dump(mode="json"),
