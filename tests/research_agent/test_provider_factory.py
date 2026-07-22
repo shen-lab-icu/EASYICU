@@ -6,7 +6,6 @@ from typing import Any
 
 import pytest
 
-
 _PROVIDER_ENV_KEYS = (
     "OPENAI_API_KEY",
     "OPENAI_BASE_URL",
@@ -89,12 +88,8 @@ def _build_all_three(mcp, discovery, benchmark, *, provider: str):
     )
 
 
-def test_openrouter_contract_is_consistent_across_all_three_entries(
-    ra, monkeypatch
-):
-    mcp, discovery, benchmark, seen = _install_entrypoint_recorders(
-        monkeypatch, ra
-    )
+def test_openrouter_contract_is_consistent_across_all_three_entries(ra, monkeypatch):
+    mcp, discovery, benchmark, seen = _install_entrypoint_recorders(monkeypatch, ra)
     monkeypatch.setenv("OPENROUTER_API_KEY", "router-secret")
     monkeypatch.setenv("OPENROUTER_BASE_URL", "https://router.example/v1")
     monkeypatch.setenv("OPENAI_API_KEY", "wrong-openai-secret")
@@ -119,14 +114,10 @@ def test_openrouter_contract_is_consistent_across_all_three_entries(
         }
 
 
-def test_loopback_openai_never_forwards_paid_secrets_from_any_entry(
-    ra, monkeypatch
-):
+def test_loopback_openai_never_forwards_paid_secrets_from_any_entry(ra, monkeypatch):
     from easyicu.research_agent.providers import LOCAL_OPENAI_DUMMY_API_KEY
 
-    mcp, discovery, benchmark, seen = _install_entrypoint_recorders(
-        monkeypatch, ra
-    )
+    mcp, discovery, benchmark, seen = _install_entrypoint_recorders(monkeypatch, ra)
     monkeypatch.setenv("OPENAI_BASE_URL", "http://127.0.0.1:8787/v1")
     monkeypatch.setenv("OPENAI_API_KEY", "paid-openai-secret")
     monkeypatch.setenv("OPENROUTER_API_KEY", "paid-openrouter-secret")
@@ -226,9 +217,7 @@ def test_provider_keys_are_not_interchangeable_across_entrypoints(
     available_key,
     missing_key,
 ):
-    mcp, discovery, benchmark, seen = _install_entrypoint_recorders(
-        monkeypatch, ra
-    )
+    mcp, discovery, benchmark, seen = _install_entrypoint_recorders(monkeypatch, ra)
     monkeypatch.setenv(available_key, "wrong-provider-secret")
     if provider == "openai":
         monkeypatch.setenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
@@ -335,3 +324,30 @@ def test_factory_authorization_records_exact_nonsecret_endpoint():
         }
     ]
     assert "secret-never-persisted" not in str(payload)
+
+
+def test_unknown_provider_is_unmanaged_external_and_never_local_exempt():
+    from easyicu.research_agent.providers.factory import (
+        provider_authorization_manifest,
+        provider_transport_destination,
+    )
+
+    class CustomForwarder:
+        name = "custom-forwarder"
+
+    client = CustomForwarder()
+
+    assert provider_transport_destination(client) == "external"
+    assert provider_authorization_manifest(client) == {
+        "schema_version": "easyicu.provider_authorization_manifest/1",
+        "clients": [
+            {
+                "provider": "custom-forwarder",
+                "model": "",
+                "base_url": "",
+                "destination": "external",
+                "authorization_mode": "unmanaged",
+                "authorization_sha256": "",
+            }
+        ],
+    }

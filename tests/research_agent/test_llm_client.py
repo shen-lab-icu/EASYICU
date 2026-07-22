@@ -73,9 +73,12 @@ def test_openai_client_strips_reasoning_blocks_from_content(ra):
     client._timeout = 120.0
     client._extra_body = {}
 
-    out = client.complete([LLMMessage(role="user", content="return json")])
+    out, call_usage = client.complete_with_usage(
+        [LLMMessage(role="user", content="return json")]
+    )
 
     assert out == '{"ok": true}'
+    assert call_usage is None
 
 
 def test_openai_client_streaming_is_transport_only(monkeypatch, ra):
@@ -134,7 +137,9 @@ def test_openai_client_streaming_is_transport_only(monkeypatch, ra):
     client._local_noauth_mode = False
     monkeypatch.setenv("EASYICU_LLM_STREAM", "1")
 
-    out = client.complete([LLMMessage(role="user", content="return json")])
+    out, call_usage = client.complete_with_usage(
+        [LLMMessage(role="user", content="return json")]
+    )
 
     assert out == '{"ok": true}'
     assert client.last_finish_reason == "stop"
@@ -143,7 +148,37 @@ def test_openai_client_streaming_is_transport_only(monkeypatch, ra):
         "completion_tokens": 4,
         "total_tokens": 16,
     }
+    assert call_usage == client.last_usage
     assert stream.closed is True
+
+
+def test_fallback_client_preserves_call_scoped_usage(ra):
+    from easyicu.research_agent.providers.llm import FallbackLLMClient, LLMMessage
+
+    class _UsageClient:
+        name = "usage-child"
+
+        def complete_with_usage(
+            self, messages, *, max_tokens=2048, temperature=0.2, seed=None
+        ):
+            return "done", {
+                "prompt_tokens": 17,
+                "completion_tokens": 4,
+                "total_tokens": 21,
+            }
+
+    client = FallbackLLMClient(_UsageClient())
+    response, usage = client.complete_with_usage(
+        [LLMMessage(role="user", content="run")], seed=9
+    )
+
+    assert response == "done"
+    assert usage == {
+        "prompt_tokens": 17,
+        "completion_tokens": 4,
+        "total_tokens": 21,
+    }
+    assert client.last_usage == usage
 
 
 def test_openai_client_stream_closes_on_iteration_error(monkeypatch, ra):
@@ -330,9 +365,7 @@ def test_openai_client_manual_owner_recognizes_generic_transient_errors(
 
 
 @pytest.mark.parametrize("retry_after", ["nan", "inf", "-1"])
-def test_openai_client_ignores_invalid_retry_after_values(
-    monkeypatch, ra, retry_after
-):
+def test_openai_client_ignores_invalid_retry_after_values(monkeypatch, ra, retry_after):
     from easyicu.research_agent.providers.llm import LLMMessage
 
     error = RuntimeError("provider rejected request with status 503")

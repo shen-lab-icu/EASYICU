@@ -3,8 +3,8 @@
 Two layers exercised:
 
 * ``CostMeter`` + ``MeteredClient`` in isolation — token capture from
-  an inner client's ``last_usage`` (authoritative path) and from the
-  ``chars/4`` fallback when the inner client doesn't expose usage.
+  a call-scoped ``complete_with_usage`` result (authoritative path) and from
+  the ``chars/4`` fallback when the inner client doesn't expose usage.
 * End-to-end: ``ResearchAgentPipeline(enable_cost_tracking=True)``
   populates ``manifest.cost_records`` with multiple roles, and writes
   ``cost_summary.md`` + ``cost_records.json`` to the run directory.
@@ -31,16 +31,12 @@ def test_meter_records_authoritative_usage_when_inner_exposes_it(ra):
     class _ClientWithUsage:
         name = "stub-with-usage"
 
-        def __init__(self) -> None:
-            self.last_usage = None
-
-        def complete(self, messages, *, max_tokens=2048, temperature=0.2):
-            self.last_usage = {
+        def complete_with_usage(self, messages, *, max_tokens=2048, temperature=0.2):
+            return "OK", {
                 "prompt_tokens": 123,
                 "completion_tokens": 45,
                 "total_tokens": 168,
             }
-            return "OK"
 
     inner = _ClientWithUsage()
     meter = ra.CostMeter()
@@ -165,10 +161,8 @@ def test_summary_handles_empty_meter(ra):
     assert s["any_heuristic"] is False
 
 
-def test_metered_client_does_not_double_count_when_inner_keeps_stale_usage(ra):
-    """If the inner client's ``last_usage`` is left over from a prior call,
-    the meter must reset it before invoking ``complete`` so the new
-    record reflects only the new call."""
+def test_metered_client_never_trusts_shared_stale_usage(ra):
+    """Legacy shared usage is ignored rather than misattributed."""
     from easyicu.research_agent.providers.llm import LLMMessage
 
     class _ClientStale:
@@ -183,7 +177,6 @@ def test_metered_client_does_not_double_count_when_inner_keeps_stale_usage(ra):
             }
 
         def complete(self, messages, *, max_tokens=2048, temperature=0.2):
-            # This call's "real" usage:
             self.last_usage = {
                 "prompt_tokens": 10,
                 "completion_tokens": 5,
@@ -194,8 +187,8 @@ def test_metered_client_does_not_double_count_when_inner_keeps_stale_usage(ra):
     meter = ra.CostMeter()
     metered = ra.MeteredClient(_ClientStale(), role="writer", meter=meter)
     metered.complete([LLMMessage(role="user", content="x")])
-    assert meter.records[-1].prompt_tokens == 10
-    assert meter.records[-1].completion_tokens == 5
+    assert meter.records[-1].is_heuristic is True
+    assert meter.records[-1].prompt_tokens != 10
 
 
 def test_concurrent_writer_usage_cannot_be_charged_to_another_role(ra):
@@ -206,19 +199,21 @@ def test_concurrent_writer_usage_cannot_be_charged_to_another_role(ra):
         name = "shared-provider"
 
         def __init__(self) -> None:
-            self.last_usage = None
-            self.writer_entered = threading.Event()
-            self.release_writer = threading.Event()
+            self.calls_entered = threading.Barrier(2)
 
-        def complete(self, messages, **_kwargs):  # noqa: ANN003
+        def complete_with_usage(self, messages, **_kwargs):  # noqa: ANN003
             role = messages[0].content
+            self.calls_entered.wait(timeout=2)
+            time.sleep(0.15)
             if role == "writer":
-                self.last_usage = {"prompt_tokens": 11, "completion_tokens": 3}
-                self.writer_entered.set()
-                assert self.release_writer.wait(timeout=2)
-                return "writer result"
-            self.last_usage = {"prompt_tokens": 29, "completion_tokens": 7}
-            return "analyzer result"
+                return "writer result", {
+                    "prompt_tokens": 11,
+                    "completion_tokens": 3,
+                }
+            return "analyzer result", {
+                "prompt_tokens": 29,
+                "completion_tokens": 7,
+            }
 
     shared = SharedUsageClient()
     meter = ra.CostMeter()
@@ -231,19 +226,72 @@ def test_concurrent_writer_usage_cannot_be_charged_to_another_role(ra):
     analyzer_thread = threading.Thread(
         target=lambda: analyzer.complete([LLMMessage(role="user", content="analyzer")])
     )
+    started = time.monotonic()
     writer_thread.start()
-    assert shared.writer_entered.wait(timeout=2)
     analyzer_thread.start()
-    time.sleep(0.02)
-    shared.release_writer.set()
     writer_thread.join(timeout=2)
     analyzer_thread.join(timeout=2)
+    elapsed = time.monotonic() - started
 
     by_role = {record.role: record for record in meter.records}
     assert by_role["writer"].prompt_tokens == 11
     assert by_role["writer"].completion_tokens == 3
     assert by_role["analyzer"].prompt_tokens == 29
     assert by_role["analyzer"].completion_tokens == 7
+    assert elapsed < 0.27
+
+
+def test_reproducibility_wrapper_keeps_concurrent_provider_calls_parallel(ra):
+    from easyicu.research_agent.providers.llm import LLMMessage
+    from easyicu.research_agent.replication.envelope import envelope_role_resolver
+
+    class SharedUsageClient:
+        name = "shared-provider"
+
+        def __init__(self) -> None:
+            self.calls_entered = threading.Barrier(2)
+
+        def complete_with_usage(self, messages, **_kwargs):  # noqa: ANN003
+            role = messages[0].content
+            self.calls_entered.wait(timeout=2)
+            time.sleep(0.15)
+            if role == "writer":
+                return "writer result", {
+                    "prompt_tokens": 31,
+                    "completion_tokens": 5,
+                }
+            return "analyzer result", {
+                "prompt_tokens": 41,
+                "completion_tokens": 9,
+            }
+
+    shared = SharedUsageClient()
+    envelope = ra.ReproEnvelope(run_id="parallel-usage")
+    envelope_resolver = envelope_role_resolver(shared, envelope, seed=11)
+    meter = ra.CostMeter()
+    writer = ra.MeteredClient(envelope_resolver("writer"), role="writer", meter=meter)
+    analyzer = ra.MeteredClient(
+        envelope_resolver("analyzer"), role="analyzer", meter=meter
+    )
+    writer_thread = threading.Thread(
+        target=lambda: writer.complete([LLMMessage(role="user", content="writer")])
+    )
+    analyzer_thread = threading.Thread(
+        target=lambda: analyzer.complete([LLMMessage(role="user", content="analyzer")])
+    )
+    started = time.monotonic()
+    writer_thread.start()
+    analyzer_thread.start()
+    writer_thread.join(timeout=2)
+    analyzer_thread.join(timeout=2)
+    elapsed = time.monotonic() - started
+
+    by_role = {record.role: record for record in meter.records}
+    assert by_role["writer"].prompt_tokens == 31
+    assert by_role["analyzer"].prompt_tokens == 41
+    assert all(not record.is_heuristic for record in meter.records)
+    assert len(envelope.calls) == 2
+    assert elapsed < 0.27
 
 
 # ---------------------------------------------------------------------------

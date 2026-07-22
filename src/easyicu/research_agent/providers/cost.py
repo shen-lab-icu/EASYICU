@@ -11,14 +11,11 @@ Design constraints:
 
 * **Opt-in.** Default pipeline behaviour is unchanged. Cost tracking
   activates only when ``ResearchAgentPipeline(enable_cost_tracking=True)``.
-* **Provider-agnostic.** Real clients (OpenAI / OpenRouter) report
-  usage on the SDK response; we expose that through
-  ``client.last_usage``. Clients that don't expose usage fall back to
-  a transparent ``chars / 4`` heuristic — and the record is marked
+* **Provider-agnostic.** Real clients (OpenAI / OpenRouter) return usage with
+  the same call through ``complete_with_usage``. Clients without that
+  call-scoped API fall back to a transparent ``chars / 4`` heuristic — and the record is marked
   ``is_heuristic=True`` so reviewers can tell.
-* **No SDK creep.** This module never imports ``openai`` or any
-  provider SDK. It only cares about whether the inner client sets a
-  ``last_usage`` dict on itself.
+* **No SDK creep.** This module never imports ``openai`` or any provider SDK.
 * **Cheap to test.** ``MeteredClient`` is a plain ``LLMClient``
   proxy; tests can exercise it with the mock client.
 
@@ -32,7 +29,6 @@ from __future__ import annotations
 
 from collections import defaultdict
 from dataclasses import dataclass, field
-from threading import RLock
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from ..schema import CostRecord
@@ -195,9 +191,9 @@ class MeteredClient:
 
     The wrapper preserves the ``LLMClient`` protocol so any agent that
     already accepts an LLMClient continues to work unchanged. Token
-    counts come from ``inner.last_usage`` when present; otherwise we
-    fall back to a transparent ``chars/4`` heuristic and mark the
-    record so reviewers can tell.
+    counts come from a call-scoped ``complete_with_usage`` result when present;
+    otherwise we fall back to a transparent ``chars/4`` heuristic and mark the
+    record so reviewers can tell. Shared mutable ``last_usage`` is never read.
     """
 
     name = "metered"
@@ -209,34 +205,34 @@ class MeteredClient:
         role: Optional[str],
         meter: CostMeter,
         model_override: Optional[str] = None,
-        usage_lock: Optional[RLock] = None,
     ) -> None:
         self._inner = inner
         self._role = role
         self._meter = meter
         self._model_override = model_override
-        # Separate role wrappers may share one provider whose ``last_usage``
-        # attribute is mutable. They must share this lock or one concurrent
-        # response can be charged to another role.
-        self._usage_lock = usage_lock or RLock()
 
     # The protocol methods the agents call.
 
     def complete(
         self, messages, *, max_tokens: int = 2048, temperature: float = 0.2
     ) -> str:
-        with self._usage_lock:
-            # Reset/read and the provider call form one attribution transaction.
-            try:
-                self._inner.last_usage = None  # type: ignore[attr-defined]
-            except Exception:
-                pass
+        complete_with_usage = getattr(self._inner, "complete_with_usage", None)
+        if callable(complete_with_usage):
+            result, usage = complete_with_usage(
+                messages,
+                max_tokens=max_tokens,
+                temperature=temperature,
+            )
+        else:
             result = self._inner.complete(
                 messages,
                 max_tokens=max_tokens,
                 temperature=temperature,
             )
-            usage = getattr(self._inner, "last_usage", None)
+            # A shared ``last_usage`` attribute is not call-scoped and cannot be
+            # read safely under concurrent role calls. Legacy providers use the
+            # transparent heuristic until they implement ``complete_with_usage``.
+            usage = None
         if isinstance(usage, dict) and usage.get("prompt_tokens") is not None:
             prompt_tokens = int(usage.get("prompt_tokens", 0))
             completion_tokens = int(usage.get("completion_tokens", 0))
@@ -300,8 +296,6 @@ def metered_role_resolver(llm: Any, meter: CostMeter):
     """
     from .llm import resolve_role_client
 
-    usage_locks: Dict[int, RLock] = {}
-
     def resolver(role: str):
         base = resolve_role_client(llm, role)
         if base is None:
@@ -309,13 +303,7 @@ def metered_role_resolver(llm: Any, meter: CostMeter):
         if isinstance(base, MeteredClient):
             # Don't stack meters on top of each other.
             return base
-        usage_lock = usage_locks.setdefault(id(base), RLock())
-        return MeteredClient(
-            base,
-            role=role,
-            meter=meter,
-            usage_lock=usage_lock,
-        )
+        return MeteredClient(base, role=role, meter=meter)
 
     return resolver
 

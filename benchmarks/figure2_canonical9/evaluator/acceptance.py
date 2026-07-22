@@ -17,12 +17,15 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from easyicu.research_agent.authority.execution_identity import ExecutionIdentity
+from easyicu.research_agent.authority.execution_identity import (
+    ExecutionIdentity,
+    ExpectedExecutionIdentity,
+)
 
 from .rubric_v1 import FIGURE2_TASK_IDS
 from .scoring import Figure2EvaluationAttempt, verify_figure2_evaluation_attempt
 
-FIGURE2_PAPER_ACCEPTANCE_SCHEMA = "easyicu.figure2_paper_acceptance/1"
+FIGURE2_PAPER_ACCEPTANCE_SCHEMA = "easyicu.figure2_paper_acceptance/2"
 _MAX_RESULTS_BYTES = 32 * 1024 * 1024
 
 
@@ -44,9 +47,17 @@ class VerifiedFigure2Task(_StrictFrozenModel):
 
 
 class Figure2PaperAcceptance(_StrictFrozenModel):
-    schema_version: Literal["easyicu.figure2_paper_acceptance/1"]
+    schema_version: Literal["easyicu.figure2_paper_acceptance/2"]
     status: Literal["accepted", "invalid"]
     results_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    expected_execution_identity_sha256: str | None = Field(
+        default=None,
+        pattern=r"^[0-9a-f]{64}$",
+    )
+    expected_execution_identity_freeze_sha256: str | None = Field(
+        default=None,
+        pattern=r"^[0-9a-f]{64}$",
+    )
     expected_task_ids: tuple[str, ...]
     observed_task_ids: tuple[str, ...]
     verified_tasks: tuple[VerifiedFigure2Task, ...] = ()
@@ -58,7 +69,12 @@ class Figure2PaperAcceptance(_StrictFrozenModel):
         if self.expected_task_ids != exact:
             raise ValueError("acceptance authority must retain exact Canonical9 order")
         if self.status == "accepted":
-            if self.issues or self.observed_task_ids != exact:
+            if (
+                self.issues
+                or self.observed_task_ids != exact
+                or self.expected_execution_identity_sha256 is None
+                or self.expected_execution_identity_freeze_sha256 is None
+            ):
                 raise ValueError("accepted batch contradicts coverage findings")
             if tuple(row.task_id for row in self.verified_tasks) != exact:
                 raise ValueError("accepted batch lacks exact replay-verified coverage")
@@ -139,6 +155,8 @@ def _invalid_unreadable(payload: bytes, detail: str) -> Figure2PaperAcceptance:
 
 def evaluate_figure2_paper_acceptance(
     results_path: Path | str,
+    *,
+    expected_execution_identity_path: Path | str | None = None,
 ) -> Figure2PaperAcceptance:
     """Verify a completed EHRFlowBench result file as exact Canonical9.
 
@@ -165,6 +183,42 @@ def evaluate_figure2_paper_acceptance(
 
     expected = tuple(FIGURE2_TASK_IDS)
     issues: list[Figure2AcceptanceIssue] = []
+    frozen_identity: ExpectedExecutionIdentity | None = None
+    if expected_execution_identity_path is None:
+        issues.append(
+            _issue(
+                "EXPECTED_EXECUTION_IDENTITY_MISSING",
+                "paper acceptance requires a separately frozen execution identity",
+            )
+        )
+    else:
+        try:
+            raw_expected_path = Path(expected_execution_identity_path).expanduser()
+            if not raw_expected_path.is_absolute() or raw_expected_path.is_symlink():
+                raise ValueError(
+                    "expected identity must be an absolute non-symlink path"
+                )
+            expected_path = raw_expected_path.resolve(strict=True)
+            results_root = path.parent.resolve()
+            try:
+                expected_path.relative_to(results_root)
+            except ValueError:
+                pass
+            else:
+                raise ValueError("expected identity cannot live inside result output")
+            frozen_identity = ExpectedExecutionIdentity.model_validate(
+                _strict_json_object(_read_regular_file(expected_path)),
+                strict=True,
+            )
+            if not frozen_identity.execution_identity.paper_eligible:
+                raise ValueError("frozen execution identity is not paper eligible")
+        except Exception as exc:
+            issues.append(
+                _issue(
+                    "EXPECTED_EXECUTION_IDENTITY_INVALID",
+                    f"cannot verify frozen identity: {type(exc).__name__}: {exc}",
+                )
+            )
     raw_items = payload.get("items")
     observed = (
         tuple(raw_items)
@@ -232,7 +286,6 @@ def evaluate_figure2_paper_acceptance(
         )
 
     verified: list[VerifiedFigure2Task] = []
-    accepted_execution_identity_sha256: str | None = None
     results_root = path.parent.resolve()
     for task_id in expected:
         task_rows = by_task.get(task_id, [])
@@ -322,10 +375,13 @@ def evaluate_figure2_paper_acceptance(
                 raise ValueError("paper acceptance requires the docker runner")
             if score_identity.host_runner_authorized:
                 raise ValueError("--allow-host-runner is never paper authority")
-            if accepted_execution_identity_sha256 is None:
-                accepted_execution_identity_sha256 = score_identity.identity_sha256
-            elif accepted_execution_identity_sha256 != score_identity.identity_sha256:
-                raise ValueError("Canonical9 tasks have different execution identities")
+            if frozen_identity is None:
+                raise ValueError("no valid independently frozen identity")
+            if (
+                score_identity.identity_sha256
+                != frozen_identity.expected_identity_sha256
+            ):
+                raise ValueError("run identity differs from frozen submission identity")
         except Exception as exc:
             issues.append(
                 _issue(
@@ -409,6 +465,14 @@ def evaluate_figure2_paper_acceptance(
         schema_version=FIGURE2_PAPER_ACCEPTANCE_SCHEMA,
         status=status,
         results_sha256=results_sha256,
+        expected_execution_identity_sha256=(
+            frozen_identity.expected_identity_sha256
+            if frozen_identity is not None
+            else None
+        ),
+        expected_execution_identity_freeze_sha256=(
+            frozen_identity.freeze_sha256 if frozen_identity is not None else None
+        ),
         expected_task_ids=expected,
         observed_task_ids=observed,
         verified_tasks=tuple(verified),
