@@ -211,6 +211,31 @@ def test_exact_query_includes_host_curated_spelling_variants():
     assert '"in-hospital mortality"[Title/Abstract]' in exact
 
 
+def test_broad_query_does_not_expand_modified_shock_index_to_generic_singletons():
+    from easyicu.research_agent.discovery.idea_mining_priorart import (
+        build_prior_art_queries,
+    )
+
+    idea = LiteratureIdeaCandidate(
+        source_snapshot_id="source-snapshot/sha256:test",
+        citation_key="profile",
+        source_adapter_level="metadata_only",
+        population="adult ICU stays",
+        exposure_or_predictor="modified shock index",
+        outcome="acute kidney injury",
+        rationale="cross-database transportability candidate",
+        source_quote="test",
+        exposure_core_concept="modified_shock_index",
+        outcome_core_concept="kdigo_aki",
+    )
+
+    broad = build_prior_art_queries(idea)["broad"]
+    assert '"modified shock index"[Title/Abstract]' in broad
+    assert '"shock index"[Title/Abstract]' in broad
+    assert "modified[Title/Abstract]" not in broad
+    assert "shock[Title/Abstract]" not in broad
+
+
 def test_data_first_shortlist_separates_validation_from_measurement_audit(tmp_path):
     data_path = tmp_path / "prepared.parquet"
     data_path.write_bytes(b"frozen test cohort")
