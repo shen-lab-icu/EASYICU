@@ -10,6 +10,8 @@ from pydantic import ValidationError
 from easyicu.research_agent.agents.core import (
     PlannerAgent,
     _build_planner_user_prompt,
+    _canonicalise_figure_output_alias,
+    _is_untyped_figure_alias_output,
     _normalise_plan_payload,
 )
 from easyicu.research_agent.schema import (
@@ -163,6 +165,117 @@ def test_plan_normalizer_preserves_planned_analysis_role() -> None:
     )
     assert normalized["steps"][0]["planned_analysis_role"] == "secondary"
     assert not dropped["steps"]
+
+
+@pytest.mark.parametrize(
+    ("token", "expected"),
+    [
+        ("fig:missingness_measurement", "figure:missingness_measurement"),
+        ("plot:adjusted_associations", "figure:adjusted_associations"),
+        ("chart:stage_outcomes", "figure:stage_outcomes"),
+        ("heatmap:coverage", "figure:coverage"),
+        ("fig: spaced_name ", "figure:spaced_name"),
+        # already canonical / non-figure / non-typed tokens are untouched
+        ("figure:primary_association", "figure:primary_association"),
+        ("table:table_one", "table:table_one"),
+        ("artifact:analysis_cohort", "artifact:analysis_cohort"),
+        ("fig_adjusted_associations", "fig_adjusted_associations"),
+        ("noseparator", "noseparator"),
+    ],
+)
+def test_canonicalise_figure_output_alias(token: str, expected: str) -> None:
+    assert _canonicalise_figure_output_alias(token) == expected
+
+
+def test_canonicalise_figure_output_alias_passes_through_non_strings() -> None:
+    sentinel = {"not": "a string"}
+    assert _canonicalise_figure_output_alias(sentinel) is sentinel
+
+
+def test_plan_normalizer_canonicalises_figure_output_aliases() -> None:
+    raw = json.loads(_raw_plan(include_role=True))
+    raw["steps"][0]["expected_outputs"] = [
+        "table:missingness_audit",
+        "fig:missingness_measurement",
+    ]
+    normalized, _dropped = _normalise_plan_payload(raw)
+    assert normalized["steps"][0]["expected_outputs"] == [
+        "table:missingness_audit",
+        "figure:missingness_measurement",
+    ]
+
+
+@pytest.mark.parametrize(
+    "token",
+    [
+        "fig_stage_outcomes",
+        "fig_adjusted_associations",
+        "fig_robustness",
+        "figure_gallery",
+        "plot_trend",
+        "chart_overview",
+        "heatmap_coverage",
+    ],
+)
+def test_untyped_figure_alias_output_is_detected(token: str) -> None:
+    assert _is_untyped_figure_alias_output(token) is True
+
+
+@pytest.mark.parametrize(
+    "token",
+    [
+        "figure:stage_outcomes",  # already typed
+        "fig:missingness_measurement",  # typed alias
+        "table:missingness_audit",  # non-figure typed
+        "analysis_cohort",  # non-figure bare token
+        "overview.png",  # legitimate bare image export
+        "figuration_summary",  # 'figure' is not the underscore head
+        "",
+    ],
+)
+def test_untyped_figure_alias_output_ignores_non_malformed(token: str) -> None:
+    assert _is_untyped_figure_alias_output(token) is False
+
+
+def test_plan_normalizer_rejects_e3_shaped_no_colon_figure_output() -> None:
+    """E3's planner emitted ``fig_stage_outcomes`` (underscore, no colon)."""
+
+    raw = json.loads(_raw_plan(include_role=True))
+    raw["steps"][0]["expected_outputs"] = [
+        "table:stage_stratified_outcomes",
+        "fig_stage_outcomes",
+    ]
+    with pytest.raises(ValueError, match="figure:stage_outcomes"):
+        _normalise_plan_payload(raw)
+
+
+def test_plan_normalizer_rejects_duplicate_figure_after_alias_collision() -> None:
+    """``fig:x`` and ``figure:x`` both normalise to ``figure:x`` -> one figure."""
+
+    raw = json.loads(_raw_plan(include_role=True))
+    raw["steps"][0]["expected_outputs"] = [
+        "fig:primary_association",
+        "figure:primary_association",
+    ]
+    with pytest.raises(ValueError, match="more than one output alias"):
+        _normalise_plan_payload(raw)
+
+
+def test_plan_normalizer_accepts_canonical_e3_figure_suite() -> None:
+    """The typed form of the whole E3 figure suite passes and is preserved."""
+
+    raw = json.loads(_raw_plan(include_role=True))
+    raw["steps"][0]["expected_outputs"] = [
+        "figure:stage_outcomes",
+        "plot:adjusted_associations",
+        "chart:robustness",
+    ]
+    normalized, _dropped = _normalise_plan_payload(raw)
+    assert normalized["steps"][0]["expected_outputs"] == [
+        "figure:stage_outcomes",
+        "figure:adjusted_associations",
+        "figure:robustness",
+    ]
 
 
 def test_planner_parse_requires_explicit_role_despite_schema_default() -> None:
