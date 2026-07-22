@@ -12,10 +12,14 @@ acquire paper authority.
 
 Hard boundaries (enforced by :mod:`benchmarks.figure2_canonical9.preflight.harness`):
 
-* **Zero external Provider.** Every run uses a ``MockLLMClient`` subclass
-  (``__easyicu_mock_client__ is True``); ``external_provider_calls == 0`` is
-  asserted on every run.  What a *real* model would plan or code — plan/code
-  *quality* — is explicitly out of scope and is the documented Provider boundary.
+* **Zero external Provider.** Every run executes inside a fail-closed transport
+  spy that replaces the real lowest-layer HTTP transport
+  (``httpx.Client.send`` / ``httpx.AsyncClient.send``) with a counter that raises
+  on first use; ``external_provider_calls == 0`` (the *measured* spy count) is
+  asserted on every run.  This is the authoritative boundary — the
+  ``__easyicu_mock_client__`` / ``llm_is_mockish`` markers are forgeable and are
+  recorded only as descriptive colour.  What a *real* model would plan or code —
+  plan/code *quality* — is out of scope and is the documented Provider boundary.
 * **Zero patient data.** Cohorts are tiny in-memory synthetic frames.
 * **No paper authority.** These runs are diagnostic-only; the production
   Figure 2 acceptance gate rejects them (asserted).  The fixtures never modify a
