@@ -243,6 +243,7 @@ def test_preplan_artifacts_are_registered_resume_safe_and_tamper_evident(
     assert prepared.selected_ids[0] == "aki_onset_prediction"
     receipt_path = tmp_path / "know_how_retrieval.json"
     prompt_path = tmp_path / "know_how_prompt.md"
+    resource_receipt_path = tmp_path / "resource_selection_receipt.json"
     receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
     assert receipt["selected"][0]["version"] == "1.0.0"
     assert len(receipt["selected"][0]["file_sha256"]) == 64
@@ -254,6 +255,13 @@ def test_preplan_artifacts_are_registered_resume_safe_and_tamper_evident(
     assert (
         evidence.get("know_how_prompt").sha256
         == hashlib.sha256(prompt_path.read_bytes()).hexdigest()
+    )
+    resource_receipt = json.loads(resource_receipt_path.read_text(encoding="utf-8"))
+    assert resource_receipt["provider_calls"] == 0
+    assert resource_receipt["authority"] == ("host_allowlist_then_deterministic_rank")
+    assert (
+        evidence.get("resource_selection_receipt").sha256
+        == hashlib.sha256(resource_receipt_path.read_bytes()).hexdigest()
     )
 
     prepare_preplan_know_how(

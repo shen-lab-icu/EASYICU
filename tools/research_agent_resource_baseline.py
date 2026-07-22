@@ -27,6 +27,7 @@ from typing import Any, Iterable
 
 from easyicu.research_agent.agents.core import PlannerAgent
 from easyicu.research_agent.know_how import KnowHowRegistry
+from easyicu.research_agent.resources import ResourceScheduler, ResourceSelectionQuery
 from easyicu.research_agent.schema import (
     CohortDescriptor,
     ConceptDescriptor,
@@ -114,6 +115,9 @@ SOURCE_FILES: tuple[str, ...] = (
     "src/easyicu/research_agent/know_how/registry.py",
     "src/easyicu/research_agent/planning/analysis_types.py",
     "src/easyicu/research_agent/planning/cohort_contract.py",
+    "src/easyicu/research_agent/resources/schema.py",
+    "src/easyicu/research_agent/resources/catalog.py",
+    "src/easyicu/research_agent/resources/scheduler.py",
     "src/easyicu/data/concept-dict.json",
 )
 
@@ -153,14 +157,20 @@ def _task_measurement(
     fixture: dict[str, Any], registry: KnowHowRegistry
 ) -> dict[str, Any]:
     context = _context(fixture)
-    hits = registry.retrieve(
-        query=context.research_question,
-        study_family=fixture["retrieval_family"],
-        database=context.cohort.database,
+    selection = ResourceScheduler.select_protocols(
+        registry=registry,
+        query=ResourceSelectionQuery(
+            purpose="planner",
+            query=context.research_question,
+            analysis_family=fixture["retrieval_family"],
+            database=context.cohort.database,
+            available_input_roles=fixture["concepts"],
+        ),
         available_concepts=fixture["concepts"],
         top_k=3,
     )
-    know_how_prompt = registry.render_prompt(hits) if hits else ""
+    hits = selection.hits
+    know_how_prompt = selection.prompt if hits else ""
     without_resources = PlannerAgent.request_metrics(context)
     with_resources = PlannerAgent.request_metrics(
         context,
@@ -182,6 +192,8 @@ def _task_measurement(
             for hit in hits
         ],
         "resource_selection_provider_calls": 0,
+        "resource_catalog_sha256": selection.receipt.catalog_sha256,
+        "resource_allowlist_sha256": selection.receipt.allowlist_sha256,
         "know_how_prompt_bytes": len(know_how_prompt.encode("utf-8")),
         "planner_without_resources": without_resources,
         "planner_with_resources": with_resources,

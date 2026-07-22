@@ -597,6 +597,13 @@ class KnowHowRegistry:
         except KeyError as exc:
             raise KeyError(f"unknown know-how card_id: {card_id}") from exc
 
+    def source_sha256(self, card_id: str) -> str:
+        """Return the exact source-file digest for one validated card."""
+        try:
+            return self._entries[card_id].file_sha256
+        except KeyError as exc:
+            raise KeyError(f"unknown know-how card_id: {card_id}") from exc
+
     def verify_hit_source(self, hit: KnowHowHit) -> None:
         entry = self._entries.get(hit.card_id)
         if entry is None:
