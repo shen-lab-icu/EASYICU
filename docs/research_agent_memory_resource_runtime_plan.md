@@ -1,6 +1,6 @@
-# EasyICU Research Agent：记忆、资源调度与 LangGraph 渐进接入计划
+# EasyICU Research Agent：实验前完整架构优化计划（v2）
 
-状态：`approved_design / implementation_not_started`
+状态：`framework_first_approved_design / implementation_not_started`
 日期：2026-07-22
 适用范围：Research Agent；不得改变患者数据、EvidenceStore、provider receipt、capsule 或 paper authority。
 
@@ -8,12 +8,18 @@
 
 EasyICU 复用 LangChain/LangGraph 的通用运行原语，但不把科研权威交给通用 Agent 框架。
 
-投稿前只完成两个能够直接提高可靠性或降低上下文负担的边界：
+用户最新决定：**九题实验全部暂停，先完成本文件定义的架构优化与离线发布门。** 不以“已有 PoC”或“已经能跑”为完成标准。
 
-1. Host-owned Resource Scheduler：按任务/步骤选择少量 ProtocolCard、Action 和软件能力。
-2. 分层长期记忆底座：用户偏好和已审核知识可读；运行经验先隔离，不能直接改变 canonical 科学计划。
+实验前完成六个有限边界：
 
-投稿前不重写整个执行引擎，不把 `ResearchAgentPipeline` 改造成自由 ReAct Agent，也不允许运行中联网安装软件。LangGraph 的完整默认执行迁移放到 Canonical9 冻结后。
+1. 测量与架构基线。
+2. Host-owned Resource Scheduler 与 bounded context。
+3. 分层长期记忆及经验晋升机制。
+4. Action/software/data 能力目录与受控 CapabilityRequest。
+5. LangGraph 默认编排迁移及 HITL/persistence 接线。
+6. 旧路径退役、减法清理和无 API 的九题离线发布验收。
+
+不把 `ResearchAgentPipeline` 改造成自由 ReAct Agent，也不允许运行中联网安装软件。LangGraph 只编排现有职责节点，不接管 EasyICU 科学/证据 authority。新路径验收后必须删除或退役等价旧路径，不能长期维持两套实现。
 
 ## 2. 当前基线
 
@@ -145,7 +151,7 @@ Prompt 固定分区：
 - Resource Scheduler 不增加 provider call。
 - 上下文大小不随 step 数线性增长。
 
-## 8. Work package R4：受控的新方法/软件流程
+## 8. Work package R4：Action/Software/Data 资源面与受控的新方法流程
 
 用户提出新包或新方法时生成 `CapabilityRequest`：
 
@@ -159,7 +165,13 @@ sandbox requirements
 requester and approval
 ```
 
-流程：request → human approval → isolated build → vulnerability/license check → focused validation → immutable image digest → capability registry。
+统一资源面包含：
+
+- Action：Table 1、missingness、typed input、模型诊断、图件等经过测试的动作 schema。
+- Software：当前环境已安装、版本固定、可在沙盒内调用的 Python/R 包。
+- Data：用户已提供并经过 fingerprint/typed contract 的本地数据库或导出。
+
+新增方法流程：request → human approval → isolated build → vulnerability/license check → focused validation → immutable image digest → capability registry。
 
 硬边界：
 
@@ -167,9 +179,9 @@ requester and approval
 - Coder 不得执行 `pip install`、conda install 或任意 shell installer。
 - 未注册能力 fail-close，并给用户可执行的 capability request，而不是伪装成“方法不支持”。
 
-R4 不阻塞 Canonical9；先保留现有 `methods` extra 和 curated package contract。
+实验前完成 CapabilityRequest、批准状态、版本/镜像绑定和 fail-closed 响应；不要求在实验前扩充大量包或数据库。框架必须证明用户申请一个新方法时有明确入口，而不是让 Coder 临时安装。
 
-## 9. Work package R5：LangGraph 默认运行迁移（Canonical9 后）
+## 9. Work package R5：LangGraph 默认运行迁移
 
 迁移方式不是重写业务逻辑，而是把现有 phase 作为节点：
 
@@ -181,30 +193,81 @@ Plan → Acquire → ExecuteStep → Gate → Repair/Continue → Seal → Revie
 - LangGraph checkpointer 用于运行连续性和 HITL；EasyICU receipt/capsule 仍决定是否允许重放或付费。
 - interrupt 用于 ProtocolCard、CapabilityRequest 和科学 stop condition 的人工确认。
 - 新旧 dispatch 对同一录制输入做 shadow replay；产物 SHA、provider receipt 和终态一致后才切默认。
+- 切换后删除 opt-in PoC 与不再使用的直线 dispatch 分支；公共 CLI/API 只保留一个默认运行面。
 
-## 10. 执行顺序
+## 10. Work package R6：减法清理与离线发布门
 
-### 投稿前（有界，最多三个独立提交）
+必须完成的退役决策：
 
-1. R0：测量与资源选择 fixture。
-2. R1+R3：确定性 Resource Scheduler + bounded context，先只接 Planner/Coder Prompt 装配。
-3. R2：MemoryStore schema/namespace/policy；canonical 保持 quarantine memory OFF。
-4. 离线 Canonical9 资源矩阵和固定响应 component replay 全绿。
-5. 继续 E2/E3/H2，完成 9/9 development，冻结 commit/model/prompt/data/profile/retry policy。
+- 旧 `RunMemory`/`ExperienceBank` 不再直接拼接 Planner Prompt；迁入 quarantine adapter 后删除旧注入路径。
+- Know-How、Action、Software 统一由 Resource Scheduler 投影；不再分别向 `notes` 或通用 context 重复注入。
+- `graph.py` 的 PoC 只能升级为默认 runtime 或删除，不能继续作为第二执行路径。
+- 删除无生产入口、无公共 API 承诺、无归档复现需要的内部兼容代码；公共兼容面必须有明确 retirement 记录。
+- benchmark/论文包装不得反向 import 核心运行层。
 
-停止条件：若任一提交需要额外资源选择 LLM 调用、改变科学 authority、引入循环依赖、破坏 golden，或不能在两个 focused commits 内形成完整边界，则不在投稿前启用。
+离线发布门：
 
-### Canonical9 冻结后
+- Canonical9 九个 A 题全部完成 resource-selection fixture，不调用 provider。
+- 固定 Planner/Coder 响应做 component replay，覆盖 plan、execute、gate、repair、seal、resume、HITL。
+- 恶意 memory、错误工具、未批准软件、Prompt overflow、checkpoint 篡改和旧 receipt 重放均 fail-close。
+- architecture baseline、zero-SCC、semantic golden、module graph 全绿。
 
-1. R4 受控 capability workflow。
-2. R5 LangGraph shadow migration。
-3. B/C 冻结题比较：memory OFF vs reviewed/promoted memory ON。
-4. SOFA-2 使用冻结框架，不把其结果反向用于调 Canonical9。
+结构数字要求：
 
-## 11. 最终验收
+- 顶层 `research_agent/*.py` 不高于当前 21 个，禁止新增新顶层实现文件。
+- module graph 保持 0 cyclic modules / 0 SCC。
+- `execution/phase.py`、`pipeline.py` 不得增长；新增实现必须同步删除重复旧路径。
+- Resource/Memory/Runtime 三个边界各只有一个生产入口、一个 schema 和一个 receipt 体系。
+- 生产代码净增长必须有逐项说明；仅“增加抽象层”不算完成。
+
+## 11. 执行顺序
+
+### Bundle 0：测量冻结（R0）
+
+- 1 个提交：九题 Prompt 分段、资源选择、调用与架构基线。
+- 不改行为、不调用 API。
+
+### Bundle 1：统一资源与上下文（R1+R3）
+
+- 2–3 个提交：schema/catalog/receipt → deterministic scheduler → Planner/Coder context 接线并删除旧重复注入。
+- 九题离线资源矩阵、Prompt budget、negative controls 全绿。
+
+### Bundle 2：安全长期记忆（R2）
+
+- 2–3 个提交：Memory schema/policy → filesystem/LangGraph Store adapters → 旧 memory 注入退役。
+- canonical 只读 preferences 与 reviewed knowledge；quarantine experience 永不进入科学 Prompt。
+
+### Bundle 3：能力与新方法入口（R4）
+
+- 2 个提交：Action/software/data descriptors → CapabilityRequest/approval/image binding。
+- 不大规模增加工具；完成“已有能力按需暴露、缺失能力可申请”的通用路径。
+
+### Bundle 4：LangGraph 默认 runtime（R5）
+
+- 2–3 个提交：显式 phase/step graph → checkpoint/interrupt → shadow equivalence → 默认切换并删旧重复 dispatch。
+- Graph state 只持 authority references。
+
+### Bundle 5：减法与离线发布（R6）
+
+- 1–3 个提交：删除旧注入/PoC/死路径，完成九题固定响应 replay、对抗门和结构数字验收。
+- 形成唯一 framework-freeze commit、profile、Prompt pack、resource catalog 和 memory policy。
+
+### 实验解冻
+
+1. fresh 跑 Canonical9 A；框架 bug 必须先由离线 fixture 复现才允许修。
+2. A 完成后冻结，不再用 A 结果改共享框架。
+3. B/C 验证泛化与 memory OFF/ON。
+4. SOFA-2 使用冻结框架；不把 SOFA-2 变成第十个调参题。
+
+预计规模：5–6 个 bundle、10–15 个小提交。若保持逐批测试和审阅，现实工期约 3–5 个集中工作日；这会推迟九题结果，但避免再次中途换架构。
+
+停止条件：任何 bundle 若新增科学 authority、需要额外资源选择 LLM 调用、引入循环、破坏 golden，或只是把旧逻辑复制进新文件而未删除旧入口，则拒收并回到上一个可收提交。
+
+## 12. 最终验收
 
 - 安全：0 个未审核资源/经验进入 canonical Prompt；0 次运行时联网安装。
 - 可复现：resource/memory selection 全部有 digest receipt；同坐标跨进程一致。
 - 效率：资源选择 0 LLM 调用；普通步骤 Prompt 目标 ≤30 KB；无 step-history 线性膨胀。
 - 科学：Planner 的 exposure/outcome/cohort/method/estimand 权威不转移给 retriever 或 LangGraph。
-- 泛化：A 题用于开发；冻结后 B/C 验证；SOFA-2 是独立 discovery vignette，不是调参题。
+- 结构：无双 memory、双 context assembler、双 runtime 或双 capability truth；旧路径确实删除。
+- 泛化：架构先由离线九题和对抗 fixture 验收；fresh A 题只做在线验证，冻结后 B/C 验证；SOFA-2 是独立 discovery vignette，不是调参题。
