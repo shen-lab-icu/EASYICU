@@ -77,11 +77,7 @@ from .authority.figure_renderer import (
 )
 from .providers.cost import CostMeter, metered_role_resolver
 from .figures.distribution_availability import (
-    _distribution_availability_parent_digest_seal,
     _distribution_availability_figure_step_matches_parent,
-)
-from .figures.continuous_measurement_audit import (
-    _continuous_measurement_audit_parent_digest_seal,
 )
 from .figures.sealed_registry import sealed_renderer_adapter
 from .replication.envelope import (
@@ -9902,21 +9898,8 @@ def _sealed_renderer_parent_digest_seal(
 
     if adapter := sealed_renderer_adapter(repair_id):
         return adapter.seal(run_dir, figure_step_id)
-    distribution_id = (
-        "distribution_availability_publication_bundle_from_parent_outputs_v1"
-    )
-    if repair_id == distribution_id:
-        return _distribution_availability_parent_digest_seal(run_dir, figure_step_id)
-    if repair_id == "continuous_measurement_audit_publication_bundle_v1":
-        return _continuous_measurement_audit_parent_digest_seal(run_dir, figure_step_id)
     if repair_id == "absolute_risk_incidence_prevalence_publication_bundle_v1":
         return _absolute_risk_parent_digest_seal(run_dir, figure_step_id)
-    if repair_id == (
-        "ordered_category_distribution_availability_publication_bundle_v2"
-    ):
-        return _ordered_distribution_availability_parent_digest_seal(
-            run_dir, figure_step_id
-        )
     digests = _verified_direct_parent_artifact_digests(run_dir, figure_step_id)
     if not digests or "step_summary.json" not in digests:
         return None
@@ -10034,30 +10017,6 @@ def _render_authorized_sealed_publication_bundle(
             out_dir=out_dir,
             preverified_parent_artifacts=snapshot,
         )
-    elif repair_id == (
-        "distribution_availability_publication_bundle_from_parent_outputs_v1"
-    ):
-        from .figures.distribution_availability import (
-            render_distribution_availability_bundle_from_prior_outputs,
-        )
-
-        observed = render_distribution_availability_bundle_from_prior_outputs(
-            run_dir=run_dir,
-            current_step_id=current_step_id,
-            out_dir=out_dir,
-            preverified_parent_artifacts=snapshot,
-        )
-    elif repair_id == "continuous_measurement_audit_publication_bundle_v1":
-        from .figures.continuous_measurement_audit import (
-            render_continuous_measurement_audit_bundle,
-        )
-
-        observed = render_continuous_measurement_audit_bundle(
-            run_dir=run_dir,
-            current_step_id=current_step_id,
-            out_dir=out_dir,
-            preverified_parent_artifacts=snapshot,
-        )
     elif repair_id == "ordered_category_distribution_publication_bundle_v1":
         from .figures.ordered_distribution import (
             render_ordered_distribution_bundle_from_prior_outputs,
@@ -10068,20 +10027,6 @@ def _render_authorized_sealed_publication_bundle(
             current_step_id=current_step_id,
             out_dir=out_dir,
             preverified_parent_artifacts=snapshot,
-        )
-    elif repair_id == (
-        "ordered_category_distribution_availability_publication_bundle_v2"
-    ):
-        from .figures.ordered_distribution import (
-            render_ordered_distribution_bundle_from_prior_outputs,
-        )
-
-        observed = render_ordered_distribution_bundle_from_prior_outputs(
-            run_dir=run_dir,
-            current_step_id=current_step_id,
-            out_dir=out_dir,
-            preverified_parent_artifacts=snapshot,
-            authorized_repair_id=repair_id,
         )
     elif repair_id == "cohort_flow_publication_bundle_from_parent_outputs_v1":
         observed = _render_cohort_flow_publication_bundle_from_prior_outputs(
@@ -10177,22 +10122,6 @@ def deterministic_figure_repair_id_for_upstream(
     repair_id = candidates[0].repair_id
     if adapter := sealed_renderer_adapter(repair_id):
         return repair_id if adapter.seal(run_dir, step_id) is not None else None
-    if repair_id == (
-        "distribution_availability_publication_bundle_from_parent_outputs_v1"
-    ):
-        return (
-            repair_id
-            if _distribution_availability_parent_digest_seal(run_dir, step_id)
-            is not None
-            else None
-        )
-    if repair_id == "continuous_measurement_audit_publication_bundle_v1":
-        return (
-            repair_id
-            if _continuous_measurement_audit_parent_digest_seal(run_dir, step_id)
-            is not None
-            else None
-        )
     if repair_id == "absolute_risk_incidence_prevalence_publication_bundle_v1":
         required_tables = {"outcome_incidence.csv", "exposure_prevalence.csv"}
         return (

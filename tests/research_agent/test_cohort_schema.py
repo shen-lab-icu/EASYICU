@@ -619,6 +619,70 @@ def test_load_materialized_analysis_cohort_result_rejects_flow_tampering(
     assert load_materialized_analysis_cohort_result(run_dir=tmp_path, plan=plan) is None
 
 
+def test_load_materialized_analysis_cohort_result_rejects_parquet_tampering(
+    tmp_path: Path,
+) -> None:
+    """Same-row-count content drift must refuse adoption via the ledger digest."""
+    from easyicu.research_agent.cohort.schema import (
+        CohortDefinition,
+        load_materialized_analysis_cohort_result,
+        materialize_locked_analysis_cohort,
+    )
+
+    universe_path = tmp_path / "cohort.parquet"
+    pd.DataFrame({"age": [10, 18, 40, 70]}).to_parquet(universe_path, index=False)
+    plan = _plan_with_cohort(
+        CohortDefinition(name="adult", inclusion=(_age_predicate(0, 24),))
+    )
+    materialize_locked_analysis_cohort(
+        run_dir=tmp_path,
+        plan=plan,
+        universe_path=universe_path,
+    )
+    provenance = json.loads(
+        (tmp_path / "cohort_analysis_provenance.json").read_text(encoding="utf-8")
+    )
+    assert provenance["cohort_parquet_sha256"]
+
+    cohort_path = tmp_path / "cohort_analysis.parquet"
+    tampered = pd.read_parquet(cohort_path)
+    tampered.loc[tampered.index[0], "age"] = 999
+    tampered.to_parquet(cohort_path, index=False)
+    assert len(pd.read_parquet(cohort_path)) == provenance["n_analysis_cohort"]
+
+    assert load_materialized_analysis_cohort_result(run_dir=tmp_path, plan=plan) is None
+
+
+def test_load_materialized_analysis_cohort_result_rejects_pre_digest_ledger(
+    tmp_path: Path,
+) -> None:
+    """A pre-digest ledger cannot prove the original parquet content."""
+    from easyicu.research_agent.cohort.schema import (
+        CohortDefinition,
+        load_materialized_analysis_cohort_result,
+        materialize_locked_analysis_cohort,
+    )
+
+    universe_path = tmp_path / "cohort.parquet"
+    pd.DataFrame({"age": [10, 18, 40, 70]}).to_parquet(universe_path, index=False)
+    plan = _plan_with_cohort(
+        CohortDefinition(name="adult", inclusion=(_age_predicate(0, 24),))
+    )
+    materialize_locked_analysis_cohort(
+        run_dir=tmp_path,
+        plan=plan,
+        universe_path=universe_path,
+    )
+    provenance_path = tmp_path / "cohort_analysis_provenance.json"
+    provenance = json.loads(provenance_path.read_text(encoding="utf-8"))
+    del provenance["cohort_parquet_sha256"]
+    provenance_path.write_text(
+        json.dumps(provenance, indent=2, ensure_ascii=False), encoding="utf-8"
+    )
+
+    assert load_materialized_analysis_cohort_result(run_dir=tmp_path, plan=plan) is None
+
+
 def test_materialize_no_definition_returns_no_file(tmp_path: Path) -> None:
     from easyicu.research_agent.cohort.schema import (
         CohortDefinition,

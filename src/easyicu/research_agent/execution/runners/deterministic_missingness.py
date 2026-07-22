@@ -41,6 +41,9 @@ from __future__ import annotations
 
 import textwrap
 
+from ...planning.method_vocabulary import (
+    MISSINGNESS_SOURCE_AVAILABILITY_AUDIT,
+)
 from ...schema import AnalysisStep
 
 __all__ = [
@@ -60,7 +63,7 @@ def source_availability_audit_executor_owns_step(step: AnalysisStep) -> bool:
         if str(value or "").strip().startswith(("artifact:", "table:", "dataset:"))
     }
     return bool(
-        method == "missingness_and_source_availability_audit"
+        method == MISSINGNESS_SOURCE_AVAILABILITY_AUDIT
         and outputs == {"table:missingness_audit", "table:measurement_source_audit"}
         and typed_inputs == {"artifact:analysis_cohort"}
     )
@@ -93,26 +96,30 @@ def missingness_measurement_audit_code() -> str:
         n_total = int(len(df))
 
         # --- research context: optional explicit concept list ------------------
+        # Both files below are host-owned. An ABSENT file is a legitimate
+        # legacy state (broad discovery mode); a present-but-unparseable file
+        # must fail this step loudly — swallowing it would silently change the
+        # audit scope from the declared inputs to every paired concept.
         req_concepts = []
         requested_inputs = []
         requested_outputs = []
-        try:
-            ctx = json.loads((run_dir / "research_context.json").read_text("utf-8"))
+        context_path = run_dir / "research_context.json"
+        if context_path.is_file():
+            ctx = json.loads(context_path.read_text("utf-8"))
             prefs = ctx.get("user_preferences") or {}
             if isinstance(prefs, dict):
                 for key in ("audit_concepts", "feature_concepts", "concepts", "features"):
                     vals = prefs.get(key)
                     if isinstance(vals, (list, tuple)):
                         req_concepts.extend(str(v).strip() for v in vals if str(v).strip())
-        except Exception:
-            pass
 
         # The plan owns the complete-case contract.  Reading the current
         # step's declared inputs lets the deterministic audit emit the requested
         # analytic denominator instead of returning only a compact concept
         # count and falsely satisfying a richer step.
-        try:
-            plan = json.loads((run_dir / "analysis_plan.json").read_text("utf-8"))
+        plan_path = run_dir / "analysis_plan.json"
+        if plan_path.is_file():
+            plan = json.loads(plan_path.read_text("utf-8"))
             for planned_step in plan.get("steps") or []:
                 if str(planned_step.get("step_id") or "") == current_step_id:
                     requested_inputs = [
@@ -126,8 +133,6 @@ def missingness_measurement_audit_code() -> str:
                         if str(value).strip()
                     ]
                     break
-        except Exception:
-            pass
 
         cols = list(df.columns)
         low = {c.lower(): c for c in cols}

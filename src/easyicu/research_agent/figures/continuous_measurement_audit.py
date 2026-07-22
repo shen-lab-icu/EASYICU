@@ -35,8 +35,13 @@ from .publication import (
 )
 
 REPAIR_ID = "continuous_measurement_audit_publication_bundle_v1"
-CONTROLLED_METHOD = "right_skewed_distribution_and_measurement_availability_audit"
-COMPACT_CONTROLLED_METHOD = "distribution_summary_and_missingness_audit"
+from ..planning.method_vocabulary import (
+    DISTRIBUTION_SUMMARY_AND_MISSINGNESS_AUDIT,
+    RIGHT_SKEWED_DISTRIBUTION_AND_MEASUREMENT_AVAILABILITY_AUDIT,
+)
+
+CONTROLLED_METHOD = RIGHT_SKEWED_DISTRIBUTION_AND_MEASUREMENT_AVAILABILITY_AUDIT
+COMPACT_CONTROLLED_METHOD = DISTRIBUTION_SUMMARY_AND_MISSINGNESS_AUDIT
 
 _ROLE_SUFFIXES = {
     "distribution": ("distribution",),

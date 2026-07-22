@@ -264,6 +264,9 @@ from ..gates.semantics import (
     blocking_validator_findings as _blocking_validator_findings,
 )
 from ..providers.mocks import MockLLMClient
+from ..planning.method_vocabulary import (
+    MISSINGNESS_SOURCE_AVAILABILITY_AUDIT,
+)
 from ..planning.replan_gate import (
     replan_candidate_contract_findings,
     replan_candidate_rejection_finding,
@@ -1847,7 +1850,7 @@ _COMPACT_MISSINGNESS_METHODS = frozenset(
         "missingness_audit",
         "missingness",
         "measurement_audit",
-        "missingness_and_source_availability_audit",
+        MISSINGNESS_SOURCE_AVAILABILITY_AUDIT,
         "measurement_process_audit",
         "data_quality_audit",
         "data_quality",

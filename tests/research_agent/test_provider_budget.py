@@ -1502,6 +1502,7 @@ with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as hand
                         "steps": [
                             {
                                 "step_id": "01_summary",
+                                "planned_analysis_role": "primary",
                                 "intent": "Produce a descriptive cohort summary.",
                                 "inputs": ["stay_id"],
                                 "expected_outputs": ["table:cohort_summary"],
@@ -1546,6 +1547,7 @@ with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as hand
         enable_llm_concept_audit=True,
         enable_deterministic_code_fallback=False,
         enable_deterministic_runner_repair=False,
+        runner_kind="subprocess",
         max_step_provider_calls=2,
     )
     first = first_pipeline.run(
@@ -1580,6 +1582,7 @@ with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as hand
         enable_llm_concept_audit=True,
         enable_deterministic_code_fallback=False,
         enable_deterministic_runner_repair=False,
+        runner_kind="subprocess",
         max_step_provider_calls=2,
     )
     resumed_pipeline.run(
@@ -1670,6 +1673,7 @@ with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as hand
                         "steps": [
                             {
                                 "step_id": "01_summary",
+                                "planned_analysis_role": "primary",
                                 "intent": "Produce a descriptive cohort summary.",
                                 "inputs": ["stay_id"],
                                 "expected_outputs": ["table:cohort_summary"],
@@ -1748,6 +1752,7 @@ with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as hand
         enable_llm_concept_audit=True,
         enable_deterministic_code_fallback=False,
         enable_deterministic_runner_repair=False,
+        runner_kind="subprocess",
     )
     result = pipeline.run(
         question="Summarize the ICU cohort.",

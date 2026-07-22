@@ -362,6 +362,149 @@ def test_exact_missingness_source_contract_uses_sealed_renderer(
         assert (out / f"missingness_measurement_panel.{suffix}").stat().st_size > 0
 
 
+def _sealed_missingness_snapshot(
+    *,
+    kinds: list,
+    measured: list,
+) -> dict:
+    """Build a digest-preverified parent snapshot for the sealed renderer."""
+    import io as _io
+
+    n_total = [100] * len(kinds)
+    missing = [total - one for total, one in zip(n_total, measured)]
+    concepts = [f"concept_{index}" for index in range(len(kinds))]
+
+    def _csv(frame: pd.DataFrame) -> bytes:
+        buffer = _io.BytesIO()
+        frame.to_csv(buffer, index=False)
+        return buffer.getvalue()
+
+    missingness_bytes = _csv(
+        pd.DataFrame(
+            {
+                "concept": concepts,
+                "variable": concepts,
+                "value_column": [f"{name}_max" for name in concepts],
+                "n_total": n_total,
+                "n_nonmissing": measured,
+                "missing_n": missing,
+                "missing_pct": [100.0 * m / t for m, t in zip(missing, n_total)],
+            }
+        )
+    )
+    source_bytes = _csv(
+        pd.DataFrame(
+            {
+                "concept": concepts,
+                "variable": concepts,
+                "value_column": [f"{name}_max" for name in concepts],
+                "n_total": n_total,
+                "measured_one_n": measured,
+                "value_missing_n": missing,
+                "indicator_semantics": ["measurement_availability"] * len(kinds),
+                "missingness_kind": kinds,
+            }
+        )
+    )
+    summary_bytes = json.dumps(
+        {
+            "analysis_family": "data_quality",
+            "method": "missingness_and_source_availability_audit",
+            "output_files": {
+                "table:missingness_audit": "missingness_audit.csv",
+                "table:measurement_source_audit": "measurement_source_audit.csv",
+            },
+        }
+    ).encode("utf-8")
+    return {
+        "step_summary.json": summary_bytes,
+        "missingness_audit.csv": missingness_bytes,
+        "measurement_source_audit.csv": source_bytes,
+    }
+
+
+def test_sealed_missingness_renderer_accepts_structural_no_source(
+    tmp_path: Path,
+) -> None:
+    """A cross-database structural no-source row renders inside the sealed
+    figure (0% available, distinct label) instead of abandoning it."""
+    from easyicu.research_agent.figures.missingness_source import (
+        REPAIR_ID,
+        render_missingness_source_bundle,
+    )
+
+    out = tmp_path / "steps" / "03_audit_figure" / "outputs"
+    snapshot = _sealed_missingness_snapshot(
+        kinds=["measurement_missing", "structural_no_source"],
+        measured=[60, 0],
+    )
+    assert (
+        render_missingness_source_bundle(
+            run_dir=tmp_path,
+            current_step_id="03_audit_figure",
+            out_dir=out,
+            preverified_parent_artifacts=snapshot,
+        )
+        == REPAIR_ID
+    )
+    source = pd.read_csv(out / "missingness_measurement_panel_source_data.csv")
+    structural = source[source["missingness_kind"] == "structural_no_source"].iloc[0]
+    assert structural["available_pct"] == pytest.approx(0.0)
+    assert structural["missing_pct"] == pytest.approx(100.0)
+    assert (out / "missingness_measurement_panel.png").stat().st_size > 0
+    svg = (out / "missingness_measurement_panel.svg").read_text(encoding="utf-8")
+    assert "Measurement missing" in svg
+    assert "No source" in svg
+
+
+def test_sealed_missingness_renderer_refuses_flag_conflict_rows(
+    tmp_path: Path,
+) -> None:
+    """Flag/value discordance keeps refusing the sealed render (fallback path)."""
+    from easyicu.research_agent.figures.missingness_source import (
+        render_missingness_source_bundle,
+    )
+
+    out = tmp_path / "steps" / "03_audit_figure" / "outputs"
+    snapshot = _sealed_missingness_snapshot(
+        kinds=["measurement_missing", "measurement_flag_conflict"],
+        measured=[60, 70],
+    )
+    assert (
+        render_missingness_source_bundle(
+            run_dir=tmp_path,
+            current_step_id="03_audit_figure",
+            out_dir=out,
+            preverified_parent_artifacts=snapshot,
+        )
+        is None
+    )
+
+
+def test_sealed_missingness_renderer_refuses_contradictory_structural_row(
+    tmp_path: Path,
+) -> None:
+    """structural_no_source with a nonzero measured count is a contradiction."""
+    from easyicu.research_agent.figures.missingness_source import (
+        render_missingness_source_bundle,
+    )
+
+    out = tmp_path / "steps" / "03_audit_figure" / "outputs"
+    snapshot = _sealed_missingness_snapshot(
+        kinds=["measurement_missing", "structural_no_source"],
+        measured=[60, 5],
+    )
+    assert (
+        render_missingness_source_bundle(
+            run_dir=tmp_path,
+            current_step_id="03_audit_figure",
+            out_dir=out,
+            preverified_parent_artifacts=snapshot,
+        )
+        is None
+    )
+
+
 def test_missingness_split_figure_reads_only_its_direct_parent(tmp_path: Path):
     direct = tmp_path / "steps" / "05_agent_missingness" / "outputs"
     direct.mkdir(parents=True)

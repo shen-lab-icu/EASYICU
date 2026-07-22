@@ -1,18 +1,18 @@
 {
-  "tool_version": "1.7.0",
-  "tool_sha256": "b8f00369b2c46e39e412f0b58661bf624ad821f5e12daf1030df0f8a69866ed1",
+  "tool_version": "1.8.0",
+  "tool_sha256": "0975ad7ce136ed60980dc261a32ea09917ae3abc689b53aaf47ee964868391b4",
   "shim_import_paths": [],
   "files": {
     "execution/phase.py": {
-      "loc": 11462,
-      "sha256": "82e16da87b748efae6e10771bebf2e77205115671936d27f87c867531dd20eb0",
-      "intra_package_import_edges": 70,
+      "loc": 11387,
+      "sha256": "efcbb27f7e50550ae8a3e87009419c4f99bdcb24a94592d1530fd8852dcd88f6",
+      "intra_package_import_edges": 72,
       "shim_bypass_violations": []
     },
     "pipeline.py": {
-      "loc": 10787,
-      "sha256": "917f4865f76202cb69a2c02ca286a642e9a5c61e35afae403051d335fa0f1947",
-      "intra_package_import_edges": 90,
+      "loc": 10715,
+      "sha256": "20ce272851753254bcddd8408ac94aa46db5fb4a25570359b2a07d1e983a8726",
+      "intra_package_import_edges": 89,
       "shim_bypass_violations": []
     },
     "reporting/readiness.py": {
@@ -74,12 +74,48 @@
       "sha256": "d02272a43ae839986d937ee8b75570e7a9a493964bb803f338d47a3eb24bd878",
       "intra_package_import_edges": 2,
       "shim_bypass_violations": []
+    },
+    "audits/validators.py": {
+      "loc": 12989,
+      "sha256": "9f02379012766cebc0044a9a9dcaac8409f0c56e695865478028159357613c7b",
+      "intra_package_import_edges": 10,
+      "shim_bypass_violations": []
+    },
+    "plan_utils.py": {
+      "loc": 4977,
+      "sha256": "13876ed6e8a64b67a2c339d72cad26ac0afeae458891ba2db07f499c39704a6f",
+      "intra_package_import_edges": 9,
+      "shim_bypass_violations": []
+    },
+    "agents/core.py": {
+      "loc": 4059,
+      "sha256": "427f1b0c332a0cf382caca8eadbb3c29afe0e2eea3cce2c5a27be5f1578de1e1",
+      "intra_package_import_edges": 24,
+      "shim_bypass_violations": []
+    },
+    "contracts/declared_product.py": {
+      "loc": 3509,
+      "sha256": "020191665aaffa6aaf0066bfbb32d1cbb4691eb198a752a17027e9c6b602824e",
+      "intra_package_import_edges": 5,
+      "shim_bypass_violations": []
+    },
+    "figures/skill.py": {
+      "loc": 3458,
+      "sha256": "afc496813e00a94126bd9f16dd28664b4322b3c530b4c74efd92a1cfd6fd81f4",
+      "intra_package_import_edges": 7,
+      "shim_bypass_violations": []
+    },
+    "authority/evidence_store.py": {
+      "loc": 3151,
+      "sha256": "21f731df2a3ee48f58be11f3bfd7ffb6b0e7d57e6e2239ee4e931e177f09c493",
+      "intra_package_import_edges": 3,
+      "shim_bypass_violations": []
     }
   },
   "functions": {
     "execution/phase.py::_execute_one_step": {
       "lines": 6134,
-      "line_start": 4872,
+      "line_start": 4797,
       "direct_nested_funcs": 22,
       "total_nested_funcs": 24,
       "own_bound_names": 342,
@@ -90,8 +126,8 @@
       "callable_closure_captured_names": 30
     },
     "execution/phase.py::run_execute_phase": {
-      "lines": 7925,
-      "line_start": 3538,
+      "lines": 7845,
+      "line_start": 3543,
       "direct_nested_funcs": 15,
       "total_nested_funcs": 43,
       "own_bound_names": 145,

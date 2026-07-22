@@ -1860,11 +1860,10 @@ class DockerRunner:
                     errors="replace",
                 )
             except subprocess.TimeoutExpired as exc:
-                container_ref = self._container_reference(
+                container_ref = self._required_container_reference(
                     cidfile,
                     fallback_name=container_name,
                 )
-                assert container_ref is not None
                 teardown_confirmed, cleanup_note = self._teardown_container(
                     container_ref
                 )
@@ -1875,11 +1874,10 @@ class DockerRunner:
                     "Docker execution-runtime dependency capture timed out. "
                     + cleanup_note.strip()
                 ) from exc
-            container_ref = self._container_reference(
+            container_ref = self._required_container_reference(
                 cidfile,
                 fallback_name=container_name,
             )
-            assert container_ref is not None
             teardown_confirmed, cleanup_note = self._teardown_container(container_ref)
             if not teardown_confirmed:
                 raise RuntimeError(
@@ -2104,6 +2102,30 @@ class DockerRunner:
         ):
             return value
         return fallback_name
+
+    @staticmethod
+    def _required_container_reference(
+        cidfile: Path,
+        *,
+        fallback_name: str,
+    ) -> str:
+        """Resolve the container reference that teardown is about to act on.
+
+        With a non-empty ``fallback_name`` this cannot legitimately be None;
+        raise instead of asserting so the invariant survives ``python -O`` and
+        produces an actionable error if the naming contract ever changes.
+        """
+
+        container_ref = DockerRunner._container_reference(
+            cidfile,
+            fallback_name=fallback_name,
+        )
+        if container_ref is None:
+            raise RuntimeError(
+                "Docker container reference could not be resolved for teardown "
+                f"(cidfile={cidfile.name!r}, fallback_name={fallback_name!r})."
+            )
+        return container_ref
 
     def _teardown_container(self, container_ref: str) -> Tuple[bool, str]:
         """Stop, force-remove if needed, and wait for one container."""
@@ -2407,11 +2429,10 @@ class DockerRunner:
                 proc.stderr,
                 proc.returncode,
             )
-            container_ref = self._container_reference(
+            container_ref = self._required_container_reference(
                 cidfile,
                 fallback_name=container_name,
             )
-            assert container_ref is not None
             if returncode == 0:
                 teardown_confirmed, cleanup_note = (
                     self._confirm_successful_container_teardown(container_ref)
@@ -2427,11 +2448,10 @@ class DockerRunner:
             stderr = _as_text(exc.stderr) + (
                 f"\n[DockerRunner] timed out after {self.timeout_seconds}s\n"
             )
-            container_ref = self._container_reference(
+            container_ref = self._required_container_reference(
                 cidfile,
                 fallback_name=container_name,
             )
-            assert container_ref is not None
             teardown_confirmed, cleanup_note = self._teardown_container(container_ref)
             stderr += cleanup_note
             returncode = -1

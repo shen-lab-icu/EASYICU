@@ -63,6 +63,14 @@ class CohortDataError(KeyError):
     """Raised when materialised data cannot satisfy a CTAS definition."""
 
 
+def _file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with open(path, "rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 def _load_locked_cohort_definition(run_dir: Path) -> CohortDefinition:
     path = Path(run_dir) / COHORT_LOCK_FILENAME
     if not path.exists():
@@ -647,6 +655,11 @@ def materialize_locked_analysis_cohort(
     else:
         cohort = coerce_isfinite_safe_dtypes(cohort).reset_index(drop=True)
         cohort.to_parquet(out_path, index=False)
+        # Anchor the exact parquet bytes in the ledger: without this, a later
+        # plan-phase adoption could only verify definition digest + row count,
+        # leaving same-row-count content drift undetectable on the legacy /1
+        # branch (the typed-parent branch is anchored by its authority sidecar).
+        semantic_provenance["cohort_parquet_sha256"] = _file_sha256(out_path)
         (Path(run_dir) / f"{stem}_provenance.json").write_text(
             json.dumps(semantic_provenance, indent=2, ensure_ascii=False),
             encoding="utf-8",
@@ -691,6 +704,19 @@ def load_materialized_analysis_cohort_result(
         provenance = json.loads(provenance_path.read_text(encoding="utf-8"))
         expected_definition_sha = cohort_definition_sha(definition)
         if provenance.get("cohort_sha256") != expected_definition_sha:
+            return None
+        recorded_parquet_sha = str(
+            provenance.get("cohort_parquet_sha256") or ""
+        ).strip()
+        # This is an authority recovery path, not a best-effort cache.  A
+        # pre-digest ledger cannot prove which parquet bytes originally closed
+        # the plan-phase materialization, so it must not be promoted into a new
+        # successful checkpoint.  Fresh runs deterministically rematerialize
+        # the cohort and write the digest; legacy runs fail closed instead of
+        # silently blessing same-row-count content drift.
+        if not recorded_parquet_sha:
+            return None
+        if _file_sha256(cohort_path) != recorded_parquet_sha:
             return None
         flow = pd.read_csv(flow_path)
         if flow.empty:

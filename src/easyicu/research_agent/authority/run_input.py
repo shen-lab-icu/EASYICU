@@ -1466,8 +1466,9 @@ def _register_host_cohort_materialization(
         cohort_record = evidence.register_file(
             kind="table",
             description=(
-                "Analysis cohort materialised from the agent's prose 纳排, "
-                "translated to typed CTAS predicates during execution."
+                "Analysis cohort materialised from the agent's prose "
+                "inclusion/exclusion criteria, translated to typed CTAS "
+                "predicates during execution."
             ),
             source_path=cohort_path,
             evidence_id=_HOST_COHORT_MATERIALIZER_EVIDENCE_ID,

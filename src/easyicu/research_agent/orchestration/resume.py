@@ -281,8 +281,13 @@ class ResumeController:
             ("stop_after_step_id", self.stop_after_step_id),
         ):
             if step_id and self._initial_step_index(step_id) is None:
+                # Name the actual step ids: when planning degrades (for
+                # example every Planner candidate was rejected and only
+                # host-appended steps remain), the caller's first diagnostic
+                # question is "what plan was actually active?".
                 raise ValueError(
-                    f"{label}={step_id!r} is not in the active analysis plan."
+                    f"{label}={step_id!r} is not in the active analysis plan "
+                    f"(active step ids: {list(self._initial_step_order)})."
                 )
 
     def _initial_step_index(self, step_id: str) -> Optional[int]:
