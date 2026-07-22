@@ -12,6 +12,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 
 def _run_args(ra, cohort):
     return dict(
@@ -107,3 +109,68 @@ def test_human_review_interrupt_requires_digest_bound_approval() -> None:
     )
     assert resumed["final_result"] == "final"
     assert resumed["human_review_decisions"][0]["review_id"] == request.review_id
+
+
+def test_human_review_rejects_duplicate_request_ids_before_interrupt() -> None:
+    from easyicu.research_agent.graph import HumanReviewRequest, build_pipeline_graph
+
+    request = HumanReviewRequest.create(
+        kind="scientific_stop",
+        summary="Confirm an unresolved scientific stop",
+        authority_sha256="b" * 64,
+        payload={"finding": "positivity_not_established"},
+    )
+    graph = build_pipeline_graph(
+        plan_invoker=lambda: {"aborted_result": None},
+        execute_invoker=lambda _plan: "executed",
+        write_invoker=lambda _plan, _execute: "written",
+        finalise_invoker=lambda _plan, _execute, _write: "final",
+        human_review_invoker=lambda _plan: (request, request),
+    )
+
+    with pytest.raises(ValueError, match="requests must have unique review_id"):
+        graph.invoke({})
+
+
+def test_human_review_rejects_duplicate_decisions_including_reject_then_approve() -> (
+    None
+):
+    from langgraph.checkpoint.memory import InMemorySaver
+    from langgraph.types import Command
+
+    from easyicu.research_agent.graph import (
+        HumanReviewDecision,
+        HumanReviewRequest,
+        build_pipeline_graph,
+    )
+
+    request = HumanReviewRequest.create(
+        kind="capability_request",
+        summary="Approve tested package in immutable image",
+        authority_sha256="c" * 64,
+        payload={"request_id": "cap-duplicate"},
+    )
+    graph = build_pipeline_graph(
+        plan_invoker=lambda: {"aborted_result": None},
+        execute_invoker=lambda _plan: "executed",
+        write_invoker=lambda _plan, _execute: "written",
+        finalise_invoker=lambda _plan, _execute, _write: "final",
+        human_review_invoker=lambda _plan: (request,),
+        checkpointer=InMemorySaver(),
+    )
+    config = {"configurable": {"thread_id": "duplicate-review-test"}}
+    paused = graph.invoke({}, config=config)
+    assert paused["__interrupt__"]
+    decisions = [
+        HumanReviewDecision(
+            review_id=request.review_id,
+            authority_sha256=request.authority_sha256,
+            decision=decision,
+            reviewer="maintainer",
+            decided_at="2026-07-22T07:30:00Z",
+        ).model_dump(mode="json")
+        for decision in ("rejected", "approved")
+    ]
+
+    with pytest.raises(ValueError, match="decisions must have unique review_id"):
+        graph.invoke(Command(resume={"decisions": decisions}), config=config)

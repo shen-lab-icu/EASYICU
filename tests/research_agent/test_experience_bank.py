@@ -18,9 +18,8 @@ Pins:
 6. End-to-end: ``ResearchAgentPipeline.reflect_and_persist_experience``
    reads a ``run_status.json`` and writes back records via the bank
    when enabled; is a no-op when disabled.
-7. Planner integration: retrieved records are surfaced to the planner
-   prompt as advisory hints, with explicit language that ICU rules
-   still come from the concept dictionary and validators.
+7. Planner isolation: retrieved legacy records never enter Planner context;
+   completed-run lessons are mirrored only into permissioned quarantine.
 """
 
 from __future__ import annotations
@@ -480,6 +479,38 @@ def test_pipeline_does_not_surface_unreviewed_experience_to_planner_prompt(
     payload = json.loads(quarantined[0].read_text(encoding="utf-8"))
     assert payload["review_status"] == "quarantined"
     assert payload["namespace"].startswith("run_lessons/quarantine/")
+
+
+def test_permissioned_quarantine_mirror_failure_is_nonfatal_to_completed_run(
+    ra,
+    synthetic_cohort,
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    def _fail_quarantine(*_args, **_kwargs):
+        raise OSError("simulated quarantine storage failure")
+
+    monkeypatch.setattr(
+        "easyicu.research_agent.orchestration.finalize.quarantine_run_lesson",
+        _fail_quarantine,
+    )
+    pipeline = ra.ResearchAgentPipeline(
+        workdir=tmp_path / "runs",
+        llm=ra.MockLLMClient(),
+        enable_memory=True,
+        runner_kind="subprocess",
+    )
+
+    result = pipeline.run(
+        question="Does SOFA-2 predict mortality on MIMIC-IV?",
+        cohort=synthetic_cohort,
+        cohort_name="sepsis3_aware",
+        database="miiv",
+        target_outcome="death",
+        stop_after_analysis=True,
+    )
+
+    assert Path(result.manifest_path).exists()
 
 
 def test_pipeline_reflect_handles_missing_run_status(tmp_path: Path) -> None:

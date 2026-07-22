@@ -913,13 +913,19 @@ def finalise_success(
             workdir=run_dir,
         )
         if pipeline._permissioned_memory_store is not None:
-            quarantine_run_lesson(
-                pipeline._permissioned_memory_store,
-                run_id=run_id,
-                project=pipeline.workdir.name,
-                payload=memory_record.to_dict(),
-                created_at=memory_record.finished_at,
-            )
+            try:
+                quarantine_run_lesson(
+                    pipeline._permissioned_memory_store,
+                    run_id=run_id,
+                    project=pipeline.workdir.name,
+                    payload=memory_record.to_dict(),
+                    created_at=memory_record.finished_at,
+                )
+            except Exception as exc:  # pragma: no cover - defence in depth
+                logger.warning(
+                    "permissioned-memory quarantine mirror failed (non-fatal): %s",
+                    exc,
+                )
 
     result = PipelineResult(
         run_id=run_id,

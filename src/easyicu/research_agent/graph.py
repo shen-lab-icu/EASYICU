@@ -229,6 +229,9 @@ def build_pipeline_graph(
         requests = tuple(human_review_invoker(state["plan_result"]))
         if not requests:
             return {"human_review_decisions": ()}
+        request_ids = [item.review_id for item in requests]
+        if len(request_ids) != len(set(request_ids)):
+            raise ValueError("human review requests must have unique review_id values")
         from langgraph.types import interrupt
 
         raw = interrupt(
@@ -242,6 +245,9 @@ def build_pipeline_graph(
         decisions = tuple(
             HumanReviewDecision.model_validate(item) for item in raw["decisions"]
         )
+        decision_ids = [item.review_id for item in decisions]
+        if len(decision_ids) != len(set(decision_ids)):
+            raise ValueError("human review decisions must have unique review_id values")
         expected = {item.review_id: item for item in requests}
         observed = {item.review_id: item for item in decisions}
         if set(observed) != set(expected):
