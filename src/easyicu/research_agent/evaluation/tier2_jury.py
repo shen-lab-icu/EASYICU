@@ -477,6 +477,8 @@ def _alpha_by_dimension(
 
 
 def _render_prompt(run_artifact_bundle: Dict[str, str], rubric: JuryRubric) -> str:
+    from ..research_context.outbound import project_outbound_artifact_bundle
+
     run_id = _run_id_from_bundle(run_artifact_bundle)
     lines = [
         "EasyICU Tier-2 process-quality jury",
@@ -493,8 +495,8 @@ def _render_prompt(run_artifact_bundle: Dict[str, str], rubric: JuryRubric) -> s
         for value in sorted(dimension.anchors):
             lines.append(f"  {value}: {dimension.anchors[value]}")
     lines.extend(["", f"Run id: {run_id}", "", "Artifact bundle:"])
-    for name in sorted(k for k in run_artifact_bundle if not k.startswith("__")):
-        lines.extend([f"--- {name} ---", run_artifact_bundle[name].strip(), ""])
+    safe_bundle = project_outbound_artifact_bundle(run_artifact_bundle)
+    lines.append(json.dumps(safe_bundle, sort_keys=True, separators=(",", ":")))
     return "\n".join(lines).rstrip() + "\n"
 
 

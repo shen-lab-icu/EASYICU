@@ -21,6 +21,7 @@ from easyicu.research_agent.discovery.idea_mining import (
 )
 from easyicu.research_agent.literature import CitationRecord
 from easyicu.research_agent.providers.llm import LLMMessage
+from easyicu.research_agent.providers.factory import register_offline_test_client
 
 SNAPSHOT = "source-snapshot/sha256:novopt"
 QUOTE = "future work should study this predictor of mortality in a subgroup"
@@ -32,9 +33,9 @@ SOURCE_TEXT = (
 
 class ScriptedLLM:
     name = "scripted-llm"
-    __easyicu_mock_client__ = True
 
     def __init__(self, responses: Sequence[object]):
+        register_offline_test_client(self)
         self.responses = list(responses)
         self.calls = 0
         self.messages: Sequence[LLMMessage] = ()

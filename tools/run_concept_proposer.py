@@ -153,8 +153,11 @@ def main() -> None:
 
     client = _make_llm(provider="openai", model=args.model, request_timeout=600.0)
 
+    from easyicu.research_agent.providers.factory import authorized_complete
+
     def complete(system: str, user: str) -> str:
-        return client.complete(
+        return authorized_complete(
+            client,
             [
                 LLMMessage(role="system", content=system),
                 LLMMessage(role="user", content=user),

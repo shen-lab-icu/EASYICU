@@ -34,14 +34,15 @@ from easyicu.research_agent.discovery.hypothesis_generator import (
 )
 from easyicu.research_agent.literature import CitationRecord
 from easyicu.research_agent.providers.llm import LLMMessage
+from easyicu.research_agent.providers.factory import register_offline_test_client
 from easyicu.research_agent.schema import ConceptDescriptor, VariableRole
 
 
 class CapturingIdeaLLM:
     name = "capturing-idea-llm"
-    __easyicu_mock_client__ = True
 
     def __init__(self, response: object):
+        register_offline_test_client(self)
         self.response = response
         self.messages: Sequence[LLMMessage] = ()
 
@@ -2187,9 +2188,9 @@ class _BatchAwareIdeaLLM:
     """Returns one idea per material present in each batch; records call count."""
 
     name = "batch-aware-idea-llm"
-    __easyicu_mock_client__ = True
 
     def __init__(self) -> None:
+        register_offline_test_client(self)
         self.calls = 0
         self.batch_sizes: list[int] = []
 
@@ -2647,9 +2648,9 @@ class SequenceIdeaLLM:
     """Mock LLM returning a scripted response per call (extract, then refine...)."""
 
     name = "sequence-idea-llm"
-    __easyicu_mock_client__ = True
 
     def __init__(self, responses):
+        register_offline_test_client(self)
         self.responses = list(responses)
         self.calls = 0
 

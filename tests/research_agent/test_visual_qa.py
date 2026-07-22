@@ -4,6 +4,13 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from easyicu.research_agent.providers.factory import register_offline_test_client
+
+
+def _offline(client):
+    register_offline_test_client(client)
+    return client
+
 
 def _write_plot(path: Path) -> None:
     import matplotlib
@@ -26,7 +33,6 @@ def test_visual_qa_vlm_adapter_appends_findings(ra, tmp_path: Path):
 
     class _VisionLLM:
         name = "vision"
-        __easyicu_mock_client__ = True
 
         def __init__(self):
             self.seen_paths = None
@@ -44,7 +50,7 @@ def test_visual_qa_vlm_adapter_appends_findings(ra, tmp_path: Path):
         VisualQAAuditor,
     )
 
-    llm = _VisionLLM()
+    llm = _offline(_VisionLLM())
     findings = VisualQAAuditor(
         vlm_adapter=VLMVisualQAAdapter(llm),
     ).audit(figure_paths=[fig_path])
@@ -59,7 +65,6 @@ def test_visual_qa_vlm_adapter_appends_findings(ra, tmp_path: Path):
 def test_pipeline_enables_vlm_visual_qa_when_client_is_configured(ra, tmp_path: Path):
     class _VisionLLM:
         name = "vision"
-        __easyicu_mock_client__ = True
 
         def complete_with_images(self, *, prompt, image_paths, **kwargs):
             return '{"findings":[]}'
@@ -67,7 +72,7 @@ def test_pipeline_enables_vlm_visual_qa_when_client_is_configured(ra, tmp_path: 
     pipeline = ra.ResearchAgentPipeline(
         workdir=tmp_path,
         llm=ra.MockLLMClient(),
-        vlm_client=_VisionLLM(),
+        vlm_client=_offline(_VisionLLM()),
     )
 
     assert pipeline._enable_vlm_visual_qa is True
@@ -77,7 +82,6 @@ def test_pipeline_auto_enables_vlm_visual_qa_for_vision_capable_llm(ra, tmp_path
     class _VisionLLM:
         name = "vision"
         supports_vision = True
-        __easyicu_mock_client__ = True
 
         def complete(self, messages, *, max_tokens=2048, temperature=0.2):
             return '{"findings":[]}'
@@ -87,7 +91,7 @@ def test_pipeline_auto_enables_vlm_visual_qa_for_vision_capable_llm(ra, tmp_path
 
     pipeline = ra.ResearchAgentPipeline(
         workdir=tmp_path,
-        llm=_VisionLLM(),
+        llm=_offline(_VisionLLM()),
     )
 
     assert pipeline._enable_vlm_visual_qa is True
@@ -97,14 +101,13 @@ def test_pipeline_auto_disables_vlm_visual_qa_for_text_only_llm(ra, tmp_path: Pa
     class _TextOnlyLLM:
         name = "text-only"
         supports_vision = False
-        __easyicu_mock_client__ = True
 
         def complete(self, messages, *, max_tokens=2048, temperature=0.2):
             return '{"findings":[]}'
 
     pipeline = ra.ResearchAgentPipeline(
         workdir=tmp_path,
-        llm=_TextOnlyLLM(),
+        llm=_offline(_TextOnlyLLM()),
     )
 
     assert pipeline._enable_vlm_visual_qa is False

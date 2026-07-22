@@ -57,12 +57,11 @@ class MockLLMClient:
     """
 
     name = "mock"
-    # Explicit protocol marker: subclasses may choose a descriptive class/name
-    # that contains no ``mock`` token, but they remain deterministic offline
-    # clients and must not accidentally enable provider-backed concept audits.
-    __easyicu_mock_client__ = True
 
     def __init__(self, context: Optional[ResearchContext] = None) -> None:
+        from .factory import register_offline_test_client
+
+        register_offline_test_client(self)
         self.context = context
         # Populated by :meth:`complete` so a wrapping ``MeteredClient``
         # picks up deterministic token counts in tests / offline demo

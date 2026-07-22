@@ -66,6 +66,10 @@ from ..schema import (
 )
 from ..providers.protocol import LLMClient, LLMMessage
 from ..providers.factory import authorized_complete
+from ..research_context.outbound import (
+    format_outbound_safe_context,
+    outbound_safe_script,
+)
 from ..authority.provider_budget import (
     ProviderCallBudgetError,
     StepProviderCallBudget,
@@ -874,37 +878,11 @@ class LLMConceptAuditor:
             priority_variables + referenced_variables + remaining_variables
         )[:80]
 
-        variables = [
-            {
-                "name": v.name,
-                "description": v.description,
-                "role": v.role.value,
-                "unit": v.unit,
-                "source_concept": v.source_concept,
-                "observed_domain": v.observed_domain,
-                "is_ordinal": v.is_ordinal,
-                "ordinal_levels": v.ordinal_levels,
-                "range_policy": (
-                    {
-                        "plausibility_range": v.valid_range,
-                        "semantics": "flag_only",
-                        "out_of_range_action": "retain_and_flag",
-                    }
-                    if v.valid_range is not None
-                    else None
-                ),
-                "allowed_aggregations": [a.value for a in v.allowed_aggregations],
-                "pitfalls": v.pitfalls,
-                "clinical_caveats": v.clinical_caveats,
-                "cross_database_notes": v.cross_database_notes,
-                "analysis_window": v.analysis_window,
-                "missingness": (
-                    v.missingness.model_dump(mode="json")
-                    if v.missingness is not None else None
-                ),
-            }
-            for v in selected_variables
-        ]
+        safe_context = format_outbound_safe_context(
+            context,
+            variable_names={variable.name for variable in selected_variables},
+        )
+        safe_script = outbound_safe_script(step, script_text)
         return (
             "Review this generated analysis script for ICU concept-use risks "
             "that deterministic regex checks may miss. Focus only on: ordinal "
@@ -1036,10 +1014,10 @@ class LLMConceptAuditor:
                 default=str,
             )
             + "\n"
-            "Variables:\n"
-            + json.dumps(variables, ensure_ascii=False, default=str)
+            "Outbound-safe context:\n"
+            + safe_context
             + "\n\nScript:\n"
-            + _concept_audit_script_excerpt(script_text)
+            + _concept_audit_script_excerpt(safe_script)
         )
 
 

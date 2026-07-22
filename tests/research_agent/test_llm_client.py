@@ -7,7 +7,9 @@ import pytest
 
 
 def _mock_transport_client(client):
-    client.__easyicu_mock_client__ = True
+    from easyicu.research_agent.providers.factory import register_offline_test_client
+
+    register_offline_test_client(client)
     return client
 
 

@@ -4,13 +4,19 @@ import json
 
 import pytest
 
-from easyicu.research_agent.agents.core import CoderAgent
+from easyicu.research_agent.agents.core import (
+    AnalyzerAgent,
+    CoderAgent,
+    PlannerAgent,
+    WriterAgent,
+)
+from easyicu.research_agent.audits.validators import LLMConceptAuditor
 from easyicu.research_agent.authority.diagnostic_envelope import DiagnosticEnvelope
 from easyicu.research_agent.providers.llm import OpenAIClient
 from easyicu.research_agent.providers.factory import (
     EXTERNAL_LLM_NOT_AUTHORIZED,
-    ProviderAuthorization,
     ProviderConfigurationError,
+    authorize_provider_client,
 )
 from easyicu.research_agent.repairs.patch import PATCH_FORMAT
 from easyicu.research_agent.repairs.reasons import (
@@ -24,12 +30,13 @@ class _ExternalCaptureLLM(OpenAIClient):
 
     def __init__(self, responses):  # noqa: ANN001
         self._resolved_base_url = "https://api.example.invalid/v1"
-        self.__easyicu_provider_authorization__ = ProviderAuthorization.create(
+        authorize_provider_client(
+            self,
             provider="test-external",
             model="test-model",
             base_url=self._resolved_base_url,
             destination="external",
-            authorization_mode="operator_env",
+            environment={"EASYICU_ALLOW_EXTERNAL_LLM": "1"},
         )
         self.responses = list(responses)
         self.calls = []
@@ -264,8 +271,10 @@ def test_external_initial_prompt_withholds_observed_category_literals_and_extrem
     CoderAgent(llm).run(context=context, step=step)
 
     prompt = _all_prompt_text(llm)
-    assert "observed=CATEGORICAL n_unique=2" in prompt
-    assert "observed=NUMERIC n_unique=9" in prompt
+    assert '"shape":"categorical"' in prompt
+    assert '"shape":"numeric"' in prompt
+    assert '"n_unique":2' in prompt
+    assert '"n_unique":9' in prompt
     for forbidden in (
         "RARE_PRIVATE_ALPHA",
         "RARE_PRIVATE_BETA",
@@ -335,3 +344,99 @@ def test_external_scientific_repair_context_keeps_only_domain_shape(ra):
     assert '"n_unique":2' in prompt
     assert "PRIVATE_GROUP_A" not in prompt
     assert "PRIVATE_GROUP_B" not in prompt
+
+
+def test_every_agent_context_uses_the_same_outbound_safe_projection(ra):
+    context, step = _context_and_step(ra)
+    sentinel = "PRIVATE_FREE_TEXT_SENTINEL"
+    context = context.model_copy(
+        update={
+            "cohort": context.cohort.model_copy(
+                update={"inclusion_criteria": [sentinel]}
+            ),
+            "notes": sentinel,
+            "variables": [
+                context.variables[0].model_copy(
+                    update={
+                        "description": sentinel,
+                        "pitfalls": [sentinel],
+                        "clinical_caveats": [sentinel],
+                        "cross_database_notes": [sentinel],
+                        "valid_range": [771.125, 882.875],
+                        "observed_domain": {
+                            "levels": ["PRIVATE_LEVEL_A", "PRIVATE_LEVEL_B"],
+                            "n_unique": 2,
+                            "min": 771.125,
+                            "max": 882.875,
+                        },
+                    }
+                ),
+                context.variables[1],
+            ],
+        }
+    )
+
+    planner_prompt = "\n".join(
+        message.content for message in PlannerAgent.request_messages(context)
+    )
+    coder = _ExternalCaptureLLM(["value = 1\n"])
+    CoderAgent(coder).run(context=context, step=step)
+    analyzer = _ExternalCaptureLLM(["No numeric claim."])
+    AnalyzerAgent(analyzer).run(
+        context=context,
+        step=step,
+        step_summary={"n": 10},
+        evidence_ids=["result"],
+    )
+    writer = _ExternalCaptureLLM(["No unsupported claim."])
+    WriterAgent(writer)._call_section(
+        section_name="Methods",
+        instruction="Describe the registered design.",
+        context=context,
+        evidence_ids=["result"],
+        evidence_digest='{"n":10}',
+    )
+    auditor = _ExternalCaptureLLM(['{"findings":[]}'])
+    LLMConceptAuditor(auditor).audit(
+        context=context,
+        step=step,
+        script_text="value = 1\n",
+    )
+
+    outbound = (
+        planner_prompt
+        + "\n"
+        + "\n".join(
+            _all_prompt_text(client) for client in (coder, analyzer, writer, auditor)
+        )
+    )
+    for forbidden in (
+        sentinel,
+        "PRIVATE_LEVEL_A",
+        "PRIVATE_LEVEL_B",
+        "771.125",
+        "882.875",
+        '"observed_domain"',
+        '"valid_range"',
+    ):
+        assert forbidden not in outbound
+
+
+def test_jury_receives_artifact_identity_not_arbitrary_artifact_text():
+    from easyicu.research_agent.evaluation.tier2_jury import _render_prompt
+    from easyicu.research_agent.evaluation.tier2_rubric import NPJ_DM_RUBRIC_V1
+
+    sentinel = "PRIVATE_FREE_TEXT_SENTINEL"
+    prompt = _render_prompt(
+        {
+            "__run_id__": "run-safe",
+            "manifest.json": json.dumps(
+                {"observed_domain": [sentinel], "min": 1, "max": 9}
+            ),
+        },
+        NPJ_DM_RUBRIC_V1,
+    )
+
+    assert sentinel not in prompt
+    assert "observed_domain" not in prompt
+    assert '"sha256"' in prompt

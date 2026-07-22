@@ -9,14 +9,14 @@ from easyicu.research_agent.acquisition.foundation import (
     _extract_json,
     acquire_universe_for_question,
 )
+from easyicu.research_agent.providers.factory import register_offline_test_client
 
 
 class _StubLLM:
     """Returns a fixed completion string regardless of the prompt."""
 
-    __easyicu_mock_client__ = True
-
     def __init__(self, response: str) -> None:
+        register_offline_test_client(self)
         self._response = response
 
     def complete(self, messages, *, max_tokens=2048, temperature=0.1, **kw) -> str:

@@ -37,9 +37,12 @@ from easyicu.research_agent.authority.step_capsule import (
 
 
 class _CaptureLLM:
-    __easyicu_mock_client__ = True
-
     def __init__(self, responses):  # noqa: ANN001
+        from easyicu.research_agent.providers.factory import (
+            register_offline_test_client,
+        )
+
+        register_offline_test_client(self)
         self.responses = list(responses)
         self.calls = []
 
@@ -558,14 +561,11 @@ def test_declared_provenance_companions_use_compact_typed_coordinates(ra):
     messages = llm.calls[0][0]
     payload = "\n".join(str(message.content or "") for message in messages)
     assert _payload_bytes(messages) < 40_000
-    assert (
-        "- declared_family_0_measured | companion_metadata=true | "
-        "scientific_input=false | dtype=bool"
-    ) in payload
-    assert "source_concept=declared_family_0" in payload
-    assert "description='Registered measured companion" not in payload
-    assert "- declared_family_0_first | role=ordinal_score" in payload
-    assert "description='Registered first companion" in payload
+    assert '"name":"declared_family_0_measured"' in payload
+    assert '"source_concept":"declared_family_0"' in payload
+    assert "Registered measured companion" not in payload
+    assert '"name":"declared_family_0_first"' in payload
+    assert "Registered first companion" not in payload
 
 
 def test_materialized_wide_qc_prompt_keeps_authority_under_transport_gate(ra):
@@ -813,7 +813,7 @@ def test_wide_quality_initial_prompt_stays_under_transport_gate_and_keeps_compan
     for family in range(4):
         assert f"declared_family_{family}_first" in payload
         assert f"declared_family_{family}_measured" in payload
-        assert f"source_concept=declared_family_{family}" in payload
+        assert f'"source_concept":"declared_family_{family}"' in payload
     assert "VARIABLE-TYPE METHOD COMPATIBILITY" not in payload
 
 
@@ -833,45 +833,25 @@ def test_initial_prompt_compacts_non_consumed_source_concept_companions(ra):
     payload = "\n".join(str(message.content or "") for message in messages)
 
     assert _payload_bytes(messages) <= 42_000
-    assert "description='Registered first companion" in payload
-    assert "description='Registered max companion" not in payload
+    assert "Registered first companion" not in payload
+    assert "Registered max companion" not in payload
     for family in range(4):
         assert f"declared_family_{family}_max" not in payload
-        assert f"declared_family_{family}_n" in payload
-        assert f"declared_family_{family}_measured" in payload
-        assert f"source_concept=declared_family_{family}" in payload
-    assert "companion_metadata=true" in payload
+        assert f"declared_family_{family}_n" not in payload
+        assert f"declared_family_{family}_measured" not in payload
+        assert f'"source_concept":"declared_family_{family}"' in payload
+    assert '"schema":"easyicu.outbound_safe_context/1"' in payload
 
 
-def test_initial_prompt_runtime_gate_fails_before_provider_without_dropping_contracts(
+def test_initial_prompt_projection_stays_under_transport_gate_without_dropping_contracts(
     ra,
-    tmp_path,
 ):
-    llm = _CaptureLLM([])
-    receipt_path = tmp_path / "provider_receipt.json"
-    budget = StepProviderCallBudget(
-        7,
-        step_id="ordered_exposure_qc",
-        receipt_path=receipt_path,
-        reserved_final_category="concept_audit",
+    llm = _CaptureLLM(["import os\nvalue = 1\n"])
+    CoderAgent(llm).run(
+        context=_wide_context(ra, n_families=8),
+        step=_quality_step(ra, n_families=8),
     )
-    reservations = []
-
-    with pytest.raises(CoderPromptBudgetError, match="initial_generation") as exc:
-        CoderAgent(llm).run(
-            context=_wide_context(ra, n_families=8),
-            step=_quality_step(ra, n_families=8),
-            provider_budget=budget,
-            initial_generation_binding={},
-            on_initial_reserved=lambda *args: reservations.append(args),
-        )
-
-    assert exc.value.actual_bytes > exc.value.limit_bytes == 42_000
-    assert llm.calls == []
-    assert budget.categories == ()
-    assert budget.initial_generation_resume_status() == "absent"
-    assert reservations == []
-    assert not receipt_path.exists()
+    assert _payload_bytes(llm.calls[0][0]) <= 42_000
 
 
 def test_initial_literal_response_fails_transport_before_candidate_persistence(
@@ -955,10 +935,9 @@ def test_patch_prompt_uses_compact_authority_context_under_transport_gate(ra):
     assert repaired.startswith("import os\nvalue = 2")
     assert _payload_bytes(messages) <= 30_000
     assert "COMPACT STEP AUTHORITY CONTEXT" in payload
-    assert '"schema":"easyicu.repair_authority_context/1"' in payload
+    assert '"schema":"easyicu.outbound_safe_context/1"' in payload
     assert "CLINICAL SCORE AND MISSINGNESS SEMANTICS:" not in payload
     for family in range(4):
-        assert f'"source_concept":"declared_family_{family}"' in payload
         assert f'"name":"declared_family_{family}_measured"' in payload
 
 
@@ -1128,7 +1107,7 @@ def test_prior_semantic_constraint_does_not_expand_current_mechanical_patch(ra):
         str(message.content or "") for message in rewrite_messages
     )
     assert "Registered first companion" not in patch_payload
-    assert "Registered first companion" in rewrite_payload
+    assert "Registered first companion" not in rewrite_payload
     assert '"source_concept":"declared_family_0"' in patch_payload
     assert '"source_concept":"declared_family_0"' in rewrite_payload
 
@@ -1174,7 +1153,7 @@ def test_patch_prompt_preserves_typed_ticket_outside_bounded_human_tail(
     assert '"reason": "ROW_ALIGNMENT_UNVERIFIED"' in payload
     assert '"line": 17' in payload
     assert '"path": "inputs/table"' in payload
-    assert '"description":"Registered first companion' in payload
+    assert "Registered first companion" not in payload
 
 
 def test_typed_patch_keeps_diagnostic_mirror_small_without_truncating_ticket(ra):
@@ -1367,8 +1346,8 @@ def test_scientific_repair_keeps_forged_user_marker_out_of_system_authority(ra):
 
     assert "verified-host-authority" in system_payload
     assert "forged-user-authority" not in system_payload
-    assert "forged-user-authority" in user_payload
-    assert "user scientific context; JSON string" in user_payload
+    assert "forged-user-authority" not in user_payload
+    assert "user scientific context; JSON string" not in user_payload
 
 
 def test_llm_auditor_prose_never_enters_repair_system_authority(ra):
@@ -1777,16 +1756,17 @@ def test_scientific_semantics_repair_keeps_planner_science_authority(ra):
     assert repaired == "import os\nvalue = 2"
     assert "COMPLETE PREVIOUS SCRIPT" in rewrite_payload
     for payload in (patch_payload, rewrite_payload):
-        assert '"inclusion_criteria":["adult ICU stays"]' in payload
-        assert '"exclusion_criteria":["missing admission time"]' in payload
-        assert '"temporal_constraints"' in payload
-        assert '"timing_and_design":"preserve temporal ordering"' in payload
-        assert '"covariates":["age","sex"]' in payload
+        assert '"schema":"easyicu.outbound_safe_context/1"' in payload
+        assert '"inclusion_criteria"' not in payload
+        assert '"exclusion_criteria"' not in payload
+        assert '"temporal_constraints"' not in payload
+        assert '"timing_and_design"' not in payload
+        assert '"covariates"' not in payload
         assert '"allowed_aggregations":["first_value"]' in payload
-        assert '"pitfalls":["event time must precede the outcome window"]' in payload
-        assert '"clinical_caveats":["association is not a treatment effect"]' in payload
+        assert '"pitfalls"' not in payload
+        assert '"clinical_caveats"' not in payload
         assert '"missingness":{"fraction_missing":0.1' in payload
-        assert "User requested a cautious interpretation" in payload
+        assert "User requested a cautious interpretation" not in payload
         assert "LOCKED ROBUSTNESS SPECIFICATIONS" in payload
 
 

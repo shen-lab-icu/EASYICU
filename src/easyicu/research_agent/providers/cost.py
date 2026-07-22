@@ -210,6 +210,9 @@ class MeteredClient:
         self._role = role
         self._meter = meter
         self._model_override = model_override
+        from .factory import _register_provider_wrapper
+
+        _register_provider_wrapper(self, children_getter=lambda: (self._inner,))
 
     # The protocol methods the agents call.
 

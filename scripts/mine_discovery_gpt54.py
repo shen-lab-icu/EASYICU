@@ -64,6 +64,7 @@ from easyicu.research_agent.discovery.idea_scope import (  # noqa: E402
 )
 from easyicu.research_agent.providers.llm import OpenAIClient  # noqa: E402
 from easyicu.research_agent.providers.factory import (  # noqa: E402
+    authorized_complete,
     build_provider_client,
 )
 
@@ -236,7 +237,7 @@ def make_novelty_judge(llm: OpenAIClient):
             LLMMessage(role="system", content=_NOVELTY_JUDGE_SYSTEM),
             LLMMessage(role="user", content=json.dumps(payload, ensure_ascii=False)),
         ]
-        raw = llm.complete(messages, max_tokens=300, temperature=0.0)
+        raw = authorized_complete(llm, messages, max_tokens=300, temperature=0.0)
         text = raw[raw.find("{") : raw.rfind("}") + 1] if "{" in raw else "{}"
         data = json.loads(text)
         return {

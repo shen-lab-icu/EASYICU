@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import importlib.util
 import json
+import sys
 from pathlib import Path
 
 import pytest
@@ -16,6 +18,34 @@ from easyicu.research_agent.know_how import (
 )
 from easyicu.research_agent.agents.core import PlannerAgent, PlannerPromptBudgetError
 from easyicu.research_agent.schema import CohortDescriptor, ResearchContext
+
+
+def test_counting_client_remains_a_registered_planner_wrapper() -> None:
+    repo_root = Path(__file__).resolve().parents[2]
+    tool_path = repo_root / "tools/run_research_know_how_planner_ab.py"
+    spec = importlib.util.spec_from_file_location("easyicu_planner_ab_tool", tool_path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+
+    from easyicu.research_agent.providers.mocks import MockLLMClient
+
+    context = ResearchContext(
+        research_question="Describe the ICU cohort.",
+        cohort=CohortDescriptor(
+            cohort_name="synthetic",
+            database="synthetic",
+            n_patients=10,
+            n_stays=10,
+        ),
+        variables=[],
+    )
+    client = module.CountingClient(MockLLMClient(context), max_calls=2)
+    plan = PlannerAgent(client).run(context)
+
+    assert plan.steps
+    assert len(client.calls) == 1
 
 
 @pytest.mark.parametrize(
@@ -321,10 +351,13 @@ def test_complete_planner_request_budget_fails_before_provider_call() -> None:
             n_stays=10,
         ),
         variables=[],
-        notes="x" * 90_000,
     )
     llm = NeverCalled()
 
     with pytest.raises(PlannerPromptBudgetError, match="budget exceeded"):
-        PlannerAgent(llm).run(context)
+        PlannerAgent(llm).run(
+            context,
+            allowed_know_how_decisions={"oversized_card": {}},
+            know_how_context="x" * 90_000,
+        )
     assert llm.calls == 0

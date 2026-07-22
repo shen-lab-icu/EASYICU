@@ -61,7 +61,11 @@ class _ProviderCallForbidden:
     """Sentinel LLM proving the deterministic route never calls a provider."""
 
     name = "data-first-provider-forbidden"
-    __easyicu_mock_client__ = True
+
+    def __init__(self) -> None:
+        from ..providers.factory import register_offline_test_client
+
+        register_offline_test_client(self)
 
     def complete(
         self,

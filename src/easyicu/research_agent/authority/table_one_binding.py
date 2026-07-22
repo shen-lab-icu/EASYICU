@@ -167,9 +167,33 @@ def table_one_execution_spec(step: AnalysisStep) -> TableOneSpec | None:
     return binding.execution_spec
 
 
+def table_one_private_label_map(step: AnalysisStep) -> dict[tuple[str, str], str]:
+    """Map local execution labels to public opaque tokens for outbound copies."""
+
+    binding = step._table_one_execution_binding
+    planner = step.table_one_spec
+    if not isinstance(binding, TableOneExecutionBinding) or planner is None:
+        return {}
+    if binding.planner_spec_sha256 != table_one_spec_sha256(planner):
+        raise ValueError("stale Table 1 execution binding")
+    pairs: list[tuple[Any, Any]] = list(
+        zip(binding.execution_spec.group_levels, planner.group_levels)
+    )
+    for execution_variable, planner_variable in zip(
+        binding.execution_spec.variables, planner.variables
+    ):
+        pairs.extend(zip(execution_variable.levels, planner_variable.levels))
+    return {
+        (type(private).__name__, repr(private)): str(public)
+        for private, public in pairs
+        if private != public
+    }
+
+
 __all__ = [
     "TABLE_ONE_EXECUTION_BINDING_SCHEMA",
     "TableOneExecutionBinding",
     "bind_table_one_execution_spec",
+    "table_one_private_label_map",
     "table_one_execution_spec",
 ]

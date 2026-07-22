@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 
+import pandas as pd
 import pytest
 from pydantic import ValidationError
 
@@ -14,6 +15,8 @@ from easyicu.research_agent.agents.core import (
 from easyicu.research_agent.authority.table_one_binding import (
     table_one_execution_spec,
 )
+from easyicu.research_agent.audits.validators import LLMConceptAuditor
+from easyicu.research_agent.methods.table_one import build_grouped_table_one
 from easyicu.research_agent.providers.prompts import load_prompt_pack
 from easyicu.research_agent.repairs.patch import PATCH_FORMAT
 from easyicu.research_agent.repairs.reasons import (
@@ -224,9 +227,12 @@ def test_private_table_one_levels_use_opaque_tokens_and_bind_locally() -> None:
 
 def test_private_table_one_labels_never_enter_agent_prompts() -> None:
     class CaptureLLM:
-        __easyicu_mock_client__ = True
-
         def __init__(self, responses):  # noqa: ANN001
+            from easyicu.research_agent.providers.factory import (
+                register_offline_test_client,
+            )
+
+            register_offline_test_client(self)
             self.responses = list(responses)
             self.calls = []
 
@@ -256,11 +262,42 @@ def test_private_table_one_labels_never_enter_agent_prompts() -> None:
 
     revised_payload = plan.model_dump(mode="json")
     revised_payload["revision"] = plan.revision + 1
+    revised_payload["steps"][0]["method"] = "descriptive_statistics"
     replanner_llm = CaptureLLM([json.dumps(revised_payload)])
     revised = ReplannerAgent(replanner_llm).run(
         context=context,
         current_plan=plan,
+        probe_summary={"status": "complete", "private_label": "Female"},
+        completed_step_records=[
+            {
+                "step_id": "01_upstream",
+                "status": "ok",
+                "step_summary": {
+                    "group": "Female",
+                    "category": "NeverSmokerLocal",
+                },
+            }
+        ],
     )
+    assert revised.steps[0].method == "descriptive_statistics"
+    local_spec = table_one_execution_spec(revised.steps[0])
+    assert local_spec is not None
+    assert local_spec.group_levels == ["Female", "Male"]
+    table = build_grouped_table_one(
+        pd.DataFrame(
+            {
+                "sex": ["Female", "Female", "Male", "Male"],
+                "smoking_status": [
+                    "NeverSmokerLocal",
+                    "EverSmokerLocal",
+                    "NeverSmokerLocal",
+                    "EverSmokerLocal",
+                ],
+            }
+        ),
+        local_spec,
+    )
+    assert not table.empty
 
     coder_llm = CaptureLLM(["value = 1\n"])
     CoderAgent(coder_llm).run(context=context, step=revised.steps[0])
@@ -291,9 +328,25 @@ def test_private_table_one_labels_never_enter_agent_prompts() -> None:
         current_repair_authority=authority,
     )
 
+    concept_llm = CaptureLLM(['{"findings":[]}'])
+    LLMConceptAuditor(concept_llm).audit(
+        context=context,
+        step=revised.steps[0],
+        script_text=(
+            "groups = ['Female', 'Male']\n"
+            "levels = ['NeverSmokerLocal', 'EverSmokerLocal']\n"
+        ),
+    )
+
     all_messages = [
         message.content
-        for client in (planner_llm, replanner_llm, coder_llm, repair_llm)
+        for client in (
+            planner_llm,
+            replanner_llm,
+            coder_llm,
+            repair_llm,
+            concept_llm,
+        )
         for call in client.calls
         for message in call
     ]
