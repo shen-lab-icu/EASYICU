@@ -48,12 +48,13 @@ from .idea_mining_schema import (
 )
 
 DATA_FIRST_ROUTE_SCHEMA_VERSION = "easyicu.data_first_discovery_route/2"
-DATA_FIRST_SHORTLIST_SCHEMA_VERSION = "easyicu.data_first_review_shortlist/4"
+DATA_FIRST_SHORTLIST_SCHEMA_VERSION = "easyicu.data_first_review_shortlist/5"
 
 _MIN_EXTERNAL_VALIDATION_COMPLETENESS = 0.90
 _MIN_MEASUREMENT_AUDIT_COMPLETENESS = 0.20
 _MAX_MEASUREMENT_AUDIT_COMPLETENESS = 0.70
 _MAX_EXACT_HITS_FOR_EXTERNAL_VALIDATION_REVIEW = 25
+_MAX_EXTERNAL_VALIDATION_REVIEW_CANDIDATES = 3
 
 
 class _ProviderCallForbidden:
@@ -318,6 +319,8 @@ def _review_shortlist(
             "joint_completeness": round(completeness, 6),
             "requires_human_confirmation": True,
             "paper_authorized": False,
+            "resolved_predictor_concept": record.prior_art.feasibility_pair_key[0],
+            "resolved_outcome_concept": record.prior_art.feasibility_pair_key[1],
         }
         cross_db_prior_art = int(
             record.prior_art.evidence_map_counts.get(
@@ -460,8 +463,34 @@ def _review_shortlist(
         measurement_audit_by_predictor.values(), key=lambda item: item[0]
     )
     selected: list[dict[str, Any]] = []
-    if external_validation:
-        selected.append(external_validation[0][1])
+    selected_external: list[dict[str, Any]] = []
+    used_predictors: set[str] = set()
+    used_outcomes: set[str] = set()
+
+    # First maximize both predictor and outcome diversity.  A second pass fills
+    # the bounded list with new predictors when the caller supplied only one or
+    # two outcomes.  This avoids making a single brittle top-ranked pair the
+    # entire human-review surface while still preventing near-duplicate rows
+    # from consuming the review budget.
+    for require_new_outcome in (True, False):
+        for _, payload in external_validation:
+            if payload in selected_external:
+                continue
+            predictor = str(payload["resolved_predictor_concept"])
+            outcome = str(payload["resolved_outcome_concept"])
+            if predictor in used_predictors:
+                continue
+            if require_new_outcome and outcome in used_outcomes:
+                continue
+            selected_external.append(payload)
+            used_predictors.add(predictor)
+            used_outcomes.add(outcome)
+            if len(selected_external) >= _MAX_EXTERNAL_VALIDATION_REVIEW_CANDIDATES:
+                break
+        if len(selected_external) >= _MAX_EXTERNAL_VALIDATION_REVIEW_CANDIDATES:
+            break
+
+    selected.extend(selected_external)
     if measurement_audit:
         selected.append(measurement_audit[0][1])
     return selected

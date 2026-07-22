@@ -12,6 +12,7 @@ Output: a discovery_report.md + candidate_triage_report.json under --out-dir.
 Everything stops at the human gate (candidates are ``proposed``, never
 ``accepted``). API keys come from the environment; none are written to disk.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -406,7 +407,19 @@ def main() -> None:
     )
     ap.add_argument("--top-k", type=int, default=12)
     ap.add_argument("--prior-art-top-n", type=int, default=20)
-    ap.add_argument("--model", default="gpt5.4")
+    ap.add_argument(
+        "--prior-art-candidate-limit",
+        type=int,
+        default=12,
+        help="maximum mapped, data-feasible hypotheses sent to the expensive "
+        "prior-art screen (default: 12; extraction yield remains fully recorded)",
+    )
+    ap.add_argument(
+        "--model",
+        default="gpt-5.6-luna",
+        help="provider model id; must match the configured OpenAI-compatible "
+        "proxy exactly (default: gpt-5.6-luna)",
+    )
     ap.add_argument("--request-timeout", type=float, default=600.0)
     args = ap.parse_args()
 
@@ -479,7 +492,10 @@ def main() -> None:
     if not materials:
         raise SystemExit("no usable source materials fetched from PubMed")
 
-    print("[3/5] building real proxy LLM (gpt5.4) for idea extraction ...", flush=True)
+    print(
+        f"[3/5] building real proxy LLM ({args.model}) for idea extraction ...",
+        flush=True,
+    )
     llm = _make_llm(
         provider="openai", model=args.model, request_timeout=args.request_timeout
     )
@@ -560,6 +576,7 @@ def main() -> None:
         prior_art_search_client=search_client,
         prior_art_searched_at=harness._utc_now(),
         prior_art_top_n=args.prior_art_top_n,
+        prior_art_candidate_limit=args.prior_art_candidate_limit,
         untraceable_quote_policy="skip",
         source_item_index=source_item_index,
     )
