@@ -125,6 +125,13 @@ def _measurement_audit_query(idea: LiteratureIdeaCandidate) -> str:
     return " AND ".join([predictor, population, audit])
 
 
+def _has_external_validation_differentiation(prior_art: Any) -> bool:
+    """Reject exact-term gaps that only substitute a near-equivalent construct."""
+
+    adjacent = int(prior_art.evidence_map_counts.get("adjacent_icu_background", 0))
+    return adjacent == 0 or bool(prior_art.has_specific_differentiator)
+
+
 def _screen_measurement_audit_prior_art(
     *,
     idea: LiteratureIdeaCandidate,
@@ -321,6 +328,7 @@ def _review_shortlist(
             completeness >= _MIN_EXTERNAL_VALIDATION_COMPLETENESS
             and cross_db_prior_art == 0
             and exact_hits <= _MAX_EXACT_HITS_FOR_EXTERNAL_VALIDATION_REVIEW
+            and _has_external_validation_differentiation(record.prior_art)
         ):
             route = "cross_database_external_validation"
             payload = {
@@ -335,7 +343,8 @@ def _review_shortlist(
                 "selection_reason": (
                     "high prepared-cohort completeness, <=25 exact same-topic "
                     "PubMed hits, and no retrieved title classified as comparable "
-                    "cross-database/external-validation work"
+                    "cross-database/external-validation work; exact-term gaps with "
+                    "only an undifferentiated adjacent construct are excluded"
                 ),
                 "required_next_action": (
                     "human-review the exact hits and licensed/non-PubMed literature; "
