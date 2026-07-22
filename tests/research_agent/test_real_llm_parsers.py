@@ -189,6 +189,7 @@ def test_planner_uses_enough_completion_budget(ra):
 
     class _CapturingLLM:
         name = "dummy"
+        __easyicu_mock_client__ = True
 
         def __init__(self):
             self.kwargs = None
@@ -264,6 +265,7 @@ def test_writer_strips_markdown_fence(ra, tmp_path: Path):
 
     class _DummyLLM:
         name = "dummy"
+        __easyicu_mock_client__ = True
 
         def complete(self, messages, **kwargs):
             return raw
@@ -290,6 +292,7 @@ def test_writer_language_prompt_preserves_evidence_ids(ra):
 
     class _DummyLLM:
         name = "dummy"
+        __easyicu_mock_client__ = True
 
         def complete(self, messages, **kwargs):
             captured["prompt"] = messages[-1].content
@@ -325,6 +328,7 @@ def test_writer_prompt_discourages_tbd_and_manifest_narration(ra):
 
     class _DummyLLM:
         name = "dummy"
+        __easyicu_mock_client__ = True
 
         def complete(self, messages, **kwargs):
             for msg in messages:

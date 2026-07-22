@@ -8,6 +8,10 @@ from typing import Any
 
 import pandas as pd
 
+from ..authority.table_one_binding import (
+    bind_table_one_execution_spec,
+    table_one_execution_spec,
+)
 from ..methods.table_one import table_one_spec_sha256
 from ..schema import AnalysisStep, ValidationFinding
 
@@ -58,7 +62,7 @@ def table_one_output_findings(
 ) -> list[ValidationFinding]:
     """Verify grouped structure, tests, and missingness denominators."""
 
-    spec = step.table_one_spec
+    spec = table_one_execution_spec(step)
     if spec is None:
         return []
     if out_dir is None:

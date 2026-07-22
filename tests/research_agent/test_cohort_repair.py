@@ -18,6 +18,7 @@ from easyicu.research_agent.cohort.repair import (
 
 class _StubLLM:
     name = "stub"
+    __easyicu_mock_client__ = True
 
     def __init__(self, reply: str):
         self._reply = reply
@@ -74,7 +75,9 @@ def test_drops_predicates_on_unknown_columns():
 
 def test_rejects_unsupported_operator():
     llm = _StubLLM(
-        json.dumps({"inclusion": [{"concept_id": "age", "op": "between", "value": [18, 90]}]})
+        json.dumps(
+            {"inclusion": [{"concept_id": "age", "op": "between", "value": [18, 90]}]}
+        )
     )
     definition = extract_cohort_definition_from_prose(
         cohort_prose="adults", universe_columns=_COLUMNS, llm=llm

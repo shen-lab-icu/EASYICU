@@ -37,11 +37,13 @@ def test_name_and_model():
 def test_flatten_splits_system_and_transcript():
     from easyicu.research_agent.providers.llm import CLIAgentLLMClient, LLMMessage
 
-    system, convo = CLIAgentLLMClient._flatten([
-        LLMMessage(role="system", content="be terse"),
-        LLMMessage(role="user", content="hi"),
-        LLMMessage(role="assistant", content="hello"),
-    ])
+    system, convo = CLIAgentLLMClient._flatten(
+        [
+            LLMMessage(role="system", content="be terse"),
+            LLMMessage(role="user", content="hi"),
+            LLMMessage(role="assistant", content="hello"),
+        ]
+    )
     assert system == "be terse"
     assert "User:\nhi" in convo
     assert "Assistant:\nhello" in convo
@@ -96,7 +98,8 @@ def test_complete_nonzero_exit_raises(monkeypatch):
 
     monkeypatch.setattr(shutil, "which", lambda cmd: "/usr/bin/" + cmd)
     monkeypatch.setattr(
-        subprocess, "run",
+        subprocess,
+        "run",
         lambda argv, **kw: SimpleNamespace(returncode=1, stdout="", stderr="boom"),
     )
     with pytest.raises(RuntimeError):
@@ -109,12 +112,16 @@ def test_complete_accepts_and_ignores_extra_kwargs(monkeypatch):
 
     monkeypatch.setattr(shutil, "which", lambda cmd: "/usr/bin/" + cmd)
     monkeypatch.setattr(
-        subprocess, "run",
+        subprocess,
+        "run",
         lambda argv, **kw: SimpleNamespace(returncode=0, stdout="ok", stderr=""),
     )
     out = _client("codex").complete(
         [LLMMessage(role="user", content="hi")],
-        max_tokens=10, temperature=0.7, seed=1, top_p=0.9,
+        max_tokens=10,
+        temperature=0.7,
+        seed=1,
+        top_p=0.9,
     )
     assert out == "ok"
 
@@ -129,6 +136,7 @@ def test_exported_from_package():
 # build_llm_client capability ladder (concern #1: CLI is optional, never required)
 # ---------------------------------------------------------------------------
 
+
 def _patch_cli(monkeypatch, available):
     """Make only the named CLI backends appear installed."""
     import easyicu.research_agent.providers.llm as llm_mod
@@ -136,10 +144,14 @@ def _patch_cli(monkeypatch, available):
     def _which(cmd):
         return "/usr/bin/" + cmd if cmd in available else None
 
-    monkeypatch.setattr(llm_mod.shutil if hasattr(llm_mod, "shutil") else __import__("shutil"),
-                        "which", _which)
+    monkeypatch.setattr(
+        llm_mod.shutil if hasattr(llm_mod, "shutil") else __import__("shutil"),
+        "which",
+        _which,
+    )
     # cli_backend_available imports shutil locally, so patch the real module too
     import shutil as _shutil
+
     monkeypatch.setattr(_shutil, "which", _which)
 
 
@@ -147,6 +159,7 @@ def test_ladder_uses_cli_when_available(monkeypatch):
     from easyicu.research_agent.providers.llm import build_llm_client
 
     _patch_cli(monkeypatch, {"codex"})
+    monkeypatch.setenv("EASYICU_ALLOW_EXTERNAL_LLM", "1")
     sel = build_llm_client(prefer="codex")
     assert sel.backend == "codex"
     assert sel.fell_back is False

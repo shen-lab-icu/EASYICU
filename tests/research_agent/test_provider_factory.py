@@ -351,3 +351,81 @@ def test_unknown_provider_is_unmanaged_external_and_never_local_exempt():
             }
         ],
     }
+
+
+def test_unmanaged_custom_planner_is_rejected_before_complete(ra, monkeypatch):
+    from easyicu.research_agent.agents import PlannerAgent
+    from easyicu.research_agent.providers.factory import (
+        EXTERNAL_LLM_NOT_AUTHORIZED,
+        ProviderConfigurationError,
+    )
+
+    class CustomForwarder:
+        name = "custom-forwarder"
+
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def complete(self, *_args, **_kwargs):
+            self.calls += 1
+            raise AssertionError("an unmanaged provider must receive no prompt")
+
+    # The operator opt-in authorizes factory-bound external endpoints; it must
+    # not bless an unmanaged custom adapter with no endpoint authority.
+    monkeypatch.setenv("EASYICU_ALLOW_EXTERNAL_LLM", "1")
+    client = CustomForwarder()
+    context = ra.ResearchContext(
+        research_question="Test provider authorization.",
+        cohort=ra.CohortDescriptor(
+            cohort_name="synthetic",
+            database="synthetic",
+            n_stays=10,
+            n_patients=10,
+        ),
+        variables=[],
+    )
+    with pytest.raises(ProviderConfigurationError) as exc_info:
+        PlannerAgent(client).run(context)
+
+    assert exc_info.value.issue == EXTERNAL_LLM_NOT_AUTHORIZED
+    assert client.calls == 0
+
+
+@pytest.mark.parametrize("wrapper_kind", ["fallback", "router"])
+def test_unmanaged_provider_graph_child_is_rejected_before_any_call(
+    wrapper_kind: str,
+) -> None:
+    from easyicu.research_agent.providers.factory import (
+        EXTERNAL_LLM_NOT_AUTHORIZED,
+        ProviderConfigurationError,
+        authorized_complete,
+    )
+    from easyicu.research_agent.providers.llm import FallbackLLMClient, LLMRouter
+    from easyicu.research_agent.providers.mocks import MockLLMClient
+    from easyicu.research_agent.providers.protocol import LLMMessage
+
+    class CustomForwarder:
+        name = "custom-forwarder"
+
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def complete(self, *_args, **_kwargs):
+            self.calls += 1
+            return "must-not-run"
+
+    custom = CustomForwarder()
+    mock = MockLLMClient()
+    client = (
+        FallbackLLMClient(mock, custom)
+        if wrapper_kind == "fallback"
+        else LLMRouter(default=mock, planner=custom)
+    )
+    with pytest.raises(ProviderConfigurationError) as exc_info:
+        authorized_complete(
+            client,
+            [LLMMessage(role="user", content="must not leave host")],
+        )
+
+    assert exc_info.value.issue == EXTERNAL_LLM_NOT_AUTHORIZED
+    assert custom.calls == 0

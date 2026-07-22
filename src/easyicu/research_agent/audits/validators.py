@@ -65,6 +65,7 @@ from ..schema import (
     VariableRole,
 )
 from ..providers.protocol import LLMClient, LLMMessage
+from ..providers.factory import authorized_complete
 from ..authority.provider_budget import (
     ProviderCallBudgetError,
     StepProviderCallBudget,
@@ -752,8 +753,7 @@ class LLMConceptAuditor:
             raw = complete_with_provider_budget(
                 budget=provider_budget,
                 category="concept_audit",
-                call=lambda: self.llm.complete(
-                    [
+                call=lambda: authorized_complete(self.llm, [
                         LLMMessage(
                             role="system",
                             content=(

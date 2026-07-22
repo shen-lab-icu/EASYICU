@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import textwrap
 
+from ...authority.table_one_binding import table_one_execution_spec
 from ...icu_rules import companion_count_column_for_measured
 from ...schema import AnalysisStep
 
@@ -44,8 +45,9 @@ def table_one_executor_code(step: AnalysisStep) -> str:
 
     if not table_one_executor_owns_step(step):
         raise ValueError("The step is not owned by the grouped Table 1 executor")
-    assert step.table_one_spec is not None
-    specification = step.table_one_spec.model_dump(mode="python")
+    specification_model = table_one_execution_spec(step)
+    assert specification_model is not None
+    specification = specification_model.model_dump(mode="python")
     declared_inputs = {
         str(value).strip()
         for value in step.inputs

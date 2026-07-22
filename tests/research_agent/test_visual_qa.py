@@ -7,6 +7,7 @@ from pathlib import Path
 
 def _write_plot(path: Path) -> None:
     import matplotlib
+
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
@@ -25,6 +26,7 @@ def test_visual_qa_vlm_adapter_appends_findings(ra, tmp_path: Path):
 
     class _VisionLLM:
         name = "vision"
+        __easyicu_mock_client__ = True
 
         def __init__(self):
             self.seen_paths = None
@@ -37,7 +39,10 @@ def test_visual_qa_vlm_adapter_appends_findings(ra, tmp_path: Path):
                 '"detail":{"panel":"main"}}]}'
             )
 
-    from easyicu.research_agent.gates.visual_qa import VLMVisualQAAdapter, VisualQAAuditor
+    from easyicu.research_agent.gates.visual_qa import (
+        VLMVisualQAAdapter,
+        VisualQAAuditor,
+    )
 
     llm = _VisionLLM()
     findings = VisualQAAuditor(
@@ -54,6 +59,7 @@ def test_visual_qa_vlm_adapter_appends_findings(ra, tmp_path: Path):
 def test_pipeline_enables_vlm_visual_qa_when_client_is_configured(ra, tmp_path: Path):
     class _VisionLLM:
         name = "vision"
+        __easyicu_mock_client__ = True
 
         def complete_with_images(self, *, prompt, image_paths, **kwargs):
             return '{"findings":[]}'
@@ -71,6 +77,7 @@ def test_pipeline_auto_enables_vlm_visual_qa_for_vision_capable_llm(ra, tmp_path
     class _VisionLLM:
         name = "vision"
         supports_vision = True
+        __easyicu_mock_client__ = True
 
         def complete(self, messages, *, max_tokens=2048, temperature=0.2):
             return '{"findings":[]}'
@@ -90,6 +97,7 @@ def test_pipeline_auto_disables_vlm_visual_qa_for_text_only_llm(ra, tmp_path: Pa
     class _TextOnlyLLM:
         name = "text-only"
         supports_vision = False
+        __easyicu_mock_client__ = True
 
         def complete(self, messages, *, max_tokens=2048, temperature=0.2):
             return '{"findings":[]}'
@@ -138,7 +146,9 @@ def test_visual_qa_flags_svg_text_overlap(ra, tmp_path: Path):
 
     findings = VisualQAAuditor(min_bytes=1).audit(figure_paths=[fig_path])
 
-    assert any(f.severity == "error" and "overlapping text" in f.message for f in findings)
+    assert any(
+        f.severity == "error" and "overlapping text" in f.message for f in findings
+    )
 
 
 def test_visual_qa_downgrades_panel_label_title_overlap(ra, tmp_path: Path):
@@ -162,8 +172,13 @@ def test_visual_qa_downgrades_panel_label_title_overlap(ra, tmp_path: Path):
 
     findings = VisualQAAuditor(min_bytes=1).audit(figure_paths=[fig_path])
 
-    assert any(f.severity == "warning" and "panel label close to a title" in f.message for f in findings)
-    assert not any(f.severity == "error" and "overlapping text" in f.message for f in findings)
+    assert any(
+        f.severity == "warning" and "panel label close to a title" in f.message
+        for f in findings
+    )
+    assert not any(
+        f.severity == "error" and "overlapping text" in f.message for f in findings
+    )
 
 
 def test_visual_qa_flags_svg_cropped_text(ra, tmp_path: Path):
@@ -187,7 +202,9 @@ def test_visual_qa_flags_svg_cropped_text(ra, tmp_path: Path):
     assert any("outside the canvas" in f.message for f in findings)
 
 
-def test_visual_qa_svg_numeric_consistency_passes_when_value_is_present(ra, tmp_path: Path):
+def test_visual_qa_svg_numeric_consistency_passes_when_value_is_present(
+    ra, tmp_path: Path
+):
     fig_path = tmp_path / "numbers_ok.svg"
     fig_path.write_text(
         """
@@ -211,7 +228,9 @@ def test_visual_qa_svg_numeric_consistency_passes_when_value_is_present(ra, tmp_
     assert not any("numeric consistency" in f.message for f in findings)
 
 
-def test_visual_qa_svg_numeric_consistency_warns_when_value_is_missing(ra, tmp_path: Path):
+def test_visual_qa_svg_numeric_consistency_warns_when_value_is_missing(
+    ra, tmp_path: Path
+):
     fig_path = tmp_path / "numbers_bad.svg"
     fig_path.write_text(
         """

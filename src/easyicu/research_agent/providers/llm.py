@@ -1469,7 +1469,10 @@ def _backend_available(
     backend: str, *, api_key: Optional[str], allow_mock: bool
 ) -> bool:
     if backend in _CLI_BACKENDS:
-        return cli_backend_available(backend)
+        external_allowed = str(
+            os.environ.get("EASYICU_ALLOW_EXTERNAL_LLM", "") or ""
+        ).strip().lower() in {"1", "true", "yes", "on"}
+        return cli_backend_available(backend) and external_allowed
     if backend in _API_BACKENDS:
         return _api_key_present(api_key)
     if backend == "mock":
@@ -1486,7 +1489,16 @@ def _construct_backend(
     extra_headers: Optional[Dict[str, str]],
 ) -> Any:
     if backend in _CLI_BACKENDS:
-        return CLIAgentLLMClient(backend=backend, model=model or None)
+        from .factory import authorize_provider_client
+
+        client = CLIAgentLLMClient(backend=backend, model=model or None)
+        return authorize_provider_client(
+            client,
+            provider=f"{backend}-cli",
+            model=model or "cli-default",
+            base_url=f"cli://{backend}",
+            destination="external",
+        )
     if backend in _API_BACKENDS:
         from .factory import build_provider_client
 

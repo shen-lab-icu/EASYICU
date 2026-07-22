@@ -5,8 +5,21 @@ import json
 import pytest
 from pydantic import ValidationError
 
-from easyicu.research_agent.agents.core import PlannerAgent, _normalise_plan_payload
+from easyicu.research_agent.agents.core import (
+    CoderAgent,
+    PlannerAgent,
+    ReplannerAgent,
+    _normalise_plan_payload,
+)
+from easyicu.research_agent.authority.table_one_binding import (
+    table_one_execution_spec,
+)
 from easyicu.research_agent.providers.prompts import load_prompt_pack
+from easyicu.research_agent.repairs.patch import PATCH_FORMAT
+from easyicu.research_agent.repairs.reasons import (
+    RepairPromptAuthority,
+    RepairReason,
+)
 from easyicu.research_agent.research_context.prompt_scope import coder_guide_for_step
 from easyicu.research_agent.schema import (
     AnalysisStep,
@@ -187,8 +200,111 @@ def test_private_table_one_levels_use_opaque_tokens_and_bind_locally() -> None:
     plan = planner._parse(json.dumps(payload), context)
     spec = plan.steps[0].table_one_spec
     assert spec is not None
-    assert spec.group_levels == ["Female", "Male"]
-    assert spec.variables[0].levels == ["NeverSmokerLocal", "EverSmokerLocal"]
+    assert spec.group_levels == ["__easyicu_level_1__", "__easyicu_level_2__"]
+    assert spec.variables[0].levels == [
+        "__easyicu_level_1__",
+        "__easyicu_level_2__",
+    ]
+    execution_spec = table_one_execution_spec(plan.steps[0])
+    assert execution_spec is not None
+    assert execution_spec.group_levels == ["Female", "Male"]
+    assert execution_spec.variables[0].levels == [
+        "NeverSmokerLocal",
+        "EverSmokerLocal",
+    ]
+    outbound_plan = plan.model_dump_json()
+    for private_label in (
+        "Female",
+        "Male",
+        "NeverSmokerLocal",
+        "EverSmokerLocal",
+    ):
+        assert private_label not in outbound_plan
+
+
+def test_private_table_one_labels_never_enter_agent_prompts() -> None:
+    class CaptureLLM:
+        __easyicu_mock_client__ = True
+
+        def __init__(self, responses):  # noqa: ANN001
+            self.responses = list(responses)
+            self.calls = []
+
+        def complete(self, messages, **_kwargs):  # noqa: ANN001, ANN003
+            self.calls.append(list(messages))
+            return self.responses.pop(0)
+
+    context = _private_label_context()
+    payload = json.loads(_raw(include_spec=True))
+    step_payload = payload["steps"][0]
+    step_payload["inputs"] = ["sex", "smoking_status"]
+    step_payload["table_one_spec"] = {
+        "group_by": "sex",
+        "group_levels": ["__easyicu_level_1__", "__easyicu_level_2__"],
+        "variables": [
+            {
+                "name": "smoking_status",
+                "variable_kind": "categorical",
+                "summary": "count_percent",
+                "test": "chi_square_with_fisher_exact_for_sparse_2x2",
+                "levels": ["__easyicu_level_1__", "__easyicu_level_2__"],
+            }
+        ],
+    }
+    planner_llm = CaptureLLM([json.dumps(payload)])
+    plan = PlannerAgent(planner_llm).run(context)
+
+    revised_payload = plan.model_dump(mode="json")
+    revised_payload["revision"] = plan.revision + 1
+    replanner_llm = CaptureLLM([json.dumps(revised_payload)])
+    revised = ReplannerAgent(replanner_llm).run(
+        context=context,
+        current_plan=plan,
+    )
+
+    coder_llm = CaptureLLM(["value = 1\n"])
+    CoderAgent(coder_llm).run(context=context, step=revised.steps[0])
+
+    patch = json.dumps(
+        {
+            "format": PATCH_FORMAT,
+            "edits": [{"old": "value = 1", "new": "value = 2", "expected_count": 1}],
+        }
+    )
+    repair_llm = CaptureLLM([patch])
+    authority = RepairPromptAuthority.create(
+        typed_ticket=[
+            {
+                "validator": "mechanical_code_preflight",
+                "reason": RepairReason.UNBOUND_LOCAL.value,
+                "occurrence_count": 1,
+                "detail": {"reason": "unbound_local", "line": 1},
+            }
+        ]
+    )
+    CoderAgent(repair_llm).repair(
+        context=context,
+        step=revised.steps[0],
+        code="value = 1\n",
+        run_log="local diagnostic only",
+        repair_authority=authority,
+        current_repair_authority=authority,
+    )
+
+    all_messages = [
+        message.content
+        for client in (planner_llm, replanner_llm, coder_llm, repair_llm)
+        for call in client.calls
+        for message in call
+    ]
+    outbound = "\n".join(all_messages)
+    for private_label in (
+        "Female",
+        "Male",
+        "NeverSmokerLocal",
+        "EverSmokerLocal",
+    ):
+        assert private_label not in outbound
 
 
 def test_archival_analysis_step_remains_readable_without_new_optional_spec() -> None:

@@ -20,6 +20,7 @@ def _execution_identity(
     *,
     host_runner_authorized: bool = False,
     model: str = "frozen-model",
+    input_authority_sha256: str | None = "c" * 64,
 ) -> dict[str, Any]:
     class Client:
         pass
@@ -41,7 +42,7 @@ def _execution_identity(
         provider_client=client,
         llm_seed=20260722,
         data_seed=7,
-        input_authority_sha256="c" * 64,
+        input_authority_sha256=input_authority_sha256,
         host_runner_authorized=host_runner_authorized,
         code_version={"git_sha": "b" * 40, "git_dirty": False},
     ).model_dump(mode="json")
@@ -51,10 +52,17 @@ def _write_results(
     root: Path,
     *,
     host_runner_authorized: bool = False,
+    input_authority_sha256: str | None = "c" * 64,
 ) -> Path:
-    identity = _execution_identity(host_runner_authorized=host_runner_authorized)
+    identity = _execution_identity(
+        host_runner_authorized=host_runner_authorized,
+        input_authority_sha256=input_authority_sha256,
+    )
     expected_identity = ExpectedExecutionIdentity.create(
-        ExecutionIdentity.model_validate(_execution_identity(), strict=True)
+        ExecutionIdentity.model_validate(
+            _execution_identity(input_authority_sha256=input_authority_sha256),
+            strict=True,
+        )
     )
     (root / "expected_execution_identity.json").write_text(
         json.dumps(expected_identity.model_dump(mode="json")),
@@ -255,6 +263,25 @@ def test_host_runner_authorization_can_never_pass_paper_acceptance(
 
     assert report.status == "invalid"
     assert {issue.code for issue in report.issues} == {"EXECUTION_IDENTITY_INVALID"}
+
+
+def test_missing_input_authority_can_never_pass_paper_acceptance(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = _write_results(tmp_path, input_authority_sha256=None)
+    _install_valid_attempt_stubs(monkeypatch)
+
+    report = acceptance.evaluate_figure2_paper_acceptance(
+        path,
+        expected_execution_identity_path=_expected_path(path),
+    )
+
+    assert report.status == "invalid"
+    assert {
+        "EXPECTED_EXECUTION_IDENTITY_INVALID",
+        "EXECUTION_IDENTITY_INVALID",
+    } <= {issue.code for issue in report.issues}
 
 
 def test_consistent_but_unfrozen_identity_cannot_pass_paper_acceptance(

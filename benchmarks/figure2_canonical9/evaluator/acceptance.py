@@ -210,6 +210,8 @@ def evaluate_figure2_paper_acceptance(
                 _strict_json_object(_read_regular_file(expected_path)),
                 strict=True,
             )
+            if frozen_identity.execution_identity.input_authority_sha256 is None:
+                raise ValueError("frozen identity lacks bound input authority")
             if not frozen_identity.execution_identity.paper_eligible:
                 raise ValueError("frozen execution identity is not paper eligible")
         except Exception as exc:
@@ -369,6 +371,10 @@ def evaluate_figure2_paper_acceptance(
             )
             if score_identity.identity_sha256 != manifest_identity.identity_sha256:
                 raise ValueError("score and run manifest identities differ")
+            if score_identity.input_authority_sha256 is None:
+                raise ValueError("paper acceptance requires bound input authority")
+            if manifest_identity.input_authority_sha256 is None:
+                raise ValueError("run manifest lacks bound input authority")
             if not score_identity.paper_eligible:
                 raise ValueError("execution identity is not paper eligible")
             if score_identity.runner != "docker":

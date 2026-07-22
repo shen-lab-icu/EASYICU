@@ -90,6 +90,7 @@ from .idea_mining_schema import (  # noqa: F401  (re-exported for back-compat)
     _utc_now_iso,
 )
 from ..providers.protocol import LLMClient, LLMMessage
+from ..providers.factory import authorized_complete
 from ..schema import (
     CohortDescriptor,
     ConceptDescriptor,
@@ -589,7 +590,9 @@ def extract_literature_ideas(
                 request=request,
             )
         if raw is None:
-            raw = llm.complete(messages, max_tokens=max_tokens, temperature=0.0)
+            raw = authorized_complete(
+                llm, messages, max_tokens=max_tokens, temperature=0.0
+            )
         try:
             payload = _parse_json_payload(raw)
             if not isinstance(payload, list):
@@ -760,7 +763,7 @@ def _reflect_and_refine_ideas(
         prior_art_titles=prior_art_titles,
     )
     try:
-        raw = llm.complete(messages, max_tokens=max_tokens, temperature=0.0)
+        raw = authorized_complete(llm, messages, max_tokens=max_tokens, temperature=0.0)
         payload = _parse_json_payload(raw)
     except Exception:
         return list(ideas)
@@ -1060,7 +1063,9 @@ def optimize_ideas_for_novelty(
                     num_rounds=rounds,
                 )
                 try:
-                    raw = llm.complete(messages, max_tokens=max_tokens, temperature=0.3)
+                    raw = authorized_complete(
+                        llm, messages, max_tokens=max_tokens, temperature=0.3
+                    )
                     payload = _parse_json_payload(raw)
                 except Exception:
                     break
@@ -1176,7 +1181,8 @@ def score_candidates_multicriteria(
         )
         data: Mapping[str, Any] = {}
         try:
-            raw = llm.complete(
+            raw = authorized_complete(
+                llm,
                 build_candidate_validation_messages(as_dict),
                 max_tokens=300,
                 temperature=0.0,
@@ -1705,8 +1711,7 @@ def run_idea_mining_dry_run(
     registry_path: Optional[str | Path] = None,
     cohort: Optional[Mapping[str, Any]] = None,
     analytic_unit: Literal["stay", "patient"] = "stay",
-    analytic_population_age_group: Literal["adult", "pediatric", "mixed"]
-    | None = None,
+    analytic_population_age_group: Literal["adult", "pediatric", "mixed"] | None = None,
     top_k: int = 5,
     citations: Sequence[Any] = (),
     feasibility_probe: Optional[FeasibilityProbe] = None,

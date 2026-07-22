@@ -122,6 +122,129 @@ def _attach_provider_authorization(
     return client
 
 
+def authorize_provider_client(
+    client: Any,
+    *,
+    provider: str,
+    model: str,
+    base_url: str,
+    destination: str,
+    environment: Optional[Mapping[str, str]] = None,
+) -> Any:
+    """Attach explicit endpoint authority to a non-OpenAI provider adapter.
+
+    This is the only supported bridge for adapters such as the local coding
+    agent CLI.  Unknown custom clients are not implicitly trusted merely
+    because they implement ``complete``.
+    """
+
+    env = os.environ if environment is None else environment
+    if destination not in {"external", "local"}:
+        raise ProviderConfigurationError(UNSUPPORTED_PROVIDER, provider)
+    if destination == "external" and not _external_llm_allowed(env):
+        raise ProviderConfigurationError(EXTERNAL_LLM_NOT_AUTHORIZED, provider)
+    authorization = ProviderAuthorization.create(
+        provider=str(provider),
+        model=str(model),
+        base_url=str(base_url),
+        destination=destination,
+        authorization_mode=(
+            "operator_env" if destination == "external" else "local_exempt"
+        ),
+    )
+    return _attach_provider_authorization(client, authorization)
+
+
+def _provider_client_children(client: Any) -> list[Any]:
+    children: list[Any] = []
+    raw_clients = getattr(client, "_clients", None)
+    if isinstance(raw_clients, (list, tuple)):
+        children.extend(raw_clients)
+    iterator = getattr(client, "iter_clients", None)
+    if callable(iterator):
+        try:
+            children.extend(list(iterator()))
+        except Exception as exc:
+            raise ProviderConfigurationError(
+                UNSUPPORTED_PROVIDER,
+                type(client).__name__,
+            ) from exc
+    inner = getattr(client, "_inner", None)
+    if inner is not None:
+        children.append(inner)
+    unique: list[Any] = []
+    seen: set[int] = set()
+    for child in children:
+        if child is None or child is client or id(child) in seen:
+            continue
+        seen.add(id(child))
+        unique.append(child)
+    return unique
+
+
+def _valid_provider_authorization(value: object) -> bool:
+    if not isinstance(value, ProviderAuthorization):
+        return False
+    if value.destination == "external" and value.authorization_mode != "operator_env":
+        return False
+    if value.destination == "local" and value.authorization_mode != "local_exempt":
+        return False
+    expected = ProviderAuthorization.create(
+        provider=value.provider,
+        model=value.model,
+        base_url=value.base_url,
+        destination=value.destination,
+        authorization_mode=value.authorization_mode,
+    )
+    return value == expected
+
+
+def require_provider_client_authorization(client: Any) -> None:
+    """Deny unmanaged provider graphs before any prompt reaches ``complete``.
+
+    Routers, fallback clients, and transparent cost/repro wrappers are walked
+    recursively. Every transport leaf must be an explicit offline mock or carry
+    factory-minted, internally consistent destination authority.
+    """
+
+    stack = [client]
+    seen: set[int] = set()
+    while stack:
+        current = stack.pop()
+        if current is None or id(current) in seen:
+            continue
+        seen.add(id(current))
+        if bool(getattr(current, "__easyicu_mock_client__", False)):
+            continue
+        authorization = getattr(current, "__easyicu_provider_authorization__", None)
+        children = _provider_client_children(current)
+        if _valid_provider_authorization(authorization):
+            if children:
+                stack.extend(children)
+            continue
+        if children:
+            stack.extend(children)
+            continue
+        raise ProviderConfigurationError(
+            EXTERNAL_LLM_NOT_AUTHORIZED,
+            str(getattr(current, "name", type(current).__name__)),
+        )
+
+
+def authorized_complete(client: Any, messages: Any, **kwargs: Any) -> str:
+    """Deliver a prompt only after the entire provider graph is authorized."""
+
+    require_provider_client_authorization(client)
+    return client.complete(messages, **kwargs)
+
+
+def authorized_complete_with_images(client: Any, **kwargs: Any) -> str:
+    """Deliver image prompts only after provider-graph authorization."""
+
+    require_provider_client_authorization(client)
+    return client.complete_with_images(**kwargs)
+
+
 def provider_transport_destination(client: Any) -> str:
     """Classify provider transport without reading credentials.
 

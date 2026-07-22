@@ -2,9 +2,16 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from easyicu.research_agent.agents.core import CoderAgent
 from easyicu.research_agent.authority.diagnostic_envelope import DiagnosticEnvelope
 from easyicu.research_agent.providers.llm import OpenAIClient
+from easyicu.research_agent.providers.factory import (
+    EXTERNAL_LLM_NOT_AUTHORIZED,
+    ProviderAuthorization,
+    ProviderConfigurationError,
+)
 from easyicu.research_agent.repairs.patch import PATCH_FORMAT
 from easyicu.research_agent.repairs.reasons import (
     RepairPromptAuthority,
@@ -17,6 +24,13 @@ class _ExternalCaptureLLM(OpenAIClient):
 
     def __init__(self, responses):  # noqa: ANN001
         self._resolved_base_url = "https://api.example.invalid/v1"
+        self.__easyicu_provider_authorization__ = ProviderAuthorization.create(
+            provider="test-external",
+            model="test-model",
+            base_url=self._resolved_base_url,
+            destination="external",
+            authorization_mode="operator_env",
+        )
         self.responses = list(responses)
         self.calls = []
 
@@ -172,7 +186,7 @@ def test_external_full_rewrite_also_uses_the_same_closed_envelope(ra):
     assert "do-not-send" not in prompt
 
 
-def test_unmanaged_custom_provider_receives_only_the_closed_envelope(ra):
+def test_unmanaged_custom_provider_is_rejected_before_prompt_delivery(ra):
     context, step = _context_and_step(ra)
     patch = json.dumps(
         {
@@ -182,20 +196,18 @@ def test_unmanaged_custom_provider_receives_only_the_closed_envelope(ra):
     )
     llm = _UnmanagedCaptureLLM([patch])
 
-    CoderAgent(llm).repair(
-        context=context,
-        step=step,
-        code="import os\nvalue = 1\n",
-        run_log="MRN=99117 patient_name=Private Person raw dataframe row",
-        repair_authority=_authority(),
-        current_repair_authority=_authority(),
-    )
+    with pytest.raises(ProviderConfigurationError) as exc_info:
+        CoderAgent(llm).repair(
+            context=context,
+            step=step,
+            code="import os\nvalue = 1\n",
+            run_log="MRN=99117 patient_name=Private Person raw dataframe row",
+            repair_authority=_authority(),
+            current_repair_authority=_authority(),
+        )
 
-    prompt = _all_prompt_text(llm)
-    assert "easyicu.diagnostic_envelope/1" in prompt
-    assert "99117" not in prompt
-    assert "Private Person" not in prompt
-    assert "raw dataframe row" not in prompt
+    assert exc_info.value.issue == EXTERNAL_LLM_NOT_AUTHORIZED
+    assert llm.calls == []
 
 
 def test_diagnostic_envelope_has_no_runtime_log_input_surface():

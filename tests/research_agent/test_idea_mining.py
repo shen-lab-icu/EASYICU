@@ -39,6 +39,7 @@ from easyicu.research_agent.schema import ConceptDescriptor, VariableRole
 
 class CapturingIdeaLLM:
     name = "capturing-idea-llm"
+    __easyicu_mock_client__ = True
 
     def __init__(self, response: object):
         self.response = response
@@ -2186,6 +2187,7 @@ class _BatchAwareIdeaLLM:
     """Returns one idea per material present in each batch; records call count."""
 
     name = "batch-aware-idea-llm"
+    __easyicu_mock_client__ = True
 
     def __init__(self) -> None:
         self.calls = 0
@@ -2645,6 +2647,7 @@ class SequenceIdeaLLM:
     """Mock LLM returning a scripted response per call (extract, then refine...)."""
 
     name = "sequence-idea-llm"
+    __easyicu_mock_client__ = True
 
     def __init__(self, responses):
         self.responses = list(responses)

@@ -117,9 +117,7 @@ def test_production_entrypoints_cannot_construct_openai_client_outside_factory()
                 name = (
                     func.id
                     if isinstance(func, ast.Name)
-                    else func.attr
-                    if isinstance(func, ast.Attribute)
-                    else ""
+                    else func.attr if isinstance(func, ast.Attribute) else ""
                 )
                 if name == "OpenAIClient":
                     violations.append(f"{path.relative_to(root)}:{node.lineno}")
@@ -139,3 +137,28 @@ def test_all_external_entry_surfaces_route_through_provider_factory():
     for relative in paths:
         source = (root / relative).read_text(encoding="utf-8")
         assert "build_provider_client(" in source, relative
+
+
+def test_production_prompt_calls_use_the_authorized_delivery_boundary() -> None:
+    root = Path(__file__).resolve().parents[2]
+    source_root = root / "src" / "easyicu" / "research_agent"
+    allowed_internal = {
+        "providers/factory.py",
+        "providers/llm.py",
+        "providers/cost.py",
+        "replication/envelope.py",
+    }
+    violations: list[str] = []
+    for path in source_root.rglob("*.py"):
+        relative = path.relative_to(source_root).as_posix()
+        if relative in allowed_internal:
+            continue
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in ast.walk(tree):
+            if (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "complete"
+            ):
+                violations.append(f"{relative}:{node.lineno}")
+    assert violations == []

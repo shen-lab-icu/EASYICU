@@ -150,7 +150,7 @@ class OpenAIJudge(JudgeClient):
         if base_url is None and self.base_url_env:
             base_url = os.environ.get(self.base_url_env)
 
-        from ..providers.factory import build_provider_client
+        from ..providers.factory import authorized_complete, build_provider_client
         from ..providers.llm import OpenAIClient
         from ..providers.protocol import LLMMessage
 
@@ -176,7 +176,8 @@ class OpenAIJudge(JudgeClient):
             client_cls=OpenAIClient,
             environment=provider_environment,
         )
-        response = client.complete(
+        response = authorized_complete(
+            client,
             [
                 LLMMessage(
                     role="system",
