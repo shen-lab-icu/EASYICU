@@ -760,6 +760,13 @@ def render_continuous_measurement_audit_bundle(
                 "role": "descriptive_result",
                 "claim": "Median, interquartile range, and range among observed records.",
                 "evidence_ids": [distribution_source.name],
+                # Anchor this sealed renderer's authorized product slots to the
+                # panels that display them; ``bind_declared_figure_products``
+                # fails closed ("authorized product slot is not anchored to a
+                # contract panel") otherwise, after the figure is rendered.
+                # Slot names are the registry's authorized values; mirror the
+                # distribution_availability sibling (A=distribution, B=availability).
+                "metadata": {"planner_product_slots": ["distribution"]},
             },
             {
                 "panel_id": "B",
@@ -767,6 +774,7 @@ def render_continuous_measurement_audit_bundle(
                 "role": "data_quality",
                 "claim": "Predeclared measurement-status counts partition the cohort.",
                 "evidence_ids": [missingness_source.name, availability_source.name],
+                "metadata": {"planner_product_slots": ["availability"]},
             },
         ],
         source_data=source_files,
