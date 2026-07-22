@@ -32,9 +32,10 @@ import easyicu.research_agent as ra
 from easyicu.research_agent.evaluation_scorecard import compute_tristate
 from easyicu.research_agent.providers.llm import llm_is_mockish
 from easyicu.research_agent.providers.mocks import (
-    _extract_step_id,
     _mock_code_primary_association,
+    PatternScriptedMockLLMClient,
 )
+from easyicu.research_agent.schema import CohortDescriptor, ResearchContext
 
 from benchmarks.figure2_canonical9.evaluator.acceptance import (
     evaluate_figure2_paper_acceptance,
@@ -127,8 +128,15 @@ def _last_user(messages) -> str:
     )
 
 
-class ScriptedPreflightLLM(ra.MockLLMClient):
-    """Deterministic offline client: inject a typed plan + a correct primary.
+class ScriptedPreflightLLM:
+    """Build a reviewed static offline client plus local run instrumentation.
+
+    The object handed to :class:`ResearchAgentPipeline` is the exact built-in
+    :class:`PatternScriptedMockLLMClient`, rather than this controller or a
+    benchmark-defined subclass.  That matters after the provider hardening:
+    arbitrary subclasses and wrappers cannot obtain prompt-delivery authority
+    merely by inheriting from a mock.  The factory registers the exact reviewed
+    built-in type at construction and binds its dispatch code before delivery.
 
     * The planner request returns the fixture's typed ``AnalysisPlan`` (so the
       deterministic grouped-Table-1 executor is eligible).
@@ -138,12 +146,10 @@ class ScriptedPreflightLLM(ra.MockLLMClient):
     * Optional fault injection returns runtime-raising code for a target step on
       both its initial write and every repair, to exercise the repair cap.
 
-    Every response is produced locally.  This client's offline nature is recorded
-    descriptively via ``llm_is_mockish``; the *authoritative* zero-Provider proof
-    is the transport spy in :func:`provider_transport_spy`, not this class.
+    Every response is produced locally.  Offline classification is descriptive;
+    the authoritative zero-Provider proof is the transport spy in
+    :func:`provider_transport_spy`.
     """
-
-    name = "scripted-preflight-offline"
 
     def __init__(
         self,
@@ -151,41 +157,69 @@ class ScriptedPreflightLLM(ra.MockLLMClient):
         *,
         fault_step: Optional[str] = None,
     ) -> None:
-        super().__init__()
         self._case = case
-        self._plan_json = case.build_plan().model_dump_json(indent=2)
         self._fault_step = fault_step
-        self.total_calls = 0
-        self.plan_calls = 0
-        # code write/repair calls keyed by resolved step_id
-        self.code_calls: Dict[str, int] = {}
+        plan_json = case.build_plan().model_dump_json(indent=2)
+        context = ResearchContext(
+            research_question=case.question,
+            cohort=CohortDescriptor(
+                cohort_name=f"{case.task_id}_preflight",
+                database=case.database,
+                n_stays=0,
+                n_patients=0,
+            ),
+            variables=[],
+            target_outcome=case.target_outcome,
+            primary_exposure=case.primary_exposure,
+        )
+        primary_code = _mock_code_primary_association(
+            ctx=context,
+            step_id=case.primary_step_id,
+            outcome=case.target_outcome,
+            predictor=case.primary_exposure,
+        )
+        primary_responses: List[str] = [primary_code]
+        if fault_step == case.primary_step_id:
+            primary_responses = [_FAULT_CODE] * 16
+        rules: List[tuple[str, List[str]]] = [
+            # Rules are generic -> specific; PatternScriptedMock gives the
+            # later matching rule priority.
+            ("RESEARCH PLAN AS JSON", [plan_json]),
+            ("WRITE THE PYTHON CODE", ["MOCK RESPONSE — preflight auxiliary"] * 32),
+            (case.primary_step_id, primary_responses),
+        ]
+        if fault_step is not None and fault_step != case.primary_step_id:
+            rules.append((fault_step, [_FAULT_CODE] * 16))
+        self.client = PatternScriptedMockLLMClient(
+            rules,
+            default="MOCK RESPONSE — preflight default",
+        )
 
-    def complete(self, messages, **kwargs) -> str:
-        self.total_calls += 1
-        user = _last_user(messages)
-        upper = user.upper()
+    @property
+    def total_calls(self) -> int:
+        return len(self.client.calls)
 
-        is_plan = any(a in upper for a in _PLAN_ANCHORS) and _REPLAN_ANCHOR not in upper
-        if is_plan:
-            self.plan_calls += 1
-            return self._plan_json
+    @property
+    def plan_calls(self) -> int:
+        return sum(
+            1
+            for messages, _kwargs in self.client.calls
+            if any(anchor in _last_user(messages).upper() for anchor in _PLAN_ANCHORS)
+            and _REPLAN_ANCHOR not in _last_user(messages).upper()
+        )
 
-        is_code = any(a in upper for a in _CODE_ANCHORS)
-        if is_code:
-            step_id = _extract_step_id(user) or "step"
-            self.code_calls[step_id] = self.code_calls.get(step_id, 0) + 1
-            if self._fault_step is not None and step_id == self._fault_step:
-                return _FAULT_CODE
-            if step_id == self._case.primary_step_id and self.context is not None:
-                # Reuse the mock's tested primary script, bound to the exact
-                # fixture exposure so the agent-owned primary is deterministic.
-                return _mock_code_primary_association(
-                    ctx=self.context,
-                    step_id=step_id,
-                    outcome=self._case.target_outcome,
-                    predictor=self._case.primary_exposure,
-                )
-        return super().complete(messages, **kwargs)
+    @property
+    def code_calls(self) -> Dict[str, int]:
+        counts: Dict[str, int] = {}
+        for messages, _kwargs in self.client.calls:
+            prompt = _last_user(messages)
+            if not any(anchor in prompt.upper() for anchor in _CODE_ANCHORS):
+                continue
+            for step in self._case.build_plan().steps:
+                if step.step_id in prompt:
+                    counts[step.step_id] = counts.get(step.step_id, 0) + 1
+                    break
+        return counts
 
 
 @dataclass
@@ -202,6 +236,8 @@ class PreflightRun:
     raised: Optional[str] = None
     routing: List[Dict[str, Any]] = field(default_factory=list)
     readiness: Dict[str, Any] = field(default_factory=dict)
+    runtime: Dict[str, Any] = field(default_factory=dict)
+    blocked_reason: Optional[str] = None
 
     # -- derived views ----------------------------------------------------
     @property
@@ -226,9 +262,9 @@ class PreflightRun:
 
     @property
     def llm_offline_classified(self) -> bool:
-        """Descriptive only — ``llm_is_mockish`` is forgeable (package docstring)."""
+        """Descriptive only; transport spying supplies the zero-Provider proof."""
 
-        return llm_is_mockish(self.llm)
+        return llm_is_mockish(self.llm.client)
 
 
 def load_manifest(run_dir: Path) -> Dict[str, Any]:
@@ -279,6 +315,8 @@ def build_pipeline(
         workdir=str(workdir),
         llm=llm,
         runner_kind="subprocess",
+        runner_network="none",
+        runner_kwargs={"allow_unsafe_host_fallback": False},
         timeout_seconds=timeout_seconds,
         standard_executor_timeout_seconds=standard_executor_timeout_seconds,
         max_code_repair_attempts=max_code_repair_attempts,
@@ -314,11 +352,22 @@ def run_preflight(
     returned ``provider_transport_calls`` is a real transport-layer measurement.
     """
 
+    runtime_manifest = preflight_runtime_manifest(workdir)
     llm = ScriptedPreflightLLM(case, fault_step=fault_step)
+    if not runtime_manifest.integration_ready:
+        return PreflightRun(
+            case=case,
+            run_dir=Path(workdir),
+            run_id="",
+            manifest={},
+            llm=llm,
+            runtime=runtime_manifest.as_dict(),
+            blocked_reason=runtime_manifest.blocked_reason,
+        )
     pipeline = build_pipeline(
         case,
         workdir=workdir,
-        llm=llm,
+        llm=llm.client,
         timeout_seconds=timeout_seconds,
         standard_executor_timeout_seconds=standard_executor_timeout_seconds,
         max_code_repair_attempts=max_code_repair_attempts,
@@ -354,6 +403,20 @@ def run_preflight(
             raised = f"{type(exc).__name__}: {exc}"
 
     manifest = load_manifest(run_dir)
+    # The initial probe prevents a known-bad host from launching generated
+    # code.  Probe again after a run so an isolation backend that becomes
+    # unavailable while a nested session starts is reported explicitly rather
+    # than leaking through as a generic repair failure.
+    final_runtime = preflight_runtime_manifest(run_dir)
+    isolation_reason = next(
+        (
+            rt.step_isolation_unavailable(record, final_runtime.isolation)
+            for record in manifest.get("per_step_records", [])
+            if rt.step_isolation_unavailable(record, final_runtime.isolation)
+        ),
+        None,
+    )
+    blocked_reason = final_runtime.blocked_reason if isolation_reason else None
     return PreflightRun(
         case=case,
         run_dir=run_dir,
@@ -365,6 +428,8 @@ def run_preflight(
         raised=raised,
         routing=_routing(manifest),
         readiness=manifest.get("readiness", {}),
+        runtime=final_runtime.as_dict(),
+        blocked_reason=blocked_reason,
     )
 
 
@@ -391,6 +456,12 @@ def paper_acceptance_status(run: PreflightRun) -> str:
     it through the real production gate — nothing here grants paper authority.
     """
 
+    return paper_acceptance_verdict(run).status
+
+
+def paper_acceptance_verdict(run: PreflightRun):
+    """Return the production gate's typed rejection evidence for a mock run."""
+
     results_doc = {
         "items": [run.case.task_id],
         "arms": ["aware"],
@@ -409,8 +480,7 @@ def paper_acceptance_status(run: PreflightRun) -> str:
     payload = json.dumps(results_doc, ensure_ascii=False).encode("utf-8")
     results_path = run.run_dir / "preflight_mock_results.json"
     results_path.write_bytes(payload)
-    verdict = evaluate_figure2_paper_acceptance(results_path)
-    return verdict.status
+    return evaluate_figure2_paper_acceptance(results_path)
 
 
 def _cli(task_key: str) -> int:
@@ -425,14 +495,13 @@ def _cli(task_key: str) -> int:
     if case is None:
         raise SystemExit(f"unknown task key {task_key!r}; try e1/e2/e3")
     tmp = Path(tempfile.mkdtemp(prefix=f"preflight_{task_key}_"))
-    manifest = preflight_runtime_manifest(tmp)
     run = run_preflight(case, workdir=tmp)
     print(
         json.dumps(
             {
                 "task_id": run.case.task_id,
-                "runtime_integration_ready": manifest.integration_ready,
-                "runtime_blocked_reason": manifest.blocked_reason,
+                "runtime_integration_ready": run.runtime.get("integration_ready"),
+                "runtime_blocked_reason": run.blocked_reason,
                 "llm_offline_classified": run.llm_offline_classified,
                 "external_provider_calls": run.external_provider_calls,
                 "provider_transport_targets": run.provider_transport_targets,
@@ -468,5 +537,6 @@ __all__ = [
     "build_pipeline",
     "preflight_runtime_manifest",
     "load_manifest",
+    "paper_acceptance_verdict",
     "paper_acceptance_status",
 ]

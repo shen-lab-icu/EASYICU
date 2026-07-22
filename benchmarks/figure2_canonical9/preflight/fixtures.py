@@ -32,7 +32,7 @@ executor and the agent-owned primary both run on real data offline.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Callable, Dict, List, Tuple
+from typing import Callable, Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
@@ -79,6 +79,45 @@ class GuardrailCheck:
     holds: Callable[["PreflightCase"], bool]
 
 
+FULFILLMENT_PRODUCED = "produced"
+FULFILLMENT_PLANNED_ONLY = "planned_only"
+FULFILLMENT_NOT_PRODUCED_OFFLINE = "not_produced_offline"
+_FULFILLMENTS = frozenset(
+    {
+        FULFILLMENT_PRODUCED,
+        FULFILLMENT_PLANNED_ONLY,
+        FULFILLMENT_NOT_PRODUCED_OFFLINE,
+    }
+)
+
+
+@dataclass(frozen=True)
+class ProductMapping:
+    """One live suite product and the honest scope of this offline harness.
+
+    ``output_index`` is intentionally bound to the live suite tuple, rather
+    than duplicating a product name in a second handwritten list.  A mapping
+    may point at a plan step, but ``planned_only`` is not an artifact claim and
+    ``not_produced_offline`` explicitly records products reserved for the
+    paper-authority workflow (for example publication figures).
+    """
+
+    output_index: int
+    step_id: Optional[str]
+    declared_fulfillment: str
+
+    def __post_init__(self) -> None:
+        if self.declared_fulfillment not in _FULFILLMENTS:
+            raise ValueError(f"unknown fulfillment {self.declared_fulfillment!r}")
+        if self.declared_fulfillment == FULFILLMENT_PRODUCED and self.step_id is None:
+            raise ValueError("a produced output must identify its producing step")
+        if (
+            self.declared_fulfillment == FULFILLMENT_NOT_PRODUCED_OFFLINE
+            and self.step_id is not None
+        ):
+            raise ValueError("an unproduced offline output must not name a plan step")
+
+
 @dataclass(frozen=True)
 class PreflightCase:
     """One diagnostic-only E-series preflight case bound to a suite task."""
@@ -96,6 +135,7 @@ class PreflightCase:
     _build_plan: Callable[[], AnalysisPlan]
     _build_cohort: Callable[[int], pd.DataFrame]
     guardrail_checks: Tuple[GuardrailCheck, ...] = ()
+    product_map: Tuple[ProductMapping, ...] = ()
     # A minimal synthetic dev fixture intentionally does not satisfy the full
     # article display contract, so the honest fail-closed verdict is
     # ``diagnostic_only`` (execution never completes the required suite).
@@ -127,6 +167,20 @@ class PreflightCase:
         for step in self.build_plan().steps:
             out.extend(step.expected_outputs)
         return out
+
+    def product_mapping(self) -> Tuple[tuple[str, ProductMapping], ...]:
+        """Return a one-to-one mapping against the current live suite text."""
+
+        products = self.expected_products
+        indices = [mapping.output_index for mapping in self.product_map]
+        if sorted(indices) != list(range(len(products))):
+            raise AssertionError(
+                f"{self.task_id} product map must cover each live expected output once; "
+                f"got {indices}, expected 0..{len(products) - 1}"
+            )
+        return tuple(
+            (products[mapping.output_index], mapping) for mapping in self.product_map
+        )
 
     def cohort_columns(self) -> List[str]:
         return [str(c) for c in self.build_cohort().columns]
@@ -528,6 +582,37 @@ _E3_CHECKS: Tuple[GuardrailCheck, ...] = (
 
 
 # ---------------------------------------------------------------------------
+# Formal-output scope maps
+#
+# The offline preflight proves orchestration paths.  It deliberately does not
+# claim to render the formal publication figures or satisfy paper authority.
+# Table 1 is the only formal output actually produced by the deterministic
+# executor.  The remaining case-specific analysis steps are exercised as plan
+# nodes, but their offline mock code is intentionally contract-failed; sealed
+# figures are not produced at all.  Keeping that distinction explicit prevents
+# a green preflight from being mistaken for E1/E2/E3 completion.
+# ---------------------------------------------------------------------------
+
+_E1_PRODUCTS: Tuple[ProductMapping, ...] = (
+    ProductMapping(0, "01_cohort_definition", FULFILLMENT_PLANNED_ONLY),
+    ProductMapping(1, _E1_TABLE_ONE, FULFILLMENT_PRODUCED),
+    ProductMapping(2, None, FULFILLMENT_NOT_PRODUCED_OFFLINE),
+)
+
+_E2_PRODUCTS: Tuple[ProductMapping, ...] = (
+    ProductMapping(0, _E2_TABLE_ONE, FULFILLMENT_PRODUCED),
+    ProductMapping(1, None, FULFILLMENT_NOT_PRODUCED_OFFLINE),
+    ProductMapping(2, "03_missingness_audit", FULFILLMENT_PLANNED_ONLY),
+)
+
+_E3_PRODUCTS: Tuple[ProductMapping, ...] = (
+    ProductMapping(0, _E3_TABLE_ONE, FULFILLMENT_PRODUCED),
+    ProductMapping(1, None, FULFILLMENT_NOT_PRODUCED_OFFLINE),
+    ProductMapping(2, "03_ordinal_trend", FULFILLMENT_PLANNED_ONLY),
+)
+
+
+# ---------------------------------------------------------------------------
 # Case registry
 # ---------------------------------------------------------------------------
 
@@ -555,6 +640,7 @@ E1 = PreflightCase(
     _build_plan=_e1_plan,
     _build_cohort=_e1_cohort,
     guardrail_checks=_E1_CHECKS,
+    product_map=_E1_PRODUCTS,
 )
 
 E2 = PreflightCase(
@@ -577,6 +663,7 @@ E2 = PreflightCase(
     _build_plan=_e2_plan,
     _build_cohort=_e2_cohort,
     guardrail_checks=_E2_CHECKS,
+    product_map=_E2_PRODUCTS,
 )
 
 E3 = PreflightCase(
@@ -600,12 +687,17 @@ E3 = PreflightCase(
     _build_plan=_e3_plan,
     _build_cohort=_e3_cohort,
     guardrail_checks=_E3_CHECKS,
+    product_map=_E3_PRODUCTS,
 )
 
 E1E3_CASES: Dict[str, PreflightCase] = {case.task_id: case for case in (E1, E2, E3)}
 
 __all__ = [
     "GuardrailCheck",
+    "ProductMapping",
+    "FULFILLMENT_PRODUCED",
+    "FULFILLMENT_PLANNED_ONLY",
+    "FULFILLMENT_NOT_PRODUCED_OFFLINE",
     "PreflightCase",
     "E1",
     "E2",
