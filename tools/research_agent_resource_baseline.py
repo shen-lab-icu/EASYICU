@@ -27,15 +27,20 @@ from typing import Any, Iterable
 
 from easyicu.research_agent.agents.core import PlannerAgent
 from easyicu.research_agent.know_how import KnowHowRegistry
-from easyicu.research_agent.resources import ResourceScheduler, ResourceSelectionQuery
+from easyicu.research_agent.resources import (
+    CODER_RESOURCE_PROMPT_LIMIT_BYTES,
+    ResourceScheduler,
+    ResourceSelectionQuery,
+    build_coder_resource_bundle,
+)
 from easyicu.research_agent.schema import (
     CohortDescriptor,
     ConceptDescriptor,
     ResearchContext,
 )
 
-TOOL_VERSION = "1.0.0"
-SCHEMA_VERSION = "easyicu.research_agent_resource_baseline/1"
+TOOL_VERSION = "2.0.0"
+SCHEMA_VERSION = "easyicu.research_agent_resource_baseline/2"
 REPO_ROOT = Path(__file__).resolve().parents[1]
 FIXED_CREATED_AT = datetime(2026, 7, 22, tzinfo=timezone.utc)
 
@@ -119,6 +124,7 @@ SOURCE_FILES: tuple[str, ...] = (
     "src/easyicu/research_agent/resources/catalog.py",
     "src/easyicu/research_agent/resources/capability.py",
     "src/easyicu/research_agent/resources/context.py",
+    "src/easyicu/research_agent/resources/coder.py",
     "src/easyicu/research_agent/resources/scheduler.py",
     "src/easyicu/research_agent/learning/store.py",
     "src/easyicu/research_agent/graph.py",
@@ -183,6 +189,35 @@ def _task_measurement(
         context,
         know_how_context=know_how_prompt,
     )
+    coder_bundle = build_coder_resource_bundle(
+        step_id=f"{fixture['task_id'].lower()}_primary_analysis",
+        profile_ref="npj_dm_framework_v2_dev/20260722",
+        analysis_family=fixture["retrieval_family"],
+        step_role="primary",
+        question=context.research_question,
+        intent=context.research_question,
+        method=fixture["retrieval_family"],
+        planner_inputs=("cohort:analysis_cohort", *fixture["concepts"]),
+        expected_outputs=("table:primary_result",),
+        resolved_input_bindings={
+            "cohort:analysis_cohort": {
+                "evidence_id": "analysis_cohort",
+                "sha256": hashlib.sha256(
+                    fixture["task_id"].encode("utf-8")
+                ).hexdigest(),
+            }
+        },
+        runtime_import_names=(
+            "pandas",
+            "numpy",
+            "scipy",
+            "matplotlib",
+            "statsmodels",
+            "sklearn",
+            "pyarrow",
+            "lifelines",
+        ),
+    )
     return {
         "task_id": fixture["task_id"],
         "question": fixture["question"],
@@ -207,6 +242,34 @@ def _task_measurement(
         "resource_added_bytes": (
             with_resources["total_bytes"] - without_resources["total_bytes"]
         ),
+        "coder_resources": {
+            "profile_ref": coder_bundle.profile_ref,
+            "bundle_sha256": coder_bundle.sha256,
+            "provider_calls": coder_bundle.provider_calls,
+            "prompt_bytes": coder_bundle.prompt_bytes,
+            "prompt_limit_bytes": CODER_RESOURCE_PROMPT_LIMIT_BYTES,
+            "selected": [
+                {
+                    "resource_id": resource.resource_id,
+                    "version": resource.version,
+                    "sha256": resource.sha256,
+                    "kind": resource.kind,
+                }
+                for receipt in coder_bundle.selections
+                for resource in receipt.selected
+            ],
+            "selection_receipt_sha256": [
+                hashlib.sha256(
+                    json.dumps(
+                        receipt.model_dump(mode="json"),
+                        ensure_ascii=False,
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    ).encode("utf-8")
+                ).hexdigest()
+                for receipt in coder_bundle.selections
+            ],
+        },
     }
 
 
@@ -237,6 +300,12 @@ def measure() -> dict[str, Any]:
             ),
             "max_resource_added_bytes": max(
                 task["resource_added_bytes"] for task in tasks
+            ),
+            "max_coder_resource_prompt_bytes": max(
+                task["coder_resources"]["prompt_bytes"] for task in tasks
+            ),
+            "coder_resource_provider_calls": sum(
+                task["coder_resources"]["provider_calls"] for task in tasks
             ),
         },
         "tasks": tasks,

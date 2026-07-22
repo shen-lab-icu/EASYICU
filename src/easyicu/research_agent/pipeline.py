@@ -1495,6 +1495,7 @@ class ResearchAgentPipeline:
         experience_bank_top_k: int = 5,
         experience_bank_min_similarity: float = 0.2,
         enable_know_how: bool = False,
+        enable_coder_resources: bool = False,
         know_how_paths: Sequence[Union[str, Path]] = (),
         know_how_top_k: int = 3,
         know_how_min_score: float = 0.15,
@@ -1626,6 +1627,9 @@ class ResearchAgentPipeline:
         self._envelope_include_previews = bool(envelope_include_previews)
         self._submission_profile_name = submission_profile_name
         self._submission_profile_version = submission_profile_version
+        self._submission_profile_ref = (
+            f"{submission_profile_name}/{submission_profile_version}"
+        )
         self._submission_profile_locked_at = submission_profile_locked_at
         self._expected_concept_dict_sha = expected_concept_dict_sha
         self._expected_sofa2_dict_sha = expected_sofa2_dict_sha
@@ -1746,6 +1750,7 @@ class ResearchAgentPipeline:
         self._experience_bank_top_k = max(0, int(experience_bank_top_k))
         self._experience_bank_min_similarity = float(experience_bank_min_similarity)
         self._enable_know_how = bool(enable_know_how)
+        self._enable_coder_resources = bool(enable_coder_resources)
         self._know_how_paths = tuple(Path(path) for path in know_how_paths)
         self._know_how_top_k = int(know_how_top_k)
         self._know_how_min_score = float(know_how_min_score)
@@ -1759,6 +1764,13 @@ class ResearchAgentPipeline:
             name=submission_profile_name,
             version=submission_profile_version,
             enabled=self._enable_know_how,
+        )
+        from .orchestration.profiles import require_profile_coder_resource_setting
+
+        require_profile_coder_resource_setting(
+            name=submission_profile_name,
+            version=submission_profile_version,
+            enabled=self._enable_coder_resources,
         )
         # T3.1 — runner backend selection. ``auto`` prefers a probed Docker
         # image and uses macOS sandbox-exec only when Docker is unavailable;

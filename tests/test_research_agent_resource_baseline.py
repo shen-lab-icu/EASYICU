@@ -59,6 +59,12 @@ def test_each_selected_resource_is_digest_bound_and_selection_is_llm_free() -> N
         for resource in task["selected_know_how"]:
             assert len(resource["file_sha256"]) == 64
         assert task["planner_with_resources"]["total_bytes"] <= 80_000
+        coder = task["coder_resources"]
+        assert coder["provider_calls"] == 0
+        assert coder["prompt_bytes"] <= coder["prompt_limit_bytes"] == 8_000
+        assert len(coder["selection_receipt_sha256"]) == 3
+        assert all(len(digest) == 64 for digest in coder["selection_receipt_sha256"])
+        assert all(len(resource["sha256"]) == 64 for resource in coder["selected"])
 
 
 def test_checked_in_resource_context_baseline_has_no_drift() -> None:
