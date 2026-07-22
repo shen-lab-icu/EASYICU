@@ -106,10 +106,13 @@ def _cohort(n: int = 1000, seed: int = 0) -> pd.DataFrame:
             "los_icu": rng.gamma(2.0, 2.0, n),
             "lactate": np.where(lact_measured == 1, rng.gamma(2.0, 1.5, n), np.nan),
             "lactate_measured": lact_measured,
+            "lactate_n": lact_measured,
             "crea": np.where(crea_measured == 1, rng.gamma(2.0, 0.6, n), np.nan),
             "crea_measured": crea_measured,
+            "crea_n": crea_measured,
             "rrt": np.full(n, np.nan),
             "rrt_measured": rrt_measured,
+            "rrt_n": rrt_measured,
         }
     )
 
@@ -198,6 +201,7 @@ def test_missingness_and_source_outputs_are_distinct_declared_products(tmp_path:
             "artifact:analysis_cohort",
             "lactate",
             "lactate_measured",
+            "lactate_n",
         ],
         requested_outputs=[
             "table:missingness_audit",
@@ -214,6 +218,20 @@ def test_missingness_and_source_outputs_are_distinct_declared_products(tmp_path:
     assert lactate_source["indicator_semantics"] == "measurement_availability"
     assert summary["status"] == "ok"
     assert summary["missing_declared_inputs"] == []
+    assert summary["measurement_provenance_audit"] == {
+        "source": "COHORT_PARQUET",
+        "checks": [
+            {
+                "measured_column": "lactate_measured",
+                "count_column": "lactate_n",
+                "status": "checked",
+                "comparison_n": 100,
+                "invalid_pair_n": 0,
+                "discordant_n": 0,
+                "role": "audit_only",
+            }
+        ],
+    }
     assert summary["output_files"] == {
         "table:missingness_audit": "missingness_audit.csv",
         "table:measurement_source_audit": "measurement_source_audit.csv",

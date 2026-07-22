@@ -76,6 +76,13 @@ def missingness_measurement_audit_code() -> str:
         import numpy as np
         import pandas as pd
 
+        from easyicu.research_agent.icu_rules import (
+            companion_count_column_for_measured,
+        )
+        from easyicu.research_agent.methods.descriptive_inputs import (
+            measurement_provenance_receipt,
+        )
+
         out_dir = Path(os.environ["STEP_OUT_DIR"])
         out_dir.mkdir(parents=True, exist_ok=True)
         run_dir = Path(os.environ.get("EASYICU_RUN_DIR") or out_dir.parents[2])
@@ -124,6 +131,48 @@ def missingness_measurement_audit_code() -> str:
 
         cols = list(df.columns)
         low = {c.lower(): c for c in cols}
+
+        # Replay every Planner-declared measurement flag against its structural
+        # count companion on the exact locked cohort.  The host helper raises
+        # before any result is sealed when a present pair is invalid or
+        # discordant.  A genuinely unavailable count is recorded explicitly;
+        # the summary never invents a count column or silently omits a planned
+        # measurement flag.
+        measurement_checks = []
+        for measured_column in requested_inputs:
+            count_column = companion_count_column_for_measured(measured_column)
+            if count_column is None:
+                continue
+            if measured_column not in df.columns:
+                # The declared-input denominator check below will block this
+                # step.  Do not fabricate a receipt for a missing flag.
+                continue
+            resolved_count_column = (
+                count_column
+                if count_column in df.columns
+                else low.get(count_column.lower())
+            )
+            if resolved_count_column is None:
+                measurement_checks.append(
+                    {
+                        "measured_column": measured_column,
+                        "count_column": count_column,
+                        "status": "unavailable",
+                        "comparison_n": None,
+                        "invalid_pair_n": None,
+                        "discordant_n": None,
+                        "role": "audit_only",
+                        "reason": "Declared structural count companion is absent.",
+                    }
+                )
+                continue
+            measurement_checks.append(
+                measurement_provenance_receipt(
+                    df,
+                    measured_column=measured_column,
+                    count_column=resolved_count_column,
+                )
+            )
 
         # IDs are never audit variables. Demographics and outcomes are excluded
         # only from broad discovery; if the current step explicitly declares
@@ -568,6 +617,10 @@ def missingness_measurement_audit_code() -> str:
             "missing_declared_inputs": missing_declared_inputs,
             "blocking_reason": denominator_error,
             "worst_measured_concepts": worst,
+            "measurement_provenance_audit": {
+                "source": "COHORT_PARQUET",
+                "checks": measurement_checks,
+            },
             "notes": [
                 "Deterministic missingness audit (no LLM coder).",
                 "measured_one_n uses the '<concept>_measured' availability indicator "
