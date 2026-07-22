@@ -89,6 +89,8 @@ def test_data_first_route_emits_standard_ledger_without_llm(tmp_path):
     assert shortlist["candidates"][0]["review_route"] == (
         "cross_database_external_validation"
     )
+    assert shortlist["candidates"][0]["review_candidate_id"].startswith("reviewidea_")
+    assert shortlist["candidates"][0]["origin_executable_candidate_id"]
     assert shortlist["candidates"][0]["paper_authorized"] is False
 
 
@@ -274,3 +276,8 @@ def test_data_first_shortlist_separates_validation_from_measurement_audit(tmp_pa
     )
     audit = shortlist["candidates"][1]
     assert audit["exact_same_topic_hit_count"] > 0
+    assert audit["candidate_topic"] == (
+        "cross-database measurement/source-status audit of partly_observed"
+    )
+    assert audit["origin_candidate_topic"].startswith("partly_observed -> death")
+    assert audit["review_candidate_id"] != audit["origin_executable_candidate_id"]
