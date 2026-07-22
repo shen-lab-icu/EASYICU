@@ -29,6 +29,7 @@ from easyicu.research_agent.execution.runners.deterministic_missingness import (
     source_availability_audit_executor_owns_step,
 )
 from easyicu.research_agent.execution.runners.selection import select_standard_executor
+from easyicu.research_agent.gates.preflight import audit_mechanical_code_contracts
 from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep
 
 
@@ -136,6 +137,7 @@ def test_source_availability_contract_is_selected_before_any_coder_path():
     assert selection is not None
     assert selection.analysis_kind == "missingness_source_availability_audit"
     assert "missingness_measurement_audit.csv" in selection.code
+    assert audit_mechanical_code_contracts(selection.code, step) == []
 
 
 def test_source_availability_executor_rejects_extra_scientific_product():
