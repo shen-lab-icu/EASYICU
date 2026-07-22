@@ -6,31 +6,35 @@ from types import SimpleNamespace
 import pytest
 
 
-def _mock_transport_client(client, *, model: str, completions=None, max_retries=0):
+def _mock_transport_client(
+    monkeypatch,
+    client_type,
+    *,
+    model: str,
+    completions=None,
+    max_retries=0,
+):
     # These tests exercise the concrete adapter against an in-memory fake SDK,
     # but the adapter itself must go through its real constructor so provider
     # authority cannot be minted for an ``object.__new__`` pseudo-instance.
     transport = SimpleNamespace(
         chat=SimpleNamespace(completions=completions or SimpleNamespace())
     )
-    previous = sys.modules.get("openai")
-    sys.modules["openai"] = SimpleNamespace(OpenAI=lambda **_kwargs: transport)
-    try:
-        return type(client)(
-            model=model,
-            api_key="non-secret-test-key",
-            base_url="http://127.0.0.1:8787/v1",
-            request_timeout=1.0,
-            max_retries=max_retries,
-        )
-    finally:
-        if previous is None:
-            sys.modules.pop("openai", None)
-        else:
-            sys.modules["openai"] = previous
+    monkeypatch.setitem(
+        sys.modules,
+        "openai",
+        SimpleNamespace(OpenAI=lambda **_kwargs: transport),
+    )
+    return client_type(
+        model=model,
+        api_key="non-secret-test-key",
+        base_url="http://127.0.0.1:8787/v1",
+        request_timeout=1.0,
+        max_retries=max_retries,
+    )
 
 
-def _retry_test_client(ra, failures):
+def _retry_test_client(monkeypatch, failures):
     from easyicu.research_agent.providers.llm import OpenAIClient
 
     class _Completions:
@@ -47,12 +51,12 @@ def _retry_test_client(ra, failures):
 
     completions = _Completions()
     client = _mock_transport_client(
-        OpenAIClient.__new__(OpenAIClient),
+        monkeypatch,
+        OpenAIClient,
         model="gpt-test",
         completions=completions,
         max_retries=2,
     )
-    client._rebuild_openai_client = lambda: None
     return client, completions
 
 
@@ -102,7 +106,7 @@ def test_unmanaged_external_client_is_rejected_before_transport(ra):
     assert calls == 0
 
 
-def test_openai_client_strips_reasoning_blocks_from_content(ra):
+def test_openai_client_strips_reasoning_blocks_from_content(monkeypatch, ra):
     from easyicu.research_agent.providers.llm import LLMMessage, OpenAIClient
 
     class _Completions:
@@ -115,7 +119,8 @@ def test_openai_client_strips_reasoning_blocks_from_content(ra):
             return SimpleNamespace(choices=[choice], usage=None)
 
     client = _mock_transport_client(
-        OpenAIClient.__new__(OpenAIClient),
+        monkeypatch,
+        OpenAIClient,
         model="qwen3-8b",
         completions=_Completions(),
     )
@@ -177,7 +182,8 @@ def test_openai_client_streaming_is_transport_only(monkeypatch, ra):
             return stream
 
     client = _mock_transport_client(
-        OpenAIClient.__new__(OpenAIClient),
+        monkeypatch,
+        OpenAIClient,
         model="gpt-5.6-luna",
         completions=_Completions(),
     )
@@ -248,7 +254,8 @@ def test_openai_client_stream_closes_on_iteration_error(monkeypatch, ra):
             return stream
 
     client = _mock_transport_client(
-        OpenAIClient.__new__(OpenAIClient),
+        monkeypatch,
+        OpenAIClient,
         model="gpt-5.6-luna",
         completions=_Completions(),
     )
@@ -260,7 +267,9 @@ def test_openai_client_stream_closes_on_iteration_error(monkeypatch, ra):
     assert stream.closed is True
 
 
-def test_openai_client_recovers_unclosed_reasoning_prefix_for_debuggability(ra):
+def test_openai_client_recovers_unclosed_reasoning_prefix_for_debuggability(
+    monkeypatch, ra
+):
     from easyicu.research_agent.providers.llm import LLMMessage, OpenAIClient
 
     class _Completions:
@@ -270,7 +279,8 @@ def test_openai_client_recovers_unclosed_reasoning_prefix_for_debuggability(ra):
             return SimpleNamespace(choices=[choice], usage=None)
 
     client = _mock_transport_client(
-        OpenAIClient.__new__(OpenAIClient),
+        monkeypatch,
+        OpenAIClient,
         model="qwen3-8b",
         completions=_Completions(),
     )
@@ -355,7 +365,8 @@ def test_openai_client_zero_manual_retry_budget_makes_one_attempt(monkeypatch, r
 
     completions = _Completions()
     client = _mock_transport_client(
-        OpenAIClient.__new__(OpenAIClient),
+        monkeypatch,
+        OpenAIClient,
         model="gpt-5.6-luna",
         completions=completions,
         max_retries=0,
@@ -379,7 +390,7 @@ def test_openai_client_manual_owner_retries_transient_http_status(
 
     error = RuntimeError(f"provider rejected request with status {status_code}")
     error.status_code = status_code
-    client, completions = _retry_test_client(ra, [error])
+    client, completions = _retry_test_client(monkeypatch, [error])
     sleeps = []
     monkeypatch.delenv("EASYICU_LLM_STREAM", raising=False)
     monkeypatch.setattr("time.sleep", sleeps.append)
@@ -405,7 +416,7 @@ def test_openai_client_manual_owner_recognizes_generic_transient_errors(
 ):
     from easyicu.research_agent.providers.llm import LLMMessage
 
-    client, completions = _retry_test_client(ra, [error])
+    client, completions = _retry_test_client(monkeypatch, [error])
     sleeps = []
     monkeypatch.delenv("EASYICU_LLM_STREAM", raising=False)
     monkeypatch.setattr("time.sleep", sleeps.append)
@@ -422,7 +433,7 @@ def test_openai_client_ignores_invalid_retry_after_values(monkeypatch, ra, retry
     error = RuntimeError("provider rejected request with status 503")
     error.status_code = 503
     error.response = SimpleNamespace(headers={"Retry-After": retry_after})
-    client, completions = _retry_test_client(ra, [error])
+    client, completions = _retry_test_client(monkeypatch, [error])
     sleeps = []
     monkeypatch.delenv("EASYICU_LLM_STREAM", raising=False)
     monkeypatch.setattr("time.sleep", sleeps.append)
@@ -443,7 +454,7 @@ def test_openai_client_transport_retry_consumes_provider_budget(monkeypatch, ra)
 
     error = RuntimeError("upstream response")
     error.status_code = 500
-    client, completions = _retry_test_client(ra, [error])
+    client, completions = _retry_test_client(monkeypatch, [error])
     budget = StepProviderCallBudget(2, step_id="analysis")
     monkeypatch.delenv("EASYICU_LLM_STREAM", raising=False)
     monkeypatch.setattr("time.sleep", lambda _seconds: None)
@@ -469,7 +480,7 @@ def test_openai_client_does_not_sleep_or_call_over_provider_budget(monkeypatch, 
 
     error = RuntimeError("upstream response")
     error.status_code = 504
-    client, completions = _retry_test_client(ra, [error])
+    client, completions = _retry_test_client(monkeypatch, [error])
     budget = StepProviderCallBudget(1, step_id="analysis")
     sleeps = []
     monkeypatch.delenv("EASYICU_LLM_STREAM", raising=False)
