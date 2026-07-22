@@ -26,7 +26,10 @@ import pandas as pd
 
 from easyicu.research_agent.execution.runners.deterministic_missingness import (
     missingness_measurement_audit_code,
+    source_availability_audit_executor_owns_step,
 )
+from easyicu.research_agent.execution.runners.selection import select_standard_executor
+from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep
 
 
 def _exec_runner(
@@ -108,6 +111,47 @@ def _cohort(n: int = 1000, seed: int = 0) -> pd.DataFrame:
             "rrt_measured": rrt_measured,
         }
     )
+
+
+def test_source_availability_contract_is_selected_before_any_coder_path():
+    step = AnalysisStep(
+        step_id="03_missingness_measurement_audit",
+        intent="Audit missingness and source availability without imputing zero.",
+        inputs=[
+            "artifact:analysis_cohort",
+            "aki_stage_max",
+            "aki_stage_measured",
+            "aki_stage_n",
+        ],
+        expected_outputs=[
+            "table:missingness_audit",
+            "table:measurement_source_audit",
+        ],
+        method="missingness_and_source_availability_audit",
+    )
+    plan = AnalysisPlan(research_question="Test", steps=[step])
+
+    assert source_availability_audit_executor_owns_step(step)
+    selection = select_standard_executor(step, plan=plan)
+    assert selection is not None
+    assert selection.analysis_kind == "missingness_source_availability_audit"
+    assert "missingness_measurement_audit.csv" in selection.code
+
+
+def test_source_availability_executor_rejects_extra_scientific_product():
+    step = AnalysisStep(
+        step_id="03_missingness_measurement_audit",
+        intent="Audit missingness and source availability.",
+        inputs=["artifact:analysis_cohort", "aki_stage_max"],
+        expected_outputs=[
+            "table:missingness_audit",
+            "table:measurement_source_audit",
+            "table:adjusted_association_estimates",
+        ],
+        method="missingness_and_source_availability_audit",
+    )
+
+    assert not source_availability_audit_executor_owns_step(step)
 
 
 def test_missingness_audit_counts_from_measured_indicator(tmp_path: Path):
