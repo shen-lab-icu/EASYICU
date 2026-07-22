@@ -38,7 +38,7 @@ from .idea_mining_schema import (
 )
 
 DATA_FIRST_ROUTE_SCHEMA_VERSION = "easyicu.data_first_discovery_route/2"
-DATA_FIRST_SHORTLIST_SCHEMA_VERSION = "easyicu.data_first_review_shortlist/1"
+DATA_FIRST_SHORTLIST_SCHEMA_VERSION = "easyicu.data_first_review_shortlist/2"
 
 _MIN_EXTERNAL_VALIDATION_COMPLETENESS = 0.90
 _MIN_MEASUREMENT_AUDIT_COMPLETENESS = 0.20
@@ -70,6 +70,21 @@ def _sha256_file(path: Path) -> str:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def _review_candidate_id(*, route: str, origin_id: str, topic: str) -> str:
+    """Return a stable identity for a bounded human-review question.
+
+    A measurement/source-status audit is a different scientific question from
+    the association candidate that revealed the incomplete construct.  It must
+    not inherit the association candidate's identity as though only the label
+    had changed.
+    """
+
+    digest = hashlib.sha256(
+        f"{route}\0{origin_id}\0{topic}".encode("utf-8")
+    ).hexdigest()[:16]
+    return f"reviewidea_{digest}"
 
 
 def _candidate_evidence_text(
@@ -214,9 +229,9 @@ def _review_shortlist(result: IdeaMiningDryRunResult) -> list[dict[str, Any]]:
             continue
         exact_hits = sum(query.hit_count for query in exact_records)
         base = {
-            "literature_idea_id": record.literature_idea_id,
-            "executable_candidate_id": record.executable_candidate_id,
-            "candidate_topic": record.candidate_topic,
+            "origin_literature_idea_id": record.literature_idea_id,
+            "origin_executable_candidate_id": record.executable_candidate_id,
+            "origin_candidate_topic": record.candidate_topic,
             "go_no_go": record.go_no_go,
             "exact_same_topic_hit_count": exact_hits,
             "joint_complete_n": numerator,
@@ -235,9 +250,16 @@ def _review_shortlist(result: IdeaMiningDryRunResult) -> list[dict[str, Any]]:
             and cross_db_prior_art == 0
             and exact_hits <= _MAX_EXACT_HITS_FOR_EXTERNAL_VALIDATION_REVIEW
         ):
+            route = "cross_database_external_validation"
             payload = {
                 **base,
-                "review_route": "cross_database_external_validation",
+                "review_candidate_id": _review_candidate_id(
+                    route=route,
+                    origin_id=record.executable_candidate_id,
+                    topic=record.candidate_topic,
+                ),
+                "candidate_topic": record.candidate_topic,
+                "review_route": route,
                 "selection_reason": (
                     "high prepared-cohort completeness, <=25 exact same-topic "
                     "PubMed hits, and no retrieved title classified as comparable "
@@ -257,9 +279,23 @@ def _review_shortlist(result: IdeaMiningDryRunResult) -> list[dict[str, Any]]:
             <= completeness
             < _MAX_MEASUREMENT_AUDIT_COMPLETENESS
         ):
+            route = "cross_database_measurement_bias_audit"
+            predictor = record.prior_art.predictor_literature_phrase
+            audit_topic = (
+                "cross-database measurement/source-status audit of " + predictor
+            )
             payload = {
                 **base,
-                "review_route": "cross_database_measurement_bias_audit",
+                "review_candidate_id": _review_candidate_id(
+                    route=route,
+                    origin_id=record.executable_candidate_id,
+                    topic=audit_topic,
+                ),
+                "candidate_topic": audit_topic,
+                "association_outcome_context": (
+                    record.prior_art.outcome_literature_phrase
+                ),
+                "review_route": route,
                 "selection_reason": (
                     "dictionary-resolvable across harmonized databases but only "
                     "20-70% jointly observed in the prepared cohort; association "
