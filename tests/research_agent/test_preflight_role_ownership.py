@@ -324,6 +324,15 @@ def test_missingness_audit_with_analytic_denominator_is_owned():
     )
 
 
+def test_missingness_and_source_availability_audit_is_owned():
+    assert _simple_missingness_audit_runner_owns_step(
+        "missingness_and_source_availability_audit",
+        "03_missingness_measurement_audit",
+        "Distinguish missing summaries from absent measurement sources.",
+        ["table:missingness_audit", "table:measurement_source_audit"],
+    )
+
+
 def test_missingness_runner_rejects_unowned_data_or_test_contracts():
     assert not _simple_missingness_audit_runner_owns_step(
         "data_quality_audit",

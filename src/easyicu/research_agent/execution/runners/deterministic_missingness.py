@@ -89,7 +89,7 @@ def missingness_measurement_audit_code() -> str:
                     requested_inputs = [
                         str(value).strip()
                         for value in (planned_step.get("inputs") or [])
-                        if str(value).strip()
+                        if str(value).strip() and ":" not in str(value)
                     ]
                     requested_outputs = [
                         str(value).strip()
@@ -382,6 +382,39 @@ def missingness_measurement_audit_code() -> str:
         audit = audit.sort_values("value_missing_pct", ascending=False).reset_index(drop=True)
         audit.to_csv(out_dir / "missingness_measurement_audit.csv", index=False)
 
+        missingness_audit = audit[
+            ["concept", "variable", "value_column", "n_total", "raw_value_missing_n"]
+        ].copy()
+        missingness_audit["n_nonmissing"] = (
+            missingness_audit["n_total"] - missingness_audit["raw_value_missing_n"]
+        )
+        missingness_audit["missing_n"] = missingness_audit["raw_value_missing_n"]
+        missingness_audit["missing_pct"] = (
+            100.0
+            * missingness_audit["missing_n"]
+            / missingness_audit["n_total"]
+        )
+        missingness_audit.drop(columns=["raw_value_missing_n"]).to_csv(
+            out_dir / "missingness_audit.csv", index=False
+        )
+
+        source_audit = audit[
+            [
+                "concept",
+                "variable",
+                "value_column",
+                "n_total",
+                "measured_one_n",
+                "value_missing_n",
+                "value_present_but_measured_zero_n",
+                "measured_but_value_missing_n",
+                "indicator_semantics",
+                "missingness_kind",
+                "has_measured_indicator",
+            ]
+        ].copy()
+        source_audit.to_csv(out_dir / "measurement_source_audit.csv", index=False)
+
         # --- declared analytic denominators ----------------------------------
         resolved_inputs = []
         missing_declared_inputs = []
@@ -473,6 +506,23 @@ def missingness_measurement_audit_code() -> str:
         n_binary_event_status = int(
             (audit["indicator_semantics"] == "binary_event_presence").sum()
         )
+        product_files = {
+            "missingness_audit": "missingness_audit.csv",
+            "missingness_measurement_audit": "missingness_measurement_audit.csv",
+            "measurement_audit": "missingness_measurement_audit.csv",
+            "measurement_process_audit": "missingness_measurement_audit.csv",
+            "measurement_source_audit": "measurement_source_audit.csv",
+            "data_quality_audit": "missingness_measurement_audit.csv",
+            "source_coverage": "measurement_source_audit.csv",
+            "analytic_denominator": "analytic_denominators.csv",
+            "analytic_denominators": "analytic_denominators.csv",
+            "cohort_flow": "cohort_flow.csv",
+        }
+        declared_output_files = {}
+        for output in requested_outputs:
+            product = output.split(":", 1)[-1].strip()
+            if product in product_files:
+                declared_output_files[output] = product_files[product]
         summary = {
             "step": current_step_id,
             "status": "blocked" if denominator_error else "ok",
@@ -503,7 +553,7 @@ def missingness_measurement_audit_code() -> str:
                 "structural_no_source = concept sourced for no stay in this cohort; "
                 "measurement_missing = sourced but unmeasured for a given stay.",
             ],
-            "output_files": {
+            "output_files": declared_output_files or {
                 "missingness_measurement_audit": "missingness_measurement_audit.csv",
                 "analytic_denominators": "analytic_denominators.csv",
                 "cohort_flow": "cohort_flow.csv",
