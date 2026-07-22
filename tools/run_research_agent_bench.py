@@ -1448,9 +1448,7 @@ def _benchmark_execution_identity(
         provider_authorization=provider_authorization,
         llm_seed=options.get("llm_seed"),
         data_seed=options.get("execution_data_seed"),
-        input_authority_sha256=options.get(
-            "execution_input_authority_sha256"
-        ),
+        input_authority_sha256=options.get("execution_input_authority_sha256"),
         host_runner_authorized=bool(options.get("host_runner_authorized", False)),
     )
 
@@ -1504,9 +1502,7 @@ def _benchmark_input_authority_sha256(cohort: Any) -> str:
                     index=True,
                     categorize=True,
                 )
-                digest.update(
-                    hashed.to_numpy(dtype="uint64", copy=False).tobytes()
-                )
+                digest.update(hashed.to_numpy(dtype="uint64", copy=False).tobytes())
             except (TypeError, ValueError):
                 digest.update(
                     cohort.to_json(
@@ -2383,6 +2379,65 @@ def _render_model_matrix(runs: List[Dict[str, Any]]) -> str:
     return "\n".join(lines)
 
 
+def _figure2_realrun_authorization_gate(args):
+    """Fail-closed real-run authorization, enforced before anything is launched.
+
+    Returns ``None`` to proceed (no declaration supplied, or the authority is
+    verified) or an integer exit code to stop the launcher immediately.  This is
+    called right after argument parsing, so a blocked/missing/tampered authority
+    exits with zero pipeline / subprocess / Provider / data-load activity.
+    """
+
+    declaration = getattr(args, "figure2_realrun_authorization", None)
+    if not declaration:
+        return None
+    repo_root = Path(__file__).resolve().parents[1]
+    identity = getattr(args, "figure2_expected_execution_identity", None)
+    if not identity:
+        print(
+            "[realrun-authority] --figure2-realrun-authorization requires "
+            "--figure2-expected-execution-identity",
+            file=sys.stderr,
+        )
+        return 2
+    from benchmarks.figure2_canonical9.realrun_authority import (
+        RealRunAuthorizationRequest,
+        verify_realrun_authorization,
+    )
+
+    production = getattr(args, "figure2_production_input_authority", None)
+    request = RealRunAuthorizationRequest(
+        declaration_path=Path(declaration),
+        expected_execution_identity_path=Path(identity),
+        input_freeze_path=(
+            repo_root / "benchmarks/figure2_canonical9/canonical_input_freeze_v1.json"
+        ),
+        rubric_path=(
+            repo_root / "benchmarks/figure2_canonical9/figure2_paper_rubric_v3.json"
+        ),
+        output_root=Path(args.out_root),
+        production_input_authority_path=(Path(production) if production else None),
+        resume_run_id=getattr(args, "resume_run_id", None),
+        resume_from_step_id=getattr(args, "resume_from_step_id", None),
+        cross_run_memory=bool(getattr(args, "enable_cross_run_memory", False)),
+    )
+    authorization = verify_realrun_authorization(request)
+    print(authorization.model_dump_json(indent=2))
+    if authorization.status != "authorized":
+        print(
+            "[realrun-authority] BLOCKED — no pipeline, subprocess, Provider, or "
+            "data load has started.",
+            file=sys.stderr,
+        )
+        return 2
+    print(
+        "[realrun-authority] authority verified; launching the real run still "
+        "requires the operator's explicit action.",
+        file=sys.stderr,
+    )
+    return None
+
+
 def main() -> int:
     _bootstrap_imports()
 
@@ -2700,6 +2755,26 @@ def main() -> int:
         ),
     )
     parser.add_argument(
+        "--figure2-realrun-authorization",
+        default=None,
+        help=(
+            "Path to an operator freeze declaration JSON. When set, the real-run "
+            "authorization gate is enforced BEFORE any pipeline, subprocess, "
+            "Provider, or data load; a blocked/missing/tampered authority exits "
+            "with status 2 having launched nothing. Requires "
+            "--figure2-expected-execution-identity."
+        ),
+    )
+    parser.add_argument(
+        "--figure2-production-input-authority",
+        default=None,
+        help=(
+            "Path to a typed full-9 production input authority JSON. Absent means "
+            "the input is not yet frozen for a real run (the v1 assessment stays "
+            "blocked), so the gate fails closed."
+        ),
+    )
+    parser.add_argument(
         "--force-writer-probe",
         action="store_true",
         help=(
@@ -2720,6 +2795,9 @@ def main() -> int:
         ),
     )
     args = parser.parse_args()
+    _realrun_gate_rc = _figure2_realrun_authorization_gate(args)
+    if _realrun_gate_rc is not None:
+        return _realrun_gate_rc
     case_registration = _register_case_patterns(args.case)
     submission_profile = (
         _resolve_submission_profile(args.profile)
