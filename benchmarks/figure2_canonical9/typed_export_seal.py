@@ -5,30 +5,35 @@ Repository-local paper infrastructure — NEVER imported by the research Agent.
 An older module export (e.g. ``full6_20260717/miiv``) carries empty
 ``concept_meta`` and no ``column_metadata`` sidecar, so it is a *legacy* export
 package: the official typed-authority path cannot seal a cohort/trajectory
-authority from it. Re-running the official typed exporter is impossible (it
-recomputes concepts from raw source tables the module export does not contain)
-and would recompute values under the *current* dictionary, changing the data.
+authority from it, and re-running the official typed exporter is impossible (it
+recomputes concepts from raw source tables the module export does not contain).
 
-This module RETROFITS the existing export in place. It writes ONLY:
-  * a content-addressed ``column_metadata.sha256-*.json`` sidecar, and
-  * a native ``_manifest.json``
-alongside the EXISTING parquet files — **whose bytes are never touched**.
+This module RETROFITS the existing export by writing ONLY a native
+``_manifest.json`` + a content-addressed ``column_metadata`` sidecar alongside
+the EXISTING parquet files — **whose bytes are never touched** (verified by
+per-file SHA/size before and after).
 
-It seals PROVABLE structure only — column identity, dtype, role, unit, time
-coordinate, concept id, and file SHA — and DELIBERATELY OMITS
-``extraction_bounds``.  The current dictionary's numeric ranges are NOT a
-generation authority for values extracted under an older dictionary vintage:
-re-imposing them would (a) misrepresent provenance and (b) fail-close on
-legitimate vintage values (measured: full6 ``po2`` has 6.4% of values below the
-current floor of 40).  Bounds authority is recorded as ``unavailable``; anomalous
-values are PRESERVED for downstream host-owned QC and never filtered here.
+HONEST PROVENANCE BOUNDARY (the whole point):
+
+* It seals structure only — column identity, dtype, role, unit, and time
+  coordinate — and these are a PROJECTION of the *current* packaged dictionary,
+  NOT facts recorded at the older extraction. Every sealed structural field is
+  labelled ``current_dictionary_projection_not_extraction_provenance`` and the
+  six-case required concepts get a per-field semantic review table that keeps
+  ``paper_authorized = false`` until a human signs it off.
+* It OMITS every numeric value-range claim (``extraction_bounds`` AND
+  ``analysis_plausibility_range``): the current dictionary's ranges are not an
+  authority over older-vintage values and would fail-close on legitimate vintage
+  data (measured: full6 ``po2`` 6.4% below the current floor). ``bounds_authority``
+  is recorded as ``unavailable``; anomalies are PRESERVED for downstream
+  host-owned QC (denominator + would-exclude counts kept), never filtered.
 
     seal_kind = retrofitted_structural_typed_export
 
 The seal produces a valid *typed* export package so ``materialize_to_parquet``
-can seal cohort/trajectory authorities, while keeping the honest separation the
-owner asked for: this tool answers "is the data's structure/identity trustworthy",
-NOT "are the values clinically in range" (that is downstream scientific QC).
+can seal cohort/trajectory authorities, while answering only "is the data's
+structure/identity trustworthy" — NOT "are the values clinically in range"
+(downstream scientific QC).
 """
 
 from __future__ import annotations
@@ -37,52 +42,51 @@ import dataclasses
 import gc
 import hashlib
 import json
+import os
+import re
+import subprocess
+import uuid
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import pandas as pd
 
-from easyicu.concept.metadata_projection import (
-    ColumnProjectionSpec,
-    ConceptColumnRole,
-    project_concept_column_metadata,
+from easyicu.concept.export_column_binding import (
+    build_export_file_metadata_binding,
+    metadata_definition_for_export,
 )
 from easyicu.concept.metadata_sidecar import (
     EXPORT_PHYSICAL_SCOPE,
     ColumnMetadataFileBinding,
     ColumnMetadataSidecar,
+    SidecarRef,
+    canonical_sidecar_bytes,
     write_content_addressed_sidecar,
 )
 from easyicu.config import load_src_cfg
+from easyicu.research_agent.concept_dict_audit import (
+    assert_dict_matches,
+    compute_concept_dict_fingerprint,
+)
 from easyicu.research_agent.intake.export_package import (
     IDENTIFIER_COLUMNS,
+    LEGACY_MANIFEST,
     NATIVE_MANIFEST,
+    NATIVE_MANIFEST_SCHEMA_V2,
     TIME_COLUMNS,
 )
+from easyicu.research_agent.orchestration.profiles import NPJ_DM_2026_07_18
 from easyicu.resources import load_dictionary
-from easyicu.webserver.dataio import (
-    _NATIVE_EXPORT_SCHEMA_V2,
-    _build_export_file_metadata_binding,
-    _metadata_definition_for_export,
-)
 
 SEAL_KIND = "retrofitted_structural_typed_export"
 BOUNDS_AUTHORITY_UNAVAILABLE = "unavailable"
+METADATA_PROVENANCE = "current_dictionary_projection_not_extraction_provenance"
 
-# npj_dm/20260718 packaged-dictionary identity used for the metadata PROJECTION
-# (dtype/role/unit/time).  Recorded so downstream can see exactly which dictionary
-# produced the sealed STRUCTURE — it does NOT make the current dict an authority
-# over the older-vintage VALUES (bounds stay unavailable).
-SUBMISSION_PROFILE_REF = "npj_dm/20260718"
-CONCEPT_DICT_SHA256 = "fccadc53622dc82fe1dc8696617e52044168b6a84a9255e97e59df9e53bc5803"
-SOFA2_DICT_SHA256 = "61f37a41083cd96df49a2e61d26c682e9d090d0a22d05ff97ba85a966b165b1c"
-
-# Concepts each Canonical9 case in this batch (e1/m1/m2/m3/h1/h3) structurally
-# requires per benchmarks/figure2_canonical9/evaluator/suite.py.  The flat cases'
-# additional predictor features are LLM-selected downstream from the available
-# typed pool, so they are intentionally NOT enumerated here (this map is an
-# advisory annotation, not a gate).
 _ALL_CASES = ("e1", "m1", "m2", "m3", "h1", "h3")
+# Concepts each Canonical9 case in this batch structurally requires per
+# benchmarks/figure2_canonical9/evaluator/suite.py.  Flat cases' additional
+# predictor features are LLM-selected downstream from the typed pool, so they are
+# intentionally not enumerated (this is an advisory annotation, not a gate).
 _CASE_REQUIRED: Dict[str, Tuple[str, ...]] = {
     "age": _ALL_CASES,
     "sex": _ALL_CASES,
@@ -107,32 +111,24 @@ class TypedRetrofitSealError(RuntimeError):
 
 @dataclasses.dataclass(frozen=True)
 class ColumnCompat:
-    """One physical column's compatibility verdict (constraint: no silent skips)."""
+    """One physical column's compatibility verdict (no silent skips)."""
 
     file: str
     column: str
     dtype: str
-    # bound | unbound | semantic_conflict
-    status: str
+    status: str  # bound | unbound | semantic_conflict
     role: Optional[str] = None
+    canonical_unit: Optional[str] = None
     concept_id: Optional[str] = None
     required_by_case: Tuple[str, ...] = ()
     reason: Optional[str] = None
-    # Advisory ONLY — how the CURRENT dict's bounds would score these VINTAGE
+    # Advisory ONLY — how the CURRENT dict bounds would score these VINTAGE
     # values.  Nothing is filtered; this is a QC signal + preserved denominator.
     current_dict_bounds_advisory: Optional[Dict[str, Any]] = None
 
     def to_dict(self) -> Dict[str, Any]:
-        return {
-            "file": self.file,
-            "column": self.column,
-            "dtype": self.dtype,
-            "status": self.status,
-            "role": self.role,
-            "concept_id": self.concept_id,
-            "required_by_case": list(self.required_by_case),
-            "reason": self.reason,
-            "current_dict_bounds_advisory": self.current_dict_bounds_advisory,
+        return dataclasses.asdict(self) | {
+            "required_by_case": list(self.required_by_case)
         }
 
 
@@ -140,24 +136,42 @@ class ColumnCompat:
 class SealResult:
     export_dir: str
     seal_kind: str
+    dry_run: bool
     value_vintage: str
+    value_vintage_basis: str
     bounds_authority: str
-    metadata_projection_dict: Dict[str, str]
+    metadata_provenance: str
+    dict_fingerprint: Dict[str, str]
+    source_evidence: Dict[str, Any]
     patient_identity: Dict[str, Any]
+    semantic_review: Dict[str, Any]
+    sidecar_ref: Dict[str, Any]
     sidecar_file: Optional[str]
     manifest_path: Optional[str]
     files: List[Dict[str, Any]]
     columns: List[ColumnCompat]
     parquet_immutability_verified: bool
 
+    def compat_summary(self) -> Dict[str, int]:
+        out: Dict[str, int] = {}
+        for c in self.columns:
+            out[c.status] = out.get(c.status, 0) + 1
+        return out
+
     def to_dict(self) -> Dict[str, Any]:
         return {
             "export_dir": self.export_dir,
             "seal_kind": self.seal_kind,
+            "dry_run": self.dry_run,
             "value_vintage": self.value_vintage,
+            "value_vintage_basis": self.value_vintage_basis,
             "bounds_authority": self.bounds_authority,
-            "metadata_projection_dict": self.metadata_projection_dict,
+            "metadata_provenance": self.metadata_provenance,
+            "dict_fingerprint": self.dict_fingerprint,
+            "source_evidence": self.source_evidence,
             "patient_identity": self.patient_identity,
+            "semantic_review": self.semantic_review,
+            "sidecar_ref": self.sidecar_ref,
             "sidecar_file": self.sidecar_file,
             "manifest_path": self.manifest_path,
             "parquet_immutability_verified": self.parquet_immutability_verified,
@@ -165,12 +179,6 @@ class SealResult:
             "files": self.files,
             "columns": [c.to_dict() for c in self.columns],
         }
-
-    def compat_summary(self) -> Dict[str, int]:
-        out: Dict[str, int] = {}
-        for c in self.columns:
-            out[c.status] = out.get(c.status, 0) + 1
-        return out
 
 
 def _sha256_size(path: Path) -> Tuple[str, int]:
@@ -181,18 +189,52 @@ def _sha256_size(path: Path) -> Tuple[str, int]:
     return digest.hexdigest(), int(path.stat().st_size)
 
 
-def _strip_extraction_bounds(
+def _sha256_file(path: Path) -> str:
+    return _sha256_size(path)[0]
+
+
+def _sealer_code_sha256() -> str:
+    """SHA of the sealing implementation (this module + the shared binding leaf)."""
+
+    import easyicu.concept.export_column_binding as leaf
+
+    digest = hashlib.sha256()
+    for source in sorted({Path(__file__), Path(leaf.__file__)}):
+        digest.update(source.read_bytes())
+    return digest.hexdigest()
+
+
+def _git_commit(repo_hint: Path) -> Optional[str]:
+    try:
+        out = subprocess.run(
+            ["git", "-C", str(repo_hint), "rev-parse", "HEAD"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=True,
+        )
+        return out.stdout.strip() or None
+    except Exception:
+        return None
+
+
+def _strip_value_range_claims(
     file_binding: ColumnMetadataFileBinding,
 ) -> ColumnMetadataFileBinding:
-    """Return a copy of ``file_binding`` with every column's bounds set to None.
+    """Copy ``file_binding`` with every column's numeric value-range claims removed.
 
-    The current dictionary's ``extraction_bounds`` are not an authority over the
-    older-vintage values, so they are omitted from the sealed structure.
+    The current dictionary's ``extraction_bounds`` and
+    ``analysis_plausibility_range`` are not an authority over older-vintage
+    values, so they are omitted from the sealed structure.
     """
 
     new_columns = {}
     for column, binding in file_binding.columns.items():
-        stripped_meta = dataclasses.replace(binding.metadata, extraction_bounds=None)
+        stripped_meta = dataclasses.replace(
+            binding.metadata,
+            extraction_bounds=None,
+            analysis_plausibility_range=None,
+        )
         new_columns[column] = dataclasses.replace(binding, metadata=stripped_meta)
     return dataclasses.replace(file_binding, columns=new_columns)
 
@@ -200,15 +242,20 @@ def _strip_extraction_bounds(
 def _bounds_advisory(
     concept: str, series: pd.Series, dictionary: Any, prefixes: Sequence[str]
 ) -> Optional[Dict[str, Any]]:
-    """Score VINTAGE values against the CURRENT dict bounds — advisory only.
+    """Score VINTAGE values against CURRENT dict bounds — advisory only.
 
-    Preserves the denominator (``n_total``) and the count that WOULD be excluded
-    (``n_below`` / ``n_above``) so downstream host-owned QC can decide.  Never
-    filters or mutates the data.
+    Preserves the denominator and the would-exclude counts so downstream
+    host-owned QC can decide.  Never filters or mutates data.
     """
 
+    from easyicu.concept.metadata_projection import (
+        ColumnProjectionSpec,
+        ConceptColumnRole,
+        project_concept_column_metadata,
+    )
+
     try:
-        definition = _metadata_definition_for_export(concept, "x", dictionary)
+        definition = metadata_definition_for_export(concept, "x", dictionary)
         md = project_concept_column_metadata(
             definition,
             spec=ColumnProjectionSpec(
@@ -231,7 +278,7 @@ def _bounds_advisory(
     n_below = int((numeric < float(lo)).sum()) if lo is not None else 0
     n_above = int((numeric > float(hi)).sum()) if hi is not None else 0
     if n_below == 0 and n_above == 0:
-        return None  # conforms to current bounds; nothing to advise
+        return None
     return {
         "current_dict_minimum": None if lo is None else float(lo),
         "current_dict_maximum": None if hi is None else float(hi),
@@ -247,26 +294,24 @@ def _bounds_advisory(
     }
 
 
-def _concept_role_name(concept: str, series: pd.Series, dictionary: Any) -> str:
-    """Provable role: EVENT_STATUS iff logical/categorical-boolean, else VALUE."""
-
-    definition = _metadata_definition_for_export(concept, "x", dictionary)
-    physical_is_bool = pd.api.types.is_bool_dtype(series)
-    is_logical = definition.class_name == "lgl_cncpt"
-    categorical_boolean = physical_is_bool and definition.class_name == "fct_cncpt"
-    if is_logical or categorical_boolean:
-        return ConceptColumnRole.EVENT_STATUS.value
-    return ConceptColumnRole.VALUE.value
+def _definition_unit(definition: Any) -> Optional[str]:
+    unit = getattr(definition, "unit", None)
+    if isinstance(unit, (list, tuple)) and unit:
+        return str(unit[0])
+    if isinstance(unit, str) and unit:
+        return unit
+    return None
 
 
 def _classify_columns(
-    module: str,
     frame: pd.DataFrame,
     dictionary: Any,
     prefixes: Sequence[str],
     relative_path: str,
 ) -> Tuple[List[str], List[ColumnCompat]]:
     """Classify every physical value column; return (bindable_concepts, compat)."""
+
+    from easyicu.concept.metadata_projection import ConceptColumnRole
 
     value_cols = [
         c
@@ -279,9 +324,8 @@ def _classify_columns(
         series = frame[column]
         dtype = str(series.dtype)
         required = _CASE_REQUIRED.get(column, ())
-        # Is it dict-resolvable at all?
         try:
-            definition = _metadata_definition_for_export(column, "x", dictionary)
+            definition = metadata_definition_for_export(column, "x", dictionary)
         except Exception as exc:  # noqa: BLE001 - reported, not silenced
             compat.append(
                 ColumnCompat(
@@ -289,16 +333,18 @@ def _classify_columns(
                     column=column,
                     dtype=dtype,
                     status="unbound",
-                    concept_id=None,
                     required_by_case=required,
-                    reason=f"concept not resolvable in dictionary: {type(exc).__name__}",
+                    reason=(
+                        f"concept not resolvable in dictionary: {type(exc).__name__}"
+                    ),
                 )
             )
             continue
-        # Bool physical value + non-logical concept = semantic conflict (do NOT
-        # silently skip — constraint 7).
         physical_is_bool = pd.api.types.is_bool_dtype(series)
-        logical = definition.class_name in {"lgl_cncpt", "fct_cncpt"}
+        # Match the official binding's scalar ``==`` semantics: a list/multi-class
+        # ``class_name`` is treated as non-logical (tuple membership, not a set,
+        # so an unhashable list never raises).
+        logical = definition.class_name in ("lgl_cncpt", "fct_cncpt")
         if physical_is_bool and not logical:
             compat.append(
                 ColumnCompat(
@@ -316,13 +362,19 @@ def _classify_columns(
             )
             continue
         bindable.append(column)
+        role = (
+            ConceptColumnRole.EVENT_STATUS.value
+            if logical
+            else ConceptColumnRole.VALUE.value
+        )
         compat.append(
             ColumnCompat(
                 file=relative_path,
                 column=column,
                 dtype=dtype,
                 status="bound",
-                role=_concept_role_name(column, series, dictionary),
+                role=role,
+                canonical_unit=_definition_unit(definition),
                 concept_id=column,
                 required_by_case=required,
                 current_dict_bounds_advisory=_bounds_advisory(
@@ -333,20 +385,177 @@ def _classify_columns(
     return bindable, compat
 
 
-def _module_name_for(parquet_path: Path) -> str:
-    """Module name from the sibling per-file manifest, else the filename stem."""
+def _subject_identity(
+    parquet_paths: Sequence[Path],
+) -> Dict[str, Any]:
+    """Verify cross-file stay_id -> subject_id consistency; never fabricate.
 
-    manifest = parquet_path.with_suffix("").with_suffix(".manifest.json")
+    Presence of ``subject_id`` in one file does not clear the blocker.  Every
+    file carrying both columns must agree; any conflict fails closed.
+    """
+
+    import pyarrow.parquet as pq
+
+    stay_to_subject: Dict[Any, Any] = {}
+    files_with_subject: List[str] = []
+    conflicts: List[Dict[str, Any]] = []
+    for path in parquet_paths:
+        cols = set(pq.read_schema(path).names)  # metadata only, no row read
+        if "subject_id" not in cols or "stay_id" not in cols:
+            continue
+        files_with_subject.append(path.name)
+        pair = pd.read_parquet(path, columns=["stay_id", "subject_id"]).dropna()
+        for stay, subject in zip(pair["stay_id"].tolist(), pair["subject_id"].tolist()):
+            prior = stay_to_subject.get(stay)
+            if prior is None:
+                stay_to_subject[stay] = subject
+            elif prior != subject:
+                conflicts.append(
+                    {"stay_id": stay, "subject_ids": sorted({str(prior), str(subject)})}
+                )
+    if not files_with_subject:
+        return {
+            "subject_id_present": False,
+            "row_identity": "stay_id",
+            "patient_level_uniqueness_verified": False,
+            "first_icu_stay_verified": False,
+            "blocker": "patient_identity_unavailable",
+        }
+    if conflicts:
+        raise TypedRetrofitSealError(
+            "subject_id cross-file conflict "
+            f"({len(conflicts)} stay_id(s) map to multiple subject_id): "
+            f"{conflicts[:3]}"
+        )
+    return {
+        "subject_id_present": True,
+        "row_identity": "stay_id",
+        "files_with_subject_id": sorted(files_with_subject),
+        "stay_to_subject_consistent": True,
+        "n_stays_with_subject": len(stay_to_subject),
+        "patient_level_uniqueness_verified": True,
+        "first_icu_stay_verified": False,
+        "blocker": None,
+    }
+
+
+def _bind_value_vintage(export_dir: Path, value_vintage: str) -> Tuple[str, str]:
+    """Anchor ``value_vintage`` to an evidence token; fail closed on a forged tag.
+
+    If the export path embeds a YYYYMMDD token, ``value_vintage`` MUST equal it.
+    Otherwise the vintage is operator-asserted and recorded as unverified.
+    """
+
+    tokens = re.findall(r"(?<!\d)(\d{8})(?!\d)", str(export_dir))
+    if tokens:
+        token = tokens[-1]
+        if value_vintage != token:
+            raise TypedRetrofitSealError(
+                f"value_vintage {value_vintage!r} does not match export-path date "
+                f"token {token!r} (forged vintage)"
+            )
+        return value_vintage, f"export_path_date_token:{token}"
+    return value_vintage, "operator_asserted_no_path_token"
+
+
+def _source_evidence(root: Path, parquet_paths: Sequence[Path]) -> Dict[str, Any]:
+    legacy = root / LEGACY_MANIFEST
+    per_module = {
+        p.name: _sha256_file(p)
+        for p in sorted(root.glob("*.manifest.json"))
+        if p.is_file()
+    }
+    return {
+        # The legacy export manifest IS the outer extraction-run manifest.
+        "extraction_run_manifest": LEGACY_MANIFEST,
+        "extraction_run_manifest_sha256": (
+            _sha256_file(legacy) if legacy.exists() else None
+        ),
+        "per_module_manifest_sha256": per_module,
+        "sealer_code_sha256": _sealer_code_sha256(),
+        # Bind the SEALER's code repo, not the export data dir (which lives on an
+        # external drive and is not a git repo). ``sealer_code_sha256`` above is
+        # the byte-exact authority; the commit is a convenience cross-reference.
+        "sealer_git_commit": _git_commit(Path(__file__).resolve().parent),
+    }
+
+
+def _semantic_review(
+    file_bindings: Sequence[ColumnMetadataFileBinding],
+) -> Dict[str, Any]:
+    """Per-field review table for the six-case required concepts (paper-gated)."""
+
+    rows: List[Dict[str, Any]] = []
+    seen: set[str] = set()
+    for fb in file_bindings:
+        coord = fb.time_coordinates[0] if fb.time_coordinates else None
+        for column, binding in fb.columns.items():
+            if column not in _CASE_REQUIRED or column in seen:
+                continue
+            seen.add(column)
+            md = binding.metadata
+            rows.append(
+                {
+                    "concept": column,
+                    "file": fb.relative_path,
+                    "required_by_case": list(_CASE_REQUIRED[column]),
+                    "sealed_role": md.role.value,
+                    "sealed_canonical_unit": md.canonical_unit,
+                    "sealed_time_origin": getattr(coord, "origin", None),
+                    "sealed_time_unit": getattr(coord, "unit", None),
+                    "provenance": METADATA_PROVENANCE,
+                    "reviewed": False,
+                }
+            )
+    missing = sorted(set(_CASE_REQUIRED) - seen)
+    return {
+        "paper_authorized": False,
+        "reviewed": False,
+        "note": (
+            "role/unit/time are a CURRENT-dictionary projection, not facts recorded "
+            "at the older extraction. A human must sign off each field before any "
+            "sealed input is paper-authorized."
+        ),
+        "unbound_required_concepts": missing,
+        "review_table": rows,
+    }
+
+
+def _atomic_write_json(path: Path, payload: Dict[str, Any]) -> None:
+    """Publish ``path`` atomically (temp + fsync + rename); the last commit point."""
+
+    raw = json.dumps(payload, indent=2, ensure_ascii=False).encode("utf-8")
+    tmp = path.parent / f".{path.name}.{uuid.uuid4().hex}.tmp"
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
+    try:
+        view = memoryview(raw)
+        while view:
+            view = view[os.write(fd, view) :]
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+    try:
+        os.replace(tmp, path)
+        dir_fd = os.open(path.parent, os.O_RDONLY)
+        try:
+            os.fsync(dir_fd)
+        finally:
+            os.close(dir_fd)
+    except OSError:
+        tmp.unlink(missing_ok=True)
+        raise
+
+
+def _module_name_for(parquet_path: Path) -> str:
     alt = parquet_path.parent / f"{parquet_path.stem}.manifest.json"
-    for candidate in (manifest, alt):
-        if candidate.exists():
-            try:
-                data = json.loads(candidate.read_text(encoding="utf-8"))
-                name = str(data.get("module") or "").strip()
-                if name:
-                    return name
-            except (json.JSONDecodeError, OSError):
-                pass
+    if alt.exists():
+        try:
+            data = json.loads(alt.read_text(encoding="utf-8"))
+            name = str(data.get("module") or "").strip()
+            if name:
+                return name
+        except (json.JSONDecodeError, OSError):
+            pass
     return parquet_path.stem
 
 
@@ -356,12 +565,15 @@ def seal_export_structural_typed(
     database: str = "miiv",
     value_vintage: str = "20260717",
     dictionary: Any = None,
+    dry_run: bool = False,
+    submission_profile: Any = NPJ_DM_2026_07_18,
 ) -> SealResult:
-    """Retrofit ``export_dir`` into a native typed export IN PLACE (data untouched).
+    """Retrofit ``export_dir`` into a native typed export (data untouched).
 
-    Writes only ``_manifest.json`` + a content-addressed ``column_metadata``
-    sidecar next to the existing parquets.  Verifies every parquet's SHA/size is
-    identical before and after.  Raises before writing if any parquet would change.
+    ``dry_run=True`` performs the FULL scan + compatibility report over the real
+    export and computes the would-be sidecar/manifest, but writes NOTHING.
+    Otherwise it writes only the sidecar + ``_manifest.json`` (both atomic), and
+    verifies every parquet SHA/size is identical before and after.
     """
 
     root = Path(export_dir).expanduser()
@@ -372,6 +584,15 @@ def seal_export_structural_typed(
             f"{NATIVE_MANIFEST} already present; refusing to overwrite a native "
             "manifest — remove it explicitly to re-seal"
         )
+
+    # (#1) Runtime dictionary SHA must match the declared profile, or fail closed.
+    fingerprint = compute_concept_dict_fingerprint()
+    assert_dict_matches(
+        fingerprint,
+        expected_concept_dict_sha=submission_profile.expected_concept_dict_sha,
+        expected_sofa2_dict_sha=submission_profile.expected_sofa2_dict_sha,
+        mode="strict",
+    )
     if dictionary is None:
         dictionary = load_dictionary(include_sofa2=True)
     prefixes = tuple(
@@ -380,44 +601,59 @@ def seal_export_structural_typed(
         if str(v).strip()
     )
 
+    bound_vintage, vintage_basis = _bind_value_vintage(root, value_vintage)
+
     parquet_paths = sorted(
         p for p in root.glob("*.parquet") if p.is_file() and not p.name.startswith(".")
     )
     if not parquet_paths:
         raise TypedRetrofitSealError(f"no parquet files found under {root}")
 
-    # Pre-write immutability baseline (constraint 2).
     pre_fingerprint = {p.name: _sha256_size(p) for p in parquet_paths}
+    patient_identity = _subject_identity(parquet_paths)
 
     file_bindings: List[ColumnMetadataFileBinding] = []
     files_meta: List[Dict[str, Any]] = []
     all_compat: List[ColumnCompat] = []
-    subject_id_seen = False
 
     for path in parquet_paths:
         module = _module_name_for(path)
         frame = pd.read_parquet(path)
-        if "subject_id" in frame.columns:
-            subject_id_seen = True
-        bindable, compat = _classify_columns(
-            module, frame, dictionary, prefixes, path.name
-        )
+        bindable, compat = _classify_columns(frame, dictionary, prefixes, path.name)
+        binding: Optional[ColumnMetadataFileBinding] = None
+        if bindable:
+            try:
+                binding = _strip_value_range_claims(
+                    build_export_file_metadata_binding(
+                        relative_path=path.name,
+                        module=module,
+                        frame=frame,
+                        concept_ids=bindable,
+                        database=database.strip().lower(),
+                        database_class_prefixes=prefixes,
+                        dictionary=dictionary,
+                    )
+                )
+            except Exception as exc:  # noqa: BLE001 - recorded per-column, not silenced
+                # Non-fatal for a full-export scan: downgrade this file's bound
+                # columns to ``unbound`` with the reason, never a silent skip.
+                reason = f"binding failed: {type(exc).__name__}: {exc}"[:200]
+                compat = [
+                    (
+                        dataclasses.replace(
+                            c, status="unbound", role=None, reason=reason
+                        )
+                        if c.status == "bound"
+                        else c
+                    )
+                    for c in compat
+                ]
+                bindable = []
         all_compat.extend(compat)
-        if not bindable:
-            # No typed columns — record it, do not seal this file.
+        if not bindable or binding is None:
             del frame
             gc.collect()
             continue
-        binding = _build_export_file_metadata_binding(
-            relative_path=path.name,
-            module=module,
-            frame=frame,
-            concept_ids=bindable,
-            database=database.strip().lower(),
-            database_class_prefixes=prefixes,
-            dictionary=dictionary,
-        )
-        binding = _strip_extraction_bounds(binding)
         file_bindings.append(binding)
         sha, size = pre_fingerprint[path.name]
         files_meta.append(
@@ -447,33 +683,43 @@ def seal_export_structural_typed(
         scope=EXPORT_PHYSICAL_SCOPE,
         files=tuple(file_bindings),
     )
-    metadata_ref = write_content_addressed_sidecar(root, sidecar)
+    sidecar_bytes = canonical_sidecar_bytes(sidecar)
+    sidecar_sha = hashlib.sha256(sidecar_bytes).hexdigest()
+    sidecar_name = f"column_metadata.sha256-{sidecar_sha}.json"
+    sidecar_ref = SidecarRef(
+        file=sidecar_name,
+        sha256=sidecar_sha,
+        size=len(sidecar_bytes),
+        record_count=sidecar.record_count,
+    ).to_dict()
 
-    patient_identity = {
-        "subject_id_present": subject_id_seen,
-        "row_identity": "stay_id",
-        "patient_level_uniqueness_verified": False,
-        "first_icu_stay_verified": False,
-        "blocker": None if subject_id_seen else "patient_identity_unavailable",
+    dict_fp = {
+        "submission_profile": f"{submission_profile.name}/{submission_profile.version}",
+        "concept_dict_sha256": fingerprint.concept_dict_sha,
+        "sofa2_dict_sha256": fingerprint.sofa2_dict_sha,
+        "verified_against_profile": True,
     }
+    source_evidence = _source_evidence(root, parquet_paths)
+    semantic_review = _semantic_review(file_bindings)
 
     manifest = {
-        "schema_version": _NATIVE_EXPORT_SCHEMA_V2,
+        "schema_version": NATIVE_MANIFEST_SCHEMA_V2,
         "database": database.strip().lower(),
         "format": "parquet",
         "seal_kind": SEAL_KIND,
-        "value_vintage": value_vintage,
+        "value_vintage": bound_vintage,
+        "value_vintage_basis": vintage_basis,
         "bounds_authority": BOUNDS_AUTHORITY_UNAVAILABLE,
-        "metadata_projection_dict": {
-            "submission_profile": SUBMISSION_PROFILE_REF,
-            "concept_dict_sha256": CONCEPT_DICT_SHA256,
-            "sofa2_dict_sha256": SOFA2_DICT_SHA256,
-        },
+        "metadata_provenance": METADATA_PROVENANCE,
+        "metadata_projection_dict": dict_fp,
+        "source_evidence": source_evidence,
         "patient_identity": patient_identity,
+        "semantic_review": semantic_review,
         "retrofit_note": (
             "Structural typed retrofit of an untyped module export. Parquet bytes "
-            "unchanged. extraction_bounds OMITTED — current-dict ranges are not an "
-            "authority over vintage values; anomalies preserved for downstream QC."
+            "unchanged. role/unit/time are a CURRENT-dictionary projection (not "
+            "extraction provenance); extraction_bounds AND analysis_plausibility_"
+            "range omitted; anomalies preserved for downstream QC."
         ),
         "concept_selection": {
             "mode": "all_bindable_in_modules",
@@ -481,42 +727,52 @@ def seal_export_structural_typed(
         },
         "files": files_meta,
         "feature_definitions": {"included": False},
-        "column_metadata": metadata_ref.to_dict(),
+        "column_metadata": sidecar_ref,
         "compatibility_report": [c.to_dict() for c in all_compat],
     }
     manifest_path = root / NATIVE_MANIFEST
-    manifest_path.write_text(
-        json.dumps(manifest, indent=2, ensure_ascii=False), encoding="utf-8"
-    )
 
-    # Post-write immutability verification (constraint 2): parquets unchanged.
+    written_sidecar: Optional[str] = None
     immutable = True
-    for path in parquet_paths:
-        sha, size = _sha256_size(path)
-        if (sha, size) != pre_fingerprint[path.name]:
-            immutable = False
-            raise TypedRetrofitSealError(
-                f"parquet mutated during seal (must never happen): {path.name}"
-            )
+    if not dry_run:
+        # Sidecar first (content-addressed, self-atomic), manifest LAST (the
+        # single commit point, published atomically).
+        ref = write_content_addressed_sidecar(root, sidecar)
+        assert ref.file == sidecar_name and ref.sha256 == sidecar_sha
+        written_sidecar = ref.file
+        _atomic_write_json(manifest_path, manifest)
+        for path in parquet_paths:
+            if _sha256_size(path) != pre_fingerprint[path.name]:
+                immutable = False
+                raise TypedRetrofitSealError(
+                    f"parquet mutated during seal (must never happen): {path.name}"
+                )
 
     return SealResult(
         export_dir=str(root),
         seal_kind=SEAL_KIND,
-        value_vintage=value_vintage,
+        dry_run=dry_run,
+        value_vintage=bound_vintage,
+        value_vintage_basis=vintage_basis,
         bounds_authority=BOUNDS_AUTHORITY_UNAVAILABLE,
-        metadata_projection_dict=manifest["metadata_projection_dict"],
+        metadata_provenance=METADATA_PROVENANCE,
+        dict_fingerprint=dict_fp,
+        source_evidence=source_evidence,
         patient_identity=patient_identity,
-        sidecar_file=metadata_ref.file,
-        manifest_path=str(manifest_path),
+        semantic_review=semantic_review,
+        sidecar_ref=sidecar_ref,
+        sidecar_file=written_sidecar,
+        manifest_path=None if dry_run else str(manifest_path),
         files=files_meta,
         columns=all_compat,
-        parquet_immutability_verified=immutable,
+        parquet_immutability_verified=immutable and not dry_run,
     )
 
 
 __all__ = [
     "SEAL_KIND",
     "BOUNDS_AUTHORITY_UNAVAILABLE",
+    "METADATA_PROVENANCE",
     "ColumnCompat",
     "SealResult",
     "TypedRetrofitSealError",

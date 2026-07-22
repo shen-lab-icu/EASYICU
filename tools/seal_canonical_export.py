@@ -51,6 +51,12 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         help="Optional path to write the full SealResult JSON (compat report etc.).",
     )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Scan the export and produce the full report WITHOUT writing the "
+        "sidecar or _manifest.json (real no-write preflight over the actual data).",
+    )
     args = parser.parse_args(argv)
 
     try:
@@ -58,6 +64,7 @@ def main(argv: list[str] | None = None) -> int:
             args.export,
             database=args.database,
             value_vintage=args.value_vintage,
+            dry_run=args.dry_run,
         )
     except TypedRetrofitSealError as exc:
         print(f"seal failed: {exc}", file=sys.stderr)
@@ -75,10 +82,14 @@ def main(argv: list[str] | None = None) -> int:
             {
                 "export_dir": result.export_dir,
                 "seal_kind": result.seal_kind,
+                "dry_run": result.dry_run,
                 "value_vintage": result.value_vintage,
+                "value_vintage_basis": result.value_vintage_basis,
                 "bounds_authority": result.bounds_authority,
-                "metadata_projection_dict": result.metadata_projection_dict,
+                "metadata_provenance": result.metadata_provenance,
+                "dict_fingerprint": result.dict_fingerprint,
                 "patient_identity": result.patient_identity,
+                "paper_authorized": result.semantic_review["paper_authorized"],
                 "sidecar_file": result.sidecar_file,
                 "manifest_path": result.manifest_path,
                 "parquet_immutability_verified": result.parquet_immutability_verified,
@@ -90,6 +101,9 @@ def main(argv: list[str] | None = None) -> int:
             default=str,
         )
     )
+    # Success = a completed dry-run, or a real seal with verified immutable parquets.
+    if result.dry_run:
+        return 0
     return 0 if result.parquet_immutability_verified else 1
 
 
