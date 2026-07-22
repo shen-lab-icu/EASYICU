@@ -313,6 +313,7 @@ def build_coder_resource_bundle(
     resolved_input_bindings: Mapping[str, Mapping[str, object]],
     runtime_import_names: Iterable[str],
     has_table_one_spec: bool = False,
+    approved_software_resources: Sequence[ResourceDescriptor] = (),
 ) -> CoderResourceBundle:
     """Select reviewed resources for one exact Coder step without an LLM."""
 
@@ -343,6 +344,7 @@ def build_coder_resource_bundle(
                 has_table_one_spec=has_table_one_spec,
             ),
             *_software_resources(runtime_import_names),
+            *approved_software_resources,
             *_data_resources(resolved_input_bindings),
         )
     )
@@ -517,6 +519,7 @@ def attach_step_coder_input_authority(
     runtime_import_names: Iterable[str],
     step_record: MutableMapping[str, object],
     reviewed_memory_runtime: ReviewedMemoryRuntime | None = None,
+    approved_software_resources: Sequence[ResourceDescriptor] = (),
 ) -> HostCoderAuthority:
     """Bind typed-input receipts and optional selected resources for one step."""
 
@@ -539,6 +542,7 @@ def attach_step_coder_input_authority(
             resolved_input_bindings=resolved_input_bindings,
             runtime_import_names=runtime_import_names,
             has_table_one_spec=step.table_one_spec is not None,
+            approved_software_resources=approved_software_resources,
         )
         authority, path = attach_coder_resources(
             authority=authority, run_dir=run_dir, bundle=bundle

@@ -6,14 +6,17 @@ import pytest
 from pydantic import ValidationError
 
 from easyicu.research_agent.resources import (
+    CapabilityActivation,
     CapabilityApproval,
     ResourceCatalog,
     ResourceScheduler,
     ResourceSelectionPolicy,
     ResourceSelectionQuery,
     approved_capability_resource,
+    build_capability_activation,
     build_capability_request,
     write_capability_request,
+    verify_capability_activation,
 )
 
 
@@ -174,3 +177,64 @@ def test_missing_typed_inputs_prevent_software_selection() -> None:
         kind="software",
     )
     assert selection.resources == ()
+
+
+def test_activation_requires_new_profile_new_run_and_exact_image() -> None:
+    request = _request()
+    approval = _approval(request)
+    activation = build_capability_activation(
+        request=request,
+        approval=approval,
+        source_profile_ref="source/1",
+        target_profile_ref="target/2",
+    )
+    resource = verify_capability_activation(
+        request=request,
+        approval=approval,
+        activation=activation,
+        current_profile_ref="target/2",
+        expected_image_digest="sha256:" + "a" * 64,
+        actual_image_digest="sha256:" + "a" * 64,
+        runtime_import_names=("numpy", "sksurv"),
+        is_resume=False,
+    )
+    assert resource.resource_id == "software:sksurv"
+    assert activation.runtime_install_allowed is False
+    assert activation.new_run_required is True
+
+    with pytest.raises(ValueError, match="new run"):
+        verify_capability_activation(
+            request=request,
+            approval=approval,
+            activation=activation,
+            current_profile_ref="target/2",
+            expected_image_digest="sha256:" + "a" * 64,
+            actual_image_digest="sha256:" + "a" * 64,
+            runtime_import_names=("sksurv",),
+            is_resume=True,
+        )
+    with pytest.raises(ValueError, match="runtime image"):
+        verify_capability_activation(
+            request=request,
+            approval=approval,
+            activation=activation,
+            current_profile_ref="target/2",
+            expected_image_digest="sha256:" + "a" * 64,
+            actual_image_digest="sha256:" + "c" * 64,
+            runtime_import_names=("sksurv",),
+            is_resume=False,
+        )
+
+
+def test_activation_id_rejects_tampering() -> None:
+    request = _request()
+    activation = build_capability_activation(
+        request=request,
+        approval=_approval(request),
+        source_profile_ref="source/1",
+        target_profile_ref="target/2",
+    )
+    payload = activation.model_dump(mode="python")
+    payload["target_profile_ref"] = "other/3"
+    with pytest.raises(ValidationError, match="does not bind"):
+        CapabilityActivation.model_validate(payload)

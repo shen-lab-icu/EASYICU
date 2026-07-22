@@ -20,7 +20,7 @@ from typing import Any
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SCHEMA_VERSION = "easyicu.research_agent_framework_release/2"
-TOOL_VERSION = "1.1.0"
+TOOL_VERSION = "1.2.0"
 
 RELEASE_COMMANDS: tuple[tuple[str, tuple[str, ...]], ...] = (
     (
@@ -56,6 +56,9 @@ RELEASE_COMMANDS: tuple[tuple[str, tuple[str, ...]], ...] = (
             "tests/research_agent/test_bounded_context.py",
             "tests/research_agent/test_permissioned_memory_store.py",
             "tests/research_agent/test_capability_requests.py",
+            "tests/research_agent/test_coder_resource_wiring.py",
+            "tests/research_agent/test_reviewed_memory_wiring.py",
+            "tests/research_agent/test_capability_workflow_wiring.py",
             "tests/research_agent/test_graph_poc.py",
             "tests/research_agent/test_char_golden_run_bundle.py",
             "tests/research_agent/test_typed_input_consumption_receipt.py",
@@ -73,9 +76,15 @@ def _sha256(path: Path) -> str:
 
 def _run_command(args: tuple[str, ...]) -> subprocess.CompletedProcess[str]:
     command = [sys.executable, *args]
+    env = dict(os.environ)
+    existing_pythonpath = env.get("PYTHONPATH", "")
+    env["PYTHONPATH"] = os.pathsep.join(
+        part for part in (str(REPO_ROOT / "src"), existing_pythonpath) if part
+    )
     return subprocess.run(
         command,
         cwd=REPO_ROOT,
+        env=env,
         capture_output=True,
         text=True,
         check=False,

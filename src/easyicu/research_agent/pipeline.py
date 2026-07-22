@@ -153,6 +153,7 @@ from .reporting.article_contract import (
 )
 from .planning.figure_strategy import build_article_figure_strategy
 from .orchestration.config import PipelineConfig
+from .resources.capability_runtime import CapabilityWorkflowRuntime
 from .contracts.runtime import (
     RunResult,
     _ExecutePhaseResult,
@@ -1499,6 +1500,11 @@ class ResearchAgentPipeline:
         enable_coder_resources: bool = False,
         enable_reviewed_memory: bool = False,
         reviewed_memory_namespaces: Sequence[str] = (),
+        enable_capability_workflow: bool = False,
+        expected_runner_image_digest: Optional[str] = None,
+        capability_request: Optional[Mapping[str, object]] = None,
+        capability_approval: Optional[Mapping[str, object]] = None,
+        capability_activation: Optional[Mapping[str, object]] = None,
         know_how_paths: Sequence[Union[str, Path]] = (),
         know_how_top_k: int = 3,
         know_how_min_score: float = 0.15,
@@ -1756,6 +1762,15 @@ class ResearchAgentPipeline:
         self._enable_coder_resources = bool(enable_coder_resources)
         self._enable_reviewed_memory = bool(enable_reviewed_memory)
         self._reviewed_memory_namespaces = tuple(reviewed_memory_namespaces)
+        self._capability_runtime = CapabilityWorkflowRuntime.create(
+            enabled=enable_capability_workflow,
+            profile_name=submission_profile_name,
+            profile_version=submission_profile_version,
+            expected_image_digest=expected_runner_image_digest,
+            request=capability_request,
+            approval=capability_approval,
+            activation=capability_activation,
+        )
         self._know_how_paths = tuple(Path(path) for path in know_how_paths)
         self._know_how_top_k = int(know_how_top_k)
         self._know_how_min_score = float(know_how_min_score)
@@ -2146,6 +2161,16 @@ class ResearchAgentPipeline:
                 generation_mode="system",
             )
         register_context_numeric_claims(evidence, context=context)
+        capability_finding = self._capability_runtime.prepare(
+            run_dir=run_dir,
+            evidence=evidence,
+            runtime_import_names=self._validated_runtime_capabilities or (),
+            runtime_bundle=self._validated_runtime_bundle,
+            is_resume=resume_state is not None,
+        )
+        self._approved_capability_resources = (
+            self._capability_runtime.approved_resources
+        )
         concept_fingerprint_path = run_dir / "concept_dict_fingerprint.json"
         concept_fingerprint = write_concept_dict_fingerprint(concept_fingerprint_path)
         assert_concept_dict_matches(
@@ -2213,11 +2238,20 @@ class ResearchAgentPipeline:
                 generation_mode="system",
             )
 
-        findings = preplan_data_findings(context=context, cohort_path=cohort_path)
+        findings = (
+            [capability_finding]
+            if capability_finding is not None
+            else preplan_data_findings(context=context, cohort_path=cohort_path)
+        )
         if any(f.severity == "error" for f in findings):
+            capability_blocked = capability_finding is not None
             emit_progress(
-                "audit",
-                "Pre-plan data gate failed; aborting before provider execution.",
+                "capability" if capability_blocked else "audit",
+                (
+                    "Capability review is required before provider execution."
+                    if capability_blocked
+                    else "Pre-plan data gate failed; aborting before provider execution."
+                ),
                 status="error",
                 run_id=run_id,
             )
@@ -2228,7 +2262,11 @@ class ResearchAgentPipeline:
                 context_path=context_path,
                 evidence=evidence,
                 findings=findings,
-                reason=preplan_data_failure_reason(findings),
+                reason=(
+                    "capability_review_required"
+                    if capability_blocked
+                    else preplan_data_failure_reason(findings)
+                ),
             )
             return _PlanPhaseResult(
                 context=context,
@@ -3564,6 +3602,10 @@ class ResearchAgentPipeline:
                 "client. Pass MockLLMClient() only for tests or deterministic "
                 "demo runs; the pipeline no longer falls back to mock silently."
             )
+        if resume_run_id and self._capability_runtime.activation is not None:
+            raise ValueError(
+                "Approved capability activation requires a new run; resume is forbidden"
+            )
         verified_source_authority = None
         authority_declared = (
             cohort_authority_path is not None or cohort_authority_ref is not None
@@ -3841,6 +3883,7 @@ class ResearchAgentPipeline:
                 if expected_trajectory_authority is not None
                 else None
             ),
+            capability_workflow=self._capability_runtime.scientific_coordinate(),
         )
         run_environment_identity = build_environment_identity(
             llm_signature=self._llm_signature(llm)

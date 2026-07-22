@@ -39,7 +39,7 @@ from easyicu.research_agent.schema import (
     ResearchContext,
 )
 
-TOOL_VERSION = "2.0.0"
+TOOL_VERSION = "2.1.0"
 SCHEMA_VERSION = "easyicu.research_agent_resource_baseline/2"
 REPO_ROOT = Path(__file__).resolve().parents[1]
 FIXED_CREATED_AT = datetime(2026, 7, 22, tzinfo=timezone.utc)
@@ -123,10 +123,12 @@ SOURCE_FILES: tuple[str, ...] = (
     "src/easyicu/research_agent/resources/schema.py",
     "src/easyicu/research_agent/resources/catalog.py",
     "src/easyicu/research_agent/resources/capability.py",
+    "src/easyicu/research_agent/resources/capability_runtime.py",
     "src/easyicu/research_agent/resources/context.py",
     "src/easyicu/research_agent/resources/coder.py",
     "src/easyicu/research_agent/resources/scheduler.py",
     "src/easyicu/research_agent/learning/store.py",
+    "src/easyicu/research_agent/learning/runtime.py",
     "src/easyicu/research_agent/graph.py",
     "src/easyicu/data/concept-dict.json",
 )

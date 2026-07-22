@@ -495,6 +495,7 @@ def build_scientific_identity(
     materialized_cohort_authority_ref: Optional[Mapping[str, Any]] = None,
     trajectory_path: Optional[Path] = None,
     materialized_trajectory_authority_ref: Optional[Mapping[str, Any]] = None,
+    capability_workflow: Optional[Mapping[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Canonical scientific request; execution-only knobs are excluded."""
 
@@ -573,6 +574,8 @@ def build_scientific_identity(
         payload["materialized_trajectory_authority_ref"] = dict(
             materialized_trajectory_authority_ref
         )
+    if capability_workflow is not None:
+        payload["capability_workflow"] = dict(capability_workflow)
     return _jsonable(payload)
 
 
