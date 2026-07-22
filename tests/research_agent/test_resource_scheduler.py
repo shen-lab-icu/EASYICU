@@ -32,11 +32,13 @@ def test_protocol_selection_is_deterministic_digest_bound_and_llm_free() -> None
         registry=registry,
         query=_planner_query(),
         available_concepts=("lactate", "death"),
+        allowed_review_statuses=("curated_mvp", "clinical_reviewed"),
     )
     second = ResourceScheduler.select_protocols(
         registry=registry,
         query=_planner_query(),
         available_concepts=("lactate", "death"),
+        allowed_review_statuses=("curated_mvp", "clinical_reviewed"),
     )
 
     assert first.receipt == second.receipt
@@ -59,11 +61,23 @@ def test_protocol_scheduler_allows_an_honest_zero_match() -> None:
             database="miiv",
         ),
         available_concepts=("kdigo", "death"),
+        allowed_review_statuses=("curated_mvp", "clinical_reviewed"),
     )
 
     assert selection.hits == ()
     assert selection.receipt.selected == ()
     assert selection.receipt.candidate_count >= 0
+
+
+def test_protocol_scheduler_excludes_curated_mvp_by_default_for_paper_safety() -> None:
+    selection = ResourceScheduler.select_protocols(
+        registry=KnowHowRegistry.load(),
+        query=_planner_query(),
+        available_concepts=("lactate", "death"),
+    )
+
+    assert selection.hits == ()
+    assert selection.receipt.policy.allowed_review_statuses == ("clinical_reviewed",)
 
 
 def test_host_allowlist_rejects_wrong_family_and_unreviewed_resource() -> None:

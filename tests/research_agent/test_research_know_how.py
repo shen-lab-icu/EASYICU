@@ -238,6 +238,7 @@ def test_preplan_artifacts_are_registered_resume_safe_and_tamper_evident(
         run_dir=tmp_path,
         evidence=evidence,
         database="miiv",
+        allow_curated_mvp=True,
     )
 
     assert prepared.selected_ids[0] == "aki_onset_prediction"
@@ -269,6 +270,7 @@ def test_preplan_artifacts_are_registered_resume_safe_and_tamper_evident(
         run_dir=tmp_path,
         evidence=evidence,
         database="miiv",
+        allow_curated_mvp=True,
     )
     prompt_path.write_text("tampered", encoding="utf-8")
     with pytest.raises(KnowHowIntegrityError, match="does not match"):
@@ -277,6 +279,7 @@ def test_preplan_artifacts_are_registered_resume_safe_and_tamper_evident(
             run_dir=tmp_path,
             evidence=evidence,
             database="miiv",
+            allow_curated_mvp=True,
         )
 
 
@@ -482,6 +485,9 @@ def test_opt_in_pipeline_smoke_adopts_card_without_extra_provider_calls(
         workdir=tmp_path / "enabled",
         llm=ra.LLMRouter(default=ra.MockLLMClient(), planner=enabled_planner),
         enable_know_how=True,
+        submission_profile_name="npj_dm_know_how_dev",
+        submission_profile_version="20260721",
+        submission_profile_locked_at="2026-07-21T12:00:00-04:00",
         **common,
     ).run(
         question="Build an ICU mortality prediction model.",
