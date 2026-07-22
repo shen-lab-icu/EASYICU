@@ -2210,6 +2210,27 @@ class _BatchAwareIdeaLLM:
         return json.dumps(out)
 
 
+class _OneMalformedBatchIdeaLLM(_BatchAwareIdeaLLM):
+    """Produces invalid JSON for one selected call and valid JSON otherwise."""
+
+    def __init__(self, *, malformed_call: int | None) -> None:
+        super().__init__()
+        self.malformed_call = malformed_call
+
+    def complete(
+        self, messages, *, max_tokens: int = 2048, temperature: float = 0.0
+    ) -> str:
+        next_call = self.calls + 1
+        response = super().complete(
+            messages,
+            max_tokens=max_tokens,
+            temperature=temperature,
+        )
+        if next_call == self.malformed_call:
+            return '[{"citation_key" "missing-colon"}]'
+        return response
+
+
 def _excerpt_material(idx: int) -> SourceMaterial:
     return SourceMaterial(
         citation=CitationRecord(
@@ -2258,6 +2279,77 @@ def test_extract_literature_ideas_single_batch_when_corpus_small() -> None:
 
     assert llm.calls == 1
     assert len(candidates) == 2
+
+
+def test_extraction_batch_receipts_isolate_failure_and_resume_only_failed_batch(
+    tmp_path,
+) -> None:
+    materials = [_excerpt_material(i) for i in range(6)]
+    receipt_dir = tmp_path / "receipts"
+    dropped: list[list[str]] = []
+    first_llm = _OneMalformedBatchIdeaLLM(malformed_call=2)
+
+    first = extract_literature_ideas(
+        materials=materials,
+        source_snapshot_id="source-snapshot/sha256:receipt-resume",
+        llm=first_llm,
+        batch_size=2,
+        malformed_batch_policy="skip",
+        dropped_malformed_batches=dropped,
+        batch_receipt_dir=receipt_dir,
+    )
+
+    assert first_llm.calls == 3
+    assert {idea.citation_key for idea in first} == {
+        "review_00",
+        "review_01",
+        "review_04",
+        "review_05",
+    }
+    assert dropped == [["review_02", "review_03"]]
+    assert len(list(receipt_dir.glob("*_parsed_*.json"))) == 2
+    assert len(list(receipt_dir.glob("*_malformed_*.json"))) == 1
+
+    resumed_llm = _OneMalformedBatchIdeaLLM(malformed_call=None)
+    resumed = extract_literature_ideas(
+        materials=materials,
+        source_snapshot_id="source-snapshot/sha256:receipt-resume",
+        llm=resumed_llm,
+        batch_size=2,
+        malformed_batch_policy="skip",
+        dropped_malformed_batches=[],
+        batch_receipt_dir=receipt_dir,
+    )
+
+    assert resumed_llm.calls == 1
+    assert resumed_llm.batch_sizes == [2]
+    assert {idea.citation_key for idea in resumed} == {
+        f"review_{idx:02d}" for idx in range(6)
+    }
+
+
+def test_extraction_batch_receipt_tampering_fails_closed(tmp_path) -> None:
+    materials = [_excerpt_material(0)]
+    receipt_dir = tmp_path / "receipts"
+    first_llm = _BatchAwareIdeaLLM()
+    extract_literature_ideas(
+        materials=materials,
+        source_snapshot_id="source-snapshot/sha256:receipt-tamper",
+        llm=first_llm,
+        batch_receipt_dir=receipt_dir,
+    )
+    receipt_path = next(receipt_dir.glob("*_parsed_*.json"))
+    payload = json.loads(receipt_path.read_text(encoding="utf-8"))
+    payload["raw_response"] += " "
+    receipt_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(RuntimeError, match="receipt digest mismatch"):
+        extract_literature_ideas(
+            materials=materials,
+            source_snapshot_id="source-snapshot/sha256:receipt-tamper",
+            llm=_BatchAwareIdeaLLM(),
+            batch_receipt_dir=receipt_dir,
+        )
 
 
 def test_label_prior_art_high_broad_count_blocks_false_sparse() -> None:
