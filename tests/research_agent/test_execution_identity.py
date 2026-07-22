@@ -167,7 +167,18 @@ def test_unmanaged_custom_provider_can_never_receive_paper_authority() -> None:
         {"host_runner_authorized": True},
         {"code_version": {"git_sha": "b" * 40, "git_dirty": True}},
         {"submission_profile_name": None, "submission_profile_version": None},
+        {"input_authority_sha256": None},
     ],
 )
 def test_paper_eligibility_is_deny_by_default(overrides: dict[str, Any]) -> None:
     assert _identity(**overrides).paper_eligible is False
+
+
+def test_frozen_environment_cannot_authorize_unbound_input() -> None:
+    bound = _identity()
+    unbound = _identity(input_authority_sha256=None)
+    frozen = ExpectedExecutionIdentity.create(unbound)
+
+    assert frozen.expected_identity_sha256 == unbound.environment_identity_sha256
+    assert unbound.paper_eligible is False
+    assert unbound.environment_identity_sha256 != bound.environment_identity_sha256

@@ -28,6 +28,7 @@ import xml.etree.ElementTree as ET
 from typing import Any, Dict, Iterable, List, NamedTuple, Optional, Sequence, Set, Tuple
 
 from ..providers.protocol import LLMClient, LLMMessage
+from ..providers.factory import authorized_complete, authorized_complete_with_images
 from ..schema import ValidationFinding
 
 
@@ -636,14 +637,16 @@ class VLMVisualQAAdapter:
         prompt = self._prompt(paths)
         try:
             if hasattr(self.llm, "complete_with_images"):
-                raw = self.llm.complete_with_images(  # type: ignore[attr-defined]
+                raw = authorized_complete_with_images(
+                    self.llm,
                     prompt=prompt,
                     image_paths=paths,
                     max_tokens=self.max_tokens,
                     temperature=self.temperature,
                 )
             else:
-                raw = self.llm.complete(
+                raw = authorized_complete(
+                    self.llm,
                     [
                         LLMMessage(
                             role="system",

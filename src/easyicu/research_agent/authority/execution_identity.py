@@ -220,6 +220,12 @@ def _paper_eligible(payload: Mapping[str, Any]) -> bool:
     image_hex = (
         image_digest.removeprefix("sha256:") if isinstance(image_digest, str) else ""
     )
+    input_authority = payload.get("input_authority_sha256")
+    input_authority_bound = (
+        isinstance(input_authority, str)
+        and len(input_authority) == 64
+        and all(ch in "0123456789abcdef" for ch in input_authority)
+    )
     return bool(
         profile_ref
         and payload.get("runner") == "docker"
@@ -230,6 +236,7 @@ def _paper_eligible(payload: Mapping[str, Any]) -> bool:
         and payload.get("git_sha")
         and payload.get("git_dirty") is False
         and provider_bound
+        and input_authority_bound
     )
 
 

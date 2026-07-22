@@ -37,6 +37,7 @@ from .catalog import (
     build_available_catalog,
 )
 from ..providers.protocol import LLMClient, LLMMessage
+from ..providers.factory import authorized_complete
 from ..intake.materialized_metadata import (
     MaterializedCohortAuthorityRef,
     MaterializedMetadataError,
@@ -128,7 +129,8 @@ class DataFoundationAgent:
             '"rationale": "why these concepts"}. '
             "selected_concepts MUST be a subset of the catalog above."
         )
-        raw = self.llm.complete(
+        raw = authorized_complete(
+            self.llm,
             [
                 LLMMessage(role="system", content=_SELECTION_SYSTEM),
                 LLMMessage(role="user", content=user),

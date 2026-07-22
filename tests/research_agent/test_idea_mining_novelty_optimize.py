@@ -32,6 +32,7 @@ SOURCE_TEXT = (
 
 class ScriptedLLM:
     name = "scripted-llm"
+    __easyicu_mock_client__ = True
 
     def __init__(self, responses: Sequence[object]):
         self.responses = list(responses)

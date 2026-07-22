@@ -21,8 +21,8 @@ Base: `1434aa9`
   arbitrary result-declared identities cannot authorize themselves.
 - Legacy memory write failures are non-fatal after a successful run.
 - Unknown/custom provider adapters are treated as unmanaged external
-  transports, receive only the closed diagnostic envelope, and are never
-  paper eligible.
+  transports, are denied before any prompt delivery, and are never paper
+  eligible.
 - Provider usage is returned with the same response through
   `complete_with_usage`; the metering layer does not lock around network calls
   or trust shared `last_usage`, including through fallback and reproducibility
@@ -53,6 +53,24 @@ deliberately separate coordinates: reuse must match the task data exactly;
 paper acceptance must match an operator-owned environment freeze outside the
 result tree and also verifies each score against its full manifest identity.
 
+## Third-review P1 follow-up
+
+The final three authority penetrations were reproduced and closed:
+
+1. Paper eligibility now requires a non-empty, valid input-authority digest.
+   Figure 2 acceptance independently rejects a missing input authority in the
+   frozen identity, score row, or run manifest; a matching frozen environment
+   alone cannot authorize an unbound run.
+2. Table 1 opaque tokens remain in the public `AnalysisPlan`.  A separate
+   digest-bound, host-only `TableOneExecutionBinding` holds real observed
+   levels for trusted execution and validation.  Captured Planner, Replanner,
+   Coder, and repair prompts contain none of the private labels.
+3. Every production prompt delivery goes through the generic provider graph
+   authorization boundary.  Routers, fallbacks, metering, and reproducibility
+   wrappers are traversed recursively; an unmanaged custom leaf is rejected
+   before `complete`, even when the external-provider environment opt-in is
+   present.
+
 ## Verification
 
 - Review-fix focused matrix: 168 passed, 7 pipeline tests deselected because
@@ -66,6 +84,13 @@ result tree and also verifies each score against its full manifest identity.
 - Second-review focused matrix: 156 passed.
 - Pipeline configuration mirror, Ruff, py_compile, diff-check, architecture
   gate, and module graph all passed after the follow-up.
+- Third-review offline matrix: 303 passed, 2 skipped.  This includes exact
+  identity/Figure 2 acceptance, all four Table 1 prompt surfaces, custom
+  provider and nested router/fallback negatives, diagnostic envelopes, visual
+  QA, data foundation, Tier-2 jury, and idea-mining provider paths.
+- Third-review Ruff, py_compile, diff-check, architecture gate, and module
+  graph passed.  No architecture baseline refresh was used: the touched core
+  metrics are unchanged or improved.
 
 The wider 203-test diagnostic shard produced 197 passes plus six environment
 or baseline failures.  After fixing the one follow-up configuration omission,

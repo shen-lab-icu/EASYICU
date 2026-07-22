@@ -37,6 +37,8 @@ from easyicu.research_agent.authority.step_capsule import (
 
 
 class _CaptureLLM:
+    __easyicu_mock_client__ = True
+
     def __init__(self, responses):  # noqa: ANN001
         self.responses = list(responses)
         self.calls = []

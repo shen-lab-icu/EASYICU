@@ -5,6 +5,7 @@ from __future__ import annotations
 import ast
 from typing import Optional
 
+from ..authority.table_one_binding import table_one_execution_spec
 from ..schema import AnalysisStep, ValidationFinding
 
 _SCOPES = (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
@@ -230,7 +231,13 @@ def table_one_spec_binding_findings(
             )
     if not call_names:
         return []
-    expected = step.table_one_spec.model_dump(mode="json")
+    planner_expected = step.table_one_spec.model_dump(mode="json")
+    execution_spec = table_one_execution_spec(step)
+    permitted = [planner_expected]
+    if execution_spec is not None:
+        execution_expected = execution_spec.model_dump(mode="json")
+        if execution_expected != planner_expected:
+            permitted.append(execution_expected)
     assignments: dict[str, list[ast.Assign]] = {}
     for node in ast.walk(tree):
         if (
@@ -257,7 +264,7 @@ def table_one_spec_binding_findings(
             actual = ast.literal_eval(sites[0].value)
         except (ValueError, TypeError, SyntaxError):
             actual = None
-        if actual == expected:
+        if actual in permitted:
             continue
         findings.append(
             ValidationFinding(
@@ -273,7 +280,10 @@ def table_one_spec_binding_findings(
                     "helper_name": "build_grouped_table_one",
                     "line": int(sites[0].value.lineno),
                     "spec_name": spec_name,
-                    "expected_spec": expected,
+                    # Findings may enter external repair prompts. Preserve only
+                    # the opaque Planner declaration; verified local labels stay
+                    # in the private execution binding.
+                    "expected_spec": planner_expected,
                 },
             )
         )

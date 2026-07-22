@@ -58,6 +58,7 @@ from ..icu_rules import (
 )
 from ..providers.protocol import LLMClient, LLMMessage
 from ..providers.llm import llm_is_mockish
+from ..providers.factory import authorized_complete
 from ..repairs.patch import (
     PATCH_FORMAT,
     looks_like_executable_python,
@@ -86,6 +87,7 @@ from ..authority.provider_budget import (
     StepProviderCallBudget,
     complete_with_provider_budget,
 )
+from ..authority.table_one_binding import bind_table_one_execution_spec
 from ..repairs.coordination import RepairCoordinator
 from ..repairs.reasons import (
     RepairPromptAuthority,
@@ -101,7 +103,6 @@ from ..research_context.prompt_scope import (
 from ..research_context.prompt_variables import (
     compact_fixed_window_trajectory_prompt,
     format_observed_domain,
-    opaque_level_tokens,
 )
 from ..research_context.repair_prompt import format_repair_authority_context
 from ..authority.step_capsule import ContentRef
@@ -895,78 +896,14 @@ def _render_methodological_principles() -> str:
 _PRINCIPLES_GUIDE = _render_methodological_principles()
 
 
-def _bind_and_validate_table_one_observed_levels(
+def _validate_table_one_observed_levels(
     plan: AnalysisPlan,
     context: ResearchContext,
 ) -> None:
-    """Resolve opaque Table 1 levels locally, then enforce exact values."""
-
-    variables = {variable.name: variable for variable in context.variables}
-
-    def _token(value: object) -> tuple[str, str]:
-        return type(value).__name__, repr(value)
-
-    def _observed_levels(name: str) -> list[object]:
-        variable = variables.get(name)
-        if variable is None or not variable.observed_domain:
-            return []
-        domain = variable.observed_domain
-        levels = domain.get("levels")
-        if isinstance(levels, list):
-            return list(levels)
-        if not domain.get("is_binary"):
-            return []
-        dtype = str(variable.dtype or "").lower()
-        if dtype.startswith(("int", "uint")):
-            values: tuple[object, object] = (0, 1)
-        elif dtype.startswith("bool"):
-            values = (False, True)
-        elif dtype.startswith(("float", "double")):
-            values = (0.0, 1.0)
-        else:
-            return []
-        return list(values)
-
-    def _bind_levels(name: str, declared: list[object]) -> list[object]:
-        observed = _observed_levels(name)
-        if not observed:
-            return declared
-        opaque = list(opaque_level_tokens(len(observed)))
-        if opaque and declared == opaque:
-            return observed
-        return declared
+    """Attach host-only bindings without mutating the outbound plan."""
 
     for step in plan.steps:
-        spec = step.table_one_spec
-        if spec is None:
-            continue
-        spec.group_levels[:] = _bind_levels(spec.group_by, spec.group_levels)
-        observed_group_values = _observed_levels(spec.group_by)
-        observed_groups = {_token(value) for value in observed_group_values}
-        declared_groups = {_token(value) for value in spec.group_levels}
-        if observed_groups and declared_groups != observed_groups:
-            raise ValueError(
-                f"Planner Table 1 step {step.step_id!r} group_levels must preserve "
-                f"the exact observed scalar types for {spec.group_by!r}; "
-                f"declared={spec.group_levels!r}"
-            )
-        for variable_spec in spec.variables:
-            if variable_spec.summary != "count_percent":
-                continue
-            variable_spec.levels[:] = _bind_levels(
-                variable_spec.name,
-                variable_spec.levels,
-            )
-            observed = {
-                _token(value) for value in _observed_levels(variable_spec.name)
-            }
-            declared = {_token(value) for value in variable_spec.levels}
-            if observed and not observed <= declared:
-                raise ValueError(
-                    f"Planner Table 1 step {step.step_id!r} levels for "
-                    f"{variable_spec.name!r} must preserve exact observed scalar "
-                    f"types; declared={variable_spec.levels!r}"
-                )
+        bind_table_one_execution_spec(step, context)
 
 
 _PLANNER_PROMPT_BYTE_LIMIT = 80_000
@@ -1174,7 +1111,7 @@ class PlannerAgent:
                     "Planner must record at least one claim-level disposition for "
                     f"every retrieved card: {undecided_cards!r}"
                 )
-        _bind_and_validate_table_one_observed_levels(plan, context)
+        _validate_table_one_observed_levels(plan, context)
         missing_table_one_specs = [
             step.step_id
             for step in plan.steps
@@ -2406,7 +2343,8 @@ class CoderAgent:
             raw = complete_with_provider_budget(
                 budget=provider_budget,
                 category="initial_generation",
-                call=lambda: self.llm.complete(
+                call=lambda: authorized_complete(
+                    self.llm,
                     messages,
                     max_tokens=_CODER_MAX_TOKENS,
                     temperature=0.1,
@@ -2539,9 +2477,7 @@ class CoderAgent:
             provider_transport_destination(self.llm) == "external"
         )
         prompt_repair_authority = (
-            RepairPromptAuthority()
-            if external_repair_transport
-            else repair_authority
+            RepairPromptAuthority() if external_repair_transport else repair_authority
         )
         if provider_budget is not None and logical_repair_attempt_id is not None:
             provider_budget.assert_logical_repair_prompt_binding(
@@ -2731,7 +2667,8 @@ class CoderAgent:
 
         def _full_rewrite(reason: str) -> str:
             fallback_messages = _full_rewrite_messages(reason)
-            return self.llm.complete(
+            return authorized_complete(
+                self.llm,
                 fallback_messages,
                 max_tokens=_CODER_MAX_TOKENS,
                 temperature=0.05,
@@ -2759,7 +2696,8 @@ class CoderAgent:
                 mode="minimal_patch",
                 limit_bytes=_CODER_PATCH_PROMPT_BYTE_LIMIT,
             ),
-            patch_call=lambda: self.llm.complete(
+            patch_call=lambda: authorized_complete(
+                self.llm,
                 patch_messages,
                 max_tokens=min(2048, _CODER_MAX_TOKENS),
                 temperature=0.0,
@@ -3194,7 +3132,9 @@ class AnalyzerAgent:
         return complete_with_provider_budget(
             budget=provider_budget,
             category="analyzer",
-            call=lambda: self.llm.complete(messages, max_tokens=512, temperature=0.2),
+            call=lambda: authorized_complete(
+                self.llm, messages, max_tokens=512, temperature=0.2
+            ),
         ).strip()
 
 
@@ -3283,8 +3223,8 @@ class WriterAgent:
                 ),
             ),
         ]
-        raw = self.llm.complete(
-            messages, max_tokens=max_tokens, temperature=0.3
+        raw = authorized_complete(
+            self.llm, messages, max_tokens=max_tokens, temperature=0.3
         ).strip()
         return _strip_code_fence(raw)
 

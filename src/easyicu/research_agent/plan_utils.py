@@ -60,7 +60,7 @@ from .contracts.ordered_stratified import (
     is_ordered_stratified_analysis_step,
     ordered_stratified_structure_findings,
 )
-from .contracts.table_one import table_one_output_findings
+from .contracts.table_one import bind_table_one_execution_spec, table_one_output_findings
 from .scalar_utils import (
     _first_numeric_scalar_with_key_fragment,
     _first_present_scalar,
@@ -132,10 +132,8 @@ def _augment_measurement_companion_inputs(
     """Close structural provenance inputs for selected wide summaries.
 
     The planner remains the owner of which clinical values a step analyzes.
-    Once it selects a registered per-stay summary, however, its exact count and
-    measured companions are provenance inputs rather than new scientific
-    choices. Add only companions that actually exist in ResearchContext and
-    never infer a concept by fuzzy matching.
+    Exact count/measured companions are provenance inputs, not new scientific
+    choices; add only registered companions and never fuzzy-match concepts.
     """
 
     available = {str(variable.name) for variable in context.variables}
@@ -171,6 +169,7 @@ def _augment_measurement_companion_inputs(
             revised_steps.append(step.model_copy(update={"inputs": inputs}))
         else:
             revised_steps.append(step)
+        bind_table_one_execution_spec(revised_steps[-1], context)
 
     if not additions_by_step:
         return plan, []

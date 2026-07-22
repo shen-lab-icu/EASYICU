@@ -14,6 +14,8 @@ from easyicu.research_agent.acquisition.foundation import (
 class _StubLLM:
     """Returns a fixed completion string regardless of the prompt."""
 
+    __easyicu_mock_client__ = True
+
     def __init__(self, response: str) -> None:
         self._response = response
 

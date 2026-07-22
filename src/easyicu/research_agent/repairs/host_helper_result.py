@@ -8,6 +8,17 @@ from typing import Sequence
 from ..schema import TableOneSpec, ValidationFinding
 
 _HELPER_MODULE = "easyicu.research_agent.methods.descriptive_inputs"
+_OPAQUE_TABLE_ONE_LEVEL_PREFIX = "__easyicu_level_"
+
+
+def _contains_opaque_table_one_level(value: object) -> bool:
+    if isinstance(value, str):
+        return value.startswith(_OPAQUE_TABLE_ONE_LEVEL_PREFIX)
+    if isinstance(value, dict):
+        return any(_contains_opaque_table_one_level(item) for item in value.values())
+    if isinstance(value, (list, tuple)):
+        return any(_contains_opaque_table_one_level(item) for item in value)
+    return False
 
 
 def patch_closed_counts_level_column(
@@ -155,6 +166,10 @@ def patch_table_one_planner_spec(
         try:
             validated = TableOneSpec.model_validate(expected).model_dump(mode="python")
         except (ValueError, TypeError):
+            continue
+        # Opaque values are outbound coordinates, not executable labels. Only
+        # the host-owned private binding may resolve them.
+        if _contains_opaque_table_one_level(validated):
             continue
         coordinates.append(
             (

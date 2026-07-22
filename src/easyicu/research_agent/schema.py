@@ -29,6 +29,7 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
+    PrivateAttr,
     field_validator,
     model_serializer,
     model_validator,
@@ -867,6 +868,11 @@ class AnalysisStep(BaseModel):
     """One step in a planner-emitted analysis plan."""
 
     model_config = ConfigDict(extra="forbid")
+
+    # Local execution authority is deliberately absent from model_dump/json.
+    # It may contain digest-verified categorical labels that must never return
+    # to Planner, Replanner, Coder, or repair prompts.
+    _table_one_execution_binding: Any = PrivateAttr(default=None)
 
     step_id: str
     planned_analysis_role: PlannedAnalysisRole = Field(

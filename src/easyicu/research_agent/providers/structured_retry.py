@@ -40,7 +40,7 @@ from dataclasses import dataclass
 from typing import Any, Callable, List, Optional, Sequence, TypeVar
 
 from .protocol import LLMMessage
-
+from .factory import authorized_complete
 
 T = TypeVar("T")
 
@@ -150,8 +150,8 @@ def call_llm_with_structured_retry(
     current: List[LLMMessage] = list(messages)
     last_exc: Optional[BaseException] = None
     for i in range(max_retries + 1):
-        raw = llm.complete(
-            current, max_tokens=max_tokens, temperature=temperature
+        raw = authorized_complete(
+            llm, current, max_tokens=max_tokens, temperature=temperature
         )
         head = (raw or "").strip().replace("\n", " ⏎ ")[:400]
         try:

@@ -39,6 +39,7 @@ from .schema import (
     validate_cohort_definition,
 )
 from ..providers.protocol import LLMClient, LLMMessage
+from ..providers.factory import authorized_complete
 
 # Operators ``build_cohort._apply_op`` actually implements.
 _SUPPORTED_OPS = (
@@ -173,7 +174,8 @@ def extract_cohort_definition_from_prose(
         return None
     columns = {str(c) for c in universe_columns}
     try:
-        raw = llm.complete(
+        raw = authorized_complete(
+            llm,
             [
                 LLMMessage(role="system", content=_SYSTEM),
                 LLMMessage(

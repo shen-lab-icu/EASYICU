@@ -39,6 +39,7 @@ from .concept_availability import (
 )
 from .gates.data_answerability import analysis_answerability_findings
 from .providers.mocks import MockLLMClient
+from .providers.factory import authorized_complete
 from .providers.protocol import LLMClient, LLMMessage
 from .schema import HypothesisBlueprint, ResearchContext, VariableRole
 
@@ -1111,7 +1112,9 @@ class LiteratureAgent:
                 ),
             ]
             try:
-                raw = self.llm.complete(msgs, max_tokens=1024, temperature=0.0)
+                raw = authorized_complete(
+                    self.llm, msgs, max_tokens=1024, temperature=0.0
+                )
                 data = _parse_citation_json(raw)
             except Exception:
                 data = []
