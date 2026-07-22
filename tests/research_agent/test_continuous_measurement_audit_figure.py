@@ -340,6 +340,83 @@ def test_closed_three_table_parent_routes_and_renders(tmp_path: Path) -> None:
     ]
 
 
+def test_sealed_continuous_audit_panels_anchor_authorized_slots(
+    tmp_path: Path,
+) -> None:
+    """Renderer-sweep regression (same class as the E3 missingness dead-end).
+
+    ``continuous_measurement_audit`` is a sealed renderer (in the sealed
+    ``_ADAPTERS``), so it routes through ``bind_declared_figure_products``; its
+    authorized slots are ``('distribution', 'availability')``. Its two panels
+    declared no ``planner_product_slots``, so both authorized slots had no
+    anchoring panel and binding raised ``authorized product slot is not
+    anchored to a contract panel`` *after* the figure rendered. Panel A
+    (Observed distribution) anchors ``distribution``; panel B (Measurement
+    availability) anchors ``availability`` -- mirroring the working
+    ``distribution_availability`` sibling.
+    """
+    import hashlib
+
+    from easyicu.research_agent.contracts.declared_product import (
+        bind_declared_figure_products,
+    )
+    from easyicu.research_agent.figures import continuous_measurement_audit as _mod
+    from easyicu.research_agent.repair_registry import repair_metadata_for
+
+    _write_parent(tmp_path)
+    seal = _continuous_measurement_audit_parent_digest_seal(tmp_path, FIGURE_STEP)
+    out = tmp_path / "steps" / FIGURE_STEP / "outputs"
+    assert (
+        _render_authorized_sealed_publication_bundle(
+            repair_id=REPAIR_ID,
+            run_dir=tmp_path,
+            current_step_id=FIGURE_STEP,
+            out_dir=out,
+            parent_artifact_digests=seal or {},
+        )
+        == REPAIR_ID
+    )
+
+    # (1) Each registry-authorized slot is anchored by exactly its semantic panel.
+    contract = json.loads(
+        (
+            out
+            / "continuous_distribution_measurement_availability.figure_contract.json"
+        ).read_text()
+    )
+    authorized = list(repair_metadata_for(REPAIR_ID).figure_product_slots)
+    panel_of_slot = {
+        slot: panel["panel_id"]
+        for panel in contract["panels"]
+        for slot in (panel.get("metadata") or {}).get("planner_product_slots", [])
+    }
+    assert (
+        sorted(panel_of_slot) == sorted(authorized) == ["availability", "distribution"]
+    )
+    assert panel_of_slot["distribution"] == "A"
+    assert panel_of_slot["availability"] == "B"
+
+    # (2) The real binding gate anchors every authorized slot end-to-end. Before
+    #     the panels carried the slots this raised "authorized product slot is
+    #     not anchored to a contract panel".
+    declared = [f"figure:probe_{slot}" for slot in authorized]
+    assert (
+        bind_declared_figure_products(
+            out_dir=out,
+            declared_products=declared,
+            authorized_product_slots={
+                f"figure:probe_{slot}": slot for slot in authorized
+            },
+            renderer_repair_id=REPAIR_ID,
+            renderer_implementation_sha256=hashlib.sha256(
+                Path(_mod.__file__).read_bytes()
+            ).hexdigest(),
+            renderer_parent_digests=seal or {},
+        )
+        is True
+    )
+
+
 def test_closed_compact_two_table_parent_routes_without_llm(tmp_path: Path) -> None:
     _write_compact_parent(tmp_path)
     step = AnalysisStep(
