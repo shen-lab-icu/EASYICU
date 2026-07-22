@@ -1,0 +1,75 @@
+{
+  "schema_version": "easyicu.research_agent_framework_release/1",
+  "tool_version": "1.0.0",
+  "generated_at": "2026-07-22T07:23:51.290467+00:00",
+  "tool_sha256": "55909c86d69ddc800da03cdd73d77bf0186089f151399311f0fc91abd5b257dd",
+  "provider_calls": 0,
+  "patient_data_reads": 0,
+  "status": "passed",
+  "results": [
+    {
+      "name": "resource_context",
+      "command": [
+        "/Users/haibo/Documents/GitHub/EASYICU/.venv/bin/python",
+        "tools/research_agent_resource_baseline.py",
+        "--diff",
+        "tools/arch_baselines/research_agent_resource_context.json"
+      ],
+      "returncode": 0,
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stdout_tail": "",
+      "stderr_tail": ""
+    },
+    {
+      "name": "architecture",
+      "command": [
+        "/Users/haibo/Documents/GitHub/EASYICU/.venv/bin/python",
+        "tools/arch_measure.py",
+        "--diff",
+        "tools/arch_baselines/execution_phase.json"
+      ],
+      "returncode": 0,
+      "stdout_sha256": "3ace581d0ad29b5c02d64a8c2b9ed7d5fdd236bf3545257180872f951581805c",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stdout_tail": "t.py.intra_package_import_edges               2          2       +0\nrepairs/source.py.loc                                      6818       6818       +0\nrepairs/source.py.intra_package_import_edges                 21         21       +0\nrepairs/typed_input.py.loc                                  280        280       +0\nrepairs/typed_input.py.intra_package_import_edges             2          2       +0\naudits/validators.py.loc                                  12989      12989       +0\naudits/validators.py.intra_package_import_edges              10         10       +0\nplan_utils.py.loc                                          4977       4977       +0\nplan_utils.py.intra_package_import_edges                      9          9       +0\nagents/core.py.loc                                         4165       4165       +0\nagents/core.py.intra_package_import_edges                    24         25       +1\ncontracts/declared_product.py.loc                          3509       3509       +0\ncontracts/declared_product.py.intra_package_import_edges          5          5       +0\nfigures/skill.py.loc                                       3458       3458       +0\nfigures/skill.py.intra_package_import_edges                   7          7       +0\nauthority/evidence_store.py.loc                            3151       3151       +0\nauthority/evidence_store.py.intra_package_import_edges          3          3       +0\n\npackage top-12 files by LOC (informational; * = not gated):\n     12989  audits/validators.py\n     11387  execution/phase.py\n     10628  pipeline.py\n      8364  gates/preflight.py\n      6818  repairs/source.py\n      4977  plan_utils.py\n      4165  agents/core.py\n  *   3631  discovery/idea_mining.py\n      3509  contracts/declared_product.py\n      3458  figures/skill.py\n      3151  authority/evidence_store.py\n      2940  reporting/readiness.py\n  NOTE: 1 of the top-12 files are outside TARGET_FILES — consider appending them.\n\nOK: no lower-is-better metric regressed vs baseline.\n",
+      "stderr_tail": ""
+    },
+    {
+      "name": "module_graph",
+      "command": [
+        "/Users/haibo/Documents/GitHub/EASYICU/.venv/bin/python",
+        "tools/research_agent_module_graph.py",
+        "--diff",
+        "tools/arch_baselines/research_agent_module_graph.json"
+      ],
+      "returncode": 0,
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stdout_tail": "",
+      "stderr_tail": ""
+    },
+    {
+      "name": "framework_tests",
+      "command": [
+        "/Users/haibo/Documents/GitHub/EASYICU/.venv/bin/python",
+        "-m",
+        "pytest",
+        "tests/research_agent/test_resource_scheduler.py",
+        "tests/research_agent/test_bounded_context.py",
+        "tests/research_agent/test_permissioned_memory_store.py",
+        "tests/research_agent/test_capability_requests.py",
+        "tests/research_agent/test_graph_poc.py",
+        "tests/research_agent/test_char_golden_run_bundle.py",
+        "tests/research_agent/test_typed_input_consumption_receipt.py",
+        "tests/research_agent/test_typed_input_sdk.py",
+        "-q"
+      ],
+      "returncode": 0,
+      "stdout_sha256": "637f0bacf1eafe99f6ccc5b2959a192b1e45b2fda70e85b391fa5e3943b9f499",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stdout_tail": "perties_are_immutable PASSED [ 80%]\ntests/research_agent/test_typed_input_sdk.py::test_wrong_manifest_sha_fails_closed PASSED [ 81%]\ntests/research_agent/test_typed_input_sdk.py::test_artifact_bytes_must_match_resolved_evidence_sha PASSED [ 82%]\ntests/research_agent/test_typed_input_sdk.py::test_evidence_identity_row_must_match_the_selected_binding PASSED [ 83%]\ntests/research_agent/test_typed_input_sdk.py::test_relative_path_escape_is_rejected PASSED [ 84%]\ntests/research_agent/test_typed_input_sdk.py::test_absolute_path_cannot_override_the_resolved_relative_artifact PASSED [ 85%]\ntests/research_agent/test_typed_input_sdk.py::test_symlink_artifact_is_rejected PASSED [ 87%]\ntests/research_agent/test_typed_input_sdk.py::test_symlink_parent_directory_is_rejected PASSED [ 88%]\ntests/research_agent/test_typed_input_sdk.py::test_duplicate_row_identity_is_rejected_even_if_digest_matches PASSED [ 89%]\ntests/research_agent/test_typed_input_sdk.py::test_missing_row_identity_is_rejected PASSED [ 90%]\ntests/research_agent/test_typed_input_sdk.py::test_sdk_never_guesses_an_identity_column PASSED [ 91%]\ntests/research_agent/test_typed_input_sdk.py::test_contract_columns_must_match_loaded_table_exactly PASSED [ 92%]\ntests/research_agent/test_typed_input_sdk.py::test_manifest_consumer_step_must_match_current_step PASSED [ 94%]\ntests/research_agent/test_typed_input_sdk.py::test_receipt_is_bound_to_the_host_supplied_current_code_sha PASSED [ 95%]\ntests/research_agent/test_typed_input_sdk.py::test_file_changed_after_initial_load_is_rejected_before_return PASSED [ 96%]\ntests/research_agent/test_typed_input_sdk.py::test_manifest_changed_after_initial_load_is_rejected_before_return PASSED [ 97%]\ntests/research_agent/test_typed_input_sdk.py::test_non_csv_non_parquet_transport_is_rejected PASSED [ 98%]\ntests/research_agent/test_typed_input_sdk.py::test_other_planner_input_cannot_be_substituted PASSED [100%]\n\n============================= 85 passed in 22.85s ==============================\n",
+      "stderr_tail": ""
+    }
+  ]
+}
