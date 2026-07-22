@@ -31,11 +31,19 @@ def _quarantined() -> MemoryObject:
     )
 
 
-def test_canonical_policy_rejects_quarantine_namespace() -> None:
-    with pytest.raises(ValidationError, match="cannot read quarantine"):
+@pytest.mark.parametrize(
+    "namespace",
+    [
+        "run_lessons/quarantine/project-a",
+        "preferences/user-a",
+        "runtime/session-a",
+    ],
+)
+def test_canonical_policy_rejects_nonreviewed_namespace(namespace: str) -> None:
+    with pytest.raises(ValidationError, match="reviewed/promoted memory only"):
         MemoryAccessPolicy(
             canonical=True,
-            allowed_namespaces=("run_lessons/quarantine/project-a",),
+            allowed_namespaces=(namespace,),
         )
 
 

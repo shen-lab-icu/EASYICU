@@ -293,11 +293,19 @@ class MemoryAccessPolicy(BaseModel):
 
     @model_validator(mode="after")
     def _canonical_excludes_quarantine(self) -> "MemoryAccessPolicy":
-        if self.canonical and any(
-            namespace.startswith("run_lessons/quarantine/")
-            for namespace in self.allowed_namespaces
-        ):
-            raise ValueError("canonical runs cannot read quarantine memory")
+        if self.canonical:
+            invalid = tuple(
+                namespace
+                for namespace in self.allowed_namespaces
+                if not namespace.startswith(
+                    ("reviewed_knowledge/", "promoted_lessons/")
+                )
+            )
+            if invalid:
+                raise ValueError(
+                    "canonical runs may read reviewed/promoted memory only; "
+                    f"disallowed namespaces={invalid!r}"
+                )
         return self
 
 
@@ -311,7 +319,10 @@ def select_memory(
     selected: list[MemoryObject] = []
     for namespace in policy.allowed_namespaces:
         for memory in store.list(namespace):
-            if policy.canonical and memory.review_status == "quarantined":
+            if policy.canonical and memory.review_status not in {
+                "reviewed",
+                "promoted",
+            }:
                 continue
             if memory.review_status in {"reviewed", "promoted"}:
                 if not policy.profile_ref or memory.profile_ref != policy.profile_ref:

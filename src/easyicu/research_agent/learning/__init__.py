@@ -18,6 +18,15 @@ from .store import (
     quarantine_run_lesson,
     select_memory,
 )
+from .runtime import (
+    REVIEWED_MEMORY_PROMPT_LIMIT_BYTES,
+    ReviewedMemoryBudgetError,
+    ReviewedMemoryBundle,
+    ReviewedMemoryIntegrityError,
+    ReviewedMemoryRuntime,
+    attach_step_reviewed_memory,
+    build_reviewed_memory_bundle,
+)
 
 __all__ = [
     "FileSystemMemoryStore",
@@ -26,6 +35,13 @@ __all__ = [
     "MemoryObject",
     "MemoryPromotionReceipt",
     "MemoryReviewAttestation",
+    "REVIEWED_MEMORY_PROMPT_LIMIT_BYTES",
+    "ReviewedMemoryBudgetError",
+    "ReviewedMemoryBundle",
+    "ReviewedMemoryIntegrityError",
+    "ReviewedMemoryRuntime",
+    "attach_step_reviewed_memory",
+    "build_reviewed_memory_bundle",
     "promote_quarantined_memory",
     "quarantine_run_lesson",
     "select_memory",

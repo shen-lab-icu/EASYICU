@@ -354,6 +354,7 @@ from .providers.llm import (
 from .providers.mocks import MockLLMClient
 from .providers.protocol import LLMClient, LLMMessage
 from .learning.memory import RunMemory
+from .learning.runtime import ReviewedMemoryRuntime
 from .learning.store import FileSystemMemoryStore
 from .providers.prompts import PROMPT_PACK_VERSION, prompt_pack_files
 from .execution.runner import (
@@ -1496,6 +1497,8 @@ class ResearchAgentPipeline:
         experience_bank_min_similarity: float = 0.2,
         enable_know_how: bool = False,
         enable_coder_resources: bool = False,
+        enable_reviewed_memory: bool = False,
+        reviewed_memory_namespaces: Sequence[str] = (),
         know_how_paths: Sequence[Union[str, Path]] = (),
         know_how_top_k: int = 3,
         know_how_min_score: float = 0.15,
@@ -1751,6 +1754,8 @@ class ResearchAgentPipeline:
         self._experience_bank_min_similarity = float(experience_bank_min_similarity)
         self._enable_know_how = bool(enable_know_how)
         self._enable_coder_resources = bool(enable_coder_resources)
+        self._enable_reviewed_memory = bool(enable_reviewed_memory)
+        self._reviewed_memory_namespaces = tuple(reviewed_memory_namespaces)
         self._know_how_paths = tuple(Path(path) for path in know_how_paths)
         self._know_how_top_k = int(know_how_top_k)
         self._know_how_min_score = float(know_how_min_score)
@@ -1771,6 +1776,14 @@ class ResearchAgentPipeline:
             name=submission_profile_name,
             version=submission_profile_version,
             enabled=self._enable_coder_resources,
+        )
+        from .orchestration.profiles import require_profile_reviewed_memory_setting
+
+        require_profile_reviewed_memory_setting(
+            name=submission_profile_name,
+            version=submission_profile_version,
+            enabled=self._enable_reviewed_memory,
+            namespaces=self._reviewed_memory_namespaces,
         )
         # T3.1 — runner backend selection. ``auto`` prefers a probed Docker
         # image and uses macOS sandbox-exec only when Docker is unavailable;
@@ -1803,8 +1816,13 @@ class ResearchAgentPipeline:
         self._memory = RunMemory(self.workdir) if enable_memory else None
         self._permissioned_memory_store = (
             FileSystemMemoryStore(self.workdir / ".memory_v2")
-            if enable_memory or enable_experience_bank
+            if enable_memory or enable_experience_bank or enable_reviewed_memory
             else None
+        )
+        self._reviewed_memory_runtime = ReviewedMemoryRuntime(
+            enabled=self._enable_reviewed_memory,
+            store=self._permissioned_memory_store,
+            allowed_namespaces=self._reviewed_memory_namespaces,
         )
 
     def _build_runner(
