@@ -49,6 +49,7 @@ from ..trajectory.plan_contract import (
     trajectory_role_code_contract,
 )
 from ..execution.method_capabilities import coder_method_capability_block
+from ..resources import ContextBudgetExceeded, bounded_request_metrics
 from ..cohort.schema import ALLOWED_CTAS_AGGREGATIONS, known_concept_ids
 from ..icu_rules import (
     GENERAL_ICU_ANALYSIS_PRINCIPLES,
@@ -1064,7 +1065,7 @@ class PlannerAgent:
             "top_level": [],
             "steps": [],
         }
-        self.last_prompt_metrics: Dict[str, int] = {}
+        self.last_prompt_metrics: Dict[str, Any] = {}
 
     @staticmethod
     def request_messages(
@@ -1090,21 +1091,20 @@ class PlannerAgent:
         context: ResearchContext,
         *,
         know_how_context: str = "",
-    ) -> Dict[str, int]:
-        messages = cls.request_messages(
-            context,
-            know_how_context=know_how_context,
-        )
-        system_bytes = len(messages[0].content.encode("utf-8"))
-        user_bytes = len(messages[1].content.encode("utf-8"))
-        total_bytes = system_bytes + user_bytes
-        return {
-            "system_bytes": system_bytes,
-            "user_bytes": user_bytes,
-            "total_bytes": total_bytes,
-            "approx_input_tokens": (total_bytes + 3) // 4,
-            "limit_bytes": _PLANNER_PROMPT_BYTE_LIMIT,
-        }
+    ) -> Dict[str, Any]:
+        try:
+            return bounded_request_metrics(
+                system_content=_SYSTEM_GUIDE + _PRINCIPLES_GUIDE,
+                base_user_content=_build_planner_user_prompt(context),
+                full_user_content=_build_planner_user_prompt(
+                    context, know_how_context=know_how_context
+                ),
+                max_bytes=_PLANNER_PROMPT_BYTE_LIMIT,
+            )
+        except ContextBudgetExceeded as exc:
+            raise PlannerPromptBudgetError(
+                f"Planner prompt transport budget exceeded: {exc}"
+            ) from exc
 
     def run(
         self,
