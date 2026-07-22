@@ -46,6 +46,31 @@ def _binary_context() -> ResearchContext:
     return context
 
 
+def _private_label_context() -> ResearchContext:
+    context = _context()
+    context.variables.extend(
+        [
+            ConceptDescriptor(
+                name="sex",
+                dtype="object",
+                observed_domain={
+                    "n_unique": 2,
+                    "levels": ["Female", "Male"],
+                },
+            ),
+            ConceptDescriptor(
+                name="smoking_status",
+                dtype="object",
+                observed_domain={
+                    "n_unique": 2,
+                    "levels": ["NeverSmokerLocal", "EverSmokerLocal"],
+                },
+            ),
+        ]
+    )
+    return context
+
+
 def _step(*, include_spec: bool) -> dict:
     step = {
         "step_id": "02_table_one",
@@ -129,6 +154,41 @@ def test_fresh_planner_preserves_observed_numeric_level_types() -> None:
     step["table_one_spec"]["group_levels"] = [0, 1]
     parsed = planner._parse(json.dumps(payload), _binary_context())
     assert parsed.steps[0].table_one_spec.group_levels == [0, 1]
+
+
+def test_private_table_one_levels_use_opaque_tokens_and_bind_locally() -> None:
+    context = _private_label_context()
+    prompt = PlannerAgent.request_messages(context)[1].content
+    assert "Female" not in prompt
+    assert "Male" not in prompt
+    assert "NeverSmokerLocal" not in prompt
+    assert "EverSmokerLocal" not in prompt
+    assert "__easyicu_level_1__" in prompt
+    assert "__easyicu_level_2__" in prompt
+
+    payload = json.loads(_raw(include_spec=True))
+    step = payload["steps"][0]
+    step["inputs"] = ["sex", "smoking_status"]
+    step["table_one_spec"] = {
+        "group_by": "sex",
+        "group_levels": ["__easyicu_level_1__", "__easyicu_level_2__"],
+        "variables": [
+            {
+                "name": "smoking_status",
+                "variable_kind": "categorical",
+                "summary": "count_percent",
+                "test": "chi_square_with_fisher_exact_for_sparse_2x2",
+                "levels": ["__easyicu_level_1__", "__easyicu_level_2__"],
+            }
+        ],
+    }
+
+    planner = PlannerAgent.__new__(PlannerAgent)
+    plan = planner._parse(json.dumps(payload), context)
+    spec = plan.steps[0].table_one_spec
+    assert spec is not None
+    assert spec.group_levels == ["Female", "Male"]
+    assert spec.variables[0].levels == ["NeverSmokerLocal", "EverSmokerLocal"]
 
 
 def test_archival_analysis_step_remains_readable_without_new_optional_spec() -> None:

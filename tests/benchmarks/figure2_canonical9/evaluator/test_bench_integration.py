@@ -63,15 +63,30 @@ _FIGURE2_VALIDITY_BINDINGS = {
 }
 
 
-def _current_identity() -> dict[str, Any]:
+def _current_identity(
+    *,
+    cohort: Any = None,
+    seed: int | None = None,
+) -> dict[str, Any]:
+    options = (
+        bench._bind_benchmark_execution_input({}, cohort=cohort, data_seed=seed)
+        if cohort is not None
+        else {}
+    )
     return bench._benchmark_execution_identity(
-        {}, provider="mock", model="mock"
+        options, provider="mock", model="mock"
     ).model_dump(mode="json")
 
 
-def _write_manifest(run_dir: Path, payload: dict[str, Any]) -> None:
+def _write_manifest(
+    run_dir: Path,
+    payload: dict[str, Any],
+    *,
+    cohort: Any = None,
+    seed: int | None = None,
+) -> None:
     payload = dict(payload)
-    payload["execution_identity"] = _current_identity()
+    payload["execution_identity"] = _current_identity(cohort=cohort, seed=seed)
     (run_dir / "manifest.json").write_text(json.dumps(payload), encoding="utf-8")
 
 
@@ -93,6 +108,38 @@ def _item(task_id: str) -> SimpleNamespace:
         expected_step_substrings=[],
         expected_artifact_substrings=[],
     )
+
+
+def test_benchmark_reuse_identity_binds_data_seed_and_input_values() -> None:
+    first_cohort = [{"stay_id": 1, "value": 7}]
+    second_cohort = [{"stay_id": 1, "value": 8}]
+    first = _current_identity(cohort=first_cohort, seed=7)
+    changed_seed = _current_identity(cohort=first_cohort, seed=8)
+    changed_values = _current_identity(cohort=second_cohort, seed=7)
+
+    assert first["environment_identity_sha256"] == changed_seed[
+        "environment_identity_sha256"
+    ]
+    assert first["environment_identity_sha256"] == changed_values[
+        "environment_identity_sha256"
+    ]
+    assert len(
+        {
+            first["identity_sha256"],
+            changed_seed["identity_sha256"],
+            changed_values["identity_sha256"],
+        }
+    ) == 3
+
+
+def test_benchmark_reuse_identity_binds_external_file_bytes(tmp_path: Path) -> None:
+    path = tmp_path / "cohort.csv"
+    path.write_text("stay_id,value\n1,7\n", encoding="utf-8")
+    before = _current_identity(cohort=path, seed=7)
+    path.write_text("stay_id,value\n1,8\n", encoding="utf-8")
+    after = _current_identity(cohort=path, seed=7)
+
+    assert before["identity_sha256"] != after["identity_sha256"]
 
 
 def _run_dir(tmp_path: Path) -> Path:
@@ -669,6 +716,8 @@ def test_ehrflow_reuse_rescores_completed_figure2_run_without_provider_call(
     out_root = tmp_path / "results"
     run_dir = out_root / task_id / "aware" / "run_existing"
     run_dir.mkdir(parents=True)
+    cohort_path = tmp_path / "cohort.csv"
+    cohort_path.write_text("lactate,event\n1.2,0\n2.4,1\n", encoding="utf-8")
     _write_manifest(
         run_dir,
         {
@@ -683,6 +732,8 @@ def test_ehrflow_reuse_rescores_completed_figure2_run_without_provider_call(
             "per_step_records": [],
             "evidence": [],
         },
+        cohort=cohort_path,
+        seed=7,
     )
     _write_run_status(run_dir, execution_complete=True)
     tracked_payloads = {
@@ -697,8 +748,6 @@ def test_ehrflow_reuse_rescores_completed_figure2_run_without_provider_call(
         path.write_bytes(payload)
     before = {path: path.read_bytes() for path in tracked_payloads}
 
-    cohort_path = tmp_path / "cohort.csv"
-    cohort_path.write_text("lactate,event\n1.2,0\n2.4,1\n", encoding="utf-8")
     jsonl_path = tmp_path / "figure2.jsonl"
     jsonl_path.write_text(
         json.dumps(
@@ -841,9 +890,10 @@ def test_latest_aborted_run_falls_back_to_latest_complete_run(
     arm_dir = out_root / task_id / "aware"
     complete = arm_dir / "run_20260718T010000_complete"
     aborted = arm_dir / "run_20260718T020000_aborted"
+    cohort = [{"locked_exposure": 1, "locked_outcome": 0}]
     for run_dir, is_complete in ((complete, True), (aborted, False)):
         run_dir.mkdir(parents=True)
-        _write_manifest(run_dir, {})
+        _write_manifest(run_dir, {}, cohort=cohort)
         _write_run_status(run_dir, execution_complete=is_complete)
     scored: list[Path] = []
 
@@ -875,7 +925,7 @@ def test_latest_aborted_run_falls_back_to_latest_complete_run(
 
     result = bench._run_one_item_from_cohort(
         item=_item(task_id),
-        cohort=[{"locked_exposure": 1, "locked_outcome": 0}],
+        cohort=cohort,
         out_root=out_root,
         arms=["aware"],
         reuse_existing=True,
@@ -893,7 +943,8 @@ def test_partial_arm_reuse_creates_one_provider_and_runs_only_missing_arm(
     out_root = tmp_path / "results"
     aware_run = out_root / task_id / "aware" / "run_complete"
     aware_run.mkdir(parents=True)
-    _write_manifest(aware_run, {})
+    cohort = [{"locked_exposure": 1, "locked_outcome": 0}]
+    _write_manifest(aware_run, {}, cohort=cohort)
     _write_run_status(aware_run, execution_complete=True)
     provider_calls = 0
     arm_calls: list[str] = []
@@ -924,7 +975,7 @@ def test_partial_arm_reuse_creates_one_provider_and_runs_only_missing_arm(
 
     result = bench._run_one_item_from_cohort(
         item=_item(task_id),
-        cohort=[{"locked_exposure": 1, "locked_outcome": 0}],
+        cohort=cohort,
         out_root=out_root,
         arms=["naive", "aware"],
         reuse_existing=True,

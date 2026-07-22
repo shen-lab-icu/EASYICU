@@ -101,6 +101,7 @@ from ..research_context.prompt_scope import (
 from ..research_context.prompt_variables import (
     compact_fixed_window_trajectory_prompt,
     format_observed_domain,
+    opaque_level_tokens,
 )
 from ..research_context.repair_prompt import format_repair_authority_context
 from ..authority.step_capsule import ContentRef
@@ -635,6 +636,10 @@ def _build_planner_user_prompt(
         "encode the scientific comparison. Table 1 means Overall plus grouped "
         "columns. Preserve observed scalar types exactly: numeric 0/1 levels "
         "must be JSON numbers, never the strings '0'/'1'. "
+        "When the variable catalog withholds categorical literals and supplies "
+        "`opaque_levels`, copy those exact opaque tokens into group_levels or a "
+        "categorical variable's levels. The host will bind them locally to the "
+        "digest-verified observed values; never guess a hidden label. "
         "Report per-group missing n (%), one variable-appropriate P value, "
         "and the test name. If only an ungrouped cohort description is wanted, "
         "emit `table:cohort_summary` instead and omit table_one_spec. "
@@ -890,27 +895,27 @@ def _render_methodological_principles() -> str:
 _PRINCIPLES_GUIDE = _render_methodological_principles()
 
 
-def _validate_table_one_observed_levels(
+def _bind_and_validate_table_one_observed_levels(
     plan: AnalysisPlan,
     context: ResearchContext,
 ) -> None:
-    """Reject Table 1 level types that cannot match the observed columns."""
+    """Resolve opaque Table 1 levels locally, then enforce exact values."""
 
     variables = {variable.name: variable for variable in context.variables}
 
     def _token(value: object) -> tuple[str, str]:
         return type(value).__name__, repr(value)
 
-    def _observed_tokens(name: str) -> set[tuple[str, str]]:
+    def _observed_levels(name: str) -> list[object]:
         variable = variables.get(name)
         if variable is None or not variable.observed_domain:
-            return set()
+            return []
         domain = variable.observed_domain
         levels = domain.get("levels")
         if isinstance(levels, list):
-            return {_token(value) for value in levels}
+            return list(levels)
         if not domain.get("is_binary"):
-            return set()
+            return []
         dtype = str(variable.dtype or "").lower()
         if dtype.startswith(("int", "uint")):
             values: tuple[object, object] = (0, 1)
@@ -919,14 +924,25 @@ def _validate_table_one_observed_levels(
         elif dtype.startswith(("float", "double")):
             values = (0.0, 1.0)
         else:
-            return set()
-        return {_token(value) for value in values}
+            return []
+        return list(values)
+
+    def _bind_levels(name: str, declared: list[object]) -> list[object]:
+        observed = _observed_levels(name)
+        if not observed:
+            return declared
+        opaque = list(opaque_level_tokens(len(observed)))
+        if opaque and declared == opaque:
+            return observed
+        return declared
 
     for step in plan.steps:
         spec = step.table_one_spec
         if spec is None:
             continue
-        observed_groups = _observed_tokens(spec.group_by)
+        spec.group_levels[:] = _bind_levels(spec.group_by, spec.group_levels)
+        observed_group_values = _observed_levels(spec.group_by)
+        observed_groups = {_token(value) for value in observed_group_values}
         declared_groups = {_token(value) for value in spec.group_levels}
         if observed_groups and declared_groups != observed_groups:
             raise ValueError(
@@ -937,7 +953,13 @@ def _validate_table_one_observed_levels(
         for variable_spec in spec.variables:
             if variable_spec.summary != "count_percent":
                 continue
-            observed = _observed_tokens(variable_spec.name)
+            variable_spec.levels[:] = _bind_levels(
+                variable_spec.name,
+                variable_spec.levels,
+            )
+            observed = {
+                _token(value) for value in _observed_levels(variable_spec.name)
+            }
             declared = {_token(value) for value in variable_spec.levels}
             if observed and not observed <= declared:
                 raise ValueError(
@@ -1152,7 +1174,7 @@ class PlannerAgent:
                     "Planner must record at least one claim-level disposition for "
                     f"every retrieved card: {undecided_cards!r}"
                 )
-        _validate_table_one_observed_levels(plan, context)
+        _bind_and_validate_table_one_observed_levels(plan, context)
         missing_table_one_specs = [
             step.step_id
             for step in plan.steps

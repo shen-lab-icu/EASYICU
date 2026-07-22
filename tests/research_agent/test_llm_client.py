@@ -6,6 +6,11 @@ from types import SimpleNamespace
 import pytest
 
 
+def _mock_transport_client(client):
+    client.__easyicu_mock_client__ = True
+    return client
+
+
 def _retry_test_client(ra, failures):
     from easyicu.research_agent.providers.llm import OpenAIClient
 
@@ -22,7 +27,7 @@ def _retry_test_client(ra, failures):
             return SimpleNamespace(choices=[choice], usage=None)
 
     completions = _Completions()
-    client = OpenAIClient.__new__(OpenAIClient)
+    client = _mock_transport_client(OpenAIClient.__new__(OpenAIClient))
     client._client = SimpleNamespace(chat=SimpleNamespace(completions=completions))
     client._model = "gpt-test"
     client._timeout = 1.0
@@ -55,6 +60,30 @@ def test_openai_client_disables_sdk_retries(monkeypatch, ra):
     assert client._max_retries == 5
 
 
+def test_unmanaged_external_client_is_rejected_before_transport(ra):
+    from easyicu.research_agent.providers.llm import LLMMessage, OpenAIClient
+
+    calls = 0
+
+    class _Completions:
+        def create(self, **_kwargs):
+            nonlocal calls
+            calls += 1
+            raise AssertionError("unauthorized messages must never reach transport")
+
+    client = OpenAIClient.__new__(OpenAIClient)
+    client._resolved_base_url = "https://provider.invalid/v1"
+    client._client = SimpleNamespace(chat=SimpleNamespace(completions=_Completions()))
+    client._model = "gpt-test"
+    client._timeout = 1.0
+    client._extra_body = {}
+
+    with pytest.raises(PermissionError, match="factory-minted"):
+        client.complete([LLMMessage(role="user", content="patient free text")])
+
+    assert calls == 0
+
+
 def test_openai_client_strips_reasoning_blocks_from_content(ra):
     from easyicu.research_agent.providers.llm import LLMMessage, OpenAIClient
 
@@ -67,7 +96,7 @@ def test_openai_client_strips_reasoning_blocks_from_content(ra):
             choice = SimpleNamespace(message=msg, finish_reason="stop")
             return SimpleNamespace(choices=[choice], usage=None)
 
-    client = OpenAIClient.__new__(OpenAIClient)
+    client = _mock_transport_client(OpenAIClient.__new__(OpenAIClient))
     client._client = SimpleNamespace(chat=SimpleNamespace(completions=_Completions()))
     client._model = "qwen3-8b"
     client._timeout = 120.0
@@ -129,7 +158,7 @@ def test_openai_client_streaming_is_transport_only(monkeypatch, ra):
             assert "stream_options" not in kwargs
             return stream
 
-    client = OpenAIClient.__new__(OpenAIClient)
+    client = _mock_transport_client(OpenAIClient.__new__(OpenAIClient))
     client._client = SimpleNamespace(chat=SimpleNamespace(completions=_Completions()))
     client._model = "gpt-5.6-luna"
     client._timeout = 120.0
@@ -201,7 +230,7 @@ def test_openai_client_stream_closes_on_iteration_error(monkeypatch, ra):
         def create(self, **kwargs):
             return stream
 
-    client = OpenAIClient.__new__(OpenAIClient)
+    client = _mock_transport_client(OpenAIClient.__new__(OpenAIClient))
     client._client = SimpleNamespace(chat=SimpleNamespace(completions=_Completions()))
     client._model = "gpt-5.6-luna"
     client._timeout = 120.0
@@ -224,7 +253,7 @@ def test_openai_client_recovers_unclosed_reasoning_prefix_for_debuggability(ra):
             choice = SimpleNamespace(message=msg, finish_reason="length")
             return SimpleNamespace(choices=[choice], usage=None)
 
-    client = OpenAIClient.__new__(OpenAIClient)
+    client = _mock_transport_client(OpenAIClient.__new__(OpenAIClient))
     client._client = SimpleNamespace(chat=SimpleNamespace(completions=_Completions()))
     client._model = "qwen3-8b"
     client._timeout = 120.0
@@ -266,7 +295,7 @@ def test_openai_client_supports_local_noauth_proxy_mode(ra):
             return _Response()
 
     http_client = _HttpClient()
-    client = OpenAIClient.__new__(OpenAIClient)
+    client = _mock_transport_client(OpenAIClient.__new__(OpenAIClient))
     client._client = None
     client._model = "gpt-5.4"
     client._timeout = 120.0
@@ -302,7 +331,7 @@ def test_openai_client_zero_manual_retry_budget_makes_one_attempt(monkeypatch, r
             return SimpleNamespace(choices=[], usage=None)
 
     completions = _Completions()
-    client = OpenAIClient.__new__(OpenAIClient)
+    client = _mock_transport_client(OpenAIClient.__new__(OpenAIClient))
     client._client = SimpleNamespace(chat=SimpleNamespace(completions=completions))
     client._model = "gpt-5.6-luna"
     client._timeout = 1.0

@@ -283,22 +283,11 @@ def _response_namespace_from_stream(stream: Any) -> Any:
 class OpenAIClient:
     """Thin wrapper around ``openai>=1.0`` chat completions.
 
-    Usage::
-
-        from easyicu.research_agent import OpenAIClient
-
-        # OpenAI proper
-        llm = OpenAIClient(model="gpt-4o-mini")
-
-        # OpenRouter (free tier) — anything OpenAI-compatible works the
-        # same way; the ``base_url`` is the only knob that differs.
-        llm = OpenAIClient(
-            model="google/gemini-2.0-flash-exp:free",
-            base_url="https://openrouter.ai/api/v1",
-            api_key=os.environ["OPENROUTER_API_KEY"],
-            extra_headers={"HTTP-Referer": "https://github.com/shen-lab-icu/easyicu",
-                           "X-Title": "EasyICU research-agent"},
-        )
+    External transports must be created through
+    :func:`easyicu.research_agent.providers.factory.build_provider_client`.
+    Direct construction remains available for the factory and local transport
+    tests, but an unmanaged external instance is rejected before any message is
+    serialized or sent.
 
         pipeline = ResearchAgentPipeline(llm=llm, ...)
 
@@ -444,6 +433,27 @@ class OpenAIClient:
                 for k, v in reasoning_body.items():
                     self._extra_body.setdefault(k, v)
 
+    def _require_outbound_authorization(self) -> None:
+        """Reject unmanaged external transports before serializing messages."""
+
+        if bool(getattr(self, "__easyicu_mock_client__", False)):
+            return
+        if _is_local_openai_compatible_base_url(
+            getattr(self, "_resolved_base_url", None)
+        ):
+            return
+        from .factory import ProviderAuthorization
+
+        authorization = getattr(self, "__easyicu_provider_authorization__", None)
+        if not isinstance(authorization, ProviderAuthorization) or (
+            authorization.destination != "external"
+            or authorization.authorization_mode != "operator_env"
+        ):
+            raise PermissionError(
+                "external OpenAI-compatible calls require factory-minted "
+                "provider authorization"
+            )
+
     def _rebuild_openai_client(self) -> None:
         """Recreate the OpenAI client with a FRESH httpx connection pool.
 
@@ -540,6 +550,7 @@ class OpenAIClient:
         The tuple is call-scoped: concurrent callers never have to read the
         shared compatibility attribute ``last_usage`` to attribute cost.
         """
+        self._require_outbound_authorization()
         chat_messages = [{"role": m.role, "content": m.content} for m in messages]
         create_kwargs: Dict[str, Any] = {
             "model": self._model,
@@ -832,6 +843,7 @@ class OpenAIClient:
         Lives on OpenAIClient (not FallbackLLMClient) because it needs
         ``self._client`` / ``self._model`` / ``self._timeout`` / ``self._extra_body``.
         """
+        self._require_outbound_authorization()
         content: List[Dict[str, Any]] = [{"type": "text", "text": prompt}]
         for path in image_paths:
             p = Path(path)
@@ -1147,11 +1159,15 @@ class LLMRouter:
     :class:`LLMClient` per role::
 
         router = LLMRouter(
-            default=OpenAIClient(model="gpt-4o-mini"),
-            planner=OpenAIClient(model="gpt-4o"),
-            analyzer=OpenAIClient(model="gpt-4o-mini"),
+            default=factory_minted_default_client,
+            planner=factory_minted_planner_client,
+            analyzer=factory_minted_analyzer_client,
         )
         pipeline = ResearchAgentPipeline(workdir=..., llm=router)
+
+    External clients must be created through
+    :func:`easyicu.research_agent.providers.factory.build_provider_client`;
+    unmanaged direct clients are rejected before transport.
 
     Backwards compatibility: passing a plain :class:`LLMClient`
     (``MockLLMClient``, ``OpenAIClient``, …) to

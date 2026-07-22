@@ -40,7 +40,9 @@ def _identity(**overrides: Any) -> ExecutionIdentity:
         "runner_image_digest": "sha256:" + "a" * 64,
         "network_policy": "none",
         "provider_client": _client(),
-        "seed": 17,
+        "llm_seed": 17,
+        "data_seed": 7,
+        "input_authority_sha256": "e" * 64,
         "host_runner_authorized": False,
         "code_version": {"git_sha": "b" * 40, "git_dirty": False},
     }
@@ -56,12 +58,15 @@ def test_every_execution_coordinate_changes_content_identity() -> None:
         _identity(runner_image_digest="sha256:" + "c" * 64),
         _identity(network_policy="bridge"),
         _identity(provider_client=_client(model="model-b")),
-        _identity(seed=18),
+        _identity(llm_seed=18),
+        _identity(data_seed=8),
+        _identity(input_authority_sha256="f" * 64),
         _identity(host_runner_authorized=True),
         _identity(code_version={"git_sha": "d" * 40, "git_dirty": False}),
     )
     assert (
-        len({baseline.identity_sha256, *(row.identity_sha256 for row in variants)}) == 9
+        len({baseline.identity_sha256, *(row.identity_sha256 for row in variants)})
+        == 11
     )
 
 
@@ -69,7 +74,10 @@ def test_identity_tampering_is_rejected() -> None:
     payload = _identity().model_dump(mode="json")
     payload["network_policy"] = "bridge"
 
-    with pytest.raises(ValidationError, match="execution identity digest mismatch"):
+    with pytest.raises(
+        ValidationError,
+        match="execution environment identity digest mismatch",
+    ):
         ExecutionIdentity.model_validate(payload, strict=True)
 
 
@@ -78,8 +86,21 @@ def test_expected_identity_freeze_rejects_tampering() -> None:
     payload = frozen.model_dump(mode="json")
     payload["expected_identity_sha256"] = "0" * 64
 
-    with pytest.raises(ValidationError, match="expected execution identity digest"):
+    with pytest.raises(
+        ValidationError,
+        match="expected execution environment identity digest",
+    ):
         ExpectedExecutionIdentity.model_validate(payload, strict=True)
+
+
+def test_frozen_environment_is_shared_but_reuse_identity_binds_input() -> None:
+    first = _identity(data_seed=7, input_authority_sha256="e" * 64)
+    second = _identity(data_seed=8, input_authority_sha256="f" * 64)
+    frozen = ExpectedExecutionIdentity.create(first)
+
+    assert first.environment_identity_sha256 == second.environment_identity_sha256
+    assert first.identity_sha256 != second.identity_sha256
+    assert frozen.expected_identity_sha256 == second.environment_identity_sha256
 
 
 def test_preflight_provider_coordinates_match_the_constructed_client() -> None:
@@ -102,7 +123,9 @@ def test_preflight_provider_coordinates_match_the_constructed_client() -> None:
         "runner": "docker",
         "runner_image_digest": "sha256:" + "a" * 64,
         "network_policy": "none",
-        "seed": 17,
+        "llm_seed": 17,
+        "data_seed": 7,
+        "input_authority_sha256": "e" * 64,
         "code_version": {"git_sha": "b" * 40, "git_dirty": False},
     }
     actual = ExecutionIdentity.create(provider_client=client, **common)

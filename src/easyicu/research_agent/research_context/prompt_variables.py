@@ -15,6 +15,8 @@ from typing import Any, Dict, Optional, Sequence
 
 from ..schema import ConceptDescriptor
 
+_MAX_OPAQUE_LEVEL_TOKENS = 20
+
 
 @dataclass(frozen=True)
 class CompactTrajectoryPromptProjection:
@@ -45,10 +47,29 @@ def project_observed_domain(domain: Optional[Dict[str, Any]]) -> Dict[str, Any]:
         projected["shape"] = "numeric"
     else:
         projected["shape"] = "unknown"
+    levels = domain.get("levels")
     n_unique = domain.get("n_unique")
+    if not isinstance(n_unique, int) or isinstance(n_unique, bool):
+        if isinstance(levels, list):
+            n_unique = len(levels)
+        elif domain.get("is_binary"):
+            n_unique = 2
     if isinstance(n_unique, int) and not isinstance(n_unique, bool) and n_unique >= 0:
         projected["n_unique"] = n_unique
+        if projected["shape"] == "binary_numeric_indicator" or (
+            projected["shape"] == "categorical" and isinstance(levels, list)
+        ):
+            projected["opaque_levels"] = list(opaque_level_tokens(n_unique))
     return projected
+
+
+def opaque_level_tokens(n_unique: int) -> tuple[str, ...]:
+    """Return deterministic placeholders without revealing local literals."""
+
+    count = int(n_unique)
+    if count < 2 or count > _MAX_OPAQUE_LEVEL_TOKENS:
+        return ()
+    return tuple(f"__easyicu_level_{index}__" for index in range(1, count + 1))
 
 
 def format_observed_domain(domain: Optional[Dict[str, Any]]) -> str:
@@ -59,16 +80,25 @@ def format_observed_domain(domain: Optional[Dict[str, Any]]) -> str:
         return ""
     shape = projected.get("shape")
     n_unique = projected.get("n_unique")
+    opaque_levels = projected.get("opaque_levels")
+    token_suffix = (
+        f"; opaque_levels={opaque_levels!r}"
+        if isinstance(opaque_levels, list) and opaque_levels
+        else ""
+    )
     if shape == "constant":
         return " observed=CONSTANT(single value; no variation to model)"
     if shape == "binary_numeric_indicator":
         return (
             " observed=BINARY_NUMERIC_INDICATOR(two-level; another numeric "
-            "cutoff is degenerate; literals withheld)"
+            f"cutoff is degenerate; literals withheld{token_suffix})"
         )
     if shape == "categorical":
         suffix = f" n_unique={n_unique}" if n_unique is not None else ""
-        return f" observed=CATEGORICAL{suffix} (literal levels withheld)"
+        return (
+            f" observed=CATEGORICAL{suffix} "
+            f"(literal levels withheld{token_suffix})"
+        )
     if shape == "numeric":
         suffix = f" n_unique={n_unique}" if n_unique is not None else ""
         return f" observed=NUMERIC{suffix} (cohort extrema withheld)"
@@ -255,5 +285,6 @@ __all__ = [
     "CompactTrajectoryPromptProjection",
     "compact_fixed_window_trajectory_prompt",
     "format_observed_domain",
+    "opaque_level_tokens",
     "project_observed_domain",
 ]

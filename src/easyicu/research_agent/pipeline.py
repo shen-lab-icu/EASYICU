@@ -1463,6 +1463,8 @@ class ResearchAgentPipeline:
         cost_price_table: Optional[Dict[str, Any]] = None,
         enable_reproducibility_envelope: bool = False,
         llm_seed: Optional[int] = None,
+        execution_data_seed: Optional[int] = None,
+        execution_input_authority_sha256: Optional[str] = None,
         envelope_include_previews: bool = False,
         submission_profile_name: Optional[str] = None,
         submission_profile_version: Optional[str] = None,

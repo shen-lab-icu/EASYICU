@@ -39,7 +39,9 @@ def _execution_identity(
         runner_image_digest="sha256:" + "a" * 64,
         network_policy="none",
         provider_client=client,
-        seed=20260722,
+        llm_seed=20260722,
+        data_seed=7,
+        input_authority_sha256="c" * 64,
         host_runner_authorized=host_runner_authorized,
         code_version={"git_sha": "b" * 40, "git_dirty": False},
     ).model_dump(mode="json")

@@ -63,6 +63,9 @@ from easyicu.research_agent.discovery.idea_scope import (  # noqa: E402
     resolve_journals,
 )
 from easyicu.research_agent.providers.llm import OpenAIClient  # noqa: E402
+from easyicu.research_agent.providers.factory import (  # noqa: E402
+    build_provider_client,
+)
 
 import run_idea_mining_s6_validation_harness as H  # noqa: E402
 
@@ -185,10 +188,15 @@ def make_export_feasibility_probe(
 
 def _make_llm(model: str) -> OpenAIClient:
     key = os.environ.get("OPENAI_API_KEY")
-    base = os.environ.get("OPENAI_BASE_URL")
     if not key:
         raise SystemExit("set OPENAI_API_KEY (+ OPENAI_BASE_URL for the local proxy)")
-    return OpenAIClient(model=model, api_key=key, base_url=base, request_timeout=180.0)
+    return build_provider_client(
+        provider="openai",
+        model=model,
+        request_timeout=180.0,
+        title="EasyICU discovery mining",
+        client_cls=OpenAIClient,
+    )
 
 
 _NOVELTY_JUDGE_SYSTEM = (

@@ -95,7 +95,12 @@ def test_protocol_has_no_concrete_provider_or_pipeline_dependency() -> None:
 
 def test_production_entrypoints_cannot_construct_openai_client_outside_factory():
     root = Path(__file__).resolve().parents[2]
-    targets = [root / "src" / "easyicu" / "research_agent", root / "tools"]
+    targets = [
+        root / "src" / "easyicu" / "research_agent",
+        root / "tools",
+        root / "scripts",
+        root / "examples",
+    ]
     violations: list[str] = []
     for target in targets:
         for path in target.rglob("*.py"):
