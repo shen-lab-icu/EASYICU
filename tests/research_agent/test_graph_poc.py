@@ -1,10 +1,9 @@
-"""Parity tests for the default LangGraph phase dispatcher.
+"""Tests for the sole LangGraph phase dispatcher.
 
 ``pipeline.run_with_graph(...)`` routes the existing
 ``plan → execute → write → finalise`` phases through a
 ``langgraph.graph.StateGraph``. The wrapper is intended to have
-identical behaviour to the default sequential ``pipeline.run(...)``
-path; this test pins that contract.
+the default ``pipeline.run(...)`` path.
 
 LangGraph is a core research-agent dependency.
 """
@@ -24,52 +23,18 @@ def _run_args(ra, cohort):
     )
 
 
-def test_run_with_graph_returns_pipeline_result(ra, synthetic_cohort, tmp_path: Path):
+def test_default_run_uses_langgraph(ra, synthetic_cohort, tmp_path: Path):
     pipeline = ra.ResearchAgentPipeline(
         workdir=tmp_path / "graph_run",
         llm=ra.MockLLMClient(),
         runner_kind="subprocess",
     )
-    result = pipeline.run_with_graph(**_run_args(ra, synthetic_cohort))
+    result = pipeline.run(**_run_args(ra, synthetic_cohort))
     assert result.run_id
     assert Path(result.manifest_path).exists()
     assert result.evidence_count >= 1
     receipt = Path(result.workdir) / "orchestration_runtime.json"
     assert '"backend": "langgraph"' in receipt.read_text(encoding="utf-8")
-
-
-def test_run_with_graph_parity_with_run(ra, synthetic_cohort, tmp_path: Path):
-    """The graph path must produce a result whose published fields
-    match the sequential path on the same inputs.
-
-    Run ids and timestamps will differ (each run gets a fresh
-    directory), so we compare the *structural* outputs: evidence
-    count, finding count, the existence of canonical artefacts, and
-    the manuscript scaffold path.
-    """
-
-    seq_pipe = ra.ResearchAgentPipeline(
-        workdir=tmp_path / "seq",
-        llm=ra.MockLLMClient(),
-        runner_kind="subprocess",
-    )
-    graph_pipe = ra.ResearchAgentPipeline(
-        workdir=tmp_path / "graph",
-        llm=ra.MockLLMClient(),
-        runner_kind="subprocess",
-    )
-
-    seq = seq_pipe.run(_use_graph=False, **_run_args(ra, synthetic_cohort))
-    graph = graph_pipe.run(**_run_args(ra, synthetic_cohort))
-
-    assert seq.evidence_count == graph.evidence_count
-    assert seq.findings_count == graph.findings_count
-    assert Path(seq.manifest_path).exists() and Path(graph.manifest_path).exists()
-    assert Path(seq.manuscript_path).exists() and Path(graph.manuscript_path).exists()
-    assert Path(seq.report_path).exists() and Path(graph.report_path).exists()
-    assert '"backend": "legacy_sequential"' in (
-        Path(seq.workdir) / "orchestration_runtime.json"
-    ).read_text(encoding="utf-8")
 
 
 def test_build_pipeline_graph_is_compiled_runnable(ra):
@@ -100,3 +65,45 @@ def test_build_pipeline_graph_is_compiled_runnable(ra):
     assert (
         final_state["final_result"] == "stub"
     ), "abort route must surface the aborted_result"
+
+
+def test_human_review_interrupt_requires_digest_bound_approval() -> None:
+    from langgraph.checkpoint.memory import InMemorySaver
+    from langgraph.types import Command
+
+    from easyicu.research_agent.graph import (
+        HumanReviewDecision,
+        HumanReviewRequest,
+        build_pipeline_graph,
+    )
+
+    request = HumanReviewRequest.create(
+        kind="capability_request",
+        summary="Approve tested package in immutable image",
+        authority_sha256="a" * 64,
+        payload={"request_id": "cap-123"},
+    )
+    graph = build_pipeline_graph(
+        plan_invoker=lambda: {"aborted_result": None},
+        execute_invoker=lambda _plan: "executed",
+        write_invoker=lambda _plan, _execute: "written",
+        finalise_invoker=lambda _plan, _execute, _write: "final",
+        human_review_invoker=lambda _plan: (request,),
+        checkpointer=InMemorySaver(),
+    )
+    config = {"configurable": {"thread_id": "review-test"}}
+    paused = graph.invoke({}, config=config)
+    assert paused["__interrupt__"]
+    decision = HumanReviewDecision(
+        review_id=request.review_id,
+        authority_sha256=request.authority_sha256,
+        decision="approved",
+        reviewer="maintainer",
+        decided_at="2026-07-22T05:00:00Z",
+    )
+    resumed = graph.invoke(
+        Command(resume={"decisions": [decision.model_dump(mode="json")]}),
+        config=config,
+    )
+    assert resumed["final_result"] == "final"
+    assert resumed["human_review_decisions"][0]["review_id"] == request.review_id

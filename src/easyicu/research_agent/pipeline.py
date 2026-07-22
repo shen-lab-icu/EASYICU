@@ -3504,13 +3504,11 @@ class ResearchAgentPipeline:
         source_files: Optional[Sequence[Any]] = None,
         progress_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
         force_writer_probe: bool = False,
-        _use_graph: Optional[bool] = None,
     ) -> PipelineResult:
         """Run the explicit Plan → Execute → Write phases for one cohort.
 
-        LangGraph dispatches the phases by default. ``_use_graph=False`` is a
-        private compatibility path retained for parity tests; it does not
-        change EasyICU's receipt, capsule, evidence, or checkpoint authority.
+        LangGraph dispatches the phases while EasyICU's receipt, capsule,
+        evidence, and checkpoint remain the sole scientific authority.
         """
         skill_obj: Optional[ClinicalSkill] = None
         if skill is not None:
@@ -4039,10 +4037,9 @@ class ResearchAgentPipeline:
                 emit_progress=_emit_progress,
             )
 
-        use_graph = _use_graph is not False
         from .graph import orchestration_runtime_receipt
 
-        orchestration_receipt = orchestration_runtime_receipt(use_graph=use_graph)
+        orchestration_receipt = orchestration_runtime_receipt()
         orchestration_receipt_path = run_dir / "orchestration_runtime.json"
         orchestration_receipt_path.write_text(
             orchestration_receipt.model_dump_json(indent=2) + "\n",
@@ -4178,26 +4175,17 @@ class ResearchAgentPipeline:
                 emit_progress=_emit_progress,
             )
 
-        if use_graph:
-            from .graph import build_pipeline_graph
+        from .graph import build_pipeline_graph
 
-            graph = build_pipeline_graph(
-                plan_invoker=_plan_invoker,
-                execute_invoker=_execute_invoker,
-                write_invoker=_write_invoker,
-                finalise_invoker=_finalise_invoker,
-                provenance_hook=_provenance_hook,
-            )
-            final_state = graph.invoke({})
-            return final_state["final_result"]
-
-        plan_result = _plan_invoker()
-        if plan_result.aborted_result is not None:
-            return plan_result.aborted_result
-        _provenance_hook(plan_result)
-        execute_result = _execute_invoker(plan_result)
-        write_result = _write_invoker(plan_result, execute_result)
-        return _finalise_invoker(plan_result, execute_result, write_result)
+        graph = build_pipeline_graph(
+            plan_invoker=_plan_invoker,
+            execute_invoker=_execute_invoker,
+            write_invoker=_write_invoker,
+            finalise_invoker=_finalise_invoker,
+            provenance_hook=_provenance_hook,
+        )
+        final_state = graph.invoke({})
+        return final_state["final_result"]
 
     def run_from_spec(
         self,
@@ -4221,9 +4209,8 @@ class ResearchAgentPipeline:
         return await asyncio.to_thread(self.run, **kwargs)
 
     def run_with_graph(self, **kwargs: Any) -> PipelineResult:
-        """Explicitly dispatch phases through the default LangGraph runtime."""
-        kwargs.pop("_use_graph", None)
-        return self.run(_use_graph=True, **kwargs)
+        """Backward-compatible alias for the sole LangGraph runtime."""
+        return self.run(**kwargs)
 
     def replicate(
         self,
