@@ -41,7 +41,29 @@ from __future__ import annotations
 
 import textwrap
 
-__all__ = ["missingness_measurement_audit_code"]
+from ...schema import AnalysisStep
+
+__all__ = [
+    "missingness_measurement_audit_code",
+    "source_availability_audit_executor_owns_step",
+]
+
+
+def source_availability_audit_executor_owns_step(step: AnalysisStep) -> bool:
+    """Own one exact, non-scientific missingness/source audit contract."""
+
+    method = str(step.method or "").strip().casefold()
+    outputs = {str(value or "").strip() for value in step.expected_outputs}
+    typed_inputs = {
+        str(value or "").strip()
+        for value in step.inputs
+        if str(value or "").strip().startswith(("artifact:", "table:", "dataset:"))
+    }
+    return bool(
+        method == "missingness_and_source_availability_audit"
+        and outputs == {"table:missingness_audit", "table:measurement_source_audit"}
+        and typed_inputs == {"artifact:analysis_cohort"}
+    )
 
 
 def missingness_measurement_audit_code() -> str:

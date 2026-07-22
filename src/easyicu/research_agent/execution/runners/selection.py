@@ -5,6 +5,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from ...schema import AnalysisPlan, AnalysisStep
+from .deterministic_missingness import (
+    missingness_measurement_audit_code,
+    source_availability_audit_executor_owns_step,
+)
 from .table_one_executor import table_one_executor_code, table_one_executor_owns_step
 from .trajectory_stability_executor import (
     trajectory_stability_executor_code,
@@ -37,6 +41,13 @@ def select_standard_executor(
             selection_reason="table_one_spec_preflight",
             progress_message="Using planner-specified grouped Table 1 executor",
             code=table_one_executor_code(step),
+        )
+    if source_availability_audit_executor_owns_step(step):
+        return StandardExecutorSelection(
+            analysis_kind="missingness_source_availability_audit",
+            selection_reason="missingness_source_availability_contract_preflight",
+            progress_message="Using planner-specified missingness/source audit executor",
+            code=missingness_measurement_audit_code(),
         )
     if trajectory_stability_executor_owns_step(step, plan=plan):
         return StandardExecutorSelection(
