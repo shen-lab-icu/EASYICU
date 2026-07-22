@@ -48,7 +48,7 @@ from .idea_mining_schema import (
 )
 
 DATA_FIRST_ROUTE_SCHEMA_VERSION = "easyicu.data_first_discovery_route/2"
-DATA_FIRST_SHORTLIST_SCHEMA_VERSION = "easyicu.data_first_review_shortlist/3"
+DATA_FIRST_SHORTLIST_SCHEMA_VERSION = "easyicu.data_first_review_shortlist/4"
 
 _MIN_EXTERNAL_VALIDATION_COMPLETENESS = 0.90
 _MIN_MEASUREMENT_AUDIT_COMPLETENESS = 0.20
@@ -277,7 +277,9 @@ def _review_shortlist(
     """
 
     external_validation: list[tuple[tuple[Any, ...], dict[str, Any]]] = []
-    measurement_audit: list[tuple[tuple[Any, ...], dict[str, Any]]] = []
+    measurement_audit_by_predictor: dict[
+        str, tuple[tuple[Any, ...], dict[str, Any]]
+    ] = {}
     idea_by_id = {idea.literature_idea_id: idea for idea in result.literature_ideas}
     for record in result.discovery_records:
         if record.executable_candidate_id is None or record.go_no_go == "db-cannot-do":
@@ -352,6 +354,27 @@ def _review_shortlist(
             idea = idea_by_id.get(record.literature_idea_id)
             if idea is None:
                 continue
+            predictor_key = record.prior_art.feasibility_pair_key[0]
+            existing = measurement_audit_by_predictor.get(predictor_key)
+            if existing is not None:
+                payload = existing[1]
+                for field, value in (
+                    ("origin_literature_idea_ids", record.literature_idea_id),
+                    (
+                        "origin_executable_candidate_ids",
+                        record.executable_candidate_id,
+                    ),
+                    ("origin_candidate_topics", record.candidate_topic),
+                    (
+                        "association_outcome_contexts",
+                        record.prior_art.outcome_literature_phrase,
+                    ),
+                ):
+                    values = payload[field]
+                    if value not in values:
+                        values.append(value)
+                        values.sort()
+                continue
             audit_prior_art = _screen_measurement_audit_prior_art(
                 idea=idea,
                 search_client=prior_art_search_client,
@@ -364,17 +387,25 @@ def _review_shortlist(
             audit_topic = (
                 "cross-database measurement/source-status audit of " + predictor
             )
+            audit_base = {
+                key: value
+                for key, value in base.items()
+                if not key.startswith("origin_")
+            }
             payload = {
-                **base,
+                **audit_base,
                 "review_candidate_id": _review_candidate_id(
                     route=route,
-                    origin_id=record.executable_candidate_id,
+                    origin_id=f"predictor:{predictor_key}",
                     topic=audit_topic,
                 ),
                 "candidate_topic": audit_topic,
-                "association_outcome_context": (
+                "origin_literature_idea_ids": [record.literature_idea_id],
+                "origin_executable_candidate_ids": [record.executable_candidate_id],
+                "origin_candidate_topics": [record.candidate_topic],
+                "association_outcome_contexts": [
                     record.prior_art.outcome_literature_phrase
-                ),
+                ],
                 "review_route": route,
                 "route_prior_art": {
                     "query": audit_prior_art.query,
@@ -405,20 +436,20 @@ def _review_shortlist(
                     "unmeasured values as clinical absence"
                 ),
             }
-            measurement_audit.append(
+            measurement_audit_by_predictor[predictor_key] = (
                 (
-                    (
-                        audit_prior_art.hit_count,
-                        exact_hits,
-                        completeness,
-                        record.candidate_topic,
-                    ),
-                    payload,
-                )
+                    audit_prior_art.hit_count,
+                    exact_hits,
+                    completeness,
+                    record.candidate_topic,
+                ),
+                payload,
             )
 
     external_validation.sort(key=lambda item: item[0])
-    measurement_audit.sort(key=lambda item: item[0])
+    measurement_audit = sorted(
+        measurement_audit_by_predictor.values(), key=lambda item: item[0]
+    )
     selected: list[dict[str, Any]] = []
     if external_validation:
         selected.append(external_validation[0][1])
