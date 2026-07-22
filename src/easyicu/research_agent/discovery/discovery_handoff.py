@@ -138,6 +138,7 @@ def select_discovery_row(
     *,
     index: Optional[int] = None,
     require_analysis_ready: bool = False,
+    require_resolved_outcome: bool = False,
 ) -> Dict[str, Any]:
     """Select the highest-priority idea row for downstream execution.
 
@@ -155,13 +156,22 @@ def select_discovery_row(
             raise ValueError(
                 "selected discovery row is not go/recommend and cannot enter analysis"
             )
+        if require_resolved_outcome and not selected.get("resolved_outcome_concept"):
+            raise ValueError("selected discovery row has no resolved outcome concept")
         return selected
     if not rows:
         raise ValueError("cannot select from an empty discovery ledger")
-    eligible = [row for row in rows if _row_recommended(row)]
+    selectable = [
+        row
+        for row in rows
+        if not require_resolved_outcome or row.get("resolved_outcome_concept")
+    ]
+    if not selectable:
+        raise ValueError("discovery ledger has no row with a resolved outcome concept")
+    eligible = [row for row in selectable if _row_recommended(row)]
     if require_analysis_ready and not eligible:
         raise ValueError("discovery ledger has no go/recommend row for analysis")
-    return dict(max(eligible or rows, key=_row_priority))
+    return dict(max(eligible or selectable, key=_row_priority))
 
 
 def build_handoff_from_row(
