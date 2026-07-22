@@ -27,6 +27,7 @@ from ..contracts.method_packages import (
     CURATED_METHOD_PACKAGES,
     OPTIONAL_BASELINE_PACKAGES,
 )
+from ..learning.runtime import ReviewedMemoryRuntime
 from ..planning.analysis_types import infer_analysis_type
 from ..research_context.prompt_scope import scoped_coder_context
 from ..research_context.typed import materialized_input_prompt_attachment
@@ -515,6 +516,7 @@ def attach_step_coder_input_authority(
     resolved_input_bindings: Mapping[str, Mapping[str, object]],
     runtime_import_names: Iterable[str],
     step_record: MutableMapping[str, object],
+    reviewed_memory_runtime: ReviewedMemoryRuntime | None = None,
 ) -> HostCoderAuthority:
     """Bind typed-input receipts and optional selected resources for one step."""
 
@@ -522,35 +524,56 @@ def attach_step_coder_input_authority(
         authority=authority,
         bindings=resolved_input_bindings,
     )
-    if not enabled:
-        return authority
-
     analysis_family = infer_analysis_type(context).key
-    bundle = build_coder_resource_bundle(
-        step_id=step.step_id,
-        profile_ref=profile_ref,
-        analysis_family=analysis_family,
-        step_role=step.planned_analysis_role,
-        question=context.research_question,
-        intent=step.intent,
-        method=step.method,
-        planner_inputs=step.inputs,
-        expected_outputs=step.expected_outputs,
-        resolved_input_bindings=resolved_input_bindings,
-        runtime_import_names=runtime_import_names,
-        has_table_one_spec=step.table_one_spec is not None,
-    )
-    authority, path = attach_coder_resources(
-        authority=authority, run_dir=run_dir, bundle=bundle
-    )
-    step_record.update(
-        {
-            "coder_resource_selection_path": path.relative_to(run_dir).as_posix(),
-            "coder_resource_selection_sha256": bundle.sha256,
-            "coder_resource_prompt_bytes": bundle.prompt_bytes,
-            "coder_resource_provider_calls": 0,
-        }
-    )
+    if enabled:
+        bundle = build_coder_resource_bundle(
+            step_id=step.step_id,
+            profile_ref=profile_ref,
+            analysis_family=analysis_family,
+            step_role=step.planned_analysis_role,
+            question=context.research_question,
+            intent=step.intent,
+            method=step.method,
+            planner_inputs=step.inputs,
+            expected_outputs=step.expected_outputs,
+            resolved_input_bindings=resolved_input_bindings,
+            runtime_import_names=runtime_import_names,
+            has_table_one_spec=step.table_one_spec is not None,
+        )
+        authority, path = attach_coder_resources(
+            authority=authority, run_dir=run_dir, bundle=bundle
+        )
+        step_record.update(
+            {
+                "coder_resource_selection_path": path.relative_to(run_dir).as_posix(),
+                "coder_resource_selection_sha256": bundle.sha256,
+                "coder_resource_prompt_bytes": bundle.prompt_bytes,
+                "coder_resource_provider_calls": 0,
+            }
+        )
+    if reviewed_memory_runtime is not None:
+        memory_result = reviewed_memory_runtime.attach(
+            authority=authority,
+            run_dir=run_dir,
+            profile_ref=profile_ref,
+            step_id=step.step_id,
+            analysis_family=analysis_family,
+            step_role=step.planned_analysis_role,
+            question=context.research_question,
+            method=step.method,
+        )
+        if memory_result is not None:
+            authority, memory_bundle, memory_path = memory_result
+            step_record.update(
+                {
+                    "reviewed_memory_selection_path": memory_path.relative_to(
+                        run_dir
+                    ).as_posix(),
+                    "reviewed_memory_selection_sha256": memory_bundle.sha256,
+                    "reviewed_memory_prompt_bytes": memory_bundle.prompt_bytes,
+                    "reviewed_memory_provider_calls": 0,
+                }
+            )
     return authority
 
 

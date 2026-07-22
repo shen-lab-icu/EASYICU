@@ -5402,6 +5402,7 @@ def run_execute_phase(
             resolved_input_bindings=resolved_input_bindings,
             runtime_import_names=pipeline._validated_runtime_capabilities or (),
             step_record=step_record,
+            reviewed_memory_runtime=pipeline._reviewed_memory_runtime,
         )
         step_record["resolved_inputs_path"] = str(
             resolved_inputs_path.relative_to(run_dir)

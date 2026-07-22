@@ -56,6 +56,10 @@ class SubmissionProfile:
     # authority. Historical profiles therefore omit the coordinate entirely;
     # only an additive development profile may enable Phase-2 wiring.
     enable_coder_resources: Optional[bool] = None
+    # Reviewed/promoted memory is a separate, permissioned system from legacy
+    # RunMemory. Both its enable flag and exact namespaces are profile-owned.
+    enable_reviewed_memory: Optional[bool] = None
+    reviewed_memory_namespaces: Optional[tuple[str, ...]] = None
 
     @property
     def ref(self) -> str:
@@ -103,6 +107,10 @@ class SubmissionProfile:
             options["enable_know_how"] = self.enable_know_how
         if self.enable_coder_resources is not None:
             options["enable_coder_resources"] = self.enable_coder_resources
+        if self.enable_reviewed_memory is not None:
+            options["enable_reviewed_memory"] = self.enable_reviewed_memory
+        if self.reviewed_memory_namespaces is not None:
+            options["reviewed_memory_namespaces"] = self.reviewed_memory_namespaces
         return options
 
     def pipeline_options(self) -> Dict[str, Any]:
@@ -132,6 +140,8 @@ class SubmissionProfile:
             "requires_real_provider",
             "enable_know_how",
             "enable_coder_resources",
+            "enable_reviewed_memory",
+            "reviewed_memory_namespaces",
         ):
             if payload.get(field_name) is None:
                 payload.pop(field_name, None)
@@ -317,6 +327,31 @@ NPJ_DM_2026_07_22_FRAMEWORK_V2_DEV = SubmissionProfile(
     enable_coder_resources=True,
 )
 
+NPJ_DM_2026_07_22_FRAMEWORK_V2_MEMORY_DEV = SubmissionProfile(
+    name="npj_dm_framework_v2_memory_dev",
+    version="20260722",
+    locked_at="2026-07-22T08:00:00-04:00",
+    evidence_enforcement_mode="strict",
+    writer_digest_widened=True,
+    enable_reproducibility_envelope=True,
+    requires_arm="aware",
+    requires_runner="docker",
+    expected_concept_dict_sha=NPJ_DM_2026_07_19.expected_concept_dict_sha,
+    expected_sofa2_dict_sha=NPJ_DM_2026_07_19.expected_sofa2_dict_sha,
+    enable_memory=False,
+    enable_experience_bank=False,
+    enable_deterministic_code_fallback=False,
+    enable_deterministic_planner_fallback=False,
+    requires_real_provider=True,
+    enable_know_how=False,
+    enable_coder_resources=True,
+    enable_reviewed_memory=True,
+    reviewed_memory_namespaces=(
+        "reviewed_knowledge/framework_v2",
+        "promoted_lessons/1.0.0",
+    ),
+)
+
 DEFAULT_SUBMISSION_PROFILE_REF = NPJ_DM_2026_07_19.ref
 SUBMISSION_PROFILE_REGISTRY: Dict[str, SubmissionProfile] = {
     NPJ_DM_2026_05.ref: NPJ_DM_2026_05,
@@ -328,6 +363,9 @@ SUBMISSION_PROFILE_REGISTRY: Dict[str, SubmissionProfile] = {
     NPJ_DM_2026_07_19.ref: NPJ_DM_2026_07_19,
     NPJ_DM_2026_07_21_KNOW_HOW.ref: NPJ_DM_2026_07_21_KNOW_HOW,
     NPJ_DM_2026_07_22_FRAMEWORK_V2_DEV.ref: (NPJ_DM_2026_07_22_FRAMEWORK_V2_DEV),
+    NPJ_DM_2026_07_22_FRAMEWORK_V2_MEMORY_DEV.ref: (
+        NPJ_DM_2026_07_22_FRAMEWORK_V2_MEMORY_DEV
+    ),
 }
 
 
@@ -384,6 +422,32 @@ def require_profile_coder_resource_setting(
         )
 
 
+def require_profile_reviewed_memory_setting(
+    *,
+    name: Optional[str],
+    version: Optional[str],
+    enabled: bool,
+    namespaces: tuple[str, ...],
+) -> None:
+    """Keep reviewed-memory reads profile-owned and replay-safe."""
+
+    if name is None:
+        if enabled or namespaces:
+            raise ValueError("Reviewed memory requires an additive submission profile")
+        return
+    ref = f"{name}/{version}"
+    profile = get_submission_profile(ref)
+    expected_enabled = bool(profile.enable_reviewed_memory)
+    expected_namespaces = tuple(profile.reviewed_memory_namespaces or ())
+    if bool(enabled) != expected_enabled or namespaces != expected_namespaces:
+        raise ValueError(
+            "Reviewed-memory consumption changes Coder and resume authority and "
+            f"must match the submission profile; profile {ref!r} pins "
+            f"enable_reviewed_memory={expected_enabled}, "
+            f"reviewed_memory_namespaces={expected_namespaces!r}"
+        )
+
+
 __all__ = [
     "SubmissionProfile",
     "NPJ_DM_2026_05",
@@ -395,9 +459,11 @@ __all__ = [
     "NPJ_DM_2026_07_19",
     "NPJ_DM_2026_07_21_KNOW_HOW",
     "NPJ_DM_2026_07_22_FRAMEWORK_V2_DEV",
+    "NPJ_DM_2026_07_22_FRAMEWORK_V2_MEMORY_DEV",
     "DEFAULT_SUBMISSION_PROFILE_REF",
     "SUBMISSION_PROFILE_REGISTRY",
     "get_submission_profile",
     "require_profile_know_how_setting",
     "require_profile_coder_resource_setting",
+    "require_profile_reviewed_memory_setting",
 ]
