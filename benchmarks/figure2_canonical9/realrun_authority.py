@@ -43,6 +43,7 @@ import json
 import os
 import stat
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Annotated, Any, Literal, Mapping, Optional, Sequence
 
@@ -193,7 +194,10 @@ def resolve_strict_jsonl_path(path: Path | str) -> Path:
 class CanonicalJsonlRow:
     task_id: str
     cohort_path: str
+    cohort_authority_path: str = ""
     cohort_authority_ref: Optional[Mapping[str, Any]] = None
+    trajectory_path: str = ""
+    trajectory_authority_path: str = ""
     trajectory_authority_ref: Optional[Mapping[str, Any]] = None
 
 
@@ -222,13 +226,29 @@ def read_canonical_jsonl_rows(path: Path | str) -> tuple[CanonicalJsonlRow, ...]
         if cohort is None:
             cohort = obj.get("cohort")
         cohort_ref = obj.get("cohort_authority_ref")
+        cohort_authority_path = obj.get("cohort_authority_path")
+        trajectory_path = obj.get("trajectory_path")
+        trajectory_authority_path = obj.get("trajectory_authority_path")
         traj_ref = obj.get("trajectory_authority_ref")
         rows.append(
             CanonicalJsonlRow(
                 task_id=str(key) if key is not None else "",
                 cohort_path=str(cohort) if cohort is not None else "",
+                cohort_authority_path=(
+                    str(cohort_authority_path)
+                    if cohort_authority_path is not None
+                    else ""
+                ),
                 cohort_authority_ref=(
                     dict(cohort_ref) if isinstance(cohort_ref, Mapping) else None
+                ),
+                trajectory_path=(
+                    str(trajectory_path) if trajectory_path is not None else ""
+                ),
+                trajectory_authority_path=(
+                    str(trajectory_authority_path)
+                    if trajectory_authority_path is not None
+                    else ""
                 ),
                 trajectory_authority_ref=(
                     dict(traj_ref) if isinstance(traj_ref, Mapping) else None
@@ -381,6 +401,7 @@ class CanonicalExecutionConfig(_StrictFrozenModel):
     max_step_llm_repair_attempts: Optional[int]
     timeout_seconds: float
     standard_executor_timeout_seconds: float
+    request_timeout_seconds: float
     enable_repro_envelope: bool
     enable_cost_tracking: bool
     strict_evidence: bool
@@ -402,6 +423,7 @@ def build_canonical_execution_config(
     seed: int,
     timeout_seconds: float,
     standard_executor_timeout_seconds: float,
+    request_timeout_seconds: float = 180.0,
     stop_after_step_id: object = None,
     llm_seed: object = None,
     disable_replanning: bool = False,
@@ -436,6 +458,7 @@ def build_canonical_execution_config(
         max_step_llm_repair_attempts=_opt_int(max_step_llm_repair_attempts),
         timeout_seconds=float(timeout_seconds),
         standard_executor_timeout_seconds=float(standard_executor_timeout_seconds),
+        request_timeout_seconds=float(request_timeout_seconds),
         enable_repro_envelope=bool(enable_repro_envelope),
         enable_cost_tracking=bool(enable_cost_tracking),
         strict_evidence=bool(strict_evidence),
@@ -495,6 +518,8 @@ class OperatorFreezeDeclaration(_StrictFrozenModel):
             raise ValueError("declaration ehrflowbench_jsonl_path must be absolute")
         if not self.batch_id.startswith("batch_"):
             raise ValueError("declaration batch_id must start with 'batch_'")
+        if Path(self.output_root).name != self.batch_id:
+            raise ValueError("declaration output_root must be the batch_id directory")
         return self
 
 
@@ -554,6 +579,8 @@ class RealRunAuthorization(_StrictFrozenModel):
     expected_task_ids: tuple[str, ...]
     declaration_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
     input_authority_digest: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    batch_id: str | None = None
+    frozen_input_by_task: dict[str, Sha256] = Field(default_factory=dict)
     issues: tuple[RealRunAuthorizationIssue, ...] = ()
 
     @model_validator(mode="after")
@@ -565,6 +592,10 @@ class RealRunAuthorization(_StrictFrozenModel):
                 raise ValueError("authorized receipt cannot carry issues")
             if self.declaration_sha256 is None or self.input_authority_digest is None:
                 raise ValueError("authorized receipt must bind declaration + authority")
+            if self.batch_id is None or not self.batch_id.startswith("batch_"):
+                raise ValueError("authorized receipt must bind a batch id")
+            if tuple(self.frozen_input_by_task) != tuple(FIGURE2_TASK_IDS):
+                raise ValueError("authorized receipt must bind every frozen task input")
         elif not self.issues:
             raise ValueError("blocked receipt must carry at least one issue")
         return self
@@ -616,24 +647,28 @@ def _load_declaration(
         return None, None, issues
 
 
-def _verify_fresh_output_root(root: Path, run_id: str) -> list:
+def _verify_fresh_output_root(root: Path, batch_id: str) -> list:
+    """Require an unallocated batch directory that can be atomically reserved.
+
+    ``out_root`` is the batch root itself, not a shared parent.  Verification is
+    intentionally separate from reservation; the latter uses ``mkdir`` without
+    ``exist_ok`` immediately after authorization, so concurrent processes cannot
+    both obtain the same paper-facing batch identity.
+    """
+
     issues: list[RealRunAuthorizationIssue] = []
     try:
         candidate = Path(root).expanduser()
         if not candidate.is_absolute() or candidate.is_symlink():
             raise ValueError("output root must be an absolute, non-symlink path")
+        if candidate.name != batch_id:
+            raise ValueError("output root must be named exactly for the declared batch")
+        parent = candidate.parent
+        parent_info = parent.lstat()
+        if not stat.S_ISDIR(parent_info.st_mode) or stat.S_ISLNK(parent_info.st_mode):
+            raise ValueError("output-root parent must be an existing real directory")
         if candidate.exists():
-            if not candidate.is_dir():
-                raise ValueError("output root exists and is not a directory")
-            if any(candidate.iterdir()):
-                raise ValueError(
-                    "output root is not empty; a fresh run needs a clean root"
-                )
-        run_dir = candidate / run_id
-        if run_dir.exists():
-            raise ValueError(
-                "run directory already exists; refusing a diagnostic reuse"
-            )
+            raise ValueError("batch root already exists; refusing diagnostic reuse")
     except Exception as exc:  # noqa: BLE001
         issues.append(_issue("OUTPUT_ROOT_NOT_FRESH", str(exc)))
     return issues
@@ -757,6 +792,16 @@ def _verify_invocation_binding(
             "EXECUTION_CONFIG_INVALID",
             "--stop-after-step-id would run an incomplete but paid canonical run",
         )
+    if config.case is not None:
+        bad(
+            "EXECUTION_CONFIG_INVALID",
+            "--case is a mutable named fixture and cannot select a Canonical9 run",
+        )
+    if len(config.models) > 1:
+        bad(
+            "EXECUTION_CONFIG_INVALID",
+            "a Canonical9 run must bind one concrete model, not a model matrix",
+        )
     if config.digest() != declaration.execution_config_sha256:
         bad(
             "EXECUTION_CONFIG_MISMATCH",
@@ -782,35 +827,86 @@ def _verify_sidecar_digest(
 def _verify_task_provenance(task, row: Optional[CanonicalJsonlRow]) -> None:
     """Bind the task's frozen ``provenance_sha256`` to the REAL typed sidecars."""
 
-    from easyicu.research_agent.intake.materialized_metadata import (
-        MaterializedCohortAuthorityRef,
-    )
-    from easyicu.research_agent.intake.materialized_trajectory import (
-        MaterializedTrajectoryAuthorityRef,
-    )
+    from easyicu.research_agent.intake import materialized_metadata
+    from easyicu.research_agent.intake import materialized_trajectory
 
     if row is None or not row.cohort_authority_ref:
         raise ValueError(
             f"task {task.task_id} lacks a declared typed cohort materialization "
             "authority (provenance cannot be verified)"
         )
-    cohort_ref = MaterializedCohortAuthorityRef.from_dict(row.cohort_authority_ref)
-    cohort_dir = Path(row.cohort_path).expanduser().resolve().parent
+    cohort_ref = materialized_metadata.MaterializedCohortAuthorityRef.from_dict(
+        row.cohort_authority_ref
+    )
+    cohort_path = _require_safe_path(Path(row.cohort_path))
+    cohort_dir = cohort_path.parent
+    declared_cohort_authority = _require_safe_path(Path(row.cohort_authority_path))
+    expected_cohort_authority = _require_safe_path(cohort_dir / cohort_ref.file)
+    if declared_cohort_authority != expected_cohort_authority:
+        raise ValueError(
+            f"task {task.task_id} cohort_authority_path does not select the "
+            "authority declared by cohort_authority_ref"
+        )
     _verify_sidecar_digest(
-        cohort_dir / cohort_ref.file,
+        declared_cohort_authority,
         expected_sha256=cohort_ref.sha256,
         expected_size=cohort_ref.size,
     )
-    trajectory_norm = None
-    if row.trajectory_authority_ref:
-        trajectory_ref = MaterializedTrajectoryAuthorityRef.from_dict(
-            row.trajectory_authority_ref
+    verified_cohort = materialized_metadata.load_verified_materialized_cohort_authority(
+        cohort_path,
+        expected_authority=cohort_ref,
+    )
+    if verified_cohort is None:
+        raise ValueError(
+            f"task {task.task_id} cohort authority did not verify against its cohort"
         )
+    trajectory_norm = None
+    has_trajectory = bool(row.trajectory_path)
+    has_trajectory_ref = row.trajectory_authority_ref is not None
+    has_trajectory_authority_path = bool(row.trajectory_authority_path)
+    if (
+        has_trajectory != has_trajectory_ref
+        or has_trajectory != has_trajectory_authority_path
+    ):
+        raise ValueError(
+            f"task {task.task_id} trajectory path and typed authority must be "
+            "declared together"
+        )
+    if has_trajectory:
+        trajectory_ref = (
+            materialized_trajectory.MaterializedTrajectoryAuthorityRef.from_dict(
+                row.trajectory_authority_ref
+            )
+        )
+        trajectory_path = _require_safe_path(Path(row.trajectory_path))
+        declared_trajectory_authority = _require_safe_path(
+            Path(row.trajectory_authority_path)
+        )
+        expected_trajectory_authority = _require_safe_path(
+            trajectory_path.parent / trajectory_ref.file
+        )
+        if declared_trajectory_authority != expected_trajectory_authority:
+            raise ValueError(
+                f"task {task.task_id} trajectory_authority_path does not select "
+                "the authority declared by trajectory_authority_ref"
+            )
         _verify_sidecar_digest(
-            cohort_dir / trajectory_ref.file,
+            declared_trajectory_authority,
             expected_sha256=trajectory_ref.sha256,
             expected_size=trajectory_ref.size,
         )
+        verified_trajectory = (
+            materialized_trajectory.load_verified_materialized_trajectory_authority(
+                trajectory_path,
+                expected_authority=trajectory_ref,
+                expected_universe_authority=cohort_ref,
+            )
+        )
+        if verified_trajectory is None:
+            raise ValueError(
+                f"task {task.task_id} trajectory authority did not verify against "
+                "its trajectory and cohort authority"
+            )
         trajectory_norm = trajectory_ref.to_dict()
     provenance = production_provenance_sha256(cohort_ref.to_dict(), trajectory_norm)
     if provenance != task.provenance_sha256:
@@ -824,7 +920,7 @@ def _verify_production_input_authority(
     request: RealRunAuthorizationRequest,
     declaration: OperatorFreezeDeclaration,
     identity,
-) -> list:
+) -> tuple[list, Optional[ProductionInputAuthority]]:
     """The typed production authority + each real cohort/provenance must hold."""
 
     issues: list[RealRunAuthorizationIssue] = []
@@ -836,7 +932,7 @@ def _verify_production_input_authority(
                 "not yet frozen for a real run (the v1 assessment stays blocked)",
             )
         )
-        return issues
+        return issues, None
     try:
         authority, _ = load_production_input_authority(
             request.production_input_authority_path
@@ -885,7 +981,8 @@ def _verify_production_input_authority(
         issues.append(
             _issue("PRODUCTION_INPUT_AUTHORITY_INVALID", f"{type(exc).__name__}: {exc}")
         )
-    return issues
+        authority = None
+    return issues, authority
 
 
 def verify_realrun_authorization(
@@ -997,8 +1094,12 @@ def verify_realrun_authorization(
         issues.append(_issue("INPUT_FREEZE_INVALID", f"{type(exc).__name__}: {exc}"))
 
     # 3) Production input authority: the ONLY thing that can authorize the input,
-    #    bound per-task to the real cohorts.
-    issues.extend(_verify_production_input_authority(request, declaration, identity))
+    #    bound per-task to the real cohorts.  Preserve the verified mapping in the
+    #    authorization result so the launcher never re-opens this mutable file.
+    authority_issues, production_authority = _verify_production_input_authority(
+        request, declaration, identity
+    )
+    issues.extend(authority_issues)
 
     # 4) Rubric identity.
     try:
@@ -1015,6 +1116,12 @@ def verify_realrun_authorization(
         expected_task_ids=tuple(FIGURE2_TASK_IDS),
         declaration_sha256=declaration_sha,
         input_authority_digest=declaration.input_authority_digest,
+        batch_id=(declaration.batch_id if status == "authorized" else None),
+        frozen_input_by_task=(
+            production_authority.frozen_input_by_task()
+            if status == "authorized" and production_authority is not None
+            else {}
+        ),
         issues=tuple(issues),
     )
 
@@ -1040,33 +1147,167 @@ BATCH_LEDGER_SCHEMA = "easyicu.figure2_batch_ledger/1"
 
 @dataclass(frozen=True)
 class RealRunBatchBinding:
-    """What the gate hands the launcher on an authorized run."""
+    """One irrevocably reserved Canonical9 batch handed to the launcher."""
 
     batch_id: str
     declaration_sha256: str
     input_authority_digest: str
     frozen_input_by_task: Mapping[str, str]
+    batch_root: Path | None = None
+    receipt_sha256: str | None = None
+
+
+def _write_new_regular_file(path: Path, raw: bytes) -> None:
+    """Create one regular file exactly once, without following a replacement link."""
+
+    fd: int | None = None
+    try:
+        fd = os.open(
+            path,
+            os.O_WRONLY
+            | os.O_CREAT
+            | os.O_EXCL
+            | getattr(os, "O_CLOEXEC", 0)
+            | getattr(os, "O_NOFOLLOW", 0),
+            0o600,
+        )
+        remaining = memoryview(raw)
+        while remaining:
+            written = os.write(fd, remaining)
+            if written <= 0:
+                raise OSError("short write while publishing authorization artifact")
+            remaining = remaining[written:]
+        os.fsync(fd)
+    finally:
+        if fd is not None:
+            os.close(fd)
+
+
+def _batch_receipt_bytes(binding: RealRunBatchBinding, *, generated_at: str) -> bytes:
+    return (
+        json.dumps(
+            {
+                "schema_version": BATCH_RECEIPT_SCHEMA,
+                "batch_id": binding.batch_id,
+                "declaration_sha256": binding.declaration_sha256,
+                "input_authority_digest": binding.input_authority_digest,
+                "expected_task_ids": list(FIGURE2_TASK_IDS),
+                "generated_at": generated_at,
+            },
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n"
+    ).encode("utf-8")
+
+
+def reserve_authorized_batch_root(
+    out_root: Path, binding: RealRunBatchBinding, *, generated_at: str | None = None
+) -> RealRunBatchBinding:
+    """Atomically reserve a fresh batch root and publish its immutable receipt.
+
+    This is the transition from a pure successful authorization to a launchable
+    batch.  It deliberately uses ``mkdir`` without ``exist_ok``: two concurrent
+    launchers with the same declaration cannot both proceed.  The only cleanup on
+    failure is the just-created, still-empty directory owned by this call.
+    """
+
+    root = Path(out_root).expanduser()
+    if binding.batch_root is not None or binding.receipt_sha256 is not None:
+        raise ValueError("a batch binding may only be reserved once")
+    if not root.is_absolute() or root.is_symlink() or root.name != binding.batch_id:
+        raise ValueError("batch root must be the declared absolute non-symlink batch")
+    parent = root.parent
+    parent_info = parent.lstat()
+    if not stat.S_ISDIR(parent_info.st_mode) or stat.S_ISLNK(parent_info.st_mode):
+        raise ValueError("batch-root parent must be an existing real directory")
+    os.mkdir(root, mode=0o700)
+    try:
+        reserved_root = _require_safe_path(root)
+        if reserved_root != root:
+            raise ValueError("batch root resolution changed during reservation")
+        provisional = RealRunBatchBinding(
+            batch_id=binding.batch_id,
+            declaration_sha256=binding.declaration_sha256,
+            input_authority_digest=binding.input_authority_digest,
+            frozen_input_by_task=dict(binding.frozen_input_by_task),
+            batch_root=reserved_root,
+        )
+        receipt_path = write_batch_authorization_receipt(
+            reserved_root,
+            provisional,
+            generated_at=generated_at or datetime.now(timezone.utc).isoformat(),
+        )
+        receipt_sha = hashlib.sha256(_read_regular_file(receipt_path)).hexdigest()
+        return RealRunBatchBinding(
+            batch_id=provisional.batch_id,
+            declaration_sha256=provisional.declaration_sha256,
+            input_authority_digest=provisional.input_authority_digest,
+            frozen_input_by_task=provisional.frozen_input_by_task,
+            batch_root=reserved_root,
+            receipt_sha256=receipt_sha,
+        )
+    except BaseException:
+        try:
+            root.rmdir()
+        except OSError:
+            pass
+        raise
 
 
 def write_batch_authorization_receipt(
     out_root: Path, binding: RealRunBatchBinding, *, generated_at: str
 ) -> Path:
-    """PRE-run: persist the batch identity + declaration/authorization binding."""
+    """Persist the one pre-run receipt inside an already reserved batch root."""
 
     root = Path(out_root).expanduser()
-    root.mkdir(parents=True, exist_ok=True)
-    receipt = {
+    if binding.batch_root is None or root != binding.batch_root:
+        raise ValueError("receipt root must equal the reserved batch binding root")
+    root_info = root.lstat()
+    if not stat.S_ISDIR(root_info.st_mode) or stat.S_ISLNK(root_info.st_mode):
+        raise ValueError("receipt root must be a real directory")
+    path = root / "figure2_realrun_authorization_receipt.json"
+    _write_new_regular_file(
+        path, _batch_receipt_bytes(binding, generated_at=generated_at)
+    )
+    return path
+
+
+def verify_batch_authorization_receipt(binding: RealRunBatchBinding) -> Path:
+    """Re-read the pre-run receipt and prove it still binds this reserved batch."""
+
+    if binding.batch_root is None or binding.receipt_sha256 is None:
+        raise ValueError("batch binding was not atomically reserved")
+    root = _require_safe_path(binding.batch_root)
+    if root != binding.batch_root or root.name != binding.batch_id or not root.is_dir():
+        raise ValueError("reserved batch root is invalid")
+    path = root / "figure2_realrun_authorization_receipt.json"
+    raw = _read_regular_file(_require_safe_path(path))
+    if hashlib.sha256(raw).hexdigest() != binding.receipt_sha256:
+        raise ValueError("batch authorization receipt bytes changed after reservation")
+    try:
+        receipt = json.loads(
+            raw.decode("utf-8"),
+            object_pairs_hook=_reject_duplicate_jsonl_keys,
+            parse_constant=lambda value: (_ for _ in ()).throw(
+                ValueError(f"non-finite JSON constant: {value}")
+            ),
+        )
+    except Exception as exc:  # noqa: BLE001
+        raise ValueError("batch authorization receipt is not strict JSON") from exc
+    if not isinstance(receipt, dict) or receipt != {
         "schema_version": BATCH_RECEIPT_SCHEMA,
         "batch_id": binding.batch_id,
         "declaration_sha256": binding.declaration_sha256,
         "input_authority_digest": binding.input_authority_digest,
         "expected_task_ids": list(FIGURE2_TASK_IDS),
-        "generated_at": generated_at,
-    }
-    path = root / "figure2_realrun_authorization_receipt.json"
-    path.write_text(
-        json.dumps(receipt, indent=2, sort_keys=True) + "\n", encoding="utf-8"
-    )
+        "generated_at": (
+            receipt.get("generated_at") if isinstance(receipt, dict) else None
+        ),
+    }:
+        raise ValueError("batch authorization receipt does not match the binding")
+    if not isinstance(receipt["generated_at"], str) or not receipt["generated_at"]:
+        raise ValueError("batch authorization receipt timestamp is invalid")
     return path
 
 
@@ -1082,7 +1323,13 @@ def build_batch_ledger(
     equals the frozen per-task value.  ``complete`` is True only when all nine map.
     """
 
-    root = Path(out_root).expanduser().resolve()
+    if binding.batch_root is None:
+        raise ValueError("post-run ledger requires an atomically reserved batch")
+    root = _require_safe_path(binding.batch_root)
+    requested_root = Path(out_root).expanduser().resolve(strict=True)
+    if requested_root != root:
+        raise ValueError("post-run ledger root differs from the reserved batch root")
+    verify_batch_authorization_receipt(binding)
     raw_scores = results_payload.get("scores")
     scores = raw_scores if isinstance(raw_scores, list) else []
     by_key = {
@@ -1097,37 +1344,67 @@ def build_batch_ledger(
             children.append({"task_id": task_id, "status": "missing_aware_score"})
             complete = False
             continue
-        identity = aware.get("execution_identity")
-        identity_sha = (
-            identity.get("identity_sha256") if isinstance(identity, dict) else None
-        )
-        input_digest = (
-            identity.get("input_authority_sha256")
-            if isinstance(identity, dict)
-            else None
-        )
         manifest_sha = None
+        actual_run_id = None
+        actual_identity_sha = None
+        actual_input_digest = None
+        workdir_text = aware.get("workdir")
         status = "recorded"
         try:
-            workdir = Path(str(aware.get("workdir"))).expanduser().resolve()
-            workdir.relative_to(root)  # child must live under the reserved batch root
-            manifest_sha = hashlib.sha256(
-                _read_regular_file(workdir / "manifest.json")
-            ).hexdigest()
+            workdir = _require_safe_path(Path(str(workdir_text)))
+            workdir.relative_to(root)
+            raw_manifest = _read_regular_file(
+                _require_safe_path(workdir / "manifest.json")
+            )
+            manifest_sha = hashlib.sha256(raw_manifest).hexdigest()
+            manifest = json.loads(
+                raw_manifest.decode("utf-8"),
+                object_pairs_hook=_reject_duplicate_jsonl_keys,
+                parse_constant=lambda value: (_ for _ in ()).throw(
+                    ValueError(f"non-finite JSON constant: {value}")
+                ),
+            )
+            if not isinstance(manifest, dict):
+                raise ValueError("manifest is not a JSON object")
+            actual_run_id = manifest.get("run_id")
+            if not isinstance(actual_run_id, str) or not actual_run_id:
+                raise ValueError("manifest lacks a canonical run_id")
+            expected_workdir = root / task_id / "aware" / actual_run_id
+            if workdir != expected_workdir:
+                raise ValueError(
+                    "child manifest workdir does not match batch/task/arm/run"
+                )
+            from easyicu.research_agent.authority.execution_identity import (
+                ExecutionIdentity,
+            )
+
+            actual_identity = ExecutionIdentity.model_validate(
+                manifest.get("execution_identity"), strict=True
+            )
+            actual_identity_sha = actual_identity.identity_sha256
+            actual_input_digest = actual_identity.input_authority_sha256
+            if aware.get("run_id") not in {None, actual_run_id}:
+                raise ValueError("score run_id disagrees with the child manifest")
+            score_identity = aware.get("execution_identity")
+            if isinstance(score_identity, Mapping) and (
+                score_identity.get("identity_sha256") != actual_identity_sha
+                or score_identity.get("input_authority_sha256") != actual_input_digest
+            ):
+                raise ValueError("score identity disagrees with the child manifest")
         except Exception as exc:  # noqa: BLE001
             status = f"manifest_unreadable: {type(exc).__name__}"
             complete = False
-        if input_digest != binding.frozen_input_by_task.get(task_id):
+        if actual_input_digest != binding.frozen_input_by_task.get(task_id):
             status = "input_authority_mismatch"
             complete = False
         children.append(
             {
                 "task_id": task_id,
-                "run_id": aware.get("run_id"),
-                "workdir": str(aware.get("workdir")),
+                "run_id": actual_run_id,
+                "workdir": str(workdir_text),
                 "manifest_sha256": manifest_sha,
-                "identity_sha256": identity_sha,
-                "input_authority_sha256": input_digest,
+                "identity_sha256": actual_identity_sha,
+                "input_authority_sha256": actual_input_digest,
                 "status": status,
             }
         )
@@ -1143,10 +1420,13 @@ def build_batch_ledger(
 
 def write_batch_ledger(ledger: Mapping[str, object], out_root: Path) -> Path:
     root = Path(out_root).expanduser()
-    root.mkdir(parents=True, exist_ok=True)
+    root_info = root.lstat()
+    if not stat.S_ISDIR(root_info.st_mode) or stat.S_ISLNK(root_info.st_mode):
+        raise ValueError("batch ledger root must be a real directory")
     path = root / "figure2_batch_ledger.json"
-    path.write_text(
-        json.dumps(ledger, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    _write_new_regular_file(
+        path,
+        (json.dumps(ledger, indent=2, sort_keys=True) + "\n").encode("utf-8"),
     )
     return path
 
@@ -1335,7 +1615,9 @@ __all__ = [
     "enforce_realrun_authorization",
     "verify_results_frozen_input_authority",
     "write_realrun_authorization_receipt",
+    "reserve_authorized_batch_root",
     "write_batch_authorization_receipt",
+    "verify_batch_authorization_receipt",
     "build_batch_ledger",
     "write_batch_ledger",
 ]
