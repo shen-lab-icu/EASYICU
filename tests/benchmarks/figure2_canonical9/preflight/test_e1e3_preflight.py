@@ -683,7 +683,7 @@ def test_substantive_replan_cap_stops_real_replanner_loop(tmp_path) -> None:
     finding = next(
         finding
         for finding in run.manifest.get("findings", [])
-        if finding.get("code") == "replan_budget"
+        if finding.get("validator") == "replan_budget"
     )
     assert finding["detail"] == {
         "replan_budget_exhausted": True,
