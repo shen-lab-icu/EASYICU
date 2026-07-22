@@ -13,10 +13,11 @@ Two layers exercised:
 from __future__ import annotations
 
 import json
+import threading
+import time
 from pathlib import Path
 
 import pytest
-
 
 # ---------------------------------------------------------------------------
 # CostMeter unit tests
@@ -46,6 +47,7 @@ def test_meter_records_authoritative_usage_when_inner_exposes_it(ra):
     metered = ra.MeteredClient(inner, role="planner", meter=meter)
 
     from easyicu.research_agent.providers.llm import LLMMessage as _Msg
+
     metered.complete([_Msg(role="user", content="hi")])
     assert len(meter.records) == 1
     rec = meter.records[0]
@@ -81,8 +83,10 @@ def test_meter_falls_back_to_heuristic_when_no_last_usage(ra):
 def test_estimated_cost_uses_price_table(ra):
     meter = ra.CostMeter(price_table={"toy-model": (1.0, 2.0)})
     rec = meter.record(
-        role="planner", model="toy-model",
-        prompt_tokens=1_000_000, completion_tokens=500_000,
+        role="planner",
+        model="toy-model",
+        prompt_tokens=1_000_000,
+        completion_tokens=500_000,
     )
     # 1M @ $1 prompt + 0.5M @ $2 completion = $1 + $1 = $2
     assert rec.estimated_cost_usd == pytest.approx(2.0)
@@ -94,8 +98,10 @@ def test_deepseek_models_are_in_default_price_table(ra):
     meter = ra.CostMeter()
     for model in ("deepseek-chat", "deepseek-reasoner"):
         rec = meter.record(
-            role="coder", model=model,
-            prompt_tokens=1_000_000, completion_tokens=0,
+            role="coder",
+            model=model,
+            prompt_tokens=1_000_000,
+            completion_tokens=0,
         )
         assert rec.estimated_cost_usd is not None
         assert rec.estimated_cost_usd > 0
@@ -106,8 +112,10 @@ def test_free_models_record_zero_cost_not_none(ra):
     # row (cost == 0.0) rather than dropping to ``None``.
     meter = ra.CostMeter()
     rec = meter.record(
-        role="analyzer", model="openai/gpt-oss-120b:free",
-        prompt_tokens=200_000, completion_tokens=20_000,
+        role="analyzer",
+        model="openai/gpt-oss-120b:free",
+        prompt_tokens=200_000,
+        completion_tokens=20_000,
     )
     assert rec.estimated_cost_usd == pytest.approx(0.0)
 
@@ -115,8 +123,10 @@ def test_free_models_record_zero_cost_not_none(ra):
 def test_estimated_cost_none_for_unknown_model(ra):
     meter = ra.CostMeter()
     rec = meter.record(
-        role="planner", model="some-unknown-model-9000",
-        prompt_tokens=10, completion_tokens=20,
+        role="planner",
+        model="some-unknown-model-9000",
+        prompt_tokens=10,
+        completion_tokens=20,
     )
     assert rec.estimated_cost_usd is None
 
@@ -166,15 +176,19 @@ def test_metered_client_does_not_double_count_when_inner_keeps_stale_usage(ra):
 
         def __init__(self) -> None:
             # Pre-populate as if from a previous call.
-            self.last_usage = {"prompt_tokens": 9999,
-                                "completion_tokens": 9999,
-                                "total_tokens": 19998}
+            self.last_usage = {
+                "prompt_tokens": 9999,
+                "completion_tokens": 9999,
+                "total_tokens": 19998,
+            }
 
         def complete(self, messages, *, max_tokens=2048, temperature=0.2):
             # This call's "real" usage:
-            self.last_usage = {"prompt_tokens": 10,
-                                "completion_tokens": 5,
-                                "total_tokens": 15}
+            self.last_usage = {
+                "prompt_tokens": 10,
+                "completion_tokens": 5,
+                "total_tokens": 15,
+            }
             return "x"
 
     meter = ra.CostMeter()
@@ -184,12 +198,62 @@ def test_metered_client_does_not_double_count_when_inner_keeps_stale_usage(ra):
     assert meter.records[-1].completion_tokens == 5
 
 
+def test_concurrent_writer_usage_cannot_be_charged_to_another_role(ra):
+    from easyicu.research_agent.providers.cost import metered_role_resolver
+    from easyicu.research_agent.providers.llm import LLMMessage
+
+    class SharedUsageClient:
+        name = "shared-provider"
+
+        def __init__(self) -> None:
+            self.last_usage = None
+            self.writer_entered = threading.Event()
+            self.release_writer = threading.Event()
+
+        def complete(self, messages, **_kwargs):  # noqa: ANN003
+            role = messages[0].content
+            if role == "writer":
+                self.last_usage = {"prompt_tokens": 11, "completion_tokens": 3}
+                self.writer_entered.set()
+                assert self.release_writer.wait(timeout=2)
+                return "writer result"
+            self.last_usage = {"prompt_tokens": 29, "completion_tokens": 7}
+            return "analyzer result"
+
+    shared = SharedUsageClient()
+    meter = ra.CostMeter()
+    resolver = metered_role_resolver(shared, meter)
+    writer = resolver("writer")
+    analyzer = resolver("analyzer")
+    writer_thread = threading.Thread(
+        target=lambda: writer.complete([LLMMessage(role="user", content="writer")])
+    )
+    analyzer_thread = threading.Thread(
+        target=lambda: analyzer.complete([LLMMessage(role="user", content="analyzer")])
+    )
+    writer_thread.start()
+    assert shared.writer_entered.wait(timeout=2)
+    analyzer_thread.start()
+    time.sleep(0.02)
+    shared.release_writer.set()
+    writer_thread.join(timeout=2)
+    analyzer_thread.join(timeout=2)
+
+    by_role = {record.role: record for record in meter.records}
+    assert by_role["writer"].prompt_tokens == 11
+    assert by_role["writer"].completion_tokens == 3
+    assert by_role["analyzer"].prompt_tokens == 29
+    assert by_role["analyzer"].completion_tokens == 7
+
+
 # ---------------------------------------------------------------------------
 # End-to-end: pipeline writes cost summary + manifest carries records
 # ---------------------------------------------------------------------------
 
 
-def test_pipeline_with_cost_tracking_records_per_role_calls(ra, synthetic_cohort, tmp_path):
+def test_pipeline_with_cost_tracking_records_per_role_calls(
+    ra, synthetic_cohort, tmp_path
+):
     """A full pipeline run with ``enable_cost_tracking=True`` must:
     1. populate ``manifest.cost_records`` with at least one entry per
        agent role that actually ran;
@@ -205,8 +269,9 @@ def test_pipeline_with_cost_tracking_records_per_role_calls(ra, synthetic_cohort
         enable_memory=False,
         enable_latex=False,
     )
-    result = pipeline.run(skill="association_analysis", cohort=synthetic_cohort,
-                          database="synthetic")
+    result = pipeline.run(
+        skill="association_analysis", cohort=synthetic_cohort, database="synthetic"
+    )
 
     run_dir = Path(result.workdir)
     assert (run_dir / "cost_summary.md").exists()
@@ -239,7 +304,9 @@ def test_pipeline_with_cost_tracking_records_per_role_calls(ra, synthetic_cohort
     assert len(manifest["cost_records"]) == len(records)
 
 
-def test_pipeline_without_cost_tracking_writes_no_cost_files(ra, synthetic_cohort, tmp_path):
+def test_pipeline_without_cost_tracking_writes_no_cost_files(
+    ra, synthetic_cohort, tmp_path
+):
     """Default pipeline behaviour: no cost_summary.md, no cost_records.json,
     empty cost_records in the manifest."""
     pipeline = ra.ResearchAgentPipeline(
@@ -251,8 +318,9 @@ def test_pipeline_without_cost_tracking_writes_no_cost_files(ra, synthetic_cohor
         enable_memory=False,
         enable_latex=False,
     )
-    result = pipeline.run(skill="association_analysis", cohort=synthetic_cohort,
-                          database="synthetic")
+    result = pipeline.run(
+        skill="association_analysis", cohort=synthetic_cohort, database="synthetic"
+    )
 
     run_dir = Path(result.workdir)
     assert not (run_dir / "cost_summary.md").exists()

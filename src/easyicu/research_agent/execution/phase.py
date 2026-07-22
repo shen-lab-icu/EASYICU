@@ -138,6 +138,9 @@ from ..cohort.schema import (
     write_locked_cohort_definition,
 )
 from ..authority.execution_input import ExecutionInputAuthorityState
+from ..authority.execution_identity import (
+    execution_identity_for_pipeline as _execution_identity,
+)
 from ..intake.materialized_metadata import MaterializedMetadataError
 from ..intake.materialized_trajectory import (
     MaterializedTrajectoryError,
@@ -3828,7 +3831,6 @@ def run_execute_phase(
                 f"[research_agent] resume: skipping {len(resumed_step_ids)} "
                 f"already-completed step(s) — {sorted(resumed_step_ids)}"
             )
-
     adopt_existing_host_cohort_materialization(
         plan=plan,
         run_dir=run_dir,
@@ -3862,6 +3864,7 @@ def run_execute_phase(
             "used_mock_llm": plan_result.used_mock_llm,
             "prompt_pack_version": prompt_version,
             "prompt_pack_files": prompt_files,
+            "execution_identity": _execution_identity(pipeline).model_dump(mode="json"),
             "notes": notes,
             "runtime_state": runtime_state.model_dump(mode="json"),
             "repair_ledger_path": str(repair_ledger.path.relative_to(run_dir)),

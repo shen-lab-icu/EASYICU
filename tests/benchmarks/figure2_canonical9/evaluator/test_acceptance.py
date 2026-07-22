@@ -7,15 +7,51 @@ from typing import Any, Callable
 
 import pytest
 
+from easyicu.research_agent.authority.execution_identity import ExecutionIdentity
+from easyicu.research_agent.providers.factory import ProviderAuthorization
 from benchmarks.figure2_canonical9.evaluator import acceptance
 from benchmarks.figure2_canonical9.evaluator.rubric_v1 import FIGURE2_TASK_IDS
 
 
-def _write_results(root: Path) -> Path:
+def _execution_identity(*, host_runner_authorized: bool = False) -> dict[str, Any]:
+    class Client:
+        pass
+
+    client = Client()
+    client.__easyicu_provider_authorization__ = ProviderAuthorization.create(
+        provider="openai",
+        model="frozen-model",
+        base_url="https://provider.example/v1",
+        destination="external",
+        authorization_mode="operator_env",
+    )
+    return ExecutionIdentity.create(
+        submission_profile_name="npj_dm",
+        submission_profile_version="frozen-v1",
+        runner="docker",
+        runner_image_digest="sha256:" + "a" * 64,
+        network_policy="none",
+        provider_client=client,
+        seed=20260722,
+        host_runner_authorized=host_runner_authorized,
+        code_version={"git_sha": "b" * 40, "git_dirty": False},
+    ).model_dump(mode="json")
+
+
+def _write_results(
+    root: Path,
+    *,
+    host_runner_authorized: bool = False,
+) -> Path:
+    identity = _execution_identity(host_runner_authorized=host_runner_authorized)
     scores: list[dict[str, Any]] = []
     for task_id in FIGURE2_TASK_IDS:
         run_dir = root / task_id / "aware" / f"run_{task_id}"
         run_dir.mkdir(parents=True)
+        (run_dir / "manifest.json").write_text(
+            json.dumps({"execution_identity": identity}),
+            encoding="utf-8",
+        )
         scores.append(
             {
                 "item_key": task_id,
@@ -23,6 +59,7 @@ def _write_results(root: Path) -> Path:
                     "arm": "aware",
                     "run_id": run_dir.name,
                     "workdir": str(run_dir),
+                    "execution_identity": identity,
                     "figure2_evaluation_attempt": {
                         "status": "valid",
                         "task_id": task_id,
@@ -172,6 +209,19 @@ def test_replay_failure_is_fail_closed(
 
     assert report.status == "invalid"
     assert {issue.code for issue in report.issues} == {"EVALUATION_REPLAY_FAILED"}
+
+
+def test_host_runner_authorization_can_never_pass_paper_acceptance(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = _write_results(tmp_path, host_runner_authorized=True)
+    _install_valid_attempt_stubs(monkeypatch)
+
+    report = acceptance.evaluate_figure2_paper_acceptance(path)
+
+    assert report.status == "invalid"
+    assert {issue.code for issue in report.issues} == {"EXECUTION_IDENTITY_INVALID"}
 
 
 def test_workdir_cannot_be_transplanted_under_another_task(

@@ -17,6 +17,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from easyicu.research_agent.authority.execution_identity import ExecutionIdentity
+
 from .rubric_v1 import FIGURE2_TASK_IDS
 from .scoring import Figure2EvaluationAttempt, verify_figure2_evaluation_attempt
 
@@ -230,6 +232,7 @@ def evaluate_figure2_paper_acceptance(
         )
 
     verified: list[VerifiedFigure2Task] = []
+    accepted_execution_identity_sha256: str | None = None
     results_root = path.parent.resolve()
     for task_id in expected:
         task_rows = by_task.get(task_id, [])
@@ -295,6 +298,39 @@ def evaluate_figure2_paper_acceptance(
                 _issue(
                     "RUN_IDENTITY_INVALID",
                     str(exc),
+                    task_id=task_id,
+                )
+            )
+            continue
+        try:
+            score_identity = ExecutionIdentity.model_validate(
+                arm.get("execution_identity"),
+                strict=True,
+            )
+            manifest_payload = _strict_json_object(
+                _read_regular_file(run_dir / "manifest.json")
+            )
+            manifest_identity = ExecutionIdentity.model_validate(
+                manifest_payload.get("execution_identity"),
+                strict=True,
+            )
+            if score_identity.identity_sha256 != manifest_identity.identity_sha256:
+                raise ValueError("score and run manifest identities differ")
+            if not score_identity.paper_eligible:
+                raise ValueError("execution identity is not paper eligible")
+            if score_identity.runner != "docker":
+                raise ValueError("paper acceptance requires the docker runner")
+            if score_identity.host_runner_authorized:
+                raise ValueError("--allow-host-runner is never paper authority")
+            if accepted_execution_identity_sha256 is None:
+                accepted_execution_identity_sha256 = score_identity.identity_sha256
+            elif accepted_execution_identity_sha256 != score_identity.identity_sha256:
+                raise ValueError("Canonical9 tasks have different execution identities")
+        except Exception as exc:
+            issues.append(
+                _issue(
+                    "EXECUTION_IDENTITY_INVALID",
+                    f"execution identity invalid: {type(exc).__name__}: {exc}",
                     task_id=task_id,
                 )
             )

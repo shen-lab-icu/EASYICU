@@ -39,6 +39,7 @@ from ..contracts.runtime import (
 from ..providers.cost import CostMeter
 from ..providers.factory import provider_authorization_manifest
 from ..authority.evidence_store import EvidenceStore
+from ..authority.execution_identity import execution_identity_for_pipeline
 from ..methods.multiple_testing import build_multiple_testing_report
 from ..methods.sensitivity import compute_e_value
 from ..replication.report import _literature_provenance_note
@@ -852,6 +853,9 @@ def finalise_success(
         cost_records=cost_records_for_manifest,
         reproducibility=reproducibility_summary,
         provider_authorization=provider_authorization_manifest(pipeline._llm),
+        execution_identity=execution_identity_for_pipeline(pipeline).model_dump(
+            mode="json"
+        ),
         submission_profile_name=pipeline._submission_profile_name,
         submission_profile_version=pipeline._submission_profile_version,
         submission_profile_locked_at=pipeline._submission_profile_locked_at,
@@ -906,16 +910,16 @@ def finalise_success(
     write_run_checkpoint(manifest_path, manifest.model_dump(mode="json"))
 
     if pipeline._memory is not None:
-        memory_record = pipeline._memory.record(
-            run_id=run_id,
-            research_question=context.research_question,
-            database=database,
-            target_outcome=target_outcome,
-            findings=findings,
-            workdir=run_dir,
-        )
-        if pipeline._permissioned_memory_store is not None:
-            try:
+        try:
+            memory_record = pipeline._memory.record(
+                run_id=run_id,
+                research_question=context.research_question,
+                database=database,
+                target_outcome=target_outcome,
+                findings=findings,
+                workdir=run_dir,
+            )
+            if pipeline._permissioned_memory_store is not None:
                 quarantine_run_lesson(
                     pipeline._permissioned_memory_store,
                     run_id=run_id,
@@ -923,11 +927,8 @@ def finalise_success(
                     payload=memory_record.to_dict(),
                     created_at=memory_record.finished_at,
                 )
-            except Exception as exc:  # pragma: no cover - defence in depth
-                logger.warning(
-                    "permissioned-memory quarantine mirror failed (non-fatal): %s",
-                    exc,
-                )
+        except Exception as exc:  # pragma: no cover - storage boundary
+            logger.warning("legacy memory finalization failed (non-fatal): %s", exc)
 
     result = PipelineResult(
         run_id=run_id,
@@ -1016,7 +1017,6 @@ def finalise_aborted(
         context=context,
         plan=None,
         findings=findings,
-        provider_authorization=provider_authorization_manifest(pipeline._llm),
         per_step_records=[],
         evidence=evidence,
         run_dir=run_dir,
@@ -1043,6 +1043,10 @@ def finalise_aborted(
         context_path=str(context_path.relative_to(run_dir)),
         evidence=evidence.records(),
         findings=findings,
+        provider_authorization=provider_authorization_manifest(pipeline._llm),
+        execution_identity=execution_identity_for_pipeline(pipeline).model_dump(
+            mode="json"
+        ),
         submission_profile_name=pipeline._submission_profile_name,
         submission_profile_version=pipeline._submission_profile_version,
         submission_profile_locked_at=pipeline._submission_profile_locked_at,

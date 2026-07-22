@@ -1,0 +1,121 @@
+from __future__ import annotations
+
+from typing import Any
+
+import pytest
+from pydantic import ValidationError
+
+from easyicu.research_agent.authority.execution_identity import ExecutionIdentity
+from easyicu.research_agent.providers.factory import (
+    ProviderAuthorization,
+    build_provider_client,
+    provider_authorization_for_configuration,
+)
+
+
+class _AuthorizedClient:
+    pass
+
+
+def _client(*, model: str = "model-a") -> Any:
+    client = _AuthorizedClient()
+    client.__easyicu_provider_authorization__ = ProviderAuthorization.create(
+        provider="openai",
+        model=model,
+        base_url="https://provider.example/v1",
+        destination="external",
+        authorization_mode="operator_env",
+    )
+    return client
+
+
+def _identity(**overrides: Any) -> ExecutionIdentity:
+    coordinates = {
+        "submission_profile_name": "profile",
+        "submission_profile_version": "v1",
+        "runner": "docker",
+        "runner_image_digest": "sha256:" + "a" * 64,
+        "network_policy": "none",
+        "provider_client": _client(),
+        "seed": 17,
+        "host_runner_authorized": False,
+        "code_version": {"git_sha": "b" * 40, "git_dirty": False},
+    }
+    coordinates.update(overrides)
+    return ExecutionIdentity.create(**coordinates)
+
+
+def test_every_execution_coordinate_changes_content_identity() -> None:
+    baseline = _identity()
+    variants = (
+        _identity(submission_profile_version="v2"),
+        _identity(runner="subprocess"),
+        _identity(runner_image_digest="sha256:" + "c" * 64),
+        _identity(network_policy="bridge"),
+        _identity(provider_client=_client(model="model-b")),
+        _identity(seed=18),
+        _identity(host_runner_authorized=True),
+        _identity(code_version={"git_sha": "d" * 40, "git_dirty": False}),
+    )
+    assert (
+        len({baseline.identity_sha256, *(row.identity_sha256 for row in variants)}) == 9
+    )
+
+
+def test_identity_tampering_is_rejected() -> None:
+    payload = _identity().model_dump(mode="json")
+    payload["network_policy"] = "bridge"
+
+    with pytest.raises(ValidationError, match="execution identity digest mismatch"):
+        ExecutionIdentity.model_validate(payload, strict=True)
+
+
+def test_preflight_provider_coordinates_match_the_constructed_client() -> None:
+    class Client:
+        def __init__(self, **_kwargs: Any) -> None:
+            pass
+
+    environment = {"OPENAI_BASE_URL": "http://127.0.0.1:8317/v1"}
+    client = build_provider_client(
+        provider="openai",
+        model="local-model",
+        request_timeout=60.0,
+        title="EasyICU test",
+        client_cls=Client,
+        environment=environment,
+    )
+    common = {
+        "submission_profile_name": "profile",
+        "submission_profile_version": "v1",
+        "runner": "docker",
+        "runner_image_digest": "sha256:" + "a" * 64,
+        "network_policy": "none",
+        "seed": 17,
+        "code_version": {"git_sha": "b" * 40, "git_dirty": False},
+    }
+    actual = ExecutionIdentity.create(provider_client=client, **common)
+    preflight = ExecutionIdentity.create(
+        provider_authorization=provider_authorization_for_configuration(
+            provider="openai",
+            model="local-model",
+            environment=environment,
+        ),
+        **common,
+    )
+
+    assert actual.identity_sha256 == preflight.identity_sha256
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"runner": "subprocess"},
+        {"runner_image_digest": None},
+        {"network_policy": "bridge"},
+        {"host_runner_authorized": True},
+        {"code_version": {"git_sha": "b" * 40, "git_dirty": True}},
+        {"submission_profile_name": None, "submission_profile_version": None},
+    ],
+)
+def test_paper_eligibility_is_deny_by_default(overrides: dict[str, Any]) -> None:
+    assert _identity(**overrides).paper_eligible is False

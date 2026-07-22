@@ -63,6 +63,18 @@ _FIGURE2_VALIDITY_BINDINGS = {
 }
 
 
+def _current_identity() -> dict[str, Any]:
+    return bench._benchmark_execution_identity(
+        {}, provider="mock", model="mock"
+    ).model_dump(mode="json")
+
+
+def _write_manifest(run_dir: Path, payload: dict[str, Any]) -> None:
+    payload = dict(payload)
+    payload["execution_identity"] = _current_identity()
+    (run_dir / "manifest.json").write_text(json.dumps(payload), encoding="utf-8")
+
+
 def _item(task_id: str) -> SimpleNamespace:
     exposure, outcome = _FIGURE2_VALIDITY_BINDINGS.get(
         task_id, ("locked_exposure", "locked_outcome")
@@ -86,21 +98,19 @@ def _item(task_id: str) -> SimpleNamespace:
 def _run_dir(tmp_path: Path) -> Path:
     run_dir = tmp_path / "run_bench_figure2"
     run_dir.mkdir()
-    (run_dir / "manifest.json").write_text(
-        json.dumps(
-            {
-                "run_id": run_dir.name,
-                "findings": [],
-                "readiness": {
-                    "numeric_error_count": 0,
-                    "evidence_error_count": 0,
-                    "analysis_error_count": 0,
-                },
-                "per_step_records": [],
-                "evidence": [],
-            }
-        ),
-        encoding="utf-8",
+    _write_manifest(
+        run_dir,
+        {
+            "run_id": run_dir.name,
+            "findings": [],
+            "readiness": {
+                "numeric_error_count": 0,
+                "evidence_error_count": 0,
+                "analysis_error_count": 0,
+            },
+            "per_step_records": [],
+            "evidence": [],
+        },
     )
     return run_dir
 
@@ -205,7 +215,10 @@ def test_exact_figure2_task_adds_structured_attempt_without_changing_five_dim(
     result = bench._score_arm(run_dir=run_dir, item=item, label="aware")
 
     assert result["five_dim_scorecard"] is five_dim_sentinel
-    assert set(result) == _LEGACY_ARM_SCORE_KEYS | {"figure2_evaluation_attempt"}
+    assert set(result) == _LEGACY_ARM_SCORE_KEYS | {
+        "execution_identity",
+        "figure2_evaluation_attempt",
+    }
     attempt = result["figure2_evaluation_attempt"]
     assert attempt == {
         "schema_version": FIGURE2_EVALUATION_ATTEMPT_SCHEMA,
@@ -393,6 +406,37 @@ def test_near_miss_and_non_figure2_tasks_keep_legacy_shape(
     assert result["five_dim_scorecard"] is five_dim_sentinel
 
 
+def test_bench_scores_active_and_superseded_errors_separately(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run_dir = _run_dir(tmp_path)
+    manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
+    manifest["findings"] = [
+        {"validator": "old_gate", "severity": "error", "message": "superseded"}
+    ]
+    manifest["readiness"].update(
+        {
+            "numeric_error_count": 0,
+            "evidence_error_count": 0,
+            "analysis_error_count": 0,
+            "superseded_error_count": 1,
+        }
+    )
+    (run_dir / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    _stub_legacy_score(monkeypatch)
+
+    result = bench._score_arm(
+        run_dir=run_dir,
+        item=_item("ordinary_external_evaluation_task"),
+        label="aware",
+    )
+
+    assert result["n_errors"] == 0
+    assert result["n_historical_errors"] == 1
+    assert result["superseded_error_count"] == 1
+
+
 @pytest.mark.parametrize(
     ("failing_stage", "expected_reason"),
     [
@@ -534,7 +578,7 @@ def test_authority_invalid_rescore_cannot_count_as_reuse(
     arm_dir = tmp_path / "aware"
     run_dir = arm_dir / "run_invalid_authority"
     run_dir.mkdir(parents=True)
-    (run_dir / "manifest.json").write_text("{}\n", encoding="utf-8")
+    _write_manifest(run_dir, {})
     monkeypatch.setattr(bench, "_figure2_run_is_reusable", lambda *_args: True)
     monkeypatch.setattr(
         bench,
@@ -553,6 +597,7 @@ def test_authority_invalid_rescore_cannot_count_as_reuse(
             arm_dir=arm_dir,
             item=_item(task_id),
             label="aware",
+            expected_execution_identity_sha256=_current_identity()["identity_sha256"],
         )
         is None
     )
@@ -624,22 +669,20 @@ def test_ehrflow_reuse_rescores_completed_figure2_run_without_provider_call(
     out_root = tmp_path / "results"
     run_dir = out_root / task_id / "aware" / "run_existing"
     run_dir.mkdir(parents=True)
-    (run_dir / "manifest.json").write_text(
-        json.dumps(
-            {
-                "run_id": run_dir.name,
-                "findings": [],
-                "readiness": {
-                    "execution_complete": True,
-                    "numeric_error_count": 0,
-                    "evidence_error_count": 0,
-                    "analysis_error_count": 0,
-                },
-                "per_step_records": [],
-                "evidence": [],
-            }
-        ),
-        encoding="utf-8",
+    _write_manifest(
+        run_dir,
+        {
+            "run_id": run_dir.name,
+            "findings": [],
+            "readiness": {
+                "execution_complete": True,
+                "numeric_error_count": 0,
+                "evidence_error_count": 0,
+                "analysis_error_count": 0,
+            },
+            "per_step_records": [],
+            "evidence": [],
+        },
     )
     _write_run_status(run_dir, execution_complete=True)
     tracked_payloads = {
@@ -743,7 +786,7 @@ def test_aborted_manifest_is_not_reused_and_arm_runs(
     out_root = tmp_path / "results"
     run_dir = out_root / task_id / "aware" / "run_aborted"
     run_dir.mkdir(parents=True)
-    (run_dir / "manifest.json").write_text("{}\n", encoding="utf-8")
+    _write_manifest(run_dir, {})
     _write_run_status(run_dir, execution_complete=False)
     provider_calls: list[tuple[str, str]] = []
     arm_calls: list[str] = []
@@ -779,12 +822,12 @@ def test_aborted_manifest_is_not_reused_and_arm_runs(
         cohort=[{"locked_exposure": 1, "locked_outcome": 0}],
         out_root=out_root,
         arms=["aware"],
-        provider="provider-sentinel",
-        model="model-sentinel",
+        provider="mock",
+        model="mock",
         reuse_existing=True,
     )
 
-    assert provider_calls == [("provider-sentinel", "model-sentinel")]
+    assert provider_calls == [("mock", "mock")]
     assert arm_calls == ["aware"]
     assert result["aware"]["run_id"] == "run_new"
 
@@ -800,7 +843,7 @@ def test_latest_aborted_run_falls_back_to_latest_complete_run(
     aborted = arm_dir / "run_20260718T020000_aborted"
     for run_dir, is_complete in ((complete, True), (aborted, False)):
         run_dir.mkdir(parents=True)
-        (run_dir / "manifest.json").write_text("{}\n", encoding="utf-8")
+        _write_manifest(run_dir, {})
         _write_run_status(run_dir, execution_complete=is_complete)
     scored: list[Path] = []
 
@@ -850,7 +893,7 @@ def test_partial_arm_reuse_creates_one_provider_and_runs_only_missing_arm(
     out_root = tmp_path / "results"
     aware_run = out_root / task_id / "aware" / "run_complete"
     aware_run.mkdir(parents=True)
-    (aware_run / "manifest.json").write_text("{}\n", encoding="utf-8")
+    _write_manifest(aware_run, {})
     _write_run_status(aware_run, execution_complete=True)
     provider_calls = 0
     arm_calls: list[str] = []

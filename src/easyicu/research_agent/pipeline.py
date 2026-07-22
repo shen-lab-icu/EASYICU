@@ -1511,6 +1511,7 @@ class ResearchAgentPipeline:
         runner_kind: str = "auto",
         runner_image: Optional[str] = None,
         runner_network: str = "none",
+        host_runner_authorized: bool = False,
         runner_factory: Optional[Callable[..., Any]] = None,
         runner_kwargs: Optional[Dict[str, Any]] = None,
         case_plugin_registry: Optional[Any] = None,
@@ -1824,6 +1825,8 @@ class ResearchAgentPipeline:
             )
         self._runner_image = runner_image
         self._runner_network = runner_network
+        self._expected_runner_image_digest = expected_runner_image_digest
+        self._host_runner_authorized = bool(host_runner_authorized)
         self._runner_factory = runner_factory
         self._runner_kwargs = dict(runner_kwargs or {})
         self._validated_runtime_capabilities: Optional[Tuple[str, ...]] = None
