@@ -250,6 +250,11 @@ class PipelineConfig:
     enable_coder_resources: bool = False
     enable_reviewed_memory: bool = False
     reviewed_memory_namespaces: Sequence[str] = ()
+    enable_capability_workflow: bool = False
+    expected_runner_image_digest: Optional[str] = None
+    capability_request: Optional[Dict[str, Any]] = None
+    capability_approval: Optional[Dict[str, Any]] = None
+    capability_activation: Optional[Dict[str, Any]] = None
     know_how_paths: Sequence[Union[str, Path]] = ()
     know_how_top_k: int = 3
     know_how_min_score: float = 0.15

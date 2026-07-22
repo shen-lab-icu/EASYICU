@@ -60,6 +60,11 @@ class SubmissionProfile:
     # RunMemory. Both its enable flag and exact namespaces are profile-owned.
     enable_reviewed_memory: Optional[bool] = None
     reviewed_memory_namespaces: Optional[tuple[str, ...]] = None
+    # New analytical software is never installed in a running sandbox. A
+    # request profile may emit a reviewable capability request; a later,
+    # additive profile must pin the rebuilt runner image before activation.
+    enable_capability_workflow: Optional[bool] = None
+    expected_runner_image_digest: Optional[str] = None
 
     @property
     def ref(self) -> str:
@@ -111,6 +116,10 @@ class SubmissionProfile:
             options["enable_reviewed_memory"] = self.enable_reviewed_memory
         if self.reviewed_memory_namespaces is not None:
             options["reviewed_memory_namespaces"] = self.reviewed_memory_namespaces
+        if self.enable_capability_workflow is not None:
+            options["enable_capability_workflow"] = self.enable_capability_workflow
+        if self.expected_runner_image_digest is not None:
+            options["expected_runner_image_digest"] = self.expected_runner_image_digest
         return options
 
     def pipeline_options(self) -> Dict[str, Any]:
@@ -142,6 +151,8 @@ class SubmissionProfile:
             "enable_coder_resources",
             "enable_reviewed_memory",
             "reviewed_memory_namespaces",
+            "enable_capability_workflow",
+            "expected_runner_image_digest",
         ):
             if payload.get(field_name) is None:
                 payload.pop(field_name, None)
@@ -352,6 +363,32 @@ NPJ_DM_2026_07_22_FRAMEWORK_V2_MEMORY_DEV = SubmissionProfile(
     ),
 )
 
+NPJ_DM_2026_07_22_FRAMEWORK_V2_CAPABILITY_DEV = SubmissionProfile(
+    name="npj_dm_framework_v2_capability_dev",
+    version="20260722",
+    locked_at="2026-07-22T10:00:00-04:00",
+    evidence_enforcement_mode="strict",
+    writer_digest_widened=True,
+    enable_reproducibility_envelope=True,
+    requires_arm="aware",
+    requires_runner="docker",
+    expected_concept_dict_sha=NPJ_DM_2026_07_19.expected_concept_dict_sha,
+    expected_sofa2_dict_sha=NPJ_DM_2026_07_19.expected_sofa2_dict_sha,
+    enable_memory=False,
+    enable_experience_bank=False,
+    enable_deterministic_code_fallback=False,
+    enable_deterministic_planner_fallback=False,
+    requires_real_provider=True,
+    enable_know_how=False,
+    enable_coder_resources=True,
+    enable_reviewed_memory=True,
+    reviewed_memory_namespaces=(
+        "reviewed_knowledge/framework_v2",
+        "promoted_lessons/1.0.0",
+    ),
+    enable_capability_workflow=True,
+)
+
 DEFAULT_SUBMISSION_PROFILE_REF = NPJ_DM_2026_07_19.ref
 SUBMISSION_PROFILE_REGISTRY: Dict[str, SubmissionProfile] = {
     NPJ_DM_2026_05.ref: NPJ_DM_2026_05,
@@ -365,6 +402,9 @@ SUBMISSION_PROFILE_REGISTRY: Dict[str, SubmissionProfile] = {
     NPJ_DM_2026_07_22_FRAMEWORK_V2_DEV.ref: (NPJ_DM_2026_07_22_FRAMEWORK_V2_DEV),
     NPJ_DM_2026_07_22_FRAMEWORK_V2_MEMORY_DEV.ref: (
         NPJ_DM_2026_07_22_FRAMEWORK_V2_MEMORY_DEV
+    ),
+    NPJ_DM_2026_07_22_FRAMEWORK_V2_CAPABILITY_DEV.ref: (
+        NPJ_DM_2026_07_22_FRAMEWORK_V2_CAPABILITY_DEV
     ),
 }
 
@@ -448,6 +488,32 @@ def require_profile_reviewed_memory_setting(
         )
 
 
+def require_profile_capability_workflow_setting(
+    *,
+    name: Optional[str],
+    version: Optional[str],
+    enabled: bool,
+    expected_runner_image_digest: Optional[str],
+) -> None:
+    """Keep capability requests/activations on additive profiles."""
+
+    if name is None:
+        if enabled or expected_runner_image_digest is not None:
+            raise ValueError("Capability workflow requires an additive profile")
+        return
+    ref = f"{name}/{version}"
+    profile = get_submission_profile(ref)
+    expected_enabled = bool(profile.enable_capability_workflow)
+    expected_digest = profile.expected_runner_image_digest
+    if enabled != expected_enabled or expected_runner_image_digest != expected_digest:
+        raise ValueError(
+            "Capability workflow changes runtime authority and must match the "
+            f"submission profile; profile {ref!r} pins "
+            f"enable_capability_workflow={expected_enabled}, "
+            f"expected_runner_image_digest={expected_digest!r}"
+        )
+
+
 __all__ = [
     "SubmissionProfile",
     "NPJ_DM_2026_05",
@@ -460,10 +526,12 @@ __all__ = [
     "NPJ_DM_2026_07_21_KNOW_HOW",
     "NPJ_DM_2026_07_22_FRAMEWORK_V2_DEV",
     "NPJ_DM_2026_07_22_FRAMEWORK_V2_MEMORY_DEV",
+    "NPJ_DM_2026_07_22_FRAMEWORK_V2_CAPABILITY_DEV",
     "DEFAULT_SUBMISSION_PROFILE_REF",
     "SUBMISSION_PROFILE_REGISTRY",
     "get_submission_profile",
     "require_profile_know_how_setting",
     "require_profile_coder_resource_setting",
     "require_profile_reviewed_memory_setting",
+    "require_profile_capability_workflow_setting",
 ]

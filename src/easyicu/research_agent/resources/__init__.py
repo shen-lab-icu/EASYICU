@@ -2,10 +2,16 @@
 
 from .catalog import ResourceCatalog, protocol_catalog_from_know_how
 from .capability import (
+    CapabilityActivation,
     CapabilityApproval,
     CapabilityRequest,
     approved_capability_resource,
+    build_capability_activation,
     build_capability_request,
+    verify_capability_activation,
+    runtime_snapshot_sha256,
+    write_capability_activation,
+    write_capability_approval,
     write_capability_request,
 )
 from .coder import (
@@ -20,6 +26,7 @@ from .coder import (
     build_coder_resource_bundle,
     persist_coder_resource_bundle,
 )
+from .capability_runtime import CapabilityWorkflowRuntime
 from .context import (
     AssembledContext,
     BoundedContextAssembler,
@@ -53,13 +60,20 @@ __all__ = [
     "ResourceSelectionReceipt",
     "protocol_catalog_from_know_how",
     "CapabilityApproval",
+    "CapabilityActivation",
     "CapabilityRequest",
+    "CapabilityWorkflowRuntime",
     "CODER_RESOURCE_BUNDLE_SCHEMA",
     "CODER_RESOURCE_PROMPT_LIMIT_BYTES",
     "CoderResourceBundle",
     "CoderResourceIntegrityError",
     "approved_capability_resource",
+    "build_capability_activation",
     "build_capability_request",
+    "verify_capability_activation",
+    "runtime_snapshot_sha256",
+    "write_capability_activation",
+    "write_capability_approval",
     "write_capability_request",
     "attach_coder_resources",
     "attach_step_coder_input_authority",

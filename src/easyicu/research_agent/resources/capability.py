@@ -22,6 +22,7 @@ from .schema import ResourceDescriptor
 
 CAPABILITY_REQUEST_SCHEMA = "easyicu.capability_request/1"
 CAPABILITY_APPROVAL_SCHEMA = "easyicu.capability_approval/1"
+CAPABILITY_ACTIVATION_SCHEMA = "easyicu.capability_activation/1"
 
 
 def _canonical_bytes(payload: object) -> bytes:
@@ -119,10 +120,68 @@ class CapabilityApproval(BaseModel):
             )
         return self
 
+    @property
+    def sha256(self) -> str:
+        return hashlib.sha256(
+            _canonical_bytes(self.model_dump(mode="json"))
+        ).hexdigest()
+
+
+class CapabilityActivation(BaseModel):
+    """A reviewed hand-off into a *new* immutable runtime/profile.
+
+    Approval never authorises package installation inside a running container.
+    A maintainer must build and validate a new image, register a new submission
+    profile that pins its digest, and start a new run with this activation.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal["easyicu.capability_activation/1"] = (
+        CAPABILITY_ACTIVATION_SCHEMA
+    )
+    activation_id: str = Field(pattern=r"^capact-[0-9a-f]{16}$")
+    request_id: str = Field(pattern=r"^cap-[0-9a-f]{16}$")
+    request_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    approval_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    source_profile_ref: str = Field(min_length=3, max_length=240)
+    target_profile_ref: str = Field(min_length=3, max_length=240)
+    image_digest: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
+    new_run_required: Literal[True] = True
+    runtime_install_allowed: Literal[False] = False
+
+    @model_validator(mode="after")
+    def _bind_activation(self) -> "CapabilityActivation":
+        if self.source_profile_ref == self.target_profile_ref:
+            raise ValueError("capability activation requires a new profile")
+        expected = capability_activation_id(self.model_dump(exclude={"activation_id"}))
+        if self.activation_id != expected:
+            raise ValueError("capability activation id does not bind activation bytes")
+        return self
+
+    @property
+    def sha256(self) -> str:
+        return hashlib.sha256(
+            _canonical_bytes(self.model_dump(mode="json"))
+        ).hexdigest()
+
 
 def capability_request_id(payload: Mapping[str, object]) -> str:
     digest = hashlib.sha256(_canonical_bytes(dict(payload))).hexdigest()
     return f"cap-{digest[:16]}"
+
+
+def capability_activation_id(payload: Mapping[str, object]) -> str:
+    digest = hashlib.sha256(_canonical_bytes(dict(payload))).hexdigest()
+    return f"capact-{digest[:16]}"
+
+
+def runtime_snapshot_sha256(import_names: Iterable[str]) -> str:
+    """Canonical digest of the runner's exact import-name allow-list."""
+
+    return hashlib.sha256(
+        _canonical_bytes(tuple(sorted(set(import_names))))
+    ).hexdigest()
 
 
 def build_capability_request(
@@ -147,7 +206,7 @@ def build_capability_request(
     snapshot = tuple(sorted(set(runtime_import_names)))
     if import_name in snapshot:
         raise ValueError("installed software must be registered, not requested")
-    snapshot_sha = hashlib.sha256(_canonical_bytes(snapshot)).hexdigest()
+    snapshot_sha = runtime_snapshot_sha256(snapshot)
     payload = {
         "schema_version": CAPABILITY_REQUEST_SCHEMA,
         "method_name": method_name,
@@ -212,6 +271,70 @@ def approved_capability_resource(
     )
 
 
+def build_capability_activation(
+    *,
+    request: CapabilityRequest,
+    approval: CapabilityApproval,
+    source_profile_ref: str,
+    target_profile_ref: str,
+) -> CapabilityActivation:
+    """Bind an approval to a different profile and immutable image."""
+
+    # Reuse the catalog conversion as the single approval/request join check.
+    approved_capability_resource(request, approval)
+    assert approval.image_digest is not None
+    payload = {
+        "schema_version": CAPABILITY_ACTIVATION_SCHEMA,
+        "request_id": request.request_id,
+        "request_sha256": request.sha256,
+        "approval_sha256": approval.sha256,
+        "source_profile_ref": source_profile_ref,
+        "target_profile_ref": target_profile_ref,
+        "image_digest": approval.image_digest,
+        "new_run_required": True,
+        "runtime_install_allowed": False,
+    }
+    return CapabilityActivation(
+        activation_id=capability_activation_id(payload),
+        **payload,
+    )
+
+
+def verify_capability_activation(
+    *,
+    request: CapabilityRequest,
+    approval: CapabilityApproval,
+    activation: CapabilityActivation,
+    current_profile_ref: str,
+    expected_image_digest: str | None,
+    actual_image_digest: str | None,
+    runtime_import_names: Iterable[str],
+    is_resume: bool,
+) -> ResourceDescriptor:
+    """Fail closed unless a new run uses the exact approved environment."""
+
+    resource = approved_capability_resource(request, approval)
+    if is_resume:
+        raise ValueError("capability activation requires a new run, not resume")
+    if activation.request_id != request.request_id:
+        raise ValueError("capability activation belongs to a different request")
+    if activation.request_sha256 != request.sha256:
+        raise ValueError("capability activation does not bind request bytes")
+    if activation.approval_sha256 != approval.sha256:
+        raise ValueError("capability activation does not bind approval bytes")
+    if activation.target_profile_ref != current_profile_ref:
+        raise ValueError("capability activation targets a different profile")
+    if not expected_image_digest:
+        raise ValueError("target profile does not pin an immutable image digest")
+    if activation.image_digest != expected_image_digest:
+        raise ValueError("capability activation conflicts with target profile image")
+    if actual_image_digest != expected_image_digest:
+        raise ValueError("runtime image does not match capability activation")
+    if request.import_name not in set(runtime_import_names):
+        raise ValueError("approved capability import is absent from the new runtime")
+    return resource
+
+
 def write_capability_request(path: Path, request: CapabilityRequest) -> None:
     """Write a request once; never mutate a previously reviewed request."""
 
@@ -242,10 +365,76 @@ def write_capability_request(path: Path, request: CapabilityRequest) -> None:
             pass
 
 
+def write_capability_activation(path: Path, activation: CapabilityActivation) -> None:
+    """Write an activation receipt once, with byte-for-byte idempotence."""
+
+    path = Path(path)
+    payload = activation.model_dump_json(indent=2).encode("utf-8") + b"\n"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if path.exists():
+        if path.read_bytes() != payload:
+            raise FileExistsError("capability activation path has other bytes")
+        return
+    fd, temp_name = tempfile.mkstemp(prefix=".capability-activation-", dir=path.parent)
+    try:
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+        try:
+            os.link(temp_name, path)
+        except FileExistsError:
+            if path.read_bytes() != payload:
+                raise FileExistsError(
+                    "capability activation path has other bytes"
+                ) from None
+    finally:
+        try:
+            os.unlink(temp_name)
+        except FileNotFoundError:
+            pass
+
+
+def write_capability_approval(path: Path, approval: CapabilityApproval) -> None:
+    """Write the digest-bound human approval once."""
+
+    path = Path(path)
+    payload = approval.model_dump_json(indent=2).encode("utf-8") + b"\n"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if path.exists():
+        if path.read_bytes() != payload:
+            raise FileExistsError("capability approval path has other bytes")
+        return
+    fd, temp_name = tempfile.mkstemp(prefix=".capability-approval-", dir=path.parent)
+    try:
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+        try:
+            os.link(temp_name, path)
+        except FileExistsError:
+            if path.read_bytes() != payload:
+                raise FileExistsError(
+                    "capability approval path has other bytes"
+                ) from None
+    finally:
+        try:
+            os.unlink(temp_name)
+        except FileNotFoundError:
+            pass
+
+
 __all__ = [
+    "CapabilityActivation",
     "CapabilityApproval",
     "CapabilityRequest",
     "approved_capability_resource",
+    "build_capability_activation",
     "build_capability_request",
+    "verify_capability_activation",
+    "runtime_snapshot_sha256",
+    "write_capability_activation",
+    "write_capability_approval",
     "write_capability_request",
 ]
