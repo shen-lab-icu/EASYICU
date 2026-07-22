@@ -130,7 +130,6 @@ from ..gates.concept import (
     quarantined_errors_superseded_by_current_policy as _quarantined_errors_superseded_by_current_policy,
 )
 from ..authority.coder_authority import HostCoderAuthority
-from ..research_context.prompt_scope import scoped_coder_context
 from ..cohort.repair import extract_cohort_definition_from_prose
 from ..cohort.schema import (
     CohortDefinition,
@@ -144,7 +143,11 @@ from ..intake.materialized_trajectory import (
     MaterializedTrajectoryError,
     StagedTrajectoryBinding,
 )
-from ..research_context.typed import materialized_input_prompt_attachment
+from ..resources.coder import (
+    attach_step_coder_input_authority,
+    bind_materialized_coder_authority,
+    bind_primary_cohort_role,
+)
 from ..contracts.runtime import ValidationFinding, _ExecutePhaseResult, _PlanPhaseResult
 from .runners.deterministic_descriptive import absolute_risk_context_code
 from .runners.deterministic_missingness import (
@@ -193,7 +196,6 @@ from ..authority.typed_binding import (
     TypedBindingResolver,
     _EvidenceLineageResolutionError,
     _assignment_model_authority_context_block,
-    _coder_authority_with_typed_parent_schema_receipts,
     _declared_typed_artifact_paths,
     _declared_typed_product_paths,
     _evidence_kind_matches_typed_product,
@@ -1263,22 +1265,6 @@ def _coder_authority_with_locked_robustness_specs(
             )
         )
     return authority.append(attachment)
-
-
-def _bind_materialized_coder_authority(
-    *,
-    context: ResearchContext,
-    step: AnalysisStep,
-    authority: HostCoderAuthority,
-) -> tuple[ResearchContext, HostCoderAuthority]:
-    """Bind one step-scoped V2 fact attachment to every coder call path."""
-
-    scoped_context = scoped_coder_context(context, step)
-    attachment = materialized_input_prompt_attachment(scoped_context)
-    if not attachment:
-        # Preserve the archived V1 context and authority coordinates exactly.
-        return context, authority
-    return scoped_context, authority.append(attachment)
 
 
 # Max directed full-replans fired when a model/estimation step self-blocks on a
@@ -5108,32 +5094,23 @@ def run_execute_phase(
                 total_steps=total_steps,
             )
             return step_record
-        coder_context = coder_base_context
         coder_authority = _coder_authority_with_locked_robustness_specs(
             authority=HostCoderAuthority(),
             context=coder_base_context,
             step=step,
             run_dir=run_dir,
         )
-        coder_context, coder_authority = _bind_materialized_coder_authority(
-            context=coder_base_context,
-            step=step,
-            authority=coder_authority,
+        coder_context, coder_authority = bind_materialized_coder_authority(
+            coder_base_context, step, coder_authority
         )
-        if primary_cohort_uses_universe:
-            locked_cohort_payload = _planner_locked_cohort_prompt_payload(plan)
-            role_note = (
-                "CURRENT STEP INPUT ROLE (host-owned execution contract): this "
-                "is the plan's unique primary analysis_cohort + attrition "
-                "producer, so COHORT_PARQUET is the raw study universe for this "
-                "step only. Apply exactly the Planner-locked cohort definition, "
-                "report truthful universe-to-final attrition, and emit an "
-                "analysis_cohort whose ordered row identity matches the locked "
-                "host cohort. Downstream steps receive the filtered cohort. "
-                "Planner-locked cohort definition JSON: "
-                f"{locked_cohort_payload}."
-            )
-            coder_authority = coder_authority.append(role_note)
+        coder_authority = bind_primary_cohort_role(
+            authority=coder_authority,
+            locked_cohort_payload=(
+                _planner_locked_cohort_prompt_payload(plan)
+                if primary_cohort_uses_universe
+                else None
+            ),
+        )
         worker_progress = StepWorkerProgress()
         quarantine_state = ConceptQuarantineState()
         step_attempt_state = StepAttemptState()
@@ -5415,9 +5392,16 @@ def run_execute_phase(
             bindings=resolved_input_bindings,
             context_path=plan_result.context_path,
         )
-        coder_authority = _coder_authority_with_typed_parent_schema_receipts(
+        coder_authority = attach_step_coder_input_authority(
+            enabled=pipeline._enable_coder_resources,
             authority=coder_authority,
-            bindings=resolved_input_bindings,
+            run_dir=run_dir,
+            profile_ref=pipeline._submission_profile_ref,
+            context=coder_context,
+            step=step,
+            resolved_input_bindings=resolved_input_bindings,
+            runtime_import_names=pipeline._validated_runtime_capabilities or (),
+            step_record=step_record,
         )
         step_record["resolved_inputs_path"] = str(
             resolved_inputs_path.relative_to(run_dir)

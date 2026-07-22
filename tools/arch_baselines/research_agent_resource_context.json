@@ -5,7 +5,7 @@
   },
   "patient_data_reads": 0,
   "provider_calls": 0,
-  "schema_version": "easyicu.research_agent_resource_baseline/1",
+  "schema_version": "easyicu.research_agent_resource_baseline/2",
   "scope": "offline_minimal_context_fixture_not_paper_input_authority",
   "source_sha256": {
     "src/easyicu/data/concept-dict.json": "fccadc53622dc82fe1dc8696617e52044168b6a84a9255e97e59df9e53bc5803",
@@ -17,12 +17,15 @@
     "src/easyicu/research_agent/planning/cohort_contract.py": "bd29eb63f41e3766c7e47ee0c2a502068cc311b0fc1f1412e118cc78f550a470",
     "src/easyicu/research_agent/resources/capability.py": "ad2b84b9e121d896f3287a4636a85c23015855ee4cf753b52962494ffedf2458",
     "src/easyicu/research_agent/resources/catalog.py": "d1df9901759c3a323ac6a9bb4998cefa7ca2deb978ddd8409851a68f2beeff2f",
+    "src/easyicu/research_agent/resources/coder.py": "6070b985bd668b4c4651797283ef75d6f992c93bef447bfd6ccc7ec728630189",
     "src/easyicu/research_agent/resources/context.py": "8ce42accd83398ff9972b8e50f2f64f9ac926ad610d2c386f2b763adf77af2e1",
     "src/easyicu/research_agent/resources/scheduler.py": "2c127f23d369e5564353caf7d50bb4d6dfc16b1b60c719bcc768507c0be41be6",
     "src/easyicu/research_agent/resources/schema.py": "456053a9d96a8ee5fe0b3e8b2cfa22187f6bb0d8cc81b43d28569ffd311fd288",
-    "tools/research_agent_resource_baseline.py": "0496c2aae15a5243f32f4949bccc6d99e2373a8b9baab68c2f9cd0d225ed95f7"
+    "tools/research_agent_resource_baseline.py": "036a7479d0e3afbf94fd519df339271e4d4cafe6f3adbda8e98efdc7f3d63fdf"
   },
   "summary": {
+    "coder_resource_provider_calls": 0,
+    "max_coder_resource_prompt_bytes": 611,
     "max_planner_with_resources_bytes": 37338,
     "max_planner_without_resources_bytes": 32782,
     "max_resource_added_bytes": 4633,
@@ -42,6 +45,32 @@
   ],
   "tasks": [
     {
+      "coder_resources": {
+        "bundle_sha256": "066bf287afdc76b9b3aceac6fdf3efc2a4024a2349669020af469032ae36e2c3",
+        "profile_ref": "npj_dm_framework_v2_dev/20260722",
+        "prompt_bytes": 369,
+        "prompt_limit_bytes": 8000,
+        "provider_calls": 0,
+        "selected": [
+          {
+            "kind": "action",
+            "resource_id": "action:typed-input-sdk",
+            "sha256": "96ab63cd4e9384353eb480a61b10f8b91cc7bf69f6e886553846c5ff24185b62",
+            "version": "1.0.0"
+          },
+          {
+            "kind": "data",
+            "resource_id": "data:cohort:analysis_cohort",
+            "sha256": "22249aa61fd2594e50910aa574afbb977f9df8f7377e6f02e19c72245d899ad8",
+            "version": "1.0.0"
+          }
+        ],
+        "selection_receipt_sha256": [
+          "80e316a401eb6da07fcb686660fa948aeb089833e5bccdc02dc80105bdca23c0",
+          "17c26cd92c91ff936bbee49652da19f4abdcd89f7c9c43d2e020f7c12b8b87ce",
+          "66a59d17aa8f046678627069b8306bcf0e2d918a21b07209e7ebf1668312512f"
+        ]
+      },
       "fixture_concepts": [
         "sepsis3",
         "death",
@@ -108,6 +137,44 @@
       "task_id": "E1"
     },
     {
+      "coder_resources": {
+        "bundle_sha256": "69ed4bf81f9fc6e2d0ec1ef3d99071ef125c5f5e0acce9753a4b2022bbcd05bb",
+        "profile_ref": "npj_dm_framework_v2_dev/20260722",
+        "prompt_bytes": 611,
+        "prompt_limit_bytes": 8000,
+        "provider_calls": 0,
+        "selected": [
+          {
+            "kind": "action",
+            "resource_id": "action:typed-input-sdk",
+            "sha256": "96ab63cd4e9384353eb480a61b10f8b91cc7bf69f6e886553846c5ff24185b62",
+            "version": "1.0.0"
+          },
+          {
+            "kind": "software",
+            "resource_id": "software:scipy",
+            "sha256": "3f56dfc1765341da56ccb259e1ff13b1761fd9e45d47af8a0375e5fb8ace7ca9",
+            "version": "1.0.0"
+          },
+          {
+            "kind": "software",
+            "resource_id": "software:statsmodels",
+            "sha256": "3ff40c7f30d360246b29cd2760b9723f5bfe14c2913a1a757a089c3e26cc6160",
+            "version": "1.0.0"
+          },
+          {
+            "kind": "data",
+            "resource_id": "data:cohort:analysis_cohort",
+            "sha256": "713a5bb2d170c8684937ab1dd0311be88e0d95fbd9b253333965841517794f64",
+            "version": "1.0.0"
+          }
+        ],
+        "selection_receipt_sha256": [
+          "d5021c47d2b673e0e0d62f12b4a831dc3e0885e5885b22cfeb2dfd75b4defde7",
+          "7e91bcacbbd1bd38d853dc6c9fd704f0a0cf55f34c7b96cfbac558b705fc3cc1",
+          "b1653ccfe90237fdb99dbed733b30fe777b99f13e5de3c056e79f88f02d9e049"
+        ]
+      },
       "fixture_concepts": [
         "lactate",
         "death",
@@ -174,6 +241,44 @@
       "task_id": "E2"
     },
     {
+      "coder_resources": {
+        "bundle_sha256": "423ee7640ee34f349ba123f6efdad97e38b21941f40e6e60d6ffb5ceb1ae9e6a",
+        "profile_ref": "npj_dm_framework_v2_dev/20260722",
+        "prompt_bytes": 611,
+        "prompt_limit_bytes": 8000,
+        "provider_calls": 0,
+        "selected": [
+          {
+            "kind": "action",
+            "resource_id": "action:typed-input-sdk",
+            "sha256": "96ab63cd4e9384353eb480a61b10f8b91cc7bf69f6e886553846c5ff24185b62",
+            "version": "1.0.0"
+          },
+          {
+            "kind": "software",
+            "resource_id": "software:scipy",
+            "sha256": "3f56dfc1765341da56ccb259e1ff13b1761fd9e45d47af8a0375e5fb8ace7ca9",
+            "version": "1.0.0"
+          },
+          {
+            "kind": "software",
+            "resource_id": "software:statsmodels",
+            "sha256": "3ff40c7f30d360246b29cd2760b9723f5bfe14c2913a1a757a089c3e26cc6160",
+            "version": "1.0.0"
+          },
+          {
+            "kind": "data",
+            "resource_id": "data:cohort:analysis_cohort",
+            "sha256": "183499aaeec2b9ca37bd647ae892902fd61b9a1dd8867a54287fd2c19ee97ed7",
+            "version": "1.0.0"
+          }
+        ],
+        "selection_receipt_sha256": [
+          "c777ed1a42051f49ea998cdcc2adcf5ab1db442eb53f45b64ec488f80325fa4e",
+          "dd4185d5feef154bf8d9c8d0dd37c0bb6137b378044a49d53d5014544aeaa242",
+          "1a0b55aae2f5217f33f83c8a04b2828a6a142588e41f3fc88d05ee19ff66ec63"
+        ]
+      },
       "fixture_concepts": [
         "kdigo",
         "death",
@@ -226,6 +331,44 @@
       "task_id": "E3"
     },
     {
+      "coder_resources": {
+        "bundle_sha256": "eab4d9a16e1b1e7098d22ebd34ae3eeaaca8438f60bc4c805269e01e3e2eaf8c",
+        "profile_ref": "npj_dm_framework_v2_dev/20260722",
+        "prompt_bytes": 611,
+        "prompt_limit_bytes": 8000,
+        "provider_calls": 0,
+        "selected": [
+          {
+            "kind": "action",
+            "resource_id": "action:typed-input-sdk",
+            "sha256": "96ab63cd4e9384353eb480a61b10f8b91cc7bf69f6e886553846c5ff24185b62",
+            "version": "1.0.0"
+          },
+          {
+            "kind": "software",
+            "resource_id": "software:scipy",
+            "sha256": "3f56dfc1765341da56ccb259e1ff13b1761fd9e45d47af8a0375e5fb8ace7ca9",
+            "version": "1.0.0"
+          },
+          {
+            "kind": "software",
+            "resource_id": "software:statsmodels",
+            "sha256": "3ff40c7f30d360246b29cd2760b9723f5bfe14c2913a1a757a089c3e26cc6160",
+            "version": "1.0.0"
+          },
+          {
+            "kind": "data",
+            "resource_id": "data:cohort:analysis_cohort",
+            "sha256": "2d214ca69b86c255be416d42cca977a59b34a7492873105522c35015fab806f0",
+            "version": "1.0.0"
+          }
+        ],
+        "selection_receipt_sha256": [
+          "4603237c537a9c6623e451c8b613e6e791302d2ff0e36a4295db5bda22ac1dac",
+          "af827e8afd2d6a4bcb453b0d6b8b6ce3ec9e2bc4bb4adbf1a2b0a2f085b2f7f5",
+          "35592aa904e40851cad2170056d73f284146a4e06df138c68317e5c651c9005f"
+        ]
+      },
       "fixture_concepts": [
         "bilirubin",
         "sofa",
@@ -278,6 +421,38 @@
       "task_id": "M1"
     },
     {
+      "coder_resources": {
+        "bundle_sha256": "d1dfa76a510d61f2680976521c4269b84d0d5aeaf03daf2a4dee7201e8b0881e",
+        "profile_ref": "npj_dm_framework_v2_dev/20260722",
+        "prompt_bytes": 506,
+        "prompt_limit_bytes": 8000,
+        "provider_calls": 0,
+        "selected": [
+          {
+            "kind": "action",
+            "resource_id": "action:typed-input-sdk",
+            "sha256": "96ab63cd4e9384353eb480a61b10f8b91cc7bf69f6e886553846c5ff24185b62",
+            "version": "1.0.0"
+          },
+          {
+            "kind": "software",
+            "resource_id": "software:sklearn",
+            "sha256": "021deb761e48985ee20bd00e7f81a78bbe2bab65a908030e1a241e82bc1c6fb8",
+            "version": "1.0.0"
+          },
+          {
+            "kind": "data",
+            "resource_id": "data:cohort:analysis_cohort",
+            "sha256": "0892a10ece1f933ee98f5d554601b28f8437801d1aa1b77799e4035ddcb6950c",
+            "version": "1.0.0"
+          }
+        ],
+        "selection_receipt_sha256": [
+          "90d6411ed2249af31d8727aa603ceeb3d15f4294c9b29a07f78f372c68c2d632",
+          "a975c6d88cf8626a4b4326629069420570904dae6bd67d30679a4b365c7451f7",
+          "520b40c360bacbe3095adf94b5c7309074c25f039af4550d286c7095bd9891f9"
+        ]
+      },
       "fixture_concepts": [
         "death",
         "age",
@@ -345,6 +520,38 @@
       "task_id": "M2"
     },
     {
+      "coder_resources": {
+        "bundle_sha256": "8c94e8994a9e243df6be929fae4679d1600db079187c7c9d7c44d859cff5c031",
+        "profile_ref": "npj_dm_framework_v2_dev/20260722",
+        "prompt_bytes": 506,
+        "prompt_limit_bytes": 8000,
+        "provider_calls": 0,
+        "selected": [
+          {
+            "kind": "action",
+            "resource_id": "action:typed-input-sdk",
+            "sha256": "96ab63cd4e9384353eb480a61b10f8b91cc7bf69f6e886553846c5ff24185b62",
+            "version": "1.0.0"
+          },
+          {
+            "kind": "software",
+            "resource_id": "software:sklearn",
+            "sha256": "021deb761e48985ee20bd00e7f81a78bbe2bab65a908030e1a241e82bc1c6fb8",
+            "version": "1.0.0"
+          },
+          {
+            "kind": "data",
+            "resource_id": "data:cohort:analysis_cohort",
+            "sha256": "67629a19d082ed3a6a50d4e4ff97d02f6208b8706aeef961e0d6a438604211df",
+            "version": "1.0.0"
+          }
+        ],
+        "selection_receipt_sha256": [
+          "b9c0a8a33bb7676cc6182f55d1d43915ce91ad2488f5942fbb36efbe06205190",
+          "21edde00a62e4ec7ef9a8669e677f30a1699d4589be71d28c55c5b5de0c33040",
+          "b1c1ad99f613dce458379afc68441ccbb5f722b0aa79ad9702fbafd7a7e924d0"
+        ]
+      },
       "fixture_concepts": [
         "sepsis3",
         "heart_rate",
@@ -412,6 +619,44 @@
       "task_id": "M3"
     },
     {
+      "coder_resources": {
+        "bundle_sha256": "10be83751f79ddd4361d4fce9704bd0c4bc360b3ed769b846ddcae5ca726d218",
+        "profile_ref": "npj_dm_framework_v2_dev/20260722",
+        "prompt_bytes": 611,
+        "prompt_limit_bytes": 8000,
+        "provider_calls": 0,
+        "selected": [
+          {
+            "kind": "action",
+            "resource_id": "action:typed-input-sdk",
+            "sha256": "96ab63cd4e9384353eb480a61b10f8b91cc7bf69f6e886553846c5ff24185b62",
+            "version": "1.0.0"
+          },
+          {
+            "kind": "software",
+            "resource_id": "software:scipy",
+            "sha256": "3f56dfc1765341da56ccb259e1ff13b1761fd9e45d47af8a0375e5fb8ace7ca9",
+            "version": "1.0.0"
+          },
+          {
+            "kind": "software",
+            "resource_id": "software:statsmodels",
+            "sha256": "3ff40c7f30d360246b29cd2760b9723f5bfe14c2913a1a757a089c3e26cc6160",
+            "version": "1.0.0"
+          },
+          {
+            "kind": "data",
+            "resource_id": "data:cohort:analysis_cohort",
+            "sha256": "8bf797aa02bd65b7cbd52155f6e010be77bb3d461320dac4c74c12d749d81066",
+            "version": "1.0.0"
+          }
+        ],
+        "selection_receipt_sha256": [
+          "8bd517a1fa2ed5e4ed525b501a8f3137c5e2f840c7e42f4babb92c0bf9d51522",
+          "ca5e7c92812f74ec4e47e71515e6b5c0df38b975e559a867b1908ff2caa09b89",
+          "f3d01d4e598ba6882dac7d847a128cf517ac033fb40581049ed45f287b623ce0"
+        ]
+      },
       "fixture_concepts": [
         "mechvent",
         "death",
@@ -478,6 +723,44 @@
       "task_id": "H1"
     },
     {
+      "coder_resources": {
+        "bundle_sha256": "75f9b2c5c7107a32a768c3e3281a78ef328db6dc77a11125fce35aaa88ba0467",
+        "profile_ref": "npj_dm_framework_v2_dev/20260722",
+        "prompt_bytes": 611,
+        "prompt_limit_bytes": 8000,
+        "provider_calls": 0,
+        "selected": [
+          {
+            "kind": "action",
+            "resource_id": "action:typed-input-sdk",
+            "sha256": "96ab63cd4e9384353eb480a61b10f8b91cc7bf69f6e886553846c5ff24185b62",
+            "version": "1.0.0"
+          },
+          {
+            "kind": "software",
+            "resource_id": "software:scipy",
+            "sha256": "3f56dfc1765341da56ccb259e1ff13b1761fd9e45d47af8a0375e5fb8ace7ca9",
+            "version": "1.0.0"
+          },
+          {
+            "kind": "software",
+            "resource_id": "software:statsmodels",
+            "sha256": "3ff40c7f30d360246b29cd2760b9723f5bfe14c2913a1a757a089c3e26cc6160",
+            "version": "1.0.0"
+          },
+          {
+            "kind": "data",
+            "resource_id": "data:cohort:analysis_cohort",
+            "sha256": "ae1a64d34d1c58553d436923cc6eb2386a63892c0bdd3f1a924eb7f7a30ae975",
+            "version": "1.0.0"
+          }
+        ],
+        "selection_receipt_sha256": [
+          "07836e6da3d9e4946374d0f5b67effd6a5f416e9633267f8eff97cacd83bec86",
+          "36ecd7f6448498fd52cfb702d807af69df23bf7d687eca179401fde6bf290697",
+          "3e060ea918e06d6f2e6624f25b72ef8c95e7d53719a8a3668a975d30f510e53f"
+        ]
+      },
       "fixture_concepts": [
         "vaso",
         "death",
@@ -545,6 +828,38 @@
       "task_id": "H2"
     },
     {
+      "coder_resources": {
+        "bundle_sha256": "906473cd72b9cc12a9ac8a655dea3d0d6f345d5415d6c28d7dbd288c0fd7fee2",
+        "profile_ref": "npj_dm_framework_v2_dev/20260722",
+        "prompt_bytes": 506,
+        "prompt_limit_bytes": 8000,
+        "provider_calls": 0,
+        "selected": [
+          {
+            "kind": "action",
+            "resource_id": "action:typed-input-sdk",
+            "sha256": "96ab63cd4e9384353eb480a61b10f8b91cc7bf69f6e886553846c5ff24185b62",
+            "version": "1.0.0"
+          },
+          {
+            "kind": "software",
+            "resource_id": "software:sklearn",
+            "sha256": "021deb761e48985ee20bd00e7f81a78bbe2bab65a908030e1a241e82bc1c6fb8",
+            "version": "1.0.0"
+          },
+          {
+            "kind": "data",
+            "resource_id": "data:cohort:analysis_cohort",
+            "sha256": "b14c45d35f5032a467ef7f7772da89ef2acc4db220b59453ed53b93467fa285f",
+            "version": "1.0.0"
+          }
+        ],
+        "selection_receipt_sha256": [
+          "cfa569946e20bb577e47601bbc9f5cd1bd9030d0b94540214a3ff6abf03990ec",
+          "54ec10ec84e25f5dc8714f9b2fdf3467db73fc8204bea545e6a696ef87433e60",
+          "14f45bb63f0c8d66b142499d5676cd25fd926280ecbb6ad204fe2719fd5e7c17"
+        ]
+      },
       "fixture_concepts": [
         "sofa",
         "stay_id",
@@ -610,5 +925,5 @@
       "task_id": "H3"
     }
   ],
-  "tool_version": "1.0.0"
+  "tool_version": "2.0.0"
 }

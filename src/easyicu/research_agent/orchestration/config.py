@@ -247,6 +247,7 @@ class PipelineConfig:
     experience_bank_top_k: int = 5
     experience_bank_min_similarity: float = 0.2
     enable_know_how: bool = False
+    enable_coder_resources: bool = False
     know_how_paths: Sequence[Union[str, Path]] = ()
     know_how_top_k: int = 3
     know_how_min_score: float = 0.15

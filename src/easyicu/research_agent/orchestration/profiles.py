@@ -52,6 +52,10 @@ class SubmissionProfile:
     # submission-defining coordinate. Historical profiles leave this None and
     # remain byte-identical; only an additive profile may opt in.
     enable_know_how: Optional[bool] = None
+    # Step-scoped Action/Software/Data resources alter Coder prompts and resume
+    # authority. Historical profiles therefore omit the coordinate entirely;
+    # only an additive development profile may enable Phase-2 wiring.
+    enable_coder_resources: Optional[bool] = None
 
     @property
     def ref(self) -> str:
@@ -97,6 +101,8 @@ class SubmissionProfile:
             )
         if self.enable_know_how is not None:
             options["enable_know_how"] = self.enable_know_how
+        if self.enable_coder_resources is not None:
+            options["enable_coder_resources"] = self.enable_coder_resources
         return options
 
     def pipeline_options(self) -> Dict[str, Any]:
@@ -125,6 +131,7 @@ class SubmissionProfile:
             "enable_deterministic_planner_fallback",
             "requires_real_provider",
             "enable_know_how",
+            "enable_coder_resources",
         ):
             if payload.get(field_name) is None:
                 payload.pop(field_name, None)
@@ -290,6 +297,26 @@ NPJ_DM_2026_07_21_KNOW_HOW = SubmissionProfile(
     enable_know_how=True,
 )
 
+NPJ_DM_2026_07_22_FRAMEWORK_V2_DEV = SubmissionProfile(
+    name="npj_dm_framework_v2_dev",
+    version="20260722",
+    locked_at="2026-07-22T06:00:00-04:00",
+    evidence_enforcement_mode="strict",
+    writer_digest_widened=True,
+    enable_reproducibility_envelope=True,
+    requires_arm="aware",
+    requires_runner="docker",
+    expected_concept_dict_sha=NPJ_DM_2026_07_19.expected_concept_dict_sha,
+    expected_sofa2_dict_sha=NPJ_DM_2026_07_19.expected_sofa2_dict_sha,
+    enable_memory=False,
+    enable_experience_bank=False,
+    enable_deterministic_code_fallback=False,
+    enable_deterministic_planner_fallback=False,
+    requires_real_provider=True,
+    enable_know_how=False,
+    enable_coder_resources=True,
+)
+
 DEFAULT_SUBMISSION_PROFILE_REF = NPJ_DM_2026_07_19.ref
 SUBMISSION_PROFILE_REGISTRY: Dict[str, SubmissionProfile] = {
     NPJ_DM_2026_05.ref: NPJ_DM_2026_05,
@@ -300,6 +327,7 @@ SUBMISSION_PROFILE_REGISTRY: Dict[str, SubmissionProfile] = {
     NPJ_DM_2026_07_18.ref: NPJ_DM_2026_07_18,
     NPJ_DM_2026_07_19.ref: NPJ_DM_2026_07_19,
     NPJ_DM_2026_07_21_KNOW_HOW.ref: NPJ_DM_2026_07_21_KNOW_HOW,
+    NPJ_DM_2026_07_22_FRAMEWORK_V2_DEV.ref: (NPJ_DM_2026_07_22_FRAMEWORK_V2_DEV),
 }
 
 
@@ -335,6 +363,27 @@ def require_profile_know_how_setting(
         )
 
 
+def require_profile_coder_resource_setting(
+    *,
+    name: Optional[str],
+    version: Optional[str],
+    enabled: bool,
+) -> None:
+    """Keep Coder resource selection profile-owned and replay-safe."""
+    if name is None:
+        if enabled:
+            raise ValueError("Coder resources require an additive submission profile")
+        return
+    ref = f"{name}/{version}"
+    expected = bool(get_submission_profile(ref).enable_coder_resources)
+    if bool(enabled) != expected:
+        raise ValueError(
+            "Coder resource selection changes prompt and resume authority and must "
+            f"match the submission profile; profile {ref!r} pins "
+            f"enable_coder_resources={expected}"
+        )
+
+
 __all__ = [
     "SubmissionProfile",
     "NPJ_DM_2026_05",
@@ -345,8 +394,10 @@ __all__ = [
     "NPJ_DM_2026_07_18",
     "NPJ_DM_2026_07_19",
     "NPJ_DM_2026_07_21_KNOW_HOW",
+    "NPJ_DM_2026_07_22_FRAMEWORK_V2_DEV",
     "DEFAULT_SUBMISSION_PROFILE_REF",
     "SUBMISSION_PROFILE_REGISTRY",
     "get_submission_profile",
     "require_profile_know_how_setting",
+    "require_profile_coder_resource_setting",
 ]
