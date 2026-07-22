@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import subprocess
 import sys
 from datetime import datetime, timezone
@@ -18,8 +19,8 @@ from pathlib import Path
 from typing import Any
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-SCHEMA_VERSION = "easyicu.research_agent_framework_release/1"
-TOOL_VERSION = "1.0.0"
+SCHEMA_VERSION = "easyicu.research_agent_framework_release/2"
+TOOL_VERSION = "1.1.0"
 
 RELEASE_COMMANDS: tuple[tuple[str, tuple[str, ...]], ...] = (
     (
@@ -59,6 +60,7 @@ RELEASE_COMMANDS: tuple[tuple[str, tuple[str, ...]], ...] = (
             "tests/research_agent/test_char_golden_run_bundle.py",
             "tests/research_agent/test_typed_input_consumption_receipt.py",
             "tests/research_agent/test_typed_input_sdk.py",
+            "tests/research_agent/test_experience_bank.py::test_permissioned_quarantine_mirror_failure_is_nonfatal_to_completed_run",
             "-q",
         ),
     ),
@@ -81,7 +83,31 @@ def _run_command(args: tuple[str, ...]) -> subprocess.CompletedProcess[str]:
     )
 
 
+def _git_state() -> dict[str, Any]:
+    commit = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+    status = subprocess.run(
+        ["git", "status", "--porcelain=v1", "--untracked-files=all"],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout
+    return {
+        "commit": commit,
+        "dirty": bool(status),
+        "status_porcelain_sha256": hashlib.sha256(status.encode("utf-8")).hexdigest(),
+        "status_porcelain": status.splitlines(),
+    }
+
+
 def run_release_gate() -> dict[str, Any]:
+    git_state = _git_state()
     results = []
     for name, args in RELEASE_COMMANDS:
         completed = _run_command(args)
@@ -107,11 +133,17 @@ def run_release_gate() -> dict[str, Any]:
         "tool_version": TOOL_VERSION,
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "tool_sha256": _sha256(Path(__file__)),
-        "provider_calls": 0,
-        "patient_data_reads": 0,
+        "git": git_state,
+        "execution_policy": {
+            "provider_access": "prohibited_by_static_release_command_allowlist",
+            "patient_data_access": "prohibited_by_static_release_command_allowlist",
+            "runtime_monitoring": "not_instrumented",
+            "environment_marker": "EASYICU_OFFLINE_RELEASE_GATE=1",
+        },
         "status": (
             "passed"
-            if len(results) == len(RELEASE_COMMANDS)
+            if not git_state["dirty"]
+            and len(results) == len(RELEASE_COMMANDS)
             and all(item["returncode"] == 0 for item in results)
             else "failed"
         ),
@@ -131,6 +163,7 @@ def main() -> int:
     if args.list:
         print(json.dumps(RELEASE_COMMANDS, indent=2))
         return 0
+    os.environ["EASYICU_OFFLINE_RELEASE_GATE"] = "1"
     report = run_release_gate()
     payload = json.dumps(report, indent=2, ensure_ascii=False) + "\n"
     if args.report is not None:
