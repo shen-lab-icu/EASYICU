@@ -25,7 +25,9 @@ from benchmarks.figure2_canonical9.typed_export_seal import (
     SEAL_KIND,
     TypedRetrofitSealError,
     assert_sealed_export_paper_ready,
+    build_retrofit_review_attestation,
     seal_export_structural_typed,
+    verify_retrofit_review_attestation,
 )
 
 
@@ -290,6 +292,94 @@ def test_consumer_gate_requires_a_sealed_manifest(tmp_path: Path) -> None:
     root.mkdir()
     with pytest.raises(TypedRetrofitSealError, match="not sealed"):
         assert_sealed_export_paper_ready(root)
+
+
+# --------------------------------------------------------------------------- #
+# Review attestation: mint (gated) + re-verify (offline + live)
+# --------------------------------------------------------------------------- #
+def _write_paper_ready_export(root: Path) -> None:
+    """A sealed export WITH cross-file-consistent subject_id, then human-signed.
+
+    The producer always writes ``paper_ready=False``; a human sign-off step flips
+    the semantic review + paper_ready, which is exactly what makes it attestable.
+    """
+
+    root.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame(
+        {
+            "stay_id": [1, 2, 3],
+            "subject_id": [10, 20, 30],
+            "age": [65.0, 70.0, 55.0],
+            "sex": ["Male", "Female", "Male"],
+        }
+    ).to_parquet(root / "demographics.parquet", index=False)
+    pd.DataFrame(
+        {
+            "stay_id": [1, 2, 3],
+            "subject_id": [10, 20, 30],
+            "charttime": [0.5, 2.0, 1.0],
+            "lact": [1.2, 2.5, 3.1],
+        }
+    ).to_parquet(root / "blood_gas.parquet", index=False)
+    (root / "easyicu_export_manifest.json").write_text(
+        json.dumps({"database": "miiv"}), encoding="utf-8"
+    )
+    seal_export_structural_typed(root, value_vintage="20260717")
+    path = root / "_manifest.json"
+    manifest = json.loads(path.read_text(encoding="utf-8"))
+    manifest["semantic_review"]["paper_authorized"] = True
+    manifest["semantic_review"]["reviewed"] = True
+    manifest["paper_ready"] = True
+    path.write_text(json.dumps(manifest), encoding="utf-8")
+
+
+def test_build_attestation_fails_closed_for_full6_shape(tmp_path: Path) -> None:
+    root = tmp_path / "export_20260717"
+    _write_synthetic_export(root)  # no subject_id + unreviewed == full6 shape
+    _seal(root)
+    with pytest.raises(TypedRetrofitSealError, match="NOT paper-authorized"):
+        build_retrofit_review_attestation(
+            root, reviewer="dr. reviewer", reviewed_at="2026-07-22"
+        )
+
+
+def test_build_and_verify_attestation_roundtrip(tmp_path: Path) -> None:
+    root = tmp_path / "export_20260717"
+    _write_paper_ready_export(root)
+    att = build_retrofit_review_attestation(
+        root, reviewer="dr. reviewer", reviewed_at="2026-07-22"
+    )
+    assert att["paper_ready"] is True and att["seal_kind"] == SEAL_KIND
+    assert len(att["source_manifest_sha256"]) == 64
+    assert len(att["source_sidecar_sha256"]) == 64
+    verify_retrofit_review_attestation(att)  # offline
+    verify_retrofit_review_attestation(att, export_dir=root)  # live re-derivation
+
+
+def test_verify_attestation_rejects_forged_unreviewed(tmp_path: Path) -> None:
+    root = tmp_path / "export_20260717"
+    _write_paper_ready_export(root)
+    att = build_retrofit_review_attestation(
+        root, reviewer="dr. reviewer", reviewed_at="2026-07-22"
+    )
+    with pytest.raises(TypedRetrofitSealError, match="not paper_ready"):
+        verify_retrofit_review_attestation(dict(att, paper_ready=False))
+
+
+def test_verify_attestation_detects_manifest_tamper(tmp_path: Path) -> None:
+    root = tmp_path / "export_20260717"
+    _write_paper_ready_export(root)
+    att = build_retrofit_review_attestation(
+        root, reviewer="dr. reviewer", reviewed_at="2026-07-22"
+    )
+    # Tamper the manifest bytes while keeping it paper-ready: the live digest
+    # re-derivation must fail closed even though the gate itself still passes.
+    path = root / "_manifest.json"
+    manifest = json.loads(path.read_text(encoding="utf-8"))
+    manifest["benign_marker"] = "tampered"
+    path.write_text(json.dumps(manifest), encoding="utf-8")
+    with pytest.raises(TypedRetrofitSealError, match="source_manifest_sha256 mismatch"):
+        verify_retrofit_review_attestation(att, export_dir=root)
 
 
 # --------------------------------------------------------------------------- #

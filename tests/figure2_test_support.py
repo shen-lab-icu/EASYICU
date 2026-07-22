@@ -232,8 +232,16 @@ def install_ready_input_binding(
     task_id: str,
     research_question: str,
     capsule: RunInputCapsuleV2,
+    source_kind: str = "official_typed",
+    retrofit_review_attestation: dict[str, Any] | None = None,
 ) -> Path:
-    """Install one test-only ready selector without weakening production data."""
+    """Install one test-only ready selector without weakening production data.
+
+    ``source_kind="retrofit_sealed"`` requires a real minted
+    ``retrofit_review_attestation`` (from
+    ``typed_export_seal.build_retrofit_review_attestation``) so tests exercise the
+    genuine freeze -> load re-verification path, not a hand-built binding.
+    """
 
     default_payload = json.loads(_DEFAULT_BINDING_PATH.read_text(encoding="utf-8"))
     source_ref = capsule.scientific_identity["materialized_cohort_authority_ref"]
@@ -250,6 +258,8 @@ def install_ready_input_binding(
         "scientific_identity_sha256": capsule.scientific_identity_sha256,
         "source_materialized_cohort_authority_ref": source_ref,
         "source_materialized_trajectory_authority_ref": None,
+        "source_kind": source_kind,
+        "source_retrofit_review_attestation": retrofit_review_attestation,
     }
     default_payload["tasks"] = tuple(
         (
