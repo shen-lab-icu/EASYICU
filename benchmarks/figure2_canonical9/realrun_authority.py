@@ -174,20 +174,40 @@ def _reject_duplicate_jsonl_keys(pairs: Sequence[tuple[str, object]]) -> dict:
     return decoded
 
 
-def read_canonical_jsonl_invocation(
-    path: Path | str,
-) -> tuple[tuple[str, ...], tuple[str, ...]]:
-    """Return ``(task_ids, cohort_paths)`` from an EHRFlow handoff JSONL.
+def resolve_strict_jsonl_path(path: Path | str) -> Path:
+    """The ONE strict JSONL resolution shared by the gate and the launcher.
 
-    Only the handoff manifest is read (keys + declared cohort paths), never the
-    cohort payloads themselves.  Rows are decoded strictly (duplicate JSON keys are
-    rejected) so an ambiguous manifest cannot silently authorize.
+    Absolute, regular, non-symlink, existing.  A relative path, a symlink, a
+    directory, or a missing file RAISES — it is never downgraded to "not a
+    canonical run".  The launcher runs exactly this resolved path, so the gate and
+    the launcher can never diverge on which file was authorized.
     """
 
-    safe = _require_safe_path(path)
+    safe = _require_safe_path(path)  # absolute + non-symlink + resolve(strict=True)
+    if not safe.is_file():
+        raise ValueError("ehrflowbench JSONL must be a regular file")
+    return safe
+
+
+@dataclass
+class CanonicalJsonlRow:
+    task_id: str
+    cohort_path: str
+    cohort_authority_ref: Optional[Mapping[str, Any]] = None
+    trajectory_authority_ref: Optional[Mapping[str, Any]] = None
+
+
+def read_canonical_jsonl_rows(path: Path | str) -> tuple[CanonicalJsonlRow, ...]:
+    """Strictly read the handoff rows (keys, cohort paths, typed authority refs).
+
+    Only the handoff manifest is read, never the cohort payloads.  Rows are decoded
+    strictly (duplicate JSON keys rejected) so an ambiguous manifest cannot silently
+    authorize.  The JSONL path itself must satisfy :func:`resolve_strict_jsonl_path`.
+    """
+
+    safe = resolve_strict_jsonl_path(path)
     raw = _read_regular_file(safe)
-    task_ids: list[str] = []
-    cohort_paths: list[str] = []
+    rows: list[CanonicalJsonlRow] = []
     for line in raw.decode("utf-8").splitlines():
         line = line.strip()
         if not line or line.startswith("#"):
@@ -201,9 +221,48 @@ def read_canonical_jsonl_invocation(
         cohort = obj.get("cohort_path")
         if cohort is None:
             cohort = obj.get("cohort")
-        task_ids.append(str(key) if key is not None else "")
-        cohort_paths.append(str(cohort) if cohort is not None else "")
-    return tuple(task_ids), tuple(cohort_paths)
+        cohort_ref = obj.get("cohort_authority_ref")
+        traj_ref = obj.get("trajectory_authority_ref")
+        rows.append(
+            CanonicalJsonlRow(
+                task_id=str(key) if key is not None else "",
+                cohort_path=str(cohort) if cohort is not None else "",
+                cohort_authority_ref=(
+                    dict(cohort_ref) if isinstance(cohort_ref, Mapping) else None
+                ),
+                trajectory_authority_ref=(
+                    dict(traj_ref) if isinstance(traj_ref, Mapping) else None
+                ),
+            )
+        )
+    return tuple(rows)
+
+
+def read_canonical_jsonl_invocation(
+    path: Path | str,
+) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """Return ``(task_ids, cohort_paths)`` from an EHRFlow handoff JSONL."""
+
+    rows = read_canonical_jsonl_rows(path)
+    return (
+        tuple(row.task_id for row in rows),
+        tuple(row.cohort_path for row in rows),
+    )
+
+
+def production_provenance_sha256(
+    cohort_authority: Optional[Mapping[str, Any]],
+    trajectory_authority: Optional[Mapping[str, Any]],
+) -> str:
+    """Canonical per-task provenance digest over the typed sidecar authorities."""
+
+    body = {
+        "cohort_authority": dict(cohort_authority) if cohort_authority else None,
+        "trajectory_authority": (
+            dict(trajectory_authority) if trajectory_authority else None
+        ),
+    }
+    return hashlib.sha256(_canonical_json_bytes(body)).hexdigest()
 
 
 def jsonl_references_canonical9(task_ids: Sequence[str]) -> bool:
@@ -297,6 +356,99 @@ def load_production_input_authority(
 
 
 # ---------------------------------------------------------------------------
+# Canonical execution config — every run-semantics knob folded into ONE digest
+# ---------------------------------------------------------------------------
+
+CANONICAL_EXECUTION_CONFIG_SCHEMA = "easyicu.figure2_canonical_execution_config/1"
+
+
+class CanonicalExecutionConfig(_StrictFrozenModel):
+    """Pure parse/normalization of every knob that changes canonical run semantics.
+
+    No Provider, runner, or data load.  The declaration pins
+    ``execution_config_sha256``; the gate rebuilds this object from the real argv and
+    compares digests, so a new flag can never be silently omitted from the binding.
+    A canonical run must have ``stop_after_step_id is None``.
+    """
+
+    schema_version: Literal["easyicu.figure2_canonical_execution_config/1"]
+    stop_after_step_id: Optional[str]
+    seed: int
+    llm_seed: Optional[int]
+    disable_replanning: bool
+    max_total_steps: Optional[int]
+    max_code_repair_attempts: Optional[int]
+    max_step_llm_repair_attempts: Optional[int]
+    timeout_seconds: float
+    standard_executor_timeout_seconds: float
+    enable_repro_envelope: bool
+    enable_cost_tracking: bool
+    strict_evidence: bool
+    writer_digest_widened: bool
+    enable_pubmed: bool
+    case: Optional[str]
+    development_sample_size: Optional[int]
+    development_sample_seed: int
+    models: tuple[str, ...]
+
+    def digest(self) -> str:
+        return hashlib.sha256(
+            _canonical_json_bytes(self.model_dump(mode="json"))
+        ).hexdigest()
+
+
+def build_canonical_execution_config(
+    *,
+    seed: int,
+    timeout_seconds: float,
+    standard_executor_timeout_seconds: float,
+    stop_after_step_id: object = None,
+    llm_seed: object = None,
+    disable_replanning: bool = False,
+    max_total_steps: object = None,
+    max_code_repair_attempts: object = None,
+    max_step_llm_repair_attempts: object = None,
+    enable_repro_envelope: bool = True,
+    enable_cost_tracking: bool = True,
+    strict_evidence: bool = False,
+    writer_digest_widened: bool = False,
+    enable_pubmed: bool = False,
+    case: object = None,
+    development_sample_size: object = None,
+    development_sample_seed: int = 20260719,
+    models: Sequence[str] = (),
+) -> CanonicalExecutionConfig:
+    """Normalize argv into the canonical config (pure — no Provider/runner/data)."""
+
+    def _opt_int(value: object) -> Optional[int]:
+        return int(value) if value is not None else None
+
+    return CanonicalExecutionConfig(
+        schema_version=CANONICAL_EXECUTION_CONFIG_SCHEMA,
+        stop_after_step_id=(
+            str(stop_after_step_id).strip() or None if stop_after_step_id else None
+        ),
+        seed=int(seed),
+        llm_seed=_opt_int(llm_seed),
+        disable_replanning=bool(disable_replanning),
+        max_total_steps=_opt_int(max_total_steps),
+        max_code_repair_attempts=_opt_int(max_code_repair_attempts),
+        max_step_llm_repair_attempts=_opt_int(max_step_llm_repair_attempts),
+        timeout_seconds=float(timeout_seconds),
+        standard_executor_timeout_seconds=float(standard_executor_timeout_seconds),
+        enable_repro_envelope=bool(enable_repro_envelope),
+        enable_cost_tracking=bool(enable_cost_tracking),
+        strict_evidence=bool(strict_evidence),
+        writer_digest_widened=bool(writer_digest_widened),
+        enable_pubmed=bool(enable_pubmed),
+        case=(str(case).strip() or None if case else None),
+        development_sample_size=_opt_int(development_sample_size),
+        development_sample_seed=int(development_sample_seed),
+        models=tuple(str(model) for model in (models or ())),
+    )
+
+
+# ---------------------------------------------------------------------------
 # Operator freeze declaration (all pins REQUIRED)
 # ---------------------------------------------------------------------------
 
@@ -309,6 +461,7 @@ class OperatorFreezeDeclaration(_StrictFrozenModel):
     input_authority_digest: Sha256
     input_freeze_manifest_sha256: Sha256
     rubric_sha256: Sha256
+    execution_config_sha256: Sha256
     code_commit_sha: Sha1Hex
     runner: Literal["docker"]
     network_policy: Literal["none", "disabled"]
@@ -322,7 +475,7 @@ class OperatorFreezeDeclaration(_StrictFrozenModel):
     arms: tuple[str, ...]
     cross_run_memory: Literal[False]
     output_root: str
-    run_id: str
+    batch_id: str
 
     @model_validator(mode="after")
     def _declared_intent_is_canonical(self) -> "OperatorFreezeDeclaration":
@@ -340,8 +493,8 @@ class OperatorFreezeDeclaration(_StrictFrozenModel):
             raise ValueError("declaration output_root must be absolute")
         if not Path(self.ehrflowbench_jsonl_path).is_absolute():
             raise ValueError("declaration ehrflowbench_jsonl_path must be absolute")
-        if not self.run_id.startswith("run_"):
-            raise ValueError("declaration run_id must start with 'run_'")
+        if not self.batch_id.startswith("batch_"):
+            raise ValueError("declaration batch_id must start with 'batch_'")
         return self
 
 
@@ -370,6 +523,7 @@ class RealRunInvocation:
     runner: str
     out_root: Path
     require_paper_acceptance: bool
+    execution_config: CanonicalExecutionConfig
     reuse_existing: bool = False
     repeat: int = 1
     force_writer_probe: bool = False
@@ -513,11 +667,12 @@ def _verify_invocation_binding(
     if tuple(invocation.task_ids) != tuple(declaration.task_ids):
         bad("INVOCATION_TASKS_MISMATCH", "real task ids differ from the declared pin")
 
-    # EHRFlow JSONL — exact path AND exact bytes.
+    # EHRFlow JSONL — strict resolution (absolute/regular/non-symlink), exact path
+    # AND exact bytes.  The launcher runs this same strict path.
     try:
         if invocation.ehrflowbench_jsonl_path is None:
             raise ValueError("no ehrflowbench JSONL supplied for a canonical run")
-        actual_jsonl = _require_safe_path(invocation.ehrflowbench_jsonl_path)
+        actual_jsonl = resolve_strict_jsonl_path(invocation.ehrflowbench_jsonl_path)
         declared_jsonl = Path(declaration.ehrflowbench_jsonl_path).expanduser()
         if not declared_jsonl.is_absolute() or actual_jsonl != declared_jsonl.resolve(
             strict=True
@@ -592,7 +747,77 @@ def _verify_invocation_binding(
             "PAPER_ACCEPTANCE_NOT_REQUIRED",
             "a real canonical run must set --require-figure2-paper-acceptance",
         )
+
+    # Frozen execution-config digest — folds every run-semantics knob into one pin
+    # so no flag (stop-after, seed, replan, budgets, timeouts, pubmed, ...) can be
+    # silently omitted from the binding.
+    config = invocation.execution_config
+    if config.stop_after_step_id is not None:
+        bad(
+            "EXECUTION_CONFIG_INVALID",
+            "--stop-after-step-id would run an incomplete but paid canonical run",
+        )
+    if config.digest() != declaration.execution_config_sha256:
+        bad(
+            "EXECUTION_CONFIG_MISMATCH",
+            "real execution config digest differs from the declared pin",
+        )
     return issues
+
+
+def _verify_sidecar_digest(
+    sidecar: Path, *, expected_sha256: str, expected_size: int
+) -> None:
+    """A typed materialization-authority sidecar must hash+size to its declared ref."""
+
+    if sidecar.is_symlink() or not sidecar.is_file():
+        raise ValueError(f"sidecar authority is not a regular file: {sidecar.name}")
+    data = _read_regular_file(_require_safe_path(sidecar))
+    if len(data) != int(expected_size):
+        raise ValueError(f"sidecar authority size differs from ref: {sidecar.name}")
+    if hashlib.sha256(data).hexdigest() != expected_sha256:
+        raise ValueError(f"sidecar authority digest differs from ref: {sidecar.name}")
+
+
+def _verify_task_provenance(task, row: Optional[CanonicalJsonlRow]) -> None:
+    """Bind the task's frozen ``provenance_sha256`` to the REAL typed sidecars."""
+
+    from easyicu.research_agent.intake.materialized_metadata import (
+        MaterializedCohortAuthorityRef,
+    )
+    from easyicu.research_agent.intake.materialized_trajectory import (
+        MaterializedTrajectoryAuthorityRef,
+    )
+
+    if row is None or not row.cohort_authority_ref:
+        raise ValueError(
+            f"task {task.task_id} lacks a declared typed cohort materialization "
+            "authority (provenance cannot be verified)"
+        )
+    cohort_ref = MaterializedCohortAuthorityRef.from_dict(row.cohort_authority_ref)
+    cohort_dir = Path(row.cohort_path).expanduser().resolve().parent
+    _verify_sidecar_digest(
+        cohort_dir / cohort_ref.file,
+        expected_sha256=cohort_ref.sha256,
+        expected_size=cohort_ref.size,
+    )
+    trajectory_norm = None
+    if row.trajectory_authority_ref:
+        trajectory_ref = MaterializedTrajectoryAuthorityRef.from_dict(
+            row.trajectory_authority_ref
+        )
+        _verify_sidecar_digest(
+            cohort_dir / trajectory_ref.file,
+            expected_sha256=trajectory_ref.sha256,
+            expected_size=trajectory_ref.size,
+        )
+        trajectory_norm = trajectory_ref.to_dict()
+    provenance = production_provenance_sha256(cohort_ref.to_dict(), trajectory_norm)
+    if provenance != task.provenance_sha256:
+        raise ValueError(
+            f"task {task.task_id} provenance differs from the frozen production "
+            "authority (a sidecar/provenance was replaced)"
+        )
 
 
 def _verify_production_input_authority(
@@ -600,7 +825,7 @@ def _verify_production_input_authority(
     declaration: OperatorFreezeDeclaration,
     identity,
 ) -> list:
-    """The typed production authority + each real cohort must hash to its pin."""
+    """The typed production authority + each real cohort/provenance must hold."""
 
     issues: list[RealRunAuthorizationIssue] = []
     if request.production_input_authority_path is None:
@@ -630,8 +855,14 @@ def _verify_production_input_authority(
             raise ValueError(
                 "production authority submission profile differs from the pin"
             )
-        # Per-task: the REAL cohort file (from the JSONL) must hash to the frozen
-        # per-task input digest, using the launcher's own algorithm.
+        # Re-read the strictly-resolved JSONL rows (the path+bytes are already pinned
+        # by the invocation binding) so per-task input AND provenance bind to reality.
+        rows_by_task = {
+            row.task_id: row
+            for row in read_canonical_jsonl_rows(
+                request.invocation.ehrflowbench_jsonl_path
+            )
+        }
         cohort_by_task = request.invocation.cohort_by_task()
         for task in authority.tasks:
             cohort_path = cohort_by_task.get(task.task_id)
@@ -639,12 +870,17 @@ def _verify_production_input_authority(
                 raise ValueError(
                     f"invocation is missing a cohort path for task {task.task_id}"
                 )
+            # (a) the REAL cohort file must hash to the frozen per-task input digest,
+            #     using the launcher's own algorithm.
             actual = production_cohort_input_sha256(cohort_path)
             if actual != task.input_sha256:
                 raise ValueError(
                     f"cohort for task {task.task_id} does not hash to its frozen "
                     "production input authority"
                 )
+            # (b) the typed materialization sidecar(s) must bind to the frozen
+            #     per-task provenance digest (a swapped sidecar fails closed here).
+            _verify_task_provenance(task, rows_by_task.get(task.task_id))
     except Exception as exc:  # noqa: BLE001
         issues.append(
             _issue("PRODUCTION_INPUT_AUTHORITY_INVALID", f"{type(exc).__name__}: {exc}")
@@ -688,7 +924,7 @@ def verify_realrun_authorization(
         )
 
     # Fresh output root (the real out_root, keyed by the declared run id).
-    issues.extend(_verify_fresh_output_root(invocation.out_root, declaration.run_id))
+    issues.extend(_verify_fresh_output_root(invocation.out_root, declaration.batch_id))
 
     # Declaration <-> real invocation, knob for knob.
     issues.extend(_verify_invocation_binding(declaration, invocation))
@@ -795,6 +1031,127 @@ def enforce_realrun_authorization(
 
 
 # ---------------------------------------------------------------------------
+# Batch identity: pre-run receipt + post-run child ledger
+# ---------------------------------------------------------------------------
+
+BATCH_RECEIPT_SCHEMA = "easyicu.figure2_batch_authorization_receipt/1"
+BATCH_LEDGER_SCHEMA = "easyicu.figure2_batch_ledger/1"
+
+
+@dataclass(frozen=True)
+class RealRunBatchBinding:
+    """What the gate hands the launcher on an authorized run."""
+
+    batch_id: str
+    declaration_sha256: str
+    input_authority_digest: str
+    frozen_input_by_task: Mapping[str, str]
+
+
+def write_batch_authorization_receipt(
+    out_root: Path, binding: RealRunBatchBinding, *, generated_at: str
+) -> Path:
+    """PRE-run: persist the batch identity + declaration/authorization binding."""
+
+    root = Path(out_root).expanduser()
+    root.mkdir(parents=True, exist_ok=True)
+    receipt = {
+        "schema_version": BATCH_RECEIPT_SCHEMA,
+        "batch_id": binding.batch_id,
+        "declaration_sha256": binding.declaration_sha256,
+        "input_authority_digest": binding.input_authority_digest,
+        "expected_task_ids": list(FIGURE2_TASK_IDS),
+        "generated_at": generated_at,
+    }
+    path = root / "figure2_realrun_authorization_receipt.json"
+    path.write_text(
+        json.dumps(receipt, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+    return path
+
+
+def build_batch_ledger(
+    results_payload: Mapping[str, object],
+    out_root: Path,
+    binding: RealRunBatchBinding,
+) -> dict:
+    """POST-run: map each Canonical9 aware child run back to the batch/declaration.
+
+    Records per task: child ``run_id``, workdir, the ``manifest.json`` sha256, the
+    execution identity sha, and the bound input-authority digest — and whether it
+    equals the frozen per-task value.  ``complete`` is True only when all nine map.
+    """
+
+    root = Path(out_root).expanduser().resolve()
+    raw_scores = results_payload.get("scores")
+    scores = raw_scores if isinstance(raw_scores, list) else []
+    by_key = {
+        str(score.get("item_key")): score for score in scores if isinstance(score, dict)
+    }
+    children: list[dict] = []
+    complete = True
+    for task_id in FIGURE2_TASK_IDS:
+        score = by_key.get(task_id)
+        aware = score.get("aware") if isinstance(score, dict) else None
+        if not isinstance(aware, dict):
+            children.append({"task_id": task_id, "status": "missing_aware_score"})
+            complete = False
+            continue
+        identity = aware.get("execution_identity")
+        identity_sha = (
+            identity.get("identity_sha256") if isinstance(identity, dict) else None
+        )
+        input_digest = (
+            identity.get("input_authority_sha256")
+            if isinstance(identity, dict)
+            else None
+        )
+        manifest_sha = None
+        status = "recorded"
+        try:
+            workdir = Path(str(aware.get("workdir"))).expanduser().resolve()
+            workdir.relative_to(root)  # child must live under the reserved batch root
+            manifest_sha = hashlib.sha256(
+                _read_regular_file(workdir / "manifest.json")
+            ).hexdigest()
+        except Exception as exc:  # noqa: BLE001
+            status = f"manifest_unreadable: {type(exc).__name__}"
+            complete = False
+        if input_digest != binding.frozen_input_by_task.get(task_id):
+            status = "input_authority_mismatch"
+            complete = False
+        children.append(
+            {
+                "task_id": task_id,
+                "run_id": aware.get("run_id"),
+                "workdir": str(aware.get("workdir")),
+                "manifest_sha256": manifest_sha,
+                "identity_sha256": identity_sha,
+                "input_authority_sha256": input_digest,
+                "status": status,
+            }
+        )
+    return {
+        "schema_version": BATCH_LEDGER_SCHEMA,
+        "batch_id": binding.batch_id,
+        "declaration_sha256": binding.declaration_sha256,
+        "expected_task_ids": list(FIGURE2_TASK_IDS),
+        "complete": complete,
+        "children": children,
+    }
+
+
+def write_batch_ledger(ledger: Mapping[str, object], out_root: Path) -> Path:
+    root = Path(out_root).expanduser()
+    root.mkdir(parents=True, exist_ok=True)
+    path = root / "figure2_batch_ledger.json"
+    path.write_text(
+        json.dumps(ledger, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+    return path
+
+
+# ---------------------------------------------------------------------------
 # Post-run per-manifest cross-check (launcher layer; evaluator stays locked)
 # ---------------------------------------------------------------------------
 
@@ -887,9 +1244,17 @@ def _cli(argv: Optional[Sequence[str]] = None) -> int:
     parser.add_argument("--resume-run-id", default=None)
     parser.add_argument("--resume-from-step-id", default=None)
     parser.add_argument("--enable-cross-run-memory", action="store_true")
+    parser.add_argument(
+        "--execution-config",
+        required=True,
+        help="Path to the canonical execution-config JSON pinned by the operator.",
+    )
     parser.add_argument("--receipt-out", default=None)
     args = parser.parse_args(argv)
 
+    execution_config = CanonicalExecutionConfig.model_validate_json(
+        _read_regular_file(_require_safe_path(args.execution_config)), strict=True
+    )
     task_ids, cohort_paths = read_canonical_jsonl_invocation(args.ehrflowbench_jsonl)
     invocation = RealRunInvocation(
         arms=tuple(args.arms),
@@ -903,6 +1268,7 @@ def _cli(argv: Optional[Sequence[str]] = None) -> int:
         runner=str(args.runner or "auto"),
         out_root=Path(args.out_root),
         require_paper_acceptance=bool(args.require_figure2_paper_acceptance),
+        execution_config=execution_config,
         reuse_existing=bool(args.reuse_existing),
         repeat=int(args.repeat),
         force_writer_probe=bool(args.force_writer_probe),
@@ -942,10 +1308,19 @@ __all__ = [
     "REALRUN_AUTHORIZATION_SCHEMA",
     "OPERATOR_FREEZE_DECLARATION_SCHEMA",
     "PRODUCTION_INPUT_AUTHORITY_SCHEMA",
+    "CANONICAL_EXECUTION_CONFIG_SCHEMA",
+    "BATCH_RECEIPT_SCHEMA",
+    "BATCH_LEDGER_SCHEMA",
     "AUTHORIZED_ARMS",
     "production_cohort_input_sha256",
+    "production_provenance_sha256",
+    "resolve_strict_jsonl_path",
+    "read_canonical_jsonl_rows",
     "read_canonical_jsonl_invocation",
     "jsonl_references_canonical9",
+    "CanonicalJsonlRow",
+    "CanonicalExecutionConfig",
+    "build_canonical_execution_config",
     "ProductionInputTask",
     "ProductionInputAuthority",
     "load_production_input_authority",
@@ -955,8 +1330,12 @@ __all__ = [
     "RealRunAuthorization",
     "RealRunAuthorizationRequest",
     "RealRunAuthorizationBlocked",
+    "RealRunBatchBinding",
     "verify_realrun_authorization",
     "enforce_realrun_authorization",
     "verify_results_frozen_input_authority",
     "write_realrun_authorization_receipt",
+    "write_batch_authorization_receipt",
+    "build_batch_ledger",
+    "write_batch_ledger",
 ]
