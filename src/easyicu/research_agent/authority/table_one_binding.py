@@ -190,10 +190,54 @@ def table_one_private_label_map(step: AnalysisStep) -> dict[tuple[str, str], str
     }
 
 
+def table_one_private_code_label_map(
+    step: AnalysisStep,
+) -> dict[tuple[str, str], str]:
+    """Map private labels to unique reversible tokens for outbound code."""
+
+    private = table_one_private_label_map(step)
+    return {
+        typed_value: "__easyicu_table1_label_"
+        + hashlib.sha256(
+            _canonical_json(
+                {
+                    "step_id": step.step_id,
+                    "type": typed_value[0],
+                    "repr": typed_value[1],
+                    "public": public,
+                }
+            ).encode("utf-8")
+        ).hexdigest()[:16]
+        + "__"
+        for typed_value, public in private.items()
+    }
+
+
+def table_one_code_token_value_map(step: AnalysisStep) -> dict[str, Any]:
+    """Return the inverse unique-token mapping for host-only restoration."""
+
+    binding = step._table_one_execution_binding
+    planner = step.table_one_spec
+    if not isinstance(binding, TableOneExecutionBinding) or planner is None:
+        return {}
+    code_tokens = table_one_private_code_label_map(step)
+    values: list[Any] = list(binding.execution_spec.group_levels)
+    for variable in binding.execution_spec.variables:
+        values.extend(variable.levels)
+    restored: dict[str, Any] = {}
+    for value in values:
+        token = code_tokens.get((type(value).__name__, repr(value)))
+        if token is not None:
+            restored[token] = value
+    return restored
+
+
 __all__ = [
     "TABLE_ONE_EXECUTION_BINDING_SCHEMA",
     "TableOneExecutionBinding",
     "bind_table_one_execution_spec",
     "table_one_private_label_map",
+    "table_one_private_code_label_map",
+    "table_one_code_token_value_map",
     "table_one_execution_spec",
 ]

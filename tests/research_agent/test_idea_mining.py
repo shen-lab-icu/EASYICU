@@ -3,7 +3,6 @@ from __future__ import annotations
 import inspect
 import json
 from typing import Sequence
-
 import pytest
 
 import easyicu.research_agent.discovery.idea_mining as idea_mining_mod
@@ -33,28 +32,12 @@ from easyicu.research_agent.discovery.hypothesis_generator import (
     HypothesisFeasibilitySignal,
 )
 from easyicu.research_agent.literature import CitationRecord
-from easyicu.research_agent.providers.llm import LLMMessage
-from easyicu.research_agent.providers.factory import register_offline_test_client
+from easyicu.research_agent.providers.mocks import ScriptedMockLLMClient
 from easyicu.research_agent.schema import ConceptDescriptor, VariableRole
 
 
-class CapturingIdeaLLM:
-    name = "capturing-idea-llm"
-
-    def __init__(self, response: object):
-        register_offline_test_client(self)
-        self.response = response
-        self.messages: Sequence[LLMMessage] = ()
-
-    def complete(
-        self,
-        messages: Sequence[LLMMessage],
-        *,
-        max_tokens: int = 2048,
-        temperature: float = 0.2,
-    ) -> str:
-        self.messages = messages
-        return json.dumps(self.response)
+def CapturingIdeaLLM(response: object) -> ScriptedMockLLMClient:
+    return ScriptedMockLLMClient([json.dumps(response)])
 
 
 class FakePriorArtSearchClient:
@@ -143,7 +126,7 @@ def test_extract_literature_ideas_from_user_excerpt_with_traceable_quote() -> No
     assert candidate.literature_idea_id
     assert candidate.source_quote == quote
     assert candidate.source_adapter_level == "user_supplied_excerpt"
-    assert llm.messages[0].role == "system"
+    assert llm.calls[0][0][0].role == "system"
 
 
 def test_prior_art_queries_use_literature_phrase_not_canonical_concept_key() -> None:
@@ -2184,60 +2167,41 @@ def test_generic_outcome_without_mortality_default_still_blocks() -> None:
     assert not executable.executable
 
 
-class _BatchAwareIdeaLLM:
-    """Returns one idea per material present in each batch; records call count."""
-
-    name = "batch-aware-idea-llm"
-
-    def __init__(self) -> None:
-        register_offline_test_client(self)
-        self.calls = 0
-        self.batch_sizes: list[int] = []
-
-    def complete(
-        self, messages, *, max_tokens: int = 2048, temperature: float = 0.0
-    ) -> str:
-        self.calls += 1
-        payload = json.loads(messages[-1].content)
-        sources = payload.get("sources", [])
-        self.batch_sizes.append(len(sources))
-        out = []
-        for src in sources:
-            text = src.get("available_source_text", "")
-            quote = " ".join(text.split()[:6])  # traceable verbatim prefix
-            out.append(
-                {
-                    "citation_key": src["citation_key"],
-                    "population": "adult ICU patients",
-                    "exposure_or_predictor": "serum lactate",
-                    "outcome": "in-hospital mortality",
-                    "rationale": "Open direction from the source.",
-                    "source_quote": quote,
-                    "analysis_family": "association",
-                }
-            )
-        return json.dumps(out)
+def _batch_response(indices: Sequence[int]) -> str:
+    return json.dumps(
+        [
+            {
+                "citation_key": f"review_{index:02d}",
+                "population": "adult ICU patients",
+                "exposure_or_predictor": "serum lactate",
+                "outcome": "in-hospital mortality",
+                "rationale": "Open direction from the source.",
+                "source_quote": " ".join(
+                    _excerpt_material(index).source_text.split()[:6]
+                ),
+                "analysis_family": "association",
+            }
+            for index in indices
+        ]
+    )
 
 
-class _OneMalformedBatchIdeaLLM(_BatchAwareIdeaLLM):
-    """Produces invalid JSON for one selected call and valid JSON otherwise."""
-
-    def __init__(self, *, malformed_call: int | None) -> None:
-        super().__init__()
-        self.malformed_call = malformed_call
-
-    def complete(
-        self, messages, *, max_tokens: int = 2048, temperature: float = 0.0
-    ) -> str:
-        next_call = self.calls + 1
-        response = super().complete(
-            messages,
-            max_tokens=max_tokens,
-            temperature=temperature,
+def _batch_idea_llm(
+    batches: Sequence[Sequence[int]],
+    *,
+    malformed_call: int | None = None,
+) -> ScriptedMockLLMClient:
+    responses = [
+        (
+            '[{"citation_key" "missing-colon"}]'
+            if malformed_call == call_index
+            else _batch_response(indices)
         )
-        if next_call == self.malformed_call:
-            return '[{"citation_key" "missing-colon"}]'
-        return response
+        for call_index, indices in enumerate(batches, start=1)
+    ]
+    client = ScriptedMockLLMClient(responses)
+    client.batch_sizes = [len(indices) for indices in batches]
+    return client
 
 
 def _excerpt_material(idx: int) -> SourceMaterial:
@@ -2260,7 +2224,7 @@ def test_extract_literature_ideas_batches_so_yield_scales_with_corpus() -> None:
     # 7 articles with batch_size=3 must produce 3 calls (3+3+1) and 7 ideas,
     # proving the corpus is fully processed rather than capped by one call.
     materials = [_excerpt_material(i) for i in range(7)]
-    llm = _BatchAwareIdeaLLM()
+    llm = _batch_idea_llm([[0, 1, 2], [3, 4, 5], [6]])
 
     candidates = extract_literature_ideas(
         materials=materials,
@@ -2269,7 +2233,7 @@ def test_extract_literature_ideas_batches_so_yield_scales_with_corpus() -> None:
         batch_size=3,
     )
 
-    assert llm.calls == 3
+    assert len(llm.calls) == 3
     assert llm.batch_sizes == [3, 3, 1]
     assert len(candidates) == 7
     assert {c.citation_key for c in candidates} == {f"review_{i:02d}" for i in range(7)}
@@ -2277,7 +2241,7 @@ def test_extract_literature_ideas_batches_so_yield_scales_with_corpus() -> None:
 
 def test_extract_literature_ideas_single_batch_when_corpus_small() -> None:
     materials = [_excerpt_material(i) for i in range(2)]
-    llm = _BatchAwareIdeaLLM()
+    llm = _batch_idea_llm([[0, 1]])
 
     candidates = extract_literature_ideas(
         materials=materials,
@@ -2286,7 +2250,7 @@ def test_extract_literature_ideas_single_batch_when_corpus_small() -> None:
         batch_size=6,
     )
 
-    assert llm.calls == 1
+    assert len(llm.calls) == 1
     assert len(candidates) == 2
 
 
@@ -2296,7 +2260,7 @@ def test_extraction_batch_receipts_isolate_failure_and_resume_only_failed_batch(
     materials = [_excerpt_material(i) for i in range(6)]
     receipt_dir = tmp_path / "receipts"
     dropped: list[list[str]] = []
-    first_llm = _OneMalformedBatchIdeaLLM(malformed_call=2)
+    first_llm = _batch_idea_llm([[0, 1], [2, 3], [4, 5]], malformed_call=2)
 
     first = extract_literature_ideas(
         materials=materials,
@@ -2308,7 +2272,7 @@ def test_extraction_batch_receipts_isolate_failure_and_resume_only_failed_batch(
         batch_receipt_dir=receipt_dir,
     )
 
-    assert first_llm.calls == 3
+    assert len(first_llm.calls) == 3
     assert {idea.citation_key for idea in first} == {
         "review_00",
         "review_01",
@@ -2319,7 +2283,7 @@ def test_extraction_batch_receipts_isolate_failure_and_resume_only_failed_batch(
     assert len(list(receipt_dir.glob("*_parsed_*.json"))) == 2
     assert len(list(receipt_dir.glob("*_malformed_*.json"))) == 1
 
-    resumed_llm = _OneMalformedBatchIdeaLLM(malformed_call=None)
+    resumed_llm = _batch_idea_llm([[2, 3]])
     resumed = extract_literature_ideas(
         materials=materials,
         source_snapshot_id="source-snapshot/sha256:receipt-resume",
@@ -2330,7 +2294,7 @@ def test_extraction_batch_receipts_isolate_failure_and_resume_only_failed_batch(
         batch_receipt_dir=receipt_dir,
     )
 
-    assert resumed_llm.calls == 1
+    assert len(resumed_llm.calls) == 1
     assert resumed_llm.batch_sizes == [2]
     assert {idea.citation_key for idea in resumed} == {
         f"review_{idx:02d}" for idx in range(6)
@@ -2340,7 +2304,7 @@ def test_extraction_batch_receipts_isolate_failure_and_resume_only_failed_batch(
 def test_extraction_batch_receipt_tampering_fails_closed(tmp_path) -> None:
     materials = [_excerpt_material(0)]
     receipt_dir = tmp_path / "receipts"
-    first_llm = _BatchAwareIdeaLLM()
+    first_llm = _batch_idea_llm([[0]])
     extract_literature_ideas(
         materials=materials,
         source_snapshot_id="source-snapshot/sha256:receipt-tamper",
@@ -2356,7 +2320,7 @@ def test_extraction_batch_receipt_tampering_fails_closed(tmp_path) -> None:
         extract_literature_ideas(
             materials=materials,
             source_snapshot_id="source-snapshot/sha256:receipt-tamper",
-            llm=_BatchAwareIdeaLLM(),
+            llm=_batch_idea_llm([[0]]),
             batch_receipt_dir=receipt_dir,
         )
 
@@ -2644,20 +2608,10 @@ def test_pairwise_trajectory_idea_stays_on_predictor_outcome_path() -> None:
     assert candidate.resolved_analysis_concepts == []
 
 
-class SequenceIdeaLLM:
-    """Mock LLM returning a scripted response per call (extract, then refine...)."""
+def SequenceIdeaLLM(responses: Sequence[str]) -> ScriptedMockLLMClient:
+    """Return the built-in static sequence mock for extract/refine calls."""
 
-    name = "sequence-idea-llm"
-
-    def __init__(self, responses):
-        register_offline_test_client(self)
-        self.responses = list(responses)
-        self.calls = 0
-
-    def complete(self, messages, **kwargs):
-        idx = min(self.calls, len(self.responses) - 1)
-        self.calls += 1
-        return self.responses[idx]
+    return ScriptedMockLLMClient(list(responses))
 
 
 def _reflection_material() -> SourceMaterial:
@@ -2745,7 +2699,7 @@ def test_reflection_zero_rounds_is_single_pass() -> None:
         reflection_rounds=0,
     )
     assert len(ideas) == 1
-    assert llm.calls == 1  # only the extraction call, no reflection call
+    assert len(llm.calls) == 1  # only the extraction call, no reflection call
 
 
 def test_reflection_drops_idea_with_tampered_untraceable_quote() -> None:

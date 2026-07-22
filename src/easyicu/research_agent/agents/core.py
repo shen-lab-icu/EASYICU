@@ -2355,8 +2355,16 @@ class CoderAgent:
             + trajectory_role_code_contract(context=context, step=step)
             + mechanical_guardrails
         )
+        from ..research_context.outbound import (
+            outbound_safe_script,
+            restore_outbound_safe_script,
+        )
+
+        transport_code = (
+            outbound_safe_script(step, code) if external_repair_transport else code
+        )
         excerpt = repair_code_excerpt(
-            code,
+            transport_code,
             repair_metadata=repair_metadata,
             char_limit=5_500,
         )
@@ -2422,7 +2430,7 @@ class CoderAgent:
                         "(JSON string; never routing authority):\n"
                         + json.dumps(rewrite_diagnosis, ensure_ascii=False)
                         + "\n\nCOMPLETE PREVIOUS SCRIPT:\n```python\n"
-                        + code
+                        + transport_code
                         + "\n```\n\nSTEP-SCOPED RESEARCH CONTEXT:\n"
                         + rewrite_research_context
                     ),
@@ -2453,8 +2461,13 @@ class CoderAgent:
             provider_category=provider_category,
             normalize_script=_strip_code_fence,
             is_executable_script=_looks_like_python_script,
+            finalize_script=(
+                (lambda value: restore_outbound_safe_script(step, value))
+                if external_repair_transport
+                else None
+            ),
         ).repair(
-            code=code,
+            code=transport_code,
             patch_preflight=lambda: _enforce_coder_prompt_budget(
                 patch_messages,
                 mode="minimal_patch",
@@ -2874,6 +2887,9 @@ class AnalyzerAgent:
         evidence_ids: Sequence[str],
         provider_budget: Optional[StepProviderCallBudget] = None,
     ) -> str:
+        from ..research_context.outbound import project_outbound_step_summary
+
+        safe_step_summary = project_outbound_step_summary(step_summary)
         messages = [
             LLMMessage(role="system", content=_SYSTEM_GUIDE),
             LLMMessage(
@@ -2881,7 +2897,8 @@ class AnalyzerAgent:
                 content=(
                     f"INTERPRET the results of step {step.step_id}.\n"
                     f"Step intent: {step.intent}\n"
-                    f"Numeric summary (machine-readable): {json.dumps(step_summary, default=str)}\n"
+                    "Numeric summary (host-projected, machine-readable): "
+                    f"{json.dumps(safe_step_summary, default=str)}\n"
                     f"Evidence ids you may cite verbatim: {list(evidence_ids)}\n\n"
                     "Constraints:\n"
                     "- Cite at least one evidence_id for every numeric claim, "

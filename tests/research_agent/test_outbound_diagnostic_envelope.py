@@ -12,38 +12,16 @@ from easyicu.research_agent.agents.core import (
 )
 from easyicu.research_agent.audits.validators import LLMConceptAuditor
 from easyicu.research_agent.authority.diagnostic_envelope import DiagnosticEnvelope
-from easyicu.research_agent.providers.llm import OpenAIClient
 from easyicu.research_agent.providers.factory import (
     EXTERNAL_LLM_NOT_AUTHORIZED,
     ProviderConfigurationError,
-    authorize_provider_client,
 )
+from easyicu.research_agent.providers.mocks import ExternalCaptureMockLLMClient
 from easyicu.research_agent.repairs.patch import PATCH_FORMAT
 from easyicu.research_agent.repairs.reasons import (
     RepairPromptAuthority,
     RepairReason,
 )
-
-
-class _ExternalCaptureLLM(OpenAIClient):
-    """OpenAI transport identity without constructing an SDK/network client."""
-
-    def __init__(self, responses):  # noqa: ANN001
-        self._resolved_base_url = "https://api.example.invalid/v1"
-        authorize_provider_client(
-            self,
-            provider="test-external",
-            model="test-model",
-            base_url=self._resolved_base_url,
-            destination="external",
-            environment={"EASYICU_ALLOW_EXTERNAL_LLM": "1"},
-        )
-        self.responses = list(responses)
-        self.calls = []
-
-    def complete(self, messages, **kwargs):  # noqa: ANN001, ANN003
-        self.calls.append((list(messages), dict(kwargs)))
-        return self.responses.pop(0)
 
 
 class _UnmanagedCaptureLLM:
@@ -111,7 +89,7 @@ def _authority() -> RepairPromptAuthority:
     )
 
 
-def _all_prompt_text(llm: _ExternalCaptureLLM) -> str:
+def _all_prompt_text(llm: ExternalCaptureMockLLMClient) -> str:
     return "\n".join(
         str(message.content or "")
         for messages, _kwargs in llm.calls
@@ -127,7 +105,7 @@ def test_external_repair_never_sends_raw_runtime_or_dataframe_values(ra):
             "edits": [{"old": "value = 1", "new": "value = 2", "expected_count": 1}],
         }
     )
-    llm = _ExternalCaptureLLM([patch])
+    llm = ExternalCaptureMockLLMClient([patch])
     raw_log = "\n".join(
         [
             "MRN=88442211",
@@ -168,7 +146,7 @@ def test_external_repair_never_sends_raw_runtime_or_dataframe_values(ra):
 
 def test_external_full_rewrite_also_uses_the_same_closed_envelope(ra):
     context, step = _context_and_step(ra)
-    llm = _ExternalCaptureLLM(
+    llm = ExternalCaptureMockLLMClient(
         [
             "not a valid exact patch",
             "import os\nvalue = 2\n",
@@ -266,7 +244,7 @@ def test_external_initial_prompt_withholds_observed_category_literals_and_extrem
             ]
         }
     )
-    llm = _ExternalCaptureLLM(["import os\nvalue = 1\n"])
+    llm = ExternalCaptureMockLLMClient(["import os\nvalue = 1\n"])
 
     CoderAgent(llm).run(context=context, step=step)
 
@@ -313,7 +291,7 @@ def test_external_scientific_repair_context_keeps_only_domain_shape(ra):
             }
         ]
     )
-    llm = _ExternalCaptureLLM(
+    llm = ExternalCaptureMockLLMClient(
         [
             json.dumps(
                 {
@@ -349,10 +327,12 @@ def test_external_scientific_repair_context_keeps_only_domain_shape(ra):
 def test_every_agent_context_uses_the_same_outbound_safe_projection(ra):
     context, step = _context_and_step(ra)
     sentinel = "PRIVATE_FREE_TEXT_SENTINEL"
+    trusted_inclusion = "Age 18 years or older under the host cohort contract"
+    trusted_outcome = "In-hospital death before discharge"
     context = context.model_copy(
         update={
             "cohort": context.cohort.model_copy(
-                update={"inclusion_criteria": [sentinel]}
+                update={"inclusion_criteria": [trusted_inclusion]}
             ),
             "notes": sentinel,
             "variables": [
@@ -362,7 +342,10 @@ def test_every_agent_context_uses_the_same_outbound_safe_projection(ra):
                         "pitfalls": [sentinel],
                         "clinical_caveats": [sentinel],
                         "cross_database_notes": [sentinel],
-                        "valid_range": [771.125, 882.875],
+                        "unit": "mmol/L",
+                        "valid_range": [0.0, 100.0],
+                        "analysis_window": "first 24 hours after ICU admission",
+                        "forbidden_transformations": ["no silent zero imputation"],
                         "observed_domain": {
                             "levels": ["PRIVATE_LEVEL_A", "PRIVATE_LEVEL_B"],
                             "n_unique": 2,
@@ -371,7 +354,9 @@ def test_every_agent_context_uses_the_same_outbound_safe_projection(ra):
                         },
                     }
                 ),
-                context.variables[1],
+                context.variables[1].model_copy(
+                    update={"description": trusted_outcome}
+                ),
             ],
         }
     )
@@ -379,16 +364,21 @@ def test_every_agent_context_uses_the_same_outbound_safe_projection(ra):
     planner_prompt = "\n".join(
         message.content for message in PlannerAgent.request_messages(context)
     )
-    coder = _ExternalCaptureLLM(["value = 1\n"])
+    coder = ExternalCaptureMockLLMClient(["value = 1\n"])
     CoderAgent(coder).run(context=context, step=step)
-    analyzer = _ExternalCaptureLLM(["No numeric claim."])
+    analyzer = ExternalCaptureMockLLMClient(["No numeric claim."])
     AnalyzerAgent(analyzer).run(
         context=context,
         step=step,
-        step_summary={"n": 10},
+        step_summary={
+            "status": "ok",
+            "n": 10,
+            "mortality_fraction": 0.2,
+            "group": "PRIVATE_LEVEL_A",
+        },
         evidence_ids=["result"],
     )
-    writer = _ExternalCaptureLLM(["No unsupported claim."])
+    writer = ExternalCaptureMockLLMClient(["No unsupported claim."])
     WriterAgent(writer)._call_section(
         section_name="Methods",
         instruction="Describe the registered design.",
@@ -396,7 +386,7 @@ def test_every_agent_context_uses_the_same_outbound_safe_projection(ra):
         evidence_ids=["result"],
         evidence_digest='{"n":10}',
     )
-    auditor = _ExternalCaptureLLM(['{"findings":[]}'])
+    auditor = ExternalCaptureMockLLMClient(['{"findings":[]}'])
     LLMConceptAuditor(auditor).audit(
         context=context,
         step=step,
@@ -417,9 +407,20 @@ def test_every_agent_context_uses_the_same_outbound_safe_projection(ra):
         "771.125",
         "882.875",
         '"observed_domain"',
-        '"valid_range"',
     ):
         assert forbidden not in outbound
+    for required in (
+        trusted_inclusion,
+        trusted_outcome,
+        "mmol/L",
+        "first 24 hours after ICU admission",
+        "no silent zero imputation",
+        '"plausibility_range":[0.0,100.0]',
+    ):
+        assert required in outbound
+    analyzer_prompt = _all_prompt_text(analyzer)
+    assert '"mortality_fraction": 0.2' in analyzer_prompt
+    assert '"group": "__easyicu_value_' in analyzer_prompt
 
 
 def test_jury_receives_artifact_identity_not_arbitrary_artifact_text():
@@ -431,7 +432,24 @@ def test_jury_receives_artifact_identity_not_arbitrary_artifact_text():
         {
             "__run_id__": "run-safe",
             "manifest.json": json.dumps(
-                {"observed_domain": [sentinel], "min": 1, "max": 9}
+                {
+                    "status": "scientifically_incomplete",
+                    "error_count": 1,
+                    "errors": [
+                        {
+                            "error_code": "missing_required_effect",
+                            "severity": "error",
+                            "message": sentinel,
+                        }
+                    ],
+                    "evidence": {
+                        "count": 2,
+                        "sha256": "a" * 64,
+                    },
+                    "observed_domain": [sentinel],
+                    "min": 1,
+                    "max": 9,
+                }
             ),
         },
         NPJ_DM_RUBRIC_V1,
@@ -440,3 +458,8 @@ def test_jury_receives_artifact_identity_not_arbitrary_artifact_text():
     assert sentinel not in prompt
     assert "observed_domain" not in prompt
     assert '"sha256"' in prompt
+    assert "scientifically_incomplete" in prompt
+    assert "missing_required_effect" in prompt
+    assert '"error_count":1' in prompt
+    assert '"count":2' in prompt
+    assert "a" * 64 in prompt

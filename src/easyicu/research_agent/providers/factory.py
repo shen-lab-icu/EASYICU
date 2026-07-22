@@ -11,6 +11,7 @@ import hashlib
 import ipaddress
 import json
 import os
+import sys
 import threading
 import weakref
 from dataclasses import dataclass
@@ -89,14 +90,56 @@ def _trusted_client_record(client: Any) -> Optional[_TrustedClientRecord]:
 
 
 def register_offline_test_client(client: Any) -> Any:
-    """Explicitly register one in-process, no-transport test double.
+    """Register one exact built-in, no-transport mock type.
 
-    Trust is held in a private identity registry, never in an object attribute.
-    This helper is intended for deterministic tests and offline fixtures only.
+    Arbitrary objects cannot turn themselves into trusted transports by calling
+    this function.  The reviewed mock classes live in ``providers.mocks`` and
+    are compared by class identity, not by a marker or spoofable module/name.
     """
+
+    module = sys.modules.get("easyicu.research_agent.providers.mocks")
+    allowed = tuple(
+        candidate
+        for candidate in (
+            getattr(module, "MockLLMClient", None) if module else None,
+            getattr(module, "ScriptedMockLLMClient", None) if module else None,
+            getattr(module, "ScriptedVisionMockLLMClient", None) if module else None,
+            (
+                getattr(module, "BudgetAwareScriptedMockLLMClient", None)
+                if module
+                else None
+            ),
+            (getattr(module, "PatternScriptedMockLLMClient", None) if module else None),
+        )
+        if isinstance(candidate, type)
+    )
+    if not allowed or type(client) not in allowed:
+        raise ProviderConfigurationError(
+            EXTERNAL_LLM_NOT_AUTHORIZED,
+            type(client).__name__,
+        )
 
     _remember_trusted_client(
         client, _TrustedClientRecord(kind="offline", authorization=None)
+    )
+    return client
+
+
+def _register_external_capture_test_client(client: Any) -> Any:
+    """Register the exact built-in non-network external capture mock."""
+
+    module = sys.modules.get("easyicu.research_agent.providers.mocks")
+    capture_type = (
+        getattr(module, "ExternalCaptureMockLLMClient", None) if module else None
+    )
+    if not isinstance(capture_type, type) or type(client) is not capture_type:
+        raise ProviderConfigurationError(
+            EXTERNAL_LLM_NOT_AUTHORIZED,
+            type(client).__name__,
+        )
+    _remember_trusted_client(
+        client,
+        _TrustedClientRecord(kind="external_capture", authorization=None),
     )
     return client
 
@@ -207,25 +250,35 @@ def _attach_provider_authorization(
     client: Any,
     authorization: ProviderAuthorization,
 ) -> Any:
-    """Attach factory-minted provenance; fail if a client cannot carry it."""
+    """Attach provenance only to one reviewed transport implementation.
+
+    ``build_provider_client`` accepts a constructor parameter so entrypoint
+    tests can inspect the non-secret configuration passed to an adapter.  That
+    testing seam must not turn an arbitrary constructor into an authorized
+    transport.  Unknown instances are therefore returned unmodified and will
+    be rejected by :func:`require_provider_client_authorization` before any
+    prompt delivery.
+    """
+
+    if client is None or isinstance(client, Mapping):
+        return client
+    if not (
+        _is_reviewed_client_type(client, "OpenAIClient")
+        or _is_reviewed_client_type(client, "CLIAgentLLMClient")
+    ):
+        return client
 
     try:
         setattr(client, "__easyicu_provider_authorization__", authorization)
     except Exception as exc:  # pragma: no cover - custom-client boundary
-        # Test/configuration probes historically use a plain mapping as a
-        # constructor spy. It is not an executable provider and cannot carry
-        # runtime provenance; keep that introspection surface compatible.
-        if client is None or isinstance(client, Mapping):
-            return client
         raise ProviderConfigurationError(
             UNSUPPORTED_PROVIDER,
             authorization.provider,
         ) from exc
-    if client is not None and not isinstance(client, Mapping):
-        _remember_trusted_client(
-            client,
-            _TrustedClientRecord(kind="transport", authorization=authorization),
-        )
+    _remember_trusted_client(
+        client,
+        _TrustedClientRecord(kind="transport", authorization=authorization),
+    )
     return client
 
 
@@ -248,6 +301,33 @@ def authorize_provider_client(
     env = os.environ if environment is None else environment
     if destination not in {"external", "local"}:
         raise ProviderConfigurationError(UNSUPPORTED_PROVIDER, provider)
+    is_openai = _is_reviewed_client_type(client, "OpenAIClient")
+    is_cli = _is_reviewed_client_type(client, "CLIAgentLLMClient")
+    if not (is_openai or is_cli):
+        raise ProviderConfigurationError(EXTERNAL_LLM_NOT_AUTHORIZED, provider)
+    if is_openai:
+        if str(provider) != "openai":
+            raise ProviderConfigurationError(EXTERNAL_LLM_NOT_AUTHORIZED, provider)
+        live_base_url = str(getattr(client, "_resolved_base_url", None) or "")
+        live_model = str(getattr(client, "_model", "") or "")
+        if _canonical_endpoint(live_base_url) != _canonical_endpoint(base_url):
+            raise ProviderConfigurationError(EXTERNAL_LLM_NOT_AUTHORIZED, provider)
+        if live_model != str(model):
+            raise ProviderConfigurationError(EXTERNAL_LLM_NOT_AUTHORIZED, provider)
+        if (destination == "local") != is_loopback_openai_base_url(live_base_url):
+            raise ProviderConfigurationError(EXTERNAL_LLM_NOT_AUTHORIZED, provider)
+    else:
+        backend = str(getattr(client, "_backend", "") or "")
+        live_model = str(getattr(client, "_model", "") or "") or "cli-default"
+        if (
+            backend not in {"codex", "claude"}
+            or str(provider) != f"{backend}-cli"
+            or str(base_url) != f"cli://{backend}"
+            or str(model) != live_model
+        ):
+            raise ProviderConfigurationError(EXTERNAL_LLM_NOT_AUTHORIZED, provider)
+        if destination == "local":
+            raise ProviderConfigurationError(EXTERNAL_LLM_NOT_AUTHORIZED, provider)
     if destination == "external" and not _external_llm_allowed(env):
         raise ProviderConfigurationError(EXTERNAL_LLM_NOT_AUTHORIZED, provider)
     authorization = ProviderAuthorization.create(
@@ -279,6 +359,68 @@ def _valid_provider_authorization(value: object) -> bool:
     return value == expected
 
 
+def _is_reviewed_client_type(client: Any, name: str) -> bool:
+    module = sys.modules.get("easyicu.research_agent.providers.llm")
+    reviewed = getattr(module, name, None) if module else None
+    return isinstance(reviewed, type) and type(client) is reviewed
+
+
+def _canonical_endpoint(value: object) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    parsed = urlsplit(raw)
+    scheme = parsed.scheme.lower()
+    hostname = (parsed.hostname or "").lower().rstrip(".")
+    try:
+        port = parsed.port
+    except ValueError:
+        return ""
+    if (
+        scheme not in {"http", "https"}
+        or not hostname
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.query
+        or parsed.fragment
+    ):
+        return ""
+    default_port = (scheme == "https" and port in {None, 443}) or (
+        scheme == "http" and port in {None, 80}
+    )
+    authority = hostname if default_port else f"{hostname}:{port}"
+    path = parsed.path.rstrip("/") or ""
+    return f"{scheme}://{authority}{path}"
+
+
+def _transport_matches_authorization(
+    client: Any,
+    authorization: ProviderAuthorization,
+) -> bool:
+    if _is_reviewed_client_type(client, "OpenAIClient"):
+        live_base_url = str(getattr(client, "_resolved_base_url", None) or "")
+        live_model = str(getattr(client, "_model", "") or "")
+        if live_model != authorization.model:
+            return False
+        if _canonical_endpoint(live_base_url) != _canonical_endpoint(
+            authorization.base_url
+        ):
+            return False
+        is_loopback = is_loopback_openai_base_url(live_base_url)
+        return (authorization.destination == "local") == is_loopback
+    if _is_reviewed_client_type(client, "CLIAgentLLMClient"):
+        backend = str(getattr(client, "_backend", "") or "")
+        live_model = str(getattr(client, "_model", "") or "") or "cli-default"
+        return (
+            backend in {"codex", "claude"}
+            and authorization.provider == f"{backend}-cli"
+            and authorization.base_url == f"cli://{backend}"
+            and authorization.model == live_model
+            and authorization.destination == "external"
+        )
+    return False
+
+
 def require_provider_client_authorization(client: Any) -> None:
     """Deny unmanaged provider graphs before any prompt reaches ``complete``.
 
@@ -300,10 +442,12 @@ def require_provider_client_authorization(client: Any) -> None:
                 EXTERNAL_LLM_NOT_AUTHORIZED,
                 str(getattr(current, "name", type(current).__name__)),
             )
-        if record.kind == "offline":
+        if record.kind in {"offline", "external_capture"}:
             continue
-        if record.kind == "transport" and _valid_provider_authorization(
-            record.authorization
+        if (
+            record.kind == "transport"
+            and _valid_provider_authorization(record.authorization)
+            and _transport_matches_authorization(current, record.authorization)
         ):
             continue
         if record.kind == "wrapper" and record.children_getter is not None:
@@ -351,6 +495,8 @@ def provider_transport_destination(client: Any) -> str:
     record = _trusted_client_record(client)
     if record is not None and record.kind == "offline":
         return "mock"
+    if record is not None and record.kind == "external_capture":
+        return "external"
     if record is not None and record.kind == "wrapper" and record.children_getter:
         destinations = {
             provider_transport_destination(child) for child in record.children_getter()

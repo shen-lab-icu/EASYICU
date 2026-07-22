@@ -27,6 +27,7 @@ from ..robustness.panel import (
 from ..authority.runtime_artifacts import current_successful_step_records
 from ..schema import AnalysisPlan, AnalysisStep, ResearchContext, ValidationFinding
 from ..trajectory.plan_contract import augment_trajectory_plan_products
+from .table_one_binding import bind_table_one_execution_spec
 from .plan_scope import _plan_scientific_scope_signature, _plan_signature
 from .planned_role import verified_planned_analysis_role
 
@@ -353,6 +354,8 @@ def normalize_replan_candidate(
         )
     try:
         revised = AnalysisPlan.model_validate(revised.model_dump(mode="json"))
+        for revised_step in revised.steps:
+            bind_table_one_execution_spec(revised_step, context)
     except (TypeError, ValueError) as exc:
         findings.append(_invalid_authority_projection_finding(exc))
         return NormalizedPlanCandidate(

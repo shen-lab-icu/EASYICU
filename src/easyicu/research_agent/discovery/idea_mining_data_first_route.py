@@ -62,11 +62,6 @@ class _ProviderCallForbidden:
 
     name = "data-first-provider-forbidden"
 
-    def __init__(self) -> None:
-        from ..providers.factory import register_offline_test_client
-
-        register_offline_test_client(self)
-
     def complete(
         self,
         messages: Sequence[LLMMessage],

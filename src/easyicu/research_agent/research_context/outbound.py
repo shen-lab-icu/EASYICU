@@ -7,9 +7,15 @@ import hashlib
 import json
 from typing import Any, Iterable, Mapping, Optional, Sequence
 
-from ..authority.table_one_binding import table_one_private_label_map
+from ..authority.table_one_binding import (
+    table_one_code_token_value_map,
+    table_one_private_code_label_map,
+)
 from ..schema import AnalysisStep, ResearchContext
-from .prompt_variables import project_observed_domain
+from .prompt_variables import (
+    compact_fixed_window_trajectory_prompt,
+    project_observed_domain,
+)
 
 
 def _compact(value: Any) -> Any:
@@ -26,6 +32,36 @@ def _compact(value: Any) -> Any:
             if (item := _compact(value)) not in (None, "", [], {}, ())
         ]
     return value
+
+
+_OUTCOME_SOURCE_LABELS = {
+    "icu_mortality": "ICU mortality",
+    "hospital_mortality": "hospital mortality",
+    "mortality_28d": "28-day mortality",
+    "mortality_30d": "30-day mortality",
+    "time_to_event_endpoint": "a time-to-event endpoint",
+    "length_of_stay": "a length-of-stay outcome",
+    "readmission": "a readmission outcome",
+}
+
+
+def _outcome_semantics(variable: Any) -> dict[str, Any]:
+    """Render host-bound outcome semantics without forwarding caveat prose."""
+
+    source_concept = str(variable.source_concept or "").strip()
+    label = _OUTCOME_SOURCE_LABELS.get(source_concept)
+    return _compact(
+        {
+            "definition": variable.description,
+            "source_concept": source_concept or None,
+            "host_binding": (
+                f"For this analysis, '{variable.name}' is explicitly treated as "
+                f"{label} because that is what the typed outcome binding declares."
+                if label
+                else None
+            ),
+        }
+    )
 
 
 def outbound_safe_context_payload(
@@ -45,6 +81,10 @@ def outbound_safe_context_payload(
         if selected is not None and variable.name.lower() not in selected:
             continue
         projected_domain = project_observed_domain(variable.observed_domain)
+        if variable.observed_domain is not None:
+            for flag in ("is_binary", "is_constant"):
+                if isinstance(variable.observed_domain.get(flag), bool):
+                    projected_domain[flag] = variable.observed_domain[flag]
         role = variable.role.value
         variables.append(
             _compact(
@@ -52,8 +92,19 @@ def outbound_safe_context_payload(
                     "name": variable.name,
                     "role": role if role != "meta" else None,
                     "dtype": variable.dtype,
+                    "unit": variable.unit,
+                    "plausibility_range": variable.valid_range,
+                    "range_policy": (
+                        "flag_only" if variable.valid_range is not None else None
+                    ),
+                    "out_of_range_action": (
+                        "retain_and_flag" if variable.valid_range is not None else None
+                    ),
                     "source_concept": (
                         variable.source_concept if role != "meta" else None
+                    ),
+                    "outcome_semantics": (
+                        _outcome_semantics(variable) if role == "outcome" else None
                     ),
                     "is_ordinal": True if variable.is_ordinal else None,
                     "ordinal_cardinality": (
@@ -73,6 +124,15 @@ def outbound_safe_context_payload(
                         else None
                     ),
                     "observed_shape": projected_domain,
+                    "analysis_window": variable.analysis_window,
+                    "temporal_resolution": variable.temporal_resolution,
+                    "fixed_window_trajectory": (
+                        variable.fixed_window_trajectory.model_dump(mode="json")
+                        if variable.fixed_window_trajectory is not None
+                        else None
+                    ),
+                    "missingness_semantics": variable.missingness_semantics,
+                    "forbidden_transformations": variable.forbidden_transformations,
                     "missingness": (
                         {
                             "fraction_missing": variable.missingness.fraction_missing,
@@ -89,9 +149,15 @@ def outbound_safe_context_payload(
             "schema": "easyicu.outbound_safe_context/1",
             "research_question": context.research_question,
             "cohort": {
+                "cohort_name": context.cohort.cohort_name,
                 "database": context.cohort.database,
                 "n_stays": context.cohort.n_stays,
                 "n_patients": context.cohort.n_patients,
+                "inclusion_contract": context.cohort.inclusion_criteria,
+                "exclusion_contract": context.cohort.exclusion_criteria,
+                "id_columns": context.cohort.id_columns,
+                "time_columns": context.cohort.time_columns,
+                "outcome_columns": context.cohort.outcome_columns,
             },
             "primary_exposure": context.primary_exposure,
             "target_outcome": context.target_outcome,
@@ -104,6 +170,28 @@ def outbound_safe_context_payload(
                 }
                 for window in context.time_windows
             ],
+            "temporal_constraints": [
+                {
+                    "relation": constraint.relation,
+                    "anchor_event": constraint.anchor_event,
+                    "target_concept": constraint.target_concept,
+                    "start_hours": constraint.start_hours,
+                    "end_hours": constraint.end_hours,
+                    "aggregation_hint": constraint.aggregation_hint,
+                    "executable_repr": constraint.executable_repr,
+                }
+                for constraint in context.temporal_constraints
+            ],
+            "cross_database_validation": context.cross_database_validation,
+            "explicit_user_choices": (
+                context.user_preferences.model_dump(
+                    mode="json",
+                    exclude_none=True,
+                    exclude={"extra_notes"},
+                )
+                if context.user_preferences is not None
+                else None
+            ),
             "variables": variables,
         }
     )
@@ -114,8 +202,34 @@ def format_outbound_safe_context(
     *,
     variable_names: Optional[Iterable[str]] = None,
 ) -> str:
+    payload = outbound_safe_context_payload(context, variable_names=variable_names)
+    selected = (
+        None
+        if variable_names is None
+        else {str(name).lower() for name in variable_names}
+    )
+    trajectory_variables = [
+        variable
+        for variable in context.variables
+        if variable.fixed_window_trajectory is not None
+        and (selected is None or variable.name.lower() in selected)
+    ]
+    compact_projection = compact_fixed_window_trajectory_prompt(trajectory_variables)
+    if compact_projection.shared_lines:
+        trajectory_names = {variable.name for variable in trajectory_variables}
+        payload["variables"] = [
+            row
+            for row in payload.get("variables", [])
+            if row.get("name") not in trajectory_names
+        ]
+        payload[
+            "Shared fixed-window trajectory policies (binding for the member columns below)"
+        ] = list(compact_projection.shared_lines)
+        payload["fixed_window_trajectory_columns"] = list(
+            compact_projection.variable_lines
+        )
     return json.dumps(
-        outbound_safe_context_payload(context, variable_names=variable_names),
+        payload,
         ensure_ascii=False,
         sort_keys=True,
         separators=(",", ":"),
@@ -140,12 +254,19 @@ _SAFE_RECORD_KEYS = frozenset(
 
 
 def project_outbound_records(
-    records: Sequence[Mapping[str, Any]]
+    records: Sequence[Mapping[str, Any]],
 ) -> list[dict[str, Any]]:
     """Project completed records without summaries, labels, logs, or prose."""
 
     return [
-        {key: record[key] for key in _SAFE_RECORD_KEYS if key in record}
+        {
+            **{key: record[key] for key in _SAFE_RECORD_KEYS if key in record},
+            **(
+                {"step_summary": project_outbound_step_summary(record["step_summary"])}
+                if isinstance(record.get("step_summary"), Mapping)
+                else {}
+            ),
+        }
         for record in records
     ]
 
@@ -169,7 +290,7 @@ def outbound_safe_script(step: Optional[AnalysisStep], script_text: str) -> str:
 
     if step is None:
         return script_text
-    mapping = table_one_private_label_map(step)
+    mapping = table_one_private_code_label_map(step)
     if not mapping:
         return script_text
     try:
@@ -189,17 +310,129 @@ def outbound_safe_script(step: Optional[AnalysisStep], script_text: str) -> str:
     return ast.unparse(_Redactor().visit(tree)) + "\n"
 
 
-def project_outbound_artifact_bundle(bundle: Mapping[str, str]) -> dict[str, Any]:
-    """Expose artifact identity and size, never arbitrary artifact text."""
+def restore_outbound_safe_script(step: Optional[AnalysisStep], script_text: str) -> str:
+    """Restore host-only Table 1 values after an external repair response."""
 
-    return {
-        str(name): {
+    if step is None:
+        return script_text
+    mapping = table_one_code_token_value_map(step)
+    if not mapping:
+        return script_text
+    try:
+        tree = ast.parse(script_text)
+    except SyntaxError as exc:
+        raise ValueError("cannot restore Table 1 labels from repaired code") from exc
+
+    class _Restorer(ast.NodeTransformer):
+        def visit_Constant(self, node: ast.Constant) -> ast.AST:  # noqa: N802
+            if isinstance(node.value, str) and node.value in mapping:
+                return ast.copy_location(ast.Constant(value=mapping[node.value]), node)
+            return node
+
+    return ast.unparse(_Restorer().visit(tree)) + "\n"
+
+
+_SAFE_TEXT_KEYS = frozenset(
+    {
+        "status",
+        "state",
+        "severity",
+        "validator",
+        "error_code",
+        "error_type",
+        "issue_code",
+        "schema",
+        "schema_version",
+        "sha256",
+        "digest",
+        "evidence_id",
+        "artifact_id",
+        "step_id",
+        "role",
+        "method",
+        "semantics_family",
+    }
+)
+_UNSAFE_VALUE_KEYS = frozenset(
+    {
+        "observed_domain",
+        "levels",
+        "categories",
+        "values",
+        "rows",
+        "data",
+        "min",
+        "max",
+        "message",
+        "description",
+        "notes",
+        "text",
+    }
+)
+
+
+def _opaque_scalar(value: str) -> str:
+    digest = hashlib.sha256(value.encode("utf-8")).hexdigest()[:12]
+    return f"__easyicu_value_{digest}__"
+
+
+def _safe_summary_value(value: Any, *, key: str = "") -> Any:
+    lowered = str(key).lower()
+    if lowered in _UNSAFE_VALUE_KEYS:
+        return None
+    if isinstance(value, Mapping):
+        return _compact(
+            {
+                str(child_key): _safe_summary_value(child, key=str(child_key))
+                for child_key, child in value.items()
+            }
+        )
+    if isinstance(value, (list, tuple)):
+        projected = [_safe_summary_value(item, key=key) for item in value]
+        return [item for item in projected if item is not None]
+    if isinstance(value, str):
+        if lowered in _SAFE_TEXT_KEYS or lowered.endswith(
+            ("_sha256", "_digest", "_id", "_code", "_status")
+        ):
+            return value
+        return _opaque_scalar(value)
+    if isinstance(value, (int, float, bool)) or value is None:
+        return value
+    return None
+
+
+def project_outbound_step_summary(summary: Mapping[str, Any]) -> dict[str, Any]:
+    """Keep aggregate host structure while opaque-tokenizing category text."""
+
+    return _compact(
+        {
+            str(key): _safe_summary_value(value, key=str(key))
+            for key, value in summary.items()
+        }
+    )
+
+
+def project_outbound_artifact_bundle(bundle: Mapping[str, str]) -> dict[str, Any]:
+    """Expose identity plus safe host-generated structured process evidence."""
+
+    projected: dict[str, Any] = {}
+    for name, content in sorted(bundle.items()):
+        if str(name).startswith("__"):
+            continue
+        row: dict[str, Any] = {
             "sha256": hashlib.sha256(str(content).encode("utf-8")).hexdigest(),
             "chars": len(str(content)),
         }
-        for name, content in sorted(bundle.items())
-        if not str(name).startswith("__")
-    }
+        try:
+            parsed = json.loads(str(content))
+        except (TypeError, ValueError):
+            parsed = None
+        if isinstance(parsed, Mapping):
+            structured = project_outbound_step_summary(parsed)
+            if structured:
+                row["structured"] = structured
+        projected[str(name)] = row
+    return projected
 
 
 __all__ = [
@@ -209,4 +442,6 @@ __all__ = [
     "project_outbound_artifact_bundle",
     "project_outbound_probe",
     "project_outbound_records",
+    "project_outbound_step_summary",
+    "restore_outbound_safe_script",
 ]

@@ -36,19 +36,9 @@ from easyicu.research_agent.authority.step_capsule import (
 )
 
 
-class _CaptureLLM:
-    def __init__(self, responses):  # noqa: ANN001
-        from easyicu.research_agent.providers.factory import (
-            register_offline_test_client,
-        )
+from easyicu.research_agent.providers.mocks import ScriptedMockLLMClient
 
-        register_offline_test_client(self)
-        self.responses = list(responses)
-        self.calls = []
-
-    def complete(self, messages, **kwargs):  # noqa: ANN001, ANN003
-        self.calls.append((list(messages), dict(kwargs)))
-        return self.responses.pop(0)
+_CaptureLLM = ScriptedMockLLMClient
 
 
 def _wide_context(ra, *, n_families: int = 4):
@@ -1759,9 +1749,11 @@ def test_scientific_semantics_repair_keeps_planner_science_authority(ra):
         assert '"schema":"easyicu.outbound_safe_context/1"' in payload
         assert '"inclusion_criteria"' not in payload
         assert '"exclusion_criteria"' not in payload
-        assert '"temporal_constraints"' not in payload
-        assert '"timing_and_design"' not in payload
-        assert '"covariates"' not in payload
+        assert '"inclusion_contract":["adult ICU stays"]' in payload
+        assert '"exclusion_contract":["missing admission time"]' in payload
+        assert '"temporal_constraints"' in payload
+        assert '"timing_and_design":"preserve temporal ordering"' in payload
+        assert '"covariates":["age","sex"]' in payload
         assert '"allowed_aggregations":["first_value"]' in payload
         assert '"pitfalls"' not in payload
         assert '"clinical_caveats"' not in payload

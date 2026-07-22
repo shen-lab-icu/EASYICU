@@ -9,6 +9,8 @@ import sys
 from pathlib import Path
 from typing import get_type_hints
 
+import pytest
+
 import easyicu.research_agent as research_agent
 from easyicu.research_agent import providers
 from easyicu.research_agent.providers import llm, mocks as llm_mocks
@@ -30,11 +32,12 @@ def test_mock_annotations_resolve_without_importing_back_from_llm() -> None:
     )
 
 
-def test_renamed_mock_subclass_remains_explicitly_offline() -> None:
+def test_mock_subclass_cannot_inherit_offline_authority() -> None:
     class InterruptingAnalyzer(llm_mocks.MockLLMClient):
         name = "interrupting-analyzer"
 
-    assert llm.llm_is_mockish(InterruptingAnalyzer())
+    with pytest.raises(ValueError, match="external LLM transport is disabled"):
+        InterruptingAnalyzer()
 
 
 def test_provider_package_keeps_factory_import_lazy() -> None:

@@ -17,7 +17,6 @@ from easyicu.research_agent.authority.provider_budget import (
     ProviderCallBudgetReceiptError,
     StepProviderCallBudget,
     complete_with_provider_budget,
-    consume_active_transport_attempt,
     load_provider_call_budget_receipt,
     load_provider_call_budget_state,
     provider_call_budget_receipt_path,
@@ -33,7 +32,11 @@ from easyicu.research_agent.schema import (
     CohortDescriptor,
     ResearchContext,
 )
-from easyicu.research_agent.providers.factory import register_offline_test_client
+from easyicu.research_agent.providers.mocks import (
+    BudgetAwareScriptedMockLLMClient,
+    PatternScriptedMockLLMClient,
+    ScriptedMockLLMClient,
+)
 
 
 def _canonical_digest(payload: dict) -> str:
@@ -57,16 +60,8 @@ def _payload_digest_without_sha(payload: dict) -> str:
     )
 
 
-class _AuditLLM:
-    name = "audit-budget-test"
-
-    def __init__(self) -> None:
-        register_offline_test_client(self)
-        self.calls = 0
-
-    def complete(self, messages, **kwargs):  # noqa: ANN001, ANN003
-        self.calls += 1
-        return '{"findings":[]}'
+def _audit_llm() -> ScriptedMockLLMClient:
+    return ScriptedMockLLMClient(['{"findings":[]}'], repeat_last=True)
 
 
 def _context() -> ResearchContext:
@@ -83,25 +78,18 @@ def _context() -> ResearchContext:
 
 
 def test_pre_step_cohort_translation_has_durable_shared_provider_budget(tmp_path):
-    class _CohortTranslationLLM:
-        name = "cohort-translation-budget-test"
-
-        def __init__(self) -> None:
-            register_offline_test_client(self)
-            self.calls = 0
-
-        def complete(self, messages, **kwargs):  # noqa: ANN001, ANN003
-            del messages, kwargs
-            self.calls += 1
-            return json.dumps(
+    owner_step_id = "01_cohort_definition"
+    llm = ScriptedMockLLMClient(
+        [
+            json.dumps(
                 {
                     "inclusion": [{"concept_id": "age", "op": ">=", "value": 18}],
                     "exclusion": [],
                 }
             )
-
-    owner_step_id = "01_cohort_definition"
-    llm = _CohortTranslationLLM()
+        ],
+        repeat_last=True,
+    )
     first, first_snapshot = _extract_cohort_definition_with_provider_budget(
         run_dir=tmp_path,
         budget_owner_step_id=owner_step_id,
@@ -163,7 +151,7 @@ def test_pre_step_cohort_translation_has_durable_shared_provider_budget(tmp_path
             llm=llm,
             name="adult_icu",
         )
-    assert llm.calls == 2
+    assert len(llm.calls) == 2
 
     receipt_path.write_text("{}\n", encoding="utf-8")
     with pytest.raises(ProviderCallBudgetReceiptError):
@@ -176,7 +164,7 @@ def test_pre_step_cohort_translation_has_durable_shared_provider_budget(tmp_path
             llm=llm,
             name="adult_icu",
         )
-    assert llm.calls == 2
+    assert len(llm.calls) == 2
 
 
 def test_cohort_translation_preserves_existing_single_ledger_state(tmp_path):
@@ -208,28 +196,22 @@ def test_cohort_translation_preserves_existing_single_ledger_state(tmp_path):
         after_code_sha256="a" * 64,
     )
 
-    class _TranslationLLM:
-        name = "preserve-ledger-test"
-
-        def __init__(self) -> None:
-            register_offline_test_client(self)
-
-        def complete(self, messages, **kwargs):  # noqa: ANN001, ANN003
-            del messages, kwargs
-            return json.dumps(
-                {
-                    "inclusion": [{"concept_id": "age", "op": ">=", "value": 18}],
-                    "exclusion": [],
-                }
-            )
-
     definition, _snapshot = _extract_cohort_definition_with_provider_budget(
         run_dir=tmp_path,
         budget_owner_step_id=owner_step_id,
         configured_limit=5,
         cohort_prose="Include adults age 18 years or older.",
         universe_columns=["stay_id", "age"],
-        llm=_TranslationLLM(),
+        llm=ScriptedMockLLMClient(
+            [
+                json.dumps(
+                    {
+                        "inclusion": [{"concept_id": "age", "op": ">=", "value": 18}],
+                        "exclusion": [],
+                    }
+                )
+            ]
+        ),
         name="adult_icu",
         reserved_final_category="concept_audit",
     )
@@ -582,7 +564,7 @@ def test_receipt_rejects_final_audit_policy_drift(tmp_path):
 
 
 def test_llm_concept_auditor_charges_shared_budget_and_fails_closed_when_empty():
-    llm = _AuditLLM()
+    llm = _audit_llm()
     auditor = LLMConceptAuditor(llm)
     budget = StepProviderCallBudget(1, step_id="audit")
 
@@ -593,7 +575,7 @@ def test_llm_concept_auditor_charges_shared_budget_and_fails_closed_when_empty()
     )
 
     assert findings == []
-    assert llm.calls == 1
+    assert len(llm.calls) == 1
     assert budget.categories == ("concept_audit",)
 
     with pytest.raises(ProviderCallBudgetExhausted) as exc_info:
@@ -604,13 +586,13 @@ def test_llm_concept_auditor_charges_shared_budget_and_fails_closed_when_empty()
         )
 
     assert exc_info.value.category == "concept_audit"
-    assert llm.calls == 1
+    assert len(llm.calls) == 1
 
 
 def test_analyzer_charges_the_same_step_budget_and_stops_when_exhausted():
     from easyicu.research_agent.agents.core import AnalyzerAgent
 
-    llm = _AuditLLM()
+    llm = _audit_llm()
     analyzer = AnalyzerAgent(llm)
     budget = StepProviderCallBudget(1, step_id="analysis")
     step = AnalysisStep(step_id="03_model", intent="Interpret the fitted model.")
@@ -623,7 +605,7 @@ def test_analyzer_charges_the_same_step_budget_and_stops_when_exhausted():
         provider_budget=budget,
     )
 
-    assert llm.calls == 1
+    assert len(llm.calls) == 1
     assert budget.categories == ("analyzer",)
     with pytest.raises(ProviderCallBudgetExhausted) as exc_info:
         analyzer.run(
@@ -634,7 +616,7 @@ def test_analyzer_charges_the_same_step_budget_and_stops_when_exhausted():
             provider_budget=budget,
         )
     assert exc_info.value.category == "analyzer"
-    assert llm.calls == 1
+    assert len(llm.calls) == 1
 
 
 def test_openai_transport_retries_consume_the_same_provider_budget(monkeypatch):
@@ -662,7 +644,16 @@ def test_openai_transport_retries_consume_the_same_provider_budget(monkeypatch):
     client._extra_body = {}
     client._local_noauth_mode = False
     client._max_retries = 2
-    register_offline_test_client(client)
+    client._resolved_base_url = "http://127.0.0.1:8317/v1"
+    from easyicu.research_agent.providers.factory import (
+        _register_loopback_provider_client,
+    )
+
+    _register_loopback_provider_client(
+        client,
+        model="gpt-test",
+        base_url=client._resolved_base_url,
+    )
     monkeypatch.setattr("time.sleep", lambda _seconds: None)
     budget = StepProviderCallBudget(2, step_id="transport")
 
@@ -696,7 +687,16 @@ def test_openai_transport_retry_stops_before_exceeding_budget(monkeypatch):
     client._extra_body = {}
     client._local_noauth_mode = False
     client._max_retries = 3
-    register_offline_test_client(client)
+    client._resolved_base_url = "http://127.0.0.1:8317/v1"
+    from easyicu.research_agent.providers.factory import (
+        _register_loopback_provider_client,
+    )
+
+    _register_loopback_provider_client(
+        client,
+        model="gpt-test",
+        base_url=client._resolved_base_url,
+    )
     sleeps = []
     monkeypatch.setattr("time.sleep", sleeps.append)
     budget = StepProviderCallBudget(1, step_id="transport")
@@ -1373,7 +1373,7 @@ def test_receipt_persistence_failure_prevents_provider_call(monkeypatch, tmp_pat
 def test_concept_auditor_does_not_downgrade_receipt_failure(monkeypatch, tmp_path):
     path = provider_call_budget_receipt_path(tmp_path, step_id="audit")
     budget = StepProviderCallBudget(1, step_id="audit", receipt_path=path)
-    llm = _AuditLLM()
+    llm = _audit_llm()
 
     def fail_replace(*_args):
         raise OSError("read-only filesystem")
@@ -1390,27 +1390,14 @@ def test_concept_auditor_does_not_downgrade_receipt_failure(monkeypatch, tmp_pat
             provider_budget=budget,
         )
 
-    assert llm.calls == 0
+    assert len(llm.calls) == 0
 
 
 def test_fallback_children_each_consume_a_real_provider_attempt():
     from easyicu.research_agent.providers.llm import FallbackLLMClient, LLMMessage
 
-    class _Child:
-        def __init__(self, result=None, error=None):
-            register_offline_test_client(self)
-            self.result = result
-            self.error = error
-            self.calls = 0
-
-        def complete(self, messages, **kwargs):  # noqa: ANN001, ANN003
-            self.calls += 1
-            if self.error is not None:
-                raise self.error
-            return self.result
-
-    first = _Child(error=RuntimeError("429 rate limit"))
-    second = _Child(result="ok")
+    first = ScriptedMockLLMClient([RuntimeError("429 rate limit")])
+    second = ScriptedMockLLMClient(["ok"])
     client = FallbackLLMClient(first, second)
     budget = StepProviderCallBudget(2, step_id="fallback")
 
@@ -1421,23 +1408,13 @@ def test_fallback_children_each_consume_a_real_provider_attempt():
     )
 
     assert result == "ok"
-    assert first.calls == 1
-    assert second.calls == 1
+    assert len(first.calls) == 1
+    assert len(second.calls) == 1
     assert budget.categories == ("repair_patch", "repair_patch")
 
 
 def test_fallback_does_not_double_charge_transparent_transport_aware_wrapper():
     from easyicu.research_agent.providers.llm import FallbackLLMClient, LLMMessage
-
-    class _AwareClient:
-        provider_attempt_budget_aware = True
-
-        def __init__(self) -> None:
-            register_offline_test_client(self)
-
-        def complete(self, messages, **kwargs):  # noqa: ANN001, ANN003
-            consume_active_transport_attempt()
-            return "ok"
 
     class _Wrapper:
         def __init__(self, inner):
@@ -1451,7 +1428,7 @@ def test_fallback_does_not_double_charge_transparent_transport_aware_wrapper():
         def complete(self, messages, **kwargs):  # noqa: ANN001, ANN003
             return self._inner.complete(messages, **kwargs)
 
-    client = FallbackLLMClient(_Wrapper(_AwareClient()))
+    client = FallbackLLMClient(_Wrapper(BudgetAwareScriptedMockLLMClient(["ok"])))
     budget = StepProviderCallBudget(1, step_id="wrapped")
 
     result = complete_with_provider_budget(
@@ -1486,76 +1463,52 @@ with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as hand
     json.dump(summary, handle)
 """
 
-    class _BudgetedPipelineLLM:
-        name = "provider-budget-pipeline-test"
+    plan_response = json.dumps(
+        {
+            "research_question": "Summarize the ICU cohort.",
+            "steps": [
+                {
+                    "step_id": "01_summary",
+                    "planned_analysis_role": "primary",
+                    "intent": "Produce a descriptive cohort summary.",
+                    "inputs": ["stay_id"],
+                    "expected_outputs": ["table:cohort_summary"],
+                    "method": "descriptive_summary",
+                    "icu_rule_refs": [],
+                }
+            ],
+            "rationale": "provider budget resume regression",
+        }
+    )
+    audit_response = json.dumps(
+        {
+            "findings": [
+                {
+                    "severity": "error",
+                    "message": "A binding concept error requires repair.",
+                    "detail": {"issue_code": "provider_budget_resume_test"},
+                }
+            ]
+        }
+    )
 
-        def __init__(self) -> None:
-            register_offline_test_client(self)
-            self.plan_calls = 0
-            self.write_calls = 0
-            self.audit_calls = 0
-            self.repair_calls = 0
-
-        def complete(self, messages, *, max_tokens=2048, temperature=0.2):
-            del max_tokens, temperature
-            system = "\n".join(
-                str(message.content or "")
-                for message in messages
-                if message.role == "system"
-            )
-            user = next(
-                (
-                    str(message.content or "")
-                    for message in reversed(messages)
-                    if message.role == "user"
-                ),
-                "",
-            )
-            upper = user.upper()
-            if "ICU-AWARE RESEARCH PLAN" in upper:
-                self.plan_calls += 1
-                return json.dumps(
-                    {
-                        "research_question": "Summarize the ICU cohort.",
-                        "steps": [
-                            {
-                                "step_id": "01_summary",
-                                "planned_analysis_role": "primary",
-                                "intent": "Produce a descriptive cohort summary.",
-                                "inputs": ["stay_id"],
-                                "expected_outputs": ["table:cohort_summary"],
-                                "method": "descriptive_summary",
-                                "icu_rule_refs": [],
-                            }
-                        ],
-                        "rationale": "provider budget resume regression",
-                    }
-                )
-            if "WRITE THE PYTHON CODE" in upper:
-                self.write_calls += 1
-                return draft_code
-            if "CONSERVATIVE ICU CONCEPT-USE AUDITOR" in system.upper():
-                self.audit_calls += 1
-                return json.dumps(
-                    {
-                        "findings": [
-                            {
-                                "severity": "error",
-                                "message": "A binding concept error requires repair.",
-                                "detail": {
-                                    "issue_code": "provider_budget_resume_test",
-                                },
-                            }
-                        ]
-                    }
-                )
-            if "REPAIR" in upper:
-                self.repair_calls += 1
-                return draft_code.replace('"n": int(len(df))', '"n": int(len(df))')
-            return "{}"
+    def count_calls(llm: ScriptedMockLLMClient, marker: str) -> int:
+        folded_marker = marker.casefold()
+        return sum(
+            folded_marker
+            in "\n".join(str(message.content or "") for message in messages).casefold()
+            for messages, _kwargs in llm.calls
+        )
 
     cohort = pd.DataFrame({"stay_id": [1, 2, 3], "death": [0, 1, 0]})
-    first_llm = _BudgetedPipelineLLM()
+    first_llm = PatternScriptedMockLLMClient(
+        [
+            ("ICU-AWARE RESEARCH PLAN", [plan_response]),
+            ("WRITE THE PYTHON CODE", [draft_code]),
+            ("CONSERVATIVE ICU CONCEPT-USE AUDITOR", [audit_response]),
+            ("REPAIR THE PYTHON CODE", [draft_code]),
+        ]
+    )
     first_pipeline = ra.ResearchAgentPipeline(
         workdir=tmp_path,
         llm=first_llm,
@@ -1586,11 +1539,13 @@ with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as hand
 
     assert stored_limit == 2
     assert stored_categories == ("initial_generation", "concept_audit")
-    assert first_llm.write_calls == 1
-    assert first_llm.audit_calls == 1
-    assert first_llm.repair_calls == 0
+    assert count_calls(first_llm, "WRITE THE PYTHON CODE") == 1
+    assert count_calls(first_llm, "CONSERVATIVE ICU CONCEPT-USE AUDITOR") == 1
+    assert count_calls(first_llm, "REPAIR THE PYTHON CODE") == 0
 
-    resumed_llm = _BudgetedPipelineLLM()
+    resumed_llm = PatternScriptedMockLLMClient(
+        [("ICU-AWARE RESEARCH PLAN", [plan_response])]
+    )
     resumed_pipeline = ra.ResearchAgentPipeline(
         workdir=tmp_path,
         llm=resumed_llm,
@@ -1632,9 +1587,9 @@ with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as hand
     ]
     assert latest.get("step_llm_repair_attempts", 0) == 0
     assert latest["step_provider_call_repair_unavailable"] is True
-    assert resumed_llm.write_calls == 0
-    assert resumed_llm.audit_calls == 0
-    assert resumed_llm.repair_calls == 0
+    assert count_calls(resumed_llm, "WRITE THE PYTHON CODE") == 0
+    assert count_calls(resumed_llm, "CONSERVATIVE ICU CONCEPT-USE AUDITOR") == 0
+    assert count_calls(resumed_llm, "REPAIR THE PYTHON CODE") == 0
 
 
 def test_pipeline_default_budget_executes_two_semantic_repairs_and_final_audit(
@@ -1661,107 +1616,80 @@ with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as hand
     json.dump(summary, handle)
 """
 
-    class _TwoRepairLLM:
-        name = "two-semantic-repair-budget-test"
+    plan_response = json.dumps(
+        {
+            "research_question": "Summarize the ICU cohort.",
+            "steps": [
+                {
+                    "step_id": "01_summary",
+                    "planned_analysis_role": "primary",
+                    "intent": "Produce a descriptive cohort summary.",
+                    "inputs": ["stay_id"],
+                    "expected_outputs": ["table:cohort_summary"],
+                    "method": "descriptive_summary",
+                    "icu_rule_refs": [],
+                }
+            ],
+            "rationale": "two semantic repair budget regression",
+        }
+    )
 
-        def __init__(self) -> None:
-            register_offline_test_client(self)
-            self.audit_calls = 0
-            self.repair_calls = 0
+    def audit_response(marker: str | None) -> str:
+        return json.dumps(
+            {
+                "findings": (
+                    [
+                        {
+                            "severity": "error",
+                            "message": f"{marker} requires one repair.",
+                            "detail": {"issue_code": "other"},
+                        }
+                    ]
+                    if marker
+                    else []
+                )
+            }
+        )
 
-        def complete(self, messages, *, max_tokens=2048, temperature=0.2):
-            del max_tokens, temperature
-            system = "\n".join(
-                str(message.content or "")
-                for message in messages
-                if message.role == "system"
-            )
-            user = next(
-                (
-                    str(message.content or "")
-                    for message in reversed(messages)
-                    if message.role == "user"
-                ),
-                "",
-            )
-            upper = user.upper()
-            if "ICU-AWARE RESEARCH PLAN" in upper:
-                return json.dumps(
+    def patch(old_marker: str, new_marker: str) -> str:
+        return json.dumps(
+            {
+                "format": PATCH_FORMAT,
+                "edits": [
                     {
-                        "research_question": "Summarize the ICU cohort.",
-                        "steps": [
-                            {
-                                "step_id": "01_summary",
-                                "planned_analysis_role": "primary",
-                                "intent": "Produce a descriptive cohort summary.",
-                                "inputs": ["stay_id"],
-                                "expected_outputs": ["table:cohort_summary"],
-                                "method": "descriptive_summary",
-                                "icu_rule_refs": [],
-                            }
-                        ],
-                        "rationale": "two semantic repair budget regression",
+                        "old": f"# {old_marker}",
+                        "new": f"# {new_marker}",
+                        "expected_count": 1,
                     }
-                )
-            if "WRITE THE PYTHON CODE" in upper:
-                return script("SEMANTIC_REPAIR_ROUND_1")
-            if "CONSERVATIVE ICU CONCEPT-USE AUDITOR" in system.upper():
-                self.audit_calls += 1
-                marker = next(
-                    (
-                        value
-                        for value in (
-                            "SEMANTIC_REPAIR_ROUND_1",
-                            "SEMANTIC_REPAIR_ROUND_2",
-                        )
-                        if value in user
-                    ),
-                    None,
-                )
-                return json.dumps(
-                    {
-                        "findings": (
-                            [
-                                {
-                                    "severity": "error",
-                                    "message": f"{marker} requires one repair.",
-                                    "detail": {"issue_code": "other"},
-                                }
-                            ]
-                            if marker
-                            else []
-                        )
-                    }
-                )
-            if "REPAIR THE PYTHON CODE" in upper:
-                self.repair_calls += 1
-                old_marker = (
-                    "SEMANTIC_REPAIR_ROUND_1"
-                    if self.repair_calls == 1
-                    else "SEMANTIC_REPAIR_ROUND_2"
-                )
-                new_marker = (
-                    "SEMANTIC_REPAIR_ROUND_2"
-                    if self.repair_calls == 1
-                    else "SEMANTIC_AUDIT_SAFE"
-                )
-                return json.dumps(
-                    {
-                        "format": PATCH_FORMAT,
-                        "edits": [
-                            {
-                                "old": f"# {old_marker}",
-                                "new": f"# {new_marker}",
-                                "expected_count": 1,
-                            }
-                        ],
-                    }
-                )
-            if "INTERPRET THE RESULTS" in upper:
-                return "Cohort summary completed {evidence:cohort_summary}."
-            return "{}"
+                ],
+            }
+        )
 
-    llm = _TwoRepairLLM()
+    llm = PatternScriptedMockLLMClient(
+        [
+            ("ICU-AWARE RESEARCH PLAN", [plan_response]),
+            ("WRITE THE PYTHON CODE", [script("SEMANTIC_REPAIR_ROUND_1")]),
+            (
+                "CONSERVATIVE ICU CONCEPT-USE AUDITOR",
+                [
+                    audit_response("SEMANTIC_REPAIR_ROUND_1"),
+                    audit_response("SEMANTIC_REPAIR_ROUND_2"),
+                    audit_response(None),
+                ],
+            ),
+            (
+                "REPAIR THE PYTHON CODE",
+                [
+                    patch("SEMANTIC_REPAIR_ROUND_1", "SEMANTIC_REPAIR_ROUND_2"),
+                    patch("SEMANTIC_REPAIR_ROUND_2", "SEMANTIC_AUDIT_SAFE"),
+                ],
+            ),
+            (
+                "INTERPRET THE RESULTS",
+                ["Cohort summary completed {evidence:cohort_summary}."],
+            ),
+        ]
+    )
     pipeline = ra.ResearchAgentPipeline(
         workdir=tmp_path,
         llm=llm,
@@ -1792,8 +1720,19 @@ with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as hand
     ][-1]
 
     assert record["status"] == "ok"
-    assert llm.repair_calls == 2
-    assert llm.audit_calls == 3
+    prompt_texts = [
+        "\n".join(str(message.content or "") for message in messages)
+        for messages, _kwargs in llm.calls
+    ]
+    folded_prompts = [prompt.casefold() for prompt in prompt_texts]
+    assert sum("repair the python code" in prompt for prompt in folded_prompts) == 2
+    assert (
+        sum(
+            "conservative icu concept-use auditor" in prompt
+            for prompt in folded_prompts
+        )
+        == 3
+    )
     assert record["step_llm_repair_attempts"] == 2
     assert record["step_provider_call_categories"] == [
         "initial_generation",
