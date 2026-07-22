@@ -5,6 +5,15 @@ and returns a structured :class:`PreflightRun` summary.  It never calls an
 external Provider, never reads patient data, and never grants paper authority
 (see the package docstring for the enforced boundaries).
 
+The zero-Provider guarantee is **not** taken on the client's word.  Every run is
+wrapped in :func:`provider_transport_spy`, which replaces the real lowest-layer
+HTTP transport (``httpx.Client.send`` / ``httpx.AsyncClient.send`` — the path all
+production OpenAI/Anthropic SDK calls funnel through) with a counter that raises
+on first use.  ``PreflightRun.external_provider_calls`` is that spy's count, so
+``== 0`` is authoritative and independent of the (forgeable)
+``__easyicu_mock_client__`` / class-name markers.  ``llm_is_mockish`` is recorded
+only as *descriptive* colour, never as the security boundary.
+
 Run one case directly (development smoke)::
 
     PYTHONPATH="src:." python -m benchmarks.figure2_canonical9.preflight.harness e2
@@ -12,14 +21,16 @@ Run one case directly (development smoke)::
 
 from __future__ import annotations
 
+import contextlib
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Iterator, List, Optional
 
 
 import easyicu.research_agent as ra
 from easyicu.research_agent.evaluation_scorecard import compute_tristate
+from easyicu.research_agent.providers.llm import llm_is_mockish
 from easyicu.research_agent.providers.mocks import (
     _extract_step_id,
     _mock_code_primary_association,
@@ -28,6 +39,7 @@ from easyicu.research_agent.providers.mocks import (
 from benchmarks.figure2_canonical9.evaluator.acceptance import (
     evaluate_figure2_paper_acceptance,
 )
+from benchmarks.figure2_canonical9.preflight import runtime as rt
 from benchmarks.figure2_canonical9.preflight.fixtures import (
     E1E3_CASES,
     PreflightCase,
@@ -45,6 +57,67 @@ _FAULT_CODE = (
     "# injected preflight coder fault (deterministic, offline)\n"
     "raise RuntimeError('injected preflight coder fault')\n"
 )
+
+
+# ---------------------------------------------------------------------------
+# Zero-Provider transport spy (authoritative)
+# ---------------------------------------------------------------------------
+
+
+class ProviderTransportBlocked(RuntimeError):
+    """Raised if any real network Provider transport is invoked under the spy."""
+
+
+@dataclass
+class TransportSpy:
+    """Records attempts to reach the real HTTP transport (must stay at 0)."""
+
+    calls: int = 0
+    targets: List[str] = field(default_factory=list)
+
+
+@contextlib.contextmanager
+def provider_transport_spy() -> Iterator[TransportSpy]:
+    """Fail-closed spy over the real lowest-layer HTTP transport.
+
+    Every production LLM Provider (OpenAI/Anthropic SDK) sends requests through
+    ``httpx``.  We swap ``httpx.Client.send`` / ``httpx.AsyncClient.send`` for a
+    counter that RAISES on first use, so any real network Provider call is both
+    counted and hard-failed.  A mock client never touches ``httpx``, so the
+    counter stays 0 — that zero is the authoritative zero-Provider evidence.
+
+    Only ``send`` is patched (not client construction), so incidental
+    construction of an ``httpx.Client`` that never sends is untouched; the moment
+    a request would leave the process it is blocked.
+    """
+
+    spy = TransportSpy()
+    import httpx
+
+    real_sync = httpx.Client.send
+    real_async = httpx.AsyncClient.send
+
+    def _blocked_sync(self, *args, **kwargs):  # noqa: ANN001
+        spy.calls += 1
+        spy.targets.append("httpx.Client.send")
+        raise ProviderTransportBlocked(
+            "preflight is zero-Provider: httpx.Client.send was invoked"
+        )
+
+    async def _blocked_async(self, *args, **kwargs):  # noqa: ANN001
+        spy.calls += 1
+        spy.targets.append("httpx.AsyncClient.send")
+        raise ProviderTransportBlocked(
+            "preflight is zero-Provider: httpx.AsyncClient.send was invoked"
+        )
+
+    httpx.Client.send = _blocked_sync  # type: ignore[method-assign]
+    httpx.AsyncClient.send = _blocked_async  # type: ignore[method-assign]
+    try:
+        yield spy
+    finally:
+        httpx.Client.send = real_sync  # type: ignore[method-assign]
+        httpx.AsyncClient.send = real_async  # type: ignore[method-assign]
 
 
 def _last_user(messages) -> str:
@@ -65,8 +138,9 @@ class ScriptedPreflightLLM(ra.MockLLMClient):
     * Optional fault injection returns runtime-raising code for a target step on
       both its initial write and every repair, to exercise the repair cap.
 
-    Every response is produced locally; there is no network Provider.  The
-    ``__easyicu_mock_client__`` marker (inherited) proves this.
+    Every response is produced locally.  This client's offline nature is recorded
+    descriptively via ``llm_is_mockish``; the *authoritative* zero-Provider proof
+    is the transport spy in :func:`provider_transport_spy`, not this class.
     """
 
     name = "scripted-preflight-offline"
@@ -85,13 +159,6 @@ class ScriptedPreflightLLM(ra.MockLLMClient):
         self.plan_calls = 0
         # code write/repair calls keyed by resolved step_id
         self.code_calls: Dict[str, int] = {}
-
-    # -- provenance -------------------------------------------------------
-    @property
-    def external_provider_calls(self) -> int:
-        """External (network) Provider calls. Always 0 for a mock client."""
-
-        return 0
 
     def complete(self, messages, **kwargs) -> str:
         self.total_calls += 1
@@ -130,6 +197,8 @@ class PreflightRun:
     run_id: str
     manifest: Dict[str, Any]
     llm: ScriptedPreflightLLM
+    provider_transport_calls: int = 0
+    provider_transport_targets: List[str] = field(default_factory=list)
     raised: Optional[str] = None
     routing: List[Dict[str, Any]] = field(default_factory=list)
     readiness: Dict[str, Any] = field(default_factory=dict)
@@ -151,11 +220,15 @@ class PreflightRun:
 
     @property
     def external_provider_calls(self) -> int:
-        return self.llm.external_provider_calls
+        """Authoritative: the real httpx transport spy count, not a self-report."""
+
+        return self.provider_transport_calls
 
     @property
-    def llm_is_mock(self) -> bool:
-        return bool(getattr(self.llm, "__easyicu_mock_client__", False))
+    def llm_offline_classified(self) -> bool:
+        """Descriptive only — ``llm_is_mockish`` is forgeable (package docstring)."""
+
+        return llm_is_mockish(self.llm)
 
 
 def load_manifest(run_dir: Path) -> Dict[str, Any]:
@@ -196,9 +269,10 @@ def build_pipeline(
     ``runner_kind='subprocess'`` runs the real host runner (the documented
     offline-diagnosis path).  The ``auto`` runner's Docker source-SHA integrity
     gate is a *production* blocker and is deliberately NOT bypassed or weakened;
-    the subprocess runner is only for offline diagnosis.  Tangential Provider-shaped
-    audits (literature, visual QA, LaTeX, LLM concept audit) are disabled so the
-    run exercises the orchestration under test, not unrelated quality validators.
+    the subprocess runner is only for offline diagnosis.  Tangential
+    Provider-shaped audits (literature, visual QA, LaTeX, LLM concept audit) are
+    disabled so the run exercises the orchestration under test, not unrelated
+    quality validators.
     """
 
     kwargs: Dict[str, Any] = dict(
@@ -234,7 +308,11 @@ def run_preflight(
     enable_replanning: bool = False,
     max_replans: Optional[int] = None,
 ) -> PreflightRun:
-    """Run one offline graph-level preflight and return structured evidence."""
+    """Run one offline graph-level preflight and return structured evidence.
+
+    The whole pipeline run executes inside :func:`provider_transport_spy`, so the
+    returned ``provider_transport_calls`` is a real transport-layer measurement.
+    """
 
     llm = ScriptedPreflightLLM(case, fault_step=fault_step)
     pipeline = build_pipeline(
@@ -267,12 +345,13 @@ def run_preflight(
     raised: Optional[str] = None
     run_dir = Path(workdir)
     run_id = ""
-    try:
-        result = pipeline.run(**run_kwargs)
-        run_dir = Path(result.workdir)
-        run_id = result.run_id
-    except Exception as exc:  # noqa: BLE001 - a raise IS a graph-level outcome
-        raised = f"{type(exc).__name__}: {exc}"
+    with provider_transport_spy() as spy:
+        try:
+            result = pipeline.run(**run_kwargs)
+            run_dir = Path(result.workdir)
+            run_id = result.run_id
+        except Exception as exc:  # noqa: BLE001 - a raise IS a graph-level outcome
+            raised = f"{type(exc).__name__}: {exc}"
 
     manifest = load_manifest(run_dir)
     return PreflightRun(
@@ -281,10 +360,26 @@ def run_preflight(
         run_id=run_id,
         manifest=manifest,
         llm=llm,
+        provider_transport_calls=spy.calls,
+        provider_transport_targets=list(spy.targets),
         raised=raised,
         routing=_routing(manifest),
         readiness=manifest.get("readiness", {}),
     )
+
+
+def preflight_runtime_manifest(run_dir: Optional[Path] = None) -> rt.RuntimeManifest:
+    """Capture the auditable runtime identity + isolation-backend capability.
+
+    Persisted to ``run_dir`` when given.  The integration gate reads
+    ``manifest.integration_ready`` (runtime-compatible AND isolation available);
+    a nested-sandbox host reports a structured ``blocked_reason`` instead.
+    """
+
+    manifest = rt.build_runtime_manifest()
+    if run_dir is not None:
+        rt.write_runtime_manifest(run_dir, manifest)
+    return manifest
 
 
 def paper_acceptance_status(run: PreflightRun) -> str:
@@ -330,15 +425,20 @@ def _cli(task_key: str) -> int:
     if case is None:
         raise SystemExit(f"unknown task key {task_key!r}; try e1/e2/e3")
     tmp = Path(tempfile.mkdtemp(prefix=f"preflight_{task_key}_"))
+    manifest = preflight_runtime_manifest(tmp)
     run = run_preflight(case, workdir=tmp)
     print(
         json.dumps(
             {
                 "task_id": run.case.task_id,
-                "llm_is_mock": run.llm_is_mock,
+                "runtime_integration_ready": manifest.integration_ready,
+                "runtime_blocked_reason": manifest.blocked_reason,
+                "llm_offline_classified": run.llm_offline_classified,
                 "external_provider_calls": run.external_provider_calls,
+                "provider_transport_targets": run.provider_transport_targets,
                 "total_llm_calls": run.llm.total_calls,
                 "plan_calls": run.llm.plan_calls,
+                "expected_products": list(run.case.expected_products),
                 "step_ids": run.step_ids,
                 "routing": run.routing,
                 "tristate": run.tristate,
@@ -359,10 +459,14 @@ if __name__ == "__main__":
 
 
 __all__ = [
+    "ProviderTransportBlocked",
+    "TransportSpy",
+    "provider_transport_spy",
     "ScriptedPreflightLLM",
     "PreflightRun",
     "run_preflight",
     "build_pipeline",
+    "preflight_runtime_manifest",
     "load_manifest",
     "paper_acceptance_status",
 ]
