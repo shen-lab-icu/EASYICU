@@ -20,7 +20,6 @@ from pathlib import Path
 
 import pytest
 
-
 # ---------------------------------------------------------------------------
 # ReproEnvelope unit tests
 # ---------------------------------------------------------------------------
@@ -73,9 +72,10 @@ def test_recording_client_records_prompt_and_response_hashes(ra):
     assert rec.temperature == 0.1
     assert rec.max_tokens == 32
     assert rec.requested_seed is None
-    assert rec.prompt_sha256 == hashlib.sha256(
-        f"<<<user>>>\n{msg.content}".encode("utf-8")
-    ).hexdigest()
+    assert (
+        rec.prompt_sha256
+        == hashlib.sha256(f"<<<user>>>\n{msg.content}".encode("utf-8")).hexdigest()
+    )
     assert rec.response_sha256 == hashlib.sha256(out.encode("utf-8")).hexdigest()
 
 
@@ -94,7 +94,10 @@ def test_recording_client_forwards_seed_when_inner_accepts_it(ra):
 
     env = ra.ReproEnvelope(run_id="run-seed")
     recorder = ra.ReproRecordingClient(
-        _WithSeed(), role="coder", envelope=env, seed=1234,
+        _WithSeed(),
+        role="coder",
+        envelope=env,
+        seed=1234,
     )
     out = recorder.complete([LLMMessage(role="user", content="go")])
     assert observed["seed"] == 1234
@@ -111,9 +114,7 @@ def test_recording_client_records_top_p_when_caller_sets_it(ra):
         name = "with-top-p"
         _model = "topp-aware"
 
-        def complete(
-            self, messages, *, max_tokens=2048, temperature=0.2, top_p=None
-        ):
+        def complete(self, messages, *, max_tokens=2048, temperature=0.2, top_p=None):
             observed["top_p"] = top_p
             return "ok"
 
@@ -166,7 +167,10 @@ def test_recording_client_degrades_gracefully_for_clients_without_seed(ra):
 
     env = ra.ReproEnvelope(run_id="run-no-seed")
     recorder = ra.ReproRecordingClient(
-        _NoSeed(), role="writer", envelope=env, seed=42,
+        _NoSeed(),
+        role="writer",
+        envelope=env,
+        seed=42,
     )
     # Should not raise even though the inner client has no seed kwarg.
     out = recorder.complete([LLMMessage(role="user", content="go")])
@@ -174,6 +178,41 @@ def test_recording_client_degrades_gracefully_for_clients_without_seed(ra):
     # Requested seed is still recorded as user intent even though the
     # provider cannot honour it.
     assert env.calls[0].requested_seed == 42
+
+
+def test_recording_client_returns_usage_owned_by_the_same_call(ra):
+    from easyicu.research_agent.providers.llm import LLMMessage
+
+    class _WithCallUsage:
+        name = "call-usage"
+        _model = "usage-model"
+
+        def complete_with_usage(
+            self, messages, *, max_tokens=2048, temperature=0.2, seed=None
+        ):
+            assert seed == 77
+            return "ok", {
+                "prompt_tokens": 13,
+                "completion_tokens": 5,
+                "total_tokens": 18,
+            }
+
+    env = ra.ReproEnvelope(run_id="run-call-usage")
+    recorder = ra.ReproRecordingClient(
+        _WithCallUsage(), role="writer", envelope=env, seed=77
+    )
+    response, usage = recorder.complete_with_usage(
+        [LLMMessage(role="user", content="go")]
+    )
+
+    assert response == "ok"
+    assert usage == {
+        "prompt_tokens": 13,
+        "completion_tokens": 5,
+        "total_tokens": 18,
+    }
+    assert recorder.last_usage == usage
+    assert len(env.calls) == 1
 
 
 def test_manifest_summary_aggregates_by_role_and_model(ra):
@@ -304,9 +343,7 @@ def test_pipeline_without_envelope_stays_bit_identical_for_manifest_field(
     assert not (run_dir / "reproducibility_envelope.json").exists()
 
 
-def test_pipeline_envelope_composes_with_cost_tracking(
-    ra, synthetic_cohort, tmp_path
-):
+def test_pipeline_envelope_composes_with_cost_tracking(ra, synthetic_cohort, tmp_path):
     cohort_path = _write_cohort(synthetic_cohort, tmp_path)
     pipeline = ra.ResearchAgentPipeline(
         workdir=tmp_path / "out",

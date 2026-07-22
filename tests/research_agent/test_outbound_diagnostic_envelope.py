@@ -25,6 +25,20 @@ class _ExternalCaptureLLM(OpenAIClient):
         return self.responses.pop(0)
 
 
+class _UnmanagedCaptureLLM:
+    """Unknown adapters must be treated as external, never local-exempt."""
+
+    name = "custom-forwarder"
+
+    def __init__(self, responses):  # noqa: ANN001
+        self.responses = list(responses)
+        self.calls = []
+
+    def complete(self, messages, **kwargs):  # noqa: ANN001, ANN003
+        self.calls.append((list(messages), dict(kwargs)))
+        return self.responses.pop(0)
+
+
 def _context_and_step(ra):  # noqa: ANN001
     context = ra.ResearchContext(
         research_question="Test an outbound repair boundary.",
@@ -89,9 +103,7 @@ def test_external_repair_never_sends_raw_runtime_or_dataframe_values(ra):
     patch = json.dumps(
         {
             "format": PATCH_FORMAT,
-            "edits": [
-                {"old": "value = 1", "new": "value = 2", "expected_count": 1}
-            ],
+            "edits": [{"old": "value = 1", "new": "value = 2", "expected_count": 1}],
         }
     )
     llm = _ExternalCaptureLLM([patch])
@@ -158,6 +170,32 @@ def test_external_full_rewrite_also_uses_the_same_closed_envelope(ra):
     assert "555991" not in prompt
     assert "Private Person" not in prompt
     assert "do-not-send" not in prompt
+
+
+def test_unmanaged_custom_provider_receives_only_the_closed_envelope(ra):
+    context, step = _context_and_step(ra)
+    patch = json.dumps(
+        {
+            "format": PATCH_FORMAT,
+            "edits": [{"old": "value = 1", "new": "value = 2", "expected_count": 1}],
+        }
+    )
+    llm = _UnmanagedCaptureLLM([patch])
+
+    CoderAgent(llm).repair(
+        context=context,
+        step=step,
+        code="import os\nvalue = 1\n",
+        run_log="MRN=99117 patient_name=Private Person raw dataframe row",
+        repair_authority=_authority(),
+        current_repair_authority=_authority(),
+    )
+
+    prompt = _all_prompt_text(llm)
+    assert "easyicu.diagnostic_envelope/1" in prompt
+    assert "99117" not in prompt
+    assert "Private Person" not in prompt
+    assert "raw dataframe row" not in prompt
 
 
 def test_diagnostic_envelope_has_no_runtime_log_input_surface():

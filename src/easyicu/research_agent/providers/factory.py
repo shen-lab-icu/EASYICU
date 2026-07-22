@@ -137,9 +137,12 @@ def provider_transport_destination(client: Any) -> str:
     if bool(getattr(client, "__easyicu_openai_transport__", False)):
         base_url = getattr(client, "_resolved_base_url", None)
         return "local" if is_loopback_openai_base_url(base_url) else "external"
-    # In-process adapters are retained for deterministic tests and local
-    # plugins. Production OpenAI-compatible transports are covered above.
-    return "local"
+    # Unknown adapters are never trusted merely because they are in-process:
+    # they may forward requests to an arbitrary remote service. Treat them as
+    # external so repair prompts receive the structured outbound envelope, and
+    # keep their authorization mode unmanaged below. A truly local transport
+    # must be factory-attested (for example, a loopback OpenAI endpoint).
+    return "external"
 
 
 def provider_authorization_manifest(client: Any) -> dict[str, Any]:
@@ -187,9 +190,7 @@ def provider_authorization_manifest(client: Any) -> dict[str, Any]:
                 "model": str(getattr(item, "_model", "") or ""),
                 "base_url": base_url,
                 "destination": destination,
-                "authorization_mode": (
-                    "local_exempt" if destination == "local" else "unmanaged"
-                ),
+                "authorization_mode": "unmanaged",
                 "authorization_sha256": "",
             }
         )

@@ -13,6 +13,7 @@ from ..providers.prompts import PROMPT_PACK_VERSION, prompt_pack_files
 from .runtime_artifacts import capture_code_version
 
 EXECUTION_IDENTITY_SCHEMA = "easyicu.execution_identity/1"
+EXPECTED_EXECUTION_IDENTITY_SCHEMA = "easyicu.expected_execution_identity/1"
 
 
 def _canonical_json(value: Mapping[str, Any]) -> str:
@@ -141,6 +142,43 @@ class ExecutionIdentity(BaseModel):
         return cls.model_validate(payload, strict=True)
 
 
+class ExpectedExecutionIdentity(BaseModel):
+    """An operator-frozen identity supplied independently of run outputs."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    schema_version: Literal["easyicu.expected_execution_identity/1"]
+    execution_identity: ExecutionIdentity
+    expected_identity_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    freeze_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+    @model_validator(mode="after")
+    def _verify_frozen_identity(self) -> "ExpectedExecutionIdentity":
+        if self.expected_identity_sha256 != self.execution_identity.identity_sha256:
+            raise ValueError("expected execution identity digest mismatch")
+        payload = self.model_dump(mode="json", exclude={"freeze_sha256"})
+        expected_freeze_sha = hashlib.sha256(
+            _canonical_json(payload).encode("utf-8")
+        ).hexdigest()
+        if self.freeze_sha256 != expected_freeze_sha:
+            raise ValueError("expected execution identity freeze digest mismatch")
+        return self
+
+    @classmethod
+    def create(cls, identity: ExecutionIdentity) -> "ExpectedExecutionIdentity":
+        if not isinstance(identity, ExecutionIdentity):
+            raise TypeError("expected execution identity requires ExecutionIdentity")
+        payload: dict[str, Any] = {
+            "schema_version": EXPECTED_EXECUTION_IDENTITY_SCHEMA,
+            "execution_identity": identity.model_dump(mode="json"),
+            "expected_identity_sha256": identity.identity_sha256,
+        }
+        payload["freeze_sha256"] = hashlib.sha256(
+            _canonical_json(payload).encode("utf-8")
+        ).hexdigest()
+        return cls.model_validate(payload, strict=True)
+
+
 def _paper_eligible(payload: Mapping[str, Any]) -> bool:
     profile_ref = payload.get("submission_profile_ref")
     image_digest = payload.get("runner_image_digest")
@@ -189,6 +227,8 @@ def execution_identity_for_pipeline(pipeline: Any) -> ExecutionIdentity:
 
 __all__ = [
     "EXECUTION_IDENTITY_SCHEMA",
+    "EXPECTED_EXECUTION_IDENTITY_SCHEMA",
+    "ExpectedExecutionIdentity",
     "ExecutionIdentity",
     "execution_identity_for_pipeline",
 ]

@@ -2591,6 +2591,15 @@ def main() -> int:
         ),
     )
     parser.add_argument(
+        "--figure2-expected-execution-identity",
+        default=None,
+        help=(
+            "Absolute path to an operator-frozen ExpectedExecutionIdentity JSON. "
+            "Required with --require-figure2-paper-acceptance and forbidden "
+            "inside the benchmark output root."
+        ),
+    )
+    parser.add_argument(
         "--force-writer-probe",
         action="store_true",
         help=(
@@ -2694,6 +2703,18 @@ def main() -> int:
             "--require-figure2-paper-acceptance cannot score a non-paper "
             "development sample. Rerun the frozen task on the full cohort."
         )
+    expected_execution_identity_path = getattr(
+        args,
+        "figure2_expected_execution_identity",
+        None,
+    )
+    if bool(args.require_figure2_paper_acceptance) and not (
+        str(expected_execution_identity_path or "").strip()
+    ):
+        raise SystemExit(
+            "--require-figure2-paper-acceptance requires "
+            "--figure2-expected-execution-identity."
+        )
 
     if args.ehrflowbench_jsonl:
         if bool(args.require_figure2_paper_acceptance) and _normalize_arms(
@@ -2731,6 +2752,11 @@ def main() -> int:
                 allow_mock_aware=bool(args.allow_mock_aware),
                 require_figure2_paper_acceptance=bool(
                     args.require_figure2_paper_acceptance
+                ),
+                expected_execution_identity_path=(
+                    Path(expected_execution_identity_path).expanduser().resolve()
+                    if expected_execution_identity_path
+                    else None
                 ),
             )
 
@@ -3358,6 +3384,7 @@ def _run_ehrflowbench_jsonl(
     force_writer_probe: bool = False,
     allow_mock_aware: bool = False,
     require_figure2_paper_acceptance: bool = False,
+    expected_execution_identity_path: Path | None = None,
 ) -> int:
     """Run an external EHRFlowBench-style JSONL export when available."""
     import pandas as pd
@@ -3781,7 +3808,10 @@ def _run_ehrflowbench_jsonl(
         )
 
         try:
-            acceptance = evaluate_figure2_paper_acceptance(results_path)
+            acceptance = evaluate_figure2_paper_acceptance(
+                results_path,
+                expected_execution_identity_path=expected_execution_identity_path,
+            )
         except Exception as exc:  # paper gate must not truncate item outputs
             acceptance = Figure2PaperAcceptance(
                 schema_version=FIGURE2_PAPER_ACCEPTANCE_SCHEMA,

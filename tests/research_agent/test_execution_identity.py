@@ -5,7 +5,10 @@ from typing import Any
 import pytest
 from pydantic import ValidationError
 
-from easyicu.research_agent.authority.execution_identity import ExecutionIdentity
+from easyicu.research_agent.authority.execution_identity import (
+    ExecutionIdentity,
+    ExpectedExecutionIdentity,
+)
 from easyicu.research_agent.providers.factory import (
     ProviderAuthorization,
     build_provider_client,
@@ -70,6 +73,15 @@ def test_identity_tampering_is_rejected() -> None:
         ExecutionIdentity.model_validate(payload, strict=True)
 
 
+def test_expected_identity_freeze_rejects_tampering() -> None:
+    frozen = ExpectedExecutionIdentity.create(_identity())
+    payload = frozen.model_dump(mode="json")
+    payload["expected_identity_sha256"] = "0" * 64
+
+    with pytest.raises(ValidationError, match="expected execution identity digest"):
+        ExpectedExecutionIdentity.model_validate(payload, strict=True)
+
+
 def test_preflight_provider_coordinates_match_the_constructed_client() -> None:
     class Client:
         def __init__(self, **_kwargs: Any) -> None:
@@ -104,6 +116,23 @@ def test_preflight_provider_coordinates_match_the_constructed_client() -> None:
     )
 
     assert actual.identity_sha256 == preflight.identity_sha256
+
+
+def test_unmanaged_custom_provider_can_never_receive_paper_authority() -> None:
+    class CustomForwarder:
+        name = "custom-forwarder"
+
+    identity = _identity(provider_client=CustomForwarder())
+
+    assert identity.provider_authorization["clients"][0] == {
+        "provider": "custom-forwarder",
+        "model": "",
+        "base_url": "",
+        "destination": "external",
+        "authorization_mode": "unmanaged",
+        "authorization_sha256": "",
+    }
+    assert identity.paper_eligible is False
 
 
 @pytest.mark.parametrize(

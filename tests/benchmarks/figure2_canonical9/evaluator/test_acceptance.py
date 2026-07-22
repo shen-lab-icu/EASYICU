@@ -7,20 +7,27 @@ from typing import Any, Callable
 
 import pytest
 
-from easyicu.research_agent.authority.execution_identity import ExecutionIdentity
+from easyicu.research_agent.authority.execution_identity import (
+    ExecutionIdentity,
+    ExpectedExecutionIdentity,
+)
 from easyicu.research_agent.providers.factory import ProviderAuthorization
 from benchmarks.figure2_canonical9.evaluator import acceptance
 from benchmarks.figure2_canonical9.evaluator.rubric_v1 import FIGURE2_TASK_IDS
 
 
-def _execution_identity(*, host_runner_authorized: bool = False) -> dict[str, Any]:
+def _execution_identity(
+    *,
+    host_runner_authorized: bool = False,
+    model: str = "frozen-model",
+) -> dict[str, Any]:
     class Client:
         pass
 
     client = Client()
     client.__easyicu_provider_authorization__ = ProviderAuthorization.create(
         provider="openai",
-        model="frozen-model",
+        model=model,
         base_url="https://provider.example/v1",
         destination="external",
         authorization_mode="operator_env",
@@ -44,9 +51,17 @@ def _write_results(
     host_runner_authorized: bool = False,
 ) -> Path:
     identity = _execution_identity(host_runner_authorized=host_runner_authorized)
+    expected_identity = ExpectedExecutionIdentity.create(
+        ExecutionIdentity.model_validate(_execution_identity(), strict=True)
+    )
+    (root / "expected_execution_identity.json").write_text(
+        json.dumps(expected_identity.model_dump(mode="json")),
+        encoding="utf-8",
+    )
+    results_root = root / "results"
     scores: list[dict[str, Any]] = []
     for task_id in FIGURE2_TASK_IDS:
-        run_dir = root / task_id / "aware" / f"run_{task_id}"
+        run_dir = results_root / task_id / "aware" / f"run_{task_id}"
         run_dir.mkdir(parents=True)
         (run_dir / "manifest.json").write_text(
             json.dumps({"execution_identity": identity}),
@@ -68,7 +83,7 @@ def _write_results(
                 },
             }
         )
-    path = root / "ehrflowbench_results.json"
+    path = results_root / "ehrflowbench_results.json"
     path.write_text(
         json.dumps(
             {
@@ -81,6 +96,10 @@ def _write_results(
         encoding="utf-8",
     )
     return path
+
+
+def _expected_path(results_path: Path) -> Path:
+    return results_path.parent.parent / "expected_execution_identity.json"
 
 
 def _install_valid_attempt_stubs(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -125,7 +144,10 @@ def test_exact_nine_valid_aware_attempts_are_replay_accepted(
     path = _write_results(tmp_path)
     _install_valid_attempt_stubs(monkeypatch)
 
-    report = acceptance.evaluate_figure2_paper_acceptance(path)
+    report = acceptance.evaluate_figure2_paper_acceptance(
+        path,
+        expected_execution_identity_path=_expected_path(path),
+    )
 
     assert report.status == "accepted"
     assert tuple(row.task_id for row in report.verified_tasks) == FIGURE2_TASK_IDS
@@ -187,7 +209,10 @@ def test_coverage_identity_and_attempt_failures_are_structured_invalid(
     _install_valid_attempt_stubs(monkeypatch)
     _mutate(path, mutation)
 
-    report = acceptance.evaluate_figure2_paper_acceptance(path)
+    report = acceptance.evaluate_figure2_paper_acceptance(
+        path,
+        expected_execution_identity_path=_expected_path(path),
+    )
 
     assert report.status == "invalid"
     assert expected_code in {issue.code for issue in report.issues}
@@ -205,7 +230,10 @@ def test_replay_failure_is_fail_closed(
 
     monkeypatch.setattr(acceptance, "verify_figure2_evaluation_attempt", fail_replay)
 
-    report = acceptance.evaluate_figure2_paper_acceptance(path)
+    report = acceptance.evaluate_figure2_paper_acceptance(
+        path,
+        expected_execution_identity_path=_expected_path(path),
+    )
 
     assert report.status == "invalid"
     assert {issue.code for issue in report.issues} == {"EVALUATION_REPLAY_FAILED"}
@@ -218,10 +246,59 @@ def test_host_runner_authorization_can_never_pass_paper_acceptance(
     path = _write_results(tmp_path, host_runner_authorized=True)
     _install_valid_attempt_stubs(monkeypatch)
 
-    report = acceptance.evaluate_figure2_paper_acceptance(path)
+    report = acceptance.evaluate_figure2_paper_acceptance(
+        path,
+        expected_execution_identity_path=_expected_path(path),
+    )
 
     assert report.status == "invalid"
     assert {issue.code for issue in report.issues} == {"EXECUTION_IDENTITY_INVALID"}
+
+
+def test_consistent_but_unfrozen_identity_cannot_pass_paper_acceptance(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = _write_results(tmp_path)
+    _install_valid_attempt_stubs(monkeypatch)
+    alternate = _execution_identity(model="unfrozen-model")
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    for row in payload["scores"]:
+        row["aware"]["execution_identity"] = alternate
+        run_dir = Path(row["aware"]["workdir"])
+        (run_dir / "manifest.json").write_text(
+            json.dumps({"execution_identity": alternate}),
+            encoding="utf-8",
+        )
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    report = acceptance.evaluate_figure2_paper_acceptance(
+        path,
+        expected_execution_identity_path=_expected_path(path),
+    )
+
+    assert report.status == "invalid"
+    assert {issue.code for issue in report.issues} == {"EXECUTION_IDENTITY_INVALID"}
+
+
+def test_results_cannot_supply_their_own_expected_identity(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = _write_results(tmp_path)
+    _install_valid_attempt_stubs(monkeypatch)
+    self_declared = path.parent / "expected_execution_identity.json"
+    self_declared.write_bytes(_expected_path(path).read_bytes())
+
+    report = acceptance.evaluate_figure2_paper_acceptance(
+        path,
+        expected_execution_identity_path=self_declared,
+    )
+
+    assert report.status == "invalid"
+    assert "EXPECTED_EXECUTION_IDENTITY_INVALID" in {
+        issue.code for issue in report.issues
+    }
 
 
 def test_workdir_cannot_be_transplanted_under_another_task(
@@ -232,12 +309,15 @@ def test_workdir_cannot_be_transplanted_under_another_task(
     _install_valid_attempt_stubs(monkeypatch)
     payload = json.loads(path.read_text(encoding="utf-8"))
     first = payload["scores"][0]["aware"]
-    transplanted = tmp_path / FIGURE2_TASK_IDS[1] / "aware" / str(first["run_id"])
+    transplanted = path.parent / FIGURE2_TASK_IDS[1] / "aware" / str(first["run_id"])
     transplanted.mkdir()
     first["workdir"] = str(transplanted)
     path.write_text(json.dumps(payload), encoding="utf-8")
 
-    report = acceptance.evaluate_figure2_paper_acceptance(path)
+    report = acceptance.evaluate_figure2_paper_acceptance(
+        path,
+        expected_execution_identity_path=_expected_path(path),
+    )
 
     assert report.status == "invalid"
     assert "RUN_IDENTITY_INVALID" in {issue.code for issue in report.issues}

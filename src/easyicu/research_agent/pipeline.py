@@ -2647,8 +2647,8 @@ class ResearchAgentPipeline:
             )
             # Order: envelope wraps the innermost client so prompt /
             # response hashes are computed on the exact strings the
-            # agent sent / received; the metered layer then observes
-            # ``last_usage`` the envelope passes through.
+            # agent sent / received; the metered layer then receives usage
+            # owned by that same response through ``complete_with_usage``.
             if repro_envelope is not None:
                 env_resolver = envelope_role_resolver(
                     llm,

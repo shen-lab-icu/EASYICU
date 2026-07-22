@@ -328,7 +328,9 @@ class OpenAIClient:
         # or drops the connection) can be given a longer per-call timeout and a
         # bigger retry budget without a code change:
         #   EASYICU_LLM_TIMEOUT=<seconds>   EASYICU_LLM_MAX_RETRIES=<attempts>
-        request_timeout = float(os.environ.get("EASYICU_LLM_TIMEOUT") or request_timeout)
+        request_timeout = float(
+            os.environ.get("EASYICU_LLM_TIMEOUT") or request_timeout
+        )
         max_retries = int(os.environ.get("EASYICU_LLM_MAX_RETRIES") or max_retries)
         kwargs: Dict[str, Any] = {}
         # Accept either OPENAI_API_KEY (vanilla) or OPENROUTER_API_KEY so
@@ -515,6 +517,29 @@ class OpenAIClient:
         seed: Optional[int] = None,
         top_p: Optional[float] = None,
     ) -> str:
+        content, _usage = self.complete_with_usage(
+            messages,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            seed=seed,
+            top_p=top_p,
+        )
+        return content
+
+    def complete_with_usage(
+        self,
+        messages: Sequence[LLMMessage],
+        *,
+        max_tokens: int = 2048,
+        temperature: float = 0.2,
+        seed: Optional[int] = None,
+        top_p: Optional[float] = None,
+    ) -> tuple[str, Optional[Dict[str, int]]]:
+        """Return text and usage from the same provider response.
+
+        The tuple is call-scoped: concurrent callers never have to read the
+        shared compatibility attribute ``last_usage`` to attribute cost.
+        """
         chat_messages = [{"role": m.role, "content": m.content} for m in messages]
         create_kwargs: Dict[str, Any] = {
             "model": self._model,
@@ -685,20 +710,21 @@ class OpenAIClient:
         # ``MeteredClient`` can pull authoritative token counts instead of
         # falling back to the chars/4 heuristic. Defensive: not every
         # provider populates ``usage`` on every response.
+        call_usage: Optional[Dict[str, int]] = None
         try:
             usage = getattr(resp, "usage", None)
             if usage is not None:
-                self.last_usage = {
+                call_usage = {
                     "prompt_tokens": int(getattr(usage, "prompt_tokens", 0) or 0),
                     "completion_tokens": int(
                         getattr(usage, "completion_tokens", 0) or 0
                     ),
                     "total_tokens": int(getattr(usage, "total_tokens", 0) or 0),
                 }
-            else:
-                self.last_usage = None
         except Exception:
-            self.last_usage = None
+            call_usage = None
+        # Compatibility only; cost attribution uses the call-scoped return.
+        self.last_usage = call_usage
 
         # T1.3 — robust content extraction. Reasoning-tuned models
         # (GLM-4.5, DeepSeek-R1, o1-style, Qwen3) often leave ``content``
@@ -788,7 +814,7 @@ class OpenAIClient:
             except Exception:
                 pass
 
-        return content
+        return content, call_usage
 
     def complete_with_images(
         self,
@@ -976,6 +1002,25 @@ class FallbackLLMClient:
         seed: Optional[int] = None,
         top_p: Optional[float] = None,
     ) -> str:
+        out, _usage = self.complete_with_usage(
+            messages,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            seed=seed,
+            top_p=top_p,
+        )
+        return out
+
+    def complete_with_usage(
+        self,
+        messages: Sequence["LLMMessage"],
+        *,
+        max_tokens: int = 2048,
+        temperature: float = 0.2,
+        seed: Optional[int] = None,
+        top_p: Optional[float] = None,
+    ) -> tuple[str, Optional[Dict[str, int]]]:
+        """Return usage from the same successful fallback call, when available."""
         errors: List[str] = []
         last_exc: Optional[Exception] = None
         for client in self._clients:
@@ -987,25 +1032,39 @@ class FallbackLLMClient:
                 # 3-kwarg signature.
                 import inspect as _inspect
 
+                child_complete_with_usage = getattr(client, "complete_with_usage", None)
+                child_method = (
+                    child_complete_with_usage
+                    if callable(child_complete_with_usage)
+                    else client.complete
+                )
                 try:
-                    _params = _inspect.signature(client.complete).parameters
+                    _params = _inspect.signature(child_method).parameters
+                    _accepts_seed = "seed" in _params
                     _accepts_top_p = "top_p" in _params
                 except (TypeError, ValueError):
+                    _accepts_seed = False
                     _accepts_top_p = False
                 _kwargs: Dict[str, Any] = {
                     "max_tokens": max_tokens,
                     "temperature": temperature,
-                    "seed": seed,
                 }
+                if _accepts_seed and seed is not None:
+                    _kwargs["seed"] = seed
                 if _accepts_top_p and top_p is not None:
                     _kwargs["top_p"] = top_p
-                out = client.complete(messages, **_kwargs)
-                self.last_usage = getattr(client, "last_usage", None)
+                if callable(child_complete_with_usage):
+                    out, raw_usage = child_method(messages, **_kwargs)
+                    usage = dict(raw_usage) if isinstance(raw_usage, dict) else None
+                else:
+                    out = child_method(messages, **_kwargs)
+                    usage = None
+                self.last_usage = dict(usage) if usage is not None else None
                 self.last_finish_reason = getattr(client, "last_finish_reason", None)
                 self.last_client_name = getattr(
                     client, "_model", getattr(client, "name", type(client).__name__)
                 )
-                return out
+                return out, usage
             except (
                 Exception
             ) as exc:  # pragma: no cover - exercised via tests with fake clients
