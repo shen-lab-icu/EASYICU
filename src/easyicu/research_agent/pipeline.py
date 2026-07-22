@@ -3504,15 +3504,13 @@ class ResearchAgentPipeline:
         source_files: Optional[Sequence[Any]] = None,
         progress_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
         force_writer_probe: bool = False,
-        _use_graph: bool = False,
+        _use_graph: Optional[bool] = None,
     ) -> PipelineResult:
         """Run the explicit Plan → Execute → Write phases for one cohort.
 
-        Pass ``_use_graph=True`` (or call :meth:`run_with_graph`) to
-        dispatch the phases through the opt-in langgraph wrapper in
-        :mod:`easyicu.research_agent.graph`. Behaviour is identical
-        either way; the graph path is a PoC for future branching /
-        checkpointing work.
+        LangGraph dispatches the phases by default. ``_use_graph=False`` is a
+        private compatibility path retained for parity tests; it does not
+        change EasyICU's receipt, capsule, evidence, or checkpoint authority.
         """
         skill_obj: Optional[ClinicalSkill] = None
         if skill is not None:
@@ -4041,6 +4039,16 @@ class ResearchAgentPipeline:
                 emit_progress=_emit_progress,
             )
 
+        use_graph = _use_graph is not False
+        from .graph import orchestration_runtime_receipt
+
+        orchestration_receipt = orchestration_runtime_receipt(use_graph=use_graph)
+        orchestration_receipt_path = run_dir / "orchestration_runtime.json"
+        orchestration_receipt_path.write_text(
+            orchestration_receipt.model_dump_json(indent=2) + "\n",
+            encoding="utf-8",
+        )
+
         def _provenance_hook(plan_result):
             # O27 — Raw EHR provenance. Hash the cohort parquet and any
             # user-supplied source files and register as evidence so the
@@ -4077,6 +4085,18 @@ class ResearchAgentPipeline:
                             f"{type(exc).__name__}: {exc}"
                         ),
                     )
+                )
+            if plan_result.evidence.get("orchestration_runtime") is None:
+                plan_result.evidence.register_file(
+                    kind="log",
+                    description=(
+                        "Non-scientific phase-dispatch runtime identity; EasyICU "
+                        "receipts/capsules/checkpoints remain authoritative."
+                    ),
+                    source_path=orchestration_receipt_path,
+                    evidence_id="orchestration_runtime",
+                    producer="pipeline",
+                    generation_mode="system",
                 )
 
         def _execute_invoker(plan_result):
@@ -4158,7 +4178,7 @@ class ResearchAgentPipeline:
                 emit_progress=_emit_progress,
             )
 
-        if _use_graph:
+        if use_graph:
             from .graph import build_pipeline_graph
 
             graph = build_pipeline_graph(
@@ -4201,12 +4221,7 @@ class ResearchAgentPipeline:
         return await asyncio.to_thread(self.run, **kwargs)
 
     def run_with_graph(self, **kwargs: Any) -> PipelineResult:
-        """Opt-in PoC: dispatch the phases through a langgraph StateGraph.
-
-        Requires the ``agentic`` extra (``pip install easyicu[agentic]``).
-        Behaviour is identical to :meth:`run`; see
-        :mod:`easyicu.research_agent.graph` for the wrapper design.
-        """
+        """Explicitly dispatch phases through the default LangGraph runtime."""
         kwargs.pop("_use_graph", None)
         return self.run(_use_graph=True, **kwargs)
 
