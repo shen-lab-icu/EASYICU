@@ -354,6 +354,7 @@ from .providers.llm import (
 from .providers.mocks import MockLLMClient
 from .providers.protocol import LLMClient, LLMMessage
 from .learning.memory import RunMemory
+from .learning.store import FileSystemMemoryStore
 from .providers.prompts import PROMPT_PACK_VERSION, prompt_pack_files
 from .execution.runner import (
     HOST_OWNED_RUNNER_ENV_KEYS,
@@ -1734,12 +1735,10 @@ class ResearchAgentPipeline:
         self._writer_digest_secondary_cap_per_step = max(
             0, int(writer_digest_secondary_cap_per_step)
         )
-        # Phase-1 cross-run experience bank (default off). When True,
-        # the planner sees retrieved hints in its context block and
-        # the post-run reflector mines + writes back records via the
-        # deterministic helper in experience.py. The bank is read in
-        # ``_retrieve_experience_hints`` and written in
-        # ``_reflect_and_persist_experience``.
+        # Legacy cross-run stores are write-only compatibility sources.
+        # Their free-text records are never injected into Planner context.
+        # Run-derived records are additionally mirrored into the v2
+        # permissioned quarantine store during finalization.
         self._enable_experience_bank = bool(enable_experience_bank)
         self._experience_bank_path: Optional[Path] = (
             Path(experience_bank_path) if experience_bank_path else None
@@ -1790,6 +1789,11 @@ class ResearchAgentPipeline:
         self._validated_runtime_capabilities: Optional[Tuple[str, ...]] = None
         self._validated_runtime_bundle: Optional[Dict[str, object]] = None
         self._memory = RunMemory(self.workdir) if enable_memory else None
+        self._permissioned_memory_store = (
+            FileSystemMemoryStore(self.workdir / ".memory_v2")
+            if enable_memory or enable_experience_bank
+            else None
+        )
 
     def _build_runner(
         self,
@@ -2225,102 +2229,7 @@ class ResearchAgentPipeline:
             findings=len(findings),
         )
 
-        memory_digest_text: Optional[str] = None
-        if self._memory is not None:
-            digest = self._memory.digest_for_prompt(
-                research_question=question,
-                database=database,
-                target_outcome=target_outcome,
-            )
-            memory_digest_text = digest
-            if skill_obj is None:
-                try:
-                    meta_digest = self._memory.meta_planner_digest(
-                        skill_keys=[s.key for s in list_skills()],
-                        research_question=question,
-                        database=database,
-                        target_outcome=target_outcome,
-                    )
-                    memory_digest_text = digest + "\n\n" + meta_digest
-                except Exception:
-                    pass
-            digest_path = run_dir / "memory_digest.md"
-            digest_path.write_text(memory_digest_text, encoding="utf-8")
-            if evidence.get("memory_digest") is None:
-                evidence.register_file(
-                    kind="log",
-                    description="Cross-run memory digest fed to the planner.",
-                    source_path=digest_path,
-                    evidence_id="memory_digest",
-                    producer="memory",
-                    generation_mode="system",
-                )
-
-        experience_digest_text: Optional[str] = None
-        experience_hits = self.retrieve_experience_hints(
-            research_question=question,
-            database=database,
-        )
-        if experience_hits:
-            bank = self._experience_bank()
-            bank_record_count = (
-                len(bank.records()) if bank is not None else len(experience_hits)
-            )
-            retired_count = max(0, bank_record_count - len(experience_hits))
-            lines = [
-                "# Experience Hints",
-                "",
-                "Only deterministic, audit-safe experience buckets are shown: "
-                "concept_usage_hint and failure_counter_example. These are hints, "
-                "not ICU rules; cohort definitions and clinical rules still come "
-                "from the concept dictionary and validators.",
-                "",
-                f"Selected {len(experience_hits)} card(s); withheld/retired "
-                f"{retired_count} card(s) below the retrieval threshold or top-k.",
-            ]
-            for idx, (record, score) in enumerate(experience_hits, start=1):
-                lines.extend(
-                    [
-                        "",
-                        f"## Card {idx}: {record.kind}",
-                        f"- score: {score:.3f}",
-                        f"- database: {record.database}",
-                        f"- cohort: {record.cohort_name}",
-                        f"- produced_by: {record.producer_run_id or 'unknown'}",
-                        f"- reason: lexical overlap with the current question"
-                        + (
-                            " plus same-database boost"
-                            if database and record.database == database
-                            else ""
-                        ),
-                        f"- summary: {record.summary}",
-                    ]
-                )
-            experience_digest_text = "\n".join(lines) + "\n"
-            experience_path = run_dir / "experience_hints.md"
-            experience_path.write_text(experience_digest_text, encoding="utf-8")
-            if evidence.get("experience_hints") is None:
-                evidence.register_file(
-                    kind="log",
-                    description="Audit log of cross-run experience cards fed to the planner.",
-                    source_path=experience_path,
-                    evidence_id="experience_hints",
-                    producer="experience_bank",
-                    generation_mode="system",
-                )
-
         agent_context = context
-        planner_notes: List[str] = []
-        if memory_digest_text:
-            planner_notes.append("RunMemory digest for planner:\n" + memory_digest_text)
-        if experience_digest_text:
-            planner_notes.append(
-                "Experience hints for planner:\n" + experience_digest_text
-            )
-        if planner_notes:
-            note = "\n\n".join(planner_notes)
-            agent_notes = f"{context.notes}\n\n{note}" if context.notes else note
-            agent_context = agent_context.model_copy(update={"notes": agent_notes})
         if self._context_top_k and skill_obj is None:
             agent_context = build_retrieved_research_context(
                 agent_context,
