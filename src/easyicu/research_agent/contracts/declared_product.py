@@ -197,6 +197,7 @@ _PRODUCT_SLOT_SUFFIXES: Mapping[str, tuple[tuple[str, ...], ...]] = {
         ("measurement", "coverage"),
         ("source", "coverage"),
     ),
+    "missingness_measurement": (("missingness", "measurement"),),
     "cohort_flow": (
         ("cohort", "flow"),
         ("eligibility", "flow"),
