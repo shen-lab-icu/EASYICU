@@ -6,6 +6,7 @@ from easyicu.research_agent.agents.core import CoderAgent
 from easyicu.research_agent.research_context.prompt_variables import (
     compact_fixed_window_trajectory_prompt,
 )
+from easyicu.research_agent.providers.mocks import ScriptedMockLLMClient
 from easyicu.research_agent.schema import (
     AggregationRule,
     AnalysisStep,
@@ -16,15 +17,6 @@ from easyicu.research_agent.schema import (
     ResearchContext,
     VariableRole,
 )
-
-
-class _CaptureLLM:
-    def __init__(self) -> None:
-        self.calls = []
-
-    def complete(self, messages, **_kwargs):  # noqa: ANN001
-        self.calls.append(list(messages))
-        return "import os\nvalue = 1\n"
 
 
 def _trajectory_context() -> ResearchContext:
@@ -168,11 +160,11 @@ def test_wide_trajectory_generation_prompts_stay_below_transport_gate() -> None:
 
     for representation in (False, True):
         step = _trajectory_step(context, representation=representation)
-        llm = _CaptureLLM()
+        llm = ScriptedMockLLMClient(["import os\nvalue = 1\n"])
 
         CoderAgent(llm).run(context=context, step=step)
 
-        messages = llm.calls[0]
+        messages = llm.calls[0][0]
         payload = "\n".join(str(message.content or "") for message in messages)
         assert _payload_bytes(messages) <= 42_000
         assert "Shared fixed-window trajectory policies" in payload

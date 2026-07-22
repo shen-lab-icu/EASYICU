@@ -295,27 +295,18 @@ def test_external_provider_requires_explicit_operator_authorization(ra, monkeypa
 
 def test_factory_authorization_records_exact_nonsecret_endpoint():
     from easyicu.research_agent.providers.factory import (
-        build_provider_client,
-        provider_authorization_manifest,
+        provider_authorization_for_configuration,
     )
 
-    class RecordingClient:
-        def __init__(self, **kwargs):  # noqa: ANN003
-            self.kwargs = kwargs
-
-    client = build_provider_client(
+    payload = provider_authorization_for_configuration(
         provider="openrouter",
         model="provider/model",
-        request_timeout=10,
-        title="test",
-        client_cls=RecordingClient,
         environment={
             "OPENROUTER_API_KEY": "secret-never-persisted",
             "OPENROUTER_BASE_URL": "https://router.example/v1",
             "EASYICU_ALLOW_EXTERNAL_LLM": "1",
         },
     )
-    payload = provider_authorization_manifest(client)
 
     assert payload["schema_version"] == "easyicu.provider_authorization_manifest/1"
     assert payload["clients"] == [
@@ -325,10 +316,46 @@ def test_factory_authorization_records_exact_nonsecret_endpoint():
             "base_url": "https://router.example/v1",
             "destination": "external",
             "authorization_mode": "operator_env",
-            "authorization_sha256": client.__easyicu_provider_authorization__.authorization_sha256,
+            "authorization_sha256": payload["clients"][0]["authorization_sha256"],
         }
     ]
     assert "secret-never-persisted" not in str(payload)
+
+
+def test_factory_constructor_seam_does_not_authorize_custom_transport():
+    from easyicu.research_agent.providers.factory import (
+        ProviderConfigurationError,
+        authorized_complete,
+        build_provider_client,
+        provider_authorization_manifest,
+    )
+    from easyicu.research_agent.providers.protocol import LLMMessage
+
+    class CustomForwarder:
+        def __init__(self, **kwargs):  # noqa: ANN003
+            self.kwargs = kwargs
+            self.calls = 0
+
+        def complete(self, *_args, **_kwargs):
+            self.calls += 1
+            return "leaked"
+
+    client = build_provider_client(
+        provider="openai",
+        model="model",
+        request_timeout=10,
+        title="test",
+        client_cls=CustomForwarder,
+        environment={"OPENAI_BASE_URL": "http://127.0.0.1:8317/v1"},
+    )
+
+    with pytest.raises(ProviderConfigurationError):
+        authorized_complete(client, [LLMMessage(role="user", content="secret")])
+    assert client.calls == 0
+    assert (
+        provider_authorization_manifest(client)["clients"][0]["authorization_mode"]
+        == "unmanaged"
+    )
 
 
 def test_unknown_provider_is_unmanaged_external_and_never_local_exempt():
@@ -417,6 +444,98 @@ def test_forged_mock_marker_never_authorizes_a_custom_client():
     with pytest.raises(ProviderConfigurationError):
         authorized_complete(client, [LLMMessage(role="user", content="secret")])
     assert client.calls == 0
+
+
+def test_custom_client_cannot_self_register_as_offline():
+    from easyicu.research_agent.providers.factory import (
+        EXTERNAL_LLM_NOT_AUTHORIZED,
+        ProviderConfigurationError,
+        register_offline_test_client,
+    )
+
+    class CustomClient:
+        pass
+
+    with pytest.raises(ProviderConfigurationError) as exc_info:
+        register_offline_test_client(CustomClient())
+
+    assert exc_info.value.issue == EXTERNAL_LLM_NOT_AUTHORIZED
+
+
+def test_remote_openai_transport_cannot_be_authorized_as_local():
+    from easyicu.research_agent.providers.factory import (
+        EXTERNAL_LLM_NOT_AUTHORIZED,
+        ProviderConfigurationError,
+        authorize_provider_client,
+    )
+    from easyicu.research_agent.providers.llm import OpenAIClient
+
+    client = object.__new__(OpenAIClient)
+    client._model = "model"
+    client._resolved_base_url = "https://attacker.example/v1"
+
+    with pytest.raises(ProviderConfigurationError) as exc_info:
+        authorize_provider_client(
+            client,
+            provider="openai",
+            model="model",
+            base_url="https://attacker.example/v1",
+            destination="local",
+            environment={},
+        )
+
+    assert exc_info.value.issue == EXTERNAL_LLM_NOT_AUTHORIZED
+
+
+@pytest.mark.parametrize(
+    ("attribute", "mutated_value"),
+    [
+        ("_resolved_base_url", "https://attacker.example/v1"),
+        ("_model", "mutated-model"),
+    ],
+)
+def test_registered_openai_transport_mutation_is_rejected_before_delivery(
+    attribute: str,
+    mutated_value: str,
+) -> None:
+    from easyicu.research_agent.providers.factory import (
+        EXTERNAL_LLM_NOT_AUTHORIZED,
+        ProviderConfigurationError,
+        authorize_provider_client,
+        authorized_complete,
+    )
+    from easyicu.research_agent.providers.llm import OpenAIClient
+    from easyicu.research_agent.providers.protocol import LLMMessage
+
+    client = object.__new__(OpenAIClient)
+    client._model = "model"
+    client._resolved_base_url = "http://127.0.0.1:8787/v1"
+    calls = 0
+
+    def complete(*_args, **_kwargs):
+        nonlocal calls
+        calls += 1
+        return "must not run"
+
+    client.complete = complete
+    authorize_provider_client(
+        client,
+        provider="openai",
+        model="model",
+        base_url="http://127.0.0.1:8787/v1",
+        destination="local",
+        environment={},
+    )
+    setattr(client, attribute, mutated_value)
+
+    with pytest.raises(ProviderConfigurationError) as exc_info:
+        authorized_complete(
+            client,
+            [LLMMessage(role="user", content="must remain local")],
+        )
+
+    assert exc_info.value.issue == EXTERNAL_LLM_NOT_AUTHORIZED
+    assert calls == 0
 
 
 def test_forged_provider_authorization_attribute_never_authorizes_client():

@@ -8,7 +8,6 @@ Gap B annotates candidates without ever touching the go/no-go gate.
 
 from __future__ import annotations
 
-import json
 from typing import Sequence
 
 from easyicu.research_agent.discovery.idea_mining import (
@@ -20,8 +19,7 @@ from easyicu.research_agent.discovery.idea_mining import (
     score_candidates_multicriteria,
 )
 from easyicu.research_agent.literature import CitationRecord
-from easyicu.research_agent.providers.llm import LLMMessage
-from easyicu.research_agent.providers.factory import register_offline_test_client
+from easyicu.research_agent.providers.mocks import ScriptedMockLLMClient
 
 SNAPSHOT = "source-snapshot/sha256:novopt"
 QUOTE = "future work should study this predictor of mortality in a subgroup"
@@ -31,26 +29,15 @@ SOURCE_TEXT = (
 )
 
 
-class ScriptedLLM:
-    name = "scripted-llm"
+def ScriptedLLM(responses: Sequence[object]) -> ScriptedMockLLMClient:
+    import json
 
-    def __init__(self, responses: Sequence[object]):
-        register_offline_test_client(self)
-        self.responses = list(responses)
-        self.calls = 0
-        self.messages: Sequence[LLMMessage] = ()
-
-    def complete(
-        self,
-        messages: Sequence[LLMMessage],
-        *,
-        max_tokens: int = 2048,
-        temperature: float = 0.2,
-    ) -> str:
-        self.calls += 1
-        self.messages = messages
-        response = self.responses.pop(0) if self.responses else {}
-        return response if isinstance(response, str) else json.dumps(response)
+    return ScriptedMockLLMClient(
+        [
+            response if isinstance(response, str) else json.dumps(response)
+            for response in responses
+        ]
+    )
 
 
 class CountingSearch:
@@ -187,7 +174,7 @@ def test_novelty_optimization_skips_below_threshold() -> None:
         trace=trace,
     )
 
-    assert llm.calls == 0
+    assert len(llm.calls) == 0
     assert "nicheconstruct" in out[0].exposure_or_predictor
     assert trace[0]["revised"] is False
 

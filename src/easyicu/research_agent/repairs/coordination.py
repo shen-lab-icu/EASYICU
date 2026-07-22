@@ -411,11 +411,13 @@ class RepairCoordinator:
         provider_category: str,
         normalize_script: Callable[[str], str],
         is_executable_script: Callable[[str], bool],
+        finalize_script: Optional[Callable[[str], str]] = None,
     ) -> None:
         self._provider_budget = provider_budget
         self._provider_category = str(provider_category).strip() or "repair"
         self._normalize_script = normalize_script
         self._is_executable_script = is_executable_script
+        self._finalize_script = finalize_script or (lambda value: value)
 
     def _must_skip_patch(self) -> bool:
         if self._provider_budget is None:
@@ -475,6 +477,14 @@ class RepairCoordinator:
                 full_rewrite_call=full_rewrite_call,
                 patch_preflight=patch_preflight,
                 full_rewrite_preflight=full_rewrite_preflight,
+            )
+            finalized_code = self._finalize_script(result.code)
+            if not self._is_executable_script(finalized_code):
+                raise ValueError("finalized Coder repair is not an executable script")
+            result = RepairTransportResult(
+                code=finalized_code,
+                mode=result.mode,
+                provider_calls=result.provider_calls,
             )
         except ProviderCallBudgetReceiptError:
             raise

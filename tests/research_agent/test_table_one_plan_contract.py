@@ -13,10 +13,13 @@ from easyicu.research_agent.agents.core import (
     _normalise_plan_payload,
 )
 from easyicu.research_agent.authority.table_one_binding import (
+    bind_table_one_execution_spec,
     table_one_execution_spec,
 )
+from easyicu.research_agent.authority.plan_authority import normalize_replan_candidate
 from easyicu.research_agent.audits.validators import LLMConceptAuditor
 from easyicu.research_agent.methods.table_one import build_grouped_table_one
+from easyicu.research_agent.providers.mocks import ExternalCaptureMockLLMClient
 from easyicu.research_agent.providers.prompts import load_prompt_pack
 from easyicu.research_agent.repairs.patch import PATCH_FORMAT
 from easyicu.research_agent.repairs.reasons import (
@@ -85,6 +88,78 @@ def _private_label_context() -> ResearchContext:
         ]
     )
     return context
+
+
+def _private_table_one_bound_step() -> tuple[ResearchContext, AnalysisStep]:
+    context = _private_label_context()
+    step = AnalysisStep.model_validate(
+        {
+            "step_id": "02_table_one",
+            "planned_analysis_role": "auxiliary",
+            "intent": "Produce the grouped baseline table.",
+            "inputs": ["sex", "smoking_status"],
+            "expected_outputs": ["table:table_one"],
+            "method": "table_one",
+            "table_one_spec": {
+                "group_by": "sex",
+                "group_levels": [
+                    "__easyicu_level_1__",
+                    "__easyicu_level_2__",
+                ],
+                "variables": [
+                    {
+                        "name": "smoking_status",
+                        "variable_kind": "categorical",
+                        "summary": "count_percent",
+                        "test": "chi_square_with_fisher_exact_for_sparse_2x2",
+                        "levels": [
+                            "__easyicu_level_1__",
+                            "__easyicu_level_2__",
+                        ],
+                    }
+                ],
+            },
+        }
+    )
+    assert bind_table_one_execution_spec(step, context) is not None
+    return context, step
+
+
+def _private_table_one_script() -> str:
+    return (
+        "groups = ['Female', 'Male']\n"
+        "smoking_levels = ['NeverSmokerLocal', 'EverSmokerLocal']\n"
+        "value = 1\n"
+    )
+
+
+def _captured_prompt_text(client: ExternalCaptureMockLLMClient) -> str:
+    return "\n".join(
+        message.content for messages, _kwargs in client.calls for message in messages
+    )
+
+
+def _assert_private_labels_absent(text: str) -> None:
+    for private_label in (
+        "Female",
+        "Male",
+        "NeverSmokerLocal",
+        "EverSmokerLocal",
+    ):
+        assert private_label not in text
+
+
+def _repair_authority(*, validator: str) -> RepairPromptAuthority:
+    return RepairPromptAuthority.create(
+        typed_ticket=[
+            {
+                "validator": validator,
+                "reason": RepairReason.UNBOUND_LOCAL.value,
+                "occurrence_count": 1,
+                "detail": {"reason": "unbound_local", "line": 3},
+            }
+        ]
+    )
 
 
 def _step(*, include_spec: bool) -> dict:
@@ -226,20 +301,6 @@ def test_private_table_one_levels_use_opaque_tokens_and_bind_locally() -> None:
 
 
 def test_private_table_one_labels_never_enter_agent_prompts() -> None:
-    class CaptureLLM:
-        def __init__(self, responses):  # noqa: ANN001
-            from easyicu.research_agent.providers.factory import (
-                register_offline_test_client,
-            )
-
-            register_offline_test_client(self)
-            self.responses = list(responses)
-            self.calls = []
-
-        def complete(self, messages, **_kwargs):  # noqa: ANN001, ANN003
-            self.calls.append(list(messages))
-            return self.responses.pop(0)
-
     context = _private_label_context()
     payload = json.loads(_raw(include_spec=True))
     step_payload = payload["steps"][0]
@@ -257,14 +318,14 @@ def test_private_table_one_labels_never_enter_agent_prompts() -> None:
             }
         ],
     }
-    planner_llm = CaptureLLM([json.dumps(payload)])
+    planner_llm = ExternalCaptureMockLLMClient([json.dumps(payload)])
     plan = PlannerAgent(planner_llm).run(context)
 
     revised_payload = plan.model_dump(mode="json")
     revised_payload["revision"] = plan.revision + 1
     revised_payload["steps"][0]["method"] = "descriptive_statistics"
-    replanner_llm = CaptureLLM([json.dumps(revised_payload)])
-    revised = ReplannerAgent(replanner_llm).run(
+    replanner_llm = ExternalCaptureMockLLMClient([json.dumps(revised_payload)])
+    replanner_candidate = ReplannerAgent(replanner_llm).run(
         context=context,
         current_plan=plan,
         probe_summary={"status": "complete", "private_label": "Female"},
@@ -279,6 +340,14 @@ def test_private_table_one_labels_never_enter_agent_prompts() -> None:
             }
         ],
     )
+    revised = normalize_replan_candidate(
+        current_plan=plan,
+        candidate_plan=replanner_candidate,
+        completed_records=[],
+        context=context,
+        max_total_steps=0,
+        locked_robustness_specs=[],
+    ).plan
     assert revised.steps[0].method == "descriptive_statistics"
     local_spec = table_one_execution_spec(revised.steps[0])
     assert local_spec is not None
@@ -299,7 +368,7 @@ def test_private_table_one_labels_never_enter_agent_prompts() -> None:
     )
     assert not table.empty
 
-    coder_llm = CaptureLLM(["value = 1\n"])
+    coder_llm = ExternalCaptureMockLLMClient(["value = 1\n"])
     CoderAgent(coder_llm).run(context=context, step=revised.steps[0])
 
     patch = json.dumps(
@@ -308,7 +377,7 @@ def test_private_table_one_labels_never_enter_agent_prompts() -> None:
             "edits": [{"old": "value = 1", "new": "value = 2", "expected_count": 1}],
         }
     )
-    repair_llm = CaptureLLM([patch])
+    repair_llm = ExternalCaptureMockLLMClient([patch])
     authority = RepairPromptAuthority.create(
         typed_ticket=[
             {
@@ -328,7 +397,7 @@ def test_private_table_one_labels_never_enter_agent_prompts() -> None:
         current_repair_authority=authority,
     )
 
-    concept_llm = CaptureLLM(['{"findings":[]}'])
+    concept_llm = ExternalCaptureMockLLMClient(['{"findings":[]}'])
     LLMConceptAuditor(concept_llm).audit(
         context=context,
         step=revised.steps[0],
@@ -347,7 +416,7 @@ def test_private_table_one_labels_never_enter_agent_prompts() -> None:
             repair_llm,
             concept_llm,
         )
-        for call in client.calls
+        for call, _kwargs in client.calls
         for message in call
     ]
     outbound = "\n".join(all_messages)
@@ -358,6 +427,112 @@ def test_private_table_one_labels_never_enter_agent_prompts() -> None:
         "EverSmokerLocal",
     ):
         assert private_label not in outbound
+
+
+def test_table_one_contract_repair_never_sends_private_labels() -> None:
+    context, step = _private_table_one_bound_step()
+    response = json.dumps(
+        {
+            "format": PATCH_FORMAT,
+            "edits": [{"old": "value = 1", "new": "value = 2", "expected_count": 1}],
+        }
+    )
+    client = ExternalCaptureMockLLMClient([response])
+    authority = _repair_authority(validator="contract_validator")
+
+    repaired = CoderAgent(client).repair(
+        context=context,
+        step=step,
+        code=_private_table_one_script(),
+        run_log="Female NeverSmokerLocal must remain local",
+        repair_authority=authority,
+        current_repair_authority=authority,
+        provider_category="contract_repair",
+    )
+
+    _assert_private_labels_absent(_captured_prompt_text(client))
+    assert "Female" in repaired
+    assert "NeverSmokerLocal" in repaired
+    assert "value = 2" in repaired
+
+
+def test_table_one_runtime_repair_never_sends_private_labels() -> None:
+    context, step = _private_table_one_bound_step()
+    response = json.dumps(
+        {
+            "format": PATCH_FORMAT,
+            "edits": [{"old": "value = 1", "new": "value = 3", "expected_count": 1}],
+        }
+    )
+    client = ExternalCaptureMockLLMClient([response])
+    authority = _repair_authority(validator="runtime_executor")
+
+    repaired = CoderAgent(client).repair(
+        context=context,
+        step=step,
+        code=_private_table_one_script(),
+        run_log="Male EverSmokerLocal traceback must remain local",
+        repair_authority=authority,
+        current_repair_authority=authority,
+        provider_category="runtime_repair",
+    )
+
+    _assert_private_labels_absent(_captured_prompt_text(client))
+    assert "Male" in repaired
+    assert "EverSmokerLocal" in repaired
+    assert "value = 3" in repaired
+
+
+def test_table_one_minimal_patch_never_sends_private_deterministic_script() -> None:
+    context, step = _private_table_one_bound_step()
+    response = json.dumps(
+        {
+            "format": PATCH_FORMAT,
+            "edits": [{"old": "value = 1", "new": "value = 4", "expected_count": 1}],
+        }
+    )
+    client = ExternalCaptureMockLLMClient([response])
+    authority = _repair_authority(validator="mechanical_code_preflight")
+
+    repaired = CoderAgent(client).repair(
+        context=context,
+        step=step,
+        code=_private_table_one_script(),
+        run_log="private deterministic script",
+        repair_authority=authority,
+        current_repair_authority=authority,
+    )
+
+    prompt = _captured_prompt_text(client)
+    _assert_private_labels_absent(prompt)
+    assert "__easyicu_table1_label_" in prompt
+    assert "value = 4" in repaired
+
+
+def test_table_one_full_rewrite_never_sends_private_deterministic_script() -> None:
+    context, step = _private_table_one_bound_step()
+    from easyicu.research_agent.research_context.outbound import outbound_safe_script
+
+    safe_rewrite = outbound_safe_script(step, _private_table_one_script()).replace(
+        "value = 1", "value = 5"
+    )
+    client = ExternalCaptureMockLLMClient(["not a patch", safe_rewrite])
+    authority = _repair_authority(validator="runtime_executor")
+
+    repaired = CoderAgent(client).repair(
+        context=context,
+        step=step,
+        code=_private_table_one_script(),
+        run_log="Female Male full rewrite diagnostic",
+        repair_authority=authority,
+        current_repair_authority=authority,
+    )
+
+    assert len(client.calls) == 2
+    _assert_private_labels_absent(_captured_prompt_text(client))
+    assert "Female" in repaired
+    assert "EverSmokerLocal" in repaired
+    assert "value = 5" in repaired
 
 
 def test_archival_analysis_step_remains_readable_without_new_optional_spec() -> None:

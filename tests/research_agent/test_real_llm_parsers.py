@@ -21,12 +21,7 @@ import sys
 import types
 from pathlib import Path
 
-from easyicu.research_agent.providers.factory import register_offline_test_client
-
-
-def _offline(client):
-    register_offline_test_client(client)
-    return client
+from easyicu.research_agent.providers.mocks import ScriptedMockLLMClient
 
 
 def _load_agents_helpers(ra):
@@ -194,25 +189,17 @@ def test_planner_uses_enough_completion_budget(ra):
         variables=[],
     )
 
-    class _CapturingLLM:
-        name = "dummy"
-
-        def __init__(self):
-            self.kwargs = None
-
-        def complete(self, messages, **kwargs):
-            self.kwargs = kwargs
-            return (
-                '{"research_question": "Is sofa2 -> death?", "steps":'
-                ' [{"step_id":"01_table_one","planned_analysis_role":"auxiliary",'
-                '"intent":"t1","inputs":[],"expected_outputs":[]}]}'
-            )
-
     from easyicu.research_agent.agents.core import PlannerAgent
 
-    llm = _offline(_CapturingLLM())
+    llm = ScriptedMockLLMClient(
+        [
+            '{"research_question": "Is sofa2 -> death?", "steps":'
+            ' [{"step_id":"01_table_one","planned_analysis_role":"auxiliary",'
+            '"intent":"t1","inputs":[],"expected_outputs":[]}]}'
+        ]
+    )
     PlannerAgent(llm).run(ctx)
-    assert llm.kwargs["max_tokens"] >= 4096
+    assert llm.calls[0][1]["max_tokens"] >= 4096
 
 
 def test_openai_client_passes_provider_extra_body(ra, monkeypatch):
@@ -242,6 +229,7 @@ def test_openai_client_passes_provider_extra_body(ra, monkeypatch):
         sys.modules, "openai", types.SimpleNamespace(OpenAI=_FakeOpenAI)
     )
 
+    from easyicu.research_agent.providers.factory import authorize_provider_client
     from easyicu.research_agent.providers.llm import LLMMessage, OpenAIClient
 
     extra_body = {"reasoning": {"effort": "none", "exclude": True}}
@@ -251,7 +239,14 @@ def test_openai_client_passes_provider_extra_body(ra, monkeypatch):
         base_url="https://openrouter.ai/api/v1",
         extra_body=extra_body,
     )
-    register_offline_test_client(client)
+    authorize_provider_client(
+        client,
+        provider="openai",
+        model="z-ai/glm-4.5-air:free",
+        base_url="https://openrouter.ai/api/v1",
+        destination="external",
+        environment={"EASYICU_ALLOW_EXTERNAL_LLM": "1"},
+    )
     assert client.complete([LLMMessage(role="user", content="hi")]) == "ok"
     assert calls["create"]["extra_body"] == extra_body
 
@@ -261,12 +256,6 @@ def test_writer_strips_markdown_fence(ra, tmp_path: Path):
     still see raw markdown so it can locate ``{evidence:*}``."""
     raw = "```markdown\n# Title\n\nCohort: {evidence:table_one}.\n```"
 
-    class _DummyLLM:
-        name = "dummy"
-
-        def complete(self, messages, **kwargs):
-            return raw
-
     from easyicu.research_agent.agents.core import WriterAgent
 
     schema = ra.schema
@@ -277,7 +266,7 @@ def test_writer_strips_markdown_fence(ra, tmp_path: Path):
         ),
         variables=[],
     )
-    out = WriterAgent(_offline(_DummyLLM())).run(
+    out = WriterAgent(ScriptedMockLLMClient([raw], repeat_last=True)).run(
         context=ctx, evidence_ids=["table_one"]
     )
     # The fence must be stripped so the binder regex matches.
@@ -287,15 +276,6 @@ def test_writer_strips_markdown_fence(ra, tmp_path: Path):
 
 def test_writer_language_prompt_preserves_evidence_ids(ra):
     """The Chinese writer mode should ask for zh prose but keep evidence ids ASCII."""
-    captured = {}
-
-    class _DummyLLM:
-        name = "dummy"
-
-        def complete(self, messages, **kwargs):
-            captured["prompt"] = messages[-1].content
-            return "# 标题\n\n结果：12 例 {evidence:table_one}。\n"
-
     from easyicu.research_agent.agents.core import WriterAgent
 
     schema = ra.schema
@@ -307,13 +287,20 @@ def test_writer_language_prompt_preserves_evidence_ids(ra):
         variables=[],
     )
 
-    out = WriterAgent(_offline(_DummyLLM()), language="zh").run(
+    llm = ScriptedMockLLMClient(
+        ["# 标题\n\n结果：12 例 {evidence:table_one}。\n"],
+        repeat_last=True,
+    )
+    out = WriterAgent(llm, language="zh").run(
         context=ctx,
         evidence_ids=["table_one"],
     )
 
-    assert "Simplified Chinese" in captured["prompt"]
-    assert "do not translate evidence ids" in captured["prompt"]
+    prompts = "\n".join(
+        message.content for messages, _kwargs in llm.calls for message in messages
+    )
+    assert "Simplified Chinese" in prompts
+    assert "do not translate evidence ids" in prompts
     assert "{evidence:table_one}" in out
 
 
@@ -322,16 +309,6 @@ def test_writer_prompt_discourages_tbd_and_manifest_narration(ra):
     # *system* message of every per-section LLM call. Capture the full
     # joined prompt across every section so we can assert on contract
     # text regardless of which section was last called.
-    captured = {"system": "", "user": ""}
-
-    class _DummyLLM:
-        name = "dummy"
-
-        def complete(self, messages, **kwargs):
-            for msg in messages:
-                captured[msg.role] = captured.get(msg.role, "") + msg.content + "\n"
-            return "# Title\n\n## Results\n\nBaseline characteristics are summarised in Table 1 {evidence:table_one}.\n"
-
     from easyicu.research_agent.agents.core import WriterAgent
 
     schema = ra.schema
@@ -343,9 +320,19 @@ def test_writer_prompt_discourages_tbd_and_manifest_narration(ra):
         variables=[],
     )
 
-    out = WriterAgent(_offline(_DummyLLM())).run(
-        context=ctx, evidence_ids=["table_one"]
+    llm = ScriptedMockLLMClient(
+        [
+            "# Title\n\n## Results\n\nBaseline characteristics are summarised "
+            "in Table 1 {evidence:table_one}.\n"
+        ],
+        repeat_last=True,
     )
+    out = WriterAgent(llm).run(context=ctx, evidence_ids=["table_one"])
+
+    captured = {"system": "", "user": ""}
+    for messages, _kwargs in llm.calls:
+        for message in messages:
+            captured[message.role] += message.content + "\n"
 
     # Writer contract assertions land in the system prompt.
     assert "`[TBD]`" in captured["system"]

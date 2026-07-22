@@ -16,20 +16,27 @@ from easyicu.research_agent.providers.factory import (
 )
 
 
-class _AuthorizedClient:
-    pass
-
-
-def _client(*, model: str = "model-a") -> Any:
-    client = _AuthorizedClient()
-    client.__easyicu_provider_authorization__ = ProviderAuthorization.create(
+def _provider_authorization(*, model: str = "model-a") -> dict[str, Any]:
+    authorization = ProviderAuthorization.create(
         provider="openai",
         model=model,
         base_url="https://provider.example/v1",
         destination="external",
         authorization_mode="operator_env",
     )
-    return client
+    return {
+        "schema_version": "easyicu.provider_authorization_manifest/1",
+        "clients": [
+            {
+                "provider": authorization.provider,
+                "model": authorization.model,
+                "base_url": authorization.base_url,
+                "destination": authorization.destination,
+                "authorization_mode": authorization.authorization_mode,
+                "authorization_sha256": authorization.authorization_sha256,
+            }
+        ],
+    }
 
 
 def _identity(**overrides: Any) -> ExecutionIdentity:
@@ -39,7 +46,7 @@ def _identity(**overrides: Any) -> ExecutionIdentity:
         "runner": "docker",
         "runner_image_digest": "sha256:" + "a" * 64,
         "network_policy": "none",
-        "provider_client": _client(),
+        "provider_authorization": _provider_authorization(),
         "llm_seed": 17,
         "data_seed": 7,
         "input_authority_sha256": "e" * 64,
@@ -47,6 +54,8 @@ def _identity(**overrides: Any) -> ExecutionIdentity:
         "code_version": {"git_sha": "b" * 40, "git_dirty": False},
     }
     coordinates.update(overrides)
+    if "provider_client" in overrides:
+        coordinates.pop("provider_authorization", None)
     return ExecutionIdentity.create(**coordinates)
 
 
@@ -57,7 +66,7 @@ def test_every_execution_coordinate_changes_content_identity() -> None:
         _identity(runner="subprocess"),
         _identity(runner_image_digest="sha256:" + "c" * 64),
         _identity(network_policy="bridge"),
-        _identity(provider_client=_client(model="model-b")),
+        _identity(provider_authorization=_provider_authorization(model="model-b")),
         _identity(llm_seed=18),
         _identity(data_seed=8),
         _identity(input_authority_sha256="f" * 64),
@@ -104,9 +113,7 @@ def test_frozen_environment_is_shared_but_reuse_identity_binds_input() -> None:
 
 
 def test_preflight_provider_coordinates_match_the_constructed_client() -> None:
-    class Client:
-        def __init__(self, **_kwargs: Any) -> None:
-            pass
+    from easyicu.research_agent.providers.llm import OpenAIClient
 
     environment = {"OPENAI_BASE_URL": "http://127.0.0.1:8317/v1"}
     client = build_provider_client(
@@ -114,7 +121,7 @@ def test_preflight_provider_coordinates_match_the_constructed_client() -> None:
         model="local-model",
         request_timeout=60.0,
         title="EasyICU test",
-        client_cls=Client,
+        client_cls=OpenAIClient,
         environment=environment,
     )
     common = {
@@ -182,3 +189,4 @@ def test_frozen_environment_cannot_authorize_unbound_input() -> None:
     assert frozen.expected_identity_sha256 == unbound.environment_identity_sha256
     assert unbound.paper_eligible is False
     assert unbound.environment_identity_sha256 != bound.environment_identity_sha256
+    assert unbound.identity_sha256 != bound.identity_sha256

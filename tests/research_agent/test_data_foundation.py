@@ -9,18 +9,11 @@ from easyicu.research_agent.acquisition.foundation import (
     _extract_json,
     acquire_universe_for_question,
 )
-from easyicu.research_agent.providers.factory import register_offline_test_client
+from easyicu.research_agent.providers.mocks import ScriptedMockLLMClient
 
 
-class _StubLLM:
-    """Returns a fixed completion string regardless of the prompt."""
-
-    def __init__(self, response: str) -> None:
-        register_offline_test_client(self)
-        self._response = response
-
-    def complete(self, messages, *, max_tokens=2048, temperature=0.1, **kw) -> str:
-        return self._response
+def _stub(response: str) -> ScriptedMockLLMClient:
+    return ScriptedMockLLMClient([response])
 
 
 def _catalog(*ids: str) -> AvailableCatalog:
@@ -36,7 +29,7 @@ def test_extract_json_handles_fenced_and_bare():
 
 
 def test_agent_selects_concepts_and_reports_coverage():
-    llm = _StubLLM(
+    llm = _stub(
         '{"selected_concepts": ["sep3_sofa2", "sofa2", "death", "made_up"], '
         '"inclusion_exclusion": ["adults", "ICU LoS >= 1 day"], '
         '"rationale": "sepsis exposure + severity"}'
@@ -54,7 +47,7 @@ def test_agent_selects_concepts_and_reports_coverage():
 
 
 def test_agent_empty_or_garbage_response_is_safe():
-    sel = DataFoundationAgent(_StubLLM("garbage")).select_concepts(
+    sel = DataFoundationAgent(_stub("garbage")).select_concepts(
         question="q", catalog=_catalog("death")
     )
     assert sel.selected_concepts == []
@@ -80,7 +73,7 @@ def test_acquire_blocks_when_outcome_missing(monkeypatch):
     res = acquire_universe_for_question(
         export_dir="/nonexistent",
         question="q",
-        llm=_StubLLM('{"selected_concepts": ["lact"]}'),
+        llm=_stub('{"selected_concepts": ["lact"]}'),
         output_dir="/tmp/x",
         target_outcome="death",
         outcome_concepts=["death"],
@@ -109,7 +102,7 @@ def test_acquire_proceeds_on_available_subset_when_outcome_present(monkeypatch):
     res = acquire_universe_for_question(
         export_dir="/nonexistent",
         question="q",
-        llm=_StubLLM('{"selected_concepts": ["sofa2", "lact", "made_up", "death"]}'),
+        llm=_stub('{"selected_concepts": ["sofa2", "lact", "made_up", "death"]}'),
         output_dir="/tmp/x",
         target_outcome="death",
         outcome_concepts=["death"],
@@ -145,7 +138,7 @@ def test_outcome_free_acquisition_materialises_required_trajectory_concept(
     result = acquire_universe_for_question(
         export_dir="/nonexistent",
         question="Are SOFA-2 trajectories reproducible?",
-        llm=_StubLLM('{"selected_concepts": []}'),
+        llm=_stub('{"selected_concepts": []}'),
         output_dir="/tmp/x",
         target_outcome=None,
         outcome_concepts=(),
@@ -179,7 +172,7 @@ def test_required_trajectory_concept_missing_blocks_before_materialisation(
     result = acquire_universe_for_question(
         export_dir="/nonexistent",
         question="Are SOFA-2 trajectories reproducible?",
-        llm=_StubLLM('{"selected_concepts": []}'),
+        llm=_stub('{"selected_concepts": []}'),
         output_dir="/tmp/x",
         target_outcome=None,
         outcome_concepts=(),
@@ -235,7 +228,7 @@ def test_acquire_preserves_legacy_trajectory_without_typed_loader(
     result = acquire_universe_for_question(
         export_dir=tmp_path,
         question="q",
-        llm=_StubLLM('{"selected_concepts": ["sofa2", "death"]}'),
+        llm=_stub('{"selected_concepts": ["sofa2", "death"]}'),
         output_dir=tmp_path,
         target_outcome="death",
         outcome_concepts=["death"],
@@ -252,14 +245,13 @@ def test_acquire_preserves_legacy_trajectory_without_typed_loader(
 def test_acquire_captures_selection_token_usage_and_cost(monkeypatch):
     # A metered client exposes last_usage + model; the selection's token cost
     # is recorded on the result (it runs as a pre-sandbox stage).
-    class _MeteredStub(_StubLLM):
-        # OpenAIClient stores the model id as the private ``_model``.
-        _model = "deepseek-chat"
-        last_usage = {
-            "prompt_tokens": 1000,
-            "completion_tokens": 200,
-            "total_tokens": 1200,
-        }
+    llm = _stub('{"selected_concepts": ["sofa2", "death"]}')
+    llm._model = "deepseek-chat"
+    llm.last_usage = {
+        "prompt_tokens": 1000,
+        "completion_tokens": 200,
+        "total_tokens": 1200,
+    }
 
     monkeypatch.setattr(
         df_mod,
@@ -277,7 +269,7 @@ def test_acquire_captures_selection_token_usage_and_cost(monkeypatch):
     res = acquire_universe_for_question(
         export_dir="/nonexistent",
         question="q",
-        llm=_MeteredStub('{"selected_concepts": ["sofa2", "death"]}'),
+        llm=llm,
         output_dir="/tmp/x",
         target_outcome="death",
         outcome_concepts=["death"],

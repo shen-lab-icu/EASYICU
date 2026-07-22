@@ -14,25 +14,18 @@ import json
 from easyicu.research_agent.cohort.repair import (
     extract_cohort_definition_from_prose,
 )
-from easyicu.research_agent.providers.factory import register_offline_test_client
+from easyicu.research_agent.providers.mocks import ScriptedMockLLMClient
 
 
-class _StubLLM:
-    name = "stub"
-
-    def __init__(self, reply: str):
-        register_offline_test_client(self)
-        self._reply = reply
-
-    def complete(self, messages, *, max_tokens=2048, temperature=0.2):
-        return self._reply
+def _stub(reply: str) -> ScriptedMockLLMClient:
+    return ScriptedMockLLMClient([reply])
 
 
 _COLUMNS = ["stay_id", "age", "los_icu", "sofa2", "death"]
 
 
 def test_extracts_grounded_predicates():
-    llm = _StubLLM(
+    llm = _stub(
         json.dumps(
             {
                 "inclusion": [
@@ -57,7 +50,7 @@ def test_extracts_grounded_predicates():
 
 
 def test_drops_predicates_on_unknown_columns():
-    llm = _StubLLM(
+    llm = _stub(
         json.dumps(
             {
                 "inclusion": [
@@ -75,7 +68,7 @@ def test_drops_predicates_on_unknown_columns():
 
 
 def test_rejects_unsupported_operator():
-    llm = _StubLLM(
+    llm = _stub(
         json.dumps(
             {"inclusion": [{"concept_id": "age", "op": "between", "value": [18, 90]}]}
         )
@@ -89,7 +82,7 @@ def test_rejects_unsupported_operator():
 def test_returns_none_on_empty_or_garbage():
     assert (
         extract_cohort_definition_from_prose(
-            cohort_prose="adults", universe_columns=_COLUMNS, llm=_StubLLM("not json")
+            cohort_prose="adults", universe_columns=_COLUMNS, llm=_stub("not json")
         )
         is None
     )
@@ -97,21 +90,21 @@ def test_returns_none_on_empty_or_garbage():
         extract_cohort_definition_from_prose(
             cohort_prose="adults",
             universe_columns=_COLUMNS,
-            llm=_StubLLM(json.dumps({"inclusion": [], "exclusion": []})),
+            llm=_stub(json.dumps({"inclusion": [], "exclusion": []})),
         )
         is None
     )
     # no prose / no columns → no LLM call, no definition
     assert (
         extract_cohort_definition_from_prose(
-            cohort_prose="", universe_columns=_COLUMNS, llm=_StubLLM("{}")
+            cohort_prose="", universe_columns=_COLUMNS, llm=_stub("{}")
         )
         is None
     )
 
 
 def test_missing_operator_needs_no_value():
-    llm = _StubLLM(
+    llm = _stub(
         json.dumps({"inclusion": [{"concept_id": "sofa2", "op": "not_missing"}]})
     )
     definition = extract_cohort_definition_from_prose(

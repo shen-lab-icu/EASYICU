@@ -155,6 +155,159 @@ class MockLLMClient:
         return response
 
 
+class ScriptedMockLLMClient:
+    """Built-in deterministic mock returning a closed response sequence."""
+
+    name = "scripted-mock"
+
+    def __init__(
+        self,
+        responses: Sequence[str | Exception],
+        *,
+        repeat_last: bool = False,
+    ) -> None:
+        from .factory import register_offline_test_client
+
+        self.responses = list(responses)
+        self._repeat_last = bool(repeat_last)
+        self._last_response: str | Exception | None = None
+        self.calls: list[tuple[list[LLMMessage], dict[str, Any]]] = []
+        register_offline_test_client(self)
+
+    def complete(self, messages: Sequence[LLMMessage], **kwargs: Any) -> str:
+        self.calls.append((list(messages), dict(kwargs)))
+        if self.responses:
+            response = self.responses.pop(0)
+            self._last_response = response
+        elif self._repeat_last and self._last_response is not None:
+            response = self._last_response
+        else:
+            raise RuntimeError("scripted mock response sequence exhausted")
+        if isinstance(response, Exception):
+            raise response
+        return str(response)
+
+
+class ScriptedVisionMockLLMClient(ScriptedMockLLMClient):
+    """Built-in static-response vision mock with no transport callback."""
+
+    name = "scripted-vision-mock"
+    supports_vision = True
+
+    def __init__(self, responses: Sequence[str | Exception]) -> None:
+        # Register only after construction as this exact reviewed type; calling
+        # the parent constructor would attempt to register the subclass there.
+        from .factory import register_offline_test_client
+
+        self.responses = list(responses)
+        self._repeat_last = False
+        self._last_response: str | Exception | None = None
+        self.calls: list[tuple[list[LLMMessage], dict[str, Any]]] = []
+        self.image_calls: list[dict[str, Any]] = []
+        register_offline_test_client(self)
+
+    def complete_with_images(self, **kwargs: Any) -> str:
+        self.image_calls.append(dict(kwargs))
+        if not self.responses:
+            raise RuntimeError("scripted vision mock response sequence exhausted")
+        response = self.responses.pop(0)
+        if isinstance(response, Exception):
+            raise response
+        return str(response)
+
+
+class BudgetAwareScriptedMockLLMClient(ScriptedMockLLMClient):
+    """Closed scripted mock that owns the active provider-attempt charge."""
+
+    name = "budget-aware-scripted-mock"
+    provider_attempt_budget_aware = True
+
+    def __init__(self, responses: Sequence[str | Exception]) -> None:
+        from .factory import register_offline_test_client
+
+        self.responses = list(responses)
+        self._repeat_last = False
+        self._last_response: str | Exception | None = None
+        self.calls: list[tuple[list[LLMMessage], dict[str, Any]]] = []
+        register_offline_test_client(self)
+
+    def complete(self, messages: Sequence[LLMMessage], **kwargs: Any) -> str:
+        from ..authority.provider_budget import consume_active_transport_attempt
+
+        consume_active_transport_attempt()
+        self.calls.append((list(messages), dict(kwargs)))
+        if not self.responses:
+            raise RuntimeError("scripted mock response sequence exhausted")
+        response = self.responses.pop(0)
+        if isinstance(response, Exception):
+            raise response
+        return str(response)
+
+
+class PatternScriptedMockLLMClient:
+    """Closed, non-network prompt router with static literal response queues.
+
+    This is intentionally less expressive than a callback mock: tests may map
+    literal prompt markers to fixed strings or exceptions, but cannot execute
+    arbitrary code at the trusted delivery boundary.
+    """
+
+    name = "pattern-scripted-mock"
+
+    def __init__(
+        self,
+        rules: Sequence[tuple[str, Sequence[str | Exception]]],
+        *,
+        default: str | Exception = "{}",
+    ) -> None:
+        from .factory import register_offline_test_client
+
+        self._rules = [(str(marker), list(responses)) for marker, responses in rules]
+        self._default = default
+        self.calls: list[tuple[list[LLMMessage], dict[str, Any]]] = []
+        register_offline_test_client(self)
+
+    def complete(self, messages: Sequence[LLMMessage], **kwargs: Any) -> str:
+        copied = list(messages)
+        self.calls.append((copied, dict(kwargs)))
+        prompt = "\n".join(str(message.content or "") for message in copied)
+        folded_prompt = prompt.casefold()
+        response: str | Exception = self._default
+        for marker, responses in self._rules:
+            if marker.casefold() in folded_prompt:
+                if not responses:
+                    raise RuntimeError(
+                        f"pattern mock response sequence exhausted for {marker!r}"
+                    )
+                response = responses.pop(0)
+                break
+        if isinstance(response, Exception):
+            raise response
+        return str(response)
+
+
+class ExternalCaptureMockLLMClient:
+    """Non-network capture mock that exercises the external outbound path."""
+
+    name = "external-capture-mock"
+
+    def __init__(self, responses: Sequence[str | Exception]) -> None:
+        from .factory import _register_external_capture_test_client
+
+        self.responses = list(responses)
+        self.calls: list[tuple[list[LLMMessage], dict[str, Any]]] = []
+        _register_external_capture_test_client(self)
+
+    def complete(self, messages: Sequence[LLMMessage], **kwargs: Any) -> str:
+        self.calls.append((list(messages), dict(kwargs)))
+        if not self.responses:
+            raise RuntimeError("external capture response sequence exhausted")
+        response = self.responses.pop(0)
+        if isinstance(response, Exception):
+            raise response
+        return str(response)
+
+
 def _mock_generic_response(prompt: str) -> str:
     return (
         "MOCK RESPONSE — no live LLM configured. The research-agent "

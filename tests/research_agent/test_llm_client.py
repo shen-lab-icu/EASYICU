@@ -6,10 +6,21 @@ from types import SimpleNamespace
 import pytest
 
 
-def _mock_transport_client(client):
-    from easyicu.research_agent.providers.factory import register_offline_test_client
+def _mock_transport_client(client, *, model: str):
+    from easyicu.research_agent.providers.factory import authorize_provider_client
 
-    register_offline_test_client(client)
+    # These tests exercise the concrete adapter against an in-memory fake SDK,
+    # but the adapter itself still receives exact loopback transport authority.
+    client._model = model
+    client._resolved_base_url = "http://127.0.0.1:8787/v1"
+    authorize_provider_client(
+        client,
+        provider="openai",
+        model=model,
+        base_url=client._resolved_base_url,
+        destination="local",
+        environment={},
+    )
     return client
 
 
@@ -29,7 +40,9 @@ def _retry_test_client(ra, failures):
             return SimpleNamespace(choices=[choice], usage=None)
 
     completions = _Completions()
-    client = _mock_transport_client(OpenAIClient.__new__(OpenAIClient))
+    client = _mock_transport_client(
+        OpenAIClient.__new__(OpenAIClient), model="gpt-test"
+    )
     client._client = SimpleNamespace(chat=SimpleNamespace(completions=completions))
     client._model = "gpt-test"
     client._timeout = 1.0
@@ -98,7 +111,9 @@ def test_openai_client_strips_reasoning_blocks_from_content(ra):
             choice = SimpleNamespace(message=msg, finish_reason="stop")
             return SimpleNamespace(choices=[choice], usage=None)
 
-    client = _mock_transport_client(OpenAIClient.__new__(OpenAIClient))
+    client = _mock_transport_client(
+        OpenAIClient.__new__(OpenAIClient), model="qwen3-8b"
+    )
     client._client = SimpleNamespace(chat=SimpleNamespace(completions=_Completions()))
     client._model = "qwen3-8b"
     client._timeout = 120.0
@@ -160,7 +175,9 @@ def test_openai_client_streaming_is_transport_only(monkeypatch, ra):
             assert "stream_options" not in kwargs
             return stream
 
-    client = _mock_transport_client(OpenAIClient.__new__(OpenAIClient))
+    client = _mock_transport_client(
+        OpenAIClient.__new__(OpenAIClient), model="gpt-5.6-luna"
+    )
     client._client = SimpleNamespace(chat=SimpleNamespace(completions=_Completions()))
     client._model = "gpt-5.6-luna"
     client._timeout = 120.0
@@ -232,7 +249,9 @@ def test_openai_client_stream_closes_on_iteration_error(monkeypatch, ra):
         def create(self, **kwargs):
             return stream
 
-    client = _mock_transport_client(OpenAIClient.__new__(OpenAIClient))
+    client = _mock_transport_client(
+        OpenAIClient.__new__(OpenAIClient), model="gpt-5.6-luna"
+    )
     client._client = SimpleNamespace(chat=SimpleNamespace(completions=_Completions()))
     client._model = "gpt-5.6-luna"
     client._timeout = 120.0
@@ -255,7 +274,9 @@ def test_openai_client_recovers_unclosed_reasoning_prefix_for_debuggability(ra):
             choice = SimpleNamespace(message=msg, finish_reason="length")
             return SimpleNamespace(choices=[choice], usage=None)
 
-    client = _mock_transport_client(OpenAIClient.__new__(OpenAIClient))
+    client = _mock_transport_client(
+        OpenAIClient.__new__(OpenAIClient), model="qwen3-8b"
+    )
     client._client = SimpleNamespace(chat=SimpleNamespace(completions=_Completions()))
     client._model = "qwen3-8b"
     client._timeout = 120.0
@@ -297,7 +318,7 @@ def test_openai_client_supports_local_noauth_proxy_mode(ra):
             return _Response()
 
     http_client = _HttpClient()
-    client = _mock_transport_client(OpenAIClient.__new__(OpenAIClient))
+    client = _mock_transport_client(OpenAIClient.__new__(OpenAIClient), model="gpt-5.4")
     client._client = None
     client._model = "gpt-5.4"
     client._timeout = 120.0
@@ -333,7 +354,9 @@ def test_openai_client_zero_manual_retry_budget_makes_one_attempt(monkeypatch, r
             return SimpleNamespace(choices=[], usage=None)
 
     completions = _Completions()
-    client = _mock_transport_client(OpenAIClient.__new__(OpenAIClient))
+    client = _mock_transport_client(
+        OpenAIClient.__new__(OpenAIClient), model="gpt-5.6-luna"
+    )
     client._client = SimpleNamespace(chat=SimpleNamespace(completions=completions))
     client._model = "gpt-5.6-luna"
     client._timeout = 1.0
