@@ -36,7 +36,24 @@ audit does **not** open, schedule, or implement a re-materialization job.  With
 that constraint, a production Canonical9 run remains correctly blocked: no
 code patch may turn the historical export into patient-level paper authority.
 
-## Conditional route if a future data lane is explicitly approved
+## Conditional routes if a future data lane is explicitly approved
+
+There are two mutually exclusive routes.  Both require a new owner decision;
+neither is currently authorized and neither changes the P4 launch gate.
+
+1. **Fresh native export.** Follow the native source-to-export route below.
+2. **Controlled identity bridge.** Preserve the historical full6 clinical
+   bytes, but separately derive a protected ICU-stay-to-patient relation from
+   frozen source snapshots.  The bridge must be bound to the full6 manifest and
+   content digests, every mapping artifact digest, per-source cardinality
+   evidence, and an explicit semantic attestation for HiRID/SICdb.  Its
+   repository contract is `identity_bridge_contract.py`; it intentionally
+   reads only the small descriptor, not a mapping or a patient row.  A complete
+   bridge may be handed to native typed materialization review, but cannot
+   authorize a run, replace a trajectory/cohort authority, or bypass the final
+   operator freeze.
+
+### Fresh native export route
 
 1. The owner explicitly approves a new, versioned data lane, freezes the
    approved source snapshots, and records the
