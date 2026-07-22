@@ -37,6 +37,7 @@ from ..contracts.runtime import (
     _WritePhaseResult,
 )
 from ..providers.cost import CostMeter
+from ..providers.factory import provider_authorization_manifest
 from ..authority.evidence_store import EvidenceStore
 from ..methods.multiple_testing import build_multiple_testing_report
 from ..methods.sensitivity import compute_e_value
@@ -850,6 +851,7 @@ def finalise_success(
         per_step_records=per_step_records,
         cost_records=cost_records_for_manifest,
         reproducibility=reproducibility_summary,
+        provider_authorization=provider_authorization_manifest(pipeline._llm),
         submission_profile_name=pipeline._submission_profile_name,
         submission_profile_version=pipeline._submission_profile_version,
         submission_profile_locked_at=pipeline._submission_profile_locked_at,
@@ -1014,6 +1016,7 @@ def finalise_aborted(
         context=context,
         plan=None,
         findings=findings,
+        provider_authorization=provider_authorization_manifest(pipeline._llm),
         per_step_records=[],
         evidence=evidence,
         run_dir=run_dir,

@@ -27,6 +27,7 @@ from ..schema import (
     ResearchContext,
 )
 from .typed import project_research_context_variables
+from .prompt_variables import project_observed_domain
 from ..trajectory.plan_contract import trajectory_step_roles
 
 _COMPANION_SUFFIXES = (
@@ -717,16 +718,15 @@ def _planner_variable_catalog_line(variable: object) -> str:
     missingness = getattr(variable, "missingness", None)
     if missingness is not None:
         fields.append(f"missing={missingness.fraction_missing:.3f}")
-    domain = getattr(variable, "observed_domain", None) or {}
-    if domain.get("is_constant"):
+    domain = project_observed_domain(getattr(variable, "observed_domain", None))
+    if domain.get("shape") == "constant":
         fields.append("observed=constant")
-    elif domain.get("is_binary"):
+    elif domain.get("shape") == "binary_numeric_indicator":
         fields.append("observed=binary")
-    elif domain.get("levels"):
-        levels = ",".join(str(value) for value in domain["levels"][:6])
-        fields.append(f"levels={levels}")
-    elif domain.get("min") is not None and domain.get("max") is not None:
-        fields.append(f"observed={domain['min']:g}:{domain['max']:g}")
+    elif domain.get("shape") in {"categorical", "numeric"}:
+        fields.append(f"observed={domain['shape']}")
+    if domain.get("n_unique") is not None:
+        fields.append(f"observed_n_unique={domain['n_unique']}")
     caveats = tuple(getattr(variable, "clinical_caveats", ()) or ()) or tuple(
         getattr(variable, "pitfalls", ()) or ()
     )

@@ -12,6 +12,7 @@ _PROVIDER_ENV_KEYS = (
     "OPENAI_BASE_URL",
     "OPENROUTER_API_KEY",
     "OPENROUTER_BASE_URL",
+    "EASYICU_ALLOW_EXTERNAL_LLM",
 )
 
 
@@ -97,6 +98,7 @@ def test_openrouter_contract_is_consistent_across_all_three_entries(
     monkeypatch.setenv("OPENROUTER_API_KEY", "router-secret")
     monkeypatch.setenv("OPENROUTER_BASE_URL", "https://router.example/v1")
     monkeypatch.setenv("OPENAI_API_KEY", "wrong-openai-secret")
+    monkeypatch.setenv("EASYICU_ALLOW_EXTERNAL_LLM", "1")
 
     _build_all_three(mcp, discovery, benchmark, provider="openrouter")
 
@@ -276,3 +278,60 @@ def test_mcp_rejects_wildcard_bind_address_as_per_call_loopback(ra, monkeypatch)
     assert error["error_code"] == "llm_configuration_invalid"
     assert "loopback" in error["error"]
     assert constructed == []
+
+
+def test_external_provider_requires_explicit_operator_authorization(ra, monkeypatch):
+    import easyicu.research_agent.mcp_server as mcp
+
+    monkeypatch.setenv("OPENAI_API_KEY", "configured-but-not-authorized")
+    client, error = mcp._build_run_llm(
+        {"provider": "openai", "model": "gpt-test", "request_timeout": 5}
+    )
+
+    assert client is None
+    assert error == {
+        "error": (
+            "configuration_error: external LLM transport is disabled; set "
+            "EASYICU_ALLOW_EXTERNAL_LLM=1 only after approving the exact "
+            "provider endpoint and outbound data policy"
+        ),
+        "error_code": "llm_external_transport_not_authorized",
+    }
+
+
+def test_factory_authorization_records_exact_nonsecret_endpoint():
+    from easyicu.research_agent.providers.factory import (
+        build_provider_client,
+        provider_authorization_manifest,
+    )
+
+    class RecordingClient:
+        def __init__(self, **kwargs):  # noqa: ANN003
+            self.kwargs = kwargs
+
+    client = build_provider_client(
+        provider="openrouter",
+        model="provider/model",
+        request_timeout=10,
+        title="test",
+        client_cls=RecordingClient,
+        environment={
+            "OPENROUTER_API_KEY": "secret-never-persisted",
+            "OPENROUTER_BASE_URL": "https://router.example/v1",
+            "EASYICU_ALLOW_EXTERNAL_LLM": "1",
+        },
+    )
+    payload = provider_authorization_manifest(client)
+
+    assert payload["schema_version"] == "easyicu.provider_authorization_manifest/1"
+    assert payload["clients"] == [
+        {
+            "provider": "openrouter",
+            "model": "provider/model",
+            "base_url": "https://router.example/v1",
+            "destination": "external",
+            "authorization_mode": "operator_env",
+            "authorization_sha256": client.__easyicu_provider_authorization__.authorization_sha256,
+        }
+    ]
+    assert "secret-never-persisted" not in str(payload)

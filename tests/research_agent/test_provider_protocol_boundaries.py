@@ -91,3 +91,46 @@ def test_protocol_has_no_concrete_provider_or_pipeline_dependency() -> None:
         if isinstance(node, ast.ImportFrom) and node.module
     }
     assert not imported & {"llm", "llm_mocks", "pipeline", "schema"}
+
+
+def test_production_entrypoints_cannot_construct_openai_client_outside_factory():
+    root = Path(__file__).resolve().parents[2]
+    targets = [root / "src" / "easyicu" / "research_agent", root / "tools"]
+    violations: list[str] = []
+    for target in targets:
+        for path in target.rglob("*.py"):
+            if path.name == "factory.py" or path.parts[-2:] == (
+                "providers",
+                "llm.py",
+            ):
+                continue
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+            for node in ast.walk(tree):
+                if not isinstance(node, ast.Call):
+                    continue
+                func = node.func
+                name = (
+                    func.id
+                    if isinstance(func, ast.Name)
+                    else func.attr
+                    if isinstance(func, ast.Attribute)
+                    else ""
+                )
+                if name == "OpenAIClient":
+                    violations.append(f"{path.relative_to(root)}:{node.lineno}")
+    assert violations == []
+
+
+def test_all_external_entry_surfaces_route_through_provider_factory():
+    root = Path(__file__).resolve().parents[2]
+    paths = (
+        "src/easyicu/research_agent/cli.py",
+        "src/easyicu/research_agent/replication_cli.py",
+        "src/easyicu/research_agent/mcp_server.py",
+        "src/easyicu/research_agent/evaluation/tier2_jury.py",
+        "tools/run_research_agent_bench.py",
+        "tools/run_openrouter_fullflow_validation.py",
+    )
+    for relative in paths:
+        source = (root / relative).read_text(encoding="utf-8")
+        assert "build_provider_client(" in source, relative

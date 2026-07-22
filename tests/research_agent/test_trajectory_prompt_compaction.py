@@ -158,7 +158,7 @@ def test_wide_trajectory_projection_preserves_every_exact_window_coordinate() ->
         projection.shared_lines
     )
     assert (
-        "f='resp' t=[18,24)h obs=0:4/u5 m=3.0%/low"
+        "f='resp' t=[18,24)h obs=numeric/u5 m=3.0%/low"
         in rendered["trajectory_resp_h18_24"]
     )
 

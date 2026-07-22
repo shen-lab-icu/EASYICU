@@ -45,7 +45,8 @@ def test_continuous_score_not_flagged_binary():
     assert d["is_binary"] is False
     assert d["min"] == 0.0 and d["max"] == 24.0
     hint = _format_observed_domain(d)
-    assert "[0,24]" in hint and "BINARY" not in hint
+    assert "NUMERIC" in hint and "n_unique=25" in hint and "BINARY" not in hint
+    assert "[0,24]" not in hint
 
 
 def test_constant_column_flagged_constant():
@@ -86,7 +87,8 @@ def test_categorical_two_level_is_not_numeric_binary():
     assert d["is_binary"] is False
     assert d["levels"] == ["Female", "Male"]
     hint = _format_observed_domain(d)
-    assert "{0,1}" not in hint and "Male" in hint and "categorical" in hint
+    assert "{0,1}" not in hint and "Male" not in hint
+    assert "CATEGORICAL" in hint and "n_unique=2" in hint
 
 
 def test_high_cardinality_categorical_omits_levels():
