@@ -94,6 +94,7 @@ from .import_repair import (
 from .input_scope import patch_raw_input_physical_superset_guard
 from .reasons import RepairReason
 from .typed_input import (
+    patch_all_rows_outcome_coordinate_filter,
     patch_resolved_input_cohort_env_shadow,
     patch_resolved_input_manifest_env,
     patch_resolved_input_relative_path_root,
@@ -5094,6 +5095,16 @@ def _deterministic_runner_repair(
         repaired = patch_resolved_input_manifest_env(code, run_log)
         if repaired != code:
             return manifest_env_repair, repaired
+
+    all_rows_outcome_repair = "all_rows_outcome_coordinate_filter_v1"
+    if previous_repair != all_rows_outcome_repair:
+        repaired = patch_all_rows_outcome_coordinate_filter(
+            code,
+            run_log,
+            resolved_input_bindings=resolved_input_bindings,
+        )
+        if repaired != code:
+            return all_rows_outcome_repair, repaired
 
     merge_collision_repair = "pandas_merge_dynamic_column_collision_guard_v1"
     if previous_repair != merge_collision_repair:

@@ -3,10 +3,161 @@
 from __future__ import annotations
 
 import ast
-from typing import Sequence
+from typing import Any, Mapping, Sequence
 
 from ..gates.typed_input import resolved_input_shadowed_by_cohort_env_findings
 from ..schema import ValidationFinding
+
+
+def patch_all_rows_outcome_coordinate_filter(
+    code: str,
+    run_log: str,
+    *,
+    resolved_input_bindings: Mapping[str, Any] | None,
+) -> str:
+    """Keep every row of a target-bound outcome-incidence product.
+
+    A producer may use a reader-facing label in its ``outcome`` column while
+    the ResearchContext uses the canonical source coordinate.  A rendering
+    consumer must not equate those two namespaces and silently remove every
+    row.  This repair is intentionally closed to one exact runtime failure,
+    one exact AST filter/guard pair, and a host binding that proves the input
+    is the complete ``table:outcome_incidence`` product in ``all_rows`` mode.
+    It does not choose an outcome: the unique-label runtime guard verifies
+    that the already bound table represents exactly one outcome coordinate.
+    """
+
+    if (
+        "runtimeerror: no bound outcome-incidence rows for target outcome"
+        not in str(run_log or "").lower()
+    ):
+        return code
+    binding = dict((resolved_input_bindings or {}).get("table:outcome_incidence") or {})
+    consumption = binding.get("consumption_contract")
+    product_contract = binding.get("product_contract")
+    identity = binding.get("identity_row")
+    if (
+        not isinstance(consumption, Mapping)
+        or consumption.get("mode") != "all_rows"
+        or not isinstance(product_contract, Mapping)
+        or "outcome" not in list(product_contract.get("columns") or [])
+        or not isinstance(identity, Mapping)
+        or identity.get("declared_kind") != "table"
+        or identity.get("product") != "outcome_incidence"
+        or identity.get("input_key") != "table:outcome_incidence"
+    ):
+        return code
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return code
+
+    def _matches_filter(node: ast.Assign) -> str | None:
+        if (
+            len(node.targets) != 1
+            or not isinstance(node.targets[0], ast.Name)
+            or not isinstance(node.value, ast.Call)
+            or node.value.args
+            or node.value.keywords
+            or not isinstance(node.value.func, ast.Attribute)
+            or node.value.func.attr != "copy"
+            or not isinstance(node.value.func.value, ast.Subscript)
+            or not isinstance(node.value.func.value.value, ast.Attribute)
+            or node.value.func.value.value.attr != "loc"
+        ):
+            return None
+        frame_name = node.targets[0].id
+        loc_owner = node.value.func.value.value.value
+        predicate = node.value.func.value.slice
+        expected = ast.parse(
+            f'{frame_name}["outcome"].astype(str).eq(str(target_outcome))',
+            mode="eval",
+        ).body
+        if (
+            not isinstance(loc_owner, ast.Name)
+            or loc_owner.id != frame_name
+            or ast.dump(predicate, include_attributes=False)
+            != ast.dump(expected, include_attributes=False)
+        ):
+            return None
+        return frame_name
+
+    def _matches_empty_guard(node: ast.stmt, frame_name: str) -> bool:
+        return bool(
+            isinstance(node, ast.If)
+            and isinstance(node.test, ast.Attribute)
+            and isinstance(node.test.value, ast.Name)
+            and node.test.value.id == frame_name
+            and node.test.attr == "empty"
+            and len(node.body) == 1
+            and isinstance(node.body[0], ast.Raise)
+            and isinstance(node.body[0].exc, ast.Call)
+            and isinstance(node.body[0].exc.func, ast.Name)
+            and node.body[0].exc.func.id == "RuntimeError"
+            and len(node.body[0].exc.args) == 1
+            and isinstance(node.body[0].exc.args[0], ast.Constant)
+            and node.body[0].exc.args[0].value
+            == "No bound outcome-incidence rows for target outcome"
+        )
+
+    candidates: list[tuple[ast.Assign, ast.If, str]] = []
+    for owner in ast.walk(tree):
+        body = getattr(owner, "body", None)
+        if not isinstance(body, list):
+            continue
+        for index, statement in enumerate(body[:-1]):
+            if not isinstance(statement, ast.Assign):
+                continue
+            frame_name = _matches_filter(statement)
+            guard = body[index + 1]
+            if frame_name is not None and _matches_empty_guard(guard, frame_name):
+                candidates.append((statement, guard, frame_name))
+    if len(candidates) != 1:
+        return code
+    assignment, guard, frame_name = candidates[0]
+    label_name = "_easyicu_bound_outcome_labels"
+    if any(
+        isinstance(node, ast.Name) and node.id == label_name for node in ast.walk(tree)
+    ):
+        return code
+    if not all(
+        isinstance(value, int)
+        for value in (
+            assignment.lineno,
+            assignment.col_offset,
+            guard.end_lineno,
+            guard.end_col_offset,
+        )
+    ):
+        return code
+
+    lines = code.splitlines(keepends=True)
+    line_starts: list[int] = []
+    cursor = 0
+    for line in lines:
+        line_starts.append(cursor)
+        cursor += len(line)
+
+    def _offset(lineno: int, utf8_column: int) -> int:
+        line = lines[lineno - 1]
+        char_column = len(line.encode("utf-8")[:utf8_column].decode("utf-8"))
+        return line_starts[lineno - 1] + char_column
+
+    start = _offset(assignment.lineno, assignment.col_offset)
+    end = _offset(guard.end_lineno, guard.end_col_offset)
+    indent = " " * int(assignment.col_offset)
+    replacement = (
+        f'{label_name} = {frame_name}["outcome"].dropna().astype(str).unique().tolist()\n'
+        f"{indent}if len({label_name}) != 1:\n"
+        f'{indent}    raise RuntimeError("Bound outcome-incidence table must contain exactly one outcome coordinate")\n'
+        f"{indent}{frame_name} = {frame_name}.copy()"
+    )
+    repaired = code[:start] + replacement + code[end:]
+    try:
+        ast.parse(repaired)
+    except SyntaxError:
+        return code
+    return repaired
 
 
 def patch_resolved_input_manifest_env(code: str, run_log: str) -> str:
@@ -360,6 +511,7 @@ def patch_resolved_input_cohort_env_shadow(
 
 
 __all__ = [
+    "patch_all_rows_outcome_coordinate_filter",
     "patch_resolved_input_manifest_env",
     "patch_resolved_input_cohort_env_shadow",
     "patch_resolved_input_relative_path_root",
