@@ -9694,22 +9694,24 @@ class FigureSourceDataValidator:
                     continue
                 if declared_kind == "statistic":
                     record = current_records.get(producer_id)
-                    if (
-                        record is None
-                        or evidence_id
-                        != str(record.get("step_summary_evidence_id") or "").strip()
-                        or evidence_id
-                        not in {
-                            str(item) for item in (record.get("evidence_ids") or [])
-                        }
-                    ):
+                    if record is None or evidence_id not in {
+                        str(item) for item in (record.get("evidence_ids") or [])
+                    }:
+                        invalid_bound_evidence.append(raw_input)
+                        continue
+                    try:
+                        statistic_payload = json.loads(
+                            bound_path.read_text(encoding="utf-8")
+                        )
+                    except (OSError, UnicodeError, json.JSONDecodeError):
                         invalid_bound_evidence.append(raw_input)
                         continue
                     value = self._extract_statistic_value(
-                        record.get("step_summary"), product_name
+                        statistic_payload,
+                        product_name,
                     )
                     if value is None:
-                        invalid_bound_evidence.append(raw_input)
+                        unsupported_value_inputs.append(raw_input)
                         continue
                     if not result_families or any(
                         self._source_supports_result_family(

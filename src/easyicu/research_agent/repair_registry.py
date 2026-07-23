@@ -339,6 +339,7 @@ _STRUCTURAL_REPAIRS = {
     "proportion_confint_nobs_keyword_v1",
     "publication_bundle_promote_v1",
     "returned_coercion_loss_guard_v1",
+    "render_only_effect_echo_suppression_v1",
     "remove_pandas_cut_observed_keyword_v1",
     "sklearn_bool_imputer_cast_v1",
     "sibling_figure_exports_promote_v1",

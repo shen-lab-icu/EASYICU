@@ -2568,6 +2568,55 @@ def test_truthful_statistic_backed_figure_has_value_lineage(tmp_path: Path):
     assert [finding for finding in findings if finding.severity == "error"] == []
 
 
+def test_standalone_statistic_artifact_authenticates_current_figure(
+    tmp_path: Path,
+):
+    figure_out, step, summary, records, bindings = _statistic_figure_fixture(
+        tmp_path,
+        source_value=0.81,
+    )
+    statistic_path = tmp_path / "evidence" / "metric__auroc.json"
+    statistic_path.write_text(
+        json.dumps({"name": "auroc", "estimate": 0.81}),
+        encoding="utf-8",
+    )
+    digest = hashlib.sha256(statistic_path.read_bytes()).hexdigest()
+    records[0]["evidence_ids"].append("metric_artifact")
+    bindings["statistic:auroc"] = {
+        "declared_kind": "statistic",
+        "product": "auroc",
+        "produced_by_step": "03_model",
+        "evidence_id": "metric_artifact",
+        "sha256": digest,
+        "absolute_path": str(statistic_path),
+    }
+
+    findings = FigureSourceDataValidator().audit(
+        step=step,
+        out_dir=figure_out,
+        run_dir=tmp_path,
+        step_summary=summary,
+        completed_step_records=records,
+        resolved_input_bindings=bindings,
+    )
+
+    assert [finding for finding in findings if finding.severity == "error"] == []
+
+    records[0]["evidence_ids"].remove("metric_artifact")
+    rejected = FigureSourceDataValidator().audit(
+        step=step,
+        out_dir=figure_out,
+        run_dir=tmp_path,
+        step_summary=summary,
+        completed_step_records=records,
+        resolved_input_bindings=bindings,
+    )
+    assert any(
+        finding.detail.get("reason") == "resolved_input_evidence_mismatch"
+        for finding in rejected
+    )
+
+
 def test_statistic_backed_figure_rejects_wrong_source_value(tmp_path: Path):
     figure_out, step, summary, records, bindings = _statistic_figure_fixture(
         tmp_path,
