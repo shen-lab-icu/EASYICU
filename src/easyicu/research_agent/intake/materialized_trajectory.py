@@ -1148,27 +1148,72 @@ def _validate_initial_producer_receipts(
         universe,
         source_available_concepts,
     )
+    provenance = authority.semantic_provenance
+    expected_payload: dict[str, object] = {
+        "database": universe.sidecar.source_database,
+        "requested_concepts": list(authority.requested_concepts),
+        "materialized_concepts": list(authority.materialized_concepts),
+        "available_unobserved_concepts": list(authority.available_unobserved_concepts),
+        "unavailable_concepts": list(authority.unavailable_concepts),
+        "window": (
+            [authority.window.start_hours, authority.window.end_hours]
+            if authority.window is not None
+            else None
+        ),
+        "bound_universe_authority_sha256": universe.reference.sha256,
+    }
+    parameter_receipt_keys = {
+        "bounds_violation_policy",
+        "source_bounds_exclusions",
+    }
+    provenance_receipt_keys = {
+        "source_bounds_violation_policy",
+        "source_bounds_exclusions",
+    }
+    has_parameter_receipt = bool(
+        parameter_receipt_keys.intersection(authority.producer_parameters)
+    )
+    has_provenance_receipt = bool(provenance_receipt_keys.intersection(provenance))
+    receipt_valid = has_parameter_receipt == has_provenance_receipt
+    if has_parameter_receipt:
+        receipt_valid = receipt_valid and parameter_receipt_keys.issubset(
+            authority.producer_parameters
+        )
+        receipt_valid = receipt_valid and provenance_receipt_keys.issubset(provenance)
+        policy = authority.producer_parameters.get("bounds_violation_policy")
+        exclusions = authority.producer_parameters.get("source_bounds_exclusions")
+        receipt_valid = receipt_valid and policy in {
+            "reject",
+            "exclude_with_receipt",
+        }
+        receipt_valid = receipt_valid and isinstance(exclusions, Mapping)
+        if isinstance(exclusions, Mapping):
+            receipt_valid = receipt_valid and all(
+                isinstance(concept, str)
+                and concept in set(authority.requested_concepts)
+                and isinstance(count, int)
+                and not isinstance(count, bool)
+                and count > 0
+                for concept, count in exclusions.items()
+            )
+            receipt_valid = receipt_valid and (policy != "reject" or not exclusions)
+        receipt_valid = receipt_valid and (
+            provenance.get("source_bounds_violation_policy") == policy
+            and provenance.get("source_bounds_exclusions") == exclusions
+        )
+        expected_payload.update(
+            {
+                "bounds_violation_policy": policy,
+                "source_bounds_exclusions": exclusions,
+            }
+        )
     expected_parameters = _canonical_mapping(
-        {
-            "database": universe.sidecar.source_database,
-            "requested_concepts": list(authority.requested_concepts),
-            "materialized_concepts": list(authority.materialized_concepts),
-            "available_unobserved_concepts": list(
-                authority.available_unobserved_concepts
-            ),
-            "unavailable_concepts": list(authority.unavailable_concepts),
-            "window": (
-                [authority.window.start_hours, authority.window.end_hours]
-                if authority.window is not None
-                else None
-            ),
-            "bound_universe_authority_sha256": universe.reference.sha256,
-        },
+        expected_payload,
         label="expected trajectory producer parameters",
     )
-    provenance = authority.semantic_provenance
     if (
         authority.producer != "cohort_materializer"
+        or not receipt_valid
         or authority.concept_bindings != expected_bindings
         or authority.producer_parameters != expected_parameters
         or provenance.get("n_rows") != authority.trajectory_rows
