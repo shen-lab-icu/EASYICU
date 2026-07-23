@@ -347,6 +347,32 @@ def _step_summary_statistic_values(
     return values
 
 
+def _named_structured_statistic_payload(
+    payload: Any,
+    statistic_name: str,
+) -> bool:
+    """Return true for an exact named statistic carrying finite numeric data."""
+
+    if not isinstance(payload, Mapping):
+        return False
+    declared_name = payload.get("name") or payload.get("statistic")
+    if _normalise_typed_product_name(declared_name) != statistic_name:
+        return False
+
+    def _has_finite_number(value: Any) -> bool:
+        if isinstance(value, bool):
+            return False
+        if isinstance(value, (int, float)):
+            return math.isfinite(float(value))
+        if isinstance(value, Mapping):
+            return any(_has_finite_number(item) for item in value.values())
+        if isinstance(value, (list, tuple)):
+            return any(_has_finite_number(item) for item in value)
+        return False
+
+    return _has_finite_number(payload)
+
+
 def _resolve_typed_input_evidence(
     *,
     input_name: str,
@@ -465,6 +491,147 @@ def _resolve_typed_input_evidence(
     }
     if typed_product[0] == "statistic":
         step_summary = (producer_record or {}).get("step_summary")
+        typed_mapping_declared, declared_paths = _declared_typed_product_paths(
+            step_summary,
+            typed_product=typed_product,
+        )
+        if typed_mapping_declared:
+            if len(declared_paths) != 1:
+                return None, {
+                    "input": str(input_name),
+                    **product_fields,
+                    "reason": (
+                        "typed_mapping_not_verified"
+                        if not declared_paths
+                        else "ambiguous_typed_mapping"
+                    ),
+                    "producer_step_id": producer_id,
+                    "declared_paths": declared_paths,
+                }
+            declared_filename = Path(declared_paths[0]).name
+            candidates: List[Tuple[Any, Path]] = []
+            incompatible_evidence_kinds: Set[str] = set()
+            for record in evidence_records:
+                evidence_id = str(_evidence_record_field(record, "evidence_id") or "")
+                if (
+                    evidence_id not in active_ids
+                    or str(_evidence_record_field(record, "produced_by_step") or "")
+                    != producer_id
+                ):
+                    continue
+                verified_path = verified_run_evidence_path(run_dir, record)
+                if verified_path is None:
+                    continue
+                if _registered_source_name(record, verified_path) != declared_filename:
+                    continue
+                if not _evidence_kind_matches_typed_product(record, typed_product):
+                    incompatible_evidence_kinds.add(
+                        str(_evidence_record_field(record, "kind") or "missing")
+                    )
+                    continue
+                candidates.append((record, verified_path))
+            if len(candidates) != 1:
+                return None, {
+                    "input": str(input_name),
+                    **product_fields,
+                    "reason": (
+                        "evidence_kind_mismatch"
+                        if incompatible_evidence_kinds and not candidates
+                        else (
+                            "typed_mapping_not_verified"
+                            if not candidates
+                            else "ambiguous_current_artifact"
+                        )
+                    ),
+                    "producer_step_id": producer_id,
+                    "declared_path": declared_paths[0],
+                    **(
+                        {
+                            "declared_kind": typed_product[0],
+                            "observed_evidence_kinds": sorted(
+                                incompatible_evidence_kinds
+                            ),
+                        }
+                        if incompatible_evidence_kinds and not candidates
+                        else {}
+                    ),
+                }
+            record, verified_path = candidates[0]
+            try:
+                evidence_payload = json.loads(verified_path.read_text(encoding="utf-8"))
+            except (AttributeError, OSError, TypeError, ValueError):
+                evidence_payload = None
+            if not _named_structured_statistic_payload(
+                evidence_payload,
+                typed_product[1],
+            ):
+                return None, {
+                    "input": str(input_name),
+                    **product_fields,
+                    "reason": "statistic_evidence_value_missing",
+                    "producer_step_id": producer_id,
+                }
+            evidence_values = sorted(
+                set(
+                    _step_summary_statistic_values(
+                        evidence_payload,
+                        typed_product[1],
+                    )
+                )
+            )
+            if len(evidence_values) > 1:
+                return None, {
+                    "input": str(input_name),
+                    **product_fields,
+                    "reason": "statistic_evidence_value_ambiguous",
+                    "producer_step_id": producer_id,
+                    "evidence_values": evidence_values,
+                }
+            recorded_values = sorted(
+                set(
+                    _step_summary_statistic_values(
+                        step_summary,
+                        typed_product[1],
+                    )
+                )
+            )
+            if len(recorded_values) > 1:
+                return None, {
+                    "input": str(input_name),
+                    **product_fields,
+                    "reason": "statistic_record_value_ambiguous",
+                    "producer_step_id": producer_id,
+                    "recorded_values": recorded_values,
+                }
+            if (
+                recorded_values
+                and evidence_values
+                and not math.isclose(
+                    recorded_values[0],
+                    evidence_values[0],
+                    rel_tol=1e-12,
+                    abs_tol=1e-12,
+                )
+            ):
+                return None, {
+                    "input": str(input_name),
+                    **product_fields,
+                    "reason": "statistic_evidence_payload_mismatch",
+                    "producer_step_id": producer_id,
+                    "recorded_value": recorded_values[0],
+                    "evidence_value": evidence_values[0],
+                }
+            return (
+                EvidenceRef(
+                    evidence_id=str(
+                        _evidence_record_field(record, "evidence_id") or ""
+                    ),
+                    kind=_evidence_record_field(record, "kind"),
+                    description=_evidence_record_field(record, "description"),
+                    relative_path=_evidence_record_field(record, "relative_path"),
+                ),
+                None,
+            )
         recorded_values = _step_summary_statistic_values(
             step_summary,
             typed_product[1],

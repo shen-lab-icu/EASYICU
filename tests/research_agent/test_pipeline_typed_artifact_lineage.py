@@ -1401,6 +1401,144 @@ def test_typed_statistic_binds_current_verified_step_summary(tmp_path: Path) -> 
 
 
 @pytest.mark.parametrize(
+    ("product_name", "payload"),
+    [
+        (
+            "complete_case_n",
+            {"name": "complete_case_n", "value": 94425},
+        ),
+        (
+            "robustness_summary",
+            {
+                "name": "robustness_summary",
+                "primary_analysis_n": 94425,
+                "complete_case_analysis_n": 94425,
+            },
+        ),
+    ],
+)
+def test_typed_statistic_binds_exact_declared_json_sidecar(
+    tmp_path: Path,
+    product_name: str,
+    payload: dict[str, object],
+) -> None:
+    store = EvidenceStore(tmp_path)
+    sidecar = _register(
+        store,
+        tmp_path,
+        suffix=".json",
+        payload=json.dumps(payload),
+        evidence_id=f"{product_name}_statistic",
+        kind="statistic",
+        source_stem=product_name,
+    )
+    declared_product = f"statistic:{product_name}"
+    plan = _plan_for_typed_product(declared_product)
+
+    ref, failure = _resolve_typed_input_evidence(
+        input_name=declared_product,
+        plan=plan,
+        evidence_records=store.records(),
+        per_step_records=[
+            {
+                "step_id": "producer",
+                "status": "ok",
+                "evidence_ids": [sidecar.evidence_id],
+                "step_summary": {
+                    "output_files": {
+                        declared_product: f"{product_name}.json",
+                    }
+                },
+                "analysis_request": {"step": plan.steps[0].model_dump(mode="json")},
+                "plan_scientific_signature": _scope_signature(plan),
+            }
+        ],
+        run_dir=tmp_path,
+    )
+
+    assert failure is None
+    assert ref is not None
+    assert ref.evidence_id == sidecar.evidence_id
+    assert ref.kind == "statistic"
+
+
+@pytest.mark.parametrize(
+    ("payload", "evidence_kind", "step_summary_value", "reason"),
+    [
+        (
+            {"name": "different_statistic", "value": 94425},
+            "statistic",
+            None,
+            "statistic_evidence_value_missing",
+        ),
+        (
+            {"name": "complete_case_n", "status": "complete"},
+            "statistic",
+            None,
+            "statistic_evidence_value_missing",
+        ),
+        (
+            {"name": "complete_case_n", "value": 94425},
+            "log",
+            None,
+            "evidence_kind_mismatch",
+        ),
+        (
+            {"name": "complete_case_n", "value": 94425},
+            "statistic",
+            94424,
+            "statistic_evidence_payload_mismatch",
+        ),
+    ],
+)
+def test_typed_statistic_declared_json_sidecar_fails_closed(
+    tmp_path: Path,
+    payload: dict[str, object],
+    evidence_kind: str,
+    step_summary_value: int | None,
+    reason: str,
+) -> None:
+    store = EvidenceStore(tmp_path)
+    sidecar = _register(
+        store,
+        tmp_path,
+        suffix=".json",
+        payload=json.dumps(payload),
+        evidence_id="complete_case_n_statistic",
+        kind=evidence_kind,
+        source_stem="complete_case_n",
+    )
+    declared_product = "statistic:complete_case_n"
+    plan = _plan_for_typed_product(declared_product)
+    step_summary: dict[str, object] = {
+        "output_files": {declared_product: "complete_case_n.json"}
+    }
+    if step_summary_value is not None:
+        step_summary["complete_case_n"] = step_summary_value
+
+    ref, failure = _resolve_typed_input_evidence(
+        input_name=declared_product,
+        plan=plan,
+        evidence_records=store.records(),
+        per_step_records=[
+            {
+                "step_id": "producer",
+                "status": "ok",
+                "evidence_ids": [sidecar.evidence_id],
+                "step_summary": step_summary,
+                "analysis_request": {"step": plan.steps[0].model_dump(mode="json")},
+                "plan_scientific_signature": _scope_signature(plan),
+            }
+        ],
+        run_dir=tmp_path,
+    )
+
+    assert ref is None
+    assert failure is not None
+    assert failure["reason"] == reason
+
+
+@pytest.mark.parametrize(
     ("evidence_payload", "reason"),
     [
         ("[]\n", "statistic_evidence_payload_not_mapping"),
