@@ -507,6 +507,24 @@ def bind_primary_cohort_role(
     )
 
 
+def bind_execution_cohort_runtime(
+    *,
+    authority: HostCoderAuthority,
+) -> HostCoderAuthority:
+    """Explain the host-owned current-cohort cardinality coordinate."""
+
+    return authority.append(
+        "CURRENT EXECUTION COHORT (host-owned runtime contract): "
+        "COHORT_PARQUET is the exact cohort selected for this step. The "
+        "ResearchContext cohort cardinality can describe the earlier run input "
+        "before eligibility or a typed cohort override, so never hard-code it "
+        "as the current row count. Derive ordinary denominators from the loaded "
+        "DataFrame. If an explicit row-count integrity assertion is needed, "
+        "compare len(the loaded COHORT_PARQUET frame) with "
+        'int(os.environ["EASYICU_COHORT_ROWS"]); the runner owns that value.'
+    )
+
+
 def attach_step_coder_input_authority(
     *,
     enabled: bool,
@@ -523,6 +541,7 @@ def attach_step_coder_input_authority(
 ) -> HostCoderAuthority:
     """Bind typed-input receipts and optional selected resources for one step."""
 
+    authority = bind_execution_cohort_runtime(authority=authority)
     authority = _coder_authority_with_typed_parent_schema_receipts(
         authority=authority,
         bindings=resolved_input_bindings,
@@ -588,6 +607,7 @@ __all__ = [
     "CoderResourceIntegrityError",
     "attach_coder_resources",
     "attach_step_coder_input_authority",
+    "bind_execution_cohort_runtime",
     "bind_materialized_coder_authority",
     "bind_primary_cohort_role",
     "build_coder_resource_bundle",

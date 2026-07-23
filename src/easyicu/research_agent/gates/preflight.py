@@ -17,7 +17,9 @@ from ..schema import AnalysisStep, ValidationFinding
 from .ast_semantics import (
     DYNAMIC_NAMESPACE_MUTATORS as _DYNAMIC_NAMESPACE_MUTATORS,
     DYNAMIC_NAMESPACE_PRIMITIVES as _DYNAMIC_NAMESPACE_PRIMITIVES,
+    call_name as _call_name,
     contains_literal_provenance_audit_row,
+    execution_cohort_row_count_findings as _cohort_count_findings,
     literal_observational_getattr,
 )
 from .binary_feasibility import binary_feasibility_guard_findings
@@ -50,17 +52,6 @@ _STRUCTURAL_ACCOUNTING_PRODUCTS = frozenset(
 _RENDER_METHODS = frozenset(
     {"figure", "publication_figure", "visualization", "descriptive_visualization"}
 )
-
-
-def _call_name(node: ast.AST) -> str:
-    if isinstance(node, ast.Name):
-        return node.id
-    if isinstance(node, ast.Attribute):
-        prefix = _call_name(node.value)
-        return f"{prefix}.{node.attr}" if prefix else node.attr
-    if isinstance(node, ast.Call):
-        return _call_name(node.func)
-    return ""
 
 
 def _is_frame_columns(node: ast.AST) -> bool:
@@ -8357,7 +8348,9 @@ def audit_mechanical_code_contracts(
     findings.extend(_conditional_nonfinite_guard_findings(tree))
     findings.extend(_strict_numeric_nonfinite_findings(tree))
     findings.extend(_categorical_level_reconciliation_findings(tree))
-    findings.extend(binary_feasibility_guard_findings(tree))
+    findings.extend(
+        binary_feasibility_guard_findings(tree) + _cohort_count_findings(tree)
+    )
     return findings
 
 

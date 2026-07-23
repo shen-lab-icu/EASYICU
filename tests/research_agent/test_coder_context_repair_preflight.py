@@ -6498,3 +6498,72 @@ def test_llm_concept_audit_cache_does_not_persist_transient_failures(
 
     assert cache.get(key) is None
     assert not cache.path.exists()
+
+
+def test_hardcoded_execution_cohort_count_uses_host_runtime_coordinate(ra):
+    step = ra.AnalysisStep(
+        step_id="cohort_summary",
+        intent="Summarize the exact locked execution cohort.",
+        inputs=["age"],
+        expected_outputs=["table:cohort_summary"],
+        method="descriptive_summary",
+    )
+    code = """\
+import os
+import pandas as pd
+
+cohort_path = os.environ["COHORT_PARQUET"]
+df = pd.read_parquet(cohort_path)
+locked_n = int(len(df))
+if locked_n != 94458:
+    raise ValueError("locked cohort row count mismatch")
+"""
+
+    findings = audit_mechanical_code_contracts(code, step)
+    row_findings = [
+        finding
+        for finding in findings
+        if (finding.detail or {}).get("reason")
+        == "execution_cohort_row_count_hardcoded"
+    ]
+
+    assert len(row_findings) == 1
+    repaired, names = deterministic_concept_audit_repair(
+        code,
+        [row_findings[0].message],
+        repair_findings=row_findings,
+    )
+    assert names == ["execution_cohort_runtime_row_count_v1"]
+    assert "94458" not in repaired
+    assert 'environ["EASYICU_COHORT_ROWS"]' in repaired
+    assert not any(
+        (finding.detail or {}).get("reason") == "execution_cohort_row_count_hardcoded"
+        for finding in audit_mechanical_code_contracts(repaired, step)
+    )
+
+
+def test_dynamic_execution_cohort_count_and_unrelated_table_constants_are_allowed(ra):
+    step = ra.AnalysisStep(
+        step_id="cohort_summary",
+        intent="Summarize the exact locked execution cohort.",
+        inputs=["age"],
+        expected_outputs=["table:cohort_summary"],
+        method="descriptive_summary",
+    )
+    code = """\
+import os
+import pandas as pd
+
+df = pd.read_parquet(os.environ["COHORT_PARQUET"])
+expected_n = int(os.environ["EASYICU_COHORT_ROWS"])
+if len(df) != expected_n:
+    raise ValueError("locked cohort row count mismatch")
+display_rows = [{"label": "n"}, {"label": "missing"}]
+if len(display_rows) != 2:
+    raise ValueError("display schema changed")
+"""
+
+    assert not any(
+        (finding.detail or {}).get("reason") == "execution_cohort_row_count_hardcoded"
+        for finding in audit_mechanical_code_contracts(code, step)
+    )
