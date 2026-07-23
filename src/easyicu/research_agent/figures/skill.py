@@ -306,7 +306,14 @@ class PublicationFigureSkill:
             try:
                 frame = _read_table(run_dir / primary.relative_path)
                 strata = _first_normalisable_record(
-                    source_evidence,
+                    # Absolute-risk context is deliberately an auxiliary result
+                    # upstream of the adjusted primary model. Restricting this
+                    # lookup to the primary-effect lineage hides a valid,
+                    # registered outcome-incidence table and leaves the main
+                    # figure with relative estimates only. The primary effect
+                    # itself remains selected from ``source_evidence`` above;
+                    # this wider view is used only for the descriptive panel.
+                    evidence,
                     [
                         "stratified_mortality",
                         "stratified_mortality_incidence",
@@ -314,6 +321,7 @@ class PublicationFigureSkill:
                         "outcome_by_primary_exposure",
                         "outcome_by_group",
                         "outcome_by_sepsis3",
+                        "outcome_incidence",
                         # Association steps commonly export the absolute
                         # outcome risk by exposure group as
                         # absolute_risk_by_<exposure>.csv; the prefix token
@@ -2982,6 +2990,8 @@ def _normalise_strata_frame(
             "mortality_pct",
             "event_pct",
             "outcome_pct",
+            "incidence_proportion",
+            "incidence_pct",
             "risk",
             "rate",
             "death_risk",

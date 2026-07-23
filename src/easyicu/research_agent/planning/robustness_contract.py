@@ -15,7 +15,14 @@ from .cohort_contract import CohortDefinition, coerce_cohort_definition
 
 RobustnessAxis = Literal["cohort", "missing", "outcome"]
 
-MIN_AXIS_COUNTS: Dict[str, int] = {"cohort": 3, "missing": 2, "outcome": 2}
+# Robustness requirements are study- and data-dependent. A universal 3/2/2
+# quota forced planners (and the historical fallback) to invent unsupported
+# cohort and outcome definitions just to satisfy schema cardinality. The
+# article contract decides whether robustness is required; this typed contract
+# requires at least one explicit, executable candidate and validates whichever
+# scientific axes the current task can actually support.
+MIN_AXIS_COUNTS: Dict[str, int] = {"cohort": 0, "missing": 0, "outcome": 0}
+MIN_TOTAL_SPEC_COUNT = 1
 
 
 class RobustnessPlanError(ValueError):
@@ -61,6 +68,10 @@ def validate_robustness_specs(specs: Sequence[RobustnessSpec]) -> None:
     counts = {axis: 0 for axis in MIN_AXIS_COUNTS}
     seen_ids: set[str] = set()
     problems: List[str] = []
+    if len(specs) < MIN_TOTAL_SPEC_COUNT:
+        problems.append(
+            "robustness_specs require at least one task-supported alternative"
+        )
     for spec in specs:
         if not spec.spec_id:
             problems.append("spec_id must be non-empty")
@@ -87,6 +98,7 @@ def _dict_or_none(value: Any) -> Optional[Dict[str, Any]]:
 
 __all__ = [
     "MIN_AXIS_COUNTS",
+    "MIN_TOTAL_SPEC_COUNT",
     "RobustnessAxis",
     "RobustnessPlanError",
     "RobustnessSpec",

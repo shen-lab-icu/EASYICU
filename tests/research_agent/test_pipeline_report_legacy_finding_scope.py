@@ -221,3 +221,39 @@ def test_only_known_older_attempt_error_is_superseded() -> None:
 
     assert active == []
     assert superseded == [finding]
+
+
+def test_legacy_unscoped_mechanical_error_retires_only_when_all_steps_clean() -> None:
+    finding = ValidationFinding(
+        validator="mechanical_code_preflight",
+        severity="error",
+        message="Legacy helper signature failed before step scoping existed.",
+        detail={"reason": "host_helper_call_signature_invalid"},
+    )
+
+    active, superseded = _partition_findings_by_supersession(
+        [finding],
+        success_step_ids={"01_cohort", "02_model"},
+        known_step_ids={"01_cohort", "02_model"},
+    )
+
+    assert active == []
+    assert superseded == [finding]
+
+
+def test_legacy_unscoped_mechanical_error_stays_active_if_any_step_failed() -> None:
+    finding = ValidationFinding(
+        validator="mechanical_code_preflight",
+        severity="error",
+        message="Ambiguous legacy helper signature failure.",
+        detail={"reason": "host_helper_call_signature_invalid"},
+    )
+
+    active, superseded = _partition_findings_by_supersession(
+        [finding],
+        success_step_ids={"01_cohort"},
+        known_step_ids={"01_cohort", "02_model"},
+    )
+
+    assert active == [finding]
+    assert superseded == []
