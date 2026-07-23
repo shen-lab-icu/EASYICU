@@ -5,11 +5,135 @@ windowing, predicate-column, binary-outcome helpers, and the CTAS 纳排
 integration on synthetic frames so the logic is covered in CI.
 """
 
+import hashlib
+from types import SimpleNamespace
+
 import pandas as pd
 import pytest
 
 from easyicu.research_agent.cohort import materializer as M
 from easyicu.research_agent.cohort.schema import CohortDefinition, build_cohort
+
+
+def _sha256(path):
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def test_typed_bounds_exclusion_is_explicit_and_receipted():
+    values = pd.Series([1.0, 51.0, None])
+    counts = {}
+
+    filtered = M._bounded_typed_numeric(
+        pd.to_numeric(values, errors="coerce"),
+        original=values,
+        metadata=SimpleNamespace(
+            extraction_bounds=SimpleNamespace(minimum=0.0, maximum=50.0)
+        ),
+        concept="lact",
+        purpose="test",
+        bounds_violation_policy="exclude_with_receipt",
+        bounds_violation_counts=counts,
+    )
+
+    assert filtered.iloc[0] == 1.0
+    assert pd.isna(filtered.iloc[1])
+    assert counts == {"lact": 1}
+
+
+def test_typed_bounds_default_still_rejects():
+    values = pd.Series([51.0])
+
+    with pytest.raises(M.MaterializedMetadataError, match="outside sealed"):
+        M._bounded_typed_numeric(
+            values,
+            original=values,
+            metadata=SimpleNamespace(
+                extraction_bounds=SimpleNamespace(minimum=0.0, maximum=50.0)
+            ),
+            concept="lact",
+            purpose="test",
+        )
+
+
+def test_replacement_patient_identity_preserves_rows_and_patient_groups(tmp_path):
+    cohort = pd.DataFrame(
+        {
+            "stay_id": [11, 12, 13],
+            "age": [60, 61, 70],
+        }
+    )
+    mapping_path = tmp_path / "stay_patient.parquet"
+    pd.DataFrame(
+        {
+            "stay_id": [11, 12, 13],
+            "patient_key": [100, 100, 200],
+        }
+    ).to_parquet(mapping_path, index=False)
+
+    result, receipt = M._replace_row_identity_from_mapping(
+        cohort,
+        mapping_path=mapping_path.absolute(),
+        mapping_sha256=_sha256(mapping_path),
+        mapping_stay_column="stay_id",
+        mapping_patient_column="patient_key",
+        output_identity_column="patient_stay_id",
+        authority_coordinates={"bridge_ref": "test/bridge"},
+    )
+
+    assert result.columns.tolist() == ["patient_stay_id", "age"]
+    assert result["patient_stay_id"].tolist() == [
+        "p100:s11",
+        "p100:s12",
+        "p200:s13",
+    ]
+    assert result["patient_stay_id"].str.split(":s").str[0].tolist() == [
+        "p100",
+        "p100",
+        "p200",
+    ]
+    assert receipt["mapped_cohort_rows"] == 3
+    assert receipt["patient_group_derivation"] == {
+        "algorithm": "prefix_before_:s",
+        "delimiter": ":s",
+    }
+    assert receipt["authority_coordinates"] == {"bridge_ref": "test/bridge"}
+
+
+def test_replacement_patient_identity_rejects_uncovered_stay(tmp_path):
+    cohort = pd.DataFrame({"stay_id": [11, 12], "age": [60, 61]})
+    mapping_path = tmp_path / "stay_patient.parquet"
+    pd.DataFrame({"stay_id": [11], "patient_key": [100]}).to_parquet(
+        mapping_path, index=False
+    )
+
+    with pytest.raises(M.MaterializedMetadataError, match="cover every cohort stay"):
+        M._replace_row_identity_from_mapping(
+            cohort,
+            mapping_path=mapping_path.absolute(),
+            mapping_sha256=_sha256(mapping_path),
+            mapping_stay_column="stay_id",
+            mapping_patient_column="patient_key",
+            output_identity_column="patient_stay_id",
+            authority_coordinates=None,
+        )
+
+
+def test_replacement_patient_identity_rejects_digest_mismatch(tmp_path):
+    mapping_path = tmp_path / "stay_patient.parquet"
+    pd.DataFrame({"stay_id": [11], "patient_key": [100]}).to_parquet(
+        mapping_path, index=False
+    )
+
+    with pytest.raises(M.MaterializedMetadataError, match="digest mismatch"):
+        M._replace_row_identity_from_mapping(
+            pd.DataFrame({"stay_id": [11]}),
+            mapping_path=mapping_path.absolute(),
+            mapping_sha256="0" * 64,
+            mapping_stay_column="stay_id",
+            mapping_patient_column="patient_key",
+            output_identity_column="patient_stay_id",
+            authority_coordinates=None,
+        )
 
 
 def test_load_concept_uses_public_easyicu_api_after_package_move(monkeypatch, tmp_path):
@@ -217,6 +341,62 @@ def test_summarize_timeseries_categorical_concept_becomes_presence():
     r3 = out[out.stay_id == 3].iloc[0]
     assert r3.vent_max == 0.0  # "none" is a negative token
     assert r3.vent_measured == 1
+
+
+def test_typed_categorical_value_becomes_recorded_presence():
+    df = pd.DataFrame(
+        {
+            "stay_id": [1, 1, 2],
+            "charttime": [1.0, 2.0, 1.0],
+            "mech_vent": ["invasive", "noninvasive", None],
+        }
+    )
+
+    out, presence_encoded = M._summarize_timeseries_with_representation(
+        df,
+        "mech_vent",
+        (0.0, 24.0),
+        source_role=M.ConceptColumnRole.VALUE,
+    )
+
+    assert presence_encoded is True
+    assert out.loc[out["stay_id"] == 1, "mech_vent_max"].iloc[0] == 1.0
+
+
+def test_declared_positive_only_event_decodes_structural_absence():
+    wide = pd.DataFrame(
+        {
+            "vaso_ind_max": [1.0, None],
+            "vaso_ind_min": [1.0, None],
+            "vaso_ind_mean": [1.0, None],
+            "vaso_ind_first": [1.0, None],
+            "vaso_ind_n": [3, 0],
+        }
+    )
+
+    normalized = M._normalize_declared_positive_only_event_concepts(
+        wide,
+        concepts=("vaso_ind",),
+    )
+
+    assert normalized == [
+        "vaso_ind_max",
+        "vaso_ind_min",
+        "vaso_ind_mean",
+        "vaso_ind_first",
+    ]
+    assert wide["vaso_ind_max"].tolist() == [1.0, 0.0]
+    assert wide["vaso_ind_n"].tolist() == [3, 0]
+
+
+def test_declared_positive_only_event_rejects_nonbinary_values():
+    wide = pd.DataFrame({"vaso_ind_max": [2.0]})
+
+    with pytest.raises(M.MaterializedMetadataError, match="not binary"):
+        M._normalize_declared_positive_only_event_concepts(
+            wide,
+            concepts=("vaso_ind",),
+        )
 
 
 def test_summarize_timeseries_numeric_stored_as_text_uses_numeric_view():

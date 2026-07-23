@@ -1113,6 +1113,8 @@ def _run_one_arm(
         primary_exposure=operational_exposure,
         concept_descriptions=concept_descriptions,
         inclusion_criteria=item.inclusion_criteria,
+        id_columns=(getattr(item, "id_columns", None) or None),
+        notes=getattr(item, "notes", None),
         resume_run_id=resolved_resume_run_id,
         resume_from_step_id=resume_from_step_id,
         stop_after_step_id=stop_after_step_id,
@@ -3688,6 +3690,7 @@ def _external_item_from_row(
         inclusion_criteria=_external_string_list(
             row, "inclusion_criteria", diagnostics
         ),
+        id_columns=_external_string_list(row, "id_columns", diagnostics),
         candidate_variables=_external_string_list(
             row, "candidate_variables", diagnostics
         ),
