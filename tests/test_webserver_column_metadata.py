@@ -50,6 +50,15 @@ def test_exact_logical_or_boolean_outputs_are_event_status() -> None:
     )
 
 
+def test_catalog_only_boolean_output_is_event_status() -> None:
+    binding = _build(
+        pd.DataFrame({"stay_id": [1, 2], "mort_28d": [False, True]}),
+        concepts=["mort_28d"],
+    )
+
+    assert binding.columns["mort_28d"].metadata.role is ConceptColumnRole.EVENT_STATUS
+
+
 def test_logical_companions_use_concept_semantics_not_storage_dtype() -> None:
     binding = _build(
         pd.DataFrame(
