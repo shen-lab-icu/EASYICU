@@ -1819,8 +1819,9 @@ def _typed_input_scope_contract(step: AnalysisStep) -> str:
         )
     return (
         "TYPED INPUT BINDING (binding):\n"
-        "- Read os.environ['EASYICU_RESOLVED_INPUTS_JSON']; this applies even when "
-        "the step declares only untyped raw-variable inputs. "
+        "- EASYICU_RESOLVED_INPUTS_JSON is a filesystem path to a JSON document; "
+        "read the file, then parse its contents. This applies even when the step "
+        "declares only untyped raw-variable inputs. "
         "manifest['planner_declared_inputs'] is the exact Planner-owned consumer "
         "scope: kind:name entries are products and all others are the only eligible "
         "raw-variable or column coordinates.\n"
@@ -1912,7 +1913,8 @@ def _compact_repair_scope_contract(step: AnalysisStep) -> str:
         "step_summary, source-data, and diagnostic companions do not widen "
         "scientific scope; do not add undeclared effect contrasts.",
         "TYPED INPUT BINDING (binding): minimal patch",
-        "- Read EASYICU_RESOLVED_INPUTS_JSON; this applies even when the step "
+        "- EASYICU_RESOLVED_INPUTS_JSON is a filesystem path to a JSON document; "
+        "read the file, then parse its contents. This applies even when the step "
         "declares only untyped raw-variable inputs.",
         "- manifest['planner_declared_inputs'] is the exact Planner-owned "
         "consumer scope and the only eligible raw-variable or column coordinates. "
