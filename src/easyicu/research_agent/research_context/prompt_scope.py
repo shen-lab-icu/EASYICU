@@ -164,6 +164,17 @@ _COMPACT_SERIALIZATION_GUIDANCE = """OUTPUT SERIALIZATION CONTRACT:
 - Every CSV cell must be one scalar. Emit separate columns for median, quartiles, counts, and percentages; emit one row per categorical level.
 - Never assign the result of an inplace pandas operation, and prefer stable `.agg`/`.transform` over mixed-shape `groupby.apply`."""
 
+_COMPACT_RENDER_ONLY_GUIDANCE = """RENDER-ONLY PUBLICATION FIGURE CONTRACT:
+- Use only the exact digest-bound typed inputs in `EASYICU_RESOLVED_INPUTS_JSON`. Read that environment value as a JSON-file path, verify each declared evidence id/path/digest and product schema, and never scan the run/evidence directory, reuse an earlier figure, rank historical records, or choose columns by dtype/position.
+- This step may render the declared products but may not fit a model, reconstruct a cohort, recompute an absent estimand, or invent a statistic. Resolve columns by exact registered names and fail closed on a missing/ambiguous field. A bound `statistic:*` input must be loaded and cited even when its value is also present in a table.
+- Write a minimal `<stem>_source_data.csv` containing every plotted value, denominator, source table, and row/key needed for exact reconciliation. Do not add unplotted helper masks, duplicated rounded values, or unauthorised derived columns. For positional tracing use the exact columns `source_row_index` and `source_table`.
+- Verify every count-derived rate/risk/fraction/percentage from a finite numerator and denominator > 0. Keep unavailable confidence limits null or omit the error bar; never substitute the point estimate. Disclose every excluded invalid result row and reason. Structural accounting figures must fail closed rather than drop a required row.
+- Use matplotlib `Agg` and editable SVG text. Build every export from the same figure and source data with `make_figure_contract`, `apply_publication_style`, `add_panel_label`, `save_publication_figure`, and `audit_publication_exports` from `easyicu.research_agent.figures.publication`. Call `save_publication_figure(fig=fig, out_dir=out_dir, stem=stem, contract=contract)` directly and save matching PNG, SVG, PDF, and TIFF files.
+- Use the stable FigureContract fields `figure_id`, `core_claim`, `panels`, and `source_data`; each panel uses `panel_id`, `role`, `claim`, `evidence_ids`, plus `chart_type` or `visual_form`. `source_data` is one local CSV basename or a flat list of basenames; evidence ids belong on panels.
+- Follow the host-bound ARTICLE FIGURE STRATEGY when present. Give the reader-facing result visual priority, use distinct panel roles/chart families where required, keep incompatible effect scales on separate axes/panels, and never use a generic chart to impersonate an absolute-risk, calibration, survival, robustness, or data-quality role.
+- Keep labels reader-facing and compact. Use `constrained_layout=True` or explicit GridSpec spacing; keep labels, legends, and value text within their panels. Use compact unique panel labels, no duplicated label in a title, and no figure-level title, caption, long provenance note, or process note on the canvas.
+- Save the generated `.figure_contract.json`, publication export-QA findings, all `figure_files`, input bindings, and every quotable numeric statistic in `step_summary.json`. JSON values must be Python primitives; fraction fields stay in [0,1], percentage fields in [0,100], and probability/absolute-risk/prevalence confidence bounds stay in [0,1]."""
+
 _TABLE_ONE_SDK_GUIDANCE = """GROUPED TABLE 1 CONTRACT:
 - `table_one_spec` is the sole authority for grouping, closed levels, summaries, and tests.
 - Use the exact `table_one_spec` attached to this step; do not recreate, extend, or rename its fields in local code.
@@ -584,6 +595,30 @@ def coder_rewrite_guide_for_step(full_guide: str, step: AnalysisStep) -> str:
     )
 
 
+def compact_rendering_coder_guide_for_step(
+    full_guide: str,
+    step: AnalysisStep,
+) -> str:
+    """Project a render-only prompt without repeating the figure tutorial.
+
+    The expanded guide remains useful documentation and is retained for normal
+    prompts.  When the complete lossless prompt approaches the transport
+    envelope, this structural projection replaces only the non-authoritative
+    figure/visual teaching sections.  Typed inputs, host authority, the Planner
+    method and expected outputs, and the outbound-safe scientific context stay
+    byte-for-byte intact.
+    """
+
+    if not _figure_contract_applies(step):
+        return coder_guide_for_step(full_guide, step)
+    base = coder_guide_for_step(
+        full_guide,
+        step,
+        _exclude_sections=frozenset({"figure", "visual"}),
+    )
+    return "\n\n".join((base, _COMPACT_RENDER_ONLY_GUIDANCE)).strip()
+
+
 def coder_context_requires_method_constraints(step: AnalysisStep) -> bool:
     """Return whether the scoped context needs model-compatibility prose."""
 
@@ -983,6 +1018,7 @@ def scoped_coder_context(
 
 
 __all__ = [
+    "compact_rendering_coder_guide_for_step",
     "coder_context_requires_method_constraints",
     "coder_guide_for_step",
     "normalised_method_head",
