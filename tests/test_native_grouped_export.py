@@ -150,3 +150,27 @@ def test_grouped_export_records_missing_concept_inside_physical_module(
     ]
     with open_export_package(output) as package:
         assert set(package.concept_index) == {"mort_28d"}
+
+
+def test_grouped_export_reads_special_concept_from_saved_key(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(api, "EXTRACT_MODULES", {"sepsis3_sofa1": ["sep3_sofa1"]})
+    pd.DataFrame(
+        {"stay_id": [1, 2], "charttime": [0.0, 1.0], "sep3_sofa1": [0, 1]}
+    ).to_parquet(tmp_path / "sepsis3_sofa1.parquet", index=False)
+    (tmp_path / "sepsis3_sofa1.manifest.json").write_text(
+        json.dumps({"saved": {"sep3_sofa1": {"rows": 2}}}), encoding="utf-8"
+    )
+
+    api._publish_native_export_v2(
+        database="miiv",
+        data_path=str(tmp_path / "source"),
+        output_dir=str(tmp_path),
+        modules=["sepsis3_sofa1"],
+        max_patients=None,
+        result={"modules": {"sepsis3_sofa1": {"errors": []}}},
+    )
+
+    with open_export_package(tmp_path) as package:
+        assert set(package.concept_index) == {"sep3_sofa1"}
