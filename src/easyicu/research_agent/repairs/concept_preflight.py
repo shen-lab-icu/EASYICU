@@ -14,6 +14,7 @@ from .host_helper_result import (
 )
 from .host_helper_failure import patch_host_validation_helper_reraise
 from .local_binding import patch_local_read_before_assignment_hoist
+from .runtime_context_levels import patch_runtime_context_opaque_levels
 
 
 def patch_concept_preflight_repairs(
@@ -65,6 +66,13 @@ def patch_concept_preflight_repairs(
     if candidate != repaired:
         repaired = candidate
         names.append("execution_cohort_runtime_row_count_v1")
+    candidate = patch_runtime_context_opaque_levels(
+        repaired,
+        findings=findings,
+    )
+    if candidate != repaired:
+        repaired = candidate
+        names.append("runtime_context_private_levels_v1")
     return repaired, names
 
 

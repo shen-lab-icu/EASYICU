@@ -197,6 +197,71 @@ def execution_cohort_row_count_findings(
     )
 
 
+def runtime_context_opaque_level_findings(
+    tree: ast.Module,
+) -> list[ValidationFinding]:
+    """Reject treating the outbound-safe projection as the runtime context.
+
+    Provider prompts expose ``observed_shape.opaque_levels`` so categorical
+    literals stay private. The digest-verified local ResearchContext keeps the
+    real execution binding under ``observed_domain.levels``.
+    """
+
+    def _string_slice(node: ast.AST, value: str) -> ast.Constant | None:
+        if (
+            isinstance(node, ast.Subscript)
+            and isinstance(node.slice, ast.Constant)
+            and node.slice.value == value
+            and node.slice.end_lineno is not None
+            and node.slice.end_col_offset is not None
+        ):
+            return node.slice
+        return None
+
+    findings: list[ValidationFinding] = []
+    for node in ast.walk(tree):
+        outer_key = _string_slice(node, "opaque_levels")
+        if outer_key is None or not isinstance(node, ast.Subscript):
+            continue
+        inner_key = _string_slice(node.value, "observed_shape")
+        if inner_key is None:
+            continue
+        findings.append(
+            ValidationFinding(
+                validator="mechanical_code_preflight",
+                severity="error",
+                message=(
+                    "Generated code reads outbound-only "
+                    "observed_shape.opaque_levels from the local ResearchContext. "
+                    "Use the digest-verified local observed_domain.levels binding; "
+                    "never copy private level literals into generated source."
+                ),
+                detail={
+                    "reason": "runtime_context_opaque_levels_projection",
+                    "observed_shape_key": {
+                        "line": int(inner_key.lineno),
+                        "column": int(inner_key.col_offset),
+                        "end_line": int(inner_key.end_lineno),
+                        "end_column": int(inner_key.end_col_offset),
+                    },
+                    "opaque_levels_key": {
+                        "line": int(outer_key.lineno),
+                        "column": int(outer_key.col_offset),
+                        "end_line": int(outer_key.end_lineno),
+                        "end_column": int(outer_key.end_col_offset),
+                    },
+                },
+            )
+        )
+    return sorted(
+        findings,
+        key=lambda finding: (
+            int(finding.detail["observed_shape_key"]["line"]),
+            int(finding.detail["observed_shape_key"]["column"]),
+        ),
+    )
+
+
 def literal_observational_getattr(
     node: ast.AST,
     *,
@@ -276,4 +341,5 @@ __all__ = [
     "contains_literal_provenance_audit_row",
     "execution_cohort_row_count_findings",
     "literal_observational_getattr",
+    "runtime_context_opaque_level_findings",
 ]
