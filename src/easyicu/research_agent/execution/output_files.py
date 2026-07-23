@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import csv
+import json
 import math
 import shutil
 from pathlib import Path
@@ -34,6 +35,74 @@ def _clear_output_dir(out_dir: Path) -> None:
             shutil.rmtree(child)
 
 
+def _finite_number(value: Any) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    number = float(value)
+    return number if math.isfinite(number) else None
+
+
+def _bind_registered_primary_or_statistic(
+    payload: Dict[str, Any],
+    outputs: Any,
+    out_dir: Path,
+) -> None:
+    relative = (
+        outputs.get("statistic:primary_or") if isinstance(outputs, dict) else None
+    )
+    if (
+        not isinstance(relative, str)
+        or Path(relative).name != relative
+        or Path(relative).suffix.lower() != ".json"
+    ):
+        return
+    source = out_dir / relative
+    if not source.is_file() or source.is_symlink():
+        return
+    try:
+        statistic = json.loads(source.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return
+    if not isinstance(statistic, dict):
+        return
+    declared_name = str(
+        statistic.get("name") or statistic.get("statistic") or ""
+    ).strip()
+    if declared_name != "primary_or":
+        return
+    estimates = [
+        number
+        for key in ("value", "estimate", "result")
+        if key in statistic
+        and (number := _finite_number(statistic.get(key))) is not None
+    ]
+    if not estimates or any(
+        not math.isclose(value, estimates[0], rel_tol=1e-12, abs_tol=1e-12)
+        for value in estimates[1:]
+    ):
+        return
+    estimate = estimates[0]
+    if estimate <= 0:
+        return
+    low = _finite_number(statistic.get("ci_low"))
+    high = _finite_number(statistic.get("ci_high"))
+    interval_declared = "ci_low" in statistic or "ci_high" in statistic
+    if interval_declared and (
+        low is None or high is None or not (0 < low <= estimate <= high)
+    ):
+        return
+    payload.update(
+        primary_estimate=estimate,
+        primary_estimate_label="odds_ratio",
+        primary_or=estimate,
+    )
+    if low is not None and high is not None:
+        payload.update(
+            primary_estimate_interval=[low, high],
+            primary_or_ci=[low, high],
+        )
+
+
 def bind_primary_output(step_summary: Any, out_dir: Path) -> Dict[str, Any]:
     """Bind one registered adjusted-association row into canonical scalars."""
 
@@ -41,6 +110,7 @@ def bind_primary_output(step_summary: Any, out_dir: Path) -> Dict[str, Any]:
         dict(step_summary) if isinstance(step_summary, dict) else {"raw": step_summary}
     )
     outputs = payload.get("output_files")
+    _bind_registered_primary_or_statistic(payload, outputs, out_dir)
     relative = (
         outputs.get("table:adjusted_association_estimates")
         if isinstance(outputs, dict)
