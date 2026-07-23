@@ -1952,6 +1952,48 @@ def test_success_alias_filter_suppresses_implicit_cross_kind_basename_collision(
     assert suppressed == {"table_result", "artifact_result"}
 
 
+def test_success_alias_filter_suppresses_ambiguous_typed_stem_advertised_by_summary():
+    from easyicu.research_agent.execution.phase import (
+        _filter_success_alias_bindings,
+    )
+
+    filtered, retained, suppressed = _filter_success_alias_bindings(
+        {
+            "summary": ["robustness_summary", "06_sensitivity"],
+            "table_result": [],
+            "statistic_result": [],
+        },
+        existing_aliases={},
+        owners_by_evidence_id={},
+        step_id="06_sensitivity",
+        records_by_evidence_id={
+            "summary": {
+                "evidence_id": "summary",
+                "kind": "statistic",
+                "relative_path": "evidence/summary__step_summary.json",
+            },
+            "table_result": {
+                "evidence_id": "table_result",
+                "kind": "table",
+                "relative_path": "evidence/table_result__robustness_summary.csv",
+            },
+            "statistic_result": {
+                "evidence_id": "statistic_result",
+                "kind": "log",
+                "relative_path": "evidence/statistic_result__robustness_summary.json",
+            },
+        },
+    )
+
+    assert filtered == {
+        "summary": ["06_sensitivity"],
+        "table_result": [],
+        "statistic_result": [],
+    }
+    assert retained == {}
+    assert suppressed == {"table_result", "statistic_result"}
+
+
 def test_success_alias_filter_prefers_vector_export_for_one_logical_figure():
     from easyicu.research_agent.execution.phase import (
         _filter_success_alias_bindings,
