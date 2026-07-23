@@ -1867,8 +1867,8 @@ class EvidenceStore:
         self,
         evidence_id: str,
         *,
-        finding_severity: Optional[str] = None,
-        finding_messages: Optional[Sequence[str]] = None,
+        finding_severity: object = ...,
+        finding_messages: object = ...,
         metadata: Optional[Dict[str, Any]] = None,
         producer: Optional[str] = None,
         generation_mode: Optional[str] = None,
@@ -1878,10 +1878,10 @@ class EvidenceStore:
             record = self.get(evidence_id)
             if record is None:
                 return None
-            if finding_severity is not None:
-                record.finding_severity = finding_severity
-            if finding_messages is not None:
-                record.finding_messages = list(finding_messages)
+            if finding_severity is not ...:
+                record.finding_severity = finding_severity  # type: ignore[assignment]
+            if finding_messages is not ...:
+                record.finding_messages = list(finding_messages or [])  # type: ignore[arg-type]
             if metadata:
                 merged = dict(record.metadata)
                 merged.update(metadata)

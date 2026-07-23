@@ -724,8 +724,14 @@ def _claim_numeric_distance(
         return None
     canonical, has_percent = parsed
     raw = value_str.strip()
-    candidate = claim.canonical * 100.0 if has_percent else claim.canonical
-    if claim.value == raw or candidate == canonical:
+    candidates = [claim.canonical]
+    if has_percent:
+        # Numeric summaries legitimately use both fraction fields (0.36)
+        # and already-scaled percentage fields (36.0). Keep both candidates;
+        # the evidence-aware selector resolves any collision from the cited
+        # step or evidence record rather than guessing the source unit.
+        candidates.append(claim.canonical * 100.0)
+    if claim.value == raw or canonical in candidates:
         return 0.0
     display_places = _display_decimal_places(value_str)
     display_abs_tol = 0.0
@@ -734,14 +740,19 @@ def _claim_numeric_distance(
     elif has_percent:
         display_abs_tol = 0.5
     window = tolerance if tolerance is not None else claim.tolerance
-    if abs(candidate) > 1e-9:
-        rel = abs(candidate - canonical) / abs(candidate)
-    else:
-        rel = 0.0 if abs(canonical) <= 1e-12 else float("inf")
-    abs_window = max(display_abs_tol, window * max(abs(candidate), abs(canonical)))
-    if rel <= window or abs(candidate - canonical) <= abs_window:
-        return abs(candidate - canonical) / max(abs(candidate), 1e-9)
-    return None
+    distances: List[float] = []
+    for candidate in candidates:
+        if abs(candidate) > 1e-9:
+            rel = abs(candidate - canonical) / abs(candidate)
+        else:
+            rel = 0.0 if abs(canonical) <= 1e-12 else float("inf")
+        abs_window = max(
+            display_abs_tol,
+            window * max(abs(candidate), abs(canonical)),
+        )
+        if rel <= window or abs(candidate - canonical) <= abs_window:
+            distances.append(abs(candidate - canonical) / max(abs(candidate), 1e-9))
+    return min(distances) if distances else None
 
 
 def _candidate_claims_for_value(
@@ -977,6 +988,29 @@ def _source_field_tiebreak_score(context: str, claim: NumericClaim) -> int:
             score -= 6
         if any(token in source for token in ("raw", "candidate", "source_population")):
             score -= 2
+    if re.search(r"\b(?:input|source)\s+rows?\b", text):
+        if source.endswith("n_input_rows"):
+            score += 9
+        elif source.endswith("n_at_start_rows"):
+            score += 6
+    if re.search(
+        r"\b(?:final\s+cohort|cohort\s+(?:comprised|included|consisted)|"
+        r"retained\s+as|final\s+rows?)\b",
+        text,
+    ):
+        if source.endswith("n_final_rows"):
+            score += 9
+        elif source.endswith("n_remaining_rows"):
+            score += 6
+        elif source.endswith(("cohort_n", "cohort_rows", "row_count")):
+            score += 4
+    if re.search(
+        r"\b(?:measurement[-\s]?provenance|paired\s+values?|"
+        r"discordan(?:ce|t)|provenance\s+checks?)\b",
+        text,
+    ):
+        if source.endswith("comparison_n"):
+            score += 8
     if universe_context and re.search(r"(?:^|[._-])n_universe$", source):
         score += 4
     if "analysis cohort" in text or "analytic cohort" in text:
@@ -1090,19 +1124,54 @@ def _select_numeric_claim(
             ),
         )
         distinct_fields = {claim.source_field or "" for claim, _ in remaining}
+        evidence_ids = {claim.evidence_id or "" for claim, _ in remaining}
+        owner_is_cited = any(
+            token and token.lower() in context.lower()
+            for claim, _ in remaining
+            for token in (claim.step_id, claim.evidence_id)
+        )
         # Collapse same-step/same-value candidates only when the pick is
         # semantically defensible: either every candidate carries the same
-        # source field (true duplicate registrations) or the ranked winner
-        # has a positive field-token score tying it to the prose context.
+        # source field (true duplicate registrations), the ranked winner has a
+        # positive field-token score tying it to the prose context, or the
+        # sentence explicitly cites the single immutable evidence record that
+        # owns all remaining same-value fields. The latter covers one step
+        # summary exposing the same denominator in its cohort, audit, and
+        # input-binding sections without permitting a pick across records.
         # A zero-score tie between opaque, differently named fields must
         # stay ambiguous — a lexicographic pick is not provenance.
         if (
             len(distinct_fields) == 1
             or _source_field_tiebreak_score(context, ranked[0][0]) > 0
+            or (len(evidence_ids) == 1 and owner_is_cited)
         ):
             return ranked[0][0], False
 
     return None, True
+
+
+_NUMERIC_SENTENCE_BOUNDARY_RE = re.compile(r"(?:[.!?](?=\s|$)|\n{2,})")
+
+
+def _numeric_sentence_context(text: str, *, start: int, end: int) -> str:
+    """Return the current prose sentence for evidence-aware disambiguation.
+
+    A fixed character window can include the citation from the previous
+    sentence while truncating the current sentence's trailing evidence link.
+    That makes a repeated denominator appear to belong to the wrong step.
+    Sentence boundaries keep the exact local citation and exclude neighbouring
+    claims. The cap only limits pathological generated run-on prose.
+    """
+
+    context_start = 0
+    for match in _NUMERIC_SENTENCE_BOUNDARY_RE.finditer(text, 0, start):
+        context_start = match.end()
+    next_boundary = _NUMERIC_SENTENCE_BOUNDARY_RE.search(text, end)
+    context_end = next_boundary.end() if next_boundary is not None else len(text)
+    max_chars = 1600
+    context_start = max(context_start, start - max_chars)
+    context_end = min(context_end, end + max_chars)
+    return text[context_start:context_end]
 
 
 def bind_numeric_values(
@@ -1196,9 +1265,7 @@ def bind_numeric_values(
         ):
             continue
         out_parts.append(manuscript[cursor:end])
-        context_start = max(0, start - 80)
-        context_end = min(len(manuscript), end + 80)
-        context = manuscript[context_start:context_end]
+        context = _numeric_sentence_context(manuscript, start=start, end=end)
         candidates = _candidate_claims_for_value(
             evidence,
             lookup_value,

@@ -320,6 +320,100 @@ def test_spaced_percent_display_binds_to_proportion_claim(ra, tmp_path: Path) ->
     assert binding_map["claim_1"].source_field == "baseline_prevalence"
 
 
+def test_percent_display_uses_cited_scaled_percent_claim_not_unrelated_fraction(
+    ra,
+    tmp_path: Path,
+) -> None:
+    from easyicu.research_agent.reporting.manuscript_post import bind_numeric_values
+
+    store = ra.EvidenceStore(tmp_path)
+    store.register_numeric_claim(
+        value="64.0083",
+        canonical=64.00834233204176,
+        evidence_id="e_cohort",
+        step_id="01_define_cohort",
+        source_field="exposure_levels[0].pct_of_final_cohort",
+    )
+    store.register_numeric_claim(
+        value="0.640083",
+        canonical=0.6400834233204176,
+        evidence_id="e_context",
+        step_id="research_context",
+        source_field="variable.missingness.fraction_missing",
+    )
+
+    _, binding_map, untraced = bind_numeric_values(
+        "The reference level represented 64.01% of the final cohort "
+        "[01_define_cohort](evidence/cohort.json).",
+        evidence=store,
+    )
+
+    assert untraced == []
+    assert binding_map["claim_1"].step_id == "01_define_cohort"
+    assert binding_map["claim_1"].source_field.endswith("pct_of_final_cohort")
+
+
+def test_current_sentence_citation_beats_previous_sentence_for_repeated_denominator(
+    ra,
+    tmp_path: Path,
+) -> None:
+    from easyicu.research_agent.reporting.manuscript_post import bind_numeric_values
+
+    store = ra.EvidenceStore(tmp_path)
+    store.register_numeric_claim(
+        value="94458",
+        canonical=94458.0,
+        evidence_id="e_model",
+        step_id="05_model",
+        source_field="n_full",
+    )
+    for field in ("n_input_rows", "n_final_rows", "audit.comparison_n"):
+        store.register_numeric_claim(
+            value="94458",
+            canonical=94458.0,
+            evidence_id="e_cohort",
+            step_id="01_define_cohort",
+            source_field=field,
+        )
+
+    _, binding_map, untraced = bind_numeric_values(
+        "The fitted model was audited [05_model](evidence/model.json). "
+        "The cohort comprised 94,458 ICU stays "
+        "[01_define_cohort](evidence/cohort.json).",
+        evidence=store,
+    )
+
+    assert untraced == []
+    assert binding_map["claim_1"].step_id == "01_define_cohort"
+    assert binding_map["claim_1"].source_field == "n_final_rows"
+
+
+def test_uncited_same_record_numeric_fields_remain_ambiguous(
+    ra,
+    tmp_path: Path,
+) -> None:
+    from easyicu.research_agent.reporting.manuscript_post import bind_numeric_values
+
+    store = ra.EvidenceStore(tmp_path)
+    for field in ("field_a", "field_b"):
+        store.register_numeric_claim(
+            value="1.23",
+            canonical=1.23,
+            evidence_id="e_shared",
+            step_id="02_model",
+            source_field=field,
+        )
+
+    bound, binding_map, untraced = bind_numeric_values(
+        "The analysis reported 1.23 in the table.",
+        evidence=store,
+    )
+
+    assert binding_map == {}
+    assert untraced == ["1.23"]
+    assert "<!-- AMBIGUOUS:1.23:candidates=[" in bound
+
+
 def test_hazard_ratio_prose_picks_hr_candidate(ra, tmp_path: Path) -> None:
     from easyicu.research_agent.reporting.manuscript_post import bind_numeric_values
 
