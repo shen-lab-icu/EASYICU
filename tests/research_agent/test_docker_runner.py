@@ -1568,20 +1568,15 @@ def test_runtime_preflight_failure_spends_zero_llm_calls(
     synthetic_cohort,
     tmp_path: Path,
 ):
-    class CountingLLM(ra.MockLLMClient):
-        def __init__(self) -> None:
-            super().__init__()
-            self.calls = 0
-
-        def complete(self, messages, **kwargs):
-            self.calls += 1
-            return super().complete(messages, **kwargs)
-
     class MissingRuntime:
         def validate_runtime_capabilities(self):
             raise RuntimeError("required runtime package is missing")
 
-    llm = CountingLLM()
+    # Use an exact reviewed offline fixture. Subclassing MockLLMClient is no
+    # longer an authorization mechanism, and this preflight must not need one.
+    from easyicu.research_agent.providers.mocks import ScriptedMockLLMClient
+
+    llm = ScriptedMockLLMClient(["{}"])
     pipe = ra.ResearchAgentPipeline(
         workdir=tmp_path / "ra",
         llm=llm,
@@ -1597,7 +1592,7 @@ def test_runtime_preflight_failure_spends_zero_llm_calls(
             target_outcome="death",
         )
 
-    assert llm.calls == 0
+    assert llm.calls == []
 
 
 def test_runner_rebuild_restores_preflighted_capability_snapshot(

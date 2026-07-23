@@ -165,3 +165,52 @@ standard-executor ownership.  The exact archived `analysis_plan_revision_2.json`
 now selects `missingness_source_availability_audit` offline before the Coder.
 This is a framework-level current-cohort convention, not a benchmark keyword or
 case-specific prompt.
+
+## E1 scientific-contract failure and batch canary closure
+
+The first authorized `f7b4d1b` E1 run is preserved at:
+
+`/Volumes/外置硬盘/easyicu_data/canonical9_runs/batch_20260723_luna_miiv_adaptive_f7b4d1b/e1_sepsis3_prevalence_mortality/aware/run_20260723T124316_20acfc`
+
+It is diagnostic-only and must never be upgraded. Step 01 applied
+`sep3_sofa2_max >= 1` as primary eligibility, reducing the 94,458-stay
+universe to 33,997 exposure-positive stays. Step 02 then correctly failed
+because its closed Table 1 comparison still required both exposure levels. The
+per-question fail-stop suppressed Steps 03--06, but the formal batch
+incorrectly initialized E2 before the operator interrupted it. E2 never
+reached execution and is not evidence.
+
+Implementation commit `09f8e5c` closes this as three case-neutral contracts:
+
+- Planner typed-binding validation rejects a primary cohort whose predicates
+  leave fewer than two levels of a downstream Table 1 comparison or required
+  primary estimand. Replaying the exact archived E1 plan produces the expected
+  `collapse a downstream closed comparison` rejection.
+- The two canonical empty-comparison runtime diagnostics are plan/data
+  contradictions. They fail closed with `llm_repair_used=false`; changing
+  Python cannot restore rows removed by an upstream cohort definition.
+- A formal Canonical9 batch must begin with E1. E2--E9 are
+  `batch_canary_blocked` unless E1 is publication-ready, manuscript-ready,
+  zero-error, has a valid locked evaluation envelope, and its exact paper
+  scorecard is `gate_reportable`.
+
+Provider transport accounting is now written before each call under
+`.runtime/provider_transport_receipts/`. Receipts contain hashes and usage,
+never prompt or response text, and terminalize as completed, failed, or
+cancelled on `KeyboardInterrupt`.
+
+Verification on source-bound image `easyicu-research-agent:source-09f8e5c`
+(`sha256:e4e999a639810e3d9d58847205bfb766961c83403bb4073565bb689badddf3a9`):
+
+- scientific/authority/control matrix: 234 passed, 4 deselected;
+- Provider/outbound/Table 1/cost matrix: 132 passed;
+- missingness/runner selected matrix: 35 passed after replacing the obsolete
+  unauthorized Mock subclass fixture;
+- three historical scripts now construct Provider clients only through the
+  reviewed factory;
+- Ruff, Black, Python compilation, diff-check, architecture/resource
+  baselines, and the 315-module/31-package/1,028-edge zero-cycle graph pass.
+
+Paper-facing progress remains 0/9. The next action is a new immutable execution
+identity, operator declaration, and fresh E1 canary. Only a `gate_reportable`
+E1 releases the remaining eight questions.
