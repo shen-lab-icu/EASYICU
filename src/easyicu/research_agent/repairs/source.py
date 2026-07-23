@@ -61,6 +61,7 @@ from .plausibility import patch_flag_only_plausibility_range_rejection
 from .provenance_summary import (
     patch_audit_only_companion_value_selector,
     patch_custom_measurement_provenance_receipts,
+    patch_direct_host_receipt_source_guard,
     patch_late_measurement_provenance_receipt,
     patch_measurement_provenance_contract,
     repair_superseded_provenance,
@@ -5035,6 +5036,12 @@ def _deterministic_runner_repair(
         repaired = patch_raw_input_physical_superset_guard(code, run_log)
         if repaired != code:
             return input_scope_repair, repaired
+
+    receipt_source_repair = "host_receipt_source_envelope_v1"
+    if previous_repair != receipt_source_repair:
+        repaired = patch_direct_host_receipt_source_guard(code, run_log)
+        if repaired != code:
+            return receipt_source_repair, repaired
 
     identity_key_repair = "resolved_input_identity_key_v1"
     if previous_repair != identity_key_repair and (
