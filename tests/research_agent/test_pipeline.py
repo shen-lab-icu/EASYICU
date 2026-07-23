@@ -5829,6 +5829,33 @@ def test_repair_common_writer_citation_omissions_does_not_launder_numeric_result
     ]
 
 
+def test_apply_writer_evidence_repair_decisions_cites_or_drops_without_rewriting(ra):
+    from easyicu.research_agent.reporting.manuscript_post import (
+        _apply_writer_evidence_repair_decisions,
+    )
+
+    supported = "Sepsis is clinically important."
+    unsupported = "No estimate was available for reporting."
+    scaffold = f"## Introduction\n\n{supported} {unsupported}\n"
+
+    repaired, applied = _apply_writer_evidence_repair_decisions(
+        scaffold,
+        missing_sentences=[supported, unsupported],
+        decisions=[
+            {
+                "index": 0,
+                "action": "cite",
+                "evidence_ids": ["literature_prisma"],
+            },
+            {"index": 1, "action": "drop", "evidence_ids": []},
+        ],
+    )
+
+    assert "Sepsis is clinically important {evidence:literature_prisma}." in repaired
+    assert unsupported not in repaired
+    assert [item["action"] for item in applied] == ["cite", "drop"]
+
+
 def test_execution_gate_and_parent_figure_dependency_helpers(ra):
     from easyicu.research_agent.pipeline import (
         _execution_gate_status,

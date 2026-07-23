@@ -306,6 +306,75 @@ def _append_evidence_citation(sentence: str, evidence_id: str) -> str:
     return sentence.rstrip() + citation
 
 
+def _apply_writer_evidence_repair_decisions(
+    scaffold: str,
+    *,
+    missing_sentences: Sequence[str],
+    decisions: Sequence[Mapping[str, object]],
+) -> tuple[str, List[Dict[str, object]]]:
+    """Apply a validated writer citation/drop decision set without rewriting.
+
+    The LLM chooses only between registered citations and deletion. This host
+    function preserves every cited sentence byte-for-byte apart from appending
+    the selected evidence placeholders, so the repair cannot quietly change a
+    number, direction, population, or interpretation.
+    """
+
+    sentences = [str(sentence).strip() for sentence in missing_sentences]
+    if len(decisions) != len(sentences):
+        raise ValueError("writer evidence repair must decide every missing sentence")
+    rewritten = scaffold
+    applied: List[Dict[str, object]] = []
+    seen: set[int] = set()
+    for decision in decisions:
+        index = decision.get("index")
+        if (
+            not isinstance(index, int)
+            or isinstance(index, bool)
+            or index < 0
+            or index >= len(sentences)
+            or index in seen
+        ):
+            raise ValueError("writer evidence repair index is invalid or duplicated")
+        target = sentences[index]
+        if target not in rewritten:
+            raise ValueError(
+                "writer evidence repair target is absent from the current scaffold"
+            )
+        action = str(decision.get("action") or "").strip().lower()
+        raw_ids = decision.get("evidence_ids", [])
+        if not isinstance(raw_ids, (list, tuple)):
+            raise ValueError("writer evidence repair evidence_ids must be a sequence")
+        evidence_ids = [
+            str(evidence_id).strip()
+            for evidence_id in raw_ids
+            if str(evidence_id).strip()
+        ]
+        if action == "cite":
+            if not evidence_ids:
+                raise ValueError("cite decision requires at least one evidence id")
+            replacement = target
+            for evidence_id in evidence_ids:
+                replacement = _append_evidence_citation(replacement, evidence_id)
+        elif action == "drop":
+            if evidence_ids:
+                raise ValueError("drop decision cannot include evidence ids")
+            replacement = ""
+        else:
+            raise ValueError("writer evidence repair action must be cite or drop")
+        rewritten = rewritten.replace(target, replacement, 1)
+        seen.add(index)
+        applied.append(
+            {
+                "index": index,
+                "action": action,
+                "evidence_ids": evidence_ids,
+                "sentence": target[:500],
+            }
+        )
+    return rewritten, sorted(applied, key=lambda item: int(item["index"]))
+
+
 def _best_methods_citation(sentence: str, resolvable: set[str]) -> Optional[str]:
     for pattern, candidates in _METHOD_CITATION_REPAIR_RULES:
         if not pattern.search(sentence):
