@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import csv
+import math
 import shutil
 from pathlib import Path
+from typing import Any, Dict
 
 
 def _has_figure_exports(out_dir: Path) -> bool:
@@ -31,4 +34,46 @@ def _clear_output_dir(out_dir: Path) -> None:
             shutil.rmtree(child)
 
 
-__all__ = ["_clear_output_dir", "_has_figure_exports"]
+def bind_primary_output(step_summary: Any, out_dir: Path) -> Dict[str, Any]:
+    """Bind one registered adjusted-association row into canonical scalars."""
+
+    payload = (
+        dict(step_summary) if isinstance(step_summary, dict) else {"raw": step_summary}
+    )
+    outputs = payload.get("output_files")
+    relative = (
+        outputs.get("table:adjusted_association_estimates")
+        if isinstance(outputs, dict)
+        else None
+    )
+    if not isinstance(relative, str) or Path(relative).name != relative:
+        return payload
+    source = out_dir / relative
+    if not source.is_file() or source.is_symlink():
+        return payload
+    try:
+        with source.open(newline="", encoding="utf-8") as handle:
+            rows = list(csv.DictReader(handle))
+        if len(rows) != 1 or rows[0].get("fit_status") != "fitted":
+            return payload
+        row = rows[0]
+        estimate, low, high = map(
+            float, (row["estimate"], row["ci_low"], row["ci_high"])
+        )
+        if not all(math.isfinite(value) for value in (estimate, low, high)):
+            return payload
+    except (KeyError, OSError, TypeError, ValueError):
+        return payload
+    scale = str(row.get("effect_scale") or "estimate").strip()
+    payload.update(
+        primary_estimate=estimate,
+        primary_estimate_label=scale,
+        primary_estimate_interval=[low, high],
+        primary_association_term=str(row.get("exposure") or "").strip() or None,
+    )
+    if scale == "odds_ratio":
+        payload.update(primary_or=estimate, primary_or_ci=[low, high])
+    return payload
+
+
+__all__ = ["_clear_output_dir", "_has_figure_exports", "bind_primary_output"]

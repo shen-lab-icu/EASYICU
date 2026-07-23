@@ -3821,6 +3821,7 @@ def read_model_covariate_names(
                         value
                         and value.lower() not in _NON_COVARIATE_TERMS
                         and value not in names
+                        and row.get("term_role") not in ("exposure", "outcome")
                     ):
                         names.append(value)
         except (OSError, ValueError):

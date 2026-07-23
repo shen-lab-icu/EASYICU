@@ -97,6 +97,35 @@ def test_reader_detects_coef_table_with_term_identifier_column(tmp_path: Path):
     assert read_model_covariate_names(tmp_path) == ["sepsis3", "age", "map_first"]
 
 
+def test_reader_excludes_structured_exposure_term_from_adjustment_set(
+    tmp_path: Path,
+):
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    with (tmp_path / "coefficients.csv").open("w", newline="", encoding="utf-8") as fh:
+        w = csv.DictWriter(
+            fh, fieldnames=["term", "term_role", "source_variable", "odds_ratio"]
+        )
+        w.writeheader()
+        w.writerow(
+            {
+                "term": "sep3_sofa2_max",
+                "term_role": "exposure",
+                "source_variable": "sep3_sofa2_max",
+                "odds_ratio": "1.6",
+            }
+        )
+        w.writerow(
+            {
+                "term": "age",
+                "term_role": "adjustment",
+                "source_variable": "age",
+                "odds_ratio": "1.02",
+            }
+        )
+
+    assert read_model_covariate_names(tmp_path) == ["age"]
+
+
 def test_reader_detects_predictor_identifier_column(tmp_path: Path):
     tmp_path.mkdir(parents=True, exist_ok=True)
     with (tmp_path / "coefs.csv").open("w", newline="", encoding="utf-8") as fh:

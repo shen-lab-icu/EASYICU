@@ -255,7 +255,7 @@ from .publication_figure import (
     _sealed_typed_figure_products,
 )
 from .host_services import ExecutePhaseHost
-from .output_files import _clear_output_dir, _has_figure_exports
+from .output_files import _clear_output_dir, _has_figure_exports, bind_primary_output
 from ..gates.visual import (
     VisualGateResult,
     VisualRepairAction,
@@ -1572,7 +1572,7 @@ def _load_step_summary_from_outputs(out_dir: Path) -> Dict[str, Any]:
         loaded = json.loads(summary_path.read_text(encoding="utf-8"))
     except Exception:
         loaded = None
-    return loaded if isinstance(loaded, dict) else {"raw": loaded}
+    return bind_primary_output(loaded, out_dir)
 
 
 def build_self_block_replan_directive(
@@ -5718,7 +5718,9 @@ def run_execute_phase(
                     step_record["step_authority_capsule_stage"] = (
                         step_attempt_state.selected_resume_capsule.capsule.stage
                     )
-                    selected_digest = step_attempt_state.selected_resume_capsule.capsule.candidate_code.sha256
+                    selected_digest = (
+                        step_attempt_state.selected_resume_capsule.capsule.candidate_code.sha256
+                    )
                     if (
                         step_attempt_state.selected_resume_capsule.capsule.concept_audit
                         is not None
@@ -9916,9 +9918,7 @@ def run_execute_phase(
         figure_role = (
             "publication_figure"
             if publication_step
-            else "analysis_figure"
-            if _step_expects_figure(step)
-            else None
+            else "analysis_figure" if _step_expects_figure(step) else None
         )
         if (
             publication_step
