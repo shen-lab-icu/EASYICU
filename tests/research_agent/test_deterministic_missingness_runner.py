@@ -23,8 +23,10 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import pytest
 
 from easyicu.research_agent.execution.runners.deterministic_missingness import (
+    is_missingness_measurement_availability_contract,
     missingness_measurement_audit_code,
     source_availability_audit_executor_owns_step,
 )
@@ -124,7 +126,27 @@ def _cohort(n: int = 1000, seed: int = 0) -> pd.DataFrame:
     )
 
 
-def test_source_availability_contract_is_selected_before_any_coder_path():
+@pytest.mark.parametrize(
+    ("method", "availability_product"),
+    [
+        (
+            "missingness_and_source_availability_audit",
+            "table:measurement_source_audit",
+        ),
+        (
+            "missingness_and_measurement_frequency_audit",
+            "table:measurement_availability",
+        ),
+        (
+            "missingness_and_informative_measurement_audit",
+            "table:measurement_availability_audit",
+        ),
+    ],
+)
+def test_structured_availability_contract_is_selected_before_any_coder_path(
+    method: str,
+    availability_product: str,
+):
     step = AnalysisStep(
         step_id="03_missingness_measurement_audit",
         intent="Audit missingness and source availability without imputing zero.",
@@ -136,12 +158,16 @@ def test_source_availability_contract_is_selected_before_any_coder_path():
         ],
         expected_outputs=[
             "table:missingness_audit",
-            "table:measurement_source_audit",
+            availability_product,
         ],
-        method="missingness_and_source_availability_audit",
+        method=method,
     )
     plan = AnalysisPlan(research_question="Test", steps=[step])
 
+    assert is_missingness_measurement_availability_contract(
+        step.method,
+        step.expected_outputs,
+    )
     assert source_availability_audit_executor_owns_step(step)
     selection = select_standard_executor(step, plan=plan)
     assert selection is not None
@@ -150,45 +176,86 @@ def test_source_availability_contract_is_selected_before_any_coder_path():
     assert audit_mechanical_code_contracts(selection.code, step) == []
 
 
-def test_measurement_frequency_contract_is_selected_before_any_coder_path():
-    step = AnalysisStep(
-        step_id="04_missingness_and_measurement_audit",
-        intent="Audit missingness and measurement frequency without imputation.",
-        inputs=[
-            "artifact:analysis_cohort",
-            "lactate",
-            "lactate_measured",
-            "lactate_n",
-        ],
-        expected_outputs=[
-            "table:missingness_audit",
-            "table:measurement_availability",
-        ],
-        method="missingness_and_measurement_frequency_audit",
-    )
-    plan = AnalysisPlan(research_question="Test", steps=[step])
-
-    assert source_availability_audit_executor_owns_step(step)
-    selection = select_standard_executor(step, plan=plan)
-    assert selection is not None
-    assert selection.analysis_kind == "missingness_source_availability_audit"
-    assert "measurement_availability.csv" in selection.code
-    assert audit_mechanical_code_contracts(selection.code, step) == []
-
-
-def test_source_availability_executor_rejects_extra_scientific_product():
+@pytest.mark.parametrize(
+    ("method", "expected_outputs"),
+    [
+        (
+            "longitudinal_missingness_and_measurement_availability_audit",
+            [
+                "table:missingness_audit",
+                "table:measurement_availability_audit",
+            ],
+        ),
+        (
+            "missingness_and_measurement_model_audit",
+            [
+                "table:missingness_audit",
+                "table:measurement_availability_audit",
+            ],
+        ),
+        (
+            "missingness_and_informative_measurement_audit",
+            [
+                "table:missingness_audit",
+                "table:measurement_availability_audit",
+                "table:adjusted_association_estimates",
+            ],
+        ),
+        (
+            "missingness_and_informative_measurement_audit",
+            [
+                "table:missingness_audit",
+                "test:missingness_mechanism",
+            ],
+        ),
+        (
+            "missingness_and_informative_measurement_audit",
+            [
+                "table:missingness_audit",
+                "table:score_quality_audit",
+            ],
+        ),
+    ],
+)
+def test_structured_availability_contract_rejects_richer_or_unknown_science(
+    method: str,
+    expected_outputs: list[str],
+):
     step = AnalysisStep(
         step_id="03_missingness_measurement_audit",
         intent="Audit missingness and source availability.",
         inputs=["artifact:analysis_cohort", "aki_stage_max"],
-        expected_outputs=[
-            "table:missingness_audit",
-            "table:measurement_source_audit",
-            "table:adjusted_association_estimates",
-        ],
-        method="missingness_and_source_availability_audit",
+        expected_outputs=expected_outputs,
+        method=method,
     )
 
+    assert not is_missingness_measurement_availability_contract(
+        method,
+        expected_outputs,
+    )
+    assert not source_availability_audit_executor_owns_step(step)
+
+
+def test_structured_availability_executor_requires_exact_analysis_cohort_scope():
+    step = AnalysisStep(
+        step_id="03_missingness_measurement_audit",
+        intent="Audit missingness and source availability.",
+        inputs=[
+            "artifact:analysis_cohort",
+            "table:unreviewed_source_reconciliation",
+            "aki_stage_max",
+        ],
+        expected_outputs=[
+            "table:missingness_audit",
+            "table:measurement_availability_audit",
+        ],
+        method="missingness_and_informative_measurement_audit",
+    )
+
+    assert is_missingness_measurement_availability_contract(
+        step.method,
+        step.expected_outputs,
+    )
     assert not source_availability_audit_executor_owns_step(step)
 
 
@@ -296,6 +363,36 @@ def test_measurement_availability_is_a_concrete_declared_product(tmp_path: Path)
     assert summary["output_files"] == {
         "table:missingness_audit": "missingness_audit.csv",
         "table:measurement_availability": "measurement_availability.csv",
+    }
+
+
+def test_measurement_availability_audit_is_a_concrete_declared_product(
+    tmp_path: Path,
+):
+    cohort = _cohort(n=100, seed=14)
+    summary, out_dir = _exec_runner(
+        tmp_path,
+        cohort,
+        {},
+        requested_inputs=[
+            "artifact:analysis_cohort",
+            "lactate",
+            "lactate_measured",
+            "lactate_n",
+        ],
+        requested_outputs=[
+            "table:missingness_audit",
+            "table:measurement_availability_audit",
+        ],
+    )
+
+    availability = pd.read_csv(out_dir / "measurement_availability_audit.csv")
+    lactate = availability.loc[availability["concept"] == "lactate"].iloc[0]
+    assert lactate["indicator_semantics"] == "measurement_availability"
+    assert summary["status"] == "ok"
+    assert summary["output_files"] == {
+        "table:missingness_audit": "missingness_audit.csv",
+        "table:measurement_availability_audit": ("measurement_availability_audit.csv"),
     }
 
 

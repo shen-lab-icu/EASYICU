@@ -76,3 +76,61 @@ production container correctly mounts the executable script read-only.
 
 A fresh E1 run must create new execution identity and operator freeze evidence;
 the interrupted batch must not be resumed.
+
+## Fresh Planner synonym diagnostic and structural routing closure
+
+The first fresh source-bound launch after the fixes was preserved at:
+
+`/Volumes/外置硬盘/easyicu_data/canonical9_runs/batch_20260723_luna_miiv_adaptive_56cb992/e1_sepsis3_prevalence_mortality/aware/run_20260723T120740_86c1a7`
+
+It reached a valid six-step plan but was stopped before any analysis step ran.
+The Planner expressed the same descriptive Step 04 science with a third
+compositional spelling:
+
+- method: `missingness_and_informative_measurement_audit`
+- products: `table:missingness_audit` and
+  `table:measurement_availability_audit`
+
+The historical standard-executor selector recognised only two exact
+method/product spellings.  This was a routing defect, not a reason to add the
+new literal to another allowlist.  The replacement classifier now binds the
+closed analysis kind structurally:
+
+1. the only typed input scope is `artifact:analysis_cohort`;
+2. exactly two typed table products are declared;
+3. one product is the missingness audit and one is a measurement/source
+   availability audit;
+4. method and product tokens are drawn from a closed descriptive-audit
+   vocabulary;
+5. any model/effect, test, figure, longitudinal analysis, score-quality
+   analysis, extra product, unknown product, or extra typed input fails closed.
+
+All three observed Planner spellings select the same zero-Provider deterministic
+executor.  The new `measurement_availability_audit` spelling is materialised as
+its own concrete CSV and is bound in `step_summary.json`; it is not satisfied by
+an undeclared alias.
+
+The exact archived fresh plan now selects
+`missingness_source_availability_audit` offline before the Coder path.  The
+diagnostic launch made real planning/replanning Provider requests before the
+manual interruption, so it remains invalid development evidence and is never
+resumed or scored.
+
+Verification for this increment:
+
+- structural routing/negative controls and adjacent ownership tests: **69
+  passed**;
+- fail-stop, convergence, primary model roles, prompt budgets, Provider budget,
+  execution identity, trajectory compaction, and routing matrix: **389
+  passed**;
+- architecture lower-is-better metrics: exact, with no `execution/phase.py`
+  growth;
+- module graph: no new cycle;
+- resource/context envelope: unchanged.  Its checked-in source digest was
+  realigned to the already-reviewed `agents/core.py` interruption fix from the
+  preceding increment; no resource selection or prompt metric changed;
+- Ruff, Black, Python compilation, and `git diff --check`: passed.
+
+This increment still does not make E1 paper-facing.  A new immutable image,
+execution identity, production-input authority, and operator declaration are
+required before the next fresh E1 launch.

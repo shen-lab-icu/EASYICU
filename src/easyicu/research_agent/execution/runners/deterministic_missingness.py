@@ -39,41 +39,109 @@ manuscript figure from ``missingness_measurement_audit.csv`` in the figure step.
 
 from __future__ import annotations
 
+import re
 import textwrap
+from collections.abc import Sequence
 
-from ...planning.method_vocabulary import (
-    MISSINGNESS_SOURCE_AVAILABILITY_AUDIT,
-)
 from ...schema import AnalysisStep
 
 __all__ = [
+    "is_missingness_measurement_availability_contract",
     "missingness_measurement_audit_code",
     "source_availability_audit_executor_owns_step",
 ]
 
 
-def source_availability_audit_executor_owns_step(step: AnalysisStep) -> bool:
-    """Own one exact, non-scientific missingness/source audit contract."""
+_MISSINGNESS_AVAILABILITY_METHOD_TOKENS = frozenset(
+    {
+        "and",
+        "audit",
+        "availability",
+        "frequency",
+        "informative",
+        "measurement",
+        "missingness",
+        "source",
+    }
+)
+_MEASUREMENT_AVAILABILITY_PRODUCT_TOKENS = frozenset(
+    {
+        "audit",
+        "availability",
+        "measurement",
+        "source",
+    }
+)
 
-    method = str(step.method or "").strip().casefold()
-    outputs = {str(value or "").strip() for value in step.expected_outputs}
+
+def _contract_tokens(value: object) -> frozenset[str]:
+    """Return normalised structured-name tokens, not prose keywords."""
+
+    return frozenset(re.findall(r"[a-z0-9]+", str(value or "").casefold()))
+
+
+def is_missingness_measurement_availability_contract(
+    method: object,
+    expected_outputs: Sequence[object],
+) -> bool:
+    """Classify the closed, descriptive missingness/availability analysis kind.
+
+    Planner method labels may use harmless compositional synonyms, but method
+    prose alone never grants executor ownership.  The contract must declare
+    exactly two typed tables: the missingness audit and one measurement/source
+    availability audit.  Unknown method or product tokens fail closed, which
+    prevents this count-only executor from swallowing a model, test, figure, or
+    richer scientific reconciliation step.
+    """
+
+    method_tokens = _contract_tokens(method)
+    method_is_closed_audit = bool(
+        method_tokens
+        and method_tokens <= _MISSINGNESS_AVAILABILITY_METHOD_TOKENS
+        and {"missingness", "audit"} <= method_tokens
+        and (
+            "measurement" in method_tokens
+            or {"source", "availability"} <= method_tokens
+        )
+    )
+    if not method_is_closed_audit:
+        return False
+
+    outputs = [str(value or "").strip().casefold() for value in expected_outputs]
+    if len(outputs) != 2 or len(set(outputs)) != 2:
+        return False
+    if any(not value.startswith("table:") for value in outputs):
+        return False
+
+    product_tokens = [_contract_tokens(value.split(":", 1)[1]) for value in outputs]
+    missingness_products = [
+        tokens for tokens in product_tokens if tokens == {"missingness", "audit"}
+    ]
+    availability_products = [
+        tokens
+        for tokens in product_tokens
+        if (
+            tokens <= _MEASUREMENT_AVAILABILITY_PRODUCT_TOKENS
+            and "measurement" in tokens
+            and bool(tokens & {"source", "availability"})
+        )
+    ]
+    return len(missingness_products) == 1 and len(availability_products) == 1
+
+
+def source_availability_audit_executor_owns_step(step: AnalysisStep) -> bool:
+    """Own one closed, non-scientific missingness/availability contract."""
+
     typed_inputs = {
         str(value or "").strip()
         for value in step.inputs
         if str(value or "").strip().startswith(("artifact:", "table:", "dataset:"))
     }
-    supported_contracts = {
-        (
-            MISSINGNESS_SOURCE_AVAILABILITY_AUDIT,
-            frozenset({"table:missingness_audit", "table:measurement_source_audit"}),
-        ),
-        (
-            "missingness_and_measurement_frequency_audit",
-            frozenset({"table:missingness_audit", "table:measurement_availability"}),
-        ),
-    }
     return bool(
-        (method, frozenset(outputs)) in supported_contracts
+        is_missingness_measurement_availability_contract(
+            step.method,
+            step.expected_outputs,
+        )
         and typed_inputs == {"artifact:analysis_cohort"}
     )
 
@@ -520,6 +588,9 @@ def missingness_measurement_audit_code() -> str:
         ].copy()
         source_audit.to_csv(out_dir / "measurement_source_audit.csv", index=False)
         source_audit.to_csv(out_dir / "measurement_availability.csv", index=False)
+        source_audit.to_csv(
+            out_dir / "measurement_availability_audit.csv", index=False
+        )
 
         # --- declared analytic denominators ----------------------------------
         resolved_inputs = []
@@ -619,6 +690,7 @@ def missingness_measurement_audit_code() -> str:
             "measurement_process_audit": "missingness_measurement_audit.csv",
             "measurement_source_audit": "measurement_source_audit.csv",
             "measurement_availability": "measurement_availability.csv",
+            "measurement_availability_audit": "measurement_availability_audit.csv",
             "data_quality_audit": "missingness_measurement_audit.csv",
             "source_coverage": "measurement_source_audit.csv",
             "analytic_denominator": "analytic_denominators.csv",
