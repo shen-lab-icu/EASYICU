@@ -21,6 +21,8 @@ import sys
 import types
 from pathlib import Path
 
+import pytest
+
 from easyicu.research_agent.providers.mocks import ScriptedMockLLMClient
 
 
@@ -247,6 +249,102 @@ def test_cohort_concept_allowlist_includes_sofa2_overlay() -> None:
     from easyicu.research_agent.planning.cohort_contract import known_concept_ids
 
     assert {"sofa2", "sep3_sofa2", "sofa2_resp"} <= known_concept_ids()
+
+
+def test_planner_retries_non_column_step_and_model_references(tmp_path) -> None:
+    """Semantic labels must not survive as executable typed dataframe fields."""
+
+    from easyicu.research_agent.agents.core import PlannerAgent
+    from tests.research_agent.test_materialized_column_metadata import (
+        _build_v2_context,
+    )
+
+    context = _build_v2_context(tmp_path)
+
+    def response(exposure: str, outcome: str) -> str:
+        return (
+            '{"research_question":"Estimate the sealed association.",'
+            '"analysis_type":"association_study",'
+            '"steps":[{"step_id":"01_model",'
+            '"planned_analysis_role":"primary",'
+            '"intent":"Fit the declared adjusted association.",'
+            f'"inputs":["{exposure}","{outcome}"],'
+            '"expected_outputs":["table:adjusted_association_estimates"],'
+            '"method":"adjusted_association_models",'
+            '"model_requirements":[{'
+            '"requirement_id":"primary_sealed_association",'
+            f'"outcome":"{outcome}","outcome_type":"binary",'
+            '"method_family":"logistic_regression",'
+            f'"exposure_source":"{exposure}",'
+            '"analysis_role":"primary","analysis_set":"complete_case",'
+            '"required_for_step_success":true}]}]}'
+        )
+
+    llm = ScriptedMockLLMClient(
+        [response("lactate", "mortality"), response("lact_max", "death")]
+    )
+    plan = PlannerAgent(llm).run(context)
+
+    assert len(llm.calls) == 2
+    assert plan.steps[0].inputs == ["lact_max", "death"]
+    feedback = llm.calls[1][0][-1].content
+    assert "typed plan references are not executable" in feedback
+    assert "raw name 'lactate'" in feedback
+    assert "'step inputs': 1" in feedback
+    assert "'model exposures': 1" in feedback
+    assert "raw name 'mortality'" in feedback
+    assert "'model outcomes': 1" in feedback
+
+
+def test_typed_binding_gate_covers_robustness_fields(tmp_path) -> None:
+    from types import SimpleNamespace
+
+    from easyicu.research_agent.cohort.schema import (
+        CohortSchemaError,
+        validate_plan_typed_bindings_against_context,
+    )
+    from tests.research_agent.test_materialized_column_metadata import (
+        _build_v2_context,
+    )
+
+    context = _build_v2_context(tmp_path)
+    plan = SimpleNamespace(
+        cohort=None,
+        steps=[],
+        robustness_specs=[
+            SimpleNamespace(
+                spec_id="missing_aliases",
+                cohort_override=None,
+                missing_override={
+                    "strategy": "complete_case",
+                    "variables": ["lactate", "death"],
+                    "audit_flags": ["measurement_status"],
+                },
+                outcome_override=None,
+            ),
+            SimpleNamespace(
+                spec_id="outcome_alias",
+                cohort_override=None,
+                missing_override=None,
+                outcome_override={
+                    "concept_id": "mortality",
+                    "time_column": "mortality_time",
+                },
+            ),
+        ],
+    )
+
+    with pytest.raises(CohortSchemaError) as caught:
+        validate_plan_typed_bindings_against_context(plan=plan, context=context)
+
+    message = str(caught.value)
+    assert "raw name 'lactate'" in message
+    assert "'robustness missing variables': 1" in message
+    assert "raw name 'measurement_status'" in message
+    assert "'robustness audit flags': 1" in message
+    assert "raw name 'mortality'" in message
+    assert "raw name 'mortality_time'" in message
+    assert message.count("'robustness outcome fields': 1") == 2
 
 
 def test_openai_client_passes_provider_extra_body(ra, monkeypatch):

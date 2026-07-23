@@ -473,18 +473,115 @@ def analysis_cohort_authority_coordinates(
     return coordinates
 
 
-def validate_plan_cohort_predicates_against_context(
+def _raw_typed_plan_reference_issues(
+    *,
+    plan: Any,
+    columns: tuple[str, ...],
+) -> list[str]:
+    """Return Planner-owned raw fields absent from the sealed cohort.
+
+    A typed run has no implicit variable namespace.  Raw dataframe fields must
+    name an exact sealed column; upstream products use the explicit
+    ``kind:name`` syntax and are resolved by the artifact graph instead.
+    """
+
+    available = set(columns)
+    invalid_locations: dict[str, list[str]] = {}
+
+    def require_column(label: str, value: Any) -> None:
+        name = str(value or "").strip()
+        if name and ":" not in name and name not in available:
+            invalid_locations.setdefault(name, []).append(label)
+
+    for step_index, step in enumerate(getattr(plan, "steps", ()) or ()):
+        step_id = str(getattr(step, "step_id", "") or step_index)
+        for input_index, value in enumerate(getattr(step, "inputs", ()) or ()):
+            require_column(f"steps[{step_id}].inputs[{input_index}]", value)
+        for requirement_index, requirement in enumerate(
+            getattr(step, "model_requirements", ()) or ()
+        ):
+            require_column(
+                f"steps[{step_id}].model_requirements" f"[{requirement_index}].outcome",
+                getattr(requirement, "outcome", None),
+            )
+            require_column(
+                f"steps[{step_id}].model_requirements"
+                f"[{requirement_index}].exposure_source",
+                getattr(requirement, "exposure_source", None),
+            )
+
+    for spec_index, spec in enumerate(getattr(plan, "robustness_specs", ()) or ()):
+        spec_id = str(getattr(spec, "spec_id", "") or spec_index)
+        missing = getattr(spec, "missing_override", None)
+        if isinstance(missing, Mapping):
+            for field in ("variables", "audit_flags"):
+                values = missing.get(field)
+                if isinstance(values, (list, tuple)):
+                    for value_index, value in enumerate(values):
+                        require_column(
+                            f"robustness_specs[{spec_id}].missing_override."
+                            f"{field}[{value_index}]",
+                            value,
+                        )
+        outcome = getattr(spec, "outcome_override", None)
+        if isinstance(outcome, Mapping):
+            for field in (
+                "column",
+                "concept_id",
+                "target",
+                "event_time_column",
+                "time_column",
+            ):
+                if outcome.get(field) is not None:
+                    require_column(
+                        f"robustness_specs[{spec_id}].outcome_override.{field}",
+                        outcome.get(field),
+                    )
+
+    def location_categories(locations: list[str]) -> dict[str, int]:
+        categories: dict[str, int] = {}
+        for location in locations:
+            if ".model_requirements" in location:
+                category = (
+                    "model outcomes"
+                    if location.endswith(".outcome")
+                    else "model exposures"
+                )
+            elif ".missing_override.variables" in location:
+                category = "robustness missing variables"
+            elif ".missing_override.audit_flags" in location:
+                category = "robustness audit flags"
+            elif ".outcome_override." in location:
+                category = "robustness outcome fields"
+            else:
+                category = "step inputs"
+            categories[category] = categories.get(category, 0) + 1
+        return categories
+
+    return [
+        (
+            f"raw name {name!r} is not an exact sealed cohort column; "
+            f"locations={location_categories(locations)!r}"
+        )
+        for name, locations in invalid_locations.items()
+    ]
+
+
+def validate_plan_typed_bindings_against_context(
     *,
     plan: Any,
     context: Any,
 ) -> None:
-    """Reject typed predicates that cannot reach the sealed run input.
+    """Reject Planner references that cannot reach the sealed run input.
 
     Global dictionary membership is necessary but insufficient for a typed
     run: a legal EasyICU concept can still be absent from this immutable
     materialized cohort, or available only under a different sealed
-    window/aggregation. Validate that boundary while the Planner's structured
-    retry is active instead of failing later inside LangGraph materialization.
+    window/aggregation.  Likewise, a semantic label is not an executable
+    dataframe column.  Validate cohort predicates, raw step inputs, model
+    outcome/exposure fields, and robustness variables while the Planner's
+    structured retry is active instead of failing later inside LangGraph
+    execution.
 
     Legacy contexts retain their historical behavior because they do not carry
     a host-verified materialized column roster.
@@ -508,7 +605,8 @@ def validate_plan_cohort_predicates_against_context(
                 (f"robustness_specs[{spec_id}].cohort_override", override)
             )
 
-    issues: list[str] = []
+    raw_issues = _raw_typed_plan_reference_issues(plan=plan, columns=columns)
+    issues = list(raw_issues)
     for label, definition in definitions:
         try:
             bindings = _planner_declared_context_column_bindings(
@@ -565,14 +663,37 @@ def validate_plan_cohort_predicates_against_context(
         }
     )
     detail = "; ".join(issues[:4])
+    if raw_issues:
+        correction = (
+            "For raw step inputs, Table 1, model requirements, and robustness "
+            "fields, copy exact column names from the materialized-input roster "
+            "in the original prompt; concept ids are only valid inside typed "
+            "cohort predicates, and kind:name is only valid for an explicit "
+            "upstream product."
+        )
+    else:
+        correction = (
+            "Use an executable dictionary concept whose exact "
+            "window/aggregation is bound by the declared analysis-cohort "
+            f"columns={producer_columns!r} and source concepts={typed_sources!r}."
+        )
     raise CohortSchemaError(
-        "typed cohort predicates are not executable against this sealed input: "
-        f"declared typed source concepts={typed_sources!r}; declared columns="
-        f"{producer_columns!r}. {detail}. Use a merged EasyICU dictionary "
-        "concept whose exact sealed "
-        "window/aggregation is represented by an analysis-cohort step input; "
-        "do not invent unavailable columns or windows."
+        "typed plan references are not executable against this sealed input. "
+        f"Invalid references: {detail}. {correction} Additional binding context: "
+        "declared "
+        f"typed source concepts={typed_sources!r}; declared columns="
+        f"{producer_columns!r}; sealed cohort columns={sorted(columns)!r}."
     )
+
+
+def validate_plan_cohort_predicates_against_context(
+    *,
+    plan: Any,
+    context: Any,
+) -> None:
+    """Compatibility alias for the expanded typed-plan binding gate."""
+
+    validate_plan_typed_bindings_against_context(plan=plan, context=context)
 
 
 def coerce_isfinite_safe_dtypes(frame: Any) -> Any:
@@ -1145,6 +1266,7 @@ __all__ = [
     "reset_pattern_registry",
     "validate_cohort_definition",
     "validate_plan_cohort_predicates_against_context",
+    "validate_plan_typed_bindings_against_context",
     "validate_concept_predicate",
     "write_locked_cohort_definition",
 ]
