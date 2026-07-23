@@ -10568,6 +10568,14 @@ def run_execute_phase(
                 reason=standard_executor_terminal_reason,
             )
             return step_record
+        # Re-derive canonical scalar aliases immediately before the final
+        # deterministic gates.  Pre-seal figure/source preparation may inspect
+        # the generated summary, but it must not make a valid, registered
+        # statistic sidecar invisible to the scientific step contract.  This
+        # binding is idempotent and remains fail-closed on unregistered paths,
+        # symlinks, mismatched statistic names, non-finite values, and
+        # conflicting aliases.
+        step_summary = bind_primary_output(step_summary, run_result.out_dir)
         with shared_lock:
             completed_records_snapshot = list(per_step_records)
         final_gate_findings = _evaluate_final_deterministic_gates(
