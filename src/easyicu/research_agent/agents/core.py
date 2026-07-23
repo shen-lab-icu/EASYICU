@@ -53,7 +53,7 @@ from ..resources import ContextBudgetExceeded, bounded_request_metrics
 from ..cohort.schema import (
     ALLOWED_CTAS_AGGREGATIONS,
     known_concept_ids,
-    validate_plan_cohort_predicates_against_context,
+    validate_plan_typed_bindings_against_context,
 )
 from ..icu_rules import (
     GENERAL_ICU_ANALYSIS_PRINCIPLES,
@@ -481,6 +481,15 @@ def _build_planner_user_prompt(
         "`expected_roles` roster. Never select the first row or assume a table "
         "has one result merely because the downstream step renders one figure. "
         "Leave this array empty when no typed-table cardinality rule is needed.\n\n"
+        "When the ResearchContext carries `materialized_inputs`, every raw "
+        "dataframe field in `steps[*].inputs`, `table_one_spec`, "
+        "`model_requirements` outcome/exposure fields, and robustness "
+        "missingness/outcome fields MUST copy an exact name from the sealed "
+        "cohort column roster. Concept ids belong in typed cohort predicates; "
+        "they are not aliases for raw step inputs. An upstream logical product "
+        "must use its explicit `kind:name` value from a producer's "
+        "`expected_outputs`. Never substitute a human label or a plausible "
+        "synonym for a sealed column.\n\n"
         "When a plan requests a manuscript-facing figure, declare a top-level "
         "`display_labels` object for every variable, contrast, endpoint, or "
         "robustness spec id whose human-facing wording matters. Labels are "
@@ -908,7 +917,7 @@ class PlannerAgent:
                     "catalog instead of inventing or misspelling a family"
                 )
             plan.analysis_type = canonical_family
-        validate_plan_cohort_predicates_against_context(plan=plan, context=context)
+        validate_plan_typed_bindings_against_context(plan=plan, context=context)
         return plan
 
 
