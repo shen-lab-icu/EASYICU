@@ -607,6 +607,109 @@ def test_runner_repair_rejects_unbound_or_dynamically_used_analysis_roles():
     )
 
 
+def test_contract_repair_suppresses_parent_effect_echo_in_figure_summary():
+    code = """
+plotted_or = float(primary_row["odds_ratio"])
+step_summary = {
+    "status": "completed",
+    "figure_files": ["robustness_plot.png"],
+    "output_files": {"figure:robustness_plot": "robustness_plot.png"},
+    "numeric_summary": {
+        "primary_analysis_n": primary_n,
+        "primary_or": plotted_or,
+        "primary_or_finite": bool(np.isfinite(plotted_or)),
+        "confidence_intervals_available": 2,
+    },
+}
+"""
+    findings = [
+        {
+            "validator": "declared_product_contract",
+            "detail": {
+                "kind": "unauthorized_effect_product",
+                "planned_method": "visualization",
+                "declared_effect_products": [],
+                "registered_effect_products": [
+                    "log:primary_or",
+                    "log:primary_or_finite",
+                    "statistic:primary_or",
+                    "statistic:primary_or_finite",
+                ],
+                "summary_effect_paths": [
+                    "numeric_summary.primary_or",
+                    "numeric_summary.primary_or_finite",
+                ],
+            },
+        }
+    ]
+
+    repair = deterministic_contract_repair(code=code, findings=findings)
+
+    assert repair is not None
+    repair_id, repaired = repair
+    assert repair_id == "render_only_effect_echo_suppression_v1"
+    summary_mapping = next(
+        node.value
+        for node in ast.walk(ast.parse(repaired))
+        if isinstance(node, ast.Assign)
+        and isinstance(node.targets[0], ast.Name)
+        and node.targets[0].id == "step_summary"
+    )
+    numeric_summary = summary_mapping.values[
+        next(
+            index
+            for index, key in enumerate(summary_mapping.keys)
+            if key.value == "numeric_summary"
+        )
+    ]
+    assert {key.value for key in numeric_summary.keys} == {
+        "primary_analysis_n",
+        "confidence_intervals_available",
+    }
+    assert 'plotted_or = float(primary_row["odds_ratio"])' in repaired
+
+
+def test_contract_repair_does_not_suppress_owned_or_ambiguous_effect_output():
+    code = """
+step_summary = {
+    "status": "completed",
+    "figure_files": ["effect.png"],
+    "output_files": {"figure:effect": "effect.png"},
+    "numeric_summary": {"primary_or": value, "rows": 2},
+}
+"""
+    base_detail = {
+        "kind": "unauthorized_effect_product",
+        "planned_method": "visualization",
+        "declared_effect_products": [],
+        "registered_effect_products": [
+            "log:primary_or",
+            "statistic:primary_or",
+        ],
+        "summary_effect_paths": ["numeric_summary.primary_or"],
+    }
+    owned = dict(base_detail, declared_effect_products=["statistic:primary_or"])
+    ambiguous = dict(
+        base_detail,
+        summary_effect_paths=["reconciliation.primary_or"],
+    )
+
+    assert (
+        deterministic_contract_repair(
+            code=code,
+            findings=[{"validator": "declared_product_contract", "detail": owned}],
+        )
+        is None
+    )
+    assert (
+        deterministic_contract_repair(
+            code=code,
+            findings=[{"validator": "declared_product_contract", "detail": ambiguous}],
+        )
+        is None
+    )
+
+
 def _attrition_identity_finding(
     *,
     expected: list[object] | None = None,

@@ -60,6 +60,7 @@ from .nonfinite_audit import (
 )
 from .nullable_validation import patch_unused_nullable_numeric_validation
 from .rendering_role import patch_structured_analysis_role_selection
+from .rendering_summary import patch_render_only_effect_echo
 from .plausibility import patch_flag_only_plausibility_range_rejection
 from .provenance_summary import (
     patch_audit_only_companion_value_selector,
@@ -4882,6 +4883,12 @@ def deterministic_contract_repair(
     previous_repair: Optional[str] = None,
 ) -> Optional[tuple[str, str]]:
     """Patch objective contract/audit failures before asking the LLM to repair."""
+
+    render_echo_repair_name = "render_only_effect_echo_suppression_v1"
+    if previous_repair != render_echo_repair_name:
+        repaired = patch_render_only_effect_echo(code, findings=findings)
+        if repaired is not None and repaired != code:
+            return render_echo_repair_name, repaired
 
     host_receipts = patch_custom_measurement_provenance_receipts(
         code, findings=findings
