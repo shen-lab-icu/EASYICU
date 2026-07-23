@@ -899,6 +899,42 @@ def test_initial_literal_response_fails_transport_before_candidate_persistence(
     assert receipt_path.exists()
 
 
+def test_interrupted_initial_generation_records_terminal_transport_failure(
+    ra,
+    tmp_path,
+):
+    receipt_path = tmp_path / "provider_receipt.json"
+    budget = StepProviderCallBudget(
+        2,
+        step_id="ordered_exposure_qc",
+        receipt_path=receipt_path,
+    )
+
+    with pytest.raises(KeyboardInterrupt):
+        CoderAgent(_CaptureLLM([KeyboardInterrupt()])).run(
+            context=_wide_context(ra, n_families=1),
+            step=_quality_step(ra, n_families=1),
+            provider_budget=budget,
+            initial_generation_binding={"schema_version": "test"},
+            persist_candidate=lambda code: pytest.fail(
+                f"interrupted transport persisted code: {code}"
+            ),
+        )
+
+    receipt = json.loads(receipt_path.read_text("utf-8"))
+    assert budget.categories == ("initial_generation",)
+    assert budget.initial_generation_resume_status() == "failed"
+    assert receipt["initial_generation"]["transport"] == {
+        "state": "failed",
+        "error_type": "KeyboardInterrupt",
+        "provider_history_len": 1,
+        "provider_history_sha256": receipt["initial_generation"]["transport"][
+            "provider_history_sha256"
+        ],
+        "provider_calls": 1,
+    }
+
+
 def test_initial_candidate_capsule_integrity_error_remains_hard_failure(ra, tmp_path):
     llm = _CaptureLLM(["import os\nvalue = 1\n"])
     budget = StepProviderCallBudget(
@@ -1772,7 +1808,7 @@ def test_explicit_host_authority_reaches_initial_patch_and_full_rewrite(ra):
 
 
 def test_assignment_model_roster_is_host_bound_outside_research_notes():
-    from easyicu.research_agent.execution.phase import (
+    from easyicu.research_agent.authority.typed_binding import (
         _coder_authority_with_typed_parent_schema_receipts,
     )
 

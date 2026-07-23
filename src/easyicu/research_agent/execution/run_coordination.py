@@ -20,6 +20,7 @@ class RunExecutionState:
 
     remaining_steps: list[AnalysisStep]
     executed_step_ids: set[str]
+    stop_on_failure: bool = False
     stop_reason: Optional[str] = None
 
 
@@ -69,6 +70,16 @@ class RunCoordinator:
             step = state.remaining_steps.pop(0)
             record = execute_step(step)
             state.executed_step_ids.add(step.step_id)
+            if (
+                state.stop_on_failure
+                and isinstance(record, dict)
+                and str(record.get("status") or "").strip().lower() != "ok"
+            ):
+                record["remaining_steps_suppressed"] = True
+                state.stop_reason = "required_step_failed:" + (
+                    str(record.get("status") or "").strip().lower() or "missing"
+                )
+                break
             transition = resolve_transition(
                 step,
                 record,

@@ -985,6 +985,16 @@ class AnalysisStep(BaseModel):
         if len(requirement_ids) != len(set(requirement_ids)):
             raise ValueError("model_requirements requirement_id values must be unique")
         if self.model_requirements:
+            primary_requirements = [
+                item
+                for item in self.model_requirements
+                if item.analysis_role == "primary"
+            ]
+            if self.planned_analysis_role == "primary" and not primary_requirements:
+                raise ValueError(
+                    "a primary adjusted-association step must declare at least one "
+                    "primary model requirement"
+                )
             method_head = str(self.method or "").lower().split(" with ", 1)[0]
             method = _normalise_model_contract_token(method_head)
             outputs = set()

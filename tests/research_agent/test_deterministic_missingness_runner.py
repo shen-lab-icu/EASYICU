@@ -40,6 +40,7 @@ def _exec_runner(
     *,
     requested_inputs: list[str] | None = None,
     requested_outputs: list[str] | None = None,
+    current_plan_name: str | None = None,
 ):
     out_dir = run_dir / "steps" / "02_missingness_measurement_audit" / "outputs"
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -47,7 +48,8 @@ def _exec_runner(
         json.dumps(context), encoding="utf-8"
     )
     if requested_inputs is not None:
-        (run_dir / "analysis_plan.json").write_text(
+        plan_name = current_plan_name or "analysis_plan.json"
+        (run_dir / plan_name).write_text(
             json.dumps(
                 {
                     "steps": [
@@ -69,6 +71,11 @@ def _exec_runner(
             ),
             encoding="utf-8",
         )
+        if current_plan_name is not None:
+            (run_dir / "manifest_partial.json").write_text(
+                json.dumps({"plan_path": current_plan_name}),
+                encoding="utf-8",
+            )
     cohort_path = run_dir / "cohort_analysis.parquet"
     cohort.to_parquet(cohort_path, index=False)
 
@@ -140,6 +147,32 @@ def test_source_availability_contract_is_selected_before_any_coder_path():
     assert selection is not None
     assert selection.analysis_kind == "missingness_source_availability_audit"
     assert "missingness_measurement_audit.csv" in selection.code
+    assert audit_mechanical_code_contracts(selection.code, step) == []
+
+
+def test_measurement_frequency_contract_is_selected_before_any_coder_path():
+    step = AnalysisStep(
+        step_id="04_missingness_and_measurement_audit",
+        intent="Audit missingness and measurement frequency without imputation.",
+        inputs=[
+            "artifact:analysis_cohort",
+            "lactate",
+            "lactate_measured",
+            "lactate_n",
+        ],
+        expected_outputs=[
+            "table:missingness_audit",
+            "table:measurement_availability",
+        ],
+        method="missingness_and_measurement_frequency_audit",
+    )
+    plan = AnalysisPlan(research_question="Test", steps=[step])
+
+    assert source_availability_audit_executor_owns_step(step)
+    selection = select_standard_executor(step, plan=plan)
+    assert selection is not None
+    assert selection.analysis_kind == "missingness_source_availability_audit"
+    assert "measurement_availability.csv" in selection.code
     assert audit_mechanical_code_contracts(selection.code, step) == []
 
 
@@ -235,6 +268,60 @@ def test_missingness_and_source_outputs_are_distinct_declared_products(tmp_path:
     assert summary["output_files"] == {
         "table:missingness_audit": "missingness_audit.csv",
         "table:measurement_source_audit": "measurement_source_audit.csv",
+    }
+
+
+def test_measurement_availability_is_a_concrete_declared_product(tmp_path: Path):
+    cohort = _cohort(n=100, seed=12)
+    summary, out_dir = _exec_runner(
+        tmp_path,
+        cohort,
+        {},
+        requested_inputs=[
+            "artifact:analysis_cohort",
+            "lactate",
+            "lactate_measured",
+            "lactate_n",
+        ],
+        requested_outputs=[
+            "table:missingness_audit",
+            "table:measurement_availability",
+        ],
+    )
+
+    availability = pd.read_csv(out_dir / "measurement_availability.csv")
+    lactate = availability.loc[availability["concept"] == "lactate"].iloc[0]
+    assert lactate["indicator_semantics"] == "measurement_availability"
+    assert summary["status"] == "ok"
+    assert summary["output_files"] == {
+        "table:missingness_audit": "missingness_audit.csv",
+        "table:measurement_availability": "measurement_availability.csv",
+    }
+
+
+def test_missingness_runner_uses_manifest_selected_current_plan(tmp_path: Path):
+    cohort = _cohort(n=100, seed=13)
+    summary, _out_dir = _exec_runner(
+        tmp_path,
+        cohort,
+        {},
+        requested_inputs=[
+            "artifact:analysis_cohort",
+            "lactate",
+            "lactate_measured",
+            "lactate_n",
+        ],
+        requested_outputs=[
+            "table:missingness_audit",
+            "table:measurement_availability",
+        ],
+        current_plan_name="analysis_plan_revision_2.json",
+    )
+
+    assert summary["requested_input_count"] == 3
+    assert summary["output_files"] == {
+        "table:missingness_audit": "missingness_audit.csv",
+        "table:measurement_availability": "measurement_availability.csv",
     }
 
 

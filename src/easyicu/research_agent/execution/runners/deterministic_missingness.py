@@ -62,9 +62,18 @@ def source_availability_audit_executor_owns_step(step: AnalysisStep) -> bool:
         for value in step.inputs
         if str(value or "").strip().startswith(("artifact:", "table:", "dataset:"))
     }
+    supported_contracts = {
+        (
+            MISSINGNESS_SOURCE_AVAILABILITY_AUDIT,
+            frozenset({"table:missingness_audit", "table:measurement_source_audit"}),
+        ),
+        (
+            "missingness_and_measurement_frequency_audit",
+            frozenset({"table:missingness_audit", "table:measurement_availability"}),
+        ),
+    }
     return bool(
-        method == MISSINGNESS_SOURCE_AVAILABILITY_AUDIT
-        and outputs == {"table:missingness_audit", "table:measurement_source_audit"}
+        (method, frozenset(outputs)) in supported_contracts
         and typed_inputs == {"artifact:analysis_cohort"}
     )
 
@@ -117,7 +126,25 @@ def missingness_measurement_audit_code() -> str:
         # step's declared inputs lets the deterministic audit emit the requested
         # analytic denominator instead of returning only a compact concept
         # count and falsely satisfying a richer step.
-        plan_path = run_dir / "analysis_plan.json"
+        plan_name = "analysis_plan.json"
+        manifest_path = run_dir / "manifest_partial.json"
+        if manifest_path.is_file():
+            manifest = json.loads(manifest_path.read_text("utf-8"))
+            if not isinstance(manifest, dict):
+                raise ValueError("manifest_partial.json must contain an object")
+            declared_plan = manifest.get("plan_path")
+            if declared_plan is not None:
+                declared_plan_path = Path(str(declared_plan))
+                if (
+                    declared_plan_path.is_absolute()
+                    or len(declared_plan_path.parts) != 1
+                    or declared_plan_path.suffix != ".json"
+                ):
+                    raise ValueError(
+                        "manifest_partial.json carries an unsafe plan_path"
+                    )
+                plan_name = declared_plan_path.name
+        plan_path = run_dir / plan_name
         if plan_path.is_file():
             plan = json.loads(plan_path.read_text("utf-8"))
             for planned_step in plan.get("steps") or []:
@@ -492,6 +519,7 @@ def missingness_measurement_audit_code() -> str:
             ]
         ].copy()
         source_audit.to_csv(out_dir / "measurement_source_audit.csv", index=False)
+        source_audit.to_csv(out_dir / "measurement_availability.csv", index=False)
 
         # --- declared analytic denominators ----------------------------------
         resolved_inputs = []
@@ -590,6 +618,7 @@ def missingness_measurement_audit_code() -> str:
             "measurement_audit": "missingness_measurement_audit.csv",
             "measurement_process_audit": "missingness_measurement_audit.csv",
             "measurement_source_audit": "measurement_source_audit.csv",
+            "measurement_availability": "measurement_availability.csv",
             "data_quality_audit": "missingness_measurement_audit.csv",
             "source_coverage": "measurement_source_audit.csv",
             "analytic_denominator": "analytic_denominators.csv",

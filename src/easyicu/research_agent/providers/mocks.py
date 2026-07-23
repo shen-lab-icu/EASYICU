@@ -162,7 +162,7 @@ class ScriptedMockLLMClient:
 
     def __init__(
         self,
-        responses: Sequence[str | Exception],
+        responses: Sequence[str | BaseException],
         *,
         repeat_last: bool = False,
     ) -> None:
@@ -170,7 +170,7 @@ class ScriptedMockLLMClient:
 
         self.responses = list(responses)
         self._repeat_last = bool(repeat_last)
-        self._last_response: str | Exception | None = None
+        self._last_response: str | BaseException | None = None
         self.calls: list[tuple[list[LLMMessage], dict[str, Any]]] = []
         register_offline_test_client(self)
 
@@ -183,7 +183,7 @@ class ScriptedMockLLMClient:
             response = self._last_response
         else:
             raise RuntimeError("scripted mock response sequence exhausted")
-        if isinstance(response, Exception):
+        if isinstance(response, BaseException):
             raise response
         return str(response)
 
@@ -194,14 +194,14 @@ class ScriptedVisionMockLLMClient(ScriptedMockLLMClient):
     name = "scripted-vision-mock"
     supports_vision = True
 
-    def __init__(self, responses: Sequence[str | Exception]) -> None:
+    def __init__(self, responses: Sequence[str | BaseException]) -> None:
         # Register only after construction as this exact reviewed type; calling
         # the parent constructor would attempt to register the subclass there.
         from .factory import register_offline_test_client
 
         self.responses = list(responses)
         self._repeat_last = False
-        self._last_response: str | Exception | None = None
+        self._last_response: str | BaseException | None = None
         self.calls: list[tuple[list[LLMMessage], dict[str, Any]]] = []
         self.image_calls: list[dict[str, Any]] = []
         register_offline_test_client(self)
@@ -211,7 +211,7 @@ class ScriptedVisionMockLLMClient(ScriptedMockLLMClient):
         if not self.responses:
             raise RuntimeError("scripted vision mock response sequence exhausted")
         response = self.responses.pop(0)
-        if isinstance(response, Exception):
+        if isinstance(response, BaseException):
             raise response
         return str(response)
 
@@ -257,9 +257,9 @@ class PatternScriptedMockLLMClient:
 
     def __init__(
         self,
-        rules: Sequence[tuple[str, Sequence[str | Exception]]],
+        rules: Sequence[tuple[str, Sequence[str | BaseException]]],
         *,
-        default: str | Exception = "{}",
+        default: str | BaseException = "{}",
     ) -> None:
         from .factory import register_offline_test_client
 
@@ -273,7 +273,7 @@ class PatternScriptedMockLLMClient:
         self.calls.append((copied, dict(kwargs)))
         prompt = "\n".join(str(message.content or "") for message in copied)
         folded_prompt = prompt.casefold()
-        response: str | Exception = self._default
+        response: str | BaseException = self._default
         matches = [
             (index, marker, responses)
             for index, (marker, responses) in enumerate(self._rules)
@@ -286,7 +286,7 @@ class PatternScriptedMockLLMClient:
                     f"pattern mock response sequence exhausted for {marker!r}"
                 )
             response = responses.pop(0)
-        if isinstance(response, Exception):
+        if isinstance(response, BaseException):
             raise response
         return str(response)
 

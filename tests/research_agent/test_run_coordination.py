@@ -45,6 +45,37 @@ def test_sequential_stop_is_resolved_after_step_execution() -> None:
     assert state.stop_reason == "requested_stop"
 
 
+def test_sequential_fail_stop_suppresses_later_steps_and_transitions() -> None:
+    from easyicu.research_agent.execution.run_coordination import (
+        RunCoordinator,
+        RunExecutionState,
+    )
+
+    calls: list[str] = []
+    record = {"status": "coder_failed"}
+    state = RunExecutionState(
+        remaining_steps=[_step("04"), _step("05")],
+        executed_step_ids=set(),
+        stop_on_failure=True,
+    )
+
+    RunCoordinator().run_sequential(
+        state=state,
+        execute_step=lambda step: calls.append(step.step_id) or record,
+        resolve_transition=lambda step, result, has_remaining: pytest.fail(
+            "a terminal failed required step must not transition"
+        ),
+        apply_revised_plan=lambda plan, executed: pytest.fail(
+            "a terminal failed required step must not replan"
+        ),
+    )
+
+    assert calls == ["04"]
+    assert state.executed_step_ids == {"04"}
+    assert state.stop_reason == "required_step_failed:coder_failed"
+    assert record["remaining_steps_suppressed"] is True
+
+
 def test_directed_replan_retries_current_step_without_two_plan_authorities() -> None:
     from easyicu.research_agent.execution.run_coordination import (
         RunCoordinator,
@@ -225,6 +256,11 @@ def test_run_coordinator_is_science_neutral_and_pipeline_owns_transitions() -> N
         "and _successful_step_requests_replan(record)", directed
     )
     assert corruption < requested_stop < directed < ordinary
+    assert (
+        "stop_on_failure=(pipeline._submission_profile_name is not None)"
+        in phase_source
+    )
+    assert "or pipeline._submission_profile_name is not None" in phase_source
     assert (
         "if pipeline._enable_visual_qa and requested_stop_after_step_id is None:"
         in phase_source

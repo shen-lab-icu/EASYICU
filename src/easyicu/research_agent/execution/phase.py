@@ -11024,7 +11024,6 @@ def run_execute_phase(
                 ),
             )
         )
-
     if (
         pipeline._max_concurrent_steps <= 1
         or len(steps_to_run) <= 1
@@ -11032,6 +11031,7 @@ def run_execute_phase(
         or has_typed_input_dependencies
         or has_primary_cohort_universe_producer
         or requested_stop_after_step_id is not None
+        or pipeline._submission_profile_name is not None
     ):
 
         def _maybe_directed_model_replan(
@@ -11171,6 +11171,7 @@ def run_execute_phase(
             state=RunExecutionState(
                 remaining_steps=list(steps_to_run),
                 executed_step_ids=set(preexecuted_step_ids),
+                stop_on_failure=(pipeline._submission_profile_name is not None),
             ),
             execute_step=_execute_one_step,
             resolve_transition=_resolve_run_transition,
@@ -11195,7 +11196,6 @@ def run_execute_phase(
             submit_step=_submit_in_current_context,
             on_worker_error=_record_parallel_worker_error,
         )
-
     if run_input_authority_state.corrupted:
         _flush_partial_manifest(
             {

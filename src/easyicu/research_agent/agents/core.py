@@ -2187,7 +2187,7 @@ class CoderAgent:
                 and on_initial_candidate is not None
             ):
                 on_initial_candidate(initial_ref, initial_transport_id)
-        except Exception as exc:
+        except BaseException as exc:
             if initial_transport_id is not None and provider_budget is not None:
                 if provider_budget.initial_generation_resume_status() == "pending":
                     provider_budget.fail_initial_generation_transport(

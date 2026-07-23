@@ -49,7 +49,7 @@ _DEFAULT_OUTPUT = (
     _REPO_ROOT / "benchmarks/figure2_canonical9/canonical_run_input_bindings_v2.json"
 )
 _PROFILE = {
-    "ref": "npj_dm/20260718",
+    "ref": "npj_dm/20260719",
     "concept_dict_sha256": (
         "fccadc53622dc82fe1dc8696617e52044168b6a84a9255e97e59df9e53bc5803"
     ),
