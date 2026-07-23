@@ -3,6 +3,7 @@ from __future__ import annotations
 from easyicu.research_agent.repairs.provenance_summary import (
     patch_companion_audit_frame_alignment,
 )
+from easyicu.research_agent.repairs.reasons import RepairReason
 from easyicu.research_agent.repairs.source import deterministic_concept_audit_repair
 from easyicu.research_agent.schema import ValidationFinding
 
@@ -120,4 +121,60 @@ def main():
     )
 
     assert "call_receipt(typed_df," in repaired
+    assert repair_names == ["audit_only_companion_value_selector_v1"]
+
+
+def test_repair_removes_only_unsupported_receipt_keyword_with_stale_line() -> None:
+    code = """\
+from easyicu.research_agent.methods.descriptive_inputs import (
+    measurement_provenance_receipt,
+)
+
+def call_receipt(frame, measured_column, count_column):
+    value_column = "exposure"
+    return measurement_provenance_receipt(
+        frame,
+        value_column=value_column,
+        measured_column=measured_column,
+        count_column=count_column,
+    )
+"""
+    findings = [
+        ValidationFinding(
+            validator="mechanical_code_preflight",
+            severity="error",
+            message="The registered host helper has an unsupported keyword.",
+            detail={
+                "reason": "host_helper_call_signature_invalid",
+                "helper_name": "measurement_provenance_receipt",
+                "line": 7,
+                "violations": ["unknown_keyword_argument"],
+            },
+        ),
+        ValidationFinding(
+            validator="mechanical_code_preflight",
+            severity="error",
+            message="A stale expanded-keyword coordinate from the prior draft.",
+            detail={
+                "reason": "host_helper_call_signature_invalid",
+                "helper_name": "measurement_provenance_receipt",
+                "line": 20,
+                "violations": [
+                    "expanded_keyword_arguments_unverifiable",
+                    "required_keyword_only_argument_missing",
+                ],
+            },
+        ),
+    ]
+
+    repaired, repair_names = deterministic_concept_audit_repair(
+        code,
+        [finding.message for finding in findings],
+        repair_reasons=[RepairReason.INVALID_HELPER_SIGNATURE],
+        repair_findings=findings,
+    )
+
+    assert "value_column=value_column" not in repaired
+    assert "measured_column=measured_column" in repaired
+    assert "count_column=count_column" in repaired
     assert repair_names == ["audit_only_companion_value_selector_v1"]
