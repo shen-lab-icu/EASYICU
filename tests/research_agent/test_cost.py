@@ -191,6 +191,66 @@ def test_metered_client_never_trusts_shared_stale_usage(ra):
     assert meter.records[-1].prompt_tokens != 10
 
 
+def test_transport_receipt_terminalizes_keyboard_interrupt_without_content(
+    ra, tmp_path
+):
+    from easyicu.research_agent.providers.llm import LLMMessage
+
+    class _InterruptedClient:
+        name = "interrupted-provider"
+
+        def complete_with_usage(self, messages, **kwargs):
+            raise KeyboardInterrupt
+
+    meter = ra.CostMeter(runtime_dir=tmp_path / ".runtime")
+    metered = ra.MeteredClient(_InterruptedClient(), role="planner", meter=meter)
+
+    with pytest.raises(KeyboardInterrupt):
+        metered.complete([LLMMessage(role="user", content="private prompt sentinel")])
+
+    receipts = list((tmp_path / ".runtime/provider_transport_receipts").glob("*.json"))
+    assert len(receipts) == 1
+    payload = json.loads(receipts[0].read_text(encoding="utf-8"))
+    assert payload["state"] == "cancelled"
+    assert payload["error_type"] == "KeyboardInterrupt"
+    assert payload["role"] == "planner"
+    assert payload["request_sha256"]
+    assert "private prompt sentinel" not in receipts[0].read_text(encoding="utf-8")
+    assert meter.records == []
+
+
+def test_transport_receipt_records_completed_call_usage(ra, tmp_path):
+    from easyicu.research_agent.providers.llm import LLMMessage
+
+    class _CompletedClient:
+        name = "completed-provider"
+
+        def complete_with_usage(self, messages, **kwargs):
+            return "private response sentinel", {
+                "prompt_tokens": 7,
+                "completion_tokens": 3,
+            }
+
+    meter = ra.CostMeter(runtime_dir=tmp_path / ".runtime")
+    metered = ra.MeteredClient(_CompletedClient(), role="coder", meter=meter)
+    assert metered.complete([LLMMessage(role="user", content="prompt")]) == (
+        "private response sentinel"
+    )
+
+    receipt = next((tmp_path / ".runtime/provider_transport_receipts").glob("*.json"))
+    raw = receipt.read_text(encoding="utf-8")
+    payload = json.loads(raw)
+    assert payload["state"] == "completed"
+    assert payload["usage"] == {
+        "prompt_tokens": 7,
+        "completion_tokens": 3,
+        "total_tokens": 10,
+        "is_heuristic": False,
+    }
+    assert payload["response_sha256"]
+    assert "private response sentinel" not in raw
+
+
 def test_concurrent_writer_usage_cannot_be_charged_to_another_role(ra):
     from easyicu.research_agent.providers.cost import metered_role_resolver
     from easyicu.research_agent.providers.llm import LLMMessage

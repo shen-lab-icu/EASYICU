@@ -108,6 +108,7 @@ from .development_sample import (
     materialize_development_execution_sample,
     record_development_sample_authority,
 )
+from .failure_classification import classify_runtime_failure
 from .cohort_routing import (
     bind_step_execution_cohort as _bind_step_execution_cohort,
     bound_step_execution_cohort_path as _bound_step_execution_cohort_path,
@@ -9613,6 +9614,28 @@ def run_execute_phase(
                 standard_executor_terminal_block = True
                 standard_executor_terminal_reason = "executor_runtime_failure"
                 break
+            runtime_failure = classify_runtime_failure(
+                run_log=run_log,
+                timed_out=bool(run_result.timed_out),
+                step_id=step.step_id,
+                returncode=run_result.returncode,
+            )
+            if runtime_failure is not None:
+                step_record.update(runtime_failure.step_updates)
+                with shared_lock:
+                    findings.append(runtime_failure.finding)
+                    _append_terminal_step_record(per_step_records, step_record)
+                    _flush_partial_manifest()
+                emit_progress(
+                    "runner",
+                    runtime_failure.progress_message,
+                    status="error",
+                    run_id=run_id,
+                    step_id=step.step_id,
+                    current_step=step_current,
+                    total_steps=total_steps,
+                )
+                return step_record
             if sealed_renderer_authorized_code_sha256 is not None:
                 runtime_finding = ValidationFinding(
                     validator="sealed_renderer_authority",

@@ -27,8 +27,15 @@ output tokens.
 
 from __future__ import annotations
 
+import hashlib
+import json
+import os
+import threading
+import uuid
 from collections import defaultdict
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from ..schema import CostRecord
@@ -87,6 +94,108 @@ class CostMeter:
         default_factory=lambda: dict(_DEFAULT_PRICES)
     )
     records: List[CostRecord] = field(default_factory=list)
+    runtime_dir: Optional[Path] = None
+    _receipt_lock: threading.Lock = field(
+        default_factory=threading.Lock,
+        init=False,
+        repr=False,
+    )
+
+    @staticmethod
+    def _atomic_write_receipt(path: Path, payload: Dict[str, Any]) -> None:
+        temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+        temporary.write_text(
+            json.dumps(
+                payload,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ),
+            encoding="utf-8",
+        )
+        os.chmod(temporary, 0o600)
+        temporary.replace(path)
+        os.chmod(path, 0o600)
+
+    def begin_transport(
+        self,
+        *,
+        role: Optional[str],
+        model: str,
+        messages: Sequence[Any],
+        max_tokens: int,
+        temperature: float,
+    ) -> Optional[tuple[Path, Dict[str, Any]]]:
+        """Persist an in-progress PHI-safe receipt before provider delivery."""
+
+        if self.runtime_dir is None:
+            return None
+        receipt_dir = Path(self.runtime_dir) / "provider_transport_receipts"
+        receipt_dir.mkdir(parents=True, exist_ok=True)
+        os.chmod(receipt_dir, 0o700)
+        call_id = uuid.uuid4().hex
+        request_hasher = hashlib.sha256()
+        prompt_bytes = 0
+        for message in messages:
+            role_value = str(getattr(message, "role", "") or "")
+            content = str(getattr(message, "content", "") or "")
+            encoded = content.encode("utf-8")
+            prompt_bytes += len(encoded)
+            request_hasher.update(role_value.encode("utf-8"))
+            request_hasher.update(b"\0")
+            request_hasher.update(encoded)
+            request_hasher.update(b"\0")
+        payload: Dict[str, Any] = {
+            "schema_version": "easyicu.provider_transport_receipt/1",
+            "call_id": call_id,
+            "state": "in_progress",
+            "role": role,
+            "model": model,
+            "request_sha256": request_hasher.hexdigest(),
+            "prompt_bytes": prompt_bytes,
+            "max_tokens": int(max_tokens),
+            "temperature": float(temperature),
+            "started_at": datetime.now(timezone.utc).isoformat(),
+            "finished_at": None,
+            "error_type": None,
+            "usage": None,
+            "response_sha256": None,
+        }
+        path = receipt_dir / f"{call_id}.json"
+        with self._receipt_lock:
+            self._atomic_write_receipt(path, payload)
+        return path, payload
+
+    def finish_transport(
+        self,
+        receipt: Optional[tuple[Path, Dict[str, Any]]],
+        *,
+        state: str,
+        error_type: Optional[str] = None,
+        usage: Optional[Dict[str, int]] = None,
+        response: Optional[str] = None,
+    ) -> None:
+        """Terminalize a transport receipt without persisting prompt/response."""
+
+        if receipt is None:
+            return
+        path, original = receipt
+        payload = dict(original)
+        payload.update(
+            {
+                "state": str(state),
+                "finished_at": datetime.now(timezone.utc).isoformat(),
+                "error_type": str(error_type) if error_type else None,
+                "usage": dict(usage) if usage is not None else None,
+                "response_sha256": (
+                    hashlib.sha256(str(response).encode("utf-8")).hexdigest()
+                    if response is not None
+                    else None
+                ),
+            }
+        )
+        with self._receipt_lock:
+            self._atomic_write_receipt(path, payload)
 
     def estimate_cost(
         self,
@@ -219,23 +328,43 @@ class MeteredClient:
     def complete(
         self, messages, *, max_tokens: int = 2048, temperature: float = 0.2
     ) -> str:
-        complete_with_usage = getattr(self._inner, "complete_with_usage", None)
-        if callable(complete_with_usage):
-            result, usage = complete_with_usage(
-                messages,
-                max_tokens=max_tokens,
-                temperature=temperature,
+        model = self._model_override or _identify_model(self._inner)
+        receipt = self._meter.begin_transport(
+            role=self._role,
+            model=model,
+            messages=messages,
+            max_tokens=max_tokens,
+            temperature=temperature,
+        )
+        try:
+            complete_with_usage = getattr(self._inner, "complete_with_usage", None)
+            if callable(complete_with_usage):
+                result, usage = complete_with_usage(
+                    messages,
+                    max_tokens=max_tokens,
+                    temperature=temperature,
+                )
+            else:
+                result = self._inner.complete(
+                    messages,
+                    max_tokens=max_tokens,
+                    temperature=temperature,
+                )
+                # A shared ``last_usage`` attribute is not call-scoped and cannot be
+                # read safely under concurrent role calls. Legacy providers use the
+                # transparent heuristic until they implement ``complete_with_usage``.
+                usage = None
+        except BaseException as exc:
+            self._meter.finish_transport(
+                receipt,
+                state=(
+                    "cancelled"
+                    if isinstance(exc, (KeyboardInterrupt, SystemExit))
+                    else "failed"
+                ),
+                error_type=type(exc).__name__,
             )
-        else:
-            result = self._inner.complete(
-                messages,
-                max_tokens=max_tokens,
-                temperature=temperature,
-            )
-            # A shared ``last_usage`` attribute is not call-scoped and cannot be
-            # read safely under concurrent role calls. Legacy providers use the
-            # transparent heuristic until they implement ``complete_with_usage``.
-            usage = None
+            raise
         if isinstance(usage, dict) and usage.get("prompt_tokens") is not None:
             prompt_tokens = int(usage.get("prompt_tokens", 0))
             completion_tokens = int(usage.get("completion_tokens", 0))
@@ -247,13 +376,23 @@ class MeteredClient:
             completion_tokens = max(1, completion_chars // _CHARS_PER_TOKEN)
             is_heuristic = True
 
-        model = self._model_override or _identify_model(self._inner)
         self._meter.record(
             role=self._role,
             model=model,
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
             is_heuristic=is_heuristic,
+        )
+        self._meter.finish_transport(
+            receipt,
+            state="completed",
+            usage={
+                "prompt_tokens": prompt_tokens,
+                "completion_tokens": completion_tokens,
+                "total_tokens": prompt_tokens + completion_tokens,
+                "is_heuristic": is_heuristic,
+            },
+            response=result,
         )
         return result
 

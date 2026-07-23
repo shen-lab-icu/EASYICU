@@ -2648,9 +2648,10 @@ class ResearchAgentPipeline:
                     price_table=(
                         dict(self._cost_price_table) if self._cost_price_table else None
                     ),
+                    runtime_dir=run_dir / ".runtime",
                 )
                 if self._cost_price_table is not None
-                else CostMeter()
+                else CostMeter(runtime_dir=run_dir / ".runtime")
             )
             # Order: envelope wraps the innermost client so prompt /
             # response hashes are computed on the exact strings the

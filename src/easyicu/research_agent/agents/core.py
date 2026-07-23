@@ -497,6 +497,9 @@ def _build_planner_user_prompt(
         "scientific object and must not change its exposure, outcome, method, "
         "cohort, or estimand. The renderer will not infer that a token such as "
         "`death` means ICU, hospital, or fixed-day mortality.\n\n"
+        "Keep eligibility separate from exposure: primary-cohort predicates "
+        "must preserve every closed level compared by a downstream Table 1 or "
+        "required primary estimand, including prevalence denominators.\n\n"
         + _format_concept_id_allowlist()
         + "\n\n"
         + _format_ctas_schema_constraints()
