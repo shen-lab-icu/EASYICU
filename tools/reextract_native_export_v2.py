@@ -76,15 +76,32 @@ def _configure_external_runtime(root: Path) -> tuple[Dict[str, str | None], str 
     runtime_spill = root / ".runtime_spill"
     runtime_tmp.mkdir(mode=0o700)
     runtime_spill.mkdir(mode=0o700)
-    prior = {
-        key: os.environ.get(key)
-        for key in ("TMPDIR", "TMP", "TEMP", "EASYICU_DUCKDB_TEMP_DIR")
-    }
+    runtime_keys = (
+        "TMPDIR",
+        "TMP",
+        "TEMP",
+        "EASYICU_DUCKDB_TEMP_DIR",
+        "EASYICU_DUCKDB_THREADS",
+        "EASYICU_DUCKDB_MEMORY_LIMIT",
+        "EASYICU_PARALLEL_MAX_WORKERS",
+        "EASYICU_CACHE_BUDGET_MB",
+        "EASYICU_ONESHOT_BUDGET_MB",
+    )
+    prior = {key: os.environ.get(key) for key in runtime_keys}
     prior_tempdir = tempfile.tempdir
     os.environ["TMPDIR"] = str(runtime_tmp)
     os.environ["TMP"] = str(runtime_tmp)
     os.environ["TEMP"] = str(runtime_tmp)
     os.environ["EASYICU_DUCKDB_TEMP_DIR"] = str(runtime_spill)
+    # A consumer Mac must never trade a faster full-table aggregation for swap
+    # growth on its internal APFS volume.  The streamed module writer is the
+    # primary guard; these cap any individual DuckDB/cache workset as defence
+    # in depth, with spill still rooted on the external run directory.
+    os.environ["EASYICU_DUCKDB_THREADS"] = "1"
+    os.environ["EASYICU_DUCKDB_MEMORY_LIMIT"] = "1GB"
+    os.environ["EASYICU_PARALLEL_MAX_WORKERS"] = "1"
+    os.environ["EASYICU_CACHE_BUDGET_MB"] = "256"
+    os.environ["EASYICU_ONESHOT_BUDGET_MB"] = "512"
     tempfile.tempdir = str(runtime_tmp)
     return prior, prior_tempdir
 
@@ -123,8 +140,8 @@ def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--batch-size",
         type=int,
-        default=None,
-        help="emergency low-memory override; omit to preserve one-shot extraction",
+        default=10_000,
+        help="bounded external-export batch size (default: 10000 stays)",
     )
     return parser.parse_args(argv)
 
@@ -175,6 +192,7 @@ def run(args: argparse.Namespace) -> Dict[str, Any]:
                 output_dir=source_output,
                 batch_size=args.batch_size,
                 native_export_v2=True,
+                stream_output_batches=True,
                 verbose=True,
             )
             spill_removed = _remove_worker_spill_directory(source_output)

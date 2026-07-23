@@ -153,3 +153,74 @@ def test_module_extraction_sanitises_mixed_object_columns(monkeypatch, tmp_path)
     assert exported["mech_circ_support"].tolist()[:2] == [1.0, 1.0]
     # genuine string column left as-is
     assert exported["sex"].tolist()[:2] == ["M", "F"]
+
+
+def test_module_extraction_streams_patient_batches_directly_to_parquet(
+    monkeypatch, tmp_path
+):
+    calls = []
+
+    def fake_load_concepts(**kwargs):
+        ids = list(kwargs["patient_ids"]["stay_id"])
+        calls.append(ids)
+        return pd.DataFrame(
+            {
+                "stay_id": ids,
+                "charttime": [0] * len(ids),
+                "test_signal": [float(value) for value in ids],
+            }
+        )
+
+    monkeypatch.setattr(easyicu, "load_concepts", fake_load_concepts)
+
+    api._run_module_extraction(
+        "test_module",
+        ["test_signal"],
+        "miiv",
+        str(tmp_path),
+        {"stay_id": [1, 2, 3, 4, 5]},
+        2,
+        str(tmp_path),
+        stream_output_batches=True,
+    )
+
+    manifest = json.loads((tmp_path / "_manifest.json").read_text())
+    assert manifest["errors"] == []
+    assert calls == [[1, 2], [3, 4], [5]]
+    exported = pd.read_parquet(manifest["saved"]["test_module"]["path"])
+    assert exported["stay_id"].tolist() == [1, 2, 3, 4, 5]
+    assert not (tmp_path / ".test_module.partial.parquet").exists()
+
+
+def test_streamed_special_export_uses_published_dependency_parquets(tmp_path):
+    source = tmp_path / "published"
+    output = tmp_path / "special"
+    source.mkdir()
+    output.mkdir()
+    time = pd.to_datetime(["2026-01-01T00:00:00", "2026-01-01T01:00:00"])
+    pd.DataFrame(
+        {"stay_id": [1, 1], "charttime": time, "susp_inf": [False, True]}
+    ).to_parquet(source / "sepsis_shared.parquet", index=False)
+    pd.DataFrame({"stay_id": [1, 1], "charttime": time, "sofa": [0.0, 3.0]}).to_parquet(
+        source / "sofa1_score.parquet", index=False
+    )
+    pd.DataFrame(
+        {"stay_id": [1, 1], "charttime": time, "sofa2": [0.0, 3.0]}
+    ).to_parquet(source / "sofa2_score.parquet", index=False)
+
+    api._stream_special_extraction_batches(
+        ["sepsis3_sofa1", "sepsis3_sofa2"],
+        "miiv",
+        str(tmp_path),
+        {"stay_id": [1]},
+        1,
+        str(output),
+        use_sofa2=True,
+        published_output_dir=str(source),
+    )
+
+    manifest = json.loads((output / "_manifest.json").read_text())
+    assert manifest["errors"] == []
+    assert set(manifest["saved"]) == {"sep3_sofa1", "sep3_sofa2"}
+    assert (output / "sep3_sofa1.parquet").is_file()
+    assert (output / "sep3_sofa2.parquet").is_file()
