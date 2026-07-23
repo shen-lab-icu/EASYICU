@@ -2005,6 +2005,8 @@ def _robustness_sensitivity_runner_owns_step(
         "robustness_matrix",
         "robustness_summary",
         "complete_case_n",
+        "primary_or",
+        "missingness_strategy_notes",
     }
     structured_products = _closed_auxiliary_output_products(
         expected_outputs,
