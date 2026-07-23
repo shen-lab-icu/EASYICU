@@ -2543,6 +2543,77 @@ def _canonical_execution_config_from_args(args):
     )
 
 
+def _verify_figure2_development_diagnostic(
+    args,
+    *,
+    jsonl_path: Path,
+    task_ids: tuple,
+) -> None:
+    """Verify an explicit non-paper Canonical9 development input binding."""
+
+    if bool(getattr(args, "submission_profile", False)) or bool(
+        getattr(args, "require_figure2_paper_acceptance", False)
+    ):
+        raise ValueError(
+            "development diagnostics cannot enable a submission profile or "
+            "paper acceptance"
+        )
+    if any(
+        getattr(args, name, None)
+        for name in (
+            "figure2_realrun_authorization",
+            "figure2_expected_execution_identity",
+            "figure2_production_input_authority",
+        )
+    ):
+        raise ValueError(
+            "development diagnostics cannot carry paper authority coordinates"
+        )
+    if str(getattr(args, "runner", "") or "") != "docker":
+        raise ValueError("development diagnostics require --runner docker")
+    if _normalize_arms(getattr(args, "arms", None)) != ["aware"]:
+        raise ValueError("development diagnostics require exactly --arms aware")
+    if str(getattr(args, "provider", "") or "") == "mock":
+        raise ValueError("development diagnostics require a real Provider")
+    if not task_ids:
+        raise ValueError("development diagnostic JSONL has no Canonical9 task")
+
+    receipt_raw = str(
+        getattr(args, "figure2_development_binding_receipt", "") or ""
+    ).strip()
+    if not receipt_raw:
+        raise ValueError(
+            "--development-diagnostic requires "
+            "--figure2-development-binding-receipt"
+        )
+    receipt_path = Path(receipt_raw).expanduser()
+    if not receipt_path.is_absolute() or receipt_path.is_symlink():
+        raise ValueError("development binding receipt must be absolute and non-symlink")
+    receipt_path = receipt_path.resolve(strict=True)
+    if not receipt_path.is_file():
+        raise ValueError("development binding receipt must be a regular file")
+    payload = json.loads(
+        receipt_path.read_text(encoding="utf-8"),
+        object_pairs_hook=_reject_jsonl_duplicate_pairs,
+        parse_constant=_reject_jsonl_nonfinite_constant,
+    )
+    if not isinstance(payload, dict):
+        raise ValueError("development binding receipt must be a JSON object")
+    if (
+        payload.get("schema_version")
+        != "easyicu.canonical9_development_binding_receipt/1"
+        or payload.get("paper_authority") is not False
+    ):
+        raise ValueError(
+            "development binding receipt must explicitly deny paper authority"
+        )
+    if payload.get("output_jsonl") != str(jsonl_path):
+        raise ValueError("development binding receipt does not bind this JSONL path")
+    observed_sha256 = hashlib.sha256(jsonl_path.read_bytes()).hexdigest()
+    if payload.get("output_sha256") != observed_sha256:
+        raise ValueError("development binding receipt does not bind these JSONL bytes")
+
+
 def _figure2_realrun_authorization_gate(args):
     """Fail-closed real-run authorization, enforced before anything is launched.
 
@@ -2571,6 +2642,9 @@ def _figure2_realrun_authorization_gate(args):
     declaration = getattr(args, "figure2_realrun_authorization", None)
     jsonl = getattr(args, "ehrflowbench_jsonl", None)
     require_acceptance = bool(getattr(args, "require_figure2_paper_acceptance", False))
+    development_diagnostic = bool(
+        getattr(args, "development_diagnostic", False)
+    )
 
     # First classify an existing JSONL without changing ordinary, non-canonical
     # EHRFlowBench behavior.  If it references Canonical9 (or if explicit paper
@@ -2600,7 +2674,7 @@ def _figure2_realrun_authorization_gate(args):
     references_canonical = bool(task_ids) and jsonl_references_canonical9(task_ids)
     real_canonical_run = require_acceptance or references_canonical
 
-    if declaration or real_canonical_run:
+    if declaration or real_canonical_run or development_diagnostic:
         try:
             strict_jsonl = resolve_strict_jsonl_path(jsonl)
             task_ids, cohort_paths = read_canonical_jsonl_invocation(strict_jsonl)
@@ -2612,6 +2686,34 @@ def _figure2_realrun_authorization_gate(args):
                 file=sys.stderr,
             )
             return 2, None
+
+    if development_diagnostic:
+        if not references_canonical:
+            print(
+                "[development-diagnostic] the explicit development path is only "
+                "valid for Canonical9 JSONL inputs.",
+                file=sys.stderr,
+            )
+            return 2, None
+        try:
+            _verify_figure2_development_diagnostic(
+                args,
+                jsonl_path=strict_jsonl,
+                task_ids=task_ids,
+            )
+        except Exception as exc:  # noqa: BLE001
+            print(
+                "[development-diagnostic] BLOCKED — no pipeline, subprocess, "
+                f"Provider, or data load has started ({type(exc).__name__}: {exc}).",
+                file=sys.stderr,
+            )
+            return 2, None
+        print(
+            "[development-diagnostic] verified non-paper input binding; results "
+            "are development-only and require a fresh authorized rerun for paper use.",
+            file=sys.stderr,
+        )
+        return None, None
 
     # 1) Mandatory activation: a Canonical9 / paper-acceptance run cannot bypass the
     #    gate by omitting the declaration.
@@ -3036,6 +3138,23 @@ def main() -> int:
         default=None,
         help="Optional EHRFlowBench-style JSONL export. Each row may include "
         "key, question, cohort_path, target_outcome, expected_or_direction.",
+    )
+    parser.add_argument(
+        "--development-diagnostic",
+        action="store_true",
+        help=(
+            "Run a Canonical9 input only as an explicitly non-paper Docker "
+            "diagnostic. Requires --figure2-development-binding-receipt; the "
+            "result cannot be promoted and must be rerun under fresh paper authority."
+        ),
+    )
+    parser.add_argument(
+        "--figure2-development-binding-receipt",
+        default=None,
+        help=(
+            "Absolute non-symlink receipt binding the exact development JSONL "
+            "path and SHA256 with paper_authority=false."
+        ),
     )
     parser.add_argument(
         "--require-figure2-paper-acceptance",
