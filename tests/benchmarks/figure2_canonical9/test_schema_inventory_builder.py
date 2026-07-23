@@ -101,6 +101,31 @@ def test_schema_inventory_records_unlisted_member_for_review(
     )
 
 
+def test_schema_inventory_records_partial_manifest_without_inferring_semantics(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = _fixture_export(tmp_path)
+    manifest_path = root / "miiv/demographics.manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["saved"]["demographics"].pop("rows")
+    manifest["saved"]["demographics"].pop("concepts")
+    manifest_path.write_text(
+        json.dumps(manifest, sort_keys=True) + "\n", encoding="utf-8"
+    )
+    _patch_snapshot_pin(monkeypatch, root)
+
+    result = builder.build_schema_inventory(
+        full_export_root=root, output_root=tmp_path / "protected-inventory"
+    )
+    payload = json.loads(result.inventory_path.read_text(encoding="utf-8"))
+    module = payload["sources"][0]["modules"][0]
+
+    assert module["manifest_completeness"] == "partial_or_invalid"
+    assert module["manifest_missing_fields"] == ["rows", "concepts"]
+    assert module["manifest_declared_row_count"] is None
+    assert module["declared_concepts"] is None
+
+
 def test_schema_inventory_rejects_missing_declared_output(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
