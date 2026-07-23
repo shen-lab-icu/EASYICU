@@ -30,6 +30,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import signal
 import threading
 import uuid
 from collections import defaultdict
@@ -104,18 +105,53 @@ class CostMeter:
     @staticmethod
     def _atomic_write_receipt(path: Path, payload: Dict[str, Any]) -> None:
         temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
-        temporary.write_text(
+        raw = (
             json.dumps(
                 payload,
                 ensure_ascii=False,
                 sort_keys=True,
                 separators=(",", ":"),
-            ),
-            encoding="utf-8",
+            ).encode("utf-8")
+            + b"\n"
         )
-        os.chmod(temporary, 0o600)
-        temporary.replace(path)
-        os.chmod(path, 0o600)
+        old_mask = None
+        if hasattr(signal, "pthread_sigmask"):
+            old_mask = signal.pthread_sigmask(
+                signal.SIG_BLOCK,
+                {signal.SIGINT, signal.SIGTERM},
+            )
+        descriptor: Optional[int] = None
+        try:
+            descriptor = os.open(
+                temporary,
+                os.O_CREAT | os.O_EXCL | os.O_WRONLY | getattr(os, "O_CLOEXEC", 0),
+                0o600,
+            )
+            view = memoryview(raw)
+            while view:
+                written = os.write(descriptor, view)
+                if written <= 0:
+                    raise OSError("short transport-receipt write")
+                view = view[written:]
+            os.fsync(descriptor)
+            os.close(descriptor)
+            descriptor = None
+            os.replace(temporary, path)
+            os.chmod(path, 0o600)
+            directory_fd = os.open(path.parent, os.O_RDONLY)
+            try:
+                os.fsync(directory_fd)
+            finally:
+                os.close(directory_fd)
+        finally:
+            if descriptor is not None:
+                os.close(descriptor)
+            try:
+                temporary.unlink()
+            except FileNotFoundError:
+                pass
+            if old_mask is not None:
+                signal.pthread_sigmask(signal.SIG_SETMASK, old_mask)
 
     def begin_transport(
         self,

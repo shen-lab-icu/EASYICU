@@ -11,7 +11,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Optional
 
-from .evaluator.paper_rubric_v3 import load_figure2_paper_rubric
+from .evaluator.paper_rubric_v3 import (
+    Figure2PaperRubricManifest,
+    default_figure2_paper_rubric_path,
+)
 from .evaluator.suite import easyicu_evaluation_protocol_suite
 
 
@@ -23,6 +26,7 @@ class Canonical9MaterializationSpec:
     feature_concepts: tuple[str, ...]
     static_concepts: tuple[str, ...]
     outcome_concepts: tuple[str, ...] = ("death",)
+    exposure_concept: Optional[str] = None
     operational_exposure: Optional[str] = None
     emit_trajectory: bool = False
     trajectory_concepts: tuple[str, ...] = ()
@@ -65,7 +69,8 @@ CANONICAL9_MIMIC_IV_PLAN: tuple[Canonical9MaterializationSpec, ...] = (
             "map",
         ),
         static_concepts=_STATIC_CORE,
-        operational_exposure="sepsis3",
+        exposure_concept="sepsis3",
+        operational_exposure="sep3_sofa2_max",
         positive_only_event_concepts=("sep3_sofa2",),
         notes=(
             "Use the typed sep3_sofa2 concept as the Sepsis-3 criterion and "
@@ -87,7 +92,8 @@ CANONICAL9_MIMIC_IV_PLAN: tuple[Canonical9MaterializationSpec, ...] = (
             "wbc",
         ),
         static_concepts=_STATIC_CORE,
-        operational_exposure="lactate",
+        exposure_concept="lactate",
+        operational_exposure="lact_max",
         notes=(
             "The operational exposure is lact_max, the maximum typed lact value "
             "within ICU hours 0-24, in mmol/L. Audit measuredness and skew and "
@@ -111,7 +117,8 @@ CANONICAL9_MIMIC_IV_PLAN: tuple[Canonical9MaterializationSpec, ...] = (
             "sofa_resp",
         ),
         static_concepts=_STATIC_CORE,
-        operational_exposure="kdigo",
+        exposure_concept="kdigo",
+        operational_exposure="aki_stage_max",
         notes=(
             "Use aki_stage_max over ICU hours 0-24 as the ordered KDIGO stage "
             "(0-3). Retain its ordinal interpretation and report stage-specific "
@@ -122,7 +129,8 @@ CANONICAL9_MIMIC_IV_PLAN: tuple[Canonical9MaterializationSpec, ...] = (
         task_id="m1_hepatobiliary_missingness",
         feature_concepts=("bili", *_SOFA2_COMPONENTS),
         static_concepts=_STATIC_CORE,
-        operational_exposure="bili",
+        exposure_concept="bili",
+        operational_exposure="bili_max",
     ),
     Canonical9MaterializationSpec(
         task_id="m2_mortality_prediction",
@@ -199,7 +207,8 @@ CANONICAL9_MIMIC_IV_PLAN: tuple[Canonical9MaterializationSpec, ...] = (
             "lact",
         ),
         static_concepts=(*_STATIC_CORE, "los_hosp"),
-        operational_exposure="vent_24h_any",
+        exposure_concept="vent_24h_any",
+        operational_exposure="mech_vent_max",
         positive_only_event_concepts=("mech_vent",),
         notes=(
             "Derive vent_24h_any only from typed ventilation status/timing within "
@@ -226,7 +235,8 @@ CANONICAL9_MIMIC_IV_PLAN: tuple[Canonical9MaterializationSpec, ...] = (
             "hgb",
         ),
         static_concepts=(*_STATIC_CORE, "los_hosp"),
-        operational_exposure="vasopressor",
+        exposure_concept="vasopressor",
+        operational_exposure="vaso_ind_max",
         positive_only_event_concepts=("vaso_ind",),
         emit_trajectory=True,
         trajectory_concepts=(*_VASOPRESSOR_CONCEPTS, "map", "lact"),
@@ -263,15 +273,24 @@ def validate_canonical9_mimic_iv_plan() -> None:
     planned_ids = tuple(spec.task_id for spec in CANONICAL9_MIMIC_IV_PLAN)
     if planned_ids != task_ids:
         raise ValueError("Canonical9 materialization plan order drifted from suite")
-    rubric = load_figure2_paper_rubric()
+    # Input materialization is explicitly development-only. Validate the frozen
+    # rubric schema and task coordinates here, but leave the executable scorer
+    # tree digest to the final paper-acceptance/authority gate. Otherwise an
+    # unrelated scorer implementation edit blocks rebuilding diagnostic inputs.
+    rubric = Figure2PaperRubricManifest.model_validate_json(
+        default_figure2_paper_rubric_path().read_bytes(),
+        strict=True,
+    )
     rubric_exposures = tuple(
         task.validity_binding.exposure_concept for task in rubric.tasks
     )
     planned_exposures = tuple(
-        spec.operational_exposure for spec in CANONICAL9_MIMIC_IV_PLAN
+        spec.exposure_concept for spec in CANONICAL9_MIMIC_IV_PLAN
     )
     if planned_exposures != rubric_exposures:
-        raise ValueError("Canonical9 operational exposures drifted from paper rubric")
+        raise ValueError(
+            "Canonical9 scoring exposure concepts drifted from paper rubric"
+        )
     for spec in CANONICAL9_MIMIC_IV_PLAN:
         if spec.emit_trajectory != bool(
             spec.trajectory_concepts and spec.trajectory_window
