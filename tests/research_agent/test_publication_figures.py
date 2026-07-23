@@ -976,6 +976,101 @@ def test_publication_figure_skill_rebuilds_sparse_primary_bundle_when_source_tab
     assert image.height / image.width < 1.2
 
 
+def test_publication_figure_skill_uses_auxiliary_outcome_incidence_for_main_figure(
+    ra,
+    tmp_path: Path,
+):
+    run_dir = tmp_path / "run"
+    evidence = ra.EvidenceStore(run_dir)
+    primary_table = tmp_path / "adjusted_association_estimates.csv"
+    primary_table.write_text(
+        "term,odds_ratio,ci_low,ci_high\nexposure,1.61,1.54,1.68\n",
+        encoding="utf-8",
+    )
+    outcome_table = tmp_path / "outcome_incidence.csv"
+    outcome_table.write_text(
+        "stratum,numerator,denominator,incidence_proportion,incidence_pct\n"
+        "overall,95,1000,0.095,9.5\n"
+        "exposure_status_0,50,700,0.0714286,7.14286\n"
+        "exposure_status_1,45,300,0.15,15.0\n",
+        encoding="utf-8",
+    )
+    evidence.register_file(
+        kind="table",
+        description="Primary adjusted association table.",
+        source_path=primary_table,
+        evidence_id="adjusted_association_estimates",
+        aliases=["primary_association"],
+        produced_by_step="07_adjusted_association_model",
+    )
+    evidence.register_file(
+        kind="table",
+        description="Observed outcome incidence by exposure group.",
+        source_path=outcome_table,
+        evidence_id="outcome_incidence",
+        produced_by_step="04_outcome_incidence",
+    )
+    context = ra.ResearchContext(
+        research_question="Estimate an adjusted exposure-outcome association.",
+        cohort=ra.CohortDescriptor(
+            cohort_name="demo",
+            database="synthetic",
+            n_patients=1000,
+            n_stays=1000,
+        ),
+        variables=[],
+        target_outcome="outcome",
+    )
+    plan = ra.AnalysisPlan(
+        research_question=context.research_question,
+        steps=[
+            ra.AnalysisStep(
+                step_id="04_outcome_incidence",
+                intent="Report observed outcome incidence by exposure.",
+                expected_outputs=["table:outcome_incidence"],
+                planned_analysis_role="auxiliary",
+            ),
+            ra.AnalysisStep(
+                step_id="07_adjusted_association_model",
+                intent="Estimate the primary adjusted association.",
+                expected_outputs=["table:adjusted_association_estimates"],
+                planned_analysis_role="primary",
+            ),
+            ra.AnalysisStep(
+                step_id="08_publication_figure",
+                intent="Render the primary manuscript figure.",
+                inputs=["table:adjusted_association_estimates"],
+                expected_outputs=["figure:publication_figure"],
+                planned_analysis_role="auxiliary",
+            ),
+        ],
+    )
+
+    result = ra.PublicationFigureSkill().run(
+        context=context,
+        plan=plan,
+        evidence=evidence,
+        run_dir=run_dir,
+        prompt_pack_version="test",
+    )
+
+    assert result.generated is True
+    contract = json.loads(
+        (
+            run_dir
+            / "publication_figures"
+            / "easyicu_publication_figure.figure_contract.json"
+        ).read_text(encoding="utf-8")
+    )
+    assert [panel["role"] for panel in contract["panels"]] == [
+        "primary_estimand",
+        "descriptive_result",
+    ]
+    descriptive = contract["panels"][1]
+    assert descriptive["metadata"]["chart_type"] == "event_rate_panel"
+    assert descriptive["evidence_ids"] == ["outcome_incidence"]
+
+
 def test_figure_contract_enforces_unique_panel_ids():
     with pytest.raises(ValueError):
         make_figure_contract(

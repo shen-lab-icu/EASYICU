@@ -59,6 +59,7 @@ from .agents.core import (
     DataExtractionAgent,
     ManuscriptAgent,
     PlannerAgent,
+    PlannerArticleContractError,
     ReplannerAgent,
     RuntimeSupervisor,
     StatisticalAnalysisAgent,
@@ -2905,10 +2906,13 @@ class ResearchAgentPipeline:
                 plan = planner.run(
                     agent_context,
                     **know_how_binding.planner_kwargs,
+                    enforce_article_contract=True,
                 )
                 planner_prompt_metrics = know_how_binding.prompt_metrics(
                     planner, agent_context
                 )
+            except PlannerArticleContractError:
+                raise
             except Exception as exc:
                 if not self._enable_deterministic_planner_fallback:
                     raise
@@ -2956,6 +2960,7 @@ class ResearchAgentPipeline:
                     retry_plan = planner.run(
                         agent_context,
                         **know_how_binding.planner_kwargs,
+                        enforce_article_contract=True,
                     )
                 except Exception:
                     retry_plan = None
@@ -3002,6 +3007,7 @@ class ResearchAgentPipeline:
                     cohort_retry = planner.run(
                         agent_context,
                         **know_how_binding.planner_kwargs,
+                        enforce_article_contract=True,
                     )
                 except Exception:
                     cohort_retry = None

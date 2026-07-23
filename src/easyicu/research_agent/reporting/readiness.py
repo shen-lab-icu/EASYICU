@@ -938,6 +938,13 @@ _LEGACY_UNSCOPED_STEP_VALIDATOR_METHODS: Dict[str, frozenset[str]] = {
     "robustness_cohort_membership": frozenset({"cohort_definition_sensitivity"}),
 }
 
+# Older checkpoints persisted this per-step deterministic finding before the
+# orchestrator attached ``detail.step_id`` / attempt coordinates. It is safe to
+# retire only when every current step record is successful: modern findings
+# are scoped at emission, and a partially failing run must keep the ambiguous
+# legacy error active.
+_LEGACY_UNSCOPED_ALL_STEPS_CLEAN_VALIDATORS = frozenset({"mechanical_code_preflight"})
+
 
 def _normalised_method_head(method: Any) -> str:
     """Return the exact scientific owner from ``<head>_with_<rider>``."""
@@ -1692,6 +1699,9 @@ def _partition_findings_by_supersession(
        matching non-figure owner step and no unresolved explicitly scoped error
        from the same validator.  It is then treated exactly like an explicitly
        scoped finding.  Ambiguous or currently failing ownership remains active.
+    6. A pre-scope mechanical-code finding is unambiguously historical because
+       every current step record is successful. Any partially failing current
+       run keeps the unscoped finding active.
 
     The classification is purely deterministic — same inputs always
     yield the same partition. The superseded set is returned
@@ -1718,6 +1728,16 @@ def _partition_findings_by_supersession(
     }
     for f in findings:
         explicit_sid = _step_id_referenced_in_finding(f)
+        if (
+            not explicit_sid
+            and f.severity == "error"
+            and str(f.validator or "") in _LEGACY_UNSCOPED_ALL_STEPS_CLEAN_VALIDATORS
+            and str(f.validator or "") not in unresolved_scoped_error_validators
+            and known_step_ids
+            and set(known_step_ids).issubset(success_step_ids)
+        ):
+            superseded.append(f)
+            continue
         legacy_sid = None
         if (
             not explicit_sid

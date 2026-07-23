@@ -55,19 +55,55 @@ ARTICLE_CONTRACT_AUDIT_SCHEMA_VERSION = "easyicu.article_contract_audit/1"
 
 _REQUIRED_TIERS: Set[DisplayTier] = {"core", "conditional"}
 _COUNTED_ARTIFACT_KINDS = {"table", "figure", "statistic"}
+_AMBIGUOUS_ARTIFACT_ROLE_TERMS: Dict[str, Set[str]] = {
+    # These words are useful while matching structured plan declarations, but
+    # far too broad for artifact prose (for example, "model specification" in
+    # a review-risk sentence is not a completed sensitivity analysis).
+    "robustness": {"variant", "alternative", "specification"},
+}
 
 _ROLE_ALIASES: Dict[str, Sequence[str]] = {
-    "cohort_accounting": ("cohort flow", "attrition", "eligibility", "denominator"),
-    "baseline_context": ("table 1", "table_one", "baseline characteristics"),
-    "data_quality": ("audit", "missingness", "measurement", "coverage", "quality"),
+    "cohort_accounting": (
+        "cohort flow",
+        "attrition",
+        "eligibility",
+        "denominator",
+        "cohort_attrition",
+    ),
+    "baseline_context": (
+        "table 1",
+        "table_one",
+        "baseline characteristics",
+        "baseline_characteristics",
+    ),
+    "data_quality": (
+        "audit",
+        "missingness",
+        "measurement",
+        "coverage",
+        "quality",
+        "missingness_profile",
+        "data_quality_source_status",
+    ),
     "primary_estimand": (
         "relationship",
         "association",
         "adjusted estimate",
         "effect estimate",
         "forest plot",
+        "adjusted_association_estimates",
     ),
-    "robustness": ("sensitivity", "robustness", "specification", "alternative"),
+    # Keep these aliases role-specific. Bare words such as ``specification`` or
+    # ``alternative`` occur in ordinary model-review prose and previously made
+    # a two-panel primary figure falsely satisfy the robustness artifact role.
+    # The requirement's acceptable outputs still recognise the precise phrases
+    # ``specification curve`` and ``alternative-definition panel``.
+    "robustness": (
+        "sensitivity",
+        "robustness",
+        "robustness_matrix",
+        "robustness_summary",
+    ),
     "validation": ("validation", "external validation", "train-test"),
     "model_performance": ("roc", "auroc", "discrimination", "precision-recall"),
     "calibration": ("calibration", "brier"),
@@ -144,9 +180,10 @@ def _requirement_terms(module: DisplayModuleSpec) -> List[str]:
     ]
     terms: List[str] = []
     seen: Set[str] = set()
+    ambiguous = _AMBIGUOUS_ARTIFACT_ROLE_TERMS.get(module.role, set())
     for term in raw_terms:
         cleaned = _normalise_space(term)
-        if not cleaned or cleaned in seen:
+        if not cleaned or cleaned in seen or cleaned in ambiguous:
             continue
         terms.append(cleaned)
         seen.add(cleaned)

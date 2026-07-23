@@ -162,7 +162,9 @@ class RobustnessPanel:
         return cls.from_rows(
             [RobustnessPanelRow.from_dict(r) for r in data.get("rows", []) or []],
             primary_spec_id=str(data.get("primary_spec_id") or PRIMARY_SPEC_ID),
-            locked_at=str(data.get("locked_at") or datetime.now(timezone.utc).isoformat()),
+            locked_at=str(
+                data.get("locked_at") or datetime.now(timezone.utc).isoformat()
+            ),
         )
 
 
@@ -233,11 +235,18 @@ def default_robustness_specs() -> List[RobustnessSpec]:
 
 
 def ensure_robustness_specs(plan: Any) -> Any:
+    """Validate declared specs without inventing scientific alternatives.
+
+    The Planner/article contract owns whether robustness is required. Empty
+    plans must stay empty so the contract can reject or retry them; silently
+    inserting case-neutral placeholders produced non-executable rows that could
+    be mistaken for completed sensitivity evidence.
+    """
+
     specs = list(getattr(plan, "robustness_specs", []) or [])
     if specs:
         validate_robustness_specs(specs)
-        return plan
-    return plan.model_copy(update={"robustness_specs": default_robustness_specs()})
+    return plan
 
 
 def write_locked_robustness_specs(
@@ -260,9 +269,10 @@ def write_locked_robustness_specs(
             )
         except LockAuthorityError as exc:
             raise RobustnessPlanError(str(exc)) from exc
-        if repair is not None and evidence.get(
-            "robustness_lock_resume_rehydration"
-        ) is None:
+        if (
+            repair is not None
+            and evidence.get("robustness_lock_resume_rehydration") is None
+        ):
             evidence.register_json(
                 kind="log",
                 description=(
@@ -280,9 +290,7 @@ def write_locked_robustness_specs(
             )
         locked_specs = load_locked_robustness_specs(run_dir)
         validate_robustness_specs(locked_specs)
-        if specs and robustness_specs_sha(specs) != robustness_specs_sha(
-            locked_specs
-        ):
+        if specs and robustness_specs_sha(specs) != robustness_specs_sha(locked_specs):
             raise RobustnessPlanError(
                 "robustness_specs changed after plan lock; refusing to overwrite "
                 "the pre-specified execution contract"
@@ -303,7 +311,7 @@ def write_locked_robustness_specs(
             )
         return path
     if not specs:
-        specs = default_robustness_specs()
+        return path
     validate_robustness_specs(specs)
     payload = {
         "schema_version": "easyicu.robustness_specs/1",
@@ -366,10 +374,7 @@ def load_locked_robustness_specs(run_dir: Path) -> List[RobustnessSpec]:
         raise RobustnessPlanError("robustness_specs lock has invalid specs payload")
     if any(not isinstance(spec, dict) for spec in raw_specs):
         raise RobustnessPlanError("robustness_specs lock has invalid spec entries")
-    specs = [
-        RobustnessSpec.from_dict(spec)
-        for spec in raw_specs
-    ]
+    specs = [RobustnessSpec.from_dict(spec) for spec in raw_specs]
     validate_robustness_specs(specs)
     expected_sha = str(payload.get("spec_sha256") or "").strip()
     observed_sha = robustness_specs_sha(specs)
@@ -486,9 +491,7 @@ def write_robustness_panel(
     prompt_pack_version: Optional[str],
 ) -> Path:
     lock_path = Path(run_dir) / LOCK_FILENAME
-    non_primary_rows = [
-        row for row in panel.rows if row.spec_id != PRIMARY_SPEC_ID
-    ]
+    non_primary_rows = [row for row in panel.rows if row.spec_id != PRIMARY_SPEC_ID]
     if non_primary_rows and not lock_path.exists():
         raise RobustnessPlanError(
             "non-primary robustness panel rows require a verified plan-time lock"
@@ -558,7 +561,9 @@ def load_robustness_panel(path: Path) -> Optional[RobustnessPanel]:
 
 
 def numeric_digest_for_panel(panel: RobustnessPanel) -> Dict[str, Any]:
-    primary = next((row for row in panel.rows if row.spec_id == panel.primary_spec_id), None)
+    primary = next(
+        (row for row in panel.rows if row.spec_id == panel.primary_spec_id), None
+    )
     digest: Dict[str, Any] = {}
     seen_values: set[tuple[float, int]] = set()
 
@@ -617,13 +622,15 @@ def worst_rows_by_axis(panel: RobustnessPanel) -> Dict[str, RobustnessPanelRow]:
         if row.point_estimate is None:
             continue
         current = selected.get(row.axis)
-        if current is None or abs(row.point_estimate) < abs(current.point_estimate or 0.0):
+        if current is None or abs(row.point_estimate) < abs(
+            current.point_estimate or 0.0
+        ):
             selected[row.axis] = row
     return selected
 
 
 def _primary_row_from_records(
-    per_step_records: Sequence[Dict[str, Any]]
+    per_step_records: Sequence[Dict[str, Any]],
 ) -> Optional[RobustnessPanelRow]:
     from .primary_effect import (
         _extract_primary_effect_payload_from_records,
@@ -652,7 +659,7 @@ def _primary_row_from_records(
 
 
 def _declared_rows_from_records(
-    per_step_records: Sequence[Dict[str, Any]]
+    per_step_records: Sequence[Dict[str, Any]],
 ) -> Iterable[RobustnessPanelRow]:
     for record in _successful_step_records(per_step_records):
         summary = record.get("step_summary")
@@ -670,9 +677,7 @@ def _declared_rows_from_records(
             # Numeric authority is the current digest-bound step summary that
             # contains this row.  A free-form row must not redirect its values to
             # an unrelated evidence id such as a replay log.
-            data["evidence_id"] = str(
-                record.get("step_summary_evidence_id") or ""
-            )
+            data["evidence_id"] = str(record.get("step_summary_evidence_id") or "")
             yield RobustnessPanelRow.from_dict(data)
 
 
@@ -793,7 +798,9 @@ def _assert_claimable_panel_rows_match_evidence(
             raise RobustnessPlanError(
                 f"robustness panel row {row.spec_id!r} evidence is not a JSON summary"
             ) from exc
-        if not isinstance(payload, dict) or not _row_matches_summary_payload(row, payload):
+        if not isinstance(payload, dict) or not _row_matches_summary_payload(
+            row, payload
+        ):
             raise RobustnessPlanError(
                 f"robustness panel row {row.spec_id!r} disagrees with its evidence summary"
             )

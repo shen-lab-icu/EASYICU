@@ -17,30 +17,31 @@ def _host_role_fields(step_id: str, role: str = "primary") -> dict:
     }
 
 
-def test_planner_emits_minimum_axes() -> None:
+def test_planner_accepts_one_task_supported_robustness_axis() -> None:
     from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep
 
-    with pytest.raises(ValueError, match="at least 3 cohort"):
-        AnalysisPlan(
-            research_question="Does severity predict mortality?",
-            steps=[
-                AnalysisStep(
-                    step_id="01_model",
-                    intent="Fit the primary model.",
-                    expected_outputs=["statistic:primary_or"],
-                )
-            ],
-            robustness_specs=[
-                {
-                    "spec_id": "alt_missing_complete_case",
-                    "axis": "missing",
-                    "description": "Complete cases only.",
-                    "cohort_override": None,
-                    "missing_override": {"strategy": "complete_case"},
-                    "outcome_override": None,
-                }
-            ],
-        )
+    plan = AnalysisPlan(
+        research_question="Does severity predict mortality?",
+        steps=[
+            AnalysisStep(
+                step_id="01_model",
+                intent="Fit the primary model.",
+                expected_outputs=["statistic:primary_or"],
+            )
+        ],
+        robustness_specs=[
+            {
+                "spec_id": "alt_missing_complete_case",
+                "axis": "missing",
+                "description": "Complete cases only.",
+                "cohort_override": None,
+                "missing_override": {"strategy": "complete_case"},
+                "outcome_override": None,
+            }
+        ],
+    )
+
+    assert [spec.axis for spec in plan.robustness_specs] == ["missing"]
 
 
 def test_default_outcome_specs_are_case_neutral_placeholders() -> None:
@@ -65,6 +66,40 @@ def test_default_outcome_specs_are_case_neutral_placeholders() -> None:
     assert "mortality" not in joined
     assert "death" not in joined
     assert "28_day" not in joined
+
+
+def test_missing_planner_specs_are_not_replaced_with_fake_defaults(
+    ra,
+    tmp_path: Path,
+) -> None:
+    from easyicu.research_agent.robustness.panel import (
+        ensure_robustness_specs,
+        write_locked_robustness_specs,
+    )
+    from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep
+
+    plan = AnalysisPlan(
+        research_question="Does severity predict mortality?",
+        steps=[
+            AnalysisStep(
+                step_id="01_model",
+                intent="Fit the primary model.",
+                expected_outputs=["statistic:primary_or"],
+            )
+        ],
+    )
+
+    unchanged = ensure_robustness_specs(plan)
+    lock_path = write_locked_robustness_specs(
+        run_dir=tmp_path,
+        plan=unchanged,
+        evidence=ra.EvidenceStore(tmp_path),
+        prompt_pack_version="test",
+        llm_signature="mock",
+    )
+
+    assert unchanged.robustness_specs == []
+    assert not lock_path.exists()
 
 
 def test_panel_freezes_after_plan(ra, tmp_path: Path) -> None:

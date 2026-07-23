@@ -522,12 +522,12 @@ def _build_planner_user_prompt(
         "protocol, or status output such as `artifact:cohort_defined` is not a "
         "cohort dataset and cannot replace that product. The other outputs in "
         "that step may only be canonical attrition/flow tables.\n\n"
-        "Pre-specify robustness variants before execution. Add a "
-        "`robustness_specs` array with at least 3 cohort-axis, "
-        "2 missingness-axis, and 2 outcome-axis alternatives. "
-        "These are advisory execution specifications: do not use "
-        "them to change the primary analysis, and do not describe "
-        "their results as surprising or unexpected.\n\n"
+        "When robustness is required, pre-specify one or more executable, "
+        "task-supported `robustness_specs`; never invent an unsupported axis, "
+        "endpoint, or variable. Add an auxiliary post-primary step with "
+        "`method='robustness_sensitivity'` producing "
+        "`table:robustness_matrix` and `statistic:robustness_summary`. "
+        "Variants must not change the primary analysis.\n\n"
         + locked_analysis_type_guide(infer_analysis_type(context))
         + "\n\n"
         + planner_analysis_type_guide()
@@ -690,6 +690,10 @@ class PlannerPromptBudgetError(RuntimeError):
     """The complete Planner request exceeds its bounded transport envelope."""
 
 
+class PlannerArticleContractError(ValueError):
+    """The parsed Planner response omits a required article-level role."""
+
+
 class PlannerAgent:
     """Produces an :class:`AnalysisPlan` from the research context.
 
@@ -751,6 +755,7 @@ class PlannerAgent:
         *,
         allowed_know_how_decisions: Optional[Mapping[str, Mapping[str, Any]]] = None,
         know_how_context: str = "",
+        enforce_article_contract: bool = False,
     ) -> AnalysisPlan:
         if bool(allowed_know_how_decisions) != bool(know_how_context):
             raise ValueError(
@@ -782,6 +787,7 @@ class PlannerAgent:
                 raw,
                 context,
                 allowed_know_how_decisions=allowed_know_how_decisions,
+                enforce_article_contract=enforce_article_contract,
             ),
             role="planner",
             max_retries=PLANNER_MAX_RETRIES,
@@ -810,6 +816,7 @@ class PlannerAgent:
         context: ResearchContext,
         *,
         allowed_know_how_decisions: Optional[Mapping[str, Mapping[str, Any]]] = None,
+        enforce_article_contract: bool = False,
     ) -> AnalysisPlan:
         text = raw.strip()
         # Strip a fenced block anywhere in the response (already
@@ -853,6 +860,40 @@ class PlannerAgent:
         data, dropped = _normalise_plan_payload(data)
         self.last_dropped_plan_keys = dropped
         plan = AnalysisPlan.model_validate(data)
+        if enforce_article_contract:
+            from ..reporting.article_contract import (
+                build_article_analysis_contract,
+                validate_plan_against_article_contract,
+            )
+
+            contract = build_article_analysis_contract(
+                context,
+                analysis_type=plan.analysis_type,
+            )
+            contract_findings = validate_plan_against_article_contract(
+                plan=plan,
+                contract=contract,
+            )
+            missing_roles = sorted(
+                {
+                    str(role)
+                    for finding in contract_findings
+                    for role in (finding.detail or {}).get("missing_roles", [])
+                    if str(role).strip()
+                }
+            )
+            if "robustness" in contract.required_roles and not plan.robustness_specs:
+                missing_roles = sorted({*missing_roles, "robustness_specs"})
+            if missing_roles:
+                raise PlannerArticleContractError(
+                    "Planner plan is missing required article contract role(s): "
+                    + ", ".join(missing_roles)
+                    + ". Add explicit typed analysis steps and, when robustness "
+                    "is required, at least one task-supported robustness spec plus "
+                    "a method='robustness_sensitivity' step producing "
+                    "table:robustness_matrix and statistic:robustness_summary. "
+                    "Do not invent an unsupported cohort, outcome, or endpoint."
+                )
         if allowed_know_how_decisions is not None:
             decisions_by_card: dict[str, list[Any]] = {}
             for decision in plan.know_how_decisions:

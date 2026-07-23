@@ -313,6 +313,166 @@ def test_article_contract_ignores_role_words_in_step_prose_and_wrong_kinds(ra):
     assert "primary_estimand" not in covered
 
 
+def test_model_specification_review_prose_does_not_claim_robustness_artifact(
+    ra,
+    tmp_path,
+):
+    import json
+
+    from easyicu.research_agent.reporting.article_contract import (
+        build_article_analysis_contract,
+        roles_covered_by_artifacts,
+    )
+
+    context = _context(
+        ra,
+        "Estimate an adjusted association and report the analytic cohort.",
+        exposure="x",
+    )
+    contract = build_article_analysis_contract(context)
+    publication_dir = tmp_path / "publication_figures"
+    publication_dir.mkdir()
+    (publication_dir / "primary.figure_contract.json").write_text(
+        json.dumps(
+            {
+                "figure_id": "primary",
+                "core_claim": "The adjusted association is displayed.",
+                "panels": [
+                    {
+                        "panel_id": "A",
+                        "title": "Adjusted association",
+                        "role": "primary_estimand",
+                        "claim": "The registered primary estimate is shown.",
+                        "review_risk": (
+                            "Interpretability depends on the upstream model "
+                            "specification and validator findings."
+                        ),
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    covered = roles_covered_by_artifacts(
+        contract=contract,
+        evidence_records=[],
+        per_step_records=[],
+        run_dir=tmp_path,
+    )
+
+    assert "robustness" not in covered
+
+
+def test_planner_article_contract_retries_missing_robustness_instead_of_faking_it(
+    ra,
+):
+    import json
+    import pytest
+
+    from easyicu.research_agent.agents.core import (
+        PlannerAgent,
+        PlannerArticleContractError,
+    )
+
+    context = _context(
+        ra,
+        "Estimate an adjusted association and report the analytic cohort.",
+        exposure="x",
+    )
+    payload = {
+        "research_question": context.research_question,
+        "analysis_type": "association_study",
+        "steps": [
+            {
+                "step_id": "01_cohort",
+                "planned_analysis_role": "auxiliary",
+                "intent": "Report cohort accounting.",
+                "expected_outputs": ["table:cohort_attrition"],
+            },
+            {
+                "step_id": "02_baseline",
+                "planned_analysis_role": "auxiliary",
+                "intent": "Report baseline characteristics.",
+                "expected_outputs": ["table:baseline_characteristics"],
+            },
+            {
+                "step_id": "03_quality",
+                "planned_analysis_role": "auxiliary",
+                "intent": "Audit data quality.",
+                "expected_outputs": ["table:missingness_profile"],
+            },
+            {
+                "step_id": "04_descriptive",
+                "planned_analysis_role": "auxiliary",
+                "intent": "Report absolute outcome risk.",
+                "expected_outputs": ["table:outcome_incidence"],
+            },
+            {
+                "step_id": "05_primary",
+                "planned_analysis_role": "primary",
+                "intent": "Estimate the adjusted association.",
+                "expected_outputs": ["table:adjusted_association_estimates"],
+                "method": "adjusted_association_models",
+                "model_requirements": [
+                    {
+                        "requirement_id": "primary_x_death",
+                        "outcome": "death",
+                        "outcome_type": "binary",
+                        "method_family": "binary_logistic_regression",
+                        "exposure_source": "x",
+                        "analysis_role": "primary",
+                        "analysis_set": "complete_case",
+                        "required_for_step_success": True,
+                    }
+                ],
+            },
+        ],
+    }
+    planner = PlannerAgent(object())  # _parse is transport-free.
+
+    with pytest.raises(
+        PlannerArticleContractError,
+        match="robustness, robustness_specs",
+    ):
+        planner._parse(
+            json.dumps(payload),
+            context,
+            enforce_article_contract=True,
+        )
+
+    payload["robustness_specs"] = [
+        {
+            "spec_id": "alt_missing_median",
+            "axis": "missing",
+            "description": "Median-impute the declared baseline covariate.",
+            "missing_override": {"strategy": "median_imputation"},
+        }
+    ]
+    payload["steps"].append(
+        {
+            "step_id": "06_robustness",
+            "planned_analysis_role": "auxiliary",
+            "intent": "Replay the primary model under the locked sensitivity spec.",
+            "inputs": ["table:adjusted_association_estimates"],
+            "expected_outputs": [
+                "table:robustness_matrix",
+                "statistic:robustness_summary",
+            ],
+            "method": "robustness_sensitivity",
+        }
+    )
+
+    parsed = planner._parse(
+        json.dumps(payload),
+        context,
+        enforce_article_contract=True,
+    )
+
+    assert parsed.steps[-1].method == "robustness_sensitivity"
+    assert [spec.spec_id for spec in parsed.robustness_specs] == ["alt_missing_median"]
+
+
 def test_nonprimary_output_prefixes_do_not_satisfy_primary_estimand_role(ra):
     from easyicu.research_agent.reporting.article_contract import (
         build_article_analysis_contract,
