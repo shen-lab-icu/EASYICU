@@ -71,6 +71,22 @@ def _binary_context() -> ResearchContext:
     return context
 
 
+def _float_binary_context() -> ResearchContext:
+    context = _context()
+    context.variables.append(
+        ConceptDescriptor(
+            name="sepsis_flag",
+            dtype="float64",
+            observed_domain={
+                "n_unique": 2,
+                "is_binary": True,
+                "levels": [0.0, 1.0],
+            },
+        )
+    )
+    return context
+
+
 def _private_label_context() -> ResearchContext:
     context = _context()
     context.variables.extend(
@@ -251,6 +267,45 @@ def test_fresh_planner_preserves_observed_numeric_level_types() -> None:
     step["table_one_spec"]["group_levels"] = [0, 1]
     parsed = planner._parse(json.dumps(payload), _binary_context())
     assert parsed.steps[0].table_one_spec.group_levels == [0, 1]
+
+
+def test_float_backed_binary_domain_accepts_equivalent_json_integer_levels() -> None:
+    payload = json.loads(_raw(include_spec=True))
+    step = payload["steps"][0]
+    step["inputs"] = ["sepsis_flag", "age"]
+    step["table_one_spec"]["group_by"] = "sepsis_flag"
+    step["table_one_spec"]["group_levels"] = [0, 1]
+
+    plan = PlannerAgent.__new__(PlannerAgent)._parse(
+        json.dumps(payload),
+        _float_binary_context(),
+    )
+    execution = table_one_execution_spec(plan.steps[0])
+
+    assert execution is not None
+    assert execution.group_levels == [0.0, 1.0]
+    assert all(isinstance(value, float) for value in execution.group_levels)
+
+
+def test_invalid_private_levels_report_only_safe_correction_coordinates() -> None:
+    payload = json.loads(_raw(include_spec=True))
+    step = payload["steps"][0]
+    step["inputs"] = ["sex", "age"]
+    step["table_one_spec"]["group_by"] = "sex"
+    step["table_one_spec"]["group_levels"] = ["guessed-a", "guessed-b"]
+
+    with pytest.raises(ValueError) as exc_info:
+        PlannerAgent.__new__(PlannerAgent)._parse(
+            json.dumps(payload),
+            _private_label_context(),
+        )
+
+    message = str(exc_info.value)
+    assert "sex" in message
+    assert "__easyicu_level_1__" in message
+    assert "Female" not in message
+    assert "Male" not in message
+    assert "guessed-a" not in message
 
 
 def test_private_table_one_levels_use_opaque_tokens_and_bind_locally() -> None:
@@ -659,6 +714,31 @@ def test_plan_normalizer_keeps_only_closed_table_one_schema() -> None:
         "step[0]:invented_policy",
         "step[0].variables[0]:invented",
     ]
+
+
+def test_plan_normalizer_omits_empty_unsupported_consumption_contract() -> None:
+    payload = {
+        "research_question": "Describe the cohort.",
+        "steps": [
+            {
+                **_step(include_spec=True),
+                "input_consumption_contracts": [
+                    {
+                        "input": "dataset:analysis_cohort",
+                        "cardinality": "all_rows",
+                    }
+                ],
+            }
+        ],
+    }
+
+    normalized, dropped = _normalise_plan_payload(payload)
+
+    assert normalized["steps"][0]["input_consumption_contracts"] == []
+    assert any(
+        item.endswith(":empty_after_normalization")
+        for item in dropped["input_consumption_contracts"]
+    )
 
 
 def test_table_one_sdk_guidance_is_only_added_for_typed_table_one() -> None:
