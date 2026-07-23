@@ -46,6 +46,12 @@ def _metadata_definition_for_export(concept_id: str, module: str, dictionary: An
     }
     if unit:
         payload["unit"] = [unit]
+    if str(unit).strip().lower() == "boolean":
+        # Derived catalog outputs such as mort_28d are physical event flags but
+        # intentionally have no raw-source dictionary entry.  Preserve that
+        # producer-owned logical type instead of falling back to num_cncpt and
+        # subsequently rejecting an honest boolean column.
+        payload["class_name"] = "lgl_cncpt"
     return ConceptDefinition.from_name_and_payload(concept_id, payload)
 
 
