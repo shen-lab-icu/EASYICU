@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -8,6 +9,7 @@ from pydantic import ValidationError
 from easyicu.research_agent.authority.execution_identity import (
     ExecutionIdentity,
     ExpectedExecutionIdentity,
+    execution_identity_for_pipeline,
 )
 from easyicu.research_agent.providers.factory import (
     ProviderAuthorization,
@@ -190,3 +192,49 @@ def test_frozen_environment_cannot_authorize_unbound_input() -> None:
     assert unbound.paper_eligible is False
     assert unbound.environment_identity_sha256 != bound.environment_identity_sha256
     assert unbound.identity_sha256 != bound.identity_sha256
+
+
+def _pipeline_with_runtime_image(
+    *,
+    actual: str,
+    expected: str | None = None,
+) -> SimpleNamespace:
+    return SimpleNamespace(
+        _execution_identity=None,
+        _submission_profile_name="profile",
+        _submission_profile_version="v1",
+        _runner_kind="docker",
+        _expected_runner_image_digest=expected,
+        _validated_runtime_bundle={
+            "schema": "easyicu.docker_runtime_preflight/2",
+            "provenance": {"image_id": actual},
+        },
+        _runner_network="none",
+        _llm=None,
+        _llm_seed=None,
+        _config=SimpleNamespace(
+            execution_data_seed=7,
+            execution_input_authority_sha256="e" * 64,
+        ),
+        _host_runner_authorized=False,
+    )
+
+
+def test_pipeline_identity_binds_the_validated_runtime_image() -> None:
+    actual = "sha256:" + "a" * 64
+
+    identity = execution_identity_for_pipeline(
+        _pipeline_with_runtime_image(actual=actual)
+    )
+
+    assert identity.runner_image_digest == actual
+
+
+def test_pipeline_identity_rejects_expected_and_validated_image_mismatch() -> None:
+    with pytest.raises(ValueError, match="differs from the expected image"):
+        execution_identity_for_pipeline(
+            _pipeline_with_runtime_image(
+                actual="sha256:" + "a" * 64,
+                expected="sha256:" + "b" * 64,
+            )
+        )
