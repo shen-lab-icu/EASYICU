@@ -2172,6 +2172,7 @@ def write_readiness_artifacts(
     stop_after_analysis: bool,
     writer_probe_mode: bool = False,
     writer_probe_failed_steps: Optional[Sequence[str]] = None,
+    force_diagnostic_only: bool = False,
 ) -> tuple[Dict[str, Any], Dict[str, str]]:
     gates = _compute_readiness_gates(
         context=context,
@@ -2190,21 +2191,26 @@ def write_readiness_artifacts(
     # stream (no separate event artifact) so the gate story is quantitative
     # — a run that took 4 writer passes is more fragile than one that took 1.
     gates["writer_attempt_count"] = count_writer_attempts(run_dir)
+    gates["forced_diagnostic_only"] = bool(force_diagnostic_only)
     status = (
-        # Fail-closed floor: a run that exhausted its replan budget without
-        # converging is diagnostic_only regardless of what limped through.
         "diagnostic_only"
-        if gates.get("replan_budget_exhausted")
+        if force_diagnostic_only
         else (
-            "publication_ready"
-            if gates["publication_ready"]
+            # Fail-closed floor: a run that exhausted its replan budget without
+            # converging is diagnostic_only regardless of what limped through.
+            "diagnostic_only"
+            if gates.get("replan_budget_exhausted")
             else (
-                "manuscript_ready"
-                if gates["manuscript_ready"]
+                "publication_ready"
+                if gates["publication_ready"]
                 else (
-                    "analysis_only"
-                    if gates["execution_complete"]
-                    else "diagnostic_only"
+                    "manuscript_ready"
+                    if gates["manuscript_ready"]
+                    else (
+                        "analysis_only"
+                        if gates["execution_complete"]
+                        else "diagnostic_only"
+                    )
                 )
             )
         )
@@ -2217,6 +2223,7 @@ def write_readiness_artifacts(
         "schema_version": "easyicu.run_status/2",
         "status": status,
         "strict_fail_closed": True,
+        "forced_diagnostic_only": bool(force_diagnostic_only),
         "writer_probe_mode": bool(writer_probe_mode),
         "writer_probe_failed_steps": list(writer_probe_failed_steps or []),
         "research_question": context.research_question,

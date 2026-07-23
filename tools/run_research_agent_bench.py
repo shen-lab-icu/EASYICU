@@ -2143,6 +2143,7 @@ def _benchmark_pipeline_options(
     host_runner_authorized: bool = False,
     development_sample_size: Optional[int] = None,
     development_sample_seed: int = 20260719,
+    development_diagnostic: bool = False,
 ) -> Dict[str, Any]:
     options: Dict[str, Any] = {}
     if submission_profile:
@@ -2166,6 +2167,13 @@ def _benchmark_pipeline_options(
             raise SystemExit("--development-sample-size must be positive.")
         options["development_sample_size"] = int(development_sample_size)
         options["development_sample_seed"] = int(development_sample_seed)
+    if development_diagnostic:
+        if submission_profile is not None:
+            raise SystemExit(
+                "--development-diagnostic is non-paper authority and cannot "
+                "be combined with --submission-profile."
+            )
+        options["development_diagnostic"] = True
     if enable_pubmed:
         options["enable_pubmed"] = True
     # These are independent execution budgets.  The ordinary timeout bounds
@@ -2583,8 +2591,7 @@ def _verify_figure2_development_diagnostic(
     ).strip()
     if not receipt_raw:
         raise ValueError(
-            "--development-diagnostic requires "
-            "--figure2-development-binding-receipt"
+            "--development-diagnostic requires " "--figure2-development-binding-receipt"
         )
     receipt_path = Path(receipt_raw).expanduser()
     if not receipt_path.is_absolute() or receipt_path.is_symlink():
@@ -2642,9 +2649,7 @@ def _figure2_realrun_authorization_gate(args):
     declaration = getattr(args, "figure2_realrun_authorization", None)
     jsonl = getattr(args, "ehrflowbench_jsonl", None)
     require_acceptance = bool(getattr(args, "require_figure2_paper_acceptance", False))
-    development_diagnostic = bool(
-        getattr(args, "development_diagnostic", False)
-    )
+    development_diagnostic = bool(getattr(args, "development_diagnostic", False))
 
     # First classify an existing JSONL without changing ordinary, non-canonical
     # EHRFlowBench behavior.  If it references Canonical9 (or if explicit paper
@@ -3292,6 +3297,7 @@ def main() -> int:
         host_runner_authorized=bool(getattr(args, "allow_host_runner", False)),
         development_sample_size=getattr(args, "development_sample_size", None),
         development_sample_seed=int(getattr(args, "development_sample_seed", 20260719)),
+        development_diagnostic=bool(getattr(args, "development_diagnostic", False)),
     )
 
     if (

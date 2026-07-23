@@ -99,3 +99,35 @@ def test_run_status_surfaces_four_distinct_completion_axes(tmp_path: Path):
     status = json.loads((tmp_path / "run_status.json").read_text(encoding="utf-8"))
     assert status["schema_version"] == "easyicu.run_status/2"
     assert status["status"] == "analysis_only"
+
+
+def test_explicit_development_lane_forces_diagnostic_only(tmp_path: Path):
+    context = ResearchContext(
+        research_question="Is a treatment exposure associated with mortality?",
+        cohort=CohortDescriptor(
+            cohort_name="synthetic",
+            database="synthetic",
+            n_patients=10,
+            n_stays=10,
+        ),
+        variables=[],
+    )
+    manuscript = tmp_path / "manuscript.md"
+    manuscript.write_text("Development-only manuscript.\n", encoding="utf-8")
+
+    gates, _ = write_readiness_artifacts(
+        context=context,
+        plan=_plan(),
+        findings=[],
+        per_step_records=[_feasibility_failure_record()],
+        evidence=EvidenceStore(tmp_path),
+        run_dir=tmp_path,
+        manuscript_path=manuscript,
+        stop_after_analysis=True,
+        force_diagnostic_only=True,
+    )
+
+    status = json.loads((tmp_path / "run_status.json").read_text(encoding="utf-8"))
+    assert gates["forced_diagnostic_only"] is True
+    assert status["forced_diagnostic_only"] is True
+    assert status["status"] == "diagnostic_only"

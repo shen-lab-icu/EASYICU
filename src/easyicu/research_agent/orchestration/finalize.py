@@ -825,6 +825,7 @@ def finalise_success(
         stop_after_analysis=stop_after_analysis,
         writer_probe_mode=write_result.writer_probe_mode,
         writer_probe_failed_steps=write_result.writer_probe_failed_steps,
+        force_diagnostic_only=bool(getattr(pipeline, "_development_diagnostic", False)),
     )
 
     report_path.write_text(

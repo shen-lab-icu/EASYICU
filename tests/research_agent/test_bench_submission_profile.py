@@ -151,6 +151,28 @@ def test_submission_profile_rejects_development_sample() -> None:
         )
 
 
+def test_benchmark_options_enable_nonpaper_development_diagnostic() -> None:
+    options = _benchmark_pipeline_options(
+        max_total_steps=None,
+        disable_replanning=False,
+        max_code_repair_attempts=None,
+        development_diagnostic=True,
+    )
+
+    assert options["development_diagnostic"] is True
+
+
+def test_submission_profile_rejects_development_diagnostic() -> None:
+    with pytest.raises(SystemExit, match="non-paper authority"):
+        _benchmark_pipeline_options(
+            max_total_steps=None,
+            disable_replanning=False,
+            max_code_repair_attempts=None,
+            submission_profile=CANONICAL_PROFILE,
+            development_diagnostic=True,
+        )
+
+
 def test_benchmark_options_keep_execution_timeouts_independent() -> None:
     options = _benchmark_pipeline_options(
         max_total_steps=None,

@@ -1490,6 +1490,7 @@ class ResearchAgentPipeline:
         max_concurrent_steps: int = 1,
         development_sample_size: Optional[int] = None,
         development_sample_seed: int = 20260719,
+        development_diagnostic: bool = False,
         enable_probe_step: bool = True,
         enable_replanning: bool = True,
         max_total_steps: int = 12,
@@ -1711,12 +1712,18 @@ class ResearchAgentPipeline:
         ):
             raise ValueError("development_sample_size must be positive")
         self._development_sample_seed = int(development_sample_seed)
+        self._development_diagnostic = bool(development_diagnostic)
         if (
             self._development_sample_size is not None
             and submission_profile_name is not None
         ):
             raise ValueError(
                 "development cohort sampling is non-paper authority and cannot "
+                "be combined with a submission profile"
+            )
+        if self._development_diagnostic and submission_profile_name is not None:
+            raise ValueError(
+                "development diagnostics are non-paper authority and cannot "
                 "be combined with a submission profile"
             )
         self._enable_probe_step = bool(enable_probe_step)

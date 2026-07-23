@@ -75,13 +75,33 @@ class RuntimeProvenanceMismatchError(RuntimeError):
     """Docker steps disagree about the immutable execution environment."""
 
 
-def _validated_runtime_lock(run_dir: Path) -> Optional[Path]:
-    """Return one lock only when every Docker step has the same snapshot."""
+_DEVELOPMENT_MUTABLE_PROVENANCE_FIELDS = frozenset(
+    {
+        "image_reference",
+        "image_id",
+        "repo_digests",
+        "requirements_sha256",
+    }
+)
+
+
+def _runtime_dependency_rows(lock_bytes: bytes) -> Tuple[str, ...]:
+    """Return only installable dependency pins from a runner lock."""
+
+    return tuple(
+        line.strip()
+        for line in lock_bytes.decode("utf-8").splitlines()
+        if line.strip() and not line.lstrip().startswith("#")
+    )
+
+
+def _runtime_snapshot_entries(run_dir: Path) -> List[Dict[str, Any]]:
+    """Load and self-validate every per-step Docker runtime snapshot."""
 
     lock_paths = sorted(run_dir.glob("steps/*/outputs/runner_requirements.lock.txt"))
     provenance_paths = sorted(run_dir.glob("steps/*/outputs/runner_provenance.json"))
     if not lock_paths and not provenance_paths:
-        return None
+        return []
     lock_by_parent = {path.parent.resolve(): path for path in lock_paths}
     provenance_by_parent = {path.parent.resolve(): path for path in provenance_paths}
     if set(lock_by_parent) != set(provenance_by_parent):
@@ -90,8 +110,7 @@ def _validated_runtime_lock(run_dir: Path) -> Optional[Path]:
             "contain both runner_requirements.lock.txt and runner_provenance.json"
         )
 
-    reference_lock: Optional[bytes] = None
-    reference_provenance: Optional[str] = None
+    entries: List[Dict[str, Any]] = []
     for parent in sorted(lock_by_parent, key=str):
         lock_path = lock_by_parent[parent]
         provenance_path = provenance_by_parent[parent]
@@ -112,19 +131,125 @@ def _validated_runtime_lock(run_dir: Path) -> Optional[Path]:
             raise RuntimeProvenanceMismatchError(
                 f"Docker runtime lock hash mismatch for {lock_path}"
             )
+        if provenance.get("runtime") != "docker" or provenance.get("network") != "none":
+            raise RuntimeProvenanceMismatchError(
+                f"Unsafe Docker runtime provenance for {provenance_path}"
+            )
         canonical_provenance = json.dumps(
             provenance, sort_keys=True, separators=(",", ":"), ensure_ascii=False
         )
-        if reference_lock is None:
-            reference_lock = lock_bytes
-            reference_provenance = canonical_provenance
-        elif (
-            lock_bytes != reference_lock or canonical_provenance != reference_provenance
-        ):
+        entries.append(
+            {
+                "step_id": lock_path.parents[1].name,
+                "lock_path": lock_path,
+                "lock_bytes": lock_bytes,
+                "lock_sha256": actual_lock_sha,
+                "dependency_rows": _runtime_dependency_rows(lock_bytes),
+                "provenance_path": provenance_path,
+                "provenance": provenance,
+                "canonical_provenance": canonical_provenance,
+                "provenance_sha256": hashlib.sha256(
+                    canonical_provenance.encode("utf-8")
+                ).hexdigest(),
+            }
+        )
+    return entries
+
+
+def _validated_runtime_lock(
+    run_dir: Path,
+    *,
+    allow_development_lineage: bool = False,
+) -> Optional[Path]:
+    """Return one runner lock after enforcing paper or development provenance.
+
+    Paper-facing/default runs require byte-identical locks and provenance for
+    every step. An explicitly non-paper development diagnostic may span images
+    while framework fixes are tested, but only when package pins and all
+    non-image runtime controls remain identical. The newest step lock is then
+    selected for the diagnostic notebook and the full lineage is recorded
+    separately by :func:`_write_development_runtime_lineage`.
+    """
+
+    entries = _runtime_snapshot_entries(run_dir)
+    if not entries:
+        return None
+
+    reference = entries[0]
+    reference_stable_provenance = {
+        key: value
+        for key, value in reference["provenance"].items()
+        if key not in _DEVELOPMENT_MUTABLE_PROVENANCE_FIELDS
+    }
+    development_mismatch = False
+    for entry in entries[1:]:
+        exact_match = (
+            entry["lock_bytes"] == reference["lock_bytes"]
+            and entry["canonical_provenance"] == reference["canonical_provenance"]
+        )
+        if exact_match:
+            continue
+        if not allow_development_lineage:
             raise RuntimeProvenanceMismatchError(
                 "Docker steps used inconsistent image provenance or dependency locks"
             )
-    return lock_paths[0]
+        development_mismatch = True
+        stable_provenance = {
+            key: value
+            for key, value in entry["provenance"].items()
+            if key not in _DEVELOPMENT_MUTABLE_PROVENANCE_FIELDS
+        }
+        if (
+            entry["dependency_rows"] != reference["dependency_rows"]
+            or stable_provenance != reference_stable_provenance
+        ):
+            raise RuntimeProvenanceMismatchError(
+                "Development resume changed dependency pins or immutable Docker "
+                "runtime controls"
+            )
+    return entries[-1]["lock_path"] if development_mismatch else entries[0]["lock_path"]
+
+
+def _write_development_runtime_lineage(run_dir: Path) -> Path:
+    """Persist the exact multi-image lineage for a non-paper diagnostic run."""
+
+    entries = _runtime_snapshot_entries(run_dir)
+    if not entries:
+        raise RuntimeProvenanceMismatchError(
+            "Development runtime lineage requires Docker step snapshots"
+        )
+    selected = entries[-1]
+    payload = {
+        "schema_version": "easyicu.development_runtime_lineage/1",
+        "paper_authority": False,
+        "diagnostic_only": True,
+        "mixed_runtime_snapshots": len(
+            {entry["provenance_sha256"] for entry in entries}
+        )
+        > 1,
+        "selected_notebook_lock": str(selected["lock_path"].relative_to(run_dir)),
+        "selected_notebook_lock_sha256": selected["lock_sha256"],
+        "steps": [
+            {
+                "step_id": entry["step_id"],
+                "lock_path": str(entry["lock_path"].relative_to(run_dir)),
+                "lock_sha256": entry["lock_sha256"],
+                "dependency_rows_sha256": hashlib.sha256(
+                    "\n".join(entry["dependency_rows"]).encode("utf-8")
+                ).hexdigest(),
+                "provenance_path": str(entry["provenance_path"].relative_to(run_dir)),
+                "provenance_sha256": entry["provenance_sha256"],
+                "provenance": entry["provenance"],
+            }
+            for entry in entries
+        ],
+    }
+    lineage_path = run_dir / "development_runtime_lineage.json"
+    lineage_path.write_text(
+        json.dumps(payload, indent=2, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
+    return lineage_path
 
 
 def _assert_registered_runtime_lock_matches(evidence: Any, lockfile_path: Path) -> None:
@@ -1447,8 +1572,47 @@ def run_write_phase(
     # packages in ``requirements.lock.txt``. Runs regardless of
     # reviewer / checklist flags so the reproducibility artefacts
     # are always present.
-    captured_runtime_lock = _validated_runtime_lock(run_dir)
+    development_diagnostic = bool(getattr(pipeline, "_development_diagnostic", False))
+    captured_runtime_lock = _validated_runtime_lock(
+        run_dir,
+        allow_development_lineage=development_diagnostic,
+    )
     try:
+        if development_diagnostic and captured_runtime_lock is not None:
+            lineage_path = _write_development_runtime_lineage(run_dir)
+            lineage_record = evidence.register_file(
+                kind="log",
+                description=(
+                    "Exact per-step Docker image and lock lineage for an "
+                    "explicitly non-paper development diagnostic."
+                ),
+                source_path=lineage_path,
+                evidence_id="development_runtime_lineage",
+                producer="pipeline",
+                generation_mode="system",
+                metadata={
+                    "paper_authority": False,
+                    "diagnostic_only": True,
+                },
+                on_sha_change="new_id",
+            )
+            findings.append(
+                ValidationFinding(
+                    validator="development_runtime_lineage",
+                    severity="warning",
+                    message=(
+                        "This explicitly non-paper diagnostic resumed across "
+                        "framework images. Exact per-step runtime lineage was "
+                        "retained; a fresh single-image run is required for "
+                        "paper authority."
+                    ),
+                    evidence_ids=[lineage_record.evidence_id],
+                    detail={
+                        "paper_authority": False,
+                        "diagnostic_only": True,
+                    },
+                )
+            )
         notebook_steps: List[NotebookStep] = []
         intent_by_id = {s.step_id: s.intent for s in plan_result.plan.steps}
         # Preserve plan order: iterate plan, pick first 'code'
@@ -1506,14 +1670,15 @@ def run_write_phase(
         lockfile_path.write_text(
             build_requirements_lockfile(captured_runtime_lock), encoding="utf-8"
         )
-        _assert_registered_runtime_lock_matches(evidence, lockfile_path)
+        if not development_diagnostic:
+            _assert_registered_runtime_lock_matches(evidence, lockfile_path)
         existing_lock_record = evidence.get("requirements_lockfile")
-        if existing_lock_record is None:
+        if existing_lock_record is None or development_diagnostic:
             evidence.register_file(
                 kind="log",
                 description=(
-                    "Execution-runtime requirements lockfile captured "
-                    "at run time (O26)."
+                    "Execution-runtime requirements lockfile captured at run "
+                    "time (O26)."
                 ),
                 source_path=lockfile_path,
                 evidence_id="requirements_lockfile",
@@ -1524,8 +1689,11 @@ def run_write_phase(
                         "docker_runner"
                         if captured_runtime_lock is not None
                         else "host_interpreter"
-                    )
+                    ),
+                    "paper_authority": not development_diagnostic,
+                    "diagnostic_only": development_diagnostic,
                 },
+                on_sha_change=("new_id" if development_diagnostic else "raise"),
             )
     except RuntimeProvenanceMismatchError:
         raise
