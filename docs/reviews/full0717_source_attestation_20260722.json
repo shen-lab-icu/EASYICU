@@ -1,0 +1,32 @@
+{
+  "schema_version": "easyicu.figure2_source_attestation_review_input/1",
+  "status": "evidence_inventory_complete_formal_attestation_pending",
+  "authorization": false,
+  "historical_export": {
+    "label": "full6_20260717",
+    "content_sha256": "2812dbf45f1308013147ea0f09cbdf7b93b39f31c01e15588e5923a800a3fcdf",
+    "run_manifest_sha256": "3cd70b85daabf6470ea19ed315cf07b88d6fcc0737cdfa4980c4639d109e9ed2"
+  },
+  "identity_bridge": {
+    "contract_sha256": "4092104a40d2b22d80a93cf00323be0f3c048bfc3d9ea6bb002124361ecce794",
+    "review_handoff_only": true,
+    "real_run_authorized": false
+  },
+  "observed_provenance_limitations": [
+    "Historical module manifests record empty concept_meta objects.",
+    "The historical run manifest records an empty EasyICU commit.",
+    "The recorded thesis source tree was dirty at export time."
+  ],
+  "required_signoff": [
+    "Data owner attests that full0717 bytes remain the selected payload and identifies the frozen source snapshots used by the controlled bridge.",
+    "Transformation owner reviews a source-bound typed column inventory for every selected input; bindings may not be inferred from downstream results or patched into historical parquet in place.",
+    "Identity owner attests ICU-stay-to-patient semantics and cardinality policy for all six sources, including HiRID and SICdb.",
+    "Clinical and methods reviewers complete the content-bound E2, H2, and H3 review packets; H2 lacks an absence-as-nonuse contract and H3 historical instability is terminal without a new reviewed design.",
+    "Only after the preceding reviews may exact typed cohort/trajectory authorities and a fresh P4 ProductionInputAuthority be prepared."
+  ],
+  "explicit_exclusions": [
+    "This review input, a content hash, an identity bridge, or a structural sidecar is not paper authority.",
+    "No source re-extraction, clinical-data modification, Provider call, Docker runner, or Canonical9 task execution is authorized.",
+    "Column names, module names, and prior development output cannot substitute for source-attested clinical semantics."
+  ]
+}

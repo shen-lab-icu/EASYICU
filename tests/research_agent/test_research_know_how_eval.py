@@ -187,25 +187,70 @@ def test_peak_lactate_and_trajectory_questions_retrieve_different_cards() -> Non
     assert [hit.card_id for hit in trajectory] == ["lactate_trajectory_outcome"]
 
 
-def test_peak_lactate_review_packet_is_bound_to_exact_card_content() -> None:
+@pytest.mark.parametrize(
+    ("card_id", "packet_name"),
+    [
+        ("early_peak_lactate_association", "early_peak_lactate_association_20260721"),
+        (
+            "vasopressor_comparative_effectiveness",
+            "vasopressor_comparative_effectiveness_20260722",
+        ),
+        ("longitudinal_icu_phenotyping", "longitudinal_icu_phenotyping_20260722"),
+    ],
+)
+def test_canonical9_review_packet_is_bound_to_exact_card_content(
+    card_id: str, packet_name: str
+) -> None:
     repo_root = Path(__file__).resolve().parents[2]
     card_payload = json.loads(
-        (
-            repo_root
-            / "src/easyicu/data/research_know_how/early_peak_lactate_association.json"
-        ).read_text(encoding="utf-8")
+        (repo_root / f"src/easyicu/data/research_know_how/{card_id}.json").read_text(
+            encoding="utf-8"
+        )
     )
     packet = json.loads(
-        (
-            repo_root / "docs/reviews/early_peak_lactate_association_20260721.json"
-        ).read_text(encoding="utf-8")
+        (repo_root / f"docs/reviews/{packet_name}.json").read_text(encoding="utf-8")
     )
 
+    assert packet["card_id"] == card_id
+    assert packet["card_version"] == card_payload["version"]
     assert packet["authorization"] is False
     assert packet["status"].endswith("formal_attestation_pending")
     assert packet["reviewed_content_sha256"] == reviewable_card_content_sha256(
         card_payload
     )
+    assert packet["attestation_fields_required_after_signoff"] == [
+        "reviewer_owner",
+        "review_date",
+        "review_scope",
+        "literature_search_cutoff",
+        "clinical_reviewed",
+        "methods_reviewed",
+    ]
+    cited = {
+        citation_id
+        for group in packet["evidence_groups"]
+        for citation_id in group["citation_ids"]
+    }
+    card_citations = {item["citation_id"] for item in card_payload["citations"]}
+    assert cited <= card_citations
+
+
+def test_full0717_source_attestation_review_input_is_non_authorizing() -> None:
+    repo_root = Path(__file__).resolve().parents[2]
+    packet = json.loads(
+        (
+            repo_root / "docs/reviews/full0717_source_attestation_20260722.json"
+        ).read_text(encoding="utf-8")
+    )
+
+    assert (
+        packet["schema_version"] == "easyicu.figure2_source_attestation_review_input/1"
+    )
+    assert packet["authorization"] is False
+    assert packet["status"].endswith("formal_attestation_pending")
+    assert packet["identity_bridge"]["review_handoff_only"] is True
+    assert packet["identity_bridge"]["real_run_authorized"] is False
+    assert len(packet["required_signoff"]) == 5
 
 
 def test_claims_must_exactly_cover_design_stop_and_confirmation_items() -> None:
