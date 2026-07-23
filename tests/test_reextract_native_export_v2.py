@@ -1,0 +1,81 @@
+"""Contract tests for the sequential native-v2 re-export launcher."""
+
+from __future__ import annotations
+
+import importlib.util
+import json
+from pathlib import Path
+
+import pytest
+
+TOOL = Path(__file__).resolve().parents[1] / "tools" / "reextract_native_export_v2.py"
+SPEC = importlib.util.spec_from_file_location("reextract_native_export_v2", TOOL)
+assert SPEC and SPEC.loader
+launcher = importlib.util.module_from_spec(SPEC)
+SPEC.loader.exec_module(launcher)
+
+
+class _Package:
+    column_metadata_sha256 = "a" * 64
+    concept_index = {"age": object()}
+    missing_selected_concepts = ()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args):
+        return None
+
+
+def test_launcher_is_sequential_private_and_preserves_one_shot_default(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    calls: list[dict[str, object]] = []
+
+    monkeypatch.setattr(launcher, "DEFAULT_DATA_PATHS", {"miiv": str(source)})
+
+    def fake_extract(database, **kwargs):
+        calls.append({"database": database, **kwargs})
+        out = Path(kwargs["output_dir"])
+        out.mkdir(mode=0o700)
+        (out / "_manifest.json").write_text(
+            json.dumps({"unavailable_modules": []}), encoding="utf-8"
+        )
+        return {
+            "num_patients": 10,
+            "native_export_v2": {"output_validation_reads": 19},
+        }
+
+    monkeypatch.setattr(launcher, "extract_database", fake_extract)
+    monkeypatch.setattr(launcher, "open_export_package", lambda _path: _Package())
+    args = launcher._parse_args(
+        ["--output-root", str(tmp_path / "out"), "--databases", "miiv"]
+    )
+
+    manifest = launcher.run(args)
+
+    assert manifest["status"] == "verified"
+    assert calls == [
+        {
+            "database": "miiv",
+            "data_path": str(source),
+            "output_dir": tmp_path / "out" / "miiv",
+            "batch_size": None,
+            "native_export_v2": True,
+            "verbose": True,
+        }
+    ]
+    persisted = json.loads((tmp_path / "out" / "run_manifest.json").read_text())
+    assert persisted["sources"]["miiv"]["status"] == "verified"
+    assert oct((tmp_path / "out").stat().st_mode & 0o777) == "0o700"
+
+
+def test_launcher_rejects_an_existing_output_root(tmp_path: Path) -> None:
+    out = tmp_path / "existing"
+    out.mkdir()
+    args = launcher._parse_args(["--output-root", str(out), "--databases", "miiv"])
+
+    with pytest.raises(ValueError, match="must be new"):
+        launcher.run(args)

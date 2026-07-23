@@ -4194,6 +4194,175 @@ def _group_modules_for_extraction(
     return groups
 
 
+_NATIVE_EXPORT_SCHEMA_V2 = "easyicu_native_export_v2"
+
+
+def _publish_native_export_v2(
+    *,
+    database: str,
+    data_path: str,
+    output_dir: str,
+    modules: List[str],
+    max_patients: Optional[int],
+    result: Dict,
+) -> Dict[str, object]:
+    """Seal completed grouped-module files as one native-v2 package.
+
+    The raw database has already been consumed by the grouped workers. This
+    finalization reads only the newly written parquet files once, to validate
+    their physical values and bind each column to producer-owned metadata. A
+    partial extraction never gets a root native manifest.
+    """
+    import json
+    import time
+
+    from .concept.export_metadata import (
+        ExportMetadataError,
+        build_export_file_metadata_binding,
+        missing_primary_metadata_concepts,
+    )
+    from .concept.metadata_sidecar import (
+        EXPORT_PHYSICAL_SCOPE,
+        ColumnMetadataSidecar,
+        write_content_addressed_sidecar,
+    )
+    from .config import load_src_cfg
+
+    output_root = Path(output_dir)
+    root_manifest = output_root / "_manifest.json"
+    if root_manifest.exists() or root_manifest.is_symlink():
+        raise ValueError(
+            "native_export_v2 refuses an existing root _manifest.json; "
+            "use a fresh output directory"
+        )
+
+    failures = {
+        module: list((result.get("modules", {}).get(module) or {}).get("errors") or [])
+        for module in modules
+        if list((result.get("modules", {}).get(module) or {}).get("errors") or [])
+    }
+    missing_module_results = [
+        module
+        for module in modules
+        if module not in result.get("modules", {})
+    ]
+    if failures or missing_module_results:
+        raise ValueError(
+            "native_export_v2 requires every requested module to finish before "
+            f"publication (failures={sorted(failures)}, "
+            f"missing_results={missing_module_results})"
+        )
+
+    # Structural non-availability (for example, a database without a Sepsis-3
+    # source) is not an extraction failure. It has no physical file and must not
+    # be silently given a typed binding; record it separately and select only
+    # the files the producer actually materialized.
+    unavailable_modules = [
+        {
+            "module": module,
+            "reason": "producer_returned_no_physical_output",
+            "concept_ids": list(EXTRACT_MODULES[module]),
+        }
+        for module in modules
+        if not (output_root / f"{module}.parquet").is_file()
+    ]
+    published_modules = [
+        module
+        for module in modules
+        if (output_root / f"{module}.parquet").is_file()
+    ]
+    if not published_modules:
+        raise ValueError("native_export_v2 has no physical module output to seal")
+
+    normalized_database = str(database).strip().lower()
+    dictionary = load_dictionary(include_sofa2=True)
+    source_config = load_src_cfg(normalized_database)
+    class_prefixes = tuple(
+        str(value).strip().lower()
+        for value in source_config.class_prefix
+        if str(value).strip()
+    )
+    concept_plan = {
+        module: list(EXTRACT_MODULES[module]) for module in published_modules
+    }
+    files: List[Dict[str, object]] = []
+    file_bindings = []
+
+    for module in published_modules:
+        relative_path = f"{module}.parquet"
+        # This is an output validation pass, not a second scan of any raw table.
+        frame = pd.read_parquet(output_root / relative_path)
+        try:
+            binding = build_export_file_metadata_binding(
+                relative_path=relative_path,
+                module=module,
+                frame=frame,
+                concept_ids=concept_plan[module],
+                database=normalized_database,
+                database_class_prefixes=class_prefixes,
+                dictionary=dictionary,
+            )
+        except ExportMetadataError as exc:
+            raise ValueError(
+                f"native_export_v2 cannot seal {relative_path}: {exc.error}"
+            ) from exc
+        file_bindings.append(binding)
+        files.append({
+            "file": relative_path,
+            "module": module,
+            "concepts": len(concept_plan[module]),
+            "concept_ids": concept_plan[module],
+            "rows": int(frame.shape[0]),
+            "column_metadata_columns": list(binding.columns),
+        })
+
+    missing_primary = missing_primary_metadata_concepts(
+        concept_plan=concept_plan,
+        file_bindings=file_bindings,
+    )
+    if missing_primary:
+        raise ValueError(
+            "native_export_v2 cannot seal selected concepts without a primary "
+            f"physical binding: {missing_primary}"
+        )
+
+    sidecar = ColumnMetadataSidecar(
+        source_database=normalized_database,
+        source_database_class_prefixes=class_prefixes,
+        scope=EXPORT_PHYSICAL_SCOPE,
+        files=tuple(file_bindings),
+    )
+    sidecar_ref = write_content_addressed_sidecar(output_root, sidecar)
+    manifest = {
+        "schema_version": _NATIVE_EXPORT_SCHEMA_V2,
+        "database": normalized_database,
+        "data_path": str(data_path),
+        "format": "parquet",
+        "max_patients": max_patients,
+        "generated": time.strftime("%Y-%m-%dT%H:%M:%S"),
+        "export_kind": "grouped_module_extraction",
+        "unavailable_modules": unavailable_modules,
+        "concept_selection": {
+            "mode": "all_in_selected_modules",
+            "modules": concept_plan,
+        },
+        "files": files,
+        "feature_definitions": {"included": False},
+        "column_metadata": sidecar_ref.to_dict(),
+    }
+    temporary_manifest = output_root / ".native-export-v2-manifest.tmp"
+    temporary_manifest.write_text(
+        json.dumps(manifest, indent=2, ensure_ascii=False), encoding="utf-8"
+    )
+    os.replace(temporary_manifest, root_manifest)
+    return {
+        "manifest": str(root_manifest),
+        "column_metadata": sidecar_ref.file,
+        "column_metadata_sha256": sidecar_ref.sha256,
+        "output_validation_reads": len(files),
+    }
+
+
 def extract_database(
     database: str,
     data_path: Optional[Union[str, Path]] = None,
@@ -4203,6 +4372,7 @@ def extract_database(
     max_patients: Optional[int] = None,
     batch_size: Optional[int] = None,
     group_modules: bool = True,
+    native_export_v2: bool = False,
     verbose: bool = True,
 ) -> Dict:
     """按 19 个模块分组、子进程隔离地提取整个数据库的全部特征。
@@ -4240,6 +4410,9 @@ def extract_database(
             加载(推荐，最快)。仅在极小内存机器上想强制限制峰值内存时才显式传值。
         group_modules: True(默认) = 共享源表的模块合并为分组子进程并复用
             keep_cache 缓存；False = 每模块一个子进程（旧行为）。
+        native_export_v2: True 时，在所有模块成功后基于刚写出的 parquet
+            文件建立 native-v2 typed metadata sidecar；不会重读原始表。若任何
+            模块或 metadata 绑定失败，不会发布根 ``_manifest.json``。
         verbose: 是否打印进度
 
     Returns:
@@ -4338,6 +4511,15 @@ def extract_database(
     if output_dir is not None:
         output_dir = str(output_dir)
         os.makedirs(output_dir, exist_ok=True)
+    if native_export_v2 and output_dir is None:
+        raise ValueError("native_export_v2 requires output_dir")
+    if native_export_v2 and output_dir is not None:
+        native_manifest = Path(output_dir) / "_manifest.json"
+        if native_manifest.exists() or native_manifest.is_symlink():
+            raise ValueError(
+                "native_export_v2 refuses an existing root _manifest.json; "
+                "use a fresh output directory"
+            )
 
     if verbose:
         rss = get_rss_mb()
@@ -4628,6 +4810,17 @@ def extract_database(
         # 清理临时目录
         shutil.rmtree(tmp_root, ignore_errors=True)
 
+    if native_export_v2:
+        assert output_dir is not None
+        result["native_export_v2"] = _publish_native_export_v2(
+            database=database,
+            data_path=data_path,
+            output_dir=output_dir,
+            modules=modules,
+            max_patients=max_patients,
+            result=result,
+        )
+
     total_elapsed = time.time() - t_start
     result['total_elapsed'] = round(total_elapsed, 1)
 
@@ -4669,6 +4862,7 @@ def extract_all_databases(
     modules: Optional[List[str]] = None,
     max_patients: Optional[int] = None,
     batch_size: Optional[int] = None,
+    native_export_v2: bool = False,
     verbose: bool = True,
 ) -> Dict:
     """逐库逐模块子进程隔离提取所有数据库的全部特征。
@@ -4683,6 +4877,7 @@ def extract_all_databases(
         modules: 要提取的模块列表（None = 全部）
         max_patients: 每个库的患者数量限制
         batch_size: 子进程内患者分批大小
+        native_export_v2: 为每个完整数据库输出发布 native-v2 typed package
         verbose: 是否打印进度
 
     Returns:
@@ -4741,6 +4936,7 @@ def extract_all_databases(
                 modules=modules,
                 max_patients=max_patients,
                 batch_size=batch_size,
+                native_export_v2=native_export_v2,
                 verbose=verbose,
             )
             results[db] = r
