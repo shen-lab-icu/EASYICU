@@ -42,11 +42,13 @@ only; it does not establish a performance advantage.
 
 ## Verification
 
-- Focused authority/provider/input-scope matrix: `254 passed, 4 deselected`.
-- The four deselected integration cases were blocked by the expected
-  current-source versus old-Docker-source digest mismatch. They must be rerun
-  after building an immutable image from the final clean documentation commit;
-  the source-identity gate was not weakened.
+- Focused authority/provider/input-scope matrix: `254 passed, 4 deselected`
+  before the image rebuild.
+- Immutable image `easyicu-research-agent:source-f68c1c3`, digest
+  `sha256:af52f1509e4c63d3424f84d6790fa45178e67ec8b7d7358449d78e7f99315542`,
+  was built from the clean source tree. The four source-bound integration
+  cases then passed `4/4`; combined focused evidence is `258/258`. The
+  source-identity gate was not weakened.
 - Legacy Provider authorization schema references under `src/`, `tests/`,
   `tools/`, and `benchmarks/`: `0`.
 - Ruff and `git diff --check`: passed.
@@ -59,9 +61,8 @@ only; it does not establish a performance advantage.
 
 ## Next action
 
-Build a fresh immutable Docker image from the final clean commit and rerun the
-four digest-blocked integration cases. Then launch a fresh E1 engineering run
-with `--reasoning-effort-profile adaptive_v1`. Do not promote the profile to
-default unless E1 remains scientifically/contract valid and shows a material
+Launch a fresh E1 engineering run with
+`--reasoning-effort-profile adaptive_v1`. Do not promote the profile to default
+unless E1 remains scientifically/contract valid and shows a material
 end-to-end latency improvement without more Planner retries or repairs. Paper
 authority remains `0/9` until accepted Canonical9 artifacts exist.
