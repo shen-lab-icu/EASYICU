@@ -108,9 +108,35 @@ def _resolve_levels(
         _typed_token(value) for value in observed
     }:
         return list(declared), observed
+    # JSON has one ``number`` type even though Python/pandas distinguish
+    # integral and floating scalar representations.  A Planner declaration
+    # of ``[0, 1]`` therefore denotes the same closed binary domain as a
+    # float-backed cohort column whose verified levels are ``[0.0, 1.0]``.
+    # Canonicalise execution back to the host-observed scalar types; never
+    # apply this equivalence to booleans or categorical strings.
+    declared_numeric = all(
+        isinstance(value, (int, float)) and not isinstance(value, bool)
+        for value in declared
+    )
+    observed_numeric = all(
+        isinstance(value, (int, float)) and not isinstance(value, bool)
+        for value in observed
+    )
+    if (
+        declared_numeric
+        and observed_numeric
+        and len(declared) == len(observed)
+        and {float(value) for value in declared} == {float(value) for value in observed}
+    ):
+        return observed, observed
+    safe_expected = opaque or ["<host-observed numeric scalar types>"]
     raise ValueError(
-        "Planner Table 1 levels must preserve the exact observed scalar types "
-        "or the exact opaque level tokens supplied by the host"
+        "Planner Table 1 levels for "
+        f"{name!r} must preserve the exact observed scalar types or use the "
+        f"exact host-safe tokens {safe_expected!r}; expected_count="
+        f"{len(observed)}, declared_count={len(declared)}, declared_types="
+        f"{[type(value).__name__ for value in declared]!r}. No observed "
+        "category literal is available to the Provider."
     )
 
 

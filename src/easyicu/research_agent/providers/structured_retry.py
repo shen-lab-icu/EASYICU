@@ -147,7 +147,8 @@ def call_llm_with_structured_retry(
         When every attempt up to ``max_retries`` raised during parsing.
     """
     attempts: List[StructuredAttempt] = []
-    current: List[LLMMessage] = list(messages)
+    base_messages: List[LLMMessage] = list(messages)
+    current: List[LLMMessage] = list(base_messages)
     last_exc: Optional[BaseException] = None
     for i in range(max_retries + 1):
         raw = authorized_complete(
@@ -169,7 +170,10 @@ def call_llm_with_structured_retry(
             last_exc = exc
             if i >= max_retries:
                 break
-            # Build a feedback turn and append to the conversation.
+            # Keep only the latest failed response beside the immutable base
+            # prompt.  Accumulating every full JSON attempt grows Planner
+            # retries quadratically (and can exceed the original prompt by
+            # tens of kilobytes) without adding useful correction context.
             feedback_parts = [
                 feedback_preamble,
                 f"  {exc.__class__.__name__}: {str(exc)[:400]}",
@@ -179,7 +183,7 @@ def call_llm_with_structured_retry(
             if format_reminder:
                 feedback_parts.extend(["", format_reminder])
             feedback_message = "\n".join(feedback_parts)
-            current = current + [
+            current = base_messages + [
                 LLMMessage(role="assistant", content=raw or ""),
                 LLMMessage(role="user", content=feedback_message),
             ]

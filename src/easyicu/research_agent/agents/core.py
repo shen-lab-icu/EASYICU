@@ -3592,7 +3592,16 @@ def _normalise_plan_payload(
                         dropped["input_consumption_contracts"].append(
                             f"{contract_id}:{key}"
                         )
-                consumption_contracts.append(contract_payload)
+                # An optional contract written entirely with unsupported keys
+                # has no executable meaning after normalization.  Treat it as
+                # omitted instead of manufacturing an empty object that burns
+                # a Provider retry on required fields.
+                if contract_payload:
+                    consumption_contracts.append(contract_payload)
+                else:
+                    dropped["input_consumption_contracts"].append(
+                        f"{contract_id}:empty_after_normalization"
+                    )
             if "input_consumption_contracts" in step_payload:
                 step_payload["input_consumption_contracts"] = consumption_contracts
             raw_table_one = step_payload.get("table_one_spec")
