@@ -132,6 +132,7 @@ SOURCE_FILES: tuple[str, ...] = (
     "src/easyicu/research_agent/learning/runtime.py",
     "src/easyicu/research_agent/graph.py",
     "src/easyicu/data/concept-dict.json",
+    "src/easyicu/data/sofa2-dict.json",
 )
 
 

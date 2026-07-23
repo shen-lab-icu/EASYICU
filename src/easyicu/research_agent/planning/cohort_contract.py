@@ -60,6 +60,8 @@ PredicateOp = Literal[
 ]
 
 _CONCEPT_DICT_PATH = Path(__file__).resolve().parents[2] / "data" / "concept-dict.json"
+_SOFA2_DICT_PATH = Path(__file__).resolve().parents[2] / "data" / "sofa2-dict.json"
+_CONCEPT_DICT_PATHS = (_CONCEPT_DICT_PATH, _SOFA2_DICT_PATH)
 _ANY_ALL_ALLOWED_OPS = {"==", "!=", "missing", "not_missing"}
 
 
@@ -369,11 +371,15 @@ def concept_id_exists(concept_id: str) -> bool:
 
 @lru_cache(maxsize=1)
 def known_concept_ids() -> set[str]:
-    try:
-        payload = json.loads(_CONCEPT_DICT_PATH.read_text(encoding="utf-8"))
-    except Exception:
-        payload = {}
-    return set(payload.keys())
+    concept_ids: set[str] = set()
+    for path in _CONCEPT_DICT_PATHS:
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            payload = {}
+        if isinstance(payload, dict):
+            concept_ids.update(str(key) for key in payload)
+    return concept_ids
 
 
 def _coerce_offset(value: Any) -> float:

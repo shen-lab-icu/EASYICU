@@ -50,7 +50,11 @@ from ..trajectory.plan_contract import (
 )
 from ..execution.method_capabilities import coder_method_capability_block
 from ..resources import ContextBudgetExceeded, bounded_request_metrics
-from ..cohort.schema import ALLOWED_CTAS_AGGREGATIONS, known_concept_ids
+from ..cohort.schema import (
+    ALLOWED_CTAS_AGGREGATIONS,
+    known_concept_ids,
+    validate_plan_cohort_predicates_against_context,
+)
 from ..icu_rules import (
     GENERAL_ICU_ANALYSIS_PRINCIPLES,
     VariableKind,
@@ -904,6 +908,7 @@ class PlannerAgent:
                     "catalog instead of inventing or misspelling a family"
                 )
             plan.analysis_type = canonical_family
+        validate_plan_cohort_predicates_against_context(plan=plan, context=context)
         return plan
 
 
