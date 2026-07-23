@@ -1883,6 +1883,13 @@ def _typed_input_scope_contract(step: AnalysisStep) -> str:
         "auditing observed non-finite values, capture their raw mask first, mask "
         "them before the helper, and report that raw mask separately. Never let "
         "non-finite values bypass the helper or hard-code its audit mask.\n"
+        "- Import `strict_numeric_input` and, for every exact Planner-declared "
+        "measured/count pair, `measurement_provenance_receipt` from "
+        "`easyicu.research_agent.methods.descriptive_inputs`; never define local "
+        "replacements with those names. Call each provenance receipt directly on "
+        "the locked frame before scientific output, preserve its returned mapping "
+        "unchanged, and let its validation error propagate. Do not pre-coerce, "
+        "duplicate, or hand-roll validation of the same measured/count pair.\n"
         "- Call every required host validation/provenance receipt before writing "
         "any scientific output.\n"
         f"{typed_cohort_contract}"
@@ -2645,6 +2652,21 @@ def _repair_specialization(
             "dictionary, because that recreates an unverifiable marker audit. "
             "This replacement may validate only pairs the Agent already declared "
             "and may not change values, rows, denominators, or scientific choices.\n"
+        )
+
+    if RepairReason.LOSSY_NUMERIC_COERCION.value in structured_reasons:
+        guidance.append(
+            "- DIAGNOSED LOSSY-NUMERIC REPAIR (binding): fix every ticketed line "
+            "in the same patch, including conversions inside conditional dtype "
+            "branches. For a result-bearing numeric Series, import and call the "
+            "host-owned `strict_numeric_input(original)` and use its `.values`; "
+            "do not define or retain a local helper with that name. For an exact "
+            "Planner-declared measured/count provenance pair, remove custom "
+            "`pd.to_numeric` scans for that pair and call the self-raising "
+            "`measurement_provenance_receipt(frame, measured_column=..., "
+            "count_column=...)` directly instead. Do not add a guard to only one "
+            "branch or one occurrence, and do not use a later `notna()` domain "
+            "mask as a substitute for fail-closed conversion.\n"
         )
 
     result_guard_modes = {
