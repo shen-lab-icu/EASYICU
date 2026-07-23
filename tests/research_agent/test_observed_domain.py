@@ -37,8 +37,31 @@ def test_binary_criterion_flagged_binary():
     assert d["is_binary"] is True
     assert d["is_constant"] is False
     assert d["n_unique"] == 2
+    assert d["levels"] == [0, 1]
     hint = _format_observed_domain(d)
     assert "BINARY" in hint and "degenerate" in hint
+    assert "[0, 1]" not in hint
+
+
+def test_float_binary_levels_are_locally_bound_but_outbound_opaque():
+    series = pd.Series([0.0, 1.0, 1.0, 0.0], dtype="float64")
+
+    domain = _observed_domain(series)
+
+    assert domain["levels"] == [0.0, 1.0]
+    assert project_observed_domain(domain) == {
+        "shape": "binary_numeric_indicator",
+        "n_unique": 2,
+        "opaque_levels": ["__easyicu_level_1__", "__easyicu_level_2__"],
+    }
+
+
+def test_single_observed_binary_value_does_not_invent_missing_level():
+    domain = _observed_domain(pd.Series([1.0, 1.0], dtype="float64"))
+
+    assert domain["is_binary"] is True
+    assert domain["n_unique"] == 1
+    assert "levels" not in domain
 
 
 def test_continuous_score_not_flagged_binary():
@@ -130,4 +153,5 @@ def test_descriptor_carries_observed_domain():
     )
     by_name = {v.name: v for v in ctx.variables}
     assert by_name["sep3_sofa2_max"].observed_domain["is_binary"] is True
+    assert by_name["sep3_sofa2_max"].observed_domain["levels"] == [0, 1]
     assert by_name["age"].observed_domain["is_binary"] is False
