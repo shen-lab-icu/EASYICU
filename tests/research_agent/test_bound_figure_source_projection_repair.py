@@ -147,10 +147,99 @@ def test_bound_figure_repair_requires_unambiguous_loader_and_bundle_contract(
     )
 
 
-def test_bound_figure_source_projection_is_registered_structural() -> None:
-    metadata = repair_metadata_for("bound_figure_source_projection_v2")
+def test_direct_bound_figure_repair_projects_tables_that_also_bind_statistics(
+    tmp_path: Path,
+) -> None:
+    code = f"""
+from pathlib import Path
+import pandas as pd
 
-    assert metadata.classification_source == "exact"
-    assert metadata.repair_class is RepairClass.STRUCTURAL
-    assert metadata.introduces_numbers is False
-    assert automatic_repair_allowed(metadata.repair_id)
+OUT_DIR = Path({str(tmp_path)!r})
+
+def _export_figure_source_data(source_data):
+    exported = []
+    for key, frame in source_data.items():
+        name = f"{{key}}_figure_source.csv"
+        frame.to_csv(OUT_DIR / name, index=False)
+        exported.append(name)
+    return exported
+
+def make_figure_contract(**kwargs):
+    kwargs["source_data"] = _export_figure_source_data(kwargs["source_data"])
+    return kwargs
+
+def main():
+    loaded = {{
+        "table:parent_a": (
+            pd.DataFrame({{"row_id": ["a"], "primary_or": [1.25]}}),
+            Path("parent_a.csv"),
+        ),
+        "table:parent_b": (
+            pd.DataFrame({{"row_id": ["b"], "complete_case_n": [17]}}),
+            Path("parent_b.csv"),
+        ),
+    }}
+    parent_a = loaded["table:parent_a"][0].copy()
+    parent_b = loaded["table:parent_b"][0].copy()
+    mixed = pd.DataFrame({{"panel": ["A", "B"], "value": [1.25, 17]}})
+    mixed.to_csv(OUT_DIR / "overview_source_data.csv", index=False)
+    return make_figure_contract(
+        figure_id="figure:overview",
+        source_data="overview_source_data.csv",
+    )
+"""
+    finding = {
+        **_FINDING,
+        "detail": {
+            **_FINDING["detail"],
+            "missing_bound_statistics": [
+                "statistic:primary_or",
+                "statistic:complete_case_n",
+            ],
+        },
+    }
+
+    repair = deterministic_contract_repair(code=code, findings=[finding])
+
+    assert repair is not None
+    repair_id, repaired = repair
+    assert repair_id == "direct_bound_figure_source_projection_v1"
+    namespace: dict[str, object] = {}
+    exec(repaired, namespace)
+    contract = namespace["main"]()
+    assert contract["source_data"] == [
+        "parent_a_figure_source.csv",
+        "parent_b_figure_source.csv",
+    ]
+    assert pd.read_csv(tmp_path / "parent_a_figure_source.csv").to_dict(
+        orient="records"
+    ) == [
+        {
+            "row_id": "a",
+            "primary_or": 1.25,
+            "source_row_index": 0,
+            "source_table": "parent_a.csv",
+        }
+    ]
+    assert pd.read_csv(tmp_path / "parent_b_figure_source.csv").to_dict(
+        orient="records"
+    ) == [
+        {
+            "row_id": "b",
+            "complete_case_n": 17,
+            "source_row_index": 0,
+            "source_table": "parent_b.csv",
+        }
+    ]
+
+
+def test_bound_figure_source_projection_is_registered_structural() -> None:
+    for repair_id in (
+        "bound_figure_source_projection_v2",
+        "direct_bound_figure_source_projection_v1",
+    ):
+        metadata = repair_metadata_for(repair_id)
+        assert metadata.classification_source == "exact"
+        assert metadata.repair_class is RepairClass.STRUCTURAL
+        assert metadata.introduces_numbers is False
+        assert automatic_repair_allowed(metadata.repair_id)

@@ -7543,6 +7543,7 @@ def run_execute_phase(
 
         worker_progress.repair_attempts = 0
         worker_progress.contract_repair_attempts = 0
+        worker_progress.llm_contract_repair_attempts = 0
         worker_progress.visual_repair_attempts = 0
         # Contract, visual-layout, and runtime failures have independent repair
         # budgets. ``repair_attempts`` remains the total mutation count used for
@@ -9398,7 +9399,7 @@ def run_execute_phase(
                         _clear_output_dir(run_result.out_dir)
                         continue
                     if (
-                        worker_progress.contract_repair_attempts
+                        worker_progress.llm_contract_repair_attempts
                         >= pipeline._max_code_repair_attempts
                         or not _llm_repair_budget_available()
                     ):
@@ -9477,12 +9478,16 @@ def run_execute_phase(
                         raise AssertionError(
                             "LLM repair budget changed without mutation"
                         )
+                    worker_progress.llm_contract_repair_attempts += 1
                     worker_progress.repair_attempts += 1
                     step_record["code_repair_attempts"] = (
                         worker_progress.repair_attempts
                     )
                     step_record["contract_repair_attempts"] = (
                         worker_progress.contract_repair_attempts
+                    )
+                    step_record["llm_contract_repair_attempts"] = (
+                        worker_progress.llm_contract_repair_attempts
                     )
                     emit_progress(
                         "coder",

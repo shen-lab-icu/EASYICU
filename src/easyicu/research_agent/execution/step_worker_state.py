@@ -29,6 +29,10 @@ class StepWorkerProgress:
     # the logical LLM budget, and concept repairs remain separately counted.
     repair_attempts: int = 0
     contract_repair_attempts: int = 0
+    # Automatic structural repairs remain visible in
+    # ``contract_repair_attempts`` but must not consume the independent paid
+    # contract-repair allowance.
+    llm_contract_repair_attempts: int = 0
     visual_repair_attempts: int = 0
     runtime_repair_attempts: int = 0
 

@@ -52,6 +52,7 @@ def test_worker_progress_defaults_are_isolated() -> None:
         "llm_repair_used": False,
         "repair_attempts": 0,
         "contract_repair_attempts": 0,
+        "llm_contract_repair_attempts": 0,
         "visual_repair_attempts": 0,
         "runtime_repair_attempts": 0,
     }

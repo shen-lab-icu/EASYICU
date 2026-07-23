@@ -26,9 +26,10 @@ from __future__ import annotations
 import ast
 import json
 import math
+from pathlib import Path
 import re
 import textwrap
-from typing import Any, Dict, List, Mapping, Optional, Sequence
+from typing import Any, Dict, List, Mapping, Optional, Sequence, Set
 
 import numpy as np
 import pandas as pd
@@ -4876,6 +4877,145 @@ def _patch_bound_figure_source_projection(code: str) -> str:
     return repaired
 
 
+def _patch_direct_bound_figure_source_projection(
+    code: str,
+    *,
+    missing_table_names: Sequence[str],
+) -> str:
+    """Project directly loaded typed parents into a figure source bundle.
+
+    Some generated renderers bind tables as
+    ``loaded["table:<name>"][0].copy()`` instead of retaining a separate
+    table/record mapping. When a reader-facing long source table cannot
+    authenticate every typed parent, replace only the FigureContract's
+    ``source_data`` argument with exact, complete projections of those bound
+    frames. No scientific rows or values are selected or rewritten.
+    """
+
+    plain_missing_names = [
+        str(name)
+        for name in missing_table_names
+        if isinstance(name, str)
+        and name
+        and Path(name).name == name
+        and Path(name).suffix.lower() == ".csv"
+    ]
+    if len(plain_missing_names) != len(missing_table_names) or not plain_missing_names:
+        return code
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return code
+    if not any(
+        isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and node.name == "_export_figure_source_data"
+        for node in ast.walk(tree)
+    ):
+        return code
+
+    loaded_tables: Dict[str, str] = {}
+    duplicate_products: Set[str] = set()
+    for node in ast.walk(tree):
+        if not (
+            isinstance(node, ast.Assign)
+            and len(node.targets) == 1
+            and isinstance(node.targets[0], ast.Name)
+            and isinstance(node.value, ast.Call)
+            and isinstance(node.value.func, ast.Attribute)
+            and node.value.func.attr == "copy"
+            and isinstance(node.value.func.value, ast.Subscript)
+        ):
+            continue
+        row_subscript = node.value.func.value
+        if not (
+            isinstance(row_subscript.slice, ast.Constant)
+            and row_subscript.slice.value == 0
+            and isinstance(row_subscript.value, ast.Subscript)
+            and isinstance(row_subscript.value.value, ast.Name)
+            and isinstance(row_subscript.value.slice, ast.Constant)
+            and isinstance(row_subscript.value.slice.value, str)
+        ):
+            continue
+        input_key = row_subscript.value.slice.value
+        if not input_key.startswith("table:"):
+            continue
+        product = input_key.split(":", 1)[1]
+        if product in loaded_tables:
+            duplicate_products.add(product)
+            continue
+        loaded_tables[product] = node.targets[0].id
+    if duplicate_products:
+        return code
+
+    missing_products = [Path(name).stem for name in plain_missing_names]
+    if len(missing_products) != len(set(missing_products)) or any(
+        product not in loaded_tables for product in missing_products
+    ):
+        return code
+
+    source_keywords: List[ast.keyword] = []
+    for node in ast.walk(tree):
+        if not (
+            isinstance(node, ast.Call)
+            and (
+                (
+                    isinstance(node.func, ast.Name)
+                    and node.func.id == "make_figure_contract"
+                )
+                or (
+                    isinstance(node.func, ast.Attribute)
+                    and node.func.attr == "make_figure_contract"
+                )
+            )
+        ):
+            continue
+        source_keywords.extend(
+            keyword
+            for keyword in node.keywords
+            if keyword.arg == "source_data"
+            and isinstance(keyword.value, ast.Constant)
+            and isinstance(keyword.value.value, str)
+        )
+    if len(source_keywords) != 1:
+        return code
+
+    bundle_entries = []
+    for source_name, product in zip(
+        plain_missing_names,
+        missing_products,
+        strict=True,
+    ):
+        frame_name = loaded_tables[product]
+        bundle_entries.append(
+            f"{product!r}: {frame_name}.copy(deep=True).assign("
+            f"source_row_index=range(len({frame_name})), "
+            f"source_table={source_name!r})"
+        )
+    replacement = "{" + ", ".join(bundle_entries) + "}"
+
+    keyword = source_keywords[0]
+    lines = code.splitlines(keepends=True)
+    line_starts: List[int] = []
+    offset = 0
+    for line in lines:
+        line_starts.append(offset)
+        offset += len(line)
+
+    def absolute_offset(line_number: int, byte_column: int) -> int:
+        line = lines[line_number - 1]
+        character_column = len(line.encode("utf-8")[:byte_column].decode("utf-8"))
+        return line_starts[line_number - 1] + character_column
+
+    start = absolute_offset(keyword.value.lineno, keyword.value.col_offset)
+    end = absolute_offset(keyword.value.end_lineno, keyword.value.end_col_offset)
+    repaired = code[:start] + replacement + code[end:]
+    try:
+        ast.parse(repaired)
+    except SyntaxError:
+        return code
+    return repaired
+
+
 def deterministic_contract_repair(
     *,
     code: str,
@@ -4903,7 +5043,7 @@ def deterministic_contract_repair(
     if convergence_contract != code:
         return "penalized_convergence_contract_v2", convergence_contract
 
-    unavailable_source_findings = []
+    source_coverage_findings = []
     for finding in findings:
         validator = getattr(finding, "validator", None)
         detail = getattr(finding, "detail", None)
@@ -4915,8 +5055,34 @@ def deterministic_contract_repair(
             and isinstance(detail, dict)
             and detail.get("reason") == "incomplete_source_lineage_coverage"
             and detail.get("missing_bound_tables")
-            and not detail.get("missing_bound_statistics")
         ):
+            source_coverage_findings.append(finding)
+    direct_source_repair_name = "direct_bound_figure_source_projection_v1"
+    if (
+        len(source_coverage_findings) == 1
+        and previous_repair != direct_source_repair_name
+    ):
+        finding = source_coverage_findings[0]
+        detail = (
+            finding.get("detail")
+            if isinstance(finding, dict)
+            else getattr(finding, "detail", {})
+        )
+        repaired = _patch_direct_bound_figure_source_projection(
+            code,
+            missing_table_names=list(detail.get("missing_bound_tables") or []),
+        )
+        if repaired != code:
+            return direct_source_repair_name, repaired
+
+    unavailable_source_findings = []
+    for finding in source_coverage_findings:
+        detail = (
+            finding.get("detail")
+            if isinstance(finding, dict)
+            else getattr(finding, "detail", {})
+        )
+        if not detail.get("missing_bound_statistics"):
             unavailable_source_findings.append(finding)
     unavailable_source_repair_name = "unavailable_figure_full_source_projection_v1"
     if (
