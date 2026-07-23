@@ -438,6 +438,8 @@ def _planner_declared_context_column_bindings(
         )
     }
     for concept_id in sorted(predicate_concepts):
+        if concept_id in directly_resolved_concepts:
+            continue
         predicates = [
             predicate
             for predicate in (*definition.inclusion, *definition.exclusion)

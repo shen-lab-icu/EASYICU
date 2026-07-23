@@ -403,6 +403,58 @@ def test_typed_binding_gate_rejects_direct_suffix_with_wrong_window(tmp_path) ->
         validate_plan_typed_bindings_against_context(plan=plan, context=context)
 
 
+def test_typed_binding_gate_accepts_direct_static_column_without_window(
+    tmp_path,
+) -> None:
+    from types import SimpleNamespace
+
+    from easyicu.research_agent.cohort.schema import (
+        validate_plan_typed_bindings_against_context,
+    )
+    from easyicu.research_agent.planning.cohort_contract import (
+        CohortDefinition,
+        ConceptPredicate,
+        TimeWindow,
+    )
+    from easyicu.research_agent.schema import AnalysisStep
+    from tests.research_agent.test_materialized_column_metadata import (
+        _build_v2_context,
+    )
+
+    context = _build_v2_context(tmp_path)
+    producer = AnalysisStep(
+        step_id="01_cohort",
+        planned_analysis_role="auxiliary",
+        intent="Materialize the adult analysis cohort and its flow.",
+        inputs=["stay_id", "age", "death"],
+        expected_outputs=["cohort:analysis_cohort", "table:cohort_flow"],
+        method="cohort_definition",
+    )
+    adult_cohort = CohortDefinition(
+        name="adult_cohort",
+        inclusion=[
+            ConceptPredicate(
+                concept_id="age",
+                time_window=TimeWindow(
+                    anchor="icu_admission",
+                    start_offset_hours=0,
+                    end_offset_hours=24,
+                ),
+                aggregation="first",
+                op=">=",
+                value=18,
+            )
+        ],
+    )
+    plan = SimpleNamespace(
+        cohort=adult_cohort,
+        steps=[producer],
+        robustness_specs=[],
+    )
+
+    validate_plan_typed_bindings_against_context(plan=plan, context=context)
+
+
 def test_planner_retries_robustness_window_absent_from_sealed_input(tmp_path) -> None:
     """A plausible column suffix cannot authorize a different scientific window."""
 
