@@ -106,6 +106,28 @@ def test_structured_repair_metadata_reads_nested_exact_coordinates_only():
     assert metadata.line_anchors == {33, 205, 206}
 
 
+def test_structured_repair_metadata_preserves_trusted_line_lists():
+    authority = RepairPromptAuthority.create(
+        typed_ticket=[
+            {
+                "validator": "mechanical_code_preflight",
+                "reason": RepairReason.LOSSY_NUMERIC_COERCION.value,
+                "structured_reason": "lossy_numeric_coercion",
+                "detail": {
+                    "reason": "lossy_numeric_coercion",
+                    "lines": [181, 184],
+                },
+            }
+        ]
+    )
+
+    payload = authority.payload()
+    metadata = structured_repair_metadata(authority)
+
+    assert payload["typed_ticket"][0]["detail"]["lines"] == [181, 184]
+    assert metadata.line_anchors == {181, 184}
+
+
 def test_structured_repair_metadata_rejects_runtime_text():
     with pytest.raises(TypeError, match="RepairPromptAuthority"):
         structured_repair_metadata(  # type: ignore[arg-type]

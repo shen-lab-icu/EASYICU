@@ -557,6 +557,8 @@ def test_declared_provenance_companions_use_compact_typed_coordinates(ra):
     assert "Registered measured companion" not in payload
     assert '"name":"declared_family_0_first"' in payload
     assert "Registered first companion" not in payload
+    assert "never define local replacements with those names" in payload
+    assert "Do not pre-coerce, duplicate, or hand-roll validation" in payload
 
 
 def test_materialized_wide_qc_prompt_keeps_authority_under_transport_gate(ra):
@@ -979,6 +981,67 @@ def test_provenance_fail_close_repair_does_not_expand_full_scientific_context(ra
     assert '"valid_range":' not in payload
     assert '"observed_domain":' not in payload
     assert '"cross_database_validation":' not in payload
+
+
+def test_lossy_numeric_repair_binds_all_lines_to_host_helpers(ra):
+    patch = json.dumps(
+        {
+            "format": PATCH_FORMAT,
+            "edits": [
+                {
+                    "old": "value = pd.to_numeric(source, errors='coerce')",
+                    "new": "value = strict_numeric_input(source).values",
+                    "expected_count": 1,
+                }
+            ],
+        }
+    )
+    context = _wide_context(ra, n_families=1)
+    step = ra.AnalysisStep(
+        step_id="numeric_repair",
+        intent="Validate declared numeric inputs.",
+        inputs=[
+            "declared_family_0_first",
+            "declared_family_0_measured",
+            "declared_family_0_n",
+        ],
+        expected_outputs=["table:data_quality"],
+        method="data_quality_audit",
+    )
+    authority = RepairPromptAuthority.create(
+        typed_ticket=[
+            {
+                "reason": RepairReason.LOSSY_NUMERIC_COERCION.value,
+                "validator": "mechanical_code_preflight",
+                "structured_reason": "lossy_numeric_coercion",
+                "detail": {
+                    "reason": "lossy_numeric_coercion",
+                    "lines": [18, 31],
+                },
+                "occurrences": [],
+                "occurrence_count": 2,
+            }
+        ]
+    )
+    llm = _CaptureLLM([patch])
+
+    CoderAgent(llm).repair(
+        context=context,
+        step=step,
+        code=(
+            "import pandas as pd\n"
+            "source = pd.Series([1])\n"
+            "value = pd.to_numeric(source, errors='coerce')\n"
+        ),
+        run_log="lossy numeric coercion",
+        repair_authority=authority,
+        current_repair_authority=authority,
+    )
+    payload = "\n".join(str(message.content or "") for message in llm.calls[0][0])
+
+    assert "fix every ticketed line in the same patch" in payload
+    assert "strict_numeric_input(original)" in payload
+    assert "measurement_provenance_receipt(frame" in payload
 
 
 def test_wide_provenance_repair_remains_under_patch_transport_budget(ra):

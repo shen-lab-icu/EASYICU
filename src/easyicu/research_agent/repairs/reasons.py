@@ -96,6 +96,7 @@ _SAFE_TICKET_KEYS = frozenset(
         "issues",
         "kind",
         "line",
+        "lines",
         "matched_patterns",
         "model_id",
         "mapping_name",
@@ -522,6 +523,17 @@ def structured_repair_metadata(
                     and value > 0
                 ):
                     line_anchors.add(value)
+                elif (
+                    key == "lines"
+                    and isinstance(value, list)
+                    and all(
+                        isinstance(item, int)
+                        and not isinstance(item, bool)
+                        and item > 0
+                        for item in value
+                    )
+                ):
+                    line_anchors.update(value)
             for value in payload.values():
                 _collect(value)
         elif isinstance(payload, list):
@@ -541,9 +553,7 @@ def structured_repair_metadata(
 _DETAIL_REASON_CODES = {
     "invalid_local_helper_call": RepairReason.INVALID_HELPER_SIGNATURE,
     "host_helper_call_signature_invalid": RepairReason.INVALID_HELPER_SIGNATURE,
-    "closed_counts_table_index_used_as_levels": (
-        RepairReason.INVALID_HELPER_SIGNATURE
-    ),
+    "closed_counts_table_index_used_as_levels": (RepairReason.INVALID_HELPER_SIGNATURE),
     "table_one_spec_not_planner_owned": RepairReason.INVALID_HELPER_SIGNATURE,
     "local_helper_unpack_arity_mismatch": RepairReason.INVALID_HELPER_SIGNATURE,
     "host_helper_runtime_introspection": RepairReason.INVALID_HELPER_SIGNATURE,
