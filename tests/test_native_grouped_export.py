@@ -103,3 +103,50 @@ def test_grouped_export_records_structural_unavailability_without_selecting_it(
     ]
     with open_export_package(tmp_path) as package:
         assert set(package.concept_index) == {"age"}
+
+
+def test_grouped_export_records_missing_concept_inside_physical_module(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    output = tmp_path / "out"
+    output.mkdir()
+    pd.DataFrame({"stay_id": [1], "mort_28d": [False]}).to_parquet(
+        output / "outcome.parquet", index=False
+    )
+    (output / "outcome.manifest.json").write_text(
+        json.dumps(
+            {
+                "saved": {
+                    "outcome": {
+                        "concepts": ["mort_28d"],
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    result = {"modules": {"outcome": {"errors": []}}}
+    monkeypatch.setitem(
+        api.EXTRACT_MODULES, "outcome", ["mort_28d", "vent_free_days_28"]
+    )
+
+    api._publish_native_export_v2(
+        database="miiv",
+        data_path=str(tmp_path / "source"),
+        output_dir=str(output),
+        modules=["outcome"],
+        max_patients=None,
+        result=result,
+    )
+
+    manifest = json.loads((output / "_manifest.json").read_text(encoding="utf-8"))
+    assert manifest["concept_selection"]["modules"]["outcome"] == ["mort_28d"]
+    assert manifest["unavailable_concepts"] == [
+        {
+            "module": "outcome",
+            "concept": "vent_free_days_28",
+            "reason": "producer_returned_no_physical_column",
+        }
+    ]
+    with open_export_package(output) as package:
+        assert set(package.concept_index) == {"mort_28d"}

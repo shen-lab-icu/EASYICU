@@ -5040,9 +5040,11 @@ def _publish_native_export_v2(
         for value in source_config.class_prefix
         if str(value).strip()
     )
-    concept_plan = {
+    requested_concept_plan = {
         module: list(EXTRACT_MODULES[module]) for module in published_modules
     }
+    concept_plan: Dict[str, List[str]] = {}
+    unavailable_concepts: List[Dict[str, str]] = []
     files: List[Dict[str, object]] = []
     file_bindings = []
 
@@ -5050,6 +5052,40 @@ def _publish_native_export_v2(
         relative_path = f"{module}.parquet"
         # This is an output validation pass, not a second scan of any raw table.
         frame = pd.read_parquet(output_root / relative_path)
+        produced_concepts: Optional[set[str]] = None
+        module_manifest_path = output_root / f"{module}.manifest.json"
+        if module_manifest_path.is_file() and not module_manifest_path.is_symlink():
+            module_manifest = json.loads(
+                module_manifest_path.read_text(encoding="utf-8")
+            )
+            saved = module_manifest.get("saved")
+            if isinstance(saved, dict):
+                produced_concepts = {
+                    str(concept)
+                    for record in saved.values()
+                    if isinstance(record, dict)
+                    for concept in (record.get("concepts") or [])
+                    if isinstance(concept, str)
+                }
+        structurally_unavailable = {
+            concept
+            for concept in requested_concept_plan[module]
+            if produced_concepts is not None and concept not in produced_concepts
+        }
+        concept_plan[module] = [
+            concept
+            for concept in requested_concept_plan[module]
+            if concept not in structurally_unavailable
+        ]
+        unavailable_concepts.extend(
+            {
+                "module": module,
+                "concept": concept,
+                "reason": "producer_returned_no_physical_column",
+            }
+            for concept in requested_concept_plan[module]
+            if concept in structurally_unavailable
+        )
         try:
             binding = build_export_file_metadata_binding(
                 relative_path=relative_path,
@@ -5102,6 +5138,7 @@ def _publish_native_export_v2(
         "generated": time.strftime("%Y-%m-%dT%H:%M:%S"),
         "export_kind": "grouped_module_extraction",
         "unavailable_modules": unavailable_modules,
+        "unavailable_concepts": unavailable_concepts,
         "concept_selection": {
             "mode": "all_in_selected_modules",
             "modules": concept_plan,
