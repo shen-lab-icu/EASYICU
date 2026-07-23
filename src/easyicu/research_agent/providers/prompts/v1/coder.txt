@@ -662,78 +662,38 @@ TABLE-ONE / DESCRIPTIVE SUMMARIES:
   `table_one.csv` and `step_summary.json` even if some requested
   columns are missing; record missing variables under `"skipped"`.
 CLINICAL SCORE AND MISSINGNESS SEMANTICS:
-- AUTHORITATIVE-VALUE DENOMINATOR INVARIANT (check before writing any
-  scientific output): once the Planner/typed contract declares a physiological
-  or ordered value column, derive that value's availability, non-missing
-  denominator, categories, and model eligibility only from the authoritative
-  value itself plus its declared finite/domain rules. A `*_measured*`, `*_n*`,
-  source-status, or provenance-receipt field is audit-only: never use it to
-  gate, mask, filter, relabel, or change the denominator of the authoritative
-  value. If an exact companion audit is invalid or discordant, raise for the
-  whole step; do not repair the disagreement by dropping rows.
-- STRICT ORDERED-DOMAIN INTEGRITY: when the typed contract declares a closed
-  ordered/integer level domain, count non-finite, non-integer, and out-of-domain
-  non-missing source values, then raise before writing any scientific output if
-  any count is non-zero. Merely recording an invalid count/status while
-  continuing is not fail-closed. An emitted `invalid` category is allowed only
-  when the Planner/typed product contract explicitly declares that category as
-  a non-blocking scientific level; do not invent that policy in generated code.
-- Many ICU score components, stages, and categories are ordinal rather
-  than interval-scale measurements. For ordinal components or stages
-  such as organ-score components or clinical staging variables, prefer
-  ordered level distributions, counts/percentages, median/IQR, or
-  clinically defined thresholds. Do not make `mean()`/`std()` the only
-  evidence for an ordinal component's clinical interpretation.
-- For total scores that are commonly modelled as numeric covariates,
-  make that modelling choice explicit in step_summary.json and keep the
-  interpretation guarded.
-- When constructing windowed score components, use the documented
-  aggregation rule from the concept metadata or study protocol. If the
-  rule is unavailable, document the assumption instead of silently
-  averaging repeated ordinal values.
-- Never treat a numeric score value of 0 as equivalent to "not measured".
-  When measurement presence matters, explicitly separate measured
-  normal/low values from unmeasured or missing values.
-- When one measured concept has several per-stay summaries (for example
-  `<concept>_first`, `_max`, `_min`, or `_mean`) plus source-presence fields
-  such as `<concept>_n` or `<concept>_measured`, apply the same source-status
-  consistency audit to EVERY summary. Keep the physiological summary's own
-  numeric/domain validity mask separate from that provenance audit: count and
-  measured fields must not exclude individual values, redefine missingness, or
-  change descriptive/model denominators. If the paired provenance audit is
-  invalid or discordant, fail the completed step instead of filtering those
-  rows and continuing with altered results.
-- Every non-figure, result-bearing step that declares a `<concept>_measured`
-  input must audit that flag against its mechanically paired `<concept>_n`
-  provenance field. This
-  requirement is not limited to a component-QC step or to one analysis method.
-  Set `step_summary["measurement_provenance_audit"]["source"]` to exactly
-  `"COHORT_PARQUET"` and write one record under `checks` for every exact
-  declared measured input. Preserve any trailing time-window suffix when
-  pairing fields (for example, `<concept>_measured_24h` pairs with
-  `<concept>_n_24h`). Each record must contain `measured_column`,
-  `count_column`, `status`, `comparison_n`, `invalid_pair_n`, `discordant_n`,
-  and `role="audit_only"`. If the companion count exists in the locked cohort,
-  require a binary 0/1 measured flag and a finite, non-negative integer count;
-  validate the measured flag itself even when the companion count is absent.
-  A boolean, datetime, or timedelta count is not an integer observation count,
-  and datetime/timedelta values are not valid measured flags.
-  Pandas dtype predicates such as `is_bool_dtype(...)` return one scalar
-  Python boolean. Negate such scalar predicates with `not`, never with `~`;
+- AUTHORITATIVE-VALUE DENOMINATOR INVARIANT: derive availability, categories,
+  and model eligibility from the Planner-declared value and its finite/domain
+  rules; derive that value's availability, non-missing denominator, and levels
+  from the value itself. A `*_measured*`, `*_n*`, source-status, or receipt
+  field is audit-only: never use it to gate, mask, filter, relabel, impute, or
+  change the denominator. A discordant companion audit raises for the whole
+  step; it is never repaired by dropping rows.
+- STRICT ORDERED-DOMAIN INTEGRITY: for a declared closed ordered/integer
+  domain, count non-finite, non-integer, and out-of-domain non-missing values
+  and raise before writing any scientific output when any count is non-zero.
+  Merely recording an invalid count/status is not fail-closed. For ordinal
+  components, report ordered counts/percentages and median/IQR or thresholds;
+  do not rely on mean/SD alone. State when a total score is modeled numerically,
+  and use only its documented window and aggregation rule.
+- A numeric score of zero is not "unmeasured". Keep value validity separate
+  from provenance. When one concept has several per-stay summaries,
+  apply the same source-status consistency audit to EVERY summary.
+  Keep its numeric/domain validity mask separate; companions must not exclude individual values
+  or change descriptive/model denominators. If invalid, fail the completed step instead of filtering.
+- Every result step declaring a measured/count pair must call the host
+  `measurement_provenance_receipt` on the exact analyzed frame before output;
+  this requirement is not limited to a component-QC step. Preserve any trailing
+  time-window suffix. Preserve one record under `checks` unchanged in
+  `step_summary["measurement_provenance_audit"]["source"]`=`"COHORT_PARQUET"`,
+  including `invalid_pair_n` and `role="audit_only"`. Validate the flag even
+  when the companion count is absent; boolean, datetime, or timedelta count
+  values are invalid. Discordance is a fail-closed provenance error. The host
+  will reject omitted measured families, convenient subsets, or checks omitted
+  from the planner's declared inputs. This audit is provenance only: never make
+  it a physiological value, adjustment covariate, or new cohort rule.
+  Negate such scalar predicates with `not`, never with `~`;
   reserve `~` for elementwise boolean Series/array masks.
-  Report invalid pairs separately, compare valid pairs with `(count > 0)`, and
-  use `status="checked"`. Any invalid pair or flag/count discordance is a
-  fail-closed provenance error, even when reported truthfully. The host will
-  replay both exact columns from the locked `COHORT_PARQUET` and reject omitted
-  measured families, convenient subset checks, or self-reported counts that
-  disagree. If the locked cohort
-  contains the measured flag but not its companion count, use
-  `status="unavailable"` with the expected count column and a reason, and set
-  `comparison_n`, `invalid_pair_n`, and `discordant_n` to null. Never claim
-  unavailable merely because the count was omitted from the planner's primary
-  input list. This audit normally verifies provenance only: it must not turn
-  the count into a physiological value, outcome, adjustment covariate, or new
-  cohort rule.
 - BINARY EVENT-PRESENCE EXCEPTION:
   The narrow exception is an agent-planned sparse binary event-presence
   exposure when the registered base concept is an
@@ -768,44 +728,22 @@ CLINICAL SCORE AND MISSINGNESS SEMANTICS:
   Figure-only steps and steps without a declared measured input do not need
   this block. A method-specific `component_qc` block may report other
   method-specific checks, but need not duplicate this host-replayed audit.
-- A shared source-status helper must make the summary semantics explicit
-  (for example `require_integer=True` only for an ordinal stage or count).
-  Never apply an ordinal/integer-like check to a continuous laboratory value
-  merely because both variables use the same helper. Validate continuous
-  values with their own finite/domain rule and ordinal values with their own
-  integer/level rule.
+- A shared source-status helper must make summary semantics explicit.
+  Never apply an ordinal/integer-like check to a continuous laboratory value.
 - Treat a declared plausibility, display, or audit range as a range flag, not
-  an automatic exclusion rule. If the locked protocol says to retain and flag
-  finite values outside that range, do not reclassify them as invalid, cap
-  them, or drop them in a later descriptive or modelling step.
-- Never derive a binary exposure, outcome, event flag, or eligibility flag
-  with `.fillna(0)` or by otherwise recoding missing source values to the
-  negative class. Use an explicit rule that preserves missingness first, e.g.
-  `np.where(source.isna(), np.nan, (source >= threshold).astype(int))`, then
-  report the source missing count and decide whether modelling should drop,
-  block, or use a prespecified missingness strategy. A missing source value
-  is not evidence of event absence unless the concept metadata explicitly
-  defines unrecorded as negative.
-- When validating a supplied derived column against a rebuilt locked
-  definition, treat a missing supplied column as `not_applicable` /
-  `unavailable_for_comparison`, not as a failed derivation or mismatch.
-  Only report a derivation failure when both the supplied column and the
-  source column are present and comparable rows actually disagree, or when
-  the source column needed for the locked definition is absent.
-- Do not define the analytic cohort for a binary event/exposure by keeping
-  only rows where `<concept>_measured == 1` or `<concept>_n > 0`. For sparse
-  event indicators, treatment/onset flags, and derived 0/1 clinical states,
-  absence of an event/trigger is usually the negative class (0/False) unless
-  the concept metadata explicitly says the patient was screened/assessed and
-  an unassessed state is not interpretable. If filtering on measurement turns
-  the primary exposure into all 1s or all 0s, treat that as a design error:
-  rebuild the exposure denominator to retain event-negative/untriggered
-  records, or write an infeasibility summary with source-data evidence.
-- Whenever you coerce descriptive or modelling variables to numeric,
-  preserve an audit table or step_summary block with original
-  missingness, post-coercion missingness, and newly invalid/coerced
-  values for each variable. Do not silently drop values created by
-  `pd.to_numeric(..., errors="coerce")` without counting them.
+  an exclusion or capping rule. If the locked protocol says to retain and flag
+  finite values, do so.
+- Never use `.fillna(0)` or any silent imputation for an exposure, outcome,
+  event, eligibility flag, score component, or primary result variable.
+  Preserve missingness and follow only the Planner's explicit missing-data
+  strategy. Do not define the analytic cohort for a binary event/exposure by
+  `<concept>_measured == 1` or `<concept>_n > 0`; retain event-negative and
+  untriggered comparators.
+- When checking a supplied derived value, "source unavailable" is distinct
+  from "derivation mismatch". Claim mismatch only when comparable source and
+  supplied values exist and disagree.
+- Numeric coercion must report original missingness, post-coercion missingness,
+  and newly invalid values. Never silently drop values created by coercion.
 - Before any complete-case model, create one shared complete-case mask
   across the outcome, primary predictor/exposure, and all covariates.
   Save a cohort-flow or complete-case table with `n_full`,

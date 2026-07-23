@@ -21,6 +21,7 @@ class RunExecutionState:
     remaining_steps: list[AnalysisStep]
     executed_step_ids: set[str]
     stop_on_failure: bool = False
+    stop_failure_roles: frozenset[str] = frozenset()
     stop_reason: Optional[str] = None
 
 
@@ -70,10 +71,16 @@ class RunCoordinator:
             step = state.remaining_steps.pop(0)
             record = execute_step(step)
             state.executed_step_ids.add(step.step_id)
-            if (
-                state.stop_on_failure
-                and isinstance(record, dict)
-                and str(record.get("status") or "").strip().lower() != "ok"
+            record_failed = isinstance(record, dict) and (
+                str(record.get("status") or "").strip().lower() != "ok"
+            )
+            record_role = (
+                str(record.get("planned_analysis_role") or "").strip().lower()
+                if isinstance(record, dict)
+                else ""
+            )
+            if record_failed and (
+                state.stop_on_failure or record_role in state.stop_failure_roles
             ):
                 record["remaining_steps_suppressed"] = True
                 state.stop_reason = "required_step_failed:" + (
