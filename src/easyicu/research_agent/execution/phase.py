@@ -10576,6 +10576,16 @@ def run_execute_phase(
         # symlinks, mismatched statistic names, non-finite values, and
         # conflicting aliases.
         step_summary = bind_primary_output(step_summary, run_result.out_dir)
+        registered_primary_or = (
+            step_summary.get("output_files", {}).get("statistic:primary_or")
+            if isinstance(step_summary.get("output_files"), Mapping)
+            else None
+        )
+        step_record["host_primary_output_binding"] = {
+            "registered": isinstance(registered_primary_or, str),
+            "bound": isinstance(step_summary.get("primary_or"), (int, float))
+            and not isinstance(step_summary.get("primary_or"), bool),
+        }
         with shared_lock:
             completed_records_snapshot = list(per_step_records)
         final_gate_findings = _evaluate_final_deterministic_gates(
