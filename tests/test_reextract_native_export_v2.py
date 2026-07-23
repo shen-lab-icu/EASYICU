@@ -96,3 +96,50 @@ def test_launcher_rejects_an_existing_output_root(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="must be new"):
         launcher.run(args)
+
+
+def test_one_shot_launcher_keeps_external_runtime_but_disables_auto_batches(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    calls: list[dict[str, object]] = []
+    monkeypatch.setattr(launcher, "DEFAULT_DATA_PATHS", {"miiv": str(source)})
+
+    def fake_extract(database, **kwargs):
+        calls.append({"database": database, **kwargs})
+        assert os.environ["TMPDIR"] == str(tmp_path / "out" / ".runtime_tmp")
+        assert os.environ["EASYICU_DUCKDB_TEMP_DIR"] == str(
+            tmp_path / "out" / ".runtime_spill"
+        )
+        assert "EASYICU_ONESHOT_BUDGET_MB" not in os.environ
+        out = Path(kwargs["output_dir"])
+        out.mkdir(mode=0o700)
+        (out / "_manifest.json").write_text(
+            json.dumps({"unavailable_modules": []}), encoding="utf-8"
+        )
+        return {
+            "num_patients": 10,
+            "native_export_v2": {"output_validation_reads": 19},
+        }
+
+    monkeypatch.setattr(launcher, "extract_database", fake_extract)
+    monkeypatch.setattr(launcher, "open_export_package", lambda _path: _Package())
+    args = launcher._parse_args(
+        ["--output-root", str(tmp_path / "out"), "--databases", "miiv", "--one-shot"]
+    )
+
+    manifest = launcher.run(args)
+
+    assert manifest["extraction_mode"] == "one_shot_all_patients"
+    assert calls == [
+        {
+            "database": "miiv",
+            "data_path": str(source),
+            "output_dir": tmp_path / "out" / "miiv",
+            "batch_size": None,
+            "native_export_v2": True,
+            "stream_output_batches": False,
+            "verbose": True,
+        }
+    ]

@@ -69,8 +69,14 @@ def _remove_worker_spill_directory(source_output: Path) -> bool:
     return _remove_private_directory(source_output / ".easyicu_spill")
 
 
-def _configure_external_runtime(root: Path) -> tuple[Dict[str, str | None], str | None]:
-    """Force every temporary/spill mechanism onto the external run root."""
+def _configure_external_runtime(
+    root: Path, *, one_shot: bool
+) -> tuple[Dict[str, str | None], str | None]:
+    """Force every temporary/spill mechanism onto the external run root.
+
+    ``one_shot`` changes only the extraction policy.  Temporary DuckDB state
+    remains external in both modes.
+    """
 
     runtime_tmp = root / ".runtime_tmp"
     runtime_spill = root / ".runtime_spill"
@@ -93,15 +99,19 @@ def _configure_external_runtime(root: Path) -> tuple[Dict[str, str | None], str 
     os.environ["TMP"] = str(runtime_tmp)
     os.environ["TEMP"] = str(runtime_tmp)
     os.environ["EASYICU_DUCKDB_TEMP_DIR"] = str(runtime_spill)
-    # A consumer Mac must never trade a faster full-table aggregation for swap
-    # growth on its internal APFS volume.  The streamed module writer is the
-    # primary guard; these cap any individual DuckDB/cache workset as defence
-    # in depth, with spill still rooted on the external run directory.
+    # Keep DuckDB spill and its process topology bounded in both modes.  The
+    # explicit one-shot option still gets a full patient set per module, but
+    # cannot silently redirect temporary state to the internal APFS volume.
     os.environ["EASYICU_DUCKDB_THREADS"] = "1"
     os.environ["EASYICU_DUCKDB_MEMORY_LIMIT"] = "1GB"
     os.environ["EASYICU_PARALLEL_MAX_WORKERS"] = "1"
     os.environ["EASYICU_CACHE_BUDGET_MB"] = "256"
-    os.environ["EASYICU_ONESHOT_BUDGET_MB"] = "512"
+    if one_shot:
+        # Do not let the export launcher silently turn an explicitly requested
+        # all-patient module into auto-batches because of its safety profile.
+        os.environ.pop("EASYICU_ONESHOT_BUDGET_MB", None)
+    else:
+        os.environ["EASYICU_ONESHOT_BUDGET_MB"] = "512"
     tempfile.tempdir = str(runtime_tmp)
     return prior, prior_tempdir
 
@@ -143,6 +153,14 @@ def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         default=10_000,
         help="bounded external-export batch size (default: 10000 stays)",
     )
+    parser.add_argument(
+        "--one-shot",
+        action="store_true",
+        help=(
+            "process every source module with its full patient set once; "
+            "temporary and DuckDB spill files remain under the external output root"
+        ),
+    )
     return parser.parse_args(argv)
 
 
@@ -170,13 +188,18 @@ def run(args: argparse.Namespace) -> Dict[str, Any]:
             )
 
     output_root.mkdir(mode=0o700, parents=True)
-    runtime_prior, runtime_tempdir = _configure_external_runtime(output_root)
+    runtime_prior, runtime_tempdir = _configure_external_runtime(
+        output_root, one_shot=args.one_shot
+    )
     run_manifest_path = output_root / "run_manifest.json"
     run_manifest: Dict[str, Any] = {
         "schema_version": "easyicu_grouped_native_reexport_run_v1",
         "generated": time.strftime("%Y-%m-%dT%H:%M:%S"),
         "database_order": databases,
-        "batch_size": args.batch_size,
+        "batch_size": None if args.one_shot else args.batch_size,
+        "extraction_mode": (
+            "one_shot_all_patients" if args.one_shot else "streamed_patient_batches"
+        ),
         "sources": {},
         "status": "running",
     }
@@ -190,9 +213,9 @@ def run(args: argparse.Namespace) -> Dict[str, Any]:
                 database,
                 data_path=paths[database],
                 output_dir=source_output,
-                batch_size=args.batch_size,
+                batch_size=None if args.one_shot else args.batch_size,
                 native_export_v2=True,
-                stream_output_batches=True,
+                stream_output_batches=not args.one_shot,
                 verbose=True,
             )
             spill_removed = _remove_worker_spill_directory(source_output)
