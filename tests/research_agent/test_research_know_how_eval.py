@@ -258,6 +258,21 @@ def test_full0717_source_attestation_review_input_is_non_authorizing() -> None:
         packet["future_review_contract"]["p4_integration"]
         == "forbidden_pending_separate_review"
     )
+    assert packet["bounded_review_packet"] == {
+        "schema_version": "easyicu.figure2_source_review_packet/1",
+        "packet_sha256": "ef6296eb25c74e4196e934f486736a63c18585f57e34fbba105130546275185c",
+        "schema_inventory_sha256": (
+            "e3ad266bc7f2ce7896d0b9361e5c9d0cf1c8bd9498d06adf24b95e9fe39b1474"
+        ),
+        "external_artifact": (
+            "/Volumes/外置硬盘/easyicu_data/"
+            "full6_20260717_source_review_packet_20260722/"
+            "source_review_packet.json"
+        ),
+        "metadata_only": True,
+        "source_attested": False,
+        "real_run_authorized": False,
+    }
     assert len(packet["required_signoff"]) == 5
 
 
