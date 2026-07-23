@@ -411,6 +411,7 @@ class CanonicalExecutionConfig(_StrictFrozenModel):
     development_sample_size: Optional[int]
     development_sample_seed: int
     models: tuple[str, ...]
+    reasoning_effort_profile: Literal["provider_default", "adaptive_v1"]
 
     def digest(self) -> str:
         return hashlib.sha256(
@@ -439,6 +440,7 @@ def build_canonical_execution_config(
     development_sample_size: object = None,
     development_sample_seed: int = 20260719,
     models: Sequence[str] = (),
+    reasoning_effort_profile: str = "provider_default",
 ) -> CanonicalExecutionConfig:
     """Normalize argv into the canonical config (pure — no Provider/runner/data)."""
 
@@ -468,6 +470,7 @@ def build_canonical_execution_config(
         development_sample_size=_opt_int(development_sample_size),
         development_sample_seed=int(development_sample_seed),
         models=tuple(str(model) for model in (models or ())),
+        reasoning_effort_profile=str(reasoning_effort_profile),
     )
 
 

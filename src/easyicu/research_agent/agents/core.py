@@ -1825,6 +1825,14 @@ def _typed_input_scope_contract(step: AnalysisStep) -> str:
         "scope, preserving its original order and spelling. Treat typed kind:name "
         "entries as product identities and the remaining entries as the only "
         "eligible raw-variable or column coordinates for this step.\n"
+        "- COHORT_PARQUET physical columns may be a strict superset of those raw "
+        "coordinates. Require every Planner-declared raw column used by this step "
+        "to be present, but never require DataFrame.columns to equal "
+        "planner_declared_inputs (including through list/set/tuple wrappers). "
+        "Use only declared raw coordinates in calculations; do not drop unrelated "
+        "physical columns merely to make the schemas equal, and preserve full "
+        "row payload when producing a row-membership/cohort artifact unless the "
+        "Planner explicitly declares a narrowed output schema.\n"
         "- manifest['inputs'] contains only host-bound typed products. A binding's "
         "product_contract describes the producer product's semantics; it does not "
         "define or widen this consumer step's input scope.\n"
@@ -1940,6 +1948,12 @@ def _compact_repair_scope_contract(step: AnalysisStep) -> str:
         "- manifest['planner_declared_inputs'] is the exact Planner-owned "
         "consumer scope and the only eligible raw-variable or column coordinates. "
         "manifest['inputs'] contains only host-bound typed products.",
+        "- COHORT_PARQUET physical columns may be a strict superset of the raw "
+        "Planner inputs. Require declared raw columns to be present, but never "
+        "require DataFrame.columns to equal planner_declared_inputs or discard "
+        "unrelated columns merely to force equality. Use only declared raw "
+        "coordinates for calculations and preserve full row payload for a "
+        "cohort artifact unless its output schema is explicitly narrowed.",
         "- Each product_contract comes from the successful producer's step "
         "summary and describes the producer product's semantics, but cannot "
         "widen this consumer. Validate its exact relative_path/evidence_id/sha256 and "
@@ -2006,8 +2020,14 @@ class CoderAgent:
     post-hoc validator in ``audits/patterns.py`` remains the second.
     """
 
-    def __init__(self, llm: LLMClient) -> None:
+    def __init__(
+        self,
+        llm: LLMClient,
+        *,
+        repair_llm: Optional[LLMClient] = None,
+    ) -> None:
         self.llm = llm
+        self.repair_llm = repair_llm or llm
         self.last_compatibility_violations: List[Dict[str, object]] = []
         self.last_compatibility_repair_attempts: int = 0
         self.last_repair_transport: Optional[str] = None
@@ -2260,8 +2280,9 @@ class CoderAgent:
         current_repair_authority = current_repair_authority or repair_authority
         from ..providers.factory import provider_transport_destination
 
+        repair_llm = self.repair_llm
         external_repair_transport = (
-            provider_transport_destination(self.llm) == "external"
+            provider_transport_destination(repair_llm) == "external"
         )
         prompt_repair_authority = (
             RepairPromptAuthority() if external_repair_transport else repair_authority
@@ -2315,7 +2336,7 @@ class CoderAgent:
         # candidate stdout/stderr remains local evidence. Mock and genuinely
         # local transports retain the bounded diagnostic for compatibility.
         patch_diagnosis = _outbound_repair_diagnosis(
-            llm=self.llm,
+            llm=repair_llm,
             run_log=run_log,
             repair_authority=current_repair_authority,
             attempt=attempt,
@@ -2326,7 +2347,7 @@ class CoderAgent:
             ),
         )
         rewrite_diagnosis = _outbound_repair_diagnosis(
-            llm=self.llm,
+            llm=repair_llm,
             run_log=run_log,
             repair_authority=current_repair_authority,
             attempt=attempt,
@@ -2456,7 +2477,7 @@ class CoderAgent:
         def _full_rewrite(reason: str) -> str:
             fallback_messages = _full_rewrite_messages(reason)
             return authorized_complete(
-                self.llm,
+                repair_llm,
                 fallback_messages,
                 max_tokens=_CODER_MAX_TOKENS,
                 temperature=0.05,
@@ -2490,7 +2511,7 @@ class CoderAgent:
                 limit_bytes=_CODER_PATCH_PROMPT_BYTE_LIMIT,
             ),
             patch_call=lambda: authorized_complete(
-                self.llm,
+                repair_llm,
                 patch_messages,
                 max_tokens=min(2048, _CODER_MAX_TOKENS),
                 temperature=0.0,

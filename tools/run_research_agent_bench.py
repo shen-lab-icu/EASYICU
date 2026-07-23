@@ -1425,6 +1425,7 @@ def _benchmark_execution_identity(
     *,
     provider: str | None = None,
     model: str | None = None,
+    reasoning_effort_profile: str = "provider_default",
 ):
     from easyicu.research_agent.authority.execution_identity import ExecutionIdentity
     from easyicu.research_agent.providers.factory import (
@@ -1439,6 +1440,7 @@ def _benchmark_execution_identity(
         provider_authorization = provider_authorization_for_configuration(
             provider=provider,
             model=model,
+            reasoning_effort_profile=reasoning_effort_profile,
         )
     return ExecutionIdentity.create(
         submission_profile_name=options.get("submission_profile_name"),
@@ -1963,23 +1965,61 @@ def _render_run_registry(payload: Dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
-def _make_llm(*, provider: str, model: str, request_timeout: float):
+def _make_llm(
+    *,
+    provider: str,
+    model: str,
+    request_timeout: float,
+    reasoning_effort_profile: str = "provider_default",
+):
     _bootstrap_imports()
-    from easyicu.research_agent import MockLLMClient, OpenAIClient  # type: ignore
+    from easyicu.research_agent import (  # type: ignore
+        LLMRouter,
+        MockLLMClient,
+        OpenAIClient,
+    )
     from easyicu.research_agent.providers import (  # type: ignore
         ProviderConfigurationError,
         build_provider_client,
     )
+    from easyicu.research_agent.providers.llm import reasoning_effort_by_role
 
     if provider == "mock":
         return MockLLMClient()
     try:
-        return build_provider_client(
-            provider=provider,
-            model=model,
-            request_timeout=request_timeout,
-            title="EasyICU research-agent benchmark",
-            client_cls=OpenAIClient,
+        effort_by_role = reasoning_effort_by_role(reasoning_effort_profile)
+        if not effort_by_role:
+            return build_provider_client(
+                provider=provider,
+                model=model,
+                request_timeout=request_timeout,
+                title="EasyICU research-agent benchmark",
+                client_cls=OpenAIClient,
+            )
+        clients_by_effort = {
+            effort: build_provider_client(
+                provider=provider,
+                model=model,
+                request_timeout=request_timeout,
+                title="EasyICU research-agent benchmark",
+                client_cls=OpenAIClient,
+                extra_body={"reasoning": {"effort": effort}},
+            )
+            for effort in sorted(set(effort_by_role.values()))
+        }
+        role_clients = {
+            role: clients_by_effort[effort]
+            for role, effort in effort_by_role.items()
+        }
+        return LLMRouter(
+            default=role_clients["coder"],
+            planner=role_clients["planner"],
+            coder=role_clients["coder"],
+            analyzer=role_clients["analyzer"],
+            writer=role_clients["writer"],
+            literature=role_clients["literature"],
+            repair=role_clients["repair"],
+            reasoning_effort_profile=reasoning_effort_profile,
         )
     except ProviderConfigurationError as exc:
         raise SystemExit(str(exc)) from exc
@@ -2248,6 +2288,7 @@ def _run_suite(
     case_registration: Optional[Dict[str, Any]] = None,
     force_writer_probe: bool = False,
     allow_mock_aware: bool = False,
+    reasoning_effort_profile: str = "provider_default",
 ) -> Dict[str, Any]:
     selected_arms = _normalize_arms(arms)
     _enforce_mock_aware_provider(
@@ -2255,7 +2296,12 @@ def _run_suite(
         provider=provider,
         allow_mock_aware=allow_mock_aware,
     )
-    llm = _make_llm(provider=provider, model=model, request_timeout=request_timeout)
+    llm = _make_llm(
+        provider=provider,
+        model=model,
+        request_timeout=request_timeout,
+        reasoning_effort_profile=reasoning_effort_profile,
+    )
     from easyicu.research_agent import (  # type: ignore
         default_icu_agent_bench_suite,
         icu_agent_bench_markdown,
@@ -2288,6 +2334,7 @@ def _run_suite(
         "bench_kind": bench_kind,
         "provider": provider,
         "model": model,
+        "reasoning_effort_profile": reasoning_effort_profile,
         "backend_base_url": _resolve_backend_base_url(provider),
         "arms": selected_arms,
         "case_registration": case_registration,
@@ -2411,6 +2458,9 @@ def _canonical_execution_config_from_args(args):
         development_sample_size=getattr(args, "development_sample_size", None),
         development_sample_seed=int(getattr(args, "development_sample_seed", 20260719)),
         models=tuple(getattr(args, "models", None) or ()),
+        reasoning_effort_profile=str(
+            getattr(args, "reasoning_effort_profile", "provider_default")
+        ),
     )
 
 
@@ -2658,6 +2708,17 @@ def main() -> int:
         type=float,
         default=180.0,
         help="Per-request timeout for real LLM providers.",
+    )
+    parser.add_argument(
+        "--reasoning-effort-profile",
+        choices=["provider_default", "adaptive_v1"],
+        default="provider_default",
+        help=(
+            "Per-request reasoning policy. 'provider_default' sends no override; "
+            "'adaptive_v1' uses medium for planning/coding, low for "
+            "analysis/writing/literature, and high only for validated repairs. "
+            "The selected profile is bound into Canonical9 execution authority."
+        ),
     )
     parser.add_argument(
         "--timeout",
@@ -3111,6 +3172,7 @@ def main() -> int:
                     else None
                 ),
                 batch_binding=_figure2_batch_binding,
+                reasoning_effort_profile=str(args.reasoning_effort_profile),
             )
 
         if n_repeat == 1:
@@ -3184,6 +3246,7 @@ def main() -> int:
             case_registration=case_registration,
             force_writer_probe=bool(args.force_writer_probe),
             allow_mock_aware=bool(args.allow_mock_aware),
+            reasoning_effort_profile=str(args.reasoning_effort_profile),
         )
         all_runs.append(payload)
         totals = payload["totals"]
@@ -3740,6 +3803,7 @@ def _run_ehrflowbench_jsonl(
     require_figure2_paper_acceptance: bool = False,
     expected_execution_identity_path: Path | None = None,
     batch_binding: Optional[Any] = None,
+    reasoning_effort_profile: str = "provider_default",
 ) -> int:
     """Run an external EHRFlowBench-style JSONL export when available."""
     import pandas as pd
@@ -4110,6 +4174,7 @@ def _run_ehrflowbench_jsonl(
                 resume_from_step_id=resume_from_step_id,
                 stop_after_step_id=stop_after_step_id,
                 force_writer_probe=force_writer_probe,
+                reasoning_effort_profile=reasoning_effort_profile,
             )
             scores.append(score)
         except Exception as exc:  # noqa: BLE001 — keep batch alive on 502/etc.
@@ -4142,6 +4207,7 @@ def _run_ehrflowbench_jsonl(
         "source": str(jsonl_path),
         "seed": seed,
         "arms": _normalize_arms(arms),
+        "reasoning_effort_profile": reasoning_effort_profile,
         "pipeline_options": dict(pipeline_options or {}),
         "force_writer_probe": bool(force_writer_probe),
         "items": input_task_ids,
@@ -4272,6 +4338,7 @@ def _run_one_item_from_cohort(
     resume_from_step_id: Optional[str] = None,
     stop_after_step_id: Optional[str] = None,
     force_writer_probe: bool = False,
+    reasoning_effort_profile: str = "provider_default",
 ) -> Dict[str, Any]:
     item_root = out_root / item.key
     selected = set(_normalize_arms(arms))
@@ -4286,6 +4353,7 @@ def _run_one_item_from_cohort(
         bound_pipeline_options,
         provider=provider,
         model=model,
+        reasoning_effort_profile=reasoning_effort_profile,
     )
     if reuse_existing and not resume_run_id:
         if "naive" in selected:
@@ -4305,7 +4373,12 @@ def _run_one_item_from_cohort(
     run_naive = "naive" in selected and not _arm_was_run(naive)
     run_aware = "aware" in selected and not _arm_was_run(aware)
     llm = (
-        _make_llm(provider=provider, model=model, request_timeout=request_timeout)
+        _make_llm(
+            provider=provider,
+            model=model,
+            request_timeout=request_timeout,
+            reasoning_effort_profile=reasoning_effort_profile,
+        )
         if run_naive or run_aware
         else None
     )
@@ -4349,6 +4422,7 @@ def _run_one_item_from_cohort(
         "expected_predictor": item.primary_predictor,
         "operational_exposure": getattr(item, "operational_exposure", None),
         "database": getattr(item, "database", "bench"),
+        "reasoning_effort_profile": reasoning_effort_profile,
         "expected_or_direction": item.expected_or_direction,
         "benchmark_family": getattr(item, "benchmark_family", "external"),
         "difficulty": getattr(item, "difficulty", "external"),

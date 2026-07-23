@@ -3746,7 +3746,7 @@ def run_execute_phase(
     fallback_coder_provider_identity_sha256 = canonical_sha256(
         pipeline._llm_signature(coder_llm_client)
     )
-    coder = CoderAgent(coder_llm_client)
+    coder = CoderAgent(coder_llm_client, repair_llm=role_resolver("repair"))
     # Opt-in altitude-2a: delegate script authoring + self-repair to a local
     # coding-agent CLI when EASYICU_AGENTIC_CODER_BACKEND is set. Off by default;
     # degrades back to ``coder`` when the CLI is unavailable. The script it

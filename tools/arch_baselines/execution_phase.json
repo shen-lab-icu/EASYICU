@@ -5,7 +5,7 @@
   "files": {
     "execution/phase.py": {
       "loc": 11384,
-      "sha256": "3f498e07386053d72f52c1a99652ea029c764474c1f4c5584c0f176a43b8a24c",
+      "sha256": "83ad6b2d6c162caa08cc995cb4477dc46574215808092ceb3626643bb39ef378",
       "intra_package_import_edges": 73,
       "shim_bypass_violations": []
     },
@@ -64,9 +64,9 @@
       "shim_bypass_violations": []
     },
     "repairs/source.py": {
-      "loc": 6818,
-      "sha256": "1994338611f7d9a8881d2e5bd9785a7c44ead87813029d00841d2e59a445c720",
-      "intra_package_import_edges": 21,
+      "loc": 6825,
+      "sha256": "d2cab927f5719b0d6f36e9a2ff9de5943829e64484a13590d3bad670c8f8dbc5",
+      "intra_package_import_edges": 22,
       "shim_bypass_violations": []
     },
     "repairs/typed_input.py": {
@@ -88,8 +88,8 @@
       "shim_bypass_violations": []
     },
     "agents/core.py": {
-      "loc": 3860,
-      "sha256": "a8597e13d5c7dab121785405a9729227599d199855ae4f6cfb3f5bb80f4a4e5b",
+      "loc": 3881,
+      "sha256": "2d2778c580784d7360da26b184dbbac03a775300f5b6dccf882b9daa9ccc269d",
       "intra_package_import_edges": 29,
       "shim_bypass_violations": []
     },

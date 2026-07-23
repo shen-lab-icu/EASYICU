@@ -89,6 +89,7 @@ from .import_repair import (
     insert_after_imports,
     patch_known_host_helper_import,
 )
+from .input_scope import patch_raw_input_physical_superset_guard
 from .reasons import RepairReason
 from .typed_input import (
     patch_resolved_input_cohort_env_shadow,
@@ -5028,6 +5029,12 @@ def _deterministic_runner_repair(
         repaired = patch_known_host_helper_import(code, run_log)
         if repaired is not None and repaired != code:
             return host_helper_import_repair, repaired
+
+    input_scope_repair = "raw_input_physical_superset_guard_v1"
+    if previous_repair != input_scope_repair:
+        repaired = patch_raw_input_physical_superset_guard(code, run_log)
+        if repaired != code:
+            return input_scope_repair, repaired
 
     identity_key_repair = "resolved_input_identity_key_v1"
     if previous_repair != identity_key_repair and (

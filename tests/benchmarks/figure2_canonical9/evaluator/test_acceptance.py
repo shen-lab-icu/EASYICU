@@ -41,7 +41,8 @@ def _execution_identity(
         # to the identity constructor, which is the same immutable provenance
         # shape the real factory records after it has vetted a transport.
         provider_authorization={
-            "schema_version": "easyicu.provider_authorization_manifest/1",
+            "schema_version": "easyicu.provider_authorization_manifest/2",
+            "reasoning_effort_profile": "provider_default",
             "clients": [asdict(authorization)],
         },
         llm_seed=20260722,

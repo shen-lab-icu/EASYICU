@@ -1422,6 +1422,16 @@ def test_config_request_timeout_mismatch_blocks(tmp_path) -> None:
     assert "EXECUTION_CONFIG_MISMATCH" in _codes(auth)
 
 
+def test_config_reasoning_effort_profile_mismatch_blocks(tmp_path) -> None:
+    request, _ = _authorized_setup(tmp_path)
+    changed = _config_with(reasoning_effort_profile="adaptive_v1")
+    auth = verify_realrun_authorization(
+        _with_invocation(request, execution_config=changed)
+    )
+    assert auth.status == "blocked"
+    assert "EXECUTION_CONFIG_MISMATCH" in _codes(auth)
+
+
 def test_config_mutable_case_selector_blocks_even_when_pinned(tmp_path) -> None:
     request, paths = _authorized_setup(tmp_path)
     changed = build_canonical_execution_config(

@@ -323,6 +323,7 @@ _STRUCTURAL_REPAIRS = {
     "normalize_first_time_companion_v1",
     "observed_binary_primary_exposure_guard_v1",
     "primary_predictor_safe_summary_lookup_v1",
+    "raw_input_physical_superset_guard_v1",
     "provenance_bidirectional_pair_scan_v1",
     "provenance_checked_status_contract_v1",
     "provenance_custom_helper_to_host_receipt_v1",
