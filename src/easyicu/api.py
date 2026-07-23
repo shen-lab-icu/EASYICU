@@ -5060,13 +5060,16 @@ def _publish_native_export_v2(
             )
             saved = module_manifest.get("saved")
             if isinstance(saved, dict):
-                produced_concepts = {
-                    str(concept)
-                    for record in saved.values()
-                    if isinstance(record, dict)
-                    for concept in (record.get("concepts") or [])
-                    if isinstance(concept, str)
-                }
+                produced_concepts = set()
+                for saved_name, record in saved.items():
+                    if isinstance(saved_name, str):
+                        produced_concepts.add(saved_name)
+                    if isinstance(record, dict):
+                        produced_concepts.update(
+                            concept
+                            for concept in (record.get("concepts") or [])
+                            if isinstance(concept, str)
+                        )
         structurally_unavailable = {
             concept
             for concept in requested_concept_plan[module]
