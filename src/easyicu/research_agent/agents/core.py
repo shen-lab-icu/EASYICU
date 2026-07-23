@@ -75,6 +75,7 @@ from ..repairs.patch import (
 )
 from ..authority.coder_authority import HostCoderAuthority
 from ..research_context.prompt_scope import (
+    compact_rendering_coder_guide_for_step,
     coder_context_requires_method_constraints,
     coder_guide_for_step,
     coder_rewrite_guide_for_step,
@@ -1670,6 +1671,7 @@ _MAX_PRE_EXEC_COMPATIBILITY_REPAIRS = 2
 # finish_reason=="length" continuation rather than raising it blindly.
 _CODER_MAX_TOKENS = 8192
 _CODER_INITIAL_PROMPT_BYTE_LIMIT = 42_000
+_CODER_INITIAL_PROMPT_TARGET_BYTES = 38_000
 _CODER_PATCH_PROMPT_BYTE_LIMIT = 30_000
 _CODER_REWRITE_PROMPT_BYTE_LIMIT = 65_000
 _CODER_TYPED_PATCH_DIAGNOSTIC_BYTE_LIMIT = 768
@@ -2040,63 +2042,75 @@ class CoderAgent:
             for value in (requirement.outcome, requirement.exposure_source)
             if str(value or "").strip()
         )
+        user_content = (
+            f"Write the Python CODE for STEP {step.step_id}.\n"
+            f"Analysis-family context: {_family.key} ({_family.name}). "
+            "Use this only to reject method-incompatible substitutions. "
+            "Execute the planner-owned Method and Expected outputs below; "
+            "the family label does not authorize another method, estimand, "
+            "figure, or scientific product.\n"
+            f"Step intent: {step.intent}\n"
+            f"Step inputs: {step.inputs}\n"
+            f"Expected outputs: {step.expected_outputs}\n"
+            "Model requirements: "
+            f"{json.dumps([item.model_dump(mode='json') for item in step.model_requirements], ensure_ascii=False)}\n"
+            f"Method: {step.method or '(unspecified — choose conservatively)'}\n\n"
+            + _declared_output_scope_contract(step)
+            + _primary_analysis_cohort_output_contract(step)
+            + _cohort_predicate_partition_safety_contract(step)
+            + _typed_input_scope_contract(step)
+            + coder_method_capability_block()
+            + trajectory_phenotyping_code_contract(
+                context=context,
+                step=step,
+            )
+            + trajectory_role_code_contract(context=context, step=step)
+            + "\n\n"
+            "OUTPUT FORMAT — VERY IMPORTANT:\n"
+            "Return *only* a complete, runnable Python script. A "
+            "```python … ``` fence is acceptable; any text outside "
+            "the fence will be discarded. Do NOT include the cohort "
+            "data inline; read it from `os.environ['COHORT_PARQUET']`. "
+            "Do NOT print or describe what the script does — write "
+            "the script itself. Respect explicit user preferences "
+            "recorded in the ResearchContext, especially requested "
+            "outputs, evaluation metrics, timing rules, and design "
+            "constraints.\n\n"
+            "STEP-SCOPED RESEARCH CONTEXT:\n"
+            + _format_context(
+                scoped_context,
+                include_method_constraints=(
+                    coder_context_requires_method_constraints(step)
+                ),
+                include_materialized_input_facts=False,
+                include_planning_scaffolds=False,
+                detailed_variable_names=detailed_variable_names,
+                method_constraint_variable_names=detailed_variable_names,
+                include_ctas_aggregation_guidance=False,
+                compact_declared_source_companions=True,
+            )
+        )
         messages = [
             *_coder_system_messages(
                 scoped_guide=scoped_guide,
                 host_authority=host_authority,
             ),
-            LLMMessage(
-                role="user",
-                content=(
-                    f"Write the Python CODE for STEP {step.step_id}.\n"
-                    f"Analysis-family context: {_family.key} ({_family.name}). "
-                    "Use this only to reject method-incompatible substitutions. "
-                    "Execute the planner-owned Method and Expected outputs below; "
-                    "the family label does not authorize another method, estimand, "
-                    "figure, or scientific product.\n"
-                    f"Step intent: {step.intent}\n"
-                    f"Step inputs: {step.inputs}\n"
-                    f"Expected outputs: {step.expected_outputs}\n"
-                    "Model requirements: "
-                    f"{json.dumps([item.model_dump(mode='json') for item in step.model_requirements], ensure_ascii=False)}\n"
-                    f"Method: {step.method or '(unspecified — choose conservatively)'}\n\n"
-                    + _declared_output_scope_contract(step)
-                    + _primary_analysis_cohort_output_contract(step)
-                    + _cohort_predicate_partition_safety_contract(step)
-                    + _typed_input_scope_contract(step)
-                    + coder_method_capability_block()
-                    + trajectory_phenotyping_code_contract(
-                        context=context,
-                        step=step,
-                    )
-                    + trajectory_role_code_contract(context=context, step=step)
-                    + "\n\n"
-                    "OUTPUT FORMAT — VERY IMPORTANT:\n"
-                    "Return *only* a complete, runnable Python script. A "
-                    "```python … ``` fence is acceptable; any text outside "
-                    "the fence will be discarded. Do NOT include the cohort "
-                    "data inline; read it from `os.environ['COHORT_PARQUET']`. "
-                    "Do NOT print or describe what the script does — write "
-                    "the script itself. Respect explicit user preferences "
-                    "recorded in the ResearchContext, especially requested "
-                    "outputs, evaluation metrics, timing rules, and design "
-                    "constraints.\n\n"
-                    "STEP-SCOPED RESEARCH CONTEXT:\n"
-                    + _format_context(
-                        scoped_context,
-                        include_method_constraints=(
-                            coder_context_requires_method_constraints(step)
-                        ),
-                        include_materialized_input_facts=False,
-                        include_planning_scaffolds=False,
-                        detailed_variable_names=detailed_variable_names,
-                        method_constraint_variable_names=detailed_variable_names,
-                        include_ctas_aggregation_guidance=False,
-                        compact_declared_source_companions=True,
-                    )
-                ),
-            ),
+            LLMMessage(role="user", content=user_content),
         ]
+        if _coder_prompt_payload_bytes(
+            messages
+        ) > _CODER_INITIAL_PROMPT_TARGET_BYTES and _step_expects_figure(step):
+            scoped_guide = compact_rendering_coder_guide_for_step(
+                _CODER_GUIDE,
+                step,
+            )
+            messages = [
+                *_coder_system_messages(
+                    scoped_guide=scoped_guide,
+                    host_authority=host_authority,
+                ),
+                LLMMessage(role="user", content=user_content),
+            ]
         _enforce_coder_prompt_budget(
             messages,
             mode="initial_generation",

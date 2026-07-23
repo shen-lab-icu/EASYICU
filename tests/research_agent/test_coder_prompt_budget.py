@@ -15,6 +15,7 @@ from easyicu.research_agent.agents.core import (
 from easyicu.research_agent.repairs.patch import PATCH_FORMAT
 from easyicu.research_agent.authority.coder_authority import HostCoderAuthority
 from easyicu.research_agent.research_context.prompt_scope import (
+    compact_rendering_coder_guide_for_step,
     coder_context_requires_method_constraints,
     coder_guide_for_step,
     coder_rewrite_guide_for_step,
@@ -736,6 +737,62 @@ def test_typed_figure_owner_does_not_load_model_compatibility_scaffold(ra):
 
     assert "For rendering-only figure steps" in guide
     assert coder_context_requires_method_constraints(step) is False
+
+
+def test_wide_render_only_prompt_compacts_below_target_without_losing_authority(ra):
+    typed_inputs = [
+        "table:cohort_attrition",
+        "table:table_one",
+        "table:prevalence",
+        "table:outcome_incidence",
+        "table:missingness_profile",
+        "table:complete_case_attrition",
+        "table:exposure_qc",
+        "table:data_quality_source_status",
+        "table:adjusted_association_estimates",
+    ]
+    step = ra.AnalysisStep(
+        step_id="publication_overview",
+        intent="Render the declared digest-bound products without recomputation.",
+        inputs=typed_inputs,
+        expected_outputs=["figure:overview"],
+        method="visualization",
+    )
+    authority_marker = "host-authority-marker:" + ("x" * 13_000)
+    llm = _CaptureLLM(["import os\nvalue = 1\n"])
+
+    CoderAgent(llm).run(
+        context=_wide_context(ra),
+        step=step,
+        host_authority=HostCoderAuthority.from_values([authority_marker]),
+    )
+
+    messages = llm.calls[0][0]
+    payload = "\n".join(str(message.content or "") for message in messages)
+    assert _payload_bytes(messages) < 38_000
+    assert authority_marker in payload
+    assert str(typed_inputs) in payload
+    assert "EASYICU_RESOLVED_INPUTS_JSON" in payload
+    assert "save_publication_figure" in payload
+    assert "<stem>_source_data.csv" in payload
+    assert "fit a model" in payload
+    assert "first numeric column" not in payload
+
+
+def test_compact_rendering_guide_is_structural_not_intent_routed(ra):
+    step = ra.AnalysisStep(
+        step_id="neutral",
+        intent="Human prose contains no figure keywords.",
+        inputs=["table:source"],
+        expected_outputs=["figure:panel"],
+        method="visualization",
+    )
+
+    guide = compact_rendering_coder_guide_for_step(load_prompt_pack()["coder"], step)
+
+    assert "RENDER-ONLY PUBLICATION FIGURE CONTRACT:" in guide
+    assert "exact digest-bound typed inputs" in guide
+    assert "save matching PNG, SVG, PDF, and TIFF" in guide
 
 
 @pytest.mark.parametrize(
