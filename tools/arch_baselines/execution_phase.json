@@ -64,8 +64,8 @@
       "shim_bypass_violations": []
     },
     "repairs/source.py": {
-      "loc": 6825,
-      "sha256": "d2cab927f5719b0d6f36e9a2ff9de5943829e64484a13590d3bad670c8f8dbc5",
+      "loc": 6832,
+      "sha256": "02a07dc74bb4cc9269ee2719ebbd3bfd45a312787dd9f3603178942dc54f702f",
       "intra_package_import_edges": 22,
       "shim_bypass_violations": []
     },
@@ -88,8 +88,8 @@
       "shim_bypass_violations": []
     },
     "agents/core.py": {
-      "loc": 3881,
-      "sha256": "2d2778c580784d7360da26b184dbbac03a775300f5b6dccf882b9daa9ccc269d",
+      "loc": 3885,
+      "sha256": "50160cf2488fd5a53b50724a6d82419d4809b59afa1f3978cfd2f62d7a35ee92",
       "intra_package_import_edges": 29,
       "shim_bypass_violations": []
     },

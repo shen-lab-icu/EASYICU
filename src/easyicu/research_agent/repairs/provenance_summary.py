@@ -1509,6 +1509,140 @@ def _patch_named_provenance_summary(code: str) -> str:
     return repaired
 
 
+def patch_direct_host_receipt_source_guard(code: str, run_log: str) -> str:
+    """Remove one impossible direct-receipt ``source`` assertion and envelope it.
+
+    ``measurement_provenance_receipt`` returns one self-validating check record;
+    the ``source`` coordinate belongs to the step-summary envelope, not that
+    record. This patch is limited to the exact runtime diagnostic, one direct
+    host call, its redundant type/source guards, and one direct summary use.
+    """
+
+    diagnostic = "measurement provenance source is not cohort_parquet"
+    if diagnostic not in str(run_log or "").lower():
+        return code
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return code
+
+    exact_imports = [
+        node
+        for node in tree.body
+        if isinstance(node, ast.ImportFrom)
+        and node.level == 0
+        and node.module == "easyicu.research_agent.methods.descriptive_inputs"
+        and any(
+            alias.name == "measurement_provenance_receipt" and alias.asname is None
+            for alias in node.names
+        )
+    ]
+    if len(exact_imports) != 1:
+        return code
+    assignments = [
+        node
+        for node in tree.body
+        if isinstance(node, ast.Assign)
+        and len(node.targets) == 1
+        and isinstance(node.targets[0], ast.Name)
+        and isinstance(node.value, ast.Call)
+        and isinstance(node.value.func, ast.Name)
+        and node.value.func.id == "measurement_provenance_receipt"
+        and len(node.value.args) == 1
+        and not any(keyword.arg is None for keyword in node.value.keywords)
+        and {keyword.arg for keyword in node.value.keywords}
+        == {"measured_column", "count_column"}
+    ]
+    if len(assignments) != 1:
+        return code
+    receipt_name = assignments[0].targets[0].id
+
+    type_guards: list[ast.Expr] = []
+    source_guards: list[ast.Expr] = []
+    for node in tree.body:
+        if not (
+            isinstance(node, ast.Expr)
+            and isinstance(node.value, ast.Call)
+            and isinstance(node.value.func, ast.Name)
+            and node.value.func.id == "require"
+            and len(node.value.args) >= 2
+            and isinstance(node.value.args[1], ast.Constant)
+            and isinstance(node.value.args[1].value, str)
+        ):
+            continue
+        condition = node.value.args[0]
+        message = node.value.args[1].value.lower()
+        if (
+            message == "measurement_provenance_receipt did not return a mapping"
+            and isinstance(condition, ast.Call)
+            and isinstance(condition.func, ast.Name)
+            and condition.func.id == "isinstance"
+            and len(condition.args) == 2
+            and isinstance(condition.args[0], ast.Name)
+            and condition.args[0].id == receipt_name
+            and isinstance(condition.args[1], ast.Name)
+            and condition.args[1].id == "dict"
+        ):
+            type_guards.append(node)
+            continue
+        if message != diagnostic or not isinstance(condition, ast.Compare):
+            continue
+        if (
+            len(condition.ops) != 1
+            or not isinstance(condition.ops[0], ast.Eq)
+            or len(condition.comparators) != 1
+        ):
+            continue
+        candidates = (condition.left, condition.comparators[0])
+        source_get = next(
+            (
+                candidate
+                for candidate in candidates
+                if isinstance(candidate, ast.Call)
+                and isinstance(candidate.func, ast.Attribute)
+                and candidate.func.attr == "get"
+                and isinstance(candidate.func.value, ast.Name)
+                and candidate.func.value.id == receipt_name
+                and len(candidate.args) == 1
+                and isinstance(candidate.args[0], ast.Constant)
+                and candidate.args[0].value == "source"
+                and not candidate.keywords
+            ),
+            None,
+        )
+        source_literal = next(
+            (
+                candidate
+                for candidate in candidates
+                if isinstance(candidate, ast.Constant)
+                and candidate.value == "COHORT_PARQUET"
+            ),
+            None,
+        )
+        if source_get is not None and source_literal is not None:
+            source_guards.append(node)
+
+    if len(type_guards) != 1 or len(source_guards) != 1:
+        return code
+    lines = code.splitlines(keepends=True)
+    guards = sorted(
+        (*type_guards, *source_guards),
+        key=lambda item: item.lineno,
+        reverse=True,
+    )
+    for guard in guards:
+        if guard.end_lineno is None:
+            return code
+        del lines[guard.lineno - 1 : guard.end_lineno]
+    without_false_guards = "".join(lines)
+    try:
+        ast.parse(without_false_guards)
+    except SyntaxError:
+        return code
+    repaired = patch_direct_host_provenance_summary(without_false_guards)
+    return repaired if repaired != without_false_guards else code
+
+
 def patch_measurement_provenance_summary(code: str) -> str:
     """Apply one proven provenance-envelope normalization, fail-closed."""
 
@@ -1541,6 +1675,7 @@ def patch_measurement_provenance_contract(
 __all__ = [
     "patch_audit_only_companion_value_selector",
     "patch_direct_host_provenance_summary",
+    "patch_direct_host_receipt_source_guard",
     "patch_measurement_provenance_contract",
     "patch_measurement_provenance_summary",
     "patch_nested_host_provenance_summary",

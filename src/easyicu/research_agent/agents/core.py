@@ -1833,6 +1833,10 @@ def _typed_input_scope_contract(step: AnalysisStep) -> str:
         "physical columns merely to make the schemas equal, and preserve full "
         "row payload when producing a row-membership/cohort artifact unless the "
         "Planner explicitly declares a narrowed output schema.\n"
+        "- `measurement_provenance_receipt(...)` returns one self-validating "
+        "check record and has no `source` field. Never assert "
+        "`receipt.get('source')`. Publish it unchanged inside "
+        '`{"source":"COHORT_PARQUET","checks":[receipt]}` in the step summary.\n'
         "- manifest['inputs'] contains only host-bound typed products. A binding's "
         "product_contract describes the producer product's semantics; it does not "
         "define or widen this consumer step's input scope.\n"
