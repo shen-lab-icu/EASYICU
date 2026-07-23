@@ -392,3 +392,54 @@ worktree was intentionally dirty. Focused observed-domain, outbound, Table 1,
 and runtime-level binding checks are green; the new immutable image must next
 rebuild the context and replay the archived Step 05 script before another
 authority is issued.
+
+## Fresh E1 R3: typed operational exposure is model authority
+
+The rebuilt `source-bf2e8e1` image
+(`sha256:fbc963cd79a1e15b4687f9f2f7d30d763b67ae226b4a32174eea29a706eca1e6`)
+successfully replayed the archived Step 05 script with local numeric-binary
+levels `[0.0, 1.0]`. The next authorized canary is preserved at:
+
+`/Volumes/外置硬盘/easyicu_data/canonical9_runs/batch_20260723_luna_miiv_adaptive_bf2e8e1/e1_sepsis3_prevalence_mortality/aware/run_20260723T145650_0ce2e7`
+
+That real Luna run completed Steps 01--05. Step 06 then executed its adjusted
+logistic model successfully in Docker, but the early contract gate treated the
+Planner-owned operational primary source `sep3_sofa2_max` as an alternate SOFA
+covariate because ResearchContext retained the clinical concept name
+`sepsis3`. This produced two mutually inconsistent diagnostics:
+
+- the primary-model validator rejected `sep3_sofa2_max` even though the typed
+  `model_requirements` roster required it as the primary exposure source;
+- the overadjustment auditor interpreted the same primary predictor as a SOFA
+  constituent that should be removed from adjustment.
+
+The subsequent LLM contract repair therefore removed the true primary
+predictor and added unsupported `value_column=` arguments to
+`measurement_provenance_receipt`. The post-mutation mechanical gate correctly
+quarantined that draft before execution. The run remains diagnostic-only, and
+the batch canary again prevented E2--E9 from starting.
+
+Commit `af4a0d1` makes `AnalysisStep` the single typed authority for required
+PRIMARY exposure sources. Both model-contract reconciliation and the
+overadjustment audit now consume that authority. Only exact required PRIMARY
+sources are exempted; secondary/sensitivity sources cannot self-promote, and a
+distinct constituent such as `sofa_renal` still produces the overadjustment
+error.
+
+Verification:
+
+- exact archived Step 06 execution on the same 94,458-stay cohort: return code
+  0; primary OR 1.6077, 95% CI 1.5393--1.6791, analytic n=94,425;
+- the complete 14-validator early contract sequence on those replay outputs:
+  **0 findings / 0 errors**;
+- model-contract, overadjustment, repair, execution-phase, and gate adjacency:
+  **296 passed, 1 deselected** (the deselected legacy Replanner export test
+  targets an already-retired private import);
+- three new negative controls prove exact PRIMARY exemption, continued
+  constituent blocking, and no secondary-source exemption;
+- Ruff, Python compilation, `git diff --check`, architecture lower-is-better,
+  resource baseline, and zero-cycle module graph pass.
+
+The next action is to build a clean `af4a0d1`-based source image, run the
+source-bound integration check, issue a new execution identity and authority,
+and start another fresh E1. No old diagnostic run may be resumed or upgraded.
