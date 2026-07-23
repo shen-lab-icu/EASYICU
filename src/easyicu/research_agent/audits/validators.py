@@ -11346,6 +11346,14 @@ class FigureSourceDataValidator:
             present = raw.notna() & raw.astype(str).str.strip().ne("")
             if not present.any():
                 return False
+            # CSV round-trips commonly represent nullable boolean metadata as
+            # object dtype (for example ``[False, NaN]``). A name such as
+            # ``estimate_identical_to_primary`` contains the token
+            # ``estimate`` but remains a flag, not a numeric result. Treating
+            # it as numeric turns two identical ``False`` values into matching
+            # parse failures and falsely rejects an exact parent projection.
+            if pd.api.types.infer_dtype(raw[present], skipna=True) == "boolean":
+                return False
             parsed = _clean_numeric(raw[present])
             numeric_evidence = bool(
                 pd.api.types.is_numeric_dtype(raw) or parsed.notna().all()

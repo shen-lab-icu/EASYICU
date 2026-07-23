@@ -151,6 +151,43 @@ def test_fabricated_contrast_id_still_flagged(tmp_path: Path):
     assert res.get("reason") == "source_rows_not_in_upstream", res
 
 
+def test_nullable_boolean_metadata_does_not_break_exact_numeric_projection(
+    tmp_path: Path,
+):
+    upstream = tmp_path / "robustness_summary.csv"
+    pd.DataFrame(
+        {
+            "analysis": ["primary", "complete_case"],
+            "odds_ratio": [1.25, 1.20],
+            "estimate_identical_to_primary": [None, False],
+        }
+    ).to_csv(upstream, index=False)
+    source = pd.DataFrame(
+        {
+            "source_row_index": [0, 1],
+            "analysis": ["primary", "complete_case"],
+            "odds_ratio": [1.25, 1.20],
+            "estimate_identical_to_primary": [None, False],
+        }
+    )
+
+    clean = FigureSourceDataValidator._compare_source_to_upstream(
+        source_df=source,
+        source_path=tmp_path / "robustness_source_data.csv",
+        upstream_path=upstream,
+    )
+    assert clean.get("ok") is True, clean
+
+    source.loc[1, "odds_ratio"] = 9.99
+    drift = FigureSourceDataValidator._compare_source_to_upstream(
+        source_df=source,
+        source_path=tmp_path / "robustness_source_data.csv",
+        upstream_path=upstream,
+    )
+    assert drift.get("ok") is False, drift
+    assert drift.get("reason") == "source_values_disagree", drift
+
+
 def test_model_id_term_composite_key_disambiguates_shared_terms_and_flags_drift(
     tmp_path: Path,
 ):
