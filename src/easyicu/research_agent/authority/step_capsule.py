@@ -1444,6 +1444,7 @@ def _verify_capsule_contents(
     capsule: StepAuthorityCapsule,
     *,
     ancestry: Optional[frozenset[str]] = None,
+    verified: Optional[dict[str, str]] = None,
 ) -> str:
     current_digest = _sha256_bytes(
         _canonical_json_bytes(capsule.model_dump(mode="json"))
@@ -1451,6 +1452,9 @@ def _verify_capsule_contents(
     visited = ancestry or frozenset()
     if current_digest in visited:
         raise StepAuthorityCapsuleError("capsule ancestry contains a cycle")
+    verified_codes = verified if verified is not None else {}
+    if current_digest in verified_codes:
+        return verified_codes[current_digest]
     if len(visited) >= 256:
         raise StepAuthorityCapsuleError("capsule ancestry exceeds verification bound")
     visited = visited | {current_digest}
@@ -1546,7 +1550,12 @@ def _verify_capsule_contents(
     adopted_from = capsule.candidate_origin.adopted_from_capsule_sha256
     if adopted_from is not None:
         source = _load_capsule_model(root, adopted_from)
-        _verify_capsule_contents(root, source, ancestry=visited)
+        _verify_capsule_contents(
+            root,
+            source,
+            ancestry=visited,
+            verified=verified_codes,
+        )
         exact_science = _scientific_adoption_identity(
             source
         ) == _scientific_adoption_identity(capsule)
@@ -1570,8 +1579,14 @@ def _verify_capsule_contents(
             )
     if capsule.parent_capsule_sha256 is not None:
         parent = _load_capsule_model(root, capsule.parent_capsule_sha256)
-        _verify_capsule_contents(root, parent, ancestry=visited)
+        _verify_capsule_contents(
+            root,
+            parent,
+            ancestry=visited,
+            verified=verified_codes,
+        )
         _verify_parent_transition(capsule, parent=parent)
+    verified_codes[current_digest] = code
     return code
 
 

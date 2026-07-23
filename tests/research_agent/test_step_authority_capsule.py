@@ -587,6 +587,48 @@ def test_concurrent_capsule_sealing_is_idempotent(tmp_path: Path) -> None:
     )
 
 
+def test_shared_capsule_ancestry_is_verified_once_per_root_call(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    base = _candidate(tmp_path)
+    base_ref = seal_step_authority_capsule(tmp_path, base)
+    adopted_origin = base.candidate_origin.model_copy(
+        update={
+            "kind": "legacy_adoption",
+            "provider_category": None,
+            "provider_transport_id": None,
+            "adopted_from_capsule_sha256": base_ref.capsule_sha256,
+        }
+    )
+    adopted = _candidate(tmp_path, candidate_origin=adopted_origin)
+    adopted_ref = seal_step_authority_capsule(tmp_path, adopted)
+    audited = _candidate(
+        tmp_path,
+        stage="concept_audited",
+        parent_capsule_sha256=adopted_ref.capsule_sha256,
+        candidate_origin=adopted_origin,
+        concept_audit=_audit(tmp_path, adopted),
+    )
+
+    real_candidate_check = capsule_store._is_candidate_python
+    candidate_checks = 0
+
+    def counted_candidate_check(code: str) -> bool:
+        nonlocal candidate_checks
+        candidate_checks += 1
+        return real_candidate_check(code)
+
+    monkeypatch.setattr(capsule_store, "_is_candidate_python", counted_candidate_check)
+
+    seal_step_authority_capsule(tmp_path, audited)
+
+    # The root, adopted parent, and shared base are each content-verified once.
+    # The base capsule remains addressable from both ancestry edges without
+    # re-reading and re-validating every referenced blob.
+    assert candidate_checks == 3
+
+
 def test_code_blob_must_be_utf8_executable_python(tmp_path: Path) -> None:
     invalid_code = put_content_blob(
         tmp_path,
