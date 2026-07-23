@@ -1884,6 +1884,16 @@ def _typed_input_scope_contract(step: AnalysisStep) -> str:
             "Analyze only that joined typed cohort; never admit raw-only rows or "
             "reconstruct its eligibility rules.\n"
         )
+    typed_numeric_null_contract = ""
+    if typed_inputs:
+        typed_numeric_null_contract = (
+            "- A producer may truthfully leave a numeric cell null when that row or "
+            "field is explicitly not estimable, not independent, or not applicable. "
+            "Require finite values for every number actually used in this step's "
+            "calculation, claim, or figure, but do not reject an otherwise valid typed "
+            "table because an unused nullable field is blank. Never drop such rows or "
+            "replace semantic missingness with zero merely to pass validation.\n"
+        )
     return (
         "TYPED INPUT BINDING (binding):\n"
         "- EASYICU_RESOLVED_INPUTS_JSON is a filesystem path to a JSON document; "
@@ -1930,6 +1940,7 @@ def _typed_input_scope_contract(step: AnalysisStep) -> str:
         "repeats that key-and-value comparison.\n"
         "- Use `strict_numeric_input(original).values` for result-bearing numeric "
         "input. Capture/report any raw non-finite mask before calling it.\n"
+        f"{typed_numeric_null_contract}"
         "- Import `strict_numeric_input` and, for every exact Planner-declared "
         "measured/count pair, `measurement_provenance_receipt` from "
         "`easyicu.research_agent.methods.descriptive_inputs`; never define local "
@@ -2036,6 +2047,14 @@ def _compact_repair_scope_contract(step: AnalysisStep) -> str:
             "COHORT_PARQUET; do not require the two key sets to be identical. "
             "Join raw columns onto typed keys in typed-row order, Analyze only "
             "that joined typed cohort, and never admit raw-only rows."
+        )
+    if typed_inputs:
+        lines.append(
+            "- A typed numeric cell may be null when the producer explicitly records "
+            "that the field is not estimable, not independent, or not applicable. "
+            "Require finite values for numbers actually used by this step, but do not "
+            "reject the whole product for an unused nullable field. Never drop rows "
+            "or replace semantic missingness with zero to make validation pass."
         )
     lines.extend(
         [

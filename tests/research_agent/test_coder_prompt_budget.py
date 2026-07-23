@@ -148,6 +148,25 @@ def test_raw_input_scope_preserves_physical_superset_in_generation_and_repair(ra
         assert "preserve full row payload" in contract
 
 
+def test_typed_input_contract_validates_used_values_without_fabricating_nulls(ra):
+    step = ra.AnalysisStep(
+        step_id="render_robustness",
+        intent="Render a registered robustness comparison.",
+        inputs=["table:robustness_matrix", "statistic:robustness_summary"],
+        expected_outputs=["figure:robustness_plot"],
+        method="visualization",
+    )
+
+    contracts = (
+        _typed_input_scope_contract(step),
+        _compact_repair_scope_contract(step),
+    )
+    for contract in contracts:
+        assert "Require finite values for" in contract
+        assert "unused nullable field" in contract
+        assert "replace semantic missingness with zero" in contract
+
+
 def _payload_bytes(messages) -> int:  # noqa: ANN001
     return sum(len(str(message.content or "").encode("utf-8")) for message in messages)
 

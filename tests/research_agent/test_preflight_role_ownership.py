@@ -494,6 +494,18 @@ def test_robustness_runner_matches_separate_structured_comparison():
             "table:robustness_matrix",
         ],
     )
+    assert _robustness_sensitivity_runner_owns_step(
+        "robustness_sensitivity",
+        "06_complete_case_sensitivity",
+        [
+            "statistic:primary_or",
+            "statistic:complete_case_n",
+            "table:robustness_summary",
+            "log:missingness_strategy_notes",
+            "table:robustness_matrix",
+            "statistic:robustness_summary",
+        ],
+    )
 
 
 def test_alias_rich_cohort_sensitivity_contract_remains_agent_owned():
