@@ -263,3 +263,53 @@ Verification for the closure increment:
 - scorer, scoring-input, task sealer, bench integration, safety issuer, rubric,
   completion axes, and descriptive primitives: 227 passed;
 - Ruff and Black: passed.
+
+## Fresh E1 canary: derived-cohort cardinality must be runtime-owned
+
+The next authorized `8f62c65` E1 canary is preserved at:
+
+`/Volumes/外置硬盘/easyicu_data/canonical9_runs/batch_20260723_luna_miiv_adaptive_8f62c65/e1_sepsis3_prevalence_mortality/aware/run_20260723T135252_091c6c`
+
+The preceding scientific-contract and Step 04 API fixes held. The Planner
+defined a seven-step workflow, and Step 01 preserved both exposure levels. Its
+eligibility rule removed two stays with missing admission-time authority,
+materialising a 94,456-row analysis cohort from the 94,458-row run input.
+Step 02 then failed because generated code compared the current
+`COHORT_PARQUET` length with the initial ResearchContext cardinality, hard-coded
+as 94,458. One concept-audit repair and the bounded code repair retained the
+same stale literal, so the step failed twice. The run terminalised as
+`diagnostic_only`; the batch canary prevented E2--E9 from starting.
+
+This is a cross-step runtime-coordinate defect rather than a new E1-specific
+scientific rule. `ResearchContext.cohort.n_stays` can describe the pre-
+eligibility run input, while every downstream step consumes the current locked
+cohort. The closure therefore adds three case-neutral controls:
+
+- both host and Docker runners read only the Parquet footer and expose its
+  current cardinality as the reserved, host-owned
+  `EASYICU_COHORT_ROWS` coordinate;
+- Coder authority states that ordinary denominators come from the loaded frame
+  and any explicit integrity assertion must compare against that runtime
+  coordinate, never the initial context count;
+- the mechanical AST gate follows only a frame loaded from the host-owned
+  `COHORT_PARQUET` path. A positive literal compared with its direct length is
+  replaced deterministically with the host coordinate before any LLM repair.
+  Unrelated table lengths and already-dynamic checks are unchanged.
+
+The exact archived Step 02 script produces one such finding and the
+`execution_cohort_runtime_row_count_v1` repair changes only the stale literal:
+
+`if locked_n != int(__import__("os").environ["EASYICU_COHORT_ROWS"]):`
+
+Pre-image verification before the immutable-image replay:
+
+- new negative/positive runner and AST cases plus Provider-budget, typed-
+  artifact-lineage, and cohort-schema adjacency: **163 passed**;
+- architecture lower-is-better gate: no regression; `execution/phase.py`
+  remains exactly at baseline and `gates/preflight.py` is seven lines smaller;
+- resource/context envelope and zero-cycle module graph: passed;
+- Ruff, Black, Python compilation, and `git diff --check`: passed.
+
+Paper-facing progress remains 0/9. The `8f62c65` run is immutable diagnostic
+evidence only. A source-bound image must replay the archived Step 02 script
+successfully before a new authority and fresh E1 are issued.

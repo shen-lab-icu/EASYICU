@@ -101,6 +101,7 @@ HOST_OWNED_RUNNER_ENV_KEYS = frozenset(
         "COHORT_PATH",
         "EASYICU_COHORT_PATH",
         "EASYICU_COHORT_PARQUET",
+        "EASYICU_COHORT_ROWS",
         "STEP_OUT_DIR",
         "STEP_OUTPUT_DIR",
         "STEP_OUTPUT",
@@ -136,6 +137,18 @@ HOST_OWNED_RUNNER_ENV_KEYS = frozenset(
     }
 )
 _RUNNER_ENV_KEY_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\Z")
+
+
+def _parquet_row_count(path: Path) -> Optional[int]:
+    """Read the Parquet footer cardinality without scanning cohort columns."""
+
+    try:
+        import pyarrow.parquet as pq
+
+        count = int(pq.read_metadata(Path(path)).num_rows)
+    except (ImportError, OSError, TypeError, ValueError):
+        return None
+    return count if count >= 0 else None
 
 
 def _reject_docker_mount_field(value: str, *, label: str) -> None:
@@ -829,6 +842,9 @@ class CodeRunner:
         env["PYTHONDONTWRITEBYTECODE"] = "1"
         env["PYTHONPATH"] = str(Path(__file__).resolve().parents[3])
         env["COHORT_PARQUET"] = str(self.cohort_parquet)
+        cohort_rows = _parquet_row_count(self.cohort_parquet)
+        if cohort_rows is not None:
+            env["EASYICU_COHORT_ROWS"] = str(cohort_rows)
         env["STEP_OUT_DIR"] = str(out_dir)
         env["EASYICU_RUN_DIR"] = str(self.workdir.resolve())
         env["EASYICU_EVIDENCE_DIR"] = str((self.workdir / "evidence").resolve())
@@ -1674,6 +1690,9 @@ class DockerRunner:
             "MPLCONFIGDIR": "/tmp/matplotlib",
             "XDG_CACHE_HOME": "/tmp/.cache",
         }
+        cohort_rows = _parquet_row_count(self.cohort_parquet)
+        if cohort_rows is not None:
+            env["EASYICU_COHORT_ROWS"] = str(cohort_rows)
         env.update(rewritten_extra_env)
         if resolved_inputs_path is not None:
             relative_manifest = resolved_inputs_path.relative_to(self.workdir.resolve())

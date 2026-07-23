@@ -282,6 +282,7 @@ def test_build_command_has_safety_knobs(
     env_pairs = [cmd[i + 1] for i, tok in enumerate(cmd) if tok == "-e"]
     env_dict = dict(p.split("=", 1) for p in env_pairs)
     assert env_dict["COHORT_PARQUET"] == "/cohort.parquet"
+    assert env_dict["EASYICU_COHORT_ROWS"] == "2"
     assert env_dict["STEP_OUT_DIR"] == "/easyicu-step-output"
     assert env_dict["EASYICU_STEP_ID"] == "step_x"
     assert env_dict["EASYICU_RUN_DIR"] == "/easyicu-run"

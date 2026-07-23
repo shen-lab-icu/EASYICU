@@ -72,6 +72,34 @@ def test_runner_records_real_duration(ra, tmp_path: Path):
     assert "duration_seconds:" in log_text
 
 
+def test_code_runner_exposes_current_cohort_row_count(ra, tmp_path: Path):
+    cohort_path = tmp_path / "cohort.parquet"
+    pd.DataFrame({"stay_id": [1, 2, 3], "death": [0, 1, 0]}).to_parquet(
+        cohort_path,
+        index=False,
+    )
+    runner = ra.CodeRunner(
+        workdir=tmp_path / "run",
+        cohort_parquet=cohort_path,
+        timeout_seconds=10,
+        network_policy="allow",
+        allow_unsafe_host_fallback=True,
+    )
+
+    result = runner.run(
+        step_id="cohort_rows",
+        code=(
+            "import os\n"
+            "from pathlib import Path\n"
+            "Path(os.environ['STEP_OUT_DIR'], 'rows.txt').write_text("
+            "os.environ['EASYICU_COHORT_ROWS'])\n"
+        ),
+    )
+
+    assert result.succeeded
+    assert (result.out_dir / "rows.txt").read_text(encoding="utf-8") == "3"
+
+
 def test_code_runner_never_collects_generated_output_symlinks(ra, tmp_path: Path):
     cohort_path = tmp_path / "cohort.parquet"
     pd.DataFrame({"stay_id": [1], "death": [0]}).to_parquet(cohort_path, index=False)

@@ -6,6 +6,7 @@ from typing import Sequence
 
 from ..schema import ValidationFinding
 from .binary_feasibility import patch_binary_domain_before_authored_feasibility
+from .cohort_row_count import patch_hardcoded_execution_cohort_row_count
 from .domain_guards import patch_llm_proven_domain_guards
 from .host_helper_result import (
     patch_closed_counts_level_column,
@@ -57,6 +58,13 @@ def patch_concept_preflight_repairs(
     if candidate != repaired:
         repaired = candidate
         names.append("host_validation_helper_reraise_v1")
+    candidate = patch_hardcoded_execution_cohort_row_count(
+        repaired,
+        findings=findings,
+    )
+    if candidate != repaired:
+        repaired = candidate
+        names.append("execution_cohort_runtime_row_count_v1")
     return repaired, names
 
 
