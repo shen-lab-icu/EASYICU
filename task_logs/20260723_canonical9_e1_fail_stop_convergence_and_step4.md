@@ -313,3 +313,28 @@ Pre-image verification before the immutable-image replay:
 Paper-facing progress remains 0/9. The `8f62c65` run is immutable diagnostic
 evidence only. A source-bound image must replay the archived Step 02 script
 successfully before a new authority and fresh E1 are issued.
+
+The first `38beac7` source-bound replay confirmed the new row-count contract:
+the Docker environment contained `EASYICU_COHORT_ROWS=94456`, and the original
+94,458-versus-94,456 exception disappeared. Execution then reached the next
+lineage boundary and exposed a second projection mismatch. The Coder had copied
+`observed_shape.opaque_levels` from its outbound-safe prompt view into a lookup
+against the digest-verified local ResearchContext JSON. The local schema
+correctly stores the private execution binding as `observed_domain.levels`, so
+the script raised `KeyError: 'observed_shape'`.
+
+This does not justify exposing category literals to the Provider. The
+case-neutral closure keeps both views:
+
+- Provider prompts retain only `observed_shape.opaque_levels`;
+- the generated source contains no real category label;
+- a narrow AST finding rewrites only the exact outbound projection lookup to
+  `observed_domain.levels` before execution, so
+  `closed_categorical_counts` receives the SHA-bound local levels;
+- unrelated shape metadata and already-correct runtime lookups are unchanged.
+
+The two projection-bridge controls and the preceding row-count/runner and
+lineage matrix pass **165/165**. Architecture remains below the frozen
+lower-is-better baseline, with no module cycle or resource-envelope expansion.
+A rebuilt image must now replay the same archived script through both corrected
+boundaries before authority issuance.

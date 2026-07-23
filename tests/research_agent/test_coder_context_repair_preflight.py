@@ -6567,3 +6567,59 @@ if len(display_rows) != 2:
         (finding.detail or {}).get("reason") == "execution_cohort_row_count_hardcoded"
         for finding in audit_mechanical_code_contracts(code, step)
     )
+
+
+def test_outbound_opaque_levels_bind_to_digest_verified_local_context(ra):
+    step = ra.AnalysisStep(
+        step_id="cohort_summary",
+        intent="Summarize a closed categorical distribution.",
+        inputs=["sex"],
+        expected_outputs=["table:cohort_summary"],
+        method="descriptive_summary",
+    )
+    code = """\
+sex_metadata = next(
+    variable for variable in context["variables"] if variable["name"] == "sex"
+)
+sex_levels = sex_metadata["observed_shape"]["opaque_levels"]
+"""
+
+    findings = audit_mechanical_code_contracts(code, step)
+    level_findings = [
+        finding
+        for finding in findings
+        if (finding.detail or {}).get("reason")
+        == "runtime_context_opaque_levels_projection"
+    ]
+
+    assert len(level_findings) == 1
+    repaired, names = deterministic_concept_audit_repair(
+        code,
+        [level_findings[0].message],
+        repair_findings=level_findings,
+    )
+    assert names == ["runtime_context_private_levels_v1"]
+    assert "sex_metadata['observed_domain']['levels']" in repaired
+    assert "Female" not in repaired
+    assert "Male" not in repaired
+    assert not audit_mechanical_code_contracts(repaired, step)
+
+
+def test_runtime_context_level_bridge_does_not_rewrite_unrelated_shape_metadata(ra):
+    step = ra.AnalysisStep(
+        step_id="cohort_summary",
+        intent="Inspect a safe metadata projection.",
+        inputs=["sex"],
+        expected_outputs=["table:cohort_summary"],
+        method="descriptive_summary",
+    )
+    code = """\
+shape = variable["observed_shape"]["shape"]
+levels = variable["observed_domain"]["levels"]
+"""
+
+    assert not any(
+        (finding.detail or {}).get("reason")
+        == "runtime_context_opaque_levels_projection"
+        for finding in audit_mechanical_code_contracts(code, step)
+    )

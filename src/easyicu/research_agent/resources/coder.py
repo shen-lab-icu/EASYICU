@@ -521,7 +521,12 @@ def bind_execution_cohort_runtime(
         "as the current row count. Derive ordinary denominators from the loaded "
         "DataFrame. If an explicit row-count integrity assertion is needed, "
         "compare len(the loaded COHORT_PARQUET frame) with "
-        'int(os.environ["EASYICU_COHORT_ROWS"]); the runner owns that value.'
+        'int(os.environ["EASYICU_COHORT_ROWS"]); the runner owns that value. '
+        "The prompt's outbound-safe variable view uses "
+        "observed_shape.opaque_levels, but the digest-verified local "
+        "ResearchContext JSON uses observed_domain.levels. Read the latter only "
+        "at local execution time when closed categorical helpers need the real "
+        "binding; never copy private literals into generated source."
     )
 
 

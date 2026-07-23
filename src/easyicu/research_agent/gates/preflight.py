@@ -21,6 +21,7 @@ from .ast_semantics import (
     contains_literal_provenance_audit_row,
     execution_cohort_row_count_findings as _cohort_count_findings,
     literal_observational_getattr,
+    runtime_context_opaque_level_findings as _runtime_context_level_findings,
 )
 from .binary_feasibility import binary_feasibility_guard_findings
 from .host_helper_result import (
@@ -8349,7 +8350,9 @@ def audit_mechanical_code_contracts(
     findings.extend(_strict_numeric_nonfinite_findings(tree))
     findings.extend(_categorical_level_reconciliation_findings(tree))
     findings.extend(
-        binary_feasibility_guard_findings(tree) + _cohort_count_findings(tree)
+        binary_feasibility_guard_findings(tree)
+        + _cohort_count_findings(tree)
+        + _runtime_context_level_findings(tree)
     )
     return findings
 
