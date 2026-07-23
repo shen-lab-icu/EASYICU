@@ -212,26 +212,38 @@ def _module_record(
         )
     rows, columns = _schema_columns(export_root / parquet_relative)
     declared_rows = output.get("rows")
-    if not isinstance(declared_rows, int) or isinstance(declared_rows, bool):
-        raise SchemaInventoryBuildError(
-            f"{manifest_relative} has no integer saved row count"
-        )
-    if rows != declared_rows:
-        raise SchemaInventoryBuildError(
-            f"{parquet_relative} row count differs from its module manifest"
-        )
+    row_count_matches_manifest: bool | None = None
+    manifest_missing_fields: list[str] = []
+    manifest_invalid_fields: list[str] = []
+    if declared_rows is None:
+        manifest_missing_fields.append("rows")
+    elif not isinstance(declared_rows, int) or isinstance(declared_rows, bool):
+        manifest_invalid_fields.append("rows")
+        declared_rows = None
+    else:
+        row_count_matches_manifest = rows == declared_rows
     concepts = output.get("concepts")
-    if not isinstance(concepts, list) or not all(
+    if concepts is None:
+        manifest_missing_fields.append("concepts")
+    elif not isinstance(concepts, list) or not all(
         isinstance(value, str) and value for value in concepts
     ):
-        raise SchemaInventoryBuildError(
-            f"{manifest_relative} has invalid saved concepts"
-        )
+        manifest_invalid_fields.append("concepts")
+        concepts = None
     record.update(
         {
             "state": "schema_observed_not_source_attested",
             "saved_output_names": sorted(manifest["saved"]),
-            "declared_concepts": list(concepts),
+            "manifest_completeness": (
+                "complete"
+                if not manifest_missing_fields and not manifest_invalid_fields
+                else "partial_or_invalid"
+            ),
+            "manifest_missing_fields": manifest_missing_fields,
+            "manifest_invalid_fields": manifest_invalid_fields,
+            "manifest_declared_row_count": declared_rows,
+            "row_count_matches_manifest": row_count_matches_manifest,
+            "declared_concepts": list(concepts) if concepts is not None else None,
             "data_file": {
                 "relative_path": parquet_relative,
                 "sha256": parquet_identity["sha256"],
