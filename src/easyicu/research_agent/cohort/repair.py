@@ -28,6 +28,7 @@ filled with a first-24h default rather than rejected.
 from __future__ import annotations
 
 import json
+import re
 from typing import Any, Optional, Sequence
 
 from .schema import (
@@ -71,6 +72,29 @@ _SYSTEM = (
     "what the prose explicitly states. If the prose states no concrete, "
     "column-checkable criterion, return an empty inclusion list."
 )
+
+_NO_FILTER_INTENT = re.compile(
+    r"\b(?:preserv(?:e|ing)|retain(?:ing)?)\s+(?:the\s+)?"
+    r"(?:full|entire|complete)\s+(?:denominator|cohort|population)\b|"
+    r"\b(?:all|every)\s+(?:supplied|provided|available|input)\s+"
+    r"(?:icu\s+)?(?:stay|stays|row|rows|record|records)\b",
+    re.IGNORECASE,
+)
+_EXPLICIT_FILTER_INTENT = re.compile(
+    r"(?:>=|<=|==|!=|(?<!-)[<>](?!=))|"
+    r"\b(?:includ(?:e|es|ed|ing)|exclud(?:e|es|ed|ing)|eligib(?:le|ility)|"
+    r"only|minimum|maximum|at\s+least|at\s+most|greater\s+than|less\s+than|"
+    r"adult|aged?|missing|non[- ]?missing|recorded|required?)\b",
+    re.IGNORECASE,
+)
+
+
+def _explicitly_unfiltered_cohort(prose: str) -> bool:
+    """Return whether prose declares a full denominator with no eligibility."""
+
+    return bool(_NO_FILTER_INTENT.search(prose)) and not bool(
+        _EXPLICIT_FILTER_INTENT.search(prose)
+    )
 
 
 def _user_prompt(*, cohort_prose: str, universe_columns: Sequence[str]) -> str:
@@ -171,6 +195,8 @@ def extract_cohort_definition_from_prose(
     pass predicate validation.
     """
     if not (cohort_prose or "").strip() or not universe_columns:
+        return None
+    if _explicitly_unfiltered_cohort(cohort_prose):
         return None
     columns = {str(c) for c in universe_columns}
     try:
