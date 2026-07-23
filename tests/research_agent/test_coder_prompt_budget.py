@@ -29,6 +29,7 @@ from easyicu.research_agent.schema import (
     MissingnessProfile,
     TemporalConstraint,
     UserPreferences,
+    ValidationFinding,
 )
 from easyicu.research_agent.authority.step_capsule import (
     ContentRef,
@@ -1184,6 +1185,83 @@ def test_typed_patch_keeps_diagnostic_mirror_small_without_truncating_ticket(ra)
     assert "bounded diagnostic omitted" in diagnostic
     assert RepairReason.ARBITRARY_COLUMN_FALLBACK.value in payload
     assert '"line": 82' in payload
+
+
+def test_real_sized_helper_repair_compacts_code_not_typed_authority(ra):
+    old_call = """receipt = measurement_provenance_receipt(
+        measured,
+        counts,
+        measured_column=measured_column,
+        count_column=count_column,
+    )"""
+    new_call = """receipt = measurement_provenance_receipt(
+        frame,
+        measured_column=measured_column,
+        count_column=count_column,
+    )"""
+    neighboring_statements = "\n".join(
+        f'    context_{index} = "{"x" * 600}"' for index in range(9)
+    )
+    code = (
+        "from easyicu.research_agent.methods.descriptive_inputs import "
+        "measurement_provenance_receipt\n\n"
+        "def audit(frame, measured, counts, measured_column, count_column):\n"
+        + neighboring_statements
+        + "\n    "
+        + old_call
+        + '\n    return receipt\n\nprint("ready")\n'
+    )
+    call_line = next(
+        index
+        for index, line in enumerate(code.splitlines(), start=1)
+        if "receipt = measurement_provenance_receipt(" in line
+    )
+    finding = ValidationFinding(
+        validator="mechanical_code_preflight",
+        severity="error",
+        message="A host helper call violates its stable argument contract.",
+        detail={
+            "reason": "host_helper_call_signature_invalid",
+            "helper_name": "measurement_provenance_receipt",
+            "line": call_line,
+            "max_positional": 1,
+            "required_keywords": ["measured_column", "count_column"],
+            "violations": ["keyword_only_parameters_passed_positionally"],
+        },
+    )
+    repair_authority = RepairPromptAuthority.create(findings=[finding])
+    host_attachment = (
+        "HOST-VERIFIED MATERIALIZED INPUT AND TYPED PARENT AUTHORITY:\n" + "a" * 12_000
+    )
+    patch = json.dumps(
+        {
+            "format": PATCH_FORMAT,
+            "edits": [
+                {"old": old_call, "new": new_call, "expected_count": 1},
+            ],
+        }
+    )
+    llm = _CaptureLLM([patch])
+
+    repaired = CoderAgent(llm).repair(
+        context=_wide_context(ra),
+        step=_quality_step(ra),
+        host_authority=HostCoderAuthority().append(host_attachment),
+        code=code,
+        run_log=finding.message,
+        repair_authority=repair_authority,
+        current_repair_authority=repair_authority,
+    )
+    messages = llm.calls[0][0]
+    payload = "\n".join(str(message.content or "") for message in messages)
+
+    assert _payload_bytes(messages) <= 30_000
+    assert repaired != code
+    assert new_call in repaired
+    assert old_call in payload
+    assert host_attachment in payload
+    assert '"reason": "host_helper_call_signature_invalid"' in payload
+    assert f'"line": {call_line}' in payload
 
 
 def test_bounded_repair_excerpt_never_promotes_embedded_authority_markers():
