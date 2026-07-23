@@ -6,7 +6,7 @@ from easyicu.research_agent.agents.agentic_coder import AgenticCoderAgent
 from easyicu.research_agent.agents.core import CoderAgent as _ProductionCoderAgent
 from easyicu.research_agent.authority.coder_authority import HostCoderAuthority
 from easyicu.research_agent.providers.llm import LLMMessage
-from easyicu.research_agent.execution.phase import (
+from easyicu.research_agent.authority.typed_binding import (
     _coder_authority_with_typed_parent_schema_receipts,
     _typed_parent_schema_context_block,
 )
@@ -15,13 +15,10 @@ from easyicu.research_agent.repairs.reasons import RepairPromptAuthority, Repair
 from easyicu.research_agent.schema import AnalysisStep, PlannedModelRequirement
 
 
-class _RecordingLLM:
-    def __init__(self) -> None:
-        self.messages: list[LLMMessage] = []
+def _RecordingLLM():
+    from easyicu.research_agent.providers.mocks import ScriptedMockLLMClient
 
-    def complete(self, messages, **kwargs):  # noqa: ANN001, ANN003
-        self.messages = list(messages)
-        return "import os\n"
+    return ScriptedMockLLMClient(["import os\n"], repeat_last=True)
 
 
 def _test_host_repair_authority(run_log: str) -> RepairPromptAuthority:
@@ -277,10 +274,10 @@ def test_coder_context_exposes_registered_source_concept_metadata(ra):
     CoderAgent(llm).run(context=context, step=step)
 
     prompt = llm.messages[-1].content
-    assert "source_concept=treatment_event" in prompt
-    assert "description='Registered treatment event indicator'" in prompt
-    assert "role=intervention" in prompt
-    assert "observed=CONSTANT(single value; no variation to model)" in prompt
+    assert '"source_concept":"treatment_event"' in prompt
+    assert '"role":"intervention"' in prompt
+    assert '"shape":"constant"' in prompt
+    assert "Registered treatment event indicator" not in prompt
 
 
 def test_coder_repair_requires_standard_helper_after_sparse_event_diagnosis(ra):
@@ -366,7 +363,7 @@ def test_coder_sparse_event_repair_surfaces_referenced_context_metadata(ra):
     assert '"name": "treatment_first"' in metadata_line
     assert '"source_concept": "treatment_event"' in metadata_line
     assert '"role": "intervention"' in metadata_line
-    assert '"description": "Registered treatment event indicator"' in metadata_line
+    assert "Registered treatment event indicator" not in metadata_line
     assert "unreferenced_first" not in metadata_line
 
 
@@ -394,7 +391,7 @@ def test_coder_repair_preserves_standard_helper_across_later_traceback(ra):
         run_log="TypeError: cannot convert the series to int",
     )
 
-    prompt = llm.messages[-1].content
+    prompt = "\n".join(message.content for message in llm.messages)
     assert "DIAGNOSED SPARSE-EVENT REPAIR (binding)" in prompt
     assert "Do not replace those columns" in prompt
     assert "`BinaryEventPresenceResult` dataclass, NOT a dictionary" in prompt
@@ -1007,9 +1004,9 @@ def test_coder_repair_removes_untraceable_figure_audit_columns(ra):
         ),
     )
 
-    prompt = llm.messages[-1].content
+    prompt = "\n".join(message.content for message in llm.messages)
     assert "DIAGNOSED FIGURE SOURCE-DATA TRACE REPAIR" in prompt
-    assert "remove unplotted derived numeric/boolean audit fields" in prompt
+    assert "Remove unplotted derived numeric/boolean audit fields" in prompt
     assert "Keep such checks internal" in prompt
 
 

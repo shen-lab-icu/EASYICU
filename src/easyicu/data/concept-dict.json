@@ -8424,6 +8424,32 @@
      "callback": "transform_fun(set_val(TRUE))",
      "_comment": "2026-07-18 fix: MIMIC-III had NO mech_circ_support source (extracted empty) despite chartevents holding IABP/LVAD/RVAD data. Mirrors miiv MetaVision itemids (shared d_items; itemids absent in MIMIC-III drop naturally). Excludes CareVue low-number ambiguous itemids and ECMO (separate concept)."
     }
+   ],
+   "mimic_demo": [
+    {
+     "table": "chartevents",
+     "sub_var": "itemid",
+     "ids": [
+      224309,
+      224652,
+      224654,
+      224311,
+      224310,
+      224322,
+      227980,
+      228866,
+      225979,
+      228154,
+      228156,
+      228151,
+      228158,
+      228198,
+      229254,
+      220128
+     ],
+     "callback": "transform_fun(set_val(TRUE))",
+     "_comment": "2026-07-18 fix: MIMIC-III had NO mech_circ_support source (extracted empty) despite chartevents holding IABP/LVAD/RVAD data. Mirrors miiv MetaVision itemids (shared d_items; itemids absent in MIMIC-III drop naturally). Excludes CareVue low-number ambiguous itemids and ECMO (separate concept)."
+    }
    ]
   }
  },

@@ -1306,6 +1306,7 @@ class DockerRunner:
     CONTAINER_EXTRA_ROOT = "/easyicu-extra"
     GHOST_MONITOR_GRACE_SECONDS = 2.0
     GHOST_MONITOR_INTERVAL_SECONDS = 0.25
+    RUNTIME_PROVENANCE_MAX_ATTEMPTS = 2
 
     def __init__(
         self,
@@ -1816,13 +1817,6 @@ class DockerRunner:
                 Path(__file__).resolve().parents[1]
             )
 
-            attempt_id = uuid.uuid4().hex
-            cidfile = self._docker_cidfile_path(attempt_id)
-            sentinel = self.workdir / (
-                f".docker-runtime-provenance-{attempt_id}.sentinel"
-            )
-            container_name = f"easyicu-ra-{attempt_id}"
-            self._write_regular_file(sentinel, f"name:{container_name}\n")
             distribution_script = (
                 "import hashlib\n"
                 "from pathlib import Path\n"
@@ -1851,34 +1845,62 @@ class DockerRunner:
                 "        rows[name.casefold()] = f'{name}=={version}'\n"
                 "print('\\n'.join(rows[key] for key in sorted(rows)))\n"
             )
-            capture_cmd = [
-                self.docker_executable,
-                "run",
-                f"--cidfile={cidfile}",
-                f"--name={container_name}",
-                "--network=none",
-                "--read-only",
-                "--cap-drop=ALL",
-                "--security-opt=no-new-privileges",
-                "--tmpfs=/tmp:rw,noexec,nosuid,size=32m",
-                *([f"--user={self.user}"] if self.user else []),
-                "-e",
-                "HOME=/tmp",
-                image_id,
-                "python",
-                "-c",
-                distribution_script,
-            ]
-            try:
-                capture_proc = subprocess.run(  # noqa: S603 - argv list, no shell
-                    capture_cmd,
-                    capture_output=True,
-                    text=True,
-                    timeout=max(15.0, min(self.timeout_seconds, 60.0)),
-                    encoding="utf-8",
-                    errors="replace",
+            capture_proc: Optional[subprocess.CompletedProcess[str]] = None
+            for attempt_index in range(self.RUNTIME_PROVENANCE_MAX_ATTEMPTS):
+                attempt_id = uuid.uuid4().hex
+                cidfile = self._docker_cidfile_path(attempt_id)
+                sentinel = self.workdir / (
+                    f".docker-runtime-provenance-{attempt_id}.sentinel"
                 )
-            except subprocess.TimeoutExpired as exc:
+                container_name = f"easyicu-ra-{attempt_id}"
+                self._write_regular_file(sentinel, f"name:{container_name}\n")
+                capture_cmd = [
+                    self.docker_executable,
+                    "run",
+                    f"--cidfile={cidfile}",
+                    f"--name={container_name}",
+                    "--network=none",
+                    "--read-only",
+                    "--cap-drop=ALL",
+                    "--security-opt=no-new-privileges",
+                    "--tmpfs=/tmp:rw,noexec,nosuid,size=32m",
+                    *([f"--user={self.user}"] if self.user else []),
+                    "-e",
+                    "HOME=/tmp",
+                    image_id,
+                    "python",
+                    "-c",
+                    distribution_script,
+                ]
+                try:
+                    capture_proc = subprocess.run(  # noqa: S603 - argv list, no shell
+                        capture_cmd,
+                        capture_output=True,
+                        text=True,
+                        timeout=max(15.0, min(self.timeout_seconds, 60.0)),
+                        encoding="utf-8",
+                        errors="replace",
+                    )
+                except subprocess.TimeoutExpired as exc:
+                    container_ref = self._required_container_reference(
+                        cidfile,
+                        fallback_name=container_name,
+                    )
+                    teardown_confirmed, cleanup_note = self._teardown_container(
+                        container_ref
+                    )
+                    if teardown_confirmed:
+                        sentinel.unlink(missing_ok=True)
+                        cidfile.unlink(missing_ok=True)
+                    if (
+                        teardown_confirmed
+                        and attempt_index + 1 < self.RUNTIME_PROVENANCE_MAX_ATTEMPTS
+                    ):
+                        continue
+                    raise RuntimeError(
+                        "Docker execution-runtime dependency capture timed out "
+                        f"after {attempt_index + 1} attempt(s). " + cleanup_note.strip()
+                    ) from exc
                 container_ref = self._required_container_reference(
                     cidfile,
                     fallback_name=container_name,
@@ -1886,25 +1908,19 @@ class DockerRunner:
                 teardown_confirmed, cleanup_note = self._teardown_container(
                     container_ref
                 )
-                if teardown_confirmed:
-                    sentinel.unlink(missing_ok=True)
-                    cidfile.unlink(missing_ok=True)
+                if not teardown_confirmed:
+                    raise RuntimeError(
+                        "Docker execution-runtime dependency capture completed, but "
+                        "container teardown could not be confirmed. "
+                        + cleanup_note.strip()
+                    )
+                sentinel.unlink(missing_ok=True)
+                cidfile.unlink(missing_ok=True)
+                break
+            if capture_proc is None:  # pragma: no cover - loop contract guard
                 raise RuntimeError(
-                    "Docker execution-runtime dependency capture timed out. "
-                    + cleanup_note.strip()
-                ) from exc
-            container_ref = self._required_container_reference(
-                cidfile,
-                fallback_name=container_name,
-            )
-            teardown_confirmed, cleanup_note = self._teardown_container(container_ref)
-            if not teardown_confirmed:
-                raise RuntimeError(
-                    "Docker execution-runtime dependency capture completed, but "
-                    "container teardown could not be confirmed. " + cleanup_note.strip()
+                    "Docker execution-runtime dependency capture produced no result"
                 )
-            sentinel.unlink(missing_ok=True)
-            cidfile.unlink(missing_ok=True)
             requirements = capture_proc.stdout.strip()
             if capture_proc.returncode != 0 or not requirements:
                 raise RuntimeError(

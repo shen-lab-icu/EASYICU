@@ -10,6 +10,7 @@ import pytest
 
 from easyicu.research_agent.authority.evidence_store import EvidenceStore
 from easyicu.research_agent.contracts.runtime import RunResult
+from easyicu.research_agent.providers.mocks import PatternScriptedMockLLMClient
 from easyicu.research_agent.schema import ValidationFinding
 from easyicu.research_agent.trajectory.plan_contract import (
     STABILITY_EXECUTOR_INPUTS,
@@ -156,37 +157,31 @@ def _trajectory_plan() -> dict[str, Any]:
     }
 
 
-class _TerminalPlanLLM:
-    name = "trajectory-terminal-sentinel-test"
-
-    def __init__(self) -> None:
-        self.repair_calls = 0
-        self.write_calls = 0
-
-    def complete(self, messages, *, max_tokens=2048, temperature=0.2):
-        del max_tokens, temperature
-        user = next(
+def _terminal_plan_llm() -> PatternScriptedMockLLMClient:
+    return PatternScriptedMockLLMClient(
+        [
+            ("ICU-AWARE RESEARCH PLAN", [json.dumps(_trajectory_plan())]),
+            ("WRITE THE PYTHON CODE", [_TRIVIAL_CODE] * 4),
+            ("REPAIR THE PYTHON CODE", [_TRIVIAL_CODE] * 4),
             (
-                message.content
-                for message in reversed(messages)
-                if message.role == "user"
+                "INTERPRET THE RESULTS",
+                ["The registered supporting products were reviewed."] * 4,
             ),
-            "",
-        )
-        upper = user.upper()
-        if "ICU-AWARE RESEARCH PLAN" in upper:
-            return json.dumps(_trajectory_plan())
-        if "REPAIR THE PYTHON CODE" in upper:
-            self.repair_calls += 1
-            return _TRIVIAL_CODE
-        if "WRITE THE PYTHON CODE" in upper:
-            self.write_calls += 1
-            return _TRIVIAL_CODE
-        if "INTERPRET THE RESULTS" in upper:
-            return "The registered supporting products were reviewed."
-        if "EVERY FINDING MUST INCLUDE" in upper and "RETURN JSON ONLY" in upper:
-            return json.dumps({"findings": []})
-        return "{}"
+            (
+                "EVERY FINDING MUST INCLUDE",
+                [json.dumps({"findings": []})] * 4,
+            ),
+        ]
+    )
+
+
+def _call_count(client, marker: str) -> int:
+    folded = marker.casefold()
+    return sum(
+        folded
+        in "\n".join(str(message.content or "") for message in messages).casefold()
+        for messages, _kwargs in client.calls
+    )
 
 
 class _TerminalRunner:
@@ -203,6 +198,10 @@ class _TerminalRunner:
         self.timeout_seconds = float(timeout_seconds)
         self.calls: list[str] = []
         self.exact_binding_consumption = exact_binding_consumption
+
+    @staticmethod
+    def validate_runtime_capabilities() -> tuple[str, ...]:
+        return ("numpy", "pandas", "scipy", "sklearn")
 
     @staticmethod
     def _write_json(path: Path, payload: dict[str, Any]) -> None:
@@ -449,6 +448,19 @@ def _run_terminal_case(
     stability_mode: str,
 ):
     _disable_unrelated_step_audits(monkeypatch)
+    from easyicu.research_agent.agents.core import PlannerAgent
+
+    original_planner_run = PlannerAgent.run
+
+    def run_without_unrelated_article_suite(self, context, **kwargs):
+        kwargs["enforce_article_contract"] = False
+        return original_planner_run(self, context, **kwargs)
+
+    monkeypatch.setattr(
+        PlannerAgent,
+        "run",
+        run_without_unrelated_article_suite,
+    )
     if stability_mode == "preexecution_concept_error":
         from easyicu.research_agent.execution import phase as pipeline_execute
 
@@ -493,7 +505,7 @@ def _run_terminal_case(
                 else []
             ),
         )
-    llm = _TerminalPlanLLM()
+    llm = _terminal_plan_llm()
     runner_holder: dict[str, _TerminalRunner] = {}
     exact_binding_consumption: dict[str, set[str]] = {}
 
@@ -580,7 +592,7 @@ def test_trajectory_stability_terminal_failures_never_enter_repair_or_fallback(
     assert stability_record["status"] == "deterministic_standard_blocked"
     assert stability_record["diagnostic_only"] is True
     assert stability_record["standard_executor_terminal_reason"] == expected_reason
-    assert llm.repair_calls == 0
+    assert _call_count(llm, "REPAIR THE PYTHON CODE") == 0
     assert runner.exact_binding_consumption.get("02_candidates") == {
         "artifact:trajectory_representation",
         "manifest:trajectory_representation_schema",
@@ -710,7 +722,7 @@ def test_unsafe_runner_mount_short_circuits_before_any_output_probe(
     assert stability_record["runner_output_safety_reason"] == (
         "runner_output_teardown_unconfirmed"
     )
-    assert llm.repair_calls == 0
+    assert _call_count(llm, "REPAIR THE PYTHON CODE") == 0
     assert runner.calls.count("03_stability") == 1
     assert [
         claim
@@ -755,7 +767,7 @@ def test_ordinary_unsafe_runner_mount_never_enters_repair_or_evidence(
     assert failed_record["runner_output_safety_reason"] == (
         "runner_output_teardown_unconfirmed"
     )
-    assert llm.repair_calls == 0
+    assert _call_count(llm, "REPAIR THE PYTHON CODE") == 0
     assert runner.calls == ["01_representation"]
     assert not any(
         record.relative_path.endswith("untrusted_partial.csv")

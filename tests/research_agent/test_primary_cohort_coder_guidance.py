@@ -17,18 +17,11 @@ from easyicu.research_agent.schema import (
     CohortDescriptor,
     ResearchContext,
 )
+from easyicu.research_agent.providers.mocks import ScriptedMockLLMClient
 
 
-class _CaptureLLM:
-    name = "primary-cohort-guidance-test"
-
-    def __init__(self, responses: list[str]) -> None:
-        self.responses = list(responses)
-        self.calls = []
-
-    def complete(self, messages, **kwargs):  # noqa: ANN001, ANN003
-        self.calls.append((list(messages), dict(kwargs)))
-        return self.responses.pop(0)
+def _CaptureLLM(responses: list[str]):  # noqa: N802
+    return ScriptedMockLLMClient(responses)
 
 
 def _context() -> ResearchContext:
@@ -137,9 +130,7 @@ def test_primary_cohort_schema_guidance_tracks_host_product_aliases() -> None:
         }
     )
 
-    _assert_canonical_schema_guidance(
-        _primary_analysis_cohort_output_contract(step)
-    )
+    _assert_canonical_schema_guidance(_primary_analysis_cohort_output_contract(step))
 
 
 def test_primary_cohort_schema_guidance_accepts_analysis_set_alias() -> None:
@@ -174,9 +165,7 @@ def test_primary_cohort_guidance_accepts_agent_semantic_method_label() -> None:
     )
 
     _assert_canonical_schema_guidance(_primary_analysis_cohort_output_contract(step))
-    _assert_partition_safety_guidance(
-        _cohort_predicate_partition_safety_contract(step)
-    )
+    _assert_partition_safety_guidance(_cohort_predicate_partition_safety_contract(step))
 
 
 @pytest.mark.parametrize(
@@ -224,7 +213,9 @@ def test_generic_cohort_flow_contract_prevents_nonfinite_threshold_admission() -
     _assert_partition_safety_guidance(direct_contract)
     _assert_partition_safety_guidance(repair_guidance)
     _assert_partition_safety_guidance(llm.calls[0][0][-1].content)
-    combined = "\n".join((direct_contract, repair_guidance, llm.calls[0][0][-1].content))
+    combined = "\n".join(
+        (direct_contract, repair_guidance, llm.calls[0][0][-1].content)
+    )
     for case_term in ("lactate", "kdigo", "mimic", "e2_lactate"):
         assert case_term not in combined.lower()
 

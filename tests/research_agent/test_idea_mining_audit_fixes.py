@@ -16,7 +16,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import List, Sequence
+from typing import List
 
 import pytest
 
@@ -38,7 +38,7 @@ from easyicu.research_agent.discovery.idea_mining_schema import (
     PriorArtAssessment,
 )
 from easyicu.research_agent.literature import CitationRecord
-from easyicu.research_agent.providers.llm import LLMMessage
+from easyicu.research_agent.providers.mocks import ScriptedMockLLMClient
 
 REPO = Path(__file__).resolve().parents[2]
 _HAS_ICD = (REPO / "benchmark" / "icd_cohort_catalog_miiv.json").exists()
@@ -269,30 +269,24 @@ def test_sufficient_power_still_recommends() -> None:
 # --- Problem 4: registry collision (homogenization) -------------------------
 
 
-class _OneIdeaLLM:
-    name = "one-idea-llm"
-
-    def __init__(self) -> None:
-        self.response = [
-            {
-                "citation_key": "neutral_review_2026",
-                "population": "adult ICU patients",
-                "exposure_or_predictor": "lactate",
-                "outcome": "patient-centered endpoint",
-                "rationale": "The source describes this direction.",
-                "source_quote": "lactate trajectory",
-                "analysis_family": "association",
-            }
+def _one_idea_llm() -> ScriptedMockLLMClient:
+    return ScriptedMockLLMClient(
+        [
+            json.dumps(
+                [
+                    {
+                        "citation_key": "neutral_review_2026",
+                        "population": "adult ICU patients",
+                        "exposure_or_predictor": "lactate",
+                        "outcome": "patient-centered endpoint",
+                        "rationale": "The source describes this direction.",
+                        "source_quote": "lactate trajectory",
+                        "analysis_family": "association",
+                    }
+                ]
+            )
         ]
-
-    def complete(
-        self,
-        messages: Sequence[LLMMessage],
-        *,
-        max_tokens: int = 2048,
-        temperature: float = 0.2,
-    ) -> str:
-        return json.dumps(self.response)
+    )
 
 
 def _nutrition_material() -> SourceMaterial:
@@ -342,7 +336,7 @@ def _run_once(tmp_path: Path, registry_path: Path, tag: str):
 
     return run_idea_mining_dry_run(
         materials=[_nutrition_material()],
-        llm=_OneIdeaLLM(),
+        llm=_one_idea_llm(),
         available_concepts=concepts,
         outcome_determinability={
             "endpoint_known": OutcomeDeterminability(

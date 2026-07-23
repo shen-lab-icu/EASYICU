@@ -105,6 +105,8 @@ def _trajectory_plan() -> dict[str, Any]:
                 "expected_outputs": [
                     "artifact:trajectory_representation",
                     "table:trajectory_membership",
+                    "table:feature_availability",
+                    "table:feature_missingness_heatmap",
                     "manifest:trajectory_representation_schema",
                 ],
                 "method": "missingness_aware_trajectory_representation",
@@ -123,6 +125,7 @@ def _trajectory_plan() -> dict[str, Any]:
                 "expected_outputs": [
                     "artifact:candidate_cluster_models",
                     "artifact:candidate_cluster_assignments",
+                    "table:embedding_plot",
                     "manifest:cluster_selection",
                     "manifest:candidate_cluster_solution_schema",
                 ],
@@ -133,7 +136,7 @@ def _trajectory_plan() -> dict[str, Any]:
             },
             {
                 "step_id": "03_stability",
-                "planned_analysis_role": "sensitivity",
+                "planned_analysis_role": "auxiliary",
                 "intent": "Execute the planner-owned stability design.",
                 "inputs": sorted(STABILITY_EXECUTOR_INPUTS),
                 "expected_outputs": sorted(STABILITY_EXECUTOR_OUTPUTS),
@@ -149,28 +152,75 @@ def _trajectory_plan() -> dict[str, Any]:
                 "inputs": ["artifact:cluster_assignments"],
                 "expected_outputs": [
                     "table:trajectory_profiles",
+                    "table:phenotype_characteristics",
                     "table:cluster_sizes",
+                    "table:descriptive_result",
                 ],
                 "method": "descriptive_cluster_characterization",
                 "icu_rule_refs": [],
                 "model_requirements": [],
                 "trajectory_stability_spec": None,
             },
+            {
+                "step_id": "05_robustness",
+                "planned_analysis_role": "sensitivity",
+                "intent": (
+                    "Re-evaluate the frozen trajectory solution in complete cases "
+                    "without changing the primary clustering assignment."
+                ),
+                "inputs": ["artifact:cluster_assignments"],
+                "expected_outputs": [
+                    "table:robustness_matrix",
+                    "statistic:robustness_summary",
+                ],
+                "method": "robustness_sensitivity",
+                "icu_rule_refs": [],
+                "model_requirements": [],
+                "trajectory_stability_spec": None,
+            },
+        ],
+        "robustness_specs": [
+            {
+                "spec_id": "complete_case_trajectory_inputs",
+                "axis": "missing",
+                "description": (
+                    "Repeat the frozen characterization among stays with complete "
+                    "values for the planner-selected trajectory inputs."
+                ),
+                "missing_override": {"strategy": "complete_case"},
+            }
         ],
         "rationale": "Exercise the typed supporting stability calculator.",
     }
 
 
-class _PlanAndCoderLLM:
-    name = "trajectory-stability-pipeline-success-test"
+def _PlanAndCoderLLM():
+    """Compose the reviewed prompt router instead of subclassing a mock."""
 
-    def __init__(self) -> None:
-        self.write_prompts: list[str] = []
-        self.repair_prompts: list[str] = []
+    from easyicu.research_agent.providers.mocks import PatternScriptedMockLLMClient
 
-    def complete(self, messages, *, max_tokens=2048, temperature=0.2):
-        del max_tokens, temperature
-        user = next(
+    return PatternScriptedMockLLMClient(
+        [
+            ("ICU-AWARE RESEARCH PLAN", [json.dumps(_trajectory_plan())]),
+            ("WRITE THE PYTHON CODE", ["value = 1\n"] * 8),
+            ("REPAIR THE PYTHON CODE", ["value = 2\n"]),
+            (
+                "INTERPRET THE RESULTS",
+                ["The registered supporting products were reviewed."] * 8,
+            ),
+            (
+                "EVERY FINDING MUST INCLUDE",
+                [json.dumps({"findings": []})] * 8,
+            ),
+        ],
+        default="{}",
+    )
+
+
+def _captured_prompts(llm, marker: str) -> list[str]:
+    folded = marker.casefold()
+    return [
+        next(
             (
                 message.content
                 for message in reversed(messages)
@@ -178,20 +228,10 @@ class _PlanAndCoderLLM:
             ),
             "",
         )
-        upper = user.upper()
-        if "ICU-AWARE RESEARCH PLAN" in upper:
-            return json.dumps(_trajectory_plan())
-        if "REPAIR THE PYTHON CODE" in upper:
-            self.repair_prompts.append(user)
-            return "value = 2\n"
-        if "WRITE THE PYTHON CODE" in upper:
-            self.write_prompts.append(user)
-            return "value = 1\n"
-        if "INTERPRET THE RESULTS" in upper:
-            return "The registered supporting products were reviewed."
-        if "EVERY FINDING MUST INCLUDE" in upper and "RETURN JSON ONLY" in upper:
-            return json.dumps({"findings": []})
-        return "{}"
+        for messages, _kwargs in llm.calls
+        if folded
+        in "\n".join(str(message.content or "") for message in messages).casefold()
+    ]
 
 
 class _HybridTrajectoryRunner:
@@ -230,7 +270,7 @@ class _HybridTrajectoryRunner:
         representation_path = out_dir / "trajectory_representation.csv"
         representation.to_csv(representation_path, index=False)
         membership_path = out_dir / "trajectory_membership.csv"
-        pd.DataFrame(
+        membership = pd.DataFrame(
             {
                 "opaque_id": identifiers,
                 "observed_window_count": [2] * len(identifiers),
@@ -238,7 +278,21 @@ class _HybridTrajectoryRunner:
                 "included_in_clustering": [True] * len(identifiers),
                 "exclusion_reason": [""] * len(identifiers),
             }
-        ).to_csv(membership_path, index=False)
+        )
+        membership.to_csv(membership_path, index=False)
+        pd.DataFrame(
+            {
+                "feature": ["marker_h0_6", "marker_h6_12"],
+                "available_n": [len(membership), len(membership)],
+            }
+        ).to_csv(out_dir / "feature_availability.csv", index=False)
+        pd.DataFrame(
+            {
+                "feature": ["marker_h0_6", "marker_h6_12"],
+                "missing_n": [0, 0],
+                "missing_fraction": [0.0, 0.0],
+            }
+        ).to_csv(out_dir / "feature_missingness_heatmap.csv", index=False)
 
         representation_sha = _sha256(representation_path)
         self._write_json(
@@ -280,6 +334,10 @@ class _HybridTrajectoryRunner:
                         "trajectory_representation.csv"
                     ),
                     "table:trajectory_membership": "trajectory_membership.csv",
+                    "table:feature_availability": "feature_availability.csv",
+                    "table:feature_missingness_heatmap": (
+                        "feature_missingness_heatmap.csv"
+                    ),
                     "manifest:trajectory_representation_schema": (
                         "trajectory_representation_schema.json"
                     ),
@@ -314,6 +372,9 @@ class _HybridTrajectoryRunner:
         self.candidate_labels = assignments.set_index("opaque_id")[
             "chosen_partition"
         ].to_dict()
+        representation.merge(assignments, on="opaque_id", how="inner").to_csv(
+            out_dir / "embedding_plot.csv", index=False
+        )
 
         candidate_models_path = out_dir / "candidate_cluster_models.csv"
         pd.DataFrame(
@@ -383,6 +444,7 @@ class _HybridTrajectoryRunner:
                     "artifact:candidate_cluster_assignments": (
                         "candidate_cluster_assignments.csv"
                     ),
+                    "table:embedding_plot": "embedding_plot.csv",
                     "manifest:cluster_selection": "cluster_selection.json",
                     "manifest:candidate_cluster_solution_schema": (
                         "candidate_cluster_solution_schema.json"
@@ -411,7 +473,13 @@ class _HybridTrajectoryRunner:
         sizes["proportion"] = sizes["size"] / len(assignments)
         sizes.to_csv(out_dir / "cluster_sizes.csv", index=False)
         sizes.rename(columns={"size": "n"}).to_csv(
+            out_dir / "phenotype_characteristics.csv", index=False
+        )
+        sizes.rename(columns={"size": "n"}).to_csv(
             out_dir / "trajectory_profiles.csv", index=False
+        )
+        sizes.rename(columns={"size": "n"}).to_csv(
+            out_dir / "descriptive_result.csv", index=False
         )
         self._write_json(
             out_dir / "step_summary.json",
@@ -423,7 +491,11 @@ class _HybridTrajectoryRunner:
                 "input_bindings": receipts,
                 "output_files": {
                     "table:trajectory_profiles": "trajectory_profiles.csv",
+                    "table:phenotype_characteristics": (
+                        "phenotype_characteristics.csv"
+                    ),
                     "table:cluster_sizes": "cluster_sizes.csv",
+                    "table:descriptive_result": "descriptive_result.csv",
                 },
             },
         )
@@ -629,8 +701,11 @@ def test_typed_trajectory_stability_success_is_evidence_bound_and_continues(
         assert f"os.environ['{native_thread_env}'] = '1'" in standard_script
 
     stability_coder_marker = "03_stability"
-    assert all(stability_coder_marker not in prompt for prompt in llm.write_prompts)
-    assert llm.repair_prompts == []
+    assert all(
+        stability_coder_marker not in prompt
+        for prompt in _captured_prompts(llm, "WRITE THE PYTHON CODE")
+    )
+    assert _captured_prompts(llm, "REPAIR THE PYTHON CODE") == []
 
     evidence = EvidenceStore(run_dir)
     script_records = [

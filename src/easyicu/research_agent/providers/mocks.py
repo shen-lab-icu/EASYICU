@@ -63,6 +63,7 @@ class MockLLMClient:
 
         register_offline_test_client(self)
         self.context = context
+        self.calls: list[tuple[list[LLMMessage], dict[str, Any]]] = []
         # Populated by :meth:`complete` so a wrapping ``MeteredClient``
         # picks up deterministic token counts in tests / offline demo
         # without falling back to the chars/4 heuristic.
@@ -80,6 +81,16 @@ class MockLLMClient:
         # the reproducibility envelope (O20) can forward it uniformly.
         # The mock is deterministic regardless of seed.
         _ = seed
+        self.calls.append(
+            (
+                list(messages),
+                {
+                    "max_tokens": max_tokens,
+                    "temperature": temperature,
+                    "seed": seed,
+                },
+            )
+        )
         last_user = next(
             (m.content for m in reversed(messages) if m.role == "user"),
             "",
@@ -172,10 +183,12 @@ class ScriptedMockLLMClient:
         self._repeat_last = bool(repeat_last)
         self._last_response: str | BaseException | None = None
         self.calls: list[tuple[list[LLMMessage], dict[str, Any]]] = []
+        self.messages: list[LLMMessage] = []
         register_offline_test_client(self)
 
     def complete(self, messages: Sequence[LLMMessage], **kwargs: Any) -> str:
-        self.calls.append((list(messages), dict(kwargs)))
+        self.messages = list(messages)
+        self.calls.append((list(self.messages), dict(kwargs)))
         if self.responses:
             response = self.responses.pop(0)
             self._last_response = response

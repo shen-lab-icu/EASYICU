@@ -30,7 +30,7 @@ from easyicu.research_agent.research_context.typed import (
     materialized_input_prompt_attachment,
 )
 from easyicu.research_agent.authority.coder_authority import HostCoderAuthority
-from easyicu.research_agent.execution.phase import _bind_materialized_coder_authority
+from easyicu.research_agent.resources.coder import bind_materialized_coder_authority
 from tests.research_agent.test_research_context_v2_authority_join import (
     _prepare_typed_run,
 )
@@ -55,25 +55,18 @@ _FORBIDDEN_SCIENTIFIC_SELECTION_KEYS = {
 }
 
 
-class _CapturingLLM:
-    name = "capturing"
+def _CapturingLLM(response: str):
+    from easyicu.research_agent.providers.mocks import ScriptedMockLLMClient
 
-    def __init__(self, response: str) -> None:
-        self.response = response
-        self.calls: list[list[Any]] = []
+    return ScriptedMockLLMClient([response], repeat_last=True)
 
-    def complete(self, messages, **_kwargs) -> str:
-        self.calls.append(list(messages))
-        return self.response
 
-    @property
-    def last_user_prompt(self) -> str:
-        assert self.calls
-        return next(
-            message.content
-            for message in reversed(self.calls[-1])
-            if message.role == "user"
-        )
+def _last_user_prompt(client) -> str:
+    assert client.calls
+    messages, _kwargs = client.calls[-1]
+    return next(
+        message.content for message in reversed(messages) if message.role == "user"
+    )
 
 
 @pytest.fixture
@@ -84,6 +77,7 @@ def v2_context(tmp_path: Path) -> ResearchContextV2:
 def _plan() -> AnalysisPlan:
     return AnalysisPlan(
         research_question="Describe age while retaining the declared effect model.",
+        analysis_type="descriptive_epidemiology",
         steps=[
             AnalysisStep(
                 step_id="01_summary",
@@ -103,7 +97,7 @@ def test_step_scoped_v2_facts_bind_the_shared_coder_authority(
     step = _plan().steps[0]
     base_authority = HostCoderAuthority().append("existing host receipt")
 
-    scoped_context, bound_authority = _bind_materialized_coder_authority(
+    scoped_context, bound_authority = bind_materialized_coder_authority(
         context=v2_context,
         step=step,
         authority=base_authority,
@@ -116,15 +110,6 @@ def test_step_scoped_v2_facts_bind_the_shared_coder_authority(
     assert set(scoped_context.materialized_inputs.cohort.column_bindings).issubset(
         {variable.name for variable in scoped_context.variables}
     )
-
-
-def _assert_one_bounded_materialized_block(prompt: str) -> None:
-    assert prompt.count(_MATERIALIZED_HEADING) == 1
-    attachment = prompt[prompt.index(_MATERIALIZED_HEADING) :]
-    json_line = attachment.splitlines()[1]
-    bounded_block = attachment.splitlines()[0] + "\n" + json_line
-    assert len(bounded_block.encode("utf-8")) <= 4 * 1024
-    json.loads(json_line)
 
 
 def _recursive_keys(value: Any) -> set[str]:
@@ -190,21 +175,27 @@ def _wide_context_with_late_primary(context: ResearchContextV2) -> ResearchConte
     return ResearchContextV2.model_validate(payload)
 
 
-def test_planner_and_replanner_each_opt_in_to_one_materialized_block(
+def test_planner_and_replanner_use_unified_outbound_safe_projection(
     v2_context: ResearchContextV2,
 ) -> None:
     plan = _plan()
 
     planner_llm = _CapturingLLM(plan.model_dump_json())
     PlannerAgent(planner_llm).run(v2_context)
-    _assert_one_bounded_materialized_block(planner_llm.last_user_prompt)
+    planner_prompt = _last_user_prompt(planner_llm)
+    assert _MATERIALIZED_HEADING not in planner_prompt
+    assert "age" in planner_prompt
+    assert "easyicu.outbound_safe_context/1" in planner_prompt
 
     replanner_llm = _CapturingLLM(plan.model_dump_json())
     ReplannerAgent(replanner_llm).run(
         context=v2_context,
         current_plan=plan,
     )
-    _assert_one_bounded_materialized_block(replanner_llm.last_user_prompt)
+    replanner_prompt = _last_user_prompt(replanner_llm)
+    assert _MATERIALIZED_HEADING not in replanner_prompt
+    assert "age" in replanner_prompt
+    assert "easyicu.outbound_safe_context/1" in replanner_prompt
 
 
 def test_analyzer_and_writer_do_not_receive_materialized_block_by_default(
@@ -219,7 +210,7 @@ def test_analyzer_and_writer_do_not_receive_materialized_block_by_default(
         step_summary={},
         evidence_ids=[],
     )
-    assert _MATERIALIZED_HEADING not in analyzer_llm.last_user_prompt
+    assert _MATERIALIZED_HEADING not in _last_user_prompt(analyzer_llm)
 
     writer_llm = _CapturingLLM("No supported prose.")
     WriterAgent(writer_llm)._call_section(
@@ -229,7 +220,7 @@ def test_analyzer_and_writer_do_not_receive_materialized_block_by_default(
         evidence_ids=[],
         evidence_digest=None,
     )
-    assert _MATERIALIZED_HEADING not in writer_llm.last_user_prompt
+    assert _MATERIALIZED_HEADING not in _last_user_prompt(writer_llm)
 
 
 def test_wide_materialized_projection_keeps_primary_and_no_science_choices(

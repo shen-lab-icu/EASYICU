@@ -2,7 +2,7 @@
   "audit_log_authority_events": [],
   "authoritative_numeric_claims": {
     "count": 28,
-    "set_sha256": "6d0ca89e6fa651576b02bee7cc851532f760825bd27af80ed1eb9938193a3d29"
+    "set_sha256": "eab0c07e90e69d634fe6257590e2017b4602dd5b1c13b69535843ae13a078fb4"
   },
   "authority_transition_order": {
     "01_representation": [
@@ -11,7 +11,23 @@
         "event": "early_validate"
       },
       {
-        "count": 6,
+        "count": 7,
+        "event": "seal_hash"
+      },
+      {
+        "count": 1,
+        "event": "deferred_history_registration"
+      },
+      {
+        "count": 1,
+        "event": "seal_hash"
+      },
+      {
+        "count": 1,
+        "event": "deferred_history_registration"
+      },
+      {
+        "count": 2,
         "event": "seal_hash"
       },
       {
@@ -51,7 +67,7 @@
         "event": "early_validate"
       },
       {
-        "count": 4,
+        "count": 6,
         "event": "seal_hash"
       },
       {
@@ -69,7 +85,15 @@
         "event": "early_validate"
       },
       {
-        "count": 6,
+        "count": 7,
+        "event": "seal_hash"
+      },
+      {
+        "count": 1,
+        "event": "deferred_history_registration"
+      },
+      {
+        "count": 1,
         "event": "seal_hash"
       },
       {
@@ -117,7 +141,7 @@
         "event": "early_validate"
       },
       {
-        "count": 5,
+        "count": 6,
         "event": "seal_hash"
       },
       {
@@ -233,7 +257,23 @@
         "event": "early_validate"
       },
       {
-        "count": 4,
+        "count": 6,
+        "event": "seal_hash"
+      },
+      {
+        "count": 1,
+        "event": "deferred_history_registration"
+      },
+      {
+        "count": 1,
+        "event": "seal_hash"
+      },
+      {
+        "count": 1,
+        "event": "deferred_history_registration"
+      },
+      {
+        "count": 1,
         "event": "seal_hash"
       },
       {
@@ -265,7 +305,7 @@
         "event": "early_validate"
       },
       {
-        "count": 3,
+        "count": 5,
         "event": "seal_hash"
       },
       {
@@ -279,15 +319,15 @@
     ]
   },
   "current_aliases": {
-    "count": 31,
-    "mapping_sha256": "0757e2be2ac59f65757b74983e4f49f85fd75fe292e678b18b1bd81d152e8030"
+    "count": 36,
+    "mapping_sha256": "01971d5f4d2e3cdef456ae6610da96a4f8e8228a5cf7c4bd862449cee745ec30"
   },
   "current_evidence": {
-    "count": 29,
-    "mapping_sha256": "3a3e2ba284ecf89b84c4debec123ff80badcd962576b2dc9e0999673684c33a2"
+    "count": 34,
+    "mapping_sha256": "35f1ca4ee994de152903c3d71cb6ed2a6809092a7db607608ef38f253dc5e77f"
   },
   "current_self_aliases": {
-    "count": 29
+    "count": 34
   },
   "dependency_edges": [
     [
@@ -312,7 +352,17 @@
     ],
     [
       "01_representation",
-      "05_publication_figure_fallback",
+      "06_publication_figure_fallback",
+      "table:feature_availability"
+    ],
+    [
+      "01_representation",
+      "06_publication_figure_fallback",
+      "table:feature_missingness_heatmap"
+    ],
+    [
+      "01_representation",
+      "06_publication_figure_fallback",
       "table:trajectory_membership"
     ],
     [
@@ -331,53 +381,83 @@
       "manifest:cluster_selection"
     ],
     [
+      "02_candidates",
+      "06_publication_figure_fallback",
+      "table:embedding_plot"
+    ],
+    [
       "03_stability",
       "04_characterization",
       "artifact:cluster_assignments"
     ],
     [
       "03_stability",
-      "05_publication_figure_fallback",
+      "05_robustness",
+      "artifact:cluster_assignments"
+    ],
+    [
+      "03_stability",
+      "06_publication_figure_fallback",
       "table:cluster_assignment_provenance"
     ],
     [
       "03_stability",
-      "05_publication_figure_fallback",
+      "06_publication_figure_fallback",
       "table:cluster_assignments"
     ],
     [
       "03_stability",
-      "05_publication_figure_fallback",
+      "06_publication_figure_fallback",
       "table:cluster_stability"
     ],
     [
       "03_stability",
-      "05_publication_figure_fallback",
+      "06_publication_figure_fallback",
       "table:cluster_stability_assignments"
     ],
     [
       "04_characterization",
-      "05_publication_figure_fallback",
+      "06_publication_figure_fallback",
       "table:cluster_sizes"
     ],
     [
       "04_characterization",
-      "05_publication_figure_fallback",
+      "06_publication_figure_fallback",
+      "table:descriptive_result"
+    ],
+    [
+      "04_characterization",
+      "06_publication_figure_fallback",
+      "table:phenotype_characteristics"
+    ],
+    [
+      "04_characterization",
+      "06_publication_figure_fallback",
       "table:trajectory_profiles"
+    ],
+    [
+      "05_robustness",
+      "06_publication_figure_fallback",
+      "table:robustness_matrix"
     ]
   ],
   "dependency_propagation_set": [],
   "deterministic_product_sha256": {
     "01_representation:artifact:trajectory_representation": "91024f30535fbf636fe7453e7e4af85d0645261a146e69f9a92617735376107c",
+    "01_representation:table:feature_availability": "bd228cf6c8949bdb4c76d964242098ae7d5d214f25275cbaa2ce84e3fc741c0e",
+    "01_representation:table:feature_missingness_heatmap": "6359852a0323a0d6ebd4ffb67e00d7751f01024f16c687fdd29c80c2a75e23ab",
     "01_representation:table:trajectory_membership": "1ced9e7198c9a0ed684697317ce041d7b9cc9a3c215bdb5a6572175a63b1a521",
     "02_candidates:artifact:candidate_cluster_assignments": "2b93c86ac49157764325a833567fea729d386112c3ea0716ef477a56a3c4a749",
     "02_candidates:artifact:candidate_cluster_models": "8a276c2226489a7392b081e9c9b979d762113ff190b769dd33c1c9aa630ca2c1",
+    "02_candidates:table:embedding_plot": "dc2edcf32b47704f57c0edacedf065c264047977e8cc16ea251dac82eae9de91",
     "03_stability:artifact:cluster_assignments": "b3626090b553c9fadc160e7de410a2804c752995f4d611095af81b5645d0404c",
     "03_stability:table:cluster_assignment_provenance": "3ed26ee98bbe1ff62688e0066a6728c4174922c6fcf66168d3632967e3efd6d3",
     "03_stability:table:cluster_assignments": "b3626090b553c9fadc160e7de410a2804c752995f4d611095af81b5645d0404c",
     "03_stability:table:cluster_stability": "6d1eb7a295e4ff9f5664784de42ad3d6afed9067e457a8f6062cff20a1ac32bc",
     "03_stability:table:cluster_stability_assignments": "5a665d83488a98e4b8e41b6558c8c2034d05d18e331fa25fb134e3176ed7be66",
     "04_characterization:table:cluster_sizes": "81130f3394dc155cb3bb121fd950b33fa7942fa36db92e1871f1426847575ff4",
+    "04_characterization:table:descriptive_result": "250f621d701d2b6e6075908aed61ad6f02bfbc10375603f988f066f67249cef5",
+    "04_characterization:table:phenotype_characteristics": "250f621d701d2b6e6075908aed61ad6f02bfbc10375603f988f066f67249cef5",
     "04_characterization:table:trajectory_profiles": "250f621d701d2b6e6075908aed61ad6f02bfbc10375603f988f066f67249cef5"
   },
   "finding_observability": {
@@ -401,13 +481,14 @@
       "manuscript_ready": false,
       "missing_evidence_count": 0,
       "missing_steps": [
-        "05_publication_figure_fallback",
-        "06_audit_panel"
+        "05_robustness",
+        "06_publication_figure_fallback",
+        "07_audit_panel"
       ],
       "numeric_error_count": 0,
       "numeric_verified": false,
       "publication_ready": false,
-      "required_step_count": 6
+      "required_step_count": 7
     },
     "status": "diagnostic_only",
     "strict_fail_closed": true
@@ -496,10 +577,10 @@
     "by_severity": {
       "error": 0,
       "info": 3,
-      "warning": 15
+      "warning": 10
     },
-    "count": 18,
-    "set_sha256": "86c154c912f6a06a212e5aaf850f88586c26e134ea13bbf7b8c3f164e2ed775a"
+    "count": 13,
+    "set_sha256": "d614e4ee22163bcacc87a571a7264ac79cd1671c15b41b23acb42edc72ac6d1e"
   },
   "volatile_field_allowlist": [
     "absolute_path",
