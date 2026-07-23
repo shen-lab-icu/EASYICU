@@ -157,6 +157,10 @@ import pandas as pd
 OUT_DIR = Path({str(tmp_path)!r})
 
 def _export_figure_source_data(source_data):
+    if isinstance(source_data, (list, tuple)) and all(
+        isinstance(item, str) for item in source_data
+    ):
+        return list(source_data)
     exported = []
     for key, frame in source_data.items():
         name = f"{{key}}_figure_source.csv"
@@ -167,6 +171,9 @@ def _export_figure_source_data(source_data):
 def make_figure_contract(**kwargs):
     kwargs["source_data"] = _export_figure_source_data(kwargs["source_data"])
     return kwargs
+
+def save_publication_figure(*, fig, out_dir, stem, contract):
+    return None
 
 def main():
     loaded = {{
@@ -183,10 +190,17 @@ def main():
     parent_b = loaded["table:parent_b"][0].copy()
     mixed = pd.DataFrame({{"panel": ["A", "B"], "value": [1.25, 17]}})
     mixed.to_csv(OUT_DIR / "overview_source_data.csv", index=False)
-    return make_figure_contract(
+    contract = make_figure_contract(
         figure_id="figure:overview",
         source_data="overview_source_data.csv",
     )
+    save_publication_figure(
+        fig=None,
+        out_dir=OUT_DIR,
+        stem="overview",
+        contract=contract,
+    )
+    return contract
 """
     finding = {
         **_FINDING,
@@ -208,10 +222,10 @@ def main():
     exec(repaired, namespace)
     contract = namespace["main"]()
     assert contract["source_data"] == [
-        "parent_a_figure_source.csv",
-        "parent_b_figure_source.csv",
+        "bound_000_parent_a_source_data.csv",
+        "bound_001_parent_b_source_data.csv",
     ]
-    assert pd.read_csv(tmp_path / "parent_a_figure_source.csv").to_dict(
+    assert pd.read_csv(tmp_path / "bound_000_parent_a_source_data.csv").to_dict(
         orient="records"
     ) == [
         {
@@ -221,7 +235,7 @@ def main():
             "source_table": "parent_a.csv",
         }
     ]
-    assert pd.read_csv(tmp_path / "parent_b_figure_source.csv").to_dict(
+    assert pd.read_csv(tmp_path / "bound_001_parent_b_source_data.csv").to_dict(
         orient="records"
     ) == [
         {
@@ -233,9 +247,75 @@ def main():
     ]
 
 
+def test_direct_bound_figure_repair_materializes_prior_dataframe_dict_shape(
+    tmp_path: Path,
+) -> None:
+    code = f"""
+from pathlib import Path
+import pandas as pd
+
+OUT_DIR = Path({str(tmp_path)!r})
+
+def make_figure_contract(**kwargs):
+    return kwargs
+
+def save_publication_figure(*, fig, out_dir, stem, contract):
+    return None
+
+def main():
+    parent_a = pd.DataFrame({{"row_id": ["a"], "primary_or": [1.25]}})
+    parent_b = pd.DataFrame({{"row_id": ["b"], "complete_case_n": [17]}})
+    contract = make_figure_contract(
+        figure_id="figure:overview",
+        source_data={{
+            "parent_a": parent_a.copy(deep=True).assign(
+                source_row_index=range(len(parent_a)),
+                source_table="parent_a.csv",
+            ),
+            "parent_b": parent_b.copy(deep=True).assign(
+                source_row_index=range(len(parent_b)),
+                source_table="parent_b.csv",
+            ),
+        }},
+    )
+    save_publication_figure(
+        fig=None,
+        out_dir=OUT_DIR,
+        stem="overview",
+        contract=contract,
+    )
+    return contract
+"""
+    finding = {
+        "validator": "figure_source_data",
+        "severity": "error",
+        "detail": {"reason": "missing_source_data"},
+    }
+
+    repair = deterministic_contract_repair(
+        code=code,
+        findings=[finding],
+        previous_repair="direct_bound_figure_source_projection_v1",
+    )
+
+    assert repair is not None
+    repair_id, repaired = repair
+    assert repair_id == "direct_bound_figure_source_materialization_v1"
+    namespace: dict[str, object] = {}
+    exec(repaired, namespace)
+    contract = namespace["main"]()
+    assert contract["source_data"] == [
+        "bound_000_parent_a_source_data.csv",
+        "bound_001_parent_b_source_data.csv",
+    ]
+    assert (tmp_path / contract["source_data"][0]).is_file()
+    assert (tmp_path / contract["source_data"][1]).is_file()
+
+
 def test_bound_figure_source_projection_is_registered_structural() -> None:
     for repair_id in (
         "bound_figure_source_projection_v2",
+        "direct_bound_figure_source_materialization_v1",
         "direct_bound_figure_source_projection_v1",
     ):
         metadata = repair_metadata_for(repair_id)

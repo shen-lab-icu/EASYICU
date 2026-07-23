@@ -306,6 +306,7 @@ _STRUCTURAL_REPAIRS = {
     "flag_only_plausibility_range_retention_v1",
     "categorical_level_reconciliation_guard_v1",
     "conditional_nonfinite_fail_closed_guard_v1",
+    "direct_bound_figure_source_materialization_v1",
     "direct_bound_figure_source_projection_v1",
     "host_schema_numeric_alias_v1",
     "dedupe_predictor_numeric_design_v1",

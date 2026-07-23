@@ -4877,20 +4877,150 @@ def _patch_bound_figure_source_projection(code: str) -> str:
     return repaired
 
 
+def _materialize_direct_bound_source_frames(
+    code: str,
+    *,
+    tree: ast.AST,
+    contract_statement: ast.Assign,
+    source_keyword: ast.keyword,
+    entries: Sequence[tuple[str, str, str]],
+) -> str:
+    """Write exact parent frames and bind their local CSV basenames."""
+
+    marker = "_easyicu_direct_bound_source_files"
+    if marker in code or not entries:
+        return code
+    if any(
+        re.fullmatch(r"[A-Za-z0-9_]+", product) is None
+        or Path(source_name).name != source_name
+        or Path(source_name).suffix.lower() != ".csv"
+        for product, _frame_name, source_name in entries
+    ):
+        return code
+    output_dir_names = {
+        keyword.value.id
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and (
+            (
+                isinstance(node.func, ast.Name)
+                and node.func.id == "save_publication_figure"
+            )
+            or (
+                isinstance(node.func, ast.Attribute)
+                and node.func.attr == "save_publication_figure"
+            )
+        )
+        for keyword in node.keywords
+        if keyword.arg == "out_dir" and isinstance(keyword.value, ast.Name)
+    }
+    if len(output_dir_names) != 1:
+        return code
+    output_dir_name = next(iter(output_dir_names))
+    indent = " " * int(contract_statement.col_offset)
+    projection = f"{indent}{marker} = []\n"
+    for index, (product, frame_name, source_name) in enumerate(entries):
+        local_name = f"bound_{index:03d}_{product}_source_data.csv"
+        projection += (
+            f"{indent}_easyicu_direct_bound_frame = "
+            f"{frame_name}.copy(deep=True)\n"
+            f'{indent}if {{"source_row_index", "source_table"}} & '
+            "set(_easyicu_direct_bound_frame.columns):\n"
+            f"{indent}    raise RuntimeError("
+            '"Bound parent already uses reserved figure provenance columns")\n'
+            f'{indent}_easyicu_direct_bound_frame.insert(0, "source_table", '
+            f"{source_name!r})\n"
+            f'{indent}_easyicu_direct_bound_frame.insert(0, "source_row_index", '
+            "range(len(_easyicu_direct_bound_frame)))\n"
+            f"{indent}_easyicu_direct_bound_source_name = {local_name!r}\n"
+            f"{indent}_easyicu_direct_bound_frame.to_csv(\n"
+            f"{indent}    {output_dir_name} / "
+            "_easyicu_direct_bound_source_name,\n"
+            f"{indent}    index=False,\n"
+            f"{indent})\n"
+            f"{indent}{marker}.append(_easyicu_direct_bound_source_name)\n"
+        )
+    projection += "\n"
+
+    lines = code.splitlines(keepends=True)
+    line_starts: List[int] = []
+    offset = 0
+    for line in lines:
+        line_starts.append(offset)
+        offset += len(line)
+
+    def absolute_offset(line_number: int, byte_column: int) -> int:
+        line = lines[line_number - 1]
+        character_column = len(line.encode("utf-8")[:byte_column].decode("utf-8"))
+        return line_starts[line_number - 1] + character_column
+
+    source_start = absolute_offset(
+        source_keyword.value.lineno,
+        source_keyword.value.col_offset,
+    )
+    source_end = absolute_offset(
+        source_keyword.value.end_lineno,
+        source_keyword.value.end_col_offset,
+    )
+    insert_at = line_starts[contract_statement.lineno - 1]
+    repaired = code
+    for start, end, replacement in sorted(
+        [
+            (source_start, source_end, marker),
+            (insert_at, insert_at, projection),
+        ],
+        key=lambda item: item[0],
+        reverse=True,
+    ):
+        repaired = repaired[:start] + replacement + repaired[end:]
+    try:
+        ast.parse(repaired)
+    except SyntaxError:
+        return code
+    return repaired
+
+
+def _figure_contract_source_assignment(
+    tree: ast.AST,
+    *,
+    source_value_type: type[ast.AST],
+) -> tuple[ast.Assign, ast.keyword] | None:
+    candidates: List[tuple[ast.Assign, ast.keyword]] = []
+    for node in ast.walk(tree):
+        if not (
+            isinstance(node, ast.Assign)
+            and len(node.targets) == 1
+            and isinstance(node.targets[0], ast.Name)
+            and isinstance(node.value, ast.Call)
+            and (
+                (
+                    isinstance(node.value.func, ast.Name)
+                    and node.value.func.id == "make_figure_contract"
+                )
+                or (
+                    isinstance(node.value.func, ast.Attribute)
+                    and node.value.func.attr == "make_figure_contract"
+                )
+            )
+        ):
+            continue
+        source_keywords = [
+            keyword
+            for keyword in node.value.keywords
+            if keyword.arg == "source_data"
+            and isinstance(keyword.value, source_value_type)
+        ]
+        if len(source_keywords) == 1:
+            candidates.append((node, source_keywords[0]))
+    return candidates[0] if len(candidates) == 1 else None
+
+
 def _patch_direct_bound_figure_source_projection(
     code: str,
     *,
     missing_table_names: Sequence[str],
 ) -> str:
-    """Project directly loaded typed parents into a figure source bundle.
-
-    Some generated renderers bind tables as
-    ``loaded["table:<name>"][0].copy()`` instead of retaining a separate
-    table/record mapping. When a reader-facing long source table cannot
-    authenticate every typed parent, replace only the FigureContract's
-    ``source_data`` argument with exact, complete projections of those bound
-    frames. No scientific rows or values are selected or rewritten.
-    """
+    """Project directly loaded typed parents into local source-data files."""
 
     plain_missing_names = [
         str(name)
@@ -4905,12 +5035,6 @@ def _patch_direct_bound_figure_source_projection(
     try:
         tree = ast.parse(code)
     except SyntaxError:
-        return code
-    if not any(
-        isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
-        and node.name == "_export_figure_source_data"
-        for node in ast.walk(tree)
-    ):
         return code
 
     loaded_tables: Dict[str, str] = {}
@@ -4946,74 +5070,96 @@ def _patch_direct_bound_figure_source_projection(
         loaded_tables[product] = node.targets[0].id
     if duplicate_products:
         return code
-
     missing_products = [Path(name).stem for name in plain_missing_names]
     if len(missing_products) != len(set(missing_products)) or any(
         product not in loaded_tables for product in missing_products
     ):
         return code
-
-    source_keywords: List[ast.keyword] = []
-    for node in ast.walk(tree):
-        if not (
-            isinstance(node, ast.Call)
-            and (
-                (
-                    isinstance(node.func, ast.Name)
-                    and node.func.id == "make_figure_contract"
-                )
-                or (
-                    isinstance(node.func, ast.Attribute)
-                    and node.func.attr == "make_figure_contract"
-                )
-            )
-        ):
-            continue
-        source_keywords.extend(
-            keyword
-            for keyword in node.keywords
-            if keyword.arg == "source_data"
-            and isinstance(keyword.value, ast.Constant)
-            and isinstance(keyword.value.value, str)
-        )
-    if len(source_keywords) != 1:
+    source_assignment = _figure_contract_source_assignment(
+        tree,
+        source_value_type=ast.Constant,
+    )
+    if source_assignment is None:
         return code
-
-    bundle_entries = []
-    for source_name, product in zip(
-        plain_missing_names,
-        missing_products,
-        strict=True,
-    ):
-        frame_name = loaded_tables[product]
-        bundle_entries.append(
-            f"{product!r}: {frame_name}.copy(deep=True).assign("
-            f"source_row_index=range(len({frame_name})), "
-            f"source_table={source_name!r})"
+    contract_statement, source_keyword = source_assignment
+    entries = [
+        (product, loaded_tables[product], source_name)
+        for source_name, product in zip(
+            plain_missing_names,
+            missing_products,
+            strict=True,
         )
-    replacement = "{" + ", ".join(bundle_entries) + "}"
+    ]
+    return _materialize_direct_bound_source_frames(
+        code,
+        tree=tree,
+        contract_statement=contract_statement,
+        source_keyword=source_keyword,
+        entries=entries,
+    )
 
-    keyword = source_keywords[0]
-    lines = code.splitlines(keepends=True)
-    line_starts: List[int] = []
-    offset = 0
-    for line in lines:
-        line_starts.append(offset)
-        offset += len(line)
 
-    def absolute_offset(line_number: int, byte_column: int) -> int:
-        line = lines[line_number - 1]
-        character_column = len(line.encode("utf-8")[:byte_column].decode("utf-8"))
-        return line_starts[line_number - 1] + character_column
+def _patch_direct_bound_figure_source_materialization(code: str) -> str:
+    """Materialize the exact v1 DataFrame-dictionary projection shape."""
 
-    start = absolute_offset(keyword.value.lineno, keyword.value.col_offset)
-    end = absolute_offset(keyword.value.end_lineno, keyword.value.end_col_offset)
-    repaired = code[:start] + replacement + code[end:]
     try:
-        ast.parse(repaired)
+        tree = ast.parse(code)
     except SyntaxError:
         return code
-    return repaired
+    source_assignment = _figure_contract_source_assignment(
+        tree,
+        source_value_type=ast.Dict,
+    )
+    if source_assignment is None:
+        return code
+    contract_statement, source_keyword = source_assignment
+    source_dict = source_keyword.value
+    assert isinstance(source_dict, ast.Dict)
+    entries: List[tuple[str, str, str]] = []
+    for key, value in zip(source_dict.keys, source_dict.values, strict=True):
+        if not (
+            isinstance(key, ast.Constant)
+            and isinstance(key.value, str)
+            and isinstance(value, ast.Call)
+            and isinstance(value.func, ast.Attribute)
+            and value.func.attr == "assign"
+            and isinstance(value.func.value, ast.Call)
+            and isinstance(value.func.value.func, ast.Attribute)
+            and value.func.value.func.attr == "copy"
+            and isinstance(value.func.value.func.value, ast.Name)
+        ):
+            return code
+        frame_name = value.func.value.func.value.id
+        keywords = {keyword.arg: keyword.value for keyword in value.keywords}
+        source_table = keywords.get("source_table")
+        row_index = keywords.get("source_row_index")
+        if not (
+            set(keywords) == {"source_row_index", "source_table"}
+            and isinstance(source_table, ast.Constant)
+            and isinstance(source_table.value, str)
+            and Path(source_table.value).name == source_table.value
+            and Path(source_table.value).suffix.lower() == ".csv"
+            and Path(source_table.value).stem == key.value
+            and isinstance(row_index, ast.Call)
+            and isinstance(row_index.func, ast.Name)
+            and row_index.func.id == "range"
+            and len(row_index.args) == 1
+            and isinstance(row_index.args[0], ast.Call)
+            and isinstance(row_index.args[0].func, ast.Name)
+            and row_index.args[0].func.id == "len"
+            and len(row_index.args[0].args) == 1
+            and isinstance(row_index.args[0].args[0], ast.Name)
+            and row_index.args[0].args[0].id == frame_name
+        ):
+            return code
+        entries.append((key.value, frame_name, source_table.value))
+    return _materialize_direct_bound_source_frames(
+        code,
+        tree=tree,
+        contract_statement=contract_statement,
+        source_keyword=source_keyword,
+        entries=entries,
+    )
 
 
 def deterministic_contract_repair(
@@ -5042,6 +5188,28 @@ def deterministic_contract_repair(
     )
     if convergence_contract != code:
         return "penalized_convergence_contract_v2", convergence_contract
+
+    direct_materialization_findings = []
+    for finding in findings:
+        validator = getattr(finding, "validator", None)
+        detail = getattr(finding, "detail", None)
+        if isinstance(finding, dict):
+            validator = finding.get("validator")
+            detail = finding.get("detail")
+        if (
+            validator == "figure_source_data"
+            and isinstance(detail, dict)
+            and detail.get("reason") == "missing_source_data"
+        ):
+            direct_materialization_findings.append(finding)
+    direct_materialization_repair_name = "direct_bound_figure_source_materialization_v1"
+    if (
+        len(direct_materialization_findings) == 1
+        and previous_repair != direct_materialization_repair_name
+    ):
+        repaired = _patch_direct_bound_figure_source_materialization(code)
+        if repaired != code:
+            return direct_materialization_repair_name, repaired
 
     source_coverage_findings = []
     for finding in findings:
