@@ -17,6 +17,7 @@ without anyone having to spend a real LLM call.
 from __future__ import annotations
 
 import importlib
+import json
 import sys
 import types
 from pathlib import Path
@@ -768,6 +769,72 @@ def test_writer_prompt_discourages_tbd_and_manifest_narration(ra):
     assert "Funding information was not available" in captured["user"]
     # The dummy LLM's stock response should land in the bound output.
     assert "{evidence:table_one}" in out
+
+
+def test_writer_evidence_repair_returns_cite_or_drop_decisions():
+    from easyicu.research_agent.reporting.writer_evidence_repair import (
+        decide_writer_evidence_repairs,
+    )
+
+    raw = json.dumps(
+        {
+            "decisions": [
+                {
+                    "index": 0,
+                    "action": "cite",
+                    "evidence_ids": ["literature_prisma"],
+                },
+                {"index": 1, "action": "drop", "evidence_ids": []},
+            ]
+        }
+    )
+    decisions = decide_writer_evidence_repairs(
+        ScriptedMockLLMClient([raw], repeat_last=True),
+        evidence_ids=["literature_prisma", "primary_association"],
+        evidence_digest="literature_prisma: background evidence",
+        missing_sentences=[
+            "Sepsis is clinically important.",
+            "No estimate was available for reporting.",
+        ],
+    )
+
+    assert decisions == [
+        {
+            "index": 0,
+            "action": "cite",
+            "evidence_ids": ["literature_prisma"],
+        },
+        {"index": 1, "action": "drop", "evidence_ids": []},
+    ]
+
+
+def test_writer_evidence_repair_rejects_unregistered_evidence_id():
+    from easyicu.research_agent.providers.structured_retry import (
+        StructuredResponseFailure,
+    )
+    from easyicu.research_agent.reporting.writer_evidence_repair import (
+        decide_writer_evidence_repairs,
+    )
+
+    raw = json.dumps(
+        {
+            "decisions": [
+                {
+                    "index": 0,
+                    "action": "cite",
+                    "evidence_ids": ["invented_id"],
+                }
+            ]
+        }
+    )
+
+    with pytest.raises(StructuredResponseFailure):
+        decide_writer_evidence_repairs(
+            ScriptedMockLLMClient([raw], repeat_last=True),
+            evidence_ids=["literature_prisma"],
+            evidence_digest="literature_prisma: background evidence",
+            missing_sentences=["Sepsis is clinically important."],
+        )
 
 
 def test_openrouter_reasoning_extra_body_skips_gpt_oss(ra):

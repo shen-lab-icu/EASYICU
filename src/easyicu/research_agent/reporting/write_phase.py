@@ -39,6 +39,7 @@ from .latex import scaffold_to_latex
 from ..literature import LiteratureAgent, LiteratureBundle
 from ..providers.mocks import MockLLMClient
 from .manuscript_post import (
+    _apply_writer_evidence_repair_decisions,
     bind_numeric_values,
     enforce_writer_claim_language,
     _demote_unresolved_evidence_placeholders,
@@ -52,6 +53,7 @@ from .writer_evidence import (
     _render_writer_evidence_digest,
     _render_writer_evidence_digest_v2,
 )
+from .writer_evidence_repair import decide_writer_evidence_repairs
 from ..replication.notebook import (
     NotebookStep,
     build_notebook,
@@ -856,6 +858,48 @@ def run_write_phase(
                 detail={"citation_repairs": citation_repairs},
             )
         )
+    if (
+        scaffold
+        and pipeline._evidence_enforcement_mode is EvidenceEnforcementMode.STRICT
+    ):
+        strict_missing_sentences: List[str] = []
+        try:
+            evidence.enforce_evidence_bound_scaffold(scaffold)
+        except EvidenceEnforcementError as exc:
+            raw_missing = (exc.detail or {}).get("removed_sentences", [])
+            if isinstance(raw_missing, list):
+                strict_missing_sentences = [
+                    str(sentence).strip()
+                    for sentence in raw_missing
+                    if str(sentence).strip()
+                ]
+        if strict_missing_sentences:
+            repair_decisions = decide_writer_evidence_repairs(
+                writer.llm,
+                evidence_ids=preferred_writer_evidence_names,
+                evidence_digest=writer_evidence_digest,
+                missing_sentences=strict_missing_sentences,
+                language=run_language,
+            )
+            scaffold, applied_evidence_repairs = (
+                _apply_writer_evidence_repair_decisions(
+                    scaffold,
+                    missing_sentences=strict_missing_sentences,
+                    decisions=repair_decisions,
+                )
+            )
+            findings.append(
+                ValidationFinding(
+                    validator="evidence_bound_writer",
+                    severity="warning",
+                    message=(
+                        "Applied one bounded writer evidence repair pass to "
+                        f"{len(applied_evidence_repairs)} sentence(s); the unchanged "
+                        "STRICT gate will revalidate the result."
+                    ),
+                    detail={"evidence_repairs": applied_evidence_repairs},
+                )
+            )
     scaffold_path = run_dir / "manuscript_scaffold.md"
     scaffold_path.write_text(scaffold, encoding="utf-8")
     if evidence.get("manuscript_scaffold_raw") is None:
