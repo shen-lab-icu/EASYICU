@@ -885,10 +885,34 @@ class PlannerAgent:
             if "robustness" in contract.required_roles and not plan.robustness_specs:
                 missing_roles = sorted({*missing_roles, "robustness_specs"})
             if missing_roles:
+                completion_hints: list[str] = []
+                for role in missing_roles:
+                    if role == "robustness_specs":
+                        continue
+                    module_ids = [
+                        requirement.module_id
+                        for requirement in contract.requirements
+                        if requirement.required and requirement.role == role
+                    ]
+                    if not module_ids:
+                        continue
+                    typed_examples = ", ".join(
+                        f"'table:{module_id}'" for module_id in module_ids[:3]
+                    )
+                    completion_hints.append(f"{role} -> {typed_examples}")
+                hint_text = (
+                    " Required typed step examples: "
+                    + "; ".join(completion_hints)
+                    + "."
+                    if completion_hints
+                    else ""
+                )
                 raise PlannerArticleContractError(
                     "Planner plan is missing required article contract role(s): "
                     + ", ".join(missing_roles)
-                    + ". Add explicit typed analysis steps and, when robustness "
+                    + "."
+                    + hint_text
+                    + " Add explicit typed analysis steps and, when robustness "
                     "is required, at least one task-supported robustness spec plus "
                     "a method='robustness_sensitivity' step producing "
                     "table:robustness_matrix and statistic:robustness_summary. "

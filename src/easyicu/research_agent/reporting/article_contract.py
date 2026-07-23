@@ -264,6 +264,7 @@ def render_article_analysis_contract_for_prompt(
         lines.append(
             "  - "
             f"{req.module_id} (role={req.role}; tier={req.tier}; "
+            f"typed_example=table:{req.module_id}; "
             f"acceptable={', '.join(req.acceptable_outputs[:4])})"
         )
     if recommended:
@@ -279,6 +280,11 @@ def render_article_analysis_contract_for_prompt(
     lines.append(
         "- rule: a technically valid single result figure is insufficient unless "
         "the artifact suite covers the required article roles."
+    )
+    lines.append(
+        "- rule: every required role must be owned by an explicit analysis step; "
+        "put its typed_example (or an equally explicit typed product using an "
+        "acceptable term) in expected_outputs. Intent-only prose does not count."
     )
     return "\n".join(lines)
 

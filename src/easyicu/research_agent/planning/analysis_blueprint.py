@@ -35,7 +35,6 @@ from ..schema import AnalysisPlan, ResearchContext, ValidationFinding
 from .study_design import StudyDesignBrief, build_study_design_brief
 from .study_design_playbook import DisplayTier, StudyDesignFamily
 
-
 ANALYSIS_BLUEPRINT_SCHEMA_VERSION = "easyicu.analysis_blueprint/1"
 PRIOR_ART_DESIGN_BRIEF_SCHEMA_VERSION = "easyicu.prior_art_design_brief/1"
 
@@ -169,7 +168,9 @@ def _build_prior_art_design_brief(
     ]
     for role in figure_strategy.role_strategies:
         if role.required:
-            query = " ".join([brief.analysis_family, role.role, "main figure supplement"])
+            query = " ".join(
+                [brief.analysis_family, role.role, "main figure supplement"]
+            )
             queries.append(query)
     return PriorArtDesignBrief(
         analysis_family=brief.analysis_family,
@@ -266,7 +267,9 @@ def build_analysis_blueprint(
         recommended_article_roles=list(resolved_contract.recommended_roles),
         article_roles=article_roles,
         main_text_display_roles=[
-            role.role for role in article_roles if role.required and role.tier != "supplementary"
+            role.role
+            for role in article_roles
+            if role.required and role.tier != "supplementary"
         ],
         supplementary_display_roles=list(resolved_brief.supplementary_displays),
         sensitivity_requirements=list(resolved_brief.sensitivity_requirements),
@@ -285,7 +288,9 @@ def build_analysis_blueprint(
 
 def render_analysis_blueprint_for_prompt(blueprint: AnalysisBlueprint) -> str:
     required_article = [
-        role for role in blueprint.article_roles if role.required and role.tier != "supplementary"
+        role
+        for role in blueprint.article_roles
+        if role.required and role.tier != "supplementary"
     ]
     required_visual = [role for role in blueprint.visual_roles if role.required]
     lines = [
@@ -317,6 +322,7 @@ def render_analysis_blueprint_for_prompt(blueprint: AnalysisBlueprint) -> str:
         lines.append(
             "  - "
             f"{role.module_id} (role={role.role}; tier={role.tier}; "
+            f"typed_example=table:{role.module_id}; "
             f"acceptable={', '.join(role.acceptable_outputs[:4])}; "
             f"rationale={role.rationale})"
         )
@@ -340,6 +346,7 @@ def render_analysis_blueprint_for_prompt(blueprint: AnalysisBlueprint) -> str:
         [
             "- anti_patterns: " + "; ".join(blueprint.anti_patterns),
             "- validation_gates: " + "; ".join(blueprint.validation_gates),
+            "- rule: every required article role must be owned by an explicit analysis step whose expected_outputs include its typed_example (or an equally explicit typed product using an acceptable term); Intent-only prose does not count.",
             "- rule: executable steps must map outputs to article roles; a single technically valid figure is not article-grade unless the primary figure and supporting artifacts satisfy this blueprint.",
         ]
     )

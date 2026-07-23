@@ -472,6 +472,18 @@ def test_planner_article_contract_retries_missing_robustness_instead_of_faking_i
     assert parsed.steps[-1].method == "robustness_sensitivity"
     assert [spec.spec_id for spec in parsed.robustness_specs] == ["alt_missing_median"]
 
+    payload["steps"] = [
+        step for step in payload["steps"] if step["step_id"] != "01_cohort"
+    ]
+    with pytest.raises(PlannerArticleContractError) as caught:
+        planner._parse(
+            json.dumps(payload),
+            context,
+            enforce_article_contract=True,
+        )
+    assert "cohort_accounting" in str(caught.value)
+    assert "table:cohort_flow" in str(caught.value)
+
 
 def test_nonprimary_output_prefixes_do_not_satisfy_primary_estimand_role(ra):
     from easyicu.research_agent.reporting.article_contract import (
@@ -1062,6 +1074,8 @@ def test_analysis_blueprint_combines_prior_art_contract_and_figure_strategy(ra):
     assert "ANALYSIS BLUEPRINT" in prompt
     assert "PRIOR-ART DESIGN BRIEF" in prompt
     assert "ARTICLE ANALYSIS CONTRACT" in prompt
+    assert "typed_example=table:" in prompt
+    assert "Intent-only prose does not count" in prompt
     assert "ARTICLE FIGURE STRATEGY" in prompt
     dumped = blueprint.model_dump_json()
     assert "E1" not in dumped
