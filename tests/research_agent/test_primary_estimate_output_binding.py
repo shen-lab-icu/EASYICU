@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import json
 
 from easyicu.research_agent.execution.output_files import bind_primary_output
 
@@ -62,6 +63,101 @@ def test_refuses_unregistered_or_multirow_estimates(tmp_path) -> None:
                     "table:adjusted_association_estimates": path.name,
                 }
             },
+            tmp_path,
+        ).get("primary_or")
+        is None
+    )
+
+
+def test_binds_registered_primary_or_statistic(tmp_path) -> None:
+    path = tmp_path / "primary_or.json"
+    path.write_text(
+        json.dumps(
+            {
+                "name": "primary_or",
+                "estimate": 1.6,
+                "ci_low": 1.5,
+                "ci_high": 1.7,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    bound = bind_primary_output(
+        {"output_files": {"statistic:primary_or": path.name}},
+        tmp_path,
+    )
+
+    assert bound["primary_or"] == 1.6
+    assert bound["primary_or_ci"] == [1.5, 1.7]
+    assert bound["primary_estimate_label"] == "odds_ratio"
+
+
+def test_refuses_unregistered_mismatched_or_unsafe_primary_or_statistic(
+    tmp_path,
+) -> None:
+    path = tmp_path / "primary_or.json"
+    path.write_text(
+        json.dumps(
+            {
+                "name": "different_statistic",
+                "estimate": 1.6,
+                "ci_low": 1.5,
+                "ci_high": 1.7,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert (
+        bind_primary_output(
+            {"output_files": {"statistic:primary_or": path.name}},
+            tmp_path,
+        ).get("primary_or")
+        is None
+    )
+
+    path.write_text(
+        json.dumps(
+            {
+                "name": "primary_or",
+                "estimate": 1.6,
+                "value": 1.7,
+                "ci_low": 1.5,
+                "ci_high": 1.8,
+            }
+        ),
+        encoding="utf-8",
+    )
+    assert (
+        bind_primary_output(
+            {"output_files": {"statistic:primary_or": path.name}},
+            tmp_path,
+        ).get("primary_or")
+        is None
+    )
+
+    outside = tmp_path.parent / "outside-primary-or.json"
+    outside.write_text(
+        json.dumps({"name": "primary_or", "estimate": 1.6}),
+        encoding="utf-8",
+    )
+    assert (
+        bind_primary_output(
+            {"output_files": {"statistic:primary_or": f"../{outside.name}"}},
+            tmp_path,
+        ).get("primary_or")
+        is None
+    )
+    assert bind_primary_output({}, tmp_path).get("primary_or") is None
+
+    path.write_text(
+        json.dumps({"name": "primary_or", "estimate": True}),
+        encoding="utf-8",
+    )
+    assert (
+        bind_primary_output(
+            {"output_files": {"statistic:primary_or": path.name}},
             tmp_path,
         ).get("primary_or")
         is None
