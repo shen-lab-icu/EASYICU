@@ -331,6 +331,63 @@ def _planner_declared_context_column_bindings(
 
     if context is None:
         return {}
+    available = {str(column) for column in columns}
+    descriptors_by_name: Dict[str, list[Any]] = {}
+    for descriptor in getattr(context, "variables", ()) or ():
+        name = str(getattr(descriptor, "name", "") or "").strip()
+        if name and name in available:
+            descriptors_by_name.setdefault(name, []).append(descriptor)
+
+    # Exact/bare column resolution controls *which* column is used, but the
+    # suffix alone cannot prove its scientific coordinate.  Validate a direct
+    # column against its sealed descriptor even when the plan has no separate
+    # cohort-materialisation step.  Cross-name bindings below remain restricted
+    # to an explicit analysis-cohort producer.
+    for predicate in (*definition.inclusion, *definition.exclusion):
+        direct_column = _resolve_predicate_column(
+            columns,
+            predicate.concept_id,
+            predicate.aggregation,
+        )
+        direct_descriptors = [
+            descriptor
+            for descriptor in descriptors_by_name.get(str(direct_column or ""), ())
+            if str(getattr(descriptor, "source_concept", "") or "").strip()
+            == predicate.concept_id
+        ]
+        coordinate_descriptors = [
+            descriptor
+            for descriptor in direct_descriptors
+            if str(getattr(descriptor, "analysis_window", "") or "").strip()
+        ]
+        if coordinate_descriptors and not any(
+            _descriptor_aggregation_matches_predicate(
+                descriptor_name=str(getattr(descriptor, "name", "") or ""),
+                predicate=predicate,
+            )
+            and _descriptor_window_matches_predicate(
+                getattr(descriptor, "analysis_window", None),
+                predicate.time_window,
+            )
+            for descriptor in coordinate_descriptors
+        ):
+            sealed_windows = sorted(
+                {
+                    str(getattr(descriptor, "analysis_window", None) or "unknown")
+                    for descriptor in coordinate_descriptors
+                }
+            )
+            raise CohortDataError(
+                "cohort predicate direct column has no sealed descriptor with "
+                "proven matching aggregation and time window for concept "
+                f"{predicate.concept_id!r}: requested="
+                f"{predicate.time_window.anchor}["
+                f"{predicate.time_window.start_offset_hours},"
+                f"{predicate.time_window.end_offset_hours}]h/"
+                f"{predicate.aggregation}, direct_column={direct_column!r}, "
+                f"sealed_windows={sealed_windows!r}"
+            )
+
     producers = [
         step
         for step in getattr(plan, "steps", ()) or ()
@@ -338,7 +395,6 @@ def _planner_declared_context_column_bindings(
     ]
     if len(producers) != 1:
         return {}
-    available = {str(column) for column in columns}
     declared_inputs = {
         str(value).strip()
         for value in getattr(producers[0], "inputs", ()) or ()
@@ -366,12 +422,20 @@ def _planner_declared_context_column_bindings(
     predicate_concepts = {
         predicate.concept_id
         for predicate in (*definition.inclusion, *definition.exclusion)
-        if _resolve_predicate_column(
-            columns,
-            predicate.concept_id,
-            predicate.aggregation,
+    }
+    directly_resolved_concepts = {
+        concept_id
+        for concept_id in predicate_concepts
+        if all(
+            _resolve_predicate_column(
+                columns,
+                predicate.concept_id,
+                predicate.aggregation,
+            )
+            is not None
+            for predicate in (*definition.inclusion, *definition.exclusion)
+            if predicate.concept_id == concept_id
         )
-        is None
     }
     for concept_id in sorted(predicate_concepts):
         predicates = [
@@ -407,7 +471,7 @@ def _planner_declared_context_column_bindings(
                 f"{concept_id!r}; Planner-declared ResearchContext candidates: "
                 + ", ".join(repr(candidate) for candidate in candidates)
             )
-        if len(candidates) == 1:
+        if len(candidates) == 1 and concept_id not in directly_resolved_concepts:
             bindings[concept_id] = candidates[0]
     return bindings
 

@@ -11,7 +11,9 @@ from easyicu.research_agent.pipeline import (
     _defer_typed_plan_dag_findings_until_probe,
 )
 from easyicu.research_agent.planning.replan_gate import (
+    partition_replan_candidate_findings,
     replan_candidate_contract_findings,
+    replan_candidate_rejection_finding,
 )
 from easyicu.research_agent.schema import (
     AnalysisPlan,
@@ -163,6 +165,45 @@ def test_replan_candidate_contract_rejects_ambiguous_producer():
         and (finding.detail or {}).get("reason") == "typed_input_producer_ambiguous"
         for finding in findings
     )
+
+
+def test_rejected_replan_candidate_errors_remain_diagnostic_only():
+    normalization_error = ValidationFinding(
+        validator="replanner",
+        severity="error",
+        message="Candidate output kind is not materializable.",
+        detail={
+            "reason": "typed_output_kind_not_materializable",
+            "typed_product": "protocol:robustness",
+        },
+    )
+    normalization_warning = ValidationFinding(
+        validator="replanner",
+        severity="warning",
+        message="Immutable scope was restored.",
+        detail={"reason": "completed_step_snapshot_immutable"},
+    )
+    duplicate_contract_error = normalization_error.model_copy(
+        update={"validator": "replanner"}
+    )
+
+    active, errors = partition_replan_candidate_findings(
+        normalization_findings=[normalization_warning, normalization_error],
+        contract_findings=[duplicate_contract_error],
+    )
+    rejection = replan_candidate_rejection_finding(
+        contract_errors=errors,
+        trigger="probe_summary",
+        candidate_revision=3,
+    )
+
+    assert active == [normalization_warning]
+    assert len(errors) == 1
+    assert rejection.severity == "warning"
+    assert rejection.detail["contract_findings"][0]["detail"] == {
+        "reason": "typed_output_kind_not_materializable",
+        "typed_product": "protocol:robustness",
+    }
 
 
 def test_preprobe_typed_error_becomes_pending_but_unrelated_error_stays_current():
