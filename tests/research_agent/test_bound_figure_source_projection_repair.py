@@ -44,7 +44,12 @@ def load_bound_table(input_key):
         if input_key.endswith("parent_a")
         else pd.DataFrame({{"row_id": ["b"], "count": [17]}})
     )
-    return frame, {{"input_key": input_key}}, {{"product": input_key}}
+    source_name = "parent_a.csv" if input_key.endswith("parent_a") else "parent_b.csv"
+    return (
+        frame,
+        {{"input_key": input_key}},
+        {{"product": input_key, "relative_path": f"evidence/{{source_name}}"}},
+    )
 
 def main():
     tables = {{}}
@@ -87,7 +92,7 @@ def test_bound_figure_repair_projects_each_loaded_parent_without_renaming(
 
     assert repair is not None
     repair_id, repaired = repair
-    assert repair_id == "bound_figure_source_projection_v1"
+    assert repair_id == "bound_figure_source_projection_v2"
     namespace: dict[str, object] = {}
     exec(repaired, namespace)
     contract, summary = namespace["main"]()
@@ -97,8 +102,22 @@ def test_bound_figure_repair_projects_each_loaded_parent_without_renaming(
     assert len(declared) == 2
     assert "overview_source_data.csv" not in declared
     observed = [pd.read_csv(tmp_path / filename) for filename in declared]
-    assert observed[0].to_dict(orient="records") == [{"row_id": "a", "estimate": 1.25}]
-    assert observed[1].to_dict(orient="records") == [{"row_id": "b", "count": 17}]
+    assert observed[0].to_dict(orient="records") == [
+        {
+            "source_row_index": 0,
+            "source_table": "parent_a.csv",
+            "row_id": "a",
+            "estimate": 1.25,
+        }
+    ]
+    assert observed[1].to_dict(orient="records") == [
+        {
+            "source_row_index": 0,
+            "source_table": "parent_b.csv",
+            "row_id": "b",
+            "count": 17,
+        }
+    ]
 
 
 def test_bound_figure_repair_requires_unambiguous_loader_and_bundle_contract(
@@ -129,7 +148,7 @@ def test_bound_figure_repair_requires_unambiguous_loader_and_bundle_contract(
 
 
 def test_bound_figure_source_projection_is_registered_structural() -> None:
-    metadata = repair_metadata_for("bound_figure_source_projection_v1")
+    metadata = repair_metadata_for("bound_figure_source_projection_v2")
 
     assert metadata.classification_source == "exact"
     assert metadata.repair_class is RepairClass.STRUCTURAL

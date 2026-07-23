@@ -51,28 +51,37 @@ def test_effect_source_inherits_primary_tier_only_from_matching_model_contract()
             },
         }
     ]
-    assert FigureSourceDataValidator._contract_scoped_effect_product(
-        product="table:adjusted_association_estimates",
-        source_frame=source,
-        upstream_step_id="05_model",
-        completed_step_records=completed,
-    ) == "table:primary_adjusted_association_estimates"
+    assert (
+        FigureSourceDataValidator._contract_scoped_effect_product(
+            product="table:adjusted_association_estimates",
+            source_frame=source,
+            upstream_step_id="05_model",
+            completed_step_records=completed,
+        )
+        == "table:primary_adjusted_association_estimates"
+    )
 
     forged = source.assign(source_variable="different_marker")
-    assert FigureSourceDataValidator._contract_scoped_effect_product(
-        product="table:adjusted_association_estimates",
-        source_frame=forged,
-        upstream_step_id="05_model",
-        completed_step_records=completed,
-    ) == "table:adjusted_association_estimates"
+    assert (
+        FigureSourceDataValidator._contract_scoped_effect_product(
+            product="table:adjusted_association_estimates",
+            source_frame=forged,
+            upstream_step_id="05_model",
+            completed_step_records=completed,
+        )
+        == "table:adjusted_association_estimates"
+    )
 
     adjustment_row = source.assign(term_role="adjustment")
-    assert FigureSourceDataValidator._contract_scoped_effect_product(
-        product="table:adjusted_association_estimates",
-        source_frame=adjustment_row,
-        upstream_step_id="05_model",
-        completed_step_records=completed,
-    ) == "table:adjusted_association_estimates"
+    assert (
+        FigureSourceDataValidator._contract_scoped_effect_product(
+            product="table:adjusted_association_estimates",
+            source_frame=adjustment_row,
+            upstream_step_id="05_model",
+            completed_step_records=completed,
+        )
+        == "table:adjusted_association_estimates"
+    )
 
     positional_source = pd.DataFrame({"source_row_index": [0, 1]})
     upstream = pd.DataFrame(
@@ -83,13 +92,16 @@ def test_effect_source_inherits_primary_tier_only_from_matching_model_contract()
             "odds_ratio": [1.25, 1.01],
         }
     )
-    assert FigureSourceDataValidator._contract_scoped_effect_product(
-        product="table:adjusted_association_estimates",
-        source_frame=positional_source,
-        upstream_frame=upstream,
-        upstream_step_id="05_model",
-        completed_step_records=completed,
-    ) == "table:primary_adjusted_association_estimates"
+    assert (
+        FigureSourceDataValidator._contract_scoped_effect_product(
+            product="table:adjusted_association_estimates",
+            source_frame=positional_source,
+            upstream_frame=upstream,
+            upstream_step_id="05_model",
+            completed_step_records=completed,
+        )
+        == "table:primary_adjusted_association_estimates"
+    )
 
 
 def _write_upstream(tmp_path: Path) -> Path:
@@ -730,6 +742,43 @@ def test_source_row_index_alias_accepts_truthful_parent_projection(
     assert res.get("ok") is True, res
     assert res.get("key_column") == position_col, res
     assert {"n", "event_n", "risk"} <= set(res.get("verified_value_mappings", {}))
+
+
+def test_source_row_index_disambiguates_repeated_named_keys_and_metadata_columns(
+    tmp_path: Path,
+):
+    up = tmp_path / "table_one.csv"
+    upstream = pd.DataFrame(
+        {
+            "variable": ["age", "age", "sex", "sex"],
+            "group": ["overall", "exposed", "overall", "exposed"],
+            "count_column": ["", "", "sex", "sex"],
+            "count": [100, 40, 55, 21],
+        }
+    )
+    upstream.to_csv(up, index=False)
+    source = upstream.copy()
+    source.insert(0, "source_table", up.name)
+    source.insert(0, "source_row_index", range(len(source)))
+
+    res = FigureSourceDataValidator._compare_source_to_upstream(
+        source_df=source,
+        source_path=tmp_path / "publication_figure_source_data.csv",
+        upstream_path=up,
+    )
+
+    assert res.get("ok") is True, res
+    assert res.get("key_column") == "source_row_index", res
+    assert res.get("verified_value_mappings", {}).get("count") == "count", res
+
+    source.loc[1, "count"] = 41
+    forged = FigureSourceDataValidator._compare_source_to_upstream(
+        source_df=source,
+        source_path=tmp_path / "publication_figure_source_data.csv",
+        upstream_path=up,
+    )
+    assert forged.get("ok") is False, forged
+    assert forged.get("reason") == "source_values_disagree", forged
 
 
 def test_underscore_source_row_index_still_flags_tampered_value(tmp_path: Path):

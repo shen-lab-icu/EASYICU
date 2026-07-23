@@ -4595,26 +4595,28 @@ def _patch_bound_figure_source_projection(code: str) -> str:
     """
 
     marker = "_easyicu_bound_source_files"
-    if marker in code:
+    provenance_marker = "_easyicu_bound_source_table_name"
+    if provenance_marker in code:
         return code
     try:
         tree = ast.parse(code)
     except SyntaxError:
         return code
 
-    table_loads: List[tuple[str, str, str]] = []
+    table_loads: List[tuple[str, str, str, str]] = []
     for loop in (node for node in ast.walk(tree) if isinstance(node, ast.For)):
         if not (isinstance(loop.target, ast.Name) and isinstance(loop.iter, ast.Name)):
             continue
         loop_key = loop.target.id
-        loaded_frame_names = {
-            target.elts[0].id
+        loaded_tuples = [
+            target
             for assignment in loop.body
             if isinstance(assignment, ast.Assign)
             and len(assignment.targets) == 1
             and isinstance((target := assignment.targets[0]), ast.Tuple)
-            and target.elts
+            and len(target.elts) >= 3
             and isinstance(target.elts[0], ast.Name)
+            and isinstance(target.elts[2], ast.Name)
             and isinstance(assignment.value, ast.Call)
             and (
                 (
@@ -4626,9 +4628,13 @@ def _patch_bound_figure_source_projection(code: str) -> str:
                     and assignment.value.func.attr == "load_bound_table"
                 )
             )
-        }
-        if len(loaded_frame_names) != 1:
+        ]
+        if len(loaded_tuples) != 1:
             continue
+        loaded_frame_name = loaded_tuples[0].elts[0].id
+        loaded_record_name = loaded_tuples[0].elts[2].id
+        frame_map_names: List[str] = []
+        record_map_names: List[str] = []
         for node in ast.walk(loop):
             if not (
                 isinstance(node, ast.Assign)
@@ -4638,14 +4644,75 @@ def _patch_bound_figure_source_projection(code: str) -> str:
                 and isinstance(node.targets[0].slice, ast.Name)
                 and node.targets[0].slice.id == loop_key
                 and isinstance(node.value, ast.Name)
-                and node.value.id in loaded_frame_names
             ):
                 continue
-            table_loads.append((node.targets[0].value.id, loop.iter.id, loop_key))
+            if node.value.id == loaded_frame_name:
+                frame_map_names.append(node.targets[0].value.id)
+            elif node.value.id == loaded_record_name:
+                record_map_names.append(node.targets[0].value.id)
+        if len(frame_map_names) == 1 and len(record_map_names) == 1:
+            table_loads.append(
+                (
+                    frame_map_names[0],
+                    record_map_names[0],
+                    loop.iter.id,
+                    loop_key,
+                )
+            )
     table_loads = list(dict.fromkeys(table_loads))
     if len(table_loads) != 1:
         return code
-    table_map_name, input_iterable_name, _ = table_loads[0]
+    table_map_name, record_map_name, input_iterable_name, _ = table_loads[0]
+
+    provenance_lines = (
+        "_easyicu_bound_record = "
+        f"{record_map_name}[_easyicu_bound_key]\n"
+        "_easyicu_bound_relative_path = "
+        '_easyicu_bound_record.get("relative_path")\n'
+        "if not isinstance(_easyicu_bound_relative_path, str) "
+        "or not _easyicu_bound_relative_path.strip():\n"
+        '    raise RuntimeError("Missing bound source-table path for figure provenance")\n'
+        f"{provenance_marker} = "
+        '_easyicu_bound_relative_path.replace(chr(92), "/").rsplit("/", 1)[-1]\n'
+        f"if not {provenance_marker}:\n"
+        '    raise RuntimeError("Invalid bound source-table path for figure provenance")\n'
+        'if {"source_row_index", "source_table"} '
+        "& set(_easyicu_bound_frame.columns):\n"
+        "    raise RuntimeError("
+        '"Bound parent already uses reserved figure provenance columns")\n'
+        "_easyicu_bound_frame.insert(\n"
+        f'    0, "source_table", {provenance_marker}\n'
+        ")\n"
+        "_easyicu_bound_frame.insert(\n"
+        '    0, "source_row_index", range(len(_easyicu_bound_frame))\n'
+        ")\n"
+    )
+    if marker in code:
+        bound_frame_assignments = [
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Assign)
+            and len(node.targets) == 1
+            and isinstance(node.targets[0], ast.Name)
+            and node.targets[0].id == "_easyicu_bound_frame"
+        ]
+        if len(bound_frame_assignments) != 1:
+            return code
+        assignment = bound_frame_assignments[0]
+        if assignment.end_lineno is None:
+            return code
+        lines = code.splitlines(keepends=True)
+        insert_at = sum(len(line) for line in lines[: assignment.end_lineno])
+        repaired = (
+            code[:insert_at]
+            + textwrap.indent(provenance_lines, " " * 8)
+            + code[insert_at:]
+        )
+        try:
+            ast.parse(repaired)
+        except SyntaxError:
+            return code
+        return repaired
 
     contract_assignments: List[tuple[ast.Assign, ast.keyword]] = []
     for node in ast.walk(tree):
@@ -4730,7 +4797,8 @@ def _patch_bound_figure_source_projection(code: str) -> str:
         f"enumerate({input_iterable_name}):\n"
         f"{indent}    _easyicu_bound_frame = "
         f"{table_map_name}[_easyicu_bound_key].copy(deep=True)\n"
-        f'{indent}    _easyicu_bound_token = "".join(\n'
+        + textwrap.indent(provenance_lines, indent + " " * 4)
+        + f'{indent}    _easyicu_bound_token = "".join(\n'
         f'{indent}        character if character.isalnum() else "_"\n'
         f"{indent}        for character in str(_easyicu_bound_key)\n"
         f'{indent}    ).strip("_")\n'
@@ -4807,7 +4875,7 @@ def deterministic_contract_repair(
         if repaired != code:
             return unavailable_source_repair_name, repaired
 
-    bound_source_repair_name = "bound_figure_source_projection_v1"
+    bound_source_repair_name = "bound_figure_source_projection_v2"
     if (
         len(unavailable_source_findings) == 1
         and previous_repair != bound_source_repair_name
