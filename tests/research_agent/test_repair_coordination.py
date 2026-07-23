@@ -130,6 +130,48 @@ step_summary = {"candidate_fit_diagnostics": candidate_diagnostics}
     assert 'if key not in {"model", "labels"}' in repaired
 
 
+def test_resume_preflight_repairs_unused_nullable_validation_from_summary(tmp_path):
+    step_dir = tmp_path / "steps" / "robustness_figure"
+    outputs = step_dir / "outputs"
+    outputs.mkdir(parents=True)
+    (outputs / "step_summary.json").write_text(
+        json.dumps(
+            {
+                "status": "failed",
+                "error": (
+                    "robustness_matrix.absolute_or_difference "
+                    "contains non-finite values"
+                ),
+            }
+        ),
+        encoding="utf-8",
+    )
+    code = """
+required_matrix_columns = ["primary_or", "absolute_or_difference"]
+numeric_matrix_columns = ["primary_or", "absolute_or_difference"]
+for column in numeric_matrix_columns:
+    validate_numeric_series(
+        robustness_matrix[column],
+        f"robustness_matrix.{column}",
+    )
+matrix_row = robustness_matrix.iloc[0]
+plotted_or = float(matrix_row["primary_or"])
+"""
+
+    candidate = resume_deterministic_repair_candidate(
+        code=code,
+        step_dir=step_dir,
+        analysis_family="figure",
+    )
+
+    assert candidate is not None
+    (repair_id, repaired), source, trigger = candidate
+    assert repair_id == "unused_nullable_numeric_validation_v1"
+    assert source == "resume_summary_repair_preflight"
+    assert "numeric_matrix_columns = ['primary_or']" in repaired
+    assert trigger["step_summary_path"] == str(outputs / "step_summary.json")
+
+
 def test_sync_provider_writes_exact_key_set(tmp_path):
     provider, step_record, budget = _repair_budget(tmp_path)
     budget.sync_provider()

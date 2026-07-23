@@ -349,6 +349,7 @@ _STRUCTURAL_REPAIRS = {
     "table_one_binary_key_string_v1",
     "text_distribution_denominator_from_counts_v1",
     "unavailable_figure_full_source_projection_v1",
+    "unused_nullable_numeric_validation_v1",
     # Only renderers with an exact direct-parent product, closed source schema,
     # and no scientific selection are automatic.  Heuristic result-table,
     # exposure, outcome, or model selection remains METHOD_SUBSTITUTION by the
