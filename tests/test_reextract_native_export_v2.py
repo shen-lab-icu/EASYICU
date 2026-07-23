@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -38,6 +39,12 @@ def test_launcher_is_sequential_private_and_preserves_one_shot_default(
 
     def fake_extract(database, **kwargs):
         calls.append({"database": database, **kwargs})
+        assert os.environ["TMPDIR"] == str(tmp_path / "out" / ".runtime_tmp")
+        assert os.environ["TMP"] == str(tmp_path / "out" / ".runtime_tmp")
+        assert os.environ["TEMP"] == str(tmp_path / "out" / ".runtime_tmp")
+        assert os.environ["EASYICU_DUCKDB_TEMP_DIR"] == str(
+            tmp_path / "out" / ".runtime_spill"
+        )
         out = Path(kwargs["output_dir"])
         out.mkdir(mode=0o700)
         spill = out / ".easyicu_spill"
@@ -74,6 +81,8 @@ def test_launcher_is_sequential_private_and_preserves_one_shot_default(
     assert persisted["sources"]["miiv"]["status"] == "verified"
     assert persisted["sources"]["miiv"]["spill_directory_removed"] is True
     assert not (tmp_path / "out" / "miiv" / ".easyicu_spill").exists()
+    assert not (tmp_path / "out" / ".runtime_tmp").exists()
+    assert not (tmp_path / "out" / ".runtime_spill").exists()
     assert oct((tmp_path / "out").stat().st_mode & 0o777) == "0o700"
 
 

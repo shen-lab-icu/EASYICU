@@ -15,6 +15,7 @@ import json
 import os
 import shutil
 import sys
+import tempfile
 import time
 from pathlib import Path
 from typing import Any, Dict, Sequence
@@ -51,16 +52,50 @@ def _write_private_json(path: Path, payload: Dict[str, Any]) -> None:
     os.replace(temporary, path)
 
 
-def _remove_worker_spill_directory(source_output: Path) -> bool:
-    """Remove only the extractor's completed, private DuckDB spill directory."""
+def _remove_private_directory(path: Path) -> bool:
+    """Remove one exact, completed private runtime directory."""
 
-    spill = source_output / ".easyicu_spill"
-    if not spill.exists():
+    if not path.exists():
         return False
-    if spill.is_symlink() or not spill.is_dir():
-        raise ValueError(f"unexpected spill path; refusing removal: {spill}")
-    shutil.rmtree(spill)
+    if path.is_symlink() or not path.is_dir():
+        raise ValueError(f"unexpected runtime path; refusing removal: {path}")
+    shutil.rmtree(path)
     return True
+
+
+def _remove_worker_spill_directory(source_output: Path) -> bool:
+    """Remove only the extractor's completed private DuckDB spill directory."""
+
+    return _remove_private_directory(source_output / ".easyicu_spill")
+
+
+def _configure_external_runtime(root: Path) -> tuple[Dict[str, str | None], str | None]:
+    """Force every temporary/spill mechanism onto the external run root."""
+
+    runtime_tmp = root / ".runtime_tmp"
+    runtime_spill = root / ".runtime_spill"
+    runtime_tmp.mkdir(mode=0o700)
+    runtime_spill.mkdir(mode=0o700)
+    prior = {
+        key: os.environ.get(key)
+        for key in ("TMPDIR", "TMP", "TEMP", "EASYICU_DUCKDB_TEMP_DIR")
+    }
+    prior_tempdir = tempfile.tempdir
+    os.environ["TMPDIR"] = str(runtime_tmp)
+    os.environ["TMP"] = str(runtime_tmp)
+    os.environ["TEMP"] = str(runtime_tmp)
+    os.environ["EASYICU_DUCKDB_TEMP_DIR"] = str(runtime_spill)
+    tempfile.tempdir = str(runtime_tmp)
+    return prior, prior_tempdir
+
+
+def _restore_runtime(prior: Dict[str, str | None], prior_tempdir: str | None) -> None:
+    for key, value in prior.items():
+        if value is None:
+            os.environ.pop(key, None)
+        else:
+            os.environ[key] = value
+    tempfile.tempdir = prior_tempdir
 
 
 def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
@@ -118,6 +153,7 @@ def run(args: argparse.Namespace) -> Dict[str, Any]:
             )
 
     output_root.mkdir(mode=0o700, parents=True)
+    runtime_prior, runtime_tempdir = _configure_external_runtime(output_root)
     run_manifest_path = output_root / "run_manifest.json"
     run_manifest: Dict[str, Any] = {
         "schema_version": "easyicu_grouped_native_reexport_run_v1",
@@ -173,6 +209,9 @@ def run(args: argparse.Namespace) -> Dict[str, Any]:
 
     run_manifest["status"] = "verified"
     _write_private_json(run_manifest_path, run_manifest)
+    _restore_runtime(runtime_prior, runtime_tempdir)
+    _remove_private_directory(output_root / ".runtime_tmp")
+    _remove_private_directory(output_root / ".runtime_spill")
     return run_manifest
 
 
