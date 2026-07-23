@@ -26,7 +26,9 @@ import pandas as pd
 import pytest
 
 from easyicu.research_agent.execution.runners.deterministic_missingness import (
+    is_missingness_complete_case_contract,
     is_missingness_measurement_availability_contract,
+    missingness_audit_executor_owns_step,
     missingness_measurement_audit_code,
     source_availability_audit_executor_owns_step,
 )
@@ -51,7 +53,9 @@ def _exec_runner(
     )
     if requested_inputs is not None:
         plan_name = current_plan_name or "analysis_plan.json"
-        (run_dir / plan_name).write_text(
+        plan_path = run_dir / plan_name
+        plan_path.parent.mkdir(parents=True, exist_ok=True)
+        plan_path.write_text(
             json.dumps(
                 {
                     "steps": [
@@ -174,6 +178,62 @@ def test_structured_availability_contract_is_selected_before_any_coder_path(
     assert selection.analysis_kind == "missingness_source_availability_audit"
     assert "missingness_measurement_audit.csv" in selection.code
     assert audit_mechanical_code_contracts(selection.code, step) == []
+
+
+def test_structured_missingness_complete_case_contract_is_selected():
+    step = AnalysisStep(
+        step_id="05_missingness_audit",
+        intent="Audit missingness and complete-case attrition without imputation.",
+        inputs=[
+            "artifact:analysis_cohort",
+            "exposure",
+            "outcome",
+            "age",
+        ],
+        expected_outputs=[
+            "table:missingness_profile",
+            "table:complete_case_attrition",
+        ],
+        method="missingness_and_complete_case_audit",
+    )
+    plan = AnalysisPlan(research_question="Test", steps=[step])
+
+    assert is_missingness_complete_case_contract(
+        step.method,
+        step.expected_outputs,
+    )
+    assert missingness_audit_executor_owns_step(step)
+    selection = select_standard_executor(step, plan=plan)
+    assert selection is not None
+    assert selection.analysis_kind == "missingness_complete_case_audit"
+    assert audit_mechanical_code_contracts(selection.code, step) == []
+
+
+def test_structured_missingness_complete_case_contract_rejects_wider_scope():
+    extra_output = AnalysisStep(
+        step_id="05_missingness_audit",
+        intent="Audit missingness and fit an effect model.",
+        inputs=["artifact:analysis_cohort", "exposure", "outcome"],
+        expected_outputs=[
+            "table:missingness_profile",
+            "table:complete_case_attrition",
+            "table:adjusted_association_estimates",
+        ],
+        method="missingness_and_complete_case_audit",
+    )
+    foreign_input = AnalysisStep(
+        step_id="05_missingness_audit",
+        intent="Reconcile missingness from an unreviewed table.",
+        inputs=["table:unreviewed_reconciliation", "age"],
+        expected_outputs=[
+            "table:missingness_profile",
+            "table:complete_case_attrition",
+        ],
+        method="missingness_and_complete_case_audit",
+    )
+
+    assert not missingness_audit_executor_owns_step(extra_output)
+    assert not missingness_audit_executor_owns_step(foreign_input)
 
 
 @pytest.mark.parametrize(
@@ -365,6 +425,33 @@ def test_missingness_and_source_outputs_are_distinct_declared_products(tmp_path:
     }
 
 
+def test_missingness_profile_and_complete_case_outputs_are_bound(tmp_path: Path):
+    cohort = _cohort(n=100, seed=15)
+    cohort.loc[:9, "age"] = np.nan
+    summary, out_dir = _exec_runner(
+        tmp_path,
+        cohort,
+        {},
+        requested_inputs=["age", "death"],
+        requested_outputs=[
+            "table:missingness_profile",
+            "table:complete_case_attrition",
+        ],
+    )
+
+    profile = pd.read_csv(out_dir / "missingness_audit.csv")
+    denominators = pd.read_csv(out_dir / "analytic_denominators.csv")
+    complete = denominators.loc[
+        denominators["analysis_set"] == "all_requested_inputs"
+    ].iloc[0]
+    assert profile.loc[profile["concept"] == "age", "missing_n"].item() == 10
+    assert complete["n_complete"] == 90
+    assert summary["output_files"] == {
+        "table:missingness_profile": "missingness_audit.csv",
+        "table:complete_case_attrition": "analytic_denominators.csv",
+    }
+
+
 def test_measurement_availability_is_a_concrete_declared_product(tmp_path: Path):
     cohort = _cohort(n=100, seed=12)
     summary, out_dir = _exec_runner(
@@ -447,6 +534,41 @@ def test_missingness_runner_uses_manifest_selected_current_plan(tmp_path: Path):
         "table:missingness_audit": "missingness_audit.csv",
         "table:measurement_availability": "measurement_availability.csv",
     }
+
+
+def test_missingness_runner_accepts_host_evidence_plan_path(tmp_path: Path):
+    cohort = _cohort(n=100, seed=16)
+    summary, _out_dir = _exec_runner(
+        tmp_path,
+        cohort,
+        {},
+        requested_inputs=["age", "death"],
+        requested_outputs=[
+            "table:missingness_profile",
+            "table:complete_case_attrition",
+        ],
+        current_plan_name="evidence/analysis_plan_input_closure.json",
+    )
+
+    assert summary["status"] == "ok"
+    assert summary["requested_input_count"] == 2
+
+
+def test_missingness_runner_rejects_plan_path_escape(tmp_path: Path):
+    cohort = _cohort(n=10, seed=17)
+
+    with pytest.raises(ValueError, match="unsafe plan_path"):
+        _exec_runner(
+            tmp_path,
+            cohort,
+            {},
+            requested_inputs=["age", "death"],
+            requested_outputs=[
+                "table:missingness_profile",
+                "table:complete_case_attrition",
+            ],
+            current_plan_name="../analysis_plan.json",
+        )
 
 
 def test_structural_no_source_distinguished_from_measurement_missing(tmp_path: Path):

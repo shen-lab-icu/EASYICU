@@ -46,7 +46,9 @@ from collections.abc import Sequence
 from ...schema import AnalysisStep
 
 __all__ = [
+    "is_missingness_complete_case_contract",
     "is_missingness_measurement_availability_contract",
+    "missingness_audit_executor_owns_step",
     "missingness_measurement_audit_code",
     "source_availability_audit_executor_owns_step",
 ]
@@ -71,6 +73,9 @@ _MEASUREMENT_AVAILABILITY_PRODUCT_TOKENS = frozenset(
         "measurement",
         "source",
     }
+)
+_MISSINGNESS_COMPLETE_CASE_METHOD_TOKENS = frozenset(
+    {"and", "audit", "case", "complete", "missingness"}
 )
 
 
@@ -129,26 +134,56 @@ def is_missingness_measurement_availability_contract(
     return len(missingness_products) == 1 and len(availability_products) == 1
 
 
-def source_availability_audit_executor_owns_step(step: AnalysisStep) -> bool:
-    """Own one closed, non-scientific missingness/availability contract."""
+def is_missingness_complete_case_contract(
+    method: object,
+    expected_outputs: Sequence[object],
+) -> bool:
+    """Classify one closed missingness-profile/complete-case count contract."""
+
+    method_tokens = _contract_tokens(method)
+    if method_tokens != _MISSINGNESS_COMPLETE_CASE_METHOD_TOKENS:
+        return False
+    outputs = {str(value or "").strip().casefold() for value in expected_outputs}
+    return outputs == {
+        "table:missingness_profile",
+        "table:complete_case_attrition",
+    }
+
+
+def missingness_audit_executor_owns_step(step: AnalysisStep) -> bool:
+    """Own a closed, auxiliary count-only missingness contract."""
 
     typed_inputs = {
         str(value or "").strip()
         for value in step.inputs
         if str(value or "").strip().startswith(("artifact:", "table:", "dataset:"))
     }
+    contract_is_supported = is_missingness_measurement_availability_contract(
+        step.method,
+        step.expected_outputs,
+    ) or is_missingness_complete_case_contract(
+        step.method,
+        step.expected_outputs,
+    )
+    return bool(
+        contract_is_supported
+        # AnalysisStep bare columns are evaluated against the orchestrator's
+        # already-locked COHORT_PARQUET by construction. Any other typed source
+        # still rejects ownership; the standard runner must never reconcile an
+        # upstream table or dataset on the Planner's behalf.
+        and (not typed_inputs or typed_inputs == {"artifact:analysis_cohort"})
+    )
+
+
+def source_availability_audit_executor_owns_step(step: AnalysisStep) -> bool:
+    """Own one closed, non-scientific missingness/availability contract."""
+
     return bool(
         is_missingness_measurement_availability_contract(
             step.method,
             step.expected_outputs,
         )
-        # AnalysisStep bare columns are evaluated against the orchestrator's
-        # already-locked COHORT_PARQUET by construction.  Planner revisions may
-        # therefore either spell that implicit scope explicitly or omit the
-        # redundant artifact coordinate.  Any OTHER typed source still rejects
-        # ownership; the standard runner must never reconcile an upstream table
-        # or dataset on the Planner's behalf.
-        and (not typed_inputs or typed_inputs == {"artifact:analysis_cohort"})
+        and missingness_audit_executor_owns_step(step)
     )
 
 
@@ -200,7 +235,7 @@ def missingness_measurement_audit_code() -> str:
         # step's declared inputs lets the deterministic audit emit the requested
         # analytic denominator instead of returning only a compact concept
         # count and falsely satisfying a richer step.
-        plan_name = "analysis_plan.json"
+        plan_path = run_dir / "analysis_plan.json"
         manifest_path = run_dir / "manifest_partial.json"
         if manifest_path.is_file():
             manifest = json.loads(manifest_path.read_text("utf-8"))
@@ -208,17 +243,23 @@ def missingness_measurement_audit_code() -> str:
                 raise ValueError("manifest_partial.json must contain an object")
             declared_plan = manifest.get("plan_path")
             if declared_plan is not None:
-                declared_plan_path = Path(str(declared_plan))
+                declared_plan_path = Path(str(declared_plan).strip())
                 if (
                     declared_plan_path.is_absolute()
-                    or len(declared_plan_path.parts) != 1
                     or declared_plan_path.suffix != ".json"
+                    or not declared_plan_path.parts
+                    or any(part in {"", ".", ".."} for part in declared_plan_path.parts)
                 ):
                     raise ValueError(
                         "manifest_partial.json carries an unsafe plan_path"
                     )
-                plan_name = declared_plan_path.name
-        plan_path = run_dir / plan_name
+                resolved_run_dir = run_dir.resolve()
+                resolved_plan_path = (run_dir / declared_plan_path).resolve()
+                if not resolved_plan_path.is_relative_to(resolved_run_dir):
+                    raise ValueError(
+                        "manifest_partial.json plan_path escapes the run directory"
+                    )
+                plan_path = resolved_plan_path
         if plan_path.is_file():
             plan = json.loads(plan_path.read_text("utf-8"))
             for planned_step in plan.get("steps") or []:
@@ -691,6 +732,7 @@ def missingness_measurement_audit_code() -> str:
         )
         product_files = {
             "missingness_audit": "missingness_audit.csv",
+            "missingness_profile": "missingness_audit.csv",
             "missingness_measurement_audit": "missingness_measurement_audit.csv",
             "measurement_audit": "missingness_measurement_audit.csv",
             "measurement_process_audit": "missingness_measurement_audit.csv",
@@ -701,6 +743,7 @@ def missingness_measurement_audit_code() -> str:
             "source_coverage": "measurement_source_audit.csv",
             "analytic_denominator": "analytic_denominators.csv",
             "analytic_denominators": "analytic_denominators.csv",
+            "complete_case_attrition": "analytic_denominators.csv",
             "cohort_flow": "cohort_flow.csv",
         }
         declared_output_files = {}
