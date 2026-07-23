@@ -44,6 +44,14 @@ the bridge descriptor remains a handoff artifact and P4 correctly blocks any
 run until typed cohort/trajectory authorities, the three case decisions, and
 the final operation freeze exist.
 
+The non-authorizing evidence inventory for that review is
+`docs/reviews/full0717_source_attestation_20260722.json`.  It records the
+full-export and bridge identities, plus the decisive limitation: historical
+module manifests have empty `concept_meta` and the recorded EasyICU commit is
+empty.  The next materialization must therefore be a specifically reviewed,
+source-bound typed path; it cannot infer clinical semantics from names or
+patch full0717 in place.
+
 ## Conditional routes if a future data lane is explicitly approved
 
 There are two mutually exclusive routes.  The controlled bridge is now the
