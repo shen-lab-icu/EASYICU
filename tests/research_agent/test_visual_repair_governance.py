@@ -7,6 +7,10 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
+from easyicu.research_agent.providers.mocks import (
+    ExternalCaptureMockLLMClient,
+    PatternScriptedMockLLMClient,
+)
 from easyicu.research_agent.schema import ValidationFinding
 
 from .test_gate_evaluator_contract import gate_call_order
@@ -81,85 +85,93 @@ def _script(*, svg: str, include_table: bool) -> str:
     )
 
 
-class _VisualGovernanceLLM:
-    name = "visual-governance-llm"
-
-    def __init__(
-        self,
-        *,
-        initial_code: str,
-        contract_code: str | None = None,
-        contract_error: Exception | None = None,
-        visual_code: str | None = None,
-        visual_error: Exception | None = None,
-    ) -> None:
-        self.initial_code = initial_code
-        self.contract_code = contract_code
-        self.contract_error = contract_error
-        self.visual_code = visual_code
-        self.visual_error = visual_error
-        self.contract_repairs = 0
-        self.visual_repairs = 0
-        self.visual_prompts: list[str] = []
-        self.visual_message_batches: list[list] = []
-
-    def complete(self, messages, *, max_tokens=2048, temperature=0.2):
-        del max_tokens, temperature
-        user = next((m.content for m in reversed(messages) if m.role == "user"), "")
-        upper = user.upper()
-        if "ICU-AWARE RESEARCH PLAN" in upper:
-            return json.dumps(
+def _visual_governance_llm(
+    *,
+    initial_code: str,
+    contract_code: str | None = None,
+    contract_error: Exception | None = None,
+    visual_code: str | None = None,
+    visual_error: Exception | None = None,
+) -> PatternScriptedMockLLMClient:
+    plan = json.dumps(
+        {
+            "research_question": "Summarize the cohort.",
+            "steps": [
                 {
-                    "research_question": "Summarize the cohort.",
-                    "steps": [
-                        {
-                            "step_id": "01_summary",
-                            "intent": "Write a summary table and an auxiliary figure.",
-                            "inputs": ["stay_id"],
-                            "expected_outputs": ["table:summary"],
-                            "method": "descriptive_summary",
-                            "icu_rule_refs": [],
-                        }
-                    ],
-                    "rationale": "visual-repair governance fixture",
+                    "step_id": "01_summary",
+                    "planned_analysis_role": "primary",
+                    "intent": "Write a summary table and an auxiliary figure.",
+                    "inputs": ["stay_id"],
+                    "expected_outputs": ["table:summary"],
+                    "method": "descriptive_summary",
+                    "icu_rule_refs": [],
                 }
-            )
-        if "WRITE THE PYTHON CODE" in upper:
-            return self.initial_code
-        if "REPAIR THE PYTHON CODE" in upper:
-            if "VISUAL QA REJECTED" in upper:
-                self.visual_repairs += 1
-                self.visual_prompts.append(user)
-                self.visual_message_batches.append(list(messages))
-                if self.visual_error is not None:
-                    raise self.visual_error
-                assert self.visual_code is not None
-                if "MINIMAL PATCH MODE" in upper:
-                    assert self.contract_code is not None
-                    return _exact_code_patch([('x="102"', 'x="280"')])
-                return self.visual_code
-            self.contract_repairs += 1
-            if self.contract_error is not None:
-                raise self.contract_error
-            assert self.contract_code is not None
-            if "MINIMAL PATCH MODE" in upper:
-                return _exact_code_patch(
-                    [
-                        ('x="280"', 'x="102"'),
-                        (
-                            self.initial_code.splitlines()[-1],
-                            "\n".join(self.contract_code.splitlines()[-2:]),
-                        ),
-                    ]
-                )
-            return self.contract_code
-        if "INTERPRET THE RESULTS" in upper:
-            return "The summary is available {evidence:summary}."
-        if "MANUSCRIPT SCAFFOLD" in upper:
-            return "# Title\n\n## Results\n\nSummary {evidence:summary}."
-        if "EVERY FINDING MUST INCLUDE" in upper and "RETURN JSON ONLY" in upper:
-            return json.dumps({"findings": []})
-        return "{}"
+            ],
+            "rationale": "visual-repair governance fixture",
+        }
+    )
+    contract_response: str | BaseException
+    if contract_error is not None:
+        contract_response = contract_error
+    elif contract_code is not None:
+        contract_response = _exact_code_patch(
+            [
+                ('x="280"', 'x="102"'),
+                (
+                    initial_code.splitlines()[-1],
+                    "\n".join(contract_code.splitlines()[-2:]),
+                ),
+            ]
+        )
+    else:
+        contract_response = AssertionError("unexpected contract repair")
+
+    visual_response: str | BaseException
+    if visual_error is not None:
+        visual_response = visual_error
+    elif visual_code is not None and contract_code is not None:
+        visual_response = _exact_code_patch([('x="102"', 'x="280"')])
+    elif visual_code is not None:
+        visual_response = visual_code
+    else:
+        visual_response = AssertionError("unexpected visual repair")
+
+    return PatternScriptedMockLLMClient(
+        [
+            ("ICU-AWARE RESEARCH PLAN", [plan]),
+            ("WRITE THE PYTHON CODE", [initial_code]),
+            ("REPAIR THE PYTHON CODE", [contract_response]),
+            ("VISUAL QA REJECTED", [visual_response]),
+            (
+                "INTERPRET THE RESULTS",
+                ["The summary is available {evidence:summary}."],
+            ),
+            (
+                "MANUSCRIPT SCAFFOLD",
+                ["# Title\n\n## Results\n\nSummary {evidence:summary}."],
+            ),
+            (
+                "EVERY FINDING MUST INCLUDE",
+                [json.dumps({"findings": []})],
+            ),
+        ]
+    )
+
+
+def _matching_calls(client, marker: str):
+    folded = marker.casefold()
+    return [
+        (messages, kwargs)
+        for messages, kwargs in client.calls
+        if folded
+        in "\n".join(str(message.content or "") for message in messages).casefold()
+    ]
+
+
+def _repair_counts(client) -> tuple[int, int]:
+    repair_calls = _matching_calls(client, "REPAIR THE PYTHON CODE")
+    visual_calls = _matching_calls(client, "VISUAL QA REJECTED")
+    return len(repair_calls) - len(visual_calls), len(visual_calls)
 
 
 def _exact_code_patch(edits: list[tuple[str, str]]) -> str:
@@ -187,16 +199,33 @@ def _record(result) -> dict:
 def _run(
     ra,
     tmp_path: Path,
-    llm: _VisualGovernanceLLM,
+    llm: PatternScriptedMockLLMClient,
+    monkeypatch: pytest.MonkeyPatch,
     *,
     enable_deterministic_code_fallback: bool = False,
 ):
+    from easyicu.research_agent.agents.core import PlannerAgent
+
+    original_planner_run = PlannerAgent.run
+
+    def run_without_unrelated_article_suite(self, context, **kwargs):
+        kwargs["enforce_article_contract"] = False
+        return original_planner_run(self, context, **kwargs)
+
+    monkeypatch.setattr(
+        PlannerAgent,
+        "run",
+        run_without_unrelated_article_suite,
+    )
+    concept_auditor = ExternalCaptureMockLLMClient([json.dumps({"findings": []})] * 2)
     pipeline = ra.ResearchAgentPipeline(
         workdir=tmp_path,
         llm=llm,
+        llm_concept_auditor_client=concept_auditor,
         enable_literature=False,
         enable_latex=False,
         enable_vlm_visual_qa=False,
+        enable_llm_concept_audit=True,
         enable_deterministic_code_fallback=enable_deterministic_code_fallback,
         enable_deterministic_runner_repair=False,
         max_code_repair_attempts=1,
@@ -345,16 +374,15 @@ def test_contract_budget_does_not_consume_visual_layout_budget(
         "_step_contract_findings",
         controlled_contract,
     )
-    llm = _VisualGovernanceLLM(
+    llm = _visual_governance_llm(
         initial_code=_script(svg=_svg(overlap=False), include_table=False),
         contract_code=_script(svg=_svg(overlap=True), include_table=True),
         visual_code=_script(svg=_svg(overlap=False), include_table=True),
     )
 
-    record = _record(_run(ra, tmp_path, llm))
+    record = _record(_run(ra, tmp_path, llm, monkeypatch))
 
-    assert llm.contract_repairs == 1
-    assert llm.visual_repairs == 1
+    assert _repair_counts(llm) == (1, 1)
     assert record["status"] == "ok"
     assert record["contract_repair_attempts"] == 1
     assert record["visual_repair_attempts"] == 1
@@ -368,9 +396,10 @@ def test_contract_budget_does_not_consume_visual_layout_budget(
         "analyzer",
     ]
     authority_prefix = "HOST-OWNED REPAIR AUTHORITY (typed; verbatim):\n"
+    visual_message_batch = _matching_calls(llm, "VISUAL QA REJECTED")[0][0]
     visual_authority_messages = [
         message.content.removeprefix(authority_prefix)
-        for message in llm.visual_message_batches[0]
+        for message in visual_message_batch
         if message.role == "system" and message.content.startswith(authority_prefix)
     ]
     assert len(visual_authority_messages) == 1
@@ -409,18 +438,18 @@ def test_contract_repair_provider_failure_preserves_contract_observability(
         "_step_contract_findings",
         lambda **kwargs: [finding],
     )
-    llm = _VisualGovernanceLLM(
+    llm = _visual_governance_llm(
         initial_code=_script(svg=_svg(overlap=False), include_table=False),
         contract_error=RuntimeError("provider returned HTTP 502"),
     )
 
-    result = _run(ra, tmp_path, llm)
+    result = _run(ra, tmp_path, llm, monkeypatch)
     partial = json.loads(
         (Path(result.workdir) / "manifest_partial.json").read_text(encoding="utf-8")
     )
     record = _record(result)
 
-    assert llm.contract_repairs == 1
+    assert _repair_counts(llm) == (1, 0)
     assert record["status"] == "repair_failed"
     assert record["step_summary"] == {"status": "ok", "contract_ok": False}
     assert record["contract_findings"] == [finding.model_dump()]
@@ -436,7 +465,7 @@ def test_cosmetic_visual_repair_provider_failure_keeps_outputs(
     ra, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _ignore_figure_provenance_gates(monkeypatch)
-    llm = _VisualGovernanceLLM(
+    llm = _visual_governance_llm(
         initial_code=_script(svg=_svg(overlap=True), include_table=True),
         visual_error=RuntimeError("simulated provider outage"),
     )
@@ -445,11 +474,12 @@ def test_cosmetic_visual_repair_provider_failure_keeps_outputs(
         ra,
         tmp_path,
         llm,
+        monkeypatch,
         enable_deterministic_code_fallback=True,
     )
     record = _record(result)
 
-    assert llm.visual_repairs == 1
+    assert _repair_counts(llm) == (0, 1)
     assert record["status"] == "ok"
     assert record["visual_qa_demoted"] is True
     assert record["visual_repair_provider_failed"] is True
@@ -468,14 +498,14 @@ def test_noncosmetic_visual_repair_provider_failure_remains_fail_closed(
 ) -> None:
     _ignore_figure_provenance_gates(monkeypatch)
     malformed_svg = "<svg>" + ("x" * 1400)
-    llm = _VisualGovernanceLLM(
+    llm = _visual_governance_llm(
         initial_code=_script(svg=malformed_svg, include_table=True),
         visual_error=RuntimeError("simulated provider outage"),
     )
 
-    record = _record(_run(ra, tmp_path, llm))
+    record = _record(_run(ra, tmp_path, llm, monkeypatch))
 
-    assert llm.visual_repairs == 1
+    assert _repair_counts(llm) == (0, 1)
     assert record["status"] == "repair_failed"
     assert record.get("visual_qa_demoted") is not True
     assert any(finding["severity"] == "error" for finding in record["visual_findings"])

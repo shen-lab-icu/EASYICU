@@ -689,6 +689,32 @@
      "callback": "transform_fun(set_val(TRUE))",
      "_comment": "2026-07-18 fix: mirror miiv MetaVision IABP/LVAD/RVAD itemids (sofa2 overlay was shadowing concept-dict; MIMIC-III chartevents holds the data)."
     }
+   ],
+   "mimic_demo": [
+    {
+     "table": "chartevents",
+     "sub_var": "itemid",
+     "ids": [
+      224309,
+      224652,
+      224654,
+      224311,
+      224310,
+      224322,
+      227980,
+      228866,
+      225979,
+      228154,
+      228156,
+      228151,
+      228158,
+      228198,
+      229254,
+      220128
+     ],
+     "callback": "transform_fun(set_val(TRUE))",
+     "_comment": "2026-07-18 fix: mirror miiv MetaVision IABP/LVAD/RVAD itemids (sofa2 overlay was shadowing concept-dict; MIMIC-III chartevents holds the data)."
+    }
    ]
   }
  },

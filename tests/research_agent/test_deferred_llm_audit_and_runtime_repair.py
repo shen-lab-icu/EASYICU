@@ -8,6 +8,57 @@ from types import SimpleNamespace
 import pandas as pd
 import pytest
 
+from easyicu.research_agent.providers.mocks import (
+    PatternScriptedMockLLMClient,
+    ScriptedMockLLMClient,
+)
+
+
+def _prompt_text(messages) -> str:
+    return "\n".join(str(message.content or "") for message in messages)
+
+
+def _call_count(client, marker: str) -> int:
+    folded = marker.casefold()
+    return sum(
+        folded in _prompt_text(messages).casefold()
+        for messages, _kwargs in client.calls
+    )
+
+
+def _matching_user_prompts(client, marker: str) -> list[str]:
+    folded = marker.casefold()
+    prompts = []
+    for messages, _kwargs in client.calls:
+        full_prompt = _prompt_text(messages)
+        if folded not in full_prompt.casefold():
+            continue
+        prompts.append(
+            next(
+                (
+                    str(message.content or "")
+                    for message in reversed(messages)
+                    if message.role == "user"
+                ),
+                "",
+            )
+        )
+    return prompts
+
+
+def _isolate_article_suite_contract(monkeypatch) -> None:
+    """Keep orchestration regressions independent of article-suite breadth."""
+
+    from easyicu.research_agent.agents.core import PlannerAgent
+
+    original_run = PlannerAgent.run
+
+    def run_without_article_suite(self, context, **kwargs):
+        kwargs["enforce_article_contract"] = False
+        return original_run(self, context, **kwargs)
+
+    monkeypatch.setattr(PlannerAgent, "run", run_without_article_suite)
+
 
 def _summary_script(*, phase: str) -> str:
     return f"""
@@ -105,6 +156,7 @@ def test_provider_budget_failure_is_not_replayed_as_concept_authority(
 def test_llm_concept_audit_runs_once_only_after_local_contracts_pass(
     ra, tmp_path: Path, monkeypatch
 ) -> None:
+    _isolate_article_suite_contract(monkeypatch)
     from easyicu.research_agent.audits.validators import PrimaryModelContractValidator
     from easyicu.research_agent.contracts.runtime import ValidationFinding
     from easyicu.research_agent.execution.runner import CodeRunner
@@ -112,40 +164,18 @@ def test_llm_concept_audit_runs_once_only_after_local_contracts_pass(
     initial_code = _summary_script(phase="INITIAL_CONTRACT_ERROR")
     repaired_code = _summary_script(phase="FINAL_CONTRACT_VALID")
 
-    class DeferredAuditLLM:
-        name = "deferred-audit-llm"
-
-        def __init__(self) -> None:
-            self.audit_prompts: list[str] = []
-
-        def complete(self, messages, *, max_tokens=2048, temperature=0.2):
-            del max_tokens, temperature
-            system = "\n".join(
-                str(message.content or "")
-                for message in messages
-                if message.role == "system"
-            )
-            user = next(
-                (
-                    str(message.content or "")
-                    for message in reversed(messages)
-                    if message.role == "user"
-                ),
-                "",
-            )
-            upper = user.upper()
-            if "ICU-AWARE RESEARCH PLAN" in upper:
-                return _plan()
-            if "WRITE THE PYTHON CODE" in upper:
-                return initial_code
-            if "REPAIR THE PYTHON CODE" in upper:
-                return repaired_code
-            if "CONSERVATIVE ICU CONCEPT-USE AUDITOR" in system.upper():
-                self.audit_prompts.append(user)
-                return json.dumps({"findings": []})
-            if "INTERPRET THE RESULTS" in upper:
-                return "The cohort summary is available."
-            return "{}"
+    llm = PatternScriptedMockLLMClient(
+        [
+            ("ICU-AWARE RESEARCH PLAN", [_plan()]),
+            ("WRITE THE PYTHON CODE", [initial_code]),
+            ("REPAIR THE PYTHON CODE", [repaired_code] * 2),
+            (
+                "CONSERVATIVE ICU CONCEPT-USE AUDITOR",
+                [json.dumps({"findings": []})],
+            ),
+            ("INTERPRET THE RESULTS", ["The cohort summary is available."]),
+        ]
+    )
 
     def contract_audit(self, *, step, step_summary, **kwargs):
         del self, kwargs
@@ -174,7 +204,6 @@ def test_llm_concept_audit_runs_once_only_after_local_contracts_pass(
 
     monkeypatch.setattr(PrimaryModelContractValidator, "audit", contract_audit)
     monkeypatch.setattr(CodeRunner, "run", recording_run)
-    llm = DeferredAuditLLM()
     pipeline = ra.ResearchAgentPipeline(
         workdir=tmp_path,
         llm=llm,
@@ -185,6 +214,7 @@ def test_llm_concept_audit_runs_once_only_after_local_contracts_pass(
         enable_deterministic_code_fallback=False,
         enable_deterministic_runner_repair=False,
         max_code_repair_attempts=1,
+        runner_kind="subprocess",
     )
     result = pipeline.run(
         question="Summarize the ICU cohort.",
@@ -200,9 +230,10 @@ def test_llm_concept_audit_runs_once_only_after_local_contracts_pass(
     assert len(executed_code) == 2
     assert "INITIAL_CONTRACT_ERROR" in executed_code[0]
     assert "FINAL_CONTRACT_VALID" in executed_code[1]
-    assert len(llm.audit_prompts) == 1
-    assert "FINAL_CONTRACT_VALID" in llm.audit_prompts[0]
-    assert "INITIAL_CONTRACT_ERROR" not in llm.audit_prompts[0]
+    audit_prompts = _matching_user_prompts(llm, "CONSERVATIVE ICU CONCEPT-USE AUDITOR")
+    assert len(audit_prompts) == 1
+    assert "FINAL_CONTRACT_VALID" in audit_prompts[0]
+    assert "INITIAL_CONTRACT_ERROR" not in audit_prompts[0]
     assert record["status"] == "ok"
     assert record["llm_concept_audit_status"] == "completed"
     assert record["llm_concept_approved_code_sha256"] == record["executed_code_sha256"]
@@ -213,32 +244,27 @@ def test_llm_concept_audit_runs_once_only_after_local_contracts_pass(
 
 
 def test_disabled_llm_audit_records_final_gate_without_claiming_llm_approval(
-    ra, tmp_path: Path
+    ra, tmp_path: Path, monkeypatch
 ) -> None:
-    class AuditDisabledLLM:
-        name = "audit-disabled-llm"
-
-        def complete(self, messages, *, max_tokens=2048, temperature=0.2):
-            del max_tokens, temperature
-            user = next((m.content for m in reversed(messages) if m.role == "user"), "")
-            upper = user.upper()
-            if "ICU-AWARE RESEARCH PLAN" in upper:
-                return _plan()
-            if "WRITE THE PYTHON CODE" in upper:
-                return _summary_script(phase="AUDIT_DISABLED")
-            if "INTERPRET THE RESULTS" in upper:
-                return "The cohort summary is available."
-            return "{}"
+    _isolate_article_suite_contract(monkeypatch)
+    llm = PatternScriptedMockLLMClient(
+        [
+            ("ICU-AWARE RESEARCH PLAN", [_plan()]),
+            ("WRITE THE PYTHON CODE", [_summary_script(phase="AUDIT_DISABLED")]),
+            ("INTERPRET THE RESULTS", ["The cohort summary is available."]),
+        ]
+    )
 
     pipeline = ra.ResearchAgentPipeline(
         workdir=tmp_path,
-        llm=AuditDisabledLLM(),
+        llm=llm,
         enable_literature=False,
         enable_visual_qa=False,
         enable_latex=False,
         enable_llm_concept_audit=False,
         enable_deterministic_code_fallback=False,
         enable_deterministic_runner_repair=False,
+        runner_kind="subprocess",
     )
     result = pipeline.run(
         question="Summarize the ICU cohort.",
@@ -261,11 +287,13 @@ def test_disabled_llm_audit_records_final_gate_without_claiming_llm_approval(
 
 
 def test_typed_lossy_guard_repairs_without_logical_llm_budget(
-    ra, tmp_path: Path
+    ra, tmp_path: Path, monkeypatch
 ) -> None:
+    _isolate_article_suite_contract(monkeypatch)
     lossy_code = r"""
 import json
 import os
+import numpy as np
 import pandas as pd
 
 cohort = pd.read_parquet(os.environ["COHORT_PARQUET"])
@@ -316,40 +344,24 @@ with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as hand
         }
     )
 
-    class LossyGuardLLM:
-        name = "lossy-guard-llm"
-
-        def __init__(self) -> None:
-            self.repair_calls = 0
-            self.audit_calls = 0
-
-        def complete(self, messages, *, max_tokens=2048, temperature=0.2):
-            del max_tokens, temperature
-            system = "\n".join(
-                str(message.content or "")
-                for message in messages
-                if message.role == "system"
-            )
-            user = next(
-                (str(message.content or "") for message in reversed(messages)),
-                "",
-            )
-            upper = user.upper()
-            if "ICU-AWARE RESEARCH PLAN" in upper:
-                return plan
-            if "WRITE THE PYTHON CODE" in upper:
-                return lossy_code
-            if "REPAIR THE PYTHON CODE" in upper:
-                self.repair_calls += 1
-                raise AssertionError("typed mechanical repair must avoid the coder")
-            if "CONSERVATIVE ICU CONCEPT-USE AUDITOR" in system.upper():
-                self.audit_calls += 1
-                return json.dumps({"findings": []})
-            if "INTERPRET THE RESULTS" in upper:
-                return "The exposure quality-control table is available."
-            return "{}"
-
-    llm = LossyGuardLLM()
+    llm = PatternScriptedMockLLMClient(
+        [
+            ("ICU-AWARE RESEARCH PLAN", [plan]),
+            ("WRITE THE PYTHON CODE", [lossy_code]),
+            (
+                "REPAIR THE PYTHON CODE",
+                [AssertionError("typed mechanical repair must avoid the coder")],
+            ),
+            (
+                "CONSERVATIVE ICU CONCEPT-USE AUDITOR",
+                [json.dumps({"findings": []})],
+            ),
+            (
+                "INTERPRET THE RESULTS",
+                ["The exposure quality-control table is available."],
+            ),
+        ]
+    )
     pipeline = ra.ResearchAgentPipeline(
         workdir=tmp_path,
         llm=llm,
@@ -360,6 +372,7 @@ with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as hand
         enable_deterministic_code_fallback=False,
         enable_deterministic_runner_repair=False,
         max_step_llm_repair_attempts=0,
+        runner_kind="subprocess",
     )
     result = pipeline.run(
         question="Audit an ordered numeric exposure.",
@@ -386,40 +399,35 @@ with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as hand
         if item.get("step_id") == "02_exposure_qc"
     ][-1]
     assert record["status"] == "ok"
-    assert record["deterministic_concept_repairs"] == 1
-    assert record["applied_concept_repair_names"] == ["lossy_numeric_coercion_guard_v1"]
+    assert record["deterministic_concept_repairs"] == 2
+    assert record["applied_concept_repair_names"] == [
+        "lossy_numeric_coercion_guard_v1",
+        "strict_numeric_nonfinite_guard_v1",
+    ]
     assert record.get("step_llm_repair_attempts", 0) == 0
-    assert llm.repair_calls == 0
-    assert llm.audit_calls == 1
+    assert _call_count(llm, "REPAIR THE PYTHON CODE") == 0
+    assert _call_count(llm, "CONSERVATIVE ICU CONCEPT-USE AUDITOR") == 1
 
 
 def test_runtime_repair_transport_retry_does_not_reexecute_known_failure(
     ra, tmp_path: Path, monkeypatch
 ) -> None:
+    _isolate_article_suite_contract(monkeypatch)
     from easyicu.research_agent.execution.runner import CodeRunner
 
     broken_code = "raise RuntimeError('KNOWN_RUNTIME_FAILURE')\n"
 
-    class FailedRepairLLM:
-        name = "failed-runtime-repair-llm"
-
-        def __init__(self) -> None:
-            self.repair_calls = 0
-
-        def complete(self, messages, *, max_tokens=2048, temperature=0.2):
-            del max_tokens, temperature
-            user = next((m.content for m in reversed(messages) if m.role == "user"), "")
-            upper = user.upper()
-            if "ICU-AWARE RESEARCH PLAN" in upper:
-                return _plan()
-            if "WRITE THE PYTHON CODE" in upper:
-                return broken_code
-            if "REPAIR THE PYTHON CODE" in upper:
-                self.repair_calls += 1
-                raise RuntimeError("provider rate limited")
-            if "INTERPRET THE RESULTS" in upper:
-                return "The fallback summary is available."
-            return "{}"
+    llm = PatternScriptedMockLLMClient(
+        [
+            ("ICU-AWARE RESEARCH PLAN", [_plan()]),
+            ("WRITE THE PYTHON CODE", [broken_code]),
+            (
+                "REPAIR THE PYTHON CODE",
+                [RuntimeError("provider rate limited")] * 2,
+            ),
+            ("INTERPRET THE RESULTS", ["The fallback summary is available."]),
+        ]
+    )
 
     executed_code: list[str] = []
     original_run = CodeRunner.run
@@ -434,7 +442,6 @@ def test_runtime_repair_transport_retry_does_not_reexecute_known_failure(
         )
 
     monkeypatch.setattr(CodeRunner, "run", recording_run)
-    llm = FailedRepairLLM()
     pipeline = ra.ResearchAgentPipeline(
         workdir=tmp_path,
         llm=llm,
@@ -444,6 +451,7 @@ def test_runtime_repair_transport_retry_does_not_reexecute_known_failure(
         enable_llm_concept_audit=False,
         enable_deterministic_runner_repair=False,
         max_code_repair_attempts=3,
+        runner_kind="subprocess",
     )
     result = pipeline.run(
         question="Summarize the ICU cohort.",
@@ -456,7 +464,7 @@ def test_runtime_repair_transport_retry_does_not_reexecute_known_failure(
     )
 
     record = _latest_step_record(Path(result.workdir))
-    assert llm.repair_calls == 2
+    assert _call_count(llm, "REPAIR THE PYTHON CODE") == 2
     assert sum("KNOWN_RUNTIME_FAILURE" in code for code in executed_code) == 1
     assert record["status"] == "repair_failed"
 
@@ -464,6 +472,7 @@ def test_runtime_repair_transport_retry_does_not_reexecute_known_failure(
 def test_noop_runtime_repair_is_retried_without_reexecution(
     ra, tmp_path: Path, monkeypatch
 ) -> None:
+    _isolate_article_suite_contract(monkeypatch)
     from easyicu.research_agent.execution.runner import CodeRunner
 
     broken_code = (
@@ -471,26 +480,14 @@ def test_noop_runtime_repair_is_retried_without_reexecution(
         + "\nraise RuntimeError('NOOP_RUNTIME_FAILURE')\n"
     )
 
-    class NoopRepairLLM:
-        name = "noop-runtime-repair-llm"
-
-        def __init__(self) -> None:
-            self.repair_calls = 0
-
-        def complete(self, messages, *, max_tokens=2048, temperature=0.2):
-            del max_tokens, temperature
-            user = next((m.content for m in reversed(messages) if m.role == "user"), "")
-            upper = user.upper()
-            if "ICU-AWARE RESEARCH PLAN" in upper:
-                return _plan()
-            if "WRITE THE PYTHON CODE" in upper:
-                return broken_code
-            if "REPAIR THE PYTHON CODE" in upper:
-                self.repair_calls += 1
-                return broken_code
-            if "INTERPRET THE RESULTS" in upper:
-                return "The fallback summary is available."
-            return "{}"
+    llm = PatternScriptedMockLLMClient(
+        [
+            ("ICU-AWARE RESEARCH PLAN", [_plan()]),
+            ("WRITE THE PYTHON CODE", [broken_code]),
+            ("REPAIR THE PYTHON CODE", [broken_code] * 4),
+            ("INTERPRET THE RESULTS", ["The fallback summary is available."]),
+        ]
+    )
 
     executed_code: list[str] = []
     original_run = CodeRunner.run
@@ -505,7 +502,6 @@ def test_noop_runtime_repair_is_retried_without_reexecution(
         )
 
     monkeypatch.setattr(CodeRunner, "run", recording_run)
-    llm = NoopRepairLLM()
     pipeline = ra.ResearchAgentPipeline(
         workdir=tmp_path,
         llm=llm,
@@ -515,6 +511,7 @@ def test_noop_runtime_repair_is_retried_without_reexecution(
         enable_llm_concept_audit=False,
         enable_deterministic_runner_repair=False,
         max_code_repair_attempts=3,
+        runner_kind="subprocess",
     )
     result = pipeline.run(
         question="Summarize the ICU cohort.",
@@ -528,7 +525,7 @@ def test_noop_runtime_repair_is_retried_without_reexecution(
 
     record = _latest_step_record(Path(result.workdir))
     assert record["step_llm_repair_attempts"] == 2
-    assert llm.repair_calls == 4
+    assert _call_count(llm, "REPAIR THE PYTHON CODE") == 4
     assert sum("NOOP_RUNTIME_FAILURE" in code for code in executed_code) == 1
     assert record["status"] == "repair_failed"
 
@@ -536,6 +533,7 @@ def test_noop_runtime_repair_is_retried_without_reexecution(
 def test_exact_capsule_resume_skips_generation_audit_and_execution_but_reruns_gates(
     ra, tmp_path: Path, monkeypatch
 ) -> None:
+    _isolate_article_suite_contract(monkeypatch)
     from easyicu.research_agent.execution import phase as pipeline_execute
     from easyicu.research_agent.agents.core import RuntimeSupervisor
     from easyicu.research_agent.contracts.runtime import RunResult
@@ -544,55 +542,6 @@ def test_exact_capsule_resume_skips_generation_audit_and_execution_but_reruns_ga
         StepAuthorityCapsuleRef,
         load_verified_step_authority_capsule,
     )
-
-    class CapsuleResumeLLM:
-        name = "capsule-resume-llm"
-
-        def __init__(self) -> None:
-            self.generation_calls = 0
-            self.audit_calls = 0
-
-        def complete(self, messages, *, max_tokens=2048, temperature=0.2):
-            del max_tokens, temperature
-            system = "\n".join(
-                str(message.content or "")
-                for message in messages
-                if message.role == "system"
-            ).upper()
-            user = next(
-                (
-                    str(message.content or "")
-                    for message in reversed(messages)
-                    if message.role == "user"
-                ),
-                "",
-            )
-            upper = user.upper()
-            if "ICU-AWARE RESEARCH PLAN" in upper:
-                return _plan()
-            if "WRITE THE PYTHON CODE" in upper:
-                self.generation_calls += 1
-                return _summary_script(phase="CAPSULE_RESUME")
-            if "CONSERVATIVE ICU CONCEPT-USE AUDITOR" in system:
-                self.audit_calls += 1
-                return json.dumps({"findings": []})
-            if "INTERPRET THE RESULTS" in upper:
-                return "The cohort summary is available."
-            return "{}"
-
-    class CapsuleAuditLLM:
-        name = "capsule-auditor"
-        _model = "gpt-5.6-luna"
-        _extra_body = {"reasoning_effort": "high"}
-
-        def __init__(self, endpoint: str) -> None:
-            self._resolved_base_url = endpoint
-            self.calls = 0
-
-        def complete(self, messages, *, max_tokens=2048, temperature=0.2):
-            del messages, max_tokens, temperature
-            self.calls += 1
-            return json.dumps({"findings": []})
 
     runner_calls: list[str] = []
 
@@ -687,9 +636,34 @@ def test_exact_capsule_resume_skips_generation_audit_and_execution_but_reruns_ga
         "critique_step",
         lambda self, *, state, **_kwargs: state,
     )
-    llm = CapsuleResumeLLM()
-    auditor_a = CapsuleAuditLLM("http://127.0.0.1:8787/v1")
-    auditor_b = CapsuleAuditLLM("http://127.0.0.1:8317/v1")
+    llm = PatternScriptedMockLLMClient(
+        [
+            ("ICU-AWARE RESEARCH PLAN", [_plan()] * 8),
+            (
+                "WRITE THE PYTHON CODE",
+                [_summary_script(phase="CAPSULE_RESUME")] * 8,
+            ),
+            (
+                "CONSERVATIVE ICU CONCEPT-USE AUDITOR",
+                [json.dumps({"findings": []})] * 8,
+            ),
+            ("INTERPRET THE RESULTS", ["The cohort summary is available."] * 8),
+        ]
+    )
+
+    def capsule_auditor(endpoint: str) -> ScriptedMockLLMClient:
+        client = ScriptedMockLLMClient(
+            [json.dumps({"findings": []})] * 8,
+            repeat_last=True,
+        )
+        client.name = "capsule-auditor"
+        client._model = "gpt-5.6-luna"
+        client._extra_body = {"reasoning_effort": "high"}
+        client._resolved_base_url = endpoint
+        return client
+
+    auditor_a = capsule_auditor("http://127.0.0.1:8787/v1")
+    auditor_b = capsule_auditor("http://127.0.0.1:8317/v1")
 
     def build_pipeline(auditor=auditor_a):
         return ra.ResearchAgentPipeline(
@@ -729,9 +703,9 @@ def test_exact_capsule_resume_skips_generation_audit_and_execution_but_reruns_ga
     assert first_capsule.capsule.concept_audit is not None
     assert first_record["step_provider_call_receipt_version"] == 6
     assert first_record["step_provider_call_receipt"].endswith(".json")
-    assert llm.generation_calls == 1
-    assert llm.audit_calls == 0
-    assert auditor_a.calls == 1
+    assert _call_count(llm, "WRITE THE PYTHON CODE") == 1
+    assert _call_count(llm, "CONSERVATIVE ICU CONCEPT-USE AUDITOR") == 0
+    assert len(auditor_a.calls) == 1
     assert runner_calls == ["01_summary"]
     assert gate_calls == ["01_summary"]
 
@@ -747,8 +721,8 @@ def test_exact_capsule_resume_skips_generation_audit_and_execution_but_reruns_ga
     assert second_record["step_authority_capsule_reused"] is True
     assert second_record["capsule_execution_replayed"] is True
     assert second_record["capsule_concept_audit_replayed"] is True
-    assert llm.generation_calls == 1
-    assert auditor_a.calls == 1
+    assert _call_count(llm, "WRITE THE PYTHON CODE") == 1
+    assert len(auditor_a.calls) == 1
     assert runner_calls == ["01_summary"]
     assert gate_calls == ["01_summary", "01_summary"]
 
@@ -767,8 +741,8 @@ def test_exact_capsule_resume_skips_generation_audit_and_execution_but_reruns_ga
     assert third_record["step_authority_audit_cache_miss"] == "audit_identity_drift"
     assert third_record["capsule_execution_replayed"] is True
     assert third_record.get("capsule_concept_audit_replayed") is not True
-    assert auditor_b.calls == 1
-    assert llm.generation_calls == 1
+    assert len(auditor_b.calls) == 1
+    assert _call_count(llm, "WRITE THE PYTHON CODE") == 1
     assert runner_calls == ["01_summary"]
     assert third_capsule.capsule.execution == first_capsule.capsule.execution
     assert third_capsule.capsule.concept_audit is not None
@@ -785,8 +759,8 @@ def test_exact_capsule_resume_skips_generation_audit_and_execution_but_reruns_ga
     fourth_record = _latest_step_record(Path(fourth.workdir))
     assert fourth_record["capsule_execution_replayed"] is True
     assert fourth_record["capsule_concept_audit_replayed"] is True
-    assert auditor_b.calls == 1
-    assert llm.generation_calls == 1
+    assert len(auditor_b.calls) == 1
+    assert _call_count(llm, "WRITE THE PYTHON CODE") == 1
     assert runner_calls == ["01_summary"]
     assert gate_calls == ["01_summary"] * 4
 
@@ -811,8 +785,8 @@ def test_exact_capsule_resume_skips_generation_audit_and_execution_but_reruns_ga
         "control_plane_drift_revalidation"
     )
     assert fifth_record["capsule_concept_audit_replayed"] is True
-    assert llm.generation_calls == 1
-    assert auditor_b.calls == 1
+    assert _call_count(llm, "WRITE THE PYTHON CODE") == 1
+    assert len(auditor_b.calls) == 1
     assert runner_calls == ["01_summary", "01_summary"]
     assert fifth_capsule.capsule.candidate_origin.kind == "legacy_adoption"
     assert (
@@ -827,8 +801,8 @@ def test_exact_capsule_resume_skips_generation_audit_and_execution_but_reruns_ga
     sixth_record = _latest_step_record(Path(sixth.workdir))
     assert sixth_record["capsule_execution_replayed"] is True
     assert sixth_record["capsule_concept_audit_replayed"] is True
-    assert llm.generation_calls == 1
-    assert auditor_b.calls == 1
+    assert _call_count(llm, "WRITE THE PYTHON CODE") == 1
+    assert len(auditor_b.calls) == 1
     assert runner_calls == ["01_summary", "01_summary"]
     assert gate_calls == ["01_summary"] * 6
 
@@ -877,7 +851,7 @@ def test_exact_capsule_resume_skips_generation_audit_and_execution_but_reruns_ga
     valid_before_drift = build_pipeline(auditor_b).run(**invalid_candidate_kwargs)
     valid_before_drift_dir = Path(valid_before_drift.workdir)
     assert _latest_step_record(valid_before_drift_dir)["status"] == "ok"
-    generation_before_validator_drift = llm.generation_calls
+    generation_before_validator_drift = _call_count(llm, "WRITE THE PYTHON CODE")
     gate_calls_before_validator_drift = len(gate_calls)
     monkeypatch.setattr(
         concept_gates,
@@ -906,11 +880,15 @@ def test_exact_capsule_resume_skips_generation_audit_and_execution_but_reruns_ga
         for record in invalid_history
     )
     assert invalid_after_drift_record["status"] == "contract_failed"
-    assert invalid_after_drift_record["resume_validator_invalid_candidate_reused"] is True
+    assert (
+        invalid_after_drift_record["resume_validator_invalid_candidate_reused"] is True
+    )
     assert invalid_after_drift_record["step_authority_capsule_cache_miss"] == (
         "control_plane_drift_revalidation"
     )
-    assert llm.generation_calls == generation_before_validator_drift
+    assert (
+        _call_count(llm, "WRITE THE PYTHON CODE") == generation_before_validator_drift
+    )
     assert len(gate_calls) >= gate_calls_before_validator_drift + 2
 
     from easyicu.research_agent.agents import agentic_coder
@@ -930,7 +908,7 @@ def test_exact_capsule_resume_skips_generation_audit_and_execution_but_reruns_ga
         delegated_script,
     )
     gate_behavior["mode"] = "error"
-    generation_before_agentic = llm.generation_calls
+    generation_before_agentic = _call_count(llm, "WRITE THE PYTHON CODE")
     agentic_kwargs = {
         **run_kwargs,
         "cohort_name": "agentic_capsule_resume_test",
@@ -944,7 +922,7 @@ def test_exact_capsule_resume_skips_generation_audit_and_execution_but_reruns_ga
         ),
     )
     assert agentic_calls["n"] == 0
-    assert llm.generation_calls == generation_before_agentic + 1
+    assert _call_count(llm, "WRITE THE PYTHON CODE") == generation_before_agentic + 1
     assert agentic_first_record["step_authority_initial_transport"] == (
         "fallback_provider_receipt"
     )
@@ -958,12 +936,13 @@ def test_exact_capsule_resume_skips_generation_audit_and_execution_but_reruns_ga
     agentic_second_record = _latest_step_record(Path(agentic_second.workdir))
     assert agentic_second_record["step_authority_capsule_reused"] is True
     assert agentic_calls["n"] == 0
-    assert llm.generation_calls == generation_before_agentic + 1
+    assert _call_count(llm, "WRITE THE PYTHON CODE") == generation_before_agentic + 1
 
 
 def test_resume_seals_completed_repair_after_capsule_checkpoint_crash(
     ra, tmp_path: Path, monkeypatch
 ) -> None:
+    _isolate_article_suite_contract(monkeypatch)
     from easyicu.research_agent.execution import phase as pipeline_execute
     from easyicu.research_agent.agents.core import RuntimeSupervisor
     from easyicu.research_agent.audits.validators import PrimaryModelContractValidator
@@ -976,36 +955,6 @@ def test_resume_seals_completed_repair_after_capsule_checkpoint_crash(
     initial_code = _summary_script(phase="CAPSULE_CRASH_INITIAL")
     repaired_code = _summary_script(phase="CAPSULE_CRASH_REPAIRED")
 
-    class RepairCrashLLM:
-        name = "capsule-repair-crash-llm"
-
-        def __init__(self) -> None:
-            self.generation_calls = 0
-            self.repair_calls = 0
-
-        def complete(self, messages, *, max_tokens=2048, temperature=0.2):
-            del max_tokens, temperature
-            user = next(
-                (
-                    str(message.content or "")
-                    for message in reversed(messages)
-                    if message.role == "user"
-                ),
-                "",
-            )
-            upper = user.upper()
-            if "ICU-AWARE RESEARCH PLAN" in upper:
-                return _plan()
-            if "WRITE THE PYTHON CODE" in upper:
-                self.generation_calls += 1
-                return initial_code
-            if "REPAIR THE PYTHON CODE" in upper:
-                self.repair_calls += 1
-                return repaired_code
-            if "INTERPRET THE RESULTS" in upper:
-                return "The repaired cohort summary is available."
-            return "{}"
-
     runner_phases: list[str] = []
 
     class RepairCrashRunner:
@@ -1014,6 +963,10 @@ def test_resume_seals_completed_repair_after_capsule_checkpoint_crash(
 
         def __init__(self, *, workdir: Path) -> None:
             self.workdir = Path(workdir)
+
+        @staticmethod
+        def validate_runtime_capabilities() -> tuple[str, ...]:
+            return ("pandas",)
 
         def run(self, *, step_id, code, resolved_inputs_path=None):
             del resolved_inputs_path
@@ -1099,7 +1052,17 @@ def test_resume_seals_completed_repair_after_capsule_checkpoint_crash(
     def runner_factory(*, workdir, **_kwargs):
         return RepairCrashRunner(workdir=Path(workdir))
 
-    llm = RepairCrashLLM()
+    llm = PatternScriptedMockLLMClient(
+        [
+            ("ICU-AWARE RESEARCH PLAN", [_plan()]),
+            ("WRITE THE PYTHON CODE", [initial_code]),
+            ("REPAIR THE PYTHON CODE", [repaired_code] * 2),
+            (
+                "INTERPRET THE RESULTS",
+                ["The repaired cohort summary is available."],
+            ),
+        ]
+    )
 
     def build_pipeline():
         return ra.ResearchAgentPipeline(
@@ -1130,11 +1093,11 @@ def test_resume_seals_completed_repair_after_capsule_checkpoint_crash(
     first_record = _latest_step_record(run_dir)
     assert first_record["status"] == "repair_transport_pending"
     assert first_record["capsule_pending_repair_attempt_id"] == 1
-    assert llm.generation_calls == 1
+    assert _call_count(llm, "WRITE THE PYTHON CODE") == 1
     # This fixture intentionally returns a complete script to the patch route,
     # so one logical repair uses patch + authorized full-rewrite calls.
-    assert llm.repair_calls == 2
-    repair_calls_before_resume = llm.repair_calls
+    assert _call_count(llm, "REPAIR THE PYTHON CODE") == 2
+    repair_calls_before_resume = _call_count(llm, "REPAIR THE PYTHON CODE")
     assert runner_phases == ["CAPSULE_CRASH_INITIAL"]
 
     monkeypatch.setattr(
@@ -1152,8 +1115,8 @@ def test_resume_seals_completed_repair_after_capsule_checkpoint_crash(
     assert second_record["step_authority_capsule_cache_miss"] == (
         "control_plane_drift_revalidation"
     )
-    assert llm.generation_calls == 1
-    assert llm.repair_calls == repair_calls_before_resume
+    assert _call_count(llm, "WRITE THE PYTHON CODE") == 1
+    assert _call_count(llm, "REPAIR THE PYTHON CODE") == repair_calls_before_resume
     assert runner_phases == [
         "CAPSULE_CRASH_INITIAL",
         "CAPSULE_CRASH_REPAIRED",

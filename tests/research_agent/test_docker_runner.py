@@ -731,23 +731,84 @@ def test_runtime_provenance_timeout_tears_down_named_probe(
 
     with pytest.raises(
         RuntimeError,
-        match="execution-runtime dependency capture timed out",
+        match="dependency capture timed out after 2 attempt",
     ):
         runner._capture_runtime_provenance()
 
-    capture_cmd = captured[1]
-    assert capture_cmd[1] == "run"
-    assert "--rm" not in capture_cmd
-    assert any(token.startswith("--cidfile=") for token in capture_cmd)
-    container_name = next(
-        token.removeprefix("--name=")
-        for token in capture_cmd
-        if token.startswith("--name=")
-    )
-    assert captured[2][1:3] == ["stop", "--timeout=5"]
-    assert captured[2][-1] == container_name
-    assert captured[3][1:] == ["wait", container_name]
-    assert captured[4][1:] == ["rm", "--force", container_name]
+    capture_commands = [cmd for cmd in captured if len(cmd) >= 2 and cmd[1] == "run"]
+    assert len(capture_commands) == 2
+    for capture_cmd in capture_commands:
+        assert "--rm" not in capture_cmd
+        assert any(token.startswith("--cidfile=") for token in capture_cmd)
+        container_name = next(
+            token.removeprefix("--name=")
+            for token in capture_cmd
+            if token.startswith("--name=")
+        )
+        capture_index = captured.index(capture_cmd)
+        assert captured[capture_index + 1][1:3] == ["stop", "--timeout=5"]
+        assert captured[capture_index + 1][-1] == container_name
+        assert captured[capture_index + 2][1:] == ["wait", container_name]
+        assert captured[capture_index + 3][1:] == [
+            "rm",
+            "--force",
+            container_name,
+        ]
+    assert not list(run_dir.glob(".docker-runtime-provenance-*.sentinel"))
+    assert not list(run_dir.glob(".docker-runtime-provenance-*.cid"))
+
+
+def test_runtime_provenance_retries_once_after_transient_timeout(
+    ra,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    cohort = _make_cohort(tmp_path)
+    _force_docker_present(monkeypatch)
+    captured: List[List[str]] = []
+    probe_attempts = 0
+
+    def fake_run(cmd, *args, **kwargs):
+        nonlocal probe_attempts
+        del args
+        captured.append(list(cmd))
+        if len(cmd) >= 3 and cmd[1:3] == ["image", "inspect"]:
+            return _FakeProc(
+                stdout=json.dumps({"Id": "sha256:" + "a" * 64, "RepoDigests": []})
+            )
+        if "importlib.metadata" in " ".join(cmd):
+            probe_attempts += 1
+            if probe_attempts == 1:
+                raise subprocess.TimeoutExpired(
+                    cmd=cmd,
+                    timeout=kwargs.get("timeout", 0),
+                )
+            return _FakeProc(
+                stdout=(
+                    "numpy==2.0.0\n"
+                    "pandas==2.2.0\n"
+                    "matplotlib==3.9.0\n"
+                    "pyarrow==17.0.0\n"
+                    "scipy==1.14.0\n"
+                    "statsmodels==0.14.0\n"
+                    "scikit-learn==1.5.0\n"
+                )
+            )
+        if len(cmd) >= 2 and cmd[1] in {"stop", "wait", "rm"}:
+            return _FakeProc()
+        raise AssertionError(cmd)
+
+    import easyicu.research_agent.execution.runner as runner_module
+
+    monkeypatch.setattr(runner_module.subprocess, "run", fake_run)
+    run_dir = tmp_path / "run"
+    runner = ra.DockerRunner(workdir=run_dir, cohort_parquet=cohort)
+
+    provenance, requirements = runner._capture_runtime_provenance()
+
+    assert probe_attempts == 2
+    assert provenance["runtime"] == "docker"
+    assert "numpy==2.0.0" in requirements
     assert not list(run_dir.glob(".docker-runtime-provenance-*.sentinel"))
     assert not list(run_dir.glob(".docker-runtime-provenance-*.cid"))
 

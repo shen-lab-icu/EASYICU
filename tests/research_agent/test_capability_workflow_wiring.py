@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
@@ -10,10 +11,12 @@ import pandas as pd
 import pytest
 
 from easyicu.research_agent.orchestration.profiles import (
-    NPJ_DM_2026_07_19,
     SUBMISSION_PROFILE_REGISTRY,
     SubmissionProfile,
     get_submission_profile,
+)
+from easyicu.research_agent.concept_dict_audit import (
+    compute_concept_dict_fingerprint,
 )
 from easyicu.research_agent.resources import (
     CapabilityApproval,
@@ -80,6 +83,7 @@ def _cohort() -> pd.DataFrame:
 
 
 def _target_profile(*, name: str = "capability_activated") -> SubmissionProfile:
+    fingerprint = compute_concept_dict_fingerprint()
     return SubmissionProfile(
         name=name,
         version="1",
@@ -88,8 +92,8 @@ def _target_profile(*, name: str = "capability_activated") -> SubmissionProfile:
         writer_digest_widened=True,
         enable_reproducibility_envelope=True,
         requires_arm="aware",
-        expected_concept_dict_sha=NPJ_DM_2026_07_19.expected_concept_dict_sha,
-        expected_sofa2_dict_sha=NPJ_DM_2026_07_19.expected_sofa2_dict_sha,
+        expected_concept_dict_sha=fingerprint.concept_dict_sha,
+        expected_sofa2_dict_sha=fingerprint.sofa2_dict_sha,
         enable_memory=False,
         enable_experience_bank=False,
         enable_know_how=False,
@@ -116,7 +120,12 @@ def test_missing_capability_pauses_real_pipeline_before_provider(
             runners[timeout] = fixture._HybridTrajectoryRunner(workdir=Path(workdir))
         return runners[timeout]
 
-    profile = get_submission_profile(PENDING_PROFILE_REF)
+    fingerprint = compute_concept_dict_fingerprint()
+    profile = replace(
+        get_submission_profile(PENDING_PROFILE_REF),
+        expected_concept_dict_sha=fingerprint.concept_dict_sha,
+        expected_sofa2_dict_sha=fingerprint.sofa2_dict_sha,
+    )
     pipeline = ra.ResearchAgentPipeline(
         workdir=tmp_path,
         llm=llm,

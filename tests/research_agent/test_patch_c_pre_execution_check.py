@@ -20,8 +20,6 @@ post-hoc validator in ``audits/patterns.py`` records the issue.
 from __future__ import annotations
 
 import json
-from typing import List
-
 import pytest
 
 from easyicu.research_agent.agents.core import (
@@ -29,7 +27,7 @@ from easyicu.research_agent.agents.core import (
     _MAX_PRE_EXEC_COMPATIBILITY_REPAIRS,
 )
 from easyicu.research_agent.repairs.patch import PATCH_FORMAT
-from easyicu.research_agent.providers.llm import LLMMessage
+from easyicu.research_agent.providers.mocks import ScriptedMockLLMClient
 from easyicu.research_agent.gates.method_compatibility import (
     detect_forbidden_pattern_usage,
     format_violation_message,
@@ -116,18 +114,8 @@ def _still_bad_patch(index: int) -> str:
     return _patch((f"random_state={index}", f"random_state={index + 1}"))
 
 
-class _ScriptedLLM:
-    name = "scripted"
-
-    def __init__(self, replies: List[str]) -> None:
-        self.replies = list(replies)
-        self.calls: List[List[LLMMessage]] = []
-
-    def complete(self, messages, *, max_tokens=2048, temperature=0.2):
-        self.calls.append(list(messages))
-        if not self.replies:
-            raise RuntimeError("scripted LLM ran out of replies")
-        return self.replies.pop(0)
+def _ScriptedLLM(replies: list[str]):  # noqa: N802
+    return ScriptedMockLLMClient(replies)
 
 
 # ---------------------------------------------------------------------------
@@ -215,19 +203,11 @@ def test_coderagent_requests_full_token_budget():
     mid-expression (SyntaxError "'(' was never closed")."""
     from easyicu.research_agent.agents.core import _CODER_MAX_TOKENS
 
-    captured = {}
-
-    class _RecordingLLM:
-        name = "rec"
-
-        def complete(self, messages, *, max_tokens=2048, temperature=0.2):
-            captured["max_tokens"] = max_tokens
-            return _CLEAN_SCRIPT
-
-    agent = CoderAgent(_RecordingLLM())
+    llm = ScriptedMockLLMClient([_CLEAN_SCRIPT])
+    agent = CoderAgent(llm)
     agent.run(context=_ordinal_context(), step=_step())
     assert _CODER_MAX_TOKENS >= 8192
-    assert captured["max_tokens"] == _CODER_MAX_TOKENS
+    assert llm.calls[0][1]["max_tokens"] == _CODER_MAX_TOKENS
 
 
 def test_coderagent_run_triggers_repair_on_violation_then_returns_clean_code():
@@ -238,7 +218,7 @@ def test_coderagent_run_triggers_repair_on_violation_then_returns_clean_code():
     # First call: initial. Second call: repair triggered by violation.
     assert len(llm.calls) == 2
     # The repair user message must include the violation block.
-    repair_user_msg = llm.calls[1][-1].content
+    repair_user_msg = llm.calls[1][0][-1].content
     assert "PRE-EXECUTION COMPATIBILITY CHECK FAILED" in repair_user_msg
     assert (
         "MiniBatchKMeans" in repair_user_msg
@@ -282,7 +262,7 @@ def test_coderagent_repair_allows_only_contract_named_method_modules():
         attempt=1,
     )
 
-    repair_prompt = llm.calls[0][-1].content
+    repair_prompt = llm.calls[0][0][-1].content
     assert "easyicu.research_agent.methods.*" in repair_prompt
     assert "explicitly named by the code contract" in repair_prompt
     assert "All other project-local imports" in repair_prompt

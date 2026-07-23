@@ -23,16 +23,11 @@ from easyicu.research_agent.authority.provider_budget import (
     StepProviderCallBudget,
 )
 from easyicu.research_agent.schema import ValidationFinding
+from easyicu.research_agent.providers.mocks import ScriptedMockLLMClient
 
 
-class _SequenceLLM:
-    def __init__(self, responses):  # noqa: ANN001
-        self.responses = list(responses)
-        self.calls = []
-
-    def complete(self, messages, **kwargs):  # noqa: ANN001, ANN003
-        self.calls.append((list(messages), dict(kwargs)))
-        return self.responses.pop(0)
+def _SequenceLLM(responses):  # noqa: ANN001, N802
+    return ScriptedMockLLMClient(responses)
 
 
 def _context(ra, *, variable_count: int = 0):
