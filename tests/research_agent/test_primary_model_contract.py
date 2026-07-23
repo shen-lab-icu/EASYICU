@@ -957,6 +957,30 @@ def test_planner_model_requirements_activate_without_context_exposure():
     )
 
 
+def test_planner_primary_source_is_authoritative_operational_alias(
+    tmp_path: Path,
+):
+    cohort_path, out_dir = _write_inputs(tmp_path)
+    contracts = copy.deepcopy(_contracts())
+    requirements = _bind_standard_contracts_to_requirements(contracts)
+    context = _context().model_copy(
+        update={"primary_exposure": "clinical_laboratory_signal"}
+    )
+
+    findings = PrimaryModelContractValidator().audit(
+        step=_step(model_requirements=requirements),
+        step_summary={"model_contracts": contracts},
+        context=context,
+        completed_step_records=_prior_records(),
+        out_dir=out_dir,
+        cohort_path=cohort_path,
+    )
+
+    issues = _issue_types(findings)
+    assert "primary_exposure_mismatch" not in issues
+    assert "alternate_exposure_cannot_be_primary" not in issues
+
+
 def test_planner_model_requirements_do_not_activate_for_wrong_product_kind():
     _contracts_payload, requirements = _contracts_with_requirements()
     step = _step(model_requirements=requirements).model_copy(

@@ -4850,17 +4850,17 @@ class PrimaryModelContractValidator:
                 }
             )
         declared_primary = str(context.primary_exposure or "")
-        declared_primary_sources = (
-            [
+        declared_primary_sources = list(
+            step.primary_exposure_authority_sources(
                 declared_primary,
-                *self._operational_primary_sources(
+                self._operational_primary_sources(
                     declared_primary=declared_primary,
                     completed_step_records=completed_step_records,
                     step_summary=step_summary,
-                ),
-            ]
-            if declared_primary.strip()
-            else []
+                )
+                if declared_primary.strip()
+                else (),
+            )
         )
         if len(primary_models) == 1 and declared_primary_sources:
             primary = primary_models[0]

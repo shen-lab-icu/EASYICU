@@ -23,7 +23,7 @@ import re
 from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional, Sequence
 
 from pydantic import (
     BaseModel,
@@ -935,6 +935,43 @@ class AnalysisStep(BaseModel):
             "eligible only when this complete typed packet is present."
         ),
     )
+
+    def required_primary_exposure_sources(self) -> tuple[str, ...]:
+        """Return required PRIMARY sources from the Planner-owned model roster."""
+
+        return tuple(
+            dict.fromkeys(
+                item.exposure_source
+                for item in self.model_requirements
+                if item.analysis_role == "primary"
+                and item.required_for_step_success
+            )
+        )
+
+    def primary_exposure_authority_sources(
+        self,
+        declared_primary: str,
+        operational_sources: Sequence[str] = (),
+    ) -> tuple[str, ...]:
+        """Unify the clinical concept, prior alias, and typed model source."""
+
+        values = [str(declared_primary or "").strip()]
+        values.extend(str(value or "").strip() for value in operational_sources)
+        values.extend(self.required_primary_exposure_sources())
+        return tuple(dict.fromkeys(value for value in values if value))
+
+    def without_required_primary_exposure_terms(
+        self,
+        terms: Sequence[str],
+    ) -> List[str]:
+        """Remove only exact typed PRIMARY sources from adjustment terms."""
+
+        sources = {
+            source.casefold() for source in self.required_primary_exposure_sources()
+        }
+        return [
+            term for term in terms if str(term).strip().casefold() not in sources
+        ]
 
     @model_validator(mode="after")
     def _model_requirement_ids_are_unique(self) -> "AnalysisStep":

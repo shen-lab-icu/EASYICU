@@ -4034,8 +4034,7 @@ def _primary_exposure_overadjustment_findings(
     if not exposure:
         return []
     covariates = read_adjustment_covariates(out_dir)
-    if not covariates:
-        return []
+    covariates = step.without_required_primary_exposure_terms(covariates)
     offenders = detect_overadjustment(exposure, covariates)
     if not offenders:
         # No resolvable constituent matched. If the exposure is nonetheless a
