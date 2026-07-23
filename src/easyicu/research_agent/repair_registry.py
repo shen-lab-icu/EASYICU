@@ -346,6 +346,7 @@ _STRUCTURAL_REPAIRS = {
     "statsmodels_dummy_design_float_v1",
     "statsmodels_helper_design_float_v1",
     "strict_numeric_nonfinite_guard_v1",
+    "structured_analysis_role_selection_v1",
     "table_one_binary_key_string_v1",
     "text_distribution_denominator_from_counts_v1",
     "unavailable_figure_full_source_projection_v1",
