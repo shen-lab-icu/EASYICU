@@ -40,6 +40,9 @@ def test_launcher_is_sequential_private_and_preserves_one_shot_default(
         calls.append({"database": database, **kwargs})
         out = Path(kwargs["output_dir"])
         out.mkdir(mode=0o700)
+        spill = out / ".easyicu_spill"
+        spill.mkdir()
+        (spill / "duckdb_temp_storage.tmp").write_text("temporary")
         (out / "_manifest.json").write_text(
             json.dumps({"unavailable_modules": []}), encoding="utf-8"
         )
@@ -69,6 +72,8 @@ def test_launcher_is_sequential_private_and_preserves_one_shot_default(
     ]
     persisted = json.loads((tmp_path / "out" / "run_manifest.json").read_text())
     assert persisted["sources"]["miiv"]["status"] == "verified"
+    assert persisted["sources"]["miiv"]["spill_directory_removed"] is True
+    assert not (tmp_path / "out" / "miiv" / ".easyicu_spill").exists()
     assert oct((tmp_path / "out").stat().st_mode & 0o777) == "0o700"
 
 

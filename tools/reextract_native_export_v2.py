@@ -13,6 +13,7 @@ import argparse
 import hashlib
 import json
 import os
+import shutil
 import sys
 import time
 from pathlib import Path
@@ -48,6 +49,18 @@ def _write_private_json(path: Path, payload: Dict[str, Any]) -> None:
     )
     os.chmod(temporary, 0o600)
     os.replace(temporary, path)
+
+
+def _remove_worker_spill_directory(source_output: Path) -> bool:
+    """Remove only the extractor's completed, private DuckDB spill directory."""
+
+    spill = source_output / ".easyicu_spill"
+    if not spill.exists():
+        return False
+    if spill.is_symlink() or not spill.is_dir():
+        raise ValueError(f"unexpected spill path; refusing removal: {spill}")
+    shutil.rmtree(spill)
+    return True
 
 
 def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
@@ -128,6 +141,7 @@ def run(args: argparse.Namespace) -> Dict[str, Any]:
                 native_export_v2=True,
                 verbose=True,
             )
+            spill_removed = _remove_worker_spill_directory(source_output)
             with open_export_package(source_output) as package:
                 native = result["native_export_v2"]
                 run_manifest["sources"][database] = {
@@ -144,6 +158,7 @@ def run(args: argparse.Namespace) -> Dict[str, Any]:
                         (source_output / "_manifest.json").read_text(encoding="utf-8")
                     ).get("unavailable_modules", []),
                     "output_validation_reads": native["output_validation_reads"],
+                    "spill_directory_removed": spill_removed,
                 }
         except BaseException as exc:
             run_manifest["sources"][database] = {
