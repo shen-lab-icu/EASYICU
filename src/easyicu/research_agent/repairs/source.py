@@ -59,6 +59,7 @@ from .nonfinite_audit import (
     patch_strict_numeric_nonfinite_audit_conflict,
 )
 from .nullable_validation import patch_unused_nullable_numeric_validation
+from .rendering_role import patch_structured_analysis_role_selection
 from .plausibility import patch_flag_only_plausibility_range_rejection
 from .provenance_summary import (
     patch_audit_only_companion_value_selector,
@@ -5337,6 +5338,11 @@ def _deterministic_runner_repair(
     """
     lowered = (run_log or "").lower()
     binary_model_repair_allowed = _family_allows_binary_model_repair(analysis_family)
+    structured_role_repair = "structured_analysis_role_selection_v1"
+    if previous_repair != structured_role_repair:
+        repaired = patch_structured_analysis_role_selection(code, run_log)
+        if repaired is not None and repaired != code:
+            return structured_role_repair, repaired
     if repair := _finding_json_repair(code, run_log, previous_repair):
         return repair
 

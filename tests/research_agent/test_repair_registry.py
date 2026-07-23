@@ -57,6 +57,12 @@ def test_unused_nullable_numeric_validation_is_structural_and_automatic() -> Non
     assert automatic_repair_allowed(repair_id)
 
 
+def test_structured_analysis_role_selection_is_structural_and_automatic() -> None:
+    repair_id = "structured_analysis_role_selection_v1"
+    assert repair_metadata_for(repair_id).repair_class is RepairClass.STRUCTURAL
+    assert automatic_repair_allowed(repair_id)
+
+
 def test_retired_case_specific_repair_ids_are_not_registered() -> None:
     retired = [
         "generic_v15_table_one_fallback_v1",

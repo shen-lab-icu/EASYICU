@@ -172,6 +172,41 @@ plotted_or = float(matrix_row["primary_or"])
     assert trigger["step_summary_path"] == str(outputs / "step_summary.json")
 
 
+def test_resume_preflight_repairs_structured_analysis_role_selection(tmp_path):
+    step_dir = tmp_path / "steps" / "robustness_figure"
+    step_dir.mkdir(parents=True)
+    (step_dir / "run.log").write_text(
+        "ValueError: Could not identify exactly one primary and one complete-case row "
+        "from robustness_summary.restriction\n",
+        encoding="utf-8",
+    )
+    code = """
+required_summary_columns = ["analysis", "restriction", "n", "odds_ratio"]
+restriction_values = (
+    robustness_summary["restriction"].astype(str).str.strip().str.lower()
+)
+primary_rows = robustness_summary[
+    restriction_values.isin({"primary", "full", "none", "all"})
+]
+complete_rows = robustness_summary[
+    restriction_values.isin({"complete_case", "complete case", "complete-case"})
+]
+"""
+
+    candidate = resume_deterministic_repair_candidate(
+        code=code,
+        step_dir=step_dir,
+        analysis_family="figure",
+    )
+
+    assert candidate is not None
+    (repair_id, repaired), source, trigger = candidate
+    assert repair_id == "structured_analysis_role_selection_v1"
+    assert source == "resume_runner_repair_preflight"
+    assert "robustness_summary['analysis']" in repaired
+    assert trigger["run_log_path"] == str(step_dir / "run.log")
+
+
 def test_sync_provider_writes_exact_key_set(tmp_path):
     provider, step_record, budget = _repair_budget(tmp_path)
     budget.sync_provider()

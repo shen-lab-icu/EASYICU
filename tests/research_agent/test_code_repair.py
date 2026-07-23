@@ -549,6 +549,64 @@ plotted_value = float(matrix_row[selected_column])
     assert repaired is None
 
 
+def _rendering_role_code() -> str:
+    return """
+required_summary_columns = [
+    "analysis",
+    "restriction",
+    "n",
+    "odds_ratio",
+]
+restriction_values = (
+    robustness_summary["restriction"].astype(str).str.strip().str.lower()
+)
+primary_rows = robustness_summary[
+    restriction_values.isin({"primary", "full", "none", "all"})
+]
+complete_rows = robustness_summary[
+    restriction_values.isin({"complete_case", "complete case", "complete-case"})
+]
+"""
+
+
+def test_runner_repair_uses_declared_analysis_roles_for_figure_rows():
+    run_log = (
+        "ValueError: Could not identify exactly one primary and one complete-case row "
+        "from robustness_summary.restriction"
+    )
+    repair = _deterministic_runner_repair(
+        code=_rendering_role_code(),
+        run_log=run_log,
+    )
+
+    assert repair is not None
+    repair_id, repaired = repair
+    assert repair_id == "structured_analysis_role_selection_v1"
+    assert "robustness_summary['analysis']" in repaired
+    assert "restriction_values.isin({'primary'})" in repaired
+    assert "complete_case_sensitivity" in repaired
+    assert '"restriction"' in repaired
+
+
+def test_runner_repair_rejects_unbound_or_dynamically_used_analysis_roles():
+    run_log = (
+        "ValueError: Could not identify exactly one primary and one complete-case row "
+        "from robustness_summary.restriction"
+    )
+    missing_schema = _rendering_role_code().replace('    "analysis",\n', "")
+    dynamic_use = _rendering_role_code() + "\nprint(restriction_values)\n"
+
+    assert _deterministic_runner_repair(code=missing_schema, run_log=run_log) is None
+    assert _deterministic_runner_repair(code=dynamic_use, run_log=run_log) is None
+    assert (
+        _deterministic_runner_repair(
+            code=_rendering_role_code(),
+            run_log="ValueError: some other row-selection error",
+        )
+        is None
+    )
+
+
 def _attrition_identity_finding(
     *,
     expected: list[object] | None = None,
