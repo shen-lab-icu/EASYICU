@@ -322,6 +322,7 @@ _STRUCTURAL_REPAIRS = {
     "non_tabular_companion_row_gate_v1",
     "normalize_first_time_companion_v1",
     "observed_binary_primary_exposure_guard_v1",
+    "penalized_convergence_contract_v1",
     "primary_predictor_safe_summary_lookup_v1",
     "raw_input_physical_superset_guard_v1",
     "host_receipt_source_envelope_v1",

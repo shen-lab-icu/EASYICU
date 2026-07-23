@@ -4821,7 +4821,28 @@ class PrimaryModelContractValidator:
             for contract in contracts
             if self._normalise(contract.get("analysis_role")) == "primary"
         ]
-        if len(primary_models) != 1:
+        planner_primary_requirements = [
+            requirement
+            for requirement in (getattr(step, "model_requirements", []) or [])
+            if self._normalise(requirement.analysis_role) == "primary"
+        ]
+        planner_authorized_secondary_only = bool(
+            getattr(step, "model_requirements", []) or []
+        ) and not planner_primary_requirements
+        if planner_authorized_secondary_only and primary_models:
+            issues.append(
+                {
+                    "issue": "unplanned_primary_model",
+                    "reported": len(primary_models),
+                    "planner_model_roles": sorted(
+                        {
+                            self._normalise(requirement.analysis_role)
+                            for requirement in step.model_requirements
+                        }
+                    ),
+                }
+            )
+        elif not planner_authorized_secondary_only and len(primary_models) != 1:
             issues.append(
                 {
                     "issue": "exactly_one_primary_model_required",
@@ -5438,8 +5459,14 @@ class PrimaryModelContractValidator:
                     f"Complex primary-association step {step.step_id} violates "
                     f"the machine-verifiable multi-model contract ({len(issues)} "
                     "issue(s)). Emit step_summary.model_contracts with the fixed "
-                    "fields, keep exactly one context-declared primary exposure, "
-                    "label alternate representations secondary/sensitivity, fit "
+                    "fields, "
+                    + (
+                        "preserve the Planner-authorized secondary-only roster "
+                        "without inventing a primary exposure, "
+                        if planner_authorized_secondary_only
+                        else "keep exactly one context-declared primary exposure, "
+                    )
+                    + "label alternate representations secondary/sensitivity, fit "
                     "separate models without mutual adjustment, use only the "
                     "planned baseline covariates, satisfy every planner-owned "
                     "required model requirement, report honest non-fit reasons, "

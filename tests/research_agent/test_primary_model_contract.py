@@ -313,6 +313,76 @@ def test_primary_model_contract_accepts_separate_verified_models(tmp_path: Path)
     assert _audit(tmp_path, contracts=_contracts()) == []
 
 
+def test_primary_model_contract_accepts_planner_authorized_secondary_only_step(
+    tmp_path: Path,
+):
+    cohort_path, out_dir = _write_inputs(tmp_path)
+    contracts, requirements = _contracts_with_requirements()
+    contract = copy.deepcopy(contracts[2])
+    requirement = requirements[2]
+    coefficients = pd.read_csv(out_dir / "model_coefficients.csv")
+    coefficients.loc[
+        coefficients["model_id"].eq(contract["model_id"])
+    ].to_csv(out_dir / "model_coefficients.csv", index=False)
+
+    findings = PrimaryModelContractValidator().audit(
+        step=_step(model_requirements=[requirement]),
+        step_summary={"model_contracts": [contract]},
+        context=_context(),
+        completed_step_records=_prior_records(),
+        out_dir=out_dir,
+        cohort_path=cohort_path,
+    )
+
+    assert findings == []
+
+
+def test_primary_model_contract_rejects_primary_in_secondary_only_roster(
+    tmp_path: Path,
+):
+    contracts, requirements = _contracts_with_requirements()
+    secondary_contract = copy.deepcopy(contracts[2])
+    secondary_contract["analysis_role"] = "primary"
+
+    issues = _issue_types(
+        _audit(
+            tmp_path,
+            contracts=[secondary_contract],
+            step=_step(model_requirements=[requirements[2]]),
+        )
+    )
+
+    assert "model_requirement_field_mismatch" in issues
+    assert "unplanned_primary_model" in issues
+
+
+def test_secondary_only_contract_error_does_not_request_a_fake_primary(
+    tmp_path: Path,
+):
+    cohort_path, out_dir = _write_inputs(tmp_path)
+    contracts, requirements = _contracts_with_requirements()
+    contract = copy.deepcopy(contracts[2])
+    contract.pop("convergence_method")
+    contract.pop("optimizer_success")
+    coefficients = pd.read_csv(out_dir / "model_coefficients.csv")
+    coefficients.loc[
+        coefficients["model_id"].eq(contract["model_id"])
+    ].to_csv(out_dir / "model_coefficients.csv", index=False)
+
+    findings = PrimaryModelContractValidator().audit(
+        step=_step(model_requirements=[requirements[2]]),
+        step_summary={"model_contracts": [contract]},
+        context=_context(),
+        completed_step_records=_prior_records(),
+        out_dir=out_dir,
+        cohort_path=cohort_path,
+    )
+
+    assert len(findings) == 1
+    assert "secondary-only roster" in findings[0].message
+    assert "keep exactly one context-declared primary exposure" not in findings[0].message
+
+
 @pytest.mark.parametrize("fit_status", ["not_fitted", "separation_no_estimate"])
 def test_primary_model_contract_legacy_required_model_must_be_fitted(
     tmp_path: Path,
@@ -1166,7 +1236,9 @@ def test_primary_model_contract_is_wired_into_all_contract_passes() -> None:
     # The early repair gate and the final authority gate now evaluate ONE shared
     # deterministic contract sequence (dedup), so the primary-model contract
     # validator is audited exactly once — inside that shared sequence — and it
-    # carries the execution-cohort path there.
+    # carries the cohort-integrity authority path there. For ordinary analysis
+    # steps this is the execution cohort; a cohort-producing step deliberately
+    # retains the full universe even when later development execution is sampled.
     shared_audits = _audit_calls(
         pipeline_execute._step_deterministic_contract_findings,
         "primary_model_contract_validator",
@@ -1174,7 +1246,7 @@ def test_primary_model_contract_is_wired_into_all_contract_passes() -> None:
     assert len(shared_audits) == 1
     shared_keywords = {kw.arg: kw.value for kw in shared_audits[0].keywords}
     assert isinstance(shared_keywords.get("cohort_path"), ast.Name)
-    assert shared_keywords["cohort_path"].id == "execution_cohort_path"
+    assert shared_keywords["cohort_path"].id == "integrity_universe_path"
 
     # The mutable execution loop still owns one early repair gate and the
     # extracted read-only evaluator owns the single final authority gate; each

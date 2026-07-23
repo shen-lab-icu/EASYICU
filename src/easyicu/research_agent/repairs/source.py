@@ -52,6 +52,7 @@ from .lossy_coercion import (
     patch_returned_coercion_loss_guard as _patch_returned_coercion_loss_guard,
 )
 from .merge_collision import patch_pandas_merge_dynamic_column_collision
+from .model_contract import patch_penalized_convergence_contract
 from .name_alias import patch_undefined_mapping_near_match_alias
 from .nonfinite_audit import (
     patch_nonfinite_audit_host_strict_boundary,
@@ -4588,6 +4589,13 @@ def deterministic_contract_repair(
     )
     if host_receipts != code:
         return "measurement_provenance_host_receipts_v1", host_receipts
+
+    convergence_contract = patch_penalized_convergence_contract(
+        code,
+        findings=findings,
+    )
+    if convergence_contract != code:
+        return "penalized_convergence_contract_v1", convergence_contract
 
     unavailable_source_findings = []
     for finding in findings:
