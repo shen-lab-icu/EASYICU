@@ -96,6 +96,7 @@ def _fixture_run(
     plan_revision: int = 1,
     evidence_audit_updates: dict[str, object] | None = None,
     numeric_audit_updates: dict[str, object] | None = None,
+    gate_updates: dict[str, object] | None = None,
     task_id: str = TASK_ID,
     research_question: str = RESEARCH_QUESTION,
     exposure_concept: str | None = EXPOSURE_CONCEPT,
@@ -111,15 +112,33 @@ def _fixture_run(
     run_dir.mkdir(parents=True)
     gates = {
         "execution_complete": execution_complete,
+        "execution_ok": True,
+        "artifact_valid": True,
         "required_step_count": 1,
         "completed_step_count": 1,
         "failed_steps": [],
         "missing_steps": [],
+        "scientific_incomplete_steps": [],
+        "step_completion_states": [
+            {
+                "schema_version": "easyicu.step_completion_state/1",
+                "step_id": "01_primary",
+                "execution_ok": True,
+                "outer_status": "ok",
+                "summary_status": "ok",
+                "scientific_requirement_complete": True,
+            }
+        ],
+        "step_scientific_requirements_complete": True,
+        "completion_schema_version": "easyicu.run_completion_axes/1",
+        "scientific_requirement_complete": True,
         "manuscript_ready": True,
+        "paper_authorized": True,
         "publication_figure_bundle_ready": True,
         "publication_figure_stems": ["primary_result"],
         "replan_budget_exhausted": False,
     }
+    gates.update(gate_updates or {})
     _write_json(
         run_dir / "run_status.json",
         {
@@ -729,6 +748,40 @@ def test_rejects_uncheckpointed_evidence_generation(tmp_path: Path) -> None:
 def test_rejects_string_false_gate(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="must be a boolean"):
         _fixture_run(tmp_path, execution_complete="false")
+
+
+@pytest.mark.parametrize(
+    "gate",
+    [
+        "execution_ok",
+        "artifact_valid",
+        "scientific_requirement_complete",
+        "step_scientific_requirements_complete",
+        "paper_authorized",
+    ],
+)
+def test_rejects_false_explicit_completion_axis(
+    tmp_path: Path,
+    gate: str,
+) -> None:
+    with pytest.raises(PermissionError, match=gate):
+        _fixture_run(tmp_path, gate_updates={gate: False})
+
+
+def test_rejects_malformed_step_completion_state(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="step completion state has an invalid schema"):
+        _fixture_run(
+            tmp_path,
+            gate_updates={
+                "step_completion_states": [
+                    {
+                        "schema_version": "easyicu.step_completion_state/1",
+                        "step_id": "01_primary",
+                        "execution_ok": True,
+                    }
+                ]
+            },
+        )
 
 
 def test_rejects_empty_claim_ledger(tmp_path: Path) -> None:

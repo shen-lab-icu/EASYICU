@@ -214,3 +214,52 @@ Verification on source-bound image `easyicu-research-agent:source-09f8e5c`
 Paper-facing progress remains 0/9. The next action is a new immutable execution
 identity, operator declaration, and fresh E1 canary. Only a `gate_reportable`
 E1 releases the remaining eight questions.
+
+## Fresh E1 canary: comparator P0 closed, Step 04 API mismatch exposed
+
+The clean `4132eea` canary is preserved at:
+
+`/Volumes/外置硬盘/easyicu_data/canonical9_runs/batch_20260723_luna_miiv_adaptive_4132eea/e1_sepsis3_prevalence_mortality/aware/run_20260723T132615_44441a`
+
+The real Luna plan kept the 94,458-stay eligibility cohort independent of the
+Sepsis-3 exposure. Step 01 completed, and the host-owned grouped Table 1 in
+Step 02 completed with both comparison levels. Step 03 prevalence/outcome
+summary also completed. This closes the specific comparator-erasure failure
+from the `f7b4d1b` diagnostic run on a real Provider response.
+
+Step 04 failed closed after its two bounded repairs. The last repair correctly
+added explicit binary-domain checks but called the host primitive as
+`strict_numeric_input(series, name=variable)`. The primitive accepted only the
+Series positional argument, so Docker returned:
+
+`TypeError: strict_numeric_input() got an unexpected keyword argument 'name'`
+
+The method now accepts mutually consistent `name` or `column` diagnostic
+labels. They cannot select data or weaken numeric validation. The exact failed
+Step 04 script was replayed against the same cohort with the patched source and
+exited zero, producing both declared tables and `step_summary.json` under an
+external-drive verification directory.
+
+The diagnostic run also exposed a producer/verifier schema drift at the
+posthoc scoring boundary. Current run status emits explicit execution,
+artifact, scientific, and paper-authorization axes plus per-step scientific
+completion states, while the strict scorer allowlist still rejected those
+fields as unknown. The scorer now requires and validates the exact completion
+schema, every explicit axis, an empty scientific-incomplete list, and one
+closed completion-state object per required step. The v3 rubric scorer-tree
+digest was updated to bind the corrected verifier. False completion axes and
+malformed step-state objects have negative regression coverage.
+
+This run remains diagnostic-only and must never be upgraded. E2--E9 were
+correctly recorded as `batch_canary_blocked`; no downstream analysis run was
+started. Paper-facing progress remains 0/9 pending a new clean commit, image,
+execution identity, authority declaration, and fresh E1 canary.
+
+Verification for the closure increment:
+
+- exact failed Step 04 script replay: exit 0, all three declared outputs
+  produced on the external drive;
+- descriptive primitives and adjacent repair selection: 34 passed;
+- scorer, scoring-input, task sealer, bench integration, safety issuer, rubric,
+  completion axes, and descriptive primitives: 227 passed;
+- Ruff and Black: passed.
