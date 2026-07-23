@@ -243,6 +243,86 @@ def test_llm_concept_audit_runs_once_only_after_local_contracts_pass(
     )
 
 
+def test_automatic_contract_repair_does_not_consume_llm_contract_allowance(
+    ra, tmp_path: Path, monkeypatch
+) -> None:
+    _isolate_article_suite_contract(monkeypatch)
+    from easyicu.research_agent.audits.validators import PrimaryModelContractValidator
+    from easyicu.research_agent.contracts.runtime import ValidationFinding
+    from easyicu.research_agent.execution import phase
+
+    initial_code = _summary_script(phase="INITIAL_CONTRACT_ERROR")
+    structural_code = _summary_script(phase="STRUCTURAL_CONTRACT_ERROR")
+    repaired_code = _summary_script(phase="FINAL_CONTRACT_VALID")
+    llm = PatternScriptedMockLLMClient(
+        [
+            ("ICU-AWARE RESEARCH PLAN", [_plan()]),
+            ("WRITE THE PYTHON CODE", [initial_code]),
+            ("REPAIR THE PYTHON CODE", [repaired_code] * 2),
+            (
+                "CONSERVATIVE ICU CONCEPT-USE AUDITOR",
+                [json.dumps({"findings": []})],
+            ),
+            ("INTERPRET THE RESULTS", ["The cohort summary is available."]),
+        ]
+    )
+
+    def contract_audit(self, *, step, step_summary, **kwargs):
+        del self, kwargs
+        if step_summary.get("phase") == "FINAL_CONTRACT_VALID":
+            return []
+        return [
+            ValidationFinding(
+                validator="primary_model_contract",
+                severity="error",
+                message="Force deterministic then LLM contract repair.",
+                detail={"step_id": step.step_id},
+            )
+        ]
+
+    def one_structural_repair(*, code, findings, previous_repair=None):
+        del findings
+        if (
+            "INITIAL_CONTRACT_ERROR" in code
+            and previous_repair != "render_only_effect_echo_suppression_v1"
+        ):
+            return "render_only_effect_echo_suppression_v1", structural_code
+        return None
+
+    monkeypatch.setattr(PrimaryModelContractValidator, "audit", contract_audit)
+    monkeypatch.setattr(phase, "deterministic_contract_repair", one_structural_repair)
+    pipeline = ra.ResearchAgentPipeline(
+        workdir=tmp_path,
+        llm=llm,
+        enable_literature=False,
+        enable_visual_qa=False,
+        enable_latex=False,
+        enable_llm_concept_audit=True,
+        enable_deterministic_code_fallback=False,
+        enable_deterministic_runner_repair=True,
+        max_code_repair_attempts=1,
+        runner_kind="subprocess",
+    )
+
+    result = pipeline.run(
+        question="Summarize the ICU cohort.",
+        cohort=pd.DataFrame({"stay_id": [1, 2, 3], "death": [0, 1, 0]}),
+        cohort_name="independent_contract_budget_test",
+        database="synthetic",
+        target_outcome="death",
+        stop_after_step_id="01_summary",
+        stop_after_analysis=True,
+    )
+
+    record = _latest_step_record(Path(result.workdir))
+    assert record["status"] == "ok"
+    assert record["contract_repair_attempts"] == 2
+    assert record["llm_contract_repair_attempts"] == 1
+    assert record["code_repair_attempts"] == 2
+    assert record["step_llm_repair_classes"] == ["contract"]
+    assert _call_count(llm, "REPAIR THE PYTHON CODE") >= 1
+
+
 def test_disabled_llm_audit_records_final_gate_without_claiming_llm_approval(
     ra, tmp_path: Path, monkeypatch
 ) -> None:
