@@ -203,7 +203,7 @@ def _build_jsonl_row(
         "question": task.objective,
         "database": "miiv",
         "target_outcome": "death",
-        "primary_predictor": spec.operational_exposure,
+        "primary_predictor": spec.exposure_concept,
         "operational_exposure": spec.operational_exposure,
         "kind": task.kind,
         "difficulty": task.difficulty,
@@ -338,6 +338,15 @@ def materialize(args: argparse.Namespace) -> Path:
             cohort_verified = load_verified_materialized_cohort_authority(cohort_path)
             if cohort_verified is None:
                 raise RuntimeError(f"{spec.task_id}: typed cohort authority missing")
+            if (
+                spec.operational_exposure
+                and spec.operational_exposure
+                not in cohort_verified.authority.cohort_columns
+            ):
+                raise RuntimeError(
+                    f"{spec.task_id}: operational exposure column "
+                    f"{spec.operational_exposure!r} is absent from the sealed cohort"
+                )
             trajectory_path: Path | None = None
             trajectory_verified = None
             if spec.emit_trajectory:

@@ -389,7 +389,20 @@ def test_planner_retries_primary_cohort_that_erases_its_closed_comparison(
             '"missing_group_policy":"fail_closed",'
             '"missingness_display":"n_percent_by_group",'
             '"p_values_required":true,'
-            '"p_value_adjustment":"none_descriptive_table"}}]}'
+            '"p_value_adjustment":"none_descriptive_table"}},'
+            '{"step_id":"03_primary_association",'
+            '"planned_analysis_role":"primary",'
+            '"intent":"Fit the required primary adjusted association.",'
+            '"inputs":["artifact:analysis_cohort","lact_max","death"],'
+            '"expected_outputs":["table:adjusted_association_estimates"],'
+            '"method":"adjusted_association_models",'
+            '"model_requirements":[{'
+            '"requirement_id":"primary_adjusted",'
+            '"outcome":"death","outcome_type":"binary",'
+            '"method_family":"logistic_regression",'
+            '"exposure_source":"lact_max",'
+            '"analysis_role":"primary","analysis_set":"source_aware",'
+            '"required_for_step_success":true}]}]}'
         )
 
     llm = ScriptedMockLLMClient(

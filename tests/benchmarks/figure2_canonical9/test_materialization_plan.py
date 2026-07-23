@@ -1,5 +1,6 @@
 from benchmarks.figure2_canonical9.evaluator.paper_rubric_v3 import (
-    load_figure2_paper_rubric,
+    Figure2PaperRubricManifest,
+    default_figure2_paper_rubric_path,
 )
 from benchmarks.figure2_canonical9.evaluator.suite import (
     easyicu_evaluation_protocol_suite,
@@ -10,17 +11,29 @@ from benchmarks.figure2_canonical9.materialization_plan import (
 )
 
 
-def test_materialization_plan_matches_exact_suite_and_paper_exposures():
+def test_materialization_plan_separates_scoring_concepts_from_sealed_columns():
     validate_canonical9_mimic_iv_plan()
 
     suite = easyicu_evaluation_protocol_suite()
-    rubric = load_figure2_paper_rubric()
+    rubric = Figure2PaperRubricManifest.model_validate_json(
+        default_figure2_paper_rubric_path().read_bytes(),
+        strict=True,
+    )
     assert tuple(spec.task_id for spec in CANONICAL9_MIMIC_IV_PLAN) == tuple(
         task.task_id for task in suite.tasks
     )
-    assert tuple(
-        spec.operational_exposure for spec in CANONICAL9_MIMIC_IV_PLAN
-    ) == tuple(task.validity_binding.exposure_concept for task in rubric.tasks)
+    assert tuple(spec.exposure_concept for spec in CANONICAL9_MIMIC_IV_PLAN) == tuple(
+        task.validity_binding.exposure_concept for task in rubric.tasks
+    )
+    by_id = {spec.task_id: spec for spec in CANONICAL9_MIMIC_IV_PLAN}
+    assert by_id["e1_sepsis3_prevalence_mortality"].operational_exposure == (
+        "sep3_sofa2_max"
+    )
+    assert by_id["e2_lactate_mortality"].operational_exposure == "lact_max"
+    assert by_id["e3_kdigo_gradient"].operational_exposure == "aki_stage_max"
+    assert by_id["m1_hepatobiliary_missingness"].operational_exposure == "bili_max"
+    assert by_id["h1_ventilation_survival"].operational_exposure == "mech_vent_max"
+    assert by_id["h2_vasopressor_causal"].operational_exposure == "vaso_ind_max"
 
 
 def test_patient_split_and_trajectory_cases_have_explicit_execution_contracts():

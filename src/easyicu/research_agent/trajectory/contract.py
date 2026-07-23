@@ -538,36 +538,151 @@ def trajectory_script_findings(
         script_text=script_text,
         step=step,
     )
-    if not selected or not trajectory_zero_imputation_detected(
-        script_text,
-        trajectory_columns=[variable.name for variable in selected],
-    ):
+    if not selected:
         return []
-    return [
-        ValidationFinding(
-            validator="trajectory_representation_contract",
-            severity="error",
-            message=(
-                "Fixed-window trajectory values were zero-imputed. A trailing "
-                "or unobserved window is not an observed zero state; declare a "
-                "non-zero missingness representation and preserve the observed-"
-                "window membership rule."
-            ),
-            detail={
-                "step_id": step.step_id if step is not None else None,
-                "trajectory_families": sorted(
-                    {
-                        variable.fixed_window_trajectory.family
-                        for variable in selected
-                        if variable.fixed_window_trajectory is not None
-                    }
+    columns = [variable.name for variable in selected]
+    findings: list[ValidationFinding] = []
+    if trajectory_zero_imputation_detected(
+        script_text,
+        trajectory_columns=columns,
+    ):
+        findings.append(
+            ValidationFinding(
+                validator="trajectory_representation_contract",
+                severity="error",
+                message=(
+                    "Fixed-window trajectory values were zero-imputed. A trailing "
+                    "or unobserved window is not an observed zero state; declare a "
+                    "non-zero missingness representation and preserve the observed-"
+                    "window membership rule."
                 ),
-                "selected_trajectory_columns": sorted(
-                    variable.name for variable in selected
-                ),
-            },
+                detail={
+                    "step_id": step.step_id if step is not None else None,
+                    "trajectory_families": sorted(
+                        {
+                            variable.fixed_window_trajectory.family
+                            for variable in selected
+                            if variable.fixed_window_trajectory is not None
+                        }
+                    ),
+                    "selected_trajectory_columns": sorted(
+                        variable.name for variable in selected
+                    ),
+                },
+            )
         )
-    ]
+    if trajectory_future_imputation_detected(
+        script_text,
+        trajectory_columns=columns,
+    ):
+        findings.append(
+            ValidationFinding(
+                validator="trajectory_representation_contract",
+                severity="error",
+                message=(
+                    "A fixed-window trajectory uses backward/two-sided filling. "
+                    "An earlier window may not consume a future observation; use "
+                    "an explicitly ordered, within-entity past-only strategy or "
+                    "preserve the missing window."
+                ),
+                detail={
+                    "kind": "trajectory_future_imputation",
+                    "step_id": step.step_id if step is not None else None,
+                    "selected_trajectory_columns": sorted(columns),
+                },
+            )
+        )
+    return findings
+
+
+def trajectory_future_imputation_detected(
+    script_text: str,
+    *,
+    trajectory_columns: Iterable[str],
+) -> bool:
+    """Return whether fixed-window values can be filled from future windows."""
+
+    columns = {str(value) for value in trajectory_columns if str(value)}
+    if not columns:
+        return False
+    try:
+        tree = ast.parse(str(script_text or ""))
+    except SyntaxError:
+        return False
+
+    selectors: set[str] = set()
+    frames: set[str] = set()
+
+    def references_selector(node: ast.AST) -> bool:
+        return any(
+            isinstance(child, ast.Name) and child.id in selectors
+            for child in ast.walk(node)
+        )
+
+    def expression_is_trajectory(node: ast.AST) -> bool:
+        if isinstance(node, ast.Name):
+            return node.id in frames
+        if isinstance(node, ast.Subscript):
+            return references_selector(node.slice) or _selector_mentions_trajectory(
+                node.slice, columns
+            )
+        if isinstance(node, ast.Call):
+            if _selector_mentions_trajectory(node, columns):
+                return True
+            if isinstance(node.func, ast.Attribute):
+                return expression_is_trajectory(node.func.value)
+            return bool(node.args and expression_is_trajectory(node.args[0]))
+        if isinstance(node, ast.Attribute):
+            return expression_is_trajectory(node.value)
+        return False
+
+    assignments = [node for node in ast.walk(tree) if isinstance(node, ast.Assign)]
+    for _ in range(3):
+        changed = False
+        for assignment in assignments:
+            targets = [
+                target.id
+                for target in assignment.targets
+                if isinstance(target, ast.Name)
+            ]
+            if not targets:
+                continue
+            if _selector_mentions_trajectory(assignment.value, columns):
+                for target in targets:
+                    if target not in selectors:
+                        selectors.add(target)
+                        changed = True
+            if expression_is_trajectory(assignment.value):
+                for target in targets:
+                    if target not in frames:
+                        frames.add(target)
+                        changed = True
+        if not changed:
+            break
+
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
+            continue
+        method = node.func.attr.lower()
+        if not expression_is_trajectory(node.func.value):
+            continue
+        if method in {"bfill", "backfill", "interpolate"}:
+            return True
+        if method != "fillna":
+            continue
+        fill_method = next(
+            (
+                keyword.value.value.lower()
+                for keyword in node.keywords
+                if keyword.arg == "method"
+                and isinstance(keyword.value, ast.Constant)
+                and isinstance(keyword.value.value, str)
+            ),
+            "",
+        )
+        if fill_method in {"bfill", "backfill"}:
+            return True
+    return False
 
 
 def _contract_error(kind: str, message: str, **detail: Any) -> ValidationFinding:
@@ -1718,5 +1833,6 @@ __all__ = [
     "trajectory_phenotyping_code_contract",
     "trajectory_phenotyping_contract_applies",
     "trajectory_script_findings",
+    "trajectory_future_imputation_detected",
     "trajectory_zero_imputation_detected",
 ]

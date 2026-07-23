@@ -43,6 +43,10 @@ from ..planning.analysis_types import (
     locked_analysis_type_guide,
     planner_analysis_type_guide,
 )
+from ..planning.primary_result_contract import (
+    primary_result_contract_guide,
+    validate_required_primary_result as _validate_required_primary_result,
+)
 from ..trajectory.contract import trajectory_phenotyping_code_contract
 from ..trajectory.plan_contract import (
     trajectory_planner_contract_guide,
@@ -448,15 +452,8 @@ def _build_planner_user_prompt(
         "`expected_outputs`; never rely on hidden in-memory state. Do not force "
         "prediction, clustering, or any other family into a hard-coded mega-step "
         "or split it solely to fit a shared pipeline template.\n\n"
-        "Every step MUST explicitly declare `planned_analysis_role` as exactly "
-        "one of `primary`, `secondary`, `sensitivity`, or `auxiliary`. Use "
-        "`primary` only for the single step that produces the study's headline "
-        "estimand/result; at most one step may be primary, and a plan may have "
-        "none. Use `secondary` for another scientific result, `sensitivity` for "
-        "a robustness analysis, and `auxiliary` for preparation, quality control, "
-        "descriptive reporting, rendering, or protocol work. This role is a "
-        "Planner scientific decision; the host will not infer it from intent, "
-        "method, filenames, or outputs.\n\n"
+        + primary_result_contract_guide()
+        + "\n\n"
         "The typed `model_requirements` roster currently covers only a complex "
         "binary/continuous adjusted-association step whose method is exactly "
         "`adjusted_association_models` and whose expected outputs include "
@@ -921,6 +918,7 @@ class PlannerAgent:
                 )
             plan.analysis_type = canonical_family
         validate_plan_typed_bindings_against_context(plan=plan, context=context)
+        _validate_required_primary_result(plan=plan, context=context)
         return plan
 
 

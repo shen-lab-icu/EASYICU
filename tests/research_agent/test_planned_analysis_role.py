@@ -13,6 +13,7 @@ from easyicu.research_agent.agents.core import (
     _canonicalise_figure_output_alias,
     _is_untyped_figure_alias_output,
     _normalise_plan_payload,
+    _validate_required_primary_result,
 )
 from easyicu.research_agent.providers.mocks import PatternScriptedMockLLMClient
 from easyicu.research_agent.schema import (
@@ -20,6 +21,7 @@ from easyicu.research_agent.schema import (
     AnalysisStep,
     CohortDescriptor,
     PlannedAnalysisRole,
+    PlannedModelRequirement,
     ResearchContext,
     StepRecord,
 )
@@ -112,6 +114,141 @@ def test_analysis_plan_rejects_multiple_primary_steps() -> None:
                 ),
             ],
         )
+
+
+def _association_context() -> ResearchContext:
+    return ResearchContext(
+        research_question="Estimate the adjusted association with mortality.",
+        cohort=CohortDescriptor(
+            cohort_name="synthetic",
+            database="synthetic",
+            n_patients=10,
+            n_stays=10,
+        ),
+        variables=[],
+        primary_exposure="sealed_exposure",
+        target_outcome="sealed_outcome",
+    )
+
+
+def _primary_association_step() -> AnalysisStep:
+    return AnalysisStep(
+        step_id="03_primary_association",
+        planned_analysis_role="primary",
+        intent="Fit the prespecified adjusted association.",
+        inputs=["sealed_exposure", "sealed_outcome"],
+        expected_outputs=["table:adjusted_association_estimates"],
+        method="adjusted_association_models",
+        model_requirements=[
+            PlannedModelRequirement(
+                requirement_id="primary_adjusted",
+                outcome="sealed_outcome",
+                outcome_type="binary",
+                method_family="logistic_regression",
+                exposure_source="sealed_exposure",
+                analysis_role="primary",
+                analysis_set="source_aware",
+                required_for_step_success=True,
+            )
+        ],
+    )
+
+
+def test_result_bearing_association_rejects_secondary_only_plan() -> None:
+    context = _association_context()
+    plan = AnalysisPlan(
+        research_question=context.research_question,
+        analysis_type="association_study",
+        steps=[
+            AnalysisStep(
+                step_id="01_feasibility",
+                planned_analysis_role="secondary",
+                intent="Audit whether the requested estimate may be feasible.",
+                expected_outputs=["table:estimand_feasibility"],
+                method="feasibility_audit",
+            )
+        ],
+    )
+
+    with pytest.raises(ValueError, match="requires exactly one Planner-owned primary"):
+        _validate_required_primary_result(plan=plan, context=context)
+
+
+def test_association_feasibility_step_cannot_masquerade_as_primary_model() -> None:
+    context = _association_context()
+    plan = AnalysisPlan(
+        research_question=context.research_question,
+        analysis_type="association_study",
+        steps=[
+            AnalysisStep(
+                step_id="01_feasibility",
+                planned_analysis_role="primary",
+                intent="Audit whether the requested estimate may be feasible.",
+                expected_outputs=["table:estimand_feasibility"],
+                method="feasibility_audit",
+            )
+        ],
+    )
+
+    with pytest.raises(ValueError, match="adjusted_association_models"):
+        _validate_required_primary_result(plan=plan, context=context)
+
+
+def test_association_primary_model_must_use_exact_context_coordinates() -> None:
+    context = _association_context()
+    wrong = _primary_association_step().model_copy(
+        update={
+            "model_requirements": [
+                _primary_association_step()
+                .model_requirements[0]
+                .model_copy(update={"exposure_source": "plausible_alias"})
+            ]
+        }
+    )
+    plan = AnalysisPlan(
+        research_question=context.research_question,
+        analysis_type="association_study",
+        steps=[wrong],
+    )
+
+    with pytest.raises(ValueError, match="exact ResearchContext operational exposure"):
+        _validate_required_primary_result(plan=plan, context=context)
+
+
+def test_valid_primary_association_satisfies_headline_contract() -> None:
+    context = _association_context()
+    plan = AnalysisPlan(
+        research_question=context.research_question,
+        analysis_type="association_study",
+        steps=[_primary_association_step()],
+    )
+
+    _validate_required_primary_result(plan=plan, context=context)
+
+
+def test_protocol_only_family_may_still_have_no_primary_result() -> None:
+    context = _context().model_copy(
+        update={
+            "research_question": "Audit whether the requested data fields exist.",
+            "primary_exposure": None,
+            "target_outcome": None,
+        }
+    )
+    plan = AnalysisPlan(
+        research_question=context.research_question,
+        analysis_type="data_quality_audit",
+        steps=[
+            AnalysisStep(
+                step_id="01_audit",
+                intent="Audit the sealed data inventory.",
+                planned_analysis_role="auxiliary",
+                expected_outputs=["table:data_quality"],
+                method="data_quality_audit",
+            )
+        ],
+    )
+
+    _validate_required_primary_result(plan=plan, context=context)
 
 
 @pytest.mark.parametrize(
@@ -371,3 +508,6 @@ def test_planner_prompt_defines_required_role_without_case_specific_terms() -> N
     assert '"planned_analysis_role": "auxiliary"' in prompt
     assert "exactly one materialised closed primary-cohort product" in prompt
     assert "`artifact:cohort_defined` is not a cohort dataset" in prompt
+    assert "Do not impute the primary exposure or outcome" in prompt
+    assert "fit every imputer/scaler only on the training split" in prompt
+    assert "never use future observations to fill an earlier window" in prompt

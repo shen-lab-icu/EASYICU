@@ -1602,6 +1602,54 @@ def test_concept_usage_flags_fillna_zero(ra):
     )
 
 
+def test_primary_result_rejects_exposure_or_outcome_imputation(ra):
+    ctx = _ctx_with_sofa(ra).model_copy(update={"primary_exposure": "lact"})
+    step = ra.schema.AnalysisStep(
+        step_id="04_primary_association",
+        planned_analysis_role="primary",
+        intent="Fit the primary adjusted association.",
+    )
+    code = """
+primary_predictor = "lact"
+outcome_col = "death"
+df[primary_predictor] = df[primary_predictor].fillna(df[primary_predictor].median())
+df[outcome_col] = df[outcome_col].ffill()
+"""
+    findings = ra.AnalysisPatternAuditor().audit(
+        context=ctx,
+        script_text=code,
+        step=step,
+    )
+
+    protected = [
+        finding
+        for finding in findings
+        if finding.detail.get("kind") == "primary_estimand_imputation"
+    ]
+    assert len(protected) == 1
+    assert protected[0].severity == "error"
+    assert set(protected[0].detail["columns"]) == {"lact", "death"}
+
+
+def test_sensitivity_result_may_explicitly_handle_exposure_missingness(ra):
+    ctx = _ctx_with_sofa(ra).model_copy(update={"primary_exposure": "lact"})
+    step = ra.schema.AnalysisStep(
+        step_id="05_missingness_sensitivity",
+        planned_analysis_role="sensitivity",
+        intent="Run an explicitly declared missingness sensitivity analysis.",
+    )
+    findings = ra.AnalysisPatternAuditor().audit(
+        context=ctx,
+        script_text='df["lact"] = df["lact"].fillna(df["lact"].median())',
+        step=step,
+    )
+
+    assert not any(
+        finding.detail.get("kind") == "primary_estimand_imputation"
+        for finding in findings
+    )
+
+
 def test_concept_usage_allows_boolean_mask_fillna_false(ra):
     ctx = _ctx_with_sofa(ra)
     code = """
