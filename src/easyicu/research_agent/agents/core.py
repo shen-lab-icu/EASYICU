@@ -2832,8 +2832,11 @@ def _repair_specialization(
     if RepairRoute.FIGURE_SOURCE_TRACE in repair_routes:
         guidance.append(
             "- DIAGNOSED FIGURE SOURCE-DATA TRACE REPAIR (binding): make the "
-            "exported `<figure_stem>_source_data.csv` minimal. Keep every value "
-            "actually plotted plus its exact upstream trace key, but remove "
+            "exported source-data bundle minimal and independently verifiable. "
+            "Keep every value actually plotted plus its exact upstream trace "
+            "key. Preserve each bound parent's original value-column names in "
+            "a separate exact/subset CSV; never collapse unrelated parents into "
+            "generic `value`, `numerator`, or `denominator` columns. Remove "
             "unplotted derived numeric/boolean audit fields (for example integer-"
             "validity flags, duplicate rounded values, or helper-only masks) that "
             "have no independently row-aligned upstream value vector. Keep such "

@@ -4577,6 +4577,191 @@ def _patch_unavailable_figure_full_source_projection(code: str) -> str:
     return repaired
 
 
+def _patch_bound_figure_source_projection(code: str) -> str:
+    """Declare exact, per-parent source-data projections for a figure bundle.
+
+    Generated renderers sometimes combine several bound parent tables into one
+    reader-facing long table.  Renaming upstream value columns to generic
+    ``value``/``numerator`` fields makes that combined table impossible to
+    authenticate without trusting the renderer.  When the script already loads
+    every Planner-declared table into one mapping, this repair writes each
+    loaded frame unchanged to a separate local CSV and declares those exact
+    projections in both the FigureContract and ``step_summary.json``.
+
+    The rewrite is deliberately structural: it neither selects rows nor
+    changes the plotted data.  It requires one unambiguous table-loading loop,
+    one FigureContract call, one publication-save call, and one summary source
+    declaration.  Any other shape fails closed to the normal repair path.
+    """
+
+    marker = "_easyicu_bound_source_files"
+    if marker in code:
+        return code
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return code
+
+    table_loads: List[tuple[str, str, str]] = []
+    for loop in (node for node in ast.walk(tree) if isinstance(node, ast.For)):
+        if not (isinstance(loop.target, ast.Name) and isinstance(loop.iter, ast.Name)):
+            continue
+        loop_key = loop.target.id
+        loaded_frame_names = {
+            target.elts[0].id
+            for assignment in loop.body
+            if isinstance(assignment, ast.Assign)
+            and len(assignment.targets) == 1
+            and isinstance((target := assignment.targets[0]), ast.Tuple)
+            and target.elts
+            and isinstance(target.elts[0], ast.Name)
+            and isinstance(assignment.value, ast.Call)
+            and (
+                (
+                    isinstance(assignment.value.func, ast.Name)
+                    and assignment.value.func.id == "load_bound_table"
+                )
+                or (
+                    isinstance(assignment.value.func, ast.Attribute)
+                    and assignment.value.func.attr == "load_bound_table"
+                )
+            )
+        }
+        if len(loaded_frame_names) != 1:
+            continue
+        for node in ast.walk(loop):
+            if not (
+                isinstance(node, ast.Assign)
+                and len(node.targets) == 1
+                and isinstance(node.targets[0], ast.Subscript)
+                and isinstance(node.targets[0].value, ast.Name)
+                and isinstance(node.targets[0].slice, ast.Name)
+                and node.targets[0].slice.id == loop_key
+                and isinstance(node.value, ast.Name)
+                and node.value.id in loaded_frame_names
+            ):
+                continue
+            table_loads.append((node.targets[0].value.id, loop.iter.id, loop_key))
+    table_loads = list(dict.fromkeys(table_loads))
+    if len(table_loads) != 1:
+        return code
+    table_map_name, input_iterable_name, _ = table_loads[0]
+
+    contract_assignments: List[tuple[ast.Assign, ast.keyword]] = []
+    for node in ast.walk(tree):
+        if not (
+            isinstance(node, ast.Assign)
+            and isinstance(node.value, ast.Call)
+            and (
+                (
+                    isinstance(node.value.func, ast.Name)
+                    and node.value.func.id == "make_figure_contract"
+                )
+                or (
+                    isinstance(node.value.func, ast.Attribute)
+                    and node.value.func.attr == "make_figure_contract"
+                )
+            )
+        ):
+            continue
+        source_keywords = [
+            keyword for keyword in node.value.keywords if keyword.arg == "source_data"
+        ]
+        if len(source_keywords) == 1:
+            contract_assignments.append((node, source_keywords[0]))
+    if len(contract_assignments) != 1:
+        return code
+    contract_statement, source_keyword = contract_assignments[0]
+
+    output_dir_names = {
+        keyword.value.id
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and (
+            (
+                isinstance(node.func, ast.Name)
+                and node.func.id == "save_publication_figure"
+            )
+            or (
+                isinstance(node.func, ast.Attribute)
+                and node.func.attr == "save_publication_figure"
+            )
+        )
+        for keyword in node.keywords
+        if keyword.arg == "out_dir" and isinstance(keyword.value, ast.Name)
+    }
+    if len(output_dir_names) != 1:
+        return code
+    output_dir_name = next(iter(output_dir_names))
+
+    summary_source_values: List[ast.AST] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Dict):
+            continue
+        for key, value in zip(node.keys, node.values):
+            if isinstance(key, ast.Constant) and key.value == "source_data_files":
+                summary_source_values.append(value)
+    if len(summary_source_values) != 1:
+        return code
+    summary_source_value = summary_source_values[0]
+
+    lines = code.splitlines(keepends=True)
+    line_starts: List[int] = []
+    offset = 0
+    for line in lines:
+        line_starts.append(offset)
+        offset += len(line)
+
+    def _absolute_offset(lineno: int, utf8_col: int) -> int:
+        line = lines[lineno - 1]
+        char_col = len(line.encode("utf-8")[:utf8_col].decode("utf-8"))
+        return line_starts[lineno - 1] + char_col
+
+    def _span(node: ast.AST) -> tuple[int, int]:
+        return (
+            _absolute_offset(node.lineno, node.col_offset),
+            _absolute_offset(node.end_lineno, node.end_col_offset),
+        )
+
+    indent = " " * int(contract_statement.col_offset)
+    projection = (
+        f"{indent}{marker} = []\n"
+        f"{indent}for _easyicu_bound_index, _easyicu_bound_key in "
+        f"enumerate({input_iterable_name}):\n"
+        f"{indent}    _easyicu_bound_frame = "
+        f"{table_map_name}[_easyicu_bound_key].copy(deep=True)\n"
+        f'{indent}    _easyicu_bound_token = "".join(\n'
+        f'{indent}        character if character.isalnum() else "_"\n'
+        f"{indent}        for character in str(_easyicu_bound_key)\n"
+        f'{indent}    ).strip("_")\n'
+        f"{indent}    _easyicu_bound_source_name = (\n"
+        f'{indent}        f"bound_{{_easyicu_bound_index:03d}}_'
+        f'{{_easyicu_bound_token}}_source_data.csv"\n'
+        f"{indent}    )\n"
+        f"{indent}    _easyicu_bound_frame.to_csv(\n"
+        f"{indent}        {output_dir_name} / _easyicu_bound_source_name,\n"
+        f"{indent}        index=False,\n"
+        f"{indent}    )\n"
+        f"{indent}    {marker}.append(_easyicu_bound_source_name)\n\n"
+    )
+    insert_at = line_starts[contract_statement.lineno - 1]
+    replacements = [
+        (*_span(source_keyword.value), marker),
+        (*_span(summary_source_value), marker),
+        (insert_at, insert_at, projection),
+    ]
+    repaired = code
+    for start, end, replacement in sorted(
+        replacements, key=lambda item: item[0], reverse=True
+    ):
+        repaired = repaired[:start] + replacement + repaired[end:]
+    try:
+        ast.parse(repaired)
+    except SyntaxError:
+        return code
+    return repaired
+
+
 def deterministic_contract_repair(
     *,
     code: str,
@@ -4621,6 +4806,15 @@ def deterministic_contract_repair(
         repaired = _patch_unavailable_figure_full_source_projection(code)
         if repaired != code:
             return unavailable_source_repair_name, repaired
+
+    bound_source_repair_name = "bound_figure_source_projection_v1"
+    if (
+        len(unavailable_source_findings) == 1
+        and previous_repair != bound_source_repair_name
+    ):
+        repaired = _patch_bound_figure_source_projection(code)
+        if repaired != code:
+            return bound_source_repair_name, repaired
 
     attrition_identity_findings = []
     for finding in findings:

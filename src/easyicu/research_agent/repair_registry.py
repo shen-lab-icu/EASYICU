@@ -298,6 +298,7 @@ _STRUCTURAL_REPAIRS = {
     "arbitrary_column_fallback_fail_closed_v1",
     "audit_only_companion_value_selector_v1",
     "binary_domain_authored_feasibility_v1",
+    "bound_figure_source_projection_v1",
     "cohort_csv_to_parquet_v1",
     "cohort_file_direct_read_v1",
     "flag_only_plausibility_range_retention_v1",
