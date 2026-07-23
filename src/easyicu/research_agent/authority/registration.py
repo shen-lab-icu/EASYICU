@@ -191,6 +191,35 @@ def filter_success_alias_bindings(
             Path(_record_source_name(evidence_id)).stem
             for evidence_id in product_claimants
         }
+        generic_summary_claimants = [
+            evidence_id
+            for evidence_id in explicit_claimants
+            if _record_source_name(evidence_id) == "step_summary.json"
+        ]
+        # A generated summary may advertise a convenient bare role while two
+        # distinct typed products (for example ``table:x`` and
+        # ``statistic:x``) share that stem. No one of those three records is
+        # the truthful unqualified authority. Keep the typed/evidence-id
+        # routes, remove the summary's convenience claim, and suppress both
+        # implicit basenames. Explicit claims made by a real product remain
+        # strict and continue to fail closed below.
+        if (
+            len(product_claimants) > 1
+            and len(product_stems) == 1
+            and not any(
+                evidence_id in explicit_claimants for evidence_id in product_claimants
+            )
+            and set(unique_claimants)
+            == set(product_claimants) | set(generic_summary_claimants)
+        ):
+            for evidence_id in generic_summary_claimants:
+                filtered[evidence_id] = [
+                    candidate
+                    for candidate in filtered[evidence_id]
+                    if candidate != alias
+                ]
+            suppressed_basename_evidence_ids.update(product_claimants)
+            continue
         # A producer may deliberately declare both ``artifact:x`` and
         # ``table:x`` with JSON/CSV files sharing basename ``x``. Typed input
         # resolution uses the declared kind + exact summary path, so an
