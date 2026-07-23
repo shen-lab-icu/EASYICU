@@ -713,6 +713,31 @@ def test_bind_manuscript_verbose_mode_keeps_warning_caveat_visible(ra, tmp_path:
     assert "(warning: see manifest)" in bound
 
 
+def test_update_record_can_clear_resolved_finding_caveat(ra, tmp_path: Path):
+    src = tmp_path / "result.json"
+    src.write_text('{"estimate": 1.2}\n', encoding="utf-8")
+    store = ra.EvidenceStore(root=tmp_path)
+    rec = store.register_file(kind="statistic", description="result", source_path=src)
+    store.update_record(
+        rec.evidence_id,
+        finding_severity="error",
+        finding_messages=["transient validation error"],
+    )
+    store.update_record(
+        rec.evidence_id,
+        finding_severity=None,
+        finding_messages=[],
+    )
+
+    reloaded = ra.EvidenceStore(root=tmp_path).get(rec.evidence_id)
+    assert reloaded is not None
+    assert reloaded.finding_severity is None
+    assert reloaded.finding_messages == []
+    assert "see manifest" not in store.bind_manuscript(
+        f"See {{evidence:{rec.evidence_id}}}."
+    )
+
+
 def test_enforce_evidence_bound_scaffold_filters_unsupported_result_sentences(
     ra, tmp_path: Path
 ):
