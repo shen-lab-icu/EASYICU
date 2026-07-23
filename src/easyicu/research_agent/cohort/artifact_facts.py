@@ -42,6 +42,13 @@ def observed_domain_for_series(series: pd.Series) -> Optional[Dict[str, Any]]:
                 domain["is_binary"] = values.issubset({0, 1}) and bool(values)
             except (TypeError, ValueError):
                 domain["is_binary"] = False
+        if domain["is_binary"] and n_unique == 2:
+            if pd.api.types.is_bool_dtype(nonnull):
+                domain["levels"] = [False, True]
+            elif pd.api.types.is_integer_dtype(nonnull):
+                domain["levels"] = [0, 1]
+            else:
+                domain["levels"] = [0.0, 1.0]
     elif n_unique <= 8:
         try:
             domain["levels"] = sorted(str(value) for value in nonnull.unique())

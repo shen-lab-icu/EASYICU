@@ -338,3 +338,57 @@ lineage matrix pass **165/165**. Architecture remains below the frozen
 lower-is-better baseline, with no module cycle or resource-envelope expansion.
 A rebuilt image must now replay the same archived script through both corrected
 boundaries before authority issuance.
+
+The rebuilt `source-93c4126` image
+(`sha256:0fcf94ac171cc7bf4a65531de2ffdc55504ac259411f68a90a6e64721d32fcb4`)
+then replayed that exact archived Step 02 successfully: return code 0 in 1.92
+seconds with both declared outputs. The first launch against this image stopped
+before any Provider call when one cold Colima runtime-provenance subprocess
+exceeded its fixed 60-second capture timeout; the identical capture immediately
+passed in 1.86 seconds with all 11 capabilities. Because no code, image, input,
+or rubric changed, a fresh R2 authority was issued rather than weakening the
+runtime gate.
+
+## Fresh E1 R2: numeric-binary local level binding
+
+The authorized R2 canary is preserved at:
+
+`/Volumes/外置硬盘/easyicu_data/canonical9_runs/batch_20260723_luna_miiv_adaptive_93c4126_r2/e1_sepsis3_prevalence_mortality/aware/run_20260723T142906_35cc18`
+
+It independently closed all earlier barriers in one run:
+
+- runtime capability capture passed with 11 capabilities;
+- Step 01 retained all 94,458 stays and both Sepsis-3 groups while using the
+  runtime row-count coordinate rather than a literal;
+- Step 02 used the zero-Coder grouped Table 1 executor and completed with both
+  comparison groups;
+- Steps 03 and 04 completed, with Step 04's bounded post-mutation repair
+  executing successfully in Docker.
+
+Step 05 then exposed a host-context inconsistency. The exact
+`sep3_sofa2_max` descriptor said `dtype=float64`, `n_unique=2`,
+`is_binary=true`, `min=0`, and `max=1`, but omitted `observed_domain.levels`.
+Generated code correctly deferred private level binding to the digest-verified
+local ResearchContext, so both bounded script executions failed closed with:
+
+`ValueError: Expected two closed levels for sep3_sofa2_max`
+
+This cannot be fixed reliably by another LLM rewrite because the missing fact
+belongs to the host. The case-neutral correction makes
+`observed_domain_for_series` bind `[0, 1]`, `[0.0, 1.0]`, or `[False, True]`
+only when both values of an actually observed numeric binary domain are
+present. A one-level constant never receives an invented comparator. The local
+ResearchContext retains the typed levels, while every Provider projection
+continues to receive only `binary_numeric_indicator`, cardinality, and opaque
+tokens.
+
+The R2 run remains `diagnostic_only`; it completed 5/9 execution states and
+the batch canary correctly marked E2--E9 `batch_canary_blocked`. No downstream
+question was initialized. The first adjacent matrix after the correction
+reported **444 passed**. Its five red cases are outside this change: four old
+custom `_SequenceLLM` fixtures are now rejected by the Provider registry before
+callback, and one Docker test expected the preceding source digest while the
+worktree was intentionally dirty. Focused observed-domain, outbound, Table 1,
+and runtime-level binding checks are green; the new immutable image must next
+rebuild the context and replay the archived Step 05 script before another
+authority is issued.
