@@ -56,3 +56,11 @@ run because its installed research-agent source digest
 `c4d00e47…ddbc`. A matching immutable image must be built and frozen before
 the first real prompt.
 
+The first matching overlay image exposed one final execution-identity wiring
+gap: Docker preflight already exported the verified immutable `image_id`, but
+`execution_identity_for_pipeline()` recorded only an optional profile-side
+expected digest. Paper profiles without a capability-activation pin therefore
+lost the real image coordinate. The identity now binds the validated runtime
+image and rejects any mismatch with an independently expected digest. Focused
+execution-identity/realrun/pipeline checks passed (`102 passed`); architecture
+and module-graph gates showed no regression.

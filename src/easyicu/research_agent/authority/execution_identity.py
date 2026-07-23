@@ -246,11 +246,24 @@ def execution_identity_for_pipeline(pipeline: Any) -> ExecutionIdentity:
     cached = getattr(pipeline, "_execution_identity", None)
     if isinstance(cached, ExecutionIdentity):
         return cached
+    expected_image = getattr(pipeline, "_expected_runner_image_digest", None)
+    runtime_bundle = getattr(pipeline, "_validated_runtime_bundle", None)
+    actual_image = None
+    if isinstance(runtime_bundle, Mapping):
+        provenance = runtime_bundle.get("provenance")
+        source = provenance if isinstance(provenance, Mapping) else runtime_bundle
+        actual_image = str(source.get("image_id") or "") or None
+    if expected_image is not None and actual_image is not None:
+        if str(expected_image) != actual_image:
+            raise ValueError(
+                "Validated runner image differs from the expected image digest"
+            )
+    runner_image_digest = actual_image or expected_image
     identity = ExecutionIdentity.create(
         submission_profile_name=pipeline._submission_profile_name,
         submission_profile_version=pipeline._submission_profile_version,
         runner=pipeline._runner_kind,
-        runner_image_digest=pipeline._expected_runner_image_digest,
+        runner_image_digest=runner_image_digest,
         network_policy=pipeline._runner_network,
         provider_client=pipeline._llm,
         llm_seed=pipeline._llm_seed,
