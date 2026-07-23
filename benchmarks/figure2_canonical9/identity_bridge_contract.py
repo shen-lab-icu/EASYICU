@@ -38,7 +38,7 @@ _SOURCE_KEYS: tuple[tuple[str, str, str], ...] = (
     ("eicu", "patientunitstayid", "uniquepid"),
     ("amsterdamumcdb", "admissionid", "patientid"),
     ("hirid", "patientid", "patientid"),
-    ("sicdb", "CaseID", "CaseID"),
+    ("sicdb", "CaseID", "PatientID"),
 )
 _SOURCE_IDS = tuple(item[0] for item in _SOURCE_KEYS)
 _SOURCE_KEY_BY_ID = {item[0]: item[1:] for item in _SOURCE_KEYS}

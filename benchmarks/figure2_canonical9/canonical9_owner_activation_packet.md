@@ -6,7 +6,8 @@ clinical decisions.  Filling it does **not** authorize a run.  Its purpose is
 to collect the owner-controlled inputs that the existing P4 gate verifies
 before any Provider, Docker runner, or cohort data can start.
 
-Current status: **not authorized**.  The canonical run remains `0/9`.
+Current status: **input route selected; run not authorized**.  The canonical
+run remains `0/9`.
 
 ## 1. Select exactly one input route
 
@@ -22,6 +23,20 @@ historical parquet in place.
 The controlled bridge is not a shortcut around review.  Its descriptor must
 continue to report `real_run_authorized=false`; P4 will reject any structural
 retrofit as production authority.
+
+### Recorded owner-delegated default (2026-07-22)
+
+The owner selected the controlled-bridge route: `full6_20260717` remains the
+only clinical payload, with source access limited to the six stay-to-patient
+relations needed to prevent patient-level leakage.  The private host artifact
+`full6_20260717_identity_bridge_20260722/identity_bridge_contract.json` was
+built with digest
+`4092104a40d2b22d80a93cf00323be0f3c048bfc3d9ea6bb002124361ecce794`.
+It covers all six sources with zero unmapped or duplicate full0717 stays.
+
+This owner decision authorizes the *bridge-production data lane* only.  It
+does not turn the descriptor into typed materialization authority, a clinical
+review, an execution permit, or a Provider credential.
 
 ## 2. Freeze source and identity evidence
 
@@ -54,6 +69,18 @@ protocols, not global agent-prompt text.
 The existing `KnowHowCard` mechanism binds a clinical/methods review
 attestation to exact card content.  Do not set `clinical_reviewed` without a
 real reviewer decision.
+
+### Owner-delegated defaults awaiting formal attestation
+
+These choices let implementation and data-quality work proceed without
+silently changing a scientific result.  They are deliberately not labelled
+`clinical_reviewed`.
+
+| Task | Default chosen for the next typed review | Consequence now |
+| --- | --- | --- |
+| E2 | ICU-admission anchor; first-24-hour maximum among unit-verified, finite, positive lactate values; preserve all such values in the primary analysis, summarize with median/IQR, assess nonlinearity on the raw mmol/L scale, and use a predeclared log-scale sensitivity analysis. Values with unresolved units or invalid measurement state are reported as unavailable, never deleted based on an estimated effect. | The existing peak-lactate card and review packet are the implementation starting point; formal clinical/methods sign-off is still required before paper authority. |
+| H2 | Medication non-recording is **unknown**, not non-exposure. A causal contrast may include a source only after its first-window medication capture and timing are evidenced; otherwise it is an explicit feasibility failure, not an invented control arm. | Current manifests establish that a vasopressor module was exported without errors, but not a complete absence-as-nonuse contract, so causal H2 remains blocked. |
+| H3 | The observed stability failure is terminal for the current design. Do not retry with a new seed, k, threshold, or post-hoc exclusion. | H3 remains a documented negative feasibility result until an independently reviewed redesign is available. |
 
 ## 4. Prepare the P4 operation freeze
 

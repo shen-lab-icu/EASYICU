@@ -22,7 +22,7 @@ The retained source conversion libraries contain candidate identity sources:
 | eICU | `patientunitstayid` | `uniquepid` | source mapping schema observed; re-materialization required |
 | AmsterdamUMCdb | `admissionid` | `patientid` | source mapping schema observed; re-materialization required |
 | HiRID | `patientid` | owner must attest its stay/patient semantics | not inferable from the development export |
-| SICdb | `CaseID` | owner must attest its case/patient semantics | not inferable from the development export |
+| SICdb | `CaseID` | `PatientID` | source relation available; semantic attestation still required |
 
 “Schema observed” means column names and table metadata were inspected only.
 It is not evidence that a particular join, cardinality, cohort, or scientific
@@ -30,16 +30,24 @@ analysis is valid.
 
 ## Current decision
 
-The active project plan forbids re-extracting the six databases and permits
-development only from the existing `full6_20260717` export.  Therefore this
-audit does **not** open, schedule, or implement a re-materialization job.  With
-that constraint, a production Canonical9 run remains correctly blocked: no
-code patch may turn the historical export into patient-level paper authority.
+The owner selected a controlled identity bridge on 2026-07-22.  It preserves
+the existing `full6_20260717` clinical bytes and reads only six frozen source
+relations to make host-only stay-to-patient mappings.  The builder produced a
+private contract with digest
+`4092104a40d2b22d80a93cf00323be0f3c048bfc3d9ea6bb002124361ecce794` and
+zero unmapped/duplicate full0717 stays in every source.  No clinical export was
+re-extracted, modified, or made available to a Provider.
+
+This changes the next action from “await a route choice” to “perform native
+typed-materialization review.”  It does **not** change the production state:
+the bridge descriptor remains a handoff artifact and P4 correctly blocks any
+run until typed cohort/trajectory authorities, the three case decisions, and
+the final operation freeze exist.
 
 ## Conditional routes if a future data lane is explicitly approved
 
-There are two mutually exclusive routes.  Both require a new owner decision;
-neither is currently authorized and neither changes the P4 launch gate.
+There are two mutually exclusive routes.  The controlled bridge is now the
+selected route; neither route changes the P4 launch gate.
 
 1. **Fresh native export.** Follow the native source-to-export route below.
 2. **Controlled identity bridge.** Preserve the historical full6 clinical
