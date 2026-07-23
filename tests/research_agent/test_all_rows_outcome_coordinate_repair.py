@@ -6,6 +6,11 @@ from easyicu.research_agent.repairs.source import _deterministic_runner_repair
 from easyicu.research_agent.repairs.typed_input import (
     patch_all_rows_outcome_coordinate_filter,
 )
+from easyicu.research_agent.repair_registry import (
+    RepairClass,
+    automatic_repair_allowed,
+    repair_metadata_for,
+)
 
 _SCRIPT = """
 def main():
@@ -67,6 +72,15 @@ def test_runner_routes_exact_all_rows_repair_before_llm_repair() -> None:
             resolved_input_bindings=_BINDINGS,
         ),
     )
+
+
+def test_all_rows_repair_is_registered_as_structural_and_automatic() -> None:
+    metadata = repair_metadata_for("all_rows_outcome_coordinate_filter_v1")
+
+    assert metadata.classification_source == "exact"
+    assert metadata.repair_class is RepairClass.STRUCTURAL
+    assert metadata.introduces_numbers is False
+    assert automatic_repair_allowed(metadata.repair_id)
 
 
 def test_all_rows_repair_rejects_unbound_or_subset_consumption() -> None:
