@@ -949,6 +949,90 @@ def test_launcher_canonical_jsonl_without_authorization_blocks(
     assert calls == {"llm": 0, "suite": 0, "ehrflow": 0, "register": 0}
 
 
+def _development_binding_receipt(path: Path, jsonl_path: Path) -> Path:
+    path.write_text(
+        json.dumps(
+            {
+                "schema_version": (
+                    "easyicu.canonical9_development_binding_receipt/1"
+                ),
+                "paper_authority": False,
+                "output_jsonl": str(jsonl_path.resolve()),
+                "output_sha256": _sha256_file(jsonl_path),
+            }
+        ),
+        encoding="utf-8",
+    )
+    return path
+
+
+def test_canonical_development_diagnostic_requires_exact_nonpaper_binding(
+    tmp_path,
+) -> None:
+    import argparse
+
+    import tools.run_research_agent_bench as bench
+
+    files = _launcher_files(tmp_path)
+    receipt = _development_binding_receipt(
+        tmp_path / "development-receipt.json",
+        files["jsonl_path"],
+    )
+    args = argparse.Namespace(
+        figure2_realrun_authorization=None,
+        figure2_expected_execution_identity=None,
+        figure2_production_input_authority=None,
+        figure2_development_binding_receipt=str(receipt),
+        development_diagnostic=True,
+        ehrflowbench_jsonl=str(files["jsonl_path"]),
+        require_figure2_paper_acceptance=False,
+        submission_profile=False,
+        runner="docker",
+        arms=["aware"],
+        provider="openai",
+    )
+
+    rc, binding = bench._figure2_realrun_authorization_gate(args)
+
+    assert rc is None
+    assert binding is None
+
+
+def test_canonical_development_diagnostic_rejects_tampered_binding(
+    tmp_path,
+) -> None:
+    import argparse
+
+    import tools.run_research_agent_bench as bench
+
+    files = _launcher_files(tmp_path)
+    receipt = _development_binding_receipt(
+        tmp_path / "development-receipt.json",
+        files["jsonl_path"],
+    )
+    payload = json.loads(receipt.read_text(encoding="utf-8"))
+    payload["output_sha256"] = "0" * 64
+    receipt.write_text(json.dumps(payload), encoding="utf-8")
+    args = argparse.Namespace(
+        figure2_realrun_authorization=None,
+        figure2_expected_execution_identity=None,
+        figure2_production_input_authority=None,
+        figure2_development_binding_receipt=str(receipt),
+        development_diagnostic=True,
+        ehrflowbench_jsonl=str(files["jsonl_path"]),
+        require_figure2_paper_acceptance=False,
+        submission_profile=False,
+        runner="docker",
+        arms=["aware"],
+        provider="openai",
+    )
+
+    rc, binding = bench._figure2_realrun_authorization_gate(args)
+
+    assert rc == 2
+    assert binding is None
+
+
 def test_launcher_declaration_without_identity_blocks(tmp_path, monkeypatch):
     bench, calls = _spies(monkeypatch)
     files = _launcher_files(tmp_path, with_identity=False)
