@@ -567,6 +567,164 @@ def _raw_typed_plan_reference_issues(
     ]
 
 
+def _closed_observed_levels(variable: Any) -> list[Any]:
+    """Return host-visible closed levels without exposing them in diagnostics."""
+
+    if variable is None:
+        return []
+    domain = getattr(variable, "observed_domain", None)
+    if not isinstance(domain, Mapping):
+        return []
+    levels = domain.get("levels")
+    if isinstance(levels, list) and len(levels) >= 2:
+        return list(levels)
+    if not domain.get("is_binary"):
+        return []
+    dtype = str(getattr(variable, "dtype", "") or "").strip().casefold()
+    if dtype.startswith(("int", "uint")):
+        return [0, 1]
+    if dtype.startswith(("float", "double")):
+        return [0.0, 1.0]
+    if dtype.startswith("bool"):
+        return [False, True]
+    return []
+
+
+def _predicate_accepts_closed_level(
+    predicate: ConceptPredicate,
+    level: Any,
+) -> Optional[bool]:
+    """Evaluate one typed predicate on a local closed level, if comparable."""
+
+    op = str(predicate.op or "").strip().casefold()
+    target = predicate.value
+    try:
+        if op == "==":
+            return bool(level == target)
+        if op == "!=":
+            return bool(level != target)
+        if op == "<":
+            return bool(level < target)
+        if op == "<=":
+            return bool(level <= target)
+        if op == ">":
+            return bool(level > target)
+        if op == ">=":
+            return bool(level >= target)
+        if op == "in":
+            values = target if isinstance(target, list) else [target]
+            return bool(level in values)
+        if op == "not_in":
+            values = target if isinstance(target, list) else [target]
+            return bool(level not in values)
+        if op == "missing":
+            return bool(
+                level is None or (isinstance(level, float) and math.isnan(level))
+            )
+        if op == "not_missing":
+            return not bool(
+                level is None or (isinstance(level, float) and math.isnan(level))
+            )
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return None
+
+
+def _primary_cohort_contrast_preservation_issues(
+    *,
+    plan: Any,
+    context: Any,
+    definition: CohortDefinition,
+    columns: tuple[str, ...],
+    bindings: Mapping[str, str],
+) -> list[str]:
+    """Reject a primary cohort that statically erases a planned contrast.
+
+    This is a consistency check only.  The host does not choose eligibility or
+    an estimand: it verifies that the Planner's own closed cohort predicates do
+    not leave fewer than two levels of the same variable that the Planner later
+    declares as a grouped comparison or required primary-model exposure.
+    """
+
+    variables = {
+        str(getattr(variable, "name", "") or "").strip(): variable
+        for variable in getattr(context, "variables", ()) or ()
+    }
+    targets: dict[str, list[Any]] = {}
+
+    # Table 1 private execution bindings contain the locally observed labels;
+    # public opaque tokens are never copied into this validation diagnostic.
+    from ..authority.table_one_binding import table_one_execution_spec
+
+    for step in getattr(plan, "steps", ()) or ():
+        spec = table_one_execution_spec(step)
+        if spec is not None and len(spec.group_levels) >= 2:
+            targets.setdefault(str(spec.group_by), list(spec.group_levels))
+        for requirement in getattr(step, "model_requirements", ()) or ():
+            role = str(getattr(requirement, "analysis_role", "") or "").casefold()
+            if role != "primary":
+                continue
+            exposure = str(getattr(requirement, "exposure_source", "") or "").strip()
+            levels = _closed_observed_levels(variables.get(exposure))
+            if exposure and len(levels) >= 2:
+                targets.setdefault(exposure, levels)
+
+    if not targets:
+        return []
+
+    predicates_by_column: dict[str, dict[str, list[ConceptPredicate]]] = {}
+    for kind, predicates in (
+        ("inclusion", definition.inclusion),
+        ("exclusion", definition.exclusion),
+    ):
+        for predicate in predicates:
+            column = _resolve_predicate_column(
+                columns,
+                predicate.concept_id,
+                predicate.aggregation,
+                column_bindings=dict(bindings),
+            )
+            if column:
+                predicates_by_column.setdefault(column, {}).setdefault(kind, []).append(
+                    predicate
+                )
+
+    issues: list[str] = []
+    for column, levels in targets.items():
+        predicate_sets = predicates_by_column.get(column)
+        if not predicate_sets:
+            continue
+        retained = 0
+        indeterminate = False
+        for level in levels:
+            include = True
+            for predicate in predicate_sets.get("inclusion", ()):
+                accepted = _predicate_accepts_closed_level(predicate, level)
+                if accepted is None:
+                    indeterminate = True
+                    break
+                include = include and accepted
+            if indeterminate:
+                break
+            for predicate in predicate_sets.get("exclusion", ()):
+                excluded = _predicate_accepts_closed_level(predicate, level)
+                if excluded is None:
+                    indeterminate = True
+                    break
+                include = include and not excluded
+            if indeterminate:
+                break
+            retained += int(include)
+        if not indeterminate and retained < 2:
+            issues.append(
+                "cohort: primary cohort predicates collapse a downstream closed "
+                f"comparison on sealed column {column!r} below two retained "
+                "levels. Revise the cohort eligibility or the downstream "
+                "comparison/primary estimand so the plan is internally consistent."
+            )
+    return issues
+
+
 def validate_plan_typed_bindings_against_context(
     *,
     plan: Any,
@@ -607,6 +765,8 @@ def validate_plan_typed_bindings_against_context(
 
     raw_issues = _raw_typed_plan_reference_issues(plan=plan, columns=columns)
     issues = list(raw_issues)
+    primary_definition: Optional[CohortDefinition] = None
+    primary_bindings: Dict[str, str] = {}
     for label, definition in definitions:
         try:
             bindings = _planner_declared_context_column_bindings(
@@ -618,6 +778,9 @@ def validate_plan_typed_bindings_against_context(
         except CohortDataError as exc:
             issues.append(f"{label}: {exc}")
             continue
+        if label == "cohort":
+            primary_definition = definition
+            primary_bindings = bindings
         for kind, predicates in (
             ("inclusion", definition.inclusion),
             ("exclusion", definition.exclusion),
@@ -641,6 +804,16 @@ def validate_plan_typed_bindings_against_context(
                         f"{predicate.time_window.end_offset_hours}]h has no "
                         "exact or uniquely bound sealed column"
                     )
+    if primary_definition is not None:
+        issues.extend(
+            _primary_cohort_contrast_preservation_issues(
+                plan=plan,
+                context=context,
+                definition=primary_definition,
+                columns=columns,
+                bindings=primary_bindings,
+            )
+        )
     if not issues:
         return
 

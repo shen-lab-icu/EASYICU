@@ -1691,6 +1691,19 @@ def test_run_ehrflowbench_writes_receipt_and_ledger(tmp_path, monkeypatch) -> No
                 "run_id": run_id,
                 "workdir": str(workdir),
                 "execution_identity": identity,
+                "publication_ready": True,
+                "manuscript_ready": True,
+                "n_errors": 0,
+                "figure2_evaluation_attempt": {
+                    "status": "valid",
+                    "envelope": {
+                        "scorecard": {
+                            "scorecard_canonical_json": json.dumps(
+                                {"tristate": "gate_reportable"}
+                            )
+                        }
+                    },
+                },
             }
         )
         return {"item_key": item.key, "aware": aware}
@@ -1716,10 +1729,105 @@ def test_run_ehrflowbench_writes_receipt_and_ledger(tmp_path, monkeypatch) -> No
     assert ledger["complete"] is True
     assert ledger["batch_id"] == _BATCH_ID
     assert len(ledger["children"]) == 9
+    canary = json.loads((out_root / "figure2_canary_gate.json").read_text())
+    assert canary["status"] == "passed"
+    assert canary["task_id"] == FIGURE2_TASK_IDS[0]
     # Each child's frozen input authority (from the per-row binding) is recorded.
     for child in ledger["children"]:
         assert child["input_authority_sha256"] == frozen[child["task_id"]]
         assert child["manifest_sha256"]
+
+
+def test_formal_batch_does_not_start_e2_when_e1_canary_is_diagnostic(
+    tmp_path, monkeypatch
+) -> None:
+    import pandas as pd
+
+    import tools.run_research_agent_bench as bench
+
+    cohort_paths = _cohorts(tmp_path)
+    jsonl_path = tmp_path / "canonical.jsonl"
+    _write_jsonl(jsonl_path, cohort_paths)
+    frozen = {
+        task_id: production_cohort_input_sha256(cohort_paths[task_id])
+        for task_id in FIGURE2_TASK_IDS
+    }
+    out_root = tmp_path / _BATCH_ID
+    binding = _binding(frozen, out_root)
+    monkeypatch.setattr(
+        pd, "read_parquet", lambda *a, **k: pd.DataFrame({"stay_id": [1], "x": [2]})
+    )
+    monkeypatch.setattr(
+        "easyicu.research_agent.intake.materialized_metadata."
+        "load_verified_materialized_cohort_authority",
+        lambda *a, **k: object(),
+    )
+    calls: list[str] = []
+
+    def _diagnostic_item(*, item, **kwargs):
+        calls.append(item.key)
+        aware = dict(bench._skipped_arm("aware"))
+        aware.update(
+            {
+                "status": "diagnostic_only",
+                "publication_ready": False,
+                "manuscript_ready": False,
+                "n_errors": 1,
+                "figure2_evaluation_attempt": {"status": "valid"},
+            }
+        )
+        return {
+            "item_key": item.key,
+            "aware": aware,
+        }
+
+    monkeypatch.setattr(bench, "_run_one_item_from_cohort", _diagnostic_item)
+
+    assert (
+        bench._run_ehrflowbench_jsonl(
+            jsonl_path=jsonl_path,
+            out_root=out_root,
+            seed=7,
+            arms=["aware"],
+            provider=_PROVIDER,
+            model=_MODEL,
+            batch_binding=binding,
+        )
+        == 2
+    )
+
+    assert calls == [FIGURE2_TASK_IDS[0]]
+    canary = json.loads((out_root / "figure2_canary_gate.json").read_text())
+    assert canary["status"] == "blocked"
+    payload = json.loads((out_root / "ehrflowbench_results.json").read_text())
+    blocked = [
+        row for row in payload["pending"] if row["status"] == "batch_canary_blocked"
+    ]
+    assert [row["key"] for row in blocked] == list(FIGURE2_TASK_IDS[1:])
+
+
+def test_formal_canary_rejects_valid_but_analysis_only_paper_score() -> None:
+    import tools.run_research_agent_bench as bench
+
+    score = {
+        "aware": {
+            "publication_ready": True,
+            "manuscript_ready": True,
+            "n_errors": 0,
+            "figure2_evaluation_attempt": {
+                "status": "valid",
+                "envelope": {
+                    "scorecard": {
+                        "scorecard_canonical_json": json.dumps(
+                            {"tristate": "analysis_only"}
+                        )
+                    }
+                },
+            },
+        }
+    }
+
+    assert bench._figure2_canary_passed(score) is False
 
 
 def test_end_to_end_gate_authorizes_and_hands_batch_binding(

@@ -787,6 +787,86 @@ def _gate_ladder(run_dir: Path, readiness: Dict[str, Any]) -> Optional[str]:
     return "analysis_only" if readiness.get("execution_complete") else "incomplete"
 
 
+def _figure2_canary_passed(score: Mapping[str, Any]) -> bool:
+    """Require the first formal Canonical9 item to clear paper-facing gates."""
+
+    aware = score.get("aware")
+    if not isinstance(aware, Mapping):
+        return False
+    evaluation = aware.get("figure2_evaluation_attempt")
+    paper_tristate: Optional[str] = None
+    if isinstance(evaluation, Mapping):
+        envelope = evaluation.get("envelope")
+        paper_scorecard = (
+            envelope.get("scorecard") if isinstance(envelope, Mapping) else None
+        )
+        canonical_scorecard = (
+            paper_scorecard.get("scorecard_canonical_json")
+            if isinstance(paper_scorecard, Mapping)
+            else None
+        )
+        if isinstance(canonical_scorecard, str):
+            try:
+                parsed_scorecard = json.loads(canonical_scorecard)
+            except (TypeError, ValueError):
+                parsed_scorecard = None
+            if isinstance(parsed_scorecard, Mapping):
+                paper_tristate = str(parsed_scorecard.get("tristate") or "")
+    return bool(
+        aware.get("publication_ready")
+        and aware.get("manuscript_ready")
+        and int(aware.get("n_errors") or 0) == 0
+        and isinstance(evaluation, Mapping)
+        and evaluation.get("status") == "valid"
+        and paper_tristate == "gate_reportable"
+    )
+
+
+def _write_figure2_canary_gate(
+    *,
+    out_root: Path,
+    task_id: str,
+    score: Optional[Mapping[str, Any]],
+    status: str,
+    reason: str,
+) -> Path:
+    """Persist why a formal batch did or did not advance beyond its canary."""
+
+    score_payload = dict(score or {})
+    payload = {
+        "schema_version": "easyicu.figure2_canary_gate/1",
+        "task_id": str(task_id),
+        "status": str(status),
+        "reason": str(reason),
+        "score_sha256": (
+            hashlib.sha256(
+                json.dumps(
+                    score_payload,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                    ensure_ascii=False,
+                    default=str,
+                ).encode("utf-8")
+            ).hexdigest()
+            if score_payload
+            else None
+        ),
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+    }
+    path = Path(out_root) / "figure2_canary_gate.json"
+    path.write_text(
+        json.dumps(
+            payload,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    return path
+
+
 def _writer_attempts(run_dir: Path, readiness: Dict[str, Any]) -> Optional[int]:
     """Writer drafting passes for the run (attempts-to-ready fragility proxy).
 
@@ -2008,8 +2088,7 @@ def _make_llm(
             for effort in sorted(set(effort_by_role.values()))
         }
         role_clients = {
-            role: clients_by_effort[effort]
-            for role, effort in effort_by_role.items()
+            role: clients_by_effort[effort] for role, effort in effort_by_role.items()
         }
         return LLMRouter(
             default=role_clients["coder"],
@@ -3877,6 +3956,17 @@ def _run_ehrflowbench_jsonl(
         str(row.get("key") or row.get("id") or f"ehrflowbench_{idx:03d}")
         for idx, row in enumerate(rows)
     ]
+    formal_canary_task_id: Optional[str] = None
+    if batch_binding is not None:
+        from benchmarks.figure2_canonical9.evaluator.rubric_v1 import (
+            FIGURE2_TASK_IDS,
+        )
+
+        formal_canary_task_id = str(FIGURE2_TASK_IDS[0])
+        if not input_task_ids or input_task_ids[0] != formal_canary_task_id:
+            raise ValueError(
+                "A formal Canonical9 batch must start with its locked E1 canary."
+            )
     for idx, row in enumerate(rows):
         key = str(row.get("key") or row.get("id") or f"ehrflowbench_{idx:03d}")
         if idx in invalid_row_indices:
@@ -4177,6 +4267,30 @@ def _run_ehrflowbench_jsonl(
                 reasoning_effort_profile=reasoning_effort_profile,
             )
             scores.append(score)
+            if formal_canary_task_id is not None and key == formal_canary_task_id:
+                canary_passed = _figure2_canary_passed(score)
+                _write_figure2_canary_gate(
+                    out_root=out_root,
+                    task_id=key,
+                    score=score,
+                    status="passed" if canary_passed else "blocked",
+                    reason=(
+                        "publication, manuscript, zero-error, and locked paper "
+                        "scorecard gates passed"
+                        if canary_passed
+                        else "formal canary did not clear every paper-facing gate"
+                    ),
+                )
+                if not canary_passed:
+                    pending.extend(
+                        {
+                            "key": later_key,
+                            "status": "batch_canary_blocked",
+                            "blocked_by": key,
+                        }
+                        for later_key in input_task_ids[idx + 1 :]
+                    )
+                    break
         except Exception as exc:  # noqa: BLE001 — keep batch alive on 502/etc.
             import traceback as _tb
 
@@ -4199,6 +4313,23 @@ def _run_ehrflowbench_jsonl(
                     "error": f"{type(exc).__name__}: {str(exc)[:300]}",
                 }
             )
+            if formal_canary_task_id is not None and key == formal_canary_task_id:
+                _write_figure2_canary_gate(
+                    out_root=out_root,
+                    task_id=key,
+                    score=None,
+                    status="blocked",
+                    reason=f"canary raised {type(exc).__name__}",
+                )
+                pending.extend(
+                    {
+                        "key": later_key,
+                        "status": "batch_canary_blocked",
+                        "blocked_by": key,
+                    }
+                    for later_key in input_task_ids[idx + 1 :]
+                )
+                break
             continue
 
     totals = _aggregate(scores) if scores else {"naive": {}, "aware": {}}

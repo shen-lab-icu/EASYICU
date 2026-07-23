@@ -347,6 +347,68 @@ def test_typed_binding_gate_covers_robustness_fields(tmp_path) -> None:
     assert message.count("'robustness outcome fields': 1") == 2
 
 
+def test_planner_retries_primary_cohort_that_erases_its_closed_comparison(
+    tmp_path,
+) -> None:
+    """Eligibility cannot erase a Planner-declared downstream contrast."""
+
+    from easyicu.research_agent.agents.core import PlannerAgent
+    from tests.research_agent.test_materialized_column_metadata import (
+        _build_v2_context,
+    )
+
+    context = _build_v2_context(tmp_path)
+
+    def response(cohort_op: str, cohort_value: str) -> str:
+        return (
+            '{"research_question":"Compare a closed exposure in the sealed cohort.",'
+            '"analysis_type":"association_study",'
+            '"cohort":{"name":"primary","inclusion":[{'
+            '"concept_id":"mech_vent",'
+            '"time_window":{"anchor":"icu_admission",'
+            '"start_offset_hours":0,"end_offset_hours":24},'
+            f'"aggregation":"max","op":"{cohort_op}","value":{cohort_value}'
+            '}],"exclusion":[]},'
+            '"steps":[{"step_id":"01_define_cohort",'
+            '"planned_analysis_role":"auxiliary",'
+            '"intent":"Materialize the declared analysis cohort.",'
+            '"inputs":["stay_id","mech_vent_max"],'
+            '"expected_outputs":["artifact:analysis_cohort"],'
+            '"method":"cohort_definition"},'
+            '{"step_id":"02_table_one",'
+            '"planned_analysis_role":"auxiliary",'
+            '"intent":"Describe both closed exposure groups.",'
+            '"inputs":["artifact:analysis_cohort","mech_vent_max","age"],'
+            '"expected_outputs":["table:table_one"],'
+            '"method":"descriptive",'
+            '"table_one_spec":{"group_by":"mech_vent_max",'
+            '"group_levels":["__easyicu_level_1__","__easyicu_level_2__"],'
+            '"variables":[{"name":"age","variable_kind":"continuous",'
+            '"summary":"median_iqr","test":"mann_whitney_or_kruskal",'
+            '"levels":[]}],"include_overall":true,'
+            '"missing_group_policy":"fail_closed",'
+            '"missingness_display":"n_percent_by_group",'
+            '"p_values_required":true,'
+            '"p_value_adjustment":"none_descriptive_table"}}]}'
+        )
+
+    llm = ScriptedMockLLMClient(
+        [
+            response(">=", "1"),
+            response("not_missing", "null"),
+        ]
+    )
+    plan = PlannerAgent(llm).run(context)
+
+    assert len(llm.calls) == 2
+    assert plan.cohort is not None
+    assert plan.cohort.inclusion[0].op == "not_missing"
+    feedback = llm.calls[1][0][-1].content
+    assert "collapse a downstream closed comparison" in feedback
+    assert "below two retained levels" in feedback
+    assert "retained_values" not in feedback
+
+
 def test_openai_client_passes_provider_extra_body(ra, monkeypatch):
     """OpenRouter reasoning controls must reach the SDK request."""
     calls = {}
