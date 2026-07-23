@@ -259,6 +259,33 @@ def test_structured_availability_executor_requires_exact_analysis_cohort_scope()
     assert not source_availability_audit_executor_owns_step(step)
 
 
+def test_structured_availability_executor_accepts_implicit_locked_cohort_scope():
+    step = AnalysisStep(
+        step_id="04_missingness_and_measurement_audit",
+        intent="Audit missingness and measurement availability.",
+        inputs=[
+            "sep3_sofa2_max",
+            "sep3_sofa2_measured",
+            "death",
+            "age",
+            "lact_max",
+            "lact_measured",
+        ],
+        expected_outputs=[
+            "table:missingness_audit",
+            "table:measurement_availability_audit",
+        ],
+        method="missingness_and_measurement_frequency_audit",
+    )
+    plan = AnalysisPlan(research_question="Test", steps=[step])
+
+    assert source_availability_audit_executor_owns_step(step)
+    selection = select_standard_executor(step, plan=plan)
+    assert selection is not None
+    assert selection.analysis_kind == "missingness_source_availability_audit"
+    assert audit_mechanical_code_contracts(selection.code, step) == []
+
+
 def test_missingness_audit_counts_from_measured_indicator(tmp_path: Path):
     cohort = _cohort(n=1000, seed=1)
     summary, out_dir = _exec_runner(tmp_path, cohort, {})

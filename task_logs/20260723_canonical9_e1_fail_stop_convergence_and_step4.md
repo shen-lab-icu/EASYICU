@@ -134,3 +134,34 @@ Verification for this increment:
 This increment still does not make E1 paper-facing.  A new immutable image,
 execution identity, production-input authority, and operator declaration are
 required before the next fresh E1 launch.
+
+## Implicit locked-cohort scope exposed by the next fresh E1
+
+The next fresh, fully authorized E1 launch is preserved at:
+
+`/Volumes/外置硬盘/easyicu_data/canonical9_runs/batch_20260723_luna_miiv_adaptive_19e7720/e1_sepsis3_prevalence_mortality/aware/run_20260723T122453_d88e08`
+
+Steps 01--03 completed successfully, including the zero-Coder grouped Table 1.
+The Planner's revised Step 04 retained the closed method/product contract but
+listed only bare physical columns.  It omitted the redundant
+`artifact:analysis_cohort` coordinate because every AnalysisStep already runs
+against the orchestrator-owned, locked `COHORT_PARQUET`.  The first structural
+matcher required that explicit coordinate, so it declined ownership and the
+step entered the Coder path.  The run was stopped during that request; no Step
+04 script or result was accepted, and no later step started.
+
+The Provider budget receipt proves interruption accounting worked as intended:
+Step 04 `initial_generation.transport.state="failed"`,
+`error_type="KeyboardInterrupt"`, and `provider_calls=1`.  It is not left
+pending and will never be resumed.
+
+The corrected scope rule now accepts either:
+
+- the explicit sole typed source `artifact:analysis_cohort`; or
+- no typed source, meaning the framework's implicit locked `COHORT_PARQUET`.
+
+Any additional `artifact:`, `table:`, or `dataset:` source still rejects
+standard-executor ownership.  The exact archived `analysis_plan_revision_2.json`
+now selects `missingness_source_availability_audit` offline before the Coder.
+This is a framework-level current-cohort convention, not a benchmark keyword or
+case-specific prompt.
