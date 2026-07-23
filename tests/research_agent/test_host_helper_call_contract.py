@@ -265,6 +265,34 @@ first = measurement_provenance_receipt(frame, measured_a, count_a); second = mea
     assert names == []
 
 
+def test_deterministic_repair_binds_multiple_independent_literal_role_calls(ra):
+    script = """
+from easyicu.research_agent.methods.descriptive_inputs import measurement_provenance_receipt
+first = measurement_provenance_receipt(frame, "first_n", "first_measured")
+second = measurement_provenance_receipt(frame, "second_measured", "second_n")
+"""
+    findings = _signature_findings(script, ra)
+
+    repaired, names = deterministic_concept_audit_repair(
+        script,
+        [finding.message for finding in findings],
+        repair_reasons=[repair_reason_for_finding(finding) for finding in findings],
+        repair_findings=findings,
+    )
+
+    assert len(findings) == 2
+    assert names == ["host_helper_keyword_only_call_v1"]
+    assert (
+        'measurement_provenance_receipt(frame, measured_column="first_measured", '
+        'count_column="first_n")'
+    ) in repaired
+    assert (
+        'measurement_provenance_receipt(frame, measured_column="second_measured", '
+        'count_column="second_n")'
+    ) in repaired
+    assert _signature_findings(repaired, ra) == []
+
+
 def test_closed_counts_requires_explicit_declared_levels_before_execution(ra):
     script = """
 from easyicu.research_agent.methods.descriptive_inputs import closed_categorical_counts

@@ -347,6 +347,150 @@ def test_typed_binding_gate_covers_robustness_fields(tmp_path) -> None:
     assert message.count("'robustness outcome fields': 1") == 2
 
 
+def test_typed_binding_gate_rejects_direct_suffix_with_wrong_window(tmp_path) -> None:
+    from types import SimpleNamespace
+
+    from easyicu.research_agent.cohort.schema import (
+        CohortSchemaError,
+        validate_plan_typed_bindings_against_context,
+    )
+    from easyicu.research_agent.planning.cohort_contract import (
+        CohortDefinition,
+        ConceptPredicate,
+        TimeWindow,
+    )
+    from tests.research_agent.test_materialized_column_metadata import (
+        _build_v2_context,
+    )
+
+    context = _build_v2_context(tmp_path)
+    producer = SimpleNamespace(
+        step_id="01_cohort",
+        inputs=["lact_max", "death"],
+        expected_outputs=["artifact:analysis_cohort"],
+        method="cohort_definition",
+    )
+    six_hour = CohortDefinition(
+        name="six_hour",
+        inclusion=[
+            ConceptPredicate(
+                concept_id="lact",
+                time_window=TimeWindow(
+                    anchor="icu_admission",
+                    start_offset_hours=0,
+                    end_offset_hours=6,
+                ),
+                aggregation="max",
+                op=">=",
+                value=0,
+            )
+        ],
+    )
+    plan = SimpleNamespace(
+        cohort=None,
+        steps=[producer],
+        robustness_specs=[
+            SimpleNamespace(
+                spec_id="six_hour",
+                cohort_override=six_hour,
+                missing_override=None,
+                outcome_override=None,
+            )
+        ],
+    )
+
+    with pytest.raises(CohortSchemaError, match="proven matching aggregation and time"):
+        validate_plan_typed_bindings_against_context(plan=plan, context=context)
+
+
+def test_planner_retries_robustness_window_absent_from_sealed_input(tmp_path) -> None:
+    """A plausible column suffix cannot authorize a different scientific window."""
+
+    import json
+
+    from easyicu.research_agent.agents.core import PlannerAgent
+    from tests.research_agent.test_materialized_column_metadata import (
+        _build_v2_context,
+    )
+
+    context = _build_v2_context(tmp_path)
+    primary_step = {
+        "step_id": "01_model",
+        "planned_analysis_role": "primary",
+        "intent": "Fit the declared adjusted association.",
+        "inputs": ["lact_max", "death"],
+        "expected_outputs": ["table:adjusted_association_estimates"],
+        "method": "adjusted_association_models",
+        "model_requirements": [
+            {
+                "requirement_id": "primary_sealed_association",
+                "outcome": "death",
+                "outcome_type": "binary",
+                "method_family": "logistic_regression",
+                "exposure_source": "lact_max",
+                "analysis_role": "primary",
+                "analysis_set": "complete_case",
+                "required_for_step_success": True,
+            }
+        ],
+    }
+    unsupported_window = {
+        "research_question": "Estimate the sealed association.",
+        "analysis_type": "association_study",
+        "steps": [primary_step],
+        "robustness_specs": [
+            {
+                "spec_id": "six_hour_lactate",
+                "axis": "cohort",
+                "description": "Restrict by a six-hour maximum.",
+                "cohort_override": {
+                    "name": "six_hour_lactate",
+                    "inclusion": [
+                        {
+                            "concept_id": "lact",
+                            "time_window": {
+                                "anchor": "icu_admission",
+                                "start_offset_hours": 0,
+                                "end_offset_hours": 6,
+                            },
+                            "aggregation": "max",
+                            "op": ">=",
+                            "value": 0,
+                        }
+                    ],
+                    "exclusion": [],
+                },
+            }
+        ],
+    }
+    supported_missingness = {
+        **unsupported_window,
+        "robustness_specs": [
+            {
+                "spec_id": "complete_case",
+                "axis": "missing",
+                "description": "Restrict the model to complete cases.",
+                "missing_override": {
+                    "strategy": "complete_case",
+                    "variables": ["lact_max", "death"],
+                },
+            }
+        ],
+    }
+    llm = ScriptedMockLLMClient(
+        [json.dumps(unsupported_window), json.dumps(supported_missingness)]
+    )
+
+    plan = PlannerAgent(llm).run(context)
+
+    assert len(llm.calls) == 2
+    assert plan.robustness_specs[0].spec_id == "complete_case"
+    feedback = llm.calls[1][0][-1].content
+    assert "proven matching aggregation and time" in feedback
+    assert "icu_admission[0.0,6.0]h/max" in feedback
+    assert "icu_admission[0,24]h" in feedback
+
+
 def test_planner_retries_primary_cohort_that_erases_its_closed_comparison(
     tmp_path,
 ) -> None:

@@ -629,19 +629,19 @@ def _patch_host_helper_keyword_only_call(
     """Bind an exact provenance-helper call to its stable keyword-only API.
 
     The transformation is intentionally narrower than the detector. It accepts
-    exactly one structured finding and one three-name call on that line, then
-    moves only the already-authored measured/count arguments to their declared
-    keyword slots. No expression, column, row, value, or scientific choice is
-    introduced.
+    one or more structured findings with exactly one call on each named line,
+    then moves only the already-authored measured/count arguments to their
+    declared keyword slots. Multiple calls on the same line remain ambiguous
+    and fail closed. No expression, column, row, value, or scientific choice
+    is introduced.
     """
 
-    if len(finding_lines) != 1:
+    if not finding_lines:
         return code
     try:
         tree = ast.parse(code)
     except SyntaxError:
         return code
-    line = next(iter(finding_lines))
 
     # Older generated scripts sometimes wrapped the stable helper in a
     # signature-adaptation try/except and passed two selected Series plus a
@@ -650,6 +650,7 @@ def _patch_host_helper_keyword_only_call(
     # adapter with the stable host call.  This introduces no column name or
     # scientific choice; it only restores the registered API contract.
     legacy_adapters: list[tuple[ast.Try, ast.Call, ast.Subscript, ast.Subscript]] = []
+    legacy_line = next(iter(finding_lines)) if len(finding_lines) == 1 else None
     for statement in ast.walk(tree):
         if not (
             isinstance(statement, ast.Try)
@@ -664,7 +665,8 @@ def _patch_host_helper_keyword_only_call(
         call = statement.body[0].value
         handler = statement.handlers[0]
         if not (
-            int(getattr(call, "lineno", 0)) == line
+            legacy_line is not None
+            and int(getattr(call, "lineno", 0)) == legacy_line
             and _call_tail(call.func) == "measurement_provenance_receipt"
             and len(call.args) == 2
             and all(isinstance(argument, ast.Subscript) for argument in call.args)
@@ -811,37 +813,72 @@ def _patch_host_helper_keyword_only_call(
                         return code
             return repaired
 
-    candidates = [
-        node
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Call)
-        and int(getattr(node, "lineno", 0)) == line
-        and _call_tail(node.func) == "measurement_provenance_receipt"
-        and len(node.args) == 3
-        and all(isinstance(argument, ast.Name) for argument in node.args)
-        and not node.keywords
-    ]
-    if len(candidates) != 1:
-        return code
-    call = candidates[0]
-    call_source = ast.get_source_segment(code, call)
-    function_source = ast.get_source_segment(code, call.func)
-    argument_sources = [
-        ast.get_source_segment(code, argument) for argument in call.args
-    ]
-    if (
-        not call_source
-        or not function_source
-        or any(not source for source in argument_sources)
-        or code.count(call_source) != 1
-    ):
-        return code
-    frame_source, measured_source, count_source = argument_sources
-    replacement = (
-        f"{function_source}({frame_source}, "
-        f"measured_column={measured_source}, count_column={count_source})"
-    )
-    repaired = code.replace(call_source, replacement, 1)
+    def _argument_role(argument: ast.AST) -> str | None:
+        if isinstance(argument, ast.Name):
+            value = argument.id
+        elif isinstance(argument, ast.Constant) and isinstance(argument.value, str):
+            value = argument.value
+        else:
+            return None
+        normalized = str(value).strip().casefold()
+        if "measured" in normalized:
+            return "measured"
+        if "count" in normalized or normalized.endswith("_n"):
+            return "count"
+        return None
+
+    replacements: list[tuple[str, str]] = []
+    for line in sorted(finding_lines):
+        candidates = [
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call)
+            and int(getattr(node, "lineno", 0)) == line
+            and _call_tail(node.func) == "measurement_provenance_receipt"
+            and len(node.args) == 3
+            and isinstance(node.args[0], ast.Name)
+            and not node.keywords
+        ]
+        if len(candidates) != 1:
+            return code
+        call = candidates[0]
+        call_source = ast.get_source_segment(code, call)
+        function_source = ast.get_source_segment(code, call.func)
+        argument_sources = [
+            ast.get_source_segment(code, argument) for argument in call.args
+        ]
+        if (
+            not call_source
+            or not function_source
+            or any(not source for source in argument_sources)
+            or code.count(call_source) != 1
+        ):
+            return code
+        frame_source, second_source, third_source = argument_sources
+        second_role = _argument_role(call.args[1])
+        third_role = _argument_role(call.args[2])
+        if second_role == "count" and third_role == "measured":
+            measured_source, count_source = third_source, second_source
+        elif second_role == "measured" and third_role == "count":
+            measured_source, count_source = second_source, third_source
+        elif all(isinstance(argument, ast.Name) for argument in call.args):
+            # Preserve the established stable-API positional migration for
+            # generic local variable names when no role-bearing token exists.
+            measured_source, count_source = second_source, third_source
+        else:
+            return code
+        replacements.append(
+            (
+                call_source,
+                f"{function_source}({frame_source}, "
+                f"measured_column={measured_source}, "
+                f"count_column={count_source})",
+            )
+        )
+
+    repaired = code
+    for call_source, replacement in replacements:
+        repaired = repaired.replace(call_source, replacement, 1)
     try:
         ast.parse(repaired)
     except SyntaxError:

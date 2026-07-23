@@ -274,6 +274,7 @@ from ..planning.method_vocabulary import (
     MISSINGNESS_SOURCE_AVAILABILITY_AUDIT,
 )
 from ..planning.replan_gate import (
+    partition_replan_candidate_findings,
     replan_candidate_contract_findings,
     replan_candidate_rejection_finding,
 )
@@ -4318,17 +4319,18 @@ def run_execute_phase(
             locked_robustness_specs=locked_robustness_specs,
         )
         revised = normalized_candidate.plan
-        findings.extend(normalized_candidate.findings)
 
         candidate_contract_findings = replan_candidate_contract_findings(
             plan=revised,
             context=context,
         )
-        candidate_contract_errors = [
-            finding
-            for finding in candidate_contract_findings
-            if finding.severity == "error"
-        ]
+        active_candidate_findings, candidate_contract_errors = (
+            partition_replan_candidate_findings(
+                normalization_findings=list(normalized_candidate.findings),
+                contract_findings=candidate_contract_findings,
+            )
+        )
+        findings.extend(active_candidate_findings)
         if candidate_contract_errors:
             findings.append(
                 replan_candidate_rejection_finding(
