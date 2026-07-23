@@ -142,7 +142,13 @@ def source_availability_audit_executor_owns_step(step: AnalysisStep) -> bool:
             step.method,
             step.expected_outputs,
         )
-        and typed_inputs == {"artifact:analysis_cohort"}
+        # AnalysisStep bare columns are evaluated against the orchestrator's
+        # already-locked COHORT_PARQUET by construction.  Planner revisions may
+        # therefore either spell that implicit scope explicitly or omit the
+        # redundant artifact coordinate.  Any OTHER typed source still rejects
+        # ownership; the standard runner must never reconcile an upstream table
+        # or dataset on the Planner's behalf.
+        and (not typed_inputs or typed_inputs == {"artifact:analysis_cohort"})
     )
 
 
