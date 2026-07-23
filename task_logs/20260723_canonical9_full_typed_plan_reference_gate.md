@@ -59,6 +59,58 @@ reproduced on clean `423be9c`; one conflicts with the newer execution-phase
 authority assertion, and the scripts factory static gate was already recorded.
 They were not concealed as regressions from this increment.
 
+## Fresh Luna E1 repair-coordinate follow-up
+
+A fresh paper-authority batch on clean `c8c7f8e` passed the real-run authority
+gate and created:
+
+`/Volumes/外置硬盘/easyicu_data/canonical9_runs/batch_20260723_luna_miiv_c8c7f8e/e1_sepsis3_prevalence_mortality/aware/run_20260723T091405_6779f6`
+
+The real Planner produced eight steps and used the sealed physical field
+`sep3_sofa2_max` in every step input, model exposure, and missingness
+robustness coordinate. This confirms the typed Planner retry fixed the original
+`sepsis3` alias failure.
+
+The first generated cohort-definition script then exposed a different generic
+repair-transport gap. Mechanical preflight correctly quarantined a lossy
+numeric/provenance implementation, but the trusted ticket represented exact
+coordinates as `lines:[...]` while `RepairPromptAuthority` retained only
+singular `line` fields. Two Luna minimal patches therefore saw the typed reason
+without its complete line set and repaired only part of the script. Step 1 was
+withheld; Table 1 completed successfully, but the batch was stopped while Step
+3 was generating because the failed Step 1 already made paper acceptance
+impossible. The run is diagnostic only and E2 was not started.
+
+Commit `5aefeb6` closes that framework gap without adding case-, variable-, or
+database-specific routing:
+
+- trusted host repair tickets preserve positive integer `lines` arrays and
+  expose all entries as line anchors;
+- initial Coder authority forbids local replacements for
+  `strict_numeric_input` and `measurement_provenance_receipt`;
+- lossy-numeric repair specialization requires every ticketed branch and
+  occurrence to use the self-raising host helpers atomically.
+
+The archived quarantined script was then submitted to a one-call real Luna
+repair probe using only the outbound-safe context and unexecuted candidate
+code. It changed SHA-256
+`57d6487bdd1a8827b5456cf8c824792d1a52c99daff35122f24735fc0b1812e7`
+to
+`eaeda01daa00078b5deb42f7ca62c2340328eeca6fd64ceb7864b83733c049c7`,
+removed the local `strict_numeric_input` replacement, imported the host helper,
+and reduced deterministic mechanical errors to zero.
+
+Verification:
+
+- focused repair/prompt matrix: `79 passed, 1 deselected`;
+- expanded repair/preflight/provider/parser matrix:
+  `580 passed, 4 baseline-existing failures, 1 deselected`;
+- all four failures reproduce on clean `c8c7f8e` and are stale unmanaged mock
+  authorization tests;
+- architecture lower-is-better gate, zero-cycle module graph,
+  resource/context baseline, Ruff, Black, `py_compile`, and `git diff --check`
+  passed.
+
 ## Data-lane scheduling
 
 The remaining native-v2 database extraction policy is now fixed:
@@ -75,7 +127,8 @@ disk.
 
 ## Next action
 
-Build an immutable image from the new clean HEAD, regenerate execution identity
-and operator-freeze authority in a new batch root, then rerun E1 with the aware
-arm only. Continue the remaining eight tasks only after E1's plan contains
-sealed physical columns and its deterministic gates pass.
+Build an immutable image from clean `5aefeb6` plus this evidence update,
+regenerate execution identity and operator-freeze authority in a new batch
+root, then rerun E1 with the aware arm only. Continue the remaining eight tasks
+only after E1's plan contains sealed physical columns and Step 1 passes its
+deterministic concept gate.
