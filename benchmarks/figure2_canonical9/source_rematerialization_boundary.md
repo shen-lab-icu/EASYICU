@@ -52,6 +52,14 @@ empty.  The next materialization must therefore be a specifically reviewed,
 source-bound typed path; it cannot infer clinical semantics from names or
 patch full0717 in place.
 
+`source_attestation_contract.py` now supplies the strict, snapshot-pinned
+handoff format that this future review must use: it accepts only the exact
+full0717 export and bridge digests, requires six source-attested typed
+inventories plus data/transformation/identity owner references, and reports
+review eligibility only.  It remains intentionally absent from P4's import
+graph; an attested handoff still requires a separately reviewed native typed
+materialization and the existing P4 authority/final-operation gates.
+
 ## Conditional routes if a future data lane is explicitly approved
 
 There are two mutually exclusive routes.  The controlled bridge is now the

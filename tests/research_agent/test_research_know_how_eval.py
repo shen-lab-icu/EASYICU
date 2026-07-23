@@ -250,6 +250,14 @@ def test_full0717_source_attestation_review_input_is_non_authorizing() -> None:
     assert packet["status"].endswith("formal_attestation_pending")
     assert packet["identity_bridge"]["review_handoff_only"] is True
     assert packet["identity_bridge"]["real_run_authorized"] is False
+    assert (
+        packet["future_review_contract"]["schema_version"]
+        == "easyicu.figure2_source_attestation/1"
+    )
+    assert (
+        packet["future_review_contract"]["p4_integration"]
+        == "forbidden_pending_separate_review"
+    )
     assert len(packet["required_signoff"]) == 5
 
 
