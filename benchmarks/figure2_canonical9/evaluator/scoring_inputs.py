@@ -446,10 +446,13 @@ _BOOL_GATE_NAMES = frozenset(
         "display_table_one_present",
         "evidence_complete",
         "execution_complete",
+        "execution_ok",
+        "artifact_valid",
         "manuscript_generated",
         "manuscript_ready",
         "manuscript_text_ready",
         "numeric_verified",
+        "paper_authorized",
         "publication_figure_bundle_ready",
         "publication_figure_contract_ready",
         "publication_figure_source_data_ready",
@@ -459,6 +462,8 @@ _BOOL_GATE_NAMES = frozenset(
         "replan_budget_advisory",
         "replan_budget_exhausted",
         "replan_budget_hit",
+        "scientific_requirement_complete",
+        "step_scientific_requirements_complete",
         "writer_probe_mode",
     }
 )
@@ -531,6 +536,8 @@ _LIST_GATE_NAMES = frozenset(
         "publication_figure_visual_qa_errors",
         "publication_provenance_invalid_sources",
         "publication_ready_stems",
+        "scientific_incomplete_steps",
+        "step_completion_states",
         "superseded_errors",
         "writer_probe_failed_steps",
     }
@@ -551,6 +558,7 @@ _STR_GATE_NAMES = frozenset(
         "article_figure_strategy_audit_schema_version",
         "article_figure_strategy_family",
         "article_figure_strategy_hero_role",
+        "completion_schema_version",
     }
 )
 _NULLABLE_STR_GATE_NAMES = frozenset({"publication_provenance_error"})
@@ -567,14 +575,22 @@ _ALL_GATE_NAMES = (
 _REQUIRED_SCORING_GATES = frozenset(
     {
         "execution_complete",
+        "execution_ok",
+        "artifact_valid",
         "required_step_count",
         "completed_step_count",
         "failed_steps",
         "missing_steps",
         "manuscript_ready",
+        "paper_authorized",
         "publication_figure_bundle_ready",
         "publication_figure_stems",
         "replan_budget_exhausted",
+        "scientific_requirement_complete",
+        "scientific_incomplete_steps",
+        "step_completion_states",
+        "step_scientific_requirements_complete",
+        "completion_schema_version",
     }
 )
 
@@ -612,6 +628,8 @@ def _strict_gate_mapping(raw: dict[str, Any]) -> dict[str, Any]:
             raise ValueError(f"gate {name} must be null or a non-negative integer")
     if raw["completed_step_count"] > raw["required_step_count"]:
         raise ValueError("completed step count exceeds required step count")
+    if raw["completion_schema_version"] != "easyicu.run_completion_axes/1":
+        raise ValueError("unsupported run completion axes schema")
     return dict(raw)
 
 
@@ -629,6 +647,20 @@ def require_completed_figure2_gates(raw: Mapping[str, Any]) -> dict[str, Any]:
     gates = _strict_gate_mapping(dict(raw))
     if gates["execution_complete"] is not True:
         raise PermissionError("paper scoring requires execution_complete")
+    if gates["execution_ok"] is not True:
+        raise PermissionError("paper scoring requires execution_ok")
+    if gates["artifact_valid"] is not True:
+        raise PermissionError("paper scoring requires artifact_valid")
+    if gates["scientific_requirement_complete"] is not True:
+        raise PermissionError("paper scoring requires scientific_requirement_complete")
+    if gates["step_scientific_requirements_complete"] is not True:
+        raise PermissionError(
+            "paper scoring requires step_scientific_requirements_complete"
+        )
+    if gates["scientific_incomplete_steps"]:
+        raise PermissionError("paper scoring rejects scientifically incomplete steps")
+    if gates["paper_authorized"] is not True:
+        raise PermissionError("paper scoring requires paper_authorized")
     if gates["manuscript_ready"] is not True:
         raise PermissionError("paper scoring requires manuscript_ready")
     if gates["completed_step_count"] != gates["required_step_count"]:
@@ -637,6 +669,43 @@ def require_completed_figure2_gates(raw: Mapping[str, Any]) -> dict[str, Any]:
         raise PermissionError("paper scoring rejects runs with failed steps")
     if gates["missing_steps"]:
         raise PermissionError("paper scoring rejects runs with missing steps")
+    states = gates["step_completion_states"]
+    if len(states) != gates["required_step_count"]:
+        raise ValueError("step completion state count differs from required steps")
+    seen_step_ids: set[str] = set()
+    for state in states:
+        if type(state) is not dict:
+            raise ValueError("step completion states must contain objects")
+        if set(state) != {
+            "schema_version",
+            "step_id",
+            "execution_ok",
+            "outer_status",
+            "summary_status",
+            "scientific_requirement_complete",
+        }:
+            raise ValueError("step completion state has an invalid schema")
+        if state["schema_version"] != "easyicu.step_completion_state/1":
+            raise ValueError("unsupported step completion state schema")
+        step_id = state["step_id"]
+        if type(step_id) is not str or not step_id:
+            raise ValueError("step completion state lacks a valid step_id")
+        if step_id in seen_step_ids:
+            raise ValueError("step completion states contain a duplicate step_id")
+        seen_step_ids.add(step_id)
+        if state["execution_ok"] is not True:
+            raise PermissionError("paper scoring rejects an execution-incomplete step")
+        if state["scientific_requirement_complete"] is not True:
+            raise PermissionError(
+                "paper scoring rejects a scientifically incomplete step"
+            )
+        if state["outer_status"] is not None and type(state["outer_status"]) is not str:
+            raise ValueError("step completion outer_status must be null or a string")
+        if (
+            state["summary_status"] is not None
+            and type(state["summary_status"]) is not str
+        ):
+            raise ValueError("step completion summary_status must be null or a string")
     return gates
 
 

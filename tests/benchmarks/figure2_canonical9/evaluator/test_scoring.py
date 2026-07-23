@@ -119,11 +119,28 @@ def _ready_run(
     run_dir.mkdir()
     gates = {
         "execution_complete": True,
+        "execution_ok": True,
+        "artifact_valid": True,
         "required_step_count": 1,
         "completed_step_count": 1,
         "failed_steps": [],
         "missing_steps": [],
+        "scientific_incomplete_steps": [],
+        "step_completion_states": [
+            {
+                "schema_version": "easyicu.step_completion_state/1",
+                "step_id": "01_primary",
+                "execution_ok": True,
+                "outer_status": "ok",
+                "summary_status": "ok",
+                "scientific_requirement_complete": True,
+            }
+        ],
+        "step_scientific_requirements_complete": True,
+        "completion_schema_version": "easyicu.run_completion_axes/1",
+        "scientific_requirement_complete": True,
         "manuscript_ready": True,
+        "paper_authorized": True,
         "publication_figure_bundle_ready": True,
         "publication_figure_stems": ["primary_result"],
         "replan_budget_exhausted": False,

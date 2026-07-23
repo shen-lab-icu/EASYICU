@@ -841,8 +841,15 @@ def test_aborted_manifest_is_not_reused_and_arm_runs(
     arm_calls: list[str] = []
     provider_sentinel = object()
 
-    def fake_provider(*, provider: str, model: str, request_timeout: float) -> object:
+    def fake_provider(
+        *,
+        provider: str,
+        model: str,
+        request_timeout: float,
+        reasoning_effort_profile: str,
+    ) -> object:
         assert request_timeout == 180.0
+        assert reasoning_effort_profile == "provider_default"
         provider_calls.append((provider, model))
         return provider_sentinel
 
