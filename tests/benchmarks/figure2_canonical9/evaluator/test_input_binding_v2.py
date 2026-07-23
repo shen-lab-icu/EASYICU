@@ -17,14 +17,19 @@ def _tracked_payload() -> dict[str, object]:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
-def test_tracked_selector_is_exact_canonical9_and_blocked_until_owner_freeze() -> None:
+def test_tracked_selector_is_exact_canonical9_and_owner_frozen() -> None:
     manifest, digest = input_binding_v2.load_canonical_run_input_bindings()
 
     assert tuple(item.task_id for item in manifest.tasks) == FIGURE2_TASK_IDS
-    assert all(item.state == "blocked" for item in manifest.tasks)
+    assert all(item.state == "ready" for item in manifest.tasks)
     assert len(digest) == 64
-    with pytest.raises(PermissionError, match="not input-frozen"):
-        input_binding_v2.require_ready_task_binding(FIGURE2_TASK_IDS[0])
+    for task_id in FIGURE2_TASK_IDS:
+        _manifest, binding, selected_digest, case_digest = (
+            input_binding_v2.require_ready_task_binding(task_id)
+        )
+        assert binding.task_id == task_id
+        assert selected_digest == digest
+        assert len(case_digest) == 64
 
 
 def test_selector_requires_canonical_json_bytes(
