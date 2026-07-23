@@ -553,7 +553,7 @@ def patch_custom_measurement_provenance_receipts(
             "        )"
             for measured, count in sorted(missing.items())
         )
-        extension = f"\n{checks_name}.extend(\n" "    [\n" f"{rendered}\n" "    ]\n" ")"
+        extension = f"\n{checks_name}.extend(\n    [\n{rendered}\n    ]\n)"
         edits.append((checks_span[1], checks_span[1], extension))
 
     if not receipt_imports:
@@ -1047,6 +1047,147 @@ def patch_late_measurement_provenance_receipt(
     return repaired
 
 
+def patch_companion_audit_frame_alignment(
+    code: str,
+    *,
+    findings: Sequence[Any],
+) -> str:
+    """Run audit-only companion receipts on the exact analyzed typed frame.
+
+    The concept auditor supplies both identifiers after proving that a receipt
+    was evaluated on a different frame from the result-bearing values.  This
+    repair is deliberately narrow: the analysis frame must be the first value
+    returned by ``load_bound_table(..., "artifact:analysis_cohort")`` and the
+    affected call must be either the host receipt itself or a transparent local
+    wrapper around that exact host helper.  No column, mask, or row policy is
+    changed.
+    """
+
+    details = []
+    for finding in findings:
+        validator, severity, _message, detail = _finding_parts(finding)
+        if (
+            validator == "llm_concept_auditor"
+            and severity == "error"
+            and isinstance(detail, dict)
+            and detail.get("issue_code") == "audit_only_companion_row_gating_required"
+        ):
+            details.append(detail)
+    if len(details) != 1:
+        return code
+    audit_frame = details[0].get("audit_frame")
+    analysis_frame = details[0].get("analysis_frame")
+    if (
+        not isinstance(audit_frame, str)
+        or not audit_frame.isidentifier()
+        or not isinstance(analysis_frame, str)
+        or not analysis_frame.isidentifier()
+        or audit_frame == analysis_frame
+    ):
+        return code
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return code
+    parents = {
+        child: parent
+        for parent in ast.walk(tree)
+        for child in ast.iter_child_nodes(parent)
+    }
+
+    transparent_wrappers: set[str] = set()
+    for function in (
+        node for node in ast.walk(tree) if isinstance(node, ast.FunctionDef)
+    ):
+        if not function.args.args:
+            continue
+        frame_parameter = function.args.args[0].arg
+        receipt_calls = [
+            node
+            for node in ast.walk(function)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "measurement_provenance_receipt"
+        ]
+        if len(receipt_calls) != 1:
+            continue
+        receipt = receipt_calls[0]
+        if (
+            len(receipt.args) == 1
+            and isinstance(receipt.args[0], ast.Name)
+            and receipt.args[0].id == frame_parameter
+            and not any(keyword.arg is None for keyword in receipt.keywords)
+            and {keyword.arg for keyword in receipt.keywords}
+            == {"measured_column", "count_column"}
+        ):
+            transparent_wrappers.add(function.name)
+
+    safe_calls = {"measurement_provenance_receipt", *transparent_wrappers}
+    candidates: list[ast.Name] = []
+    candidate_scopes: set[ast.AST] = set()
+    for call in (node for node in ast.walk(tree) if isinstance(node, ast.Call)):
+        if not (
+            isinstance(call.func, ast.Name)
+            and call.func.id in safe_calls
+            and call.args
+            and isinstance(call.args[0], ast.Name)
+            and call.args[0].id == audit_frame
+        ):
+            continue
+        candidates.append(call.args[0])
+        candidate_scopes.add(_lexical_scope(call, parents))
+    if not candidates or len(candidate_scopes) != 1:
+        return code
+    scope = next(iter(candidate_scopes))
+
+    analysis_bindings = []
+    for assignment in (
+        node for node in ast.walk(scope) if isinstance(node, ast.Assign)
+    ):
+        if _lexical_scope(assignment, parents) is not scope:
+            continue
+        target_names = {
+            node.id
+            for target in assignment.targets
+            for node in ast.walk(target)
+            if isinstance(node, ast.Name)
+        }
+        if analysis_frame not in target_names:
+            continue
+        value = assignment.value
+        if not (
+            isinstance(value, ast.Call)
+            and isinstance(value.func, ast.Name)
+            and value.func.id == "load_bound_table"
+            and any(
+                isinstance(argument, ast.Constant)
+                and argument.value == "artifact:analysis_cohort"
+                for argument in value.args
+            )
+        ):
+            continue
+        analysis_bindings.append(assignment)
+    if len(analysis_bindings) != 1:
+        return code
+
+    lines, starts = _source_offsets(code)
+    spans = [
+        span
+        for node in candidates
+        if (span := _node_span(node, lines=lines, starts=starts)) is not None
+    ]
+    if len(spans) != len(candidates):
+        return code
+    repaired = code
+    for start, end in sorted(spans, reverse=True):
+        repaired = repaired[:start] + analysis_frame + repaired[end:]
+    try:
+        ast.parse(repaired)
+    except SyntaxError:
+        return code
+    return repaired
+
+
 def patch_audit_only_companion_value_selector(
     code: str,
     *,
@@ -1062,6 +1203,9 @@ def patch_audit_only_companion_value_selector(
     is left for agent repair.
     """
 
+    aligned = patch_companion_audit_frame_alignment(code, findings=findings)
+    if aligned != code:
+        return aligned
     issue_details = []
     for finding in findings:
         validator, severity, _message, detail = _finding_parts(finding)
@@ -1499,7 +1643,7 @@ def _patch_named_provenance_summary(code: str) -> str:
     if not assignment_source or code.count(assignment_source) != 1:
         return code
     replacement = (
-        f'{audit_name} = {{"source": "COHORT_PARQUET", ' f'"checks": {receipts_name}}}'
+        f'{audit_name} = {{"source": "COHORT_PARQUET", "checks": {receipts_name}}}'
     )
     repaired = code.replace(assignment_source, replacement, 1)
     try:
@@ -1674,6 +1818,7 @@ def patch_measurement_provenance_contract(
 
 __all__ = [
     "patch_audit_only_companion_value_selector",
+    "patch_companion_audit_frame_alignment",
     "patch_direct_host_provenance_summary",
     "patch_direct_host_receipt_source_guard",
     "patch_measurement_provenance_contract",

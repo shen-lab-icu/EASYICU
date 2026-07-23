@@ -5718,9 +5718,7 @@ def run_execute_phase(
                     step_record["step_authority_capsule_stage"] = (
                         step_attempt_state.selected_resume_capsule.capsule.stage
                     )
-                    selected_digest = (
-                        step_attempt_state.selected_resume_capsule.capsule.candidate_code.sha256
-                    )
+                    selected_digest = step_attempt_state.selected_resume_capsule.capsule.candidate_code.sha256
                     if (
                         step_attempt_state.selected_resume_capsule.capsule.concept_audit
                         is not None
@@ -6615,8 +6613,7 @@ def run_execute_phase(
                                 validator="coder",
                                 severity="error",
                                 message=(
-                                    f"Coder agent failed for step {step.step_id}: "
-                                    f"{exc}"
+                                    f"Coder agent failed for step {step.step_id}: {exc}"
                                 ),
                                 detail={
                                     "step_id": step.step_id,
@@ -8041,8 +8038,7 @@ def run_execute_phase(
                             ) or canonical_sha256(
                                 {
                                     "schema": (
-                                        "easyicu.capsule_deterministic_"
-                                        "concept_audit/1"
+                                        "easyicu.capsule_deterministic_concept_audit/1"
                                     ),
                                     "step_id": step.step_id,
                                     "code_sha256": candidate_code_digest,
@@ -9920,7 +9916,9 @@ def run_execute_phase(
         figure_role = (
             "publication_figure"
             if publication_step
-            else "analysis_figure" if _step_expects_figure(step) else None
+            else "analysis_figure"
+            if _step_expects_figure(step)
+            else None
         )
         if (
             publication_step
@@ -11186,8 +11184,8 @@ def run_execute_phase(
             total_steps = len(plan.steps)
             return remaining
 
-        # ``steps_to_run`` already carries the fail-closed plan-preflight
-        # decision above. Recomputing from the full plan here would revive
+        # ``steps_to_run`` carries the fail-closed preflight decision; recomputing
+        # from the full plan here would revive
         # every step after a typed-DAG/trajectory contract ERROR and spend
         # Coder calls on a plan the host has declared non-executable.
         run_coordinator.run_sequential(
@@ -11195,6 +11193,7 @@ def run_execute_phase(
                 remaining_steps=list(steps_to_run),
                 executed_step_ids=set(preexecuted_step_ids),
                 stop_on_failure=(pipeline._submission_profile_name is not None),
+                stop_failure_roles=frozenset({"primary"}),
             ),
             execute_step=_execute_one_step,
             resolve_transition=_resolve_run_transition,

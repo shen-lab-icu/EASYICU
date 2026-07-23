@@ -76,6 +76,42 @@ def test_sequential_fail_stop_suppresses_later_steps_and_transitions() -> None:
     assert record["remaining_steps_suppressed"] is True
 
 
+def test_sequential_fail_stop_can_target_declared_step_roles() -> None:
+    from easyicu.research_agent.execution.run_coordination import (
+        RunCoordinator,
+        RunExecutionState,
+        RunTransition,
+    )
+
+    coordinator = RunCoordinator()
+    steps = [_step("aux"), _step("primary"), _step("later")]
+    executed: list[str] = []
+
+    def execute(step: AnalysisStep) -> dict[str, str]:
+        executed.append(step.step_id)
+        return {
+            "step_id": step.step_id,
+            "status": "error" if step.step_id in {"aux", "primary"} else "ok",
+            "planned_analysis_role": (
+                "primary" if step.step_id == "primary" else "auxiliary"
+            ),
+        }
+
+    state = coordinator.run_sequential(
+        state=RunExecutionState(
+            remaining_steps=list(steps),
+            executed_step_ids=set(),
+            stop_failure_roles=frozenset({"primary"}),
+        ),
+        execute_step=execute,
+        resolve_transition=lambda *_: RunTransition.continue_run(),
+        apply_revised_plan=lambda *_: [],
+    )
+
+    assert executed == ["aux", "primary"]
+    assert state.stop_reason == "required_step_failed:error"
+
+
 def test_directed_replan_retries_current_step_without_two_plan_authorities() -> None:
     from easyicu.research_agent.execution.run_coordination import (
         RunCoordinator,
@@ -260,6 +296,7 @@ def test_run_coordinator_is_science_neutral_and_pipeline_owns_transitions() -> N
         "stop_on_failure=(pipeline._submission_profile_name is not None)"
         in phase_source
     )
+    assert 'stop_failure_roles=frozenset({"primary"})' in phase_source
     assert "or pipeline._submission_profile_name is not None" in phase_source
     assert (
         "if pipeline._enable_visual_qa and requested_stop_after_step_id is None:"
