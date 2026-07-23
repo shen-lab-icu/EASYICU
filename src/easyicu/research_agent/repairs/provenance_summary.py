@@ -1047,6 +1047,106 @@ def patch_late_measurement_provenance_receipt(
     return repaired
 
 
+def _patch_unsupported_measurement_receipt_keyword(
+    code: str,
+    *,
+    findings: Sequence[Any],
+) -> str:
+    """Remove one unsupported extra keyword from the exact host receipt.
+
+    The stable helper needs only the frame plus measured/count column keys.
+    This repair activates only when structured preflight findings name the
+    precise call line, the direct host import is unshadowed, and the call
+    already carries both required keyword arguments. It therefore removes an
+    invalid adapter argument without choosing or changing any scientific data.
+    """
+
+    finding_lines = {
+        int(detail["line"])
+        for finding in findings
+        for validator, severity, _message, detail in [_finding_parts(finding)]
+        if validator == "mechanical_code_preflight"
+        and severity == "error"
+        and isinstance(detail, dict)
+        and detail.get("reason") == "host_helper_call_signature_invalid"
+        and detail.get("helper_name") == "measurement_provenance_receipt"
+        and isinstance(detail.get("line"), int)
+        and not isinstance(detail.get("line"), bool)
+        and int(detail["line"]) > 0
+    }
+    if not finding_lines:
+        return code
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return code
+    exact_imports = [
+        node
+        for node in tree.body
+        if isinstance(node, ast.ImportFrom)
+        and node.level == 0
+        and node.module == "easyicu.research_agent.methods.descriptive_inputs"
+        and any(
+            alias.name == "measurement_provenance_receipt" and alias.asname is None
+            for alias in node.names
+        )
+    ]
+    shadowing_bindings = [
+        node
+        for node in ast.walk(tree)
+        if (
+            isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
+            and node.name == "measurement_provenance_receipt"
+        )
+        or (
+            isinstance(node, ast.Name)
+            and isinstance(node.ctx, (ast.Store, ast.Del))
+            and node.id == "measurement_provenance_receipt"
+        )
+    ]
+    if len(exact_imports) != 1 or shadowing_bindings:
+        return code
+    candidates: list[ast.Call] = []
+    for call in (node for node in ast.walk(tree) if isinstance(node, ast.Call)):
+        keyword_names = [keyword.arg for keyword in call.keywords]
+        if (
+            int(getattr(call, "lineno", 0) or 0) in finding_lines
+            and isinstance(call.func, ast.Name)
+            and call.func.id == "measurement_provenance_receipt"
+            and len(call.args) == 1
+            and all(name is not None for name in keyword_names)
+            and {"measured_column", "count_column"} <= set(keyword_names)
+            and set(keyword_names) - {"measured_column", "count_column"}
+        ):
+            candidates.append(call)
+    if len(candidates) != 1:
+        return code
+    call = candidates[0]
+    call_source = ast.get_source_segment(code, call)
+    frame_source = ast.get_source_segment(code, call.args[0])
+    keywords = {keyword.arg: keyword.value for keyword in call.keywords}
+    measured_source = ast.get_source_segment(code, keywords["measured_column"])
+    count_source = ast.get_source_segment(code, keywords["count_column"])
+    if not (
+        call_source
+        and frame_source
+        and measured_source
+        and count_source
+        and code.count(call_source) == 1
+    ):
+        return code
+    replacement = (
+        f"measurement_provenance_receipt({frame_source}, "
+        f"measured_column={measured_source}, count_column={count_source})"
+    )
+    repaired = code.replace(call_source, replacement, 1)
+    try:
+        ast.parse(repaired)
+    except SyntaxError:
+        return code
+    return repaired
+
+
 def patch_companion_audit_frame_alignment(
     code: str,
     *,
@@ -1203,9 +1303,15 @@ def patch_audit_only_companion_value_selector(
     is left for agent repair.
     """
 
-    aligned = patch_companion_audit_frame_alignment(code, findings=findings)
-    if aligned != code:
-        return aligned
+    repaired = _patch_unsupported_measurement_receipt_keyword(
+        code,
+        findings=findings,
+    )
+    aligned = patch_companion_audit_frame_alignment(repaired, findings=findings)
+    if aligned != repaired:
+        repaired = aligned
+    if repaired != code:
+        return repaired
     issue_details = []
     for finding in findings:
         validator, severity, _message, detail = _finding_parts(finding)
