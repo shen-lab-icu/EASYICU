@@ -163,6 +163,11 @@ class PipelineConfig:
     # the full cohort. Submission profiles must never enable this option.
     development_sample_size: Optional[int] = None
     development_sample_seed: int = 20260719
+    # Explicitly non-paper Canonical9 development lane. This permits a resumed
+    # diagnostic run to retain an auditable multi-image runtime lineage while
+    # framework fixes are tested step-by-step. Submission profiles must never
+    # enable it, and paper-facing runs still require one immutable runtime.
+    development_diagnostic: bool = False
     enable_probe_step: bool = True
     enable_replanning: bool = True
     # Hard cap on plan size after any replanner revision. The replanner

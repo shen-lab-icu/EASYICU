@@ -269,6 +269,107 @@ def test_pipeline_write_rejects_inconsistent_step_runtime_snapshots(tmp_path):
         _validated_runtime_lock(run_dir)
 
 
+def test_development_write_accepts_audited_multi_image_lineage(tmp_path):
+    from easyicu.research_agent.reporting.write_phase import (
+        _validated_runtime_lock,
+        _write_development_runtime_lineage,
+    )
+
+    run_dir = tmp_path / "run"
+    _write_runner_snapshot(
+        run_dir,
+        "one",
+        lock_text=(
+            "# runtime=docker\n"
+            "# docker_image_id=sha256:old\n"
+            "# research_agent_source_sha256=old\n"
+            "numpy==2.0.0\n"
+        ),
+        image_id="sha256:" + "a" * 64,
+    )
+    _write_runner_snapshot(
+        run_dir,
+        "two",
+        lock_text=(
+            "# runtime=docker\n"
+            "# docker_image_id=sha256:new\n"
+            "# research_agent_source_sha256=new\n"
+            "numpy==2.0.0\n"
+        ),
+        image_id="sha256:" + "b" * 64,
+    )
+
+    selected = _validated_runtime_lock(
+        run_dir,
+        allow_development_lineage=True,
+    )
+    lineage_path = _write_development_runtime_lineage(run_dir)
+    lineage = json.loads(lineage_path.read_text(encoding="utf-8"))
+
+    assert (
+        selected
+        == run_dir / "steps" / "two" / "outputs" / "runner_requirements.lock.txt"
+    )
+    assert lineage["paper_authority"] is False
+    assert lineage["diagnostic_only"] is True
+    assert lineage["mixed_runtime_snapshots"] is True
+    assert [row["step_id"] for row in lineage["steps"]] == ["one", "two"]
+    assert all(len(row["provenance_sha256"]) == 64 for row in lineage["steps"])
+
+
+def test_development_write_rejects_changed_dependency_pins(tmp_path):
+    from easyicu.research_agent.reporting.write_phase import (
+        RuntimeProvenanceMismatchError,
+        _validated_runtime_lock,
+    )
+
+    run_dir = tmp_path / "run"
+    _write_runner_snapshot(
+        run_dir,
+        "one",
+        lock_text="# runtime=docker\nnumpy==2.0.0\n",
+        image_id="sha256:" + "a" * 64,
+    )
+    _write_runner_snapshot(
+        run_dir,
+        "two",
+        lock_text="# runtime=docker\nnumpy==2.1.0\n",
+        image_id="sha256:" + "b" * 64,
+    )
+
+    with pytest.raises(RuntimeProvenanceMismatchError, match="dependency pins"):
+        _validated_runtime_lock(run_dir, allow_development_lineage=True)
+
+
+def test_development_write_rejects_changed_network_policy(tmp_path):
+    from easyicu.research_agent.reporting.write_phase import (
+        RuntimeProvenanceMismatchError,
+        _validated_runtime_lock,
+    )
+
+    run_dir = tmp_path / "run"
+    lock_text = "# runtime=docker\nnumpy==2.0.0\n"
+    _write_runner_snapshot(
+        run_dir,
+        "one",
+        lock_text=lock_text,
+        image_id="sha256:" + "a" * 64,
+    )
+    _write_runner_snapshot(
+        run_dir,
+        "two",
+        lock_text=lock_text,
+        image_id="sha256:" + "b" * 64,
+    )
+    provenance_path = run_dir / "steps" / "two" / "outputs" / "runner_provenance.json"
+    provenance = json.loads(provenance_path.read_text(encoding="utf-8"))
+    provenance["network"] = "bridge"
+    provenance_path.write_text(json.dumps(provenance), encoding="utf-8")
+
+    with pytest.raises(RuntimeProvenanceMismatchError, match="Unsafe"):
+        _validated_runtime_lock(run_dir, allow_development_lineage=True)
+
+
 def test_pipeline_write_rejects_stale_registered_lock_on_resume(ra, tmp_path):
     from easyicu.research_agent.reporting.write_phase import (
         RuntimeProvenanceMismatchError,
