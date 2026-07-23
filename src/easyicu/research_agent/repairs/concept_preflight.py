@@ -14,6 +14,7 @@ from .host_helper_result import (
 )
 from .host_helper_failure import patch_host_validation_helper_reraise
 from .local_binding import patch_local_read_before_assignment_hoist
+from .percentage_identity import patch_bound_percentage_identity_guards
 from .runtime_context_levels import patch_runtime_context_opaque_levels
 
 
@@ -73,6 +74,13 @@ def patch_concept_preflight_repairs(
     if candidate != repaired:
         repaired = candidate
         names.append("runtime_context_private_levels_v1")
+    candidate = patch_bound_percentage_identity_guards(
+        repaired,
+        findings=findings,
+    )
+    if candidate != repaired:
+        repaired = candidate
+        names.append("bound_percentage_identity_guard_v1")
     return repaired, names
 
 
