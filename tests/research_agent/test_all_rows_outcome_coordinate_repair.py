@@ -11,6 +11,7 @@ from easyicu.research_agent.repair_registry import (
     automatic_repair_allowed,
     repair_metadata_for,
 )
+from easyicu.research_agent.execution.phase import _untrusted_runtime_repair_allowed
 
 _SCRIPT = """
 def main():
@@ -81,6 +82,14 @@ def test_all_rows_repair_is_registered_as_structural_and_automatic() -> None:
     assert metadata.repair_class is RepairClass.STRUCTURAL
     assert metadata.introduces_numbers is False
     assert automatic_repair_allowed(metadata.repair_id)
+    assert _untrusted_runtime_repair_allowed(
+        repair_id=metadata.repair_id,
+        source="deterministic_runner_repair",
+    )
+    assert not _untrusted_runtime_repair_allowed(
+        repair_id=metadata.repair_id,
+        source="case_plugin_repair",
+    )
 
 
 def test_all_rows_repair_rejects_unbound_or_subset_consumption() -> None:
