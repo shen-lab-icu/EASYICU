@@ -6,6 +6,7 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
+from easyicu.research_agent.providers.mocks import PatternScriptedMockLLMClient
 from easyicu.research_agent.repairs.patch import PATCH_FORMAT
 
 _SAFE_CODE = """
@@ -38,21 +39,6 @@ with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as f:
     json.dump(summary, f)
 """
 
-
-_SELF_MUTATING_CODE = """
-import json
-import os
-from pathlib import Path
-import pandas as pd
-
-df = pd.read_parquet(os.environ["COHORT_PARQUET"])
-out = os.environ["STEP_OUT_DIR"]
-summary = {"n": int(len(df)), "phase": "initial"}
-with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as f:
-    json.dump(summary, f)
-script = Path(__file__)
-script.write_text(script.read_text(encoding="utf-8") + "\\n# SELF_MUTATED\\n", encoding="utf-8")
-"""
 
 _INITIAL_CONCEPT_ERROR_CODE = _SAFE_CODE + "\n# INITIAL_CONCEPT_ERROR\n"
 _LATER_CONTRACT_ERROR_CODE = (
@@ -104,111 +90,70 @@ def _script_patch(old: str, new: str) -> str:
     )
 
 
-class _RepairGateLLM:
-    name = "post-repair-concept-gate-llm"
-
-    def __init__(self, *, interrupt_repair: bool = False) -> None:
-        self.interrupt_repair = interrupt_repair
-        self.write_calls = 0
-        self.repair_calls = 0
-
-    def complete(self, messages, *, max_tokens=2048, temperature=0.2):
-        del max_tokens, temperature
-        user = next((m.content for m in reversed(messages) if m.role == "user"), "")
-        upper = user.upper()
-        if "ICU-AWARE RESEARCH PLAN" in upper:
-            return json.dumps(
-                {
-                    "research_question": "Summarize the cohort.",
-                    "steps": [
-                        {
-                            "step_id": "01_summary",
-                            "planned_analysis_role": "auxiliary",
-                            "intent": "Produce a descriptive cohort summary.",
-                            "inputs": ["stay_id", "value"],
-                            "expected_outputs": ["table:cohort_summary"],
-                            "method": "descriptive_summary",
-                            "icu_rule_refs": [],
-                        }
-                    ],
-                    "rationale": "post-repair concept-gate regression",
-                }
-            )
-        if "REPAIR THE PYTHON CODE" in upper:
-            self.repair_calls += 1
-            if self.interrupt_repair:
-                raise KeyboardInterrupt("simulated operator interruption")
-            if self.repair_calls == 1:
-                return _script_patch(_SAFE_CODE, _UNSAFE_REPAIR_CODE)
-            return _script_patch(
-                _UNSAFE_REPAIR_CODE,
-                _UNSAFE_REPAIR_CODE_AGAIN,
-            )
-        if "WRITE THE PYTHON CODE" in upper:
-            self.write_calls += 1
-            return _SAFE_CODE
-        if "INTERPRET THE RESULTS" in upper:
-            return "Summary {evidence:cohort_summary}."
-        if "MANUSCRIPT SCAFFOLD" in upper:
-            return "# Title\n\n## Results\n\nSummary {evidence:cohort_summary}."
-        return "{}"
+_PLAN_RESPONSE = json.dumps(
+    {
+        "research_question": "Summarize the cohort.",
+        "steps": [
+            {
+                "step_id": "01_summary",
+                "planned_analysis_role": "auxiliary",
+                "intent": "Produce a descriptive cohort summary.",
+                "inputs": ["stay_id", "value"],
+                "expected_outputs": ["table:cohort_summary"],
+                "method": "descriptive_summary",
+                "icu_rule_refs": [],
+            }
+        ],
+        "rationale": "post-repair concept-gate regression",
+    }
+)
 
 
-class _SelfMutatingLLM(_RepairGateLLM):
-    def complete(self, messages, *, max_tokens=2048, temperature=0.2):
-        user = next((m.content for m in reversed(messages) if m.role == "user"), "")
-        if "WRITE THE PYTHON CODE" in user.upper():
-            self.write_calls += 1
-            return _SELF_MUTATING_CODE
-        return super().complete(
-            messages,
-            max_tokens=max_tokens,
-            temperature=temperature,
-        )
+def _scripted_llm(
+    *,
+    initial_code: str = _SAFE_CODE,
+    repair_responses: list[str | BaseException] | None = None,
+) -> PatternScriptedMockLLMClient:
+    return PatternScriptedMockLLMClient(
+        [
+            ("ICU-AWARE RESEARCH PLAN", [_PLAN_RESPONSE]),
+            ("WRITE THE PYTHON CODE", [initial_code]),
+            (
+                "REPAIR THE PYTHON CODE",
+                repair_responses
+                or [
+                    _script_patch(_SAFE_CODE, _UNSAFE_REPAIR_CODE),
+                    _script_patch(
+                        _UNSAFE_REPAIR_CODE,
+                        _UNSAFE_REPAIR_CODE_AGAIN,
+                    ),
+                ],
+            ),
+            ("INTERPRET THE RESULTS", ["Summary {evidence:cohort_summary}."]),
+            (
+                "MANUSCRIPT SCAFFOLD",
+                ["# Title\n\n## Results\n\nSummary {evidence:cohort_summary}."],
+            ),
+        ]
+    )
 
 
-class _SequentialRepairLLM(_RepairGateLLM):
-    def complete(self, messages, *, max_tokens=2048, temperature=0.2):
-        user = next((m.content for m in reversed(messages) if m.role == "user"), "")
-        upper = user.upper()
-        if "WRITE THE PYTHON CODE" in upper:
-            self.write_calls += 1
-            return _INITIAL_CONCEPT_ERROR_CODE
-        if "REPAIR THE PYTHON CODE" in upper:
-            self.repair_calls += 1
-            if self.repair_calls == 1:
-                return _script_patch(_INITIAL_CONCEPT_ERROR_CODE, _SAFE_CODE)
-            return _script_patch(_SAFE_CODE, _LATER_CONTRACT_ERROR_CODE)
-        return super().complete(
-            messages,
-            max_tokens=max_tokens,
-            temperature=temperature,
-        )
+def _prompt_call_count(
+    llm: PatternScriptedMockLLMClient,
+    marker: str,
+) -> int:
+    return sum(
+        marker.casefold()
+        in "\n".join(str(message.content or "") for message in messages).casefold()
+        for messages, _kwargs in llm.calls
+    )
 
 
-class _MechanicalRecoveryLLM(_RepairGateLLM):
-    def complete(self, messages, *, max_tokens=2048, temperature=0.2):
-        user = next((m.content for m in reversed(messages) if m.role == "user"), "")
-        upper = user.upper()
-        if "WRITE THE PYTHON CODE" in upper:
-            self.write_calls += 1
-            return _SAFE_CODE
-        if "REPAIR THE PYTHON CODE" in upper:
-            self.repair_calls += 1
-            if self.repair_calls == 1:
-                return _script_patch(_SAFE_CODE, _INVALID_HELPER_REPAIR_CODE)
-            return _script_patch(
-                _INVALID_HELPER_REPAIR_CODE,
-                _RECOVERED_REPAIR_CODE,
-            )
-        return super().complete(
-            messages,
-            max_tokens=max_tokens,
-            temperature=temperature,
-        )
-
-
-def _pipeline(ra, tmp_path: Path, llm: _RepairGateLLM):
+def _pipeline(
+    ra,
+    tmp_path: Path,
+    llm: PatternScriptedMockLLMClient,
+):
     return ra.ResearchAgentPipeline(
         workdir=tmp_path,
         llm=llm,
@@ -275,7 +220,7 @@ def test_contract_repair_reenters_concept_gate_before_runner(
     monkeypatch.setattr(ConceptUsageAuditor, "audit", concept_audit)
     monkeypatch.setattr(PrimaryModelContractValidator, "audit", contract_audit)
 
-    llm = _RepairGateLLM()
+    llm = _scripted_llm()
     result = _run(
         _pipeline(ra, tmp_path, llm),
         pd.DataFrame(
@@ -290,7 +235,7 @@ def test_contract_repair_reenters_concept_gate_before_runner(
         item for item in partial["per_step_records"] if item["step_id"] == "01_summary"
     )
 
-    assert llm.repair_calls == 2
+    assert _prompt_call_count(llm, "REPAIR THE PYTHON CODE") == 2
     assert any("UNSAFE_POST_REPAIR" in script for script in audited_scripts)
     assert record["status"] == "blocked_by_concept_audit"
     assert record["step_llm_repair_attempts"] == 2
@@ -329,7 +274,15 @@ def test_contract_repair_mechanical_error_uses_remaining_step_budget(
         ]
 
     monkeypatch.setattr(PrimaryModelContractValidator, "audit", contract_audit)
-    llm = _MechanicalRecoveryLLM()
+    llm = _scripted_llm(
+        repair_responses=[
+            _script_patch(_SAFE_CODE, _INVALID_HELPER_REPAIR_CODE),
+            _script_patch(
+                _INVALID_HELPER_REPAIR_CODE,
+                _RECOVERED_REPAIR_CODE,
+            ),
+        ]
+    )
     result = _run(
         _pipeline(ra, tmp_path, llm),
         pd.DataFrame(
@@ -343,7 +296,7 @@ def test_contract_repair_mechanical_error_uses_remaining_step_budget(
         item for item in partial["per_step_records"] if item["step_id"] == "01_summary"
     )
 
-    assert llm.repair_calls == 2
+    assert _prompt_call_count(llm, "REPAIR THE PYTHON CODE") == 2
     assert record["status"] == "ok"
     assert record["step_llm_repair_attempts"] == 2
     assert record["step_llm_repair_classes"] == [
@@ -409,7 +362,13 @@ def test_quarantine_persists_repaired_constraints_across_later_repairs(
     monkeypatch.setattr(ConceptUsageAuditor, "audit", concept_audit)
     monkeypatch.setattr(PrimaryModelContractValidator, "audit", contract_audit)
 
-    llm = _SequentialRepairLLM()
+    llm = _scripted_llm(
+        initial_code=_INITIAL_CONCEPT_ERROR_CODE,
+        repair_responses=[
+            _script_patch(_INITIAL_CONCEPT_ERROR_CODE, _SAFE_CODE),
+            _script_patch(_SAFE_CODE, _LATER_CONTRACT_ERROR_CODE),
+        ],
+    )
     result = _run(
         _pipeline(ra, tmp_path, llm),
         pd.DataFrame(
@@ -427,7 +386,7 @@ def test_quarantine_persists_repaired_constraints_across_later_repairs(
         item for item in partial["per_step_records"] if item["step_id"] == "01_summary"
     )
 
-    assert llm.repair_calls == 2
+    assert _prompt_call_count(llm, "REPAIR THE PYTHON CODE") == 2
     assert checkpoint is not None
     expected_messages = [
         "Earlier repaired constraint must remain binding.",
@@ -696,9 +655,22 @@ def test_monotonic_constraint_identity_unions_changing_evidence_support() -> Non
 
 
 def test_executed_script_digest_mismatch_blocks_outputs_before_evidence(
-    ra, tmp_path: Path
+    ra, tmp_path: Path, monkeypatch
 ) -> None:
-    llm = _SelfMutatingLLM()
+    from easyicu.research_agent.execution.runner import DockerRunner
+
+    original_run = DockerRunner.run
+
+    def run_then_tamper(self, **kwargs):
+        result = original_run(self, **kwargs)
+        result.script_path.write_text(
+            result.script_path.read_text(encoding="utf-8") + "\n# HOST_TAMPERED\n",
+            encoding="utf-8",
+        )
+        return result
+
+    monkeypatch.setattr(DockerRunner, "run", run_then_tamper)
+    llm = _scripted_llm()
     result = _run(
         _pipeline(ra, tmp_path, llm),
         pd.DataFrame(
@@ -743,7 +715,11 @@ def test_keyboard_interrupt_during_concept_repair_saves_draft_and_reraises(
         ]
 
     monkeypatch.setattr(ConceptUsageAuditor, "audit", reject_draft)
-    llm = _RepairGateLLM(interrupt_repair=True)
+    llm = _scripted_llm(
+        repair_responses=[
+            KeyboardInterrupt("simulated operator interruption"),
+        ]
+    )
 
     with pytest.raises(KeyboardInterrupt, match="operator interruption"):
         _run(
@@ -762,7 +738,7 @@ def test_keyboard_interrupt_during_concept_repair_saves_draft_and_reraises(
         run_dir=run_dir,
         step_id="01_summary",
     )
-    assert llm.repair_calls == 1
+    assert _prompt_call_count(llm, "REPAIR THE PYTHON CODE") == 1
     assert checkpoint is not None
     assert checkpoint.code.strip() == _SAFE_CODE.strip()
     assert (

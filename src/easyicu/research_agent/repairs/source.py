@@ -4595,7 +4595,7 @@ def deterministic_contract_repair(
         findings=findings,
     )
     if convergence_contract != code:
-        return "penalized_convergence_contract_v1", convergence_contract
+        return "penalized_convergence_contract_v2", convergence_contract
 
     unavailable_source_findings = []
     for finding in findings:

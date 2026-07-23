@@ -14,6 +14,7 @@ from easyicu.research_agent.agents.core import (
     _is_untyped_figure_alias_output,
     _normalise_plan_payload,
 )
+from easyicu.research_agent.providers.mocks import PatternScriptedMockLLMClient
 from easyicu.research_agent.schema import (
     AnalysisPlan,
     AnalysisStep,
@@ -344,24 +345,22 @@ def test_planner_parse_preserves_explicit_role() -> None:
 
 
 def test_planner_run_retries_missing_role_and_feedback_names_contract() -> None:
-    class _RetryingLLM:
-        name = "retrying"
-
-        def __init__(self) -> None:
-            self.calls: list[list[object]] = []
-
-        def complete(self, messages, **kwargs):
-            self.calls.append(list(messages))
-            if len(self.calls) == 1:
-                return _raw_plan(include_role=False)
-            return _raw_plan(include_role=True)
-
-    llm = _RetryingLLM()
+    llm = PatternScriptedMockLLMClient(
+        [
+            (
+                "ICU-AWARE RESEARCH PLAN",
+                [
+                    _raw_plan(include_role=False),
+                    _raw_plan(include_role=True),
+                ],
+            )
+        ]
+    )
     plan = PlannerAgent(llm).run(_context())
 
     assert plan.steps[0].planned_analysis_role == "primary"
     assert len(llm.calls) == 2
-    retry_feedback = llm.calls[1][-1].content
+    retry_feedback = llm.calls[1][0][-1].content
     assert "planned_analysis_role" in retry_feedback
 
 

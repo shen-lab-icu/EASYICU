@@ -321,9 +321,9 @@ def test_primary_model_contract_accepts_planner_authorized_secondary_only_step(
     contract = copy.deepcopy(contracts[2])
     requirement = requirements[2]
     coefficients = pd.read_csv(out_dir / "model_coefficients.csv")
-    coefficients.loc[
-        coefficients["model_id"].eq(contract["model_id"])
-    ].to_csv(out_dir / "model_coefficients.csv", index=False)
+    coefficients.loc[coefficients["model_id"].eq(contract["model_id"])].to_csv(
+        out_dir / "model_coefficients.csv", index=False
+    )
 
     findings = PrimaryModelContractValidator().audit(
         step=_step(model_requirements=[requirement]),
@@ -335,6 +335,23 @@ def test_primary_model_contract_accepts_planner_authorized_secondary_only_step(
     )
 
     assert findings == []
+
+
+def test_primary_step_rejects_secondary_only_model_roster_before_execution() -> None:
+    _contracts_unused, requirements = _contracts_with_requirements()
+
+    with pytest.raises(
+        ValueError,
+        match="primary adjusted-association step.*primary model requirement",
+    ):
+        AnalysisStep(
+            step_id="05_primary_association",
+            planned_analysis_role="primary",
+            intent="Estimate the primary adjusted association.",
+            method="adjusted_association_models",
+            expected_outputs=["table:adjusted_association_estimates"],
+            model_requirements=[requirements[2]],
+        )
 
 
 def test_primary_model_contract_rejects_primary_in_secondary_only_roster(
@@ -365,9 +382,9 @@ def test_secondary_only_contract_error_does_not_request_a_fake_primary(
     contract.pop("convergence_method")
     contract.pop("optimizer_success")
     coefficients = pd.read_csv(out_dir / "model_coefficients.csv")
-    coefficients.loc[
-        coefficients["model_id"].eq(contract["model_id"])
-    ].to_csv(out_dir / "model_coefficients.csv", index=False)
+    coefficients.loc[coefficients["model_id"].eq(contract["model_id"])].to_csv(
+        out_dir / "model_coefficients.csv", index=False
+    )
 
     findings = PrimaryModelContractValidator().audit(
         step=_step(model_requirements=[requirements[2]]),
@@ -380,7 +397,9 @@ def test_secondary_only_contract_error_does_not_request_a_fake_primary(
 
     assert len(findings) == 1
     assert "secondary-only roster" in findings[0].message
-    assert "keep exactly one context-declared primary exposure" not in findings[0].message
+    assert (
+        "keep exactly one context-declared primary exposure" not in findings[0].message
+    )
 
 
 @pytest.mark.parametrize("fit_status", ["not_fitted", "separation_no_estimate"])

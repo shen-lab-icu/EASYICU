@@ -245,13 +245,17 @@ def test_measurement_provenance_summary_mapping_is_structural_and_automatic() ->
 
 
 def test_penalized_convergence_contract_is_structural_and_automatic() -> None:
-    metadata = repair_metadata_for("penalized_convergence_contract_v1")
+    for repair_id in (
+        "penalized_convergence_contract_v1",
+        "penalized_convergence_contract_v2",
+    ):
+        metadata = repair_metadata_for(repair_id)
 
-    assert metadata.classification_source == "exact"
-    assert metadata.repair_class is RepairClass.STRUCTURAL
-    assert metadata.introduces_numbers is False
-    assert metadata.requires_disclosure is False
-    assert automatic_repair_allowed(metadata.repair_id)
+        assert metadata.classification_source == "exact"
+        assert metadata.repair_class is RepairClass.STRUCTURAL
+        assert metadata.introduces_numbers is False
+        assert metadata.requires_disclosure is False
+        assert automatic_repair_allowed(metadata.repair_id)
 
 
 def test_observed_binary_domain_guard_is_structural_and_automatic() -> None:
