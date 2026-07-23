@@ -58,6 +58,7 @@ from .nonfinite_audit import (
     patch_nonfinite_audit_host_strict_boundary,
     patch_strict_numeric_nonfinite_audit_conflict,
 )
+from .nullable_validation import patch_unused_nullable_numeric_validation
 from .plausibility import patch_flag_only_plausibility_range_rejection
 from .provenance_summary import (
     patch_audit_only_companion_value_selector,
@@ -4124,6 +4125,12 @@ def _deterministic_summary_repair(
         )
         if repaired is not None and repaired != code:
             return clinical_bin_repair, repaired
+    nullable_validation_repair = patch_unused_nullable_numeric_validation(
+        code,
+        step_summary,
+    )
+    if nullable_validation_repair is not None:
+        return nullable_validation_repair
     summary_text = json.dumps(step_summary, ensure_ascii=False, default=str).lower()
     simple_imputer_bool = (
         "simpleimputer does not support data with dtype bool" in summary_text

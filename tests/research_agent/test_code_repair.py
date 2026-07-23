@@ -439,6 +439,116 @@ for var in source_vars_for_table:
     )
 
 
+def test_summary_repair_skips_only_proven_unused_nullable_numeric_column():
+    code = """
+required_matrix_columns = [
+    "primary_or",
+    "absolute_or_difference",
+    "relative_or_difference_percent",
+]
+numeric_matrix_columns = [
+    "primary_or",
+    "absolute_or_difference",
+    "relative_or_difference_percent",
+]
+for column in numeric_matrix_columns:
+    validate_numeric_series(
+        robustness_matrix[column],
+        f"robustness_matrix.{column}",
+    )
+matrix_row = robustness_matrix.iloc[0]
+plotted_or = float(matrix_row["primary_or"])
+"""
+    first = _deterministic_summary_repair(
+        code=code,
+        step_summary={
+            "status": "failed",
+            "error": (
+                "robustness_matrix.absolute_or_difference " "contains non-finite values"
+            ),
+        },
+    )
+    assert first is not None
+    first_name, first_code = first
+    assert first_name == "unused_nullable_numeric_validation_v1"
+    numeric_assignment = next(
+        node
+        for node in ast.walk(ast.parse(first_code))
+        if isinstance(node, ast.Assign)
+        and isinstance(node.targets[0], ast.Name)
+        and node.targets[0].id == "numeric_matrix_columns"
+    )
+    assert [element.value for element in numeric_assignment.value.elts] == [
+        "primary_or",
+        "relative_or_difference_percent",
+    ]
+
+    second = _deterministic_summary_repair(
+        code=first_code,
+        step_summary={
+            "status": "failed",
+            "error": (
+                "robustness_matrix.relative_or_difference_percent "
+                "contains non-finite values"
+            ),
+        },
+        previous_repair=first_name,
+    )
+    assert second is not None
+    second_name, second_code = second
+    assert second_name == "unused_nullable_numeric_validation_v1"
+    assert "numeric_matrix_columns = ['primary_or']" in second_code
+
+
+def test_summary_repair_preserves_nullable_column_used_by_figure():
+    code = """
+required_matrix_columns = ["primary_or", "absolute_or_difference"]
+numeric_matrix_columns = ["primary_or", "absolute_or_difference"]
+for column in numeric_matrix_columns:
+    validate_numeric_series(
+        robustness_matrix[column],
+        f"robustness_matrix.{column}",
+    )
+matrix_row = robustness_matrix.iloc[0]
+plotted_difference = float(matrix_row["absolute_or_difference"])
+"""
+    repaired = _deterministic_summary_repair(
+        code=code,
+        step_summary={
+            "status": "failed",
+            "error": (
+                "robustness_matrix.absolute_or_difference " "contains non-finite values"
+            ),
+        },
+    )
+    assert repaired is None
+
+
+def test_summary_repair_rejects_dynamic_nullable_column_use():
+    code = """
+required_matrix_columns = ["primary_or", "absolute_or_difference"]
+numeric_matrix_columns = ["primary_or", "absolute_or_difference"]
+for column in numeric_matrix_columns:
+    validate_numeric_series(
+        robustness_matrix[column],
+        f"robustness_matrix.{column}",
+    )
+matrix_row = robustness_matrix.iloc[0]
+selected_column = choose_column()
+plotted_value = float(matrix_row[selected_column])
+"""
+    repaired = _deterministic_summary_repair(
+        code=code,
+        step_summary={
+            "status": "failed",
+            "error": (
+                "robustness_matrix.absolute_or_difference " "contains non-finite values"
+            ),
+        },
+    )
+    assert repaired is None
+
+
 def _attrition_identity_finding(
     *,
     expected: list[object] | None = None,
