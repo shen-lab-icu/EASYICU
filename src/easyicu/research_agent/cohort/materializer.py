@@ -43,6 +43,7 @@ import inspect
 import json
 import os
 import re
+import stat
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple, Union
@@ -188,6 +189,19 @@ def _enforce_sealed_numeric_bounds(
         )
 
 
+def _outside_numeric_bounds(values: pd.Series, *, bounds: object) -> pd.Series:
+    outside = pd.Series(False, index=values.index)
+    if bounds is None:
+        return outside
+    minimum = getattr(bounds, "minimum", None)
+    maximum = getattr(bounds, "maximum", None)
+    if minimum is not None:
+        outside |= values.notna() & (values < float(minimum))
+    if maximum is not None:
+        outside |= values.notna() & (values > float(maximum))
+    return outside
+
+
 def _bounded_typed_numeric(
     values: pd.Series,
     *,
@@ -195,6 +209,8 @@ def _bounded_typed_numeric(
     metadata: object,
     concept: str,
     purpose: str,
+    bounds_violation_policy: str = "reject",
+    bounds_violation_counts: Optional[dict[str, int]] = None,
 ) -> pd.Series:
     numeric = _require_finite_numeric(
         values,
@@ -202,9 +218,22 @@ def _bounded_typed_numeric(
         concept=concept,
         purpose=purpose,
     )
+    bounds = getattr(metadata, "extraction_bounds", None)
+    outside = _outside_numeric_bounds(numeric, bounds=bounds)
+    if bounds_violation_policy not in {"reject", "exclude_with_receipt"}:
+        raise MaterializedMetadataError("unsupported source bounds violation policy")
+    if bool(outside.any()) and bounds_violation_policy == "exclude_with_receipt":
+        if bounds_violation_counts is None:
+            raise MaterializedMetadataError(
+                "bounds exclusion policy requires a provenance receipt"
+            )
+        bounds_violation_counts[concept] = bounds_violation_counts.get(
+            concept, 0
+        ) + int(outside.sum())
+        numeric = numeric.mask(outside)
     _enforce_sealed_numeric_bounds(
         numeric,
-        bounds=getattr(metadata, "extraction_bounds", None),
+        bounds=bounds,
         concept=concept,
         label="extraction bounds",
     )
@@ -343,6 +372,9 @@ _SEMANTIC_PROVENANCE_KEYS = (
     "n_stays_after_inclusion_exclusion",
     "unavailable_concepts",
     "event_indicator_columns_normalized",
+    "declared_positive_only_event_concepts",
+    "source_bounds_violation_policy",
+    "source_bounds_exclusions",
     "columns",
     "cohort_sha256",
     "cohort_file_sha256",
@@ -407,6 +439,40 @@ def _normalize_event_indicator_columns(wide: pd.DataFrame) -> List[str]:
                 # where NaN/None already compare False.
                 wide[col] = (wide[col] == True).fillna(False).astype(int)  # noqa: E712
             normalized.append(col)
+    return normalized
+
+
+def _normalize_declared_positive_only_event_concepts(
+    wide: pd.DataFrame,
+    *,
+    concepts: Sequence[str],
+) -> list[str]:
+    """Decode host-declared sparse positive event summaries to explicit 0/1."""
+
+    normalized: list[str] = []
+    for concept in concepts:
+        summary_columns = [
+            f"{concept}{suffix}"
+            for suffix in _EVENT_SUMMARY_SUFFIXES
+            if f"{concept}{suffix}" in wide.columns
+        ]
+        if not summary_columns:
+            raise MaterializedMetadataError(
+                f"declared positive-only event {concept!r} has no summary columns"
+            )
+        for column in summary_columns:
+            numeric = pd.to_numeric(wide[column], errors="coerce")
+            invalid = wide[column].notna() & numeric.isna()
+            if column.endswith("_mean"):
+                outside_domain = numeric.notna() & ((numeric < 0.0) | (numeric > 1.0))
+            else:
+                outside_domain = numeric.notna() & ~numeric.isin([0.0, 1.0])
+            if bool(invalid.any()) or bool(outside_domain.any()):
+                raise MaterializedMetadataError(
+                    f"declared positive-only event {concept!r} is outside its domain"
+                )
+            wide[column] = numeric.fillna(0.0)
+            normalized.append(column)
     return normalized
 
 
@@ -643,14 +709,29 @@ def _summarize_timeseries_with_representation(
             raise MaterializedMetadataError(
                 f"typed value concept {concept!r} cannot be summarized as a boolean"
             )
-        numeric = _require_finite_numeric(
-            pd.to_numeric(col, errors="coerce"),
-            original=col,
-            concept=concept,
-            purpose="concept",
-        )
-        w = w.assign(**{concept: numeric})
-        presence_encoded = False
+        numeric = pd.to_numeric(col, errors="coerce")
+        nonnull = col.notna()
+        if bool((numeric.notna() == nonnull).all()):
+            numeric = _require_finite_numeric(
+                numeric,
+                original=col,
+                concept=concept,
+                purpose="concept",
+            )
+            w = w.assign(**{concept: numeric})
+            presence_encoded = False
+        elif not bool(numeric.notna().any()):
+            # A typed VALUE may legitimately be categorical (for example
+            # invasive/noninvasive ventilation).  The wide materializer owns a
+            # numeric summary contract, so encode recorded presence while the
+            # raw typed trajectory remains available when category detail is
+            # scientifically required.
+            w = w.assign(**{concept: _truthy_series(col).astype(float)})
+            presence_encoded = True
+        else:
+            raise MaterializedMetadataError(
+                f"typed value concept {concept!r} mixes numeric and categorical values"
+            )
     else:
         presence_encoded = bool(pd.api.types.is_bool_dtype(col))
     if (
@@ -955,6 +1036,8 @@ def materialize_cohort(
     static_concepts: Sequence[str] = ("age", "sex", "los_icu"),
     patient_ids: Optional[Sequence[int]] = None,
     prefer_existing: bool = True,
+    bounds_violation_policy: str = "reject",
+    positive_only_event_concepts: Sequence[str] = (),
 ) -> Tuple[pd.DataFrame, Dict[str, Any]]:
     """Build a per-stay analysis cohort from the EasyICU data layer.
 
@@ -972,6 +1055,8 @@ def materialize_cohort(
         static_concepts=static_concepts,
         patient_ids=patient_ids,
         prefer_existing=prefer_existing,
+        bounds_violation_policy=bounds_violation_policy,
+        positive_only_event_concepts=positive_only_event_concepts,
     )
     return cohort, provenance
 
@@ -987,6 +1072,8 @@ def _materialize_cohort_with_metadata(
     static_concepts: Sequence[str],
     patient_ids: Optional[Sequence[int]],
     prefer_existing: bool,
+    bounds_violation_policy: str,
+    positive_only_event_concepts: Sequence[str],
 ) -> tuple[pd.DataFrame, Dict[str, Any], MaterializedColumnMetadataCollector]:
     t0 = time.time()
     source_mode, root = _resolve_source(data_path, prefer_existing)
@@ -1001,6 +1088,8 @@ def _materialize_cohort_with_metadata(
         source_mode=source_mode,
         root=root,
         t0=t0,
+        bounds_violation_policy=bounds_violation_policy,
+        positive_only_event_concepts=positive_only_event_concepts,
     )
     if source_mode == "export" and is_export_package(root):
         with open_export_package(root) as export_package:
@@ -1027,6 +1116,9 @@ def _materialize_cohort_from_resolved_source(
     root: Path,
     export_package: Optional[ExportPackage],
     t0: float,
+    bounds_violation_policy: str,
+    positive_only_event_concepts: Sequence[str],
+    verify_source_package: bool = True,
 ) -> tuple[pd.DataFrame, Dict[str, Any], MaterializedColumnMetadataCollector]:
     """Materialize from one already-resolved, explicitly owned source."""
 
@@ -1042,6 +1134,9 @@ def _materialize_cohort_from_resolved_source(
         )
     source_handle: Union[Path, ExportPackage] = export_package or root
     metadata_collector = MaterializedColumnMetadataCollector(export_package)
+    if bounds_violation_policy not in {"reject", "exclude_with_receipt"}:
+        raise MaterializedMetadataError("unsupported source bounds violation policy")
+    bounds_violation_counts: dict[str, int] = {}
 
     unavailable: List[str] = []
 
@@ -1080,6 +1175,8 @@ def _materialize_cohort_from_resolved_source(
                 metadata=source_metadata,
                 concept=concept,
                 purpose="source physical value",
+                bounds_violation_policy=bounds_violation_policy,
+                bounds_violation_counts=bounds_violation_counts,
             )
         return loaded
 
@@ -1123,6 +1220,17 @@ def _materialize_cohort_from_resolved_source(
     static_set = list(dict.fromkeys(static_concepts))
     outcome_set = list(dict.fromkeys(outcome_concepts))
     feature_set = [c for c in dict.fromkeys(feature_concepts) if c not in static_set]
+    declared_positive_only = tuple(positive_only_event_concepts)
+    if len(declared_positive_only) != len(set(declared_positive_only)) or any(
+        not isinstance(concept, str)
+        or not concept
+        or concept != concept.strip()
+        or concept not in feature_set
+        for concept in declared_positive_only
+    ):
+        raise MaterializedMetadataError(
+            "positive-only event concepts must be unique materialized features"
+        )
 
     # ---- base = every ICU stay (denominator); take from the first static concept
     base: Optional[pd.DataFrame] = None
@@ -1230,6 +1338,17 @@ def _materialize_cohort_from_resolved_source(
                 if col.endswith("_measured"):
                     wide[col] = wide[col].astype(int)
         event_indicator_columns = _normalize_event_indicator_columns(wide)
+    event_indicator_columns = list(
+        dict.fromkeys(
+            [
+                *event_indicator_columns,
+                *_normalize_declared_positive_only_event_concepts(
+                    wide,
+                    concepts=declared_positive_only,
+                ),
+            ]
+        )
+    )
     n_all = int(len(wide))
 
     # ---- apply CTAS inclusion/exclusion (纳排), deterministic + auditable
@@ -1238,7 +1357,7 @@ def _materialize_cohort_from_resolved_source(
     else:
         cohort = wide
     n_after = int(len(cohort))
-    if export_package is not None:
+    if export_package is not None and verify_source_package:
         verify_export_package(export_package)
 
     provenance = {
@@ -1256,6 +1375,9 @@ def _materialize_cohort_from_resolved_source(
         "n_stays_after_inclusion_exclusion": n_after,
         "unavailable_concepts": unavailable,
         "event_indicator_columns_normalized": event_indicator_columns,
+        "declared_positive_only_event_concepts": list(declared_positive_only),
+        "source_bounds_violation_policy": bounds_violation_policy,
+        "source_bounds_exclusions": dict(sorted(bounds_violation_counts.items())),
         "columns": list(cohort.columns),
         "cohort_sha256": _hash_df(cohort.reset_index(drop=True)),
         "build_seconds": round(time.time() - t0, 2),
@@ -1271,6 +1393,7 @@ def build_trajectory_long(
     window: Optional[Window] = None,
     patient_ids: Optional[Sequence[int]] = None,
     prefer_existing: bool = True,
+    bounds_violation_policy: str = "reject",
 ) -> Tuple[pd.DataFrame, Dict[str, Any]]:
     """Long-format trajectory ``(stay_id, charttime, concept, value_num, value_str)``.
 
@@ -1296,6 +1419,7 @@ def build_trajectory_long(
         patient_ids=patient_ids,
         source_mode=source_mode,
         root=root,
+        bounds_violation_policy=bounds_violation_policy,
     )
     if source_mode == "export" and is_export_package(root):
         with open_export_package(root) as export_package:
@@ -1318,6 +1442,8 @@ def _build_trajectory_long_from_resolved_source(
     source_mode: str,
     root: Path,
     export_package: Optional[ExportPackage],
+    bounds_violation_policy: str,
+    verify_source_package: bool = True,
 ) -> Tuple[pd.DataFrame, Dict[str, Any]]:
     """Build trajectory rows from one already-resolved, explicitly owned source."""
 
@@ -1332,6 +1458,10 @@ def _build_trajectory_long_from_resolved_source(
             manifest_path=export_package.manifest_path,
         )
     source_handle: Union[Path, ExportPackage] = export_package or root
+    metadata_collector = MaterializedColumnMetadataCollector(export_package)
+    if bounds_violation_policy not in {"reject", "exclude_with_receipt"}:
+        raise MaterializedMetadataError("unsupported source bounds violation policy")
+    bounds_violation_counts: dict[str, int] = {}
     unavailable: List[str] = []
     available_unobserved: List[str] = []
     frames: List[pd.DataFrame] = []
@@ -1345,6 +1475,37 @@ def _build_trajectory_long_from_resolved_source(
             patient_ids,
             unavailable,
         )
+        if metadata_collector.enabled and not df.empty:
+            df = df.copy()
+            if TIME_COL in df.columns:
+                df[TIME_COL] = _require_finite_numeric(
+                    pd.to_numeric(df[TIME_COL], errors="coerce"),
+                    original=df[TIME_COL],
+                    concept=concept,
+                    purpose="source time coordinate",
+                )
+            source_binding = metadata_collector.source_binding(concept)
+            if source_binding is None:
+                raise MaterializedMetadataError(
+                    f"typed trajectory concept {concept!r} lost its source binding"
+                )
+            source_metadata = source_binding.metadata
+            if source_metadata.role is ConceptColumnRole.EVENT_STATUS:
+                _strict_event_status_series(df[concept], concept=concept)
+            elif source_metadata.role is ConceptColumnRole.VALUE and (
+                source_metadata.canonical_unit is not None
+                or source_metadata.extraction_bounds is not None
+                or source_metadata.analysis_plausibility_range is not None
+            ):
+                df[concept] = _bounded_typed_numeric(
+                    pd.to_numeric(df[concept], errors="coerce"),
+                    original=df[concept],
+                    metadata=source_metadata,
+                    concept=concept,
+                    purpose="trajectory source physical value",
+                    bounds_violation_policy=bounds_violation_policy,
+                    bounds_violation_counts=bounds_violation_counts,
+                )
         if TIME_COL not in df.columns or concept not in df.columns:
             if concept not in unavailable:
                 unavailable.append(concept)
@@ -1378,7 +1539,7 @@ def _build_trajectory_long_from_resolved_source(
         long_df = pd.DataFrame(
             columns=[ID_COL, TIME_COL, "concept", "value_num", "value_str"]
         )
-    if export_package is not None:
+    if export_package is not None and verify_source_package:
         verify_export_package(export_package)
     provenance = {
         "schema_version": "easyicu.cohort_trajectory/1",
@@ -1391,11 +1552,241 @@ def _build_trajectory_long_from_resolved_source(
         "trajectory_concepts_materialized": materialized,
         "available_unobserved_concepts": available_unobserved,
         "unavailable_concepts": unavailable,
+        "source_bounds_violation_policy": bounds_violation_policy,
+        "source_bounds_exclusions": dict(sorted(bounds_violation_counts.items())),
         "n_rows": int(len(long_df)),
         "n_stays": int(long_df[ID_COL].nunique()) if len(long_df) else 0,
         "trajectory_sha256": _hash_df(long_df),
     }
     return long_df, provenance
+
+
+def _materialize_with_open_export_package(
+    package: ExportPackage,
+    *,
+    materialize_args: Mapping[str, Any],
+) -> tuple[pd.DataFrame, Dict[str, Any], MaterializedColumnMetadataCollector]:
+    """Reuse one verified package snapshot across sequential materializations."""
+
+    requested = Path(materialize_args["data_path"]).expanduser().resolve(strict=True)
+    if requested != package.root.resolve(strict=True):
+        raise MaterializedMetadataError(
+            "open export package does not match the requested data_path"
+        )
+    return _materialize_cohort_from_resolved_source(
+        feature_concepts=materialize_args["feature_concepts"],
+        database=materialize_args["database"],
+        cohort_definition=materialize_args["cohort_definition"],
+        cohort_window=materialize_args["cohort_window"],
+        outcome_concepts=materialize_args["outcome_concepts"],
+        static_concepts=materialize_args["static_concepts"],
+        patient_ids=materialize_args["patient_ids"],
+        source_mode="export",
+        root=package.root,
+        export_package=package,
+        t0=time.time(),
+        bounds_violation_policy=materialize_args["bounds_violation_policy"],
+        positive_only_event_concepts=materialize_args["positive_only_event_concepts"],
+        verify_source_package=False,
+    )
+
+
+def _trajectory_with_open_export_package(
+    package: ExportPackage,
+    *,
+    concepts: Sequence[str],
+    materialize_args: Mapping[str, Any],
+    window: Optional[Window],
+) -> tuple[pd.DataFrame, Dict[str, Any]]:
+    """Build a trajectory from the same retained export-package snapshots."""
+
+    return _build_trajectory_long_from_resolved_source(
+        concepts=concepts,
+        database=materialize_args["database"],
+        window=window,
+        patient_ids=materialize_args["patient_ids"],
+        source_mode="export",
+        root=package.root,
+        export_package=package,
+        bounds_violation_policy=materialize_args["bounds_violation_policy"],
+        verify_source_package=False,
+    )
+
+
+def _exact_int_series(values: pd.Series, *, label: str) -> pd.Series:
+    """Decode a structural identifier without lossy numeric coercion."""
+
+    parsed = _coerce_int_stay(pd.DataFrame({ID_COL: values.reset_index(drop=True)}))[
+        ID_COL
+    ]
+    parsed.name = values.name
+    if parsed.isna().any():  # pragma: no cover - _coerce_int_stay rejects nulls
+        raise MaterializedMetadataError(f"{label} contains a null identifier")
+    return parsed
+
+
+def _replace_row_identity_from_mapping(
+    cohort: pd.DataFrame,
+    *,
+    mapping_path: Path,
+    mapping_sha256: str,
+    mapping_stay_column: str,
+    mapping_patient_column: str,
+    output_identity_column: str,
+    authority_coordinates: Optional[Mapping[str, object]],
+) -> tuple[pd.DataFrame, dict[str, object]]:
+    """Replace ``stay_id`` with a verified patient-grouped row identifier.
+
+    The mapping is read through one non-symlink file descriptor and is used only
+    for a deterministic one-to-one stay join.  The output remains unique per
+    stay, as required by materialized-cohort authority, while the prefix before
+    ``:s`` is stable for every stay owned by the same patient.  These host-only
+    values are available to local analysis code but are not rendered into agent
+    context or Provider prompts.
+    """
+
+    if (
+        not mapping_path.is_absolute()
+        or mapping_path.is_symlink()
+        or mapping_path.suffix.lower() != ".parquet"
+    ):
+        raise MaterializedMetadataError(
+            "replacement identity mapping must be an absolute regular Parquet file"
+        )
+    if (
+        not isinstance(mapping_sha256, str)
+        or re.fullmatch(r"[0-9a-f]{64}", mapping_sha256) is None
+    ):
+        raise MaterializedMetadataError(
+            "replacement identity mapping requires an exact sha256"
+        )
+    for label, value in (
+        ("mapping stay column", mapping_stay_column),
+        ("mapping patient column", mapping_patient_column),
+        ("output identity column", output_identity_column),
+    ):
+        if (
+            not isinstance(value, str)
+            or not value
+            or value != value.strip()
+            or "/" in value
+            or "\\" in value
+        ):
+            raise MaterializedMetadataError(f"{label} is not canonical")
+    if mapping_stay_column == mapping_patient_column:
+        raise MaterializedMetadataError(
+            "replacement identity mapping columns must be distinct"
+        )
+    if output_identity_column in cohort.columns and output_identity_column != ID_COL:
+        raise MaterializedMetadataError(
+            "replacement identity would overwrite an existing cohort column"
+        )
+
+    descriptor: Optional[int] = None
+    try:
+        descriptor = os.open(
+            mapping_path,
+            os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0),
+        )
+        before = os.fstat(descriptor)
+        if not stat.S_ISREG(before.st_mode):
+            raise MaterializedMetadataError(
+                "replacement identity mapping must be a regular file"
+            )
+        with os.fdopen(descriptor, "rb", closefd=False) as handle:
+            digest = hashlib.sha256()
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(chunk)
+            if digest.hexdigest() != mapping_sha256:
+                raise MaterializedMetadataError(
+                    "replacement identity mapping digest mismatch"
+                )
+            handle.seek(0)
+            table = pd.read_parquet(
+                handle,
+                columns=[mapping_stay_column, mapping_patient_column],
+                engine="pyarrow",
+            )
+            after = os.fstat(descriptor)
+        if (
+            before.st_dev,
+            before.st_ino,
+            before.st_size,
+            before.st_mtime_ns,
+        ) != (
+            after.st_dev,
+            after.st_ino,
+            after.st_size,
+            after.st_mtime_ns,
+        ):
+            raise MaterializedMetadataError(
+                "replacement identity mapping changed while being read"
+            )
+    except MaterializedMetadataError:
+        raise
+    except (OSError, ValueError) as exc:
+        raise MaterializedMetadataError(
+            "cannot read replacement identity mapping"
+        ) from exc
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+
+    mapping = table.rename(
+        columns={
+            mapping_stay_column: ID_COL,
+            mapping_patient_column: output_identity_column,
+        }
+    )
+    mapping[ID_COL] = _exact_int_series(
+        mapping[ID_COL], label="replacement stay identity"
+    )
+    mapping[output_identity_column] = _exact_int_series(
+        mapping[output_identity_column], label="replacement patient identity"
+    )
+    if mapping[ID_COL].duplicated().any():
+        raise MaterializedMetadataError(
+            "replacement identity mapping contains duplicate stay identifiers"
+        )
+    joined = cohort.merge(
+        mapping,
+        on=ID_COL,
+        how="left",
+        validate="one_to_one",
+        sort=False,
+    )
+    if joined[output_identity_column].isna().any():
+        raise MaterializedMetadataError(
+            "replacement identity mapping does not cover every cohort stay"
+        )
+    patient_values = joined[output_identity_column].astype("int64")
+    stay_values = joined[ID_COL].astype("int64")
+    identity_values = "p" + patient_values.astype(str) + ":s" + stay_values.astype(str)
+    if identity_values.duplicated().any():
+        raise MaterializedMetadataError(
+            "replacement identity mapping does not produce unique stay rows"
+        )
+    result = joined.drop(columns=[ID_COL, output_identity_column])
+    result.insert(
+        0,
+        output_identity_column,
+        identity_values,
+    )
+    coordinates = dict(authority_coordinates or {})
+    return result, {
+        "mapping_file_sha256": mapping_sha256,
+        "mapping_file_size": int(before.st_size),
+        "mapping_rows": int(len(mapping)),
+        "mapping_stay_column": mapping_stay_column,
+        "mapping_patient_column": mapping_patient_column,
+        "output_identity_column": output_identity_column,
+        "patient_group_derivation": {
+            "algorithm": "prefix_before_:s",
+            "delimiter": ":s",
+        },
+        "mapped_cohort_rows": int(len(result)),
+        "authority_coordinates": coordinates,
+    }
 
 
 def materialize_to_parquet(
@@ -1405,6 +1796,13 @@ def materialize_to_parquet(
     emit_trajectory: bool = False,
     trajectory_concepts: Optional[Sequence[str]] = None,
     trajectory_window: Optional[Window] = None,
+    source_package: Optional[ExportPackage] = None,
+    replacement_identity_path: Optional[Union[str, Path]] = None,
+    replacement_identity_sha256: Optional[str] = None,
+    replacement_identity_stay_column: str = ID_COL,
+    replacement_identity_patient_column: Optional[str] = None,
+    output_identity_column: Optional[str] = None,
+    identity_authority_coordinates: Optional[Mapping[str, object]] = None,
     **kwargs: Any,
 ) -> Dict[str, Path]:
     """Materialize and write ``<stem>.parquet`` + ``<stem>_provenance.json``.
@@ -1428,17 +1826,60 @@ def materialize_to_parquet(
     )
     parquet_path = out / f"{stem}.parquet"
     prov_path = out / f"{stem}_provenance.json"
-    cohort, provenance, metadata_collector = _materialize_cohort_with_metadata(
-        feature_concepts=materialize_args["feature_concepts"],
-        database=materialize_args["database"],
-        data_path=materialize_args["data_path"],
-        cohort_definition=materialize_args["cohort_definition"],
-        cohort_window=materialize_args["cohort_window"],
-        outcome_concepts=materialize_args["outcome_concepts"],
-        static_concepts=materialize_args["static_concepts"],
-        patient_ids=materialize_args["patient_ids"],
-        prefer_existing=materialize_args["prefer_existing"],
+    if source_package is None:
+        cohort, provenance, metadata_collector = _materialize_cohort_with_metadata(
+            feature_concepts=materialize_args["feature_concepts"],
+            database=materialize_args["database"],
+            data_path=materialize_args["data_path"],
+            cohort_definition=materialize_args["cohort_definition"],
+            cohort_window=materialize_args["cohort_window"],
+            outcome_concepts=materialize_args["outcome_concepts"],
+            static_concepts=materialize_args["static_concepts"],
+            patient_ids=materialize_args["patient_ids"],
+            prefer_existing=materialize_args["prefer_existing"],
+            bounds_violation_policy=materialize_args["bounds_violation_policy"],
+            positive_only_event_concepts=materialize_args[
+                "positive_only_event_concepts"
+            ],
+        )
+    else:
+        cohort, provenance, metadata_collector = _materialize_with_open_export_package(
+            source_package,
+            materialize_args=materialize_args,
+        )
+    identity_options = (
+        replacement_identity_path,
+        replacement_identity_sha256,
+        replacement_identity_patient_column,
+        output_identity_column,
     )
+    if any(value is not None for value in identity_options) and not all(
+        value is not None for value in identity_options
+    ):
+        raise MaterializedMetadataError(
+            "replacement identity path, digest, patient column, and output column "
+            "must be declared together"
+        )
+    identity_column = ID_COL
+    identity_binding: Optional[dict[str, object]] = None
+    if replacement_identity_path is not None:
+        if emit_trajectory:
+            raise MaterializedMetadataError(
+                "replacement patient identity is not supported with stay trajectories"
+            )
+        cohort, identity_binding = _replace_row_identity_from_mapping(
+            cohort,
+            mapping_path=Path(replacement_identity_path).expanduser(),
+            mapping_sha256=str(replacement_identity_sha256),
+            mapping_stay_column=replacement_identity_stay_column,
+            mapping_patient_column=str(replacement_identity_patient_column),
+            output_identity_column=str(output_identity_column),
+            authority_coordinates=identity_authority_coordinates,
+        )
+        identity_column = str(output_identity_column)
+        provenance["columns"] = list(cohort.columns)
+        provenance["cohort_sha256"] = _hash_df(cohort.reset_index(drop=True))
+        provenance["replacement_row_identity"] = identity_binding
     producer_parameters = {
         "database": materialize_args["database"],
         "cohort_window": list(materialize_args["cohort_window"]),
@@ -1456,6 +1897,13 @@ def materialize_to_parquet(
             else None
         ),
         "prefer_existing": bool(materialize_args["prefer_existing"]),
+        "bounds_violation_policy": materialize_args["bounds_violation_policy"],
+        "source_bounds_exclusions": provenance["source_bounds_exclusions"],
+        "positive_only_event_concepts": list(
+            materialize_args["positive_only_event_concepts"]
+        ),
+        "identity_column": identity_column,
+        "replacement_row_identity": identity_binding,
     }
     if metadata_collector.enabled:
         _atomic_write_provenance(
@@ -1473,7 +1921,7 @@ def materialize_to_parquet(
     provenance["cohort_file_size"] = int(parquet_path.stat().st_size)
     descriptor = metadata_collector.seal_existing_cohort(
         cohort_path=parquet_path,
-        identity_column=ID_COL,
+        identity_column=identity_column,
         source_database=materialize_args["database"],
         producer="cohort_materializer",
         producer_implementation_sha256=implementation_bundle_sha256(
@@ -1513,14 +1961,23 @@ def materialize_to_parquet(
                 *materialize_args["outcome_concepts"],
                 *materialize_args["feature_concepts"],
             ]
-        long_df, traj_prov = build_trajectory_long(
-            data_path=materialize_args["data_path"],
-            concepts=concepts,
-            database=materialize_args["database"],
-            window=trajectory_window,
-            patient_ids=materialize_args["patient_ids"],
-            prefer_existing=materialize_args["prefer_existing"],
-        )
+        if source_package is None:
+            long_df, traj_prov = build_trajectory_long(
+                data_path=materialize_args["data_path"],
+                concepts=concepts,
+                database=materialize_args["database"],
+                window=trajectory_window,
+                patient_ids=materialize_args["patient_ids"],
+                prefer_existing=materialize_args["prefer_existing"],
+                bounds_violation_policy=materialize_args["bounds_violation_policy"],
+            )
+        else:
+            long_df, traj_prov = _trajectory_with_open_export_package(
+                source_package,
+                concepts=concepts,
+                materialize_args=materialize_args,
+                window=trajectory_window,
+            )
         # A trajectory bound to this universe may contain only identities the
         # universe owns.  This matters when the materializer applied a host-
         # declared cohort definition after reading the raw concept streams.
@@ -1562,6 +2019,8 @@ def materialize_to_parquet(
                 ),
                 "unavailable_concepts": list(traj_prov["unavailable_concepts"]),
                 "window": list(trajectory_window) if trajectory_window else None,
+                "bounds_violation_policy": materialize_args["bounds_violation_policy"],
+                "source_bounds_exclusions": traj_prov["source_bounds_exclusions"],
                 "bound_universe_authority_sha256": (verified_cohort.reference.sha256),
             }
             verified_trajectory = publish_materialized_trajectory_authority(
