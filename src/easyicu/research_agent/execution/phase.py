@@ -10328,6 +10328,19 @@ def run_execute_phase(
         evidence_ids_for_step: List[str] = [script_record.evidence_id]
         pending_success_aliases: Dict[str, List[str]] = {}
         step_summary_record_id: Optional[str] = None
+        declared_output_kinds: Dict[str, set[str]] = {}
+        raw_output_files = step_summary.get("output_files")
+        if isinstance(raw_output_files, Mapping):
+            for raw_product, raw_path in raw_output_files.items():
+                parsed_product = _typed_input_product(raw_product)
+                if (
+                    parsed_product is None
+                    or parsed_product[0] not in {"table", "statistic", "figure", "log"}
+                    or not isinstance(raw_path, str)
+                    or Path(raw_path).name != raw_path
+                ):
+                    continue
+                declared_output_kinds.setdefault(raw_path, set()).add(parsed_product[0])
         for art in run_result.artefacts:
             if not run_result.outputs_safe_to_collect:
                 # Defence in depth if a custom runner supplied an artefact
@@ -10343,17 +10356,24 @@ def run_execute_phase(
                 continue
             step_aliases = services.semantic_aliases_for(step, art)
             generation_mode = worker_progress.generation_mode()
+            registered_kinds = declared_output_kinds.get(art.name, set())
+            if len(registered_kinds) == 1:
+                artifact_kind = next(iter(registered_kinds))
+            elif art.suffix.lower() in {".csv", ".tsv", ".parquet", ".feather"}:
+                artifact_kind = "table"
+            elif art.suffix.lower() in {
+                ".png",
+                ".svg",
+                ".pdf",
+                ".tiff",
+                ".tif",
+                ".pptx",
+            }:
+                artifact_kind = "figure"
+            else:
+                artifact_kind = "log"
             artifact_evidence_id = step_owned_artifact_evidence_id(
-                kind=(
-                    "table"
-                    if art.suffix.lower() in {".csv", ".tsv", ".parquet", ".feather"}
-                    else (
-                        "figure"
-                        if art.suffix.lower()
-                        in {".png", ".svg", ".pdf", ".tiff", ".tif", ".pptx"}
-                        else "log"
-                    )
-                ),
+                kind=artifact_kind,
                 step_id=step.step_id,
                 source_name=art.name,
                 artifact_sha256=sealed_result_digests.get(
@@ -10397,7 +10417,7 @@ def run_execute_phase(
                     },
                 )
                 step_summary_record_id = rec.evidence_id
-            elif art.suffix.lower() in {".csv", ".tsv", ".parquet", ".feather"}:
+            elif artifact_kind == "table":
                 rec = evidence.register_file(
                     kind="table",
                     description=f"Table {art.stem} from step {step.step_id}.",
@@ -10416,14 +10436,26 @@ def run_execute_phase(
                         **repair_evidence_metadata,
                     },
                 )
-            elif art.suffix.lower() in {
-                ".png",
-                ".svg",
-                ".pdf",
-                ".tiff",
-                ".tif",
-                ".pptx",
-            }:
+            elif artifact_kind == "statistic":
+                rec = evidence.register_file(
+                    kind="statistic",
+                    description=f"Statistic {art.stem} from step {step.step_id}.",
+                    source_path=art,
+                    produced_by_step=step.step_id,
+                    inputs=lineage_input_evidence_ids or None,
+                    script_evidence_id=script_record.evidence_id,
+                    aliases=step_aliases,
+                    producer="runner",
+                    generation_mode=generation_mode,
+                    evidence_id=artifact_evidence_id,
+                    publish_aliases=False,
+                    metadata={
+                        "script_evidence_id": script_record.evidence_id,
+                        "diagnostic_only": standard_executor_terminal_block,
+                        **repair_evidence_metadata,
+                    },
+                )
+            elif artifact_kind == "figure":
                 rec = evidence.register_file(
                     kind="figure",
                     description=f"Figure {art.stem} from step {step.step_id}.",
