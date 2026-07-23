@@ -706,6 +706,39 @@ def test_eicu_microbiology_uses_all_stays_as_denominator(monkeypatch):
     assert bool(result.loc[2, "bld_culture_positive"]) is False
 
 
+def test_miiv_microbiology_pushes_stay_subset_to_hospital_table(monkeypatch):
+    import easyicu.scores.microbiology as microbiology
+
+    captured = []
+    stays = pd.DataFrame({"stay_id": [10, 20], "hadm_id": [100, 200]})
+    microbiology_events = pd.DataFrame(
+        {
+            "hadm_id": [100, 200],
+            "org_name": ["E. coli", ""],
+            "spec_type_desc": ["Blood", "Urine"],
+        }
+    )
+
+    monkeypatch.setattr(microbiology, "_build_datasource", lambda *args: object())
+
+    def fake_table(_ds, table, columns=None, filters=None):
+        if table == "icustays":
+            return stays
+        captured.extend(filters or [])
+        assert table == "microbiologyevents"
+        return microbiology_events[microbiology_events["hadm_id"].isin([100])]
+
+    monkeypatch.setattr(microbiology, "_table_df", fake_table)
+
+    result = microbiology.load_microbiology("miiv", patient_ids=[10])
+
+    assert result["stay_id"].tolist() == [10]
+    assert bool(result["culture_positive"].iloc[0]) is True
+    assert len(captured) == 1
+    assert captured[0].column == "hadm_id"
+    assert captured[0].value == [100]
+
+
 def test_icu_table_to_wide_sets_column_axis_name():
     table = ICUTable(
         pd.DataFrame({"stay_id": [1, 1], "hour": [0, 1], "value": [2.0, 3.0]}),

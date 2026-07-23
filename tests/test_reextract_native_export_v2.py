@@ -28,7 +28,7 @@ class _Package:
         return None
 
 
-def test_launcher_is_sequential_private_and_preserves_one_shot_default(
+def test_launcher_is_sequential_private_and_uses_bounded_external_streaming(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     source = tmp_path / "source"
@@ -45,6 +45,8 @@ def test_launcher_is_sequential_private_and_preserves_one_shot_default(
         assert os.environ["EASYICU_DUCKDB_TEMP_DIR"] == str(
             tmp_path / "out" / ".runtime_spill"
         )
+        assert os.environ["EASYICU_DUCKDB_THREADS"] == "1"
+        assert os.environ["EASYICU_DUCKDB_MEMORY_LIMIT"] == "1GB"
         out = Path(kwargs["output_dir"])
         out.mkdir(mode=0o700)
         spill = out / ".easyicu_spill"
@@ -72,8 +74,9 @@ def test_launcher_is_sequential_private_and_preserves_one_shot_default(
             "database": "miiv",
             "data_path": str(source),
             "output_dir": tmp_path / "out" / "miiv",
-            "batch_size": None,
+            "batch_size": 10_000,
             "native_export_v2": True,
+            "stream_output_batches": True,
             "verbose": True,
         }
     ]
