@@ -276,8 +276,12 @@ def _normalised_join_key(values: pd.Series) -> pd.Series:
     return values.astype(str)
 
 
-def _export_content_sha256(export_root: Path) -> str:
-    """Hash every immediate full0717 file through a path-and-content manifest."""
+def full_export_file_identities(export_root: Path) -> tuple[dict[str, object], ...]:
+    """Return stable identities for every regular member of full0717.
+
+    This helper reads bytes only to calculate content identities.  It never
+    parses clinical rows and is shared by host-only review tooling.
+    """
 
     members: list[dict[str, object]] = []
     for file in sorted(export_root.rglob("*")):
@@ -294,7 +298,15 @@ def _export_content_sha256(export_root: Path) -> str:
         )
     if not members:
         raise IdentityBridgeBuildError("full0717 export contains no regular files")
-    return hashlib.sha256(_canonical_json({"members": members})).hexdigest()
+    return tuple(members)
+
+
+def full_export_content_sha256(export_root: Path) -> str:
+    """Hash every full0717 member through a path-and-content manifest."""
+
+    return hashlib.sha256(
+        _canonical_json({"members": full_export_file_identities(export_root)})
+    ).hexdigest()
 
 
 def _attestation_payload(spec: IdentitySourceSpec) -> dict[str, object]:
@@ -440,7 +452,7 @@ def build_identity_bridge(
             "historical_export": {
                 "export_label": _EXPORT_LABEL,
                 "export_manifest_sha256": _sha256_file(manifest),
-                "export_content_sha256": _export_content_sha256(export_root),
+                "export_content_sha256": full_export_content_sha256(export_root),
             },
             "data_lane": {
                 "status": "authorized",
