@@ -6,6 +6,7 @@ from dataclasses import dataclass
 
 from ...schema import AnalysisPlan, AnalysisStep
 from .deterministic_missingness import (
+    missingness_audit_executor_owns_step,
     missingness_measurement_audit_code,
     source_availability_audit_executor_owns_step,
 )
@@ -42,11 +43,20 @@ def select_standard_executor(
             progress_message="Using planner-specified grouped Table 1 executor",
             code=table_one_executor_code(step),
         )
-    if source_availability_audit_executor_owns_step(step):
+    if missingness_audit_executor_owns_step(step):
+        source_availability = source_availability_audit_executor_owns_step(step)
         return StandardExecutorSelection(
-            analysis_kind="missingness_source_availability_audit",
-            selection_reason="missingness_source_availability_contract_preflight",
-            progress_message="Using planner-specified missingness/source audit executor",
+            analysis_kind=(
+                "missingness_source_availability_audit"
+                if source_availability
+                else "missingness_complete_case_audit"
+            ),
+            selection_reason=(
+                "missingness_source_availability_contract_preflight"
+                if source_availability
+                else "missingness_complete_case_contract_preflight"
+            ),
+            progress_message="Using planner-specified missingness audit executor",
             code=missingness_measurement_audit_code(),
         )
     if trajectory_stability_executor_owns_step(step, plan=plan):
