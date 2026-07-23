@@ -25,7 +25,7 @@ def _payload(*, data_lane: str = "not_authorized") -> dict[str, object]:
         ("eicu", "patientunitstayid", "uniquepid", "attested_icu_stay_to_patient"),
         ("amsterdamumcdb", "admissionid", "patientid", "attested_icu_stay_to_patient"),
         ("hirid", "patientid", "patientid", "attested_source_key_semantics"),
-        ("sicdb", "CaseID", "CaseID", "attested_source_key_semantics"),
+        ("sicdb", "CaseID", "PatientID", "attested_source_key_semantics"),
     )
     mappings = []
     for index, (source_id, stay_key, patient_key, semantics) in enumerate(source_keys):
