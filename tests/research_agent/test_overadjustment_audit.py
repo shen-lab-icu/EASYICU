@@ -17,10 +17,36 @@ from easyicu.research_agent.plan_utils import (
     read_adjustment_covariates,
     read_model_covariate_names,
 )
+from easyicu.research_agent.schema import AnalysisStep, PlannedModelRequirement
 
 
-def _step(step_id="06_primary_association"):
-    return SimpleNamespace(step_id=step_id)
+def _step(
+    step_id="06_primary_association",
+    *,
+    primary_source=None,
+    source_role="primary",
+):
+    model_requirements = []
+    if primary_source is not None:
+        model_requirements.append(
+            PlannedModelRequirement(
+                requirement_id=f"{source_role}_model",
+                outcome="death",
+                outcome_type="binary",
+                method_family="logistic_regression",
+                exposure_source=primary_source,
+                analysis_role=source_role,
+                analysis_set="complete_case",
+                required_for_step_success=True,
+            )
+        )
+    return AnalysisStep(
+        step_id=step_id,
+        intent="Estimate the adjusted association.",
+        method="adjusted_association_models",
+        expected_outputs=["table:adjusted_association_estimates"],
+        model_requirements=model_requirements,
+    )
 
 
 def _ctx(required="sepsis3"):
@@ -136,6 +162,54 @@ def test_exposure_row_itself_is_not_flagged(tmp_path: Path):
         )
         == []
     )
+
+
+def test_planner_operational_primary_source_is_not_overadjustment(tmp_path: Path):
+    # Real E1 shape: ResearchContext preserves the clinical concept while the
+    # typed model roster binds a row-aligned operational representation.  The
+    # operational predictor is the exposure itself, not an adjusted-for SOFA
+    # constituent merely because its column name contains ``sofa``.
+    _write_coef_table(
+        tmp_path,
+        ["const", "sep3_sofa2_max", "age", "sex", "charlson_max"],
+        name="adjusted_association_estimates.csv",
+    )
+    assert (
+        _primary_exposure_overadjustment_findings(
+            step=_step(primary_source="sep3_sofa2_max"),
+            context=_ctx("sepsis3"),
+            out_dir=tmp_path,
+        )
+        == []
+    )
+
+
+def test_operational_source_exemption_does_not_hide_real_constituent(
+    tmp_path: Path,
+):
+    _write_coef_table(
+        tmp_path,
+        ["const", "sep3_sofa2_max", "age", "sofa_renal"],
+        name="adjusted_association_estimates.csv",
+    )
+    findings = _primary_exposure_overadjustment_findings(
+        step=_step(primary_source="sep3_sofa2_max"),
+        context=_ctx("sepsis3"),
+        out_dir=tmp_path,
+    )
+    assert len(findings) == 1
+    assert findings[0].detail["offending_covariates"] == ["sofa_renal"]
+
+
+def test_secondary_source_cannot_exempt_a_primary_constituent(tmp_path: Path):
+    _write_coef_table(tmp_path, ["const", "sepsis3", "age", "sofa_max"])
+    findings = _primary_exposure_overadjustment_findings(
+        step=_step(primary_source="sofa_max", source_role="secondary"),
+        context=_ctx("sepsis3"),
+        out_dir=tmp_path,
+    )
+    assert len(findings) == 1
+    assert findings[0].detail["offending_covariates"] == ["sofa_max"]
 
 
 def test_no_flag_without_required_exposure(tmp_path: Path):
