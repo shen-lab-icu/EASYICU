@@ -366,7 +366,12 @@ def test_pipeline_with_cost_tracking_records_per_role_calls(
     1. populate ``manifest.cost_records`` with at least one entry per
        agent role that actually ran;
     2. write ``cost_summary.md`` + ``cost_records.json`` artefacts to
-       the run directory and register both in the evidence store."""
+       the run directory and register both in the evidence store.
+
+    The generic mock deliberately cannot repair its invalid analysis scripts.
+    Fail-stop therefore permits Coder/repair calls but suppresses downstream
+    Analyzer/Writer calls.
+    """
     pipeline = ra.ResearchAgentPipeline(
         workdir=str(tmp_path),
         llm=ra.MockLLMClient(),
@@ -398,13 +403,13 @@ def test_pipeline_with_cost_tracking_records_per_role_calls(
 
     records = json.loads((run_dir / "cost_records.json").read_text(encoding="utf-8"))
     assert isinstance(records, list)
-    assert len(records) >= 2  # coder + analyzer at minimum (writer is also there)
+    assert len(records) >= 2
 
-    # At least the coder, analyzer and writer roles should appear.
     roles = {r["role"] for r in records if r.get("role")}
     assert "coder" in roles
-    assert "analyzer" in roles
-    assert "writer" in roles
+    assert "repair" in roles
+    assert "analyzer" not in roles
+    assert "writer" not in roles
 
     # Manifest must carry the same records.
     manifest = json.loads(Path(result.manifest_path).read_text(encoding="utf-8"))
