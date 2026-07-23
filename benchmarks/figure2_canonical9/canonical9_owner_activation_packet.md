@@ -47,9 +47,13 @@ protected host location (not in prompts and not in this packet):
 2. An owner attestation for each database's ICU-stay-to-patient semantics.
    HiRID and SICdb require an explicit attestation; their key names cannot be
    treated as patient identity by inference.
-3. A completed native typed materialization review, with exact cohort authority
+3. A `source_attestation_contract.py` handoff pinned to the exact full0717
+   export and bridge identities, with six independently reviewed typed-column
+   inventories and data/transformation/identity owner references.  This is a
+   review handoff only, not a P4 permit.
+4. A completed native typed materialization review, with exact cohort authority
    for all nine tasks and trajectory authority for tasks that require it.
-4. A full-nine `ProductionInputAuthority` whose ordered task digests match the
+5. A full-nine `ProductionInputAuthority` whose ordered task digests match the
    materialized files and sidecars actually selected by the JSONL handoff.
 
 No manual JSON edit, content hash, source-sidecar, or bridge descriptor can

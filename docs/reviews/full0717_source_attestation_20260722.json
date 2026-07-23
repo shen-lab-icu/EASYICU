@@ -12,6 +12,12 @@
     "review_handoff_only": true,
     "real_run_authorized": false
   },
+  "future_review_contract": {
+    "schema_version": "easyicu.figure2_source_attestation/1",
+    "contract_ref": "figure2_canonical9/full0717-source-attestation/20260722-v1",
+    "implementation": "benchmarks/figure2_canonical9/source_attestation_contract.py",
+    "p4_integration": "forbidden_pending_separate_review"
+  },
   "observed_provenance_limitations": [
     "Historical module manifests record empty concept_meta objects.",
     "The historical run manifest records an empty EasyICU commit.",
