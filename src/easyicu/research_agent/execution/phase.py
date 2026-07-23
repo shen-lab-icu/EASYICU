@@ -8623,6 +8623,14 @@ def run_execute_phase(
                         visual_step_summary = vloaded
                     else:
                         visual_step_summary = {"raw": vloaded}
+                # The early repair gate must evaluate the same host-bound
+                # canonical scalars as the final gate.  Otherwise a valid,
+                # Planner-declared statistic sidecar is invisible here and
+                # triggers pointless LLM repairs before evidence registration.
+                visual_step_summary = bind_primary_output(
+                    visual_step_summary,
+                    run_result.out_dir,
+                )
                 if worker_progress.deterministic_standard_executor_used or (
                     worker_progress.runner_repair_name
                     and is_sealed_renderer_repair(worker_progress.runner_repair_name)
@@ -10568,24 +10576,6 @@ def run_execute_phase(
                 reason=standard_executor_terminal_reason,
             )
             return step_record
-        # Re-derive canonical scalar aliases immediately before the final
-        # deterministic gates.  Pre-seal figure/source preparation may inspect
-        # the generated summary, but it must not make a valid, registered
-        # statistic sidecar invisible to the scientific step contract.  This
-        # binding is idempotent and remains fail-closed on unregistered paths,
-        # symlinks, mismatched statistic names, non-finite values, and
-        # conflicting aliases.
-        step_summary = bind_primary_output(step_summary, run_result.out_dir)
-        registered_primary_or = (
-            step_summary.get("output_files", {}).get("statistic:primary_or")
-            if isinstance(step_summary.get("output_files"), Mapping)
-            else None
-        )
-        step_record["host_primary_output_binding"] = {
-            "registered": isinstance(registered_primary_or, str),
-            "bound": isinstance(step_summary.get("primary_or"), (int, float))
-            and not isinstance(step_summary.get("primary_or"), bool),
-        }
         with shared_lock:
             completed_records_snapshot = list(per_step_records)
         final_gate_findings = _evaluate_final_deterministic_gates(
