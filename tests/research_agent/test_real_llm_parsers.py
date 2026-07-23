@@ -202,6 +202,53 @@ def test_planner_uses_enough_completion_budget(ra):
     assert llm.calls[0][1]["max_tokens"] >= 4096
 
 
+def test_planner_retries_dictionary_concept_absent_from_sealed_typed_input(
+    tmp_path,
+):
+    """A legal global concept is not executable authority for every cohort."""
+
+    from easyicu.research_agent.agents.core import PlannerAgent
+    from tests.research_agent.test_materialized_column_metadata import (
+        _build_v2_context,
+    )
+
+    context = _build_v2_context(tmp_path)
+
+    def response(concept_id: str) -> str:
+        return (
+            '{"research_question":"Describe the sealed cohort.",'
+            '"analysis_type":"descriptive_epidemiology",'
+            '"cohort":{"name":"primary","inclusion":[{'
+            f'"concept_id":"{concept_id}",'
+            '"time_window":{"anchor":"icu_admission",'
+            '"start_offset_hours":0,"end_offset_hours":24},'
+            '"aggregation":"max","op":"not_missing","value":null}],'
+            '"exclusion":[]},'
+            '"steps":[{"step_id":"01_define_cohort",'
+            '"planned_analysis_role":"auxiliary",'
+            '"intent":"Materialize the declared analysis cohort.",'
+            '"inputs":["stay_id","lact_max"],'
+            '"expected_outputs":["artifact:analysis_cohort"],'
+            '"method":"cohort_definition"}]}'
+        )
+
+    llm = ScriptedMockLLMClient([response("hr"), response("lact")])
+    plan = PlannerAgent(llm).run(context)
+
+    assert len(llm.calls) == 2
+    assert plan.cohort is not None
+    assert plan.cohort.inclusion[0].concept_id == "lact"
+    feedback = llm.calls[1][0][-1].content
+    assert "not executable against this sealed input" in feedback
+    assert "lact_max" in feedback
+
+
+def test_cohort_concept_allowlist_includes_sofa2_overlay() -> None:
+    from easyicu.research_agent.planning.cohort_contract import known_concept_ids
+
+    assert {"sofa2", "sep3_sofa2", "sofa2_resp"} <= known_concept_ids()
+
+
 def test_openai_client_passes_provider_extra_body(ra, monkeypatch):
     """OpenRouter reasoning controls must reach the SDK request."""
     calls = {}

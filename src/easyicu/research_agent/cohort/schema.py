@@ -473,6 +473,108 @@ def analysis_cohort_authority_coordinates(
     return coordinates
 
 
+def validate_plan_cohort_predicates_against_context(
+    *,
+    plan: Any,
+    context: Any,
+) -> None:
+    """Reject typed predicates that cannot reach the sealed run input.
+
+    Global dictionary membership is necessary but insufficient for a typed
+    run: a legal EasyICU concept can still be absent from this immutable
+    materialized cohort, or available only under a different sealed
+    window/aggregation. Validate that boundary while the Planner's structured
+    retry is active instead of failing later inside LangGraph materialization.
+
+    Legacy contexts retain their historical behavior because they do not carry
+    a host-verified materialized column roster.
+    """
+
+    materialized_inputs = getattr(context, "materialized_inputs", None)
+    typed_cohort = getattr(materialized_inputs, "cohort", None)
+    columns = tuple(getattr(typed_cohort, "cohort_columns", ()) or ())
+    if not columns:
+        return
+
+    definitions: list[tuple[str, CohortDefinition]] = []
+    primary = coerce_cohort_definition(getattr(plan, "cohort", None))
+    if primary is not None and (primary.inclusion or primary.exclusion):
+        definitions.append(("cohort", primary))
+    for index, spec in enumerate(getattr(plan, "robustness_specs", ()) or ()):
+        override = coerce_cohort_definition(getattr(spec, "cohort_override", None))
+        if override is not None and (override.inclusion or override.exclusion):
+            spec_id = str(getattr(spec, "spec_id", "") or index)
+            definitions.append(
+                (f"robustness_specs[{spec_id}].cohort_override", override)
+            )
+
+    issues: list[str] = []
+    for label, definition in definitions:
+        try:
+            bindings = _planner_declared_context_column_bindings(
+                definition=definition,
+                plan=plan,
+                context=context,
+                columns=columns,
+            )
+        except CohortDataError as exc:
+            issues.append(f"{label}: {exc}")
+            continue
+        for kind, predicates in (
+            ("inclusion", definition.inclusion),
+            ("exclusion", definition.exclusion),
+        ):
+            for index, predicate in enumerate(predicates):
+                if (
+                    _resolve_predicate_column(
+                        columns,
+                        predicate.concept_id,
+                        predicate.aggregation,
+                        column_bindings=bindings,
+                    )
+                    is None
+                ):
+                    issues.append(
+                        f"{label}.{kind}[{index}] concept_id="
+                        f"{predicate.concept_id!r}, aggregation="
+                        f"{predicate.aggregation!r}, window="
+                        f"{predicate.time_window.anchor}["
+                        f"{predicate.time_window.start_offset_hours},"
+                        f"{predicate.time_window.end_offset_hours}]h has no "
+                        "exact or uniquely bound sealed column"
+                    )
+    if not issues:
+        return
+
+    column_set = set(columns)
+    producer_columns = sorted(
+        {
+            str(value).strip()
+            for step in getattr(plan, "steps", ()) or ()
+            if _declares_analysis_cohort(step, plan=plan)
+            for value in getattr(step, "inputs", ()) or ()
+            if str(value or "").strip() in column_set and ":" not in str(value)
+        }
+    )
+    typed_sources = sorted(
+        {
+            str(getattr(variable, "source_concept", "") or "").strip()
+            for variable in getattr(context, "variables", ()) or ()
+            if str(getattr(variable, "source_concept", "") or "").strip()
+            and str(getattr(variable, "name", "") or "").strip() in producer_columns
+        }
+    )
+    detail = "; ".join(issues[:4])
+    raise CohortSchemaError(
+        "typed cohort predicates are not executable against this sealed input: "
+        f"declared typed source concepts={typed_sources!r}; declared columns="
+        f"{producer_columns!r}. {detail}. Use a merged EasyICU dictionary "
+        "concept whose exact sealed "
+        "window/aggregation is represented by an analysis-cohort step input; "
+        "do not invent unavailable columns or windows."
+    )
+
+
 def coerce_isfinite_safe_dtypes(frame: Any) -> Any:
     """Downcast pandas nullable-extension and boolean-object columns to numpy
     ``float64`` so downstream ``np.isfinite`` / ``to_numpy()`` in generated
@@ -1042,6 +1144,7 @@ __all__ = [
     "register_patterns_from_file",
     "reset_pattern_registry",
     "validate_cohort_definition",
+    "validate_plan_cohort_predicates_against_context",
     "validate_concept_predicate",
     "write_locked_cohort_definition",
 ]
