@@ -455,16 +455,16 @@ def test_private_table_one_labels_never_enter_agent_prompts() -> None:
     )
     assert not table.empty
 
-    coder_llm = ExternalCaptureMockLLMClient(["value = 1\n"])
-    CoderAgent(coder_llm).run(context=context, step=revised.steps[0])
-
     patch = json.dumps(
         {
             "format": PATCH_FORMAT,
             "edits": [{"old": "value = 1", "new": "value = 2", "expected_count": 1}],
         }
     )
+    coder_llm = ExternalCaptureMockLLMClient(["value = 1\n"])
     repair_llm = ExternalCaptureMockLLMClient([patch])
+    coder_agent = CoderAgent(coder_llm, repair_llm=repair_llm)
+    coder_agent.run(context=context, step=revised.steps[0])
     authority = RepairPromptAuthority.create(
         typed_ticket=[
             {
@@ -475,7 +475,7 @@ def test_private_table_one_labels_never_enter_agent_prompts() -> None:
             }
         ]
     )
-    CoderAgent(repair_llm).repair(
+    coder_agent.repair(
         context=context,
         step=revised.steps[0],
         code="value = 1\n",
@@ -483,6 +483,8 @@ def test_private_table_one_labels_never_enter_agent_prompts() -> None:
         repair_authority=authority,
         current_repair_authority=authority,
     )
+    assert len(coder_llm.calls) == 1
+    assert len(repair_llm.calls) == 1
 
     concept_llm = ExternalCaptureMockLLMClient(['{"findings":[]}'])
     LLMConceptAuditor(concept_llm).audit(

@@ -250,6 +250,101 @@ def test_loopback_opt_in_without_key_still_uses_dummy(ra, monkeypatch):
         assert kwargs["api_key"] == LOCAL_OPENAI_DUMMY_API_KEY
 
 
+def test_benchmark_adaptive_reasoning_is_explicit_and_role_scoped(
+    ra, monkeypatch
+):
+    import tools.run_research_agent_bench as benchmark
+    from easyicu.research_agent.providers.factory import (
+        provider_authorization_manifest,
+    )
+
+    constructed = []
+
+    class _Transport:
+        def __init__(self, **kwargs):
+            constructed.append(dict(kwargs))
+            self.chat = SimpleNamespace(completions=SimpleNamespace())
+
+    monkeypatch.setitem(
+        sys.modules,
+        "openai",
+        SimpleNamespace(OpenAI=lambda **kwargs: _Transport(**kwargs)),
+    )
+    monkeypatch.setenv("OPENAI_BASE_URL", "http://127.0.0.1:8317/v1")
+
+    router = benchmark._make_llm(
+        provider="openai",
+        model="gpt-5.6-luna",
+        request_timeout=17.0,
+        reasoning_effort_profile="adaptive_v1",
+    )
+
+    assert router.for_role("planner") is router.for_role("coder")
+    assert router.for_role("analyzer") is router.for_role("writer")
+    assert router.for_role("repair") is not router.for_role("coder")
+    assert router.for_role("planner")._extra_body == {
+        "reasoning": {"effort": "medium"}
+    }
+    assert router.for_role("analyzer")._extra_body == {
+        "reasoning": {"effort": "low"}
+    }
+    assert router.for_role("repair")._extra_body == {
+        "reasoning": {"effort": "high"}
+    }
+    assert (
+        provider_authorization_manifest(router)["reasoning_effort_profile"]
+        == "adaptive_v1"
+    )
+    expected_identity = benchmark._benchmark_execution_identity(
+        {},
+        provider="openai",
+        model="gpt-5.6-luna",
+        reasoning_effort_profile="adaptive_v1",
+    )
+    actual_identity = benchmark._benchmark_execution_identity({}, router)
+    assert actual_identity.identity_sha256 == expected_identity.identity_sha256
+    assert len(constructed) == 3
+
+
+def test_reasoning_extra_body_mutation_is_rejected_before_transport(
+    ra, monkeypatch
+):
+    from easyicu.research_agent.providers.factory import (
+        ProviderConfigurationError,
+        authorized_complete,
+    )
+    from easyicu.research_agent.providers.llm import OpenAIClient
+    from easyicu.research_agent.providers.protocol import LLMMessage
+
+    calls = []
+    completions = SimpleNamespace(create=lambda **kwargs: calls.append(kwargs))
+    monkeypatch.setitem(
+        sys.modules,
+        "openai",
+        SimpleNamespace(
+            OpenAI=lambda **_kwargs: SimpleNamespace(
+                chat=SimpleNamespace(completions=completions)
+            )
+        ),
+    )
+    client = OpenAIClient(
+        model="model",
+        api_key="non-secret-test-key",
+        base_url="http://127.0.0.1:8317/v1",
+        request_timeout=1.0,
+        max_retries=0,
+        extra_body={"reasoning": {"effort": "medium"}},
+    )
+    client._extra_body["reasoning"]["effort"] = "low"
+
+    with pytest.raises(ProviderConfigurationError):
+        authorized_complete(
+            client,
+            [LLMMessage(role="user", content="must not leave")],
+        )
+    assert calls == []
+
+
 @pytest.mark.parametrize(
     ("provider", "available_key", "missing_key"),
     [
@@ -350,7 +445,8 @@ def test_factory_authorization_records_exact_nonsecret_endpoint():
         },
     )
 
-    assert payload["schema_version"] == "easyicu.provider_authorization_manifest/1"
+    assert payload["schema_version"] == "easyicu.provider_authorization_manifest/2"
+    assert payload["reasoning_effort_profile"] == "provider_default"
     assert payload["clients"] == [
         {
             "provider": "openrouter",
@@ -413,7 +509,8 @@ def test_unknown_provider_is_unmanaged_external_and_never_local_exempt():
 
     assert provider_transport_destination(client) == "external"
     assert provider_authorization_manifest(client) == {
-        "schema_version": "easyicu.provider_authorization_manifest/1",
+        "schema_version": "easyicu.provider_authorization_manifest/2",
+        "reasoning_effort_profile": "provider_default",
         "clients": [
             {
                 "provider": "custom-forwarder",

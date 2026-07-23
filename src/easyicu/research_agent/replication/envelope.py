@@ -46,12 +46,13 @@ import json
 import os
 import platform
 import sys
+import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
 
-ENVELOPE_SCHEMA_VERSION = "easyicu.reproducibility_envelope/2"
+ENVELOPE_SCHEMA_VERSION = "easyicu.reproducibility_envelope/3"
 
 
 # ---------------------------------------------------------------------------
@@ -153,6 +154,8 @@ class ReproCallRecord:
     response_sha256: str
     prompt_chars: int
     response_chars: int
+    reasoning_effort: Optional[str] = None
+    elapsed_ms: Optional[float] = None
     # Envelope schema /2: requested_top_p records the top_p value the
     # caller asked for. ``None`` means the caller did not set top_p and
     # the provider's default applies (typically 1.0 for OpenAI-compatible
@@ -176,6 +179,8 @@ class ReproCallRecord:
             "response_sha256": self.response_sha256,
             "prompt_chars": self.prompt_chars,
             "response_chars": self.response_chars,
+            "reasoning_effort": self.reasoning_effort,
+            "elapsed_ms": self.elapsed_ms,
         }
         if self.prompt_preview is not None:
             payload["prompt_preview"] = self.prompt_preview
@@ -218,6 +223,8 @@ class ReproEnvelope:
         messages: Sequence[Any],
         response: str,
         requested_top_p: Optional[float] = None,
+        reasoning_effort: Optional[str] = None,
+        elapsed_ms: Optional[float] = None,
     ) -> ReproCallRecord:
         prompt_canonical = _canonical_messages(messages)
         prompt_preview: Optional[str] = None
@@ -240,6 +247,8 @@ class ReproEnvelope:
             response_sha256=sha256_text(response or ""),
             prompt_chars=len(prompt_canonical),
             response_chars=len(response or ""),
+            reasoning_effort=reasoning_effort,
+            elapsed_ms=(float(elapsed_ms) if elapsed_ms is not None else None),
             prompt_preview=prompt_preview,
             response_preview=response_preview,
         )
@@ -258,6 +267,8 @@ class ReproEnvelope:
         seeds = set()
         top_ps = set()
         top_p_was_unset = False
+        reasoning_efforts = set()
+        elapsed_ms_total = 0.0
         for r in self.calls:
             role_key = r.role or "unrouted"
             rb = by_role.setdefault(
@@ -275,6 +286,10 @@ class ReproEnvelope:
                 top_p_was_unset = True
             else:
                 top_ps.add(r.requested_top_p)
+            if r.reasoning_effort is not None:
+                reasoning_efforts.add(r.reasoning_effort)
+            if r.elapsed_ms is not None:
+                elapsed_ms_total += r.elapsed_ms
         summary = {
             "schema_version": ENVELOPE_SCHEMA_VERSION,
             "run_id": self.run_id,
@@ -286,6 +301,8 @@ class ReproEnvelope:
             "requested_seeds": sorted([s for s in seeds if s is not None]) or [],
             "requested_top_ps": sorted(top_ps),
             "top_p_used_provider_default": top_p_was_unset,
+            "reasoning_efforts": sorted(reasoning_efforts),
+            "recorded_elapsed_ms_total": round(elapsed_ms_total, 3),
             "by_role": by_role,
             "by_model": by_model,
             "env_snapshot": dict(self.env_snapshot),
@@ -359,6 +376,16 @@ class ReproRecordingClient:
                 return val
         return "unknown"
 
+    def _resolve_reasoning_effort(self) -> Optional[str]:
+        extra_body = getattr(self._inner, "_extra_body", None)
+        if not isinstance(extra_body, dict):
+            return None
+        reasoning = extra_body.get("reasoning")
+        if not isinstance(reasoning, dict):
+            return None
+        effort = reasoning.get("effort")
+        return str(effort) if effort is not None else None
+
     def _forward_complete(
         self,
         messages: Sequence[Any],
@@ -411,6 +438,7 @@ class ReproRecordingClient:
 
         complete_with_usage = getattr(self._inner, "complete_with_usage", None)
         usage: Optional[Dict[str, int]] = None
+        started = time.monotonic()
         if callable(complete_with_usage):
             try:
                 params = inspect.signature(complete_with_usage).parameters
@@ -441,6 +469,7 @@ class ReproRecordingClient:
                 temperature=temperature,
                 top_p=top_p,
             )
+        elapsed_ms = (time.monotonic() - started) * 1000.0
         self._envelope.record(
             role=self._role,
             client_name=getattr(self._inner, "name", type(self._inner).__name__),
@@ -451,6 +480,8 @@ class ReproRecordingClient:
             requested_top_p=top_p,
             messages=messages,
             response=response,
+            reasoning_effort=self._resolve_reasoning_effort(),
+            elapsed_ms=elapsed_ms,
         )
         # Compatibility only. Cost attribution uses the returned call-scoped
         # value above and never reads this shared attribute.

@@ -155,6 +155,34 @@ def test_recording_client_records_provider_default_when_top_p_unset(ra):
     assert summary["requested_top_ps"] == []
 
 
+def test_recording_client_records_reasoning_effort_and_elapsed_time(ra):
+    from easyicu.research_agent.providers.llm import LLMMessage
+
+    class _EffortClient:
+        name = "effort-client"
+        _model = "effort-model"
+        _extra_body = {"reasoning": {"effort": "medium"}}
+
+        def complete(self, messages, *, max_tokens=2048, temperature=0.2):
+            return "ok"
+
+    env = ra.ReproEnvelope(run_id="run-effort")
+    recorder = ra.ReproRecordingClient(
+        _EffortClient(),
+        role="planner",
+        envelope=env,
+    )
+    recorder.complete([LLMMessage(role="user", content="x")])
+
+    record = env.calls[0]
+    assert record.reasoning_effort == "medium"
+    assert record.elapsed_ms is not None and record.elapsed_ms >= 0
+    assert record.to_json()["reasoning_effort"] == "medium"
+    summary = env.to_manifest_summary()
+    assert summary["reasoning_efforts"] == ["medium"]
+    assert summary["recorded_elapsed_ms_total"] >= 0
+
+
 def test_recording_client_degrades_gracefully_for_clients_without_seed(ra):
     from easyicu.research_agent.providers.llm import LLMMessage
 

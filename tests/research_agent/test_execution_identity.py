@@ -27,7 +27,8 @@ def _provider_authorization(*, model: str = "model-a") -> dict[str, Any]:
         authorization_mode="operator_env",
     )
     return {
-        "schema_version": "easyicu.provider_authorization_manifest/1",
+        "schema_version": "easyicu.provider_authorization_manifest/2",
+        "reasoning_effort_profile": "provider_default",
         "clients": [
             {
                 "provider": authorization.provider,
@@ -148,6 +149,28 @@ def test_preflight_provider_coordinates_match_the_constructed_client() -> None:
     )
 
     assert actual.identity_sha256 == preflight.identity_sha256
+
+
+def test_reasoning_effort_profile_changes_execution_identity() -> None:
+    environment = {"OPENAI_BASE_URL": "http://127.0.0.1:8317/v1"}
+    default = _identity(
+        provider_authorization=provider_authorization_for_configuration(
+            provider="openai",
+            model="local-model",
+            environment=environment,
+            reasoning_effort_profile="provider_default",
+        )
+    )
+    adaptive = _identity(
+        provider_authorization=provider_authorization_for_configuration(
+            provider="openai",
+            model="local-model",
+            environment=environment,
+            reasoning_effort_profile="adaptive_v1",
+        )
+    )
+
+    assert default.identity_sha256 != adaptive.identity_sha256
 
 
 def test_unmanaged_custom_provider_can_never_receive_paper_authority() -> None:

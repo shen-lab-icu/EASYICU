@@ -126,7 +126,27 @@ def _reviewed_dispatch_identity(client: Any) -> tuple[Any, ...]:
                 EXTERNAL_LLM_NOT_AUTHORIZED,
                 "openai",
             )
-        return ("openai", local_noauth, attribute, id(transport), type(transport))
+        extra_body = instance_vars.get("_extra_body", {})
+        try:
+            extra_body_identity = json.dumps(
+                extra_body or {},
+                sort_keys=True,
+                separators=(",", ":"),
+                allow_nan=False,
+            )
+        except (TypeError, ValueError):
+            raise ProviderConfigurationError(
+                EXTERNAL_LLM_NOT_AUTHORIZED,
+                "openai",
+            ) from None
+        return (
+            "openai",
+            local_noauth,
+            attribute,
+            id(transport),
+            type(transport),
+            extra_body_identity,
+        )
     if _is_reviewed_client_type(client, "CLIAgentLLMClient"):
         instance_vars = _safe_instance_vars(client)
         return (
@@ -896,6 +916,10 @@ def provider_transport_destination(client: Any) -> str:
 def provider_authorization_manifest(client: Any) -> dict[str, Any]:
     """Return exact non-secret endpoint authorization for run provenance."""
 
+    reasoning_effort_profile = str(
+        getattr(client, "_reasoning_effort_profile", "provider_default")
+        or "provider_default"
+    )
     clients: list[Any] = []
     stack = [client]
     seen: set[int] = set()
@@ -954,7 +978,8 @@ def provider_authorization_manifest(client: Any) -> dict[str, Any]:
         for record in records
     }
     return {
-        "schema_version": "easyicu.provider_authorization_manifest/1",
+        "schema_version": "easyicu.provider_authorization_manifest/2",
+        "reasoning_effort_profile": reasoning_effort_profile,
         "clients": [unique[key] for key in sorted(unique)],
     }
 
@@ -964,14 +989,19 @@ def provider_authorization_for_configuration(
     provider: str,
     model: str,
     environment: Optional[Mapping[str, str]] = None,
+    reasoning_effort_profile: str = "provider_default",
 ) -> dict[str, Any]:
     """Mint non-secret identity coordinates without constructing a client."""
 
     env = os.environ if environment is None else environment
+    profile = str(reasoning_effort_profile or "").strip().lower()
+    if profile not in {"provider_default", "adaptive_v1"}:
+        raise ProviderConfigurationError(UNSUPPORTED_PROVIDER, profile)
     normalized = str(provider or "").strip().lower()
     if normalized == "mock":
         return {
-            "schema_version": "easyicu.provider_authorization_manifest/1",
+            "schema_version": "easyicu.provider_authorization_manifest/2",
+            "reasoning_effort_profile": profile,
             "clients": [
                 {
                     "provider": "mock",
@@ -997,7 +1027,8 @@ def provider_authorization_for_configuration(
         authorization_mode="local_exempt" if loopback else "operator_env",
     )
     return {
-        "schema_version": "easyicu.provider_authorization_manifest/1",
+        "schema_version": "easyicu.provider_authorization_manifest/2",
+        "reasoning_effort_profile": profile,
         "clients": [
             {
                 "provider": authorization.provider,
@@ -1106,6 +1137,7 @@ def build_provider_client(
     client_cls: Callable[..., Any],
     environment: Optional[Mapping[str, str]] = None,
     base_url_override: object = _BASE_URL_UNSET,
+    extra_body: Optional[Mapping[str, Any]] = None,
 ) -> Any:
     """Build an OpenAI-compatible client under the canonical key policy.
 
@@ -1149,9 +1181,11 @@ def build_provider_client(
                 "X-Title": title,
             },
         }
-        extra_body = _openrouter_reasoning_extra_body(model)
-        if extra_body is not None:
-            kwargs["extra_body"] = extra_body
+        provider_extra_body = _openrouter_reasoning_extra_body(model)
+        merged_extra_body = dict(provider_extra_body or {})
+        merged_extra_body.update(dict(extra_body or {}))
+        if merged_extra_body:
+            kwargs["extra_body"] = merged_extra_body
         client = client_cls(**kwargs)
         return _attach_provider_authorization(
             client,
@@ -1216,6 +1250,8 @@ def build_provider_client(
         }
         if base_url:
             kwargs["base_url"] = base_url
+        if extra_body:
+            kwargs["extra_body"] = dict(extra_body)
         client = client_cls(**kwargs)
         resolved_url = str(base_url or DEFAULT_OPENAI_BASE_URL)
         return _attach_provider_authorization(

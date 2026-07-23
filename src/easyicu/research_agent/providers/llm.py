@@ -1146,7 +1146,44 @@ class FallbackLLMClient:
 # ---------------------------------------------------------------------------
 
 
-_ROUTER_ROLES = ("planner", "coder", "analyzer", "writer", "literature")
+REASONING_EFFORT_PROFILE_PROVIDER_DEFAULT = "provider_default"
+REASONING_EFFORT_PROFILE_ADAPTIVE_V1 = "adaptive_v1"
+_REASONING_EFFORT_PROFILES: Dict[str, Dict[str, str]] = {
+    REASONING_EFFORT_PROFILE_PROVIDER_DEFAULT: {},
+    REASONING_EFFORT_PROFILE_ADAPTIVE_V1: {
+        "planner": "medium",
+        "coder": "medium",
+        "analyzer": "low",
+        "writer": "low",
+        "literature": "low",
+        "repair": "high",
+    },
+}
+_ROUTER_ROLES = (
+    "planner",
+    "coder",
+    "analyzer",
+    "writer",
+    "literature",
+    "repair",
+)
+
+
+def reasoning_effort_by_role(profile: str) -> Dict[str, str]:
+    """Return one reviewed per-role reasoning profile.
+
+    ``provider_default`` sends no override. ``adaptive_v1`` is deliberately
+    explicit so benchmark authority and per-call evidence can distinguish it
+    from a proxy-wide default that may change outside EasyICU.
+    """
+
+    normalized = str(profile or "").strip().lower()
+    if normalized not in _REASONING_EFFORT_PROFILES:
+        raise ValueError(
+            f"unknown reasoning effort profile {profile!r}; expected one of "
+            f"{sorted(_REASONING_EFFORT_PROFILES)}"
+        )
+    return dict(_REASONING_EFFORT_PROFILES[normalized])
 
 
 class LLMRouter:
@@ -1167,6 +1204,8 @@ class LLMRouter:
       typically enough.
     * **Literature** is optional; the offline curated registry is the
       default, but the agent can be wired through this router too.
+    * **Repair** is isolated from initial code generation so a configured
+      profile can spend more reasoning only after a validated failure.
 
     Running everything on the same model wastes money and rate limit.
     The :class:`LLMRouter` lets the pipeline use a different
@@ -1201,7 +1240,11 @@ class LLMRouter:
         analyzer: Optional[Any] = None,
         writer: Optional[Any] = None,
         literature: Optional[Any] = None,
+        repair: Optional[Any] = None,
+        reasoning_effort_profile: str = REASONING_EFFORT_PROFILE_PROVIDER_DEFAULT,
     ) -> None:
+        profile = str(reasoning_effort_profile or "").strip().lower()
+        expected_efforts = reasoning_effort_by_role(profile)
         self._default = default
         self._roles: Dict[str, Optional[Any]] = {
             "planner": planner,
@@ -1209,12 +1252,30 @@ class LLMRouter:
             "analyzer": analyzer,
             "writer": writer,
             "literature": literature,
+            "repair": repair,
         }
+        self._reasoning_effort_profile = profile
         if default is None and all(v is None for v in self._roles.values()):
             raise ValueError(
                 "LLMRouter needs at least one client. Pass a `default=` "
                 "and/or any subset of role-specific clients."
             )
+        for role, expected_effort in expected_efforts.items():
+            client = self._roles.get(role) or self._default
+            extra_body = getattr(client, "_extra_body", None)
+            reasoning = (
+                extra_body.get("reasoning")
+                if isinstance(extra_body, dict)
+                else None
+            )
+            actual_effort = (
+                reasoning.get("effort") if isinstance(reasoning, dict) else None
+            )
+            if actual_effort != expected_effort:
+                raise ValueError(
+                    f"reasoning profile {profile!r} requires {role}="
+                    f"{expected_effort!r}, observed {actual_effort!r}"
+                )
         from .factory import _register_provider_wrapper
 
         _register_provider_wrapper(
@@ -1709,5 +1770,6 @@ __all__ = [
     "llm_is_mockish",
     "llm_supports_vision",
     "openrouter_reasoning_extra_body",
+    "reasoning_effort_by_role",
     "resolve_role_client",
 ]

@@ -6,7 +6,12 @@ import json
 
 import pytest
 
-from easyicu.research_agent.agents.core import CoderAgent, CoderPromptBudgetError
+from easyicu.research_agent.agents.core import (
+    CoderAgent,
+    CoderPromptBudgetError,
+    _compact_repair_scope_contract,
+    _typed_input_scope_contract,
+)
 from easyicu.research_agent.repairs.patch import PATCH_FORMAT
 from easyicu.research_agent.authority.coder_authority import HostCoderAuthority
 from easyicu.research_agent.research_context.prompt_scope import (
@@ -121,6 +126,25 @@ def _quality_step(ra, *, n_families: int = 4):
         expected_outputs=["table:exposure_qc"],
         method="ordered_exposure_quality_control",
     )
+
+
+def test_raw_input_scope_preserves_physical_superset_in_generation_and_repair(ra):
+    step = ra.AnalysisStep(
+        step_id="define_cohort",
+        intent="Apply the declared eligibility predicate.",
+        inputs=["stay_id", "admission_flag", "outcome"],
+        expected_outputs=["artifact:analysis_cohort", "table:cohort_attrition"],
+        method="cohort_definition_with_attrition",
+    )
+
+    contracts = (
+        _typed_input_scope_contract(step),
+        _compact_repair_scope_contract(step),
+    )
+    for contract in contracts:
+        assert "COHORT_PARQUET physical columns may be a strict superset" in contract
+        assert "never require DataFrame.columns to equal" in contract
+        assert "preserve full row payload" in contract
 
 
 def _payload_bytes(messages) -> int:  # noqa: ANN001

@@ -56,10 +56,22 @@ def test_router_for_role_returns_role_specific_client(ra):
 
     assert router.for_role("planner") is planner
     assert router.for_role("coder") is coder
-    # analyzer / writer / literature have no per-role client → fall back.
+    # analyzer / writer / literature / repair have no per-role client → fall back.
     assert router.for_role("analyzer") is default
     assert router.for_role("writer") is default
     assert router.for_role("literature") is default
+    assert router.for_role("repair") is default
+
+
+def test_router_can_isolate_repair_from_initial_coder(ra):
+    from easyicu.research_agent.providers.mocks import ScriptedMockLLMClient
+
+    coder = ScriptedMockLLMClient(["coder"])
+    repair = ScriptedMockLLMClient(["repair"])
+    router = ra.LLMRouter(default=coder, coder=coder, repair=repair)
+
+    assert router.for_role("coder") is coder
+    assert router.for_role("repair") is repair
 
 
 def test_router_for_role_unknown_role(ra):
