@@ -75,4 +75,6 @@ jobs:
           pytest tests/research_agent/test_runner.py -q
           # The remaining offline integration tests execute deterministic
           # generated fixtures on the ephemeral Actions host.
-          EASYICU_ALLOW_UNSAFE_HOST_FALLBACK=1 pytest tests/research_agent -q --ignore=tests/research_agent/test_runner.py
+          EASYICU_TEST_RUNNER_KIND=subprocess \
+          EASYICU_ALLOW_UNSAFE_HOST_FALLBACK=1 \
+            pytest tests/research_agent -q --ignore=tests/research_agent/test_runner.py
