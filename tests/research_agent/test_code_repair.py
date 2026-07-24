@@ -1149,6 +1149,68 @@ step_summary = {
     assert deterministic_contract_repair(code=patched, findings=findings) is None
 
 
+def test_contract_repair_replaces_direct_custom_provenance_receipts():
+    code = """import pandas as pd
+
+def provenance_receipt(frame, measured_column, count_column, concept, start, end):
+    measured = pd.to_numeric(frame[measured_column], errors="coerce")
+    count = pd.to_numeric(frame[count_column], errors="coerce")
+    return {
+        "concept": concept,
+        "measured_column": measured_column,
+        "count_column": count_column,
+        "n_rows": int(len(frame)),
+        "n_inconsistent_status_count_pairs": int(
+            (((measured == 1) & (count <= 0)) | ((measured == 0) & (count > 0))).sum()
+        ),
+    }
+
+lact_receipt = provenance_receipt(
+    frame, "lact_measured", "lact_n", "lact", 0.0, 24.0
+)
+score_receipt = provenance_receipt(
+    frame, "score_measured", "score_n", "score", 0.0, 24.0
+)
+measurement_provenance_audit = {
+    "source": "COHORT_PARQUET",
+    "checks": [lact_receipt, score_receipt],
+}
+"""
+    findings = [
+        {
+            "validator": "step_summary_integrity",
+            "severity": "error",
+            "detail": {
+                "issue": "measurement_provenance_check_invalid",
+                "measured_column": measured,
+                "expected_count_column": count,
+                "expected_status": "checked",
+                "invalid_fields": [
+                    "role",
+                    "status",
+                    "comparison_n",
+                    "invalid_pair_n",
+                    "discordant_n",
+                ],
+            },
+        }
+        for measured, count in (
+            ("lact_measured", "lact_n"),
+            ("score_measured", "score_n"),
+        )
+    ]
+
+    repaired = deterministic_contract_repair(code=code, findings=findings)
+
+    assert repaired is not None
+    name, patched = repaired
+    assert name == "measurement_provenance_host_receipts_v1"
+    assert "def provenance_receipt" not in patched
+    assert patched.count("measurement_provenance_receipt(") == 2
+    assert "measured_column='lact_measured', count_column='lact_n'" in patched
+    assert "measured_column='score_measured', count_column='score_n'" in patched
+
+
 def test_contract_repair_replaces_unplanned_split_provenance_checks_with_host_receipt():
     code = """import pandas as pd
 
