@@ -3003,21 +3003,13 @@ class CrossStepRegisteredOutputValidator:
         summary = record.get("step_summary")
         if not isinstance(summary, dict):
             return sorted(set(artifacts))
-
-        def collect(value: Any) -> None:
-            if isinstance(value, str):
-                if value.strip().lower().endswith(cls._TABLE_SUFFIXES):
-                    artifacts.append(value.strip())
-            elif isinstance(value, dict):
-                for child in value.values():
-                    collect(child)
-            elif isinstance(value, list):
-                for child in value:
-                    collect(child)
-
-        for key in ("output_files", "outputs"):
-            if key in summary:
-                collect(summary[key])
+        output_files = summary.get("output_files")
+        if isinstance(output_files, Mapping):
+            for raw_path in output_files.values():
+                if isinstance(raw_path, str) and raw_path.strip().lower().endswith(
+                    cls._TABLE_SUFFIXES
+                ):
+                    artifacts.append(raw_path.strip())
         return sorted(set(artifacts))
 
     @classmethod

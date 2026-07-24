@@ -15,12 +15,19 @@ from pydantic import ValidationError
 from easyicu.research_agent.audits.envelope_shadow import (
     compare_validator_shadow_inputs,
 )
+from easyicu.research_agent.audits.envelope_consumers import (
+    CrossStepRegisteredOutputEnvelopeDualReader,
+)
+from easyicu.research_agent.audits.validators import (
+    CrossStepRegisteredOutputValidator,
+)
 from easyicu.research_agent.execution.result_envelope import (
     StepResultEnvelope,
     normalize_step_result_shadow,
     verify_step_result_envelope,
     write_shadow_step_result_envelope,
 )
+from easyicu.research_agent.schema import AnalysisStep
 
 
 def _issue_codes(envelope: StepResultEnvelope) -> set[str]:
@@ -292,10 +299,15 @@ def test_archived_replay_uses_current_ledger_and_verified_input_authority(
     cohort_sha = hashlib.sha256(cohort.read_bytes()).hexdigest()
     statistic = step_out / "estimate.json"
     statistic.write_text('{"estimate":1.25}', encoding="utf-8")
+    table = step_out / "estimate.csv"
+    table.write_text("model_id,estimate\nprimary,1.25\n", encoding="utf-8")
     container_path = "/easyicu-run/evidence/table_cohort__cohort.parquet"
     current_summary = {
         "cohort_path": container_path,
-        "output_files": {"statistic:primary_estimate": statistic.name},
+        "output_files": {
+            "statistic:primary_estimate": statistic.name,
+            "table:primary_estimate": table.name,
+        },
     }
     (step_out / "step_summary.json").write_text(
         json.dumps({"status": "stale"}),
@@ -309,7 +321,17 @@ def test_archived_replay_uses_current_ledger_and_verified_input_authority(
                 "planned_analysis_role": "primary_estimand",
                 "resolved_input_evidence_ids": ["table_cohort"],
                 "step_summary": current_summary,
-            }
+            },
+            {
+                "step_id": "02_reconciliation",
+                "status": "ok",
+                "step_summary": {
+                    "registered_output": {
+                        "upstream_step": "01_analysis",
+                        "source_table_available": False,
+                    }
+                },
+            },
         ]
     }
     (run_dir / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
@@ -348,8 +370,13 @@ def test_archived_replay_uses_current_ledger_and_verified_input_authority(
 
     assert result.returncode == 0, result.stderr
     index = json.loads((shadow_dir / "index.json").read_text())
+    assert index["schema_version"] == "easyicu.shadow_step_result_index/3"
     assert index["normalization_error_count"] == 0
     assert index["validator_shadow_mismatch_count"] == 0
+    assert index["registered_output_claim_count"] == 1
+    assert index["registered_output_shadow_mismatch_count"] == 0
+    assert index["steps"][1]["registered_output_legacy_finding_count"] == 1
+    assert index["steps"][1]["registered_output_shadow_exact"] is True
     envelope = StepResultEnvelope.model_validate_json(
         (shadow_dir / "01_analysis.step_result.envelope.json").read_text()
     )
@@ -386,6 +413,7 @@ def test_archived_replay_uses_current_ledger_and_verified_input_authority(
     rejected_index = json.loads((rejected_shadow_dir / "index.json").read_text())
     assert rejected_index["normalization_error_count"] == 1
     assert rejected_index["validator_shadow_mismatch_count"] == 1
+    assert rejected_index["registered_output_shadow_mismatch_count"] == 1
     rejected_envelope = StepResultEnvelope.model_validate_json(
         (rejected_shadow_dir / "01_analysis.step_result.envelope.json").read_text()
     )
@@ -402,6 +430,7 @@ def test_shadow_envelope_is_not_wired_into_live_execution() -> None:
         source = (repo_root / relative).read_text(encoding="utf-8")
         assert "execution.result_envelope" not in source
         assert "normalize_step_result_shadow" not in source
+        assert "audits.envelope_consumers" not in source
         assert "audits.envelope_shadow" not in source
         assert "compare_validator_shadow_inputs" not in source
 
@@ -593,4 +622,131 @@ def test_validator_shadow_comparison_is_exact_and_observational(
         "canonical_source_digest_mismatch",
         "canonical_status_mismatch",
         "canonical_unexpected_artifact",
+    }
+
+
+def _registered_output_record(summary: dict[str, object]) -> dict[str, object]:
+    return {
+        "step_id": "04_absolute_risk_context",
+        "status": "ok",
+        "evidence_ids": ["table_exposure_outcome_summary_8368e5ab"],
+        "step_summary": summary,
+    }
+
+
+def _registered_output_consumer_summary() -> dict[str, object]:
+    return {
+        "registered_output": {
+            "upstream_step": "04_absolute_risk_context",
+            "source_table_available": False,
+            "source_table_path": None,
+        }
+    }
+
+
+def test_registered_output_gate_dual_read_matches_legacy_exactly(
+    tmp_path: Path,
+) -> None:
+    table = tmp_path / "exposure_outcome_summary.csv"
+    table.write_text("group,n\n0,40\n1,60\n", encoding="utf-8")
+    prior_summary = {
+        "status": "ok",
+        "output_files": {
+            "table:exposure_outcome_summary": table.name,
+        },
+    }
+    prior = _registered_output_record(prior_summary)
+    envelope = normalize_step_result_shadow(
+        step_id="04_absolute_risk_context",
+        step_summary=prior_summary,
+        output_dir=tmp_path,
+        status="ok",
+    )
+    validator = CrossStepRegisteredOutputValidator()
+    step = AnalysisStep(
+        step_id="05_reconciliation",
+        intent="Audit the registered outputs of the prior risk step.",
+    )
+
+    legacy = validator.audit(
+        step=step,
+        step_summary=_registered_output_consumer_summary(),
+        completed_step_records=[prior],
+    )
+    dual_read = CrossStepRegisteredOutputEnvelopeDualReader().audit(
+        step=step,
+        step_summary=_registered_output_consumer_summary(),
+        completed_step_records=[prior],
+        completed_step_envelopes={"04_absolute_risk_context": envelope},
+    )
+
+    assert [finding.model_dump(mode="json") for finding in dual_read] == [
+        finding.model_dump(mode="json") for finding in legacy
+    ]
+
+
+def test_registered_output_gate_dual_read_fails_closed_without_envelope(
+    tmp_path: Path,
+) -> None:
+    table = tmp_path / "exposure_outcome_summary.csv"
+    table.write_text("group,n\n0,40\n1,60\n", encoding="utf-8")
+    prior = _registered_output_record(
+        {
+            "status": "ok",
+            "output_files": {
+                "table:exposure_outcome_summary": table.name,
+            },
+        }
+    )
+
+    findings = CrossStepRegisteredOutputEnvelopeDualReader().audit(
+        step=AnalysisStep(
+            step_id="05_reconciliation",
+            intent="Audit the registered outputs of the prior risk step.",
+        ),
+        step_summary=_registered_output_consumer_summary(),
+        completed_step_records=[prior],
+        completed_step_envelopes={},
+    )
+
+    assert len(findings) == 1
+    assert findings[0].detail["canonical_shadow_blocked"] is True
+    assert findings[0].detail["mismatch_codes"] == ["canonical_envelope_missing"]
+
+
+def test_registered_output_gate_dual_read_rejects_source_or_presence_drift(
+    tmp_path: Path,
+) -> None:
+    table = tmp_path / "exposure_outcome_summary.csv"
+    table.write_text("group,n\n0,40\n1,60\n", encoding="utf-8")
+    prior_summary = {
+        "status": "ok",
+        "output_files": {
+            "table:exposure_outcome_summary": table.name,
+        },
+    }
+    prior = _registered_output_record(prior_summary)
+    envelope = normalize_step_result_shadow(
+        step_id="04_absolute_risk_context",
+        step_summary={"status": "ok"},
+        output_dir=tmp_path,
+        status="ok",
+    )
+
+    findings = CrossStepRegisteredOutputEnvelopeDualReader().audit(
+        step=AnalysisStep(
+            step_id="05_reconciliation",
+            intent="Audit the registered outputs of the prior risk step.",
+        ),
+        step_summary=_registered_output_consumer_summary(),
+        completed_step_records=[prior],
+        completed_step_envelopes={"04_absolute_risk_context": envelope},
+    )
+
+    assert len(findings) == 1
+    assert findings[0].detail["canonical_shadow_blocked"] is True
+    assert set(findings[0].detail["mismatch_codes"]) >= {
+        "canonical_artifact_missing",
+        "canonical_source_digest_mismatch",
+        "canonical_table_presence_mismatch",
     }

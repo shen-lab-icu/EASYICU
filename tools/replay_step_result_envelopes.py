@@ -17,11 +17,19 @@ from typing import Any, Mapping
 from easyicu.research_agent.audits.envelope_shadow import (
     compare_validator_shadow_inputs,
 )
+from easyicu.research_agent.audits.envelope_consumers import (
+    CrossStepRegisteredOutputEnvelopeDualReader,
+)
+from easyicu.research_agent.audits.validators import (
+    CrossStepRegisteredOutputValidator,
+)
 from easyicu.research_agent.execution.result_envelope import (
+    StepResultEnvelope,
     normalize_step_result_shadow,
     verify_step_result_envelope,
     write_shadow_step_result_envelope,
 )
+from easyicu.research_agent.schema import AnalysisStep
 
 
 def _canonical_json_bytes(payload: Any) -> bytes:
@@ -153,6 +161,10 @@ def replay_run(run_dir: Path, output_dir: Path) -> dict[str, Any]:
         raise ValueError("run manifest has no current per-step records")
 
     index_rows: list[dict[str, Any]] = []
+    completed_records: list[dict[str, Any]] = []
+    completed_envelopes: dict[str, StepResultEnvelope] = {}
+    registered_output_validator = CrossStepRegisteredOutputValidator()
+    registered_output_dual_reader = CrossStepRegisteredOutputEnvelopeDualReader()
     for record in records:
         step_id = str(record["step_id"])
         summary = record.get("step_summary")
@@ -200,6 +212,32 @@ def replay_run(run_dir: Path, output_dir: Path) -> dict[str, Any]:
                 else None
             ),
         )
+        replay_step = AnalysisStep(
+            step_id=step_id,
+            intent="Replay archived registered-output claims without changing decisions.",
+        )
+        legacy_registered_output_findings = registered_output_validator.audit(
+            step=replay_step,
+            step_summary=summary,
+            completed_step_records=completed_records,
+        )
+        canonical_registered_output_findings = registered_output_dual_reader.audit(
+            step=replay_step,
+            step_summary=summary,
+            completed_step_records=completed_records,
+            completed_step_envelopes=completed_envelopes,
+        )
+        legacy_registered_output_payload = [
+            finding.model_dump(mode="json")
+            for finding in legacy_registered_output_findings
+        ]
+        canonical_registered_output_payload = [
+            finding.model_dump(mode="json")
+            for finding in canonical_registered_output_findings
+        ]
+        registered_output_shadow_exact = (
+            legacy_registered_output_payload == canonical_registered_output_payload
+        )
         target_path = output_dir / f"{step_id}.step_result.envelope.json"
         write_shadow_step_result_envelope(
             envelope,
@@ -231,10 +269,22 @@ def replay_run(run_dir: Path, output_dir: Path) -> dict[str, Any]:
                 ),
                 "validator_shadow_exact": comparison.exact_match,
                 "validator_shadow_mismatch_count": len(comparison.mismatches),
+                "registered_output_claim_count": len(
+                    registered_output_validator._availability_blocks(summary)
+                ),
+                "registered_output_legacy_finding_count": len(
+                    legacy_registered_output_findings
+                ),
+                "registered_output_shadow_exact": registered_output_shadow_exact,
+                "registered_output_shadow_mismatch_count": (
+                    0 if registered_output_shadow_exact else 1
+                ),
             }
         )
+        completed_records.append(record)
+        completed_envelopes[step_id] = envelope
     index = {
-        "schema_version": "easyicu.shadow_step_result_index/2",
+        "schema_version": "easyicu.shadow_step_result_index/3",
         "source_manifest_sha256": _sha256_bytes(manifest_bytes),
         "envelope_count": len(index_rows),
         "normalization_error_count": sum(
@@ -242,6 +292,12 @@ def replay_run(run_dir: Path, output_dir: Path) -> dict[str, Any]:
         ),
         "validator_shadow_mismatch_count": sum(
             row["validator_shadow_mismatch_count"] for row in index_rows
+        ),
+        "registered_output_claim_count": sum(
+            row["registered_output_claim_count"] for row in index_rows
+        ),
+        "registered_output_shadow_mismatch_count": sum(
+            row["registered_output_shadow_mismatch_count"] for row in index_rows
         ),
         "steps": index_rows,
     }
