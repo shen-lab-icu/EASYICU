@@ -56,6 +56,7 @@ def resume_deterministic_repair_candidate(
     code: str,
     step_dir: Path,
     analysis_family: str | None,
+    prior_step_summary: Optional[Dict[str, Any]] = None,
 ) -> tuple[tuple[str, str], str, dict[str, Any]] | None:
     """Select a proven runtime/summary repair for an explicitly resumed step."""
 
@@ -80,12 +81,13 @@ def resume_deterministic_repair_candidate(
             )
 
     summary_path = step_dir / "outputs" / "step_summary.json"
-    if not summary_path.is_file():
-        return None
-    try:
-        summary = json.loads(summary_path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeError, json.JSONDecodeError):
-        return None
+    if summary_path.is_file():
+        try:
+            summary = json.loads(summary_path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, json.JSONDecodeError):
+            summary = None
+    else:
+        summary = prior_step_summary
     if not isinstance(summary, dict) or not summary:
         return None
     repair = _deterministic_summary_repair(
@@ -96,13 +98,21 @@ def resume_deterministic_repair_candidate(
     )
     if repair is None:
         return None
-    source = "resume_summary_repair_preflight"
+    source = (
+        "resume_summary_repair_preflight"
+        if summary_path.is_file()
+        else "resume_authority_summary_repair_preflight"
+    )
     return (
         repair,
         source,
         {
             "source": source,
-            "step_summary_path": str(summary_path),
+            **(
+                {"step_summary_path": str(summary_path)}
+                if summary_path.is_file()
+                else {"step_summary_source": "current_evidence_authority"}
+            ),
             "step_summary_keys": sorted(str(key) for key in summary),
         },
     )
