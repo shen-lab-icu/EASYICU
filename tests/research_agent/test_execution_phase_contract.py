@@ -202,6 +202,42 @@ def test_step_run_input_capsule_must_match_sealed_evidence(tmp_path) -> None:
         )
 
 
+def test_run_input_capsule_read_error_is_typed(tmp_path, monkeypatch) -> None:
+    # An OSError while reading the working/sealed copy must convert to the typed
+    # RunInputIdentityError boundary, not escape as a raw OSError.
+    from pathlib import Path as _Path
+
+    from easyicu.research_agent.authority.evidence_store import EvidenceStore
+    from easyicu.research_agent.execution.phase import (
+        _verified_run_input_capsule_digest,
+    )
+    from easyicu.research_agent.authority.run_input import RunInputIdentityError
+
+    capsule = tmp_path / "run_input_capsule.json"
+    capsule.write_text('{"schema_version":"test"}\n', encoding="utf-8")
+    store = EvidenceStore(tmp_path)
+    store.register_file(
+        kind="log",
+        description="sealed run input capsule",
+        source_path=capsule,
+        evidence_id="run_input_capsule",
+        producer="pipeline",
+        generation_mode="system",
+    )
+
+    def _boom(self, *args, **kwargs):
+        raise OSError("disk vanished mid-read")
+
+    # verified_run_evidence_path / sha256 use Path.open, so only the post-
+    # verification read_bytes reads are intercepted here.
+    monkeypatch.setattr(_Path, "read_bytes", _boom)
+    with pytest.raises(RunInputIdentityError, match="could not be read"):
+        _verified_run_input_capsule_digest(
+            run_dir=tmp_path,
+            evidence_store=store,
+        )
+
+
 def test_parallel_step_worker_inherits_runner_capability_context() -> None:
     import easyicu.research_agent.execution.method_capabilities as method_capabilities
     from easyicu.research_agent.execution.phase import _submit_in_current_context
