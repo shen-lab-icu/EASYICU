@@ -3529,6 +3529,31 @@ def _is_untyped_figure_alias_output(token: object) -> bool:
     return probe is not None and probe[0] == "figure"
 
 
+def _canonicalise_planned_analysis_role(
+    value: object,
+    *,
+    method: object,
+) -> object:
+    """Normalize representation-only Planner role variants.
+
+    Canonical role tokens tolerate casing and surrounding whitespace.  The
+    otherwise-invalid ``robustness`` alias is safe to compile to
+    ``sensitivity`` only for the exact registered robustness/sensitivity
+    method; it remains invalid everywhere else so the host never guesses a
+    scientific role from prose.
+    """
+
+    if not isinstance(value, str):
+        return value
+    token = value.strip().casefold()
+    if token in {"primary", "secondary", "sensitivity", "auxiliary"}:
+        return token
+    method_token = str(method or "").strip().casefold()
+    if token == "robustness" and method_token == "robustness_sensitivity":
+        return "sensitivity"
+    return value
+
+
 def _normalise_plan_payload(
     data: Dict[str, Any],
 ) -> Tuple[Dict[str, Any], Dict[str, List[str]]]:
@@ -3629,6 +3654,13 @@ def _normalise_plan_payload(
                 else:
                     step_id = raw_step.get("step_id") or f"step[{idx}]"
                     dropped["steps"].append(f"{step_id}:{key}")
+            if "planned_analysis_role" in step_payload:
+                step_payload["planned_analysis_role"] = (
+                    _canonicalise_planned_analysis_role(
+                        step_payload["planned_analysis_role"],
+                        method=step_payload.get("method"),
+                    )
+                )
             requirements = []
             for req_idx, raw_requirement in enumerate(
                 step_payload.get("model_requirements", []) or []
@@ -3646,6 +3678,13 @@ def _normalise_plan_payload(
                         requirement_payload[key] = value
                     else:
                         dropped["model_requirements"].append(f"{requirement_id}:{key}")
+                if "analysis_role" in requirement_payload:
+                    requirement_payload["analysis_role"] = (
+                        _canonicalise_planned_analysis_role(
+                            requirement_payload["analysis_role"],
+                            method=step_payload.get("method"),
+                        )
+                    )
                 requirements.append(requirement_payload)
             if "model_requirements" in step_payload:
                 step_payload["model_requirements"] = requirements
