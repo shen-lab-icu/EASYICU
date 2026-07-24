@@ -230,7 +230,7 @@ def test_planner_retries_dictionary_concept_absent_from_sealed_typed_input(
             '"steps":[{"step_id":"01_define_cohort",'
             '"planned_analysis_role":"auxiliary",'
             '"intent":"Materialize the declared analysis cohort.",'
-            '"inputs":["stay_id","lact_max"],'
+            '"inputs":["lact_max"],'
             '"expected_outputs":["artifact:analysis_cohort"],'
             '"method":"cohort_definition"}]}'
         )
@@ -427,7 +427,7 @@ def test_typed_binding_gate_accepts_direct_static_column_without_window(
         step_id="01_cohort",
         planned_analysis_role="auxiliary",
         intent="Materialize the adult analysis cohort and its flow.",
-        inputs=["stay_id", "age", "death"],
+        inputs=["age", "death"],
         expected_outputs=["cohort:analysis_cohort", "table:cohort_flow"],
         method="cohort_definition",
     )
@@ -454,6 +454,37 @@ def test_typed_binding_gate_accepts_direct_static_column_without_window(
     )
 
     validate_plan_typed_bindings_against_context(plan=plan, context=context)
+
+
+def test_typed_binding_gate_rejects_identity_coordinate_as_raw_step_input(
+    tmp_path,
+) -> None:
+    from types import SimpleNamespace
+
+    from easyicu.research_agent.cohort.schema import (
+        CohortSchemaError,
+        validate_plan_typed_bindings_against_context,
+    )
+    from easyicu.research_agent.schema import AnalysisStep
+    from tests.research_agent.test_materialized_column_metadata import (
+        _build_v2_context,
+    )
+
+    context = _build_v2_context(tmp_path)
+    plan = SimpleNamespace(
+        cohort=None,
+        steps=[
+            AnalysisStep(
+                step_id="01_invalid_coordinate",
+                intent="Use a sealed coordinate as an analysis variable.",
+                inputs=["stay_id", "death"],
+            )
+        ],
+        robustness_specs=[],
+    )
+
+    with pytest.raises(CohortSchemaError, match="raw name 'stay_id'"):
+        validate_plan_typed_bindings_against_context(plan=plan, context=context)
 
 
 def test_planner_retries_robustness_window_absent_from_sealed_input(tmp_path) -> None:
@@ -569,7 +600,7 @@ def test_planner_retries_primary_cohort_that_erases_its_closed_comparison(
             '"steps":[{"step_id":"01_define_cohort",'
             '"planned_analysis_role":"auxiliary",'
             '"intent":"Materialize the declared analysis cohort.",'
-            '"inputs":["stay_id","mech_vent_max"],'
+            '"inputs":["mech_vent_max"],'
             '"expected_outputs":["artifact:analysis_cohort"],'
             '"method":"cohort_definition"},'
             '{"step_id":"02_table_one",'

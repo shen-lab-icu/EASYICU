@@ -468,7 +468,7 @@ def _call_matches_forbidden_pattern(
         return "mean" in path
     if token == "kmeansonbinary":
         return "kmeans" in path
-    return token in path or path in token
+    return token in path
 
 
 def _node_variable_sources(

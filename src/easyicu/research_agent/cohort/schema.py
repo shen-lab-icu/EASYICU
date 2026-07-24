@@ -829,7 +829,14 @@ def validate_plan_typed_bindings_against_context(
                 (f"robustness_specs[{spec_id}].cohort_override", override)
             )
 
-    raw_issues = _raw_typed_plan_reference_issues(plan=plan, columns=columns)
+    # Identity/time coordinates are navigation metadata, not executable
+    # analysis variables. Runtime raw-input contracts intentionally omit them,
+    # so reject them while the Planner still has structured-retry authority.
+    executable_columns = tuple(getattr(typed_cohort, "column_bindings", {}).keys())
+    raw_issues = _raw_typed_plan_reference_issues(
+        plan=plan,
+        columns=executable_columns,
+    )
     issues = list(raw_issues)
     primary_definition: Optional[CohortDefinition] = None
     primary_bindings: Dict[str, str] = {}

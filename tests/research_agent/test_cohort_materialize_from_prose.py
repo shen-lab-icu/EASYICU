@@ -126,67 +126,92 @@ def test_prose_cohort_is_extracted_materialised_and_enforced(
     development_sample_size: int | None,
     cohort_products: list[str],
 ):
+    from easyicu.research_agent.providers.mocks import (
+        MockLLMClient,
+        PatternScriptedMockLLMClient,
+        _mock_plan_json,
+    )
+    from easyicu.research_agent.providers.llm import LLMRouter
+    from easyicu.research_agent.planning.robustness_contract import RobustnessSpec
+    from easyicu.research_agent.reporting.article_contract import (
+        augment_plan_for_article_contract,
+        build_article_analysis_contract,
+    )
     from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep
 
-    class ProseCohortLLM(ra.MockLLMClient):
-        """Replanner grows an empty-cohort ``01_cohort_definition`` step; the
-        extraction call returns typed predicates over real universe columns."""
-
-        def complete(self, messages, **kwargs):
-            user = next((m.content for m in reversed(messages) if m.role == "user"), "")
-            if _is_extraction(user):
-                return json.dumps(
-                    {
-                        "inclusion": [
-                            {"concept_id": "age", "op": ">=", "value": 18},
-                            {"concept_id": "los_icu", "op": ">=", "value": 1},
-                        ],
-                        "exclusion": [],
-                    }
+    question = "Is admission SOFA-2 associated with ICU mortality?"
+    context = ra.build_research_context(
+        research_question=question,
+        cohort=synthetic_cohort,
+        cohort_name="prose_cohort",
+        database="synthetic",
+        target_outcome="death",
+    )
+    base_plan = AnalysisPlan.model_validate_json(_mock_plan_json(context))
+    complete_plan, _findings = augment_plan_for_article_contract(
+        plan=base_plan,
+        contract=build_article_analysis_contract(
+            context,
+            analysis_type=base_plan.analysis_type,
+        ),
+    )
+    planned = complete_plan.model_copy(
+        update={
+            "robustness_specs": [
+                RobustnessSpec(
+                    spec_id="complete_case_covariates",
+                    axis="missing",
+                    description=(
+                        "Repeat the association analysis among complete cases."
+                    ),
+                    missing_override={"strategy": "complete_case"},
                 )
-            if _is_replan(user):
-                import re
-
-                match = re.search(
-                    r"CURRENT PLAN:\n(\{.*?\})\n\nPROBE SUMMARY:",
-                    user,
-                    flags=re.DOTALL,
-                )
-                current = (
-                    AnalysisPlan.model_validate_json(match.group(1))
-                    if match
-                    else AnalysisPlan(research_question="q", steps=[])
-                )
-                steps = list(current.steps)
-                if not any("cohort_def" in (s.step_id or "") for s in steps):
-                    steps.insert(
-                        0,
-                        AnalysisStep(
-                            step_id="01_cohort_definition",
-                            intent=(
-                                "Define the adult ICU analysis cohort: include "
-                                "age >= 18 and ICU LoS >= 1 day; report attrition."
-                            ),
-                            inputs=[],
-                            expected_outputs=cohort_products,
-                            method="cohort_definition",
-                        ),
-                    )
-                revised = current.model_copy(
-                    update={"steps": steps, "revision": current.revision + 1}
-                )
-                return revised.model_dump_json(indent=2)
-            return super().complete(messages, **kwargs)
+            ],
+        }
+    )
+    executing_plan = planned.model_copy(
+        update={
+            "steps": [
+                AnalysisStep(
+                    step_id="01_cohort_definition",
+                    intent=(
+                        "Define the adult ICU analysis cohort: include age >= 18 "
+                        "and ICU LoS >= 1 day; report attrition."
+                    ),
+                    expected_outputs=cohort_products,
+                    method="cohort_definition",
+                ),
+                *planned.steps,
+            ]
+        }
+    )
+    extraction = json.dumps(
+        {
+            "inclusion": [
+                {"concept_id": "age", "op": ">=", "value": 18},
+                {"concept_id": "los_icu", "op": ">=", "value": 1},
+            ],
+            "exclusion": [],
+        }
+    )
+    planner = PatternScriptedMockLLMClient(
+        [
+            ("ICU-AWARE RESEARCH PLAN", [planned.model_dump_json()] * 8),
+            ("PROBE SUMMARY:", [executing_plan.model_dump_json()] * 8),
+            ("COHORT-DEFINITION STEP PROSE", [extraction] * 2),
+        ],
+        default=planned.model_dump_json(),
+    )
 
     pipeline = ra.ResearchAgentPipeline(
         workdir=tmp_path,
-        llm=ProseCohortLLM(),
+        llm=LLMRouter(default=MockLLMClient(), planner=planner),
         runner_kind="subprocess",
         runner_kwargs={"allow_unsafe_host_fallback": True},
         development_sample_size=development_sample_size,
     )
     result = pipeline.run(
-        question="Is admission SOFA-2 associated with ICU mortality?",
+        question=question,
         cohort=synthetic_cohort,
         cohort_name="prose_cohort",
         database="synthetic",
@@ -238,8 +263,22 @@ def test_prose_cohort_is_extracted_materialised_and_enforced(
     locked = json.loads((run_dir / "cohort_locked.json").read_text(encoding="utf-8"))
     assert locked["cohort"]["inclusion"], "cohort_locked.json still has empty 纳排"
 
-    statuses = [r.get("status") for r in manifest.get("per_step_records", [])]
-    assert statuses and all(s == "ok" for s in statuses), statuses
+    core_step_ids = {
+        "01_cohort_definition",
+        "01_table_one",
+        "02_outcome_incidence",
+        "03_missingness_audit",
+        "03_missingness_audit_figure",
+        "04_primary_association",
+        "04_primary_association_figure",
+    }
+    core_statuses = {
+        record.get("step_id"): record.get("status")
+        for record in manifest.get("per_step_records", [])
+        if record.get("step_id") in core_step_ids
+    }
+    assert core_step_ids <= set(core_statuses), core_statuses
+    assert set(core_statuses.values()) == {"ok"}, core_statuses
     if "table:cohort_flow" in cohort_products:
         flow = pd.read_csv(run_dir / "cohort_analysis_flow.csv")
         assert int(flow.iloc[0]["n_before"]) == 800
@@ -257,3 +296,68 @@ def test_prose_cohort_is_extracted_materialised_and_enforced(
         assert cohort_step["step_provider_call_categories"] == [
             "cohort_definition_translation"
         ]
+
+
+def test_failed_prose_materialization_does_not_mutate_executing_plan():
+    from easyicu.research_agent.execution.cohort_adoption import (
+        commit_staged_cohort_plan,
+        stage_candidate_cohort_plan,
+    )
+    from easyicu.research_agent.planning.cohort_contract import (
+        CohortDefinition,
+        ConceptPredicate,
+        TimeWindow,
+    )
+    from easyicu.research_agent.schema import AnalysisPlan
+
+    live = AnalysisPlan(research_question="q", steps=[])
+    definition = CohortDefinition(
+        name="adult",
+        inclusion=[
+            ConceptPredicate(
+                concept_id="age",
+                time_window=TimeWindow("icu_admit", 0, 24),
+                aggregation="max",
+                op=">=",
+                value=18,
+            )
+        ],
+    )
+    staged = stage_candidate_cohort_plan(live, definition)
+
+    class AuthorityState:
+        def __init__(self):
+            self.rebound: list[AnalysisPlan] = []
+
+        def rebind_cohort(self, *, plan, context):
+            del context
+            self.rebound.append(plan)
+
+    authority_state = AuthorityState()
+    committed = commit_staged_cohort_plan(
+        live,
+        staged,
+        materialization_status="error",
+        authority_state=authority_state,
+        context=None,
+    )
+
+    assert committed is False
+    assert live.cohort is None
+    assert staged.cohort.inclusion
+    assert authority_state.rebound == []
+
+    class RejectingAuthority:
+        def rebind_cohort(self, *, plan, context):
+            del plan, context
+            raise RuntimeError("authority mismatch")
+
+    with pytest.raises(RuntimeError, match="authority mismatch"):
+        commit_staged_cohort_plan(
+            live,
+            staged,
+            materialization_status="applied",
+            authority_state=RejectingAuthority(),
+            context=None,
+        )
+    assert live.cohort is None

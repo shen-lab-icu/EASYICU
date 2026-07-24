@@ -1229,6 +1229,7 @@ def _write_host_input_binding_receipts(
     out_dir: Path,
     step_summary: Mapping[str, Any],
     resolved_input_bindings: Mapping[str, Mapping[str, Any]],
+    consumed_input_keys: Sequence[str],
 ) -> Dict[str, Any]:
     """Seal exact input receipts for a host-owned deterministic renderer.
 
@@ -1240,8 +1241,15 @@ def _write_host_input_binding_receipts(
     integrity validator fails closed on incomplete coverage.
     """
 
+    consumed = tuple(dict.fromkeys(str(key) for key in consumed_input_keys))
+    unknown = sorted(set(consumed) - set(resolved_input_bindings))
+    if unknown:
+        raise ValueError(
+            "host consumed-input proof names unresolved bindings: " + ", ".join(unknown)
+        )
     receipts: List[Dict[str, Any]] = []
-    for input_key, raw_binding in sorted(resolved_input_bindings.items()):
+    for input_key in sorted(consumed):
+        raw_binding = resolved_input_bindings[input_key]
         if not isinstance(raw_binding, Mapping):
             continue
         binding = dict(raw_binding)

@@ -28,12 +28,17 @@ from easyicu.research_agent.pipeline import _load_compatible_resume_plan
 from easyicu.research_agent.providers.structured_retry import (
     StructuredResponseFailure,
 )
+from easyicu.research_agent.providers.mocks import (
+    PatternScriptedMockLLMClient,
+    ScriptedMockLLMClient,
+)
 from easyicu.research_agent.schema import (
     AnalysisPlan,
     AnalysisStep,
     CohortDescriptor,
     ConceptDescriptor,
     ResearchContext,
+    VariableRole,
 )
 
 
@@ -388,15 +393,14 @@ def test_planner_accepts_only_this_retrievals_claim_authority() -> None:
 
 
 def test_replanner_cannot_remove_claim_decisions() -> None:
-    class RemovingLLM:
-        name = "removing"
-
-        def complete(self, messages, **kwargs):
-            return json.dumps({"research_question": "Predict AKI", "steps": []})
-
     current = _plan_with_one_adopted_aki_claim()
     with pytest.raises(StructuredResponseFailure, match="claim-level disposition"):
-        ReplannerAgent(RemovingLLM()).run(context=_context(), current_plan=current)
+        ReplannerAgent(
+            ScriptedMockLLMClient(
+                [json.dumps({"research_question": "Predict AKI", "steps": []})],
+                repeat_last=True,
+            )
+        ).run(context=_context(), current_plan=current)
 
 
 def test_empty_decisions_do_not_change_legacy_plan_serialization() -> None:
@@ -442,59 +446,116 @@ def test_opt_in_pipeline_smoke_adopts_card_without_extra_provider_calls(
     tmp_path: Path,
 ) -> None:
     from easyicu import research_agent as ra
+    from easyicu.research_agent.providers.mocks import _mock_plan_json
 
-    class CountingPlanner(ra.MockLLMClient):
-        def __init__(self, *, adopt: bool) -> None:
-            super().__init__()
-            self.adopt = adopt
-            self.calls = 0
-            self.planner_prompts: list[str] = []
-            registry = KnowHowRegistry.load()
-            self.hit = registry.retrieve(
-                query="Build an ICU mortality prediction model.",
-                study_family="prediction",
-                database="miiv",
-                top_k=1,
-            )[0]
-            self.claim = next(
-                item
-                for item in registry.get(self.hit.card_id).claims
-                if item.claim_id == "prediction_time"
-            )
+    registry = KnowHowRegistry.load()
+    hit = registry.retrieve(
+        query="Build an ICU mortality prediction model.",
+        study_family="prediction",
+        database="miiv",
+        top_k=1,
+    )[0]
+    claim = next(
+        item
+        for item in registry.get(hit.card_id).claims
+        if item.claim_id == "prediction_time"
+    )
+    planner_context = ResearchContext(
+        research_question="Build an ICU mortality prediction model.",
+        cohort=CohortDescriptor(
+            cohort_name="know_how_smoke",
+            database="miiv",
+            n_patients=40,
+            n_stays=40,
+            id_columns=["stay_id"],
+            outcome_columns=["death"],
+        ),
+        variables=[
+            ConceptDescriptor(
+                name="age",
+                dtype="int64",
+                role=VariableRole.DEMOGRAPHIC,
+            ),
+            ConceptDescriptor(
+                name="sex",
+                dtype="object",
+                role=VariableRole.DEMOGRAPHIC,
+            ),
+            ConceptDescriptor(
+                name="death",
+                dtype="int64",
+                role=VariableRole.OUTCOME,
+                valid_range=[0, 1],
+            ),
+        ],
+        target_outcome="death",
+    )
 
-        def complete(self, messages, *, max_tokens=2048, temperature=0.2):
-            self.calls += 1
-            user_prompt = next(
-                (
-                    message.content
-                    for message in reversed(messages)
-                    if message.role == "user"
-                ),
-                "",
-            )
-            raw = super().complete(
-                messages,
-                max_tokens=max_tokens,
-                temperature=temperature,
-            )
-            if "ICU-AWARE RESEARCH PLAN" in user_prompt:
-                self.planner_prompts.append(user_prompt)
-                if self.adopt:
-                    payload = json.loads(raw)
-                    payload["know_how_decisions"] = [
-                        {
-                            "card_id": self.hit.card_id,
-                            "card_version": self.hit.version,
-                            "card_sha256": self.hit.file_sha256,
-                            "claim_id": self.claim.claim_id,
-                            "disposition": "adopted",
-                            "reason_code": "fits_prediction_landmark",
-                            "rationale": "The prediction task requires an explicit landmark.",
-                            "citation_ids": self.claim.citation_ids,
-                        }
-                    ]
-                    return json.dumps(payload)
-            return raw
+    def planner(*, adopt: bool) -> PatternScriptedMockLLMClient:
+        from easyicu.research_agent.reporting.article_contract import (
+            augment_plan_for_article_contract,
+            build_article_analysis_contract,
+        )
+
+        base_plan = AnalysisPlan.model_validate_json(_mock_plan_json(planner_context))
+        complete_plan, _findings = augment_plan_for_article_contract(
+            plan=base_plan,
+            contract=build_article_analysis_contract(
+                planner_context,
+                analysis_type=base_plan.analysis_type,
+            ),
+        )
+        primary_step = next(
+            step
+            for step in complete_plan.steps
+            if step.planned_analysis_role == "primary"
+        )
+        primary_input = next(
+            output
+            for output in primary_step.expected_outputs
+            if not output.startswith("figure:")
+        )
+        complete_plan = complete_plan.model_copy(
+            update={
+                "steps": [
+                    *complete_plan.steps,
+                    AnalysisStep(
+                        step_id="08_calibration",
+                        planned_analysis_role="auxiliary",
+                        intent="Assess calibration of the prediction model.",
+                        inputs=[primary_input],
+                        expected_outputs=["table:calibration"],
+                        method="calibration_assessment",
+                    ),
+                    AnalysisStep(
+                        step_id="09_transportability",
+                        planned_analysis_role="auxiliary",
+                        intent="Describe the prespecified transportability assessment.",
+                        expected_outputs=["table:cross_database_heterogeneity"],
+                        method="transportability_assessment",
+                    ),
+                ]
+            }
+        )
+        payload = complete_plan.model_dump(mode="json")
+        if adopt:
+            payload["know_how_decisions"] = [
+                {
+                    "card_id": hit.card_id,
+                    "card_version": hit.version,
+                    "card_sha256": hit.file_sha256,
+                    "claim_id": claim.claim_id,
+                    "disposition": "adopted",
+                    "reason_code": "fits_prediction_landmark",
+                    "rationale": ("The prediction task requires an explicit landmark."),
+                    "citation_ids": claim.citation_ids,
+                }
+            ]
+        response = json.dumps(payload)
+        return PatternScriptedMockLLMClient(
+            [("ICU-AWARE RESEARCH PLAN", [response] * 10)],
+            default=response,
+        )
 
     cohort = pd.DataFrame(
         {
@@ -514,7 +575,7 @@ def test_opt_in_pipeline_smoke_adopts_card_without_extra_provider_calls(
         enable_replanning=False,
         runner_kind="subprocess",
     )
-    enabled_planner = CountingPlanner(adopt=True)
+    enabled_planner = planner(adopt=True)
     enabled = ra.ResearchAgentPipeline(
         workdir=tmp_path / "enabled",
         llm=ra.LLMRouter(default=ra.MockLLMClient(), planner=enabled_planner),
@@ -531,7 +592,7 @@ def test_opt_in_pipeline_smoke_adopts_card_without_extra_provider_calls(
         target_outcome="death",
         stop_after_analysis=True,
     )
-    disabled_planner = CountingPlanner(adopt=False)
+    disabled_planner = planner(adopt=False)
     disabled = ra.ResearchAgentPipeline(
         workdir=tmp_path / "disabled",
         llm=ra.LLMRouter(default=ra.MockLLMClient(), planner=disabled_planner),
@@ -552,8 +613,12 @@ def test_opt_in_pipeline_smoke_adopts_card_without_extra_provider_calls(
     assert "know_how_refs" not in plan
     assert plan["know_how_decisions"][0]["card_id"] == "icu_mortality_prediction"
     assert plan["know_how_decisions"][0]["claim_id"] == "prediction_time"
-    assert "RESEARCH KNOW-HOW CONTEXT" in enabled_planner.planner_prompts[0]
-    assert "Retrieved Research Know-How" in enabled_planner.planner_prompts[0]
+    planner_prompts = [
+        "\n".join(str(message.content or "") for message in messages)
+        for messages, _kwargs in enabled_planner.calls
+    ]
+    assert "RESEARCH KNOW-HOW CONTEXT" in planner_prompts[0]
+    assert "Retrieved Research Know-How" in planner_prompts[0]
     assert (enabled_dir / "know_how_retrieval.json").exists()
     assert (enabled_dir / "know_how_prompt.md").exists()
     metrics = json.loads(
@@ -564,4 +629,4 @@ def test_opt_in_pipeline_smoke_adopts_card_without_extra_provider_calls(
     assert metrics["know_how_selected_count"] == 1
     assert not (disabled_dir / "know_how_retrieval.json").exists()
     assert not (disabled_dir / "know_how_prompt.md").exists()
-    assert disabled_planner.calls == enabled_planner.calls
+    assert len(disabled_planner.calls) == len(enabled_planner.calls)

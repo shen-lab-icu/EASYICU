@@ -216,7 +216,7 @@ def format_outbound_safe_context(
     ]
     compact_projection = compact_fixed_window_trajectory_prompt(trajectory_variables)
     if compact_projection.shared_lines:
-        trajectory_names = {variable.name for variable in trajectory_variables}
+        trajectory_names = {name for name, _line in compact_projection.variable_lines}
         payload["variables"] = [
             row
             for row in payload.get("variables", [])

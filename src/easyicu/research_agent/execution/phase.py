@@ -381,7 +381,9 @@ from ..authority.run_input import (
 from .run_coordination import RunCoordinator, RunExecutionState, RunTransition
 from .cohort_adoption import (
     adopt_existing_host_cohort_materialization,
+    commit_staged_cohort_plan,
     record_planned_host_cohort_checkpoint,
+    stage_candidate_cohort_plan,
 )
 from ..authority.runtime_artifacts import (
     current_step_records,
@@ -4084,11 +4086,14 @@ def run_execute_phase(
         _replan_state["cohort_translation_provider_budget"] = budget_snapshot
         if definition is None:
             return False
-        candidate_plan.cohort = definition
+        materialization_plan = stage_candidate_cohort_plan(
+            candidate_plan,
+            definition,
+        )
         try:
             write_locked_cohort_definition(
                 run_dir=run_dir,
-                plan=candidate_plan,
+                plan=materialization_plan,
                 evidence=evidence,
                 prompt_pack_version=prompt_version,
                 llm_signature=llm_signature,
@@ -4096,7 +4101,7 @@ def run_execute_phase(
             )
             result = materialize_locked_analysis_cohort(
                 run_dir=run_dir,
-                plan=candidate_plan,
+                plan=materialization_plan,
                 universe_path=universe_path,
                 context=context,
             )
@@ -4115,12 +4120,31 @@ def run_execute_phase(
                 )
             )
             return False
-        if result.get("status") != "applied":
-            return False
-        run_input_authority_state.rebind_cohort(
-            plan=candidate_plan,
+        committed = commit_staged_cohort_plan(
+            candidate_plan,
+            materialization_plan,
+            materialization_status=result.get("status"),
+            authority_state=run_input_authority_state,
             context=context,
         )
+        if not committed:
+            findings.append(
+                ValidationFinding(
+                    validator="cohort_materializer",
+                    severity="error",
+                    message=(
+                        "The extracted cohort definition was not applied; the "
+                        "executing plan remains unchanged and cannot claim those "
+                        "criteria."
+                    ),
+                    detail={
+                        "stage": "execute_repair",
+                        "reason": reason,
+                        "materialization_status": result.get("status"),
+                    },
+                )
+            )
+            return False
         cohort_path = run_input_authority_state.selected_path
         record_planned_host_cohort_checkpoint(
             plan=candidate_plan,
@@ -8670,6 +8694,12 @@ def run_execute_phase(
                         out_dir=run_result.out_dir,
                         step_summary=visual_step_summary,
                         resolved_input_bindings=resolved_input_bindings,
+                        consumed_input_keys=(
+                            standard_executor.consumed_input_keys
+                            if worker_progress.deterministic_standard_executor_used
+                            and standard_executor is not None
+                            else tuple(resolved_input_bindings)
+                        ),
                     )
                 if is_trajectory_stability_standard:
                     terminal_status = (
@@ -10189,6 +10219,12 @@ def run_execute_phase(
                 out_dir=run_result.out_dir,
                 step_summary=step_summary,
                 resolved_input_bindings=resolved_input_bindings,
+                consumed_input_keys=(
+                    standard_executor.consumed_input_keys
+                    if worker_progress.deterministic_standard_executor_used
+                    and standard_executor is not None
+                    else tuple(resolved_input_bindings)
+                ),
             )
         _ensure_step_figure_contract(
             step=step,
@@ -10262,6 +10298,7 @@ def run_execute_phase(
                         out_dir=run_result.out_dir,
                         step_summary=step_summary,
                         resolved_input_bindings=resolved_input_bindings,
+                        consumed_input_keys=tuple(resolved_input_bindings),
                     )
                 _ensure_step_figure_contract(
                     step=step,

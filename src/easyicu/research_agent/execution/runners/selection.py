@@ -12,6 +12,7 @@ from .deterministic_missingness import (
 )
 from .table_one_executor import table_one_executor_code, table_one_executor_owns_step
 from .trajectory_stability_executor import (
+    STABILITY_EXECUTOR_INPUTS,
     trajectory_stability_executor_code,
     trajectory_stability_executor_owns_step,
 )
@@ -27,6 +28,7 @@ class StandardExecutorSelection:
     selection_reason: str
     progress_message: str
     code: str
+    consumed_input_keys: tuple[str, ...]
 
 
 def select_standard_executor(
@@ -42,6 +44,11 @@ def select_standard_executor(
             selection_reason="table_one_spec_preflight",
             progress_message="Using planner-specified grouped Table 1 executor",
             code=table_one_executor_code(step),
+            consumed_input_keys=tuple(
+                value
+                for value in step.inputs
+                if str(value).strip() == "artifact:analysis_cohort"
+            ),
         )
     if missingness_audit_executor_owns_step(step):
         source_availability = source_availability_audit_executor_owns_step(step)
@@ -58,6 +65,11 @@ def select_standard_executor(
             ),
             progress_message="Using planner-specified missingness audit executor",
             code=missingness_measurement_audit_code(),
+            consumed_input_keys=tuple(
+                value
+                for value in step.inputs
+                if str(value).strip() == "artifact:analysis_cohort"
+            ),
         )
     if trajectory_stability_executor_owns_step(step, plan=plan):
         return StandardExecutorSelection(
@@ -65,5 +77,6 @@ def select_standard_executor(
             selection_reason="trajectory_stability_spec_preflight",
             progress_message="Using planner-specified trajectory stability executor",
             code=trajectory_stability_executor_code(step, plan=plan),
+            consumed_input_keys=tuple(sorted(STABILITY_EXECUTOR_INPUTS)),
         )
     return None
