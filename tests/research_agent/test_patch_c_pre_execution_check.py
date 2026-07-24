@@ -177,6 +177,88 @@ def test_detector_uses_word_boundary_for_variable_name():
     assert detect_forbidden_pattern_usage(script, ctx) == []
 
 
+def test_detector_ignores_forbidden_method_words_in_comments_and_docstrings():
+    ctx = ResearchContext(
+        research_question="Estimate a binary outcome.",
+        cohort=CohortDescriptor(
+            cohort_name="t",
+            database="miiv",
+            n_patients=10,
+            n_stays=10,
+            id_columns=["stay_id"],
+            outcome_columns=["death"],
+        ),
+        variables=[
+            ConceptDescriptor(
+                name="death",
+                dtype="bool",
+                role=VariableRole.OUTCOME,
+            ),
+            ConceptDescriptor(name="age", dtype="float64"),
+        ],
+        target_outcome="death",
+    )
+    script = '''\
+"""OLS and linear regression are inappropriate for the binary outcome."""
+# Do not use a linear regression for death.
+model = LogisticRegression().fit(df[["age"]], df["death"])
+'''
+    assert detect_forbidden_pattern_usage(script, ctx) == []
+
+
+def test_detector_binds_ols_to_the_outcome_not_binary_covariates():
+    ctx = ResearchContext(
+        research_question="Estimate length of stay.",
+        cohort=CohortDescriptor(
+            cohort_name="t",
+            database="miiv",
+            n_patients=10,
+            n_stays=10,
+            id_columns=["stay_id"],
+            outcome_columns=["los_icu"],
+        ),
+        variables=[
+            ConceptDescriptor(
+                name="los_icu",
+                dtype="float64",
+                role=VariableRole.OUTCOME,
+            ),
+            ConceptDescriptor(name="exposed", dtype="bool"),
+        ],
+        target_outcome="los_icu",
+    )
+    script = 'model = sm.OLS(df["los_icu"], sm.add_constant(df[["exposed"]])).fit()'
+    assert detect_forbidden_pattern_usage(script, ctx) == []
+
+
+def test_detector_flags_ols_only_when_binary_outcome_flows_into_call():
+    ctx = ResearchContext(
+        research_question="Estimate mortality.",
+        cohort=CohortDescriptor(
+            cohort_name="t",
+            database="miiv",
+            n_patients=10,
+            n_stays=10,
+            id_columns=["stay_id"],
+            outcome_columns=["death"],
+        ),
+        variables=[
+            ConceptDescriptor(
+                name="death",
+                dtype="bool",
+                role=VariableRole.OUTCOME,
+            ),
+            ConceptDescriptor(name="age", dtype="float64"),
+        ],
+        target_outcome="death",
+    )
+    script = 'model = sm.OLS(df["death"], sm.add_constant(df[["age"]])).fit()'
+    violations = detect_forbidden_pattern_usage(script, ctx)
+    assert [(item["variable"], item["kind"]) for item in violations] == [
+        ("death", "binary")
+    ]
+
+
 def test_format_violation_message_includes_preferred_alternatives():
     ctx = _ordinal_context()
     violations = detect_forbidden_pattern_usage(_BAD_SCRIPT, ctx)
