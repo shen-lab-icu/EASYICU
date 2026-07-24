@@ -51,7 +51,42 @@ def test_agent_empty_or_garbage_response_is_safe():
         question="q", catalog=_catalog("death")
     )
     assert sel.selected_concepts == []
-    assert sel.coverage is not None and sel.coverage.sufficient  # nothing requested
+    assert sel.coverage is not None
+    assert sel.selection_succeeded is False
+    assert "parseable JSON object" in sel.selection_error
+    assert sel.to_dict()["selection_succeeded"] is False
+
+
+def test_acquire_blocks_unparseable_selection_before_materialization(monkeypatch):
+    called = {"materialize": False}
+
+    monkeypatch.setattr(
+        df_mod,
+        "build_available_catalog",
+        lambda _d: _catalog("death", "age"),
+    )
+    import easyicu.research_agent.cohort.materializer as cm
+
+    def _fake_materialize(**_kwargs):
+        called["materialize"] = True
+        return {"parquet": "u.parquet", "provenance": "u.json"}
+
+    monkeypatch.setattr(cm, "materialize_to_parquet", _fake_materialize)
+
+    result = acquire_universe_for_question(
+        export_dir="/nonexistent",
+        question="q",
+        llm=_stub("garbage"),
+        output_dir="/tmp/x",
+        target_outcome="death",
+        outcome_concepts=["death"],
+        static_concepts=["age"],
+    )
+
+    assert result.blocked is True
+    assert result.selection.selection_succeeded is False
+    assert "selection failed" in result.note.lower()
+    assert called["materialize"] is False
 
 
 def test_acquire_blocks_when_outcome_missing(monkeypatch):

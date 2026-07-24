@@ -2015,6 +2015,13 @@ def _compute_readiness_gates(
         and manuscript_text_gate["manuscript_text_ready"]
         and not stop_after_analysis
     )
+    if (
+        manuscript_generated
+        and not current_gate_state["manuscript_numeric_bound_clean"]
+    ):
+        numeric_errors.append(
+            "Bound manuscript contains unresolved numeric provenance markers."
+        )
     evidence_complete = (
         manuscript_generated and missing_evidence_count == 0 and not evidence_errors
     )

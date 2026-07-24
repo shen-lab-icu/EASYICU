@@ -93,6 +93,12 @@ class ConceptSelection:
     rationale: str = ""
     coverage: Optional[CoverageReport] = None
     raw_response: str = ""
+    selection_error: str = ""
+
+    @property
+    def selection_succeeded(self) -> bool:
+        """Whether the model returned a parseable selection contract."""
+        return not self.selection_error
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -100,6 +106,8 @@ class ConceptSelection:
             "inclusion_exclusion": list(self.inclusion_exclusion),
             "rationale": self.rationale,
             "coverage": self.coverage.to_dict() if self.coverage else None,
+            "selection_succeeded": self.selection_succeeded,
+            "selection_error": self.selection_error or None,
         }
 
 
@@ -140,13 +148,28 @@ class DataFoundationAgent:
             max_tokens=4096,
             temperature=0.1,
         )
-        data = _extract_json(raw) or {}
-        selected = [
-            str(c) for c in (data.get("selected_concepts") or []) if str(c).strip()
-        ]
-        incl = [
-            str(x) for x in (data.get("inclusion_exclusion") or []) if str(x).strip()
-        ]
+        data = _extract_json(raw)
+        selection_error = ""
+        if not isinstance(data, dict):
+            selection_error = (
+                "Concept selection response was not a parseable JSON object."
+            )
+            data = {}
+        raw_selected = data.get("selected_concepts")
+        if not selection_error and not isinstance(raw_selected, list):
+            selection_error = (
+                "Concept selection JSON must contain a selected_concepts list."
+            )
+            raw_selected = []
+        selected = [str(c) for c in (raw_selected or []) if str(c).strip()]
+        raw_inclusion = data.get("inclusion_exclusion") or []
+        if not isinstance(raw_inclusion, list):
+            if not selection_error:
+                selection_error = (
+                    "Concept selection inclusion_exclusion must be a list."
+                )
+            raw_inclusion = []
+        incl = [str(x) for x in raw_inclusion if str(x).strip()]
         rationale = str(data.get("rationale") or "")
         coverage = assess_coverage(selected, catalog)
         return ConceptSelection(
@@ -155,6 +178,7 @@ class DataFoundationAgent:
             rationale=rationale,
             coverage=coverage,
             raw_response=raw if isinstance(raw, str) else "",
+            selection_error=selection_error,
         )
 
 
@@ -295,6 +319,22 @@ def acquire_universe_for_question(
     )
     sel_usage, sel_cost, sel_model = _selection_cost(llm)
     coverage = selection.coverage
+    if not selection.selection_succeeded:
+        return AcquisitionResult(
+            universe_path=None,
+            provenance_path=None,
+            selection=selection,
+            materialized_concepts=[],
+            coverage=coverage,
+            blocked=True,
+            note=(
+                "Concept selection failed before data materialization: "
+                f"{selection.selection_error}"
+            ),
+            selection_usage=sel_usage,
+            selection_cost_usd=sel_cost,
+            selection_model=sel_model,
+        )
 
     # Only the available, resolved concepts can be materialised as features;
     # outcome + demographics are passed via the dedicated args below.
