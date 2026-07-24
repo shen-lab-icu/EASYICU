@@ -657,7 +657,12 @@ def test_noop_replan_cap_stops_real_replanner_loop(tmp_path) -> None:
         enable_replanning=True,
         request_replan_from_primary=True,
         replan_strategy="noop",
-        max_consecutive_noop_replans=2,
+        # The current initial-plan shaper adds host-owned figure/audit nodes
+        # before the probe.  The static fixture response therefore consumes
+        # the probe replan as one substantive normalization; the subsequent
+        # primary-requested identical candidate is the no-op whose cap this
+        # control test exercises.
+        max_consecutive_noop_replans=1,
     )
 
     finding = next(

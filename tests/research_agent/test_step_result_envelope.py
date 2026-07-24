@@ -203,6 +203,60 @@ def test_final_gate_compiler_does_not_rehash_host_verified_input_files(
     assert "absolute_unbound_path" not in _issue_codes(snapshot.envelope)
 
 
+def test_final_gate_compiler_binds_host_verified_execution_cohort_without_rehash(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cohort_path = tmp_path / "cohort.parquet"
+    cohort_path.write_bytes(b"host-verified execution cohort")
+    cohort_sha256 = hashlib.sha256(cohort_path.read_bytes()).hexdigest()
+    original_read_bytes = Path.read_bytes
+
+    def reject_cohort_reread(path: Path) -> bytes:
+        if path == cohort_path:
+            raise AssertionError("sealed compiler repeated execution-cohort I/O")
+        return original_read_bytes(path)
+
+    monkeypatch.setattr(Path, "read_bytes", reject_cohort_reread)
+    snapshot = compile_sealed_step_result_shadow(
+        step=AnalysisStep(step_id="02_table", intent="Build a table."),
+        step_summary={"cohort_path": str(cohort_path)},
+        output_dir=tmp_path,
+        run_dir=tmp_path,
+        execution_cohort_path=cohort_path,
+        execution_cohort_sha256=cohort_sha256,
+    )
+
+    assert snapshot.ready is True
+    assert snapshot.envelope is not None
+    assert "absolute_unbound_path" not in _issue_codes(snapshot.envelope)
+    opaque_ref = "evidence:host_bound_execution_cohort@sha256:" + cohort_sha256
+    scalar_values = {
+        scalar.field_path: scalar.value for scalar in snapshot.envelope.observed_scalars
+    }
+    assert scalar_values["cohort_path"] == opaque_ref
+    assert snapshot.envelope.input_evidence_refs == (opaque_ref,)
+
+
+def test_final_gate_compiler_rejects_incomplete_execution_cohort_binding(
+    tmp_path: Path,
+) -> None:
+    cohort_path = tmp_path / "cohort.parquet"
+    cohort_path.write_bytes(b"host-verified execution cohort")
+
+    snapshot = compile_sealed_step_result_shadow(
+        step=AnalysisStep(step_id="02_table", intent="Build a table."),
+        step_summary={"cohort_path": str(cohort_path)},
+        output_dir=tmp_path,
+        run_dir=tmp_path,
+        execution_cohort_path=cohort_path,
+        execution_cohort_sha256="not-a-digest",
+    )
+
+    assert snapshot.ready is False
+    assert snapshot.error_code == "sealed_envelope_compile_failed"
+
+
 def test_shadow_envelope_binds_statistic_without_mutating_raw_artifact(
     tmp_path: Path,
 ) -> None:

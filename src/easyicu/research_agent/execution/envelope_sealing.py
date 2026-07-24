@@ -44,6 +44,8 @@ def compile_sealed_step_result_shadow(
     output_dir: Path,
     run_dir: Path,
     resolved_input_bindings: Mapping[str, Mapping[str, Any]] | None = None,
+    execution_cohort_path: Path | None = None,
+    execution_cohort_sha256: str | None = None,
     current_status: str | None = None,
 ) -> SealedStepResultEnvelopeSnapshot:
     """Compile one post-repair output view without granting paper authority.
@@ -86,6 +88,27 @@ def compile_sealed_step_result_shadow(
             authorized_path_refs[
                 (PurePosixPath(DockerRunner.CONTAINER_RUN_ROOT) / relative).as_posix()
             ] = opaque_ref
+        if execution_cohort_path is not None or execution_cohort_sha256 is not None:
+            cohort_digest = str(execution_cohort_sha256 or "").strip()
+            cohort_path = Path(execution_cohort_path or "")
+            if (
+                not _SHA256_RE.fullmatch(cohort_digest)
+                or not cohort_path.is_absolute()
+                or cohort_path.is_symlink()
+            ):
+                raise ValueError("execution cohort binding is incomplete")
+            resolved_cohort = cohort_path.resolve(strict=True)
+            cohort_relative = resolved_cohort.relative_to(run_root)
+            if not resolved_cohort.is_file():
+                raise ValueError("execution cohort binding is not a regular file")
+            cohort_ref = "evidence:host_bound_execution_cohort@sha256:" + cohort_digest
+            authorized_path_refs[str(resolved_cohort)] = cohort_ref
+            authorized_path_refs[
+                (
+                    PurePosixPath(DockerRunner.CONTAINER_RUN_ROOT)
+                    / PurePosixPath(cohort_relative.as_posix())
+                ).as_posix()
+            ] = cohort_ref
         envelope = normalize_step_result_shadow(
             step_id=step.step_id,
             step_summary=step_summary,
