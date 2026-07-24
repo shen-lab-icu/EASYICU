@@ -166,8 +166,11 @@ def patch_resolved_input_manifest_env(code: str, run_log: str) -> str:
     The generated script sometimes derives ``resolved_inputs.json`` from the
     run directory even though the host provides its authoritative path through
     ``EASYICU_RESOLVED_INPUTS_JSON``.  Another narrow failure mode treats that
-    path string as the JSON document itself.  Both repairs are deliberately
-    limited to exact runtime failures and structurally unique AST shapes.
+    path string as the JSON document itself.  A third joins the manifest's
+    run-root-relative ``evidence/...`` path to ``EASYICU_EVIDENCE_DIR``, thereby
+    producing ``evidence/evidence/...`` inside the sandbox.  All repairs are
+    deliberately limited to exact runtime failures and structurally unique AST
+    shapes.
     """
 
     lowered_log = (run_log or "").lower()
@@ -176,7 +179,14 @@ def patch_resolved_input_manifest_env(code: str, run_log: str) -> str:
         "easyicu_resolved_inputs_json must contain valid json" in lowered_log
         and "jsondecodeerror:" in lowered_log
     )
-    if not missing_manifest_failure and not path_parsed_as_json_failure:
+    relative_path_wrong_root_failure = (
+        "bound typed input file is unavailable: evidence/" in lowered_log
+    )
+    if not (
+        missing_manifest_failure
+        or path_parsed_as_json_failure
+        or relative_path_wrong_root_failure
+    ):
         return code
     try:
         tree = ast.parse(code)
@@ -193,6 +203,113 @@ def patch_resolved_input_manifest_env(code: str, run_log: str) -> str:
             and isinstance(node.slice, ast.Constant)
             and node.slice.value == env_name
         )
+
+    if relative_path_wrong_root_failure:
+        if not any(
+            isinstance(node, ast.Constant)
+            and node.value == "EASYICU_RESOLVED_INPUTS_JSON"
+            for node in ast.walk(tree)
+        ):
+            return code
+
+        relative_names: set[str] = set()
+        for node in ast.walk(tree):
+            if not (
+                isinstance(node, (ast.Assign, ast.AnnAssign)) and node.value is not None
+            ):
+                continue
+            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+            if len(targets) != 1 or not isinstance(targets[0], ast.Name):
+                continue
+            if any(
+                (
+                    isinstance(descendant, ast.Call)
+                    and isinstance(descendant.func, ast.Attribute)
+                    and descendant.func.attr == "get"
+                    and descendant.args
+                    and isinstance(descendant.args[0], ast.Constant)
+                    and descendant.args[0].value == "relative_path"
+                )
+                or (
+                    isinstance(descendant, ast.Subscript)
+                    and isinstance(descendant.slice, ast.Constant)
+                    and descendant.slice.value == "relative_path"
+                )
+                for descendant in ast.walk(node.value)
+            ):
+                relative_names.add(targets[0].id)
+        if not relative_names:
+            return code
+
+        def evidence_environment_key(node: ast.AST) -> ast.Constant | None:
+            if (
+                isinstance(node, ast.Subscript)
+                and isinstance(node.value, ast.Attribute)
+                and isinstance(node.value.value, ast.Name)
+                and node.value.value.id == "os"
+                and node.value.attr == "environ"
+                and isinstance(node.slice, ast.Constant)
+                and node.slice.value == "EASYICU_EVIDENCE_DIR"
+            ):
+                return node.slice
+            if (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and isinstance(node.func.value, ast.Attribute)
+                and isinstance(node.func.value.value, ast.Name)
+                and node.func.value.value.id == "os"
+                and node.func.value.attr == "environ"
+                and node.func.attr == "get"
+                and node.args
+                and isinstance(node.args[0], ast.Constant)
+                and node.args[0].value == "EASYICU_EVIDENCE_DIR"
+            ):
+                return node.args[0]
+            return None
+
+        candidates: list[ast.Constant] = []
+        for node in ast.walk(tree):
+            if not (
+                isinstance(node, ast.BinOp)
+                and isinstance(node.op, ast.Div)
+                and isinstance(node.right, ast.Name)
+                and node.right.id in relative_names
+                and isinstance(node.left, ast.Call)
+                and isinstance(node.left.func, ast.Name)
+                and node.left.func.id == "Path"
+                and len(node.left.args) == 1
+            ):
+                continue
+            key = evidence_environment_key(node.left.args[0])
+            if key is not None:
+                candidates.append(key)
+        if (
+            len(candidates) != 1
+            or candidates[0].end_lineno is None
+            or candidates[0].end_col_offset is None
+        ):
+            return code
+        candidate = candidates[0]
+        lines = code.splitlines(keepends=True)
+        line_starts: list[int] = []
+        offset = 0
+        for line in lines:
+            line_starts.append(offset)
+            offset += len(line)
+
+        def absolute_offset(lineno: int, utf8_col: int) -> int:
+            line = lines[lineno - 1]
+            char_col = len(line.encode("utf-8")[:utf8_col].decode("utf-8"))
+            return line_starts[lineno - 1] + char_col
+
+        start = absolute_offset(candidate.lineno, candidate.col_offset)
+        end = absolute_offset(candidate.end_lineno, candidate.end_col_offset)
+        repaired = code[:start] + repr("EASYICU_RUN_DIR") + code[end:]
+        try:
+            ast.parse(repaired)
+        except SyntaxError:
+            return code
+        return repaired
 
     if path_parsed_as_json_failure:
         path_imported = any(
