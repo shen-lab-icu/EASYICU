@@ -553,6 +553,7 @@ def structured_repair_metadata(
 _DETAIL_REASON_CODES = {
     "invalid_local_helper_call": RepairReason.INVALID_HELPER_SIGNATURE,
     "host_helper_call_signature_invalid": RepairReason.INVALID_HELPER_SIGNATURE,
+    "render_only_raw_provenance_helper": RepairReason.INVALID_HELPER_SIGNATURE,
     "closed_counts_table_index_used_as_levels": (RepairReason.INVALID_HELPER_SIGNATURE),
     "table_one_spec_not_planner_owned": RepairReason.INVALID_HELPER_SIGNATURE,
     "local_helper_unpack_arity_mismatch": RepairReason.INVALID_HELPER_SIGNATURE,

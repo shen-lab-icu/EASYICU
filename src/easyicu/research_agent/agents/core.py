@@ -2634,6 +2634,16 @@ def _repair_specialization(
         and "reconcile_binary_event_presence" in code
     )
     guidance: List[str] = []
+    if "render_only_raw_provenance_helper" in structured_reasons:
+        guidance.append(
+            "- DIAGNOSED RENDER-ONLY INPUT-BOUNDARY REPAIR: remove the reported "
+            "`measurement_provenance_receipt` call and any summary field derived "
+            "from that call. This figure child consumes already validated, "
+            "digest-bound aggregate products rather than raw patient rows. Keep "
+            "the exact typed-input digest and product-schema checks, preserve all "
+            "registered aggregate values, and do not reconstruct a cohort, "
+            "reinterpret companion columns, or change any statistic.\n"
+        )
     if standard_helper_in_script or RepairRoute.SPARSE_EVENT in repair_routes:
         metadata_candidates = []
         for variable in context.variables:

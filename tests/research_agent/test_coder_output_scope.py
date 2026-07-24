@@ -557,6 +557,39 @@ def test_coder_repair_keeps_nonprovenance_host_helper_out_of_provenance_route(ra
     assert "measurement_provenance_receipt" not in prompt
 
 
+def test_coder_repair_removes_raw_provenance_from_render_only_figure(ra):
+    llm = _RecordingLLM()
+    step = ra.AnalysisStep(
+        step_id="measurement_figure",
+        intent="Render two registered aggregate audit products.",
+        inputs=[
+            "table:missingness_measurement_audit",
+            "table:measurement_process_audit",
+        ],
+        expected_outputs=["figure:measurement_audit"],
+        method="visualization",
+    )
+
+    CoderAgent(llm).repair(
+        context=_context(ra),
+        step=step,
+        code=(
+            "receipt = measurement_provenance_receipt("
+            "aggregate, measured_column='measured', count_column='count')\n"
+        ),
+        run_log=(
+            'DETAIL: {"reason":"render_only_raw_provenance_helper",'
+            '"helper_name":"measurement_provenance_receipt","line":1}'
+        ),
+    )
+
+    prompt = llm.messages[-1].content
+    assert "DIAGNOSED RENDER-ONLY INPUT-BOUNDARY REPAIR" in prompt
+    assert "remove the reported `measurement_provenance_receipt` call" in prompt
+    assert "Keep the exact typed-input digest and product-schema checks" in prompt
+    assert "do not reconstruct a cohort" in prompt
+
+
 def test_coder_repair_keeps_sparse_event_helper_in_its_own_route(ra):
     llm = _RecordingLLM()
     step = ra.AnalysisStep(

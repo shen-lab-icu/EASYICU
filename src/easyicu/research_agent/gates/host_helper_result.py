@@ -6,10 +6,14 @@ import ast
 from typing import Optional
 
 from ..authority.table_one_binding import table_one_execution_spec
+from ..research_context.prompt_scope import normalised_method_head
 from ..schema import AnalysisStep, ValidationFinding
 
 _SCOPES = (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
 _HELPER_MODULE = "easyicu.research_agent.methods.descriptive_inputs"
+_RENDER_METHODS = frozenset(
+    {"figure", "publication_figure", "visualization", "descriptive_visualization"}
+)
 
 
 def _call_name(node: ast.AST) -> str:
@@ -209,6 +213,84 @@ def closed_counts_table_index_findings(
     return findings
 
 
+def _render_only_raw_provenance_findings(
+    tree: ast.Module,
+    step: AnalysisStep,
+) -> list[ValidationFinding]:
+    """Reject raw-row provenance helpers in typed-product figure children."""
+
+    output_kinds = {
+        str(raw or "").strip().lower().partition(":")[0]
+        for raw in (step.expected_outputs or [])
+        if ":" in str(raw or "")
+    }
+    if normalised_method_head(step.method) not in _RENDER_METHODS or not output_kinds:
+        return []
+    if output_kinds - {"figure", "plot", "chart", "heatmap"}:
+        return []
+
+    direct_names: set[str] = set()
+    module_names: set[str] = set()
+    for node in tree.body:
+        if (
+            isinstance(node, ast.ImportFrom)
+            and node.level == 0
+            and node.module == _HELPER_MODULE
+        ):
+            direct_names.update(
+                alias.asname or alias.name
+                for alias in node.names
+                if alias.name == "measurement_provenance_receipt"
+            )
+        elif isinstance(node, ast.Import):
+            module_names.update(
+                alias.asname or alias.name
+                for alias in node.names
+                if alias.name == _HELPER_MODULE
+            )
+
+    findings: list[ValidationFinding] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        call_name = _call_name(node.func)
+        if call_name not in direct_names and not any(
+            call_name == f"{name}.measurement_provenance_receipt"
+            for name in module_names
+        ):
+            continue
+        findings.append(
+            ValidationFinding(
+                validator="mechanical_code_preflight",
+                severity="error",
+                message=(
+                    "A rendering-only figure consumes digest-bound aggregate "
+                    "products and must not call the raw-row measurement "
+                    "provenance helper. Verify each typed product digest and "
+                    "declared schema, then render its registered values."
+                ),
+                detail={
+                    "reason": "render_only_raw_provenance_helper",
+                    "helper_name": "measurement_provenance_receipt",
+                    "line": int(node.lineno),
+                },
+            )
+        )
+    return findings
+
+
+def host_helper_result_findings(
+    tree: ast.Module,
+    step: AnalysisStep,
+) -> list[ValidationFinding]:
+    """Collect host-result checks that depend on the current step contract."""
+
+    return [
+        *closed_counts_table_index_findings(tree),
+        *_render_only_raw_provenance_findings(tree, step),
+    ]
+
+
 def table_one_spec_binding_findings(
     tree: ast.Module,
     step: AnalysisStep,
@@ -292,5 +374,6 @@ def table_one_spec_binding_findings(
 
 __all__ = [
     "closed_counts_table_index_findings",
+    "host_helper_result_findings",
     "table_one_spec_binding_findings",
 ]
