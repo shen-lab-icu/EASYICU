@@ -142,18 +142,37 @@ def probe_isolation_backend() -> IsolationCapability:
     On macOS the CodeRunner confines every step with ``sandbox-exec``.  We run a
     trivial command under a minimal profile: a nested/denied sandbox returns
     non-zero with ``sandbox_apply: Operation not permitted`` (the supervisor's
-    ``returncode=71``).  On non-macOS hosts the subprocess runner does not use
-    ``sandbox-exec``; report the platform backend as available so the real gate
-    still runs.
+    ``returncode=71``).  On Linux, ``unshare -n`` isolates only the network
+    namespace, not the host filesystem; :class:`CodeRunner` therefore rejects
+    both it and a plain host subprocess when unsafe fallback is disabled.
+    Report that boundary as unavailable instead of claiming the integration
+    gate can run and later misclassifying the expected fail-close as bad code.
     """
 
     import shutil
 
+    if sys.platform.startswith("linux"):
+        backend = (
+            "linux_unshare_network_namespace"
+            if shutil.which("unshare")
+            else "host_subprocess"
+        )
+        return IsolationCapability(
+            backend=backend,
+            available=False,
+            detail=(
+                "CodeRunner requires filesystem isolation when unsafe host "
+                "fallback is disabled; Linux unshare -n isolates only network"
+            ),
+        )
     if sys.platform != "darwin":
         return IsolationCapability(
-            backend=f"host_subprocess_{sys.platform}",
-            available=True,
-            detail="sandbox-exec confinement is macOS-only",
+            backend="host_subprocess",
+            available=False,
+            detail=(
+                "CodeRunner requires filesystem isolation when unsafe host "
+                f"fallback is disabled on {sys.platform}"
+            ),
         )
     sandbox_exec = shutil.which("sandbox-exec")
     if not sandbox_exec:
