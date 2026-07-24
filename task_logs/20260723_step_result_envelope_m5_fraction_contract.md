@@ -58,10 +58,20 @@ started.
 
 ## Next bounded increment
 
-Audit the two live invocation times of
-`_step_deterministic_contract_findings` before any consumer switch. The early
-pre-registration gate and final deterministic gate must receive envelopes
-bound to the same summary/status/output authority without duplicate file
-normalization. If that cannot be achieved as a small fail-closed replacement
-with net deletion, keep the live path unchanged and design the compiler
-injection seam first.
+The live timing audit found three distinct contexts rather than one reusable
+result:
+
+1. the early pre-registration gate reads a draft inside the bounded repair
+   loop; a later deterministic/LLM repair can clear and replace its output
+   directory;
+2. the fresh-run final gate reads the post-figure-repair, sealed output view;
+3. resume revalidation materializes a temporary verified evidence view before
+   running the same final gate.
+
+Therefore a draft envelope cannot be cached and reused as final authority. The
+next safe slice is a single sealed compiler seam after all pre-seal figure
+repair and before result evidence registration, plus an equivalent compiler
+from the materialized verified resume view. Final/resume may then dual-read the
+sealed envelope; the early repair gate remains on the legacy view until a
+separate draft-stage contract exists. Any implementation must retain identical
+finding payloads and fail closed on compiler/digest/status drift.
