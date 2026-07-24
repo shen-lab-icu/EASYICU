@@ -14,6 +14,9 @@ import sys
 from pathlib import Path, PurePosixPath
 from typing import Any, Mapping
 
+from easyicu.research_agent.audits.envelope_shadow import (
+    compare_validator_shadow_inputs,
+)
 from easyicu.research_agent.execution.result_envelope import (
     normalize_step_result_shadow,
     verify_step_result_envelope,
@@ -188,6 +191,15 @@ def replay_run(run_dir: Path, output_dir: Path) -> dict[str, Any]:
         )
         if not verify_step_result_envelope(envelope):
             raise RuntimeError(f"invalid envelope digest for step {step_id}")
+        comparison = compare_validator_shadow_inputs(
+            step_summary=summary,
+            envelope=envelope,
+            current_status=(
+                str(record.get("status")).strip()
+                if record.get("status") is not None
+                else None
+            ),
+        )
         target_path = output_dir / f"{step_id}.step_result.envelope.json"
         write_shadow_step_result_envelope(
             envelope,
@@ -201,7 +213,9 @@ def replay_run(run_dir: Path, output_dir: Path) -> dict[str, Any]:
                 "envelope_path": target_path.name,
                 "content_sha256": envelope.content_sha256,
                 "artifact_count": len(envelope.artifacts),
+                "table_count": len(envelope.tables),
                 "statistic_count": len(envelope.statistics),
+                "model_diagnostic_count": len(envelope.model_diagnostics),
                 "normalization_error_count": sum(
                     issue.severity == "error" for issue in envelope.normalization_issues
                 ),
@@ -215,14 +229,19 @@ def replay_run(run_dir: Path, output_dir: Path) -> dict[str, Any]:
                     if envelope.raw_summary_artifact_sha256 is not None
                     else None
                 ),
+                "validator_shadow_exact": comparison.exact_match,
+                "validator_shadow_mismatch_count": len(comparison.mismatches),
             }
         )
     index = {
-        "schema_version": "easyicu.shadow_step_result_index/1",
+        "schema_version": "easyicu.shadow_step_result_index/2",
         "source_manifest_sha256": _sha256_bytes(manifest_bytes),
         "envelope_count": len(index_rows),
         "normalization_error_count": sum(
             row["normalization_error_count"] for row in index_rows
+        ),
+        "validator_shadow_mismatch_count": sum(
+            row["validator_shadow_mismatch_count"] for row in index_rows
         ),
         "steps": index_rows,
     }
