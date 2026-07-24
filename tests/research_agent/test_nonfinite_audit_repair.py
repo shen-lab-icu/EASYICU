@@ -153,6 +153,49 @@ def test_returned_coercion_loss_is_guarded_from_structured_finding() -> None:
         helper(pd.Series([1.0, "bad"]), "value")
 
 
+def test_shared_numeric_helper_rejects_nonfinite_model_inputs() -> None:
+    code = """
+import numpy as np
+import pandas as pd
+
+def numeric_coerce_fail_closed(frame, columns):
+    result = frame.copy()
+    for column in columns:
+        original = result[column]
+        converted = pd.to_numeric(original, errors="coerce")
+        newly_invalid = int((original.notna() & converted.isna()).sum())
+        if newly_invalid > 0:
+            raise RuntimeError("lossy numeric coercion")
+        result[column] = converted
+    return result
+
+numeric_columns = ["exposure", "age", "score", "outcome"]
+data = numeric_coerce_fail_closed(frame, numeric_columns)
+"""
+    finding = ValidationFinding(
+        validator="llm_concept_auditor",
+        severity="error",
+        message="Non-finite model inputs can be silently removed.",
+        detail={
+            "issue_code": "strict_numeric_nonfinite_guard_required",
+            "variables": ["exposure", "age", "score"],
+        },
+    )
+
+    repaired, names = deterministic_concept_audit_repair(
+        code,
+        [finding.message],
+        repair_reasons=[repair_reason_for_finding(finding)],
+        repair_findings=[finding],
+    )
+
+    assert names == ["strict_numeric_nonfinite_guard_v1"]
+    assert "_easyicu_nonfinite_numeric_mask_v1" in repaired
+    namespace = {"frame": pd.DataFrame({"exposure": [float("inf")]})}
+    with pytest.raises(RuntimeError, match="non-finite numeric input"):
+        exec(repaired, namespace)
+
+
 def test_returned_coercion_loss_is_caught_before_llm_audit() -> None:
     findings = [
         finding
