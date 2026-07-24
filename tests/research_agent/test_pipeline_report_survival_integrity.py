@@ -53,6 +53,31 @@ def test_impossible_event_count_is_flagged(tmp_path: Path):
     assert "impossible event counts" in errs[0]
 
 
+def test_free_form_survival_method_cannot_bypass_structural_gate(tmp_path: Path):
+    _summary(
+        tmp_path,
+        "01_survival_analysis",
+        {
+            "primary_model": {"hazard_ratio": 1.82},
+            "n": 73083,
+            "events": 4635208,
+        },
+    )
+
+    for method in (
+        "cox_proportional_hazards",
+        "Cox proportional hazards",
+        "cox_ph with time-varying covariates",
+        "time_to_event_analysis",
+        None,
+    ):
+        errors = primary_survival_estimate_integrity_errors(
+            _plan({"step_id": "01_survival_analysis", "method": method}),
+            tmp_path,
+        )
+        assert any("impossible event counts" in error for error in errors)
+
+
 def test_deterministic_fingerprint_is_clean(tmp_path: Path):
     _summary(
         tmp_path,

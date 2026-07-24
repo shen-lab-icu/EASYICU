@@ -5332,6 +5332,27 @@ def test_manuscript_numeric_auditor_ignores_between_estimate_delta(ra):
     assert findings == []
 
 
+def test_manuscript_numeric_auditor_does_not_treat_ordinary_prose_as_delta(ra):
+    from easyicu.research_agent.pipeline import _audit_manuscript_numeric_claims
+
+    for sentence in (
+        "Within the derivation cohort, the model achieved an AUROC of 0.92.",
+        "The AUROC differed by site and was 0.92 in the derivation cohort.",
+    ):
+        findings = _audit_manuscript_numeric_claims(
+            sentence + " [model](evidence/model.csv).\n",
+            per_step_records=[
+                {
+                    "step_id": "01_model_training",
+                    "status": "ok",
+                    "step_summary": {"statistic:auroc": 0.766},
+                }
+            ],
+        )
+
+        assert any("AUROC claim" in finding.message for finding in findings)
+
+
 def test_manuscript_numeric_auditor_ignores_ci_percent_near_outcome_phrase(ra):
     """Regression: '95% confidence interval' must not be read as a 0.95
     prevalence claim when an outcome phrase ('death'/'mortality') appears

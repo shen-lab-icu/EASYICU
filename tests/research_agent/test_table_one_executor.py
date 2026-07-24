@@ -105,6 +105,37 @@ def test_table_one_executor_does_not_ignore_a_second_typed_artifact():
     )
 
 
+@pytest.mark.parametrize(
+    "typed_input",
+    [
+        "artifact:validated_measurement_analysis_set",
+        "dataset:validated_measurement_analysis_set",
+        "cohort:validated_measurement_analysis_set",
+        "table:validated_measurement_analysis_set",
+    ],
+)
+def test_table_one_executor_refuses_subset_only_typed_input(typed_input: str):
+    step = _step()
+    step.inputs = [
+        typed_input,
+        "death",
+        "age",
+        "sex",
+        "lact_max",
+        "lact_measured",
+        "lact_n",
+    ]
+
+    assert not table_one_executor_owns_step(step)
+    assert (
+        select_standard_executor(
+            step,
+            plan=AnalysisPlan(research_question="Test", steps=[step]),
+        )
+        is None
+    )
+
+
 def test_standard_executor_selects_table_one_before_any_coder_path():
     step = _step()
     selection = select_standard_executor(

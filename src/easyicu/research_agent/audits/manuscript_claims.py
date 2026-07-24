@@ -250,8 +250,10 @@ def _all_summary_scalars(
 # such a delta to the registered AUROC produces a spurious mismatch (the same
 # false-positive class the CI guard in ``_extract_percent_claims_near`` handles).
 _METRIC_DELTA_CUE = re.compile(
-    r"differ|difference|less than|no more than|at most|within|"
-    r"by\s+(?:less|under|up to)|±|\+/-|apart|gap|margin|tolerance",
+    r"\b(?:estimates?\s+)?differ(?:ed|ing)?\s+by"
+    r"(?:\s+(?:less\s+than|under|up\s+to|no\s+more\s+than|at\s+most))?\s*$|"
+    r"\b(?:difference|delta)\s+(?:was|of|under|below|less\s+than|"
+    r"no\s+more\s+than|at\s+most)\s*$|±\s*$|\+/-\s*$",
     flags=re.IGNORECASE,
 )
 
@@ -288,20 +290,11 @@ def _extract_metric_claims(text: str, metric_pattern: str) -> List[float]:
         flags=re.IGNORECASE,
     )
     for match in pattern.finditer(clean_text):
-        # A difference/tolerance cue marks the number as a delta between two
-        # estimates, not a reported point estimate. The cue may sit in the gap
-        # ("AUROC differing by less than 0.001") or earlier in the same clause
-        # ("the absolute difference was 0.0013 for AUROC and 0.0004 ..."), so
-        # scan from the previous sentence boundary up to the number. Bounding to
-        # the current clause keeps a normal claim in a later sentence checkable
-        # even when an earlier sentence mentioned a difference.
-        clause_start = max(
-            clean_text.rfind(". ", 0, match.start()),
-            clean_text.rfind("\n", 0, match.start()),
-            clean_text.rfind("; ", 0, match.start()),
-        )
-        clause = clean_text[clause_start + 1 : match.end()]
-        if _METRIC_DELTA_CUE.search(clause):
+        # A cue is authoritative only when it sits between the metric name and
+        # the number ("AUROC estimates differing by less than 0.001"). Ordinary
+        # prose elsewhere in the clause ("Within the cohort, AUROC was 0.92")
+        # must not disable numeric verification.
+        if _METRIC_DELTA_CUE.search(match.group(1)):
             continue
         try:
             value = float(match.group(2))

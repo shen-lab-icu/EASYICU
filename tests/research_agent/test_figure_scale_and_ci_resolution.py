@@ -18,6 +18,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pandas as pd
+import pytest
 
 from easyicu.research_agent.authority.evidence_store import EvidenceStore
 from easyicu.research_agent.figures.base import load_table
@@ -173,3 +174,60 @@ def test_cox_load_returns_nothing_when_only_metadata_exists(tmp_path: Path):
         evidence, tmp_path, _COX_TABLE_NAMES, require_columns=_COX_REQUIRE
     )
     assert rec is None and frame is None
+
+
+def test_cox_parser_keeps_ratio_scale_estimate_and_interval():
+    parsed = _parse_cox(
+        pd.DataFrame(
+            {
+                "term": ["exposure"],
+                "estimate": [1.83],
+                "ci_low": [1.74],
+                "ci_high": [1.91],
+                "effect_scale": ["hazard_ratio"],
+            }
+        )
+    )
+
+    assert parsed is not None
+    assert parsed.loc[0, ["hr", "lower", "upper"]].tolist() == [1.83, 1.74, 1.91]
+
+
+def test_cox_parser_exponentiates_log_coefficient_and_sibling_interval():
+    parsed = _parse_cox(
+        pd.DataFrame(
+            {
+                "term": ["exposure"],
+                "coef": [0.6931471805599453],
+                "ci_low": [0.1823215567939546],
+                "ci_high": [1.0986122886681098],
+            }
+        )
+    )
+
+    assert parsed is not None
+    assert parsed.loc[0, "hr"] == pytest.approx(2.0)
+    assert parsed.loc[0, "lower"] == pytest.approx(1.2)
+    assert parsed.loc[0, "upper"] == pytest.approx(3.0)
+
+
+def test_cox_parser_refuses_ambiguous_or_incoherent_scale():
+    ambiguous = pd.DataFrame(
+        {
+            "term": ["exposure"],
+            "estimate": [1.83],
+            "ci_low": [1.74],
+            "ci_high": [1.91],
+        }
+    )
+    outside_interval = pd.DataFrame(
+        {
+            "term": ["exposure"],
+            "hazard_ratio": [1.83],
+            "ci_low": [2.0],
+            "ci_high": [3.0],
+        }
+    )
+
+    assert _parse_cox(ambiguous) is None
+    assert _parse_cox(outside_interval) is None

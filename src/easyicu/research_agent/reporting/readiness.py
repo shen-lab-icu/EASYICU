@@ -1535,33 +1535,30 @@ def primary_result_plausibility_errors(
 # --- primary survival estimand integrity -------------------------------------
 # The agent owns the survival method.  This gate checks impossible numeric shape
 # (event counts, HR/CI scale) without requiring a deterministic-runner fingerprint.
-_SURVIVAL_PRIMARY_METHODS = ("survival_analysis", "time_to_event", "cox", "cox_ph")
-# Keys that show a step actually REPORTED a survival estimate, so an empty or
-# prep-only survival step is not misread as a fabricated result.
+# Activate from the result structure rather than Planner-authored method prose:
+# method strings are intentionally free-form and cannot carry numeric authority.
 _SURVIVAL_RESULT_KEYS = (
     "hazard_ratio",
-    "primary_model",
     "cox_terms",
     "log_hazard_ratio",
 )
+_NESTED_SURVIVAL_RESULT_KEYS = (
+    "hazard_ratio",
+    "hr",
+    "log_hazard_ratio",
+    "log_hr",
+    "cox_terms",
+)
 
 
-def _is_survival_method_step(step: Any) -> bool:
-    """True for a survival / time-to-event analysis step (not a figure step).
-
-    Deliberately does NOT apply the execution predicate's ``sensitivity`` +
-    ``definition`` exclusion: that heuristic wrongly excludes a PRIMARY survival
-    step whose intent merely *mentions* sensitivity analyses, and excluding it
-    here would hide exactly the LLM-coded result this gate must
-    catch. A genuine cohort-definition-sensitivity step is filtered out later by
-    the result-key check (it never emits a primary Cox ``hazard_ratio`` /
-    ``primary_model``).
-    """
-    method = str(getattr(step, "method", "") or "").lower()
-    if method not in _SURVIVAL_PRIMARY_METHODS:
-        return False
-    step_id = str(getattr(step, "step_id", "") or "").lower()
-    return "figure" not in step_id
+def _has_survival_result_structure(payload: Mapping[str, Any]) -> bool:
+    """Return whether a summary explicitly reports a survival estimand."""
+    if any(key in payload for key in _SURVIVAL_RESULT_KEYS):
+        return True
+    primary_model = payload.get("primary_model")
+    return isinstance(primary_model, Mapping) and any(
+        key in primary_model for key in _NESTED_SURVIVAL_RESULT_KEYS
+    )
 
 
 def _survival_summary_scalar(payload: Dict[str, Any], *keys: str) -> Optional[float]:
@@ -1599,16 +1596,16 @@ def primary_survival_estimate_integrity_errors(
     errors: List[str] = []
     active_summaries = dict(_authoritative_step_summaries(run_dir, per_step_records))
     for step in getattr(plan, "steps", None) or []:
-        if not _is_survival_method_step(step):
-            continue
         step_id = str(getattr(step, "step_id", "") or "")
+        if "figure" in step_id.lower():
+            continue
         payload = active_summaries.get(step_id)
         if payload is None:
             # A missing summary is the execution gate's concern (missing/failed
             # step); this gate only judges a step that DID produce a summary.
             continue
         payload = dict(payload)
-        if not any(key in payload for key in _SURVIVAL_RESULT_KEYS):
+        if not _has_survival_result_structure(payload):
             continue
         hr = _survival_summary_scalar(payload, "hazard_ratio", "hr", "point_estimate")
         if hr is not None and (not math.isfinite(hr) or hr <= 0):
