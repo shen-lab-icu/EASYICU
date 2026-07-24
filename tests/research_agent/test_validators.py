@@ -327,6 +327,33 @@ def test_cross_step_registered_output_allows_genuine_missing_parent_table() -> N
     assert findings == []
 
 
+def test_cross_step_registered_output_does_not_promote_unregistered_outputs() -> None:
+    prior = _prior_registered_table_record()
+    prior["evidence_ids"] = ["statistic_step_summary_12345678"]
+    prior["step_summary"].pop("output_files")
+    prior["step_summary"]["outputs"] = {
+        "guessed_table": {
+            "file": "not_a_registered_product.csv",
+        }
+    }
+
+    findings = CrossStepRegisteredOutputValidator().audit(
+        step=AnalysisStep(
+            step_id="04_reconciliation",
+            intent="Audit the registered outputs of the prior risk step.",
+        ),
+        step_summary={
+            "registered_output": {
+                "upstream_step": "04_absolute_risk_context",
+                "source_table_available": False,
+            }
+        },
+        completed_step_records=[prior],
+    )
+
+    assert findings == []
+
+
 def test_step_summary_fraction_scale_rejects_percentage_in_fraction_field() -> None:
     findings = StepSummaryFractionValidator().audit(
         step=AnalysisStep(step_id="04_reconciliation", intent="Audit missingness."),
