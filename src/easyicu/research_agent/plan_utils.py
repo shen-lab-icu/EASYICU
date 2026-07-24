@@ -60,10 +60,7 @@ from .contracts.ordered_stratified import (
     is_ordered_stratified_analysis_step,
     ordered_stratified_structure_findings,
 )
-from .contracts.table_one import (
-    bind_table_one_execution_spec,
-    table_one_output_findings,
-)
+from .contracts.table_one import bind_table_one_execution_spec, table_one_output_findings
 from .scalar_utils import (
     _first_numeric_scalar_with_key_fragment,
     _first_present_scalar,
@@ -3495,30 +3492,13 @@ def _summary_has_association_effect(step_summary: Mapping[str, Any]) -> bool:
 
 
 def _exposure_names_match(required: str, actual: str) -> bool:
-    """Lenient name match: only a *clearly unrelated* predictor counts as wrong.
-
-    Numeric modifiers are identity-bearing: a required ``score2`` must not be
-    accepted as ``score`` or ``score3`` merely because their alphabetic
-    portions overlap.  Once that fail-closed check passes, normalise to
-    alphabetic characters and retain the deliberately lenient substring /
-    shared-4-gram comparison so harmless aggregation suffixes do not trigger
-    unnecessary repair.
-
-    The comparison is directional (required contract -> reported predictor).
-    A reported composite may carry additional numeric components, but every
-    numeric component explicitly named by the required exposure must remain
-    present.
-    """
-    required_numbers = re.findall(r"\d+", required.lower())
-    actual_numbers = re.findall(r"\d+", actual.lower())
-    if required_numbers:
-        if not set(required_numbers).issubset(actual_numbers):
-            return False
-    elif actual_numbers:
-        # Introducing a numbered definition/window when the contract did not
-        # name one is not a harmless spelling variation.
+    """Lenient text match that preserves numeric exposure identity."""
+    required_numbers = set(re.findall(r"\d+", required.lower()))
+    actual_numbers = set(re.findall(r"\d+", actual.lower()))
+    if (not required_numbers and actual_numbers) or not required_numbers.issubset(
+        actual_numbers
+    ):
         return False
-
     r = re.sub(r"[^a-z]", "", required.lower())
     a = re.sub(r"[^a-z]", "", actual.lower())
     if not r or not a:
