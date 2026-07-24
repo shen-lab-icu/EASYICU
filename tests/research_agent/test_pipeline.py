@@ -6173,6 +6173,63 @@ def test_readiness_artifacts_emit_manuscript_ready_only_after_gates_pass(
     ) == bound_path.read_text(encoding="utf-8")
 
 
+def test_readiness_artifacts_reject_untraced_numeric_marker(ra, tmp_path: Path):
+    from easyicu.research_agent.authority.evidence_store import EvidenceStore
+    from easyicu.research_agent.pipeline import _write_readiness_artifacts
+
+    context = ra.ResearchContext(
+        research_question="Estimate mortality risk.",
+        cohort=ra.CohortDescriptor(
+            cohort_name="demo",
+            database="synthetic",
+            n_stays=10,
+            n_patients=10,
+        ),
+        variables=[],
+    )
+    plan = ra.AnalysisPlan(
+        research_question=context.research_question,
+        steps=[
+            ra.AnalysisStep(
+                step_id="01_model_training",
+                intent="Train model.",
+                expected_outputs=["table:model_performance"],
+            )
+        ],
+    )
+    evidence = EvidenceStore(tmp_path)
+    bound_path = tmp_path / "manuscript_scaffold_bound.md"
+    bound_path.write_text(
+        _evidence_bound_demo_manuscript()
+        + "\nThe writer added 999 <!-- UNTRACED:999 -->.\n",
+        encoding="utf-8",
+    )
+
+    gates, artifact_paths = _write_readiness_artifacts(
+        context=context,
+        plan=plan,
+        findings=[],
+        per_step_records=[
+            {
+                "step_id": "01_model_training",
+                "status": "ok",
+                "step_summary": {"statistic:auroc": 0.776},
+            }
+        ],
+        evidence=evidence,
+        run_dir=tmp_path,
+        manuscript_path=bound_path,
+        stop_after_analysis=False,
+    )
+
+    assert gates["execution_complete"] is True
+    assert gates["numeric_verified"] is False
+    assert gates["manuscript_ready"] is False
+    assert gates["numeric_error_count"] == 1
+    assert "manuscript_ready" not in artifact_paths
+    assert not (tmp_path / "manuscript_ready.md").exists()
+
+
 def _register_publication_bundle_for_readiness(
     evidence,
     tmp_path: Path,

@@ -1029,6 +1029,20 @@ def run_write_phase(
         enforcement_mode=pipeline._evidence_enforcement_mode,
         per_step_records=per_step_records,
     )
+    numeric_binding_findings: List[ValidationFinding] = []
+    if untraced_numerics:
+        numeric_binding_findings.append(
+            ValidationFinding(
+                validator="manuscript_numeric_auditor",
+                severity="error",
+                message=(
+                    "Bound manuscript contains numeric values that are not "
+                    "traceable to registered evidence."
+                ),
+                detail={"untraced_numerics": list(untraced_numerics)},
+            )
+        )
+        findings.extend(numeric_binding_findings)
     bound_evidence_id = (
         "manuscript_scaffold_writer_probe"
         if writer_probe_mode
@@ -1106,11 +1120,15 @@ def run_write_phase(
                 detail={"removed_sentences": removed_tbd_sentences},
             )
         )
-    manuscript_numeric_findings = audit_manuscript_numeric_claims(
+    manuscript_value_findings = audit_manuscript_numeric_claims(
         bound,
         per_step_records=per_step_records,
     )
-    findings.extend(manuscript_numeric_findings)
+    findings.extend(manuscript_value_findings)
+    manuscript_numeric_findings = [
+        *numeric_binding_findings,
+        *manuscript_value_findings,
+    ]
 
     manuscript_critique, critic_review_error = _review_manuscript_with_fail_safe(
         critic,
