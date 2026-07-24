@@ -238,6 +238,51 @@ def publish_step_result_envelope_sidecar(
 
 
 @dataclass(frozen=True)
+class PublishedStepResultEnvelopeSidecar:
+    """Identity a caller adds to the step's pending success aliases."""
+
+    evidence_id: str
+    alias: str
+
+
+def publish_terminal_step_result_envelope_sidecar(
+    *,
+    snapshot_envelope: StepResultEnvelope | None,
+    step_id: str,
+    attempt_id: str,
+    checkpoint_id: str,
+    script_evidence_id: str,
+    terminal_status: str,
+    evidence_store: _SidecarRegisterStore,
+) -> PublishedStepResultEnvelopeSidecar | None:
+    """Rebind + register the terminal envelope sidecar in one call.
+
+    This is the single seam the live success path invokes so the step
+    orchestrator only wires the returned ``evidence_id``/``alias`` into its
+    pending success aliases (promoted by the existing transaction).  Returns
+    ``None`` -- publishing nothing -- whenever :func:`prepare_step_result_
+    envelope_sidecar` fails closed.
+    """
+
+    prepared = prepare_step_result_envelope_sidecar(
+        snapshot_envelope=snapshot_envelope,
+        step_id=step_id,
+        attempt_id=attempt_id,
+        checkpoint_id=checkpoint_id,
+        script_evidence_id=script_evidence_id,
+        terminal_status=terminal_status,
+    )
+    if prepared is None:
+        return None
+    record = publish_step_result_envelope_sidecar(
+        prepared, evidence_store=evidence_store
+    )
+    return PublishedStepResultEnvelopeSidecar(
+        evidence_id=record.evidence_id, alias=prepared.alias
+    )
+
+
+@dataclass(frozen=True)
 class StepResultEnvelopeSidecarQuery:
     """The current successful step's coordinates the loader binds against."""
 
@@ -393,6 +438,7 @@ def load_current_step_result_envelope_sidecar(
 __all__ = [
     "LoadedStepResultEnvelopeSidecar",
     "PreparedStepResultEnvelopeSidecar",
+    "PublishedStepResultEnvelopeSidecar",
     "SIDECAR_EVIDENCE_KIND",
     "SIDECAR_PRODUCER",
     "SIDECAR_SCHEMA_VERSION",
@@ -403,4 +449,5 @@ __all__ = [
     "load_current_step_result_envelope_sidecar",
     "prepare_step_result_envelope_sidecar",
     "publish_step_result_envelope_sidecar",
+    "publish_terminal_step_result_envelope_sidecar",
 ]

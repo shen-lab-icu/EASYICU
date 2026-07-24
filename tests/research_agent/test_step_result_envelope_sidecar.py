@@ -9,10 +9,14 @@ never recognised as current authority.  No downstream consumer is wired.
 from __future__ import annotations
 
 import builtins
+import importlib.util
 import json
 from pathlib import Path
+from types import ModuleType
 from typing import Any, Callable
 
+import numpy as np
+import pandas as pd
 import pytest
 
 from easyicu.research_agent.authority.evidence_store import EvidenceStore
@@ -27,6 +31,7 @@ from easyicu.research_agent.execution.envelope_sidecar import (
     load_current_step_result_envelope_sidecar,
     prepare_step_result_envelope_sidecar,
     publish_step_result_envelope_sidecar,
+    publish_terminal_step_result_envelope_sidecar,
 )
 from easyicu.research_agent.execution.result_envelope import (
     StepResultEnvelope,
@@ -268,6 +273,45 @@ def test_fresh_and_resume_use_the_same_loader(tmp_path: Path) -> None:
     assert isinstance(resumed, LoadedStepResultEnvelopeSidecar)
     assert resumed.evidence_id == fresh.evidence_id
     assert resumed.envelope.content_sha256 == fresh.envelope.content_sha256
+
+
+def test_publish_terminal_helper_chains_prepare_and_publish(tmp_path: Path) -> None:
+    store = EvidenceStore(tmp_path / "run")
+    script_id = _script_evidence_id(store)
+    published = publish_terminal_step_result_envelope_sidecar(
+        snapshot_envelope=_ready_snapshot(tmp_path),
+        step_id=_STEP_ID,
+        attempt_id="attempt-1",
+        checkpoint_id="checkpoint-1",
+        script_evidence_id=script_id,
+        terminal_status="ok",
+        evidence_store=store,
+    )
+    assert published is not None
+    _commit_alias(store, evidence_id=published.evidence_id, alias=published.alias)
+
+    loaded = load_current_step_result_envelope_sidecar(
+        evidence_store=store, query=_query(script_id)
+    )
+    assert isinstance(loaded, LoadedStepResultEnvelopeSidecar)
+    assert loaded.evidence_id == published.evidence_id
+
+
+def test_publish_terminal_helper_publishes_nothing_when_fail_closed(
+    tmp_path: Path,
+) -> None:
+    store = EvidenceStore(tmp_path / "run")
+    published = publish_terminal_step_result_envelope_sidecar(
+        snapshot_envelope=None,
+        step_id=_STEP_ID,
+        attempt_id="attempt-1",
+        checkpoint_id="checkpoint-1",
+        script_evidence_id="code_step_abcd",
+        terminal_status="ok",
+        evidence_store=store,
+    )
+    assert published is None
+    assert not any(r.producer == SIDECAR_PRODUCER for r in store.records())
 
 
 def test_uncommitted_sidecar_is_not_current_authority(tmp_path: Path) -> None:
@@ -582,3 +626,182 @@ def test_loader_rejects_internally_inconsistent_envelope(tmp_path: Path) -> None
     )
     assert isinstance(result, StepResultEnvelopeSidecarUnavailable)
     assert result.reason == "envelope_digest_invalid"
+
+
+# ---------------------------------------------------------------------------
+# Live wiring: the real _execute_one_step success path publishes a recoverable
+# sidecar (M7, commit 3).  Reuses the minimal typed 4-step pipeline harness --
+# mock LLM + in-process runner, no Provider, Docker, or network.
+# ---------------------------------------------------------------------------
+
+
+def _load_trajectory_fixture() -> ModuleType:
+    path = Path(__file__).with_name("test_trajectory_stability_pipeline_success.py")
+    spec = importlib.util.spec_from_file_location(
+        "_easyicu_sidecar_trajectory_fixture", path
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _run_minimal_pipeline(ra, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    fixture = _load_trajectory_fixture()
+    fixture._disable_unrelated_audits(monkeypatch)
+    llm = fixture._PlanAndCoderLLM()
+    runners_by_timeout: dict[float, object] = {}
+
+    def runner_factory(*, workdir, timeout_seconds, **_kwargs):
+        timeout = float(timeout_seconds)
+        runner = runners_by_timeout.get(timeout)
+        if runner is None:
+            runner = fixture._HybridTrajectoryRunner(workdir=Path(workdir))
+            runners_by_timeout[timeout] = runner
+        return runner
+
+    pipeline = ra.ResearchAgentPipeline(
+        workdir=tmp_path,
+        llm=llm,
+        timeout_seconds=17.0,
+        standard_executor_timeout_seconds=1_234.0,
+        runner_factory=runner_factory,
+        enable_literature=False,
+        enable_visual_qa=False,
+        enable_latex=False,
+        enable_llm_concept_audit=False,
+        enable_replanning=False,
+        enable_deterministic_code_fallback=True,
+        enable_deterministic_runner_repair=False,
+        max_code_repair_attempts=2,
+    )
+    cohort = pd.DataFrame(
+        {
+            "stay_id": list(range(1, 25)),
+            "marker_h0_6": np.linspace(-1.0, 1.0, 24),
+            "marker_h6_12": np.linspace(-0.5, 1.5, 24),
+            "death": [0, 1] * 12,
+        }
+    )
+    result = pipeline.run(
+        question="Assess fixed-window trajectory phenotypes.",
+        cohort=cohort,
+        cohort_name="trajectory_stability_success",
+        database="synthetic",
+        target_outcome="death",
+        stop_after_step_id="04_characterization",
+        stop_after_analysis=True,
+    )
+    return Path(result.workdir)
+
+
+def _query_from_committed_record(store: EvidenceStore, *, alias: str, step_id: str):
+    evidence_id = store.aliases().get(alias)
+    assert evidence_id is not None, f"sidecar alias {alias!r} was not committed"
+    record = next(r for r in store.records() if r.evidence_id == evidence_id)
+    md = record.metadata or {}
+    query = StepResultEnvelopeSidecarQuery(
+        step_id=step_id,
+        terminal_status="ok",
+        script_evidence_id=str(md["script_evidence_id"]),
+        attempt_id=str(md["attempt_id"]),
+        checkpoint_id=str(md["checkpoint_id"]),
+    )
+    return record, query
+
+
+def test_live_success_path_publishes_recoverable_sidecar(
+    ra, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    run_dir = _run_minimal_pipeline(ra, tmp_path, monkeypatch)
+    store = EvidenceStore(run_dir)
+
+    # Every ``ok`` step in the real run committed exactly one sidecar alias.
+    for step_id in (
+        "01_representation",
+        "02_candidates",
+        "03_stability",
+        "04_characterization",
+    ):
+        alias = "result_envelope_sidecar__" + step_id
+        record, query = _query_from_committed_record(
+            store, alias=alias, step_id=step_id
+        )
+        assert record.producer == SIDECAR_PRODUCER
+        assert record.kind == "log"
+        assert record.metadata["sidecar_schema_version"] == SIDECAR_SCHEMA_VERSION
+        assert record.metadata["paper_authorized"] is False
+        # Written to the evidence directory, never the raw step output dir.
+        assert record.relative_path.startswith("evidence/")
+        assert (run_dir / record.relative_path).is_file()
+        step_out = run_dir / "steps" / step_id
+        if step_out.exists():
+            assert not list(step_out.rglob("*result_envelope_sidecar*"))
+
+        loaded = load_current_step_result_envelope_sidecar(
+            evidence_store=store, query=query
+        )
+        assert isinstance(loaded, LoadedStepResultEnvelopeSidecar)
+        assert loaded.envelope.status == "ok"
+        assert loaded.envelope.step_id == step_id
+        assert loaded.envelope.paper_authorized is False
+
+
+def test_live_sidecar_fails_closed_on_stale_attempt_and_missing_step(
+    ra, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    run_dir = _run_minimal_pipeline(ra, tmp_path, monkeypatch)
+    store = EvidenceStore(run_dir)
+    _record, query = _query_from_committed_record(
+        store, alias="result_envelope_sidecar__03_stability", step_id="03_stability"
+    )
+
+    # Stale attempt: the current step is bound to a different attempt id.
+    stale = load_current_step_result_envelope_sidecar(
+        evidence_store=store,
+        query=StepResultEnvelopeSidecarQuery(
+            step_id="03_stability",
+            terminal_status="ok",
+            script_evidence_id=query.script_evidence_id,
+            attempt_id=str(query.attempt_id) + "-stale",
+            checkpoint_id=query.checkpoint_id,
+        ),
+    )
+    assert isinstance(stale, StepResultEnvelopeSidecarUnavailable)
+    assert stale.reason == "attempt_mismatch"
+
+    # No sidecar was ever published for a non-existent step.
+    missing = load_current_step_result_envelope_sidecar(
+        evidence_store=store,
+        query=StepResultEnvelopeSidecarQuery(
+            step_id="99_never_ran",
+            terminal_status="ok",
+            script_evidence_id=query.script_evidence_id,
+            attempt_id=query.attempt_id,
+            checkpoint_id=query.checkpoint_id,
+        ),
+    )
+    assert isinstance(missing, StepResultEnvelopeSidecarUnavailable)
+    assert missing.reason == "no_committed_alias"
+
+
+def test_live_sidecar_fails_closed_on_tampered_bytes(
+    ra, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    run_dir = _run_minimal_pipeline(ra, tmp_path, monkeypatch)
+    store = EvidenceStore(run_dir)
+    record, query = _query_from_committed_record(
+        store,
+        alias="result_envelope_sidecar__04_characterization",
+        step_id="04_characterization",
+    )
+    target = run_dir / record.relative_path
+    tampered = json.loads(target.read_bytes())
+    tampered["status"] = "hijacked"
+    target.write_bytes(json.dumps(tampered).encode("utf-8"))
+
+    result = load_current_step_result_envelope_sidecar(
+        evidence_store=store, query=query
+    )
+    assert isinstance(result, StepResultEnvelopeSidecarUnavailable)
+    assert result.reason == "artifact_digest_mismatch"

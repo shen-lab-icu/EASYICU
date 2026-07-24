@@ -319,15 +319,15 @@
     ]
   },
   "current_aliases": {
-    "count": 36,
-    "mapping_sha256": "01971d5f4d2e3cdef456ae6610da96a4f8e8228a5cf7c4bd862449cee745ec30"
+    "count": 40,
+    "mapping_sha256": "d65b897dc6092f78285a37adb2bb11fc2b0304c5715572857f97aef96ff9b1f6"
   },
   "current_evidence": {
-    "count": 34,
-    "mapping_sha256": "35f1ca4ee994de152903c3d71cb6ed2a6809092a7db607608ef38f253dc5e77f"
+    "count": 38,
+    "mapping_sha256": "26cf26d02f86e5611c63ccd0f5ad19f8184f56b0f4dfc8e834eb5120e06b1a7f"
   },
   "current_self_aliases": {
-    "count": 34
+    "count": 38
   },
   "dependency_edges": [
     [
