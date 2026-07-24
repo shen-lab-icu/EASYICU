@@ -29,7 +29,7 @@ from pathlib import Path
 from typing import Any, Dict, Mapping, Optional, Sequence
 
 from .evidence_snapshot import EvidenceAuthorityIntegrityError
-from ..providers.mocks import MockLLMClient
+from ..providers.mocks import MockLLMClient, PatternScriptedMockLLMClient
 from ..research_context.implementation_identity import metadata_implementation_identity
 from ..providers.prompts import PROMPT_PACK_VERSION, prompt_pack_files
 from .run_input import (
@@ -196,12 +196,13 @@ def iter_mock_clients(llm: Any):
     """
     if llm is None:
         return
-    if isinstance(llm, MockLLMClient):
+    mock_types = (MockLLMClient, PatternScriptedMockLLMClient)
+    if isinstance(llm, mock_types):
         yield llm
         return
     if hasattr(llm, "iter_clients"):
         for child in llm.iter_clients():
-            if isinstance(child, MockLLMClient):
+            if isinstance(child, mock_types):
                 yield child
 
 

@@ -2329,30 +2329,6 @@ def _patch_pre312_fstring_subscript_quotes(
         or len(coordinates) != len(set(coordinates))
     ):
         return code
-    try:
-        tree = ast.parse(code)
-    except SyntaxError:
-        return code
-    parents = {
-        id(child): parent
-        for parent in ast.walk(tree)
-        for child in ast.iter_child_nodes(parent)
-    }
-    constants = {
-        (
-            int(node.lineno),
-            int(node.col_offset),
-            int(node.end_lineno),
-            int(node.end_col_offset),
-        ): node
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Constant)
-        and isinstance(node.value, str)
-        and node.end_lineno is not None
-        and node.end_col_offset is not None
-        and isinstance(parents.get(id(node)), ast.Subscript)
-        and parents[id(node)].slice is node
-    }
     lines = code.splitlines(keepends=True)
     line_starts: list[int] = []
     offset = 0
@@ -2367,14 +2343,28 @@ def _patch_pre312_fstring_subscript_quotes(
 
     replacements: list[tuple[int, int, str]] = []
     for line, column, end_line, end_column, outer_quote in coordinates:
-        node = constants.get((line, column, end_line, end_column))
-        if node is None:
+        if line != end_line or line > len(lines):
             return code
-        source = ast.get_source_segment(code, node)
-        if not source or not source.startswith(outer_quote):
+        start = _absolute_offset(line, column)
+        end = _absolute_offset(end_line, end_column)
+        source = code[start:end]
+        if (
+            not source.startswith(outer_quote)
+            or not source.endswith(outer_quote)
+            or start <= 0
+            or end >= len(code)
+            or code[start - 1] != "["
+            or code[end] != "]"
+        ):
+            return code
+        try:
+            literal_value = ast.literal_eval(source)
+        except (SyntaxError, ValueError):
+            return code
+        if not isinstance(literal_value, str):
             return code
         if outer_quote == '"':
-            content = json.dumps(node.value, ensure_ascii=False)[1:-1]
+            content = json.dumps(literal_value, ensure_ascii=False)[1:-1]
             # Python 3.11 rejects backslashes inside f-string expressions.
             # If the opposite-quoted literal would need one, this is not a
             # host-owned syntactic repair; leave it for provider repair.
@@ -2382,11 +2372,11 @@ def _patch_pre312_fstring_subscript_quotes(
                 return code
             replacement = "'" + content.replace("'", "\\'") + "'"
         else:
-            replacement = json.dumps(node.value, ensure_ascii=False)
+            replacement = json.dumps(literal_value, ensure_ascii=False)
         replacements.append(
             (
-                _absolute_offset(line, column),
-                _absolute_offset(end_line, end_column),
+                start,
+                end,
                 replacement,
             )
         )

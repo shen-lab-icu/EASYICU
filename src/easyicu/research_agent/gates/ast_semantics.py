@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ast
+import re
 from collections.abc import Collection, Mapping
 
 from ..schema import ValidationFinding
@@ -23,6 +24,88 @@ DYNAMIC_NAMESPACE_PRIMITIVES = frozenset(
 DYNAMIC_NAMESPACE_MUTATORS = frozenset(
     {"__delattr__", "__setattr__", "delattr", "setattr"}
 )
+
+
+def pre312_fstring_subscript_quote_occurrences(
+    code: str,
+    tree: ast.Module | None,
+) -> list[dict[str, object]]:
+    """Locate same-quoted f-string subscripts, including on Python 3.11."""
+
+    occurrences: list[dict[str, object]] = []
+    if tree is not None:
+        parents = {
+            id(child): parent
+            for parent in ast.walk(tree)
+            for child in ast.iter_child_nodes(parent)
+        }
+        for joined in ast.walk(tree):
+            if not isinstance(joined, ast.JoinedStr):
+                continue
+            source = ast.get_source_segment(code, joined)
+            if not source:
+                continue
+            prefix = re.match(r"(?i)^[rubf]*", source)
+            remainder = source[prefix.end() if prefix is not None else 0 :]
+            if remainder.startswith(('"""', "'''")) or not remainder.startswith(
+                ('"', "'")
+            ):
+                continue
+            outer_quote = remainder[0]
+            for formatted in joined.values:
+                if not isinstance(formatted, ast.FormattedValue):
+                    continue
+                for candidate in ast.walk(formatted.value):
+                    parent = parents.get(id(candidate))
+                    if not (
+                        isinstance(candidate, ast.Constant)
+                        and isinstance(candidate.value, str)
+                        and isinstance(parent, ast.Subscript)
+                        and parent.slice is candidate
+                        and candidate.end_lineno is not None
+                        and candidate.end_col_offset is not None
+                    ):
+                        continue
+                    literal_source = ast.get_source_segment(code, candidate)
+                    if literal_source and literal_source.startswith(outer_quote):
+                        occurrences.append(
+                            {
+                                "line": int(candidate.lineno),
+                                "column": int(candidate.col_offset),
+                                "end_line": int(candidate.end_lineno),
+                                "end_column": int(candidate.end_col_offset),
+                                "outer_quote": outer_quote,
+                            }
+                        )
+        return occurrences
+
+    opener = re.compile(r"(?i)(?<![A-Za-z0-9_])(?:[rub]*f[rub]*)(?P<quote>[\"'])")
+    subscript = re.compile(
+        r"\[(?P<literal>\"(?:[^\"\\\\]|\\\\.)*\"|'(?:[^'\\\\]|\\\\.)*')\]"
+    )
+    for line_number, line in enumerate(code.splitlines(), start=1):
+        if line.lstrip().startswith("#"):
+            continue
+        for match in opener.finditer(line):
+            outer_quote = match.group("quote")
+            if line[match.end() :].startswith(outer_quote * 2):
+                continue
+            for literal_match in subscript.finditer(line, match.end()):
+                literal = literal_match.group("literal")
+                if not literal.startswith(outer_quote):
+                    continue
+                start = literal_match.start("literal")
+                end = literal_match.end("literal")
+                occurrences.append(
+                    {
+                        "line": line_number,
+                        "column": len(line[:start].encode("utf-8")),
+                        "end_line": line_number,
+                        "end_column": len(line[:end].encode("utf-8")),
+                        "outer_quote": outer_quote,
+                    }
+                )
+    return occurrences
 
 
 def call_name(node: ast.AST) -> str:
@@ -341,5 +424,6 @@ __all__ = [
     "contains_literal_provenance_audit_row",
     "execution_cohort_row_count_findings",
     "literal_observational_getattr",
+    "pre312_fstring_subscript_quote_occurrences",
     "runtime_context_opaque_level_findings",
 ]

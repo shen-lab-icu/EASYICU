@@ -242,14 +242,20 @@ def test_replanner_injects_runtime_directive_into_prompt(ra):
     )
     from easyicu.research_agent.agents.core import ReplannerAgent
 
-    captured: dict = {}
+    from easyicu.research_agent.providers.mocks import PatternScriptedMockLLMClient
 
-    class CapturingLLM(ra.MockLLMClient):
-        def complete(self, messages, **kwargs):
-            user = next((m.content for m in reversed(messages) if m.role == "user"), "")
-            captured["user"] = user
-            plan = AnalysisPlan(research_question="q", steps=[_model_step()])
-            return plan.model_dump_json(indent=2)
+    llm = PatternScriptedMockLLMClient(
+        [
+            (
+                "CURRENT PLAN:",
+                [
+                    AnalysisPlan(
+                        research_question="q", steps=[_model_step()]
+                    ).model_dump_json(indent=2)
+                ],
+            )
+        ]
+    )
 
     ctx = ResearchContext(
         research_question="Does first-day SOFA-2 predict ICU mortality?",
@@ -263,17 +269,23 @@ def test_replanner_injects_runtime_directive_into_prompt(ra):
     )
     plan = AnalysisPlan(research_question="q", steps=[_model_step()])
 
-    ReplannerAgent(CapturingLLM()).run(
+    ReplannerAgent(llm).run(
         context=ctx,
         current_plan=plan,
         directive="OVERRIDE: cohort is task-viable; fit the model, do not block.",
     )
-    assert "PRIORITY RUNTIME DIRECTIVE" in captured["user"]
-    assert "do not block" in captured["user"]
+    captured_user = next(
+        message.content
+        for messages, _kwargs in llm.calls
+        for message in messages
+        if message.role == "user"
+    )
+    assert "PRIORITY RUNTIME DIRECTIVE" in captured_user
+    assert "do not block" in captured_user
     # The directive must precede the routine plan body so it cannot be buried.
-    assert captured["user"].index("PRIORITY RUNTIME DIRECTIVE") < captured[
-        "user"
-    ].index("CURRENT PLAN:")
+    assert captured_user.index("PRIORITY RUNTIME DIRECTIVE") < captured_user.index(
+        "CURRENT PLAN:"
+    )
 
 
 def test_replanner_without_directive_has_no_directive_block(ra):
@@ -285,16 +297,20 @@ def test_replanner_without_directive_has_no_directive_block(ra):
     )
     from easyicu.research_agent.agents.core import ReplannerAgent
 
-    captured: dict = {}
+    from easyicu.research_agent.providers.mocks import PatternScriptedMockLLMClient
 
-    class CapturingLLM(ra.MockLLMClient):
-        def complete(self, messages, **kwargs):
-            captured["user"] = next(
-                (m.content for m in reversed(messages) if m.role == "user"), ""
+    llm = PatternScriptedMockLLMClient(
+        [
+            (
+                "CURRENT PLAN:",
+                [
+                    AnalysisPlan(
+                        research_question="q", steps=[_model_step()]
+                    ).model_dump_json()
+                ],
             )
-            return AnalysisPlan(
-                research_question="q", steps=[_model_step()]
-            ).model_dump_json()
+        ]
+    )
 
     ctx = ResearchContext(
         research_question="q",
@@ -306,11 +322,17 @@ def test_replanner_without_directive_has_no_directive_block(ra):
         ],
         target_outcome="death",
     )
-    ReplannerAgent(CapturingLLM()).run(
+    ReplannerAgent(llm).run(
         context=ctx,
         current_plan=AnalysisPlan(research_question="q", steps=[_model_step()]),
     )
-    assert "PRIORITY RUNTIME DIRECTIVE" not in captured["user"]
+    captured_user = next(
+        message.content
+        for messages, _kwargs in llm.calls
+        for message in messages
+        if message.role == "user"
+    )
+    assert "PRIORITY RUNTIME DIRECTIVE" not in captured_user
 
 
 # ---------------------------------------------------------------------------
@@ -340,7 +362,9 @@ _SELF_BLOCK_STUB = (
 )
 
 
-def test_directed_replan_fires_through_execute_loop(ra, synthetic_cohort, tmp_path):
+def test_directed_replan_fires_through_execute_loop(
+    ra, synthetic_cohort, tmp_path, monkeypatch
+):
     model_step = AnalysisStep(
         step_id="01_model_training",
         intent="Train and validate the mortality prediction model in one step.",
@@ -357,37 +381,33 @@ def test_directed_replan_fires_through_execute_loop(ra, synthetic_cohort, tmp_pa
         steps=[model_step],
     )
 
-    class SelfBlockLLM(ra.MockLLMClient):
-        def __init__(self, *a, **k):
-            super().__init__(*a, **k)
-            self.replan_prompts: list[str] = []
+    from easyicu.research_agent.providers.mocks import PatternScriptedMockLLMClient
 
-        def complete(self, messages, **kwargs):
-            user = next((m.content for m in reversed(messages) if m.role == "user"), "")
-            up = user.upper()
-            is_coder = "PYTHON CODE FOR STEP" in up or (
-                "PYTHON CODE" in up and ("WRITE" in up or "REPAIR" in up)
-            )
-            is_replan = "CURRENT PLAN:" in up and (
-                "PROBE SUMMARY" in up or "REVISE" in up or "DIRECTIVE" in up
-            )
-            is_plan = (not is_replan) and (
-                "ANALYSISPLAN SCHEMA" in up
-                or "RESEARCH PLAN AS JSON" in up
-                or "ICU-AWARE RESEARCH PLAN" in up
-            )
-            if is_replan:
-                self.replan_prompts.append(user)
-                # Echo the same plan -> a noop revision; the guard still re-drives
-                # the model step because _maybe_replan returns the current plan.
-                return fixed_plan.model_dump_json(indent=2)
-            if is_plan:
-                return fixed_plan.model_dump_json(indent=2)
-            if is_coder and "01_model_training" in user:
-                return _SELF_BLOCK_STUB  # self-block on every model-step attempt
-            return super().complete(messages, **kwargs)
+    plan_json = fixed_plan.model_dump_json(indent=2)
+    llm = PatternScriptedMockLLMClient(
+        [
+            ("ICU-AWARE RESEARCH PLAN", [plan_json] * 4),
+            ("CURRENT PLAN:", [plan_json, plan_json]),
+            (
+                "WRITE THE PYTHON CODE",
+                [_SELF_BLOCK_STUB, _SELF_BLOCK_STUB, _SELF_BLOCK_STUB],
+            ),
+            (
+                "REPAIR THE PYTHON CODE",
+                [_SELF_BLOCK_STUB, _SELF_BLOCK_STUB, _SELF_BLOCK_STUB],
+            ),
+        ],
+        contextual_default=True,
+    )
+    from easyicu.research_agent.agents.core import PlannerAgent
 
-    llm = SelfBlockLLM()
+    original_planner_run = PlannerAgent.run
+
+    def run_without_article_suite(self, context, **kwargs):
+        kwargs["enforce_article_contract"] = False
+        return original_planner_run(self, context, **kwargs)
+
+    monkeypatch.setattr(PlannerAgent, "run", run_without_article_suite)
     pipeline = ra.ResearchAgentPipeline(workdir=tmp_path, llm=llm)
     result = pipeline.run(
         question="Build an in-hospital mortality prediction model.",
@@ -419,9 +439,15 @@ def test_directed_replan_fires_through_execute_loop(ra, synthetic_cohort, tmp_pa
     # Wiring: the viability-conditioned directive actually reached the replanner
     # prompt (front-placed, with the impartiality red-line text) — so a relapse
     # would be the replanner ignoring the directive, not a wiring failure.
+    replan_prompts = [
+        message.content
+        for messages, _kwargs in llm.calls
+        for message in messages
+        if message.role == "user" and "CURRENT PLAN:" in message.content
+    ]
     assert any(
         "PRIORITY RUNTIME DIRECTIVE" in p
         and "task-viable" in p
         and "genuinely non-viable" in p
-        for p in llm.replan_prompts
+        for p in replan_prompts
     ), "the directive never reached the replanner prompt (wiring gap)"

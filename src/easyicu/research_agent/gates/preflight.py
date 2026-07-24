@@ -21,6 +21,7 @@ from .ast_semantics import (
     contains_literal_provenance_audit_row,
     execution_cohort_row_count_findings as _cohort_count_findings,
     literal_observational_getattr,
+    pre312_fstring_subscript_quote_occurrences,
     runtime_context_opaque_level_findings as _runtime_context_level_findings,
 )
 from .binary_feasibility import binary_feasibility_guard_findings
@@ -3521,56 +3522,22 @@ def _resolved_input_binding_key_findings(tree: ast.Module) -> list[ValidationFin
 
 def _pre312_fstring_subscript_quote_findings(
     code: str,
-    tree: ast.Module,
+    tree: ast.Module | None,
 ) -> list[ValidationFinding]:
     """Find PEP-701-only subscript quotes rejected by the Python 3.11 runner."""
 
-    parents = {
-        id(child): parent
-        for parent in ast.walk(tree)
-        for child in ast.iter_child_nodes(parent)
-    }
-    occurrences: list[dict[str, object]] = []
-    for joined in ast.walk(tree):
-        if not isinstance(joined, ast.JoinedStr):
-            continue
-        source = ast.get_source_segment(code, joined)
-        if not source:
-            continue
-        prefix = re.match(r"(?i)^[rubf]*", source)
-        prefix_end = prefix.end() if prefix is not None else 0
-        remainder = source[prefix_end:]
-        if remainder.startswith(('"""', "'''")) or not remainder.startswith(('"', "'")):
-            continue
-        outer_quote = remainder[0]
-        for formatted in joined.values:
-            if not isinstance(formatted, ast.FormattedValue):
-                continue
-            for candidate in ast.walk(formatted.value):
-                parent = parents.get(id(candidate))
-                if not (
-                    isinstance(candidate, ast.Constant)
-                    and isinstance(candidate.value, str)
-                    and isinstance(parent, ast.Subscript)
-                    and parent.slice is candidate
-                    and candidate.end_lineno is not None
-                    and candidate.end_col_offset is not None
-                ):
-                    continue
-                literal_source = ast.get_source_segment(code, candidate)
-                if not literal_source or not literal_source.startswith(outer_quote):
-                    continue
-                occurrences.append(
-                    {
-                        "line": int(candidate.lineno),
-                        "column": int(candidate.col_offset),
-                        "end_line": int(candidate.end_lineno),
-                        "end_column": int(candidate.end_col_offset),
-                        "outer_quote": ("double" if outer_quote == '"' else "single"),
-                    }
-                )
+    occurrences = pre312_fstring_subscript_quote_occurrences(code, tree)
     if not occurrences:
         return []
+    occurrences = [
+        {
+            **occurrence,
+            "outer_quote": (
+                "double" if occurrence["outer_quote"] == '"' else "single"
+            ),
+        }
+        for occurrence in occurrences
+    ]
     occurrences.sort(
         key=lambda occurrence: (
             int(occurrence["line"]),
@@ -8297,7 +8264,10 @@ def audit_mechanical_code_contracts(
     try:
         tree = ast.parse(str(script_text or ""))
     except SyntaxError:
-        return []  # Runtime/code syntax handling owns this existing failure class.
+        return _pre312_fstring_subscript_quote_findings(
+            str(script_text or ""),
+            None,
+        )
     findings: list[ValidationFinding] = []
     for node in ast.walk(tree):
         if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):

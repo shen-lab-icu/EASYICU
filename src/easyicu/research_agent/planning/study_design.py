@@ -171,8 +171,17 @@ def _adaptive_triggers_for_context(
             "site/database-specific estimates, or transportability displays."
         )
     if (
-        "missing" in text
-        or "missingness" in text
+        any(
+            token in text
+            for token in (
+                "missing",
+                "missingness",
+                "completeness",
+                "coverage",
+                "data quality",
+                "measurement availability",
+            )
+        )
         or any(
             v.missingness
             and v.missingness.missingness_severity in {"medium", "high", "unknown"}
