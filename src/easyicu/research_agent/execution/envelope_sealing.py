@@ -44,6 +44,7 @@ def compile_sealed_step_result_shadow(
     output_dir: Path,
     run_dir: Path,
     resolved_input_bindings: Mapping[str, Mapping[str, Any]] | None = None,
+    current_status: str | None = None,
 ) -> SealedStepResultEnvelopeSnapshot:
     """Compile one post-repair output view without granting paper authority.
 
@@ -89,6 +90,7 @@ def compile_sealed_step_result_shadow(
             step_id=step.step_id,
             step_summary=step_summary,
             output_dir=output_dir,
+            status=current_status,
             planned_analysis_role=step.planned_analysis_role,
             raw_summary_artifact_bytes=(
                 raw_summary_path.read_bytes() if raw_summary_path.is_file() else None

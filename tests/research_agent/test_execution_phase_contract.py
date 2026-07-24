@@ -1308,6 +1308,16 @@ def test_final_gate_evaluator_preserves_group_order_and_attempt_binding(
         compile_once,
     )
 
+    class PassthroughFractionEnvelopeValidator:
+        def audit(self, *, legacy_findings, **_kwargs):
+            return list(legacy_findings)
+
+    monkeypatch.setattr(
+        pipeline_execute,
+        "StepSummaryFractionEnvelopeDualReader",
+        PassthroughFractionEnvelopeValidator,
+    )
+
     validator_names = {
         "stat_validator": "statistical",
         "clinical_validator": "clinical",
@@ -1400,6 +1410,105 @@ def test_final_gate_evaluator_preserves_group_order_and_attempt_binding(
             "attempt_id": "attempt-2",
             "checkpoint_id": "checkpoint-9",
         }
+
+
+def test_final_fraction_consumer_fails_closed_when_sealed_compile_fails(
+    monkeypatch,
+    tmp_path,
+):
+    from easyicu.research_agent.execution import phase as pipeline_execute
+    from easyicu.research_agent.execution.envelope_sealing import (
+        SealedStepResultEnvelopeSnapshot,
+    )
+    from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep
+
+    class EmptyValidator:
+        def audit(self, **_kwargs):
+            return []
+
+    failed_snapshot = SealedStepResultEnvelopeSnapshot(
+        envelope=None,
+        error_code="sealed_envelope_compile_failed",
+    )
+    monkeypatch.setattr(
+        pipeline_execute,
+        "compile_sealed_step_result_shadow",
+        lambda **_kwargs: failed_snapshot,
+    )
+    monkeypatch.setattr(
+        pipeline_execute,
+        "_step_execution_cohort_path",
+        lambda **_kwargs: tmp_path / "cohort.parquet",
+    )
+    monkeypatch.setattr(
+        pipeline_execute,
+        "_bound_step_execution_cohort_path",
+        lambda **_kwargs: tmp_path / "cohort.parquet",
+    )
+    monkeypatch.setattr(
+        pipeline_execute,
+        "_demote_step_contract_for_primary_runner",
+        lambda _record, _summary, findings: list(findings),
+    )
+    monkeypatch.setattr(
+        pipeline_execute,
+        "_demote_result_figure_shape_for_family_renderer",
+        lambda _context, findings: list(findings),
+    )
+
+    def fraction_only_contract_findings(**kwargs):
+        return kwargs["final_fraction_envelope_validator"].audit(
+            step=kwargs["step"],
+            step_summary=kwargs["step_summary"],
+            envelope=kwargs["final_fraction_envelope"],
+            current_status=kwargs["final_fraction_current_status"],
+            legacy_findings=[],
+        )
+
+    monkeypatch.setattr(
+        pipeline_execute,
+        "_step_deterministic_contract_findings",
+        fraction_only_contract_findings,
+    )
+    step = AnalysisStep(step_id="05_result", intent="Seal the final result.")
+    groups = pipeline_execute._evaluate_final_deterministic_gates(
+        context=object(),
+        plan=AnalysisPlan(research_question="Seal the result.", steps=[step]),
+        cohort_path=tmp_path / "cohort.parquet",
+        universe_path=tmp_path / "universe.parquet",
+        run_dir=tmp_path,
+        out_dir=tmp_path / "outputs",
+        step=step,
+        step_summary={},
+        step_record={"status": "running"},
+        completed_step_records=(),
+        resolved_input_bindings={},
+        attempt_id="attempt-1",
+        checkpoint_id="checkpoint-1",
+        stat_validator=EmptyValidator(),
+        clinical_validator=EmptyValidator(),
+        statistical_guard=EmptyValidator(),
+        cross_step_cohort_lock_validator=EmptyValidator(),
+        cross_step_registered_output_validator=EmptyValidator(),
+        cross_step_reconciliation_trace_validator=EmptyValidator(),
+        step_summary_integrity_validator=EmptyValidator(),
+        step_summary_fraction_validator=EmptyValidator(),
+        cross_step_source_status_validator=EmptyValidator(),
+        primary_model_contract_validator=EmptyValidator(),
+        figure_contract_validator=EmptyValidator(),
+        figure_source_validator=EmptyValidator(),
+    )
+
+    assert groups.result_envelope_snapshot == failed_snapshot
+    assert len(groups.contract_findings) == 1
+    finding = groups.contract_findings[0]
+    assert finding.validator == "step_summary_fraction_scale"
+    assert finding.severity == "error"
+    assert finding.detail["canonical_shadow_blocked"] is True
+    assert finding.detail["mismatch_codes"] == ["canonical_envelope_missing"]
+    assert finding.detail["step_id"] == step.step_id
+    assert finding.detail["attempt_id"] == "attempt-1"
+    assert finding.detail["checkpoint_id"] == "checkpoint-1"
 
 
 def test_execute_phase_host_verifies_measurement_provenance_at_every_contract_gate():

@@ -43,6 +43,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from ..audits.step_summary_integrity import StepSummaryIntegrityValidator
+from ..audits.envelope_consumers import StepSummaryFractionEnvelopeDualReader
 from ..audits.validators import (
     CrossStepCohortLockValidator,
     CrossStepReconciliationTraceValidator,
@@ -53,6 +54,7 @@ from ..audits.validators import (
     PrimaryModelContractValidator,
     StepSummaryFractionValidator,
 )
+from ..execution.result_envelope import StepResultEnvelope
 from ..contracts.runtime import ValidationFinding
 from ..cohort.schema import ANALYSIS_COHORT_FILENAME
 from ..contracts.declared_product import (
@@ -690,6 +692,11 @@ def _step_deterministic_contract_findings(
     step_summary_fraction_validator: StepSummaryFractionValidator,
     cross_step_source_status_validator: CrossStepSourceStatusValidator,
     primary_model_contract_validator: PrimaryModelContractValidator,
+    final_fraction_envelope_validator: (
+        StepSummaryFractionEnvelopeDualReader | None
+    ) = None,
+    final_fraction_envelope: StepResultEnvelope | None = None,
+    final_fraction_current_status: str | None = None,
 ) -> List[ValidationFinding]:
     """The shared pre-registration deterministic contract-validator sequence.
 
@@ -770,10 +777,20 @@ def _step_deterministic_contract_findings(
         resolved_input_bindings=resolved_input_bindings,
         cohort_path=integrity_universe_path,
     )
-    findings += step_summary_fraction_validator.audit(
+    legacy_fraction_findings = step_summary_fraction_validator.audit(
         step=step,
         step_summary=step_summary,
     )
+    if final_fraction_envelope_validator is not None:
+        findings += final_fraction_envelope_validator.audit(
+            step=step,
+            step_summary=step_summary,
+            envelope=final_fraction_envelope,
+            current_status=final_fraction_current_status,
+            legacy_findings=legacy_fraction_findings,
+        )
+    else:
+        findings += legacy_fraction_findings
     findings += cross_step_source_status_validator.audit(
         step=step,
         step_summary=step_summary,

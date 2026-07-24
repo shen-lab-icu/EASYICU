@@ -1,8 +1,10 @@
-"""Opt-in Validator consumers for the StepResultEnvelope migration.
+"""Fail-closed Validator consumers for the StepResultEnvelope migration.
 
-These adapters are not wired into live execution.  They run the current
-Validator, compare its source view with a canonical envelope, and retain the
-legacy decision only when both views agree exactly.
+The bounded fraction/percentage adapter is wired only at the sealed final and
+resume gate; early repair validation remains legacy.  The registered-output
+adapter is still opt-in.  Both run the current Validator, compare its source
+view with a canonical envelope, and retain the legacy decision only when both
+views agree exactly.
 """
 
 from __future__ import annotations
@@ -34,17 +36,22 @@ class StepSummaryFractionEnvelopeDualReader(StepSummaryFractionValidator):
         step_summary: Dict[str, Any],
         envelope: StepResultEnvelope | None,
         current_status: str | None = None,
+        legacy_findings: Sequence[ValidationFinding] | None = None,
     ) -> List[ValidationFinding]:
-        legacy_findings = super().audit(step=step, step_summary=step_summary)
+        retained_legacy = (
+            list(legacy_findings)
+            if legacy_findings is not None
+            else super().audit(step=step, step_summary=step_summary)
+        )
         comparison = compare_fraction_scale_shadow(
             step=step,
             step_summary=step_summary,
             current_status=current_status,
             envelope=envelope,
-            legacy_findings=legacy_findings,
+            legacy_findings=retained_legacy,
         )
         if comparison.exact_match:
-            return legacy_findings
+            return retained_legacy
         return [
             fraction_scale_shadow_blocking_finding(
                 validator_name=self.name,

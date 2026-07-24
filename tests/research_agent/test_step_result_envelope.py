@@ -70,12 +70,14 @@ def test_final_gate_compiler_builds_one_non_authoritative_sealed_snapshot(
         step_summary=summary,
         output_dir=tmp_path,
         run_dir=tmp_path,
+        current_status="final_review",
     )
 
     assert snapshot.ready is True
     assert snapshot.error_code is None
     assert snapshot.envelope is not None
     assert snapshot.envelope.step_id == step.step_id
+    assert snapshot.envelope.status == "final_review"
     assert snapshot.envelope.planned_analysis_role == "primary"
     assert snapshot.envelope.shadow is True
     assert snapshot.envelope.paper_authorized is False
@@ -582,23 +584,22 @@ def test_archived_replay_uses_current_ledger_and_verified_input_authority(
     assert "absolute_unbound_path" in _issue_codes(rejected_envelope)
 
 
-def test_shadow_envelope_is_compiled_but_not_wired_into_live_decisions() -> None:
+def test_sealed_envelope_wires_only_the_final_fraction_consumer() -> None:
     repo_root = Path(__file__).resolve().parents[2]
-    for relative in (
-        "src/easyicu/research_agent/execution/phase.py",
-        "src/easyicu/research_agent/pipeline.py",
-    ):
-        source = (repo_root / relative).read_text(encoding="utf-8")
-        assert "execution.result_envelope" not in source
-        assert "normalize_step_result_shadow" not in source
-        assert "audits.envelope_consumers" not in source
-        assert "audits.envelope_shadow" not in source
-        assert "compare_validator_shadow_inputs" not in source
+    pipeline_source = (repo_root / "src/easyicu/research_agent/pipeline.py").read_text(
+        encoding="utf-8"
+    )
+    assert "execution.result_envelope" not in pipeline_source
+    assert "normalize_step_result_shadow" not in pipeline_source
+    assert "audits.envelope_consumers" not in pipeline_source
+    assert "audits.envelope_shadow" not in pipeline_source
+    assert "compare_validator_shadow_inputs" not in pipeline_source
     phase_source = (
         repo_root / "src/easyicu/research_agent/execution/phase.py"
     ).read_text(encoding="utf-8")
     assert phase_source.count("compile_sealed_step_result_shadow(") == 1
-    assert "StepSummaryFractionEnvelopeDualReader" not in phase_source
+    assert phase_source.count("StepSummaryFractionEnvelopeDualReader()") == 1
+    assert phase_source.count("final_fraction_envelope_validator=") == 1
     assert "CrossStepRegisteredOutputEnvelopeDualReader" not in phase_source
 
 
