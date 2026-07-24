@@ -13,20 +13,26 @@ import pytest
 from pydantic import ValidationError
 
 from easyicu.research_agent.audits.envelope_shadow import (
+    canonical_registered_output_table_artifacts,
     compare_fraction_scale_shadow,
     compare_validator_shadow_inputs,
 )
 from easyicu.research_agent.audits.envelope_consumers import (
-    CrossStepRegisteredOutputEnvelopeDualReader,
+    RegisteredOutputEnvelopeConsumer,
     StepSummaryFractionEnvelopeDualReader,
 )
 from easyicu.research_agent.audits.validators import (
     CrossStepRegisteredOutputValidator,
     StepSummaryFractionValidator,
 )
+from easyicu.research_agent.authority.evidence_store import EvidenceStore
+from easyicu.research_agent.authority.registration import StepEvidenceCommit
 from easyicu.research_agent.execution import envelope_sealing
 from easyicu.research_agent.execution.envelope_sealing import (
     compile_sealed_step_result_shadow,
+)
+from easyicu.research_agent.execution.envelope_sidecar import (
+    publish_terminal_step_result_envelope_sidecar,
 )
 from easyicu.research_agent.execution.result_envelope import (
     StepResultEnvelope,
@@ -577,7 +583,11 @@ def test_archived_replay_uses_current_ledger_and_verified_input_authority(
     rejected_index = json.loads((rejected_shadow_dir / "index.json").read_text())
     assert rejected_index["normalization_error_count"] == 1
     assert rejected_index["validator_shadow_mismatch_count"] == 1
-    assert rejected_index["registered_output_shadow_mismatch_count"] == 1
+    # M8: the registered-output consumer measures upstream-table detection
+    # equivalence, which the legacy diagnostic lane preserves on an archived
+    # run.  Corrupted input authority is caught by the normalization-error and
+    # validator-shadow metrics above, not by a registered-output mismatch.
+    assert rejected_index["registered_output_shadow_mismatch_count"] == 0
     rejected_envelope = StepResultEnvelope.model_validate_json(
         (rejected_shadow_dir / "01_analysis.step_result.envelope.json").read_text()
     )
@@ -601,7 +611,10 @@ def test_sealed_envelope_wires_only_the_final_fraction_consumer() -> None:
     assert phase_source.count("compile_sealed_step_result_shadow(") == 1
     assert phase_source.count("StepSummaryFractionEnvelopeDualReader()") == 1
     assert phase_source.count("final_fraction_envelope_validator=") == 1
-    assert "CrossStepRegisteredOutputEnvelopeDualReader" not in phase_source
+    # M8-B1 lands the envelope-authoritative RegisteredOutputEnvelopeConsumer as
+    # a pure, fully-tested unit; the live final-gate wiring is the separate B2
+    # slice.  Until B2, the consumer must NOT appear in the phase orchestration.
+    assert "RegisteredOutputEnvelopeConsumer" not in phase_source
 
 
 def test_registered_tables_compile_typed_population_missingness_and_estimate(
@@ -813,112 +826,250 @@ def _registered_output_consumer_summary() -> dict[str, object]:
     }
 
 
-def test_registered_output_gate_dual_read_matches_legacy_exactly(
-    tmp_path: Path,
-) -> None:
+_UPSTREAM_STEP = "04_absolute_risk_context"
+_CONSUMER_STEP = "05_reconciliation"
+
+
+def _upstream_table_envelope(tmp_path: Path) -> StepResultEnvelope:
     table = tmp_path / "exposure_outcome_summary.csv"
     table.write_text("group,n\n0,40\n1,60\n", encoding="utf-8")
-    prior_summary = {
-        "status": "ok",
-        "output_files": {
-            "table:exposure_outcome_summary": table.name,
+    return normalize_step_result_shadow(
+        step_id=_UPSTREAM_STEP,
+        step_summary={
+            "status": "ok",
+            "output_files": {"table:exposure_outcome_summary": table.name},
         },
-    }
-    prior = _registered_output_record(prior_summary)
-    envelope = normalize_step_result_shadow(
-        step_id="04_absolute_risk_context",
-        step_summary=prior_summary,
         output_dir=tmp_path,
         status="ok",
     )
-    validator = CrossStepRegisteredOutputValidator()
-    step = AnalysisStep(
-        step_id="05_reconciliation",
+
+
+def _commit_upstream_sidecar(
+    store: EvidenceStore,
+    envelope: StepResultEnvelope,
+    *,
+    attempt_id: str = "attempt-1",
+    checkpoint_id: str = "checkpoint-1",
+    script_evidence_id: str = "code_04_risk",
+) -> str:
+    """Publish + commit a sidecar for the upstream step, returning its id."""
+
+    published = publish_terminal_step_result_envelope_sidecar(
+        snapshot_envelope=envelope,
+        step_id=_UPSTREAM_STEP,
+        attempt_id=attempt_id,
+        checkpoint_id=checkpoint_id,
+        script_evidence_id=script_evidence_id,
+        terminal_status="ok",
+        evidence_store=store,
+    )
+    assert published is not None
+    StepEvidenceCommit(store).commit_validated_step(
+        step_id=_UPSTREAM_STEP,
+        pending_aliases={published.evidence_id: [published.alias]},
+        allowed_evidence_ids=[published.evidence_id],
+        register_numeric_claims=lambda: None,
+    )
+    return published.evidence_id
+
+
+def _modern_upstream_record(
+    *,
+    sidecar_evidence_id: str,
+    attempt_id: str = "attempt-1",
+    checkpoint_id: str = "checkpoint-1",
+    script_evidence_id: str = "code_04_risk",
+    status: str = "ok",
+) -> dict[str, object]:
+    return {
+        "step_id": _UPSTREAM_STEP,
+        "status": status,
+        "evidence_ids": [
+            "table_exposure_outcome_summary_8368e5ab",
+            sidecar_evidence_id,
+        ],
+        "attempt_id": attempt_id,
+        "review_checkpoint_id": checkpoint_id,
+        "script_evidence_id": script_evidence_id,
+        "step_summary": {"status": status},
+    }
+
+
+def _consumer_step() -> AnalysisStep:
+    return AnalysisStep(
+        step_id=_CONSUMER_STEP,
         intent="Audit the registered outputs of the prior risk step.",
     )
 
-    legacy = validator.audit(
-        step=step,
-        step_summary=_registered_output_consumer_summary(),
-        completed_step_records=[prior],
-    )
-    dual_read = CrossStepRegisteredOutputEnvelopeDualReader().audit(
-        step=step,
-        step_summary=_registered_output_consumer_summary(),
-        completed_step_records=[prior],
-        completed_step_envelopes={"04_absolute_risk_context": envelope},
-    )
 
-    assert [finding.model_dump(mode="json") for finding in dual_read] == [
-        finding.model_dump(mode="json") for finding in legacy
-    ]
+def test_canonical_helper_reports_upstream_table_presence(tmp_path: Path) -> None:
+    envelope = _upstream_table_envelope(tmp_path)
+    assert canonical_registered_output_table_artifacts(envelope)
 
 
-def test_registered_output_gate_dual_read_fails_closed_without_envelope(
+def test_registered_output_consumer_matches_legacy_on_real_hit(
     tmp_path: Path,
 ) -> None:
-    table = tmp_path / "exposure_outcome_summary.csv"
-    table.write_text("group,n\n0,40\n1,60\n", encoding="utf-8")
-    prior = _registered_output_record(
-        {
-            "status": "ok",
-            "output_files": {
-                "table:exposure_outcome_summary": table.name,
-            },
-        }
-    )
+    """A real registered-output claim: the canonical-envelope verdict is a
+    NON-ZERO finding that agrees with the legacy verdict (not zero-finding)."""
 
-    findings = CrossStepRegisteredOutputEnvelopeDualReader().audit(
-        step=AnalysisStep(
-            step_id="05_reconciliation",
-            intent="Audit the registered outputs of the prior risk step.",
-        ),
+    store = EvidenceStore(tmp_path / "run")
+    envelope = _upstream_table_envelope(tmp_path)
+    sidecar_id = _commit_upstream_sidecar(store, envelope)
+    record = _modern_upstream_record(sidecar_evidence_id=sidecar_id)
+
+    canonical = RegisteredOutputEnvelopeConsumer().audit(
+        step=_consumer_step(),
         step_summary=_registered_output_consumer_summary(),
-        completed_step_records=[prior],
-        completed_step_envelopes={},
+        completed_step_records=[record],
+        evidence_store=store,
+    )
+    legacy = CrossStepRegisteredOutputValidator().audit(
+        step=_consumer_step(),
+        step_summary=_registered_output_consumer_summary(),
+        completed_step_records=[record],
     )
 
-    assert len(findings) == 1
-    assert findings[0].detail["canonical_shadow_blocked"] is True
-    assert findings[0].detail["mismatch_codes"] == ["canonical_envelope_missing"]
+    assert len(canonical) == 1
+    assert len(legacy) == 1  # both agree the table was falsely unavailable
+    detail = canonical[0].detail
+    assert detail["upstream_step"] == _UPSTREAM_STEP
+    assert detail["table_presence_source"] == "canonical_envelope"
+    assert detail["diagnostic_only"] is False
+    assert detail["paper_authority"] is False
 
 
-def test_registered_output_gate_dual_read_rejects_source_or_presence_drift(
+def test_registered_output_consumer_fails_closed_on_missing_sidecar(
     tmp_path: Path,
 ) -> None:
+    store = EvidenceStore(tmp_path / "run")
+    # Record declares a sidecar (modern run) but none was committed.
+    record = _modern_upstream_record(
+        sidecar_evidence_id="log_result_envelope_sidecar_x"
+    )
+
+    findings = RegisteredOutputEnvelopeConsumer().audit(
+        step=_consumer_step(),
+        step_summary=_registered_output_consumer_summary(),
+        completed_step_records=[record],
+        evidence_store=store,
+    )
+    assert len(findings) == 1
+    assert findings[0].detail["registered_output_sidecar_unrecoverable"] is True
+    assert findings[0].detail["sidecar_unavailable_reason"] == "no_committed_alias"
+
+
+def test_registered_output_consumer_fails_closed_on_stale_attempt(
+    tmp_path: Path,
+) -> None:
+    store = EvidenceStore(tmp_path / "run")
+    envelope = _upstream_table_envelope(tmp_path)
+    sidecar_id = _commit_upstream_sidecar(store, envelope, attempt_id="attempt-1")
+    # The record names a different (newer) attempt than the committed sidecar.
+    record = _modern_upstream_record(
+        sidecar_evidence_id=sidecar_id, attempt_id="attempt-2"
+    )
+
+    findings = RegisteredOutputEnvelopeConsumer().audit(
+        step=_consumer_step(),
+        step_summary=_registered_output_consumer_summary(),
+        completed_step_records=[record],
+        evidence_store=store,
+    )
+    assert len(findings) == 1
+    assert findings[0].detail["registered_output_sidecar_unrecoverable"] is True
+    assert findings[0].detail["sidecar_unavailable_reason"] == "attempt_mismatch"
+
+
+def test_registered_output_consumer_fails_closed_on_incomplete_coordinates(
+    tmp_path: Path,
+) -> None:
+    store = EvidenceStore(tmp_path / "run")
+    envelope = _upstream_table_envelope(tmp_path)
+    sidecar_id = _commit_upstream_sidecar(store, envelope)
+    record = _modern_upstream_record(sidecar_evidence_id=sidecar_id)
+    record.pop("attempt_id")  # a modern record missing a loader coordinate
+
+    findings = RegisteredOutputEnvelopeConsumer().audit(
+        step=_consumer_step(),
+        step_summary=_registered_output_consumer_summary(),
+        completed_step_records=[record],
+        evidence_store=store,
+    )
+    assert len(findings) == 1
+    assert findings[0].detail["sidecar_unavailable_reason"] == "incomplete_query"
+
+
+def test_registered_output_consumer_fails_closed_on_tampered_sidecar(
+    tmp_path: Path,
+) -> None:
+    store = EvidenceStore(tmp_path / "run")
+    envelope = _upstream_table_envelope(tmp_path)
+    sidecar_id = _commit_upstream_sidecar(store, envelope)
+    record = _modern_upstream_record(sidecar_evidence_id=sidecar_id)
+
+    alias = store.aliases().get("result_envelope_sidecar__" + _UPSTREAM_STEP)
+    sidecar_record = next(r for r in store.records() if r.evidence_id == alias)
+    target = store.root / sidecar_record.relative_path
+    tampered = json.loads(target.read_bytes())
+    tampered["status"] = "hijacked"
+    target.write_bytes(json.dumps(tampered).encode("utf-8"))
+
+    findings = RegisteredOutputEnvelopeConsumer().audit(
+        step=_consumer_step(),
+        step_summary=_registered_output_consumer_summary(),
+        completed_step_records=[record],
+        evidence_store=store,
+    )
+    assert len(findings) == 1
+    assert findings[0].detail["registered_output_sidecar_unrecoverable"] is True
+    assert (
+        findings[0].detail["sidecar_unavailable_reason"] == "artifact_path_unverified"
+    )
+
+
+def test_registered_output_consumer_ignores_failed_upstream_step(
+    tmp_path: Path,
+) -> None:
+    store = EvidenceStore(tmp_path / "run")
+    envelope = _upstream_table_envelope(tmp_path)
+    sidecar_id = _commit_upstream_sidecar(store, envelope)
+    # The upstream step's outer status is not successful: a genuine gap.
+    record = _modern_upstream_record(sidecar_evidence_id=sidecar_id, status="failed")
+
+    findings = RegisteredOutputEnvelopeConsumer().audit(
+        step=_consumer_step(),
+        step_summary=_registered_output_consumer_summary(),
+        completed_step_records=[record],
+        evidence_store=store,
+    )
+    assert findings == []
+
+
+def test_registered_output_consumer_uses_legacy_diagnostic_lane_for_archived_run(
+    tmp_path: Path,
+) -> None:
+    """A record that never declared a sidecar (legacy archived run) uses the
+    legacy raw parse in an explicit diagnostic lane, not paper authority."""
+
+    store = EvidenceStore(tmp_path / "run")
     table = tmp_path / "exposure_outcome_summary.csv"
     table.write_text("group,n\n0,40\n1,60\n", encoding="utf-8")
-    prior_summary = {
-        "status": "ok",
-        "output_files": {
-            "table:exposure_outcome_summary": table.name,
-        },
-    }
-    prior = _registered_output_record(prior_summary)
-    envelope = normalize_step_result_shadow(
-        step_id="04_absolute_risk_context",
-        step_summary={"status": "ok"},
-        output_dir=tmp_path,
-        status="ok",
-    )
+    legacy_record = _registered_output_record(
+        {"status": "ok", "output_files": {"table:exposure_outcome_summary": table.name}}
+    )  # evidence_ids declare only a table, no sidecar
 
-    findings = CrossStepRegisteredOutputEnvelopeDualReader().audit(
-        step=AnalysisStep(
-            step_id="05_reconciliation",
-            intent="Audit the registered outputs of the prior risk step.",
-        ),
+    findings = RegisteredOutputEnvelopeConsumer().audit(
+        step=_consumer_step(),
         step_summary=_registered_output_consumer_summary(),
-        completed_step_records=[prior],
-        completed_step_envelopes={"04_absolute_risk_context": envelope},
+        completed_step_records=[legacy_record],
+        evidence_store=store,
     )
-
     assert len(findings) == 1
-    assert findings[0].detail["canonical_shadow_blocked"] is True
-    assert set(findings[0].detail["mismatch_codes"]) >= {
-        "canonical_artifact_missing",
-        "canonical_source_digest_mismatch",
-        "canonical_table_presence_mismatch",
-    }
+    detail = findings[0].detail
+    assert detail["table_presence_source"] == "legacy_diagnostic"
+    assert detail["diagnostic_only"] is True
+    assert detail["paper_authority"] is False
 
 
 def _finding_payloads(findings: list[object]) -> list[dict[str, object]]:

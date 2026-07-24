@@ -54,16 +54,28 @@ class ValidatorShadowComparison(_StrictModel):
     decision_effect: Literal["none"] = "none"
 
 
-class RegisteredOutputShadowComparison(_StrictModel):
-    schema_version: Literal["easyicu.registered_output_shadow_comparison/1"] = (
-        "easyicu.registered_output_shadow_comparison/1"
+def canonical_registered_output_table_artifacts(
+    envelope: StepResultEnvelope,
+) -> tuple[str, ...]:
+    """The canonical registered table artifacts a completed step declares.
+
+    The M8 registered-output consumer reads table presence ONLY from this
+    canonical view of a recovered :class:`StepResultEnvelope` -- never from a
+    raw ``evidence_ids`` / ``output_files`` glob.  A table is present when an
+    artifact is typed ``kind == "table"`` or belongs to a declared table
+    product.
+    """
+
+    table_product_ids = {table.product_id for table in envelope.tables}
+    return tuple(
+        sorted(
+            {
+                artifact.relative_path
+                for artifact in envelope.artifacts
+                if artifact.kind == "table" or artifact.product_id in table_product_ids
+            }
+        )
     )
-    step_id: str
-    exact_match: bool
-    legacy_table_artifacts: tuple[str, ...] = ()
-    canonical_table_artifacts: tuple[str, ...] = ()
-    mismatches: tuple[ValidatorShadowMismatch, ...] = ()
-    decision_effect: Literal["none"] = "none"
 
 
 class FractionScaleShadowComparison(_StrictModel):
@@ -185,63 +197,6 @@ def compare_validator_shadow_inputs(
     )
 
 
-def compare_registered_output_shadow(
-    *,
-    step_id: str,
-    step_summary: Any,
-    current_status: str | None,
-    legacy_table_artifacts: Sequence[str],
-    envelope: StepResultEnvelope | None,
-) -> RegisteredOutputShadowComparison:
-    """Require exact source and table-presence agreement before dual-read."""
-
-    if envelope is None:
-        return RegisteredOutputShadowComparison(
-            step_id=step_id,
-            exact_match=False,
-            legacy_table_artifacts=tuple(sorted(set(legacy_table_artifacts))),
-            mismatches=(
-                ValidatorShadowMismatch(
-                    code="canonical_envelope_missing",
-                    detail="No canonical envelope was available for the upstream step.",
-                ),
-            ),
-        )
-    base = compare_validator_shadow_inputs(
-        step_summary=step_summary,
-        envelope=envelope,
-        current_status=current_status,
-    )
-    table_product_ids = {table.product_id for table in envelope.tables}
-    canonical_table_artifacts = tuple(
-        sorted(
-            {
-                artifact.relative_path
-                for artifact in envelope.artifacts
-                if artifact.kind == "table" or artifact.product_id in table_product_ids
-            }
-        )
-    )
-    mismatches = list(base.mismatches)
-    if bool(legacy_table_artifacts) != bool(canonical_table_artifacts):
-        mismatches.append(
-            ValidatorShadowMismatch(
-                code="canonical_table_presence_mismatch",
-                detail=(
-                    "Legacy and canonical registered-output views disagreed "
-                    "about whether the upstream step produced a table."
-                ),
-            )
-        )
-    return RegisteredOutputShadowComparison(
-        step_id=envelope.step_id,
-        exact_match=not mismatches,
-        legacy_table_artifacts=tuple(sorted(set(legacy_table_artifacts))),
-        canonical_table_artifacts=canonical_table_artifacts,
-        mismatches=tuple(mismatches),
-    )
-
-
 def _finding_payload_sha256(findings: Sequence[ValidationFinding]) -> str:
     payloads = [finding.model_dump(mode="json") for finding in findings]
     payloads.sort(
@@ -359,45 +314,12 @@ def fraction_scale_shadow_blocking_finding(
     )
 
 
-def registered_output_shadow_blocking_finding(
-    *,
-    validator_name: str,
-    consumer_step_id: str,
-    upstream_step: str,
-    comparison: RegisteredOutputShadowComparison,
-) -> ValidationFinding:
-    """Render one fail-closed migration finding without changing legacy logic."""
-
-    return ValidationFinding(
-        validator=validator_name,
-        severity="error",
-        message=(
-            f"Canonical registered-output shadow could not safely replace "
-            f"the legacy view for upstream step {upstream_step}. Keep the "
-            "legacy consumer active until the envelope source, digest, "
-            "normalization, and table-presence decisions agree exactly."
-        ),
-        detail={
-            "step_id": consumer_step_id,
-            "upstream_step": upstream_step,
-            "canonical_shadow_blocked": True,
-            "mismatch_codes": sorted(
-                {mismatch.code for mismatch in comparison.mismatches}
-            ),
-            "legacy_table_artifacts": list(comparison.legacy_table_artifacts),
-            "canonical_table_artifacts": list(comparison.canonical_table_artifacts),
-        },
-    )
-
-
 __all__ = [
     "FractionScaleShadowComparison",
-    "RegisteredOutputShadowComparison",
     "ValidatorShadowComparison",
     "ValidatorShadowMismatch",
+    "canonical_registered_output_table_artifacts",
     "compare_fraction_scale_shadow",
-    "compare_registered_output_shadow",
     "compare_validator_shadow_inputs",
     "fraction_scale_shadow_blocking_finding",
-    "registered_output_shadow_blocking_finding",
 ]

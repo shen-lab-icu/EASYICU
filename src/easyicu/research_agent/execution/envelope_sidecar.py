@@ -115,6 +115,24 @@ def _sidecar_evidence_id(
     return f"{_EVIDENCE_ID_PREFIX}{token}"
 
 
+def step_record_declares_sidecar(evidence_ids: Any) -> bool:
+    """True when a step's evidence ids include a committed envelope sidecar.
+
+    This is the resume-safe signal a downstream consumer uses to tell a modern
+    run (whose successful step published a sidecar, so a missing/stale/tampered
+    one must fail closed) from a genuinely legacy archived run (no sidecar was
+    ever published, so a legacy diagnostic lane applies).  It reads only the
+    step record's own evidence-id list, which is preserved across resume.
+    """
+
+    if not isinstance(evidence_ids, (list, tuple, set, frozenset)):
+        return False
+    return any(
+        isinstance(evidence_id, str) and evidence_id.startswith(_EVIDENCE_ID_PREFIX)
+        for evidence_id in evidence_ids
+    )
+
+
 def _canonical_envelope_bytes(envelope: StepResultEnvelope) -> bytes:
     return (
         json.dumps(
@@ -514,4 +532,5 @@ __all__ = [
     "prepare_step_result_envelope_sidecar",
     "publish_step_result_envelope_sidecar",
     "publish_terminal_step_result_envelope_sidecar",
+    "step_record_declares_sidecar",
 ]

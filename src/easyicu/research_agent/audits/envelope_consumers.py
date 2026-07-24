@@ -9,16 +9,24 @@ views agree exactly.
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Mapping, Sequence
+from typing import Any, Dict, List, Sequence
 
+from easyicu.research_agent.execution.envelope_sidecar import (
+    SUCCESSFUL_TERMINAL_STATUS,
+    LoadedStepResultEnvelopeSidecar,
+    StepResultEnvelopeSidecarLoad,
+    StepResultEnvelopeSidecarQuery,
+    StepResultEnvelopeSidecarUnavailable,
+    load_current_step_result_envelope_sidecar,
+    step_record_declares_sidecar,
+)
 from easyicu.research_agent.execution.result_envelope import StepResultEnvelope
 from easyicu.research_agent.schema import AnalysisStep, ValidationFinding
 
 from .envelope_shadow import (
+    canonical_registered_output_table_artifacts,
     compare_fraction_scale_shadow,
-    compare_registered_output_shadow,
     fraction_scale_shadow_blocking_finding,
-    registered_output_shadow_blocking_finding,
 )
 from .validators import (
     CrossStepRegisteredOutputValidator,
@@ -61,8 +69,26 @@ class StepSummaryFractionEnvelopeDualReader(StepSummaryFractionValidator):
         ]
 
 
-class CrossStepRegisteredOutputEnvelopeDualReader(CrossStepRegisteredOutputValidator):
-    """Observe registered-output envelopes without changing live wiring."""
+class RegisteredOutputEnvelopeConsumer(CrossStepRegisteredOutputValidator):
+    """Envelope-authoritative registered-output consumer (M8).
+
+    An upstream step's table presence is read ONLY from the canonical
+    :class:`StepResultEnvelope` recovered through the M7 sidecar loader -- never
+    from a raw ``evidence_ids`` / ``output_files`` glob, and never as an
+    envelope-or-legacy choice.
+
+    Two lanes, decided per upstream step by the step's own record (resume-safe):
+
+    * The successful upstream record declares a sidecar (a modern run).  The
+      canonical envelope must load and self-verify.  A missing / stale /
+      coordinate-drifted / tampered / unreadable sidecar is a typed fail-close
+      (``registered_output_sidecar_unrecoverable``), never a silent pass.
+    * The record never declared a sidecar (a genuinely legacy archived run).
+      The legacy raw table parse runs in an explicit diagnostic lane; its
+      findings are ``diagnostic_only`` and carry ``paper_authority=False``.
+    """
+
+    name = CrossStepRegisteredOutputValidator.name
 
     @classmethod
     def _successful_upstream_record(
@@ -84,62 +110,166 @@ class CrossStepRegisteredOutputEnvelopeDualReader(CrossStepRegisteredOutputValid
             return record
         return None
 
+    @staticmethod
+    def _sidecar_query(
+        upstream_step: str, record: Dict[str, Any]
+    ) -> StepResultEnvelopeSidecarQuery | None:
+        attempt_id = str(record.get("attempt_id") or "").strip()
+        checkpoint_id = str(
+            record.get("review_checkpoint_id") or record.get("checkpoint_id") or ""
+        ).strip()
+        script_evidence_id = str(record.get("script_evidence_id") or "").strip()
+        if not (attempt_id and checkpoint_id and script_evidence_id):
+            return None
+        try:
+            return StepResultEnvelopeSidecarQuery(
+                step_id=upstream_step,
+                terminal_status=SUCCESSFUL_TERMINAL_STATUS,
+                script_evidence_id=script_evidence_id,
+                attempt_id=attempt_id,
+                checkpoint_id=checkpoint_id,
+            )
+        except ValueError:
+            return None
+
+    def _load_upstream_envelope(
+        self,
+        upstream_step: str,
+        record: Dict[str, Any],
+        evidence_store: Any,
+    ) -> StepResultEnvelopeSidecarLoad:
+        query = self._sidecar_query(upstream_step, record)
+        if query is None:
+            return StepResultEnvelopeSidecarUnavailable(reason="incomplete_query")
+        return load_current_step_result_envelope_sidecar(
+            evidence_store=evidence_store, query=query
+        )
+
+    def _falsely_unavailable_finding(
+        self,
+        *,
+        consumer_step_id: str,
+        upstream_step: str,
+        block: Dict[str, Any],
+        table_artifacts: Sequence[str],
+        source: str,
+        diagnostic_only: bool,
+    ) -> ValidationFinding:
+        return ValidationFinding(
+            validator=self.name,
+            severity="error",
+            message=(
+                f"Registered upstream table was falsely reported unavailable in "
+                f"step {consumer_step_id}: completed step {upstream_step} "
+                f"registered table evidence {list(table_artifacts)}. Filter "
+                "manifest records by the exact produced_by_step and table kind, "
+                "resolve relative_path from the run directory, and use the sole "
+                "compatible table even when its filename does not repeat the "
+                "current step's semantic label."
+            ),
+            detail={
+                "step_id": consumer_step_id,
+                "summary_path": block["path"],
+                "availability_key": block["availability_key"],
+                "reported_path": block["reported_path"],
+                "upstream_step": upstream_step,
+                "registered_table_artifacts": list(table_artifacts),
+                "table_presence_source": source,
+                "diagnostic_only": diagnostic_only,
+                "paper_authority": False,
+            },
+        )
+
+    def _sidecar_unrecoverable_finding(
+        self,
+        *,
+        consumer_step_id: str,
+        upstream_step: str,
+        reason: str,
+    ) -> ValidationFinding:
+        return ValidationFinding(
+            validator=self.name,
+            severity="error",
+            message=(
+                "Registered-output authority could not be recovered for "
+                f"completed step {upstream_step} while validating step "
+                f"{consumer_step_id}: its declared step-result envelope sidecar "
+                f"was unrecoverable ({reason}). Refusing to read table presence "
+                "from a raw output glob."
+            ),
+            detail={
+                "step_id": consumer_step_id,
+                "upstream_step": upstream_step,
+                "registered_output_sidecar_unrecoverable": True,
+                "sidecar_unavailable_reason": reason,
+                "paper_authority": False,
+            },
+        )
+
     def audit(
         self,
         *,
         step: AnalysisStep,
         step_summary: Dict[str, Any],
         completed_step_records: Sequence[Dict[str, Any]],
-        completed_step_envelopes: Mapping[str, StepResultEnvelope],
+        evidence_store: Any,
     ) -> List[ValidationFinding]:
-        legacy_findings = super().audit(
-            step=step,
-            step_summary=step_summary,
-            completed_step_records=completed_step_records,
-        )
-        blockers: list[ValidationFinding] = []
-        blocked_upstream_steps: set[str] = set()
+        findings: list[ValidationFinding] = []
         for block in self._availability_blocks(step_summary):
             if block["available"]:
                 continue
             upstream_step = block["upstream_step"]
             record = self._successful_upstream_record(
-                upstream_step,
-                completed_step_records,
+                upstream_step, completed_step_records
             )
             if record is None:
+                # No successful upstream table producer: a genuine gap is allowed.
                 continue
-            comparison = compare_registered_output_shadow(
-                step_id=upstream_step,
-                step_summary=record.get("step_summary"),
-                current_status=(
-                    str(record.get("status")).strip()
-                    if record.get("status") is not None
-                    else None
-                ),
-                legacy_table_artifacts=self._table_artifacts(record),
-                envelope=completed_step_envelopes.get(upstream_step),
-            )
-            if comparison.exact_match:
-                continue
-            blocked_upstream_steps.add(upstream_step)
-            blockers.append(
-                registered_output_shadow_blocking_finding(
-                    validator_name=self.name,
-                    consumer_step_id=step.step_id,
-                    upstream_step=upstream_step,
-                    comparison=comparison,
+            if step_record_declares_sidecar(record.get("evidence_ids") or []):
+                loaded = self._load_upstream_envelope(
+                    upstream_step, record, evidence_store
                 )
-            )
-        retained_legacy = [
-            finding
-            for finding in legacy_findings
-            if finding.detail.get("upstream_step") not in blocked_upstream_steps
-        ]
-        return retained_legacy + blockers
+                if isinstance(loaded, LoadedStepResultEnvelopeSidecar):
+                    canonical_artifacts = canonical_registered_output_table_artifacts(
+                        loaded.envelope
+                    )
+                    if canonical_artifacts:
+                        findings.append(
+                            self._falsely_unavailable_finding(
+                                consumer_step_id=step.step_id,
+                                upstream_step=upstream_step,
+                                block=block,
+                                table_artifacts=canonical_artifacts,
+                                source="canonical_envelope",
+                                diagnostic_only=False,
+                            )
+                        )
+                else:
+                    findings.append(
+                        self._sidecar_unrecoverable_finding(
+                            consumer_step_id=step.step_id,
+                            upstream_step=upstream_step,
+                            reason=loaded.reason,
+                        )
+                    )
+                continue
+            # Legacy archived run: diagnostic lane over the legacy raw parse.
+            legacy_artifacts = self._table_artifacts(record)
+            if legacy_artifacts:
+                findings.append(
+                    self._falsely_unavailable_finding(
+                        consumer_step_id=step.step_id,
+                        upstream_step=upstream_step,
+                        block=block,
+                        table_artifacts=legacy_artifacts,
+                        source="legacy_diagnostic",
+                        diagnostic_only=True,
+                    )
+                )
+        return findings
 
 
 __all__ = [
-    "CrossStepRegisteredOutputEnvelopeDualReader",
+    "RegisteredOutputEnvelopeConsumer",
     "StepSummaryFractionEnvelopeDualReader",
 ]

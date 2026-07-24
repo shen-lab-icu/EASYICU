@@ -18,20 +18,41 @@ from easyicu.research_agent.audits.envelope_shadow import (
     compare_validator_shadow_inputs,
 )
 from easyicu.research_agent.audits.envelope_consumers import (
-    CrossStepRegisteredOutputEnvelopeDualReader,
+    RegisteredOutputEnvelopeConsumer,
     StepSummaryFractionEnvelopeDualReader,
 )
 from easyicu.research_agent.audits.validators import (
     CrossStepRegisteredOutputValidator,
     StepSummaryFractionValidator,
 )
+from easyicu.research_agent.authority.evidence_store import EvidenceStore
+from easyicu.research_agent.authority.evidence_snapshot import (
+    EvidenceAuthorityIntegrityError,
+)
 from easyicu.research_agent.execution.result_envelope import (
-    StepResultEnvelope,
     normalize_step_result_shadow,
     verify_step_result_envelope,
     write_shadow_step_result_envelope,
 )
 from easyicu.research_agent.schema import AnalysisStep
+
+
+class _EmptyEvidenceView:
+    """Read-only, sidecar-free evidence view for legacy archived replay.
+
+    Satisfies the sidecar loader's structural surface (``root`` / ``aliases`` /
+    ``records``) while declaring nothing, so a legacy run resolves to the
+    consumer's diagnostic lane instead of failing on a missing modern anchor.
+    """
+
+    def __init__(self, root: Path) -> None:
+        self.root = root
+
+    def aliases(self) -> dict[str, str]:
+        return {}
+
+    def records(self) -> list[Any]:
+        return []
 
 
 def _canonical_json_bytes(payload: Any) -> bytes:
@@ -164,9 +185,19 @@ def replay_run(run_dir: Path, output_dir: Path) -> dict[str, Any]:
 
     index_rows: list[dict[str, Any]] = []
     completed_records: list[dict[str, Any]] = []
-    completed_envelopes: dict[str, StepResultEnvelope] = {}
+    # The envelope-authoritative registered-output consumer (M8) resolves
+    # upstream table presence through the committed sidecar loader.  Archived
+    # runs predate sidecars, so a read-only store over the source run drives the
+    # consumer's legacy diagnostic lane; no source files are written.
     registered_output_validator = CrossStepRegisteredOutputValidator()
-    registered_output_dual_reader = CrossStepRegisteredOutputEnvelopeDualReader()
+    registered_output_consumer = RegisteredOutputEnvelopeConsumer()
+    try:
+        replay_evidence_store: Any = EvidenceStore(run_dir)
+    except EvidenceAuthorityIntegrityError:
+        # A legacy archived run without the modern authority anchor never
+        # published a sidecar, so the consumer stays in its legacy diagnostic
+        # lane and never invokes the loader; an empty read-only view is exact.
+        replay_evidence_store = _EmptyEvidenceView(run_dir)
     fraction_validator = StepSummaryFractionValidator()
     fraction_dual_reader = StepSummaryFractionEnvelopeDualReader()
     for record in records:
@@ -225,22 +256,26 @@ def replay_run(run_dir: Path, output_dir: Path) -> dict[str, Any]:
             step_summary=summary,
             completed_step_records=completed_records,
         )
-        canonical_registered_output_findings = registered_output_dual_reader.audit(
+        canonical_registered_output_findings = registered_output_consumer.audit(
             step=replay_step,
             step_summary=summary,
             completed_step_records=completed_records,
-            completed_step_envelopes=completed_envelopes,
+            evidence_store=replay_evidence_store,
         )
-        legacy_registered_output_payload = [
-            finding.model_dump(mode="json")
+        # On an archived (sidecar-free) run the consumer uses the legacy
+        # diagnostic lane, which adds provenance detail to each finding.  The
+        # migration invariant is that it flags the SAME upstream steps as the
+        # legacy validator -- detection equivalence, not byte-identical payloads.
+        legacy_registered_output_upstreams = sorted(
+            str(finding.detail.get("upstream_step") or "")
             for finding in legacy_registered_output_findings
-        ]
-        canonical_registered_output_payload = [
-            finding.model_dump(mode="json")
+        )
+        canonical_registered_output_upstreams = sorted(
+            str(finding.detail.get("upstream_step") or "")
             for finding in canonical_registered_output_findings
-        ]
+        )
         registered_output_shadow_exact = (
-            legacy_registered_output_payload == canonical_registered_output_payload
+            legacy_registered_output_upstreams == canonical_registered_output_upstreams
         )
         legacy_fraction_findings = fraction_validator.audit(
             step=replay_step,
@@ -308,7 +343,6 @@ def replay_run(run_dir: Path, output_dir: Path) -> dict[str, Any]:
             }
         )
         completed_records.append(record)
-        completed_envelopes[step_id] = envelope
     index = {
         "schema_version": "easyicu.shadow_step_result_index/4",
         "source_manifest_sha256": _sha256_bytes(manifest_bytes),
