@@ -53,6 +53,37 @@ def ra():
     return _load_research_agent()
 
 
+@pytest.fixture(autouse=True)
+def _explicit_test_runner_backend(monkeypatch):
+    """Select a host backend only when the test command explicitly requests it.
+
+    Production ``runner_kind="auto"`` must stay fail-closed on Linux hosts
+    without the pinned Docker image.  The CI integration lane exercises only
+    repository-owned deterministic scripts, so it may opt into the host runner
+    with both ``EASYICU_TEST_RUNNER_KIND=subprocess`` and the CodeRunner's
+    separate unsafe-host authorization flag.  Keeping this switch in test
+    plumbing prevents CI configuration from weakening the product default.
+    """
+
+    requested = os.environ.get("EASYICU_TEST_RUNNER_KIND", "").strip().lower()
+    if not requested:
+        yield
+        return
+    if requested != "subprocess":
+        pytest.fail(
+            "EASYICU_TEST_RUNNER_KIND only supports the explicit "
+            "'subprocess' test backend"
+        )
+
+    pipeline = importlib.import_module("easyicu.research_agent.pipeline")
+    monkeypatch.setattr(
+        pipeline,
+        "select_safe_runner_kind",
+        lambda **_kwargs: "subprocess",
+    )
+    yield
+
+
 @pytest.fixture(scope="session")
 def synthetic_cohort():
     """Small synthetic cohort with a composite-score completeness signal."""
