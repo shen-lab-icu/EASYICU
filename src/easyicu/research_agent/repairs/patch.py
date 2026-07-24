@@ -11,9 +11,10 @@ from .reasons import StructuredRepairMetadata
 PATCH_FORMAT = "easyicu.code_patch/1"
 MINIMAL_PATCH_CAPABILITY_CONTRACT = (
     "Preserve the script's existing analytical-library choices. Do not add a "
-    "third-party or project-local import unless the diagnosed repair contract "
-    "above names that exact easyicu.research_agent.methods.* helper; the "
-    "sandbox has no network and cannot install packages."
+    "third-party import. A project-local import is allowed only when it is "
+    "explicitly named by the code contract as that exact "
+    "easyicu.research_agent.methods.* helper. All other project-local imports "
+    "are forbidden; the sandbox has no network and cannot install packages."
 )
 
 
