@@ -38,6 +38,7 @@ import json
 import os
 import re
 import shutil
+import signal
 import stat
 import subprocess
 import sys
@@ -298,6 +299,75 @@ def _replace_regular_file_atomically(destination: Path, payload: bytes) -> None:
         os.replace(temporary, destination)
     finally:
         temporary.unlink(missing_ok=True)
+
+
+def _terminate_process_group(proc: "subprocess.Popen") -> None:
+    """Best-effort SIGKILL of the child's whole process group (POSIX only).
+
+    ``start_new_session=True`` makes the child a session/group leader, so its
+    pgid equals its pid and signalling the group also reaps double-forked
+    descendants that stayed in it. Descendants that call ``setsid`` themselves
+    escape -- an inherent limit of group signalling, not specific to this code.
+    """
+
+    try:
+        pgid = os.getpgid(proc.pid)
+    except (ProcessLookupError, OSError):
+        pgid = None
+    if pgid is not None:
+        try:
+            os.killpg(pgid, signal.SIGKILL)
+            return
+        except (ProcessLookupError, OSError):
+            pass
+    try:
+        proc.kill()
+    except (ProcessLookupError, OSError):
+        pass
+
+
+def _run_capturing_with_descendant_reaping(
+    cmd: Sequence[str],
+    *,
+    cwd: str,
+    env: Mapping[str, str],
+    timeout: float,
+) -> subprocess.CompletedProcess:
+    """Run ``cmd`` capturing text output; on timeout kill the whole group.
+
+    ``subprocess.run(timeout=...)`` sends the timeout kill only to the direct
+    child, so a background process spawned by generated code survives and can
+    keep mutating step outputs after evidence has been collected. On POSIX the
+    child is launched in a new session and, on timeout, the whole process group
+    is signalled before ``TimeoutExpired`` is re-raised with the captured
+    partial output (so the caller's bytes-safe timeout handler is unchanged).
+    Non-POSIX platforms keep the plain ``subprocess.run`` behaviour.
+    """
+
+    capture = dict(
+        cwd=cwd,
+        env=dict(env),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    )
+    if os.name != "posix":
+        return subprocess.run(  # noqa: S603 - configured argv, no shell
+            cmd, timeout=timeout, **capture
+        )
+
+    with subprocess.Popen(  # noqa: S603 - configured argv, no shell
+        cmd, start_new_session=True, **capture
+    ) as proc:
+        try:
+            stdout, stderr = proc.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            _terminate_process_group(proc)
+            stdout, stderr = proc.communicate()
+            raise subprocess.TimeoutExpired(cmd, timeout, output=stdout, stderr=stderr)
+        return subprocess.CompletedProcess(cmd, proc.returncode, stdout, stderr)
 
 
 def _remove_authority_snapshot(path: Path) -> None:
@@ -995,15 +1065,11 @@ class CodeRunner:
                 "is not isolated; use DockerRunner for untrusted generated code."
             )
         try:
-            proc = subprocess.run(  # noqa: S603 - intentional, generated script
+            proc = _run_capturing_with_descendant_reaping(
                 cmd,
                 cwd=str(step_dir),
                 env=env,
-                capture_output=True,
-                text=True,
                 timeout=self.timeout_seconds,
-                encoding="utf-8",
-                errors="replace",
             )
             stdout, stderr, returncode = proc.stdout, proc.stderr, proc.returncode
             if (
@@ -1018,17 +1084,11 @@ class CodeRunner:
                 retry_timeout = max(
                     self.timeout_seconds - (time.monotonic() - started), 1.0
                 )
-                retry_proc = (
-                    subprocess.run(  # noqa: S603 - intentional, generated script
-                        retry_cmd,
-                        cwd=str(step_dir),
-                        env=env,
-                        capture_output=True,
-                        text=True,
-                        timeout=retry_timeout,
-                        encoding="utf-8",
-                        errors="replace",
-                    )
+                retry_proc = _run_capturing_with_descendant_reaping(
+                    retry_cmd,
+                    cwd=str(step_dir),
+                    env=env,
+                    timeout=retry_timeout,
                 )
                 stdout = retry_proc.stdout
                 stderr = (
@@ -1054,15 +1114,11 @@ class CodeRunner:
                 retry_timeout = max(
                     self.timeout_seconds - (time.monotonic() - started), 1.0
                 )
-                retry_proc = subprocess.run(  # noqa: S603 - argv list, no shell
+                retry_proc = _run_capturing_with_descendant_reaping(
                     retry_cmd,
                     cwd=str(step_dir),
                     env=env,
-                    capture_output=True,
-                    text=True,
                     timeout=retry_timeout,
-                    encoding="utf-8",
-                    errors="replace",
                 )
                 stdout = retry_proc.stdout
                 stderr = (
@@ -1095,15 +1151,11 @@ class CodeRunner:
                 retry_timeout = max(
                     self.timeout_seconds - (time.monotonic() - started), 1.0
                 )
-                retry_proc = subprocess.run(  # noqa: S603 - argv list, no shell
+                retry_proc = _run_capturing_with_descendant_reaping(
                     retry_cmd,
                     cwd=str(step_dir),
                     env=env,
-                    capture_output=True,
-                    text=True,
                     timeout=retry_timeout,
-                    encoding="utf-8",
-                    errors="replace",
                 )
                 stdout = retry_proc.stdout
                 stderr = (
@@ -1133,15 +1185,11 @@ class CodeRunner:
                 retry_timeout = max(
                     self.timeout_seconds - (time.monotonic() - started), 1.0
                 )
-                retry_proc = subprocess.run(  # noqa: S603 - argv list, no shell
+                retry_proc = _run_capturing_with_descendant_reaping(
                     retry_cmd,
                     cwd=str(step_dir),
                     env=env,
-                    capture_output=True,
-                    text=True,
                     timeout=retry_timeout,
-                    encoding="utf-8",
-                    errors="replace",
                 )
                 stdout = retry_proc.stdout
                 stderr = (
@@ -1170,15 +1218,11 @@ class CodeRunner:
                 retry_timeout = max(
                     self.timeout_seconds - (time.monotonic() - started), 1.0
                 )
-                retry_proc = subprocess.run(  # noqa: S603 - argv list, no shell
+                retry_proc = _run_capturing_with_descendant_reaping(
                     retry_cmd,
                     cwd=str(step_dir),
                     env=env,
-                    capture_output=True,
-                    text=True,
                     timeout=retry_timeout,
-                    encoding="utf-8",
-                    errors="replace",
                 )
                 stdout = retry_proc.stdout
                 stderr = (
