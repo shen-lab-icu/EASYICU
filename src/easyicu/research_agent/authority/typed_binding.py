@@ -1140,6 +1140,7 @@ def _write_resolved_inputs_manifest(
     planner_declared_inputs: Sequence[str],
     bindings: Mapping[str, Mapping[str, Any]],
     context_path: Optional[Path] = None,
+    raw_input_contracts: Optional[Mapping[str, Any]] = None,
 ) -> Path:
     """Persist the step's authority capsule outside its writable overlay."""
 
@@ -1182,6 +1183,24 @@ def _write_resolved_inputs_manifest(
         "planner_declared_inputs": declared_inputs,
         "inputs": {key: dict(value) for key, value in bindings.items()},
     }
+    if raw_input_contracts is not None:
+        raw_payload = dict(raw_input_contracts)
+        contracts = raw_payload.get("contracts")
+        declared_raw_inputs = {item for item in declared_inputs if ":" not in item}
+        if (
+            raw_payload.get("schema_version")
+            != "easyicu.resolved_raw_input_contracts/1"
+            or not isinstance(contracts, Mapping)
+            or set(contracts) != declared_raw_inputs
+        ):
+            raise ValueError(
+                "raw input contracts must exactly match Planner-declared raw inputs"
+            )
+        declared_digest = str(raw_payload.pop("contracts_sha256", "") or "")
+        if declared_digest != canonical_sha256(raw_payload):
+            raise ValueError("raw input contract digest mismatch")
+        raw_payload["contracts_sha256"] = declared_digest
+        payload["raw_input_contracts"] = raw_payload
     if context_path is not None:
         resolved_context = Path(context_path).resolve()
         run_root = Path(run_dir).resolve()

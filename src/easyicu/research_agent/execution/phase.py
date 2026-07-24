@@ -152,6 +152,7 @@ from ..resources.coder import (
     bind_materialized_coder_authority,
     bind_primary_cohort_role,
 )
+from ..research_context.typed import resolved_raw_input_contracts
 from ..contracts.runtime import ValidationFinding, _ExecutePhaseResult, _PlanPhaseResult
 from .runners.deterministic_descriptive import absolute_risk_context_code
 from .runners.deterministic_missingness import (
@@ -5416,6 +5417,10 @@ def run_execute_phase(
             planner_declared_inputs=step.inputs,
             bindings=resolved_input_bindings,
             context_path=plan_result.context_path,
+            raw_input_contracts=resolved_raw_input_contracts(
+                coder_context,
+                step.inputs,
+            ),
         )
         coder_authority = attach_step_coder_input_authority(
             enabled=pipeline._enable_coder_resources,

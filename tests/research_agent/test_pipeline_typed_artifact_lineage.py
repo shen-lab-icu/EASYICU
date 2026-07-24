@@ -852,6 +852,42 @@ def test_resolved_inputs_manifest_keeps_untyped_inputs_out_of_bindings(
     assert payload["inputs"] == {}
 
 
+def test_resolved_inputs_manifest_rejects_tampered_raw_input_contract(
+    tmp_path: Path,
+) -> None:
+    raw_contract = {
+        "schema_version": "easyicu.resolved_raw_input_contracts/1",
+        "authority_scope": (
+            "host_verified_physical_representation_and_domain_constraints"
+        ),
+        "scientific_ownership": "Planner retains scientific decisions",
+        "contracts": {
+            "selected_first": {
+                "column": "selected_first",
+                "allowed_values": [0, 1],
+            }
+        },
+    }
+    encoded = json.dumps(
+        raw_contract,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    ).encode("utf-8")
+    raw_contract["contracts_sha256"] = hashlib.sha256(encoded).hexdigest()
+    raw_contract["contracts"]["selected_first"]["allowed_values"] = [0, 1, 2]
+
+    with pytest.raises(ValueError, match="raw input contract digest mismatch"):
+        _write_resolved_inputs_manifest(
+            run_dir=tmp_path,
+            step_id="consumer",
+            planner_declared_inputs=["selected_first"],
+            bindings={},
+            raw_input_contracts=raw_contract,
+        )
+
+
 def test_resolved_inputs_manifest_rejects_undeclared_binding(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="exact Planner-declared typed inputs"):
         _write_resolved_inputs_manifest(

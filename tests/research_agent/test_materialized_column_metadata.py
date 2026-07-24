@@ -57,7 +57,13 @@ from easyicu.research_agent.intake.materialized_metadata import (
     publish_ordered_subset_materialized_cohort,
     stage_materialized_cohort_authority,
 )
-from easyicu.research_agent.authority.evidence_store import EvidenceStore, sha256_of_file
+from easyicu.research_agent.authority.evidence_store import (
+    EvidenceStore,
+    sha256_of_file,
+)
+from easyicu.research_agent.authority.typed_binding import (
+    _write_resolved_inputs_manifest,
+)
 from easyicu.research_agent.providers.mocks import MockLLMClient
 from easyicu.research_agent import pipeline as pipeline_module
 from easyicu.research_agent.pipeline import ResearchAgentPipeline
@@ -73,6 +79,7 @@ from easyicu.research_agent.research_context.typed import (
     binding_preserves_analysis_range,
     effective_analysis_plausibility_range,
     materialized_input_prompt_attachment,
+    resolved_raw_input_contracts,
 )
 
 
@@ -253,6 +260,45 @@ def _build_v2_context(
     )
     assert isinstance(context, ResearchContextV2)
     return context
+
+
+def test_resolved_raw_input_contracts_bind_domain_and_range_policy(
+    tmp_path: Path,
+) -> None:
+    context = _build_v2_context(tmp_path)
+
+    contracts = resolved_raw_input_contracts(
+        context,
+        ["age", "death"],
+    )
+
+    assert contracts is not None
+    assert set(contracts["contracts"]) == {"age", "death"}
+    age = contracts["contracts"]["age"]
+    assert age["analysis_plausibility_range"] == {
+        "minimum": 0.0,
+        "maximum": 120.0,
+    }
+    assert age["plausibility_policy"] == {
+        "range_policy": "flag_only",
+        "out_of_range_action": "retain_and_flag",
+    }
+    assert contracts["contracts"]["death"]["allowed_values"] == [0, 1]
+
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    context_path = run_dir / "research_context.json"
+    context_path.write_text(context.model_dump_json(indent=2), encoding="utf-8")
+    manifest_path = _write_resolved_inputs_manifest(
+        run_dir=run_dir,
+        step_id="01_define_cohort",
+        planner_declared_inputs=["age", "death"],
+        bindings={},
+        context_path=context_path,
+        raw_input_contracts=contracts,
+    )
+    payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert payload["raw_input_contracts"] == contracts
 
 
 def test_materialized_cohort_publishes_exact_typed_sidecar(tmp_path: Path) -> None:

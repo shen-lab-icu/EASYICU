@@ -1864,6 +1864,7 @@ def _typed_input_scope_contract(step: AnalysisStep) -> str:
     if not declared_inputs:
         return ""
     typed_inputs = []
+    raw_inputs = []
     typed_cohort_inputs = []
     for item in declared_inputs:
         parsed = _canonical_typed_product(item)
@@ -1872,6 +1873,8 @@ def _typed_input_scope_contract(step: AnalysisStep) -> str:
             raw_kind, separator, _ = str(item or "").strip().partition(":")
             if separator and raw_kind.strip().lower() == "cohort":
                 typed_cohort_inputs.append(str(item))
+        else:
+            raw_inputs.append(str(item))
     typed_cohort_contract = ""
     if typed_cohort_inputs:
         typed_cohort_contract = (
@@ -1894,6 +1897,15 @@ def _typed_input_scope_contract(step: AnalysisStep) -> str:
             "table because an unused nullable field is blank. Never drop such rows or "
             "replace semantic missingness with zero merely to pass validation.\n"
         )
+    raw_input_contract = ""
+    if raw_inputs:
+        raw_input_contract = (
+            "- manifest['raw_input_contracts']['contracts'] is the unique "
+            "host-generated executable metadata for untyped Planner inputs. Use "
+            "exact allowed_values and analysis_plausibility_range + "
+            "plausibility_policy; do not rediscover them from prompt prose or "
+            "ResearchContext.\n"
+        )
     return (
         "TYPED INPUT BINDING (binding):\n"
         "- EASYICU_RESOLVED_INPUTS_JSON is a filesystem path to a JSON document; "
@@ -1907,6 +1919,7 @@ def _typed_input_scope_contract(step: AnalysisStep) -> str:
         "to equal planner_declared_inputs. Calculate only from declared coordinates; "
         "preserve full row payload for cohort artifacts unless the Planner declares "
         "a narrower output.\n"
+        f"{raw_input_contract}"
         "- `measurement_provenance_receipt(...)` returns one self-validating "
         "record without a `source` field; publish it unchanged inside "
         '`{"source":"COHORT_PARQUET","checks":[receipt]}`. '
@@ -1916,7 +1929,8 @@ def _typed_input_scope_contract(step: AnalysisStep) -> str:
         "scanning the full ResearchContext, DataFrames, dtypes, suffixes, or order.\n"
         "- manifest['context'] binds the immutable Agent-produced ResearchContext by "
         "relative_path and sha256. Load it under EASYICU_RUN_DIR and verify the digest; "
-        "do not copy prompt literals or invent scientific coordinates. Look up each "
+        "it is semantic context only; do not copy prompt literals, invent scientific "
+        "coordinates, or treat it as a second executable input contract. Look up each "
         "typed kind:name exactly in manifest['inputs'] and verify its evidence_id, "
         "relative_path, and sha256.\n"
         "- product_contract from the successful producer's step summary owns that "
@@ -1966,10 +1980,12 @@ def _compact_repair_scope_contract(step: AnalysisStep) -> str:
 
     declared_inputs = [str(item) for item in step.inputs or []]
     typed_inputs: list[str] = []
+    raw_inputs: list[str] = []
     typed_cohort = False
     for item in declared_inputs:
         parsed = _canonical_typed_product(item)
         if parsed is None or parsed[0] not in RUNTIME_BINDABLE_TYPED_INPUT_KINDS:
+            raw_inputs.append(item)
             continue
         typed_inputs.append(item)
         raw_kind, separator, _ = item.strip().partition(":")
@@ -2013,8 +2029,8 @@ def _compact_repair_scope_contract(step: AnalysisStep) -> str:
         "product from COHORT_PARQUET. Do not discover them by scanning the full "
         "ResearchContext.",
         "- manifest['context'] binds the immutable Agent-produced ResearchContext; "
-        "verify its digest when semantic metadata is needed and do not copy "
-        "prompt literals into fallbacks.",
+        "verify its digest, do not copy prompt literals, and do not treat it as "
+        "another executable input contract.",
         "- Record one input_bindings row per typed input attempted; it must be "
         "truthful and include exact input_key/evidence_id/sha256, loaded, and, for each "
         "loaded tabular input, its row_count. Any checked subset reconciliation "
@@ -2024,6 +2040,13 @@ def _compact_repair_scope_contract(step: AnalysisStep) -> str:
         "newly coerced to missing and raise when positive before any domain "
         "check or output.",
     ]
+    if raw_inputs:
+        lines.append(
+            "- manifest['raw_input_contracts']['contracts'] is unique host-generated "
+            "executable metadata for untyped inputs: use exact allowed_values and "
+            "analysis_plausibility_range + plausibility_policy; never rediscover "
+            "them from prompt prose or ResearchContext."
+        )
     if effect_authorized:
         lines.append(
             "- Effect authorization does not widen scope: emit effects only "
