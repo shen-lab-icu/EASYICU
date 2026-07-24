@@ -305,6 +305,61 @@ def test_plan_normalizer_preserves_planned_analysis_role() -> None:
     assert not dropped["steps"]
 
 
+def test_plan_normalizer_compiles_robustness_role_for_registered_method() -> None:
+    raw = json.loads(_raw_plan(include_role=True, role="robustness"))
+    raw["steps"][0]["method"] = "robustness_sensitivity"
+    raw["steps"][0]["model_requirements"] = [
+        {
+            "requirement_id": "locked_sensitivity_refit",
+            "outcome": "death",
+            "outcome_type": "binary",
+            "method_family": "logistic_regression",
+            "exposure_source": "lact_max",
+            "analysis_role": "robustness",
+            "analysis_set": "complete_case",
+            "required_for_step_success": False,
+        }
+    ]
+
+    normalized, _dropped = _normalise_plan_payload(raw)
+
+    assert normalized["steps"][0]["planned_analysis_role"] == "sensitivity"
+    assert (
+        normalized["steps"][0]["model_requirements"][0]["analysis_role"]
+        == "sensitivity"
+    )
+
+
+def test_plan_normalizer_does_not_guess_robustness_role_for_other_method() -> None:
+    raw = json.loads(_raw_plan(include_role=True, role="robustness"))
+    raw["steps"][0]["method"] = "descriptive_summary"
+
+    normalized, _dropped = _normalise_plan_payload(raw)
+
+    assert normalized["steps"][0]["planned_analysis_role"] == "robustness"
+    with pytest.raises(ValidationError, match="planned_analysis_role"):
+        AnalysisPlan.model_validate(normalized)
+
+
+def test_plan_normalizer_canonicalises_role_casing_and_whitespace() -> None:
+    raw = json.loads(_raw_plan(include_role=True, role="  SenSitivity  "))
+
+    normalized, _dropped = _normalise_plan_payload(raw)
+
+    assert normalized["steps"][0]["planned_analysis_role"] == "sensitivity"
+
+
+def test_planner_does_not_retry_registered_robustness_role_alias() -> None:
+    raw = json.loads(_raw_plan(include_role=True, role="robustness"))
+    raw["steps"][0]["method"] = "robustness_sensitivity"
+    llm = PatternScriptedMockLLMClient([("ICU-AWARE RESEARCH PLAN", [json.dumps(raw)])])
+
+    plan = PlannerAgent(llm).run(_context())
+
+    assert plan.steps[0].planned_analysis_role == "sensitivity"
+    assert len(llm.calls) == 1
+
+
 @pytest.mark.parametrize(
     ("token", "expected"),
     [
