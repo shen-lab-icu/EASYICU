@@ -575,6 +575,45 @@ def test_bind_numeric_values_strict_raises_on_untraced(ra, tmp_path: Path):
     assert "999" in exc_info.value.detail["untraced"]
 
 
+def test_numeric_heading_claims_are_bound_but_outline_ordinals_are_not(
+    ra, tmp_path: Path
+):
+    from easyicu.research_agent.reporting.manuscript_post import bind_numeric_values
+
+    store = _store(ra, tmp_path)
+    store.register_numeric_claim(
+        value="0.124",
+        canonical=0.124,
+        evidence_id="evid_outcome",
+        step_id="outcome",
+        source_field="absolute_risk_reduction",
+    )
+
+    bound, binding_map, untraced = bind_numeric_values(
+        "## 2. Sensitivity analyses\n"
+        "## Primary outcome: 12.4% absolute risk reduction\n",
+        evidence=store,
+        enforcement_mode=ra.EvidenceEnforcementMode.STRICT,
+    )
+
+    assert untraced == []
+    assert "12.4%[^claim_1]" in bound
+    assert set(binding_map) == {"claim_1"}
+
+
+def test_untraced_numeric_heading_fails_strict_binding(ra, tmp_path: Path):
+    from easyicu.research_agent.reporting.manuscript_post import bind_numeric_values
+
+    with pytest.raises(ra.EvidenceEnforcementError) as exc_info:
+        bind_numeric_values(
+            "## Primary outcome: 12.4% absolute risk reduction\n",
+            evidence=_store(ra, tmp_path),
+            enforcement_mode=ra.EvidenceEnforcementMode.STRICT,
+        )
+
+    assert exc_info.value.detail["untraced"] == ["12.4%"]
+
+
 def test_bind_numeric_values_skips_bibliographic_years(ra, tmp_path: Path):
     from easyicu.research_agent.reporting.manuscript_post import bind_numeric_values
 

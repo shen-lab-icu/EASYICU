@@ -24,7 +24,9 @@ def table_one_executor_owns_step(step: AnalysisStep) -> bool:
     typed_artifacts = {
         str(value or "").strip()
         for value in step.inputs
-        if str(value or "").strip().startswith(("artifact:", "table:", "dataset:"))
+        if str(value or "")
+        .strip()
+        .startswith(("artifact:", "table:", "dataset:", "cohort:"))
     }
     return bool(
         step.table_one_spec is not None
@@ -36,7 +38,7 @@ def table_one_executor_owns_step(step: AnalysisStep) -> bool:
         # would silently ignore that product's scientific filtering contract.
         # Leave such steps to the typed-input coder path until TableOneSpec
         # carries an explicit per-variable source binding.
-        and len(typed_artifacts) <= 1
+        and (not typed_artifacts or typed_artifacts == {"artifact:analysis_cohort"})
     )
 
 

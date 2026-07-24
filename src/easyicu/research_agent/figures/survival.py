@@ -170,39 +170,53 @@ def _parse_cox(frame: pd.DataFrame) -> Optional[pd.DataFrame]:
         frame, ["term", "covariate", "variable", "predictor", "label", "parameter"]
     )
     hr_col = resolve_column(frame, ["hr", "hazard_ratio", "exp(coef)", "exp_coef"])
-    coef_col = resolve_column(frame, ["coef", "log_hr", "estimate", "beta"])
+    log_coef_col = resolve_column(frame, ["coef", "log_hr", "beta"])
+    estimate_col = resolve_column(frame, ["estimate"])
+    effect_scale_col = resolve_column(
+        frame, ["effect_scale", "estimate_scale", "scale"]
+    )
     # The typed-product contract prefers ci_low / ci_high. They must be listed
     # first (exact match) or the old candidates (ci_lower/lower/...) miss them
     # and the HR forest silently renders with no confidence interval.
-    lo_col = resolve_column(
+    ratio_lo_col = resolve_column(
+        frame,
+        [
+            "hr_ci_low",
+            "hr_lower",
+            "exp(coef) lower 95%",
+        ],
+    )
+    ratio_hi_col = resolve_column(
+        frame,
+        [
+            "hr_ci_high",
+            "hr_upper",
+            "exp(coef) upper 95%",
+        ],
+    )
+    lo_col = ratio_lo_col or resolve_column(
         frame,
         [
             "ci_low",
-            "hr_ci_low",
-            "hr_lower",
             "ci_lower",
             "lower",
             "lower_95",
             "conf_lower",
             "lower_ci",
-            "exp(coef) lower 95%",
         ],
     )
-    hi_col = resolve_column(
+    hi_col = ratio_hi_col or resolve_column(
         frame,
         [
             "ci_high",
-            "hr_ci_high",
-            "hr_upper",
             "ci_upper",
             "upper",
             "upper_95",
             "conf_upper",
             "upper_ci",
-            "exp(coef) upper 95%",
         ],
     )
-    if hr_col is None and coef_col is None:
+    if hr_col is None and log_coef_col is None and estimate_col is None:
         return None
     out = pd.DataFrame()
     out["label"] = (
@@ -210,13 +224,75 @@ def _parse_cox(frame: pd.DataFrame) -> Optional[pd.DataFrame]:
         if term_col
         else [f"term {i+1}" for i in range(len(frame))]
     )
+    lower = numeric_series(frame, lo_col) if lo_col else None
+    upper = numeric_series(frame, hi_col) if hi_col else None
     if hr_col is not None:
         out["hr"] = numeric_series(frame, hr_col)
+        out["lower"] = lower if lower is not None else float("nan")
+        out["upper"] = upper if upper is not None else float("nan")
+    elif log_coef_col is not None:
+        out["hr"] = np.exp(numeric_series(frame, log_coef_col))
+        out["lower"] = (
+            lower if lower is None or ratio_lo_col is not None else np.exp(lower)
+        )
+        out["upper"] = (
+            upper if upper is None or ratio_hi_col is not None else np.exp(upper)
+        )
     else:
-        out["hr"] = np.exp(numeric_series(frame, coef_col))
-    out["lower"] = numeric_series(frame, lo_col) if lo_col else float("nan")
-    out["upper"] = numeric_series(frame, hi_col) if hi_col else float("nan")
+        # ``estimate`` is deliberately scale-neutral in the typed product
+        # contract.  Refuse to guess whether it is a coefficient or an HR.
+        if effect_scale_col is None:
+            return None
+        scales = (
+            frame[effect_scale_col]
+            .astype(str)
+            .str.strip()
+            .str.lower()
+            .str.replace(r"[^a-z0-9]+", "_", regex=True)
+            .str.strip("_")
+        )
+        ratio_mask = scales.isin({"hazard_ratio", "hr"})
+        log_mask = scales.isin(
+            {"log_hazard_ratio", "log_hr", "log_coefficient", "coefficient", "coef"}
+        )
+        if not bool((ratio_mask | log_mask).all()):
+            return None
+        estimate = numeric_series(frame, estimate_col)
+        out["hr"] = estimate.where(ratio_mask, np.exp(estimate))
+        if lower is None:
+            out["lower"] = float("nan")
+        else:
+            out["lower"] = lower.where(
+                ratio_mask | (ratio_lo_col is not None),
+                np.exp(lower),
+            )
+        if upper is None:
+            out["upper"] = float("nan")
+        else:
+            out["upper"] = upper.where(
+                ratio_mask | (ratio_hi_col is not None),
+                np.exp(upper),
+            )
     out = out[out["hr"].notna()].reset_index(drop=True)
+    interval_rows = out["lower"].notna() | out["upper"].notna()
+    if not bool(np.isfinite(out["hr"]).all()):
+        return None
+    if bool((out["lower"].notna() ^ out["upper"].notna()).any()):
+        return None
+    if bool(
+        (
+            interval_rows
+            & (
+                ~np.isfinite(out["lower"])
+                | ~np.isfinite(out["upper"])
+                | (out["lower"] <= 0)
+                | (out["upper"] <= 0)
+                | (out["lower"] > out["hr"])
+                | (out["hr"] > out["upper"])
+            )
+        ).any()
+    ):
+        return None
     # Drop an intercept-like row that would swamp the HR scale.
     out = out[~out["label"].str.lower().str.contains("intercept|const")].reset_index(
         drop=True

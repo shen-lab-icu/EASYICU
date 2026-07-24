@@ -528,7 +528,10 @@ def _remove_tbd_sentences(bound_manuscript: str) -> tuple[str, List[str]]:
 _NUMERIC_BIND_SKIP_CONTEXTS = (
     re.compile(r"\{evidence:[^}]*\}"),
     re.compile(r"\[\^[A-Za-z0-9_]+\]"),
-    re.compile(r"#+\s.*"),
+    # Skip only Markdown syntax and a conventional outline ordinal, never the
+    # entire heading. Result-bearing heading text must pass the same NumericClaim
+    # binding as body prose (e.g. ``## Primary outcome: 12.4%``).
+    re.compile(r"(?m)^\s*#{1,6}\s+(?:\d+(?:\.\d+)*[.)]\s+)?"),
     # Common hash notation such as SHA-256 is provenance metadata, not a
     # manuscript number. Skip it so the numeric binder does not flag the
     # hash width as an untraced result value.
@@ -1209,8 +1212,8 @@ def bind_numeric_values(
 
     The implementation skips numbers that are already inside
     ``{evidence:<id>}`` placeholders, existing footnote markers
-    ``[^xxx]``, or Markdown headings, so it composes cleanly with
-    sentence-level evidence binding.
+    ``[^xxx]``, and conventional Markdown outline ordinals. Numeric claims in
+    heading text remain subject to the same provenance gate as body prose.
 
     Inspired by data-to-paper's ``\\hypertarget`` / ``\\hyperlink``
     binding (NEJM AI 2024) but emits Markdown footnotes so the output
