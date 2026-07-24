@@ -366,6 +366,40 @@ def verify_step_result_envelope(envelope: StepResultEnvelope) -> bool:
     return envelope.content_sha256 == _model_content_sha256(envelope)
 
 
+def rebind_step_result_status(
+    envelope: StepResultEnvelope,
+    *,
+    status: str,
+) -> StepResultEnvelope:
+    """Return a verified copy of an envelope re-bound to a final step status.
+
+    Only the ``status`` field and the recomputed ``content_sha256`` change.
+    No cohort, CSV, JSON, or artifact bytes are re-read: the rebind operates
+    solely on the already-compiled in-memory envelope, so canonicalization
+    never scales a second time with cohort size.
+
+    The input envelope's declared digest MUST already verify -- a tampered or
+    otherwise inconsistent envelope is rejected rather than laundered into a
+    fresh digest.  ``status`` must be a non-empty string; the terminal-vs-non
+    -terminal policy is owned by the caller (the sidecar lifecycle), not by
+    this digest primitive.
+    """
+
+    if not isinstance(status, str) or not status.strip():
+        raise ValueError("step-result status rebinding requires a non-empty status")
+    if not verify_step_result_envelope(envelope):
+        raise ValueError(
+            "refusing to rebind a step-result envelope with an invalid content digest"
+        )
+    rebound = envelope.model_copy(update={"status": status})
+    rebound = rebound.model_copy(
+        update={"content_sha256": _model_content_sha256(rebound)}
+    )
+    if not verify_step_result_envelope(rebound):
+        raise ValueError("rebound step-result envelope failed self-verification")
+    return rebound
+
+
 def _type_label(value: Any) -> str:
     value_type = type(value)
     module = value_type.__module__
@@ -2200,6 +2234,7 @@ __all__ = [
     "StepResultEnvelope",
     "StepVariableBindings",
     "normalize_step_result_shadow",
+    "rebind_step_result_status",
     "rebuild_observed_scalar_tree",
     "verify_step_result_envelope",
     "write_shadow_step_result_envelope",
