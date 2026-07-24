@@ -320,11 +320,11 @@
   },
   "current_aliases": {
     "count": 40,
-    "mapping_sha256": "d65b897dc6092f78285a37adb2bb11fc2b0304c5715572857f97aef96ff9b1f6"
+    "mapping_sha256": "35be32ec2c4ea33f80f83420a03c294fafdc0944ef056ad745dc60d18310f3da"
   },
   "current_evidence": {
     "count": 38,
-    "mapping_sha256": "26cf26d02f86e5611c63ccd0f5ad19f8184f56b0f4dfc8e834eb5120e06b1a7f"
+    "mapping_sha256": "9a4023d6d4cd956063b8640b95eb13cdbee6acdfab962148bde428f529cb1bf3"
   },
   "current_self_aliases": {
     "count": 38
@@ -443,22 +443,22 @@
   ],
   "dependency_propagation_set": [],
   "deterministic_product_sha256": {
-    "01_representation:artifact:trajectory_representation": "91024f30535fbf636fe7453e7e4af85d0645261a146e69f9a92617735376107c",
-    "01_representation:table:feature_availability": "bd228cf6c8949bdb4c76d964242098ae7d5d214f25275cbaa2ce84e3fc741c0e",
-    "01_representation:table:feature_missingness_heatmap": "6359852a0323a0d6ebd4ffb67e00d7751f01024f16c687fdd29c80c2a75e23ab",
-    "01_representation:table:trajectory_membership": "1ced9e7198c9a0ed684697317ce041d7b9cc9a3c215bdb5a6572175a63b1a521",
-    "02_candidates:artifact:candidate_cluster_assignments": "2b93c86ac49157764325a833567fea729d386112c3ea0716ef477a56a3c4a749",
-    "02_candidates:artifact:candidate_cluster_models": "8a276c2226489a7392b081e9c9b979d762113ff190b769dd33c1c9aa630ca2c1",
-    "02_candidates:table:embedding_plot": "dc2edcf32b47704f57c0edacedf065c264047977e8cc16ea251dac82eae9de91",
-    "03_stability:artifact:cluster_assignments": "b3626090b553c9fadc160e7de410a2804c752995f4d611095af81b5645d0404c",
-    "03_stability:table:cluster_assignment_provenance": "3ed26ee98bbe1ff62688e0066a6728c4174922c6fcf66168d3632967e3efd6d3",
-    "03_stability:table:cluster_assignments": "b3626090b553c9fadc160e7de410a2804c752995f4d611095af81b5645d0404c",
-    "03_stability:table:cluster_stability": "6d1eb7a295e4ff9f5664784de42ad3d6afed9067e457a8f6062cff20a1ac32bc",
-    "03_stability:table:cluster_stability_assignments": "5a665d83488a98e4b8e41b6558c8c2034d05d18e331fa25fb134e3176ed7be66",
-    "04_characterization:table:cluster_sizes": "81130f3394dc155cb3bb121fd950b33fa7942fa36db92e1871f1426847575ff4",
-    "04_characterization:table:descriptive_result": "250f621d701d2b6e6075908aed61ad6f02bfbc10375603f988f066f67249cef5",
-    "04_characterization:table:phenotype_characteristics": "250f621d701d2b6e6075908aed61ad6f02bfbc10375603f988f066f67249cef5",
-    "04_characterization:table:trajectory_profiles": "250f621d701d2b6e6075908aed61ad6f02bfbc10375603f988f066f67249cef5"
+    "01_representation:artifact:trajectory_representation": "0281b83f9d0176c5e08a54464c8b179985abf346b15b9c61f89f370b721059c6",
+    "01_representation:table:feature_availability": "11853a24351749e9d6d2b089f3dbfb795b5e13cf837c4bdd5facc50d1cfcbb0e",
+    "01_representation:table:feature_missingness_heatmap": "f56065ff059026d3e2d531efe17c274897e775213008d4a3f4a8513c6954a993",
+    "01_representation:table:trajectory_membership": "babf161249094aa27a4aa85562fb9aafcf69ad6f05c22f41ad4280f50427f262",
+    "02_candidates:artifact:candidate_cluster_assignments": "2129c942a79bc656716b5648427623bc8a1ef84c47ea8280163881ade862abf9",
+    "02_candidates:artifact:candidate_cluster_models": "25dcfb37e8a98b491795ce9fd8b9b67a167cbff511cc9174037745b4260ef087",
+    "02_candidates:table:embedding_plot": "69030b872022af6b221b1239fc955ae99adc1b62005470e1a04486de0ac69af1",
+    "03_stability:artifact:cluster_assignments": "5e59102f7dbce5517c41479d99ba2ff3452119fe18eec3284fe86d6fd96a4063",
+    "03_stability:table:cluster_assignment_provenance": "194aa3ad03504dab3b685c7280b6424bf6978f40f00e7eacc265bc879f8395ec",
+    "03_stability:table:cluster_assignments": "5e59102f7dbce5517c41479d99ba2ff3452119fe18eec3284fe86d6fd96a4063",
+    "03_stability:table:cluster_stability": "36a85c8c42a51fb9b721062a513499c14fb7249ec8dc987e6aebd7229aefe862",
+    "03_stability:table:cluster_stability_assignments": "202bcda9c8d326935003ac77e180673f121ba4b4effb89772e80312274a67974",
+    "04_characterization:table:cluster_sizes": "76311fdf7f5a745abddbffb14e17d4a18743a10168d1ee8a09f5a9404e38cc4c",
+    "04_characterization:table:descriptive_result": "11882573403f0d33c001bc128b2adfa6dc9388f778cf3e89398e8e9049163192",
+    "04_characterization:table:phenotype_characteristics": "11882573403f0d33c001bc128b2adfa6dc9388f778cf3e89398e8e9049163192",
+    "04_characterization:table:trajectory_profiles": "11882573403f0d33c001bc128b2adfa6dc9388f778cf3e89398e8e9049163192"
   },
   "finding_observability": {
     "owner_result_seal_join_used": true,
@@ -493,7 +493,7 @@
     "status": "diagnostic_only",
     "strict_fail_closed": true
   },
-  "schema": "easyicu.freeze_char_golden/2",
+  "schema": "easyicu.freeze_char_golden/3",
   "step_statuses": [
     {
       "status": "ok",
