@@ -1,9 +1,9 @@
 """Validator-side comparison for the StepResultEnvelope migration.
 
-This module is observational.  It compares the legacy inputs a validator would
-read with a shadow envelope, but it does not return ``ValidationFinding`` and is
-not imported by the live execution path.  A later migration can require an
-exact comparison before switching one validator consumer.
+This module is a pure comparator.  It compares the legacy inputs a validator
+would read with a shadow envelope but does not itself return
+``ValidationFinding``.  Fail-closed consumer adapters may use the comparison at
+an explicitly sealed execution boundary.
 """
 
 from __future__ import annotations

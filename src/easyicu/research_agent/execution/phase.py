@@ -90,6 +90,7 @@ from ..audits.validators import (
 )
 from ..audits.patterns import AnalysisPatternAuditor
 from ..audits.step_summary_integrity import StepSummaryIntegrityValidator
+from ..audits.envelope_consumers import StepSummaryFractionEnvelopeDualReader
 from ..repairs.source import (
     _deterministic_runner_repair,
     _deterministic_summary_repair,
@@ -2661,12 +2662,18 @@ def _evaluate_final_deterministic_gates(
     one reusable authority.
     """
 
+    current_step_status = (
+        str(step_record.get("status")).strip()
+        if step_record.get("status") is not None
+        else None
+    )
     result_envelope_snapshot = compile_sealed_step_result_shadow(
         step=step,
         step_summary=step_summary,
         output_dir=out_dir,
         run_dir=run_dir,
         resolved_input_bindings=resolved_input_bindings,
+        current_status=current_step_status,
     )
     execution_cohort_path = _step_execution_cohort_path(
         step=step,
@@ -2722,6 +2729,9 @@ def _evaluate_final_deterministic_gates(
         step_summary_fraction_validator=step_summary_fraction_validator,
         cross_step_source_status_validator=cross_step_source_status_validator,
         primary_model_contract_validator=primary_model_contract_validator,
+        final_fraction_envelope_validator=StepSummaryFractionEnvelopeDualReader(),
+        final_fraction_envelope=result_envelope_snapshot.envelope,
+        final_fraction_current_status=current_step_status,
     )
     contract_findings.extend(
         figure_contract_validator.audit(
