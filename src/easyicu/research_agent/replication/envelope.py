@@ -367,6 +367,12 @@ class ReproRecordingClient:
     def name(self) -> str:
         return getattr(self._inner, "name", "recording")
 
+    @property
+    def model(self) -> str:
+        """Expose the model identity already recorded by this wrapper."""
+
+        return self._resolve_model()
+
     def _resolve_model(self) -> str:
         if self._model_override:
             return self._model_override

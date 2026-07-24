@@ -15,6 +15,32 @@ from ..cohort.schema import load_materialized_analysis_cohort_result
 from ..schema import AnalysisPlan, ValidationFinding
 
 
+def stage_candidate_cohort_plan(
+    plan: AnalysisPlan,
+    definition: Any,
+) -> AnalysisPlan:
+    """Return an isolated plan carrying a not-yet-authoritative cohort."""
+
+    return plan.model_copy(deep=True, update={"cohort": definition})
+
+
+def commit_staged_cohort_plan(
+    live_plan: AnalysisPlan,
+    staged_plan: AnalysisPlan,
+    *,
+    materialization_status: object,
+    authority_state: Any,
+    context: Any,
+) -> bool:
+    """Commit a staged cohort only after data application and authority bind."""
+
+    if str(materialization_status or "").strip().casefold() != "applied":
+        return False
+    authority_state.rebind_cohort(plan=staged_plan, context=context)
+    live_plan.cohort = staged_plan.cohort
+    return True
+
+
 def record_planned_host_cohort_checkpoint(
     *,
     plan: AnalysisPlan,

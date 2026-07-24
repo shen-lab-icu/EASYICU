@@ -354,6 +354,31 @@ def test_reproducibility_wrapper_keeps_concurrent_provider_calls_parallel(ra):
     assert elapsed < 0.27
 
 
+def test_meter_uses_reproducibility_wrappers_resolved_model_identity(ra):
+    from easyicu.research_agent.providers.llm import LLMMessage
+
+    class _OpenAIStyleClient:
+        name = "openai"
+        _model = "gpt-4o"
+
+        def complete_with_usage(self, messages, **_kwargs):  # noqa: ANN003
+            return "ok", {"prompt_tokens": 1_000, "completion_tokens": 100}
+
+    envelope = ra.ReproEnvelope(run_id="cost-model-identity")
+    recording = ra.ReproRecordingClient(
+        _OpenAIStyleClient(),
+        role="planner",
+        envelope=envelope,
+    )
+    meter = ra.CostMeter(price_table={"gpt-4o": (1.0, 2.0)})
+    metered = ra.MeteredClient(recording, role="planner", meter=meter)
+
+    metered.complete([LLMMessage(role="user", content="plan")])
+
+    assert meter.records[0].model == "gpt-4o"
+    assert meter.records[0].estimated_cost_usd is not None
+
+
 # ---------------------------------------------------------------------------
 # End-to-end: pipeline writes cost summary + manifest carries records
 # ---------------------------------------------------------------------------

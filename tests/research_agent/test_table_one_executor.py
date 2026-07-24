@@ -206,6 +206,7 @@ def test_host_seals_standard_executor_input_and_measurement_receipts(
         out_dir=out_dir,
         step_summary=json.loads((out_dir / "step_summary.json").read_text("utf-8")),
         resolved_input_bindings={"artifact:analysis_cohort": binding},
+        consumed_input_keys=("artifact:analysis_cohort",),
     )
 
     assert (
@@ -217,6 +218,38 @@ def test_host_seals_standard_executor_input_and_measurement_receipts(
         )
         == []
     )
+
+
+def test_host_receipt_never_marks_an_unconsumed_binding_loaded(tmp_path):
+    out_dir = tmp_path / "outputs"
+    out_dir.mkdir()
+    cohort_path = tmp_path / "cohort.parquet"
+    other_path = tmp_path / "other.parquet"
+    _frame().to_parquet(cohort_path, index=False)
+    _frame().to_parquet(other_path, index=False)
+    bindings = {
+        "artifact:analysis_cohort": {
+            "absolute_path": str(cohort_path),
+            "evidence_id": "cohort",
+            "sha256": "a" * 64,
+        },
+        "artifact:other": {
+            "absolute_path": str(other_path),
+            "evidence_id": "other",
+            "sha256": "b" * 64,
+        },
+    }
+
+    summary = _write_host_input_binding_receipts(
+        out_dir=out_dir,
+        step_summary={"status": "ok"},
+        resolved_input_bindings=bindings,
+        consumed_input_keys=("artifact:analysis_cohort",),
+    )
+
+    assert [item["input_key"] for item in summary["input_bindings"]] == [
+        "artifact:analysis_cohort"
+    ]
 
 
 def test_table_one_executor_does_not_silently_claim_a_figure_step():

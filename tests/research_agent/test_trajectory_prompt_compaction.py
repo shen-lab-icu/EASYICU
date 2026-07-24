@@ -6,6 +6,9 @@ from easyicu.research_agent.agents.core import CoderAgent
 from easyicu.research_agent.research_context.prompt_variables import (
     compact_fixed_window_trajectory_prompt,
 )
+from easyicu.research_agent.research_context.outbound import (
+    format_outbound_safe_context,
+)
 from easyicu.research_agent.providers.mocks import ScriptedMockLLMClient
 from easyicu.research_agent.schema import (
     AggregationRule,
@@ -153,6 +156,27 @@ def test_wide_trajectory_projection_preserves_every_exact_window_coordinate() ->
         "f='resp' t=[18,24)h obs=numeric/u5 m=3.0%/low"
         in rendered["trajectory_resp_h18_24"]
     )
+
+
+def test_small_uncompacted_signature_group_remains_visible_outbound() -> None:
+    context = _trajectory_context()
+    variables = [
+        variable
+        for variable in context.variables
+        if variable.name == "death"
+        or variable.name.startswith(
+            tuple(
+                [f"trajectory_total_h{index * 6}_" for index in range(6)]
+                + [f"trajectory_resp_h{index * 6}_" for index in range(2)]
+            )
+        )
+    ]
+    context = context.model_copy(update={"variables": variables})
+
+    rendered = format_outbound_safe_context(context)
+
+    for variable in variables:
+        assert variable.name in rendered
 
 
 def test_wide_trajectory_generation_prompts_stay_below_transport_gate() -> None:

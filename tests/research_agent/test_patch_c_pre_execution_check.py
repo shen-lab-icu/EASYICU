@@ -206,6 +206,13 @@ model = LogisticRegression().fit(df[["age"]], df["death"])
     assert detect_forbidden_pattern_usage(script, ctx) == []
 
 
+def test_detector_does_not_mistake_builtin_map_for_umap():
+    ctx = _ordinal_context()
+    script = 'values = set(map(str, df["gcs"].dropna().unique()))'
+
+    assert detect_forbidden_pattern_usage(script, ctx) == []
+
+
 def test_detector_binds_ols_to_the_outcome_not_binary_covariates():
     ctx = ResearchContext(
         research_question="Estimate length of stay.",
