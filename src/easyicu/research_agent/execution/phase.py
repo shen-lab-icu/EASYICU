@@ -113,6 +113,7 @@ from .envelope_sealing import (
     SealedStepResultEnvelopeSnapshot,
     compile_sealed_step_result_shadow,
 )
+from .envelope_sidecar import publish_terminal_step_result_envelope_sidecar
 from .failure_classification import classify_runtime_failure
 from .cohort_routing import (
     bind_step_execution_cohort as _bind_step_execution_cohort,
@@ -10993,6 +10994,34 @@ def run_execute_phase(
                     ),
                     detail={"step_id": step.step_id},
                 )
+        if step_record["status"] == "ok":
+            # Publish the sealed step-result envelope as a sidecar: the compiled
+            # final snapshot re-bound to the terminal ``ok`` status, registered
+            # outside the raw step outputs (in the evidence directory).  Its
+            # alias is added to pending_success_aliases so the SAME success
+            # transaction below promotes it; a rolled-back commit therefore
+            # leaves an unpublished record that the loader can never recover as
+            # current authority.  Shadow-only: paper_authorized stays false and
+            # no downstream consumer reads it yet.
+            published_envelope_sidecar = publish_terminal_step_result_envelope_sidecar(
+                snapshot_envelope=(
+                    final_gate_findings.result_envelope_snapshot.envelope
+                    if final_gate_findings.result_envelope_snapshot is not None
+                    else None
+                ),
+                step_id=step.step_id,
+                attempt_id=attempt_id,
+                checkpoint_id=review_checkpoint_id,
+                script_evidence_id=script_record.evidence_id,
+                terminal_status="ok",
+                evidence_store=evidence,
+            )
+            if published_envelope_sidecar is not None:
+                pending_success_aliases[published_envelope_sidecar.evidence_id] = [
+                    published_envelope_sidecar.alias
+                ]
+                evidence_ids_for_step.append(published_envelope_sidecar.evidence_id)
+                step_record["evidence_ids"] = list(dict.fromkeys(evidence_ids_for_step))
         evidence_publication_finding: Optional[ValidationFinding] = None
         if step_record["status"] == "ok":
             try:
