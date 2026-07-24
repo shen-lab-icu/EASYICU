@@ -527,7 +527,7 @@ def test_code_runner_default_does_not_retry_failed_sandbox_on_host(
         ],
     )
     monkeypatch.setattr(runner_mod.sys, "platform", "darwin")
-    monkeypatch.setattr(runner_mod.subprocess, "run", _fake_run)
+    monkeypatch.setattr(runner_mod, "_run_capturing_with_descendant_reaping", _fake_run)
 
     result = runner.run(step_id="sandbox_abort", code="print('must not retry')\n")
 
@@ -552,8 +552,8 @@ def test_code_runner_default_blocks_direct_host_execution(
         lambda *, script_path: [runner.python_executable, str(script_path)],
     )
     monkeypatch.setattr(
-        runner_mod.subprocess,
-        "run",
+        runner_mod,
+        "_run_capturing_with_descendant_reaping",
         lambda *args, **kwargs: pytest.fail("generated code must not run on host"),
     )
 
@@ -845,7 +845,7 @@ def test_runner_retries_without_unshare_when_linux_namespace_is_unavailable(
 
     calls: list[list[str]] = []
 
-    def _fake_run(cmd, *, cwd, env, capture_output, text, timeout, encoding, errors):
+    def _fake_run(cmd, *, cwd, env, timeout):
         calls.append(list(cmd))
         if cmd[0] == "unshare":
             return SimpleNamespace(
@@ -862,7 +862,7 @@ def test_runner_retries_without_unshare_when_linux_namespace_is_unavailable(
         lambda *, script_path: ["unshare", "-n", "--", "python", str(script_path)],
     )
     monkeypatch.setattr(runner_mod.sys, "platform", "linux")
-    monkeypatch.setattr(runner_mod.subprocess, "run", _fake_run)
+    monkeypatch.setattr(runner_mod, "_run_capturing_with_descendant_reaping", _fake_run)
 
     result = runner.run(
         step_id="linux_unshare_fallback",
@@ -894,12 +894,12 @@ def test_runner_forces_single_thread_env_for_sandboxed_numeric_stacks(
     monkeypatch.setenv("MKL_NUM_THREADS", "8")
     captured_env = {}
 
-    def _fake_run(cmd, *, cwd, env, capture_output, text, timeout, encoding, errors):
+    def _fake_run(cmd, *, cwd, env, timeout):
         captured_env.update(env)
         Path(env["STEP_OUT_DIR"], "ok.txt").write_text("ok", encoding="utf-8")
         return SimpleNamespace(stdout="", stderr="", returncode=0)
 
-    monkeypatch.setattr(runner_mod.subprocess, "run", _fake_run)
+    monkeypatch.setattr(runner_mod, "_run_capturing_with_descendant_reaping", _fake_run)
 
     runner = ra.CodeRunner(
         workdir=tmp_path / "run",
@@ -935,7 +935,7 @@ def test_runner_retries_without_macos_sandbox_when_openmp_shm_is_blocked(
 
     calls: list[list[str]] = []
 
-    def _fake_run(cmd, *, cwd, env, capture_output, text, timeout, encoding, errors):
+    def _fake_run(cmd, *, cwd, env, timeout):
         calls.append(list(cmd))
         if cmd[0] == "sandbox-exec":
             return SimpleNamespace(
@@ -958,7 +958,7 @@ def test_runner_retries_without_macos_sandbox_when_openmp_shm_is_blocked(
         ],
     )
     monkeypatch.setattr(runner_mod.sys, "platform", "darwin")
-    monkeypatch.setattr(runner_mod.subprocess, "run", _fake_run)
+    monkeypatch.setattr(runner_mod, "_run_capturing_with_descendant_reaping", _fake_run)
 
     result = runner.run(step_id="macos_omp_fallback", code="print('ok')\n")
 
@@ -993,7 +993,7 @@ def test_runner_retries_without_macos_sandbox_when_profile_apply_is_denied(
     calls: list[list[str]] = []
     captured_env = {}
 
-    def _fake_run(cmd, *, cwd, env, capture_output, text, timeout, encoding, errors):
+    def _fake_run(cmd, *, cwd, env, timeout):
         calls.append(list(cmd))
         captured_env.update(env)
         if cmd[0] == "sandbox-exec":
@@ -1017,7 +1017,7 @@ def test_runner_retries_without_macos_sandbox_when_profile_apply_is_denied(
         ],
     )
     monkeypatch.setattr(runner_mod.sys, "platform", "darwin")
-    monkeypatch.setattr(runner_mod.subprocess, "run", _fake_run)
+    monkeypatch.setattr(runner_mod, "_run_capturing_with_descendant_reaping", _fake_run)
 
     result = runner.run(step_id="macos_sandbox_apply_fallback", code="print('ok')\n")
 
@@ -1052,7 +1052,7 @@ def test_runner_retries_without_macos_sandbox_when_stdio_is_blocked(
 
     calls: list[list[str]] = []
 
-    def _fake_run(cmd, *, cwd, env, capture_output, text, timeout, encoding, errors):
+    def _fake_run(cmd, *, cwd, env, timeout):
         calls.append(list(cmd))
         if cmd[0] == "sandbox-exec":
             return SimpleNamespace(
@@ -1078,7 +1078,7 @@ def test_runner_retries_without_macos_sandbox_when_stdio_is_blocked(
         ],
     )
     monkeypatch.setattr(runner_mod.sys, "platform", "darwin")
-    monkeypatch.setattr(runner_mod.subprocess, "run", _fake_run)
+    monkeypatch.setattr(runner_mod, "_run_capturing_with_descendant_reaping", _fake_run)
 
     result = runner.run(step_id="macos_stdio_fallback", code="print('ok')\n")
 
