@@ -69,6 +69,14 @@ def test_render_only_effect_echo_suppression_is_structural_and_automatic() -> No
     assert automatic_repair_allowed(repair_id)
 
 
+def test_typed_statistic_sidecar_name_is_structural_and_automatic() -> None:
+    repair_id = "typed_statistic_sidecar_name_v1"
+    metadata = repair_metadata_for(repair_id)
+    assert metadata.repair_class is RepairClass.STRUCTURAL
+    assert metadata.introduces_numbers is False
+    assert automatic_repair_allowed(repair_id)
+
+
 def test_retired_case_specific_repair_ids_are_not_registered() -> None:
     retired = [
         "generic_v15_table_one_fallback_v1",
