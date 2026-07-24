@@ -52,6 +52,7 @@ _FINDING_FIELDS = (
     "figure_source_findings",
     "llm_concept_findings",
 )
+_BACKEND_OPAQUE_DIGEST_COLUMNS = frozenset({"parameter_sha256"})
 
 
 def _canonical_sha256(value: Any) -> str:
@@ -65,11 +66,16 @@ def _canonical_sha256(value: Any) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
-def _canonical_table_value(value: Any) -> Any:
+def _canonical_table_value(value: Any, *, column: str) -> Any:
     """Normalize tabular scalars without trusting platform-specific float bytes."""
 
     if value is None or pd.isna(value):
         return None
+    if column in _BACKEND_OPAQUE_DIGEST_COLUMNS:
+        digest = str(value).strip().lower()
+        if len(digest) == 64 and all(char in "0123456789abcdef" for char in digest):
+            return "valid_backend_sha256"
+        return f"invalid_backend_sha256:{digest}"
     if isinstance(value, (bool, np.bool_)):
         return bool(value)
     if isinstance(value, numbers.Integral):
@@ -79,9 +85,9 @@ def _canonical_table_value(value: Any) -> Any:
         if not math.isfinite(numeric):
             return f"number:{numeric}"
         # LAPACK implementations may differ in the final floating-point bits.
-        # Six significant digits exceed manuscript reporting precision while
-        # excluding BLAS/scikit-learn tail drift from this cross-version oracle.
-        return f"number:{numeric:.6g}"
+        # Ten significant digits retain scientific drift while excluding the
+        # final floating-point bits from this cross-version oracle.
+        return f"number:{numeric:.10g}"
     return str(value)
 
 
@@ -100,7 +106,10 @@ def _stable_file_sha256(path: Path) -> str:
     payload = {
         "columns": [str(column) for column in frame.columns],
         "rows": [
-            [_canonical_table_value(value) for value in row]
+            [
+                _canonical_table_value(value, column=str(column))
+                for column, value in zip(frame.columns, row)
+            ]
             for row in frame.itertuples(index=False, name=None)
         ],
     }
@@ -553,7 +562,7 @@ def _build_bundle(*, run_dir: Path, observed_events: list[tuple[str, str]]):
     }
     return _normalize(
         {
-            "schema": "easyicu.freeze_char_golden/3",
+            "schema": "easyicu.freeze_char_golden/4",
             "volatile_field_allowlist": sorted(_VOLATILE_FIELD_ALLOWLIST),
             "step_statuses": [
                 {
@@ -657,6 +666,20 @@ def test_table_semantic_digest_ignores_float_tail_but_detects_numeric_drift(
 
     assert _stable_file_sha256(baseline) == _stable_file_sha256(float_tail)
     assert _stable_file_sha256(baseline) != _stable_file_sha256(material_drift)
+
+
+def test_table_semantic_digest_validates_but_does_not_bind_backend_parameter_sha(
+    tmp_path: Path,
+):
+    first = tmp_path / "first.csv"
+    second = tmp_path / "second.csv"
+    malformed = tmp_path / "malformed.csv"
+    first.write_text(f"value,parameter_sha256\n1,{'a' * 64}\n", encoding="utf-8")
+    second.write_text(f"value,parameter_sha256\n1,{'b' * 64}\n", encoding="utf-8")
+    malformed.write_text("value,parameter_sha256\n1,not-a-sha\n", encoding="utf-8")
+
+    assert _stable_file_sha256(first) == _stable_file_sha256(second)
+    assert _stable_file_sha256(first) != _stable_file_sha256(malformed)
 
 
 def test_minimal_typed_pipeline_matches_normalized_golden_bundle(
