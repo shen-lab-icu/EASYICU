@@ -1741,12 +1741,6 @@ _CODER_PATCH_PROMPT_BYTE_LIMIT = 30_000
 _CODER_REWRITE_PROMPT_BYTE_LIMIT = 65_000
 _CODER_TYPED_PATCH_DIAGNOSTIC_BYTE_LIMIT = 768
 _CODER_PATCH_MAX_EXCERPT_CHARS = 5_500
-_CODER_MINIMAL_PATCH_CAPABILITY_CONTRACT = (
-    "Preserve the script's existing analytical-library choices. Do not add a "
-    "third-party or project-local import unless the diagnosed repair contract "
-    "above names that exact easyicu.research_agent.methods.* helper; the "
-    "sandbox has no network and cannot install packages."
-)
 
 
 class CoderPromptBudgetError(RuntimeError):
@@ -2518,11 +2512,6 @@ class CoderAgent:
                         step_id=step.step_id,
                         shared_contract=shared_contract,
                         repair_specialization=repair_specialization,
-                        # A minimal exact patch inherits the complete script's
-                        # already-validated imports. Repeating the runtime's
-                        # full package roster here can consume the entire code
-                        # excerpt budget; only a full rewrite needs that roster.
-                        capability_contract=_CODER_MINIMAL_PATCH_CAPABILITY_CONTRACT,
                         patch_diagnosis=patch_diagnosis,
                         code_excerpt=excerpt,
                         compact_repair_context=compact_repair_context,

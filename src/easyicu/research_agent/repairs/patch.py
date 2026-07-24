@@ -9,6 +9,12 @@ import re
 from .reasons import StructuredRepairMetadata
 
 PATCH_FORMAT = "easyicu.code_patch/1"
+MINIMAL_PATCH_CAPABILITY_CONTRACT = (
+    "Preserve the script's existing analytical-library choices. Do not add a "
+    "third-party or project-local import unless the diagnosed repair contract "
+    "above names that exact easyicu.research_agent.methods.* helper; the "
+    "sandbox has no network and cannot install packages."
+)
 
 
 class CodePatchError(ValueError):
@@ -464,10 +470,10 @@ def render_minimal_patch_prompt(
     step_id: str,
     shared_contract: str,
     repair_specialization: str,
-    capability_contract: str,
     patch_diagnosis: object,
     code_excerpt: str,
     compact_repair_context: str,
+    capability_contract: str = MINIMAL_PATCH_CAPABILITY_CONTRACT,
 ) -> str:
     """Render the stable user message for one typed minimal-patch request."""
 
@@ -500,6 +506,7 @@ def render_minimal_patch_prompt(
 
 __all__ = [
     "CodePatchError",
+    "MINIMAL_PATCH_CAPABILITY_CONTRACT",
     "PATCH_FORMAT",
     "apply_code_patch",
     "budgeted_repair_code_excerpt",
