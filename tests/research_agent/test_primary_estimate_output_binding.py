@@ -3,7 +3,10 @@ from __future__ import annotations
 import csv
 import json
 
-from easyicu.research_agent.execution.output_files import bind_primary_output
+from easyicu.research_agent.execution.output_files import (
+    bind_primary_output,
+    normalize_typed_statistic_sidecars,
+)
 
 
 def test_binds_registered_adjusted_association_row(tmp_path) -> None:
@@ -91,6 +94,77 @@ def test_binds_registered_primary_or_statistic(tmp_path) -> None:
     assert bound["primary_or"] == 1.6
     assert bound["primary_or_ci"] == [1.5, 1.7]
     assert bound["primary_estimate_label"] == "odds_ratio"
+
+
+def test_normalizes_typed_statistic_identity_without_changing_values(
+    tmp_path,
+) -> None:
+    primary = tmp_path / "primary_or.json"
+    primary.write_text(
+        json.dumps({"estimate": 1.6, "ci_low": 1.5, "ci_high": 1.7}),
+        encoding="utf-8",
+    )
+    grouped = tmp_path / "robustness_summary.json"
+    grouped.write_text(
+        json.dumps({"primary_or": 1.6, "complete_case_or": 1.55}),
+        encoding="utf-8",
+    )
+
+    receipts = normalize_typed_statistic_sidecars(
+        {
+            "output_files": {
+                "statistic:primary_or": primary.name,
+                "statistic:robustness_summary": grouped.name,
+            }
+        },
+        tmp_path,
+    )
+
+    assert [receipt["product"] for receipt in receipts] == [
+        "statistic:primary_or",
+        "statistic:robustness_summary",
+    ]
+    assert all(
+        receipt["before_sha256"] != receipt["after_sha256"] for receipt in receipts
+    )
+    assert json.loads(primary.read_text()) == {
+        "name": "primary_or",
+        "estimate": 1.6,
+        "ci_low": 1.5,
+        "ci_high": 1.7,
+    }
+    assert json.loads(grouped.read_text()) == {
+        "name": "robustness_summary",
+        "primary_or": 1.6,
+        "complete_case_or": 1.55,
+    }
+
+
+def test_output_normalizer_refuses_conflicting_or_nonnumeric_payloads(
+    tmp_path,
+) -> None:
+    conflicting = tmp_path / "metric.json"
+    conflicting.write_text(
+        json.dumps({"name": "different_metric", "value": 1.0}),
+        encoding="utf-8",
+    )
+    nonnumeric = tmp_path / "status.json"
+    nonnumeric.write_text(json.dumps({"status": "complete"}), encoding="utf-8")
+
+    assert (
+        normalize_typed_statistic_sidecars(
+            {
+                "output_files": {
+                    "statistic:metric": conflicting.name,
+                    "statistic:status": nonnumeric.name,
+                }
+            },
+            tmp_path,
+        )
+        == []
+    )
+    assert json.loads(conflicting.read_text())["name"] == "different_metric"
+    assert "name" not in json.loads(nonnumeric.read_text())
 
 
 def test_refuses_unregistered_mismatched_or_unsafe_primary_or_statistic(

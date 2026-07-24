@@ -352,7 +352,7 @@ _STRUCTURAL_REPAIRS = {
     "structured_analysis_role_selection_v1",
     "table_one_binary_key_string_v1",
     "text_distribution_denominator_from_counts_v1",
-    "typed_statistic_sidecar_name_v1",
+    "typed_output_normalization_v1",
     "unavailable_figure_full_source_projection_v1",
     "unused_nullable_numeric_validation_v1",
     # Only renderers with an exact direct-parent product, closed source schema,
