@@ -6055,9 +6055,22 @@ def _deterministic_runner_repair(
         if repaired != code:
             return repair_name, repaired
 
-    json_numpy_key_failure = (
-        "keys must be str, int, float, bool or none" in lowered and "json.dump(" in code
+    json_numpy_scalar_failure = any(
+        marker in lowered
+        for marker in (
+            "object of type bool is not json serializable",
+            "object of type bool_ is not json serializable",
+            "object of type int32 is not json serializable",
+            "object of type int64 is not json serializable",
+            "object of type float32 is not json serializable",
+            "object of type float64 is not json serializable",
+            "object of type ndarray is not json serializable",
+        )
     )
+    json_numpy_key_failure = (
+        "keys must be str, int, float, bool or none" in lowered
+        or json_numpy_scalar_failure
+    ) and "json.dump(" in code
     if json_numpy_key_failure:
         repair_name = "json_dump_numpy_key_sanitizer_v1"
         if previous_repair != repair_name:

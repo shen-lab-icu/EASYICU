@@ -1752,6 +1752,27 @@ class TestPatchJsonDumpNumpyKeySanitizer:
         ast.parse(patched)
 
 
+def test_runner_repair_sanitizes_numpy_boolean_values_before_json_dump():
+    code = """
+import json
+import numpy as np
+
+step_summary = {"converged": np.bool_(True)}
+with open("step_summary.json", "w", encoding="utf-8") as handle:
+    json.dump(step_summary, handle, indent=2, allow_nan=False)
+print(json.dumps(step_summary, indent=2, allow_nan=False))
+"""
+    repair = _deterministic_runner_repair(
+        code=code,
+        run_log="TypeError: Object of type bool is not JSON serializable",
+    )
+
+    assert repair is not None
+    repair_id, patched = repair
+    assert repair_id == "json_dump_numpy_key_sanitizer_v1"
+    assert "_easyicu_json_sanitize_v1" in patched
+
+
 def test_runner_repair_does_not_trigger_case_fallbacks_by_default():
     """Default repair path must stay case-neutral.
 
