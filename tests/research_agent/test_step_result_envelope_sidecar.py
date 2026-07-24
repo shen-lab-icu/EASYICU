@@ -779,6 +779,52 @@ def test_loader_rejects_relative_path_traversal(tmp_path: Path) -> None:
     assert result.reason == "artifact_path_unverified"
 
 
+def test_loader_returns_typed_unavailable_on_read_oserror(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A read failure after descriptor verification returns typed unavailable.
+
+    ``verified_run_evidence_path`` reads the file via ``.open`` to digest it; the
+    loader then re-reads via ``read_bytes`` to parse.  Only the parse re-read is
+    patched, so verification still passes and the OSError is caught, not raised.
+    """
+
+    store, script_id, prepared, record = _committed_sidecar(tmp_path)
+
+    def boom_read_bytes(self: Path) -> bytes:
+        raise OSError("evidence file vanished after verification")
+
+    monkeypatch.setattr(Path, "read_bytes", boom_read_bytes)
+    result = load_current_step_result_envelope_sidecar(
+        evidence_store=store, query=_query(script_id)
+    )
+    assert isinstance(result, StepResultEnvelopeSidecarUnavailable)
+    assert result.reason == "artifact_read_failed"
+
+
+def test_loader_rejects_bytes_changed_after_verification(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A payload swapped in the TOCTOU window fails the post-read digest check.
+
+    Verification (via ``.open``) sees the intact file and passes; the loader's
+    ``read_bytes`` re-read returns different bytes, which must be rejected rather
+    than parsed as authority.
+    """
+
+    store, script_id, prepared, record = _committed_sidecar(tmp_path)
+
+    def swapped_read_bytes(self: Path) -> bytes:
+        return b'{"status": "hijacked"}'
+
+    monkeypatch.setattr(Path, "read_bytes", swapped_read_bytes)
+    result = load_current_step_result_envelope_sidecar(
+        evidence_store=store, query=_query(script_id)
+    )
+    assert isinstance(result, StepResultEnvelopeSidecarUnavailable)
+    assert result.reason == "artifact_digest_mismatch"
+
+
 def test_loader_rejects_internally_inconsistent_envelope(tmp_path: Path) -> None:
     """A sidecar whose envelope digest does not self-verify is rejected."""
 

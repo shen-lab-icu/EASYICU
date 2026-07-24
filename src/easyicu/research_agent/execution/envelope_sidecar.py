@@ -447,7 +447,17 @@ def load_current_step_result_envelope_sidecar(
     verified_path = verified_run_evidence_path(evidence_store.root, record)
     if verified_path is None:
         return _unavailable("artifact_path_unverified")
-    raw = verified_path.read_bytes()
+    # ``verified_run_evidence_path`` already digest-checked the file, but we must
+    # read it again to parse the envelope.  Treat that second read as untrusted:
+    # a read error, or bytes that no longer match the committed digest (a file
+    # swapped in the TOCTOU window), returns typed unavailable rather than
+    # letting an OSError escape or a changed payload be parsed as authority.
+    try:
+        raw = verified_path.read_bytes()
+    except OSError:
+        return _unavailable("artifact_read_failed")
+    if hashlib.sha256(raw).hexdigest() != record.sha256:
+        return _unavailable("artifact_digest_mismatch")
 
     try:
         envelope = StepResultEnvelope.model_validate(json.loads(raw))
