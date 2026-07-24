@@ -30,10 +30,13 @@ jobs:
       - name: Run lint gate
         run: ruff check src tests
 
+      - name: Build pinned research-agent runner image
+        run: |
+          docker build \
+            -t easyicu-research-agent:1.0.0 \
+            -f src/easyicu/research_agent/runner_image/Dockerfile \
+            .
+          docker image inspect easyicu-research-agent:1.0.0 >/dev/null
+
       - name: Run test suite
-        env:
-          # GitHub-hosted runners do not carry the pinned EasyICU Docker image.
-          # Tests execute only repository-owned deterministic mock scripts; the
-          # production default remains Docker/fail-closed.
-          EASYICU_ALLOW_UNSAFE_HOST_FALLBACK: "1"
         run: pytest -q
