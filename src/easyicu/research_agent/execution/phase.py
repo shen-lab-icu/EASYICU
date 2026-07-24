@@ -108,6 +108,10 @@ from .development_sample import (
     materialize_development_execution_sample,
     record_development_sample_authority,
 )
+from .envelope_sealing import (
+    SealedStepResultEnvelopeSnapshot,
+    compile_sealed_step_result_shadow,
+)
 from .failure_classification import classify_runtime_failure
 from .cohort_routing import (
     bind_step_execution_cohort as _bind_step_execution_cohort,
@@ -2241,6 +2245,7 @@ class _FinalDeterministicGateFindings:
     guard_findings: Tuple[ValidationFinding, ...]
     contract_findings: Tuple[ValidationFinding, ...]
     figure_source_findings: Tuple[ValidationFinding, ...]
+    result_envelope_snapshot: Optional[SealedStepResultEnvelopeSnapshot] = None
 
     def all_findings(self) -> Tuple[ValidationFinding, ...]:
         """Return all groups in the historical manifest publication order."""
@@ -2656,6 +2661,13 @@ def _evaluate_final_deterministic_gates(
     one reusable authority.
     """
 
+    result_envelope_snapshot = compile_sealed_step_result_shadow(
+        step=step,
+        step_summary=step_summary,
+        output_dir=out_dir,
+        run_dir=run_dir,
+        resolved_input_bindings=resolved_input_bindings,
+    )
     execution_cohort_path = _step_execution_cohort_path(
         step=step,
         plan=plan,
@@ -2761,6 +2773,7 @@ def _evaluate_final_deterministic_gates(
         guard_findings=_bind(guard_findings),
         contract_findings=_bind(contract_findings),
         figure_source_findings=_bind(figure_source_findings),
+        result_envelope_snapshot=result_envelope_snapshot,
     )
 
 

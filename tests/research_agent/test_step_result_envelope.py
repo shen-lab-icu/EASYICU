@@ -24,6 +24,10 @@ from easyicu.research_agent.audits.validators import (
     CrossStepRegisteredOutputValidator,
     StepSummaryFractionValidator,
 )
+from easyicu.research_agent.execution import envelope_sealing
+from easyicu.research_agent.execution.envelope_sealing import (
+    compile_sealed_step_result_shadow,
+)
 from easyicu.research_agent.execution.result_envelope import (
     StepResultEnvelope,
     normalize_step_result_shadow,
@@ -35,6 +39,159 @@ from easyicu.research_agent.schema import AnalysisStep
 
 def _issue_codes(envelope: StepResultEnvelope) -> set[str]:
     return {issue.code for issue in envelope.normalization_issues}
+
+
+def test_final_gate_compiler_builds_one_non_authoritative_sealed_snapshot(
+    tmp_path: Path,
+) -> None:
+    result_path = tmp_path / "primary_result.csv"
+    result_path.write_text(
+        "term,estimate,ci_low,ci_high\nexposure,1.5,1.2,1.9\n",
+        encoding="utf-8",
+    )
+    summary = {
+        "status": "completed",
+        "output_files": {
+            "table:primary_result": (f"/easyicu-step-output/{result_path.name}")
+        },
+    }
+    raw_summary_path = tmp_path / "step_summary.json"
+    raw_summary_path.write_text(json.dumps(summary), encoding="utf-8")
+    raw_result = result_path.read_bytes()
+    raw_summary = raw_summary_path.read_bytes()
+    step = AnalysisStep(
+        step_id="05_primary_result",
+        intent="Estimate the primary result.",
+        planned_analysis_role="primary",
+    )
+
+    snapshot = compile_sealed_step_result_shadow(
+        step=step,
+        step_summary=summary,
+        output_dir=tmp_path,
+        run_dir=tmp_path,
+    )
+
+    assert snapshot.ready is True
+    assert snapshot.error_code is None
+    assert snapshot.envelope is not None
+    assert snapshot.envelope.step_id == step.step_id
+    assert snapshot.envelope.planned_analysis_role == "primary"
+    assert snapshot.envelope.shadow is True
+    assert snapshot.envelope.paper_authorized is False
+    assert (
+        snapshot.envelope.raw_summary_artifact_sha256
+        == hashlib.sha256(raw_summary).hexdigest()
+    )
+    assert [artifact.relative_path for artifact in snapshot.envelope.artifacts] == [
+        result_path.name
+    ]
+    assert result_path.read_bytes() == raw_result
+    assert raw_summary_path.read_bytes() == raw_summary
+
+
+def test_final_gate_compiler_returns_typed_failure_without_legacy_fallback(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fail_compile(**_: object) -> StepResultEnvelope:
+        raise RuntimeError("host-specific detail must not escape")
+
+    monkeypatch.setattr(
+        envelope_sealing,
+        "normalize_step_result_shadow",
+        fail_compile,
+    )
+
+    snapshot = compile_sealed_step_result_shadow(
+        step=AnalysisStep(step_id="05_result", intent="Compile the result."),
+        step_summary={},
+        output_dir=tmp_path,
+        run_dir=tmp_path,
+    )
+
+    assert snapshot.ready is False
+    assert snapshot.envelope is None
+    assert snapshot.error_code == "sealed_envelope_compile_failed"
+
+
+def test_final_gate_compiler_uses_only_digest_bound_input_path_refs(
+    tmp_path: Path,
+) -> None:
+    evidence_dir = tmp_path / "evidence"
+    evidence_dir.mkdir()
+    cohort_path = evidence_dir / "table_cohort__analysis_cohort.parquet"
+    cohort_path.write_bytes(b"digest-bound cohort placeholder")
+    cohort_sha256 = hashlib.sha256(cohort_path.read_bytes()).hexdigest()
+    container_path = "/easyicu-run/evidence/table_cohort__analysis_cohort.parquet"
+    opaque_ref = f"evidence:table_cohort@sha256:{cohort_sha256}"
+    summary = {
+        "cohort_path": container_path,
+        "input_bindings": [{"path": container_path}],
+    }
+
+    snapshot = compile_sealed_step_result_shadow(
+        step=AnalysisStep(step_id="02_table", intent="Build a table."),
+        step_summary=summary,
+        output_dir=tmp_path,
+        run_dir=tmp_path,
+        resolved_input_bindings={
+            "artifact:analysis_cohort": {
+                "evidence_id": "table_cohort",
+                "sha256": cohort_sha256,
+                "relative_path": cohort_path.relative_to(tmp_path).as_posix(),
+                "absolute_path": str(cohort_path),
+            }
+        },
+    )
+
+    assert snapshot.ready is True
+    assert snapshot.envelope is not None
+    assert "absolute_unbound_path" not in _issue_codes(snapshot.envelope)
+    scalar_values = {
+        scalar.field_path: scalar.value for scalar in snapshot.envelope.observed_scalars
+    }
+    assert scalar_values["cohort_path"] == opaque_ref
+    assert scalar_values["input_bindings[0].path"] == opaque_ref
+    assert container_path not in scalar_values.values()
+    assert snapshot.envelope.input_evidence_refs == (opaque_ref,)
+
+
+def test_final_gate_compiler_does_not_rehash_host_verified_input_files(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    evidence_dir = tmp_path / "evidence"
+    evidence_dir.mkdir()
+    cohort_path = evidence_dir / "analysis_cohort.parquet"
+    cohort_path.write_bytes(b"large host-verified input placeholder")
+    cohort_sha256 = hashlib.sha256(cohort_path.read_bytes()).hexdigest()
+    original_read_bytes = Path.read_bytes
+
+    def reject_input_read(path: Path) -> bytes:
+        if path == cohort_path:
+            raise AssertionError("sealed compiler repeated large-input I/O")
+        return original_read_bytes(path)
+
+    monkeypatch.setattr(Path, "read_bytes", reject_input_read)
+    snapshot = compile_sealed_step_result_shadow(
+        step=AnalysisStep(step_id="03_model", intent="Fit the model."),
+        step_summary={"cohort_path": "/easyicu-run/evidence/analysis_cohort.parquet"},
+        output_dir=tmp_path,
+        run_dir=tmp_path,
+        resolved_input_bindings={
+            "table:analysis_cohort": {
+                "evidence_id": "analysis_cohort",
+                "sha256": cohort_sha256,
+                "relative_path": "evidence/analysis_cohort.parquet",
+                "absolute_path": str(cohort_path),
+            }
+        },
+    )
+
+    assert snapshot.ready is True
+    assert snapshot.envelope is not None
+    assert "absolute_unbound_path" not in _issue_codes(snapshot.envelope)
 
 
 def test_shadow_envelope_binds_statistic_without_mutating_raw_artifact(
@@ -425,7 +582,7 @@ def test_archived_replay_uses_current_ledger_and_verified_input_authority(
     assert "absolute_unbound_path" in _issue_codes(rejected_envelope)
 
 
-def test_shadow_envelope_is_not_wired_into_live_execution() -> None:
+def test_shadow_envelope_is_compiled_but_not_wired_into_live_decisions() -> None:
     repo_root = Path(__file__).resolve().parents[2]
     for relative in (
         "src/easyicu/research_agent/execution/phase.py",
@@ -437,6 +594,12 @@ def test_shadow_envelope_is_not_wired_into_live_execution() -> None:
         assert "audits.envelope_consumers" not in source
         assert "audits.envelope_shadow" not in source
         assert "compare_validator_shadow_inputs" not in source
+    phase_source = (
+        repo_root / "src/easyicu/research_agent/execution/phase.py"
+    ).read_text(encoding="utf-8")
+    assert phase_source.count("compile_sealed_step_result_shadow(") == 1
+    assert "StepSummaryFractionEnvelopeDualReader" not in phase_source
+    assert "CrossStepRegisteredOutputEnvelopeDualReader" not in phase_source
 
 
 def test_registered_tables_compile_typed_population_missingness_and_estimate(
