@@ -22,62 +22,66 @@ so a defensible manuscript is still produced.
 from __future__ import annotations
 
 import json
-import re
 from pathlib import Path
 
 
-def _replan_prompt(user: str) -> bool:
-    upper = user.upper()
-    return "PROBE SUMMARY:" in upper and "CURRENT PLAN:" in upper
-
-
 def test_replanner_grown_cohort_step_with_empty_definition_is_flagged(
-    ra, synthetic_cohort, tmp_path: Path
+    ra, synthetic_cohort, tmp_path: Path, monkeypatch
 ):
     from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep
 
-    class ReplanAddsCohortStepLLM(ra.MockLLMClient):
-        """Initial plan carries no cohort-definition step (plan-phase contract
-        passes); the replanner grows a ``01_cohort_definition`` step but leaves
-        ``plan.cohort`` empty — the run12 shape. Everything else delegates to
-        the deterministic mock so the run still completes."""
+    from easyicu.research_agent.providers.mocks import PatternScriptedMockLLMClient
 
-        def complete(self, messages, **kwargs):
-            user = next((m.content for m in reversed(messages) if m.role == "user"), "")
-            if _replan_prompt(user):
-                match = re.search(
-                    r"CURRENT PLAN:\n(\{.*?\})\n\nPROBE SUMMARY:",
-                    user,
-                    flags=re.DOTALL,
-                )
-                current = (
-                    AnalysisPlan.model_validate_json(match.group(1))
-                    if match
-                    else AnalysisPlan(research_question="q", steps=[])
-                )
-                steps = list(current.steps)
-                if not any("cohort_def" in (s.step_id or "") for s in steps):
-                    steps.insert(
-                        0,
-                        AnalysisStep(
-                            step_id="01_cohort_definition",
-                            intent=(
-                                "Define the adult ICU analysis cohort: age >= 18 "
-                                "and ICU LoS >= 1 day; report the attrition."
-                            ),
-                            inputs=[],
-                            expected_outputs=["table:analysis_cohort"],
-                            method="cohort_definition",
-                        ),
-                    )
-                revised = current.model_copy(
-                    update={"steps": steps, "revision": current.revision + 1}
-                )
-                # plan.cohort stays empty: the 纳排 lives only in step prose.
-                return revised.model_dump_json(indent=2)
-            return super().complete(messages, **kwargs)
+    analysis_step = AnalysisStep(
+        step_id="02_missingness",
+        planned_analysis_role="auxiliary",
+        intent="Summarize cohort missingness.",
+        inputs=["age", "death"],
+        expected_outputs=["table:missingness"],
+        method="missingness_audit",
+    )
+    initial = AnalysisPlan(
+        research_question="Is admission SOFA-2 associated with ICU mortality?",
+        steps=[analysis_step],
+    )
+    revised = initial.model_copy(
+        update={
+            "steps": [
+                AnalysisStep(
+                    step_id="01_cohort_definition",
+                    intent=(
+                        "Define the adult ICU analysis cohort: age >= 18 "
+                        "and ICU LoS >= 1 day; report the attrition."
+                    ),
+                    inputs=[],
+                    expected_outputs=["table:analysis_cohort"],
+                    method="cohort_definition",
+                ),
+                analysis_step,
+            ],
+            "revision": initial.revision + 1,
+        }
+    )
+    llm = PatternScriptedMockLLMClient(
+        [
+            (
+                "ICU-AWARE RESEARCH PLAN",
+                [initial.model_dump_json(indent=2)] * 4,
+            ),
+            ("PROBE SUMMARY:", [revised.model_dump_json(indent=2)] * 4),
+        ],
+        contextual_default=True,
+    )
+    from easyicu.research_agent.agents.core import PlannerAgent
 
-    pipeline = ra.ResearchAgentPipeline(workdir=tmp_path, llm=ReplanAddsCohortStepLLM())
+    original_planner_run = PlannerAgent.run
+
+    def run_without_article_suite(self, context, **kwargs):
+        kwargs["enforce_article_contract"] = False
+        return original_planner_run(self, context, **kwargs)
+
+    monkeypatch.setattr(PlannerAgent, "run", run_without_article_suite)
+    pipeline = ra.ResearchAgentPipeline(workdir=tmp_path, llm=llm)
     result = pipeline.run(
         question="Is admission SOFA-2 associated with ICU mortality?",
         cohort=synthetic_cohort,

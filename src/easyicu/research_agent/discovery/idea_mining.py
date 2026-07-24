@@ -3398,8 +3398,16 @@ def _resolve_concept(term: str, lookup: Mapping[str, str]) -> Optional[str]:
     # A one-token overlap in a two-token phrase (specificity == 0.5) is still
     # too weak: ``marker c`` must not silently become ``marker a``.  Exact and
     # embedded multi-word alias matches have already returned above.
+    lexical_term_tokens = {
+        token
+        for token in re.split(
+            r"[^a-z0-9]+",
+            normalize_concept_name(resolution_term),
+        )
+        if token
+    }
     if (
-        len(term_tokens) > 1
+        len(lexical_term_tokens) > 1
         and best_score[0] <= _MIN_PARTIAL_CONCEPT_MATCH_SPECIFICITY
     ):
         return None

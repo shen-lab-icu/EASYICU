@@ -224,7 +224,16 @@ def build_article_analysis_contract(
     requirements: List[ArticleDisplayRequirement] = []
     required_roles: Set[str] = set()
     recommended_roles: Set[str] = set()
-    for module in resolved_brief.display_modules:
+    display_modules = list(resolved_brief.display_modules)
+    if source_analysis_type == "data_quality_audit":
+        # A measurement-completeness question is intentionally narrower than
+        # descriptive epidemiology. Reusing the descriptive playbook must not
+        # silently turn it into cohort characterization, prevalence estimation,
+        # or cross-database result reporting.
+        display_modules = [
+            module for module in display_modules if module.role == "data_quality"
+        ]
+    for module in display_modules:
         if module.tier == "supplementary":
             continue
         required = module.tier in _REQUIRED_TIERS

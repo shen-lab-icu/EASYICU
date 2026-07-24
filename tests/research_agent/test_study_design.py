@@ -226,6 +226,26 @@ def test_display_coverage_requires_exact_structured_product_not_decoy(ra):
         assert not _module_covered(cohort_module, outputs), wrong_output
 
 
+def test_data_quality_article_contract_stays_measurement_only(ra):
+    from easyicu.research_agent.reporting.article_contract import (
+        build_article_analysis_contract,
+    )
+
+    context = _context(
+        ra,
+        "Audit bilirubin and vasopressor measurement completeness.",
+    )
+    contract = build_article_analysis_contract(
+        context,
+        analysis_type="data_quality_audit",
+    )
+
+    assert contract.required_roles == ["data_quality"]
+    assert {
+        requirement.module_id for requirement in contract.requirements
+    } == {"missingness_data_quality", "measurement_process_audit"}
+
+
 def test_article_contract_flags_and_can_augment_narrow_association_plan(ra):
     from easyicu.research_agent.reporting.article_contract import (
         augment_plan_for_article_contract,

@@ -105,6 +105,9 @@ def test_get_input_key_access_is_reported_without_preflight_crash(ra) -> None:
     ).replace(
         'binding["input_key"]',
         'binding.get("input_key", "")',
+    ).replace(
+        'message = f"Loading {binding.get("input_key", "")}"',
+        """message = f'Loading {binding.get("input_key", "")}'""",
     )
 
     findings = _findings(script, ra)

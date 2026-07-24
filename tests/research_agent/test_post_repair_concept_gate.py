@@ -16,7 +16,11 @@ import pandas as pd
 
 df = pd.read_parquet(os.environ["COHORT_PARQUET"])
 out = os.environ["STEP_OUT_DIR"]
-summary = {"n": int(len(df)), "phase": "initial"}
+summary = {
+    "n": int(len(df)),
+    "phase": "initial",
+    "output_files": {"table:cohort_summary": "cohort_summary.csv"},
+}
 pd.DataFrame([summary]).to_csv(os.path.join(out, "cohort_summary.csv"), index=False)
 with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as f:
     json.dump(summary, f)
@@ -63,10 +67,8 @@ with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as f:
 """
 
 _RECOVERED_REPAIR_CODE = _SAFE_CODE.replace(
-    'summary = {"n": int(len(df)), "phase": "initial"}',
-    'summary = {"n": int(len(df)), "phase": "repaired", "output_files": '
-    '[{"kind": "table", "name": "cohort_summary", '
-    '"path": "cohort_summary.csv"}]}',
+    '"phase": "initial"',
+    '"phase": "repaired"',
 )
 
 _UNSAFE_REPAIR_CODE_AGAIN = _UNSAFE_REPAIR_CODE.replace(
@@ -116,7 +118,7 @@ def _scripted_llm(
 ) -> PatternScriptedMockLLMClient:
     return PatternScriptedMockLLMClient(
         [
-            ("ICU-AWARE RESEARCH PLAN", [_PLAN_RESPONSE]),
+            ("Produce an ICU-AWARE RESEARCH PLAN as JSON", [_PLAN_RESPONSE]),
             ("WRITE THE PYTHON CODE", [initial_code]),
             (
                 "REPAIR THE PYTHON CODE",
@@ -153,7 +155,17 @@ def _pipeline(
     ra,
     tmp_path: Path,
     llm: PatternScriptedMockLLMClient,
+    monkeypatch: pytest.MonkeyPatch,
 ):
+    from easyicu.research_agent.agents.core import PlannerAgent
+
+    original_run = PlannerAgent.run
+
+    def run_without_article_contract(self, context, **kwargs):
+        kwargs["enforce_article_contract"] = False
+        return original_run(self, context, **kwargs)
+
+    monkeypatch.setattr(PlannerAgent, "run", run_without_article_contract)
     return ra.ResearchAgentPipeline(
         workdir=tmp_path,
         llm=llm,
@@ -222,7 +234,7 @@ def test_contract_repair_reenters_concept_gate_before_runner(
 
     llm = _scripted_llm()
     result = _run(
-        _pipeline(ra, tmp_path, llm),
+        _pipeline(ra, tmp_path, llm, monkeypatch),
         pd.DataFrame(
             {"stay_id": [1, 2, 3], "value": [1.0, None, 3.0], "death": [0, 1, 0]}
         ),
@@ -284,7 +296,7 @@ def test_contract_repair_mechanical_error_uses_remaining_step_budget(
         ]
     )
     result = _run(
-        _pipeline(ra, tmp_path, llm),
+        _pipeline(ra, tmp_path, llm, monkeypatch),
         pd.DataFrame(
             {"stay_id": [1, 2, 3], "value": [1.0, 2.0, 3.0], "death": [0, 1, 0]}
         ),
@@ -370,7 +382,7 @@ def test_quarantine_persists_repaired_constraints_across_later_repairs(
         ],
     )
     result = _run(
-        _pipeline(ra, tmp_path, llm),
+        _pipeline(ra, tmp_path, llm, monkeypatch),
         pd.DataFrame(
             {"stay_id": [1, 2, 3], "value": [1.0, None, 3.0], "death": [0, 1, 0]}
         ),
@@ -657,22 +669,27 @@ def test_monotonic_constraint_identity_unions_changing_evidence_support() -> Non
 def test_executed_script_digest_mismatch_blocks_outputs_before_evidence(
     ra, tmp_path: Path, monkeypatch
 ) -> None:
-    from easyicu.research_agent.execution.runner import DockerRunner
+    from easyicu.research_agent.execution.runner import CodeRunner, DockerRunner
 
-    original_run = DockerRunner.run
+    def patch_runner(runner_type):
+        original_run = runner_type.run
 
-    def run_then_tamper(self, **kwargs):
-        result = original_run(self, **kwargs)
-        result.script_path.write_text(
-            result.script_path.read_text(encoding="utf-8") + "\n# HOST_TAMPERED\n",
-            encoding="utf-8",
-        )
-        return result
+        def run_then_tamper(self, **kwargs):
+            result = original_run(self, **kwargs)
+            result.script_path.write_text(
+                result.script_path.read_text(encoding="utf-8")
+                + "\n# HOST_TAMPERED\n",
+                encoding="utf-8",
+            )
+            return result
 
-    monkeypatch.setattr(DockerRunner, "run", run_then_tamper)
+        monkeypatch.setattr(runner_type, "run", run_then_tamper)
+
+    patch_runner(DockerRunner)
+    patch_runner(CodeRunner)
     llm = _scripted_llm()
     result = _run(
-        _pipeline(ra, tmp_path, llm),
+        _pipeline(ra, tmp_path, llm, monkeypatch),
         pd.DataFrame(
             {"stay_id": [1, 2, 3], "value": [1.0, 2.0, 3.0], "death": [0, 1, 0]}
         ),
@@ -723,7 +740,7 @@ def test_keyboard_interrupt_during_concept_repair_saves_draft_and_reraises(
 
     with pytest.raises(KeyboardInterrupt, match="operator interruption"):
         _run(
-            _pipeline(ra, tmp_path, llm),
+            _pipeline(ra, tmp_path, llm, monkeypatch),
             pd.DataFrame(
                 {
                     "stay_id": [1, 2, 3],

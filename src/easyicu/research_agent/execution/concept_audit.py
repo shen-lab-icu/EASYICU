@@ -166,6 +166,7 @@ class ConceptQuarantineState:
     __slots__ = (
         "draft_active",
         "policy_superseded",
+        "policy_reclassified_findings",
         "deterministic_revalidated",
         "pending_errors",
         "resumed_draft_used",
@@ -177,6 +178,7 @@ class ConceptQuarantineState:
     def __init__(self) -> None:
         self.draft_active: bool = False
         self.policy_superseded: bool = False
+        self.policy_reclassified_findings: List[ValidationFinding] = []
         self.deterministic_revalidated: bool = False
         self.pending_errors: List[ValidationFinding] = []
         self.resumed_draft_used: bool = False
@@ -392,6 +394,9 @@ class ConceptAuditCoordinator:
                     not in existing_keys
                 )
                 quarantine.policy_superseded = True
+                quarantine.policy_reclassified_findings = list(
+                    retirement.policy_reclassified_findings
+                )
                 runtime.step_record["quarantine_policy_superseded"] = True
                 runtime.step_record["quarantine_policy_superseded_findings"] = list(
                     retirement.policy_provenance
@@ -422,6 +427,18 @@ class ConceptAuditCoordinator:
             )
             if include_llm and sealed_capsule_audit is not None:
                 sealed_findings, audit_key = sealed_capsule_audit
+                if quarantine.policy_reclassified_findings:
+                    reclassified_by_identity = {
+                        (finding.validator, finding.message): finding
+                        for finding in quarantine.policy_reclassified_findings
+                    }
+                    sealed_findings = [
+                        reclassified_by_identity.get(
+                            (finding.validator, finding.message),
+                            finding,
+                        )
+                        for finding in sealed_findings
+                    ]
                 if (
                     runtime.provider_budget.snapshot().get("reserved_final_category")
                     == "concept_audit"

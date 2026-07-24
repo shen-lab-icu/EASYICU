@@ -17,6 +17,30 @@ from .prompt_variables import (
     project_observed_domain,
 )
 
+_CTAS_DEFAULT_BY_ICU_AGGREGATION_RULE = {
+    "any": "any",
+    "mean_or_median": "mean",
+    "median_only": "median",
+    "max_or_last": "max",
+    "sum": "sum",
+    "first_value": "first",
+}
+
+
+def _aggregation_hint(variable: Any) -> Optional[str]:
+    """Translate an ICU aggregation policy into planner-safe CTAS vocabulary."""
+
+    rule = variable.aggregation_default
+    if rule is None:
+        return None
+    ctas_default = _CTAS_DEFAULT_BY_ICU_AGGREGATION_RULE.get(rule.value)
+    if ctas_default is None:
+        return None
+    return (
+        f"agg_default={ctas_default} "
+        f"(icu_rule={rule.value}; translate alternatives per CTAS constraints)"
+    )
+
 
 def _compact(value: Any) -> Any:
     if isinstance(value, Mapping):
@@ -123,6 +147,7 @@ def outbound_safe_context_payload(
                         if variable.aggregation_default is not None
                         else None
                     ),
+                    "aggregation_hint": _aggregation_hint(variable),
                     "observed_shape": projected_domain,
                     "analysis_window": variable.analysis_window,
                     "temporal_resolution": variable.temporal_resolution,

@@ -403,25 +403,9 @@ def test_development_sample_changes_scientific_identity_and_stays_non_paper(
 def test_missing_post_qc_cohort_blocks_scientific_steps_without_coder_calls(
     ra, synthetic_cohort, tmp_path: Path
 ) -> None:
-    class CountingLLM(ra.MockLLMClient):
-        def __init__(self) -> None:
-            super().__init__()
-            self.coder_calls = 0
+    from easyicu.research_agent.providers.mocks import PatternScriptedMockLLMClient
 
-        def complete(self, messages, **kwargs):
-            user = next(
-                (
-                    message.content
-                    for message in reversed(messages)
-                    if message.role == "user"
-                ),
-                "",
-            )
-            if "WRITE THE PYTHON CODE" in user.upper():
-                self.coder_calls += 1
-            return super().complete(messages, **kwargs)
-
-    llm = CountingLLM()
+    llm = PatternScriptedMockLLMClient([], contextual_default=True)
     result = ResearchAgentPipeline(
         workdir=tmp_path,
         llm=llm,
@@ -443,7 +427,15 @@ def test_missing_post_qc_cohort_blocks_scientific_steps_without_coder_calls(
         == "blocked_before_scientific_execution"
     ]
     assert blocked
-    assert llm.coder_calls == 0
+    assert not [
+        call
+        for call, _kwargs in llm.calls
+        if any(
+            "WRITE THE PYTHON CODE" in message.content.upper()
+            for message in call
+            if message.role == "user"
+        )
+    ]
     assert not (Path(result.workdir) / DEVELOPMENT_COHORT_FILENAME).exists()
     assert not [
         record

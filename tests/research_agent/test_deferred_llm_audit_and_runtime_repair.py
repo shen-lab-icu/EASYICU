@@ -70,9 +70,7 @@ out = os.environ["STEP_OUT_DIR"]
 summary = {{
     "phase": {phase!r},
     "n": 3,
-    "output_files": [
-        {{"kind": "table", "name": "cohort_summary", "path": "cohort_summary.csv"}}
-    ],
+    "output_files": {{"table:cohort_summary": "cohort_summary.csv"}},
 }}
 pd.DataFrame([summary]).to_csv(
     os.path.join(out, "cohort_summary.csv"), index=False
@@ -399,9 +397,7 @@ summary = {
     "newly_invalid_or_coerced_n": int(
         coercion_record["newly_invalid_or_coerced_n"]
     ),
-    "output_files": [
-        {"kind": "table", "name": "exposure_qc", "path": "exposure_qc.csv"}
-    ],
+    "output_files": {"table:exposure_qc": "exposure_qc.csv"},
 }
 with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as handle:
     json.dump(summary, handle)
@@ -647,13 +643,9 @@ def test_exact_capsule_resume_skips_generation_audit_and_execution_but_reruns_ga
             summary = {
                 "phase": "CAPSULE_RESUME",
                 "n": 3,
-                "output_files": [
-                    {
-                        "kind": "table",
-                        "name": "cohort_summary",
-                        "path": "cohort_summary.csv",
-                    }
-                ],
+                "output_files": {
+                    "table:cohort_summary": "cohort_summary.csv",
+                },
             }
             table_path = out_dir / "cohort_summary.csv"
             pd.DataFrame([summary]).to_csv(table_path, index=False)
@@ -1064,13 +1056,9 @@ def test_resume_seals_completed_repair_after_capsule_checkpoint_crash(
             summary = {
                 "phase": phase,
                 "n": 3,
-                "output_files": [
-                    {
-                        "kind": "table",
-                        "name": "cohort_summary",
-                        "path": "cohort_summary.csv",
-                    }
-                ],
+                "output_files": {
+                    "table:cohort_summary": "cohort_summary.csv",
+                },
             }
             table_path = out_dir / "cohort_summary.csv"
             pd.DataFrame([summary]).to_csv(table_path, index=False)

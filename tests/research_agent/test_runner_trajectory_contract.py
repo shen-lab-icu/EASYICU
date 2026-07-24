@@ -18,43 +18,29 @@ from easyicu.research_agent.authority.step_capsule import (
     StepAuthorityCapsuleRef,
     load_verified_step_authority_capsule,
 )
+from easyicu.research_agent.providers.mocks import PatternScriptedMockLLMClient
 from tests.research_agent.test_materialized_trajectory_authority import _bundle
 
 
-class _TrajectoryAuthorityPlanLLM:
-    name = "trajectory-authority-plan"
-
-    def complete(self, messages, *, max_tokens=2048, temperature=0.2):
-        del max_tokens, temperature
-        user = next(
-            (
-                message.content
-                for message in reversed(messages)
-                if message.role == "user"
-            ),
-            "",
-        )
-        upper = user.upper()
-        if "ICU-AWARE RESEARCH PLAN" in upper:
-            return json.dumps(
+def _trajectory_authority_plan_llm() -> PatternScriptedMockLLMClient:
+    plan = json.dumps(
+        {
+            "research_question": "Summarize the locked ICU cohort.",
+            "steps": [
                 {
-                    "research_question": "Summarize the locked ICU cohort.",
-                    "steps": [
-                        {
-                            "step_id": "01_summary",
-                            "planned_analysis_role": "auxiliary",
-                            "intent": "Produce the declared cohort summary.",
-                            "inputs": ["stay_id"],
-                            "expected_outputs": ["table:cohort_summary"],
-                            "method": "descriptive_summary",
-                            "icu_rule_refs": [],
-                        }
-                    ],
-                    "rationale": "trajectory authority mutation regression",
+                    "step_id": "01_summary",
+                    "planned_analysis_role": "auxiliary",
+                    "intent": "Produce the declared cohort summary.",
+                    "inputs": [],
+                    "expected_outputs": ["table:cohort_summary"],
+                    "method": "descriptive_summary",
+                    "icu_rule_refs": [],
                 }
-            )
-        if "WRITE THE PYTHON CODE" in upper:
-            return """
+            ],
+            "rationale": "trajectory authority mutation regression",
+        }
+    )
+    code = """
 import json
 import os
 import pandas as pd
@@ -68,20 +54,23 @@ with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as hand
     json.dump(
         {
             "n": len(df),
-            "output_files": [
-                {
-                    "kind": "table",
-                    "name": "cohort_summary",
-                    "path": "cohort_summary.csv",
-                }
-            ],
+            "output_files": {"table:cohort_summary": "cohort_summary.csv"},
         },
         handle,
     )
 """
-        if "INTERPRET THE RESULTS" in upper:
-            return "The locked cohort summary is available."
-        return "{}"
+    return PatternScriptedMockLLMClient(
+        [
+            ("Produce an ICU-AWARE RESEARCH PLAN as JSON", [plan] * 8),
+            ("REVISE THE ICU-AWARE RESEARCH PLAN", [plan] * 8),
+            ("WRITE THE PYTHON CODE FOR STEP", [code] * 8),
+            (
+                "INTERPRET THE RESULTS OF STEP",
+                ["The locked cohort summary is available."] * 8,
+            ),
+        ],
+        contextual_default=True,
+    )
 
 
 def _typed_trajectory_run_kwargs(tmp_path):
@@ -106,10 +95,31 @@ def _typed_trajectory_run_kwargs(tmp_path):
     }
 
 
-def _trajectory_test_pipeline(ra, tmp_path, *, runner_factory):
+def _trajectory_test_pipeline(ra, tmp_path, monkeypatch, *, runner_factory):
+    import easyicu.research_agent.agents.core as agent_core
+    import easyicu.research_agent.pipeline as pipeline_module
+    from easyicu.research_agent.agents.core import PlannerAgent
+
+    original_run = PlannerAgent.run
+
+    def run_without_article_contract(self, context, **kwargs):
+        kwargs["enforce_article_contract"] = False
+        return original_run(self, context, **kwargs)
+
+    monkeypatch.setattr(PlannerAgent, "run", run_without_article_contract)
+    monkeypatch.setattr(
+        agent_core,
+        "_validate_required_primary_result",
+        lambda **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        pipeline_module,
+        "_enforce_advanced_plan_contract",
+        lambda *, plan, context: (plan, []),
+    )
     return ra.ResearchAgentPipeline(
         workdir=tmp_path / "work",
-        llm=_TrajectoryAuthorityPlanLLM(),
+        llm=_trajectory_authority_plan_llm(),
         runner_factory=runner_factory,
         enable_probe_step=False,
         enable_replanning=False,
@@ -614,7 +624,9 @@ def test_ehrflowbench_rejects_trajectory_symlink_before_resolution(
     ]
 
 
-def test_preexecution_trajectory_mutation_blocks_before_runner_call(ra, tmp_path):
+def test_preexecution_trajectory_mutation_blocks_before_runner_call(
+    ra, tmp_path, monkeypatch
+):
     _paths, run_kwargs = _typed_trajectory_run_kwargs(tmp_path)
     runner_calls: list[str] = []
 
@@ -622,11 +634,16 @@ def test_preexecution_trajectory_mutation_blocks_before_runner_call(ra, tmp_path
         network_policy = "none"
         authority_identity_sha256 = "1" * 64
 
+        def validate_runtime_capabilities(self):
+            return ("pandas",)
+
         def run(self, **_kwargs):
             runner_calls.append("run")
             raise AssertionError("mutated trajectory must be rejected before execution")
 
     def runner_factory(*, extra_env, **_kwargs):
+        if "TRAJECTORY_PARQUET" not in extra_env:
+            return NeverCalledRunner()
         staged_path = Path(extra_env["TRAJECTORY_PARQUET"])
         assert staged_path.name == "cohort_trajectory.parquet"
         assert staged_path != run_kwargs["trajectory_path"]
@@ -636,6 +653,7 @@ def test_preexecution_trajectory_mutation_blocks_before_runner_call(ra, tmp_path
     pipeline = _trajectory_test_pipeline(
         ra,
         tmp_path,
+        monkeypatch,
         runner_factory=runner_factory,
     )
 
@@ -647,6 +665,7 @@ def test_preexecution_trajectory_mutation_blocks_before_runner_call(ra, tmp_path
 def test_runner_trajectory_mutation_rejects_outputs_before_capsule_seal(
     ra,
     tmp_path,
+    monkeypatch,
 ):
     _paths, run_kwargs = _typed_trajectory_run_kwargs(tmp_path)
 
@@ -657,6 +676,9 @@ def test_runner_trajectory_mutation_rejects_outputs_before_capsule_seal(
         def __init__(self, *, workdir: Path, trajectory_path: Path) -> None:
             self.workdir = workdir
             self.trajectory_path = trajectory_path
+
+        def validate_runtime_capabilities(self):
+            return ("pandas",)
 
         def run(self, *, step_id, code, resolved_inputs_path=None):
             del resolved_inputs_path
@@ -706,6 +728,11 @@ def test_runner_trajectory_mutation_rejects_outputs_before_capsule_seal(
             )
 
     def runner_factory(*, workdir, extra_env, **_kwargs):
+        if "TRAJECTORY_PARQUET" not in extra_env:
+            return MutatingRunner(
+                workdir=Path(workdir),
+                trajectory_path=run_kwargs["trajectory_path"],
+            )
         return MutatingRunner(
             workdir=Path(workdir),
             trajectory_path=Path(extra_env["TRAJECTORY_PARQUET"]),
@@ -714,6 +741,7 @@ def test_runner_trajectory_mutation_rejects_outputs_before_capsule_seal(
     pipeline = _trajectory_test_pipeline(
         ra,
         tmp_path,
+        monkeypatch,
         runner_factory=runner_factory,
     )
     result = pipeline.run(**run_kwargs)

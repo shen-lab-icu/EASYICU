@@ -393,9 +393,8 @@ def test_pipeline_with_cost_tracking_records_per_role_calls(
     2. write ``cost_summary.md`` + ``cost_records.json`` artefacts to
        the run directory and register both in the evidence store.
 
-    The generic mock deliberately cannot repair its invalid analysis scripts.
-    Fail-stop therefore permits Coder/repair calls but suppresses downstream
-    Analyzer/Writer calls.
+    The built-in contextual mock now produces valid deterministic scripts, so
+    the clean path reaches Analyzer and Writer without spending a repair call.
     """
     pipeline = ra.ResearchAgentPipeline(
         workdir=str(tmp_path),
@@ -432,9 +431,9 @@ def test_pipeline_with_cost_tracking_records_per_role_calls(
 
     roles = {r["role"] for r in records if r.get("role")}
     assert "coder" in roles
-    assert "repair" in roles
-    assert "analyzer" not in roles
-    assert "writer" not in roles
+    assert "repair" not in roles
+    assert "analyzer" in roles
+    assert "writer" in roles
 
     # Manifest must carry the same records.
     manifest = json.loads(Path(result.manifest_path).read_text(encoding="utf-8"))

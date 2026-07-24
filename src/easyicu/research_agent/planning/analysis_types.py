@@ -1028,7 +1028,6 @@ def infer_analysis_type(
         return _REGISTRY["score_policy_sensitivity"]
     if (
         _has_any("data_quality_audit")
-        and not (primary_predictor and target_outcome)
         and not cohort_sensitivity_framed
         and not any(
         _has_any(key)

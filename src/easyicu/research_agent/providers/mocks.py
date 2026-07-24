@@ -99,63 +99,11 @@ class MockLLMClient:
         # user-message history so the deterministic mock keeps serving the
         # same agent role on retry. Use the same combined text for generators
         # that need step details from the original prompt.
-        request_text = "\n\n".join(user_messages)
-        ctx = self.context
-        if ctx is None:
-            response = _mock_generic_response(last_user)
-        else:
-            # Match on unique anchor phrases each agent injects, in order of
-            # specificity. Order matters: the coder prompt may include step
-            # intents that mention the word 'plan' (e.g. 'cross-database
-            # replication plan'), so plan matching must come last.
-            upper = request_text.upper()
-            if (
-                "WRITE THE PYTHON CODE FOR STEP" in upper
-                or "WRITE THE PYTHON CODE" in upper
-                or "REPAIR THE PYTHON CODE FOR STEP" in upper
-                or "REPAIR THE PYTHON CODE" in upper
-            ):
-                response = _mock_code_for_step(ctx, request_text)
-            elif (
-                "INTERPRET THE RESULTS OF STEP" in upper
-                or "INTERPRET THE RESULTS" in upper
-            ):
-                response = _mock_interpretation(ctx, request_text)
-            elif "WRITE ONLY THE **" in upper and "CITATION RULE" in upper:
-                language = (
-                    "zh"
-                    if ("OUTPUT LANGUAGE: ZH" in upper or "SIMPLIFIED CHINESE" in upper)
-                    else "en"
-                )
-                response = _mock_writer_section(ctx, request_text, language=language)
-            elif (
-                "WRITE A MANUSCRIPT SCAFFOLD" in upper
-                or "MANUSCRIPT SCAFFOLD" in upper
-                or "WRITE METHODS" in upper
-            ):
-                language = (
-                    "zh"
-                    if ("OUTPUT LANGUAGE: ZH" in upper or "SIMPLIFIED CHINESE" in upper)
-                    else "en"
-                )
-                response = _mock_manuscript_scaffold(ctx, language=language)
-            elif (
-                "REVISE THE ICU-AWARE RESEARCH PLAN" in upper
-                or "REVISE THE RESEARCH PLAN" in upper
-                or "COMPLETED STEP RECORDS" in upper
-                and "CURRENT PLAN" in upper
-            ):
-                response = _mock_replan_json(ctx, request_text)
-            elif (
-                "ICU-AWARE RESEARCH PLAN" in upper
-                or "RESEARCH PLAN AS JSON" in upper
-                or "ANALYSISPLAN SCHEMA" in upper
-            ):
-                response = _mock_plan_json(ctx)
-            elif "LITERATURE" in upper and ("REVIEW" in upper or "CITATION" in upper):
-                response = _mock_literature(ctx)
-            else:
-                response = _mock_generic_response(last_user)
+        response = _contextual_mock_response(
+            context=self.context,
+            user_messages=user_messages,
+            last_user=last_user,
+        )
 
         # Deterministic synthetic usage so cost-tracking tests don't have
         # to rely on the chars/4 fallback. We round to the same chars/4
@@ -278,11 +226,14 @@ class PatternScriptedMockLLMClient:
         rules: Sequence[tuple[str, Sequence[str | BaseException]]],
         *,
         default: str | BaseException = "{}",
+        contextual_default: bool = False,
     ) -> None:
         from .factory import register_offline_test_client
 
         self._rules = [(str(marker), list(responses)) for marker, responses in rules]
         self._default = default
+        self._contextual_default = bool(contextual_default)
+        self.context: Optional[ResearchContext] = None
         self.calls: list[tuple[list[LLMMessage], dict[str, Any]]] = []
         register_offline_test_client(self)
 
@@ -304,9 +255,82 @@ class PatternScriptedMockLLMClient:
                     f"pattern mock response sequence exhausted for {marker!r}"
                 )
             response = responses.pop(0)
+        elif self._contextual_default:
+            user_messages = [
+                message.content for message in copied if message.role == "user"
+            ]
+            response = _contextual_mock_response(
+                context=self.context,
+                user_messages=user_messages,
+                last_user=user_messages[-1] if user_messages else "",
+            )
         if isinstance(response, BaseException):
             raise response
         return str(response)
+
+
+def _contextual_mock_response(
+    *,
+    context: Optional[ResearchContext],
+    user_messages: Sequence[str],
+    last_user: str,
+) -> str:
+    """Return the built-in contextual mock response without a callback seam."""
+
+    if context is None:
+        return _mock_generic_response(last_user)
+
+    request_text = "\n\n".join(user_messages)
+    # Match on unique anchor phrases each agent injects, in order of
+    # specificity. Order matters: the coder prompt may include step intents
+    # that mention the word "plan", so plan matching must come last.
+    upper = request_text.upper()
+    if (
+        "WRITE THE PYTHON CODE FOR STEP" in upper
+        or "WRITE THE PYTHON CODE" in upper
+        or "REPAIR THE PYTHON CODE FOR STEP" in upper
+        or "REPAIR THE PYTHON CODE" in upper
+    ):
+        return _mock_code_for_step(context, request_text)
+    if (
+        "INTERPRET THE RESULTS OF STEP" in upper
+        or "INTERPRET THE RESULTS" in upper
+    ):
+        return _mock_interpretation(context, request_text)
+    if "WRITE ONLY THE **" in upper and "CITATION RULE" in upper:
+        language = (
+            "zh"
+            if ("OUTPUT LANGUAGE: ZH" in upper or "SIMPLIFIED CHINESE" in upper)
+            else "en"
+        )
+        return _mock_writer_section(context, request_text, language=language)
+    if (
+        "WRITE A MANUSCRIPT SCAFFOLD" in upper
+        or "MANUSCRIPT SCAFFOLD" in upper
+        or "WRITE METHODS" in upper
+    ):
+        language = (
+            "zh"
+            if ("OUTPUT LANGUAGE: ZH" in upper or "SIMPLIFIED CHINESE" in upper)
+            else "en"
+        )
+        return _mock_manuscript_scaffold(context, language=language)
+    if (
+        "REVISE THE ICU-AWARE RESEARCH PLAN" in upper
+        or "REVISE THE RESEARCH PLAN" in upper
+        or "COMPLETED STEP RECORDS" in upper
+        and "CURRENT PLAN" in upper
+    ):
+        return _mock_replan_json(context, request_text)
+    if (
+        "ICU-AWARE RESEARCH PLAN" in upper
+        or "RESEARCH PLAN AS JSON" in upper
+        or "ANALYSISPLAN SCHEMA" in upper
+    ):
+        return _mock_plan_json(context)
+    if "LITERATURE" in upper and ("REVIEW" in upper or "CITATION" in upper):
+        return _mock_literature(context)
+    return _mock_generic_response(last_user)
 
 
 class ExternalCaptureMockLLMClient:

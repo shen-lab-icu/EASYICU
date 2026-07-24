@@ -809,6 +809,7 @@ def test_discovery_data_foundation_honours_openrouter_provider(monkeypatch):
     monkeypatch.setenv("OPENROUTER_API_KEY", "router-key")
     monkeypatch.setenv("OPENROUTER_BASE_URL", "https://router.example/v1")
     monkeypatch.setenv("OPENAI_BASE_URL", "https://wrong-openai.example/v1")
+    monkeypatch.setenv("EASYICU_ALLOW_EXTERNAL_LLM", "1")
     monkeypatch.setattr(launcher, "OpenAIClient", FakeClient)
 
     launcher._build_data_foundation_llm(

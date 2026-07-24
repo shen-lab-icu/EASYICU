@@ -429,25 +429,9 @@ def test_pipeline_does_not_surface_unreviewed_experience_to_planner_prompt(
         )
     )
 
-    class _PlannerSpy(ra.MockLLMClient):
-        def __init__(self) -> None:
-            super().__init__()
-            self.planner_prompts = []
+    from easyicu.research_agent.providers.mocks import PatternScriptedMockLLMClient
 
-        def complete(self, messages, *, max_tokens=2048, temperature=0.2):
-            prompt = next(
-                (m.content for m in reversed(messages) if m.role == "user"),
-                "",
-            )
-            if "ICU-AWARE RESEARCH PLAN" in prompt:
-                self.planner_prompts.append(prompt)
-            return super().complete(
-                messages,
-                max_tokens=max_tokens,
-                temperature=temperature,
-            )
-
-    planner = _PlannerSpy()
+    planner = PatternScriptedMockLLMClient([], contextual_default=True)
     router = ra.LLMRouter(default=ra.MockLLMClient(), planner=planner)
     pipeline = ra.ResearchAgentPipeline(
         workdir=tmp_path / "runs",
@@ -467,8 +451,15 @@ def test_pipeline_does_not_surface_unreviewed_experience_to_planner_prompt(
         stop_after_analysis=True,
     )
 
-    assert planner.planner_prompts, "planner prompt was not captured"
-    prompt = "\n".join(planner.planner_prompts)
+    planner_prompts = [
+        message.content
+        for messages, _kwargs in planner.calls
+        for message in messages
+        if message.role == "user"
+        and "ICU-AWARE RESEARCH PLAN" in message.content
+    ]
+    assert planner_prompts, "planner prompt was not captured"
+    prompt = "\n".join(planner_prompts)
     assert "Experience hints for planner:" not in prompt
     assert "Prefer load_sepsis3 over manual ICD regex." not in prompt
 
