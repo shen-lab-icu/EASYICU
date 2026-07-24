@@ -509,10 +509,23 @@ def _verified_run_input_capsule_digest(
         raise RunInputIdentityError("run input capsule evidence failed verification")
     if not working_path.is_file() or working_path.is_symlink():
         raise RunInputIdentityError("run input capsule working copy is missing")
-    digest = sha256_of_file(working_path)
+    # Read each copy exactly once and derive the digest, the record check, and
+    # the sealed byte-equality check from those same in-memory buffers. The
+    # earlier digest-then-reread form returned a digest computed on read #1
+    # while comparing read #2 against the sealed copy, so a swap between the two
+    # reads could return a digest that never matched the compared bytes; an
+    # OSError from the reread also escaped the RunInputIdentityError boundary.
+    try:
+        working_bytes = working_path.read_bytes()
+        sealed_bytes = sealed_path.read_bytes()
+    except OSError as exc:
+        raise RunInputIdentityError(
+            "run input capsule copies could not be read"
+        ) from exc
+    digest = hashlib.sha256(working_bytes).hexdigest()
     if digest != str(record.sha256):
         raise RunInputIdentityError("run input capsule working digest changed")
-    if working_path.read_bytes() != sealed_path.read_bytes():
+    if working_bytes != sealed_bytes:
         raise RunInputIdentityError(
             "run input capsule working copy differs from sealed evidence"
         )
