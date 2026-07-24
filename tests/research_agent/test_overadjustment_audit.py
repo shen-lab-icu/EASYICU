@@ -181,6 +181,44 @@ def test_flags_overadjustment_for_exposure_constituent(tmp_path: Path):
     assert "sofa_max" in f.message
 
 
+def test_overadjustment_detector_does_not_match_incidental_substrings():
+    from easyicu.research_agent.icu_rules import detect_overadjustment
+
+    covariates = [
+        "acute_pancreatitis",
+        "history_of_pancreatitis",
+        "increase_from_baseline",
+        "mapped_diagnosis",
+        "age",
+    ]
+
+    assert detect_overadjustment("sofa", covariates) == []
+    assert detect_overadjustment("kdigo", covariates) == []
+    assert detect_overadjustment("sepsis3", covariates) == []
+
+
+def test_overadjustment_detector_keeps_explicit_tokens_aliases_and_suffixes():
+    from easyicu.research_agent.icu_rules import detect_overadjustment
+
+    offenders = detect_overadjustment(
+        "sepsis3",
+        [
+            "crea_first",
+            "baseline_creatinine",
+            "mean_arterial_pressure",
+            "sofa_renal",
+            "age",
+        ],
+    )
+
+    assert offenders == [
+        "crea_first",
+        "baseline_creatinine",
+        "mean_arterial_pressure",
+        "sofa_renal",
+    ]
+
+
 def test_exposure_row_itself_is_not_flagged(tmp_path: Path):
     # The exposure appears in its own coefficient table; that is correct, not
     # overadjustment, and must not be flagged.
@@ -440,7 +478,7 @@ def test_genuine_constituent_still_fires_after_negation_guard(tmp_path: Path):
 
 
 def test_replanner_injects_methodological_principles(monkeypatch):
-    from easyicu.research_agent import agents as A
+    from easyicu.research_agent.agents import core as A
     from easyicu.research_agent.providers import structured_retry as SR
     from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep
 
@@ -460,7 +498,7 @@ def test_replanner_injects_methodological_principles(monkeypatch):
 
     # Sidestep the heavy ResearchContext rendering; we only assert the system
     # message the replanner builds, not the user prompt.
-    monkeypatch.setattr(A, "_format_context", lambda ctx: "CTX")
+    monkeypatch.setattr(A, "_format_context", lambda ctx, **_kwargs: "CTX")
     monkeypatch.setattr(SR, "call_llm_with_structured_retry", _fake_retry)
 
     out = A.ReplannerAgent(llm=object()).run(
