@@ -502,6 +502,42 @@ def test_quarantined_concept_draft_is_isolated_and_digest_checked(
     assert not code_path.parent.exists()
 
 
+def test_provider_budget_failure_is_not_resumed_as_code_defect(tmp_path: Path) -> None:
+    step_id = "02_model"
+    checkpoint = store_quarantined_concept_draft(
+        run_dir=tmp_path,
+        step_id=step_id,
+        code="import os\nprint(os.environ['COHORT_PARQUET'])\n",
+        findings=[
+            {
+                "validator": "provider_call_budget",
+                "severity": "error",
+                "message": "provider allowance exhausted before concept approval",
+                "evidence_ids": [],
+                "detail": {"step_id": step_id},
+            }
+        ],
+    )
+    controller = ResumeController(
+        plan=_plan(),
+        run_dir=tmp_path,
+        resume_state={
+            "step_attempt_history": [
+                {
+                    "step_id": step_id,
+                    "status": "blocked_by_concept_audit",
+                    "quarantined_requires_repair": True,
+                    "quarantined_draft_sha256": checkpoint.sha256,
+                    "quarantined_draft_relative_path": checkpoint.relative_path,
+                }
+            ]
+        },
+        resume_from_step_id=step_id,
+    )
+
+    assert controller.quarantined_concept_draft_for_step(step_id) is None
+
+
 def test_stale_quarantine_file_is_not_reused_after_successful_repair(
     tmp_path: Path,
 ) -> None:

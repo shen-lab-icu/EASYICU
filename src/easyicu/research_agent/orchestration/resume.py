@@ -53,6 +53,12 @@ _AGENT_CODE_GENERATION_MODES = frozenset(
     {*_ROOT_AGENT_CODE_GENERATION_MODES, "resumed_code_reuse"}
 )
 _SHA256_HEX_LENGTH = 64
+_NON_CODE_QUARANTINE_VALIDATORS = frozenset(
+    {
+        "provider_call_budget",
+        "provider_call_budget_receipt",
+    }
+)
 
 
 def _agent_origin_generation_mode(payload: Dict[str, Any]) -> Optional[str]:
@@ -666,6 +672,15 @@ class ResumeController:
             step_id=step_id,
         )
         if draft is None:
+            return None
+        if all(
+            str(finding.get("validator") or "") in _NON_CODE_QUARANTINE_VALIDATORS
+            for finding in draft.findings
+        ):
+            # Provider allowance/receipt failures are control-plane state, not
+            # defects in the candidate code. Keeping them as mandatory Coder
+            # constraints makes an exhausted budget demand an impossible code
+            # repair and masks evidence-bound deterministic normalization.
             return None
         if (
             str(latest.get("quarantined_draft_sha256") or "") != draft.sha256
