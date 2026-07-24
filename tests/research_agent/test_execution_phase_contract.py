@@ -1295,6 +1295,18 @@ def test_final_gate_evaluator_preserves_group_order_and_attempt_binding(
         "_demote_result_figure_shape_for_family_renderer",
         preserve_demotions("figure_shape_demotion"),
     )
+    original_compile = pipeline_execute.compile_sealed_step_result_shadow
+    compiler_calls = []
+
+    def compile_once(**kwargs):
+        compiler_calls.append(kwargs)
+        return original_compile(**kwargs)
+
+    monkeypatch.setattr(
+        pipeline_execute,
+        "compile_sealed_step_result_shadow",
+        compile_once,
+    )
 
     validator_names = {
         "stat_validator": "statistical",
@@ -1368,6 +1380,12 @@ def test_final_gate_evaluator_preserves_group_order_and_attempt_binding(
         "model_leakage",
         "figure_contract",
     ]
+    assert groups.result_envelope_snapshot.ready is True
+    assert groups.result_envelope_snapshot.envelope is not None
+    assert groups.result_envelope_snapshot.envelope.step_id == "07_review"
+    assert groups.result_envelope_snapshot.envelope.paper_authorized is False
+    assert len(compiler_calls) == 1
+    assert compiler_calls[0]["output_dir"] == tmp_path / "outputs"
     assert [finding.validator for finding in groups.all_findings()] == [
         "statistical",
         "clinical",
