@@ -79,9 +79,9 @@ def _canonical_table_value(value: Any) -> Any:
         if not math.isfinite(numeric):
             return f"number:{numeric}"
         # LAPACK implementations may differ in the final floating-point bits.
-        # Ten significant digits retain scientific drift while excluding that
-        # platform noise from this cross-version characterization oracle.
-        return f"number:{numeric:.10g}"
+        # Six significant digits exceed manuscript reporting precision while
+        # excluding BLAS/scikit-learn tail drift from this cross-version oracle.
+        return f"number:{numeric:.6g}"
     return str(value)
 
 
