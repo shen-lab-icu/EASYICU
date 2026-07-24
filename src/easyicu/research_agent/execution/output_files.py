@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import csv
+import hashlib
 import json
 import math
+import os
 import shutil
+import tempfile
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, Mapping
 
 
 def _has_figure_exports(out_dir: Path) -> bool:
@@ -40,6 +43,103 @@ def _finite_number(value: Any) -> float | None:
         return None
     number = float(value)
     return number if math.isfinite(number) else None
+
+
+def _contains_finite_number(value: Any) -> bool:
+    if isinstance(value, bool):
+        return False
+    if isinstance(value, (int, float)):
+        return math.isfinite(float(value))
+    if isinstance(value, Mapping):
+        return any(_contains_finite_number(item) for item in value.values())
+    if isinstance(value, (list, tuple)):
+        return any(_contains_finite_number(item) for item in value)
+    return False
+
+
+def normalize_typed_statistic_sidecars(
+    step_summary: Any,
+    out_dir: Path,
+) -> list[Dict[str, str]]:
+    """Canonicalize exact typed-statistic JSON outputs once at the host edge.
+
+    The generated analysis and all numeric values remain unchanged.  A missing
+    in-payload product identity is added only when ``output_files`` binds one
+    exact ``statistic:<name>`` to one safe local JSON file containing finite
+    numeric data. Conflicting identities, symlinks, dynamic paths, invalid JSON,
+    and nonnumeric payloads remain untouched so the downstream typed gate fails
+    closed.
+    """
+
+    if not isinstance(step_summary, Mapping):
+        return []
+    output_files = step_summary.get("output_files")
+    if not isinstance(output_files, Mapping):
+        return []
+    receipts: list[Dict[str, str]] = []
+    for raw_product, raw_path in sorted(
+        output_files.items(), key=lambda item: str(item[0])
+    ):
+        product = str(raw_product or "").strip()
+        relative = str(raw_path or "").strip()
+        if (
+            not product.startswith("statistic:")
+            or product.count(":") != 1
+            or not product.split(":", 1)[1]
+            or not relative
+            or Path(relative).name != relative
+            or Path(relative).suffix.lower() != ".json"
+        ):
+            continue
+        statistic_name = product.split(":", 1)[1]
+        source = out_dir / relative
+        if not source.is_file() or source.is_symlink():
+            continue
+        try:
+            before_bytes = source.read_bytes()
+            payload = json.loads(before_bytes.decode("utf-8"))
+        except (OSError, UnicodeError, json.JSONDecodeError):
+            continue
+        if not isinstance(payload, dict) or not _contains_finite_number(payload):
+            continue
+        declared_name = payload.get("name") or payload.get("statistic")
+        if declared_name is not None:
+            continue
+        normalized = {"name": statistic_name, **payload}
+        after_text = json.dumps(
+            normalized,
+            indent=2,
+            ensure_ascii=False,
+            allow_nan=False,
+        )
+        after_bytes = (after_text + "\n").encode("utf-8")
+        temporary_path: str | None = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                mode="wb",
+                dir=out_dir,
+                prefix=f".{source.name}.",
+                suffix=".normalize",
+                delete=False,
+            ) as handle:
+                temporary_path = handle.name
+                handle.write(after_bytes)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temporary_path, source)
+            temporary_path = None
+        finally:
+            if temporary_path is not None:
+                Path(temporary_path).unlink(missing_ok=True)
+        receipts.append(
+            {
+                "product": product,
+                "path": relative,
+                "before_sha256": hashlib.sha256(before_bytes).hexdigest(),
+                "after_sha256": hashlib.sha256(after_bytes).hexdigest(),
+            }
+        )
+    return receipts
 
 
 def _bind_registered_primary_or_statistic(
@@ -146,4 +246,9 @@ def bind_primary_output(step_summary: Any, out_dir: Path) -> Dict[str, Any]:
     return payload
 
 
-__all__ = ["_clear_output_dir", "_has_figure_exports", "bind_primary_output"]
+__all__ = [
+    "_clear_output_dir",
+    "_has_figure_exports",
+    "bind_primary_output",
+    "normalize_typed_statistic_sidecars",
+]

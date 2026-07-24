@@ -98,7 +98,6 @@ from .import_repair import (
 )
 from .input_scope import patch_raw_input_physical_superset_guard
 from .reasons import RepairReason
-from .statistic_sidecar import patch_typed_statistic_sidecar_names
 from .typed_input import (
     patch_all_rows_outcome_coordinate_filter,
     patch_resolved_input_cohort_env_shadow,
@@ -4126,14 +4125,6 @@ def _deterministic_summary_repair(
 ) -> Optional[tuple[str, str]]:
     if not isinstance(step_summary, dict) or not step_summary:
         return None
-    statistic_sidecar_repair = "typed_statistic_sidecar_name_v1"
-    if previous_repair != statistic_sidecar_repair:
-        repaired = patch_typed_statistic_sidecar_names(
-            code,
-            step_summary=step_summary,
-        )
-        if repaired is not None and repaired != code:
-            return statistic_sidecar_repair, repaired
     host_helper_import_repair = "relocate_known_host_helper_import_v1"
     if previous_repair != host_helper_import_repair:
         repaired = patch_known_host_helper_import(code, str(step_summary))

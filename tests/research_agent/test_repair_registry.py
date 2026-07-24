@@ -69,8 +69,8 @@ def test_render_only_effect_echo_suppression_is_structural_and_automatic() -> No
     assert automatic_repair_allowed(repair_id)
 
 
-def test_typed_statistic_sidecar_name_is_structural_and_automatic() -> None:
-    repair_id = "typed_statistic_sidecar_name_v1"
+def test_typed_output_normalization_is_structural_and_automatic() -> None:
+    repair_id = "typed_output_normalization_v1"
     metadata = repair_metadata_for(repair_id)
     assert metadata.repair_class is RepairClass.STRUCTURAL
     assert metadata.introduces_numbers is False

@@ -568,41 +568,6 @@ class ResumeController:
             return prior_code, dict(payload)
         return None
 
-    def prior_step_summary_for_step(
-        self,
-        step_id: str,
-    ) -> Optional[Dict[str, Any]]:
-        """Return the latest verified summary for an explicitly resumed step.
-
-        A denied pre-execution repair may clear the mutable output directory.
-        The selected evidence authority remains the only valid recovery source;
-        mutable manifests and unverified output copies are intentionally ignored.
-        """
-
-        if self.resume_from_step_id != step_id:
-            return None
-        snapshot = load_current_evidence_snapshot(self.run_dir)
-        for payload in reversed(list(snapshot.records)):
-            if (
-                not isinstance(payload, dict)
-                or payload.get("kind") != "statistic"
-                or payload.get("produced_by_step") != step_id
-            ):
-                continue
-            relative_path = str(payload.get("relative_path") or "")
-            if not Path(relative_path).name.endswith("__step_summary.json"):
-                continue
-            source_path = verified_run_evidence_path(self.run_dir, payload)
-            if source_path is None:
-                continue
-            try:
-                summary = json.loads(source_path.read_text(encoding="utf-8"))
-            except (OSError, UnicodeError, json.JSONDecodeError):
-                continue
-            if isinstance(summary, dict) and summary:
-                return dict(summary)
-        return None
-
     def prior_negative_critic_report_for_step(
         self,
         step_id: str,

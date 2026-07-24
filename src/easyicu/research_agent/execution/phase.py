@@ -255,7 +255,12 @@ from .publication_figure import (
     _sealed_typed_figure_products,
 )
 from .host_services import ExecutePhaseHost
-from .output_files import _clear_output_dir, _has_figure_exports, bind_primary_output
+from .output_files import (
+    _clear_output_dir,
+    _has_figure_exports,
+    bind_primary_output,
+    normalize_typed_statistic_sidecars,
+)
 from ..gates.visual import (
     VisualGateResult,
     VisualRepairAction,
@@ -6088,9 +6093,6 @@ def run_execute_phase(
                 code=prior_code,
                 step_dir=run_dir / "steps" / step.step_id,
                 analysis_family=local_runtime_state.analysis_family,
-                prior_step_summary=resume_controller.prior_step_summary_for_step(
-                    step.step_id
-                ),
             )
             if candidate is None:
                 return None
@@ -8633,6 +8635,24 @@ def run_execute_phase(
                 # canonical scalars as the final gate.  Otherwise a valid,
                 # Planner-declared statistic sidecar is invisible here and
                 # triggers pointless LLM repairs before evidence registration.
+                normalized_statistic_outputs = normalize_typed_statistic_sidecars(
+                    visual_step_summary,
+                    run_result.out_dir,
+                )
+                if normalized_statistic_outputs:
+                    _record_repair(
+                        repair_id="typed_output_normalization_v1",
+                        step_id=step.step_id,
+                        trigger={
+                            "source": "host_output_normalizer",
+                            "normalized_outputs": normalized_statistic_outputs,
+                        },
+                        transformation=(
+                            "Added the exact Planner-declared statistic product "
+                            "identity to host-bound JSON sidecars without changing "
+                            "their numeric values."
+                        ),
+                    )
                 visual_step_summary = bind_primary_output(
                     visual_step_summary,
                     run_result.out_dir,
