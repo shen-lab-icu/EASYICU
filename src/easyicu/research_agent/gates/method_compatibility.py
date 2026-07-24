@@ -55,7 +55,6 @@ from ..trajectory.contract import (
 )
 from ..trajectory.plan_contract import trajectory_step_roles
 
-
 # ---------------------------------------------------------------------------
 # Matrix
 # ---------------------------------------------------------------------------
@@ -171,29 +170,31 @@ FORBIDDEN_METHOD_BY_KIND: Dict[str, Dict[str, object]] = {
 # should map to the ``right_skewed_continuous`` kind irrespective of
 # their dtype. This list intentionally lives next to the matrix so a
 # reviewer can audit it in one place.
-_RIGHT_SKEWED_LAB_NAMES = frozenset({
-    "lact",
-    "lactate",
-    "lactate_max",
-    "lactate_peak",
-    "bili",
-    "bilirubin",
-    "tbili",
-    "total_bilirubin",
-    "crea_peak",
-    "creatinine_peak",
-    "alt",
-    "ast",
-    "ggt",
-    "troponin",
-    "trop",
-    "ck",
-    "creatine_kinase",
-    "ddimer",
-    "d_dimer",
-    "ferritin",
-    "ldh",
-})
+_RIGHT_SKEWED_LAB_NAMES = frozenset(
+    {
+        "lact",
+        "lactate",
+        "lactate_max",
+        "lactate_peak",
+        "bili",
+        "bilirubin",
+        "tbili",
+        "total_bilirubin",
+        "crea_peak",
+        "creatinine_peak",
+        "alt",
+        "ast",
+        "ggt",
+        "troponin",
+        "trop",
+        "ck",
+        "creatine_kinase",
+        "ddimer",
+        "d_dimer",
+        "ferritin",
+        "ldh",
+    }
+)
 
 
 # ---------------------------------------------------------------------------
@@ -255,7 +256,11 @@ def _variable_kind(var: ConceptDescriptor) -> Optional[str]:
             return "binary"
         if name_l in {"vaso", "mech_vent", "rrt", "vent", "pressor"}:
             return "binary"
-    if AggregationRule.SUM in (var.allowed_aggregations or []):
+    if (
+        var.role == VariableRole.OUTCOME
+        and "int" in dtype
+        and AggregationRule.SUM in (var.allowed_aggregations or [])
+    ):
         return "count"
     if var.role == VariableRole.LAB and var.name.lower() in _RIGHT_SKEWED_LAB_NAMES:
         return "right_skewed_continuous"
@@ -269,23 +274,37 @@ def _variable_kind(var: ConceptDescriptor) -> Optional[str]:
 
 def variable_kind_constraints(
     variables: Sequence[ConceptDescriptor],
+    *,
+    outcome_names: Sequence[str] = (),
 ) -> List[Dict[str, object]]:
     """Return a list of per-variable constraint dicts (machine-readable)."""
+    declared_outcomes = {
+        str(name or "").strip().casefold()
+        for name in outcome_names
+        if str(name).strip()
+    }
     out: List[Dict[str, object]] = []
     for var in variables:
         kind = _variable_kind(var)
         if not kind:
             continue
+        if kind in {"binary", "count"} and not (
+            var.role == VariableRole.OUTCOME
+            or var.name.strip().casefold() in declared_outcomes
+        ):
+            continue
         rule = FORBIDDEN_METHOD_BY_KIND.get(kind)
         if not rule:
             continue
-        out.append({
-            "variable": var.name,
-            "kind": kind,
-            "forbidden_patterns": rule["forbidden_patterns"],
-            "preferred": rule["preferred"],
-            "rationale": rule["rationale"],
-        })
+        out.append(
+            {
+                "variable": var.name,
+                "kind": kind,
+                "forbidden_patterns": rule["forbidden_patterns"],
+                "preferred": rule["preferred"],
+                "rationale": rule["rationale"],
+            }
+        )
     return out
 
 
@@ -298,7 +317,13 @@ def render_variable_constraints(context: ResearchContext) -> str:
     ordinal / count / binary / right-skewed-continuous variables (e.g.
     purely continuous-vital studies).
     """
-    rules = variable_kind_constraints(context.variables)
+    rules = variable_kind_constraints(
+        context.variables,
+        outcome_names=(
+            context.target_outcome,
+            *(context.cohort.outcome_columns or ()),
+        ),
+    )
     if not rules:
         return ""
     lines = [
@@ -399,7 +424,193 @@ def _variable_referenced_in_code(var_name: str, code_lower: str) -> bool:
     (boundary-separated). We allow a leading/trailing alphanumeric-underscore
     boundary so ``df["gcs"]`` and ``gcs_max`` both register the variable.
     """
-    return re.search(rf"(?<![A-Za-z0-9_]){re.escape(var_name.lower())}(?![A-Za-z0-9_])", code_lower) is not None
+    return (
+        re.search(
+            rf"(?<![A-Za-z0-9_]){re.escape(var_name.lower())}(?![A-Za-z0-9_])",
+            code_lower,
+        )
+        is not None
+    )
+
+
+def _callable_path(
+    node: ast.AST,
+    estimator_aliases: Dict[str, str],
+) -> str:
+    """Return a normalized callable path, resolving assigned estimators."""
+
+    if isinstance(node, ast.Name):
+        return estimator_aliases.get(node.id, node.id).casefold()
+    if isinstance(node, ast.Attribute):
+        parent = _callable_path(node.value, estimator_aliases)
+        return f"{parent}.{node.attr.casefold()}" if parent else node.attr.casefold()
+    if isinstance(node, ast.Call):
+        return _callable_path(node.func, estimator_aliases)
+    return ""
+
+
+def _normalized_pattern(pattern: object) -> str:
+    return "".join(
+        character for character in str(pattern).casefold() if character.isalnum()
+    )
+
+
+def _call_matches_forbidden_pattern(
+    call: ast.Call,
+    pattern: object,
+    estimator_aliases: Dict[str, str],
+) -> bool:
+    path = _normalized_pattern(_callable_path(call.func, estimator_aliases))
+    token = _normalized_pattern(pattern)
+    if not path or not token:
+        return False
+    if token.startswith("reportmean"):
+        return "mean" in path
+    if token == "kmeansonbinary":
+        return "kmeans" in path
+    return token in path or path in token
+
+
+def _node_variable_sources(
+    node: ast.AST,
+    *,
+    variable_names: Dict[str, str],
+    assignment_sources: Dict[str, set[str]],
+) -> set[str]:
+    """Resolve cohort variables actually flowing into one AST expression."""
+
+    sources: set[str] = set()
+    for item in ast.walk(node):
+        if isinstance(item, ast.Name):
+            folded = item.id.casefold()
+            if folded in variable_names:
+                sources.add(folded)
+            sources.update(assignment_sources.get(item.id, ()))
+        elif isinstance(item, ast.Constant) and isinstance(item.value, str):
+            text = item.value.casefold()
+            for folded in variable_names:
+                if re.search(
+                    rf"(?<![A-Za-z0-9_]){re.escape(folded)}(?![A-Za-z0-9_])",
+                    text,
+                ):
+                    sources.add(folded)
+    return sources
+
+
+def _ast_forbidden_pattern_hits(
+    code: str,
+    *,
+    variables: Sequence[ConceptDescriptor],
+) -> Dict[str, set[str]]:
+    """Bind forbidden methods to variables that reach the method call.
+
+    Comments, imports, docstrings, and unrelated calls cannot create a hit.
+    Syntax-invalid scripts are left to the syntax gate rather than converted
+    into a scientifically misleading method-compatibility error.
+    """
+
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return {}
+
+    variable_names = {variable.name.casefold(): variable.name for variable in variables}
+    assignment_sources: Dict[str, set[str]] = {}
+    estimator_aliases: Dict[str, str] = {}
+    assignments: list[tuple[list[str], ast.AST]] = []
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Assign, ast.AnnAssign, ast.NamedExpr)):
+            if isinstance(node, ast.Assign):
+                targets = node.targets
+                value = node.value
+            else:
+                targets = [node.target]
+                value = node.value
+            names = [target.id for target in targets if isinstance(target, ast.Name)]
+            if not names or value is None:
+                continue
+            assignments.append((names, value))
+            if isinstance(value, ast.Call):
+                constructor = _callable_path(value.func, estimator_aliases)
+                for name in names:
+                    estimator_aliases[name] = constructor
+
+    for _ in range(len(assignments) + 1):
+        changed = False
+        for names, value in assignments:
+            sources = _node_variable_sources(
+                value,
+                variable_names=variable_names,
+                assignment_sources=assignment_sources,
+            )
+            for name in names:
+                prior = assignment_sources.setdefault(name, set())
+                if not sources.issubset(prior):
+                    prior.update(sources)
+                    changed = True
+        if not changed:
+            break
+
+    hits: Dict[str, set[str]] = {}
+    variable_by_name = {variable.name.casefold(): variable for variable in variables}
+    for call in (node for node in ast.walk(tree) if isinstance(node, ast.Call)):
+        sources = _node_variable_sources(
+            call,
+            variable_names=variable_names,
+            assignment_sources=assignment_sources,
+        )
+        for source in sources:
+            variable = variable_by_name[source]
+            kind = _variable_kind(variable)
+            rule = FORBIDDEN_METHOD_BY_KIND.get(kind or "")
+            if not rule:
+                continue
+            matched = {
+                str(pattern)
+                for pattern in rule["forbidden_patterns"]  # type: ignore[union-attr]
+                if _call_matches_forbidden_pattern(
+                    call,
+                    pattern,
+                    estimator_aliases,
+                )
+            }
+            if matched:
+                hits.setdefault(source, set()).update(matched)
+    return hits
+
+
+def _ast_call_pattern_hits(
+    code: str,
+    patterns: Sequence[object],
+) -> set[str]:
+    """Return forbidden callable patterns present in executable AST nodes."""
+
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return set()
+    estimator_aliases: Dict[str, str] = {}
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.Assign, ast.AnnAssign, ast.NamedExpr)):
+            continue
+        if isinstance(node, ast.Assign):
+            targets = node.targets
+            value = node.value
+        else:
+            targets = [node.target]
+            value = node.value
+        if not isinstance(value, ast.Call):
+            continue
+        constructor = _callable_path(value.func, estimator_aliases)
+        for target in targets:
+            if isinstance(target, ast.Name):
+                estimator_aliases[target.id] = constructor
+    return {
+        str(pattern)
+        for call in (node for node in ast.walk(tree) if isinstance(node, ast.Call))
+        for pattern in patterns
+        if _call_matches_forbidden_pattern(call, pattern, estimator_aliases)
+    }
 
 
 def detect_forbidden_pattern_usage(
@@ -418,12 +629,10 @@ def detect_forbidden_pattern_usage(
     coder-repair prompt; callers can also use the dict-level fields
     to log structured audit entries.
 
-    The check uses substring matching on the lowercased code. AST
-    parsing would be cleaner but would refuse to scan code that
-    fails to parse — and one of the main use cases is "the LLM
-    produced something close to valid but not quite". Substring
-    matching gives us a useful signal even when the code is slightly
-    malformed.
+    Method-family checks are bound to executable AST calls and the cohort
+    variables flowing into those calls. Comments, docstrings, imports, and
+    unrelated expressions cannot grant a blocking finding. Syntax-invalid code
+    remains the syntax gate's responsibility.
 
     The function is intentionally **non-blocking** — it returns
     findings, never mutates the code or raises. Pipeline glue is
@@ -434,6 +643,18 @@ def detect_forbidden_pattern_usage(
         return []
     code_lower = code.lower()
     violations: List[Dict[str, object]] = _helper_call_contract_violations(code)
+    structural_hits = _ast_forbidden_pattern_hits(
+        code,
+        variables=context.variables,
+    )
+    declared_outcomes = {
+        str(name or "").strip().casefold()
+        for name in (
+            context.target_outcome,
+            *(context.cohort.outcome_columns or ()),
+        )
+        if str(name or "").strip()
+    }
     selected_trajectory = {
         variable.name
         for variable in selected_trajectory_variables(
@@ -446,26 +667,37 @@ def detect_forbidden_pattern_usage(
         kind = _variable_kind(var)
         if not kind:
             continue
+        if kind in {"binary", "count"} and not (
+            var.role == VariableRole.OUTCOME
+            or var.name.strip().casefold() in declared_outcomes
+        ):
+            continue
         if (
             var.name not in selected_trajectory
-            and not _variable_referenced_in_code(var.name, code_lower)
+            and var.name.casefold() not in structural_hits
         ):
             continue
         rule = FORBIDDEN_METHOD_BY_KIND.get(kind)
         if not rule:
             continue
-        matched: List[str] = []
-        for pat in rule["forbidden_patterns"]:  # type: ignore[union-attr]
-            if pat.lower() in code_lower:
-                matched.append(pat)
+        matched = sorted(structural_hits.get(var.name.casefold(), ()))
+        if not matched and var.name in selected_trajectory:
+            matched = sorted(
+                _ast_call_pattern_hits(
+                    code,
+                    rule["forbidden_patterns"],  # type: ignore[arg-type]
+                )
+            )
         if matched:
-            violations.append({
-                "variable": var.name,
-                "kind": kind,
-                "matched_patterns": matched,
-                "preferred": rule["preferred"],
-                "rationale": rule["rationale"],
-            })
+            violations.append(
+                {
+                    "variable": var.name,
+                    "kind": kind,
+                    "matched_patterns": matched,
+                    "preferred": rule["preferred"],
+                    "rationale": rule["rationale"],
+                }
+            )
     if selected_trajectory and trajectory_zero_imputation_detected(
         code,
         trajectory_columns=selected_trajectory,
