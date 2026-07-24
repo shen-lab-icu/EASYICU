@@ -21,6 +21,9 @@ import pytest
 
 from easyicu.research_agent.authority.evidence_store import EvidenceStore
 from easyicu.research_agent.authority.registration import StepEvidenceCommit
+from easyicu.research_agent.authority.runtime_artifacts import (
+    load_run_artifact_authority,
+)
 from easyicu.research_agent.execution.envelope_sidecar import (
     SIDECAR_PRODUCER,
     SIDECAR_SCHEMA_VERSION,
@@ -358,6 +361,162 @@ def test_rolled_back_commit_leaves_no_current_authority(tmp_path: Path) -> None:
     assert store.get(record.evidence_id) is not None
 
 
+def _commit_attempt(
+    store: EvidenceStore,
+    tmp_path: Path,
+    *,
+    script_evidence_id: str,
+    attempt_id: str,
+    checkpoint_id: str,
+) -> tuple[PreparedStepResultEnvelopeSidecar, Any]:
+    """Prepare + publish + commit one successful attempt's sidecar."""
+
+    prepared = _prepared(
+        store,
+        tmp_path,
+        script_evidence_id=script_evidence_id,
+        attempt_id=attempt_id,
+        checkpoint_id=checkpoint_id,
+    )
+    record = publish_step_result_envelope_sidecar(prepared, evidence_store=store)
+    _commit_alias(store, evidence_id=record.evidence_id, alias=prepared.alias)
+    return prepared, record
+
+
+def test_second_successful_attempt_supersedes_first_as_current(
+    tmp_path: Path,
+) -> None:
+    """Identical content, new attempt: a new record and current alias moves."""
+
+    store = EvidenceStore(tmp_path / "run")
+    script_id = _script_evidence_id(store)
+    prepared1, record1 = _commit_attempt(
+        store,
+        tmp_path,
+        script_evidence_id=script_id,
+        attempt_id="attempt-1",
+        checkpoint_id="checkpoint-1",
+    )
+    prepared2, record2 = _commit_attempt(
+        store,
+        tmp_path,
+        script_evidence_id=script_id,
+        attempt_id="attempt-2",
+        checkpoint_id="checkpoint-2",
+    )
+
+    # Same step/script/content, but a DISTINCT record per attempt.
+    assert prepared1.alias == prepared2.alias
+    assert record1.evidence_id != record2.evidence_id
+    assert record1.metadata["content_sha256"] == record2.metadata["content_sha256"]
+    # The current alias points at the second attempt.
+    assert store.aliases()[prepared2.alias] == record2.evidence_id
+
+    # The first attempt is now stale; only the second is recoverable.
+    stale = load_current_step_result_envelope_sidecar(
+        evidence_store=store,
+        query=_query(script_id, attempt_id="attempt-1", checkpoint_id="checkpoint-1"),
+    )
+    assert isinstance(stale, StepResultEnvelopeSidecarUnavailable)
+    assert stale.reason == "attempt_mismatch"
+
+    loaded = load_current_step_result_envelope_sidecar(
+        evidence_store=store,
+        query=_query(script_id, attempt_id="attempt-2", checkpoint_id="checkpoint-2"),
+    )
+    assert isinstance(loaded, LoadedStepResultEnvelopeSidecar)
+    assert loaded.evidence_id == record2.evidence_id
+
+
+def test_rolled_back_third_attempt_keeps_second_as_current(tmp_path: Path) -> None:
+    """A third attempt whose commit rolls back leaves the second current."""
+
+    store = EvidenceStore(tmp_path / "run")
+    script_id = _script_evidence_id(store)
+    _commit_attempt(
+        store,
+        tmp_path,
+        script_evidence_id=script_id,
+        attempt_id="attempt-1",
+        checkpoint_id="checkpoint-1",
+    )
+    _prepared2, record2 = _commit_attempt(
+        store,
+        tmp_path,
+        script_evidence_id=script_id,
+        attempt_id="attempt-2",
+        checkpoint_id="checkpoint-2",
+    )
+
+    # Third attempt: bytes registered, but the success transaction rolls back.
+    prepared3 = _prepared(
+        store,
+        tmp_path,
+        script_evidence_id=script_id,
+        attempt_id="attempt-3",
+        checkpoint_id="checkpoint-3",
+    )
+    record3 = publish_step_result_envelope_sidecar(prepared3, evidence_store=store)
+
+    def boom() -> None:
+        raise RuntimeError("numeric claim registration failed")
+
+    with pytest.raises(RuntimeError):
+        _commit_alias(
+            store,
+            evidence_id=record3.evidence_id,
+            alias=prepared3.alias,
+            register_numeric_claims=boom,
+        )
+
+    # The current alias is unchanged: still the second attempt.
+    assert store.aliases()[prepared3.alias] == record2.evidence_id
+    loaded = load_current_step_result_envelope_sidecar(
+        evidence_store=store,
+        query=_query(script_id, attempt_id="attempt-2", checkpoint_id="checkpoint-2"),
+    )
+    assert isinstance(loaded, LoadedStepResultEnvelopeSidecar)
+    assert loaded.evidence_id == record2.evidence_id
+
+    # The rolled-back third attempt is never current.
+    stale = load_current_step_result_envelope_sidecar(
+        evidence_store=store,
+        query=_query(script_id, attempt_id="attempt-3", checkpoint_id="checkpoint-3"),
+    )
+    assert isinstance(stale, StepResultEnvelopeSidecarUnavailable)
+    assert stale.reason == "attempt_mismatch"
+
+
+def test_query_requires_nonempty_attempt_and_checkpoint() -> None:
+    """attempt_id/checkpoint_id are required and non-empty: no silent bypass."""
+
+    # Omitted entirely -> missing-argument construction error.
+    with pytest.raises(TypeError):
+        StepResultEnvelopeSidecarQuery(  # type: ignore[call-arg]
+            step_id=_STEP_ID,
+            terminal_status="ok",
+            script_evidence_id="code_x",
+        )
+    # Present but empty/blank -> fail-closed ValueError, never a wildcard query.
+    for bad in ("", "   "):
+        with pytest.raises(ValueError):
+            StepResultEnvelopeSidecarQuery(
+                step_id=_STEP_ID,
+                terminal_status="ok",
+                script_evidence_id="code_x",
+                attempt_id=bad,
+                checkpoint_id="checkpoint-1",
+            )
+        with pytest.raises(ValueError):
+            StepResultEnvelopeSidecarQuery(
+                step_id=_STEP_ID,
+                terminal_status="ok",
+                script_evidence_id="code_x",
+                attempt_id="attempt-1",
+                checkpoint_id=bad,
+            )
+
+
 def test_legacy_store_without_sidecar_is_not_auto_promoted(tmp_path: Path) -> None:
     store = EvidenceStore(tmp_path / "run")
     script_id = _script_evidence_id(store)
@@ -559,7 +718,8 @@ def test_loader_rejects_tampered_bytes(tmp_path: Path) -> None:
         evidence_store=store, query=_query(script_id)
     )
     assert isinstance(result, StepResultEnvelopeSidecarUnavailable)
-    assert result.reason == "artifact_digest_mismatch"
+    # Tampered bytes fail the descriptor-anchored digest check.
+    assert result.reason == "artifact_path_unverified"
 
 
 def test_loader_rejects_symlinked_sidecar(tmp_path: Path) -> None:
@@ -575,7 +735,48 @@ def test_loader_rejects_symlinked_sidecar(tmp_path: Path) -> None:
         evidence_store=store, query=_query(script_id)
     )
     assert isinstance(result, StepResultEnvelopeSidecarUnavailable)
-    assert result.reason == "artifact_symlink_or_missing"
+    # A final symlink -- even to identical bytes -- is refused.
+    assert result.reason == "artifact_path_unverified"
+
+
+def test_loader_rejects_parent_directory_symlink(tmp_path: Path) -> None:
+    """A symlinked evidence *parent* directory is refused, not just a final link."""
+
+    store, script_id, prepared, record = _committed_sidecar(tmp_path)
+    payload = (store.root / record.relative_path).read_bytes()
+    # Relocate the whole evidence directory and symlink it back into place, so
+    # the file itself is a regular file but a path *component* is a symlink.
+    evidence_dir = store.root / "evidence"
+    moved = store.root / "evidence_real"
+    evidence_dir.rename(moved)
+    evidence_dir.symlink_to(moved, target_is_directory=True)
+    assert (store.root / record.relative_path).read_bytes() == payload
+    assert (store.root / record.relative_path).is_file()
+
+    result = load_current_step_result_envelope_sidecar(
+        evidence_store=store, query=_query(script_id)
+    )
+    assert isinstance(result, StepResultEnvelopeSidecarUnavailable)
+    assert result.reason == "artifact_path_unverified"
+
+
+def test_loader_rejects_relative_path_traversal(tmp_path: Path) -> None:
+    """A record whose ``relative_path`` escapes the evidence dir is refused."""
+
+    store, script_id, prepared, record = _committed_sidecar(tmp_path)
+    # Plant identical bytes OUTSIDE the evidence directory, then point the
+    # committed record at them via a traversal path.  Metadata is untrusted:
+    # the descriptor-anchored guard must refuse the escape even though the
+    # bytes match the registered digest.
+    outside = store.root / "outside.json"
+    outside.write_bytes((store.root / record.relative_path).read_bytes())
+    record.relative_path = "evidence/../outside.json"
+
+    result = load_current_step_result_envelope_sidecar(
+        evidence_store=store, query=_query(script_id)
+    )
+    assert isinstance(result, StepResultEnvelopeSidecarUnavailable)
+    assert result.reason == "artifact_path_unverified"
 
 
 def test_loader_rejects_internally_inconsistent_envelope(tmp_path: Path) -> None:
@@ -804,4 +1005,63 @@ def test_live_sidecar_fails_closed_on_tampered_bytes(
         evidence_store=store, query=query
     )
     assert isinstance(result, StepResultEnvelopeSidecarUnavailable)
-    assert result.reason == "artifact_digest_mismatch"
+    assert result.reason == "artifact_path_unverified"
+
+
+@pytest.mark.parametrize(
+    "sidecar_behavior, expected_reason_fragment",
+    [
+        ("return_none", "sidecar_unavailable_for_successful_step"),
+        ("raise", "sidecar_registration_failed"),
+    ],
+)
+def test_live_ok_step_fails_closed_when_sidecar_cannot_publish(
+    ra,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    sidecar_behavior: str,
+    expected_reason_fragment: str,
+) -> None:
+    """status==ok must not commit silently if the sidecar cannot be sealed.
+
+    A missing snapshot / fail-closed prepare (``return_none``) or a registration
+    error (``raise``) converts the step to a typed ``contract_failed`` finding;
+    no sidecar alias becomes current.
+    """
+
+    from easyicu.research_agent.execution import phase as phase_mod
+
+    def _sidecar_none(**_kwargs: Any) -> None:
+        return None
+
+    def _sidecar_boom(**_kwargs: Any) -> None:
+        raise OSError("simulated sidecar registration failure")
+
+    monkeypatch.setattr(
+        phase_mod,
+        "publish_terminal_step_result_envelope_sidecar",
+        _sidecar_none if sidecar_behavior == "return_none" else _sidecar_boom,
+    )
+
+    run_dir = _run_minimal_pipeline(ra, tmp_path, monkeypatch)
+    store = EvidenceStore(run_dir)
+
+    # No sidecar alias ever became current authority.
+    assert not any(
+        alias.startswith("result_envelope_sidecar__") for alias in store.aliases()
+    )
+
+    authority = load_run_artifact_authority(run_dir)
+    assert authority is not None
+    per_step = authority.get("per_step_records") or []
+    sidecar_findings = [
+        finding
+        for record in per_step
+        if record.get("status") == "contract_failed"
+        for finding in (record.get("contract_findings") or [])
+        if finding.get("validator") == "result_envelope_sidecar"
+    ]
+    assert sidecar_findings, "a status==ok step must fail closed on sidecar publish"
+    finding = sidecar_findings[0]
+    assert finding["severity"] == "error"
+    assert expected_reason_fragment in str(finding["detail"]["reason"])

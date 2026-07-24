@@ -10994,6 +10994,7 @@ def run_execute_phase(
                     ),
                     detail={"step_id": step.step_id},
                 )
+        envelope_sidecar_finding: Optional[ValidationFinding] = None
         if step_record["status"] == "ok":
             # Publish the sealed step-result envelope as a sidecar: the compiled
             # final snapshot re-bound to the terminal ``ok`` status, registered
@@ -11003,25 +11004,69 @@ def run_execute_phase(
             # leaves an unpublished record that the loader can never recover as
             # current authority.  Shadow-only: paper_authorized stays false and
             # no downstream consumer reads it yet.
-            published_envelope_sidecar = publish_terminal_step_result_envelope_sidecar(
-                snapshot_envelope=(
-                    final_gate_findings.result_envelope_snapshot.envelope
-                    if final_gate_findings.result_envelope_snapshot is not None
-                    else None
-                ),
-                step_id=step.step_id,
-                attempt_id=attempt_id,
-                checkpoint_id=review_checkpoint_id,
-                script_evidence_id=script_record.evidence_id,
-                terminal_status="ok",
-                evidence_store=evidence,
+            sidecar_snapshot = (
+                final_gate_findings.result_envelope_snapshot.envelope
+                if final_gate_findings.result_envelope_snapshot is not None
+                else None
             )
+            sidecar_failure_reason: Optional[str] = None
+            try:
+                published_envelope_sidecar = (
+                    publish_terminal_step_result_envelope_sidecar(
+                        snapshot_envelope=sidecar_snapshot,
+                        step_id=step.step_id,
+                        attempt_id=attempt_id,
+                        checkpoint_id=review_checkpoint_id,
+                        script_evidence_id=script_record.evidence_id,
+                        terminal_status="ok",
+                        evidence_store=evidence,
+                    )
+                )
+            except (
+                EvidenceAuthorityIntegrityError,
+                ValueError,
+                OSError,
+            ) as exc:
+                published_envelope_sidecar = None
+                sidecar_failure_reason = f"sidecar_registration_failed: {exc}"
             if published_envelope_sidecar is not None:
                 pending_success_aliases[published_envelope_sidecar.evidence_id] = [
                     published_envelope_sidecar.alias
                 ]
                 evidence_ids_for_step.append(published_envelope_sidecar.evidence_id)
                 step_record["evidence_ids"] = list(dict.fromkeys(evidence_ids_for_step))
+            else:
+                # A successful step MUST seal a recoverable envelope sidecar.
+                # A missing snapshot, a fail-closed prepare, or a registration
+                # error breaks the ``status == "ok"`` invariant; it is a typed
+                # contract failure, never a silent commit without recoverable
+                # envelope authority.  The step therefore never reaches the
+                # StepEvidenceCommit below, so no alias is promoted.
+                step_record["status"] = "contract_failed"
+                envelope_sidecar_finding = ValidationFinding(
+                    validator="result_envelope_sidecar",
+                    severity="error",
+                    message=(
+                        "Successful step could not seal a recoverable "
+                        "step-result envelope sidecar for step "
+                        f"{step.step_id}; refusing to commit the step as ok "
+                        "without recoverable envelope authority."
+                    ),
+                    detail={
+                        "step_id": step.step_id,
+                        "attempt_id": attempt_id,
+                        "checkpoint_id": review_checkpoint_id,
+                        "reason": (
+                            sidecar_failure_reason
+                            or "sidecar_unavailable_for_successful_step"
+                        ),
+                    },
+                )
+                contract_findings.append(envelope_sidecar_finding)
+                step_record["contract_findings"] = [
+                    finding.model_dump() for finding in contract_findings
+                ]
+                has_contract_error = True
         evidence_publication_finding: Optional[ValidationFinding] = None
         if step_record["status"] == "ok":
             try:
@@ -11087,6 +11132,8 @@ def run_execute_phase(
         with shared_lock:
             if final_cleanup_finding is not None:
                 findings.append(final_cleanup_finding)
+            if envelope_sidecar_finding is not None:
+                findings.append(envelope_sidecar_finding)
             if evidence_publication_finding is not None:
                 findings.append(evidence_publication_finding)
             _append_terminal_step_record(per_step_records, step_record)
