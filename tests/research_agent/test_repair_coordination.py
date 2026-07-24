@@ -172,6 +172,36 @@ plotted_or = float(matrix_row["primary_or"])
     assert trigger["step_summary_path"] == str(outputs / "step_summary.json")
 
 
+def test_resume_preflight_uses_verified_prior_summary_when_outputs_were_cleared(
+    tmp_path,
+):
+    step_dir = tmp_path / "steps" / "robustness"
+    step_dir.mkdir(parents=True)
+    code = """
+def write_json(path, payload):
+    pass
+
+OUT_DIR = Path(".")
+write_json(OUT_DIR / "primary_or.json", {"estimate": 1.25})
+"""
+
+    candidate = resume_deterministic_repair_candidate(
+        code=code,
+        step_dir=step_dir,
+        analysis_family="association_study",
+        prior_step_summary={
+            "output_files": {"statistic:primary_or": "primary_or.json"}
+        },
+    )
+
+    assert candidate is not None
+    (repair_id, repaired), source, trigger = candidate
+    assert repair_id == "typed_statistic_sidecar_name_v1"
+    assert "'name': 'primary_or'" in repaired
+    assert source == "resume_authority_summary_repair_preflight"
+    assert trigger["step_summary_source"] == "current_evidence_authority"
+
+
 def test_resume_preflight_repairs_structured_analysis_role_selection(tmp_path):
     step_dir = tmp_path / "steps" / "robustness_figure"
     step_dir.mkdir(parents=True)

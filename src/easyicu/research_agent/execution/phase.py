@@ -6088,6 +6088,9 @@ def run_execute_phase(
                 code=prior_code,
                 step_dir=run_dir / "steps" / step.step_id,
                 analysis_family=local_runtime_state.analysis_family,
+                prior_step_summary=resume_controller.prior_step_summary_for_step(
+                    step.step_id
+                ),
             )
             if candidate is None:
                 return None
