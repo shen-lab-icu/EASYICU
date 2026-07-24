@@ -93,6 +93,7 @@ _MAX_TABLE_BYTES = 16 * 1024 * 1024
 _MAX_TABLE_COLUMNS = 256
 _MAX_TABLE_ROWS = 20_000
 _IDENTIFIER_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_.:-]{0,127}$")
+_SCALAR_PATH_TOKEN_RE = re.compile(r"([^\.\[\]]+)|\[(\d+)\]")
 
 
 class _StrictModel(BaseModel):
@@ -287,6 +288,61 @@ class StepResultEnvelope(_StrictModel):
     normalization_issues: tuple[NormalizationIssue, ...] = ()
     shadow: Literal[True] = True
     paper_authorized: Literal[False] = False
+
+
+def rebuild_observed_scalar_tree(
+    scalars: Sequence[CanonicalScalar],
+) -> dict[str, Any] | None:
+    """Rebuild the canonical summary tree, rejecting ambiguous scalar paths."""
+
+    root: dict[str, Any] = {}
+    for scalar in scalars:
+        tokens: list[str | int] = []
+        for match in _SCALAR_PATH_TOKEN_RE.finditer(scalar.field_path):
+            raw_index = match.group(2)
+            tokens.append(
+                int(raw_index) if raw_index is not None else str(match.group(1))
+            )
+        if not tokens or not isinstance(tokens[0], str):
+            return None
+        rendered = str(tokens[0])
+        for token in tokens[1:]:
+            rendered += f"[{token}]" if isinstance(token, int) else f".{token}"
+        if rendered != scalar.field_path:
+            return None
+
+        current: Any = root
+        for index, token in enumerate(tokens):
+            final = index == len(tokens) - 1
+            if isinstance(token, str):
+                if not isinstance(current, dict):
+                    return None
+                if final:
+                    if token in current and current[token] != scalar.value:
+                        return None
+                    current[token] = scalar.value
+                    continue
+                expected = list if isinstance(tokens[index + 1], int) else dict
+                child = current.setdefault(token, expected())
+            else:
+                if not isinstance(current, list):
+                    return None
+                while len(current) <= token:
+                    current.append(None)
+                if final:
+                    if current[token] is not None and current[token] != scalar.value:
+                        return None
+                    current[token] = scalar.value
+                    continue
+                expected = list if isinstance(tokens[index + 1], int) else dict
+                child = current[token]
+                if child is None:
+                    child = expected()
+                    current[token] = child
+            if not isinstance(child, expected):
+                return None
+            current = child
+    return root
 
 
 def _sha256_bytes(payload: bytes) -> str:
@@ -2157,6 +2213,7 @@ __all__ = [
     "StepResultEnvelope",
     "StepVariableBindings",
     "normalize_step_result_shadow",
+    "rebuild_observed_scalar_tree",
     "verify_step_result_envelope",
     "write_shadow_step_result_envelope",
 ]
