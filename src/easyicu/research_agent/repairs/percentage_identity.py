@@ -7,15 +7,12 @@ import re
 from collections import defaultdict
 from typing import Sequence
 
+from ..contracts.fraction_scale import normalize_metric_key
 from ..schema import ValidationFinding
 
 
-def _normalise(value: object) -> str:
-    return re.sub(r"[^a-z0-9]+", "_", str(value or "").lower()).strip("_")
-
-
 def _column_role(column: str) -> str | None:
-    name = _normalise(column)
+    name = normalize_metric_key(column)
     tokens = set(name.split("_"))
     if tokens & {"percentage", "percent", "pct"}:
         return "percentage"

@@ -32,6 +32,8 @@ from pydantic import (
     StrictStr,
 )
 
+from ..contracts.fraction_scale import is_scale_descriptor_field
+
 JsonScalar = Union[StrictBool, StrictInt, StrictFloat, StrictStr, None]
 
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -58,18 +60,6 @@ _SAFE_STRING_FIELD_TOKENS = frozenset(
         "step",
         "unit",
         "variable",
-    }
-)
-_SAFE_DESCRIPTOR_FIELD_NAMES = frozenset(
-    {
-        "effect_measure",
-        "estimand",
-        "measure",
-        "measure_type",
-        "metric",
-        "metric_name",
-        "statistic",
-        "type",
     }
 )
 _VALUE_KEYS = (
@@ -391,10 +381,7 @@ def _safe_string_field(field_path: str) -> bool:
         "_",
         re.split(r"[.\[]", field_path.lower())[-1],
     ).strip("_")
-    return bool(tokens & _SAFE_STRING_FIELD_TOKENS) or (
-        leaf in _SAFE_DESCRIPTOR_FIELD_NAMES
-        or leaf.endswith(("_measure", "_metric", "_type"))
-    )
+    return bool(tokens & _SAFE_STRING_FIELD_TOKENS) or is_scale_descriptor_field(leaf)
 
 
 def _path_field(field_path: str) -> bool:

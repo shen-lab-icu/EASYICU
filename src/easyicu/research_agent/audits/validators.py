@@ -45,6 +45,10 @@ from ..contracts.declared_product import (
     effect_role_family,
     typed_product,
 )
+from ..contracts.fraction_scale import (
+    is_scale_descriptor_field,
+    normalize_metric_key,
+)
 from ..replication.metrics import compare_metric_values
 from ..contracts.ordered_stratified import ordered_stratified_numeric_findings
 from ..schema import (
@@ -3089,9 +3093,6 @@ class StepSummaryFractionValidator:
     ) -> List[tuple[str, float, str]]:
         invalid: List[tuple[str, float, str]] = []
 
-        def normalise_key(value: Any) -> str:
-            return re.sub(r"[^a-z0-9]+", "_", str(value).strip().lower()).strip("_")
-
         effect_scale_names = {
             "hr",
             "or",
@@ -3105,7 +3106,7 @@ class StepSummaryFractionValidator:
         }
 
         def is_effect_scale_field(key: Any) -> bool:
-            name = normalise_key(key)
+            name = normalize_metric_key(key)
             ci_base = re.sub(r"_(?:ci_)?(?:low|high|lower|upper)$", "", name)
             return ci_base in effect_scale_names or any(
                 ci_base.endswith(f"_{effect_scale}")
@@ -3123,7 +3124,7 @@ class StepSummaryFractionValidator:
             still allowed to encode category -> fraction values.
             """
 
-            name = normalise_key(key)
+            name = normalize_metric_key(key)
             if not name or any(
                 token in name for token in ("pct", "percent", "percentage")
             ):
@@ -3254,19 +3255,6 @@ class StepSummaryFractionValidator:
             "value",
         }
         generic_ci_children = {"ci_low", "ci_high", "ci_lower", "ci_upper"}
-        scale_descriptor_names = {
-            "effect_measure",
-            "estimand",
-            "measure",
-            "measure_type",
-            "metric",
-            "metric_name",
-            "scale",
-            "statistic",
-            "type",
-            "unit",
-            "units",
-        }
         bounded_scale_descriptors = {
             "0_1",
             "dimensionless",
@@ -3399,22 +3387,17 @@ class StepSummaryFractionValidator:
                 }
             )
 
-        def is_scale_descriptor_name(name: str) -> bool:
-            return name in scale_descriptor_names or name.endswith(
-                ("_measure", "_metric", "_scale", "_type", "_unit", "_units")
-            )
-
         def mapping_declares_non_bounded_scale(value: Any) -> bool:
             if not isinstance(value, dict):
                 return False
             for key, descriptor in value.items():
-                if not is_scale_descriptor_name(normalise_key(key)) or not isinstance(
+                if not is_scale_descriptor_field(key) or not isinstance(
                     descriptor, str
                 ):
                     continue
                 if descriptor.strip() == "%":
                     return True
-                descriptor_name = normalise_key(descriptor)
+                descriptor_name = normalize_metric_key(descriptor)
                 if not descriptor_name:
                     continue
                 if (
@@ -3431,7 +3414,7 @@ class StepSummaryFractionValidator:
 
         def mapping_has_generic_metric_payload(value: Any) -> bool:
             return isinstance(value, dict) and any(
-                normalise_key(key) in scalar_value_children | generic_ci_children
+                normalize_metric_key(key) in scalar_value_children | generic_ci_children
                 for key in value
             )
 
@@ -3458,7 +3441,7 @@ class StepSummaryFractionValidator:
                     is_effect_scale_field(key) for key in value
                 )
                 for key, child in value.items():
-                    normalised = normalise_key(key)
+                    normalised = normalize_metric_key(key)
                     key_context = bounded_field_kind(key)
                     inherited_context = bounded_context
                     if inherited_context:
