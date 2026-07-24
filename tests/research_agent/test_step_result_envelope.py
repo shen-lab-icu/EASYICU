@@ -13,13 +13,16 @@ import pytest
 from pydantic import ValidationError
 
 from easyicu.research_agent.audits.envelope_shadow import (
+    compare_fraction_scale_shadow,
     compare_validator_shadow_inputs,
 )
 from easyicu.research_agent.audits.envelope_consumers import (
     CrossStepRegisteredOutputEnvelopeDualReader,
+    StepSummaryFractionEnvelopeDualReader,
 )
 from easyicu.research_agent.audits.validators import (
     CrossStepRegisteredOutputValidator,
+    StepSummaryFractionValidator,
 )
 from easyicu.research_agent.execution.result_envelope import (
     StepResultEnvelope,
@@ -370,11 +373,12 @@ def test_archived_replay_uses_current_ledger_and_verified_input_authority(
 
     assert result.returncode == 0, result.stderr
     index = json.loads((shadow_dir / "index.json").read_text())
-    assert index["schema_version"] == "easyicu.shadow_step_result_index/3"
+    assert index["schema_version"] == "easyicu.shadow_step_result_index/4"
     assert index["normalization_error_count"] == 0
     assert index["validator_shadow_mismatch_count"] == 0
     assert index["registered_output_claim_count"] == 1
     assert index["registered_output_shadow_mismatch_count"] == 0
+    assert index["fraction_shadow_mismatch_count"] == 0
     assert index["steps"][1]["registered_output_legacy_finding_count"] == 1
     assert index["steps"][1]["registered_output_shadow_exact"] is True
     envelope = StepResultEnvelope.model_validate_json(
@@ -750,3 +754,296 @@ def test_registered_output_gate_dual_read_rejects_source_or_presence_drift(
         "canonical_source_digest_mismatch",
         "canonical_table_presence_mismatch",
     }
+
+
+def _finding_payloads(findings: list[object]) -> list[dict[str, object]]:
+    return [finding.model_dump(mode="json") for finding in findings]
+
+
+@pytest.mark.parametrize(
+    "summary",
+    (
+        {
+            "missingness": {
+                "missing_fraction": {"lab_max": 56.372144},
+                "missing_pct": {"lab_max": 56.372144},
+            }
+        },
+        {
+            "missingness": {
+                "missing_fraction": {"lab_max": 0.56372144},
+                "missing_pct": {"lab_max": 56.372144},
+            }
+        },
+        {
+            "overall_outcome_prevalence": {
+                "outcome_column": "death",
+                "n": 94_458,
+                "event_n": 9_466,
+                "non_event_n": 84_992,
+                "risk": 0.1002,
+                "ci_low": 0.0983,
+                "ci_high": 0.1022,
+            }
+        },
+        {
+            "overall_outcome_prevalence": {
+                "n_events": 9_466,
+                "mortality_percentage": 10.02,
+                "risk": 0.1002,
+            }
+        },
+        {
+            "absolute_risk": {
+                "bili_distribution": {"q25": 0.8, "q75": 1.4},
+                "outcome_risk": 10.0,
+            }
+        },
+        {"observed_fraction": {"group_a": 40.0, "risk": 0.2}},
+        {"observed_fraction": {"group_a": {"value": 40.0}}},
+        {
+            "overall_risk": {
+                "interval": {
+                    "estimate": 10.0,
+                    "ci_low": 9.0,
+                    "ci_high": 11.0,
+                }
+            }
+        },
+        {"observed_fraction": {"by_group": [{"group": "a", "value": 40.0}]}},
+        {"overall_risk": {"risk": 0.2, "bootstrap_replicates": 1_000}},
+        {"observed_fraction": {"metric": "aic", "group_a": 40.0}},
+        {"observed_fraction": {"unit": "unknown", "value": 40.0}},
+        {
+            "overall_risk": {
+                "risk": 0.2,
+                "effect": {
+                    "measure": "odds_ratio",
+                    "estimate": 2.0,
+                    "ci_low": 1.2,
+                    "ci_high": 3.0,
+                },
+            }
+        },
+        {
+            "overall_risk": {
+                "risk": 0.2,
+                "estimates": [
+                    {
+                        "measure": "odds_ratio",
+                        "estimate": 2.0,
+                        "ci_low": 1.2,
+                        "ci_high": 3.0,
+                    }
+                ],
+            }
+        },
+        {
+            "overall_risk": {
+                "risk": 0.2,
+                "levels": [
+                    {
+                        "level": 4,
+                        "count": 1_256,
+                        "fraction": 0.013,
+                        "risk": 0.378,
+                        "ci_low": 0.352,
+                        "ci_high": 0.405,
+                    }
+                ],
+            }
+        },
+        {
+            "fractional_polynomial_power": 2,
+            "sampling_fraction_denominator": 500,
+            "sampling_fraction_numerator": 125,
+            "attributable_fraction": -0.08,
+            "observed_fraction": {
+                "value": 0.25,
+                "numerator": 125,
+                "denominator": 500,
+            },
+        },
+        {
+            "valid_level_distribution_percent": {"0": 0.7, "1": 0.3},
+            "valid_level_distribution_percent_pct": {"0": 70.0, "1": 30.0},
+        },
+        {"prevalence_ci_high": 1.0000000000000002},
+        {
+            "risk": {
+                "estimate": 0.2,
+                "ci_low": 0.1,
+                "ci_high": 1.0000000000000002,
+            }
+        },
+        {
+            "risk_ratio": 1.8,
+            "risk_ratio_ci_low": 1.4,
+            "risk_ratio_ci_high": 2.2,
+            "odds_ratio": 2.4,
+            "hazard_ratio": 1.7,
+            "risk_difference": -0.2,
+            "number_at_risk": 120,
+        },
+        {
+            "absolute_risk": 0.2,
+            "risk_ratio": 1.8,
+            "ci_low": 1.4,
+            "ci_high": 2.2,
+        },
+    ),
+)
+def test_fraction_scale_dual_read_matches_legacy_adversarial_corpus(
+    tmp_path: Path,
+    summary: dict[str, object],
+) -> None:
+    step = AnalysisStep(step_id="04_fraction_audit", intent="Audit bounded metrics.")
+    envelope = normalize_step_result_shadow(
+        step_id=step.step_id,
+        step_summary=summary,
+        output_dir=tmp_path,
+        status="ok",
+    )
+
+    legacy = StepSummaryFractionValidator().audit(
+        step=step,
+        step_summary=summary,
+    )
+    dual_read = StepSummaryFractionEnvelopeDualReader().audit(
+        step=step,
+        step_summary=summary,
+        envelope=envelope,
+        current_status="ok",
+    )
+    comparison = compare_fraction_scale_shadow(
+        step=step,
+        step_summary=summary,
+        current_status="ok",
+        envelope=envelope,
+    )
+
+    assert _finding_payloads(dual_read) == _finding_payloads(legacy)
+    assert comparison.exact_match is True
+    assert comparison.legacy_finding_count == len(legacy)
+    assert comparison.canonical_finding_count == len(legacy)
+
+
+def test_fraction_scale_dual_read_fails_closed_without_envelope() -> None:
+    step = AnalysisStep(step_id="04_fraction_audit", intent="Audit bounded metrics.")
+    summary = {"observed_fraction": {"group_a": 40.0}}
+
+    findings = StepSummaryFractionEnvelopeDualReader().audit(
+        step=step,
+        step_summary=summary,
+        envelope=None,
+        current_status="ok",
+    )
+
+    assert len(findings) == 1
+    assert findings[0].detail["canonical_shadow_blocked"] is True
+    assert findings[0].detail["mismatch_codes"] == ["canonical_envelope_missing"]
+
+
+def test_fraction_scale_dual_read_fails_closed_on_source_or_status_drift(
+    tmp_path: Path,
+) -> None:
+    step = AnalysisStep(step_id="04_fraction_audit", intent="Audit bounded metrics.")
+    envelope = normalize_step_result_shadow(
+        step_id=step.step_id,
+        step_summary={"observed_fraction": {"group_a": 0.4}},
+        output_dir=tmp_path,
+        status="failed",
+    )
+
+    findings = StepSummaryFractionEnvelopeDualReader().audit(
+        step=step,
+        step_summary={"observed_fraction": {"group_a": 40.0}},
+        envelope=envelope,
+        current_status="ok",
+    )
+
+    assert len(findings) == 1
+    assert findings[0].detail["canonical_shadow_blocked"] is True
+    assert set(findings[0].detail["mismatch_codes"]) >= {
+        "canonical_fraction_view_mismatch",
+        "canonical_source_digest_mismatch",
+        "canonical_status_mismatch",
+    }
+
+
+def test_fraction_scale_dual_read_fails_closed_on_nonfinite_normalization(
+    tmp_path: Path,
+) -> None:
+    step = AnalysisStep(step_id="04_fraction_audit", intent="Audit bounded metrics.")
+    summary = {"observed_fraction": {"group_a": float("nan")}}
+    envelope = normalize_step_result_shadow(
+        step_id=step.step_id,
+        step_summary=summary,
+        output_dir=tmp_path,
+        status="ok",
+    )
+
+    findings = StepSummaryFractionEnvelopeDualReader().audit(
+        step=step,
+        step_summary=summary,
+        envelope=envelope,
+        current_status="ok",
+    )
+
+    assert len(findings) == 1
+    assert findings[0].detail["canonical_shadow_blocked"] is True
+    assert set(findings[0].detail["mismatch_codes"]) >= {
+        "canonical_fraction_view_mismatch",
+        "normalization_error",
+    }
+
+
+def test_fraction_scale_dual_read_preserves_legacy_numeric_string_finding(
+    tmp_path: Path,
+) -> None:
+    step = AnalysisStep(step_id="04_fraction_audit", intent="Audit bounded metrics.")
+    summary = {"observed_fraction": {"group_a": "40.0"}}
+    envelope = normalize_step_result_shadow(
+        step_id=step.step_id,
+        step_summary=summary,
+        output_dir=tmp_path,
+        status="ok",
+    )
+
+    findings = StepSummaryFractionEnvelopeDualReader().audit(
+        step=step,
+        step_summary=summary,
+        envelope=envelope,
+        current_status="ok",
+    )
+    legacy = StepSummaryFractionValidator().audit(
+        step=step,
+        step_summary=summary,
+    )
+
+    assert _finding_payloads(findings) == _finding_payloads(legacy)
+    assert findings[0].detail["reported_value"] == 40.0
+
+
+def test_fraction_scale_dual_read_fails_closed_on_omitted_numeric_string(
+    tmp_path: Path,
+) -> None:
+    step = AnalysisStep(step_id="04_fraction_audit", intent="Audit bounded metrics.")
+    summary = {"risk": "40.0"}
+    envelope = normalize_step_result_shadow(
+        step_id=step.step_id,
+        step_summary=summary,
+        output_dir=tmp_path,
+        status="ok",
+    )
+
+    findings = StepSummaryFractionEnvelopeDualReader().audit(
+        step=step,
+        step_summary=summary,
+        envelope=envelope,
+        current_status="ok",
+    )
+
+    assert len(findings) == 1
+    assert findings[0].detail["canonical_shadow_blocked"] is True
+    assert findings[0].detail["mismatch_codes"] == ["canonical_fraction_view_mismatch"]

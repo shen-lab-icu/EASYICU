@@ -13,10 +13,44 @@ from easyicu.research_agent.execution.result_envelope import StepResultEnvelope
 from easyicu.research_agent.schema import AnalysisStep, ValidationFinding
 
 from .envelope_shadow import (
+    compare_fraction_scale_shadow,
     compare_registered_output_shadow,
+    fraction_scale_shadow_blocking_finding,
     registered_output_shadow_blocking_finding,
 )
-from .validators import CrossStepRegisteredOutputValidator
+from .validators import (
+    CrossStepRegisteredOutputValidator,
+    StepSummaryFractionValidator,
+)
+
+
+class StepSummaryFractionEnvelopeDualReader(StepSummaryFractionValidator):
+    """Retain the legacy bounded-metric decision only after exact comparison."""
+
+    def audit(
+        self,
+        *,
+        step: AnalysisStep,
+        step_summary: Dict[str, Any],
+        envelope: StepResultEnvelope | None,
+        current_status: str | None = None,
+    ) -> List[ValidationFinding]:
+        legacy_findings = super().audit(step=step, step_summary=step_summary)
+        comparison = compare_fraction_scale_shadow(
+            step=step,
+            step_summary=step_summary,
+            current_status=current_status,
+            envelope=envelope,
+        )
+        if comparison.exact_match:
+            return legacy_findings
+        return [
+            fraction_scale_shadow_blocking_finding(
+                validator_name=self.name,
+                step_id=step.step_id,
+                comparison=comparison,
+            )
+        ]
 
 
 class CrossStepRegisteredOutputEnvelopeDualReader(CrossStepRegisteredOutputValidator):
@@ -97,4 +131,7 @@ class CrossStepRegisteredOutputEnvelopeDualReader(CrossStepRegisteredOutputValid
         return retained_legacy + blockers
 
 
-__all__ = ["CrossStepRegisteredOutputEnvelopeDualReader"]
+__all__ = [
+    "CrossStepRegisteredOutputEnvelopeDualReader",
+    "StepSummaryFractionEnvelopeDualReader",
+]
