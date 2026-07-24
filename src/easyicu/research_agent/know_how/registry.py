@@ -744,8 +744,12 @@ class KnowHowRegistry:
         )
         if not hits:
             return header + '{"cards":[],"schema_version":"prompt_projection/2"}\n'
-        projected_cards: list[dict[str, Any]] = []
-        for hit in hits:
+
+        def _project_hit(
+            hit: KnowHowHit,
+            *,
+            card_limit: int,
+        ) -> dict[str, Any]:
             self.verify_hit_source(hit)
             card = self.get(hit.card_id)
             citations = {
@@ -786,7 +790,7 @@ class KnowHowRegistry:
                 encoded = json.dumps(
                     candidate, ensure_ascii=False, sort_keys=True, separators=(",", ":")
                 )
-                if len(encoded) <= per_card_limit:
+                if len(encoded) <= card_limit:
                     selected.append(claim)
                 else:
                     omitted.append(claim.claim_id)
@@ -798,28 +802,63 @@ class KnowHowRegistry:
             encoded = json.dumps(
                 block, ensure_ascii=False, sort_keys=True, separators=(",", ":")
             )
-            if len(encoded) > per_card_limit:
+            if len(encoded) > card_limit:
                 raise KnowHowIntegrityError(
                     f"mandatory projection exceeds per-card budget for {card.card_id}"
                 )
-            projected_cards.append(block)
-        payload = {
-            "schema_version": "easyicu.research_know_how_prompt/2",
-            "cards": projected_cards,
-        }
-        rendered = (
-            header
-            + json.dumps(
-                payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+            return block
+
+        retained_hits = list(hits)
+        while retained_hits:
+            withheld_count = len(hits) - len(retained_hits)
+            shell = json.dumps(
+                {
+                    "schema_version": "easyicu.research_know_how_prompt/2",
+                    "cards": [],
+                    "withheld_card_count": withheld_count,
+                },
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
             )
-            + "\n"
+            commas = max(0, len(retained_hits) - 1)
+            shared_limit = (total_limit - len(header) - len(shell) - 1 - commas) // len(
+                retained_hits
+            )
+            effective_limit = min(per_card_limit, shared_limit)
+            try:
+                projected_cards = [
+                    _project_hit(hit, card_limit=effective_limit)
+                    for hit in retained_hits
+                ]
+            except KnowHowIntegrityError:
+                # Mandatory stop/confirmation claims are indivisible. Preserve
+                # the highest-scoring cards and withhold one whole lowest-ranked
+                # card instead of truncating those authority fields.
+                retained_hits.pop()
+                continue
+            payload = {
+                "schema_version": "easyicu.research_know_how_prompt/2",
+                "cards": projected_cards,
+                "withheld_card_count": withheld_count,
+            }
+            rendered = (
+                header
+                + json.dumps(
+                    payload,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                )
+                + "\n"
+            )
+            if len(rendered) <= total_limit:
+                return rendered
+            retained_hits.pop()
+
+        raise KnowHowIntegrityError(
+            "mandatory know-how projection cannot fit the total prompt budget"
         )
-        if len(rendered) > total_limit:
-            raise KnowHowIntegrityError(
-                "structured know-how projection exceeds total prompt budget; "
-                "reduce top_k instead of truncating authority fields"
-            )
-        return rendered
 
     def retrieval_receipt(
         self,
