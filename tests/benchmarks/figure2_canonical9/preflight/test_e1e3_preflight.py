@@ -399,6 +399,22 @@ def test_blocked_reason_is_structured(runtime_manifest: rt.RuntimeManifest) -> N
         )
 
 
+def test_linux_probe_matches_code_runner_filesystem_fail_closed(
+    monkeypatch,
+) -> None:
+    """A network namespace alone must never authorize generated-code execution."""
+
+    monkeypatch.setattr(rt.sys, "platform", "linux")
+    capability = rt.probe_isolation_backend()
+
+    assert capability.backend in {
+        "linux_unshare_network_namespace",
+        "host_subprocess",
+    }
+    assert capability.available is False
+    assert "filesystem isolation" in capability.detail
+
+
 def test_step_isolation_positive_nested_sandbox_denial() -> None:
     record = {
         "returncode": 71,
