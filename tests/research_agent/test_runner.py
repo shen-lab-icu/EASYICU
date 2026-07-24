@@ -653,6 +653,7 @@ def test_pipeline_runner_receives_target_outcome_env(ra, tmp_path: Path):
     pipeline = ra.ResearchAgentPipeline(
         workdir=tmp_path / "work",
         enable_memory=False,
+        runner_kind="subprocess",
     )
 
     runner = pipeline._build_runner(
@@ -676,7 +677,11 @@ def test_pipeline_runner_does_not_discover_unstaged_trajectory_sibling(
     # sibling trajectory next to the universe
     (tmp_path / "universe_trajectory.parquet").write_bytes(b"x")
 
-    pipeline = ra.ResearchAgentPipeline(workdir=tmp_path / "work", enable_memory=False)
+    pipeline = ra.ResearchAgentPipeline(
+        workdir=tmp_path / "work",
+        enable_memory=False,
+        runner_kind="subprocess",
+    )
     runner = pipeline._build_runner(
         run_dir=tmp_path / "run",
         cohort_path=cohort_path,
@@ -714,7 +719,11 @@ def test_pipeline_runner_no_trajectory_env_when_sibling_absent(ra, tmp_path: Pat
     universe_path = tmp_path / "universe.parquet"
     pd.DataFrame({"stay_id": [1]}).to_parquet(universe_path, index=False)
 
-    pipeline = ra.ResearchAgentPipeline(workdir=tmp_path / "work", enable_memory=False)
+    pipeline = ra.ResearchAgentPipeline(
+        workdir=tmp_path / "work",
+        enable_memory=False,
+        runner_kind="subprocess",
+    )
     runner = pipeline._build_runner(
         run_dir=tmp_path / "run",
         cohort_path=cohort_path,
