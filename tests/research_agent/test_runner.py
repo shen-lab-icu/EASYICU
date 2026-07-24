@@ -173,6 +173,22 @@ def test_code_runner_control_writes_never_follow_planted_symlinks(ra, tmp_path: 
     assert "duration_seconds:" in planted_log.read_text(encoding="utf-8")
 
 
+@pytest.mark.parametrize("unsafe_value", ["false", "0", "no", 0, 1])
+def test_code_runner_rejects_non_bool_unsafe_host_fallback(
+    ra, tmp_path: Path, unsafe_value
+):
+    # bool("false") is True: a quoted config value must not silently enable
+    # unsafe host execution. Only True/False/None are accepted.
+    cohort_path = tmp_path / "cohort.parquet"
+    pd.DataFrame({"stay_id": [1]}).to_parquet(cohort_path, index=False)
+    with pytest.raises(TypeError, match="allow_unsafe_host_fallback"):
+        ra.CodeRunner(
+            workdir=tmp_path / "run",
+            cohort_parquet=cohort_path,
+            allow_unsafe_host_fallback=unsafe_value,
+        )
+
+
 def test_code_runner_authority_binds_extra_inputs_and_isolation(ra, tmp_path: Path):
     cohort_path = tmp_path / "cohort.parquet"
     pd.DataFrame({"stay_id": [1]}).to_parquet(cohort_path, index=False)

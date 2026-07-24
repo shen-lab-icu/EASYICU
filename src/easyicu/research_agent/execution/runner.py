@@ -538,11 +538,20 @@ class CodeRunner:
         self.extra_env = dict(extra_env or {})
         reject_reserved_runner_env(self.extra_env, owner="CodeRunner")
         self.network_policy = (network_policy or "none").lower()
-        self.allow_unsafe_host_fallback = (
-            _env_flag("EASYICU_ALLOW_UNSAFE_HOST_FALLBACK")
-            if allow_unsafe_host_fallback is None
-            else bool(allow_unsafe_host_fallback)
-        )
+        # Strict: this flag disables host-isolation, so a non-bool must never be
+        # silently coerced. ``bool("false")`` is ``True`` -- a quoted YAML/TOML/
+        # env value or JSON string would otherwise enable unsafe host execution.
+        if allow_unsafe_host_fallback is None:
+            self.allow_unsafe_host_fallback = _env_flag(
+                "EASYICU_ALLOW_UNSAFE_HOST_FALLBACK"
+            )
+        elif isinstance(allow_unsafe_host_fallback, bool):
+            self.allow_unsafe_host_fallback = allow_unsafe_host_fallback
+        else:
+            raise TypeError(
+                "allow_unsafe_host_fallback must be True, False, or None, not "
+                f"{type(allow_unsafe_host_fallback).__name__}"
+            )
         self._authority_identity_lock = threading.Lock()
         self._cached_authority_identity_sha256: Optional[str] = None
         # A host runner must never inherit a Docker capability snapshot left in
