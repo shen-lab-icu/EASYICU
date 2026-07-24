@@ -11,6 +11,8 @@ from __future__ import annotations
 import hashlib
 import importlib.util
 import json
+import math
+import numbers
 import re
 from pathlib import Path
 from types import ModuleType
@@ -61,6 +63,55 @@ def _canonical_sha256(value: Any) -> str:
         default=str,
     ).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
+
+
+def _canonical_table_value(value: Any) -> Any:
+    """Normalize tabular scalars without trusting platform-specific float bytes."""
+
+    if value is None or pd.isna(value):
+        return None
+    if isinstance(value, (bool, np.bool_)):
+        return bool(value)
+    if isinstance(value, numbers.Integral):
+        return f"number:{int(value)}"
+    if isinstance(value, numbers.Real):
+        numeric = float(value)
+        if not math.isfinite(numeric):
+            return f"number:{numeric}"
+        # LAPACK implementations may differ in the final floating-point bits.
+        # Ten significant digits retain scientific drift while excluding that
+        # platform noise from this cross-version characterization oracle.
+        return f"number:{numeric:.10g}"
+    return str(value)
+
+
+def _stable_file_sha256(path: Path) -> str:
+    """Hash table semantics for data files and exact bytes for everything else."""
+
+    suffix = path.suffix.lower()
+    if suffix == ".csv":
+        frame = pd.read_csv(path)
+    elif suffix == ".parquet":
+        frame = pd.read_parquet(path)
+    elif suffix == ".feather":
+        frame = pd.read_feather(path)
+    else:
+        return hashlib.sha256(path.read_bytes()).hexdigest()
+    payload = {
+        "columns": [str(column) for column in frame.columns],
+        "rows": [
+            [_canonical_table_value(value) for value in row]
+            for row in frame.itertuples(index=False, name=None)
+        ],
+    }
+    return _canonical_sha256(payload)
+
+
+def _evidence_path(run_dir: Path, relative_path: str) -> Path:
+    relative = Path(relative_path)
+    if relative.parts and relative.parts[0] == "evidence":
+        return run_dir / relative
+    return run_dir / "evidence" / relative
 
 
 def _normalize(value: Any) -> Any:
@@ -321,7 +372,7 @@ def _stable_product_shas(
             path = run_dir / "steps" / step_id / "outputs" / str(filename)
             if path.suffix.lower() not in {".csv", ".parquet", ".feather"}:
                 continue
-            shas[f"{step_id}:{product}"] = hashlib.sha256(path.read_bytes()).hexdigest()
+            shas[f"{step_id}:{product}"] = _stable_file_sha256(path)
     return shas
 
 
@@ -430,8 +481,15 @@ def _build_bundle(*, run_dir: Path, observed_events: list[tuple[str, str]]):
             "produced_by_step": current_by_id[evidence_id].produced_by_step,
             "description": current_by_id[evidence_id].description,
             "stable_content_sha256": (
-                current_by_id[evidence_id].sha256
-                if current_by_id[evidence_id].kind in {"code", "table"}
+                _stable_file_sha256(
+                    _evidence_path(
+                        run_dir,
+                        current_by_id[evidence_id].relative_path,
+                    )
+                )
+                if current_by_id[evidence_id].kind == "table"
+                else current_by_id[evidence_id].sha256
+                if current_by_id[evidence_id].kind == "code"
                 else None
             ),
         }
@@ -448,7 +506,13 @@ def _build_bundle(*, run_dir: Path, observed_events: list[tuple[str, str]]):
                 "producer": record.producer,
                 "generation_mode": record.generation_mode,
                 "stable_content_sha256": (
-                    record.sha256 if record.kind in {"code", "table"} else None
+                    _stable_file_sha256(
+                        _evidence_path(run_dir, record.relative_path)
+                    )
+                    if record.kind == "table"
+                    else record.sha256
+                    if record.kind == "code"
+                    else None
                 ),
             }
             for record in step_current_evidence
@@ -489,7 +553,7 @@ def _build_bundle(*, run_dir: Path, observed_events: list[tuple[str, str]]):
     }
     return _normalize(
         {
-            "schema": "easyicu.freeze_char_golden/2",
+            "schema": "easyicu.freeze_char_golden/3",
             "volatile_field_allowlist": sorted(_VOLATILE_FIELD_ALLOWLIST),
             "step_statuses": [
                 {
@@ -579,6 +643,20 @@ def test_normalizer_removes_only_explicitly_allowed_volatile_fields():
         "reason_code": "must_survive",
         "sha256": "a" * 64,
     }
+
+
+def test_table_semantic_digest_ignores_float_tail_but_detects_numeric_drift(
+    tmp_path: Path,
+):
+    baseline = tmp_path / "baseline.csv"
+    float_tail = tmp_path / "float_tail.csv"
+    material_drift = tmp_path / "material_drift.csv"
+    baseline.write_text("id,value\n1,0.1234567890123\n", encoding="utf-8")
+    float_tail.write_text("id,value\n1,0.1234567890124\n", encoding="utf-8")
+    material_drift.write_text("id,value\n1,0.1234667890123\n", encoding="utf-8")
+
+    assert _stable_file_sha256(baseline) == _stable_file_sha256(float_tail)
+    assert _stable_file_sha256(baseline) != _stable_file_sha256(material_drift)
 
 
 def test_minimal_typed_pipeline_matches_normalized_golden_bundle(
