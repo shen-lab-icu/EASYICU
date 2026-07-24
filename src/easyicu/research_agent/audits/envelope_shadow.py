@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from typing import Any, Literal, Mapping, Sequence
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -18,7 +19,7 @@ from easyicu.research_agent.execution.result_envelope import (
     StepResultEnvelope,
     verify_step_result_envelope,
 )
-from easyicu.research_agent.schema import ValidationFinding
+from easyicu.research_agent.schema import AnalysisStep, ValidationFinding
 
 
 class _StrictModel(BaseModel):
@@ -31,6 +32,8 @@ class ValidatorShadowMismatch(_StrictModel):
         "canonical_envelope_missing",
         "canonical_source_digest_mismatch",
         "canonical_status_mismatch",
+        "canonical_fraction_view_mismatch",
+        "canonical_scalar_tree_invalid",
         "canonical_table_presence_mismatch",
         "canonical_unexpected_artifact",
         "envelope_digest_invalid",
@@ -59,6 +62,23 @@ class RegisteredOutputShadowComparison(_StrictModel):
     exact_match: bool
     legacy_table_artifacts: tuple[str, ...] = ()
     canonical_table_artifacts: tuple[str, ...] = ()
+    mismatches: tuple[ValidatorShadowMismatch, ...] = ()
+    decision_effect: Literal["none"] = "none"
+
+
+class FractionScaleShadowComparison(_StrictModel):
+    schema_version: Literal["easyicu.fraction_scale_shadow_comparison/1"] = (
+        "easyicu.fraction_scale_shadow_comparison/1"
+    )
+    step_id: str
+    exact_match: bool
+    legacy_finding_count: int = Field(ge=0)
+    canonical_finding_count: int = Field(ge=0)
+    legacy_findings_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    canonical_findings_sha256: str | None = Field(
+        default=None,
+        pattern=r"^[0-9a-f]{64}$",
+    )
     mismatches: tuple[ValidatorShadowMismatch, ...] = ()
     decision_effect: Literal["none"] = "none"
 
@@ -222,6 +242,203 @@ def compare_registered_output_shadow(
     )
 
 
+_SCALAR_PATH_TOKEN = re.compile(r"([^\.\[\]]+)|\[(\d+)\]")
+
+
+def _scalar_path_tokens(field_path: str) -> tuple[str | int, ...] | None:
+    tokens: list[str | int] = []
+    for match in _SCALAR_PATH_TOKEN.finditer(field_path):
+        raw_index = match.group(2)
+        tokens.append(int(raw_index) if raw_index is not None else match.group(1))
+    if not tokens:
+        return None
+    rendered = str(tokens[0])
+    for token in tokens[1:]:
+        rendered += f"[{token}]" if isinstance(token, int) else f".{token}"
+    return tuple(tokens) if rendered == field_path else None
+
+
+def _set_scalar_path(
+    root: dict[str, Any],
+    *,
+    tokens: tuple[str | int, ...],
+    value: Any,
+) -> bool:
+    current: Any = root
+    for index, token in enumerate(tokens):
+        final = index == len(tokens) - 1
+        next_is_index = not final and isinstance(tokens[index + 1], int)
+        if isinstance(token, str):
+            if not isinstance(current, dict):
+                return False
+            if final:
+                if token in current and current[token] != value:
+                    return False
+                current[token] = value
+                return True
+            child = current.get(token)
+            expected_type = list if next_is_index else dict
+            if child is None:
+                child = expected_type()
+                current[token] = child
+            elif not isinstance(child, expected_type):
+                return False
+            current = child
+            continue
+        if not isinstance(current, list):
+            return False
+        while len(current) <= token:
+            current.append(None)
+        if final:
+            if current[token] is not None and current[token] != value:
+                return False
+            current[token] = value
+            return True
+        child = current[token]
+        expected_type = list if next_is_index else dict
+        if child is None:
+            child = expected_type()
+            current[token] = child
+        elif not isinstance(child, expected_type):
+            return False
+        current = child
+    return False
+
+
+def _fraction_view_summary(
+    envelope: StepResultEnvelope,
+) -> tuple[dict[str, Any], bool]:
+    """Rebuild only the normalized scalar tree carried by the envelope."""
+
+    summary: dict[str, Any] = {}
+    for scalar in envelope.observed_scalars:
+        tokens = _scalar_path_tokens(scalar.field_path)
+        if tokens is None or not isinstance(tokens[0], str):
+            return {}, False
+        if not _set_scalar_path(summary, tokens=tokens, value=scalar.value):
+            return {}, False
+    return summary, True
+
+
+def _finding_payload_sha256(findings: Sequence[ValidationFinding]) -> str:
+    payloads = [finding.model_dump(mode="json") for finding in findings]
+    payloads.sort(
+        key=lambda payload: json.dumps(
+            payload,
+            ensure_ascii=False,
+            allow_nan=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        )
+    )
+    return _canonical_json_sha256(payloads)
+
+
+def compare_fraction_scale_shadow(
+    *,
+    step: AnalysisStep,
+    step_summary: Any,
+    current_status: str | None,
+    envelope: StepResultEnvelope | None,
+) -> FractionScaleShadowComparison:
+    """Compare the legacy bounded-metric decision with envelope scalars."""
+
+    from .validators import StepSummaryFractionValidator
+
+    legacy_summary = step_summary if isinstance(step_summary, dict) else {}
+    legacy_findings = StepSummaryFractionValidator().audit(
+        step=step,
+        step_summary=legacy_summary,
+    )
+    legacy_sha256 = _finding_payload_sha256(legacy_findings)
+    if envelope is None:
+        return FractionScaleShadowComparison(
+            step_id=step.step_id,
+            exact_match=False,
+            legacy_finding_count=len(legacy_findings),
+            canonical_finding_count=0,
+            legacy_findings_sha256=legacy_sha256,
+            mismatches=(
+                ValidatorShadowMismatch(
+                    code="canonical_envelope_missing",
+                    detail="No canonical envelope was available for this step.",
+                ),
+            ),
+        )
+
+    base = compare_validator_shadow_inputs(
+        step_summary=step_summary,
+        envelope=envelope,
+        current_status=current_status,
+    )
+    mismatches = list(base.mismatches)
+    canonical_summary, tree_valid = _fraction_view_summary(envelope)
+    canonical_findings: list[ValidationFinding] = []
+    if tree_valid:
+        canonical_findings = StepSummaryFractionValidator().audit(
+            step=step,
+            step_summary=canonical_summary,
+        )
+    else:
+        mismatches.append(
+            ValidatorShadowMismatch(
+                code="canonical_scalar_tree_invalid",
+                detail="Canonical observed scalar paths could not form one tree.",
+            )
+        )
+    canonical_sha256 = _finding_payload_sha256(canonical_findings)
+    if canonical_sha256 != legacy_sha256:
+        mismatches.append(
+            ValidatorShadowMismatch(
+                code="canonical_fraction_view_mismatch",
+                detail=(
+                    "Legacy and canonical bounded fraction/percentage findings "
+                    "were not byte-equivalent."
+                ),
+            )
+        )
+    return FractionScaleShadowComparison(
+        step_id=envelope.step_id,
+        exact_match=not mismatches,
+        legacy_finding_count=len(legacy_findings),
+        canonical_finding_count=len(canonical_findings),
+        legacy_findings_sha256=legacy_sha256,
+        canonical_findings_sha256=canonical_sha256,
+        mismatches=tuple(mismatches),
+    )
+
+
+def fraction_scale_shadow_blocking_finding(
+    *,
+    validator_name: str,
+    step_id: str,
+    comparison: FractionScaleShadowComparison,
+) -> ValidationFinding:
+    """Render one fail-closed bounded-metric migration finding."""
+
+    return ValidationFinding(
+        validator=validator_name,
+        severity="error",
+        message=(
+            "Canonical bounded fraction/percentage shadow could not safely "
+            f"replace the legacy view for step {step_id}. Keep the legacy "
+            "consumer active until source, digest, normalization, scalar-tree, "
+            "and finding decisions agree exactly."
+        ),
+        detail={
+            "step_id": step_id,
+            "canonical_shadow_blocked": True,
+            "mismatch_codes": sorted(
+                {mismatch.code for mismatch in comparison.mismatches}
+            ),
+            "legacy_finding_count": comparison.legacy_finding_count,
+            "canonical_finding_count": comparison.canonical_finding_count,
+            "legacy_findings_sha256": comparison.legacy_findings_sha256,
+            "canonical_findings_sha256": comparison.canonical_findings_sha256,
+        },
+    )
+
+
 def registered_output_shadow_blocking_finding(
     *,
     validator_name: str,
@@ -254,10 +471,13 @@ def registered_output_shadow_blocking_finding(
 
 
 __all__ = [
+    "FractionScaleShadowComparison",
     "RegisteredOutputShadowComparison",
     "ValidatorShadowComparison",
     "ValidatorShadowMismatch",
+    "compare_fraction_scale_shadow",
     "compare_registered_output_shadow",
     "compare_validator_shadow_inputs",
+    "fraction_scale_shadow_blocking_finding",
     "registered_output_shadow_blocking_finding",
 ]

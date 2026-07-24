@@ -60,6 +60,18 @@ _SAFE_STRING_FIELD_TOKENS = frozenset(
         "variable",
     }
 )
+_SAFE_DESCRIPTOR_FIELD_NAMES = frozenset(
+    {
+        "effect_measure",
+        "estimand",
+        "measure",
+        "measure_type",
+        "metric",
+        "metric_name",
+        "statistic",
+        "type",
+    }
+)
 _VALUE_KEYS = (
     "value",
     "estimate",
@@ -318,7 +330,15 @@ def _type_label(value: Any) -> str:
 
 def _safe_string_field(field_path: str) -> bool:
     tokens = {token for token in re.split(r"[^a-z0-9]+", field_path.lower()) if token}
-    return bool(tokens & _SAFE_STRING_FIELD_TOKENS)
+    leaf = re.sub(
+        r"[^a-z0-9]+",
+        "_",
+        re.split(r"[.\[]", field_path.lower())[-1],
+    ).strip("_")
+    return bool(tokens & _SAFE_STRING_FIELD_TOKENS) or (
+        leaf in _SAFE_DESCRIPTOR_FIELD_NAMES
+        or leaf.endswith(("_measure", "_metric", "_type"))
+    )
 
 
 def _path_field(field_path: str) -> bool:

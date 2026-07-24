@@ -19,9 +19,11 @@ from easyicu.research_agent.audits.envelope_shadow import (
 )
 from easyicu.research_agent.audits.envelope_consumers import (
     CrossStepRegisteredOutputEnvelopeDualReader,
+    StepSummaryFractionEnvelopeDualReader,
 )
 from easyicu.research_agent.audits.validators import (
     CrossStepRegisteredOutputValidator,
+    StepSummaryFractionValidator,
 )
 from easyicu.research_agent.execution.result_envelope import (
     StepResultEnvelope,
@@ -165,6 +167,8 @@ def replay_run(run_dir: Path, output_dir: Path) -> dict[str, Any]:
     completed_envelopes: dict[str, StepResultEnvelope] = {}
     registered_output_validator = CrossStepRegisteredOutputValidator()
     registered_output_dual_reader = CrossStepRegisteredOutputEnvelopeDualReader()
+    fraction_validator = StepSummaryFractionValidator()
+    fraction_dual_reader = StepSummaryFractionEnvelopeDualReader()
     for record in records:
         step_id = str(record["step_id"])
         summary = record.get("step_summary")
@@ -238,6 +242,25 @@ def replay_run(run_dir: Path, output_dir: Path) -> dict[str, Any]:
         registered_output_shadow_exact = (
             legacy_registered_output_payload == canonical_registered_output_payload
         )
+        legacy_fraction_findings = fraction_validator.audit(
+            step=replay_step,
+            step_summary=summary,
+        )
+        canonical_fraction_findings = fraction_dual_reader.audit(
+            step=replay_step,
+            step_summary=summary,
+            envelope=envelope,
+            current_status=(
+                str(record.get("status")).strip()
+                if record.get("status") is not None
+                else None
+            ),
+        )
+        fraction_shadow_exact = [
+            finding.model_dump(mode="json") for finding in legacy_fraction_findings
+        ] == [
+            finding.model_dump(mode="json") for finding in canonical_fraction_findings
+        ]
         target_path = output_dir / f"{step_id}.step_result.envelope.json"
         write_shadow_step_result_envelope(
             envelope,
@@ -279,12 +302,15 @@ def replay_run(run_dir: Path, output_dir: Path) -> dict[str, Any]:
                 "registered_output_shadow_mismatch_count": (
                     0 if registered_output_shadow_exact else 1
                 ),
+                "fraction_legacy_finding_count": len(legacy_fraction_findings),
+                "fraction_shadow_exact": fraction_shadow_exact,
+                "fraction_shadow_mismatch_count": (0 if fraction_shadow_exact else 1),
             }
         )
         completed_records.append(record)
         completed_envelopes[step_id] = envelope
     index = {
-        "schema_version": "easyicu.shadow_step_result_index/3",
+        "schema_version": "easyicu.shadow_step_result_index/4",
         "source_manifest_sha256": _sha256_bytes(manifest_bytes),
         "envelope_count": len(index_rows),
         "normalization_error_count": sum(
@@ -298,6 +324,12 @@ def replay_run(run_dir: Path, output_dir: Path) -> dict[str, Any]:
         ),
         "registered_output_shadow_mismatch_count": sum(
             row["registered_output_shadow_mismatch_count"] for row in index_rows
+        ),
+        "fraction_legacy_finding_count": sum(
+            row["fraction_legacy_finding_count"] for row in index_rows
+        ),
+        "fraction_shadow_mismatch_count": sum(
+            row["fraction_shadow_mismatch_count"] for row in index_rows
         ),
         "steps": index_rows,
     }
