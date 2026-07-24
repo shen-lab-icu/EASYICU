@@ -10,13 +10,13 @@ from __future__ import annotations
 
 import hashlib
 import json
-import re
 from typing import Any, Literal, Mapping, Sequence
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from easyicu.research_agent.execution.result_envelope import (
     StepResultEnvelope,
+    rebuild_observed_scalar_tree,
     verify_step_result_envelope,
 )
 from easyicu.research_agent.schema import AnalysisStep, ValidationFinding
@@ -242,84 +242,6 @@ def compare_registered_output_shadow(
     )
 
 
-_SCALAR_PATH_TOKEN = re.compile(r"([^\.\[\]]+)|\[(\d+)\]")
-
-
-def _scalar_path_tokens(field_path: str) -> tuple[str | int, ...] | None:
-    tokens: list[str | int] = []
-    for match in _SCALAR_PATH_TOKEN.finditer(field_path):
-        raw_index = match.group(2)
-        tokens.append(int(raw_index) if raw_index is not None else match.group(1))
-    if not tokens:
-        return None
-    rendered = str(tokens[0])
-    for token in tokens[1:]:
-        rendered += f"[{token}]" if isinstance(token, int) else f".{token}"
-    return tuple(tokens) if rendered == field_path else None
-
-
-def _set_scalar_path(
-    root: dict[str, Any],
-    *,
-    tokens: tuple[str | int, ...],
-    value: Any,
-) -> bool:
-    current: Any = root
-    for index, token in enumerate(tokens):
-        final = index == len(tokens) - 1
-        next_is_index = not final and isinstance(tokens[index + 1], int)
-        if isinstance(token, str):
-            if not isinstance(current, dict):
-                return False
-            if final:
-                if token in current and current[token] != value:
-                    return False
-                current[token] = value
-                return True
-            child = current.get(token)
-            expected_type = list if next_is_index else dict
-            if child is None:
-                child = expected_type()
-                current[token] = child
-            elif not isinstance(child, expected_type):
-                return False
-            current = child
-            continue
-        if not isinstance(current, list):
-            return False
-        while len(current) <= token:
-            current.append(None)
-        if final:
-            if current[token] is not None and current[token] != value:
-                return False
-            current[token] = value
-            return True
-        child = current[token]
-        expected_type = list if next_is_index else dict
-        if child is None:
-            child = expected_type()
-            current[token] = child
-        elif not isinstance(child, expected_type):
-            return False
-        current = child
-    return False
-
-
-def _fraction_view_summary(
-    envelope: StepResultEnvelope,
-) -> tuple[dict[str, Any], bool]:
-    """Rebuild only the normalized scalar tree carried by the envelope."""
-
-    summary: dict[str, Any] = {}
-    for scalar in envelope.observed_scalars:
-        tokens = _scalar_path_tokens(scalar.field_path)
-        if tokens is None or not isinstance(tokens[0], str):
-            return {}, False
-        if not _set_scalar_path(summary, tokens=tokens, value=scalar.value):
-            return {}, False
-    return summary, True
-
-
 def _finding_payload_sha256(findings: Sequence[ValidationFinding]) -> str:
     payloads = [finding.model_dump(mode="json") for finding in findings]
     payloads.sort(
@@ -372,7 +294,9 @@ def compare_fraction_scale_shadow(
         current_status=current_status,
     )
     mismatches = list(base.mismatches)
-    canonical_summary, tree_valid = _fraction_view_summary(envelope)
+    rebuilt = rebuild_observed_scalar_tree(envelope.observed_scalars)
+    canonical_summary = rebuilt or {}
+    tree_valid = rebuilt is not None
     canonical_findings: list[ValidationFinding] = []
     if tree_valid:
         canonical_findings = StepSummaryFractionValidator().audit(
