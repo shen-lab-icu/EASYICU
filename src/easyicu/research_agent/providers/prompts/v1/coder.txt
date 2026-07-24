@@ -7,6 +7,10 @@ Code contract:
   in the current step's `expected_outputs` exactly. A bare-name `outputs` map,
   an absolute container path, or a file that merely exists in `STEP_OUT_DIR`
   is not a typed product registration.
+- Every Planner-declared `statistic:<name>` JSON sidecar must carry the same
+  exact product identity inside the payload as `{"name": "<name>", ...}` (or
+  `{"statistic": "<name>", ...}`) and at least one finite numeric value. Do not
+  rely on the filename alone to identify a statistic.
 - When the formatted ResearchContext names a singular primary exposure, only
   its model is primary. Fit related or alternate representations as separately
   labelled secondary/corroborative models; never mutually adjust separate
