@@ -262,16 +262,12 @@ def compare_fraction_scale_shadow(
     step_summary: Any,
     current_status: str | None,
     envelope: StepResultEnvelope | None,
+    legacy_findings: Sequence[ValidationFinding],
 ) -> FractionScaleShadowComparison:
     """Compare the legacy bounded-metric decision with envelope scalars."""
 
     from .validators import StepSummaryFractionValidator
 
-    legacy_summary = step_summary if isinstance(step_summary, dict) else {}
-    legacy_findings = StepSummaryFractionValidator().audit(
-        step=step,
-        step_summary=legacy_summary,
-    )
     legacy_sha256 = _finding_payload_sha256(legacy_findings)
     if envelope is None:
         return FractionScaleShadowComparison(

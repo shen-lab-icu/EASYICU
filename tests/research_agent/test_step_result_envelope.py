@@ -920,6 +920,7 @@ def test_fraction_scale_dual_read_matches_legacy_adversarial_corpus(
         step_summary=summary,
         current_status="ok",
         envelope=envelope,
+        legacy_findings=legacy,
     )
 
     assert _finding_payloads(dual_read) == _finding_payloads(legacy)

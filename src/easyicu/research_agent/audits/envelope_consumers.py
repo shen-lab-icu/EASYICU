@@ -41,6 +41,7 @@ class StepSummaryFractionEnvelopeDualReader(StepSummaryFractionValidator):
             step_summary=step_summary,
             current_status=current_status,
             envelope=envelope,
+            legacy_findings=legacy_findings,
         )
         if comparison.exact_match:
             return legacy_findings
