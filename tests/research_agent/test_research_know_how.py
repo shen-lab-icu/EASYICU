@@ -211,6 +211,40 @@ def test_prompt_projection_obeys_per_card_and_total_budgets() -> None:
         )
 
 
+def test_prompt_projection_schedules_three_or_more_hits_within_total_budget() -> None:
+    registry = KnowHowRegistry.load()
+    hits = registry.retrieve(
+        query=(
+            "ICU clinical research study analysis cohort outcome missingness "
+            "prediction survival causal sepsis AKI lactate ventilation "
+            "external validation fairness"
+        ),
+        study_family=None,
+        database="miiv",
+        available_concepts=[],
+        top_k=5,
+        min_score=0.01,
+    )
+    assert len(hits) >= 3
+
+    prompt = registry.render_prompt(hits)
+    projection = json.loads(prompt[prompt.index('{"cards"') :])
+
+    assert len(prompt) <= 8_000
+    assert projection["cards"]
+    assert projection["withheld_card_count"] == len(hits) - len(projection["cards"])
+    assert [card["card_id"] for card in projection["cards"]] == [
+        hit.card_id for hit in hits[: len(projection["cards"])]
+    ]
+    for card in projection["cards"]:
+        mandatory_fields = {
+            claim["field"]
+            for claim in card["claims"]
+            if claim["field"] in {"stop_condition", "requires_confirmation"}
+        }
+        assert mandatory_fields
+
+
 def test_zero_hit_binding_adds_no_planner_context_or_false_authority() -> None:
     registry = KnowHowRegistry.load()
     prepared = PreplanKnowHow(
