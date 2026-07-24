@@ -58,6 +58,7 @@ from .name_alias import patch_undefined_mapping_near_match_alias
 from .nonfinite_audit import (
     patch_nonfinite_audit_host_strict_boundary,
     patch_strict_numeric_nonfinite_audit_conflict,
+    patch_strict_numeric_helper_nonfinite_guard,
 )
 from .nullable_validation import patch_unused_nullable_numeric_validation
 from .rendering_role import patch_structured_analysis_role_selection
@@ -2446,6 +2447,15 @@ def deterministic_concept_audit_repair(
     if nonfinite_audit_host_strict != repaired:
         repair_name = "nonfinite_audit_host_strict_boundary_v2"
         repaired = nonfinite_audit_host_strict
+        repair_names.append(repair_name)
+
+    strict_helper_guarded = patch_strict_numeric_helper_nonfinite_guard(
+        repaired,
+        repair_findings=repair_findings,
+    )
+    if strict_helper_guarded != repaired:
+        repair_name = "strict_numeric_nonfinite_guard_v1"
+        repaired = strict_helper_guarded
         repair_names.append(repair_name)
 
     companion_selector_detached = patch_audit_only_companion_value_selector(

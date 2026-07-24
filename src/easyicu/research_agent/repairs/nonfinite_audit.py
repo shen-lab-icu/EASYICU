@@ -427,7 +427,177 @@ def patch_nonfinite_audit_host_strict_boundary(
     return repaired
 
 
+def patch_strict_numeric_helper_nonfinite_guard(
+    code: str,
+    *,
+    repair_findings: Sequence[ValidationFinding] = (),
+) -> str:
+    """Make one proven shared numeric-coercion helper reject infinities.
+
+    The concept auditor supplies the exact affected model variables.  The
+    source must route all of them through one literal-list call to one helper
+    that already rejects lossy ``to_numeric(..., errors="coerce")`` conversion.
+    This patch adds only the missing finite-value guard at that same boundary.
+    """
+
+    variables = {
+        variable
+        for finding in repair_findings
+        if finding.validator == "llm_concept_auditor"
+        and finding.severity == "error"
+        and (finding.detail or {}).get("issue_code")
+        == "strict_numeric_nonfinite_guard_required"
+        for variable in ((finding.detail or {}).get("variables") or [])
+        if isinstance(variable, str) and variable.isidentifier()
+    }
+    if not variables:
+        return code
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return code
+
+    def top_level_import_alias(module: str) -> str | None:
+        aliases = {
+            alias.asname or module
+            for statement in tree.body
+            if isinstance(statement, ast.Import)
+            for alias in statement.names
+            if alias.name == module
+        }
+        return next(iter(aliases)) if len(aliases) == 1 else None
+
+    pandas_alias = top_level_import_alias("pandas")
+    numpy_alias = top_level_import_alias("numpy")
+    if pandas_alias is None or numpy_alias is None:
+        return code
+    guard_name = "_easyicu_nonfinite_numeric_mask_v1"
+    if any(
+        (isinstance(node, ast.Name) and node.id in {guard_name, "RuntimeError"})
+        and isinstance(node.ctx, (ast.Store, ast.Del))
+        for node in ast.walk(tree)
+    ):
+        return code
+
+    candidates: list[tuple[ast.FunctionDef, ast.Assign, str]] = []
+    for function in (
+        node for node in ast.walk(tree) if isinstance(node, ast.FunctionDef)
+    ):
+        assignments = [
+            node
+            for node in ast.walk(function)
+            if isinstance(node, ast.Assign)
+            and len(node.targets) == 1
+            and isinstance(node.targets[0], ast.Name)
+            and isinstance(node.value, ast.Call)
+            and isinstance(node.value.func, ast.Attribute)
+            and isinstance(node.value.func.value, ast.Name)
+            and node.value.func.value.id == pandas_alias
+            and node.value.func.attr == "to_numeric"
+            and any(
+                keyword.arg == "errors"
+                and isinstance(keyword.value, ast.Constant)
+                and keyword.value.value == "coerce"
+                for keyword in node.value.keywords
+            )
+        ]
+        for assignment in assignments:
+            converted_name = assignment.targets[0].id
+            if any(
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "isfinite"
+                and isinstance(node.func.value, ast.Name)
+                and node.func.value.id == numpy_alias
+                and any(
+                    isinstance(descendant, ast.Name) and descendant.id == converted_name
+                    for descendant in ast.walk(node)
+                )
+                for node in ast.walk(function)
+            ):
+                continue
+            has_loss_guard = any(
+                isinstance(node, ast.If)
+                and any(
+                    isinstance(descendant, ast.Name) and "invalid" in descendant.id
+                    for descendant in ast.walk(node.test)
+                )
+                and any(
+                    isinstance(descendant, (ast.Raise, ast.Call))
+                    for descendant in ast.walk(node)
+                )
+                for node in ast.walk(function)
+            )
+            if has_loss_guard:
+                candidates.append((function, assignment, converted_name))
+    if len(candidates) != 1:
+        return code
+    helper, assignment, converted_name = candidates[0]
+    if any(
+        (
+            isinstance(node, ast.Name)
+            and node.id in {pandas_alias, numpy_alias}
+            and isinstance(node.ctx, (ast.Store, ast.Del))
+        )
+        or (isinstance(node, ast.arg) and node.arg in {pandas_alias, numpy_alias})
+        for node in ast.walk(helper)
+    ):
+        return code
+
+    helper_calls = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == helper.name
+        and len(node.args) >= 2
+        and isinstance(node.args[1], ast.Name)
+    ]
+    literal_lists: dict[str, list[set[str]]] = {}
+    for node in ast.walk(tree):
+        if not (
+            isinstance(node, ast.Assign)
+            and len(node.targets) == 1
+            and isinstance(node.targets[0], ast.Name)
+            and isinstance(node.value, ast.List)
+            and all(
+                isinstance(item, ast.Constant) and isinstance(item.value, str)
+                for item in node.value.elts
+            )
+        ):
+            continue
+        literal_lists.setdefault(node.targets[0].id, []).append(
+            {str(item.value) for item in node.value.elts}
+        )
+    if len(helper_calls) != 1:
+        return code
+    routed_candidates = literal_lists.get(helper_calls[0].args[1].id, [])
+    routed_variables = routed_candidates[0] if len(routed_candidates) == 1 else None
+    if routed_variables is None or not variables <= routed_variables:
+        return code
+    if assignment.end_lineno is None:
+        return code
+
+    lines = code.splitlines(keepends=True)
+    indent = lines[assignment.lineno - 1][: assignment.col_offset]
+    body_indent = indent + "    "
+    insertion = (
+        f"{indent}{guard_name} = {converted_name}.notna() & "
+        f"~{numpy_alias}.isfinite({converted_name}.to_numpy(dtype=float))\n"
+        f"{indent}if int({guard_name}.sum()) > 0:\n"
+        f'{body_indent}raise RuntimeError("non-finite numeric input")\n'
+    )
+    lines.insert(assignment.end_lineno, insertion)
+    repaired = "".join(lines)
+    try:
+        ast.parse(repaired)
+    except SyntaxError:
+        return code
+    return repaired
+
+
 __all__ = [
     "patch_nonfinite_audit_host_strict_boundary",
     "patch_strict_numeric_nonfinite_audit_conflict",
+    "patch_strict_numeric_helper_nonfinite_guard",
 ]
