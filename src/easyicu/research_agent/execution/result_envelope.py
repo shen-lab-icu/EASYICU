@@ -8,7 +8,9 @@ period the envelope is diagnostic-only and cannot grant paper authority.
 
 from __future__ import annotations
 
+import csv
 import hashlib
+import io
 import json
 import math
 import mimetypes
@@ -16,6 +18,7 @@ import numbers
 import os
 import re
 import tempfile
+from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 from typing import Any, Literal, Mapping, Sequence, Union
 
@@ -74,6 +77,10 @@ _NUMERATOR_KEYS = ("numerator", "positive_n", "event_n", "count")
 _DENOMINATOR_KEYS = ("denominator", "denominator_n", "n_total", "total_n")
 _MAX_SCALARS = 5_000
 _MAX_DEPTH = 12
+_MAX_TABLE_BYTES = 16 * 1024 * 1024
+_MAX_TABLE_COLUMNS = 256
+_MAX_TABLE_ROWS = 20_000
+_IDENTIFIER_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_.:-]{0,127}$")
 
 
 class _StrictModel(BaseModel):
@@ -95,6 +102,9 @@ class NormalizationReceipt(_StrictModel):
         "nullable_to_null",
         "path_to_relative",
         "authorized_path_to_evidence_ref",
+        "percent_to_fraction",
+        "profile_registered_table",
+        "bind_registered_model_contract",
     ]
     field_path: str = Field(min_length=1, max_length=500)
     before_type: str = Field(min_length=1, max_length=100)
@@ -135,10 +145,57 @@ class CanonicalStatistic(_StrictModel):
     fields: tuple[CanonicalScalar, ...] = ()
 
 
+class CanonicalTableProfile(_StrictModel):
+    product_id: str
+    source_artifact_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    row_count: StrictInt = Field(ge=0)
+    columns: tuple[str, ...]
+    semantic_roles: tuple[
+        Literal[
+            "effect_estimate",
+            "generic",
+            "group_summary",
+            "missingness",
+            "model_diagnostic",
+            "population_flow",
+            "prevalence",
+        ],
+        ...,
+    ]
+
+
+class CanonicalPopulationCount(_StrictModel):
+    count_id: str
+    role: Literal[
+        "analyzed",
+        "cohort",
+        "complete_case",
+        "denominator",
+        "dropped",
+        "eligible",
+        "event",
+        "excluded",
+        "non_event",
+        "numerator",
+        "source",
+    ]
+    value: StrictInt = Field(ge=0)
+    source_product_id: str
+    source_artifact_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
+class CanonicalGroupCount(_StrictModel):
+    group_id: str = Field(min_length=1, max_length=128)
+    value: StrictInt = Field(ge=0)
+    source_product_id: str
+    source_artifact_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
 class StepPopulationResult(_StrictModel):
     eligible_n: StrictInt | None = Field(default=None, ge=0)
     analyzed_n: StrictInt | None = Field(default=None, ge=0)
-    group_counts: tuple[CanonicalScalar, ...] = ()
+    counts: tuple[CanonicalPopulationCount, ...] = ()
+    group_counts: tuple[CanonicalGroupCount, ...] = ()
 
 
 class StepVariableBindings(_StrictModel):
@@ -147,16 +204,34 @@ class StepVariableBindings(_StrictModel):
     covariates: tuple[str, ...] = ()
 
 
+class StepMissingVariableResult(_StrictModel):
+    variable: str = Field(min_length=1, max_length=128)
+    denominator_n: StrictInt | None = Field(default=None, ge=0)
+    nonmissing_n: StrictInt | None = Field(default=None, ge=0)
+    missing_n: StrictInt = Field(ge=0)
+    missing_fraction: StrictFloat | None = Field(default=None, ge=0.0, le=1.0)
+    source_product_id: str
+    source_artifact_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
 class StepMissingDataResult(_StrictModel):
     declared_policy_ref: str | None = None
     executed_policy: str | None = None
     before_n: StrictInt | None = Field(default=None, ge=0)
     after_n: StrictInt | None = Field(default=None, ge=0)
+    variables: tuple[StepMissingVariableResult, ...] = ()
 
 
 class StepModelDiagnostic(_StrictModel):
     diagnostic_id: str
     status: str
+    model_family: str | None = None
+    fit_method: str | None = None
+    converged: StrictBool | None = None
+    separation_detected: StrictBool | None = None
+    penalized: StrictBool | None = None
+    analyzed_n: StrictInt | None = Field(default=None, ge=0)
+    event_n: StrictInt | None = Field(default=None, ge=0)
     controlled_source_artifact_sha256: str | None = Field(
         default=None,
         pattern=r"^[0-9a-f]{64}$",
@@ -166,9 +241,10 @@ class StepModelDiagnostic(_StrictModel):
 class StepResultEnvelope(_StrictModel):
     """Strict shadow representation of one current step result."""
 
-    schema_version: Literal["easyicu.step_result_envelope/1"] = (
-        "easyicu.step_result_envelope/1"
-    )
+    schema_version: Literal[
+        "easyicu.step_result_envelope/1",
+        "easyicu.step_result_envelope/2",
+    ] = "easyicu.step_result_envelope/2"
     content_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     step_id: str = Field(min_length=1, max_length=300)
     status: str | None = Field(default=None, max_length=100)
@@ -192,6 +268,7 @@ class StepResultEnvelope(_StrictModel):
     model_diagnostics: tuple[StepModelDiagnostic, ...] = ()
     input_evidence_refs: tuple[str, ...] = ()
     artifacts: tuple[StepArtifactRef, ...] = ()
+    tables: tuple[CanonicalTableProfile, ...] = ()
     statistics: tuple[CanonicalStatistic, ...] = ()
     observed_scalars: tuple[CanonicalScalar, ...] = ()
     normalization_receipts: tuple[NormalizationReceipt, ...] = ()
@@ -218,7 +295,10 @@ def _canonical_json_bytes(payload: Any) -> bytes:
 
 
 def _model_content_sha256(envelope: StepResultEnvelope) -> str:
-    payload = envelope.model_dump(mode="json", exclude={"content_sha256"})
+    excluded = {"content_sha256"}
+    if envelope.schema_version == "easyicu.step_result_envelope/1":
+        excluded.add("tables")
+    payload = envelope.model_dump(mode="json", exclude=excluded)
     return _sha256_bytes(_canonical_json_bytes(payload))
 
 
@@ -841,6 +921,942 @@ def _parse_statistic(
     )
 
 
+@dataclass
+class _CompiledRegisteredOutputs:
+    tables: list[CanonicalTableProfile] = field(default_factory=list)
+    statistics: list[CanonicalStatistic] = field(default_factory=list)
+    population_counts: list[CanonicalPopulationCount] = field(default_factory=list)
+    group_counts: list[CanonicalGroupCount] = field(default_factory=list)
+    missing_variables: list[StepMissingVariableResult] = field(default_factory=list)
+    model_diagnostics: list[StepModelDiagnostic] = field(default_factory=list)
+    exposures: set[str] = field(default_factory=set)
+    outcomes: set[str] = field(default_factory=set)
+    covariates: set[str] = field(default_factory=set)
+
+
+def _safe_csv_rows(
+    raw: bytes,
+    *,
+    product_id: str,
+    issues: list[NormalizationIssue],
+) -> tuple[tuple[str, ...], list[dict[str, str]]] | None:
+    if len(raw) > _MAX_TABLE_BYTES:
+        issues.append(
+            NormalizationIssue(
+                severity="error",
+                code="registered_table_too_large",
+                message="A registered table exceeded the canonical byte limit.",
+                product_id=product_id,
+            )
+        )
+        return None
+    try:
+        text = raw.decode("utf-8-sig")
+    except UnicodeError:
+        issues.append(
+            NormalizationIssue(
+                severity="error",
+                code="invalid_registered_table_encoding",
+                message="A registered table was not strict UTF-8 CSV.",
+                product_id=product_id,
+            )
+        )
+        return None
+    try:
+        rows = list(csv.reader(io.StringIO(text, newline=""), strict=True))
+    except csv.Error:
+        issues.append(
+            NormalizationIssue(
+                severity="error",
+                code="invalid_registered_table_csv",
+                message="A registered table was not valid CSV.",
+                product_id=product_id,
+            )
+        )
+        return None
+    if not rows:
+        issues.append(
+            NormalizationIssue(
+                severity="error",
+                code="empty_registered_table",
+                message="A registered table did not contain a header row.",
+                product_id=product_id,
+            )
+        )
+        return None
+    header = tuple(value.strip() for value in rows[0])
+    if (
+        not header
+        or len(header) > _MAX_TABLE_COLUMNS
+        or any(not value or len(value) > 128 for value in header)
+        or len(set(header)) != len(header)
+    ):
+        issues.append(
+            NormalizationIssue(
+                severity="error",
+                code="invalid_registered_table_header",
+                message="A registered table had empty, duplicate, or excessive columns.",
+                product_id=product_id,
+            )
+        )
+        return None
+    body = rows[1:]
+    if len(body) > _MAX_TABLE_ROWS:
+        issues.append(
+            NormalizationIssue(
+                severity="error",
+                code="registered_table_row_limit_exceeded",
+                message="A registered table exceeded the canonical row limit.",
+                product_id=product_id,
+            )
+        )
+        return None
+    mapped: list[dict[str, str]] = []
+    for index, row in enumerate(body):
+        if len(row) != len(header):
+            issues.append(
+                NormalizationIssue(
+                    severity="error",
+                    code="invalid_registered_table_row_width",
+                    message="A registered table row did not match its header width.",
+                    field_path=f"row[{index}]",
+                    product_id=product_id,
+                )
+            )
+            return None
+        mapped.append(dict(zip(header, row, strict=True)))
+    return header, mapped
+
+
+def _csv_number(
+    row: Mapping[str, str],
+    key: str,
+    *,
+    product_id: str,
+    row_index: int,
+    issues: list[NormalizationIssue],
+) -> int | float | None:
+    raw = row.get(key)
+    if raw is None or not raw.strip():
+        return None
+    rendered = raw.strip()
+    try:
+        value = float(rendered)
+    except ValueError:
+        issues.append(
+            NormalizationIssue(
+                severity="error",
+                code="invalid_registered_numeric_cell",
+                message="A recognized numeric table cell was not numeric.",
+                field_path=f"row[{row_index}].{key}",
+                product_id=product_id,
+            )
+        )
+        return None
+    if not math.isfinite(value):
+        issues.append(
+            NormalizationIssue(
+                severity="error",
+                code="nonfinite_registered_numeric_cell",
+                message="A recognized numeric table cell was not finite.",
+                field_path=f"row[{row_index}].{key}",
+                product_id=product_id,
+            )
+        )
+        return None
+    if re.fullmatch(r"[+-]?\d+", rendered):
+        return int(rendered)
+    return value
+
+
+def _csv_count(
+    row: Mapping[str, str],
+    key: str,
+    *,
+    product_id: str,
+    row_index: int,
+    issues: list[NormalizationIssue],
+) -> int | None:
+    value = _csv_number(
+        row,
+        key,
+        product_id=product_id,
+        row_index=row_index,
+        issues=issues,
+    )
+    if value is None:
+        return None
+    if value < 0 or not float(value).is_integer():
+        issues.append(
+            NormalizationIssue(
+                severity="error",
+                code="invalid_registered_count",
+                message="A recognized count cell was negative or non-integral.",
+                field_path=f"row[{row_index}].{key}",
+                product_id=product_id,
+            )
+        )
+        return None
+    return int(value)
+
+
+def _csv_bool(
+    row: Mapping[str, str],
+    key: str,
+    *,
+    product_id: str,
+    row_index: int,
+    issues: list[NormalizationIssue],
+) -> bool | None:
+    raw = row.get(key)
+    if raw is None or not raw.strip():
+        return None
+    normalized = raw.strip().lower()
+    if normalized not in {"true", "false"}:
+        issues.append(
+            NormalizationIssue(
+                severity="error",
+                code="invalid_registered_boolean_cell",
+                message="A recognized boolean table cell was not true or false.",
+                field_path=f"row[{row_index}].{key}",
+                product_id=product_id,
+            )
+        )
+        return None
+    return normalized == "true"
+
+
+def _safe_table_identifier(value: Any) -> str | None:
+    if not isinstance(value, str):
+        return None
+    normalized = value.strip()
+    if not _IDENTIFIER_RE.fullmatch(normalized):
+        return None
+    return normalized
+
+
+def _table_semantic_roles(
+    columns: set[str],
+    rows: Sequence[Mapping[str, str]],
+) -> tuple[str, ...]:
+    roles: set[str] = set()
+    if (
+        {"variable", "group", "denominator_n"}.issubset(columns)
+        and "schema_version" in columns
+        and all(
+            not row.get("schema_version")
+            or row["schema_version"].strip() == "easyicu.table_one_result/1"
+            for row in rows
+        )
+    ):
+        roles.add("group_summary")
+    if {"n_at_start", "n_remaining", "n_excluded"}.issubset(columns) or {
+        "n_at_start_rows",
+        "n_remaining_rows",
+        "n_excluded_rows",
+    }.issubset(columns):
+        roles.add("population_flow")
+    if (
+        "variable" in columns
+        and "missing_n" in columns
+        and columns.intersection({"n_full", "n_total", "cohort_n", "denominator_n"})
+        and columns.intersection({"missing_pct", "missing_percent", "fraction_missing"})
+    ):
+        roles.add("missingness")
+    if (
+        columns.intersection({"estimate", "odds_ratio"})
+        and columns.intersection({"ci_low", "ci_95_low"})
+        and columns.intersection({"ci_high", "ci_95_high"})
+    ):
+        roles.add("effect_estimate")
+    if (
+        columns.intersection({"numerator", "positive_n"})
+        and columns.intersection({"denominator", "denominator_n"})
+        and columns.intersection({"prevalence", "proportion"})
+    ):
+        roles.add("prevalence")
+    if {"model_id", "fit_status"}.issubset(columns):
+        roles.add("model_diagnostic")
+    return tuple(sorted(roles or {"generic"}))
+
+
+def _row_identity(row: Mapping[str, str], row_index: int) -> str:
+    for key in (
+        "model_id",
+        "summary",
+        "criterion_id",
+        "stage",
+        "variable",
+        "outcome",
+        "analysis",
+    ):
+        identifier = _safe_table_identifier(row.get(key))
+        if identifier is not None:
+            return identifier
+    return f"row_{row_index}"
+
+
+def _normalized_fraction(
+    row: Mapping[str, str],
+    *,
+    fraction_keys: Sequence[str],
+    percent_keys: Sequence[str],
+    product_id: str,
+    row_index: int,
+    field_name: str,
+    receipts: list[NormalizationReceipt],
+    issues: list[NormalizationIssue],
+) -> float | None:
+    candidates: list[float] = []
+    for key in fraction_keys:
+        value = _csv_number(
+            row,
+            key,
+            product_id=product_id,
+            row_index=row_index,
+            issues=issues,
+        )
+        if value is not None:
+            candidates.append(float(value))
+    for key in percent_keys:
+        value = _csv_number(
+            row,
+            key,
+            product_id=product_id,
+            row_index=row_index,
+            issues=issues,
+        )
+        if value is not None:
+            candidates.append(float(value) / 100.0)
+            receipts.append(
+                NormalizationReceipt(
+                    operation="percent_to_fraction",
+                    field_path=f"row[{row_index}].{key}",
+                    before_type="percent",
+                    after_type="fraction",
+                    product_id=product_id,
+                )
+            )
+    if not candidates:
+        return None
+    if any(value < 0.0 or value > 1.0 for value in candidates):
+        issues.append(
+            NormalizationIssue(
+                severity="error",
+                code="invalid_registered_fraction",
+                message=f"A recognized {field_name} was outside [0, 1].",
+                field_path=f"row[{row_index}]",
+                product_id=product_id,
+            )
+        )
+        return None
+    first = candidates[0]
+    if any(
+        not math.isclose(value, first, rel_tol=1e-9, abs_tol=1e-12)
+        for value in candidates[1:]
+    ):
+        issues.append(
+            NormalizationIssue(
+                severity="error",
+                code="conflicting_registered_fraction",
+                message=f"Equivalent {field_name} fields contained conflicting values.",
+                field_path=f"row[{row_index}]",
+                product_id=product_id,
+            )
+        )
+        return None
+    return first
+
+
+def _compile_registered_table(
+    *,
+    artifact: StepArtifactRef,
+    raw: bytes,
+    receipts: list[NormalizationReceipt],
+    issues: list[NormalizationIssue],
+) -> _CompiledRegisteredOutputs:
+    compiled = _CompiledRegisteredOutputs()
+    parsed = _safe_csv_rows(raw, product_id=artifact.product_id, issues=issues)
+    if parsed is None:
+        return compiled
+    header, rows = parsed
+    columns = set(header)
+    roles = _table_semantic_roles(columns, rows)
+    compiled.tables.append(
+        CanonicalTableProfile(
+            product_id=artifact.product_id,
+            source_artifact_sha256=artifact.sha256,
+            row_count=len(rows),
+            columns=header,
+            semantic_roles=roles,
+        )
+    )
+    receipts.append(
+        NormalizationReceipt(
+            operation="profile_registered_table",
+            field_path="output_files",
+            before_type="registered.csv",
+            after_type="canonical.table_profile",
+            product_id=artifact.product_id,
+        )
+    )
+
+    is_group_summary = "group_summary" in roles
+    group_values: dict[str, int] = {}
+    for row_index, row in enumerate(rows):
+        identity = _row_identity(row, row_index)
+        if is_group_summary:
+            group_id = str(row.get("group") or "").strip()
+            denominator = _csv_count(
+                row,
+                "denominator_n",
+                product_id=artifact.product_id,
+                row_index=row_index,
+                issues=issues,
+            )
+            if group_id and denominator is not None:
+                previous = group_values.get(group_id)
+                if previous is not None and previous != denominator:
+                    issues.append(
+                        NormalizationIssue(
+                            severity="error",
+                            code="conflicting_registered_group_count",
+                            message="Repeated group rows had conflicting denominators.",
+                            field_path=f"row[{row_index}].denominator_n",
+                            product_id=artifact.product_id,
+                        )
+                    )
+                else:
+                    group_values[group_id] = denominator
+            continue
+
+        if "population_flow" in roles:
+            group_id = str(row.get("exposure_level") or "").strip()
+            grouped = group_id and group_id.lower() not in {"all", "overall"}
+            for key, role in (
+                ("n_at_start", "source"),
+                ("n_at_start_rows", "source"),
+                ("n_remaining", "eligible"),
+                ("n_remaining_rows", "eligible"),
+                ("n_excluded", "excluded"),
+                ("n_excluded_rows", "excluded"),
+            ):
+                value = _csv_count(
+                    row,
+                    key,
+                    product_id=artifact.product_id,
+                    row_index=row_index,
+                    issues=issues,
+                )
+                if value is None:
+                    continue
+                if grouped and role == "eligible":
+                    group_values[group_id] = value
+                    continue
+                if grouped:
+                    continue
+                compiled.population_counts.append(
+                    CanonicalPopulationCount(
+                        count_id=f"{artifact.name}:{identity}:{key}",
+                        role=role,
+                        value=value,
+                        source_product_id=artifact.product_id,
+                        source_artifact_sha256=artifact.sha256,
+                    )
+                )
+
+        if "missingness" in roles:
+            variable = _safe_table_identifier(row.get("variable"))
+            missing_n = _csv_count(
+                row,
+                "missing_n",
+                product_id=artifact.product_id,
+                row_index=row_index,
+                issues=issues,
+            )
+            if variable is not None and missing_n is not None:
+                denominator_n = None
+                for key in ("n_full", "n_total", "cohort_n", "denominator_n"):
+                    denominator_n = _csv_count(
+                        row,
+                        key,
+                        product_id=artifact.product_id,
+                        row_index=row_index,
+                        issues=issues,
+                    )
+                    if denominator_n is not None:
+                        break
+                nonmissing_n = None
+                for key in ("n_nonmissing", "nonmissing_n"):
+                    nonmissing_n = _csv_count(
+                        row,
+                        key,
+                        product_id=artifact.product_id,
+                        row_index=row_index,
+                        issues=issues,
+                    )
+                    if nonmissing_n is not None:
+                        break
+                missing_fraction = _normalized_fraction(
+                    row,
+                    fraction_keys=("fraction_missing",),
+                    percent_keys=("missing_pct", "missing_percent"),
+                    product_id=artifact.product_id,
+                    row_index=row_index,
+                    field_name="missing fraction",
+                    receipts=receipts,
+                    issues=issues,
+                )
+                if (
+                    denominator_n is not None
+                    and denominator_n > 0
+                    and missing_fraction is not None
+                    and not math.isclose(
+                        missing_n / denominator_n,
+                        missing_fraction,
+                        rel_tol=1e-8,
+                        abs_tol=1e-12,
+                    )
+                ):
+                    issues.append(
+                        NormalizationIssue(
+                            severity="error",
+                            code="inconsistent_registered_missingness",
+                            message="Missing count and fraction did not share one denominator.",
+                            field_path=f"row[{row_index}]",
+                            product_id=artifact.product_id,
+                        )
+                    )
+                compiled.missing_variables.append(
+                    StepMissingVariableResult(
+                        variable=variable,
+                        denominator_n=denominator_n,
+                        nonmissing_n=nonmissing_n,
+                        missing_n=missing_n,
+                        missing_fraction=missing_fraction,
+                        source_product_id=artifact.product_id,
+                        source_artifact_sha256=artifact.sha256,
+                    )
+                )
+                role = str(row.get("role") or "").strip().lower()
+                if role == "primary_exposure":
+                    compiled.exposures.add(variable)
+                elif role in {"target_outcome", "outcome"}:
+                    compiled.outcomes.add(variable)
+                elif role in {"adjustment", "covariate"}:
+                    compiled.covariates.add(variable)
+
+        if "effect_estimate" in roles or "prevalence" in roles:
+            effect_scale = _safe_table_identifier(row.get("effect_scale"))
+            value: int | float | None
+            if "prevalence" in roles:
+                value = _csv_number(
+                    row,
+                    "prevalence",
+                    product_id=artifact.product_id,
+                    row_index=row_index,
+                    issues=issues,
+                )
+            elif effect_scale and "odds_ratio" in effect_scale:
+                value = _csv_number(
+                    row,
+                    "odds_ratio",
+                    product_id=artifact.product_id,
+                    row_index=row_index,
+                    issues=issues,
+                )
+                if value is None:
+                    value = _csv_number(
+                        row,
+                        "estimate",
+                        product_id=artifact.product_id,
+                        row_index=row_index,
+                        issues=issues,
+                    )
+            else:
+                value = _csv_number(
+                    row,
+                    "estimate",
+                    product_id=artifact.product_id,
+                    row_index=row_index,
+                    issues=issues,
+                )
+            low = _csv_number(
+                row,
+                "ci_low" if "ci_low" in columns else "ci_95_low",
+                product_id=artifact.product_id,
+                row_index=row_index,
+                issues=issues,
+            )
+            high = _csv_number(
+                row,
+                "ci_high" if "ci_high" in columns else "ci_95_high",
+                product_id=artifact.product_id,
+                row_index=row_index,
+                issues=issues,
+            )
+            if "prevalence" in roles and low is None and high is None:
+                low = _normalized_fraction(
+                    row,
+                    fraction_keys=(),
+                    percent_keys=("ci_lower_pct",),
+                    product_id=artifact.product_id,
+                    row_index=row_index,
+                    field_name="interval lower bound",
+                    receipts=receipts,
+                    issues=issues,
+                )
+                high = _normalized_fraction(
+                    row,
+                    fraction_keys=(),
+                    percent_keys=("ci_upper_pct",),
+                    product_id=artifact.product_id,
+                    row_index=row_index,
+                    field_name="interval upper bound",
+                    receipts=receipts,
+                    issues=issues,
+                )
+            if value is not None:
+                statistic_id = f"{artifact.name}:{identity}:{row_index}"
+                numerator = None
+                denominator = None
+                if "prevalence" in roles:
+                    for key in ("numerator", "positive_n"):
+                        numerator = _csv_count(
+                            row,
+                            key,
+                            product_id=artifact.product_id,
+                            row_index=row_index,
+                            issues=issues,
+                        )
+                        if numerator is not None:
+                            break
+                    for key in ("denominator", "denominator_n"):
+                        denominator = _csv_count(
+                            row,
+                            key,
+                            product_id=artifact.product_id,
+                            row_index=row_index,
+                            issues=issues,
+                        )
+                        if denominator is not None:
+                            break
+                compiled.statistics.append(
+                    CanonicalStatistic(
+                        statistic_id=statistic_id,
+                        product_id=artifact.product_id,
+                        value=value,
+                        interval_low=low,
+                        interval_high=high,
+                        p_value=_csv_number(
+                            row,
+                            "p_value",
+                            product_id=artifact.product_id,
+                            row_index=row_index,
+                            issues=issues,
+                        ),
+                        effect_scale=effect_scale,
+                        unit=_safe_table_identifier(row.get("outcome_unit"))
+                        or _safe_table_identifier(row.get("unit")),
+                        numerator=numerator,
+                        denominator=denominator,
+                        source_artifact_sha256=artifact.sha256,
+                    )
+                )
+
+        for key, role in (
+            ("n_full", "source"),
+            ("cohort_n", "cohort"),
+            ("n_complete_case", "complete_case"),
+            ("n_dropped", "dropped"),
+            ("n", "analyzed"),
+            ("event_n", "event"),
+            ("non_event_n", "non_event"),
+            ("numerator", "numerator"),
+            ("denominator", "denominator"),
+        ):
+            if key not in columns:
+                continue
+            if key in {"numerator", "denominator"} and "prevalence" not in roles:
+                continue
+            value = _csv_count(
+                row,
+                key,
+                product_id=artifact.product_id,
+                row_index=row_index,
+                issues=issues,
+            )
+            if value is not None:
+                compiled.population_counts.append(
+                    CanonicalPopulationCount(
+                        count_id=f"{artifact.name}:{identity}:{row_index}:{key}",
+                        role=role,
+                        value=value,
+                        source_product_id=artifact.product_id,
+                        source_artifact_sha256=artifact.sha256,
+                    )
+                )
+
+        outcome = _safe_table_identifier(row.get("outcome"))
+        if outcome is not None:
+            compiled.outcomes.add(outcome)
+        exposure = _safe_table_identifier(
+            row.get("exposure_source") or row.get("exposure")
+        )
+        if exposure is not None and str(row.get("exposure_role") or "").lower() in {
+            "primary",
+            "exposure",
+            "",
+        }:
+            compiled.exposures.add(exposure)
+        if {"model_id", "fit_status"}.issubset(columns):
+            model_id = _safe_table_identifier(row.get("model_id"))
+            fit_status = _safe_table_identifier(row.get("fit_status"))
+            if model_id is not None and fit_status is not None:
+                compiled.model_diagnostics.append(
+                    StepModelDiagnostic(
+                        diagnostic_id=f"{model_id}@{artifact.product_id}",
+                        status=fit_status,
+                        model_family=_safe_table_identifier(row.get("model_family")),
+                        fit_method=_safe_table_identifier(row.get("fit_method")),
+                        converged=_csv_bool(
+                            row,
+                            "converged",
+                            product_id=artifact.product_id,
+                            row_index=row_index,
+                            issues=issues,
+                        ),
+                        separation_detected=_csv_bool(
+                            row,
+                            (
+                                "separation_detected"
+                                if "separation_detected" in columns
+                                else "separation"
+                            ),
+                            product_id=artifact.product_id,
+                            row_index=row_index,
+                            issues=issues,
+                        ),
+                        penalized=_csv_bool(
+                            row,
+                            "penalized",
+                            product_id=artifact.product_id,
+                            row_index=row_index,
+                            issues=issues,
+                        ),
+                        analyzed_n=_csv_count(
+                            row,
+                            "n",
+                            product_id=artifact.product_id,
+                            row_index=row_index,
+                            issues=issues,
+                        ),
+                        event_n=_csv_count(
+                            row,
+                            "event_n",
+                            product_id=artifact.product_id,
+                            row_index=row_index,
+                            issues=issues,
+                        ),
+                        controlled_source_artifact_sha256=artifact.sha256,
+                    )
+                )
+
+    for group_id, value in sorted(group_values.items()):
+        if len(group_id) > 128:
+            issues.append(
+                NormalizationIssue(
+                    severity="error",
+                    code="invalid_registered_group_identity",
+                    message="A registered group identity exceeded the canonical limit.",
+                    product_id=artifact.product_id,
+                )
+            )
+            continue
+        compiled.group_counts.append(
+            CanonicalGroupCount(
+                group_id=group_id,
+                value=value,
+                source_product_id=artifact.product_id,
+                source_artifact_sha256=artifact.sha256,
+            )
+        )
+    return compiled
+
+
+def _strict_optional_bool(
+    payload: Mapping[str, Any],
+    key: str,
+    *,
+    product_id: str,
+    issues: list[NormalizationIssue],
+) -> bool | None:
+    value = payload.get(key)
+    if value is None:
+        return None
+    if type(value) is not bool:
+        issues.append(
+            NormalizationIssue(
+                severity="error",
+                code="invalid_registered_model_boolean",
+                message="A model diagnostic boolean was not a strict JSON boolean.",
+                field_path=key,
+                product_id=product_id,
+            )
+        )
+        return None
+    return value
+
+
+def _strict_optional_json_count(
+    payload: Mapping[str, Any],
+    key: str,
+    *,
+    product_id: str,
+    issues: list[NormalizationIssue],
+) -> int | None:
+    value = payload.get(key)
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        issues.append(
+            NormalizationIssue(
+                severity="error",
+                code="invalid_registered_model_count",
+                message="A model diagnostic count was not a non-negative integer.",
+                field_path=key,
+                product_id=product_id,
+            )
+        )
+        return None
+    return value
+
+
+def _compile_registered_model_artifact(
+    *,
+    artifact: StepArtifactRef,
+    raw: bytes,
+    receipts: list[NormalizationReceipt],
+    issues: list[NormalizationIssue],
+) -> _CompiledRegisteredOutputs:
+    compiled = _CompiledRegisteredOutputs()
+    if not artifact.relative_path.lower().endswith(".json"):
+        return compiled
+    try:
+        payload = _safe_json_loads(raw)
+    except (UnicodeError, json.JSONDecodeError, ValueError):
+        return compiled
+    if not isinstance(payload, Mapping):
+        return compiled
+    contract = payload.get("model_contract")
+    if not isinstance(contract, Mapping):
+        return compiled
+    model_id = _safe_table_identifier(contract.get("model_id"))
+    fit_status = _safe_table_identifier(contract.get("fit_status"))
+    if model_id is None or fit_status is None:
+        issues.append(
+            NormalizationIssue(
+                severity="error",
+                code="invalid_registered_model_contract",
+                message="A registered model contract lacked a safe model id or fit status.",
+                product_id=artifact.product_id,
+            )
+        )
+        return compiled
+    compiled.model_diagnostics.append(
+        StepModelDiagnostic(
+            diagnostic_id=f"{model_id}@{artifact.product_id}",
+            status=fit_status,
+            model_family=_safe_table_identifier(contract.get("model_family")),
+            fit_method=_safe_table_identifier(contract.get("fit_method")),
+            converged=_strict_optional_bool(
+                contract,
+                "converged",
+                product_id=artifact.product_id,
+                issues=issues,
+            ),
+            separation_detected=_strict_optional_bool(
+                contract,
+                "separation_detected",
+                product_id=artifact.product_id,
+                issues=issues,
+            ),
+            penalized=_strict_optional_bool(
+                contract,
+                "penalized",
+                product_id=artifact.product_id,
+                issues=issues,
+            ),
+            analyzed_n=_strict_optional_json_count(
+                contract,
+                "n",
+                product_id=artifact.product_id,
+                issues=issues,
+            ),
+            event_n=_strict_optional_json_count(
+                contract,
+                "event_n",
+                product_id=artifact.product_id,
+                issues=issues,
+            ),
+            controlled_source_artifact_sha256=artifact.sha256,
+        )
+    )
+    outcome = _safe_table_identifier(contract.get("outcome"))
+    exposure = _safe_table_identifier(
+        contract.get("exposure_source") or contract.get("exposure")
+    )
+    if outcome is not None:
+        compiled.outcomes.add(outcome)
+    if exposure is not None:
+        compiled.exposures.add(exposure)
+    receipts.append(
+        NormalizationReceipt(
+            operation="bind_registered_model_contract",
+            field_path="model_contract",
+            before_type="registered.json",
+            after_type="canonical.model_diagnostic",
+            product_id=artifact.product_id,
+        )
+    )
+    return compiled
+
+
+def _extend_compilation(
+    target: _CompiledRegisteredOutputs,
+    source: _CompiledRegisteredOutputs,
+) -> None:
+    target.tables.extend(source.tables)
+    target.statistics.extend(source.statistics)
+    target.population_counts.extend(source.population_counts)
+    target.group_counts.extend(source.group_counts)
+    target.missing_variables.extend(source.missing_variables)
+    target.model_diagnostics.extend(source.model_diagnostics)
+    target.exposures.update(source.exposures)
+    target.outcomes.update(source.outcomes)
+    target.covariates.update(source.covariates)
+
+
+def _unique_count(
+    counts: Sequence[CanonicalPopulationCount],
+    roles: set[str],
+) -> int | None:
+    values = {item.value for item in counts if item.role in roles}
+    return next(iter(values)) if len(values) == 1 else None
+
+
+def _selected_count(
+    counts: Sequence[CanonicalPopulationCount],
+    *,
+    preferred_role: str,
+    fallback_roles: set[str] = frozenset(),
+) -> int | None:
+    preferred = [item.value for item in counts if item.role == preferred_role]
+    if preferred:
+        return preferred[-1]
+    return _unique_count(counts, fallback_roles)
+
+
 def normalize_step_result_shadow(
     *,
     step_id: str,
@@ -887,6 +1903,7 @@ def normalize_step_result_shadow(
     )
     artifacts: list[StepArtifactRef] = []
     statistics: list[CanonicalStatistic] = []
+    compiled_outputs = _CompiledRegisteredOutputs()
     output_files = summary_mapping.get("output_files")
     if output_files is not None and not isinstance(output_files, Mapping):
         issues.append(
@@ -950,6 +1967,70 @@ def normalize_step_result_shadow(
             )
             if parsed is not None:
                 statistics.append(parsed)
+        if relative.suffix.lower() == ".csv" and kind in {"artifact", "table"}:
+            _extend_compilation(
+                compiled_outputs,
+                _compile_registered_table(
+                    artifact=artifact,
+                    raw=raw_bytes,
+                    receipts=receipts,
+                    issues=issues,
+                ),
+            )
+        if kind == "artifact" and relative.suffix.lower() == ".json":
+            _extend_compilation(
+                compiled_outputs,
+                _compile_registered_model_artifact(
+                    artifact=artifact,
+                    raw=raw_bytes,
+                    receipts=receipts,
+                    issues=issues,
+                ),
+            )
+
+    statistics.extend(compiled_outputs.statistics)
+    population = None
+    if compiled_outputs.population_counts or compiled_outputs.group_counts:
+        population = StepPopulationResult(
+            eligible_n=_selected_count(
+                compiled_outputs.population_counts,
+                preferred_role="eligible",
+                fallback_roles={"cohort"},
+            ),
+            analyzed_n=_selected_count(
+                compiled_outputs.population_counts,
+                preferred_role="analyzed",
+                fallback_roles={"complete_case"},
+            ),
+            counts=tuple(compiled_outputs.population_counts),
+            group_counts=tuple(compiled_outputs.group_counts),
+        )
+    variables = None
+    if (
+        compiled_outputs.exposures
+        or compiled_outputs.outcomes
+        or compiled_outputs.covariates
+    ):
+        variables = StepVariableBindings(
+            exposures=tuple(sorted(compiled_outputs.exposures)),
+            outcomes=tuple(sorted(compiled_outputs.outcomes)),
+            covariates=tuple(sorted(compiled_outputs.covariates)),
+        )
+    missing_data = None
+    if compiled_outputs.missing_variables:
+        missing_data = StepMissingDataResult(
+            before_n=_selected_count(
+                compiled_outputs.population_counts,
+                preferred_role="source",
+                fallback_roles={"cohort"},
+            ),
+            after_n=_selected_count(
+                compiled_outputs.population_counts,
+                preferred_role="analyzed",
+                fallback_roles={"complete_case"},
+            ),
+            variables=tuple(compiled_outputs.missing_variables),
+        )
 
     if source_summary_bytes is None:
         try:
@@ -982,8 +2063,13 @@ def normalize_step_result_shadow(
             else None
         ),
         ledger_record_sha256=ledger_record_sha256,
+        population=population,
+        variables=variables,
+        missing_data=missing_data,
+        model_diagnostics=tuple(compiled_outputs.model_diagnostics),
         input_evidence_refs=tuple(sorted(set(authorized_path_refs.values()))),
         artifacts=tuple(artifacts),
+        tables=tuple(compiled_outputs.tables),
         statistics=tuple(statistics),
         observed_scalars=tuple(observed_scalars),
         normalization_receipts=tuple(receipts),
@@ -1036,12 +2122,16 @@ def write_shadow_step_result_envelope(
 
 
 __all__ = [
+    "CanonicalGroupCount",
+    "CanonicalPopulationCount",
     "CanonicalScalar",
     "CanonicalStatistic",
+    "CanonicalTableProfile",
     "NormalizationIssue",
     "NormalizationReceipt",
     "StepArtifactRef",
     "StepMissingDataResult",
+    "StepMissingVariableResult",
     "StepModelDiagnostic",
     "StepPopulationResult",
     "StepResultEnvelope",

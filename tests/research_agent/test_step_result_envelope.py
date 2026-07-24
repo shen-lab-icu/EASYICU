@@ -12,6 +12,9 @@ import pandas as pd
 import pytest
 from pydantic import ValidationError
 
+from easyicu.research_agent.audits.envelope_shadow import (
+    compare_validator_shadow_inputs,
+)
 from easyicu.research_agent.execution.result_envelope import (
     StepResultEnvelope,
     normalize_step_result_shadow,
@@ -247,6 +250,34 @@ def test_shadow_envelope_is_strict_and_cannot_be_written_into_raw_outputs(
     assert verify_step_result_envelope(loaded)
 
 
+def test_v2_reader_preserves_v1_shadow_digest_compatibility(tmp_path: Path) -> None:
+    current = normalize_step_result_shadow(
+        step_id="legacy-shadow",
+        step_summary={"n": 10},
+        output_dir=tmp_path,
+    )
+    legacy = current.model_dump(mode="json", exclude={"content_sha256", "tables"})
+    legacy["schema_version"] = "easyicu.step_result_envelope/1"
+    legacy["content_sha256"] = hashlib.sha256(
+        (
+            json.dumps(
+                legacy,
+                ensure_ascii=False,
+                allow_nan=False,
+                separators=(",", ":"),
+                sort_keys=True,
+            )
+            + "\n"
+        ).encode("utf-8")
+    ).hexdigest()
+
+    loaded = StepResultEnvelope.model_validate(legacy)
+
+    assert loaded.schema_version == "easyicu.step_result_envelope/1"
+    assert loaded.tables == ()
+    assert verify_step_result_envelope(loaded)
+
+
 def test_archived_replay_uses_current_ledger_and_verified_input_authority(
     tmp_path: Path,
 ) -> None:
@@ -318,6 +349,7 @@ def test_archived_replay_uses_current_ledger_and_verified_input_authority(
     assert result.returncode == 0, result.stderr
     index = json.loads((shadow_dir / "index.json").read_text())
     assert index["normalization_error_count"] == 0
+    assert index["validator_shadow_mismatch_count"] == 0
     envelope = StepResultEnvelope.model_validate_json(
         (shadow_dir / "01_analysis.step_result.envelope.json").read_text()
     )
@@ -353,6 +385,7 @@ def test_archived_replay_uses_current_ledger_and_verified_input_authority(
     assert rejected.returncode == 0, rejected.stderr
     rejected_index = json.loads((rejected_shadow_dir / "index.json").read_text())
     assert rejected_index["normalization_error_count"] == 1
+    assert rejected_index["validator_shadow_mismatch_count"] == 1
     rejected_envelope = StepResultEnvelope.model_validate_json(
         (rejected_shadow_dir / "01_analysis.step_result.envelope.json").read_text()
     )
@@ -369,3 +402,195 @@ def test_shadow_envelope_is_not_wired_into_live_execution() -> None:
         source = (repo_root / relative).read_text(encoding="utf-8")
         assert "execution.result_envelope" not in source
         assert "normalize_step_result_shadow" not in source
+        assert "audits.envelope_shadow" not in source
+        assert "compare_validator_shadow_inputs" not in source
+
+
+def test_registered_tables_compile_typed_population_missingness_and_estimate(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "flow.csv").write_text(
+        "stage,n_at_start,n_excluded,n_remaining,exposure_level\n"
+        "input,100,0,100,all\n"
+        "eligible,100,20,80,all\n"
+        "eligible,100,0,50,0\n"
+        "eligible,100,0,30,1\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "missing.csv").write_text(
+        "variable,role,n_full,n_nonmissing,missing_n,missing_pct\n"
+        "exposure,primary_exposure,80,60,20,25.0\n"
+        "outcome,target_outcome,80,80,0,0.0\n"
+        "age,adjustment,80,79,1,1.25\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "estimate.csv").write_text(
+        "model_id,outcome,model_family,exposure,exposure_role,effect_scale,"
+        "estimate,ci_low,ci_high,p_value,n,event_n,non_event_n,fit_status,"
+        "converged,fit_method\n"
+        "primary,outcome,logistic_regression,exposure,primary,odds_ratio,"
+        "1.5,1.2,1.8,0.01,60,12,48,fitted,True,statsmodels_logit\n",
+        encoding="utf-8",
+    )
+    summary = {
+        "output_files": {
+            "table:flow": "flow.csv",
+            "table:missingness": "missing.csv",
+            "table:primary_estimate": "estimate.csv",
+        }
+    }
+
+    envelope = normalize_step_result_shadow(
+        step_id="typed-tables",
+        step_summary=summary,
+        output_dir=tmp_path,
+    )
+
+    assert envelope.schema_version == "easyicu.step_result_envelope/2"
+    assert verify_step_result_envelope(envelope)
+    assert {role for table in envelope.tables for role in table.semantic_roles} >= {
+        "effect_estimate",
+        "missingness",
+        "model_diagnostic",
+        "population_flow",
+    }
+    assert envelope.population is not None
+    assert envelope.population.eligible_n == 80
+    assert envelope.population.analyzed_n == 60
+    assert {
+        (item.group_id, item.value) for item in envelope.population.group_counts
+    } == {
+        ("0", 50),
+        ("1", 30),
+    }
+    assert envelope.missing_data is not None
+    missing = {item.variable: item for item in envelope.missing_data.variables}
+    assert missing["exposure"].missing_fraction == 0.25
+    assert missing["exposure"].missing_n == 20
+    assert envelope.variables is not None
+    assert envelope.variables.exposures == ("exposure",)
+    assert envelope.variables.outcomes == ("outcome",)
+    assert envelope.variables.covariates == ("age",)
+    assert len(envelope.statistics) == 1
+    assert envelope.statistics[0].value == 1.5
+    assert envelope.statistics[0].interval_low == 1.2
+    assert envelope.statistics[0].interval_high == 1.8
+    assert len(envelope.model_diagnostics) == 1
+    assert envelope.model_diagnostics[0].converged is True
+    assert not [
+        issue for issue in envelope.normalization_issues if issue.severity == "error"
+    ]
+
+
+def test_registered_model_contract_is_typed_without_free_text(
+    tmp_path: Path,
+) -> None:
+    model = {
+        "model_contract": {
+            "model_id": "primary_model",
+            "outcome": "death",
+            "model_family": "logistic_regression",
+            "exposure_source": "lactate",
+            "fit_status": "fitted",
+            "converged": True,
+            "separation_detected": False,
+            "penalized": False,
+            "fit_method": "statsmodels_glm",
+            "n": 75,
+            "event_n": 9,
+            "fit_failure_reason": "free text that must not be copied",
+        }
+    }
+    (tmp_path / "model.json").write_text(json.dumps(model), encoding="utf-8")
+
+    envelope = normalize_step_result_shadow(
+        step_id="model",
+        step_summary={"output_files": {"artifact:model": "model.json"}},
+        output_dir=tmp_path,
+    )
+
+    assert envelope.variables is not None
+    assert envelope.variables.exposures == ("lactate",)
+    assert envelope.variables.outcomes == ("death",)
+    diagnostic = envelope.model_diagnostics[0]
+    assert diagnostic.status == "fitted"
+    assert diagnostic.converged is True
+    assert diagnostic.separation_detected is False
+    assert diagnostic.analyzed_n == 75
+    assert diagnostic.event_n == 9
+    assert "free text" not in envelope.model_dump_json()
+
+
+def test_registered_table_parser_fails_closed_on_header_numeric_and_fraction_conflicts(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "duplicate.csv").write_text(
+        "variable,missing_n,missing_n,n_full,missing_pct\nx,1,1,10,10\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "conflict.csv").write_text(
+        "variable,missing_n,n_full,fraction_missing,missing_pct\n" "x,1,10,0.1,50\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "nonfinite.csv").write_text(
+        "model_id,outcome,exposure,effect_scale,estimate,ci_low,ci_high,n,"
+        "fit_status,converged\n"
+        "m,y,x,odds_ratio,NaN,1,2,10,fitted,yes\n",
+        encoding="utf-8",
+    )
+
+    envelope = normalize_step_result_shadow(
+        step_id="hostile-tables",
+        step_summary={
+            "output_files": {
+                "table:duplicate": "duplicate.csv",
+                "table:conflict": "conflict.csv",
+                "table:nonfinite": "nonfinite.csv",
+            }
+        },
+        output_dir=tmp_path,
+    )
+
+    assert {
+        "conflicting_registered_fraction",
+        "invalid_registered_boolean_cell",
+        "invalid_registered_table_header",
+        "nonfinite_registered_numeric_cell",
+    }.issubset(_issue_codes(envelope))
+    assert envelope.statistics == ()
+
+
+def test_validator_shadow_comparison_is_exact_and_observational(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "estimate.json").write_text('{"value":1.0}', encoding="utf-8")
+    summary = {"output_files": {"statistic:estimate": "estimate.json"}}
+    envelope = normalize_step_result_shadow(
+        step_id="compare",
+        step_summary=summary,
+        output_dir=tmp_path,
+        status="ok",
+    )
+
+    exact = compare_validator_shadow_inputs(
+        step_summary=summary,
+        envelope=envelope,
+        current_status="ok",
+    )
+    assert exact.exact_match is True
+    assert exact.decision_effect == "none"
+    assert exact.mismatches == ()
+
+    tampered = compare_validator_shadow_inputs(
+        step_summary={"output_files": {"statistic:other": "estimate.json"}},
+        envelope=envelope,
+        current_status="failed",
+    )
+    assert tampered.exact_match is False
+    assert tampered.decision_effect == "none"
+    assert {item.code for item in tampered.mismatches} >= {
+        "canonical_artifact_missing",
+        "canonical_source_digest_mismatch",
+        "canonical_status_mismatch",
+        "canonical_unexpected_artifact",
+    }
