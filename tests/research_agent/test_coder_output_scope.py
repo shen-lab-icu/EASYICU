@@ -1315,6 +1315,7 @@ def test_coder_prompt_binds_typed_inputs_to_resolved_manifest(ra):
         assert "producer product's semantics" in prompt
         assert "only eligible raw-variable or column coordinates" in prompt
         assert "Do not discover them by scanning the full ResearchContext" in prompt
+        assert "manifest['raw_input_contracts']['contracts']" not in prompt
         assert "manifest['context']" in prompt
         assert "immutable Agent-produced ResearchContext" in prompt
         assert "do not copy prompt literals" in prompt
@@ -1374,6 +1375,9 @@ def test_coder_prompts_bind_untyped_only_inputs_to_planner_scope(ra):
         assert "TYPED INPUT BINDING (binding)" in prompt
         assert "applies even when the step declares only untyped" in prompt
         assert "manifest['planner_declared_inputs']" in prompt
+        assert "manifest['raw_input_contracts']['contracts']" in prompt
+        assert "allowed_values" in prompt
+        assert "analysis_plausibility_range + plausibility_policy" in prompt
         assert "['selected_first', 'selected_measured']" in prompt
         assert "Exact typed inputs for this step: []" in prompt
 

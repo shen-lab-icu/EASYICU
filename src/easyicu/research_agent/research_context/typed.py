@@ -11,7 +11,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-from typing import Any, Dict, List, Literal, Mapping, Optional, Union
+from typing import Any, Dict, List, Literal, Mapping, Optional, Sequence, Union
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -798,6 +798,70 @@ def materialized_input_prompt_projection(
     return result
 
 
+def resolved_raw_input_contracts(
+    context: ResearchContextAuthority,
+    planner_declared_inputs: Sequence[str],
+) -> Optional[Dict[str, Any]]:
+    """Return exact executable metadata for Planner-declared raw columns.
+
+    The outbound prompt projection is explanatory transport, while generated
+    code executes against ``EASYICU_RESOLVED_INPUTS_JSON``.  Put the same
+    host-verified physical/domain facts in that manifest so code never has to
+    rediscover a range policy or closed domain by scanning the broader
+    ResearchContext.  Typed ``kind:name`` products remain under the manifest's
+    existing ``inputs`` authority and are intentionally excluded here.
+    """
+
+    if not isinstance(context, ResearchContextV2):
+        return None
+    context = ResearchContextV2.model_validate(context.model_dump(mode="python"))
+    raw_names = [
+        str(value).strip()
+        for value in planner_declared_inputs
+        if isinstance(value, str) and str(value).strip() and ":" not in str(value)
+    ]
+    if len(raw_names) != len(set(raw_names)):
+        raise ValueError("Planner-declared raw inputs must be unique")
+    cohort = context.materialized_inputs.cohort
+    contracts: Dict[str, Any] = {}
+    for name in raw_names:
+        binding = cohort.column_bindings.get(name)
+        if binding is None:
+            raise ValueError(
+                f"Planner-declared raw input {name!r} lacks a typed cohort binding"
+            )
+        fact = {
+            **_column_prompt_fact(name, binding),
+            "binding_sha256": binding.binding_sha256,
+        }
+        if binding.analysis_plausibility_range is not None:
+            fact["plausibility_policy"] = {
+                "range_policy": "flag_only",
+                "out_of_range_action": "retain_and_flag",
+            }
+        contracts[name] = fact
+    payload: Dict[str, Any] = {
+        "schema_version": "easyicu.resolved_raw_input_contracts/1",
+        "authority_scope": (
+            "host_verified_physical_representation_and_domain_constraints"
+        ),
+        "scientific_ownership": (
+            "Planner retains cohort, exposure, outcome, method, covariates, "
+            "and estimand decisions"
+        ),
+        "contracts": contracts,
+    }
+    canonical = json.dumps(
+        payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    ).encode("utf-8")
+    payload["contracts_sha256"] = hashlib.sha256(canonical).hexdigest()
+    return payload
+
+
 def materialized_input_prompt_attachment(
     context: ResearchContextAuthority,
 ) -> str:
@@ -1131,4 +1195,5 @@ __all__ = [
     "parse_research_context",
     "parse_research_context_json",
     "project_research_context_variables",
+    "resolved_raw_input_contracts",
 ]
