@@ -29,7 +29,7 @@ from easyicu.research_agent.authority.evidence_store import EvidenceStore
 from easyicu.research_agent.authority.evidence_snapshot import (
     EvidenceAuthorityIntegrityError,
 )
-from easyicu.research_agent.execution.result_envelope import (
+from easyicu.research_agent.contracts.result_envelope import (
     normalize_step_result_shadow,
     verify_step_result_envelope,
     write_shadow_step_result_envelope,

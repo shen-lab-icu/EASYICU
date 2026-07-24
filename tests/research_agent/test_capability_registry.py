@@ -176,6 +176,19 @@ def test_live_auxiliary_dispatch_matches_registry_in_both_directions():
             ):
                 active.add(node.value.value)
     documented = {runner.name for runner in cr.AUXILIARY_DETERMINISTIC_RUNNERS}
+    # Dedicated executors consume an already-bound standard-analysis marker
+    # instead of assigning it inside run_execute_phase.  Count those exact
+    # dispatch comparisons as live wiring too.
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Compare):
+            continue
+        constants = {
+            child.value
+            for child in ast.walk(node)
+            if isinstance(child, ast.Constant) and isinstance(child.value, str)
+        }
+        if "deterministic_standard_analysis" in constants:
+            active.update(constants & documented)
     assert active == documented
 
 

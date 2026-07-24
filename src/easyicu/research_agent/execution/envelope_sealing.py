@@ -9,7 +9,7 @@ from typing import Any, Dict, Literal, Mapping
 
 from easyicu.research_agent.schema import AnalysisStep
 
-from .result_envelope import (
+from ..contracts.result_envelope import (
     StepResultEnvelope,
     normalize_step_result_shadow,
     verify_step_result_envelope,

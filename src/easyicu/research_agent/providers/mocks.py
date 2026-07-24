@@ -33,6 +33,7 @@ from ..schema import (
     ResearchContext,
     VariableRole,
 )
+from ..planning.robustness_contract import RobustnessSpec
 
 # ---------------------------------------------------------------------------
 # Mock client: ICU-aware canned responses, used for tests / offline demo
@@ -91,10 +92,14 @@ class MockLLMClient:
                 },
             )
         )
-        last_user = next(
-            (m.content for m in reversed(messages) if m.role == "user"),
-            "",
-        )
+        user_messages = [m.content for m in messages if m.role == "user"]
+        last_user = user_messages[-1] if user_messages else ""
+        # Structured retries append a validator-feedback user turn after the
+        # original request. Classify the request from the complete immutable
+        # user-message history so the deterministic mock keeps serving the
+        # same agent role on retry. Use the same combined text for generators
+        # that need step details from the original prompt.
+        request_text = "\n\n".join(user_messages)
         ctx = self.context
         if ctx is None:
             response = _mock_generic_response(last_user)
@@ -103,26 +108,26 @@ class MockLLMClient:
             # specificity. Order matters: the coder prompt may include step
             # intents that mention the word 'plan' (e.g. 'cross-database
             # replication plan'), so plan matching must come last.
-            upper = last_user.upper()
+            upper = request_text.upper()
             if (
                 "WRITE THE PYTHON CODE FOR STEP" in upper
                 or "WRITE THE PYTHON CODE" in upper
                 or "REPAIR THE PYTHON CODE FOR STEP" in upper
                 or "REPAIR THE PYTHON CODE" in upper
             ):
-                response = _mock_code_for_step(ctx, last_user)
+                response = _mock_code_for_step(ctx, request_text)
             elif (
                 "INTERPRET THE RESULTS OF STEP" in upper
                 or "INTERPRET THE RESULTS" in upper
             ):
-                response = _mock_interpretation(ctx, last_user)
+                response = _mock_interpretation(ctx, request_text)
             elif "WRITE ONLY THE **" in upper and "CITATION RULE" in upper:
                 language = (
                     "zh"
                     if ("OUTPUT LANGUAGE: ZH" in upper or "SIMPLIFIED CHINESE" in upper)
                     else "en"
                 )
-                response = _mock_writer_section(ctx, last_user, language=language)
+                response = _mock_writer_section(ctx, request_text, language=language)
             elif (
                 "WRITE A MANUSCRIPT SCAFFOLD" in upper
                 or "MANUSCRIPT SCAFFOLD" in upper
@@ -140,7 +145,7 @@ class MockLLMClient:
                 or "COMPLETED STEP RECORDS" in upper
                 and "CURRENT PLAN" in upper
             ):
-                response = _mock_replan_json(ctx, last_user)
+                response = _mock_replan_json(ctx, request_text)
             elif (
                 "ICU-AWARE RESEARCH PLAN" in upper
                 or "RESEARCH PLAN AS JSON" in upper
@@ -425,6 +430,16 @@ def _mock_plan_json(ctx: ResearchContext) -> str:
         (
             step.model_copy(update={"method": "logistic_regression"})
             if step.step_id == "04_primary_association"
+            else step.model_copy(
+                update={
+                    "expected_outputs": [
+                        *step.expected_outputs,
+                        "table:calibration",
+                    ]
+                }
+            )
+            if step.step_id == "04_prediction_model_analysis"
+            and "table:calibration" not in step.expected_outputs
             else step
         )
         for step in steps
@@ -493,6 +508,7 @@ def _mock_plan_json(ctx: ResearchContext) -> str:
 
     plan = AnalysisPlan(
         research_question=ctx.research_question,
+        analysis_type=analysis_type.key,
         steps=steps,
         rationale=(
             f"Mock plan generated from ResearchContext for analysis type "
@@ -501,6 +517,103 @@ def _mock_plan_json(ctx: ResearchContext) -> str:
             "and missingness metadata instead of being forced as a one-size-fits-all checklist."
         ),
     )
+    # The production Planner is required to satisfy the article-level contract
+    # before execution. Keep the built-in offline Planner on that same schema:
+    # deterministic augmentation may add reporting/display roles, but never
+    # invents a missing Planner-owned headline result.
+    from ..reporting.article_contract import (
+        augment_plan_for_article_contract,
+        build_article_analysis_contract,
+    )
+
+    article_contract = build_article_analysis_contract(
+        ctx,
+        analysis_type=plan.analysis_type,
+    )
+    if "robustness" in article_contract.required_roles and not plan.robustness_specs:
+        variables = [
+            value
+            for value in (primary_pred, outcome)
+            if value and ctx.variable(value) is not None
+        ]
+        plan = plan.model_copy(
+            update={
+                "robustness_specs": [
+                    RobustnessSpec(
+                        spec_id="mock_complete_case",
+                        axis="missing",
+                        description=(
+                            "Deterministic offline complete-case sensitivity over "
+                            "the Planner-selected analysis variables."
+                        ),
+                        missing_override={
+                            "strategy": "complete_case",
+                            "variables": variables,
+                        },
+                    )
+                ]
+            }
+        )
+    pre_augmentation_step_ids = {step.step_id for step in plan.steps}
+    plan, _ = augment_plan_for_article_contract(
+        plan=plan,
+        contract=article_contract,
+    )
+    # Deterministically added display-only figure steps still need an exact
+    # upstream table. The real Planner must declare that dependency itself;
+    # the built-in offline mock wires it here so its generated code exercises
+    # the same resolved-input and provenance boundary instead of rereading the
+    # cohort or fabricating a source table.
+    primary_tables = [
+        output
+        for step in plan.steps
+        if step.step_id in pre_augmentation_step_ids
+        and step.planned_analysis_role == "primary"
+        for output in step.expected_outputs
+        if str(output).lower().startswith("table:")
+    ]
+    all_tables = [
+        output
+        for step in plan.steps
+        if step.step_id in pre_augmentation_step_ids
+        for output in step.expected_outputs
+        if str(output).lower().startswith("table:")
+    ]
+    table_one = next(
+        (
+            output
+            for output in all_tables
+            if "table_one" in str(output).lower()
+            or "baseline" in str(output).lower()
+        ),
+        None,
+    )
+    wired_steps: List[AnalysisStep] = []
+    for step in plan.steps:
+        is_added_display = (
+            step.step_id not in pre_augmentation_step_ids
+            and step.method == "article_contract_display"
+        )
+        figure_outputs = [
+            output
+            for output in step.expected_outputs
+            if str(output).lower().startswith("figure:")
+        ]
+        if not is_added_display or not figure_outputs or step.inputs:
+            wired_steps.append(step)
+            continue
+        wants_cohort_source = any(
+            "cohort" in str(output).lower() for output in figure_outputs
+        )
+        source = (
+            table_one
+            if wants_cohort_source and table_one is not None
+            else next(iter(primary_tables or all_tables), None)
+        )
+        wired_steps.append(
+            step.model_copy(update={"inputs": [source] if source is not None else []})
+        )
+    plan = plan.model_copy(update={"steps": wired_steps})
     return plan.model_dump_json(indent=2)
 
 
@@ -643,7 +756,13 @@ def _mock_code_for_step(ctx: ResearchContext, prompt: str) -> str:
     # Split figure steps inherit the parent id plus ``_figure``.  Route them
     # before any science-step matcher so a primary-association figure cannot
     # accidentally refit the model or reread the cohort.
-    if step_id.endswith("_figure"):
+    if step_id.endswith("_figure") or (
+        expected_outputs
+        and all(
+            str(output).lower().startswith("figure:")
+            for output in expected_outputs
+        )
+    ):
         return _mock_code_declared_figure(step_id=step_id, prompt=prompt)
     if "publication_figure_generation" in step_id:
         return _mock_code_publication_figure(

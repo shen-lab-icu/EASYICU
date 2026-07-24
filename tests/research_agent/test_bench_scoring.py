@@ -735,11 +735,11 @@ def _write_audit_log(run_dir: Path, writer_passes: int) -> None:
     (run_dir / "audit_log.jsonl").write_text("\n".join(lines), encoding="utf-8")
 
 
-def test_gate_ladder_prefers_run_status_status(tmp_path: Path) -> None:
+def test_gate_ladder_does_not_trust_mutable_run_status(tmp_path: Path) -> None:
     from tools.run_research_agent_bench import _gate_ladder
 
     _write_run_status(tmp_path, "publication_ready")
-    assert _gate_ladder(tmp_path, {}) == "publication_ready"
+    assert _gate_ladder(tmp_path, {}) is None
 
 
 def test_gate_ladder_falls_back_to_readiness_booleans(tmp_path: Path) -> None:

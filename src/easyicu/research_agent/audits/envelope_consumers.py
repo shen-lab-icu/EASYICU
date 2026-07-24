@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Sequence
 
-from easyicu.research_agent.execution.envelope_sidecar import (
+from easyicu.research_agent.authority.result_envelope_sidecar import (
     SUCCESSFUL_TERMINAL_STATUS,
     LoadedStepResultEnvelopeSidecar,
     StepResultEnvelopeSidecarLoad,
@@ -20,7 +20,7 @@ from easyicu.research_agent.execution.envelope_sidecar import (
     load_current_step_result_envelope_sidecar,
     step_record_declares_sidecar,
 )
-from easyicu.research_agent.execution.result_envelope import StepResultEnvelope
+from easyicu.research_agent.contracts.result_envelope import StepResultEnvelope
 from easyicu.research_agent.schema import AnalysisStep, ValidationFinding
 
 from .envelope_shadow import (

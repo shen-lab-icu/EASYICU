@@ -44,15 +44,16 @@ def test_assert_dict_matches_passes_on_identical_sha() -> None:
     )
 
 
-def test_default_submission_profile_matches_packaged_dictionaries() -> None:
+def test_frozen_default_submission_profile_detects_newer_packaged_dictionaries() -> None:
     fingerprint = compute_concept_dict_fingerprint()
     profile = get_submission_profile(DEFAULT_SUBMISSION_PROFILE_REF)
-    assert_dict_matches(
-        fingerprint,
-        expected_concept_dict_sha=profile.expected_concept_dict_sha,
-        expected_sofa2_dict_sha=profile.expected_sofa2_dict_sha,
-        mode="strict",
-    )
+    with pytest.raises(ConceptDictDriftError, match="SHA mismatch"):
+        assert_dict_matches(
+            fingerprint,
+            expected_concept_dict_sha=profile.expected_concept_dict_sha,
+            expected_sofa2_dict_sha=profile.expected_sofa2_dict_sha,
+            mode="strict",
+        )
 
 
 def test_assert_dict_matches_strict_raises_on_mismatch() -> None:

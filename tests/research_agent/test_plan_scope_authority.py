@@ -15,11 +15,20 @@ from easyicu.research_agent.execution import phase as execution_phase
 from easyicu.research_agent.authority import plan_scope
 from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep
 
+_PHASE_PLAN_SCOPE_NAMES = {
+    "_normalise_scientific_text",
+    "_plan_signature",
+    "_plan_scientific_scope_signature",
+    "_serializable_plan_scientific_scope_signature",
+    "_step_scientific_signature",
+}
+
 
 def test_execution_phase_uses_plan_scope_objects_with_identity() -> None:
     assert plan_scope.__all__
-    for name in plan_scope.__all__:
+    for name in _PHASE_PLAN_SCOPE_NAMES:
         assert getattr(execution_phase, name) is getattr(plan_scope, name)
+    assert _PHASE_PLAN_SCOPE_NAMES < set(plan_scope.__all__)
 
 
 def test_plan_scope_has_no_orchestration_or_mutation_dependency() -> None:
@@ -134,7 +143,7 @@ first = importlib.import_module({first!r})
 second = importlib.import_module({second!r})
 canonical = importlib.import_module({canonical!r})
 consumer = importlib.import_module({consumer!r})
-for name in canonical.__all__:
+for name in {_PHASE_PLAN_SCOPE_NAMES!r}:
     assert getattr(consumer, name) is getattr(canonical, name), name
 """
     env = dict(os.environ)

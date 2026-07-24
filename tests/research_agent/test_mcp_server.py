@@ -355,7 +355,11 @@ def test_mcp_run_constructs_explicit_llm(ra, tmp_path, monkeypatch):
             return SimpleNamespace(model_dump=lambda: {"status": "ok"})
 
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
-    monkeypatch.setattr(mcp, "OpenAIClient", FakeClient)
+    monkeypatch.setattr(
+        mcp,
+        "build_provider_client",
+        lambda **kwargs: FakeClient(**kwargs),
+    )
     monkeypatch.setattr(mcp, "ResearchAgentPipeline", FakePipeline)
 
     result = mcp.dispatch(

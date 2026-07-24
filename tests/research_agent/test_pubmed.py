@@ -642,8 +642,9 @@ def test_blueprint_and_agent_context_honor_explicit_primary_exposure(ra):
 
     assert _pick_blueprint_predictor(ctx) == "lab"
     rendered = _format_context(ctx)
-    assert "Primary exposure/predictor: lab" in rendered
-    assert "authoritative" in rendered
+    outbound = json.loads(rendered.split("\n\n", 1)[0])
+    assert outbound["primary_exposure"] == "lab"
+    assert outbound["target_outcome"] == "death"
 
 
 def test_hypothesis_blueprint_adds_deterministic_cross_db_steps(ra, monkeypatch):

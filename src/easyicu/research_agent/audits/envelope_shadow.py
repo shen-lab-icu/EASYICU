@@ -14,7 +14,7 @@ from typing import Any, Literal, Mapping, Sequence
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from easyicu.research_agent.execution.result_envelope import (
+from easyicu.research_agent.contracts.result_envelope import (
     StepResultEnvelope,
     rebuild_observed_scalar_tree,
     verify_step_result_envelope,

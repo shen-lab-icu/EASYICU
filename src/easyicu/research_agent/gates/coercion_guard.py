@@ -5,7 +5,15 @@ from __future__ import annotations
 import ast
 from typing import Optional
 
-_FAILURE_SUPPRESSING_OWNERS = (ast.Try, ast.TryStar, ast.With, ast.AsyncWith)
+_TRY_STAR_NODE_TYPES = (
+    (try_star_type,) if (try_star_type := getattr(ast, "TryStar", None)) else ()
+)
+_TRY_NODE_TYPES = (ast.Try, *_TRY_STAR_NODE_TYPES)
+_FAILURE_SUPPRESSING_OWNERS = (
+    *_TRY_NODE_TYPES,
+    ast.With,
+    ast.AsyncWith,
+)
 _OUTPUT_WRITER_NAMES = frozenset(
     {
         "dump",
@@ -226,7 +234,7 @@ def _handler_clears_output_claims(handler: ast.ExceptHandler) -> Optional[str]:
     return None
 
 
-def _finally_persists_summary(try_node: ast.Try | ast.TryStar, base: str) -> bool:
+def _finally_persists_summary(try_node: ast.Try, base: str) -> bool:
     return any(
         isinstance(node, ast.Call)
         and isinstance(node.func, ast.Attribute)
@@ -258,7 +266,7 @@ def _is_terminal_statement(
 
 
 def _published_before_guard(
-    try_node: ast.Try | ast.TryStar,
+    try_node: ast.Try,
     *,
     guard_line: int,
 ) -> bool:
@@ -279,7 +287,7 @@ def _published_before_guard(
 
 def _terminal_output_failure_summary(
     guard: ast.stmt,
-    try_node: ast.Try | ast.TryStar,
+    try_node: ast.Try,
     *,
     scope: ast.AST,
     parents: dict[int, ast.AST],
@@ -312,7 +320,7 @@ def guard_failure_is_terminal(
         parent = parents.get(id(current)) if current is not None else None
         if parent is None:
             return False
-        if isinstance(parent, (ast.Try, ast.TryStar)):
+        if isinstance(parent, _TRY_NODE_TYPES):
             return _terminal_output_failure_summary(
                 guard,
                 parent,

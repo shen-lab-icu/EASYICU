@@ -441,7 +441,7 @@ def test_reused_mock_pipeline_refreshes_context_between_prediction_and_clusterin
     assert "04_trajectory_clustering_analysis" in second_step_ids, second_step_ids
 
 
-def test_mock_planner_routes_survival_question_to_protocol_and_saves_user_preferences(
+def test_mock_planner_rejects_protocol_only_survival_plan(
     ra, tmp_path: Path
 ):
     cohort = pd.DataFrame(
@@ -454,41 +454,29 @@ def test_mock_planner_routes_survival_question_to_protocol_and_saves_user_prefer
         }
     )
     pipeline = ra.ResearchAgentPipeline(workdir=tmp_path, llm=ra.MockLLMClient())
-    result = pipeline.run(
-        question=(
-            "Evaluate 28-day survival after ICU admission with explicit time zero, "
-            "censoring rules, Kaplan-Meier curves, and a Cox-style model."
-        ),
-        cohort=cohort,
-        cohort_name="survival_protocol_test",
-        database="synthetic",
-        target_outcome="death",
-        user_preferences={
-            "inferred_analysis_family": "survival",
-            "timing_and_design": "time zero at ICU admission; 28-day follow-up",
-            "must_have_outputs": "Kaplan-Meier plot and hazard ratio table",
-        },
+    from easyicu.research_agent.providers.structured_retry import (
+        StructuredResponseFailure,
     )
 
-    plan = json.loads(Path(result.plan_path).read_text(encoding="utf-8"))
-    ctx = json.loads(
-        (Path(result.workdir) / "research_context.json").read_text(encoding="utf-8")
-    )
-    step_ids = [step["step_id"] for step in plan["steps"]]
-
-    # The mock agent chose a protocol-only survival plan. The framework may
-    # review that choice, but it must not invent a Cox estimand or rewrite the
-    # agent plan into a canonical method-shaped mega-step.
-    assert plan["analysis_type"] == "survival"
-    protocol = next(
-        step for step in plan["steps"] if step["step_id"] == "04_survival_protocol"
-    )
-    assert protocol["method"] == "survival_protocol"
-    assert protocol["expected_outputs"] == ["log:survival_protocol"]
-    assert "01_survival_analysis" not in step_ids, step_ids
-    assert "04_primary_association" not in step_ids
-    assert ctx["user_preferences"]["inferred_analysis_family"] == "survival"
-    assert "Kaplan-Meier" in (ctx["user_preferences"]["must_have_outputs"] or "")
+    with pytest.raises(
+        StructuredResponseFailure,
+        match="survival_effect, temporal_absolute_risk",
+    ):
+        pipeline.run(
+            question=(
+                "Evaluate 28-day survival after ICU admission with explicit time zero, "
+                "censoring rules, Kaplan-Meier curves, and a Cox-style model."
+            ),
+            cohort=cohort,
+            cohort_name="survival_protocol_test",
+            database="synthetic",
+            target_outcome="death",
+            user_preferences={
+                "inferred_analysis_family": "survival",
+                "timing_and_design": "time zero at ICU admission; 28-day follow-up",
+                "must_have_outputs": "Kaplan-Meier plot and hazard ratio table",
+            },
+        )
 
 
 def test_planner_prompt_suggests_inferred_family(ra):
@@ -601,8 +589,21 @@ def test_parse_preserves_agent_selected_family_and_rationale(ra):
                     "step_id": "01_association",
                     "planned_analysis_role": "primary",
                     "intent": "Fit the prespecified logistic association.",
-                    "method": "logistic_regression",
-                    "expected_outputs": ["table:association_estimates"],
+                    "inputs": ["exposure", "death"],
+                    "method": "adjusted_association_models",
+                    "expected_outputs": ["table:adjusted_association_estimates"],
+                    "model_requirements": [
+                        {
+                            "requirement_id": "primary_exposure_death",
+                            "outcome": "death",
+                            "outcome_type": "binary",
+                            "method_family": "logistic_regression",
+                            "exposure_source": "exposure",
+                            "analysis_role": "primary",
+                            "analysis_set": "complete_case",
+                            "required_for_step_success": True,
+                        }
+                    ],
                 }
             ],
             "rationale": (

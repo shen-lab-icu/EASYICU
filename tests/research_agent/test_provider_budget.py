@@ -1468,11 +1468,17 @@ df = pd.read_parquet(os.environ["COHORT_PARQUET"])
 out = os.environ["STEP_OUT_DIR"]
 summary = {
     "n": int(len(df)),
-    "output_files": [
-        {"kind": "table", "name": "cohort_summary", "path": "cohort_summary.csv"}
-    ],
+    "output_files": {
+        "table:baseline_characteristics": "baseline_characteristics.csv",
+        "table:exposure_outcome_distribution": "exposure_outcome_distribution.csv",
+    },
 }
-pd.DataFrame([summary]).to_csv(os.path.join(out, "cohort_summary.csv"), index=False)
+pd.DataFrame({"n": [len(df)]}).to_csv(
+    os.path.join(out, "baseline_characteristics.csv"), index=False
+)
+pd.DataFrame({"n": [len(df)]}).to_csv(
+    os.path.join(out, "exposure_outcome_distribution.csv"), index=False
+)
 with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as handle:
     json.dump(summary, handle)
 """
@@ -1486,10 +1492,40 @@ with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as hand
                     "planned_analysis_role": "primary",
                     "intent": "Produce a descriptive cohort summary.",
                     "inputs": ["stay_id"],
-                    "expected_outputs": ["table:cohort_summary"],
+                    "expected_outputs": [
+                        "table:baseline_characteristics",
+                        "table:exposure_outcome_distribution",
+                    ],
                     "method": "descriptive_summary",
                     "icu_rule_refs": [],
-                }
+                },
+                {
+                    "step_id": "02_cohort_flow",
+                    "planned_analysis_role": "auxiliary",
+                    "intent": "Report cohort accounting.",
+                    "inputs": ["stay_id"],
+                    "expected_outputs": ["table:cohort_flow"],
+                    "method": "descriptive_summary",
+                    "icu_rule_refs": [],
+                },
+                {
+                    "step_id": "03_distribution",
+                    "planned_analysis_role": "auxiliary",
+                    "intent": "Render the descriptive distribution.",
+                    "inputs": ["stay_id"],
+                    "expected_outputs": ["figure:distribution_plot"],
+                    "method": "visualization",
+                    "icu_rule_refs": [],
+                },
+                {
+                    "step_id": "04_missingness",
+                    "planned_analysis_role": "auxiliary",
+                    "intent": "Report data quality and missingness.",
+                    "inputs": ["stay_id"],
+                    "expected_outputs": ["table:missingness_table"],
+                    "method": "data_quality_audit",
+                    "icu_rule_refs": [],
+                },
             ],
             "rationale": "provider budget resume regression",
         }
@@ -1532,6 +1568,8 @@ with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as hand
         enable_llm_concept_audit=True,
         enable_deterministic_code_fallback=False,
         enable_deterministic_runner_repair=False,
+        enable_probe_step=False,
+        enable_replanning=False,
         runner_kind="subprocess",
         max_step_provider_calls=2,
     )
@@ -1569,6 +1607,8 @@ with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as hand
         enable_llm_concept_audit=True,
         enable_deterministic_code_fallback=False,
         enable_deterministic_runner_repair=False,
+        enable_probe_step=False,
+        enable_replanning=False,
         runner_kind="subprocess",
         max_step_provider_calls=2,
     )
@@ -1621,11 +1661,17 @@ df = pd.read_parquet(os.environ["COHORT_PARQUET"])
 out = os.environ["STEP_OUT_DIR"]
 summary = {{
     "n": int(len(df)),
-    "output_files": [
-        {{"kind": "table", "name": "cohort_summary", "path": "cohort_summary.csv"}}
-    ],
+    "output_files": {{
+        "table:baseline_characteristics": "baseline_characteristics.csv",
+        "table:exposure_outcome_distribution": "exposure_outcome_distribution.csv",
+    }},
 }}
-pd.DataFrame([summary]).to_csv(os.path.join(out, "cohort_summary.csv"), index=False)
+pd.DataFrame({{"n": [len(df)]}}).to_csv(
+    os.path.join(out, "baseline_characteristics.csv"), index=False
+)
+pd.DataFrame({{"n": [len(df)]}}).to_csv(
+    os.path.join(out, "exposure_outcome_distribution.csv"), index=False
+)
 with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as handle:
     json.dump(summary, handle)
 """
@@ -1639,10 +1685,40 @@ with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as hand
                     "planned_analysis_role": "primary",
                     "intent": "Produce a descriptive cohort summary.",
                     "inputs": ["stay_id"],
-                    "expected_outputs": ["table:cohort_summary"],
+                    "expected_outputs": [
+                        "table:baseline_characteristics",
+                        "table:exposure_outcome_distribution",
+                    ],
                     "method": "descriptive_summary",
                     "icu_rule_refs": [],
-                }
+                },
+                {
+                    "step_id": "02_cohort_flow",
+                    "planned_analysis_role": "auxiliary",
+                    "intent": "Report cohort accounting.",
+                    "inputs": ["stay_id"],
+                    "expected_outputs": ["table:cohort_flow"],
+                    "method": "descriptive_summary",
+                    "icu_rule_refs": [],
+                },
+                {
+                    "step_id": "03_distribution",
+                    "planned_analysis_role": "auxiliary",
+                    "intent": "Render the descriptive distribution.",
+                    "inputs": ["stay_id"],
+                    "expected_outputs": ["figure:distribution_plot"],
+                    "method": "visualization",
+                    "icu_rule_refs": [],
+                },
+                {
+                    "step_id": "04_missingness",
+                    "planned_analysis_role": "auxiliary",
+                    "intent": "Report data quality and missingness.",
+                    "inputs": ["stay_id"],
+                    "expected_outputs": ["table:missingness_table"],
+                    "method": "data_quality_audit",
+                    "icu_rule_refs": [],
+                },
             ],
             "rationale": "two semantic repair budget regression",
         }
@@ -1700,7 +1776,10 @@ with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as hand
             ),
             (
                 "INTERPRET THE RESULTS",
-                ["Cohort summary completed {evidence:cohort_summary}."],
+                [
+                    "Cohort summary completed "
+                    "{evidence:baseline_characteristics}."
+                ],
             ),
         ]
     )
@@ -1713,6 +1792,8 @@ with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as hand
         enable_llm_concept_audit=True,
         enable_deterministic_code_fallback=False,
         enable_deterministic_runner_repair=False,
+        enable_probe_step=False,
+        enable_replanning=False,
         runner_kind="subprocess",
     )
     result = pipeline.run(

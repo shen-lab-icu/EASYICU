@@ -511,6 +511,7 @@ def test_renderer_rejects_mutation_after_digest_seal(tmp_path: Path) -> None:
 def test_input_validation_fails_closed_on_malformed_percentage(tmp_path: Path) -> None:
     parent = _write_parent(tmp_path)
     missingness = pd.read_csv(parent / "marker_missingness.csv")
+    missingness["percentage"] = missingness["percentage"].astype(object)
     missingness.loc[0, "percentage"] = "not-a-number"
     missingness.to_csv(parent / "marker_missingness.csv", index=False)
 

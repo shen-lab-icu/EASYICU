@@ -9,6 +9,10 @@ from __future__ import annotations
 import ast
 from typing import Optional
 
+_TRY_STAR_NODE_TYPES = (
+    (try_star_type,) if (try_star_type := getattr(ast, "TryStar", None)) else ()
+)
+_TRY_NODE_TYPES = (ast.Try, *_TRY_STAR_NODE_TYPES)
 _GUARD_SENTINEL = "_easyicu_lossy_numeric_coercion_guard_v1"
 _RETURN_GUARD_SENTINEL = "_easyicu_returned_coercion_loss_guard_v1"
 
@@ -173,7 +177,7 @@ def _standalone_statement_source(
     current: Optional[ast.AST] = statement
     while current is not None and current in parents:
         current = parents[current]
-        if isinstance(current, (ast.Try, ast.TryStar, ast.With, ast.AsyncWith)):
+        if isinstance(current, (*_TRY_NODE_TYPES, ast.With, ast.AsyncWith)):
             return None
     start_line = lines[statement.lineno - 1]
     indent = start_line[: len(start_line) - len(start_line.lstrip(" \t"))]
@@ -425,7 +429,7 @@ def patch_returned_coercion_loss_guard(code: str) -> str:
             ):
                 continue
             if any(
-                isinstance(parent, (ast.Try, ast.TryStar))
+                isinstance(parent, _TRY_NODE_TYPES)
                 for parent in _ancestor_nodes(statement, parents)
             ):
                 continue
