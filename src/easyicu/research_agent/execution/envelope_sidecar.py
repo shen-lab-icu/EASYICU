@@ -19,7 +19,17 @@ envelope authority, and nothing else:
   table (never ``EvidenceStore.get``'s fuzzy prefix fallback), so an
   unpublished / rolled-back / legacy record is never recognised as current
   authority, and it fails closed on every producer, schema, status, binding,
-  digest, symlink, or tamper mismatch.
+  digest, symlink, or tamper mismatch.  The on-disk artifact is resolved
+  through the shared descriptor-anchored :func:`verified_run_evidence_path`
+  guard, which rejects a parent-directory symlink, a ``..`` / absolute /
+  escaped relative path, a final symlink, a non-regular file, and a digest
+  mismatch in one check -- a bare ``Path.is_symlink()`` is not sufficient.
+
+The evidence identity binds the full step attempt: ``step_id`` + ``attempt_id``
++ ``checkpoint_id`` + ``script_evidence_id`` + ``content_sha256``.  A second
+successful attempt of the same step/script/content therefore produces a *new*
+record; the step-scoped alias re-points to the latest attempt, so a query for
+the earlier attempt is stale and only the current attempt is recoverable.
 
 The envelope stays ``shadow=True`` / ``paper_authorized=False``: a sidecar is
 recovery metadata, never a grant of paper authority.  No downstream
@@ -39,13 +49,14 @@ from typing import Any, Mapping, Protocol, Sequence, Union
 
 from easyicu.research_agent.schema import EvidenceRecord
 
+from ..authority.runtime_artifacts import verified_run_evidence_path
 from .result_envelope import (
     StepResultEnvelope,
     rebind_step_result_status,
     verify_step_result_envelope,
 )
 
-SIDECAR_SCHEMA_VERSION = "easyicu.step_result_envelope_sidecar/1"
+SIDECAR_SCHEMA_VERSION = "easyicu.step_result_envelope_sidecar/2"
 SIDECAR_PRODUCER = "step_result_envelope_sidecar"
 SIDECAR_EVIDENCE_KIND = "log"
 SIDECAR_GENERATION_MODE = "system"
@@ -72,18 +83,34 @@ def _sidecar_filename(step_id: str) -> str:
 
 
 def _sidecar_evidence_id(
-    *, step_id: str, script_evidence_id: str, content_sha256: str
+    *,
+    step_id: str,
+    attempt_id: str,
+    checkpoint_id: str,
+    script_evidence_id: str,
+    content_sha256: str,
 ) -> str:
-    """Deterministic, step + script + content-bound identity.
+    """Deterministic identity bound to the full step attempt.
 
-    Artifact bytes alone are not an authority identity (two steps can emit an
-    identical envelope shell), so the id binds the producing step and its
-    script as well.  A forger cannot fabricate a matching id without matching
-    all three, and the loader re-derives and checks it.
+    Artifact bytes alone are not an authority identity (two steps -- or two
+    attempts of one step -- can emit an identical envelope shell), so the id
+    binds the producing step, the exact attempt and checkpoint, and the script
+    as well as the content digest.  A second successful attempt of the same
+    step/script/content therefore yields a *different* id (a new record) rather
+    than colliding with the first; a forger cannot fabricate a matching id
+    without matching all five; and the loader re-derives and checks it.
     """
 
     token = hashlib.sha256(
-        "\0".join((step_id, script_evidence_id, content_sha256)).encode("utf-8")
+        "\0".join(
+            (
+                step_id,
+                attempt_id,
+                checkpoint_id,
+                script_evidence_id,
+                content_sha256,
+            )
+        ).encode("utf-8")
     ).hexdigest()[:16]
     return f"{_EVIDENCE_ID_PREFIX}{token}"
 
@@ -158,6 +185,8 @@ def prepare_step_result_envelope_sidecar(
     payload = _canonical_envelope_bytes(rebound)
     evidence_id = _sidecar_evidence_id(
         step_id=step_id,
+        attempt_id=attempt_id,
+        checkpoint_id=checkpoint_id,
         script_evidence_id=script_evidence_id,
         content_sha256=rebound.content_sha256,
     )
@@ -284,13 +313,33 @@ def publish_terminal_step_result_envelope_sidecar(
 
 @dataclass(frozen=True)
 class StepResultEnvelopeSidecarQuery:
-    """The current successful step's coordinates the loader binds against."""
+    """The current successful step's coordinates the loader binds against.
+
+    ``attempt_id`` and ``checkpoint_id`` are required and non-empty: a caller
+    must not omit them to bypass the current-attempt binding.  A query that
+    names an older attempt of a re-run step is therefore stale, never a match.
+    """
 
     step_id: str
     terminal_status: str
     script_evidence_id: str
-    attempt_id: str | None = None
-    checkpoint_id: str | None = None
+    attempt_id: str
+    checkpoint_id: str
+
+    def __post_init__(self) -> None:
+        for field_name in (
+            "step_id",
+            "terminal_status",
+            "script_evidence_id",
+            "attempt_id",
+            "checkpoint_id",
+        ):
+            value = getattr(self, field_name)
+            if not isinstance(value, str) or not value.strip():
+                raise ValueError(
+                    "step-result envelope sidecar query requires a non-empty "
+                    f"{field_name}"
+                )
 
 
 @dataclass(frozen=True)
@@ -347,7 +396,9 @@ def load_current_step_result_envelope_sidecar(
     step_id = str(query.step_id or "").strip()
     terminal_status = str(query.terminal_status or "").strip()
     script_evidence_id = str(query.script_evidence_id or "").strip()
-    if not step_id or not script_evidence_id:
+    attempt_id = str(query.attempt_id or "").strip()
+    checkpoint_id = str(query.checkpoint_id or "").strip()
+    if not step_id or not script_evidence_id or not attempt_id or not checkpoint_id:
         return _unavailable("incomplete_query")
     if terminal_status != SUCCESSFUL_TERMINAL_STATUS:
         return _unavailable("non_successful_terminal_status")
@@ -383,21 +434,20 @@ def load_current_step_result_envelope_sidecar(
         return _unavailable("terminal_status_mismatch")
     if md.get("paper_authorized") is not False:
         return _unavailable("paper_authority_asserted")
-    if query.attempt_id is not None and str(md.get("attempt_id") or "") != str(
-        query.attempt_id
-    ):
+    if str(md.get("attempt_id") or "") != attempt_id:
         return _unavailable("attempt_mismatch")
-    if query.checkpoint_id is not None and str(md.get("checkpoint_id") or "") != str(
-        query.checkpoint_id
-    ):
+    if str(md.get("checkpoint_id") or "") != checkpoint_id:
         return _unavailable("checkpoint_mismatch")
 
-    path = Path(evidence_store.root) / record.relative_path
-    if path.is_symlink() or not path.is_file():
-        return _unavailable("artifact_symlink_or_missing")
-    raw = path.read_bytes()
-    if hashlib.sha256(raw).hexdigest() != record.sha256:
-        return _unavailable("artifact_digest_mismatch")
+    # Descriptor-anchored resolution: rejects a parent-directory symlink, a
+    # ``..`` / absolute / escaped relative path, a final symlink, a non-regular
+    # file, and a digest mismatch in one guard.  ``record.relative_path`` is
+    # ``evidence/<id>__<file>`` relative to the store root, which is exactly the
+    # run directory ``verified_run_evidence_path`` anchors under.
+    verified_path = verified_run_evidence_path(evidence_store.root, record)
+    if verified_path is None:
+        return _unavailable("artifact_path_unverified")
+    raw = verified_path.read_bytes()
 
     try:
         envelope = StepResultEnvelope.model_validate(json.loads(raw))
@@ -419,9 +469,13 @@ def load_current_step_result_envelope_sidecar(
     if str(md.get("envelope_schema_version") or "") != envelope.schema_version:
         return _unavailable("envelope_schema_mismatch")
     # Exact evidence-id binding: re-derive from the recovered content + the
-    # step/script coordinates and require the committed id to match.
+    # full step/attempt/checkpoint/script coordinates and require the committed
+    # id to match.  A stale attempt therefore cannot resolve even if its alias
+    # somehow survived.
     expected_evidence_id = _sidecar_evidence_id(
         step_id=step_id,
+        attempt_id=attempt_id,
+        checkpoint_id=checkpoint_id,
         script_evidence_id=script_evidence_id,
         content_sha256=content_sha256,
     )
