@@ -811,6 +811,7 @@ def test_compact_rendering_guide_is_structural_not_intent_routed(ra):
 
     assert "RENDER-ONLY PUBLICATION FIGURE CONTRACT:" in guide
     assert "exact digest-bound typed inputs" in guide
+    assert "Do not call `measurement_provenance_receipt`" in guide
     assert "save matching PNG, SVG, PDF, and TIFF" in guide
 
 

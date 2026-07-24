@@ -4656,7 +4656,11 @@ class PrimaryModelContractValidator:
             return None
 
         analysis_set = cls._normalise(contract.get("analysis_set"))
-        if analysis_set == "complete_case":
+        exposure_requires_observation = analysis_set == "complete_case" or (
+            analysis_set == "source_aware"
+            and policy in {"drop_missing", "drop_missing_baseline", "complete_case"}
+        )
+        if exposure_requires_observation:
             exposure = raw_exposure_source or str(contract.get("exposure_source") or "")
             if exposure not in frame.columns:
                 return None

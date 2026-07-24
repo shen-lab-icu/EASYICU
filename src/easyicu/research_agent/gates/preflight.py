@@ -25,7 +25,7 @@ from .ast_semantics import (
 )
 from .binary_feasibility import binary_feasibility_guard_findings
 from .host_helper_result import (
-    closed_counts_table_index_findings,
+    host_helper_result_findings,
     table_one_spec_binding_findings,
 )
 from .numeric_reduction import is_array_boolean_predicate as _is_array_boolean_predicate
@@ -8340,7 +8340,7 @@ def audit_mechanical_code_contracts(
     findings.extend(_scalar_cast_before_reduction_findings(tree))
     findings.extend(_first_time_companion_findings(tree))
     findings.extend(_host_helper_call_signature_findings(tree))
-    findings.extend(closed_counts_table_index_findings(tree))
+    findings.extend(host_helper_result_findings(tree, step))
     findings.extend(table_one_spec_binding_findings(tree, step))
     findings.extend(_boolean_reduction_identity_findings(tree))
     findings.extend(_local_helper_unpack_arity_findings(tree))

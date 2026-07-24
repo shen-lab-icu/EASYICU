@@ -46,6 +46,19 @@ def _table_step(ra):
     )
 
 
+def _figure_step(ra):
+    return ra.AnalysisStep(
+        step_id="measurement_qc_figure",
+        intent="Render the registered measurement audit products.",
+        inputs=[
+            "table:missingness_measurement_audit",
+            "table:measurement_process_audit",
+        ],
+        expected_outputs=["figure:measurement_qc"],
+        method="visualization",
+    )
+
+
 def _signature_findings(script: str, ra):
     return [
         finding
@@ -132,6 +145,36 @@ receipt = measurement_provenance_receipt(
 )
 """
 
+    assert _signature_findings(script, ra) == []
+
+
+def test_render_only_figure_rejects_raw_row_provenance_helper(ra):
+    script = """
+from easyicu.research_agent.methods.descriptive_inputs import (
+    measurement_provenance_receipt,
+)
+receipt_frame = aggregate[["measured_n", "cohort_n"]].copy()
+receipt_frame.columns = ["measured", "count"]
+receipt = measurement_provenance_receipt(
+    receipt_frame,
+    measured_column="measured",
+    count_column="measured_n",
+)
+"""
+
+    findings = [
+        finding
+        for finding in audit_mechanical_code_contracts(script, _figure_step(ra))
+        if (finding.detail or {}).get("reason") == "render_only_raw_provenance_helper"
+    ]
+
+    assert len(findings) == 1
+    assert findings[0].detail == {
+        "reason": "render_only_raw_provenance_helper",
+        "helper_name": "measurement_provenance_receipt",
+        "line": 7,
+    }
+    assert repair_reason_for_finding(findings[0]).value == ("INVALID_HELPER_SIGNATURE")
     assert _signature_findings(script, ra) == []
 
 

@@ -122,8 +122,8 @@ def _contracts() -> list[dict]:
             "exposure_role": "primary",
             "analysis_role": "primary",
             "analysis_set": "source_aware",
-            "n": 5,
-            "event_n": 2,
+            "n": 3,
+            "event_n": 1,
         },
         {
             **shared,
@@ -1108,6 +1108,35 @@ def test_primary_model_contract_checks_denominators_and_fit_diagnostics(
     assert "model_denominator_or_event_mismatch" in issues
     assert "fitted_model_must_converge" in issues
     assert "separation_requires_penalized_fit_or_no_estimate" in issues
+
+
+def test_source_aware_drop_missing_policy_requires_observed_exposure(
+    tmp_path: Path,
+):
+    contracts = copy.deepcopy(_contracts())
+    target = next(
+        contract for contract in contracts if contract["model_id"] == "lab_source_aware"
+    )
+    target["n"] = 5
+    target["event_n"] = 2
+
+    findings = _audit(tmp_path, contracts=contracts)
+
+    target_issue = next(
+        issue
+        for finding in findings
+        for issue in (finding.detail or {}).get("issues", [])
+        if issue.get("model_id") == "lab_source_aware"
+        and issue.get("issue") == "model_denominator_or_event_mismatch"
+    )
+    assert target_issue == {
+        "model_id": "lab_source_aware",
+        "issue": "model_denominator_or_event_mismatch",
+        "expected_n": 3,
+        "expected_event_n": 1,
+        "reported_n": 5,
+        "reported_event_n": 2,
+    }
 
 
 def test_primary_model_contract_rejects_encoded_term_as_raw_source(
