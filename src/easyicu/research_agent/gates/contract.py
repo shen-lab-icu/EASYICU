@@ -54,7 +54,7 @@ from ..audits.validators import (
     PrimaryModelContractValidator,
     StepSummaryFractionValidator,
 )
-from ..execution.result_envelope import StepResultEnvelope
+from ..contracts.result_envelope import StepResultEnvelope
 from ..contracts.runtime import ValidationFinding
 from ..cohort.schema import ANALYSIS_COHORT_FILENAME
 from ..contracts.declared_product import (

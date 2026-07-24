@@ -110,8 +110,16 @@ def _tabular_artifact_pandas_dtypes(
         # when a bounded standard adapter is unavailable.
         return None
 
+    # Pandas 3 reports inferred text as ``str`` while older supported releases
+    # report the same physical values as ``object``.  Keep the receipt
+    # vocabulary stable across the supported dependency matrix.
     column_dtypes = {
-        str(column): str(dtype)
+        str(column): (
+            "object"
+            if pd.api.types.is_string_dtype(dtype)
+            and not pd.api.types.is_numeric_dtype(dtype)
+            else str(dtype)
+        )
         for column, dtype in zip(frame.columns, frame.dtypes, strict=True)
     }
     numeric_columns = [

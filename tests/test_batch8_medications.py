@@ -10,6 +10,7 @@ Coverage notes:
 """
 from __future__ import annotations
 
+import ast
 import json
 import pathlib
 
@@ -119,7 +120,12 @@ def test_anticoagulation_group_includes_batch8(cdict):
     """Verify load_medications anticoagulation group references all batch-8
     anticoagulants, not just heparin."""
     from easyicu import api
-    # Re-introspect by calling with capture pattern; here we just check the
-    # api module's source mentions them — simpler than monkeypatching.
-    src = pathlib.Path(api.__file__).read_text()
-    assert "'warfarin'" in src and "'apixaban'" in src and "'enoxaparin'" in src
+
+    # Inspect string literals rather than depending on Black's choice of quote
+    # style in the implementation.
+    literals = {
+        node.value
+        for node in ast.walk(ast.parse(pathlib.Path(api.__file__).read_text()))
+        if isinstance(node, ast.Constant) and isinstance(node.value, str)
+    }
+    assert {"warfarin", "apixaban", "enoxaparin"} <= literals

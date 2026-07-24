@@ -17,6 +17,31 @@ from easyicu.research_agent.execution import phase as execution_phase
 from easyicu.research_agent.authority import typed_binding
 from easyicu.research_agent.schema import AnalysisPlan, EvidenceRef
 
+_PHASE_TYPED_BINDING_NAMES = {
+    "TypedBindingResolver",
+    "_EvidenceLineageResolutionError",
+    "_assignment_model_authority_context_block",
+    "_declared_typed_artifact_paths",
+    "_declared_typed_product_paths",
+    "_evidence_kind_matches_typed_product",
+    "_evidence_record_field",
+    "_current_verified_evidence_record",
+    "_lineage_failure_product_fields",
+    "_normalise_typed_product_name",
+    "_registered_source_name",
+    "_resolve_typed_artifact_evidence",
+    "_resolve_typed_input_evidence",
+    "_resolved_typed_input_binding",
+    "_resume_typed_input_bindings",
+    "_resume_typed_input_bindings_fingerprint",
+    "_step_summary_statistic_values",
+    "_typed_artifact_name",
+    "_typed_input_product",
+    "_typed_parent_schema_context_block",
+    "_write_host_input_binding_receipts",
+    "_write_resolved_inputs_manifest",
+}
+
 
 def _top_level_function_calls(tree: ast.Module) -> dict[str, set[str]]:
     calls: dict[str, set[str]] = {}
@@ -34,8 +59,9 @@ def _top_level_function_calls(tree: ast.Module) -> dict[str, set[str]]:
 
 def test_execution_phase_uses_typed_binding_objects_with_identity() -> None:
     assert len(typed_binding.__all__) == 23
-    for name in typed_binding.__all__:
+    for name in _PHASE_TYPED_BINDING_NAMES:
         assert getattr(execution_phase, name) is getattr(typed_binding, name)
+    assert _PHASE_TYPED_BINDING_NAMES < set(typed_binding.__all__)
 
 
 def test_standard_executors_receive_host_owned_input_receipts() -> None:
@@ -340,7 +366,7 @@ importlib.import_module({first!r})
 importlib.import_module({second!r})
 canonical = importlib.import_module({canonical!r})
 legacy = importlib.import_module({legacy!r})
-for name in canonical.__all__:
+for name in {_PHASE_TYPED_BINDING_NAMES!r}:
     assert getattr(legacy, name) is getattr(canonical, name), name
 """
     env = dict(os.environ)

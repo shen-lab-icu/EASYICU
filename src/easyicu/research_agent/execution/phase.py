@@ -113,7 +113,7 @@ from .envelope_sealing import (
     SealedStepResultEnvelopeSnapshot,
     compile_sealed_step_result_shadow,
 )
-from .envelope_sidecar import publish_terminal_step_result_envelope_sidecar
+from ..authority.result_envelope_sidecar import publish_terminal_step_result_envelope_sidecar
 from .failure_classification import classify_runtime_failure
 from .cohort_routing import (
     bind_step_execution_cohort as _bind_step_execution_cohort,

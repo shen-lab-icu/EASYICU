@@ -11,6 +11,11 @@ import ast
 from dataclasses import dataclass
 from typing import Optional
 
+_TYPE_PARAMETER_NODE_TYPES = tuple(
+    node_type
+    for name in ("TypeVar", "ParamSpec", "TypeVarTuple")
+    if (node_type := getattr(ast, name, None)) is not None
+)
 _ARRAY_BOOLEAN_PREDICATE_METHODS = frozenset(
     {"between", "duplicated", "isna", "isin", "notna"}
 )
@@ -101,7 +106,7 @@ def unambiguous_array_predicate_aliases(tree: ast.Module) -> ArrayPredicateAlias
             record(node.name)
         elif isinstance(node, ast.MatchMapping):
             record(node.rest)
-        elif isinstance(node, (ast.TypeVar, ast.ParamSpec, ast.TypeVarTuple)):
+        elif isinstance(node, _TYPE_PARAMETER_NODE_TYPES):
             record(node.name)
 
     assignments: dict[str, ast.AST] = {}

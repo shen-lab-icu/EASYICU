@@ -32,7 +32,7 @@ from pydantic import (
     StrictStr,
 )
 
-from ..contracts.fraction_scale import is_scale_descriptor_field
+from .fraction_scale import is_scale_descriptor_field
 
 JsonScalar = Union[StrictBool, StrictInt, StrictFloat, StrictStr, None]
 

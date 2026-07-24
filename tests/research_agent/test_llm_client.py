@@ -25,12 +25,17 @@ def _mock_transport_client(
         "openai",
         SimpleNamespace(OpenAI=lambda **_kwargs: transport),
     )
-    return client_type(
+    from easyicu.research_agent.providers.factory import build_provider_client
+
+    monkeypatch.setenv("EASYICU_ALLOW_EXTERNAL_LLM", "1")
+    monkeypatch.setenv("EASYICU_LLM_MAX_RETRIES", str(max_retries))
+    return build_provider_client(
+        provider="openai",
         model=model,
-        api_key="non-secret-test-key",
-        base_url="http://127.0.0.1:8787/v1",
+        base_url_override="http://127.0.0.1:8787/v1",
         request_timeout=1.0,
-        max_retries=max_retries,
+        title="EasyICU provider adapter test",
+        client_cls=client_type,
     )
 
 

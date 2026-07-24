@@ -1689,7 +1689,7 @@ def test_association_renderer_keeps_primary_exposure_and_matching_sensitivity_wi
         upstream_path=parent / "coefficients.csv",
     )
     assert result.get("ok") is True, result
-    assert result.get("key_column") == "model_id+term", result
+    assert result.get("key_column") == "source_row_index", result
     summary = json.loads((out / "step_summary.json").read_text(encoding="utf-8"))
     assert summary["publication_figure_repair"]["source_association_table"].endswith(
         "05_primary_missingness_aware_association/outputs/coefficients.csv"
@@ -1764,7 +1764,7 @@ def test_graded_exposure_forest_keys_by_varying_level_not_constant_model(
         upstream_path=parent / "primary_adjusted_odds_ratios.csv",
     )
     assert res.get("ok") is True, res
-    assert res.get("key_column") == "level", res
+    assert res.get("key_column") == "source_row_index", res
 
 
 def test_ordinal_stage_gradient_figure_routes_to_association_renderer(tmp_path: Path):

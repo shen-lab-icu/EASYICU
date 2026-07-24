@@ -49,8 +49,8 @@ from typing import Any, Mapping, Protocol, Sequence, Union
 
 from easyicu.research_agent.schema import EvidenceRecord
 
-from ..authority.runtime_artifacts import verified_run_evidence_path
-from .result_envelope import (
+from .runtime_artifacts import verified_run_evidence_path
+from ..contracts.result_envelope import (
     StepResultEnvelope,
     rebind_step_result_status,
     verify_step_result_envelope,

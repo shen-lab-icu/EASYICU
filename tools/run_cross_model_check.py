@@ -132,7 +132,8 @@ def _mock_plan(question: str, backend: BackendIdentity) -> AnalysisPlan:
                 planned_analysis_role="primary",
                 intent="Fit the primary mock association model.",
                 inputs=["age", "death"],
-                expected_outputs=["primary_association"],
+                expected_outputs=["statistic:primary_association"],
+                method="logistic_regression",
             )
         ],
     )

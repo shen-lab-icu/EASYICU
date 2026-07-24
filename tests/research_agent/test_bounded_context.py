@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from easyicu.research_agent.agents.core import PlannerAgent, PlannerPromptBudgetError
+from easyicu.research_agent.agents.core import PlannerAgent
 from easyicu.research_agent.resources import (
     BoundedContextAssembler,
     ContextBudgetExceeded,
@@ -77,7 +77,7 @@ def test_planner_metrics_expose_exact_base_and_protocol_segments() -> None:
     assert with_protocol["truncated_strings"] is False
 
 
-def test_planner_required_context_overflow_preserves_public_error_type() -> None:
+def test_planner_excludes_oversized_private_notes_from_outbound_context() -> None:
     context = ResearchContext(
         research_question="Describe the ICU cohort.",
         cohort=CohortDescriptor(
@@ -90,5 +90,7 @@ def test_planner_required_context_overflow_preserves_public_error_type() -> None
         notes="x" * 90_000,
     )
 
-    with pytest.raises(PlannerPromptBudgetError, match="required context exceeds"):
-        PlannerAgent.request_metrics(context)
+    metrics = PlannerAgent.request_metrics(context)
+
+    assert metrics["total_bytes"] < 90_000
+    assert metrics["truncated_strings"] is False

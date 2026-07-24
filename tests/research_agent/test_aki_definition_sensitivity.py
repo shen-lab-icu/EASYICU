@@ -4,6 +4,7 @@ import importlib.util
 from pathlib import Path
 
 import pandas as pd
+import pytest
 
 
 def _load_script():
@@ -12,6 +13,11 @@ def _load_script():
         / "scripts"
         / "discovery_aki_definition_sensitivity.py"
     )
+    if not path.exists():
+        pytest.skip(
+            "discovery_aki_definition_sensitivity.py is excluded from the "
+            "slimmed public repository surface"
+        )
     spec = importlib.util.spec_from_file_location(
         "discovery_aki_definition_sensitivity", path
     )

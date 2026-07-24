@@ -39,6 +39,15 @@ from .typed_input import (
 )
 from .typed_binding_identity import direct_resolved_input_key_findings
 
+_TRY_STAR_NODE_TYPES = (
+    (try_star_type,) if (try_star_type := getattr(ast, "TryStar", None)) else ()
+)
+_TRY_NODE_TYPES = (ast.Try, *_TRY_STAR_NODE_TYPES)
+_TYPE_PARAMETER_NODE_TYPES = tuple(
+    node_type
+    for name in ("TypeVar", "ParamSpec", "TypeVarTuple")
+    if (node_type := getattr(ast, name, None)) is not None
+)
 _STRUCTURAL_ACCOUNTING_PRODUCTS = frozenset(
     {
         "attrition",
@@ -930,7 +939,7 @@ def _statement_flow_outcomes(statement: ast.stmt) -> set[str]:
         return body | orelse
     if isinstance(
         statement,
-        (ast.For, ast.AsyncFor, ast.While, ast.Try, ast.TryStar, ast.Match),
+        (ast.For, ast.AsyncFor, ast.While, *_TRY_NODE_TYPES, ast.Match),
     ):
         return {_FLOW_FALLTHROUGH, _FLOW_LOOP_ESCAPE}
     return {_FLOW_FALLTHROUGH}
@@ -1155,7 +1164,7 @@ def _provenance_fail_closed_findings(tree: ast.Module) -> list[ValidationFinding
             ambiguous_names.add(str(node.name))
         if isinstance(node, ast.MatchMapping) and node.rest in marker_names:
             ambiguous_names.add(str(node.rest))
-        if isinstance(node, (ast.TypeVar, ast.ParamSpec, ast.TypeVarTuple)) and (
+        if isinstance(node, _TYPE_PARAMETER_NODE_TYPES) and (
             node.name in marker_names
         ):
             ambiguous_names.add(node.name)
@@ -1725,7 +1734,7 @@ def _provenance_fail_closed_findings(tree: ast.Module) -> list[ValidationFinding
             ):
                 return False
             if (
-                isinstance(candidate, (ast.TypeVar, ast.ParamSpec, ast.TypeVarTuple))
+                isinstance(candidate, _TYPE_PARAMETER_NODE_TYPES)
                 and candidate.name == function.name
             ):
                 return False
@@ -1916,8 +1925,7 @@ def _provenance_fail_closed_findings(tree: ast.Module) -> list[ValidationFinding
             ast.Continue,
             ast.Match,
             ast.Return,
-            ast.Try,
-            ast.TryStar,
+            *_TRY_NODE_TYPES,
             ast.While,
             ast.With,
             ast.AsyncWith,
@@ -2107,7 +2115,7 @@ def _provenance_fail_closed_findings(tree: ast.Module) -> list[ValidationFinding
                         )
                     ] = issue
                 return True
-            if isinstance(parent, (ast.TryStar, ast.With, ast.AsyncWith)):
+            if isinstance(parent, (*_TRY_STAR_NODE_TYPES, ast.With, ast.AsyncWith)):
                 return True
             current = parent
         return False
@@ -2558,8 +2566,7 @@ def _provenance_fail_closed_findings(tree: ast.Module) -> list[ValidationFinding
                 ast.Break,
                 ast.Match,
                 ast.Return,
-                ast.Try,
-                ast.TryStar,
+                *_TRY_NODE_TYPES,
                 ast.While,
                 ast.With,
                 ast.AsyncWith,
@@ -2668,8 +2675,7 @@ def _provenance_fail_closed_findings(tree: ast.Module) -> list[ValidationFinding
                 ast.Match,
                 ast.Raise,
                 ast.Return,
-                ast.Try,
-                ast.TryStar,
+                *_TRY_NODE_TYPES,
                 ast.While,
                 ast.With,
                 ast.AsyncWith,
@@ -4914,7 +4920,7 @@ def _branch_local_unbound_findings(tree: ast.Module) -> list[ValidationFinding]:
                 assigned_before.update(guaranteed)
                 continue
 
-            if isinstance(statement, (ast.Try, ast.TryStar)):
+            if isinstance(statement, _TRY_NODE_TYPES):
                 following = statements[index + 1 :]
 
                 def _top_level_stores(block: list[ast.stmt]) -> set[str]:
@@ -5528,7 +5534,7 @@ def _builtin_int_binding_is_unmodified(tree: ast.Module) -> bool:
             return False
         if isinstance(node, ast.MatchMapping) and node.rest == "int":
             return False
-        if isinstance(node, (ast.TypeVar, ast.ParamSpec, ast.TypeVarTuple)) and (
+        if isinstance(node, _TYPE_PARAMETER_NODE_TYPES) and (
             node.name == "int"
         ):
             return False

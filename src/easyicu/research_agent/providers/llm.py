@@ -409,17 +409,6 @@ class OpenAIClient:
         self._timeout = request_timeout
         self._max_retries = int(max_retries)
         self._extra_body = dict(extra_body or {})
-        from .factory import _mark_reviewed_transport_constructed
-
-        _mark_reviewed_transport_constructed(self)
-        if _is_local_openai_compatible_base_url(resolved_base_url):
-            from .factory import _register_loopback_provider_client
-
-            _register_loopback_provider_client(
-                self,
-                model=model,
-                base_url=str(resolved_base_url),
-            )
         self.supports_vision = (
             bool(supports_vision)
             if supports_vision is not None
@@ -442,6 +431,20 @@ class OpenAIClient:
             if reasoning_body:
                 for k, v in reasoning_body.items():
                     self._extra_body.setdefault(k, v)
+        # Mint construction/loopback authority only after every
+        # model-dependent dispatch option is finalized.  Recording earlier
+        # makes reviewed Qwen/OpenRouter clients look mutated on first use.
+        from .factory import _mark_reviewed_transport_constructed
+
+        _mark_reviewed_transport_constructed(self)
+        if _is_local_openai_compatible_base_url(resolved_base_url):
+            from .factory import _register_loopback_provider_client
+
+            _register_loopback_provider_client(
+                self,
+                model=model,
+                base_url=str(resolved_base_url),
+            )
 
     def _require_outbound_authorization(self) -> None:
         """Reject unmanaged external transports before serializing messages."""

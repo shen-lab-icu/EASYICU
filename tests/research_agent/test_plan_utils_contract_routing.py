@@ -343,8 +343,8 @@ def test_prediction_contract_requires_metrics_from_exact_method_owner():
 
 def test_cohort_change_requires_exact_owner_and_closed_attrition_product():
     owner = _step(
-        method="cohort definition sensitivity with binomial glm",
-        outputs=["table:cohort_overlap"],
+        method="cohort_definition_sensitivity",
+        outputs=["table:cohort_overlap_and_attrition"],
     )
     audit = _step(
         method="data_quality_audit",
@@ -353,8 +353,8 @@ def test_cohort_change_requires_exact_owner_and_closed_attrition_product():
         outputs=["table:cohort_overlap"],
     )
     reconciliation = _step(
-        method="cohort_definition_reconciliation",
-        outputs=["table:cohort_overlap"],
+        method="sensitivity_analysis",
+        outputs=["table:cohort_overlap_and_attrition"],
     )
     near_match = _step(
         method="cohort_definition_sensitivity",

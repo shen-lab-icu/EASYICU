@@ -31,10 +31,10 @@ from easyicu.research_agent.execution import envelope_sealing
 from easyicu.research_agent.execution.envelope_sealing import (
     compile_sealed_step_result_shadow,
 )
-from easyicu.research_agent.execution.envelope_sidecar import (
+from easyicu.research_agent.authority.result_envelope_sidecar import (
     publish_terminal_step_result_envelope_sidecar,
 )
-from easyicu.research_agent.execution.result_envelope import (
+from easyicu.research_agent.contracts.result_envelope import (
     StepResultEnvelope,
     normalize_step_result_shadow,
     rebind_step_result_status,

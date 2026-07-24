@@ -24,7 +24,7 @@ from easyicu.research_agent.authority.registration import StepEvidenceCommit
 from easyicu.research_agent.authority.runtime_artifacts import (
     load_run_artifact_authority,
 )
-from easyicu.research_agent.execution.envelope_sidecar import (
+from easyicu.research_agent.authority.result_envelope_sidecar import (
     SIDECAR_PRODUCER,
     SIDECAR_SCHEMA_VERSION,
     LoadedStepResultEnvelopeSidecar,
@@ -36,7 +36,7 @@ from easyicu.research_agent.execution.envelope_sidecar import (
     publish_step_result_envelope_sidecar,
     publish_terminal_step_result_envelope_sidecar,
 )
-from easyicu.research_agent.execution.result_envelope import (
+from easyicu.research_agent.contracts.result_envelope import (
     StepResultEnvelope,
     normalize_step_result_shadow,
 )

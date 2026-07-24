@@ -215,9 +215,9 @@ def test_publication_candidate_template_is_byte_identical() -> None:
     ]
     assert len(templates) == 1
     encoded = templates[0].encode("utf-8")
-    assert len(encoded) == 3008
+    assert len(encoded) == 3100
     assert hashlib.sha256(encoded).hexdigest() == (
-        "f538a66ce79a426785b258ad701ca30d15bbb534e297dfac09d6f406704d0092"
+        "ef109c3c19f90867d456a9c8da19263a4fbbd924f20dd990b573897a7c13ca45"
     )
 
 

@@ -532,9 +532,40 @@ def test_jury_receives_artifact_identity_not_arbitrary_artifact_text():
 
 def test_replanner_probe_projection_rejects_all_identifier_suffixes(ra):
     context, step = _context_and_step(ra)
+    context = context.model_copy(update={"primary_exposure": None})
     plan = ra.AnalysisPlan(
         research_question=context.research_question,
-        steps=[step],
+        steps=[
+            step.model_copy(
+                update={
+                    "expected_outputs": ["table:baseline_characteristics"],
+                }
+            ),
+            ra.AnalysisStep(
+                step_id="cohort_accounting",
+                planned_analysis_role="auxiliary",
+                intent="Report the cohort denominator.",
+                inputs=["exposure"],
+                expected_outputs=["table:cohort_flow"],
+                method="descriptive_summary",
+            ),
+            ra.AnalysisStep(
+                step_id="distribution",
+                planned_analysis_role="auxiliary",
+                intent="Render the exposure distribution.",
+                inputs=["exposure"],
+                expected_outputs=["figure:distribution_plot"],
+                method="visualization",
+            ),
+            ra.AnalysisStep(
+                step_id="data_quality",
+                planned_analysis_role="auxiliary",
+                intent="Report missingness and data quality.",
+                inputs=["exposure"],
+                expected_outputs=["table:missingness_table"],
+                method="data_quality_audit",
+            ),
+        ],
     )
     capture = ExternalCaptureMockLLMClient([plan.model_dump_json()])
 

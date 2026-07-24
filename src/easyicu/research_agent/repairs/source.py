@@ -34,6 +34,11 @@ from typing import Any, Dict, List, Mapping, Optional, Sequence, Set
 import numpy as np
 import pandas as pd
 
+_TRY_STAR_NODE_TYPES = (
+    (try_star_type,) if (try_star_type := getattr(ast, "TryStar", None)) else ()
+)
+_TRY_NODE_TYPES = (ast.Try, *_TRY_STAR_NODE_TYPES)
+
 from ..scalar_utils import (
     _coerce_scalar,
     _first_numeric_effect_from_text,
@@ -1929,7 +1934,7 @@ def _standalone_statement_source(
     current: Optional[ast.AST] = statement
     while current is not None and current in parents:
         current = parents[current]
-        if isinstance(current, (ast.Try, ast.TryStar, ast.With, ast.AsyncWith)):
+        if isinstance(current, (*_TRY_NODE_TYPES, ast.With, ast.AsyncWith)):
             return None
     start_line = lines[statement.lineno - 1]
     indent = start_line[: len(start_line) - len(start_line.lstrip(" \t"))]
@@ -3205,8 +3210,7 @@ def _patch_inline_provenance_failure_guard(code: str) -> str:
                     ast.For,
                     ast.AsyncFor,
                     ast.While,
-                    ast.Try,
-                    ast.TryStar,
+                    *_TRY_NODE_TYPES,
                     ast.With,
                     ast.AsyncWith,
                     ast.Match,
