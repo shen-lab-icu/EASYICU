@@ -809,8 +809,11 @@ class CodeRunner:
         code = reorder_forward_references(code)
 
         # Persist the script BEFORE running so it is hashable as evidence
-        # even if execution crashes.
-        script_path.write_text(code, encoding="utf-8")
+        # even if execution crashes. Route through the atomic, symlink-safe
+        # writer: a previous attempt's sandboxed code can leave ``analysis.py``
+        # as a symlink inside the reused step dir, and a raw ``write_text`` would
+        # follow it and clobber a host file outside the sandbox.
+        _replace_regular_file_atomically(script_path, code.encode("utf-8"))
         (
             authority_snapshot_path,
             authority_snapshot_sha256,
@@ -926,7 +929,8 @@ class CodeRunner:
                 "set allow_unsafe_host_fallback=True for explicit development-only "
                 "degraded execution."
             )
-            log_path.write_text(
+            _replace_regular_file_atomically(
+                log_path,
                 textwrap.dedent(f"""
                     === step {step_id} ===
                     cmd: {' '.join(cmd)}
@@ -944,8 +948,7 @@ class CodeRunner:
 
                     ---- stderr ----
                     {stderr}
-                    """).strip(),
-                encoding="utf-8",
+                    """).strip().encode("utf-8"),
             )
             return RunResult(
                 step_id=step_id,
@@ -1209,7 +1212,11 @@ class CodeRunner:
             duration = time.monotonic() - started
             timed_out = True
 
-        log_path.write_text(
+        # Symlink-safe: sandboxed code may have replaced ``run.log`` with a
+        # symlink during execution; the atomic writer overwrites the link with a
+        # fresh regular file rather than writing through it to a host victim.
+        _replace_regular_file_atomically(
+            log_path,
             textwrap.dedent(f"""
                 === step {step_id} ===
                 cmd: {' '.join(cmd)}
@@ -1229,8 +1236,7 @@ class CodeRunner:
                 {stdout}
                 ---- stderr ----
                 {stderr}
-                """).strip(),
-            encoding="utf-8",
+                """).strip().encode("utf-8"),
         )
 
         artefacts = _collect_safe_output_artifacts(out_dir)

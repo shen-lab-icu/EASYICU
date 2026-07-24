@@ -126,6 +126,53 @@ def test_code_runner_never_collects_generated_output_symlinks(ra, tmp_path: Path
     assert cohort_path.is_file()
 
 
+def test_code_runner_control_writes_never_follow_planted_symlinks(ra, tmp_path: Path):
+    # The macOS sandbox lets generated code write anywhere under the step dir,
+    # and the step dir is reused across repair attempts. A prior attempt can
+    # therefore leave analysis.py / run.log as symlinks pointing at a host file
+    # outside the sandbox. The host must overwrite the *link* with a fresh
+    # regular file, never write through it onto the victim.
+    cohort_path = tmp_path / "cohort.parquet"
+    pd.DataFrame({"stay_id": [1], "death": [0]}).to_parquet(cohort_path, index=False)
+
+    victim = tmp_path / "victim_outside_sandbox.txt"
+    victim.write_text("must survive", encoding="utf-8")
+
+    workdir = tmp_path / "run"
+    step_dir = workdir / "steps" / "hostile"
+    step_dir.mkdir(parents=True)
+    planted_script = step_dir / "analysis.py"
+    planted_log = step_dir / "run.log"
+    planted_script.symlink_to(victim)
+    planted_log.symlink_to(victim)
+
+    runner = ra.CodeRunner(
+        workdir=workdir,
+        cohort_parquet=cohort_path,
+        timeout_seconds=10,
+        allow_unsafe_host_fallback=True,
+    )
+    result = runner.run(
+        step_id="hostile",
+        code=(
+            "import os\n"
+            "from pathlib import Path\n"
+            "Path(os.environ['STEP_OUT_DIR'], 'ok.txt').write_text('ok')\n"
+        ),
+    )
+
+    assert result.succeeded
+    # The victim host file was never written through either planted link.
+    assert victim.read_text(encoding="utf-8") == "must survive"
+    # Both control files are now real, single-hardlink regular files.
+    for control in (planted_script, planted_log):
+        assert control.is_file() and not control.is_symlink()
+        assert control.stat().st_nlink == 1
+    # And they hold their real content, not the victim's.
+    assert "STEP_OUT_DIR" in planted_script.read_text(encoding="utf-8")
+    assert "duration_seconds:" in planted_log.read_text(encoding="utf-8")
+
+
 def test_code_runner_authority_binds_extra_inputs_and_isolation(ra, tmp_path: Path):
     cohort_path = tmp_path / "cohort.parquet"
     pd.DataFrame({"stay_id": [1]}).to_parquet(cohort_path, index=False)
