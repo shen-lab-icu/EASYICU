@@ -24,7 +24,9 @@ from __future__ import annotations
 
 import gzip
 import os
+import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pandas as pd
 import pyarrow as pa
@@ -32,6 +34,37 @@ import pyarrow.parquet as pq
 import pytest
 
 needs_real_data = pytest.mark.needs_real_data
+
+
+def _authorized_local_openai_client(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    completions: object,
+    max_retries: int,
+):
+    """Construct the real adapter through the reviewed local-provider factory."""
+
+    from easyicu.research_agent.providers.factory import build_provider_client
+    from easyicu.research_agent.providers.llm import OpenAIClient
+
+    transport = SimpleNamespace(
+        chat=SimpleNamespace(completions=completions),
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "openai",
+        SimpleNamespace(OpenAI=lambda **_kwargs: transport),
+    )
+    monkeypatch.setenv("EASYICU_ALLOW_EXTERNAL_LLM", "1")
+    monkeypatch.setenv("EASYICU_LLM_MAX_RETRIES", str(max_retries))
+    return build_provider_client(
+        provider="openai",
+        model="stub",
+        base_url_override="http://127.0.0.1:8787/v1",
+        request_timeout=1.0,
+        title="EasyICU local retry regression",
+        client_cls=OpenAIClient,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -223,7 +256,7 @@ def test_openai_client_retries_json_decode_error(monkeypatch):
     repair path, killing the whole step. After the fix the LLM client retries
     transient parse errors with short backoff."""
     import json
-    from easyicu.research_agent.providers.llm import LLMMessage, OpenAIClient
+    from easyicu.research_agent.providers.llm import LLMMessage
 
     calls = {"n": 0}
 
@@ -251,20 +284,11 @@ def test_openai_client_retries_json_decode_error(monkeypatch):
 
             return _Resp()
 
-    class _StubChat:
-        completions = _StubCreate()
-
-    class _StubClient:
-        chat = _StubChat()
-
-    # Build an OpenAIClient without invoking the real openai SDK
-    client = OpenAIClient.__new__(OpenAIClient)
-    client._client = _StubClient()
-    client._model = "stub"
-    client._timeout = 1.0
-    client._extra_body = None
-    client.last_usage = None
-    client.last_finish_reason = None
+    client = _authorized_local_openai_client(
+        monkeypatch,
+        completions=_StubCreate(),
+        max_retries=3,
+    )
 
     # Monkeypatch time.sleep so the retries are instant in the test
     import time
@@ -322,7 +346,7 @@ def test_openai_client_retries_null_choices(monkeypatch):
     failure; `resp.choices[0]` then raised the cryptic
     `'NoneType' object is not subscriptable` and killed the step. After the
     fix the LLM client treats null-choices/null-message as transient."""
-    from easyicu.research_agent.providers.llm import LLMMessage, OpenAIClient
+    from easyicu.research_agent.providers.llm import LLMMessage
 
     calls = {"n": 0}
 
@@ -352,19 +376,11 @@ def test_openai_client_retries_null_choices(monkeypatch):
                 return _NullChoicesResp()
             return _GoodResp()
 
-    class _StubChat:
-        completions = _StubCreate()
-
-    class _StubClient:
-        chat = _StubChat()
-
-    client = OpenAIClient.__new__(OpenAIClient)
-    client._client = _StubClient()
-    client._model = "stub"
-    client._timeout = 1.0
-    client._extra_body = None
-    client.last_usage = None
-    client.last_finish_reason = None
+    client = _authorized_local_openai_client(
+        monkeypatch,
+        completions=_StubCreate(),
+        max_retries=2,
+    )
 
     import time
 

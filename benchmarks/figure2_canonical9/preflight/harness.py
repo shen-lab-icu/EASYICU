@@ -201,6 +201,8 @@ class ScriptedPreflightLLM:
             step_id=case.primary_step_id,
             outcome=case.target_outcome,
             predictor=case.primary_exposure,
+            adjust=["age"],
+            typed_model_contract=True,
         )
         if request_replan_from_primary:
             primary_code = primary_code.replace(

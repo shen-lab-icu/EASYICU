@@ -75,35 +75,23 @@ def test_online_run_rejects_curated_card_without_explicit_override() -> None:
 
 
 def test_counting_client_records_each_retry_call() -> None:
-    class FakeClient:
-        name = "fake"
+    from easyicu.research_agent.providers.mocks import MockLLMClient
 
-        def __init__(self) -> None:
-            self.last_usage = None
+    inner = MockLLMClient()
+    client = MODULE.CountingClient(inner)
 
-        def complete(self, messages, *, max_tokens=2048, temperature=0.2):
-            self.last_usage = {"prompt_tokens": 10, "completion_tokens": 2}
-            return "{}"
-
-    client = MODULE.CountingClient(FakeClient())
-
-    assert client.complete([]) == "{}"
-    assert client.calls[0]["usage"] == {
-        "prompt_tokens": 10,
-        "completion_tokens": 2,
-    }
+    assert isinstance(client.complete([]), str)
+    assert client.calls[0]["usage"] == inner.last_usage
+    assert client.calls[0]["usage"]["prompt_tokens"] > 0
+    assert client.calls[0]["usage"]["completion_tokens"] > 0
     assert len(client.calls[0]["raw_sha256"]) == 64
 
 
 def test_counting_client_fails_before_exceeding_trial_budget() -> None:
-    class FakeClient:
-        name = "fake"
-        last_usage = None
+    from easyicu.research_agent.providers.mocks import ScriptedMockLLMClient
 
-        def complete(self, messages, *, max_tokens=2048, temperature=0.2):
-            return "{}"
-
-    client = MODULE.CountingClient(FakeClient(), max_calls=1)
+    inner = ScriptedMockLLMClient(["{}"], repeat_last=True)
+    client = MODULE.CountingClient(inner, max_calls=1)
     client.complete([])
 
     with pytest.raises(RuntimeError, match="budget exhausted"):

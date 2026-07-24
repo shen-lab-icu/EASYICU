@@ -24,7 +24,11 @@ def test_current_repair_report_is_exact_nine_and_never_authorizes_real_run() -> 
     assert tuple(row.task_id for row in rows) == tuple(FIGURE2_TASK_IDS)
     assert report["real_run_authorized"] is False
     assert all(not row.launch_ready for row in rows)
-    assert all(row.state == "blocked" for row in rows)
+    assert all(
+        row.state
+        == ("blocked" if row.input_binding_blockers else "ready_input_pending_repair")
+        for row in rows
+    )
 
 
 def test_framework_keeps_owner_and_scientific_blocks_out_of_auto_repair() -> None:

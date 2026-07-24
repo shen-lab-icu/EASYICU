@@ -247,7 +247,7 @@ def _table_one_step(
 def _primary_association_step(
     *, step_id: str, exposure: str, outcome: str, adjust: List[str], intent: str
 ) -> AnalysisStep:
-    """Agent-owned (LLM-coded) adjusted association step."""
+    """Agent-owned (LLM-coded) typed adjusted-association step."""
 
     inputs = [exposure, *adjust, outcome]
     return AnalysisStep(
@@ -255,8 +255,20 @@ def _primary_association_step(
         planned_analysis_role="primary",
         intent=intent,
         inputs=inputs,
-        expected_outputs=["table:primary_association"],
-        method="logistic_regression",
+        expected_outputs=["table:adjusted_association_estimates"],
+        method="adjusted_association_models",
+        model_requirements=[
+            {
+                "requirement_id": f"primary_{exposure}_{outcome}",
+                "outcome": outcome,
+                "outcome_type": "binary",
+                "method_family": "logistic_regression",
+                "exposure_source": exposure,
+                "analysis_role": "primary",
+                "analysis_set": "complete_case",
+                "required_for_step_success": True,
+            }
+        ],
     )
 
 
@@ -283,6 +295,44 @@ def _aux_step(
         expected_outputs=expected_outputs,
         method=method,
     )
+
+
+def _robustness_step(*, step_id: str) -> AnalysisStep:
+    """Declare article-level sensitivity products without inventing endpoints."""
+
+    return _aux_step(
+        step_id=step_id,
+        method="robustness_sensitivity",
+        inputs=["table:adjusted_association_estimates"],
+        expected_outputs=[
+            "table:robustness_matrix",
+            "statistic:robustness_summary",
+        ],
+        intent=(
+            "Replay the primary association under the pre-specified baseline-"
+            "covariate missingness strategy; never impute the exposure or outcome."
+        ),
+    )
+
+
+def _baseline_missingness_robustness_spec() -> List[Dict[str, object]]:
+    """One case-neutral sensitivity spec supported by all synthetic fixtures."""
+
+    return [
+        {
+            "spec_id": "baseline_covariate_median",
+            "axis": "missing",
+            "description": (
+                "Median-impute declared baseline adjustment covariates only; "
+                "leave the exposure and outcome unimputed."
+            ),
+            "missing_override": {
+                "strategy": "median_imputation",
+                "scope": "baseline_adjustment_covariates_only",
+                "exclude_roles": ["exposure", "outcome"],
+            },
+        }
+    ]
 
 
 def _continuous(name: str) -> TableOneVariableSpec:
@@ -322,13 +372,36 @@ def _e1_plan() -> AnalysisPlan:
                 step_id="01_cohort_definition",
                 method="cohort_definition_summary",
                 inputs=["susp_infection", "sofa", "sepsis3"],
-                expected_outputs=["table:cohort_definition"],
+                expected_outputs=[
+                    "table:cohort_definition",
+                    "table:denominator_panel",
+                ],
                 intent=(
                     "State the explicit Sepsis-3 cohort denominator and "
                     "inclusion/exclusion: membership is derived from suspected "
                     "infection timing plus SOFA>=2 (never an ICD-code proxy); "
                     "diagnosis codes are used for membership only, not event "
                     "timing."
+                ),
+            ),
+            _aux_step(
+                step_id="01b_missingness_audit",
+                method="missingness_measurement_audit",
+                inputs=["sepsis3", "age", "death"],
+                expected_outputs=["table:missingness_profile"],
+                intent=(
+                    "Report measurement availability for the exposure, outcome, "
+                    "and adjustment covariates before fitting the model."
+                ),
+            ),
+            _aux_step(
+                step_id="01c_absolute_risk",
+                method="binary_outcome_incidence_and_absolute_risk",
+                inputs=["sepsis3", "death"],
+                expected_outputs=["table:outcome_incidence"],
+                intent=(
+                    "Report Sepsis-3 prevalence and absolute mortality risk by "
+                    "exposure group before the adjusted association."
                 ),
             ),
             _table_one_step(
@@ -345,7 +418,9 @@ def _e1_plan() -> AnalysisPlan:
                 adjust=["age"],
                 intent="Adjusted association of Sepsis-3 with in-hospital mortality.",
             ),
+            _robustness_step(step_id="04_robustness"),
         ],
+        robustness_specs=_baseline_missingness_robustness_spec(),
         rationale=(
             "E1 diagnostic-only preflight fixture: an explicit cohort-definition "
             "step (derived Sepsis-3, visible denominator) ahead of a typed "
@@ -421,6 +496,16 @@ def _e2_plan() -> AnalysisPlan:
         research_question=E2.question,
         analysis_type=_ASSOCIATION,
         steps=[
+            _aux_step(
+                step_id="00_cohort_accounting",
+                method="cohort_definition_summary",
+                inputs=["lactate", "death"],
+                expected_outputs=["table:denominator_panel"],
+                intent=(
+                    "Report the eligible denominator and complete analytic "
+                    "denominator before lactate aggregation."
+                ),
+            ),
             _table_one_step(
                 step_id=_E2_TABLE_ONE,
                 group_by="death",
@@ -442,10 +527,23 @@ def _e2_plan() -> AnalysisPlan:
                 step_id="03_missingness_audit",
                 method="missingness_measurement_audit",
                 inputs=["lactate"],
-                expected_outputs=["table:missingness_audit"],
+                expected_outputs=[
+                    "table:missingness_audit",
+                    "table:missingness_profile",
+                ],
                 intent=(
                     "Audit lactate measurement missingness and the within-window "
                     "aggregation before interpreting the association."
+                ),
+            ),
+            _aux_step(
+                step_id="03b_absolute_risk",
+                method="binary_outcome_incidence_and_absolute_risk",
+                inputs=["lactate", "death"],
+                expected_outputs=["table:outcome_incidence"],
+                intent=(
+                    "Report the mortality event rate across pre-specified "
+                    "first-24h peak lactate strata before adjustment."
                 ),
             ),
             _primary_association_step(
@@ -455,7 +553,9 @@ def _e2_plan() -> AnalysisPlan:
                 adjust=["age"],
                 intent="Adjusted association of first-24h peak lactate with mortality.",
             ),
+            _robustness_step(step_id="05_robustness"),
         ],
+        robustness_specs=_baseline_missingness_robustness_spec(),
         rationale=(
             "E2 diagnostic-only preflight fixture: a within-window peak "
             "aggregation step (mmol/L) and a missingness audit around a typed "
@@ -513,6 +613,16 @@ def _e3_plan() -> AnalysisPlan:
         research_question=E3.question,
         analysis_type=_ASSOCIATION,
         steps=[
+            _aux_step(
+                step_id="00_cohort_accounting",
+                method="cohort_definition_summary",
+                inputs=["kdigo", "death"],
+                expected_outputs=["table:denominator_panel"],
+                intent=(
+                    "Report the eligible and analytic denominators before "
+                    "stage-stratified outcome analysis."
+                ),
+            ),
             _table_one_step(
                 step_id=_E3_TABLE_ONE,
                 group_by="death",
@@ -524,10 +634,23 @@ def _e3_plan() -> AnalysisPlan:
                 step_id="02_stage_stratified",
                 method="stage_stratified_outcomes",
                 inputs=["kdigo", "los_icu", "death"],
-                expected_outputs=["table:stage_stratified_outcomes"],
+                expected_outputs=[
+                    "table:stage_stratified_outcomes",
+                    "table:outcome_incidence",
+                ],
                 intent=(
                     "Stratify ICU length of stay and mortality by explicit KDIGO "
                     "stage boundaries 0, 1, 2, 3 (report each stage separately)."
+                ),
+            ),
+            _aux_step(
+                step_id="02b_missingness_audit",
+                method="missingness_measurement_audit",
+                inputs=["kdigo", "age", "death"],
+                expected_outputs=["table:missingness_profile"],
+                intent=(
+                    "Report measurement availability for KDIGO stage, outcome, "
+                    "and adjustment covariates before ordinal modelling."
                 ),
             ),
             _aux_step(
@@ -547,7 +670,9 @@ def _e3_plan() -> AnalysisPlan:
                 adjust=["age"],
                 intent="Adjusted ordinal KDIGO-stage gradient vs mortality.",
             ),
+            _robustness_step(step_id="05_robustness"),
         ],
+        robustness_specs=_baseline_missingness_robustness_spec(),
         rationale=(
             "E3 diagnostic-only preflight fixture: a stage-stratified outcomes "
             "step (explicit KDIGO boundaries vs LOS + mortality) and an ordinal "

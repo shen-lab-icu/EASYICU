@@ -113,7 +113,9 @@ from .envelope_sealing import (
     SealedStepResultEnvelopeSnapshot,
     compile_sealed_step_result_shadow,
 )
-from ..authority.result_envelope_sidecar import publish_terminal_step_result_envelope_sidecar
+from ..authority.result_envelope_sidecar import (
+    publish_terminal_step_result_envelope_sidecar,
+)
 from .failure_classification import classify_runtime_failure
 from .cohort_routing import (
     bind_step_execution_cohort as _bind_step_execution_cohort,
@@ -2681,14 +2683,6 @@ def _evaluate_final_deterministic_gates(
         if step_record.get("status") is not None
         else None
     )
-    result_envelope_snapshot = compile_sealed_step_result_shadow(
-        step=step,
-        step_summary=step_summary,
-        output_dir=out_dir,
-        run_dir=run_dir,
-        resolved_input_bindings=resolved_input_bindings,
-        current_status=current_step_status,
-    )
     execution_cohort_path = _step_execution_cohort_path(
         step=step,
         plan=plan,
@@ -2700,6 +2694,24 @@ def _evaluate_final_deterministic_gates(
         run_dir=run_dir,
         fallback_path=execution_cohort_path,
         resolved_input_bindings=resolved_input_bindings,
+    )
+    execution_cohort_sha256 = str(
+        step_record.get("execution_cohort_sha256") or ""
+    ).strip()
+    result_envelope_snapshot = compile_sealed_step_result_shadow(
+        step=step,
+        step_summary=step_summary,
+        output_dir=out_dir,
+        run_dir=run_dir,
+        resolved_input_bindings=resolved_input_bindings,
+        # Archived/isolated gate callers may not carry the host digest.  In
+        # that case omit the optional binding pair; any raw cohort path in the
+        # summary still fails normalization because it is not authorized.
+        execution_cohort_path=(
+            execution_cohort_path if execution_cohort_sha256 else None
+        ),
+        execution_cohort_sha256=execution_cohort_sha256 or None,
+        current_status=current_step_status,
     )
 
     stat_findings = stat_validator.audit(
