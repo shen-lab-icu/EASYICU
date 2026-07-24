@@ -400,6 +400,105 @@ def patch_custom_measurement_provenance_receipts(
     if len(receipt_imports) > 1 or receipt_name_bindings:
         return code
 
+    direct_candidates: list[tuple[ast.FunctionDef, list[ast.Call]]] = []
+    for helper in (node for node in tree.body if isinstance(node, ast.FunctionDef)):
+        returns = [node for node in ast.walk(helper) if isinstance(node, ast.Return)]
+        if len(returns) != 1 or not isinstance(returns[0].value, ast.Dict):
+            continue
+        return_keys = {
+            str(key.value)
+            for key in returns[0].value.keys
+            if isinstance(key, ast.Constant) and isinstance(key.value, str)
+        }
+        if not {"measured_column", "count_column"} <= return_keys:
+            continue
+        calls = [
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == helper.name
+        ]
+        helper_loads = [
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Name)
+            and isinstance(node.ctx, ast.Load)
+            and node.id == helper.name
+        ]
+        if calls and len(helper_loads) == len(calls):
+            direct_candidates.append((helper, calls))
+    if len(direct_candidates) == 1 and not missing:
+        helper, calls = direct_candidates[0]
+        direct_pairs: dict[str, str] = {}
+        rendered_calls: list[tuple[ast.Call, str]] = []
+        for call in calls:
+            if (
+                len(call.args) < 3
+                or call.keywords
+                or not isinstance(call.args[1], ast.Constant)
+                or not isinstance(call.args[1].value, str)
+                or not isinstance(call.args[2], ast.Constant)
+                or not isinstance(call.args[2].value, str)
+            ):
+                return code
+            measured = str(call.args[1].value)
+            count = str(call.args[2].value)
+            if measured in direct_pairs:
+                return code
+            frame_source = ast.get_source_segment(code, call.args[0])
+            if not frame_source:
+                return code
+            direct_pairs[measured] = count
+            rendered_calls.append(
+                (
+                    call,
+                    f"measurement_provenance_receipt({frame_source}, "
+                    f"measured_column={measured!r}, count_column={count!r})",
+                )
+            )
+        if direct_pairs == invalid:
+            lines, starts = _source_offsets(code)
+            edits: list[tuple[int, int, str]] = []
+            helper_span = _node_span(helper, lines=lines, starts=starts)
+            if helper_span is None:
+                return code
+            edits.append((*helper_span, ""))
+            for call, replacement in rendered_calls:
+                call_span = _node_span(call, lines=lines, starts=starts)
+                if call_span is None:
+                    return code
+                edits.append((*call_span, replacement))
+            if not receipt_imports:
+                imports = [
+                    node
+                    for node in tree.body
+                    if isinstance(node, (ast.Import, ast.ImportFrom))
+                ]
+                if not imports or imports[-1].end_lineno is None:
+                    return code
+                import_at = (
+                    starts[imports[-1].end_lineno]
+                    if imports[-1].end_lineno < len(lines)
+                    else len(code)
+                )
+                edits.append(
+                    (
+                        import_at,
+                        import_at,
+                        "from easyicu.research_agent.methods.descriptive_inputs "
+                        "import measurement_provenance_receipt\n",
+                    )
+                )
+            repaired = code
+            for start, end, replacement in sorted(edits, reverse=True):
+                repaired = repaired[:start] + replacement + repaired[end:]
+            try:
+                ast.parse(repaired)
+            except SyntaxError:
+                return code
+            return repaired
+
     candidates: list[
         tuple[ast.Assign, ast.ListComp, ast.Call, ast.Assign, ast.FunctionDef]
     ] = []
