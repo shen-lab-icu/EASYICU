@@ -38,6 +38,7 @@ from easyicu.webserver.input_validation import parse_bool
 # csv) is recognised as that database. Mirrors check_data_status' core_tables.
 _CORE_TABLES = {
     "miiv": ["icustays", "patients", "admissions"],
+    "miii": ["icustays", "patients", "admissions"],
     "eicu": ["patient", "apachepatientresult"],
     "aumc": ["admissions", "drugitems"],
     "hirid": ["general_table", "observations"],
@@ -219,7 +220,16 @@ def _detect_database(path: Path) -> str:
     s = str(path).lower()
     if "eicu" in s:
         return "eicu"
-    if "miiv" in s or "mimic" in s:
+    # MIMIC-III must be tested before MIMIC-IV: a bare "mimic" substring test
+    # claims /data/mimiciii for MIMIC-IV, and the two have different ID columns
+    # (icustay_id vs stay_id), so the mislabel silently empties every cohort.
+    if any(
+        token in s for token in ("mimiciii", "mimic-iii", "mimic_iii", "mimic3", "miii")
+    ):
+        return "miii"
+    if any(
+        token in s for token in ("mimiciv", "mimic-iv", "mimic_iv", "mimic4", "miiv")
+    ):
         return "miiv"
     if "aumc" in s:
         return "aumc"
@@ -241,10 +251,26 @@ def _detect_database(path: Path) -> str:
         pass
     if any(n.startswith("patient.") or n == "patient/" for n in names):
         return "eicu"
-    if any(n.startswith("admissions.") or n == "admissions/" for n in names):
-        return "miiv"
     if any(n.startswith("general_table") or n.startswith("general/") for n in names):
         return "hirid"
+    # An ambiguous "mimic" path name is resolved by table shape, not by name:
+    # MIMIC-III ships icustays + d_items at the top level, MIMIC-IV splits into
+    # icu/ + hosp/ subdirectories.
+    has_admissions = any(
+        n.startswith("admissions.") or n == "admissions/" for n in names
+    )
+    if has_admissions:
+        if any(n in {"icu/", "hosp/"} for n in names):
+            return "miiv"
+        if any(n.startswith("d_items.") or n.startswith("icustays.") for n in names):
+            return "miii"
+        return "miiv"
+    if any(n in {"icu/", "hosp/"} for n in names):
+        return "miiv"
+    if "mimic" in s:
+        # Name says MIMIC but nothing on disk distinguishes the version — say so
+        # rather than guessing a version whose ID column may be wrong.
+        return "unknown"
     return "unknown"
 
 
