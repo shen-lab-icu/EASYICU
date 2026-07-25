@@ -65,6 +65,12 @@ class SubmissionProfile:
     # additive profile must pin the rebuilt runner image before activation.
     enable_capability_workflow: Optional[bool] = None
     expected_runner_image_digest: Optional[str] = None
+    # Whether rendered figure bytes may leave the host for external visual
+    # review. Submission-defining: it decides whether a manuscript figure was
+    # ever transmitted off-site, which a privacy reviewer must be able to read
+    # off the profile rather than infer from a caller's kwargs. ``None``
+    # preserves the existing profiles byte-for-byte.
+    allow_external_figure_upload: Optional[bool] = None
 
     @property
     def ref(self) -> str:
@@ -108,6 +114,8 @@ class SubmissionProfile:
             options["enable_deterministic_planner_fallback"] = (
                 self.enable_deterministic_planner_fallback
             )
+        if self.allow_external_figure_upload is not None:
+            options["allow_external_figure_upload"] = self.allow_external_figure_upload
         if self.enable_know_how is not None:
             options["enable_know_how"] = self.enable_know_how
         if self.enable_coder_resources is not None:
@@ -153,6 +161,7 @@ class SubmissionProfile:
             "reviewed_memory_namespaces",
             "enable_capability_workflow",
             "expected_runner_image_digest",
+            "allow_external_figure_upload",
         ):
             if payload.get(field_name) is None:
                 payload.pop(field_name, None)
@@ -422,6 +431,21 @@ def get_submission_profile(ref: Optional[str] = None) -> SubmissionProfile:
         ) from exc
 
 
+def is_paper_facing_profile(name: Optional[str]) -> bool:
+    """Return whether a profile name makes paper-facing claims.
+
+    The registry holds two families under the same ``npj_dm`` stem: the frozen
+    submission profiles, and additive ``*_dev`` profiles that exist to exercise
+    in-flight wiring. Gates that must not be relaxable — provenance
+    completeness, reviewer authentication, execution resource floors — key off
+    this rather than off "a profile name was supplied at all", which would
+    hold development runs to submission rules, or off an allow-list of exact
+    refs, which silently exempts every profile added later.
+    """
+
+    return bool(name) and not str(name).endswith("_dev")
+
+
 def require_profile_know_how_setting(
     *,
     name: Optional[str],
@@ -530,6 +554,7 @@ __all__ = [
     "DEFAULT_SUBMISSION_PROFILE_REF",
     "SUBMISSION_PROFILE_REGISTRY",
     "get_submission_profile",
+    "is_paper_facing_profile",
     "require_profile_know_how_setting",
     "require_profile_coder_resource_setting",
     "require_profile_reviewed_memory_setting",

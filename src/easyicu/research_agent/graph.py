@@ -56,11 +56,13 @@ except ImportError:  # pragma: no cover - py<3.8 not supported anyway
 
 
 __all__ = [
+    "HUMAN_REVIEW_FINDING_REASONS",
     "HumanReviewDecision",
     "HumanReviewRequest",
     "OrchestrationRuntimeReceipt",
     "PipelineGraphState",
     "build_pipeline_graph",
+    "human_review_requests_for_plan",
     "orchestration_runtime_receipt",
 ]
 
@@ -121,6 +123,62 @@ class HumanReviewDecision(BaseModel):
     reviewer: str = Field(min_length=1, max_length=200)
     decided_at: str = Field(min_length=1, max_length=80)
     note: str = Field(default="", max_length=1_000)
+
+
+#: Plan-phase finding reasons that must not be walked past unattended, mapped
+#: to the review kind they raise. Keyed on the typed ``detail["reason"]`` rather
+#: than on message text so a reworded finding cannot silently drop out of the
+#: gate. A finding may also opt in directly with
+#: ``detail["human_review_required"] = True``.
+HUMAN_REVIEW_FINDING_REASONS: Mapping[str, str] = {
+    "capability_review_required": "capability_request",
+    "raw_ehr_provenance_unavailable": "protocol_claim",
+    "scientific_stop": "scientific_stop",
+}
+
+
+def human_review_requests_for_plan(
+    *,
+    findings: Sequence[Any],
+    plan: Any = None,
+) -> tuple[HumanReviewRequest, ...]:
+    """Derive the review requests a completed plan phase implies.
+
+    Deliberately derived from *typed finding state* rather than from a caller
+    flag: the point of the gate is that the run itself decides when a human is
+    required, so an operator cannot disable it by not asking for it.
+    """
+
+    requests: list[HumanReviewRequest] = []
+    seen: set[str] = set()
+    for finding in findings or ():
+        detail = getattr(finding, "detail", None) or {}
+        reason = str(detail.get("reason") or "")
+        kind = HUMAN_REVIEW_FINDING_REASONS.get(reason)
+        if kind is None and detail.get("human_review_required"):
+            kind = "scientific_stop"
+        if kind is None:
+            continue
+        payload = {
+            "validator": getattr(finding, "validator", None),
+            "severity": getattr(finding, "severity", None),
+            "reason": reason or "human_review_required",
+            "evidence_ids": list(getattr(finding, "evidence_ids", ()) or ()),
+            "plan_step_ids": [
+                str(getattr(step, "step_id", "")) for step in getattr(plan, "steps", ())
+            ],
+        }
+        request = HumanReviewRequest.create(
+            kind=kind,  # type: ignore[arg-type]
+            summary=str(getattr(finding, "message", "") or reason)[:1_000],
+            authority_sha256=_review_digest(payload),
+            payload=payload,
+        )
+        if request.review_id in seen:
+            continue
+        seen.add(request.review_id)
+        requests.append(request)
+    return tuple(requests)
 
 
 def _human_review_decision_record(
