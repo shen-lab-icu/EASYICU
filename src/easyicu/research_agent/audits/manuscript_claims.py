@@ -23,7 +23,7 @@ no callers outside this module.
 from __future__ import annotations
 
 import re
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from ..authority.runtime_artifacts import current_successful_step_records
 from ..schema import ValidationFinding
@@ -42,6 +42,39 @@ _AUROC_SUMMARY_KEYS = (
     "statistic:cv_auroc_mean",
     "mean_auroc",
     "auroc_mean",
+)
+
+_AUROC_CI_LOWER_KEYS = (
+    "auroc_ci_lower",
+    "statistic:auroc_ci_lower",
+    "auc_ci_lower",
+    "ci_lower_auroc",
+)
+
+_AUROC_CI_UPPER_KEYS = (
+    "auroc_ci_upper",
+    "statistic:auroc_ci_upper",
+    "auc_ci_upper",
+    "ci_upper_auroc",
+)
+
+_BRIER_SUMMARY_KEYS = (
+    "brier_score",
+    "statistic:brier_score",
+    "held_out_brier",
+    "statistic:held_out_brier",
+    "cv_brier_mean",
+    "statistic:cv_brier_mean",
+    "brier_mean",
+)
+
+_PREVALENCE_SUMMARY_KEYS = (
+    "baseline_prevalence",
+    "statistic:baseline_prevalence",
+    "outcome_rate",
+    "statistic:outcome_rate",
+    "event_rate",
+    "statistic:event_rate",
 )
 
 
@@ -101,18 +134,12 @@ def audit_manuscript_numeric_claims(
             # It stays as the fallback for an unbound claim, where there is no
             # step coordinate to scope by — and where the untraced-numeric
             # finding already fires.
-            step_id = footnote_steps.get(footnote_id or "")
-            scoped = (
-                _all_summary_scalars(
-                    [
-                        summary
-                        for summary, owner in zip(summaries, summary_owners)
-                        if owner == step_id
-                    ],
-                    _AUROC_SUMMARY_KEYS,
-                )
-                if step_id
-                else []
+            scoped, step_id = _scoped_registered_values(
+                summaries=summaries,
+                summary_owners=summary_owners,
+                keys=_AUROC_SUMMARY_KEYS,
+                footnote_steps=footnote_steps,
+                footnote_id=footnote_id,
             )
             comparison = scoped or registered_aurocs
             # Allow ordinary two-decimal rounding (0.7769 -> 0.78), but not
@@ -141,14 +168,27 @@ def audit_manuscript_numeric_claims(
                         },
                     )
                 )
-        ci_low = _first_summary_scalar(
-            summaries,
-            ("auroc_ci_lower", "statistic:auroc_ci_lower", "auc_ci_lower", "ci_lower_auroc"),
-        )
-        ci_high = _first_summary_scalar(
-            summaries,
-            ("auroc_ci_upper", "statistic:auroc_ci_upper", "auc_ci_upper", "ci_upper_auroc"),
-        )
+        # Scoped the same way as the point estimate: a manuscript that reports
+        # the primary model's CI is not covered by a *different* step having
+        # registered CI bounds. When the sentence carries a resolvable step,
+        # that step must own the bounds; otherwise any registered pair counts.
+        ci_steps = {
+            step_id
+            for step_id in (
+                footnote_steps.get(fid or "")
+                for _, fid in _extract_metric_claims_with_footnote(
+                    bound_manuscript, r"\b(?:AUROC|AUC)\b"
+                )
+            )
+            if step_id
+        }
+        ci_summaries = [
+            summary
+            for summary, owner in zip(summaries, summary_owners)
+            if owner in ci_steps
+        ] or list(summaries)
+        ci_low = _first_summary_scalar(ci_summaries, _AUROC_CI_LOWER_KEYS)
+        ci_high = _first_summary_scalar(ci_summaries, _AUROC_CI_UPPER_KEYS)
         if (ci_low is None or ci_high is None) and re.search(
             r"\b(?:AUROC|AUC)\b.{0,80}\b95\s*%\s*CI\b",
             bound_manuscript,
@@ -166,21 +206,21 @@ def audit_manuscript_numeric_claims(
                 )
             )
 
-    registered_briers = _all_summary_scalars(
-        summaries,
-        (
-            "brier_score",
-            "statistic:brier_score",
-            "held_out_brier",
-            "statistic:held_out_brier",
-            "cv_brier_mean",
-            "statistic:cv_brier_mean",
-            "brier_mean",
-        ),
-    )
+    registered_briers = _all_summary_scalars(summaries, _BRIER_SUMMARY_KEYS)
     if registered_briers:
-        for claimed in _extract_metric_claims(bound_manuscript, r"\bBrier(?: score)?\b"):
-            nearest = min(registered_briers, key=lambda r: abs(claimed - r))
+        footnote_steps = footnote_step_ids(bound_manuscript)
+        for claimed, footnote_id in _extract_metric_claims_with_footnote(
+            bound_manuscript, r"\bBrier(?: score)?\b"
+        ):
+            scoped, step_id = _scoped_registered_values(
+                summaries=summaries,
+                summary_owners=summary_owners,
+                keys=_BRIER_SUMMARY_KEYS,
+                footnote_steps=footnote_steps,
+                footnote_id=footnote_id,
+            )
+            comparison = scoped or registered_briers
+            nearest = min(comparison, key=lambda r: abs(claimed - r))
             if abs(claimed - nearest) > 0.015:
                 findings.append(
                     ValidationFinding(
@@ -188,35 +228,40 @@ def audit_manuscript_numeric_claims(
                         severity="error",
                         message=(
                             f"Manuscript Brier claim {claimed:.3g} does not match "
-                            f"any registered Brier score (nearest {nearest:.3g})."
+                            + (
+                                f"the Brier score registered by step {step_id!r} "
+                                f"(nearest {nearest:.3g})."
+                                if scoped
+                                else f"any registered Brier score (nearest {nearest:.3g})."
+                            )
                         ),
                         detail={
                             "metric": "brier_score",
                             "claimed": claimed,
                             "registered": nearest,
                             "registered_all": sorted(set(registered_briers)),
+                            "scoped_to_step": step_id,
                         },
                     )
                 )
 
-    registered_baselines = _all_summary_scalars(
-        summaries,
-        (
-            "baseline_prevalence",
-            "statistic:baseline_prevalence",
-            "outcome_rate",
-            "statistic:outcome_rate",
-            "event_rate",
-            "statistic:event_rate",
-        ),
-    )
+    registered_baselines = _all_summary_scalars(summaries, _PREVALENCE_SUMMARY_KEYS)
     if registered_baselines:
-        for claimed in _extract_percent_claims_near(
+        footnote_steps = footnote_step_ids(bound_manuscript)
+        for claimed, footnote_id in _extract_percent_claims_near_with_footnote(
             bound_manuscript,
             r"\b(?:baseline prevalence|mortality|death|outcome incidence)\b",
             skip_stratified_context=True,
         ):
-            nearest = min(registered_baselines, key=lambda r: abs(claimed - r))
+            scoped, step_id = _scoped_registered_values(
+                summaries=summaries,
+                summary_owners=summary_owners,
+                keys=_PREVALENCE_SUMMARY_KEYS,
+                footnote_steps=footnote_steps,
+                footnote_id=footnote_id,
+            )
+            comparison = scoped or registered_baselines
+            nearest = min(comparison, key=lambda r: abs(claimed - r))
             if abs(claimed - nearest) > 0.015:
                 findings.append(
                     ValidationFinding(
@@ -224,13 +269,20 @@ def audit_manuscript_numeric_claims(
                         severity="error",
                         message=(
                             f"Manuscript prevalence claim {claimed:.3g} does not match "
-                            f"any registered baseline prevalence (nearest {nearest:.3g})."
+                            + (
+                                f"the baseline prevalence registered by step "
+                                f"{step_id!r} (nearest {nearest:.3g})."
+                                if scoped
+                                else "any registered baseline prevalence "
+                                f"(nearest {nearest:.3g})."
+                            )
                         ),
                         detail={
                             "metric": "baseline_prevalence",
                             "claimed": claimed,
                             "registered": nearest,
                             "registered_all": sorted(set(registered_baselines)),
+                            "scoped_to_step": step_id,
                         },
                     )
                 )
@@ -343,6 +395,41 @@ def _extract_metric_claims(text: str, metric_pattern: str) -> List[float]:
     ]
 
 
+def _scoped_registered_values(
+    *,
+    summaries: Sequence[Dict[str, Any]],
+    summary_owners: Sequence[Optional[str]],
+    keys: Sequence[str],
+    footnote_steps: Mapping[str, str],
+    footnote_id: Optional[str],
+) -> Tuple[List[float], Optional[str]]:
+    """Values registered by the step this claim's footnote names, if any.
+
+    Match-any answers "is this number registered *somewhere* in the run?",
+    which passes a sentence attributing the sensitivity model's value to the
+    primary model. Every metric family gets the same treatment: the AUROC path
+    was scoped first and leaving Brier, prevalence and the CI check on
+    match-any made the auditor's own contract inconsistent.
+
+    Returns ``([], None)`` when the claim carries no resolvable step, and the
+    caller falls back to match-any — that is a different failure (an unbound
+    number), and the untraced-numeric finding already reports it.
+    """
+
+    step_id = footnote_steps.get(footnote_id or "") if footnote_id else None
+    if not step_id:
+        return [], None
+    scoped = _all_summary_scalars(
+        [
+            summary
+            for summary, owner in zip(summaries, summary_owners)
+            if owner == step_id
+        ],
+        keys,
+    )
+    return scoped, (step_id if scoped else None)
+
+
 def _extract_metric_claims_with_footnote(
     text: str, metric_pattern: str
 ) -> List[Tuple[float, Optional[str]]]:
@@ -381,10 +468,25 @@ def _extract_percent_claims_near(
     *,
     skip_stratified_context: bool = False,
 ) -> List[float]:
-    claims: List[float] = []
+    return [
+        value
+        for value, _ in _extract_percent_claims_near_with_footnote(
+            text, phrase_pattern, skip_stratified_context=skip_stratified_context
+        )
+    ]
+
+
+def _extract_percent_claims_near_with_footnote(
+    text: str,
+    phrase_pattern: str,
+    *,
+    skip_stratified_context: bool = False,
+) -> List[Tuple[float, Optional[str]]]:
+    claims: List[Tuple[float, Optional[str]]] = []
     clean_text = _strip_manuscript_noise(text)
     pattern = re.compile(
-        phrase_pattern + r".{0,80}?([0-9]+(?:\.[0-9]+)?)\s*%",
+        phrase_pattern
+        + r".{0,80}?([0-9]+(?:\.[0-9]+)?)\s*%(?:\[\^(?P<fid>[^\]]+)\])?",
         flags=re.IGNORECASE | re.DOTALL,
     )
     # A percentage that introduces a confidence/credible interval (e.g.
@@ -410,7 +512,7 @@ def _extract_percent_claims_near(
         except (TypeError, ValueError):
             continue
         if 0.0 <= value <= 1.0:
-            claims.append(value)
+            claims.append((value, match.group("fid")))
     return claims
 
 
