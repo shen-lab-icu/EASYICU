@@ -7,7 +7,16 @@ with metadata for ICU data handling, corresponding to R ricu's table classes.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Iterable, Iterator, List, Optional, Union, Dict, Callable
+from typing import (
+    Callable,
+    Dict,
+    Iterable,
+    Iterator,
+    List,
+    Optional,
+    Sequence,
+    Union,
+)
 
 import pandas as pd
 
@@ -945,32 +954,141 @@ def _as_column_tuple(value) -> tuple:
     return tuple(value)
 
 
+class KeyAlignmentError(ValueError):
+    """Tables were column-bound without proof they describe the same rows."""
+
+
+def _cbind_frame(tbl: Union[IdTbl, pd.DataFrame]) -> pd.DataFrame:
+    return tbl.data if isinstance(tbl, (IdTbl, TsTbl, WinTbl)) else tbl
+
+
+def _same_values(left: pd.Series, right: pd.Series) -> bool:
+    """Element-wise equality that treats missing == missing and ignores dtype.
+
+    ``Series.equals`` would reject an int64 column bound against the float64
+    version of the same identifiers, which is a real and harmless case once a
+    frame has been through a merge.
+    """
+
+    left_values = left.to_numpy()
+    right_values = right.to_numpy()
+    if left_values.shape != right_values.shape:
+        return False
+    try:
+        matched = left_values == right_values
+    except (TypeError, ValueError):
+        return left.astype(str).equals(right.astype(str))
+    both_missing = pd.isna(left_values) & pd.isna(right_values)
+    return bool((matched | both_missing).all())
+
+
+def _assert_cbind_alignment(
+    tables: Sequence[Union[IdTbl, pd.DataFrame]],
+) -> List[str]:
+    """Refuse to bind columns whose rows are only assumed to line up.
+
+    ``pd.concat(axis=1)`` joins on the pandas index, which after a filter or a
+    sort is unrelated to which patient a row belongs to. Binding a left table
+    ordered ``[stay 1, stay 2]`` against a right table ordered ``[stay 2, stay
+    1]`` produced one row holding stay 1's exposure and stay 2's outcome, and
+    the result was still a well-formed typed table — nothing raised, and no
+    column recorded the swap. Anything a caller cannot prove is aligned is now
+    an error instead.
+
+    Returns the anchor's key columns, which the caller drops from the other
+    typed frames so the bind does not emit them twice.
+    """
+
+    anchor = tables[0]
+    if not isinstance(anchor, (IdTbl, TsTbl, WinTbl)):
+        return []
+    anchor_df = anchor.data
+    keys = [column for column in anchor.meta_vars() if column]
+    missing = [column for column in keys if column not in anchor_df.columns]
+    if missing:
+        raise KeyAlignmentError(
+            f"table 0 declares key column(s) {missing} that it does not carry, "
+            "so no other table can be checked against it"
+        )
+
+    for position, other in enumerate(tables[1:], start=1):
+        other_df = _cbind_frame(other)
+        if len(other_df) != len(anchor_df):
+            raise KeyAlignmentError(
+                f"table {position} has {len(other_df)} row(s) against "
+                f"{len(anchor_df)} in table 0; column-binding them would pad "
+                "or truncate one of them"
+            )
+        if not anchor_df.index.equals(other_df.index):
+            raise KeyAlignmentError(
+                f"table {position} does not share table 0's row index, so "
+                "column-binding would align rows by label and silently "
+                "introduce missing values"
+            )
+        if not isinstance(other, (IdTbl, TsTbl, WinTbl)):
+            # A bare frame is the caller's own derived columns; it carries no
+            # keys to check, so shape agreement is all this can establish.
+            continue
+        absent = [column for column in keys if column not in other_df.columns]
+        if absent:
+            raise KeyAlignmentError(
+                f"table {position} is a typed ICU table but does not carry key "
+                f"column(s) {absent}, so its rows cannot be shown to describe "
+                "the same subjects and times as table 0"
+            )
+        disagreeing = [
+            column
+            for column in keys
+            if not _same_values(anchor_df[column], other_df[column])
+        ]
+        if disagreeing:
+            raise KeyAlignmentError(
+                f"table {position} disagrees with table 0 on key column(s) "
+                f"{disagreeing}: the same row position refers to different "
+                "subjects or times in the two tables"
+            )
+    return keys
+
+
 def cbind_tbl(*tables: Union[IdTbl, pd.DataFrame],
-              check_names: bool = False) -> Union[IdTbl, pd.DataFrame]:
+              check_names: bool = True) -> Union[IdTbl, pd.DataFrame]:
     """Column-bind tables (R ricu cbind_id_tbl).
-    
+
+    Typed ICU tables must agree on their key columns row by row; the keys are
+    then carried once, from the first table.
+
     Args:
         *tables: Tables to combine
-        check_names: Whether to check for duplicate column names
-        
+        check_names: Whether to reject duplicate column names in the result
+
     Returns:
         Combined table
+
+    Raises:
+        KeyAlignmentError: rows are not provably the same subjects and times.
     """
-    # Extract DataFrames
-    dfs = []
-    for tbl in tables:
-        if isinstance(tbl, (IdTbl, TsTbl, WinTbl)):
-            dfs.append(tbl.data)
-        else:
-            dfs.append(tbl)
-    
+    if not tables:
+        return pd.DataFrame()
+
+    keys = _assert_cbind_alignment(tables)
+
+    # The unit check reads each input's own duration column, so it needs the
+    # frames as given; the bind gets the deduplicated ones.
+    source_frames = [_cbind_frame(tbl) for tbl in tables]
+    dfs = [source_frames[0]]
+    for tbl, frame in zip(tables[1:], source_frames[1:]):
+        if keys and isinstance(tbl, (IdTbl, TsTbl, WinTbl)):
+            frame = frame.drop(columns=[c for c in keys if c in frame.columns])
+        dfs.append(frame)
+
     # Combine
     result = pd.concat(dfs, axis=1)
-    
+
     # Check for duplicates if requested
     if check_names and len(result.columns) != len(set(result.columns)):
-        raise ValueError("Duplicate column names found")
-    
+        duplicated = sorted({c for c in result.columns if list(result.columns).count(c) > 1})
+        raise ValueError(f"Duplicate column names found: {duplicated}")
+
     # Return same type as first input
     if isinstance(tables[0], WinTbl):
         return WinTbl(
@@ -1341,11 +1459,26 @@ def downgrade_id(
     # Build aggregation dict
     if agg_funcs is None:
         agg_funcs = {}
+        ambiguous = []
         for col in data_cols:
             if pd.api.types.is_numeric_dtype(result[col]):
                 agg_funcs[col] = 'mean'
+                if not _is_continuous_measurement(result[col]):
+                    ambiguous.append(col)
             else:
                 agg_funcs[col] = 'first'
+        if ambiguous:
+            # The mean of a SOFA score across two stays is not a SOFA score,
+            # and the mean of a 0/1 death flag is a proportion wearing an
+            # outcome's name. Both used to happen silently because "numeric"
+            # was taken to mean "continuous measurement".
+            raise ValueError(
+                f"downgrading {from_id!r} to {to_id!r} would average column(s) "
+                f"{ambiguous}, which are stored as integers or 0/1 flags — an "
+                "ordinal score, an indicator, a category code or a count does "
+                "not survive a mean. Pass agg_funcs explicitly, e.g. "
+                f"agg_funcs={{{ambiguous[0]!r}: 'max'}}."
+            )
     
     # Apply aggregation if needed
     if not keep_old_id:
@@ -1356,6 +1489,64 @@ def downgrade_id(
     
     return result
 
+def _is_continuous_measurement(values: pd.Series) -> bool:
+    """Whether averaging this column is defensible without being told.
+
+    Heart rate and creatinine are measurements and are stored as floats;
+    SOFA components, KDIGO stages, event counts and numeric category codes are
+    stored as integers, and their mean is a different quantity from the thing
+    measured. A 0/1 flag is a flag whichever dtype it arrived in, so it is
+    caught by value as well.
+
+    Storage dtype is a heuristic, not proof — which is why it only decides
+    whether the caller is *asked*, never what is computed. Note the deliberate
+    non-rule: an integer-valued float column such as a heart rate recorded as
+    ``80.0`` stays continuous, because flagging it would make every vitals
+    downgrade require boilerplate and the check would be turned off.
+    """
+
+    if not pd.api.types.is_float_dtype(values):
+        return False
+    numeric = pd.to_numeric(values, errors="coerce").dropna()
+    if numeric.empty:
+        return False
+    return not bool(numeric.isin((0, 1)).all())
+
+
+class IdMapRelationError(ValueError):
+    """The id map does not describe a relation ``change_id`` can apply alone."""
+
+
+def classify_id_relation(id_map: pd.DataFrame, from_id: str, to_id: str) -> str:
+    """Name the relation an id map describes.
+
+    Counting distinct values on each side is not enough to tell the direction.
+    ``A→X, A→Y, B→X, B→Y`` has two distinct values on both sides and is
+    many-to-many, yet a count comparison reads it as one-to-one — after which
+    ``dict(zip(...))`` keeps only the last pair for each key and the rest of
+    the mapping disappears with no error. Ask each side how far it fans out
+    instead.
+    """
+
+    for column, frame, label in (
+        (from_id, id_map, "id_map"),
+        (to_id, id_map, "id_map"),
+    ):
+        if column not in frame.columns:
+            raise ValueError(f"Column '{column}' must be in {label}")
+
+    mapping = id_map[[from_id, to_id]].drop_duplicates().dropna()
+    fans_out = bool((mapping.groupby(from_id)[to_id].nunique() > 1).any())
+    fans_in = bool((mapping.groupby(to_id)[from_id].nunique() > 1).any())
+    if fans_out and fans_in:
+        return "many_to_many"
+    if fans_out:
+        return "one_to_many"
+    if fans_in:
+        return "many_to_one"
+    return "one_to_one"
+
+
 def change_id(
     data: pd.DataFrame,
     id_map: pd.DataFrame,
@@ -1363,12 +1554,13 @@ def change_id(
     to_id: str,
     keep_old_id: bool = False,
     agg_funcs: Optional[Dict[str, Union[str, Callable]]] = None,
+    on_many_to_many: Optional[str] = None,
 ) -> pd.DataFrame:
     """Change ID type (auto-detect upgrade vs downgrade) (R ricu change_id).
-    
-    Automatically determines whether to upgrade or downgrade based on
-    the cardinality of the ID mapping.
-    
+
+    The direction is read from how the mapping fans out, not from how many
+    distinct values each side happens to have.
+
     Args:
         data: Input DataFrame
         id_map: Mapping DataFrame with both ID columns
@@ -1376,36 +1568,52 @@ def change_id(
         to_id: Target ID column name
         keep_old_id: Whether to keep the original ID column
         agg_funcs: Aggregation functions (for downgrade only)
-        
+        on_many_to_many: What to do when the map is many-to-many, which has no
+            single correct answer: ``'expand'`` emits one row per matching
+            target id, ``'aggregate'`` collapses to one row per target id using
+            ``agg_funcs``. Omitting it refuses the conversion rather than
+            picking one silently.
+
     Returns:
         DataFrame with changed IDs
-        
+
+    Raises:
+        IdMapRelationError: many-to-many map with no strategy given.
+
     Examples:
         >>> # Auto-detect direction
         >>> change_id(data, mapping, 'hadm_id', 'icustay_id')
     """
-    # Check cardinality to determine direction
-    mapping = id_map[[from_id, to_id]].drop_duplicates()
-    
-    from_unique = mapping[from_id].nunique()
-    to_unique = mapping[to_id].nunique()
-    
-    if to_unique > from_unique:
-        # Upgrade (one-to-many)
+    relation = classify_id_relation(id_map, from_id, to_id)
+
+    if relation == "many_to_many":
+        if on_many_to_many == "expand":
+            return upgrade_id(data, id_map, from_id, to_id, keep_old_id)
+        if on_many_to_many == "aggregate":
+            return downgrade_id(data, id_map, from_id, to_id, agg_funcs, keep_old_id)
+        raise IdMapRelationError(
+            f"the map from {from_id!r} to {to_id!r} is many-to-many: at least "
+            f"one {from_id} reaches several {to_id} and at least one {to_id} is "
+            f"reached by several {from_id}. Row counts and per-row values both "
+            "depend on which way it is resolved, so pass "
+            "on_many_to_many='expand' or on_many_to_many='aggregate'."
+        )
+
+    if relation == "one_to_many":
         return upgrade_id(data, id_map, from_id, to_id, keep_old_id)
-    elif to_unique < from_unique:
-        # Downgrade (many-to-one)
+    if relation == "many_to_one":
         return downgrade_id(data, id_map, from_id, to_id, agg_funcs, keep_old_id)
-    else:
-        # One-to-one mapping
-        mapping_dict = dict(zip(mapping[from_id], mapping[to_id]))
-        result = data.copy()
-        result[to_id] = result[from_id].map(mapping_dict)
-        
-        if not keep_old_id:
-            result = result.drop(columns=[from_id])
-        
-        return result
+
+    # Proven one-to-one, so no key in the dict can shadow another.
+    mapping = id_map[[from_id, to_id]].drop_duplicates()
+    mapping_dict = dict(zip(mapping[from_id], mapping[to_id]))
+    result = data.copy()
+    result[to_id] = result[from_id].map(mapping_dict)
+
+    if not keep_old_id:
+        result = result.drop(columns=[from_id])
+
+    return result
 
 def rbind_lst(
     tables: List[Union[pd.DataFrame, ICUTable, IdTbl, TsTbl, WinTbl]],
