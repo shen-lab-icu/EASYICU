@@ -191,16 +191,43 @@ def _docker_mount_entry(source: str, target: str, *, readonly: bool) -> str:
     return f"{entry},readonly" if readonly else entry
 
 
+#: Depth limit for the generated-output sweep. Deep enough for the layouts
+#: generated code actually uses (``figures/``, ``tables/``, ``models/``), shallow
+#: enough that a runaway mkdir loop cannot stall evidence collection.
+MAX_OUTPUT_ARTIFACT_DEPTH = 8
+
+
 def _collect_safe_output_artifacts(out_dir: Path) -> List[Path]:
-    """Collect only lexical single-link regular files from generated output."""
+    """Collect lexical single-link regular files from generated output.
+
+    Recurses into subdirectories: generated code routinely writes
+    ``outputs/figures/fig1.png`` and ``outputs/tables/table1.csv``, and a
+    top-level-only sweep dropped those from ``RunResult.artefacts`` — meaning
+    they never reached the SHA-256 evidence store even though the manuscript
+    could cite them.
+
+    Symlinks, hardlinked files and special files are still rejected (and
+    removed) rather than collected: they can point outside the sandbox.
+    """
 
     artefacts: List[Path] = []
-    for output_path in out_dir.iterdir():
-        metadata = os.lstat(output_path)
-        if stat.S_ISREG(metadata.st_mode) and metadata.st_nlink == 1:
-            artefacts.append(output_path)
+    pending: List[tuple[Path, int]] = [(out_dir, 0)]
+    while pending:
+        current, depth = pending.pop()
+        try:
+            entries = sorted(current.iterdir())
+        except OSError:
             continue
-        if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISDIR(metadata.st_mode):
+        for output_path in entries:
+            metadata = os.lstat(output_path)
+            if stat.S_ISREG(metadata.st_mode) and metadata.st_nlink == 1:
+                artefacts.append(output_path)
+                continue
+            if stat.S_ISDIR(metadata.st_mode):
+                if depth < MAX_OUTPUT_ARTIFACT_DEPTH:
+                    pending.append((output_path, depth + 1))
+                continue
+            # Symlink, hardlink, fifo, socket, device — never an artefact.
             output_path.unlink(missing_ok=True)
     artefacts.sort()
     return artefacts
