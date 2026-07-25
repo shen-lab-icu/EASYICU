@@ -2123,17 +2123,22 @@ def ts_to_win_tbl(win_dur: pd.Timedelta) -> Callable:
                 index_col = col
                 break
         
+        from ..table.duration import UNIT_HOURS, UNIT_TIMEDELTA, set_dur_var_unit
+
         if index_col and index_col in data.columns:
             if pd.api.types.is_numeric_dtype(data[index_col]):
                 # charttime是数值型（小时），dur_var也用小时
                 data['dur_var'] = win_dur.total_seconds() / 3600.0
+                set_dur_var_unit(data, UNIT_HOURS)
             else:
                 # charttime是datetime型，dur_var用Timedelta
                 data['dur_var'] = win_dur
+                set_dur_var_unit(data, UNIT_TIMEDELTA)
         else:
             # 默认使用Timedelta
             data['dur_var'] = win_dur
-            
+            set_dur_var_unit(data, UNIT_TIMEDELTA)
+
         return data
     
     return callback
@@ -2386,19 +2391,22 @@ def grp_mount_to_rate(
         # Detect if time is in float hours (HiRID) or datetime
         time_is_float = result['dur_var'].dtype in ['float64', 'float32', 'int64', 'int32']
         
+        from ..table.duration import UNIT_HOURS, UNIT_TIMEDELTA, set_dur_var_unit
+
         if time_is_float:
             # Time is in hours, dur_var is in hours (float)
             # Convert min_dur and extra_dur from Timedelta to hours
             min_dur_hours = min_dur.total_seconds() / 3600
             extra_dur_hours = extra_dur.total_seconds() / 3600
-            
+
             # Apply min_dur for zero-duration events
             zero_dur_mask = result['dur_var'] == 0
             result.loc[zero_dur_mask, 'dur_var'] = min_dur_hours
-            
+
             # Add extra_dur to all durations
             result['dur_var'] = result['dur_var'] + extra_dur_hours
-            
+            set_dur_var_unit(result, UNIT_HOURS)
+
             # Calculate rate: amount / duration (dur_var is already in hours)
             dur_hours = result['dur_var']
         else:
@@ -2409,7 +2417,8 @@ def grp_mount_to_rate(
             
             # Add extra_dur to all durations
             result['dur_var'] = result['dur_var'] + extra_dur
-            
+            set_dur_var_unit(result, UNIT_TIMEDELTA)
+
             # Calculate rate: amount / duration (convert to hours for rate/hour)
             dur_hours = result['dur_var'].dt.total_seconds() / 3600
         result[val_col] = result[f"{val_col}_sum"] / dur_hours
@@ -3657,6 +3666,9 @@ def eicu_dex_inf(
     interval_minutes = interval.total_seconds() / 60.0
     work["dur_var"] = interval_minutes
     work["unit_var"] = "ml/hr"
+    from ..table.duration import UNIT_MINUTES, set_dur_var_unit
+
+    set_dur_var_unit(work, UNIT_MINUTES)
 
     return work
 

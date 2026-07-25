@@ -949,11 +949,14 @@ def _apply_callback(
                 index_col = col
                 break
         
+        from ..table.duration import UNIT_MINUTES, set_dur_var_unit
+
         if index_col and index_col in frame.columns and pd.api.types.is_numeric_dtype(frame[index_col]):
             # 时间列是数值型（小时或分钟），dur_var用分钟数值
             # R ricu: ts_to_win_tbl(mins(1L)) → dur_var = difftime(1, units="mins")
             # 写入CSV时序列化为数值 1.0（分钟）
             frame['dur_var'] = duration.total_seconds() / 60.0  # 转换为分钟
+            set_dur_var_unit(frame, UNIT_MINUTES)
         else:
             # 🔧 FIX: 始终使用数值分钟，而非 Timedelta 对象
             # 原因：后续 _align_to_admission_time 会将 datetime → 相对小时数，
@@ -962,7 +965,8 @@ def _apply_callback(
             # 60 000 000 000 小时 → 无限循环。
             # R ricu 的 dur_var 也是数值型（分钟），所以统一用分钟。
             frame['dur_var'] = duration.total_seconds() / 60.0  # 转换为分钟
-            
+            set_dur_var_unit(frame, UNIT_MINUTES)
+
         return frame
     
     # Handle mimic_rate_mv callback (for infusion rates)

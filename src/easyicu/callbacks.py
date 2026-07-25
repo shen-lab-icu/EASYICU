@@ -1244,9 +1244,12 @@ def ts_to_win_tbl(win_dur):
     """
     def callback(data: pd.DataFrame, **kwargs) -> pd.DataFrame:
         """Add duration column to data."""
+        from .table.duration import UNIT_TIMEDELTA, set_dur_var_unit
+
         # Add duration column
         result = data.copy()
         result['dur_var'] = win_dur
+        set_dur_var_unit(result, UNIT_TIMEDELTA)
         return result
     
     return callback
