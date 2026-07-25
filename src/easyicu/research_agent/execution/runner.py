@@ -1448,6 +1448,15 @@ class DockerRunner:
     GHOST_MONITOR_INTERVAL_SECONDS = 0.25
     RUNTIME_PROVENANCE_MAX_ATTEMPTS = 2
 
+    #: Default container resource caps. Chosen to fit an ordinary analysis
+    #: step (a Cox fit, a bootstrap, a figure render) with headroom, while
+    #: keeping one runaway step from taking the host — or a sibling step —
+    #: down with it.
+    DEFAULT_CPU_LIMIT = "4"
+    DEFAULT_MEMORY_LIMIT = "8g"
+    DEFAULT_PIDS_LIMIT = 256
+    DEFAULT_OPEN_FILES_LIMIT = 4096
+
     def __init__(
         self,
         *,
@@ -1462,6 +1471,8 @@ class DockerRunner:
         pull_image: bool = False,
         cpu_limit: Optional[str] = None,
         memory_limit: Optional[str] = None,
+        pids_limit: Optional[int] = None,
+        open_files_limit: Optional[int] = None,
         user: Optional[str] = None,
         platform: Optional[str] = None,
     ) -> None:
@@ -1485,8 +1496,23 @@ class DockerRunner:
         self.extra_env = dict(extra_env or {})
         reject_reserved_runner_env(self.extra_env, owner="DockerRunner")
         self.pull_image = bool(pull_image)
-        self.cpu_limit = cpu_limit
-        self.memory_limit = memory_limit
+        # Resource caps are ON by default. The timeout alone does not bound
+        # damage: generated code can exhaust host memory, fork until the host
+        # runs out of PIDs, or open enough files to starve sibling steps well
+        # inside a five-minute budget. Pass an explicit value to widen or
+        # narrow a limit; pass "" / 0 to opt out of one.
+        self.cpu_limit = self.DEFAULT_CPU_LIMIT if cpu_limit is None else cpu_limit
+        self.memory_limit = (
+            self.DEFAULT_MEMORY_LIMIT if memory_limit is None else memory_limit
+        )
+        self.pids_limit = (
+            self.DEFAULT_PIDS_LIMIT if pids_limit is None else int(pids_limit or 0)
+        )
+        self.open_files_limit = (
+            self.DEFAULT_OPEN_FILES_LIMIT
+            if open_files_limit is None
+            else int(open_files_limit or 0)
+        )
         if user is not None:
             self.user = user
         elif os.name == "posix" and hasattr(os, "getuid") and hasattr(os, "getgid"):
@@ -1748,6 +1774,14 @@ class DockerRunner:
             cmd.append(f"--cpus={self.cpu_limit}")
         if self.memory_limit:
             cmd.append(f"--memory={self.memory_limit}")
+            # Without an equal swap cap the memory limit is advisory: the
+            # container simply swaps, and the host thrashes instead of the
+            # step failing fast.
+            cmd.append(f"--memory-swap={self.memory_limit}")
+        if self.pids_limit:
+            cmd.append(f"--pids-limit={self.pids_limit}")
+        if self.open_files_limit:
+            cmd.append(f"--ulimit=nofile={self.open_files_limit}:{self.open_files_limit}")
 
         # Mount the complete run tree read-only.  Mount both the writable
         # attempt output and immutable script at independent container paths.
@@ -2240,6 +2274,8 @@ class DockerRunner:
             },
             "cpu_limit": self.cpu_limit,
             "memory_limit": self.memory_limit,
+            "pids_limit": self.pids_limit,
+            "open_files_limit": self.open_files_limit,
             "user": self.user,
             "platform": self.platform,
         }
