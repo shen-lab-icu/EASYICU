@@ -272,12 +272,9 @@
     const payload = response || {};
     const t = window.t || ((en) => en);
     const warnings = [];
-    if (payload.context_sync_warning) {
-      warnings.push(t(
-        'This job can run, but the StudyContext recovery pointer did not synchronize. Keep this task open until the run finishes.',
-        '本次 job 可以继续运行，但 StudyContext 恢复指针未同步。请在运行结束前保持当前任务打开。',
-      ));
-    }
+    // There is deliberately no "the pointer did not sync but the job runs
+    // anyway" warning: the server now refuses to start a run it could not
+    // record against the StudyContext, so that state cannot reach this screen.
     if (payload.audit_warning) {
       warnings.push(t(
         'The job was accepted, but its submission audit event was not recorded. Treat provenance as incomplete until reviewed.',

@@ -192,9 +192,11 @@ def test_nonfatal_agent_submission_warnings_are_visible_in_both_surfaces() -> No
     guided = _read("js/screens-guided.js")
     agent = _read("js/screens-agent.js")
     owner = _read("js/screens-agent-study-context.js")
-    assert "context_sync_warning" in owner
     assert "audit_warning" in owner
-    assert "StudyContext recovery pointer did not synchronize" in owner
+    # A run whose active-job reservation failed is now refused outright, so
+    # there is deliberately no "the pointer did not sync but it runs anyway"
+    # warning left for this screen to render.
+    assert "context_sync_warning" not in owner
     assert "submissionWarning(r)" in agent
     assert "warningNote(agRun.warning)" in agent
     assert "submissionWarning(r)" in guided

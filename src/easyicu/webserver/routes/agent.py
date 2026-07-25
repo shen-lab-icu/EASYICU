@@ -155,7 +155,6 @@ def jobs_agent_run(body: Dict[str, Any]) -> dict:
                     pass
 
     job = submit_job("agent-run", runner)
-    context_sync_warning = None
     synced_context = None
     try:
         if study_context is not None:
@@ -169,17 +168,15 @@ def jobs_agent_run(body: Dict[str, Any]) -> dict:
     except context_store.StudyContextError as exc:
         if study_context is not None:
             start_abort.update(exc.detail)
-    except OSError:
-        if study_context is not None:
-            # The job is already running. Do not return a misleading 400 or
-            # orphan it from the caller; surface the metadata sync failure.
-            context_sync_warning = {
-                "error": "study_context_active_job_sync_failed",
-                "study_context_id": study_context_id,
-                "job_id": job.id,
-            }
     except Exception as exc:
         if study_context is not None:
+            # A failure to record the active job is not UI metadata. Without
+            # that reservation the context does not know an analysis is
+            # running, a second request can start another one against the same
+            # revision, and the terminal cleanup has no job id to match. The
+            # run is blocked rather than allowed to proceed unbound —
+            # including for OSError, which used to be downgraded to a warning
+            # here while the runner was released anyway.
             start_abort.update(
                 {
                     "error": "study_context_active_job_sync_failed",
@@ -211,7 +208,6 @@ def jobs_agent_run(body: Dict[str, Any]) -> dict:
                 "llm_provider": llm_provider,
                 "compute_target": compute.get("compute_target"),
                 "study_context_id": study_context_id or None,
-                "context_sync_warning": bool(context_sync_warning),
             },
         )
     except Exception:
@@ -231,7 +227,6 @@ def jobs_agent_run(body: Dict[str, Any]) -> dict:
         "study_context_revision": (
             int(synced_context.get("revision") or 0) if synced_context else None
         ),
-        "context_sync_warning": context_sync_warning,
         "audit_warning": audit_warning,
     }
 
