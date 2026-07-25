@@ -1,10 +1,48 @@
+"""Deprecated table helpers (was: 表工具函数 - 对应 R ricu 的 tbl-utils.R).
+
+**This module is deprecated and nothing inside EasyICU imports it.** It exists
+only because its names were exported from the top-level package, so removing it
+outright would break an external caller we cannot see. It will go in 2.0.
+
+Use :mod:`easyicu.table` instead. The ID-conversion functions here are the
+dangerous part, and they are *not* redirected: this module's ``upgrade_id`` and
+``downgrade_id`` mean the **opposite** of the canonical ones.
+
+===================  ==========================  ==========================
+name                 ``easyicu.table``           ``easyicu.table.utils``
+===================  ==========================  ==========================
+``upgrade_id``       one-to-many, coarse→fine    coarse-grained target
+``downgrade_id``     many-to-one, **aggregates** finer target, **expands**
+``change_id``        4-arg, refuses many-to-many 3-arg, different order
+===================  ==========================  ==========================
+
+Silently forwarding these to the canonical implementations would invert what a
+caller's existing code computes, so they keep their own behaviour and warn at
+call time instead. Migrate to :func:`easyicu.table.change_id`, which names the
+relation explicitly rather than leaving it to a word that means two things.
 """
-表工具函数 - 对应 R ricu 的 tbl-utils.R
-提供表操作、聚合、排序等功能
-"""
-from typing import List, Optional, Union, Callable, Dict, Any
-import pandas as pd
+
+import warnings
 from datetime import timedelta
+from typing import Any, Callable, Dict, List, Optional, Union
+
+import pandas as pd
+
+#: Emitted once per call site rather than once per module import: an import of
+#: this module is harmless, whereas calling the id functions is the thing that
+#: may already be computing the opposite of what the name suggests.
+_ID_SEMANTICS_WARNING = (
+    "easyicu.table.utils.{name} is deprecated and is NOT the same operation as "
+    "easyicu.table.{name} — this module uses 'upgrade'/'downgrade' in the "
+    "opposite sense (see the module docstring). Migrate to "
+    "easyicu.table.change_id, which states the relation explicitly. This "
+    "module will be removed in EasyICU 2.0."
+)
+
+
+def _warn_deprecated_id_api(name: str) -> None:
+    warnings.warn(_ID_SEMANTICS_WARNING.format(name=name), DeprecationWarning, stacklevel=3)
+
 
 def rename_cols(
     df: pd.DataFrame,
@@ -459,6 +497,7 @@ def change_id(
         ... })
         >>> change_id(data, 'hadm_id', id_map, time_cols=['time'])
     """
+    _warn_deprecated_id_api('change_id')
     if not by_ref:
         df = df.copy()
     
@@ -511,6 +550,7 @@ def upgrade_id(
     Returns:
         升级后的 DataFrame
     """
+    _warn_deprecated_id_api('upgrade_id')
     if not by_ref:
         df = df.copy()
     
@@ -575,6 +615,7 @@ def downgrade_id(
     Returns:
         降级后的 DataFrame
     """
+    _warn_deprecated_id_api('downgrade_id')
     if not by_ref:
         df = df.copy()
     
