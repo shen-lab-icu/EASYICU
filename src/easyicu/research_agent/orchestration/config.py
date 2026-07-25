@@ -32,18 +32,34 @@ and benefits more from being a lightweight dataclass that mirrors
 
 from __future__ import annotations
 
+import hashlib
+import json
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
-from typing import Any, Callable, Dict, Optional, Sequence, Union
+from typing import Any, Callable, Dict, Mapping, Optional, Sequence, Union
 
 
-@dataclass
+@dataclass(frozen=True)
 class PipelineConfig:
-    """Frozen-ish mirror of ``ResearchAgentPipeline.__init__`` keyword args.
+    """Immutable mirror of ``ResearchAgentPipeline.__init__`` keyword args.
 
     Defaults intentionally match ``__init__`` so
     ``PipelineConfig(workdir=...)`` and the bare-kwargs form produce
     identical pipelines.
+
+    The dataclass is frozen: the config is shared across the planner,
+    execution and reporting layers and is hashed into the run's authority
+    digest, so a post-construction mutation would leave the recorded
+    configuration disagreeing with the one that actually ran (and, on resume,
+    reload a different config than the checkpoint was taken under). Use
+    :meth:`with_overrides` to derive a changed copy.
+
+    Freezing binds the field references, not the objects behind them: the
+    remaining ``Dict``/``Sequence`` fields (``capability_request``,
+    ``runner_kwargs``, ``know_how_paths``, ...) can still be mutated in place
+    by a caller that holds the same object. :meth:`canonical_digest` therefore
+    hashes the *values* at the moment it is called, which is what the run
+    provenance records.
     """
 
     # --- required -------------------------------------------------------
@@ -67,6 +83,10 @@ class PipelineConfig:
     enable_vlm_visual_qa: Optional[bool] = None
     vlm_client: Optional[Any] = None
     visual_qa_adapter: Optional[Any] = None
+    # Uploading a rendered figure is a separate decision from authorizing the
+    # provider: the image can carry per-patient marks, small-cell strata or
+    # local paths that the text outbound projection would have stripped.
+    allow_external_figure_upload: bool = False
     enable_llm_concept_audit: Optional[bool] = None
     llm_concept_auditor_client: Optional[Any] = None
     enable_memory: bool = True
@@ -306,6 +326,35 @@ class PipelineConfig:
         ``ResearchAgentPipeline(**config.as_kwargs())`` form.
         """
         return asdict(self)
+
+    def canonical_payload(self) -> Dict[str, Any]:
+        """Return a JSON-safe rendering of every field.
+
+        Live objects (an ``llm`` client, a ``runner_factory``) are rendered by
+        type rather than value: what matters for provenance is which kind of
+        component was configured, not its memory address.
+        """
+
+        def _render(value: Any) -> Any:
+            if value is None or isinstance(value, (bool, int, float, str)):
+                return value
+            if isinstance(value, Path):
+                return str(value)
+            if isinstance(value, Mapping):
+                return {str(k): _render(v) for k, v in sorted(value.items())}
+            if isinstance(value, (list, tuple, set, frozenset)):
+                return [_render(v) for v in value]
+            return f"<{type(value).__module__}.{type(value).__qualname__}>"
+
+        return {key: _render(value) for key, value in sorted(asdict(self).items())}
+
+    def canonical_digest(self) -> str:
+        """SHA-256 over :meth:`canonical_payload`, for run provenance."""
+
+        rendered = json.dumps(
+            self.canonical_payload(), sort_keys=True, separators=(",", ":")
+        )
+        return hashlib.sha256(rendered.encode("utf-8")).hexdigest()
 
 
 __all__ = ["PipelineConfig"]
