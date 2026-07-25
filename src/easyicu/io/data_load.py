@@ -437,6 +437,7 @@ def load_id(
     src: Optional[str] = None,
     on_many_to_many: Optional[str] = None,
     agg_funcs: Optional[Mapping[str, Any]] = None,
+    on_unmapped: str = "error",
     **kwargs
 ) -> IdTbl:
     """Load data as id_tbl (R ricu load_id).
@@ -455,6 +456,8 @@ def load_id(
         agg_funcs: How to combine each column when several source rows collapse
             onto one target id. Required for integer-valued columns, whose mean
             is not the quantity they measure.
+        on_unmapped: What to do with rows the ID map does not cover. Defaults to
+            ``'error'``; ``'drop'`` removes them, ``'keep'`` accepts a null id.
         **kwargs: Additional arguments
 
     Returns:
@@ -491,6 +494,7 @@ def load_id(
             id_var,
             agg_funcs=dict(agg_funcs) if agg_funcs else None,
             on_many_to_many=on_many_to_many,
+            on_unmapped=on_unmapped,
         ),
         id_vars=id_var,
     )
