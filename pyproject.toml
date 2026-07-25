@@ -91,6 +91,14 @@ easyicu = ["data/*.json", "data/research_know_how/*.json"]
   "static/js/*.js"
 ]
 "easyicu.research_agent.providers.prompts" = ["v1/*.txt"]
+# The DockerRunner docstring tells users to build the sandbox image from
+# src/easyicu/research_agent/runner_image/Dockerfile. Ship it, or that
+# instruction is dead for anyone who installed from a wheel.
+"easyicu.research_agent" = [
+  "runner_image/Dockerfile",
+  "runner_image/requirements.lock",
+  "runner_image/README.md",
+]
 
 [tool.ruff]
 target-version = "py310"

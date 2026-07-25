@@ -46,10 +46,13 @@ jobs:
           python -m pip install --upgrade pip
           # Keep this explicit so missing package metadata cannot silently
           # hide an import required by the agent test collection.
+          # FLOORS MUST NOT DROP BELOW pyproject.toml's [project.dependencies]:
+          # a lower floor here lets CI pass on a version the package forbids.
+          # tests/test_ci_dependency_floors.py locks the two together.
           pip install \
             "pandas>=1.5" \
             "openpyxl>=3.1" \
-            "pyarrow>=14.0.0" \
+            "pyarrow>=23.0.0" \
             "numpy>=1.23" \
             "pydantic>=2.0" \
             "matplotlib>=3.7" \
