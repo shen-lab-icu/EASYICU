@@ -184,47 +184,83 @@ def authorize_figure_upload(
     return entries
 
 
+class FigureEgressReceiptError(RuntimeError):
+    """Raised when this run cannot record what it sent to an external provider.
+
+    Kept distinct from :class:`FigureEgressError` (which *prevents* an upload)
+    because it describes the opposite situation: bytes may already have left,
+    and the run has no way to say so. It must not be demoted to a warning.
+    """
+
+
 def register_figure_egress_receipt(
     *,
     policy: Optional[FigureEgressPolicy],
     evidence: Any,
     run_dir: Path,
+    phase: str = "completed",
 ) -> Optional[Any]:
-    """Persist what this run actually sent to an external provider.
+    """Persist what this run is about to send, or did send, to an external provider.
 
     ``FigureEgressPolicy.uploaded`` is an in-memory list on an object the write
     phase builds and drops, so an authorized upload left no trace: the finished
     run could not answer which images left the host. The receipt is written
     whenever a policy existed — an empty list is the meaningful evidence that
     nothing was uploaded, and is exactly what a privacy reviewer needs to see.
+
+    Two phases, because a single post-upload record is lost precisely when it
+    matters most (upload succeeded, host then failed):
+
+    * ``intent`` — written before any byte can leave, recording that this run
+      is authorized to upload and under which policy;
+    * ``completed`` — written after the visual-QA call returns *or raises*,
+      recording what actually went out.
+
+    A failure to write either one raises :class:`FigureEgressReceiptError`.
     """
 
     if policy is None:
         return None
+    if phase not in {"intent", "completed"}:
+        raise ValueError(f"unknown figure-egress receipt phase {phase!r}")
     uploads = list(getattr(policy, "uploaded", ()) or ())
     payload = {
-        "schema": "easyicu.figure_egress_receipt/1",
+        "schema": "easyicu.figure_egress_receipt/2",
+        "phase": phase,
         "allow_external_upload": bool(policy.allow_external_upload),
         "uploaded_count": len(uploads),
         "uploads": uploads,
     }
-    receipt_path = Path(run_dir) / "figure_egress_receipt.json"
-    receipt_path.write_text(
-        json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8"
+    evidence_id = (
+        "figure_egress_receipt"
+        if phase == "completed"
+        else "figure_egress_authorization_intent"
     )
-    return evidence.register_file(
-        kind="log",
-        description=(
-            "Which rendered figures, if any, were authorized to leave the host "
-            "for external visual review, with their evidence ids and digests."
-        ),
-        source_path=receipt_path,
-        evidence_id="figure_egress_receipt",
-        producer="pipeline",
-        generation_mode="system",
-        metadata={"uploaded_count": len(uploads)},
-        on_sha_change="new_id",
-    )
+    receipt_path = Path(run_dir) / f"{evidence_id}.json"
+    try:
+        receipt_path.write_text(
+            json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8"
+        )
+        return evidence.register_file(
+            kind="log",
+            description=(
+                "Which rendered figures, if any, were authorized to leave the "
+                "host for external visual review, with their evidence ids and "
+                f"digests ({phase} phase)."
+            ),
+            source_path=receipt_path,
+            evidence_id=evidence_id,
+            producer="pipeline",
+            generation_mode="system",
+            metadata={"uploaded_count": len(uploads), "egress_phase": phase},
+            on_sha_change="new_id",
+        )
+    except Exception as exc:  # noqa: BLE001 - re-raised as a typed blocker
+        raise FigureEgressReceiptError(
+            f"figure-egress {phase} receipt could not be recorded ({exc}); this "
+            "run cannot account for image bytes sent to an external provider, "
+            "so it must not be treated as a complete manuscript run"
+        ) from exc
 
 
 __all__ = [
@@ -232,6 +268,7 @@ __all__ = [
     "LOCAL_DESTINATIONS",
     "FigureEgressError",
     "FigureEgressPolicy",
+    "FigureEgressReceiptError",
     "authorize_figure_upload",
     "register_figure_egress_receipt",
 ]
