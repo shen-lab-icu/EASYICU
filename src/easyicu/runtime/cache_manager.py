@@ -6,6 +6,7 @@ easyicu 缓存管理工具
 import os
 import shutil
 import tempfile
+import weakref
 from pathlib import Path
 from typing import Dict, Any
 import logging
@@ -28,7 +29,8 @@ class CacheManager:
     def __init__(self):
         if not self._initialized:
             self._cache_dirs = []
-            self._memory_caches = []
+            self._memory_caches = weakref.WeakSet()
+            self._strong_memory_caches = []
             self._initialized = True
             self._setup_default_cache_dirs()
 
@@ -55,8 +57,27 @@ class CacheManager:
                 self._cache_dirs.append(system_cache)
 
     def register_memory_cache(self, cache_obj: Any):
-        """注册内存缓存对象，需要实现clear()方法"""
-        self._memory_caches.append(cache_obj)
+        """注册内存缓存对象，需要实现clear()方法。
+
+        用弱引用登记：这里以前存的是强引用，且没有注销入口，所以每建一个
+        Loader，它的 DataSource / ConceptResolver 就被本管理器永久钉住——
+        即使 Loader 已经从上层缓存淘汰，对象也回收不掉，切换多个数据库路径
+        时内存只增不减。改成弱引用后，登记不再延长对象寿命；真正还在被调用
+        方持有的对象依然可达，可以正常 clear()。
+        """
+        try:
+            self._memory_caches.add(cache_obj)
+        except TypeError:
+            # Not weak-referenceable (e.g. a plain dict) — keep a strong
+            # reference so behaviour does not silently change for those.
+            self._strong_memory_caches.append(cache_obj)
+
+    def unregister_memory_cache(self, cache_obj: Any) -> None:
+        """显式注销一个内存缓存对象（弱引用下通常不必调用）。"""
+        self._memory_caches.discard(cache_obj)
+        self._strong_memory_caches = [
+            obj for obj in self._strong_memory_caches if obj is not cache_obj
+        ]
 
     def clear_disk_cache(self) -> Dict[str, bool]:
         """清除所有磁盘缓存"""
@@ -83,7 +104,10 @@ class CacheManager:
         """清除所有注册的内存缓存"""
         results = {}
 
-        for i, cache_obj in enumerate(self._memory_caches):
+        # Snapshot first: the WeakSet can shrink mid-iteration when a cache's
+        # last real owner goes away.
+        registered = list(self._memory_caches) + list(self._strong_memory_caches)
+        for i, cache_obj in enumerate(registered):
             try:
                 if hasattr(cache_obj, 'clear'):
                     cache_obj.clear()
@@ -128,7 +152,9 @@ class CacheManager:
         """获取缓存信息"""
         info = {
             'disk_cache_dirs': [],
-            'memory_cache_count': len(self._memory_caches),
+            'memory_cache_count': (
+                len(self._memory_caches) + len(self._strong_memory_caches)
+            ),
             'auto_clear_enabled': AUTO_CLEAR_CACHE
         }
 
