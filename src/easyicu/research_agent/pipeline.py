@@ -37,6 +37,7 @@ import io
 import json
 import logging
 import math
+import os
 import re
 import shutil
 import textwrap
@@ -4567,15 +4568,33 @@ class ResearchAgentPipeline:
         carrying the request's own ``authority_sha256`` — the graph rejects a
         decision that does not bind the request it claims to answer, so an
         approval cannot be replayed against a different pause.
+
+        Resume is ``same_process`` only (see
+        :data:`~easyicu.research_agent.graph.HUMAN_REVIEW_RESUME_SCOPE`); the
+        pause object states that in ``resume_scope``/``resume_pid`` so a caller
+        can check before asking a human for a decision it cannot deliver.
         """
+
+        from .graph import HUMAN_REVIEW_RESUME_SCOPE
 
         pending_state = self._pending_human_review
         if not pending_state:
             raise RuntimeError(
-                "no human review is pending on this pipeline instance; "
-                "resume_human_review() answers the pause returned by run()"
+                "no human review is pending on this pipeline instance. "
+                "resume_human_review() answers the pause returned by run(), "
+                "and that pause is resumable only in the process and pipeline "
+                "instance that produced it (HumanReviewPending.resume_scope == "
+                f"{HUMAN_REVIEW_RESUME_SCOPE!r}): the plan phase's live "
+                "evidence store cannot be checkpointed, so a new process has "
+                "nothing to resume from. Re-run instead."
             )
         pending = pending_state["pending"]
+        if not pending.resumable_here:
+            raise RuntimeError(
+                f"human review for run {pending.run_id!r} was paused in process "
+                f"{pending.resume_pid} and cannot be answered from process "
+                f"{os.getpid()}"
+            )
         if run_id is not None and str(run_id) != pending.run_id:
             raise RuntimeError(
                 f"pending human review belongs to run {pending.run_id!r}, "

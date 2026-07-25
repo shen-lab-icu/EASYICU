@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
 from importlib import metadata
@@ -57,6 +58,8 @@ except ImportError:  # pragma: no cover - py<3.8 not supported anyway
 
 __all__ = [
     "HUMAN_REVIEW_FINDING_REASONS",
+    "HUMAN_REVIEW_RESUME_SCOPE",
+    "HumanReviewAuthorityError",
     "HumanReviewDecision",
     "HumanReviewPending",
     "HumanReviewRequest",
@@ -66,6 +69,31 @@ __all__ = [
     "human_review_requests_for_plan",
     "orchestration_runtime_receipt",
 ]
+
+
+#: What a caller may assume about resuming a paused run.
+#:
+#: ``same_process`` is the honest label for what exists today. The phase
+#: handoffs a resumed run needs (the plan phase's live ``EvidenceStore``, its
+#: lock, the resolved context) are held in the compiled graph's registry, not
+#: in the checkpoint — a checkpointer cannot serialise them, which is why they
+#: were moved out of the state in the first place. A new process therefore
+#: cannot reconstruct the run from the checkpoint alone.
+#:
+#: This is a declared property of the pause rather than a docstring so an
+#: operator UI can read it and decline to present the run as durably
+#: resumable. Making it durable requires reconstructible phase handoffs, which
+#: is a pipeline change, not a graph change.
+HUMAN_REVIEW_RESUME_SCOPE = "same_process"
+
+
+class HumanReviewAuthorityError(RuntimeError):
+    """Raised when a review request cannot be bound to the state it approves.
+
+    Distinct from a validation error: nothing about the plan is wrong. The run
+    simply cannot prove *what* a reviewer would be signing, and an approval
+    that binds nothing would cover anything.
+    """
 
 
 def _review_digest(payload: Mapping[str, Any]) -> str:
@@ -138,21 +166,38 @@ class HumanReviewPending(BaseModel):
     ``thread_id`` is the resume coordinate: pass it (or the whole object) back
     to :meth:`ResearchAgentPipeline.resume_human_review` together with one
     decision per request.
+
+    ``resume_scope`` states the boundary explicitly rather than leaving a
+    caller to discover it: see :data:`HUMAN_REVIEW_RESUME_SCOPE`. A UI that
+    hands the pause to a different worker, or persists it across a restart,
+    must read this field and refuse rather than find out at resume time.
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal["easyicu.human_review_pending/1"] = (
-        "easyicu.human_review_pending/1"
+    schema_version: Literal["easyicu.human_review_pending/2"] = (
+        "easyicu.human_review_pending/2"
     )
     run_id: str
     thread_id: str
     run_dir: str
     requests: tuple[HumanReviewRequest, ...]
+    #: Literal, not a free string: widening it is a deliberate edit here, not
+    #: something a caller can assert by passing a different value.
+    resume_scope: Literal["same_process"] = HUMAN_REVIEW_RESUME_SCOPE
+    #: The process that can answer this pause. A caller comparing it to its own
+    #: pid knows before prompting a human whether the answer can be delivered.
+    resume_pid: int = Field(default_factory=os.getpid)
 
     @property
     def review_ids(self) -> tuple[str, ...]:
         return tuple(item.review_id for item in self.requests)
+
+    @property
+    def resumable_here(self) -> bool:
+        """True when this process is the one that can accept the decisions."""
+
+        return self.resume_pid == os.getpid()
 
 
 #: Plan-phase finding reasons that must not be walked past unattended, mapped
@@ -188,8 +233,17 @@ def _plan_authority_payload(plan: Any, evidence: Any) -> dict[str, Any]:
         try:
             for record in evidence.records():
                 digests[str(record.evidence_id)] = str(record.sha256)
-        except Exception:  # noqa: BLE001 - an unreadable store binds nothing
-            digests = {}
+        except Exception as exc:  # noqa: BLE001 - re-raised as a typed blocker
+            # Swallowing this produced an approval request whose authority
+            # digest bound *no evidence at all*, which is exactly the state a
+            # signature is supposed to be a signature of. A reviewer would then
+            # be approving a plan the run cannot show them. Fail closed: no
+            # readable evidence, no review request.
+            raise HumanReviewAuthorityError(
+                "cannot build a human-review authority digest: the evidence "
+                f"store is unreadable ({exc}). An approval that binds no "
+                "evidence would cover any plan, so the review is not offered."
+            ) from exc
     payload["plan_evidence_sha256"] = dict(sorted(digests.items()))
     return payload
 
