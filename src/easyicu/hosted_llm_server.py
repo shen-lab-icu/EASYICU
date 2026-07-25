@@ -33,7 +33,7 @@ import json
 import os
 import threading
 import time
-from collections import deque
+from collections import OrderedDict, deque
 from typing import Any, Iterator, Sequence
 
 import requests
@@ -117,8 +117,48 @@ MODEL_ALIASES = {
     "hosted-default": HOSTED_DEFAULT_MODEL,
 }
 
+# Per-request size ceilings. A requests/minute limit alone does not bound cost:
+# 20 requests can each carry a 50 MB body, 5,000 messages and max_tokens=200000.
+# These bound the *shape* of a single request; the rate limit bounds frequency.
+HOSTED_MAX_BODY_BYTES = int(
+    os.getenv("EASYICU_HOSTED_MAX_BODY_BYTES", str(2 * 1024 * 1024)) or 0
+)
+HOSTED_MAX_MESSAGES = int(os.getenv("EASYICU_HOSTED_MAX_MESSAGES", "200") or 0)
+HOSTED_MAX_OUTPUT_TOKENS = int(
+    os.getenv("EASYICU_HOSTED_MAX_OUTPUT_TOKENS", "8192") or 0
+)
+HOSTED_MAX_COMPLETIONS = int(os.getenv("EASYICU_HOSTED_MAX_COMPLETIONS", "1") or 0)
+
+# Fields forwarded upstream. An allowlist (rather than copying the whole client
+# payload) keeps a caller from smuggling provider-side options — routing,
+# provider preferences, unbounded sampling knobs — through the relay.
+HOSTED_FORWARDED_FIELDS = frozenset(
+    {
+        "model",
+        "messages",
+        "stream",
+        "max_tokens",
+        "temperature",
+        "top_p",
+        "stop",
+        "seed",
+        "n",
+        "response_format",
+        "tools",
+        "tool_choice",
+        "presence_penalty",
+        "frequency_penalty",
+    }
+)
+
+# Cap on distinct client IPs tracked for rate limiting, so the state dict cannot
+# grow without bound under spoofed or rotating source addresses.
+HOSTED_RATE_LIMIT_MAX_TRACKED_IPS = int(
+    os.getenv("EASYICU_HOSTED_RATE_LIMIT_MAX_IPS", "4096") or 0
+)
+
 _RATE_LIMIT_LOCK = threading.Lock()
-_RATE_LIMIT_STATE: dict[str, deque[float]] = {}
+_RATE_LIMIT_STATE: "OrderedDict[str, deque[float]]" = OrderedDict()
 
 
 def _require_openrouter_key() -> None:
@@ -195,7 +235,20 @@ def _check_rate_limit(client_ip: str) -> None:
     now = time.time()
     window_start = now - 60
     with _RATE_LIMIT_LOCK:
+        # Evict IPs whose window has fully expired, then bound the table by LRU.
+        # Without this the dict grows one entry per distinct source address seen
+        # since boot.
+        stale = [
+            ip
+            for ip, seen in _RATE_LIMIT_STATE.items()
+            if not seen or seen[-1] < window_start
+        ]
+        for ip in stale:
+            if ip != client_ip:
+                _RATE_LIMIT_STATE.pop(ip, None)
+
         bucket = _RATE_LIMIT_STATE.setdefault(client_ip, deque())
+        _RATE_LIMIT_STATE.move_to_end(client_ip)
         while bucket and bucket[0] < window_start:
             bucket.popleft()
         if len(bucket) >= HOSTED_RATE_LIMIT:
@@ -204,6 +257,12 @@ def _check_rate_limit(client_ip: str) -> None:
                 detail=f"Rate limit exceeded for {client_ip}. Limit={HOSTED_RATE_LIMIT}/min",
             )
         bucket.append(now)
+
+        while (
+            HOSTED_RATE_LIMIT_MAX_TRACKED_IPS > 0
+            and len(_RATE_LIMIT_STATE) > HOSTED_RATE_LIMIT_MAX_TRACKED_IPS
+        ):
+            _RATE_LIMIT_STATE.popitem(last=False)
 
 
 def _check_auth(request: Request) -> None:
@@ -242,9 +301,102 @@ def _build_upstream_headers(request: Request) -> dict[str, str]:
     return headers
 
 
+async def _read_bounded_body(request: Request) -> bytes:
+    """Read the request body, refusing anything over the configured ceiling.
+
+    Streams and stops at the limit so an oversized (or lying Content-Length)
+    request never gets fully buffered in memory.
+    """
+
+    limit = HOSTED_MAX_BODY_BYTES
+    declared = request.headers.get("content-length")
+    if limit > 0 and declared:
+        try:
+            if int(declared) > limit:
+                raise HTTPException(
+                    status_code=413,
+                    detail=f"Request body exceeds {limit} bytes.",
+                )
+        except ValueError:
+            raise HTTPException(
+                status_code=400, detail="Invalid Content-Length header."
+            ) from None
+
+    chunks: list[bytes] = []
+    total = 0
+    async for chunk in request.stream():
+        total += len(chunk)
+        if limit > 0 and total > limit:
+            raise HTTPException(
+                status_code=413,
+                detail=f"Request body exceeds {limit} bytes.",
+            )
+        chunks.append(chunk)
+    return b"".join(chunks)
+
+
+def _validate_request_shape(payload: dict[str, Any]) -> None:
+    """Reject requests whose size the relay is not willing to pay for."""
+
+    messages = payload.get("messages")
+    if messages is not None:
+        if not isinstance(messages, list):
+            raise HTTPException(status_code=400, detail="'messages' must be a list.")
+        if HOSTED_MAX_MESSAGES > 0 and len(messages) > HOSTED_MAX_MESSAGES:
+            raise HTTPException(
+                status_code=413,
+                detail=(
+                    f"Too many messages: {len(messages)} > " f"{HOSTED_MAX_MESSAGES}."
+                ),
+            )
+
+    max_tokens = payload.get("max_tokens")
+    if max_tokens is not None:
+        try:
+            max_tokens = int(max_tokens)
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(
+                status_code=400, detail="'max_tokens' must be an integer."
+            ) from exc
+        if max_tokens < 1:
+            raise HTTPException(
+                status_code=400, detail="'max_tokens' must be positive."
+            )
+        if HOSTED_MAX_OUTPUT_TOKENS > 0 and max_tokens > HOSTED_MAX_OUTPUT_TOKENS:
+            raise HTTPException(
+                status_code=413,
+                detail=(
+                    f"'max_tokens' exceeds the hosted ceiling: {max_tokens} > "
+                    f"{HOSTED_MAX_OUTPUT_TOKENS}."
+                ),
+            )
+
+    completions = payload.get("n")
+    if completions is not None:
+        try:
+            completions = int(completions)
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(
+                status_code=400, detail="'n' must be an integer."
+            ) from exc
+        if completions < 1 or (
+            HOSTED_MAX_COMPLETIONS > 0 and completions > HOSTED_MAX_COMPLETIONS
+        ):
+            raise HTTPException(
+                status_code=413,
+                detail=f"'n' exceeds the hosted ceiling of {HOSTED_MAX_COMPLETIONS}.",
+            )
+
+
 def _build_upstream_payload(payload: dict[str, Any]) -> dict[str, Any]:
-    upstream_payload = dict(payload)
+    # Forward an allowlist rather than the caller's whole payload, so
+    # provider-side options the relay has not vetted cannot ride along.
+    upstream_payload = {
+        key: value for key, value in payload.items() if key in HOSTED_FORWARDED_FIELDS
+    }
     upstream_payload["model"] = _resolve_model(payload.get("model"))
+    if HOSTED_MAX_OUTPUT_TOKENS > 0:
+        upstream_payload.setdefault("max_tokens", HOSTED_MAX_OUTPUT_TOKENS)
     return upstream_payload
 
 
@@ -366,6 +518,10 @@ def health() -> dict[str, Any]:
         "auth_required": bool(HOSTED_SERVER_TOKEN),
         "unauthenticated_local_development": HOSTED_ALLOW_UNAUTHENTICATED_LOCAL,
         "allowed_model_aliases": sorted(MODEL_ALIASES),
+        "max_body_bytes": HOSTED_MAX_BODY_BYTES,
+        "max_messages": HOSTED_MAX_MESSAGES,
+        "max_output_tokens": HOSTED_MAX_OUTPUT_TOKENS,
+        "max_completions": HOSTED_MAX_COMPLETIONS,
     }
 
 
@@ -396,14 +552,16 @@ async def chat_completions(request: Request):
         )
     _check_rate_limit(_client_ip(request))
 
+    body = await _read_bounded_body(request)
     try:
-        payload = await request.json()
+        payload = json.loads(body)
     except (TypeError, ValueError) as exc:
         raise HTTPException(
             status_code=400, detail="Request body must be JSON."
         ) from exc
     if not isinstance(payload, dict):
         raise HTTPException(status_code=400, detail="Request body must be an object.")
+    _validate_request_shape(payload)
     upstream_payload = _build_upstream_payload(payload)
     stream_value = upstream_payload.get("stream", False)
     if not isinstance(stream_value, bool):
