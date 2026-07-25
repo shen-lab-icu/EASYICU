@@ -117,6 +117,10 @@ _IDENTIFIER_TOKEN_RE = re.compile(r"(?<!\d)\d{6,}(?!\d)")
 
 _MAX_JSON_NODES = 20_000
 
+#: Row cap for the delimited-file scan. A figure source is a summary table, so
+#: this is generous; exceeding it is reported rather than silently ignored.
+_MAX_SCANNED_ROWS = 50_000
+
 
 @dataclass
 class FigurePrivacyAudit:
@@ -260,13 +264,27 @@ def _inspect_delimited(path: Path, *, delimiter: str) -> Dict[str, Any]:
         except StopIteration:
             return {"columns": [], "reasons": ["file is empty"]}
         reasons = _column_findings(header)
+        count_columns = [
+            name for name in header if str(name).strip().lower() in GROUP_SIZE_KEYS
+        ]
         pairs: List[tuple] = []
         rows = 0
+        truncated = False
         for row in reader:
             rows += 1
+            if rows > _MAX_SCANNED_ROWS:
+                truncated = True
+                break
             for name, value in zip(header, row):
-                if str(name).strip().lower() in GROUP_SIZE_KEYS:
+                if name in count_columns:
                     pairs.append((name, value))
+    if truncated and count_columns:
+        # A count column exists but was not fully scanned, so a small cell may
+        # be hiding past the cap. Uncleared beats guessing.
+        reasons.append(
+            f"count column(s) {', '.join(count_columns)} exceed "
+            f"{_MAX_SCANNED_ROWS} rows and were not fully scanned"
+        )
     return {
         "columns": list(header),
         "rows": rows,
