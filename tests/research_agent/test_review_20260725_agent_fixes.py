@@ -1046,11 +1046,15 @@ def test_p2_2_dispatch_does_not_echo_internal_exception_text(roots, monkeypatch)
     assert "/Volumes/secret" not in json.dumps(result)
 
 
-def test_p2_2_unknown_tool_and_bad_argument_have_stable_codes(roots):
+def test_p2_2_unknown_tool_and_bad_argument_have_stable_codes(roots, monkeypatch):
     from easyicu.research_agent.mcp_server import dispatch
 
     assert dispatch("research_agent.nope", {})["error_code"] == "unknown_tool"
 
+    # ``bind_evidence`` is no longer in the process default scope set, and the
+    # scope check correctly runs before the path check. Grant it so this test
+    # still exercises the path guard it is about.
+    monkeypatch.setenv(MCP_SCOPES_ENV, "metadata,bind_evidence")
     escaped = dispatch(
         "research_agent.bind_evidence",
         {"workdir": "/etc", "kind": "log", "text": "x"},

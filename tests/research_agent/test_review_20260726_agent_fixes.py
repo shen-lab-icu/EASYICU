@@ -199,7 +199,9 @@ def test_p0_1_aggregate_statistics_honour_a_per_column_cell_floor():
 
     assert stats["common_lab"]["count"] == 100.0
     assert stats["rare_assay"]["withheld"] is True
-    assert stats["rare_assay"]["non_missing_count"] == 1
+    # Tightened 2026-07-27: the exact size of a suppressed cell is itself a
+    # small-cell disclosure, so the bound is reported instead of the count.
+    assert stats["rare_assay"]["non_missing_count"] == "<20"
     assert "7.25" not in json.dumps(stats)
 
 
@@ -833,7 +835,10 @@ def test_p1_2_egress_receipt_is_persisted_even_when_nothing_was_uploaded(ra, tmp
     payload = json.loads(
         (tmp_path / "figure_egress_receipt.json").read_text(encoding="utf-8")
     )
-    assert payload["schema"] == "easyicu.figure_egress_receipt/1"
+    # Schema moved to /2 on 2026-07-27 when the receipt became two-phase
+    # (an intent record before upload, a completed record after).
+    assert payload["schema"] == "easyicu.figure_egress_receipt/2"
+    assert payload["phase"] == "completed"
     assert payload["uploaded_count"] == 0
     assert store.get("figure_egress_receipt") is not None
 
