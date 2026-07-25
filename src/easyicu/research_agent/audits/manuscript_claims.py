@@ -156,7 +156,7 @@ def audit_manuscript_numeric_claims(
             # Allow ordinary two-decimal rounding (0.7769 -> 0.78), but not
             # manuscript-friendly drift such as 0.82.
             nearest = min(comparison, key=lambda r: abs(claimed - r))
-            if abs(claimed - nearest) > 0.015:
+            if abs(claimed - nearest) > _METRIC_TOLERANCE:
                 findings.append(
                     ValidationFinding(
                         validator="manuscript_numeric_auditor",
@@ -204,8 +204,76 @@ def audit_manuscript_numeric_claims(
             ]
         else:
             ci_summaries = list(summaries)
-        ci_low = _first_summary_scalar(ci_summaries, _AUROC_CI_LOWER_KEYS)
-        ci_high = _first_summary_scalar(ci_summaries, _AUROC_CI_UPPER_KEYS)
+        # Bounds are resolved as a PAIR from one summary. Reading the lower
+        # bound with one scan and the upper with another lets a two-model
+        # manuscript take 0.71 from the primary step and 0.84 from the
+        # sensitivity step and call the result an interval.
+        ci_pairs = _summary_ci_pairs(
+            ci_summaries, _AUROC_CI_LOWER_KEYS, _AUROC_CI_UPPER_KEYS
+        )
+        ci_low = ci_pairs[0][0] if ci_pairs else None
+        ci_high = ci_pairs[0][1] if ci_pairs else None
+
+        # Then check the interval the manuscript actually printed against the
+        # registered one. Establishing that *a* CI exists says nothing about
+        # whether 0.71-0.84 is that CI.
+        if ci_pairs:
+            owned_pairs = _summary_ci_pairs_by_owner(
+                summaries, summary_owners, _AUROC_CI_LOWER_KEYS, _AUROC_CI_UPPER_KEYS
+            )
+            for low, high, footnote_id in _extract_ci_claims(
+                bound_manuscript, r"\b(?:AUROC|AUC)\b"
+            ):
+                cited_step = footnote_steps.get(footnote_id or "")
+                if cited_step and cited_step in owned_pairs:
+                    comparison = [owned_pairs[cited_step]]
+                elif cited_step:
+                    findings.append(
+                        _cited_step_lacks_metric_finding(
+                            metric="auroc_ci",
+                            label="AUROC confidence interval",
+                            claimed=low,
+                            cited_step=cited_step,
+                        )
+                    )
+                    continue
+                else:
+                    comparison = ci_pairs
+                if not any(
+                    abs(low - bound_low) <= _METRIC_TOLERANCE
+                    and abs(high - bound_high) <= _METRIC_TOLERANCE
+                    for bound_low, bound_high in comparison
+                ):
+                    nearest_low, nearest_high = min(
+                        comparison,
+                        key=lambda pair: abs(low - pair[0]) + abs(high - pair[1]),
+                    )
+                    findings.append(
+                        ValidationFinding(
+                            validator="manuscript_numeric_auditor",
+                            severity="error",
+                            message=(
+                                f"Manuscript AUROC 95% CI {low:.3g}-{high:.3g} does "
+                                "not match "
+                                + (
+                                    f"the interval registered by step {cited_step!r} "
+                                    if cited_step
+                                    else "any registered AUROC CI "
+                                )
+                                + f"(nearest {nearest_low:.3g}-{nearest_high:.3g})."
+                            ),
+                            detail={
+                                "metric": "auroc_ci",
+                                "claimed_lower": low,
+                                "claimed_upper": high,
+                                "registered_lower": nearest_low,
+                                "registered_upper": nearest_high,
+                                "scoped_to_step": cited_step,
+                                "reason": "ci_bounds_do_not_match_registered",
+                            },
+                        )
+                    )
+
         if (ci_low is None or ci_high is None) and re.search(
             r"\b(?:AUROC|AUC)\b.{0,80}\b95\s*%\s*CI\b",
             bound_manuscript,
@@ -264,7 +332,7 @@ def audit_manuscript_numeric_claims(
             scoped, step_id = scope.values, scope.step_id
             comparison = scoped or registered_briers
             nearest = min(comparison, key=lambda r: abs(claimed - r))
-            if abs(claimed - nearest) > 0.015:
+            if abs(claimed - nearest) > _METRIC_TOLERANCE:
                 findings.append(
                     ValidationFinding(
                         validator="manuscript_numeric_auditor",
@@ -316,7 +384,7 @@ def audit_manuscript_numeric_claims(
             scoped, step_id = scope.values, scope.step_id
             comparison = scoped or registered_baselines
             nearest = min(comparison, key=lambda r: abs(claimed - r))
-            if abs(claimed - nearest) > 0.015:
+            if abs(claimed - nearest) > _METRIC_TOLERANCE:
                 findings.append(
                     ValidationFinding(
                         validator="manuscript_numeric_auditor",
@@ -342,6 +410,93 @@ def audit_manuscript_numeric_claims(
                 )
 
     return findings
+
+
+#: Ordinary two-decimal rounding (0.7769 -> 0.78) is fine; manuscript-friendly
+#: drift is not. Shared so a point estimate and its interval are held to one
+#: standard.
+_METRIC_TOLERANCE = 0.015
+
+
+#: ``AUROC ... 95% CI 0.71-0.84`` in the forms a writer actually produces.
+_CI_SEPARATOR = r"(?:\s*(?:–|—|-|to|,)\s*)"
+_CI_BOUNDS = r"[\(\[]?\s*([01]\.\d+)" + _CI_SEPARATOR + r"([01]\.\d+)\s*[\)\]]?"
+
+
+def _extract_ci_claims(
+    text: str, metric_pattern: str
+) -> List[Tuple[float, float, Optional[str]]]:
+    """The interval the manuscript printed, with its footnote id."""
+
+    clean_text = _strip_manuscript_noise(text)
+    pattern = re.compile(
+        metric_pattern
+        # ``.`` stops at a newline but not at a decimal point: the point
+        # estimate between the metric name and its interval ("AUROC of 0.868
+        # (95% CI ...") is full of decimal points, and excluding them was
+        # enough to make this never match a real sentence.
+        + r".{0,120}?9[05]\s*%\s*(?:CI|confidence\s+interval|credible\s+interval)"
+        + r"[^0-9\(\[]{0,15}"
+        + _CI_BOUNDS
+        + r"(?:\[\^(?P<fid>[^\]]+)\])?",
+        flags=re.IGNORECASE,
+    )
+    claims: List[Tuple[float, float, Optional[str]]] = []
+    for match in pattern.finditer(clean_text):
+        try:
+            low = float(match.group(1))
+            high = float(match.group(2))
+        except (TypeError, ValueError):
+            continue
+        claims.append((low, high, match.group("fid")))
+    return claims
+
+
+def _summary_ci_pairs(
+    summaries: Sequence[Dict[str, Any]],
+    lower_keys: Sequence[str],
+    upper_keys: Sequence[str],
+) -> List[Tuple[float, float]]:
+    """Intervals, each with both bounds taken from the same summary."""
+
+    from ..scalar_utils import _first_present_scalar
+
+    pairs: List[Tuple[float, float]] = []
+    for summary in summaries:
+        low = _first_present_scalar(summary, lower_keys)
+        high = _first_present_scalar(summary, upper_keys)
+        if low is None or high is None:
+            continue
+        try:
+            pairs.append((float(low), float(high)))
+        except (TypeError, ValueError):
+            continue
+    return pairs
+
+
+def _summary_ci_pairs_by_owner(
+    summaries: Sequence[Dict[str, Any]],
+    owners: Sequence[str],
+    lower_keys: Sequence[str],
+    upper_keys: Sequence[str],
+) -> Dict[str, Tuple[float, float]]:
+    """The interval each step registered, keyed by that step."""
+
+    from ..scalar_utils import _first_present_scalar
+
+    owned: Dict[str, Tuple[float, float]] = {}
+    for summary, owner in zip(summaries, owners):
+        if not owner or owner in owned:
+            continue
+        low = _first_present_scalar(summary, lower_keys)
+        high = _first_present_scalar(summary, upper_keys)
+        if low is None or high is None:
+            continue
+        try:
+            owned[owner] = (float(low), float(high))
+        except (TypeError, ValueError):
+            continue
+    return owned
 
 
 def _first_summary_scalar(
