@@ -220,9 +220,15 @@ def _detect_database(path: Path) -> str:
     s = str(path).lower()
     if "eicu" in s:
         return "eicu"
-    # MIMIC-III must be tested before MIMIC-IV: a bare "mimic" substring test
-    # claims /data/mimiciii for MIMIC-IV, and the two have different ID columns
-    # (icustay_id vs stay_id), so the mislabel silently empties every cohort.
+
+    # CONTENT BEATS NAME for the MIMIC pair. The two generations differ only in
+    # their stay-id column (stay_id vs icustay_id), and a path string is a weak
+    # signal: the token can come from an unrelated ancestor directory, and a
+    # prepared export is often filed under a name with no version at all.
+    # Read the schema first whenever the folder actually holds MIMIC tables.
+    by_schema = _detect_mimic_version_by_schema(path)
+    if by_schema:
+        return by_schema
     if any(
         token in s for token in ("mimiciii", "mimic-iii", "mimic_iii", "mimic3", "miii")
     ):
@@ -253,25 +259,80 @@ def _detect_database(path: Path) -> str:
         return "eicu"
     if any(n.startswith("general_table") or n.startswith("general/") for n in names):
         return "hirid"
-    # An ambiguous "mimic" path name is resolved by table shape, not by name:
-    # MIMIC-III ships icustays + d_items at the top level, MIMIC-IV splits into
-    # icu/ + hosp/ subdirectories.
+    # An ambiguous "mimic" path is resolved by SCHEMA, not by table names.
+    # Both versions ship icustays/patients/admissions, so a converted MIMIC-IV
+    # in a flat parquet layout looks exactly like MIMIC-III by filename alone.
+    # The stay-id column is what actually differs, and it is what downstream
+    # extraction depends on.
     has_admissions = any(
         n.startswith("admissions.") or n == "admissions/" for n in names
     )
-    if has_admissions:
-        if any(n in {"icu/", "hosp/"} for n in names):
-            return "miiv"
-        if any(n.startswith("d_items.") or n.startswith("icustays.") for n in names):
-            return "miii"
-        return "miiv"
     if any(n in {"icu/", "hosp/"} for n in names):
         return "miiv"
-    if "mimic" in s:
-        # Name says MIMIC but nothing on disk distinguishes the version — say so
-        # rather than guessing a version whose ID column may be wrong.
+    if has_admissions or any(n.startswith("icustays.") for n in names):
+        by_schema = _detect_mimic_version_by_schema(path)
+        if by_schema:
+            return by_schema
+        # Nothing on disk distinguishes the version — say so rather than
+        # guessing one whose ID column may be wrong.
         return "unknown"
     return "unknown"
+
+
+#: Columns that appear in exactly one MIMIC generation.
+_MIMIC_VERSION_MARKERS = {
+    "miiv": ("stay_id", "anchor_year", "anchor_age"),
+    "miii": ("icustay_id", "dob", "hadm_id_seq"),
+}
+
+
+def _detect_mimic_version_by_schema(path: Path) -> Optional[str]:
+    """Tell MIMIC-III from MIMIC-IV by reading a table's column names.
+
+    Filenames cannot do this — both generations ship ``icustays``,
+    ``patients`` and ``admissions``. ``stay_id`` (MIMIC-IV) vs ``icustay_id``
+    (MIMIC-III) can, and reading a parquet footer costs no row scan.
+    """
+
+    for table in ("icustays", "patients", "admissions"):
+        columns = _peek_columns(path, table)
+        if not columns:
+            continue
+        lowered = {str(col).lower() for col in columns}
+        for db_key, markers in _MIMIC_VERSION_MARKERS.items():
+            if lowered.intersection(markers):
+                return db_key
+    return None
+
+
+def _peek_columns(path: Path, table: str) -> List[str]:
+    """Read a table's column names without loading any rows."""
+
+    for candidate in (path / f"{table}.parquet", path / table):
+        try:
+            if candidate.is_file():
+                import pyarrow.parquet as pq
+
+                return list(pq.read_schema(candidate).names)
+            if candidate.is_dir():
+                import pyarrow.parquet as pq
+
+                shard = next(candidate.glob("*.parquet"), None)
+                if shard is not None:
+                    return list(pq.read_schema(shard).names)
+        except Exception:
+            continue
+
+    csv_candidate = next(path.glob(f"{table}.csv*"), None)
+    if csv_candidate is not None:
+        try:
+            import pandas as pd
+
+            header = pd.read_csv(csv_candidate, nrows=0)
+            return list(header.columns)
+        except Exception:
+            return []
+    return []
 
 
 def scan_path(raw_path: str, source_hint: Optional[str] = None) -> Dict[str, Any]:
