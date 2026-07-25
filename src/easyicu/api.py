@@ -30,6 +30,7 @@ from typing import List, Union, Optional, Dict
 from pathlib import Path
 import os
 import threading
+from collections import OrderedDict
 import numpy as np
 import pandas as pd
 import logging
@@ -54,6 +55,12 @@ logger = logging.getLogger(__name__)
 _global_loader = None
 _loader_config = None
 _LOADER_LOCK = threading.RLock()
+
+# Loaders are cached PER CONFIG so switching database never has to tear down a
+# loader another thread is mid-extraction on. Bounded so a long-lived process
+# that cycles through many data paths cannot grow without limit.
+_LOADER_CACHE_MAX = 4
+_loader_cache: "OrderedDict[tuple, BaseICULoader]" = OrderedDict()
 
 
 def _normalize_patient_ids_for_db(database_name: str, patient_ids):
@@ -138,6 +145,27 @@ def _guard_window_expansion(
     )
 
 
+def _resolve_duration_hours(
+    work: pd.DataFrame,
+    result: pd.DataFrame,
+    concept_name: str,
+) -> pd.Series:
+    """Read ``work['dur_var']`` as float hours using the declared unit.
+
+    Shared by the datetime and numeric index branches so a unit declaration can
+    never be honoured by one and ignored by the other. A ``timedelta64`` column
+    is self-describing; a numeric one takes the declaration from whichever frame
+    still carries the producer's ``attrs``.
+    """
+
+    dur_frame = work[["dur_var"]].copy()
+    if not pd.api.types.is_timedelta64_dtype(dur_frame["dur_var"]):
+        declared = get_dur_var_unit(work) or get_dur_var_unit(result)
+        if declared:
+            set_dur_var_unit(dur_frame, declared)
+    return resolve_dur_var_hours(dur_frame, concept=concept_name)
+
+
 def _expand_public_numeric_win_tbl_output(
     result: pd.DataFrame,
     concept_name: str,
@@ -205,14 +233,13 @@ def _expand_public_numeric_win_tbl_output(
 
     if is_datetime_index:
         work[index_column] = pd.to_datetime(work[index_column], errors="coerce")
-        # 🔧 FIX: dur_var may already be pd.Timedelta (set by ts_to_win_tbl for datetime indices).
-        # pd.to_numeric on Timedelta returns nanoseconds, so pd.to_timedelta(..., unit='m')
-        # would treat those nanoseconds as minutes → duration of ~114,000 years → infinite loop.
-        if pd.api.types.is_timedelta64_dtype(work["dur_var"]):
-            duration_values = work["dur_var"].fillna(pd.Timedelta(0))
-        else:
-            dur_numeric = pd.to_numeric(work["dur_var"], errors="coerce").fillna(0.0)
-            duration_values = pd.to_timedelta(dur_numeric, unit="m")
+        # Both branches read the SAME declared unit. This one used to hardcode
+        # unit="m" for every numeric dur_var, so a frame that declared hours was
+        # read as minutes — the same 60x error as the old distribution guess,
+        # just on the datetime path.
+        duration_values = pd.to_timedelta(
+            _resolve_duration_hours(work, result, concept_name), unit="h"
+        )
         epsilon = pd.Timedelta(microseconds=1)
 
         for row, duration in zip(work.itertuples(index=False), duration_values):
@@ -250,17 +277,7 @@ def _expand_public_numeric_win_tbl_output(
         if interval_hours <= 0:
             interval_hours = 1.0
 
-        # 多库 win_tbl 的 `dur_var` 单位不同（eICU medication 是分钟，HiRID
-        # grp_mount_to_rate 之后是小时）。单位由产出端显式声明并随 frame 传下来，
-        # 只有在没有声明时才退回旧的分布猜测（届时 resolve_dur_var_hours 会告警）。
-        # A timedelta64 dur_var is self-describing and needs no declaration;
-        # a numeric one is read from whichever frame still carries the producer's
-        # declaration.
-        dur_frame = work[["dur_var"]].copy()
-        declared = get_dur_var_unit(result) or get_dur_var_unit(work)
-        if declared and not pd.api.types.is_timedelta64_dtype(dur_frame["dur_var"]):
-            set_dur_var_unit(dur_frame, declared)
-        duration_hours = resolve_dur_var_hours(dur_frame, concept=concept_name)
+        duration_hours = _resolve_duration_hours(work, result, concept_name)
         epsilon = 1e-9
 
         for row, duration_hour in zip(work.itertuples(index=False), duration_hours):
@@ -442,10 +459,20 @@ def _release_loader(loader) -> None:
 
 
 def clear_global_loader():
-    """清除全局加载器，强制下一次调用重新创建"""
+    """清除全局加载器，强制下一次调用重新创建。
+
+    This is an explicit caller-driven teardown, so releasing caches here is
+    intentional — unlike the implicit teardown that used to fire whenever
+    another thread happened to request a different database.
+    """
     global _global_loader, _loader_config
     with _LOADER_LOCK:
-        _release_loader(_global_loader)
+        cached = list(_loader_cache.values())
+        _loader_cache.clear()
+        for loader in cached:
+            _release_loader(loader)
+        if _global_loader is not None and _global_loader not in cached:
+            _release_loader(_global_loader)
         _global_loader = None
         _loader_config = None
 
@@ -727,29 +754,35 @@ def _get_global_loader(
         frozenset(config_kwargs.items()),
     )
 
-    # Hold the lock across check → create → publish → read so a concurrent
-    # caller for a different database can never observe (or be handed) a loader
-    # that does not match the config it asked for.
+    # One loader PER CONFIG, not one global slot. Two rules matter here:
+    #
+    # 1. The lookup and the insert happen under the lock, so a caller can never
+    #    be handed a loader built for a different database.
+    # 2. Switching configs must NOT tear down the loader another thread is
+    #    still using. Clearing a live loader's caches mid-extraction empties
+    #    its ConceptResolver and DataSource under the caller's feet, which
+    #    surfaces as intermittent KeyErrors, empty tables or drifting results.
+    #    Evicted entries are simply dropped from the cache; Python frees them
+    #    once their last user is done.
     with _LOADER_LOCK:
-        if _global_loader is None or _loader_config != current_config:
-            previous = _global_loader
+        loader = _loader_cache.get(current_config)
+        if loader is None:
             loader = BaseICULoader(
                 database=database,
                 data_path=data_path,
                 dict_path=dict_path,
                 **kwargs,
             )
-            _global_loader = loader
-            _loader_config = current_config
-            if previous is not None and previous is not loader:
-                _release_loader(previous)
+            _loader_cache[current_config] = loader
+        _loader_cache.move_to_end(current_config)
+        while len(_loader_cache) > _LOADER_CACHE_MAX:
+            _loader_cache.popitem(last=False)
 
-        if _loader_config != current_config:  # pragma: no cover - invariant
-            raise RuntimeError(
-                "global loader config drifted while the lock was held; refusing "
-                "to hand back a loader for a different database"
-            )
-        return _global_loader
+        # `_global_loader` / `_loader_config` stay in sync for the legacy
+        # single-loader accessors (clear_global_loader, keep_cache).
+        _global_loader = loader
+        _loader_config = current_config
+        return loader
 
 
 def _get_smart_workers(num_concepts: int, num_patients: Optional[int] = None) -> tuple:
@@ -820,12 +853,21 @@ def _get_auto_chunk_strategy(
 ) -> Optional[Dict[str, int]]:
     """Return an auto-tuned chunk strategy for heavy large-scale extraction.
 
-    The policy balances throughput and memory while preserving deterministic
-    score-window expansion for clinical scores. SOFA-family concepts stay on the
-    validated ``SOFA_FIXED_CHUNK_SIZE`` profile regardless of how much memory is
-    available, because chunk size can change large-cohort window expansion
-    results — tiering it by free RAM would make the same cohort score
-    differently on different machines.
+    The policy balances throughput and memory. SOFA-family concepts stay on the
+    fixed ``SOFA_FIXED_CHUNK_SIZE`` profile regardless of available memory, so
+    that the chunking of a given cohort is a property of the cohort and not of
+    the host that happened to run it.
+
+    Partition invariance was measured on real prepared data (2026-07-25):
+    ``sofa`` and ``sofa2`` are byte-identical (``check_exact=True``) across
+    ``chunk_size`` in {None, 250, 500, 1000, 2000, 4000} and
+    ``parallel_workers`` in {1, 4}, for MIMIC-IV cohorts of 1,000 / 3,000 /
+    10,000 stays and an eICU cohort of 3,000. An earlier note here claimed
+    chunk size could change large-cohort window expansion; that is not
+    reproducible at those scales and has been replaced by this measurement.
+    Full-database scale (~94k stays) has NOT been measured, so the fixed
+    profile stays as cheap insurance rather than being relaxed.
+    See ``tests/test_sofa_partition_invariance.py``.
     """
     if not _is_low_memory_chunk_candidate(
         concepts_list,
@@ -855,16 +897,17 @@ def _get_auto_chunk_strategy(
             and auto_chunk_size > SOFA_FIXED_CHUNK_SIZE
         ):
             logger.warning(
-                "Capping SOFA auto chunk size at %d because larger chunks can "
-                "change SOFA window expansion results in current large-cohort mode.",
+                "Capping SOFA auto chunk size at %d to stay on the profile whose "
+                "partition invariance has been measured.",
                 SOFA_FIXED_CHUNK_SIZE,
             )
             auto_chunk_size = SOFA_FIXED_CHUNK_SIZE
         elif normalized.intersection(sofa_heavy_concepts):
-            logger.warning(
+            logger.info(
                 "EASYICU_AUTO_CHUNK_SIZE=%d overrides the fixed SOFA chunk "
-                "profile (%d). SOFA window expansion is not yet proven "
-                "partition-invariant, so results may not match a default run.",
+                "profile (%d). SOFA/SOFA-2 measured byte-identical across chunk "
+                "sizes up to 10k stays, so this is expected to be safe; it has "
+                "not been measured at full-database scale.",
                 auto_chunk_size,
                 SOFA_FIXED_CHUNK_SIZE,
             )
