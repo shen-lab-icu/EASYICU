@@ -71,14 +71,17 @@ ALL_SCOPES: FrozenSet[str] = frozenset(
     }
 )
 
-#: Everything except the two disclosure scopes. Extraction still runs, writes
-#: its parquet and registers evidence; what changes is that the *response*
-#: carries shape and aggregate statistics instead of rows, and study metadata
-#: arrives as the same outbound-safe projection the Planner prompt gets.
-DEFAULT_SCOPES: FrozenSet[str] = ALL_SCOPES - {
-    SCOPE_READ_PATIENT_DATA,
-    SCOPE_READ_INTERNAL_CONTEXT,
-}
+#: Read-only introspection, and nothing else. Every scope that spends money,
+#: writes to the host or binds scientific authority (``run_pipeline``,
+#: ``write_artifacts``, ``bind_evidence``) must be granted explicitly through
+#: :data:`MCP_SCOPES_ENV`.
+#:
+#: This used to be "everything except the two disclosure scopes", which meant
+#: any process that could spawn the stdio server inherited the authority to
+#: start a paid pipeline run and register evidence into a study — an authority
+#: nobody granted, on a channel with no token. Narrowing the default costs one
+#: environment variable for the deployments that do want it.
+DEFAULT_SCOPES: FrozenSet[str] = frozenset({SCOPE_METADATA})
 
 MCP_SCOPES_ENV = "EASYICU_MCP_SCOPES"
 MCP_ALLOW_PATIENT_DATA_ENV = "EASYICU_MCP_ALLOW_PATIENT_DATA"
@@ -305,7 +308,19 @@ def summarise_frame(frame: Any, *, policy: DisclosurePolicy) -> Dict[str, Any]:
     """
 
     if not hasattr(frame, "shape") or not hasattr(frame, "columns"):
-        return {"type": type(frame).__name__, "repr": repr(frame)[:500]}
+        # Anything that is not a frame is not projectable, and its ``repr`` is
+        # arbitrary: a Series, a list of dicts or an error wrapper can print
+        # identifiers, timestamps and values, which would hand back exactly
+        # what the patient-data scope exists to withhold. Report the type and
+        # nothing else.
+        return {
+            "type": type(frame).__name__,
+            "unsupported_result": True,
+            "reason": (
+                "result is not a tabular frame, so it cannot be projected "
+                "through the disclosure policy and is withheld"
+            ),
+        }
 
     columns = [str(c) for c in frame.columns]
     dtypes = {str(c): str(t) for c, t in frame.dtypes.items()}
@@ -349,15 +364,28 @@ def summarise_frame(frame: Any, *, policy: DisclosurePolicy) -> Dict[str, Any]:
     return summary
 
 
-def _missing_fraction(frame: Any, columns: Sequence[str]) -> Dict[str, float]:
+def _missing_fraction(frame: Any, columns: Sequence[str]) -> Dict[str, Any]:
+    """Per-column missingness, censored where it would invert to a small cell.
+
+    An exact fraction is an exact count: ``0.997`` over 1,000 rows says three
+    patients contributed. Every column below the non-missing floor therefore
+    reports the *same* bound string, so the suppressed sizes are no longer
+    distinguishable from one another.
+    """
+
     rows = int(frame.shape[0])
     if rows <= 0:
         return {str(column): 0.0 for column in columns}
-    fractions: Dict[str, float] = {}
+    censored = f">{(rows - MIN_NON_MISSING_FOR_COLUMN_STATS) / rows:.6f}"
+    fractions: Dict[str, Any] = {}
     for column in columns:
         try:
             missing = int(frame[column].isna().sum())
         except Exception:  # pragma: no cover - exotic dtypes
+            continue
+        non_missing = rows - missing
+        if 0 < non_missing < MIN_NON_MISSING_FOR_COLUMN_STATS:
+            fractions[str(column)] = censored
             continue
         fractions[str(column)] = round(missing / rows, 6)
     return fractions
@@ -385,9 +413,12 @@ def _aggregate_statistics(
                 # min/max/mean over a handful of contributing rows reproduces
                 # those rows.  Report only the suppressed cell size, which is
                 # already visible through ``missing_fraction``.
+                # The exact size of a suppressed cell is itself a small-cell
+                # disclosure ("3 patients have this lab"), so report the
+                # bound rather than the count.
                 stats[str(column)] = {
                     "withheld": True,
-                    "non_missing_count": non_missing,
+                    "non_missing_count": f"<{MIN_NON_MISSING_FOR_COLUMN_STATS}",
                     "reason": (
                         f"fewer than {MIN_NON_MISSING_FOR_COLUMN_STATS} "
                         "non-missing values in this column"
