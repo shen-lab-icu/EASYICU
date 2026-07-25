@@ -37,6 +37,7 @@ import json
 import re
 from dataclasses import dataclass, fields, replace
 from pathlib import Path
+from types import MappingProxyType
 from typing import Any, Callable, Dict, Mapping, Optional, Sequence, Union
 
 
@@ -50,6 +51,28 @@ _SECRET_FIELD_RE = re.compile(
 
 def _is_secret_field(name: str) -> bool:
     return bool(_SECRET_FIELD_RE.search(str(name)))
+
+
+def _deep_freeze(value: Any) -> Any:
+    """Return an immutable view of a plain data container, recursively.
+
+    Only the exact builtin containers are converted. A subclass (a pydantic
+    model, a ``defaultdict`` a caller relies on, a numpy array) keeps its
+    identity and behaviour: this exists to stop a shared ``runner_kwargs``
+    dict being edited after the config was hashed, not to re-type the
+    collaborators a run was handed.
+    """
+
+    if type(value) is dict:
+        return MappingProxyType({key: _deep_freeze(item) for key, item in value.items()})
+    if type(value) is list:
+        return tuple(_deep_freeze(item) for item in value)
+    if type(value) is set:
+        return frozenset(_deep_freeze(item) for item in value)
+    if type(value) is tuple:
+        frozen = tuple(_deep_freeze(item) for item in value)
+        return frozen if frozen != value else value
+    return value
 
 
 @dataclass(frozen=True)
@@ -67,12 +90,13 @@ class PipelineConfig:
     reload a different config than the checkpoint was taken under). Use
     :meth:`with_overrides` to derive a changed copy.
 
-    Freezing binds the field references, not the objects behind them: the
-    remaining ``Dict``/``Sequence`` fields (``capability_request``,
-    ``runner_kwargs``, ``know_how_paths``, ...) can still be mutated in place
-    by a caller that holds the same object. :meth:`canonical_digest` therefore
-    hashes the *values* at the moment it is called, which is what the run
-    provenance records.
+    ``frozen=True`` alone binds only the field *references*, so a caller
+    holding the same ``runner_kwargs`` dict could still mutate the config after
+    it was hashed into the run authority. :meth:`__post_init__` therefore also
+    freezes the plain data containers: every ``dict`` becomes a read-only
+    mapping and every ``list``/``set`` a tuple/frozenset, recursively. Live
+    objects (clients, factories, adapters, checkpointers) are left exactly as
+    passed — they are the run's collaborators, not its configuration values.
     """
 
     # --- required -------------------------------------------------------
@@ -330,6 +354,13 @@ class PipelineConfig:
         argparse options cannot silently fall back to a pipeline default.
         """
         return cls(**kwargs)
+
+    def __post_init__(self) -> None:
+        for field_def in fields(self):
+            value = getattr(self, field_def.name)
+            frozen = _deep_freeze(value)
+            if frozen is not value:
+                object.__setattr__(self, field_def.name, frozen)
 
     def with_overrides(self, **overrides: Any) -> "PipelineConfig":
         """Return a new :class:`PipelineConfig` with the given fields
