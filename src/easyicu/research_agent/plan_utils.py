@@ -60,7 +60,10 @@ from .contracts.ordered_stratified import (
     is_ordered_stratified_analysis_step,
     ordered_stratified_structure_findings,
 )
-from .contracts.table_one import bind_table_one_execution_spec, table_one_output_findings
+from .contracts.table_one import (
+    bind_table_one_execution_spec,
+    table_one_output_findings,
+)
 from .scalar_utils import (
     _first_numeric_scalar_with_key_fragment,
     _first_present_scalar,
@@ -2917,6 +2920,21 @@ def _cap_plan_preserving_figure_steps(
         step_id for step_id in preserved_step_ids if step_id in kept_ids
     ]
     capped = plan.model_copy(update={"steps": kept})
+    # Name the scientific products that were dropped, not only the step ids. A
+    # reader of the findings — or of the manuscript that quotes them — cannot
+    # tell from "dropped: 13_x, 14_y" that the run no longer contains, say, the
+    # calibration figure or the PH diagnostic it was asked for. The step ids are
+    # internal; the declared outputs are the thing whose absence changes what
+    # the analysis means.
+    dropped_outputs = sorted(
+        {
+            str(output).strip()
+            for step in steps
+            if step.step_id in set(dropped_ids)
+            for output in (getattr(step, "expected_outputs", None) or ())
+            if str(output).strip()
+        }
+    )
     findings = [
         ValidationFinding(
             validator="planner",
@@ -2926,9 +2944,18 @@ def _cap_plan_preserving_figure_steps(
                 f"max_total_steps={cap}. Dropped: "
                 f"{', '.join(dropped_ids[:6])}"
                 + (" ..." if len(dropped_ids) > 6 else "")
+                + (
+                    "; the analysis no longer produces "
+                    + ", ".join(dropped_outputs[:6])
+                    + (" ..." if len(dropped_outputs) > 6 else "")
+                    if dropped_outputs
+                    else ""
+                )
             ),
             detail={
                 "dropped_step_ids": dropped_ids,
+                "dropped_expected_outputs": dropped_outputs,
+                "plan_truncated": True,
                 "cap": cap,
                 "protected_step_ids": sorted(protected_ids),
                 "preserved_figure_step_ids": preserved_step_ids,

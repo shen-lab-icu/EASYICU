@@ -64,7 +64,9 @@ def _deep_freeze(value: Any) -> Any:
     """
 
     if type(value) is dict:
-        return MappingProxyType({key: _deep_freeze(item) for key, item in value.items()})
+        return MappingProxyType(
+            {key: _deep_freeze(item) for key, item in value.items()}
+        )
     if type(value) is list:
         return tuple(_deep_freeze(item) for item in value)
     if type(value) is set:
@@ -104,7 +106,15 @@ class PipelineConfig:
 
     # --- core LLM / runtime ---------------------------------------------
     llm: Optional[Any] = None
-    timeout_seconds: float = 300.0
+    # One generated-code attempt. The former 300 s was below the honest cost of
+    # the analyses this agent is asked to run — a Cox fit plus PH diagnostics on
+    # a six-figure cohort, a bootstrap stability sweep, a propensity match — so
+    # those steps could never pass on this path however the script was written.
+    # Timeouts are now terminal (see execution/failure_classification.py), which
+    # removes the retry multiplication that used to spend the whole repair
+    # budget re-running the same overlong computation; per-step worst-case wall
+    # clock is lower at 900 s once than it was at 300 s repeated.
+    timeout_seconds: float = 900.0
     # Registered deterministic standards can execute a planner-owned workload
     # (for example, a fixed resampling design) that is intentionally much
     # longer than one generated-code attempt. Keep that bounded workload on a
@@ -160,12 +170,22 @@ class PipelineConfig:
     max_step_llm_repair_attempts: int = 2
     # Real coder/concept-audit provider attempts share one crash-safe budget,
     # including initial generation, transport/fallback retries, compatibility
-    # repair, patch, and full-rewrite fallback. Seven supports the normal
-    # fail-closed semantic path: generation + three digest-bound audits + two
-    # minimal patches + one Analyzer call. Successful first-pass steps do not
-    # spend the additional headroom. Full rewrites and transport retries still
-    # consume the same monotonic stop-loss rather than receiving a hidden budget.
-    max_step_provider_calls: int = 7
+    # repair, patch, and full-rewrite fallback. Successful first-pass steps do
+    # not spend the headroom. Full rewrites and transport retries still consume
+    # the same monotonic stop-loss rather than receiving a hidden budget.
+    #
+    # The floor is the sum of what the step is entitled to spend:
+    #   1 generation
+    # + max_code_repair_attempts       (3)
+    # + max_step_llm_repair_attempts   (2)
+    # + 1 reserved final concept audit, when the LLM concept audit is enabled
+    #     (execution/phase.py reserves the last call for that category)
+    #   = 7
+    # At exactly 7 the step is entitled to spend every call it is granted, so a
+    # single structured-retry on a malformed response silently costs a repair
+    # attempt instead of costing headroom. Two spare calls keep transport noise
+    # from being charged to the science.
+    max_step_provider_calls: int = 9
     enable_deterministic_code_fallback: bool = False
     enable_deterministic_planner_fallback: bool = False
     enable_deterministic_runner_repair: bool = True
@@ -230,11 +250,20 @@ class PipelineConfig:
     # Hard cap on plan size after any replanner revision. The replanner
     # can still revise existing steps in place; it just may not push the
     # total count above this. Set to 0 / None to disable (legacy behaviour).
-    # Default of 12 covers probe + cohort summary + 2-3 primary models +
-    # 2-3 sensitivities + figure + interpretation. Pilot run 20260515 saw
-    # the planner expand a simple SOFA-2 association to 30 steps with 13
-    # revisions before being killed at step 20; this cap prevents that.
-    max_total_steps: int = 12
+    # Pilot run 20260515 saw the planner expand a simple SOFA-2 association to
+    # 30 steps with 13 revisions before being killed at step 20; this cap is
+    # the guard against that, and 16 is still far below where that run went.
+    #
+    # It was 12, which covered probe + cohort summary + 2-3 primary models +
+    # 2-3 sensitivities + figure + interpretation — an association task. It did
+    # not cover the harder families: a task declaring four required products
+    # (prediction, survival, causal, trajectory each do) also needs cohort
+    # definition, missingness, the primary model and robustness before those
+    # four, and truncation is silent — it drops steps with a warning and the
+    # run still completes and still scores. A cap that binds in normal
+    # operation quietly shrinks the science instead of reporting a limit, so
+    # the guard is set where only a runaway reaches it.
+    max_total_steps: int = 16
     # --- replanning convergence guards (2026-06-11) ---------------------
     # The replanner runs after the probe and after every clean step. A
     # verbose model can return cosmetically-different but substantively
