@@ -153,10 +153,43 @@ class ExperienceRecord:
 _TOKEN_RE = re.compile(r"[a-z0-9_]+")
 _STOPWORDS = frozenset(
     {
-        "a", "an", "and", "are", "as", "at", "be", "by", "for", "from",
-        "has", "have", "in", "is", "it", "its", "of", "on", "or", "that",
-        "the", "to", "was", "were", "will", "with", "we", "this", "these",
-        "those", "do", "does", "what", "which", "who", "how", "why",
+        "a",
+        "an",
+        "and",
+        "are",
+        "as",
+        "at",
+        "be",
+        "by",
+        "for",
+        "from",
+        "has",
+        "have",
+        "in",
+        "is",
+        "it",
+        "its",
+        "of",
+        "on",
+        "or",
+        "that",
+        "the",
+        "to",
+        "was",
+        "were",
+        "will",
+        "with",
+        "we",
+        "this",
+        "these",
+        "those",
+        "do",
+        "does",
+        "what",
+        "which",
+        "who",
+        "how",
+        "why",
     }
 )
 
@@ -260,8 +293,13 @@ class ExperienceBank:
                     continue
                 records.append(ExperienceRecord.from_dict(payload))
         except OSError as exc:
-            logger.warning("experience-bank %s: read failed: %s", self.path, exc)
-            return
+            # Returning here left ``self._records`` at its previous value while
+            # the file on disk was never read. The next ``add()`` would then
+            # rewrite the whole file from that stale in-memory state, silently
+            # discarding whatever the unreadable file actually contained.
+            raise ExperienceBankCorruptError(
+                f"experience bank {self.path} could not be read: {exc}"
+            ) from exc
         self._records = records
         self.corrupt_lines = corrupt
 
@@ -300,10 +338,7 @@ class ExperienceBank:
                     "that would drop them permanently"
                 )
             for existing in self._records:
-                if (
-                    existing.kind == record.kind
-                    and existing.summary == record.summary
-                ):
+                if existing.kind == record.kind and existing.summary == record.summary:
                     existing.produced_at = record.produced_at or existing.produced_at
                     existing.producer_run_id = (
                         record.producer_run_id or existing.producer_run_id
@@ -339,7 +374,21 @@ class ExperienceBank:
         ranking. Matching the same database adds a small fixed boost
         (0.1) so a cross-database match never outranks a same-database
         match with similar lexical overlap.
+
+        Raises :class:`ExperienceBankCorruptError` when the file held lines
+        that could not be parsed. Serving the parseable remainder looks
+        harmless — nothing crashes — but this output *steers the Planner*, and
+        a silently truncated bank is an unprovable planning input: neither the
+        run nor a reviewer can tell whether the record that would have changed
+        the plan was one of the unreadable ones. The caller decides whether to
+        continue without a bank; it must not continue with a partial one.
         """
+        if self.corrupt_lines:
+            raise ExperienceBankCorruptError(
+                f"experience bank {self.path} has {self.corrupt_lines} "
+                "unparseable line(s); refusing to serve a partial bank as a "
+                "planning input"
+            )
         scored: List[Tuple[ExperienceRecord, float]] = []
         with self._lock:
             corpus = list(self._records)
