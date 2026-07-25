@@ -241,6 +241,7 @@ def write_provider_config(
         _model_env_names(provider_text)[0]: model,
     }
     if base_url:
+        validate_provider_base_url(base_url)
         entries[_base_url_env_names(provider_text)[0]] = base_url
     max_tokens = str(max_tokens or "").strip()
     if max_tokens:
@@ -315,6 +316,9 @@ def _load_external_credentials(
     if not base_url:
         base_url = _default_base_url(provider)
     else:
+        # Re-checked here, not only where the UI writes it: the env file is an
+        # ordinary file, and this is the last point before the key is sent.
+        validate_provider_base_url(base_url)
         base_url = _chat_completions_url(base_url)
     model_name, model = _first_env(env, _model_env_names(provider))
     attempted = {
@@ -395,6 +399,95 @@ def _api_key_env_names(provider: str) -> List[str]:
     if normalized == "custom":
         return ["EASYICU_LLM_API_KEY"]
     return [f"{_env_token(normalized)}_API_KEY", "EASYICU_LLM_API_KEY"]
+
+
+#: Hosts that answer with cloud instance credentials rather than with an LLM.
+_METADATA_HOSTNAMES = frozenset(
+    {
+        "metadata",
+        "metadata.google.internal",
+        "metadata.goog",
+        "instance-data",
+    }
+)
+
+
+def validate_provider_base_url(base_url: str) -> str:
+    """Refuse a provider URL this host should not send an API key to.
+
+    The configured base URL is where the ``Authorization: Bearer <key>``
+    header goes, and the request is issued by the server, from inside the
+    network the server sits in. An unchecked value therefore buys two things
+    at once: an SSRF probe into whatever the host can reach, and delivery of
+    the operator's key to an address of the caller's choosing. ``requests``
+    strips the auth header across a host change, so the redirect risk here is
+    reach rather than credentials — redirects are refused anyway, because a
+    destination that was checked and a destination that is contacted should be
+    the same one.
+
+    Plaintext ``http`` is allowed only to loopback, which is how the local
+    model proxies used for benchmarking are addressed.
+
+    What this deliberately does not claim: resolving a name here does not bind
+    it for later. A name that answers publicly now and privately at request
+    time is not caught by this check alone, which is why it runs again when
+    credentials are loaded.
+    """
+
+    import ipaddress
+    import socket
+    from urllib.parse import urlsplit
+
+    text = str(base_url or "").strip()
+    if not text:
+        raise ProviderAdapterError(
+            {"error": "external_provider_base_url_required", "secrets_returned": False}
+        )
+    parsed = urlsplit(text)
+
+    def _refuse(reason: str) -> None:
+        raise ProviderAdapterError(
+            {
+                "error": "external_provider_base_url_rejected",
+                "reason": reason,
+                "secrets_returned": False,
+            }
+        )
+
+    if parsed.scheme not in {"http", "https"}:
+        _refuse("scheme_not_http")
+    if parsed.username or parsed.password:
+        _refuse("credentials_in_url")
+    if parsed.query or parsed.fragment:
+        _refuse("query_or_fragment_in_url")
+    host = (parsed.hostname or "").strip()
+    if not host:
+        _refuse("no_host")
+    if host.lower() in _METADATA_HOSTNAMES:
+        _refuse("metadata_host")
+
+    try:
+        resolved = socket.getaddrinfo(
+            host, parsed.port or None, proto=socket.IPPROTO_TCP
+        )
+    except OSError:
+        _refuse("host_does_not_resolve")
+        return text  # pragma: no cover - _refuse always raises
+    addresses = {ipaddress.ip_address(info[4][0]) for info in resolved}
+    if not addresses:
+        _refuse("host_does_not_resolve")
+
+    loopback_only = all(address.is_loopback for address in addresses)
+    for address in addresses:
+        if address.is_loopback:
+            continue
+        if address.is_link_local or address.is_reserved or address.is_multicast:
+            _refuse("link_local_or_reserved_address")
+        if address.is_private:
+            _refuse("private_address")
+    if parsed.scheme == "http" and not loopback_only:
+        _refuse("plaintext_to_non_loopback")
+    return text
 
 
 def _base_url_env_names(provider: str) -> List[str]:
@@ -592,7 +685,23 @@ def _post_chat_completion(
     import requests
 
     safe_request = {k: v for k, v in request.items() if k != "easyicu_policy"}
-    response = requests.post(url, json=safe_request, headers=headers, timeout=timeout)
+    # No redirects: the address that was checked must be the address that is
+    # contacted. A 3xx would otherwise move the request to a host nothing
+    # validated, which is the whole point of validating it.
+    response = requests.post(
+        url,
+        json=safe_request,
+        headers=headers,
+        timeout=timeout,
+        allow_redirects=False,
+    )
+    if response.is_redirect or response.is_permanent_redirect:
+        raise ProviderAdapterError(
+            {
+                "error": "external_provider_redirect_refused",
+                "status_code": response.status_code,
+            }
+        )
     response.raise_for_status()
     data = response.json()
     if not isinstance(data, dict):
