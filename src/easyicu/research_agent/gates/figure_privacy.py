@@ -14,12 +14,21 @@ producer:
   glyphs (necessary, not sufficient);
 * every source artefact the figure was drawn from is resolvable, readable and
   inspectable — an artefact the host cannot open cannot be cleared;
+* every source artefact still hashes to the digest it was registered under, so
+  the clearance is about the bytes that were actually inspected;
 * no source artefact exposes a subject identifier or an event timestamp, the
   two column families that make a mark per-patient in the first place;
+* no source artefact *value* is identifier-shaped, whatever its column is
+  called — a ``label, predicted`` table holding ``patient_30042318`` per row
+  passes every name-level check ever written;
 * no source artefact declares a group/stratum count below the small-cell
   floor;
 * no text the contract renders into the image (titles, claims, notes) carries
   an identifier-shaped token.
+
+Findings never quote the offending value: the reasons are written into the
+figure's evidence metadata and into a receipt a reviewer reads, so echoing an
+identifier there would move it out of the artefact and into the audit trail.
 
 Anything this audit cannot establish is reported as ``aggregate_only=False``
 with the reason, and the egress gate then refuses the upload. That is the
@@ -40,6 +49,8 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Set
+
+from ..authority.evidence_store import sha256_of_file
 
 #: Minimum size for any group/stratum count a source artefact declares.
 MIN_DISCLOSED_GROUP_SIZE = 20
@@ -107,19 +118,34 @@ GROUP_SIZE_KEYS = frozenset(
     }
 )
 
+#: Keys/columns whose value is a magnitude, not an identity. A cohort total or
+#: a measurement count legitimately runs to six or more digits, so these are
+#: exempt from the identifier-token scan (they are still checked for small
+#: cells, which is the opposite direction).
+_MAGNITUDE_NAME_RE = re.compile(
+    r"(?:^|_)(?:count|n|num|number|rows|size|total|totals|sum|denominator)$",
+    re.IGNORECASE,
+)
+
 #: Suffixes this audit knows how to open. Anything else is uninspectable and
 #: therefore uncleared.
 INSPECTABLE_SUFFIXES = frozenset({".json", ".csv", ".tsv", ".parquet"})
 
-#: A run of digits long enough to be a record identifier rather than a year,
-#: a count or a p-value.
-_IDENTIFIER_TOKEN_RE = re.compile(r"(?<!\d)\d{6,}(?!\d)")
+#: A run of digits long enough to be a record identifier rather than a year, a
+#: count or a p-value. The leading ``[\d.]`` exclusion keeps ``0.000001`` and
+#: the tail of a long decimal from reading as an identifier.
+_IDENTIFIER_TOKEN_RE = re.compile(r"(?<![\d.])\d{6,}(?!\d)")
 
 _MAX_JSON_NODES = 20_000
 
 #: Row cap for the delimited-file scan. A figure source is a summary table, so
 #: this is generous; exceeding it is reported rather than silently ignored.
 _MAX_SCANNED_ROWS = 50_000
+
+#: Cap on how many distinct value-level findings one artefact reports. The
+#: reason list is evidence a human reads; one leaking column would otherwise
+#: produce 50,000 identical lines.
+_MAX_VALUE_FINDINGS = 5
 
 
 @dataclass
@@ -150,21 +176,45 @@ class FigurePrivacyAudit:
             metadata["aggregate_only_reason"] = "; ".join(self.reasons) or "unproven"
         return metadata
 
+    @property
+    def verified_source_sha256(self) -> Dict[str, str]:
+        """Digest of each source *as this audit read it*, not as registered.
+
+        The egress gate re-checks this against the store at upload time: a
+        clearance is only about the bytes that were inspected.
+        """
+
+        return {
+            str(entry.get("evidence_id") or ""): str(entry.get("sha256_verified") or "")
+            for entry in self.inspected_sources
+            if entry.get("sha256_verified")
+        }
+
     def as_receipt(self) -> Dict[str, Any]:
         return {
-            "schema": "easyicu.figure_privacy_audit/1",
+            "schema": FIGURE_PRIVACY_RECEIPT_SCHEMA,
             "audit_version": FIGURE_PRIVACY_AUDIT_VERSION,
             "figure_id": self.figure_id,
             "aggregate_only": self.aggregate_only,
             "reasons": list(self.reasons),
             "panel_roles": sorted(set(self.panel_roles)),
             "inspected_sources": list(self.inspected_sources),
+            "source_sha256": self.verified_source_sha256,
             "mark_count_verified": self.mark_count_verified,
             "min_disclosed_group_size": MIN_DISCLOSED_GROUP_SIZE,
         }
 
 
-FIGURE_PRIVACY_AUDIT_VERSION = "1.0.0"
+#: Bumped whenever what the audit actually proves changes. 1.1.0 added
+#: value-level scanning (Parquet/CSV/JSON cells, not just names) and source
+#: re-hashing; the egress gate refuses a clearance produced by an audit version
+#: it does not know, so an older receipt cannot authorize under the new rules.
+FIGURE_PRIVACY_AUDIT_VERSION = "1.1.0"
+
+FIGURE_PRIVACY_RECEIPT_SCHEMA = "easyicu.figure_privacy_audit/2"
+
+#: Audit versions whose clearance the egress gate will still honour.
+TRUSTED_AUDIT_VERSIONS = frozenset({FIGURE_PRIVACY_AUDIT_VERSION})
 
 
 def _is_identifier_name(name: str) -> bool:
@@ -207,56 +257,123 @@ def _column_findings(columns: Sequence[str]) -> List[str]:
     return reasons
 
 
-def _small_cell_findings(pairs: Sequence[tuple]) -> List[str]:
-    """``pairs`` is (key, value); flag declared group sizes below the floor."""
+def _is_magnitude_name(name: str) -> bool:
+    lowered = str(name).strip().lower()
+    if lowered in GROUP_SIZE_KEYS:
+        return True
+    return bool(_MAGNITUDE_NAME_RE.search(lowered))
 
-    small: List[str] = []
-    for key, value in pairs:
-        if str(key).strip().lower() not in GROUP_SIZE_KEYS:
-            continue
-        try:
-            count = int(value)
-        except (TypeError, ValueError):
-            continue
-        if 0 < count < MIN_DISCLOSED_GROUP_SIZE:
-            small.append(f"{key}={count}")
-    if small:
-        return [
-            f"declared group size(s) below {MIN_DISCLOSED_GROUP_SIZE}: "
-            + ", ".join(sorted(small))
-        ]
-    return []
+
+def _mask_identifier_token(token: str) -> str:
+    """Describe an identifier-shaped token without reproducing it.
+
+    The reasons this audit returns are written into the figure's evidence
+    metadata and into a receipt a reviewer reads. Echoing the offending value
+    there would move the identifier out of the artefact and into the audit
+    trail — the audit would leak exactly what it exists to catch.
+    """
+
+    return f"<{len(str(token))}-digit token>"
+
+
+class _ValueScanner:
+    """Streaming scan of ``(name, value)`` cells, bounded by column count.
+
+    Column names alone clear a file that says ``label,predicted`` and then
+    writes ``patient_30042318`` into every row. The name of the column is the
+    producer's choice; the digits in the cell are the disclosure. Scanning is
+    incremental rather than list-building because a source table may legally
+    reach the row cap and materialising every cell would cost more memory than
+    the figure it is clearing.
+    """
+
+    def __init__(self) -> None:
+        self.small_cells: Set[str] = set()
+        self.identifier_hits: Dict[str, int] = {}
+        self.cells_scanned = 0
+
+    def add(self, name: Any, value: Any) -> None:
+        self.cells_scanned += 1
+        lowered = str(name).strip().lower()
+        if lowered in GROUP_SIZE_KEYS:
+            try:
+                count = int(value)
+            except (TypeError, ValueError):
+                count = None
+            if count is not None and 0 < count < MIN_DISCLOSED_GROUP_SIZE:
+                self.small_cells.add(f"{name}={count}")
+            return
+        if value is None or isinstance(value, bool):
+            return
+        if _is_magnitude_name(lowered):
+            return
+        if isinstance(value, float):
+            # A float is a measurement or an estimate. Identifiers are stored
+            # as integers or strings; scanning floats would flag long sums and
+            # high-precision statistics for no gain.
+            return
+        if _IDENTIFIER_TOKEN_RE.search(str(value)):
+            column = str(name)
+            self.identifier_hits[column] = self.identifier_hits.get(column, 0) + 1
+
+    def add_rows(self, header: Sequence[Any], row: Sequence[Any]) -> None:
+        for name, value in zip(header, row):
+            self.add(name, value)
+
+    def reasons(self) -> List[str]:
+        found: List[str] = []
+        if self.small_cells:
+            found.append(
+                f"declared group size(s) below {MIN_DISCLOSED_GROUP_SIZE}: "
+                + ", ".join(sorted(self.small_cells))
+            )
+        if self.identifier_hits:
+            named = sorted(self.identifier_hits.items())[:_MAX_VALUE_FINDINGS]
+            found.append(
+                "identifier-shaped value(s) in "
+                + ", ".join(f"{column} ({count} cell(s))" for column, count in named)
+            )
+        return found
 
 
 def _inspect_json(path: Path) -> Dict[str, Any]:
     payload = json.loads(path.read_text(encoding="utf-8"))
     names: Set[str] = set()
-    pairs: List[tuple] = []
-    stack: List[Any] = [payload]
+    scanner = _ValueScanner()
+    # The stack carries the key each node was reached under, so a list inherits
+    # its parent's name: ``{"labels": ["patient 30042318"]}`` is a disclosure
+    # by ``labels``, and its elements have no name of their own.
+    stack: List[tuple] = [("<root>", payload)]
     nodes = 0
     truncated = False
     while stack:
-        node = stack.pop()
+        key, node = stack.pop()
         nodes += 1
         if nodes > _MAX_JSON_NODES:
             truncated = True
             break
         if isinstance(node, Mapping):
-            for key, value in node.items():
-                names.add(str(key))
-                pairs.append((key, value))
-                stack.append(value)
+            for child_key, value in node.items():
+                names.add(str(child_key))
+                stack.append((child_key, value))
         elif isinstance(node, (list, tuple)):
-            stack.extend(node)
-    reasons = _column_findings(sorted(names)) + _small_cell_findings(pairs)
+            stack.extend((key, item) for item in node)
+        else:
+            scanner.add(key, node)
+    reasons = _column_findings(sorted(names)) + scanner.reasons()
     if truncated:
         reasons.append(
             f"payload exceeds {_MAX_JSON_NODES} nodes and was not fully inspected"
         )
-    return {"keys_scanned": len(names), "reasons": reasons}
+    return {
+        "keys_scanned": len(names),
+        "values_scanned": scanner.cells_scanned,
+        "reasons": reasons,
+    }
 
 
 def _inspect_delimited(path: Path, *, delimiter: str) -> Dict[str, Any]:
+    scanner = _ValueScanner()
     with path.open("r", encoding="utf-8", newline="") as handle:
         reader = csv.reader(handle, delimiter=delimiter)
         try:
@@ -264,10 +381,6 @@ def _inspect_delimited(path: Path, *, delimiter: str) -> Dict[str, Any]:
         except StopIteration:
             return {"columns": [], "reasons": ["file is empty"]}
         reasons = _column_findings(header)
-        count_columns = [
-            name for name in header if str(name).strip().lower() in GROUP_SIZE_KEYS
-        ]
-        pairs: List[tuple] = []
         rows = 0
         truncated = False
         for row in reader:
@@ -275,29 +388,61 @@ def _inspect_delimited(path: Path, *, delimiter: str) -> Dict[str, Any]:
             if rows > _MAX_SCANNED_ROWS:
                 truncated = True
                 break
-            for name, value in zip(header, row):
-                if name in count_columns:
-                    pairs.append((name, value))
-    if truncated and count_columns:
-        # A count column exists but was not fully scanned, so a small cell may
-        # be hiding past the cap. Uncleared beats guessing.
+            scanner.add_rows(header, row)
+    if truncated:
+        # Every column is scanned for identifiers and small cells now, so any
+        # unscanned row may hide either. Uncleared beats guessing.
         reasons.append(
-            f"count column(s) {', '.join(count_columns)} exceed "
-            f"{_MAX_SCANNED_ROWS} rows and were not fully scanned"
+            f"file exceeds {_MAX_SCANNED_ROWS} rows and was not fully scanned"
         )
     return {
         "columns": list(header),
         "rows": rows,
-        "reasons": reasons + _small_cell_findings(pairs),
+        "values_scanned": scanner.cells_scanned,
+        "reasons": reasons + scanner.reasons(),
     }
 
 
 def _inspect_parquet(path: Path) -> Dict[str, Any]:
+    """Read the values, not only the schema.
+
+    A schema-only check clears a two-column ``label, predicted`` table whose
+    ``label`` column holds one stay identifier per row, and clears a
+    ``subgroup, n`` table whose ``n`` is 3. Both are per-subject disclosures
+    that the column names alone cannot show.
+    """
+
     import pyarrow.parquet as pq
 
-    schema = pq.read_schema(path)
-    columns = list(schema.names)
-    return {"columns": columns, "reasons": _column_findings(columns)}
+    handle = pq.ParquetFile(path)
+    columns = list(handle.schema_arrow.names)
+    reasons = _column_findings(columns)
+    scanner = _ValueScanner()
+    rows = 0
+    truncated = False
+    for batch in handle.iter_batches(batch_size=4096):
+        table = batch.to_pydict()
+        height = batch.num_rows
+        if rows + height > _MAX_SCANNED_ROWS:
+            height = max(0, _MAX_SCANNED_ROWS - rows)
+            truncated = True
+        for name in columns:
+            values = table.get(name) or ()
+            for value in list(values)[:height]:
+                scanner.add(name, value)
+        rows += height
+        if truncated:
+            break
+    if truncated:
+        reasons.append(
+            f"file exceeds {_MAX_SCANNED_ROWS} rows and was not fully scanned"
+        )
+    return {
+        "columns": columns,
+        "rows": rows,
+        "values_scanned": scanner.cells_scanned,
+        "reasons": reasons + scanner.reasons(),
+    }
 
 
 def _inspect_source(path: Path) -> Dict[str, Any]:
@@ -384,20 +529,43 @@ def audit_figure_privacy(
                 f"{evidence_id}: {reason}" for reason in entry["reasons"]
             )
             continue
-        entry["sha256"] = str(getattr(record, "sha256", "") or "")
+        registered_sha = str(getattr(record, "sha256", "") or "")
+        entry["sha256"] = registered_sha
         path = root / str(getattr(record, "relative_path", "") or "")
         entry["suffix"] = path.suffix.lower()
         if not path.is_file():
             entry["reasons"] = ["source artefact is missing from the run directory"]
         else:
-            entry.update(_inspect_source(path))
+            # Re-hash before reading. Without this the audit clears whatever
+            # is on disk *now* while the receipt names the digest registered
+            # earlier, so a source rewritten after registration would be
+            # inspected under someone else's provenance.
+            try:
+                actual_sha = sha256_of_file(path)
+            except OSError as exc:
+                actual_sha = ""
+                entry["reasons"] = [f"source artefact could not be hashed: {exc}"]
+            else:
+                entry["sha256_verified"] = actual_sha
+                if not registered_sha:
+                    entry["reasons"] = [
+                        "source evidence record carries no registered digest"
+                    ]
+                elif actual_sha != registered_sha:
+                    entry["reasons"] = [
+                        "source artefact no longer matches its registered digest "
+                        f"({actual_sha[:12]}… != {registered_sha[:12]}…)"
+                    ]
+                else:
+                    entry.update(_inspect_source(path))
         audit.inspected_sources.append(entry)
         audit.reasons.extend(f"{evidence_id}: {reason}" for reason in entry["reasons"])
 
     for text in _rendered_text(contract):
         for token in _IDENTIFIER_TOKEN_RE.findall(text):
             audit.reasons.append(
-                f"rendered text carries an identifier-shaped token: {token}"
+                "rendered text carries an identifier-shaped token: "
+                + _mask_identifier_token(token)
             )
 
     audit.aggregate_only = not audit.reasons
@@ -406,11 +574,13 @@ def audit_figure_privacy(
 
 __all__ = [
     "FIGURE_PRIVACY_AUDIT_VERSION",
+    "FIGURE_PRIVACY_RECEIPT_SCHEMA",
     "GROUP_SIZE_KEYS",
     "IDENTIFIER_COLUMNS",
     "INSPECTABLE_SUFFIXES",
     "MIN_DISCLOSED_GROUP_SIZE",
     "TIME_COLUMNS",
+    "TRUSTED_AUDIT_VERSIONS",
     "FigurePrivacyAudit",
     "audit_figure_privacy",
 ]
