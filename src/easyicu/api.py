@@ -29,6 +29,7 @@ easyicu 高层API - 提供简单易用的接口，同时支持高级自定义
 from typing import List, Union, Optional, Dict
 from pathlib import Path
 import os
+import threading
 import numpy as np
 import pandas as pd
 import logging
@@ -36,14 +37,23 @@ import logging
 from .base import BaseICULoader, get_default_data_path, detect_database_type
 from .resources import load_dictionary, load_data_sources as load_packaged_data_sources
 from .config import DATABASE_ID_CONFIG, load_data_sources as load_user_data_sources
-from .databases.profiles import get_database_profile
+from .databases.profiles import get_database_profile, public_database_keys
+from .table.duration import (
+    get_dur_var_unit,
+    resolve_dur_var_hours,
+    set_dur_var_unit,
+)
 from .concept.catalog import CONCEPT_GROUPS_INTERNAL
 
 logger = logging.getLogger(__name__)
 
-# 全局加载器实例，用于复用初始化开销
+# 全局加载器实例，用于复用初始化开销。
+# `_LOADER_LOCK` 保护 check-then-create-then-return 这一整段：没有它时，两个线程
+# 分别请求 miiv 与 eicu 会互相覆盖 `_global_loader`，先进入的线程 return 到的可能
+# 是另一个数据库的 loader（错误的 ID 列、错误的表、被污染的缓存）。
 _global_loader = None
 _loader_config = None
+_LOADER_LOCK = threading.RLock()
 
 
 def _normalize_patient_ids_for_db(database_name: str, patient_ids):
@@ -55,12 +65,27 @@ def _normalize_patient_ids_for_db(database_name: str, patient_ids):
 
 
 def _database_profile_or_default(database_name: str):
-    """Resolve database metadata while preserving the legacy MIIV fallback."""
+    """Resolve database metadata, defaulting to MIIV only when unspecified.
+
+    A *named* database that does not resolve is an error, not a reason to fall
+    back: silently handing back the MIIV profile for ``"mimic3"`` or
+    ``"eicu_crd"`` applies MIMIC-IV's ``stay_id`` column to another database and
+    yields an empty or wrong cohort with no diagnostic.
+    """
+
+    if database_name is None or not str(database_name).strip():
+        return get_database_profile("miiv")
 
     try:
         return get_database_profile(database_name)
-    except KeyError:
-        return get_database_profile("miiv")
+    except KeyError as exc:
+        try:
+            supported = ", ".join(sorted(public_database_keys()))
+        except Exception:  # pragma: no cover - registry unavailable
+            supported = "miiv, eicu, aumc, hirid, sicdb, miii"
+        raise ValueError(
+            f"Unsupported database {database_name!r}. Supported: {supported}"
+        ) from exc
 
 
 def _patient_filter_values(patient_ids):
@@ -74,6 +99,43 @@ def _patient_filter_values(patient_ids):
     else:
         values = patient_ids
     return list(values)
+
+
+#: Chunk size used for every SOFA-family auto-chunked extraction, on every
+#: host. Fixed rather than memory-tiered: chunk size is an execution parameter
+#: that must not change a clinical score.
+SOFA_FIXED_CHUNK_SIZE = 2000
+
+#: Hard ceiling on the points one window may expand to. A correct hourly
+#: window over a month-long stay stays far below this; blowing past it means
+#: the duration was misread (wrong unit, nanoseconds, corrupt row) and we fail
+#: loudly instead of allocating until the process dies.
+MAX_WINDOW_EXPANSION_POINTS = 10_000
+
+
+class WindowExpansionError(ValueError):
+    """Raised when one win_tbl row expands to an implausible number of points."""
+
+
+def _guard_window_expansion(
+    emitted: int,
+    *,
+    concept_name: str,
+    duration: float,
+    unit: str,
+    row: dict,
+) -> None:
+    """Fail closed when a single window expands past the plausible ceiling."""
+
+    if emitted <= MAX_WINDOW_EXPANSION_POINTS:
+        return
+    raise WindowExpansionError(
+        f"concept {concept_name!r}: one window expanded past "
+        f"{MAX_WINDOW_EXPANSION_POINTS} points (duration={duration} {unit}). "
+        "This almost always means dur_var was read in the wrong unit — declare "
+        "it at the producer with set_dur_var_unit(). Offending row: "
+        + repr({k: v for k, v in row.items() if k != concept_name})
+    )
 
 
 def _expand_public_numeric_win_tbl_output(
@@ -160,7 +222,16 @@ def _expand_public_numeric_win_tbl_output(
                 continue
             end = start + duration
             current = start
+            emitted = 0
             while current <= end + epsilon:
+                emitted += 1
+                _guard_window_expansion(
+                    emitted,
+                    concept_name=concept_name,
+                    duration=duration.total_seconds() / 3600.0,
+                    unit="hours",
+                    row=row_dict,
+                )
                 expanded_rows.append(
                     {
                         **{col: row_dict[col] for col in id_columns},
@@ -175,32 +246,21 @@ def _expand_public_numeric_win_tbl_output(
         if work.empty:
             return result
 
-        # 🔧 FIX: dur_var may be pd.Timedelta (set by ts_to_win_tbl for datetime indices).
-        # After time alignment, the index becomes numeric (hours) but dur_var stays as Timedelta.
-        # pd.to_numeric on Timedelta returns nanoseconds → wildly wrong duration → infinite loop.
-        if pd.api.types.is_timedelta64_dtype(work["dur_var"]):
-            # Convert Timedelta to minutes (the standard ricu unit for dur_var)
-            dur_numeric = work["dur_var"].dt.total_seconds().div(60.0).fillna(0.0)
-        else:
-            dur_numeric = pd.to_numeric(work["dur_var"], errors="coerce").fillna(0.0)
         interval_hours = interval_td.total_seconds() / 3600.0
         if interval_hours <= 0:
             interval_hours = 1.0
 
-        # 兼容多库 win_tbl：有的 `dur_var` 是分钟（如 eICU medication），有的是小时
-        # （如 HiRID grp_mount_to_rate 之后的 `givenat` + `dur_var`）。
-        dur_sample = dur_numeric.loc[work.index].dropna()
-        duration_is_hours = False
-        if not dur_sample.empty:
-            q95 = float(dur_sample.quantile(0.95))
-            median = float(dur_sample.median())
-            duration_is_hours = q95 <= 48.0 and median <= 24.0
-
-        duration_hours = (
-            dur_numeric.loc[work.index]
-            if duration_is_hours
-            else (dur_numeric.loc[work.index] / 60.0)
-        )
+        # 多库 win_tbl 的 `dur_var` 单位不同（eICU medication 是分钟，HiRID
+        # grp_mount_to_rate 之后是小时）。单位由产出端显式声明并随 frame 传下来，
+        # 只有在没有声明时才退回旧的分布猜测（届时 resolve_dur_var_hours 会告警）。
+        # A timedelta64 dur_var is self-describing and needs no declaration;
+        # a numeric one is read from whichever frame still carries the producer's
+        # declaration.
+        dur_frame = work[["dur_var"]].copy()
+        declared = get_dur_var_unit(result) or get_dur_var_unit(work)
+        if declared and not pd.api.types.is_timedelta64_dtype(dur_frame["dur_var"]):
+            set_dur_var_unit(dur_frame, declared)
+        duration_hours = resolve_dur_var_hours(dur_frame, concept=concept_name)
         epsilon = 1e-9
 
         for row, duration_hour in zip(work.itertuples(index=False), duration_hours):
@@ -210,7 +270,16 @@ def _expand_public_numeric_win_tbl_output(
                 continue
             end = start + max(float(duration_hour), 0.0)
             current = float(start)
+            emitted = 0
             while current <= end + epsilon:
+                emitted += 1
+                _guard_window_expansion(
+                    emitted,
+                    concept_name=concept_name,
+                    duration=float(duration_hour),
+                    unit="hours",
+                    row=row_dict,
+                )
                 expanded_rows.append(
                     {
                         **{col: row_dict[col] for col in id_columns},
@@ -355,22 +424,30 @@ def _count_patient_ids_fast(
         conn.close()
 
 
+def _release_loader(loader) -> None:
+    """Drop a loader's caches so its memory is reclaimed promptly."""
+
+    if loader is None:
+        return
+    if hasattr(loader, "clear_cache"):
+        loader.clear_cache()
+        return
+    # 清理加载器内部缓存
+    if hasattr(loader, "concept_resolver"):
+        loader.concept_resolver.clear()
+    for attr in ("datasource", "data_source"):
+        data_source = getattr(loader, attr, None)
+        if data_source is not None and hasattr(data_source, "clear"):
+            data_source.clear()
+
+
 def clear_global_loader():
     """清除全局加载器，强制下一次调用重新创建"""
     global _global_loader, _loader_config
-    if _global_loader is not None:
-        if hasattr(_global_loader, "clear_cache"):
-            _global_loader.clear_cache()
-        else:
-            # 清理加载器内部缓存
-            if hasattr(_global_loader, "concept_resolver"):
-                _global_loader.concept_resolver.clear()
-            for attr in ("datasource", "data_source"):
-                data_source = getattr(_global_loader, attr, None)
-                if data_source is not None and hasattr(data_source, "clear"):
-                    data_source.clear()
-    _global_loader = None
-    _loader_config = None
+    with _LOADER_LOCK:
+        _release_loader(_global_loader)
+        _global_loader = None
+        _loader_config = None
 
 
 from contextlib import contextmanager
@@ -650,16 +727,29 @@ def _get_global_loader(
         frozenset(config_kwargs.items()),
     )
 
-    if _global_loader is None or _loader_config != current_config:
-        _global_loader = BaseICULoader(
-            database=database,
-            data_path=data_path,
-            dict_path=dict_path,
-            **kwargs,
-        )
-        _loader_config = current_config
+    # Hold the lock across check → create → publish → read so a concurrent
+    # caller for a different database can never observe (or be handed) a loader
+    # that does not match the config it asked for.
+    with _LOADER_LOCK:
+        if _global_loader is None or _loader_config != current_config:
+            previous = _global_loader
+            loader = BaseICULoader(
+                database=database,
+                data_path=data_path,
+                dict_path=dict_path,
+                **kwargs,
+            )
+            _global_loader = loader
+            _loader_config = current_config
+            if previous is not None and previous is not loader:
+                _release_loader(previous)
 
-    return _global_loader
+        if _loader_config != current_config:  # pragma: no cover - invariant
+            raise RuntimeError(
+                "global loader config drifted while the lock was held; refusing "
+                "to hand back a loader for a different database"
+            )
+        return _global_loader
 
 
 def _get_smart_workers(num_concepts: int, num_patients: Optional[int] = None) -> tuple:
@@ -731,10 +821,11 @@ def _get_auto_chunk_strategy(
     """Return an auto-tuned chunk strategy for heavy large-scale extraction.
 
     The policy balances throughput and memory while preserving deterministic
-    score-window expansion for clinical scores. SOFA-family concepts currently
-    stay on the validated 2000-stay chunk profile even when more memory is
-    available, because larger chunks can change large-cohort window expansion
-    results.
+    score-window expansion for clinical scores. SOFA-family concepts stay on the
+    validated ``SOFA_FIXED_CHUNK_SIZE`` profile regardless of how much memory is
+    available, because chunk size can change large-cohort window expansion
+    results — tiering it by free RAM would make the same cohort score
+    differently on different machines.
     """
     if not _is_low_memory_chunk_candidate(
         concepts_list,
@@ -759,12 +850,24 @@ def _get_auto_chunk_strategy(
 
     if "EASYICU_AUTO_CHUNK_SIZE" in os.environ:
         auto_chunk_size = max(250, int(os.getenv("EASYICU_AUTO_CHUNK_SIZE", "1000")))
-        if normalized.intersection(sofa_heavy_concepts) and auto_chunk_size > 2000:
+        if (
+            normalized.intersection(sofa_heavy_concepts)
+            and auto_chunk_size > SOFA_FIXED_CHUNK_SIZE
+        ):
             logger.warning(
-                "Capping SOFA auto chunk size at 2000 because larger chunks can "
-                "change SOFA window expansion results in current large-cohort mode."
+                "Capping SOFA auto chunk size at %d because larger chunks can "
+                "change SOFA window expansion results in current large-cohort mode.",
+                SOFA_FIXED_CHUNK_SIZE,
             )
-            auto_chunk_size = 2000
+            auto_chunk_size = SOFA_FIXED_CHUNK_SIZE
+        elif normalized.intersection(sofa_heavy_concepts):
+            logger.warning(
+                "EASYICU_AUTO_CHUNK_SIZE=%d overrides the fixed SOFA chunk "
+                "profile (%d). SOFA window expansion is not yet proven "
+                "partition-invariant, so results may not match a default run.",
+                auto_chunk_size,
+                SOFA_FIXED_CHUNK_SIZE,
+            )
     elif normalized.intersection(sepsis_heavy_concepts):
         # 复合 sepsis 链路更依赖批次数带来的并行度；过大 chunk 会明显拖慢速度
         auto_chunk_size = 1000
@@ -776,14 +879,12 @@ def _get_auto_chunk_strategy(
         else:
             auto_chunk_size = 1000
     elif normalized.intersection(sofa_heavy_concepts):
-        if available_memory_mb >= 10 * 1024:
-            auto_chunk_size = 2000
-        elif available_memory_mb >= 6 * 1024:
-            auto_chunk_size = 2000
-        elif available_memory_mb >= 3 * 1024:
-            auto_chunk_size = 2000
-        else:
-            auto_chunk_size = 1000
+        # Deliberately NOT memory-tiered. Chunk size can still change SOFA
+        # window-expansion results, so letting free RAM pick it would make the
+        # same cohort on the same data produce different scores on a laptop and
+        # on a workstation. A low-memory host must opt into a smaller chunk
+        # explicitly via EASYICU_AUTO_CHUNK_SIZE and own that choice.
+        auto_chunk_size = SOFA_FIXED_CHUNK_SIZE
     elif available_memory_mb >= 10 * 1024:
         auto_chunk_size = 8000
     elif available_memory_mb >= 6 * 1024:
@@ -881,6 +982,7 @@ def load_concepts(
     batch_size: Optional[int] = None,  # 🆕 分批处理大小（默认30000，适合12GB内存）
     memory_efficient: bool = False,  # 🆕 内存优化模式（压缩数据类型）
     require_bounded_sample: bool = False,
+    allow_unbounded_fallback: bool = False,
     **kwargs,
 ) -> Union[pd.DataFrame, Dict[str, pd.DataFrame]]:
     """
@@ -937,6 +1039,9 @@ def load_concepts(
         max_patients: 自动采样的患者上限
         require_bounded_sample: 若为 True，则在 max_patients 采样失败时立即报错，
             不允许回退到全库加载。适用于 Web 等必须硬性有界的调用路径。
+        allow_unbounded_fallback: 默认 False —— 传了 max_patients 却采样失败时直接
+            报错，不会把「取 100 例预览」悄悄变成全库提取。确实想在采样失败时
+            读全库的调用方需显式传 True。
         sample_strategy: 取子集时的采样策略。默认 'random'(seeded, 可复现, 代表性);
             ricu fixture parity 需显式传 'sorted'。见 _sample_patient_ids 文档。
         limit: max_patients 的别名
@@ -1130,10 +1235,24 @@ def load_concepts(
         patient_ids = _sample_patient_ids(
             loader, effective_max_patients, verbose, sample_strategy=sample_strategy
         )
-        if require_bounded_sample and (patient_ids is None or len(patient_ids) == 0):
-            raise RuntimeError(
-                "Unable to build the required bounded patient sample; refusing "
-                "to fall back to an unbounded database load."
+        # An explicit max_patients is a bound the caller asked for. If sampling
+        # fails we must not quietly turn a 100-patient preview into a
+        # full-database extraction — that is a multi-hour job the caller never
+        # requested. Callers that genuinely want the whole database omit
+        # max_patients, or opt in via allow_unbounded_fallback.
+        if patient_ids is None or len(patient_ids) == 0:
+            if require_bounded_sample or not allow_unbounded_fallback:
+                raise RuntimeError(
+                    f"Unable to sample {effective_max_patients} patients from "
+                    f"{loader.database!r}; refusing to fall back to an unbounded "
+                    "database load. Pass allow_unbounded_fallback=True to load "
+                    "every patient instead."
+                )
+            logger.warning(
+                "Patient sampling failed for %r; allow_unbounded_fallback=True, "
+                "so loading ALL patients instead of %d.",
+                loader.database,
+                effective_max_patients,
             )
 
     # 规范化患者ID
