@@ -36,6 +36,7 @@ import ipaddress
 import json
 import os
 import queue
+import re
 import secrets
 import sys
 import threading
@@ -54,6 +55,10 @@ from .research_context.outbound import (
     project_outbound_records,
 )
 from .authority.evidence_store import EvidenceStore
+from .gates.figure_egress import (
+    RESERVED_PRIVACY_METADATA_KEYS,
+    TRUSTED_FIGURE_PRODUCERS,
+)
 from .providers.llm import OpenAIClient
 from .pipeline import ResearchAgentPipeline
 from .providers import ProviderConfigurationError, build_provider_client
@@ -62,6 +67,7 @@ from .audits.validators import CohortAuditor, ConceptUsageAuditor
 from .mcp_policy import (
     MCP_AUDIT_ROOT_ENV,
     MCP_PATIENT_DATA_TOKEN_ENV,
+    MIN_NON_MISSING_FOR_COLUMN_STATS,
     SCOPE_BIND_EVIDENCE,
     SCOPE_METADATA,
     SCOPE_READ_INTERNAL_CONTEXT,
@@ -348,11 +354,63 @@ _SAFE_FINDING_DETAIL_KEYS = (
 )
 
 
+#: Keys whose integer value is a cohort/cell count. Below the column-stats
+#: floor these are reported as a bound, exactly as column stats are — an exact
+#: small count is the same disclosure whichever field carries it.
+_COUNT_DETAIL_KEYS = frozenset({"duplicate_count"})
+
+#: A run of digits long enough to be a record identifier rather than a count.
+_ID_TOKEN_RE = re.compile(r"(?<![\d.])\d{6,}(?!\d)")
+
+_MAX_DETAIL_STRING = 300
+
+
+def _sanitize_detail_string(value: str) -> str:
+    """Strip the two things a free-text detail value reliably carries.
+
+    A key allow-list decides *which* fields cross the boundary; it says nothing
+    about what is inside them. ``reason`` and ``fallback`` are written by
+    validators as free text and have carried absolute paths (disclosing the
+    host layout and the operator's directory names) and identifier-shaped
+    tokens. Both are stripped here rather than trusted per-validator.
+    """
+
+    text = str(value)
+    # Absolute and home-relative paths: keep the leaf so the message still
+    # reads, drop the tree above it.
+    text = re.sub(r"(?:/|~/)[^\s'\"]{2,}", lambda m: Path(m.group(0)).name, text)
+    text = _ID_TOKEN_RE.sub("<id>", text)
+    if len(text) > _MAX_DETAIL_STRING:
+        text = text[:_MAX_DETAIL_STRING] + "…"
+    return text
+
+
+def _sanitize_detail_value(key: str, value: Any) -> Any:
+    """Bound what a single allow-listed detail value may disclose."""
+
+    if isinstance(value, bool) or value is None:
+        return value
+    if key in _COUNT_DETAIL_KEYS and isinstance(value, int):
+        if value < MIN_NON_MISSING_FOR_COLUMN_STATS:
+            return f"<{MIN_NON_MISSING_FOR_COLUMN_STATS}"
+        return value
+    if isinstance(value, (int, float)):
+        return value
+    if isinstance(value, str):
+        return _sanitize_detail_string(value)
+    if isinstance(value, (list, tuple)):
+        return [_sanitize_detail_value(key, item) for item in value[:50]]
+    # A nested mapping is an unbounded shape the allow-list never reviewed.
+    return "<withheld>"
+
+
 def _safe_finding_payload(finding: Any) -> Dict[str, Any]:
     """Reduce one validation finding to its stable, PHI-free identity.
 
     ``message`` is dropped: it is an interpolated sentence and the place a
-    concrete value ("only 3 stays have lactate") most often ends up.
+    concrete value ("only 3 stays have lactate") most often ends up. The keys
+    that survive are additionally value-checked — an allow-listed key is not a
+    guarantee about what a validator wrote into it.
     """
 
     raw = finding if isinstance(finding, Mapping) else finding.model_dump(mode="json")
@@ -362,7 +420,9 @@ def _safe_finding_payload(finding: Any) -> Dict[str, Any]:
     detail = raw.get("detail")
     if isinstance(detail, Mapping):
         projected = {
-            key: detail[key] for key in _SAFE_FINDING_DETAIL_KEYS if key in detail
+            key: _sanitize_detail_value(key, detail[key])
+            for key in _SAFE_FINDING_DETAIL_KEYS
+            if key in detail
         }
         if projected:
             payload["detail"] = projected
@@ -692,6 +752,29 @@ def _tool_bind_evidence(args: Dict[str, Any]) -> Dict[str, Any]:
     if metadata is not None and not isinstance(metadata, dict):
         return {"error": "metadata must be an object when provided"}
 
+    # The figure-egress gate reads its authorization out of evidence metadata.
+    # An external caller that can write those keys can clear its own image to
+    # leave the host, which is the whole gate. Same for impersonating the
+    # in-process producer the gate trusts.
+    reserved = sorted(set(metadata or {}) & RESERVED_PRIVACY_METADATA_KEYS)
+    if reserved:
+        return {
+            "error": (
+                "metadata keys "
+                + ", ".join(reserved)
+                + " are owned by the host privacy audit and cannot be set by an "
+                "external caller"
+            )
+        }
+    producer = str(args.get("producer") or "mcp_external_agent")
+    if producer in TRUSTED_FIGURE_PRODUCERS:
+        return {
+            "error": (
+                f"producer {producer!r} is an in-process host producer and "
+                "cannot be claimed through the MCP evidence tool"
+            )
+        }
+
     store = EvidenceStore(workdir)
     common = {
         "kind": kind,
@@ -700,7 +783,7 @@ def _tool_bind_evidence(args: Dict[str, Any]) -> Dict[str, Any]:
         "inputs": inputs,
         "evidence_id": str(evidence_id) if evidence_id else None,
         "aliases": aliases,
-        "producer": str(args.get("producer") or "mcp_external_agent"),
+        "producer": producer,
         "generation_mode": str(args.get("generation_mode") or "external"),
         "metadata": dict(metadata or {}),
     }
