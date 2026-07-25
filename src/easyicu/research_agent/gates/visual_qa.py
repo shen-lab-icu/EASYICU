@@ -35,6 +35,8 @@ from ..providers.factory import (
 )
 from ..schema import ValidationFinding
 from .figure_egress import (
+    TRANSPORT_COMPLETED,
+    TRANSPORT_FAILED,
     FigureEgressError,
     FigureEgressPolicy,
     authorize_figure_upload,
@@ -641,6 +643,14 @@ class VLMVisualQAAdapter:
         self.temperature = float(temperature)
         self.egress_policy = egress_policy
 
+    def _close_transport(
+        self, entries: Sequence[Dict[str, str]], outcome: str
+    ) -> None:
+        policy = self.egress_policy
+        if policy is None or not entries:
+            return
+        policy.record_transport_outcome(entries, outcome)
+
     def audit(self, *, figure_paths: Sequence[Path]) -> List[ValidationFinding]:
         paths = [Path(p) for p in figure_paths if Path(p).exists()]
         if not paths:
@@ -648,12 +658,13 @@ class VLMVisualQAAdapter:
         prompt = self._prompt(paths)
         findings: List[ValidationFinding] = []
         send_images = hasattr(self.llm, "complete_with_images")
+        authorized: List[Dict[str, str]] = []
         if send_images:
             # Provider authorization answers "may this client reach that URL".
             # It does not answer "may these image bytes leave the machine",
             # which is a different question with a different default.
             try:
-                authorize_figure_upload(
+                authorized = authorize_figure_upload(
                     paths,
                     policy=self.egress_policy,
                     destination=provider_transport_destination(self.llm),
@@ -673,13 +684,20 @@ class VLMVisualQAAdapter:
                 )
         try:
             if send_images:
-                raw = authorized_complete_with_images(
-                    self.llm,
-                    prompt=prompt,
-                    image_paths=paths,
-                    max_tokens=self.max_tokens,
-                    temperature=self.temperature,
-                )
+                # The gate cleared these bytes; whether they reached the
+                # provider is a separate fact and is recorded as one.
+                try:
+                    raw = authorized_complete_with_images(
+                        self.llm,
+                        prompt=prompt,
+                        image_paths=paths,
+                        max_tokens=self.max_tokens,
+                        temperature=self.temperature,
+                    )
+                except BaseException:
+                    self._close_transport(authorized, TRANSPORT_FAILED)
+                    raise
+                self._close_transport(authorized, TRANSPORT_COMPLETED)
             else:
                 raw = authorized_complete(
                     self.llm,
