@@ -1060,16 +1060,120 @@ def _claim_identity(claim: NumericClaim) -> str:
     return f"{claim.step_id}:{claim.source_field}@{claim.evidence_id}"
 
 
+_CITED_EVIDENCE_RE = re.compile(r"\{evidence:(?P<id>[^}]+)\}")
+
+
+def _cited_evidence_ids(context: str) -> frozenset[str]:
+    """Return the evidence ids this sentence explicitly cites."""
+
+    return frozenset(
+        match.group("id").strip()
+        for match in _CITED_EVIDENCE_RE.finditer(context or "")
+        if match.group("id").strip()
+    )
+
+
+def _evidence_lineage(evidence: EvidenceStore) -> Dict[str, frozenset[str]]:
+    """Map each evidence id to itself plus its declared ancestor ids.
+
+    A sentence citing a step's summary legitimately prints values the summary
+    derived from that step's own table, so lineage — not identity — is the
+    right scope. Lineage is *declared* at registration time, which is why it
+    can be trusted here: an unrelated step cannot add itself to it after the
+    fact.
+    """
+
+    direct: Dict[str, set[str]] = {}
+    for record in evidence.records():
+        parents = set(record.inputs or ())
+        if record.script_evidence_id:
+            parents.add(record.script_evidence_id)
+        direct[record.evidence_id] = parents
+
+    resolved: Dict[str, frozenset[str]] = {}
+
+    def _walk(evidence_id: str, seen: frozenset[str]) -> frozenset[str]:
+        if evidence_id in resolved:
+            return resolved[evidence_id]
+        if evidence_id in seen:  # defensive: a registration cycle
+            return frozenset({evidence_id})
+        ancestors = {evidence_id}
+        for parent in direct.get(evidence_id, ()):  # noqa: SIM118
+            ancestors |= _walk(parent, seen | {evidence_id})
+        answer = frozenset(ancestors)
+        resolved[evidence_id] = answer
+        return answer
+
+    for evidence_id in direct:
+        _walk(evidence_id, frozenset())
+    # A sentence may cite a registered alias rather than the canonical id.
+    # Without the alias keys the citation would look unresolvable and scoping
+    # would silently fall back to match-any.
+    for alias, evidence_id in getattr(evidence, "_aliases", {}).items():
+        if alias not in resolved and evidence_id in resolved:
+            resolved[str(alias)] = resolved[evidence_id]
+    return resolved
+
+
+def _restrict_to_cited_evidence(
+    candidates: Sequence[tuple[NumericClaim, float]],
+    *,
+    cited: frozenset[str],
+    lineage: Mapping[str, frozenset[str]],
+) -> list[tuple[NumericClaim, float]]:
+    """Keep only claims the sentence's own citation can vouch for.
+
+    Without this the binder answers "does this number exist anywhere in the
+    run?" A sentence reading ``the primary model achieved an AUROC of 0.85
+    {evidence:primary_model}`` would happily bind 0.85 to the *sensitivity*
+    step that actually produced it, and the numeric auditor — which also
+    matched across all steps — would agree. The manuscript then carries a real,
+    registered, correctly-hashed number attached to the wrong model.
+    """
+
+    # Only citations that resolve to a registered record can scope anything.
+    # An unresolved placeholder is a different failure with its own finding;
+    # treating it as a scope would untrace every number in the sentence and
+    # bury the real cause.
+    resolvable = frozenset(item for item in cited if item in lineage)
+    if not resolvable:
+        return list(candidates)
+    # Union of each cited record with its declared ancestors. The direction
+    # matters: citing a derived summary vouches for the table it was computed
+    # from, but citing that table does not vouch for every later record that
+    # happened to consume it.
+    in_scope: frozenset[str] = frozenset().union(
+        *(lineage.get(item, frozenset({item})) for item in resolvable)
+    )
+    return [
+        (claim, distance)
+        for claim, distance in candidates
+        if claim.evidence_id in in_scope
+    ]
+
+
 def _select_numeric_claim(
     *,
     candidates: Sequence[tuple[NumericClaim, float]],
     context: str,
     previous_step_id: Optional[str],
+    lineage: Optional[Mapping[str, frozenset[str]]] = None,
 ) -> tuple[Optional[NumericClaim], bool]:
     """Return ``(claim, ambiguous)`` for one manuscript numeric literal."""
 
     if not candidates:
         return None, False
+
+    cited = _cited_evidence_ids(context)
+    if cited and lineage:
+        scoped = _restrict_to_cited_evidence(candidates, cited=cited, lineage=lineage)
+        if not scoped:
+            # The sentence names its source and no candidate belongs to it.
+            # Binding the value anyway would attach a foreign step's number to
+            # this claim, so it stays untraced.
+            return None, True
+        candidates = scoped
+
     if len(candidates) == 1:
         return candidates[0][0], False
 
@@ -1228,6 +1332,7 @@ def bind_numeric_values(
         else None
     )
 
+    lineage = _evidence_lineage(evidence)
     skip_spans = _spans_to_skip(manuscript)
     binding_map: Dict[str, NumericClaim] = {}
     untraced: List[str] = []
@@ -1278,6 +1383,7 @@ def bind_numeric_values(
             candidates=candidates,
             context=context,
             previous_step_id=previous_step_id,
+            lineage=lineage,
         )
         if claim is None:
             untraced.append(value)

@@ -23,10 +23,26 @@ no callers outside this module.
 from __future__ import annotations
 
 import re
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from ..authority.runtime_artifacts import current_successful_step_records
 from ..schema import ValidationFinding
+
+
+_AUROC_SUMMARY_KEYS = (
+    "auroc",
+    "statistic:auroc",
+    "auc",
+    "statistic:auc",
+    "held_out_auroc",
+    "statistic:held_out_auroc",
+    "cv_auroc",
+    "statistic:cv_auroc",
+    "cv_auroc_mean",
+    "statistic:cv_auroc_mean",
+    "mean_auroc",
+    "auroc_mean",
+)
 
 
 def audit_manuscript_numeric_claims(
@@ -48,6 +64,13 @@ def audit_manuscript_numeric_claims(
         for item in current_records
         if isinstance(item.get("step_summary"), dict)
     ]
+    # Parallel to ``summaries``: which step each one came from, so a claim the
+    # binder resolved to a step can be compared against that step alone.
+    summary_owners = [
+        str(item.get("step_id") or "")
+        for item in current_records
+        if isinstance(item.get("step_summary"), dict)
+    ]
     if not summaries:
         return []
 
@@ -64,30 +87,37 @@ def audit_manuscript_numeric_claims(
     # arbitrarily-picked audit-step AUROC (0.812). Match-any preserves the
     # hallucination catch (0.766 rounded to 0.7 still matches nothing) while
     # killing that false positive.
-    registered_aurocs = _all_summary_scalars(
-        summaries,
-        (
-            "auroc",
-            "statistic:auroc",
-            "auc",
-            "statistic:auc",
-            "held_out_auroc",
-            "statistic:held_out_auroc",
-            "cv_auroc",
-            "statistic:cv_auroc",
-            "cv_auroc_mean",
-            "statistic:cv_auroc_mean",
-            "mean_auroc",
-            "auroc_mean",
-        ),
-    )
+    registered_aurocs = _all_summary_scalars(summaries, _AUROC_SUMMARY_KEYS)
     if registered_aurocs:
-        claimed_aurocs = _extract_metric_claims(bound_manuscript, r"\b(?:AUROC|AUC)\b")
-        for claimed in claimed_aurocs:
+        claimed_aurocs = _extract_metric_claims_with_footnote(
+            bound_manuscript, r"\b(?:AUROC|AUC)\b"
+        )
+        footnote_steps = footnote_step_ids(bound_manuscript)
+        for claimed, footnote_id in claimed_aurocs:
+            # Scope the comparison to the step the binder resolved this number
+            # to, when it resolved one. Match-any answers "is this AUROC
+            # registered anywhere in the run?", which passes a sentence that
+            # attributes the sensitivity model's 0.85 to the primary model.
+            # It stays as the fallback for an unbound claim, where there is no
+            # step coordinate to scope by — and where the untraced-numeric
+            # finding already fires.
+            step_id = footnote_steps.get(footnote_id or "")
+            scoped = (
+                _all_summary_scalars(
+                    [
+                        summary
+                        for summary, owner in zip(summaries, summary_owners)
+                        if owner == step_id
+                    ],
+                    _AUROC_SUMMARY_KEYS,
+                )
+                if step_id
+                else []
+            )
+            comparison = scoped or registered_aurocs
             # Allow ordinary two-decimal rounding (0.7769 -> 0.78), but not
-            # manuscript-friendly drift such as 0.82. Compare against the
-            # NEAREST registered value across every step.
-            nearest = min(registered_aurocs, key=lambda r: abs(claimed - r))
+            # manuscript-friendly drift such as 0.82.
+            nearest = min(comparison, key=lambda r: abs(claimed - r))
             if abs(claimed - nearest) > 0.015:
                 findings.append(
                     ValidationFinding(
@@ -95,13 +125,19 @@ def audit_manuscript_numeric_claims(
                         severity="error",
                         message=(
                             f"Manuscript AUROC claim {claimed:.3g} does not match "
-                            f"any registered AUROC (nearest {nearest:.3g})."
+                            + (
+                                f"the AUROC registered by step {step_id!r} "
+                                f"(nearest {nearest:.3g})."
+                                if scoped
+                                else f"any registered AUROC (nearest {nearest:.3g})."
+                            )
                         ),
                         detail={
                             "metric": "auroc",
                             "claimed": claimed,
                             "registered": nearest,
                             "registered_all": sorted(set(registered_aurocs)),
+                            "scoped_to_step": step_id if scoped else None,
                         },
                     )
                 )
@@ -277,8 +313,42 @@ def _strip_manuscript_noise(text: str) -> str:
     return clean
 
 
+_FOOTNOTE_DEFINITION_RE = re.compile(
+    r"^\[\^(?P<fid>[^\]]+)\]:\s*(?P<fields>.+)$", re.MULTILINE
+)
+
+
+def footnote_step_ids(bound_manuscript: str) -> Dict[str, str]:
+    """Map each numeric footnote id to the step that produced its value.
+
+    ``bind_numeric_values`` has already resolved every bound number to exactly
+    one registered claim and printed the owning step in the footnote
+    definition. Reading it back is what lets this auditor compare a claim
+    against *its own* step instead of against every step in the run.
+    """
+
+    mapping: Dict[str, str] = {}
+    for match in _FOOTNOTE_DEFINITION_RE.finditer(bound_manuscript or ""):
+        for entry in match.group("fields").split(";"):
+            name, _, value = entry.strip().partition("=")
+            if name.strip() == "step" and value.strip():
+                mapping[match.group("fid")] = value.strip()
+                break
+    return mapping
+
+
 def _extract_metric_claims(text: str, metric_pattern: str) -> List[float]:
-    claims: List[float] = []
+    return [
+        value for value, _ in _extract_metric_claims_with_footnote(text, metric_pattern)
+    ]
+
+
+def _extract_metric_claims_with_footnote(
+    text: str, metric_pattern: str
+) -> List[Tuple[float, Optional[str]]]:
+    """Metric claims plus the footnote id the binder attached, when any."""
+
+    claims: List[Tuple[float, Optional[str]]] = []
     clean_text = _strip_manuscript_noise(text)
     # Require a DECIMAL point: a real AUROC/Brier point estimate is always
     # reported with decimals (0.83, not 1). A bare integer near the metric word
@@ -286,7 +356,7 @@ def _extract_metric_claims(text: str, metric_pattern: str) -> List[float]:
     # reported metric — excluding it removes that whole false-positive class
     # while still catching an implausible "1.0"/"0.0" claim written with decimals.
     pattern = re.compile(
-        metric_pattern + r"([^0-9]{0,40})([01]\.\d+)",
+        metric_pattern + r"([^0-9]{0,40})([01]\.\d+)(?:\[\^(?P<fid>[^\]]+)\])?",
         flags=re.IGNORECASE,
     )
     for match in pattern.finditer(clean_text):
@@ -301,7 +371,7 @@ def _extract_metric_claims(text: str, metric_pattern: str) -> List[float]:
         except (TypeError, ValueError):
             continue
         if 0.0 <= value <= 1.0:
-            claims.append(value)
+            claims.append((value, match.group("fid")))
     return claims
 
 

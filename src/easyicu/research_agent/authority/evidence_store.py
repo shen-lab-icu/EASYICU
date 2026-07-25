@@ -506,6 +506,35 @@ _NUMERIC_LEAF_RE = re.compile(r"^[-+]?(?:\d+(?:\.\d+)?|\.\d+)(?:[eE][-+]?\d+)?$"
 # identifiers (SOFA-2), CI labels (95% CI), and chapter-section refs
 # (Section 4). When a manuscript truly needs to cite a two-digit count
 # it should embed it inside an explicit evidence placeholder.
+#: Nouns that make a preceding 1-2 digit integer a *count* rather than an
+#: identifier, version, section or level. Kept explicit: the risk of binding a
+#: number that is not a count is a wrong footnote, so the list only holds words
+#: that cannot follow a version or section number in normal manuscript prose.
+_COUNTED_NOUNS = (
+    "patients",
+    "stays",
+    "icu stays",
+    "admissions",
+    "encounters",
+    "subjects",
+    "participants",
+    "cases",
+    "controls",
+    "deaths",
+    "events",
+    "episodes",
+    "observations",
+    "records",
+    "individuals",
+    "centres",
+    "centers",
+    "sites",
+    "hospitals",
+)
+_COUNTED_NOUN_PATTERN = "|".join(
+    noun.replace(" ", r"\s+") for noun in sorted(_COUNTED_NOUNS, key=len, reverse=True)
+)
+
 _NUMERIC_IN_PROSE_RE = re.compile(
     r"(?<![A-Za-z_\d.])"  # avoid mid-identifier digits
     r"(?P<value>"
@@ -530,6 +559,29 @@ _NUMERIC_IN_PROSE_RE = re.compile(
     # *levels* ("95% CI", "90% confidence", "99% credible interval"), which
     # are labels, not claims.
     r"\d{1,2}%(?!\s*(?:CI\b|confidence|credible))"
+    r"|"  # --- counted short integer ---
+    # A 1-2 digit integer in an explicit counting context. Small subgroup
+    # sizes, death counts and event counts are exactly the numbers a reviewer
+    # checks and exactly the ones a writer is most likely to get wrong, so
+    # leaving every "the subgroup included 42 patients" unbound left a hole in
+    # value-level provenance. Binding is gated on the *phrase*, not the digits:
+    # either an explicit ``n = 42`` / ``n of 42``, or a count immediately
+    # followed by a counted noun. That excludes SOFA-2, Sepsis-3, Section 4,
+    # Figure 2, Table 1 and "95% CI" without needing to enumerate them.
+    r"(?<![A-Za-z_\d.])"
+    # Neither end of a written range ("8-12 events") is a count.
+    r"(?<![-–])"
+    r"(?:"
+    r"(?<=\bn\s=\s)\d{1,2}"
+    r"|"
+    r"(?<=\bn=)\d{1,2}"
+    r"|"
+    r"\d{1,2}(?=\s+(?:" + _COUNTED_NOUN_PATTERN + r")\b)"
+    r")"
+    # A short integer that opens a range ("8-12 events") is a bound, not a
+    # count. Scoped to this branch only: the general numeric form must keep
+    # matching both ends of "0.71-0.82".
+    r"(?!\s*[-–])"
     r")"
     r"(?![A-Za-z_\d]|\.\d)"  # not followed by identifier / decimal continuation
 )
