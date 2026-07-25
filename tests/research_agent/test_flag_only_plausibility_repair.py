@@ -1,0 +1,207 @@
+from __future__ import annotations
+
+from easyicu.research_agent.repair_registry import RepairClass, repair_metadata_for
+from easyicu.research_agent.repairs.reasons import RepairReason
+from easyicu.research_agent.repairs.source import deterministic_concept_audit_repair
+from easyicu.research_agent.schema import ValidationFinding
+
+
+def _finding(
+    *,
+    variable: str | list[str] = "age",
+    value_class: str = "finite_outside_plausibility_range",
+):
+    return ValidationFinding(
+        validator="llm_concept_auditor",
+        severity="error",
+        message="A flag-only plausibility range was used as an exclusion rule.",
+        detail={
+            "issue_code": "plausibility_range_exclusion_required",
+            "variable": variable,
+            "value_class": value_class,
+        },
+    )
+
+
+def _repair(code: str, finding: ValidationFinding):
+    return deterministic_concept_audit_repair(
+        code,
+        [finding.message],
+        repair_reasons=[RepairReason.SCIENTIFIC_SEMANTICS_VIOLATION],
+        repair_findings=[finding],
+    )
+
+
+def test_exact_flag_only_raise_pair_is_removed_without_changing_cohort_rule():
+    code = """
+age = strict_numeric(df["age"], "age")
+age_out_of_domain = (age < 0.0) | (age > 120.0)
+if bool(age_out_of_domain.any()):
+    raise ValueError("Age outside plausibility range")
+adult_mask = age >= 18.0
+"""
+
+    repaired, names = _repair(code, _finding())
+
+    assert names == ["flag_only_plausibility_range_retention_v1"]
+    assert "age_out_of_domain" not in repaired
+    assert "age >= 18.0" in repaired
+    assert "_easyicu_flag_only_plausibility_range_retained_v1" in repaired
+
+
+def test_repair_is_idempotent():
+    code = """
+age_out_of_domain = (age < 0.0) | (age > 120.0)
+if age_out_of_domain.any():
+    raise ValueError("Age outside plausibility range")
+next_step()
+"""
+    once, names = _repair(code, _finding())
+    twice, second_names = _repair(once, _finding())
+
+    assert names == ["flag_only_plausibility_range_retention_v1"]
+    assert twice == once
+    assert second_names == []
+
+
+def test_semantic_column_family_repairs_one_loop_local_range_guard():
+    code = """
+for column, values in numeric_columns.items():
+    nonfinite = values.notna() & ~np.isfinite(values)
+    if nonfinite.any():
+        raise ValueError("nonfinite")
+    out_of_domain = values.notna() & ((values < 0.0) | (values > 24.0))
+    if bool(out_of_domain.any()):
+        raise ValueError(f"{column} outside plausibility range")
+publish(values)
+"""
+
+    repaired, names = _repair(
+        code,
+        _finding(variable=["score_h0_6", "score_h6_12"]),
+    )
+
+    assert names == ["flag_only_plausibility_range_retention_v1"]
+    assert "out_of_domain" not in repaired
+    assert "nonfinite.any()" in repaired
+    assert "publish(values)" in repaired
+
+
+def test_semantic_column_family_does_not_choose_between_two_range_guards():
+    code = """
+first_bad = (first < 0.0) | (first > 10.0)
+if first_bad.any():
+    raise ValueError("first")
+second_bad = (second < 0.0) | (second > 10.0)
+if second_bad.any():
+    raise ValueError("second")
+"""
+
+    assert _repair(code, _finding(variable=["first", "second"])) == (code, [])
+
+
+def test_stale_single_variable_finding_does_not_block_current_grouped_repair():
+    code = """
+# _easyicu_flag_only_plausibility_range_retained_v1
+for column, values in numeric_columns.items():
+    out_of_domain = values.notna() & ((values < 0.0) | (values > 24.0))
+    if out_of_domain.any():
+        raise ValueError(f"{column} outside plausibility range")
+"""
+    findings = [
+        _finding(variable="age"),
+        _finding(variable=["score_h0_6", "score_h6_12"]),
+    ]
+
+    repaired, names = deterministic_concept_audit_repair(
+        code,
+        [finding.message for finding in findings],
+        repair_reasons=[RepairReason.SCIENTIFIC_SEMANTICS_VIOLATION],
+        repair_findings=findings,
+    )
+
+    assert names == ["flag_only_plausibility_range_retention_v1"]
+    assert "out_of_domain" not in repaired
+
+
+def test_wrong_value_class_or_variable_is_not_rewritten():
+    code = """
+age_out_of_domain = (age < 0.0) | (age > 120.0)
+if age_out_of_domain.any():
+    raise ValueError("Age outside strict domain")
+"""
+
+    assert _repair(code, _finding(value_class="strict_domain_violation")) == (code, [])
+    assert _repair(code, _finding(variable="lactate")) == (code, [])
+
+
+def test_mask_with_another_consumer_is_not_rewritten():
+    code = """
+age_out_of_domain = (age < 0.0) | (age > 120.0)
+audit["outlier_n"] = int(age_out_of_domain.sum())
+if age_out_of_domain.any():
+    raise ValueError("Age outside plausibility range")
+"""
+
+    assert _repair(code, _finding()) == (code, [])
+
+
+def test_flag_only_count_is_retained_while_terminal_rejection_is_removed():
+    code = """
+def fail(message):
+    raise RuntimeError(message)
+
+age_original = df["age"]
+age_numeric = pd.to_numeric(age_original, errors="coerce")
+age_out_of_domain_mask = (age_numeric < 0) | (age_numeric > 120)
+age_out_of_domain_n = int(age_out_of_domain_mask.sum())
+if age_out_of_domain_n > 0:
+    fail(f"age outside flag-only range: {age_out_of_domain_n}")
+retained_mask = age_numeric >= 18
+step_summary = {"out_of_domain_n": age_out_of_domain_n}
+"""
+
+    repaired, names = _repair(code, _finding(variable="age"))
+
+    assert names == ["flag_only_plausibility_range_retention_v1"]
+    assert "age_out_of_domain_mask =" in repaired
+    assert "age_out_of_domain_n = int(age_out_of_domain_mask.sum())" in repaired
+    assert '"out_of_domain_n": age_out_of_domain_n' in repaired
+    assert "retained_mask = age_numeric >= 18" in repaired
+    assert "if age_out_of_domain_n > 0" not in repaired
+    assert "_easyicu_flag_only_plausibility_range_retained_v1" in repaired
+
+
+def test_counted_range_guard_does_not_rewrite_a_filtering_mask():
+    code = """
+def fail(message):
+    raise RuntimeError(message)
+
+age_original = df["age"]
+age_numeric = pd.to_numeric(age_original, errors="coerce")
+age_out_of_domain_mask = (age_numeric < 0) | (age_numeric > 120)
+age_out_of_domain_n = int(age_out_of_domain_mask.sum())
+if age_out_of_domain_n > 0:
+    fail("outside flag-only range")
+analysis_cohort = df.loc[~age_out_of_domain_mask]
+"""
+
+    assert _repair(code, _finding(variable="age")) == (code, [])
+
+
+def test_guard_with_side_effect_is_not_rewritten():
+    code = """
+age_out_of_domain = (age < 0.0) | (age > 120.0)
+if age_out_of_domain.any():
+    audit["flag"] = True
+    raise ValueError("Age outside plausibility range")
+"""
+
+    assert _repair(code, _finding()) == (code, [])
+
+
+def test_repair_is_registered_as_structural():
+    metadata = repair_metadata_for("flag_only_plausibility_range_retention_v1")
+
+    assert metadata.repair_class is RepairClass.STRUCTURAL
+    assert metadata.classification_source == "exact"

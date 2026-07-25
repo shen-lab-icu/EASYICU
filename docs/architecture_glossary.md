@@ -22,8 +22,9 @@ Reviewer-facing claim: disease cohorts and variables are resolved through
 EasyICU concepts rather than free SQL, ICD-code shortcuts, or ad hoc
 column-name guessing.
 
-Code examples: `schema.py`, `context.py`, `concept_availability.py`,
-`temporal_semantics.py`, `case_contexts.py`.
+Code examples: `schema.py`, `research_context/builder.py`,
+`research_context/typed.py`, `concept_availability.py`,
+`research_context/temporal_semantics.py`, `case_plugins/contexts.py`.
 
 ## Layer 2: LLM Orchestration
 
@@ -31,12 +32,15 @@ Definition: LLM roles that choose the analysis shape, write code, repair
 failed steps, interpret outputs, and draft manuscript text.
 
 Includes: planner, replanner, coder, analyzer, writer, literature helper,
-and their prompts.
+their prompts, and the default-off Research Know-How Registry. The registry
+retrieves a bounded set of source-backed design candidates offline; cards do
+not acquire cohort, time-zero, exclusion, or estimand authority.
 
 Reviewer-facing claim: LLMs make bounded research-workflow decisions, but
 they do not directly create numeric results or rewrite ICU rules.
 
-Code examples: `agents.py`, `prompts.py`, `prompts/v1/`, `plan_utils.py`.
+Code examples: `agents/core.py`, `providers/prompts/`, `plan_utils.py`,
+`know_how/registry.py`, and `planning/preplan_know_how.py`.
 
 ## Layer 3: Safe Analytical Runtime
 
@@ -52,8 +56,10 @@ Reviewer-facing claim: generated analysis code is executed and checked by
 software gates. A failed or unsafe analysis path is demoted or blocked
 rather than trusted because an LLM said it was valid.
 
-Code examples: `pipeline_execute.py`, `code_repair.py`, `code_hygiene.py`,
-`audits/validators.py`, `visual_qa.py`, `causal_audit.py`.
+Code examples: `execution/phase.py`, `repairs/source.py`,
+`repairs/coordination.py`, `gates/preflight.py`, `execution/code_hygiene.py`,
+`audits/validators.py`, `gates/visual.py`, `review/causal_audit.py`,
+`review/methodological_rigor.py`.
 
 ## Layer 4: Evidence And Provenance
 
@@ -68,8 +74,8 @@ Reviewer-facing claim: every reported result is linked to a registered
 artifact or formula-derived numeric claim. In submission mode, untraced
 numbers fail the run.
 
-Code examples: `evidence.py`, `pipeline_writer_aux.py`,
-`manuscript_post.py`, `replication/envelope.py`.
+Code examples: `authority/evidence_store.py`, `reporting/writer_evidence.py`,
+`reporting/manuscript_post.py`, `replication/envelope.py`.
 
 ## Layer 5: Evaluation And Submission Scaffold
 
@@ -84,8 +90,8 @@ Reviewer-facing claim: the paper reports a versioned evaluation protocol,
 not a mutable leaderboard or a generic agent score.
 
 Code examples: `tools/run_research_agent_bench.py`,
-`baselines/REGISTRY.md`, `baselines/LOCK.json`, future
-`pipeline_profiles.py`.
+`evaluation/cross_model_panel.py`, `evaluation/tier2_jury.py`,
+`baselines/REGISTRY.md`, `baselines/LOCK.json`, `orchestration/profiles.py`.
 
 ## Naming Rules
 

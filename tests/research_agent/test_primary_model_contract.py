@@ -7,8 +7,8 @@ import pandas as pd
 import pytest
 
 from easyicu.research_agent.audits.validators import PrimaryModelContractValidator
-from easyicu.research_agent.contracts import ValidationFinding
-from easyicu.research_agent.pipeline_execute import _contract_repair_log
+from easyicu.research_agent.contracts.runtime import ValidationFinding
+from easyicu.research_agent.execution.phase import _contract_repair_log
 from easyicu.research_agent.schema import (
     AnalysisPlan,
     AnalysisStep,
@@ -122,8 +122,8 @@ def _contracts() -> list[dict]:
             "exposure_role": "primary",
             "analysis_role": "primary",
             "analysis_set": "source_aware",
-            "n": 5,
-            "event_n": 2,
+            "n": 3,
+            "event_n": 1,
         },
         {
             **shared,
@@ -311,6 +311,95 @@ def _issue_types(findings: list) -> set[str]:
 
 def test_primary_model_contract_accepts_separate_verified_models(tmp_path: Path):
     assert _audit(tmp_path, contracts=_contracts()) == []
+
+
+def test_primary_model_contract_accepts_planner_authorized_secondary_only_step(
+    tmp_path: Path,
+):
+    cohort_path, out_dir = _write_inputs(tmp_path)
+    contracts, requirements = _contracts_with_requirements()
+    contract = copy.deepcopy(contracts[2])
+    requirement = requirements[2]
+    coefficients = pd.read_csv(out_dir / "model_coefficients.csv")
+    coefficients.loc[coefficients["model_id"].eq(contract["model_id"])].to_csv(
+        out_dir / "model_coefficients.csv", index=False
+    )
+
+    findings = PrimaryModelContractValidator().audit(
+        step=_step(model_requirements=[requirement]),
+        step_summary={"model_contracts": [contract]},
+        context=_context(),
+        completed_step_records=_prior_records(),
+        out_dir=out_dir,
+        cohort_path=cohort_path,
+    )
+
+    assert findings == []
+
+
+def test_primary_step_rejects_secondary_only_model_roster_before_execution() -> None:
+    _contracts_unused, requirements = _contracts_with_requirements()
+
+    with pytest.raises(
+        ValueError,
+        match="primary adjusted-association step.*primary model requirement",
+    ):
+        AnalysisStep(
+            step_id="05_primary_association",
+            planned_analysis_role="primary",
+            intent="Estimate the primary adjusted association.",
+            method="adjusted_association_models",
+            expected_outputs=["table:adjusted_association_estimates"],
+            model_requirements=[requirements[2]],
+        )
+
+
+def test_primary_model_contract_rejects_primary_in_secondary_only_roster(
+    tmp_path: Path,
+):
+    contracts, requirements = _contracts_with_requirements()
+    secondary_contract = copy.deepcopy(contracts[2])
+    secondary_contract["analysis_role"] = "primary"
+
+    issues = _issue_types(
+        _audit(
+            tmp_path,
+            contracts=[secondary_contract],
+            step=_step(model_requirements=[requirements[2]]),
+        )
+    )
+
+    assert "model_requirement_field_mismatch" in issues
+    assert "unplanned_primary_model" in issues
+
+
+def test_secondary_only_contract_error_does_not_request_a_fake_primary(
+    tmp_path: Path,
+):
+    cohort_path, out_dir = _write_inputs(tmp_path)
+    contracts, requirements = _contracts_with_requirements()
+    contract = copy.deepcopy(contracts[2])
+    contract.pop("convergence_method")
+    contract.pop("optimizer_success")
+    coefficients = pd.read_csv(out_dir / "model_coefficients.csv")
+    coefficients.loc[coefficients["model_id"].eq(contract["model_id"])].to_csv(
+        out_dir / "model_coefficients.csv", index=False
+    )
+
+    findings = PrimaryModelContractValidator().audit(
+        step=_step(model_requirements=[requirements[2]]),
+        step_summary={"model_contracts": [contract]},
+        context=_context(),
+        completed_step_records=_prior_records(),
+        out_dir=out_dir,
+        cohort_path=cohort_path,
+    )
+
+    assert len(findings) == 1
+    assert "secondary-only roster" in findings[0].message
+    assert (
+        "keep exactly one context-declared primary exposure" not in findings[0].message
+    )
 
 
 @pytest.mark.parametrize("fit_status", ["not_fitted", "separation_no_estimate"])
@@ -608,7 +697,7 @@ def test_primary_model_contract_blocks_planner_requirement_field_drift(
 
 
 def test_plan_normalizer_preserves_typed_model_requirements() -> None:
-    from easyicu.research_agent.agents import _normalise_plan_payload
+    from easyicu.research_agent.agents.core import _normalise_plan_payload
 
     payload, dropped = _normalise_plan_payload(
         {
@@ -616,6 +705,7 @@ def test_plan_normalizer_preserves_typed_model_requirements() -> None:
             "steps": [
                 {
                     "step_id": "01_model",
+                    "planned_analysis_role": "primary",
                     "intent": "Fit the planner-selected model.",
                     "method": "adjusted_association_models",
                     "expected_outputs": ["table:adjusted_association_estimates"],
@@ -741,7 +831,7 @@ def test_primary_and_secondary_model_requirements_cannot_be_optional(
 
 
 def test_plan_signature_treats_model_requirement_change_as_substantive() -> None:
-    from easyicu.research_agent.pipeline_execute import _plan_signature
+    from easyicu.research_agent.execution.phase import _plan_signature
 
     _contracts_payload, requirements = _contracts_with_requirements()
     base = AnalysisPlan(
@@ -865,6 +955,30 @@ def test_planner_model_requirements_activate_without_context_exposure():
         )
         is True
     )
+
+
+def test_planner_primary_source_is_authoritative_operational_alias(
+    tmp_path: Path,
+):
+    cohort_path, out_dir = _write_inputs(tmp_path)
+    contracts = copy.deepcopy(_contracts())
+    requirements = _bind_standard_contracts_to_requirements(contracts)
+    context = _context().model_copy(
+        update={"primary_exposure": "clinical_laboratory_signal"}
+    )
+
+    findings = PrimaryModelContractValidator().audit(
+        step=_step(model_requirements=requirements),
+        step_summary={"model_contracts": contracts},
+        context=context,
+        completed_step_records=_prior_records(),
+        out_dir=out_dir,
+        cohort_path=cohort_path,
+    )
+
+    issues = _issue_types(findings)
+    assert "primary_exposure_mismatch" not in issues
+    assert "alternate_exposure_cannot_be_primary" not in issues
 
 
 def test_planner_model_requirements_do_not_activate_for_wrong_product_kind():
@@ -996,6 +1110,35 @@ def test_primary_model_contract_checks_denominators_and_fit_diagnostics(
     assert "separation_requires_penalized_fit_or_no_estimate" in issues
 
 
+def test_source_aware_drop_missing_policy_requires_observed_exposure(
+    tmp_path: Path,
+):
+    contracts = copy.deepcopy(_contracts())
+    target = next(
+        contract for contract in contracts if contract["model_id"] == "lab_source_aware"
+    )
+    target["n"] = 5
+    target["event_n"] = 2
+
+    findings = _audit(tmp_path, contracts=contracts)
+
+    target_issue = next(
+        issue
+        for finding in findings
+        for issue in (finding.detail or {}).get("issues", [])
+        if issue.get("model_id") == "lab_source_aware"
+        and issue.get("issue") == "model_denominator_or_event_mismatch"
+    )
+    assert target_issue == {
+        "model_id": "lab_source_aware",
+        "issue": "model_denominator_or_event_mismatch",
+        "expected_n": 3,
+        "expected_event_n": 1,
+        "reported_n": 5,
+        "reported_event_n": 2,
+    }
+
+
 def test_primary_model_contract_rejects_encoded_term_as_raw_source(
     tmp_path: Path,
 ):
@@ -1076,6 +1219,52 @@ def test_primary_model_contract_accepts_encoded_term_with_raw_source(
     assert "denominator_contract_unresolvable" not in issues
 
 
+def test_primary_model_contract_replays_derived_source_without_range_exclusion(
+    tmp_path: Path,
+):
+    cohort_path, out_dir = _write_inputs(tmp_path)
+    contracts = copy.deepcopy(_contracts())
+    target = next(
+        item for item in contracts if item["model_id"] == "organ_complete_case"
+    )
+    target.update(
+        {
+            "exposure_source": "organ_score_quartiles",
+            "exposure_expression": "qcut(organ_score, q=4)",
+            "n": 5,
+            "event_n": 2,
+        }
+    )
+    context = _context()
+    organ = next(item for item in context.variables if item.name == "organ_score")
+    organ.valid_range = (0.0, 3.0)
+
+    findings = PrimaryModelContractValidator().audit(
+        step=_step(),
+        step_summary={"model_contracts": contracts},
+        context=context,
+        completed_step_records=_prior_records(),
+        out_dir=out_dir,
+        cohort_path=cohort_path,
+    )
+
+    target_issues = [
+        issue
+        for finding in findings
+        for issue in (finding.detail or {}).get("issues", [])
+        if issue.get("model_id") == "organ_complete_case"
+    ]
+    assert "exposure_terms_do_not_match_model_source" not in {
+        issue.get("issue") for issue in target_issues
+    }
+    assert "denominator_contract_unresolvable" not in {
+        issue.get("issue") for issue in target_issues
+    }
+    assert "model_denominator_or_event_mismatch" not in {
+        issue.get("issue") for issue in target_issues
+    }
+
+
 def test_primary_model_contract_does_not_expand_legacy_simple_steps(
     tmp_path: Path,
 ):
@@ -1092,9 +1281,9 @@ def test_primary_model_contract_is_wired_into_all_contract_passes() -> None:
     import ast
     import inspect
 
-    from easyicu.research_agent import pipeline_execute
+    from easyicu.research_agent.execution import phase as pipeline_execute
 
-    def _direct_calls(function) -> list[ast.Call]:
+    def _audit_calls(function, validator_name: str) -> list[ast.Call]:
         tree = ast.parse(inspect.getsource(function))
         return [
             node
@@ -1103,23 +1292,49 @@ def test_primary_model_contract_is_wired_into_all_contract_passes() -> None:
             and isinstance(node.func, ast.Attribute)
             and node.func.attr == "audit"
             and isinstance(node.func.value, ast.Name)
-            and node.func.value.id == "primary_model_contract_validator"
+            and node.func.value.id == validator_name
         ]
 
-    early_calls = _direct_calls(pipeline_execute.run_execute_phase)
-    final_calls = _direct_calls(pipeline_execute._evaluate_final_deterministic_gates)
+    def _shared_gate_calls(function) -> list[ast.Call]:
+        tree = ast.parse(inspect.getsource(function))
+        return [
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "_step_deterministic_contract_findings"
+        ]
 
-    # The mutable execution loop owns one early repair gate. The extracted
-    # read-only evaluator owns the single final authority gate after all
-    # repairable output checks have passed.
+    # The early repair gate and the final authority gate now evaluate ONE shared
+    # deterministic contract sequence (dedup), so the primary-model contract
+    # validator is audited exactly once — inside that shared sequence — and it
+    # carries the cohort-integrity authority path there. For ordinary analysis
+    # steps this is the execution cohort; a cohort-producing step deliberately
+    # retains the full universe even when later development execution is sampled.
+    shared_audits = _audit_calls(
+        pipeline_execute._step_deterministic_contract_findings,
+        "primary_model_contract_validator",
+    )
+    assert len(shared_audits) == 1
+    shared_keywords = {kw.arg: kw.value for kw in shared_audits[0].keywords}
+    assert isinstance(shared_keywords.get("cohort_path"), ast.Name)
+    assert shared_keywords["cohort_path"].id == "integrity_universe_path"
+
+    # The mutable execution loop still owns one early repair gate and the
+    # extracted read-only evaluator owns the single final authority gate; each
+    # wires in the shared sequence and passes its already-resolved cohort path.
+    early_calls = _shared_gate_calls(pipeline_execute.run_execute_phase)
+    final_calls = _shared_gate_calls(
+        pipeline_execute._evaluate_final_deterministic_gates
+    )
     assert len(early_calls) == 1
     assert len(final_calls) == 1
     early_keywords = {keyword.arg: keyword.value for keyword in early_calls[0].keywords}
     final_keywords = {keyword.arg: keyword.value for keyword in final_calls[0].keywords}
-    assert isinstance(early_keywords.get("cohort_path"), ast.Name)
-    assert early_keywords["cohort_path"].id == "step_execution_cohort_path"
-    assert isinstance(final_keywords.get("cohort_path"), ast.Name)
-    assert final_keywords["cohort_path"].id == "execution_cohort_path"
+    assert isinstance(early_keywords.get("execution_cohort_path"), ast.Name)
+    assert early_keywords["execution_cohort_path"].id == "step_execution_cohort_path"
+    assert isinstance(final_keywords.get("execution_cohort_path"), ast.Name)
+    assert final_keywords["execution_cohort_path"].id == "execution_cohort_path"
 
 
 def test_primary_model_contract_rejects_noncanonical_machine_fields(
@@ -1722,6 +1937,7 @@ def test_coder_prompt_declares_primary_model_canonical_enums() -> None:
         / "src"
         / "easyicu"
         / "research_agent"
+        / "providers"
         / "prompts"
         / "v1"
         / "coder.txt"
@@ -1739,7 +1955,7 @@ def test_coder_prompt_declares_primary_model_canonical_enums() -> None:
 
 
 def test_planner_prompt_declares_typed_model_requirements() -> None:
-    from easyicu.research_agent.agents import _build_planner_user_prompt
+    from easyicu.research_agent.agents.core import _build_planner_user_prompt
 
     prompt = _build_planner_user_prompt(_context())
 
@@ -1757,6 +1973,7 @@ def test_replanner_preserves_requirements_without_cross_family_drift() -> None:
         / "src"
         / "easyicu"
         / "research_agent"
+        / "providers"
         / "prompts"
         / "v1"
         / "replanner.txt"

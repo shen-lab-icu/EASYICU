@@ -21,7 +21,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from easyicu.research_agent.cohort_schema import coerce_isfinite_safe_dtypes
+from easyicu.research_agent.cohort.schema import coerce_isfinite_safe_dtypes
 
 
 def _mixed_frame() -> pd.DataFrame:

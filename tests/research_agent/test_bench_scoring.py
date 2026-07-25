@@ -214,6 +214,8 @@ def test_external_protocol_adapter_preserves_structured_execution_and_rubric_fie
             "claim_scope": "capability_suite",
             "protocol_version": "protocol/1",
             "rubric_version": "rubric/1",
+            "id_columns": ["patient_stay_id"],
+            "notes": "Derive patient groups from the bound row identifier.",
         },
         key="structured_task",
         question="Estimate the declared structured association.",
@@ -227,6 +229,8 @@ def test_external_protocol_adapter_preserves_structured_execution_and_rubric_fie
     assert item.operational_exposure == "severity_signal_max"
     assert item.expected_step_substrings == ["cohort", "association"]
     assert item.expected_artifact_substrings == ["table_one", "effect_figure"]
+    assert item.id_columns == ["patient_stay_id"]
+    assert item.notes == "Derive patient groups from the bound row identifier."
     assert item.protocol_adapter["database"]["defaulted"] is False
     assert item.protocol_adapter["operational_exposure"] == {
         "value": "severity_signal_max",
@@ -731,11 +735,11 @@ def _write_audit_log(run_dir: Path, writer_passes: int) -> None:
     (run_dir / "audit_log.jsonl").write_text("\n".join(lines), encoding="utf-8")
 
 
-def test_gate_ladder_prefers_run_status_status(tmp_path: Path) -> None:
+def test_gate_ladder_does_not_trust_mutable_run_status(tmp_path: Path) -> None:
     from tools.run_research_agent_bench import _gate_ladder
 
     _write_run_status(tmp_path, "publication_ready")
-    assert _gate_ladder(tmp_path, {}) == "publication_ready"
+    assert _gate_ladder(tmp_path, {}) is None
 
 
 def test_gate_ladder_falls_back_to_readiness_booleans(tmp_path: Path) -> None:

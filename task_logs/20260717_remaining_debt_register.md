@@ -1,0 +1,98 @@
+# research_agent 架构总控板 / 剩余债务台账 — 当前单一执行视图
+
+> 更新：2026-07-19 03:00 EDT
+> 分支 / research-agent 生产基线：`refactor/agent-control-plane@00c962d`（packaged concept baseline `8e97d31`）
+> 当前策略：**实验继续冻结；先完成有边界的职责归包、过期实现审计和剩余循环依赖治理，再用冻结版本 fresh 重跑九个 A 任务，随后执行独立封存的 B/C 任务。**
+
+## 文档权威关系
+
+| 层 | 文件 | 只回答什么 |
+|---|---|---|
+| 当前状态 | `项目进度/agent/CURRENT.md` | 现在在哪个 commit、正在做什么、下一步和 blocker；这是日常唯一入口 |
+| **组件总控（本文件）** | `task_logs/20260717_remaining_debt_register.md` | 每个架构组件完成/部分/待做、验收证据和下一动作 |
+| 安全设计 | `task_logs/20260715_agent_freeze_refactor_safety_plan.md` | 规范化等价、单调 authority、职责边界、freeze 不变量 |
+| B6 实施设计 | `task_logs/20260718_b6_export_metadata_freeze_plan.md` | native export intake 与 typed metadata 的两个 freeze-blocker、边界和测试门 |
+| 历史设计细则 | `task_logs/20260716_agent_architecture_optimization_checklist.md` | rev.2 原始设计、测试矩阵和性能口径；**不再用于判断实时进度** |
+
+若上述文档冲突，按上表从上到下取最新状态；安全不变量不能被进度文档放松。
+
+## 当前量化快照
+
+| 指标 | 冻结基线 | 当前 `00c962d` | 变化 |
+|---|---:|---:|---:|
+| `_execute_one_step` 行数 | 6,694 | 6,057 | −637（−9.5%） |
+| `run_execute_phase` 行数 | 8,451 | 7,703 | −748（−8.9%） |
+| `pipeline_execute.py` 行数 | 14,631 | 11,129 | −3,502（−23.9%） |
+| `research_agent` 模块 / 顶层物理路径 | — | 295 / 160 | 160 中有 **65 个 exact module-object compatibility shim**、3 个 archive shim、92 个真实顶层实现；新增实现位于职责子包，顶层物理路径未增加 |
+| package / import edge | 8 / 674 | 20 / 822 | canonical 实现已按 authority/gate/execution/repair/planning/context/review/evaluation/provider/replication 等职责归包；自动 graph gate 约束 |
+| 潜在 import SCC / 循环模块 | 1 个・最大 103 / 103 | **0 / 0** | 原 23-module SCC、validator/replication SCC 及最终 pipeline↔execute↔publication-figure SCC 均已切除；0 literal dynamic import |
+| E3 Step02 性能验收 | 旧 6 calls / 373.5s | 1 call / 0 repair / 26.8s | active wall −92.8% |
+| fresh 九个 A 任务 | — | 未启动 | 架构与 release freeze 后执行 |
+| frozen B/C | — | 未封存、未启动 | 独立 owner 封存；A 关闭后依次打开 |
+
+`tools/arch_measure.py` + `tools/arch_baselines/pipeline_execute.json` 是 LOC/闭包的可重跑门；运行性能仍以真实 run receipt/audit log 为准。
+
+## 组件 scoreboard
+
+| 组件 / 工作流 | 状态 | 当前证据 | 下一动作 / 完成定义 |
+|---|---|---|---|
+| A1 失败分类 / provider 总账 / repair budget | **完成** | schema-v5 总账、attempt-owned accounting、typed RepairReason、E3 真实 6→1 call | 不扩 case-specific reason；只修真实通用漏洞 |
+| StepAuthorityCapsule / CheckpointAuthority | **完成** | content-addressed capsule、checkpoint 显式选择、resume/revalidation 回归 | 保持 checkpoint 唯一选择器；不得扫描“较新”候选 |
+| Evidence authority / success commit | **完成（当前边界）** | canonical `authority/registration.py` + EvidenceStore 严格快照 + `StepEvidenceCommit`；旧 `evidence_registration` 是同一 module object | 不扩大成第二套 current authority；未来 prepare/seal/commit 变化须单独事务审查 |
+| Visual GateEvaluator | **完成（职责子包）** | canonical `gates/visual.py`；typed `VisualGateResult/Decision`；旧路径同对象 alias | 保持 read-only；不得吸收 provider、repair 或 authority mutation |
+| Deterministic / figure contract gate | **完成（职责子包）** | canonical `gates/contract.py`；read-only findings；pre/post canonicalization 顺序锁 | 不得把会写文件的 preparation 混回只读 gate |
+| Concept gate / concept audit execution | **完成（职责子包）** | `gates/concept.py` + `execution/concept_audit.py`；policy 与 provider/cache/receipt 生命周期分离 | 保持两层分离；旧路径只作同对象 alias |
+| Figure contract preparation | **完成（职责子包）** | `execution/figure_preparation.py`；8 个塑形/规范化 helper | 只处理已授权 figure 产品，不选择科学设计 |
+| Publication figure execution | **完成（职责子包）** | `execution/publication_figure.py` + `SealedRendererState` | 保持 rendering-only 边界；旧路径同对象 alias |
+| RepairCoordinator | **完成限定职责** | `repair_coordination.py` 只承接 patch→可选 rewrite transport；事务/分类属于 provider ledger/A1 | 不把 gate/science 塞进 coordinator；名称按限定职责理解 |
+| Execution state | **完成（职责域值对象）** | `RunExecutionState`、`StepAttemptState`、`StepWorkerProgress`、`ConceptQuarantineState`、`SealedRendererState`；`75e6b88` 将最后 4 个 quarantine lifecycle 布尔量归入唯一 step-local state，独立对抗审阅 ACCEPT | 不造万能 state bag；plan/cohort/runner/runtime mutation 继续由有明确 authority 的 orchestrator 持有 |
+| StepExecutor / RunCoordinator | **完成（限定职责）** | `StepExecutor` 恰好执行一次已锁脚本并拥有 cleanup；`RunCoordinator` 只做 queue/stop/continue/replan transition application 与并发错误回传；120 项独立回归全绿 | 不把 PlanAuthority、gate、repair、evidence 或科学决策塞入协调器；剩余主体是必要顺序编排和维护债，不是 freeze blocker |
+| PlanAuthority | **完成（纯 candidate authority 边界）** | `authority/plan_authority.py` 用冻结 typed result 承接 completed-step snapshot、estimand/figure 保留、plan cap、robustness lock 投影、typed/trajectory/companion shaping 与 scientific no-op 判定；`e54f675` 独立对抗审阅 ACCEPT | provider 调用、revision/evidence 注册、cohort mutation、runner 重建、replan budget 继续由 orchestrator 单一持有；不得扩成第二个 Planner |
+| TypedBindingResolver | **完成（3/3）** | `authority/plan_scope.py` + `authority/typed_binding.py` 承接 scientific signature、lineage/binding/schema receipt/manifest/resume 与 resolver；`dfb76b6` 用单一 resolver 替换 step 内闭包，每次显式传当前 plan，旧路径 identity 不变 | 保持 evidence fail-close、exact unpublished ID/alias 边界和 Planner 科学所有权；不再为凑 LOC 继续切本职责 |
+| Planning / method registry | **完成（职责子包）** | `e79f491`：6 个 case-neutral planning/registry 实现（约 4,778 LOC）归入 lazy `planning/`；旧路径保持 exact alias | 新 planning 代码只走 canonical import；不得把题目特定要求放回 registry/global prompt |
+| ResearchContext / method gate | **完成（职责子包）** | `dd16bed`：typed context、builder、prompt scope 归入 lazy `research_context/`，方法兼容门归 `gates/method_compatibility.py`；863 项相关回归及 wheel/sdist smoke 全绿 | 保持 source-concept/伴随元数据和 4 KiB step-scoped authority；旧路径仅作 archive/public API 门牌 |
+| Scientific review / optional evaluation | **完成（职责子包）** | `c2df928`：causal/method review 归 `review/`，cross-model/Tier-2 adapters 归 lazy `evaluation/`；65 focused + 172 architecture/golden/meta 回归及 wheel alias smoke 全绿 | paper-specific Figure 2 scorer 仍只在 `benchmarks/`；installed engine 不反向依赖论文 evaluator |
+| 目录 / import cycle 治理 | **完成当前 freeze 边界** | graph 当前 295 modules / 160 top-level physical paths / 20 packages / 822 edges / **0 cyclic modules**；纯 planning/provider/replication-metric contracts 与 immutable execute host-services 已独立，旧对象 identity 保持；受控动态 archive/digest import 不属于静态 SCC | 维持 zero-SCC 自动门；不为降低文件数删除 replay/public shims，剩余大文件属于后续维护债而非本轮再搬家理由 |
+| Frozen evaluator/core authority | **冻结，不作普通搬迁** | `evaluation_scorecard.py`、`validity_signals.py`、`viability.py` 参与 Figure 2 v1/v2 scorer tree/SHA | 若需归包，必须新增 additive evaluator v3 并保留 v1/v2 字节与 authority；不得把普通整理伪装成评分语义不变 |
+| Obsolete/dead module audit | **完成首轮** | `docs/research_agent_module_inventory_20260719.md`；六通道审计后删除唯一整文件强候选 `projection.py` + 自身测试，并清除一个零调用函数/import；parked runners、compatibility shims、live optional paths均显式分类 | 后续删除须沿用六通道证据；parked runner 只作 deprecation/major-version 退休，不在普通整理中物理删 |
+| B2 canonical 跨-run memory | **完成** | `a9cb05c`；新 profile 显式 off，旧 profile canonical JSON 不变 | canonical 永不重开；非 canonical 才允许显式 opt-in |
+| B3 step 并发 | **关闭，无需实现** | canonical 三题因 replanning + primary cohort + typed deps 被正确强制串行 | 保留 serial-gate 契约；不拆安全守卫追求伪加速。跨库 replicate 另属非关键路径 |
+| B6 跨库 export / metadata 契约 | **完成（A + B 五步 5/5）** | `acc874c`/`1481f09` native intake；`7ee66fd`/`7e8c16f` projector；`987bdc5`/`7674814` sidecar；`7cc215e` typed cohort/trajectory authority；`f99e676` ResearchContext v2、4 KiB scoped facts、implementation/cache/resume drift gate。208 core + 207 prompt/meta + 244 resume/cache + 34 wiring + 28 meta/capability 全绿 | 冻结 shared engine；后续只修 freeze shards 发现的确定 fail-open/fail-closed 回归，不按题加规则 |
+| B7 dormant primary runners | **已达成，不物理删** | `_PRIMARY_DETERMINISTIC_RUNNERS` 空集 + registry lock | 投稿实验前不做化妆性删除；live `figures/*.py` 不得误删 |
+| B7-3 display labels | **后置独立变更** | 会改变 display contract、source SHA 和可见文字 | 单独审稿图合同变更；不得当“零风险清理”顺手做 |
+| B8 middleware/hooks | **待判定，当前不做** | empty middleware 只会增加抽象层 | 只有出现两个以上真实 hook consumer 才引入 |
+| Figure 2 9×3 taskbank | **协议已定义，任务未封存** | `docs/figure2_taskbank_9x3_protocol.md`：每族 A=开发、B=冻结验证、C=未开启确认；重复运行另算稳定性 | 独立 benchmark owner 封存 B/C exact authority；开发者已看过的候选不得冒充 held-out；现有 v1/v2 evaluator 不变，9×3 走 additive v3 |
+| fresh A tasks + frozen B/C | **待做** | shared engine 尚未 freeze；现有九份 typed binding 仍 blocked | 架构 freeze → fresh 九个 A 任务 → 冻结 B → 未开启 C；结果不得反向诱导 case-specific shared patch |
+
+## 接下来四个可验收 bundle
+
+1. **协议/退休收口**：给 parked runner 保持准确 deprecation 语义，设计 display-label/mock-example 与 evaluator-v3 的迁移边界；不把协议变化混进机械搬迁。
+2. **冻结门**：从最终结构 commit 串行跑完整分片回归 + meta/capability + capsule/resume/provider/evidence authority + clean sdist→wheel release archive + arch/zero-SCC graph gate，并锁定唯一 commit/profile/dictionary/model/prompt/rubric/retry policy。
+3. **实验**：fresh 跑九个 A 任务；随后按 `docs/figure2_taskbank_9x3_protocol.md` 打开独立封存的 B，再打开未开启的 C。重复运行稳定性单独报告。
+
+## 架构 freeze 的完成定义
+
+- Agent 继续拥有 exposure、outcome、cohort、method、estimand；确定性组件只执行/审计/渲染已锁定规格。
+- `pipeline_execute.py` 不再承载已识别的 gate/concept/figure 具体实现；canonical imports 不经旧 façade。
+- import graph 保持 **0 SCC / 0 cyclic modules**；`pipeline_execute` 与 publication figure consumer 不得反向 import `pipeline`，自动门必须常绿。
+- 旧 import 路径、sealed replay/public API 保持兼容；fresh run **不等于**可以删除 shim 或 legacy migration。
+- `test_meta_benchmark_spec.py`、capability drift、evidence authority、resume/revalidation、golden 全绿。
+- scoreboard 不得残留未解释的“部分完成”：要么完成职责边界，要么明确证明剩余逻辑是 orchestrator 必需胶水并写入契约测试。
+- 性能不回退：E3 Step02 仍为 1 call / 0 repair / active wall 约 26.8s 量级；架构整理不承诺再复制 93% 提速。
+- freeze 后 fresh 跑九个 A 任务；再跑独立封存的 B/C。meta lint 不能替代真实 held-out，全流程重复运行也不能替代任务级 generalization。
+
+## 硬约束 / 不要做
+
+- 不在 shared engine 加 H2/E2/E3、KDIGO、MIMIC 或九题特定路由/提示规则。
+- 不新增 primary deterministic runner；不以裸关键词或 validator 文案驱动科学路由。
+- 不放松 provenance、fail-close、meta/capability 探针来换题目通过。
+- 不机械搬完所有顶层文件；文件整理必须是职责边界形成后的物理归位。
+- 不因 fresh run 删除旧路径：归档 run、sealed scripts、公共 API 和未来 replay 仍要求 façade/retirement 策略。
+- 不触碰并行数据会话持有的 `concept/callbacks.py`、`data/concept-dict.json`、`data/sofa2-dict.json`。
+- 不在实验进程运行时编辑 research-agent 源码。
+
+## 历史文档说明
+
+- 2026-07-16 rev.2 checklist 的 9 步、未勾 checkbox 和“Track A 后才改 Track B”是当时设计记录；7 月 17 日用户已改为 arch-first，实时状态以本表和 `CURRENT.md` 为准。
+- 2026-07-15 freeze plan 的等价、authority、职责边界仍有效；其中“先跑实验、现在不拆”的执行顺序已被 7 月 17 日决定取代。
+- 详细 commit/test 证据仍见 `task_logs/20260718_bundle3_concept_audit_boundary.md` 及 `CURRENT.md` 的日志指针，本表不复制长流水账。

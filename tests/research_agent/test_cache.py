@@ -44,13 +44,8 @@ def test_cache_off_runs_each_time(ra, synthetic_cohort, tmp_path: Path):
 
 
 def test_cache_hit_reuses_run_id_and_workdir(ra, synthetic_cohort, tmp_path: Path):
-    from easyicu.research_agent.pipeline_cache import PipelineCache
-
-    cache = PipelineCache(tmp_path / ".cache")
-    a = _write_cache_candidate(ra, tmp_path)
-    cache.record_hit("complete", a)
-    b = cache.lookup("complete")
-    assert b is not None
+    a = _run(ra, cohort=synthetic_cohort, workdir=tmp_path, enable_cache=True)
+    b = _run(ra, cohort=synthetic_cohort, workdir=tmp_path, enable_cache=True)
     assert b.run_id == a.run_id, "cache hit should return the prior run_id"
     assert b.workdir == a.workdir
     assert b.evidence_count == a.evidence_count
@@ -88,7 +83,7 @@ def test_cache_invalidates_on_question_change(ra, synthetic_cohort, tmp_path: Pa
 
 
 def test_cache_invalidates_on_skill_change(ra, synthetic_cohort, tmp_path: Path):
-    from easyicu.research_agent.pipeline_cache import PipelineCache
+    from easyicu.research_agent.authority.pipeline_cache import PipelineCache
 
     cohort_path = tmp_path / "cohort.parquet"
     cohort_path.write_bytes(b"cohort")
@@ -245,7 +240,7 @@ def _write_cache_candidate(
 
 
 def test_cache_key_binds_science_inputs_and_runtime_hashes(ra, tmp_path: Path) -> None:
-    from easyicu.research_agent.pipeline_cache import PipelineCache
+    from easyicu.research_agent.authority.pipeline_cache import PipelineCache
 
     cohort_path = tmp_path / "cohort.parquet"
     cohort_path.write_bytes(b"cohort")
@@ -282,6 +277,16 @@ def test_cache_key_binds_science_inputs_and_runtime_hashes(ra, tmp_path: Path) -
         cohort_path,
         identity_hashes={"engine_code_sha256": "engine-b"},
     )
+    changed_metadata = _compute_unit_key(
+        cache,
+        cohort_path,
+        identity_hashes={
+            "metadata_projection_sha256": "projector-b",
+            "metadata_sidecar_sha256": "sidecar-b",
+            "icu_rules_sha256": "icu-rules-b",
+            "metadata_implementation_bundle_sha256": "metadata-bundle-b",
+        },
+    )
     assert (
         len(
             {
@@ -291,14 +296,15 @@ def test_cache_key_binds_science_inputs_and_runtime_hashes(ra, tmp_path: Path) -
                 changed_prompt,
                 changed_concept,
                 changed_engine,
+                changed_metadata,
             }
         )
-        == 6
+        == 7
     )
 
 
 def test_cache_key_binds_materialised_experiment_spec(ra, tmp_path: Path) -> None:
-    from easyicu.research_agent.pipeline_cache import PipelineCache
+    from easyicu.research_agent.authority.pipeline_cache import PipelineCache
 
     cohort_path = tmp_path / "cohort.parquet"
     cohort_path.write_bytes(b"cohort")
@@ -311,18 +317,118 @@ def test_cache_key_binds_materialised_experiment_spec(ra, tmp_path: Path) -> Non
     assert second != first
 
 
-def test_cache_records_and_reuses_only_complete_terminal_run(
+def test_cache_rejects_manifest_only_completed_run_without_authority(
     ra, tmp_path: Path
 ) -> None:
-    from easyicu.research_agent.pipeline_cache import PipelineCache
+    from easyicu.research_agent.authority.pipeline_cache import PipelineCache
 
     cache = PipelineCache(tmp_path / ".cache")
     result = _write_cache_candidate(ra, tmp_path)
-    cache.record_hit("complete", result)
-    cached = cache.lookup("complete")
-    assert cached is not None
-    assert cached.run_id == result.run_id
-    assert cached.evidence_count == 1
+    fake_identity = {"research_question": "fabricated"}
+    cache.record_hit(
+        "complete",
+        result,
+        scientific_identity=fake_identity,
+    )
+    assert cache.lookup("complete", scientific_identity=fake_identity) is None
+    assert "complete" not in cache.load_index()
+
+
+def test_cache_rejects_valid_run_under_wrong_scientific_identity(
+    ra,
+    synthetic_cohort,
+    tmp_path: Path,
+) -> None:
+    from easyicu.research_agent.authority.pipeline_cache import PipelineCache
+
+    result = _run(
+        ra,
+        cohort=synthetic_cohort,
+        workdir=tmp_path,
+        enable_cache=True,
+    )
+    cache = PipelineCache(tmp_path / ".cache")
+    index = cache.load_index()
+    assert len(index) == 1
+    cache_key = next(iter(index))
+    assert (
+        cache.lookup(
+            cache_key,
+            scientific_identity={"research_question": "wrong study"},
+        )
+        is None
+    )
+    assert cache_key not in cache.load_index()
+
+
+def test_cache_rejects_mutated_root_status_even_when_manifest_is_ready(
+    ra,
+    synthetic_cohort,
+    tmp_path: Path,
+) -> None:
+    from easyicu.research_agent.authority.pipeline_cache import PipelineCache
+
+    result = _run(
+        ra,
+        cohort=synthetic_cohort,
+        workdir=tmp_path,
+        enable_cache=True,
+    )
+    run_dir = Path(result.workdir)
+    capsule = json.loads(
+        (run_dir / "run_input_capsule.json").read_text(encoding="utf-8")
+    )
+    cache = PipelineCache(tmp_path / ".cache")
+    cache_key = next(iter(cache.load_index()))
+    (run_dir / "run_status.json").write_text(
+        json.dumps({"status": "manuscript_ready", "gates": {}}),
+        encoding="utf-8",
+    )
+
+    assert (
+        cache.lookup(
+            cache_key,
+            scientific_identity=capsule["scientific_identity"],
+        )
+        is None
+    )
+
+
+def test_cache_rejects_mutated_selected_evidence(
+    ra,
+    synthetic_cohort,
+    tmp_path: Path,
+) -> None:
+    from easyicu.research_agent.authority.pipeline_cache import PipelineCache
+
+    result = _run(
+        ra,
+        cohort=synthetic_cohort,
+        workdir=tmp_path,
+        enable_cache=True,
+    )
+    run_dir = Path(result.workdir)
+    capsule = json.loads(
+        (run_dir / "run_input_capsule.json").read_text(encoding="utf-8")
+    )
+    manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
+    context_record = next(
+        record
+        for record in manifest["evidence"]
+        if record["evidence_id"] == "research_context"
+    )
+    evidence_path = run_dir / context_record["relative_path"]
+    evidence_path.write_text("{}", encoding="utf-8")
+    cache = PipelineCache(tmp_path / ".cache")
+    cache_key = next(iter(cache.load_index()))
+
+    assert (
+        cache.lookup(
+            cache_key,
+            scientific_identity=capsule["scientific_identity"],
+        )
+        is None
+    )
 
 
 @pytest.mark.parametrize(
@@ -343,7 +449,7 @@ def test_cache_rejects_partial_paused_blocked_or_superseded_runs(
     final_sequence: int,
     partial_sequence: int,
 ) -> None:
-    from easyicu.research_agent.pipeline_cache import PipelineCache
+    from easyicu.research_agent.authority.pipeline_cache import PipelineCache
 
     cache = PipelineCache(tmp_path / ".cache")
     result = _write_cache_candidate(
@@ -357,8 +463,13 @@ def test_cache_rejects_partial_paused_blocked_or_superseded_runs(
     )
     # Simulate both a new write and a stale legacy index entry: neither path
     # may surface an incomplete run as a complete PipelineResult.
-    cache.record_hit("candidate", result)
-    assert cache.lookup("candidate") is None
+    scientific_identity = {"research_question": "candidate"}
+    cache.record_hit(
+        "candidate",
+        result,
+        scientific_identity=scientific_identity,
+    )
+    assert cache.lookup("candidate", scientific_identity=scientific_identity) is None
     cache.save_index(
         {
             "candidate": {
@@ -369,5 +480,5 @@ def test_cache_rejects_partial_paused_blocked_or_superseded_runs(
             }
         }
     )
-    assert cache.lookup("candidate") is None
+    assert cache.lookup("candidate", scientific_identity=scientific_identity) is None
     assert "candidate" not in cache.load_index()

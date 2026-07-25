@@ -1,0 +1,36 @@
+{
+  "schema_version": "easyicu.know_how_review_packet/1",
+  "card_id": "longitudinal_icu_phenotyping",
+  "card_version": "1.0.0",
+  "reviewed_content_sha256": "c34dc8de95f2904aca74b83a666e746a541b81fb18d868b56711194f15ab22f9",
+  "status": "methods_evidence_pre_review_complete_formal_attestation_pending",
+  "authorization": false,
+  "split_rationale": "H3 is a longitudinal phenotyping question. It cannot be rescued by changing random seeds, cluster counts, thresholds, or exclusions after a stability failure; any new design needs a separately reviewed protocol before execution.",
+  "evidence_groups": [
+    {
+      "claim_group": "stability-based clustering validation",
+      "citation_ids": ["lange_cluster_stability_2004"],
+      "pre_review_conclusion": "Supports evaluating stability when choosing and validating a clustering solution; it does not justify post-hoc reseeding or outcome-guided selection."
+    },
+    {
+      "claim_group": "ICU trajectory phenotyping interpretation",
+      "citation_ids": ["xu_sepsis_trajectory_2022"],
+      "pre_review_conclusion": "Provides a representative ICU trajectory-phenotyping example, not a transferable cluster count, feature set, or clinical conclusion."
+    }
+  ],
+  "required_signoff": [
+    "Longitudinal features, time zero, observation window, grid, aggregation rule, missingness handling, and minimum measurement support are fixed before clustering.",
+    "Cluster count and algorithm selection do not use outcome separation, and outcome analyses begin only after phenotype assignment unless explicitly descriptive.",
+    "The protocol specifies internal validity, bootstrap or subsampling stability, and external reproducibility criteria before execution.",
+    "A historical stability failure is terminal for that protocol: no post-hoc seed, k, threshold, feature, or exclusion change may be used to make it pass.",
+    "Any redesigned phenotyping protocol is separately reviewed and receives a new content-bound attestation before it can be run."
+  ],
+  "attestation_fields_required_after_signoff": [
+    "reviewer_owner",
+    "review_date",
+    "review_scope",
+    "literature_search_cutoff",
+    "clinical_reviewed",
+    "methods_reviewed"
+  ]
+}

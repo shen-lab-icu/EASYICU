@@ -22,6 +22,7 @@ from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tupl
 
 import pandas as pd
 
+from .metrics import compare_metric_values
 from ..schema import (
     AnalysisManifest,
     AnalysisPlan,
@@ -55,12 +56,27 @@ SUPPORTED_CONCEPT_ALIASES: Dict[str, Tuple[str, ...]] = {
 }
 
 UNSUPPORTED_PATTERNS: Tuple[Tuple[str, str], ...] = (
-    (r"\bwaveform\b", "Paper requires bedside waveform data, which this mode does not support."),
+    (
+        r"\bwaveform\b",
+        "Paper requires bedside waveform data, which this mode does not support.",
+    ),
     (r"\bimaging\b|\bct\b|\bmr[i]?\b", "Paper requires imaging-derived features."),
-    (r"\bomics\b|\bproteom|\bmetabolom|\btranscriptom", "Paper requires omics features."),
-    (r"\bfree text\b|\bclinical notes?\b|\bnlp\b", "Paper relies on unstructured text/NLP features."),
-    (r"\btrial emulation\b|\btarget trial\b", "Paper requires strong causal emulation design support."),
-    (r"\brandomi[sz]ed\b|\brct\b", "Paper is an interventional/randomised design, not the initial replication target."),
+    (
+        r"\bomics\b|\bproteom|\bmetabolom|\btranscriptom",
+        "Paper requires omics features.",
+    ),
+    (
+        r"\bfree text\b|\bclinical notes?\b|\bnlp\b",
+        "Paper relies on unstructured text/NLP features.",
+    ),
+    (
+        r"\btrial emulation\b|\btarget trial\b",
+        "Paper requires strong causal emulation design support.",
+    ),
+    (
+        r"\brandomi[sz]ed\b|\brct\b",
+        "Paper is an interventional/randomised design, not the initial replication target.",
+    ),
 )
 
 
@@ -118,7 +134,9 @@ def parse_paper_profile(paper_or_text: str | Path) -> PaperProfile:
     primary_predictor = primary_exposure if paper_type == "prediction" else None
     covariates = _extract_covariates(norm)
     primary_method = _extract_primary_method(norm)
-    key_claims = _extract_key_claims(norm, target_outcome=target_outcome, predictor=primary_exposure)
+    key_claims = _extract_key_claims(
+        norm, target_outcome=target_outcome, predictor=primary_exposure
+    )
     research_question = _extract_research_question(
         title=title,
         predictor=primary_exposure,
@@ -137,11 +155,22 @@ def parse_paper_profile(paper_or_text: str | Path) -> PaperProfile:
     cohort_definition = _extract_cohort_definition(norm)
 
     if not target_outcome:
-        unsupported_reasons.append("Could not identify a supported outcome from the paper text.")
-    if not primary_exposure and paper_type in {"association", "prediction", "survival", "fairness"}:
-        unsupported_reasons.append("Could not identify a primary exposure/predictor from the paper text.")
+        unsupported_reasons.append(
+            "Could not identify a supported outcome from the paper text."
+        )
+    if not primary_exposure and paper_type in {
+        "association",
+        "prediction",
+        "survival",
+        "fairness",
+    }:
+        unsupported_reasons.append(
+            "Could not identify a primary exposure/predictor from the paper text."
+        )
     if not key_claims:
-        unsupported_reasons.append("Could not parse any key numeric claims from the paper text.")
+        unsupported_reasons.append(
+            "Could not parse any key numeric claims from the paper text."
+        )
 
     if unsupported_reasons:
         paper_type = "unsupported_or_underspecified"
@@ -166,7 +195,9 @@ def parse_paper_profile(paper_or_text: str | Path) -> PaperProfile:
     )
 
 
-def build_paper_replication_spec(profile: PaperProfile) -> tuple[PaperReplicationSpec, ReplicationDeviationReport]:
+def build_paper_replication_spec(
+    profile: PaperProfile,
+) -> tuple[PaperReplicationSpec, ReplicationDeviationReport]:
     """Map a parsed paper profile onto EasyICU-supported execution contracts."""
     mapped: Dict[str, str] = {}
     unmappable: List[str] = []
@@ -201,9 +232,13 @@ def build_paper_replication_spec(profile: PaperProfile) -> tuple[PaperReplicatio
             )
 
     if profile.target_outcome and "mortality" in profile.target_outcome.lower():
-        notes.append("Treat mortality claims as EasyICU `death` unless the paper requires a more specific endpoint.")
+        notes.append(
+            "Treat mortality claims as EasyICU `death` unless the paper requires a more specific endpoint."
+        )
     if profile.primary_analysis_method:
-        notes.append(f"Primary analysis method parsed as: {profile.primary_analysis_method}")
+        notes.append(
+            f"Primary analysis method parsed as: {profile.primary_analysis_method}"
+        )
 
     required_outputs = ["table_one", "outcome_incidence", "figure_bundle"]
     if profile.paper_type in {"association", "survival"}:
@@ -215,9 +250,13 @@ def build_paper_replication_spec(profile: PaperProfile) -> tuple[PaperReplicatio
 
     alignment_targets = []
     if profile.primary_exposure:
-        alignment_targets.append(f"primary effect direction for {profile.primary_exposure}")
+        alignment_targets.append(
+            f"primary effect direction for {profile.primary_exposure}"
+        )
     if profile.target_outcome:
-        alignment_targets.append(f"outcome definition aligned to {profile.target_outcome}")
+        alignment_targets.append(
+            f"outcome definition aligned to {profile.target_outcome}"
+        )
     for claim in profile.key_claims:
         if claim.metric:
             alignment_targets.append(claim.metric)
@@ -291,13 +330,39 @@ def collect_easyicu_metrics(
         summary = record.get("step_summary")
         if not isinstance(summary, dict):
             continue
-        _update_metric(metrics, "outcome_rate", summary, ("outcome_rate", "statistic:outcome_rate"))
-        _update_metric(metrics, "primary_or", summary, ("primary_or", "odds_ratio", "statistic:primary_or"))
-        _update_metric(metrics, "primary_pvalue", summary, ("primary_pvalue", "p_value", "pvalue"))
-        _update_metric(metrics, "primary_ci_low", summary, ("primary_ci_low", "ci_low", "conf_low"))
-        _update_metric(metrics, "primary_ci_high", summary, ("primary_ci_high", "ci_high", "conf_high"))
-        _update_metric(metrics, "auroc", summary, ("auroc", "auc", "statistic:auroc", "held_out_auroc"))
-        _update_metric(metrics, "brier_score", summary, ("brier_score", "statistic:brier_score", "held_out_brier"))
+        _update_metric(
+            metrics, "outcome_rate", summary, ("outcome_rate", "statistic:outcome_rate")
+        )
+        _update_metric(
+            metrics,
+            "primary_or",
+            summary,
+            ("primary_or", "odds_ratio", "statistic:primary_or"),
+        )
+        _update_metric(
+            metrics, "primary_pvalue", summary, ("primary_pvalue", "p_value", "pvalue")
+        )
+        _update_metric(
+            metrics, "primary_ci_low", summary, ("primary_ci_low", "ci_low", "conf_low")
+        )
+        _update_metric(
+            metrics,
+            "primary_ci_high",
+            summary,
+            ("primary_ci_high", "ci_high", "conf_high"),
+        )
+        _update_metric(
+            metrics,
+            "auroc",
+            summary,
+            ("auroc", "auc", "statistic:auroc", "held_out_auroc"),
+        )
+        _update_metric(
+            metrics,
+            "brier_score",
+            summary,
+            ("brier_score", "statistic:brier_score", "held_out_brier"),
+        )
         predictor = summary.get("predictor") or summary.get("primary_predictor")
         if predictor and "predictor" not in metrics:
             metrics["predictor"] = predictor
@@ -320,7 +385,9 @@ def collect_easyicu_metrics(
             except Exception:
                 pass
     if context_payload:
-        cohort = context_payload.get("cohort") if isinstance(context_payload, dict) else None
+        cohort = (
+            context_payload.get("cohort") if isinstance(context_payload, dict) else None
+        )
         if isinstance(cohort, dict):
             metrics.setdefault("n_stays", cohort.get("n_stays"))
             metrics.setdefault("n_patients", cohort.get("n_patients"))
@@ -349,7 +416,8 @@ def compare_paper_to_easyicu(
             {
                 "claim_id": claim.claim_id,
                 "paper_claim": claim.sentence,
-                "paper_value": claim.paper_value or ("" if claim.numeric_value is None else str(claim.numeric_value)),
+                "paper_value": claim.paper_value
+                or ("" if claim.numeric_value is None else str(claim.numeric_value)),
                 "easyicu_value": "" if easyicu_value is None else str(easyicu_value),
                 "alignment_status": alignment,
                 "reason_if_mismatch": reason,
@@ -357,56 +425,6 @@ def compare_paper_to_easyicu(
             }
         )
     return rows
-
-
-def compare_metric_values(
-    *,
-    metric: Optional[str],
-    paper_value: Optional[float],
-    paper_direction: Optional[str],
-    easyicu_value: Any,
-) -> tuple[str, str]:
-    """Classify paper vs EasyICU alignment for one claim."""
-    if paper_value is None:
-        if paper_direction and easyicu_value is not None:
-            easy_dir = "positive" if float(easyicu_value) > 1 else "negative"
-            if paper_direction == easy_dir:
-                return "directionally_aligned", "Direction matched but no exact paper scalar was available."
-        return "not_comparable", "Paper claim did not expose a comparable numeric value."
-    if easyicu_value is None:
-        return "not_comparable", "EasyICU run did not emit a comparable structured metric."
-    try:
-        easy = float(easyicu_value)
-    except Exception:
-        return "not_comparable", "EasyICU metric could not be interpreted numerically."
-
-    metric_name = (metric or "").lower()
-    if metric_name in {"p_value", "p"}:
-        paper_sig = paper_value < 0.05
-        easy_sig = easy < 0.05
-        if paper_sig == easy_sig:
-            return "directionally_aligned", "Significance state matched."
-        return "not_aligned", "Significance state did not match."
-
-    if metric_name in {"or", "hr", "rr"}:
-        if (paper_value > 1 and easy > 1) or (paper_value < 1 and easy < 1):
-            delta = abs(paper_value - easy) / max(abs(paper_value), 1e-6)
-            if delta <= 0.25:
-                return "aligned", "Effect direction and magnitude were close."
-            return "directionally_aligned", "Effect direction matched but magnitude differed."
-        return "not_aligned", "Effect direction did not match."
-
-    if metric_name in {"auroc", "auc", "brier_score", "outcome_rate", "n"}:
-        delta = abs(paper_value - easy)
-        tol = 0.03 if metric_name in {"auroc", "auc", "brier_score", "outcome_rate"} else max(5.0, 0.05 * max(abs(paper_value), 1.0))
-        if delta <= tol:
-            return "aligned", "Numeric value was within tolerance."
-        return "not_aligned", "Numeric value differed beyond the comparison tolerance."
-
-    delta = abs(paper_value - easy)
-    if delta <= max(0.05, 0.2 * max(abs(paper_value), 1.0)):
-        return "aligned", "Generic numeric tolerance matched."
-    return "not_aligned", "Generic numeric tolerance did not match."
 
 
 def render_replication_report(
@@ -445,7 +463,14 @@ def render_replication_report(
     lines.append("")
     lines.extend(["## Deviation summary", "", deviation_report.summary, ""])
     if deviation_report.items:
-        lines.extend(["### Deviation table", "", "| Item | Severity | Original | EasyICU proxy | Reason |", "|---|---|---|---|---|"])
+        lines.extend(
+            [
+                "### Deviation table",
+                "",
+                "| Item | Severity | Original | EasyICU proxy | Reason |",
+                "|---|---|---|---|---|",
+            ]
+        )
         for item in deviation_report.items:
             lines.append(
                 "| {item} | {severity} | {original} | {proxy} | {reason} |".format(
@@ -498,7 +523,11 @@ def render_deviation_report(report: ReplicationDeviationReport) -> str:
             lines.append(
                 f"- `{item.item}` [{item.severity}] {item.reason}"
                 + (f" (original: {item.original})" if item.original else "")
-                + (f" (EasyICU proxy: {item.easyicu_proxy})" if item.easyicu_proxy else "")
+                + (
+                    f" (EasyICU proxy: {item.easyicu_proxy})"
+                    if item.easyicu_proxy
+                    else ""
+                )
             )
     else:
         lines.append("- No deviations were recorded.")
@@ -530,10 +559,11 @@ def render_showcase_manuscript(
     if "replication study" not in body.lower():
         body = (
             "This is a replication study using an EasyICU cohort, with variable harmonisation "
-            "and explicit deviation tracking relative to the source paper.\n\n"
-            + body
+            "and explicit deviation tracking relative to the source paper.\n\n" + body
         )
-    if deviation_report.items and not re.search(r"\bdeviation|differ|limitation\b", body, flags=re.I):
+    if deviation_report.items and not re.search(
+        r"\bdeviation|differ|limitation\b", body, flags=re.I
+    ):
         body += (
             "\n\n## Limitations\n\n"
             "This replication includes explicit deviations between the original paper "
@@ -542,7 +572,9 @@ def render_showcase_manuscript(
     return "\n".join(header) + body + "\n"
 
 
-def write_claim_csv(path: str | Path, rows: Sequence[Dict[str, Any]], fieldnames: Sequence[str]) -> Path:
+def write_claim_csv(
+    path: str | Path, rows: Sequence[Dict[str, Any]], fieldnames: Sequence[str]
+) -> Path:
     """Write a UTF-8 CSV file with stable fieldnames."""
     out = Path(path)
     with out.open("w", newline="", encoding="utf-8") as fh:
@@ -562,7 +594,9 @@ def map_text_to_easyicu_concept(text: str) -> Optional[str]:
 
 
 def _normalise_whitespace(text: str) -> str:
-    return re.sub(r"[ \t]+", " ", text.replace("\r\n", "\n").replace("\r", "\n")).strip()
+    return re.sub(
+        r"[ \t]+", " ", text.replace("\r\n", "\n").replace("\r", "\n")
+    ).strip()
 
 
 def _extract_title(text: str) -> Optional[str]:
@@ -581,7 +615,11 @@ def _infer_paper_type(lower: str) -> str:
         return "survival"
     if "subgroup" in lower or "interaction" in lower or "fairness" in lower:
         return "fairness"
-    if "odds ratio" in lower or "logistic regression" in lower or "associated with" in lower:
+    if (
+        "odds ratio" in lower
+        or "logistic regression" in lower
+        or "associated with" in lower
+    ):
         return "association"
     if "descriptive" in lower or "incidence" in lower:
         return "descriptive"
@@ -655,7 +693,14 @@ def _extract_primary_method(text: str) -> str:
 
 def _extract_secondary_analyses(lower: str) -> List[str]:
     hits = []
-    for key in ("subgroup", "interaction", "sensitivity", "calibration", "decision curve", "fairness"):
+    for key in (
+        "subgroup",
+        "interaction",
+        "sensitivity",
+        "calibration",
+        "decision curve",
+        "fairness",
+    ):
         if key in lower:
             hits.append(key)
     return hits
@@ -698,7 +743,9 @@ def _extract_bullets_after_heading(text: str, keywords: Sequence[str]) -> List[s
     return items
 
 
-def _extract_key_claims(text: str, *, target_outcome: Optional[str], predictor: Optional[str]) -> List[PaperClaimRecord]:
+def _extract_key_claims(
+    text: str, *, target_outcome: Optional[str], predictor: Optional[str]
+) -> List[PaperClaimRecord]:
     sentences = re.split(r"(?<=[.!?])\s+", text)
     rows: List[PaperClaimRecord] = []
     for sentence in sentences:
@@ -720,11 +767,15 @@ def _extract_key_claims(text: str, *, target_outcome: Optional[str], predictor: 
             paper_value = match.group(1)
             numeric_value = float(match.group(1))
             direction = "positive" if numeric_value > 1 else "negative"
-        elif match := re.search(r"\b(?:AUROC|AUC)\b\s*=?\s*([0-9.]+)", stripped, flags=re.I):
+        elif match := re.search(
+            r"\b(?:AUROC|AUC)\b\s*=?\s*([0-9.]+)", stripped, flags=re.I
+        ):
             metric = "AUROC"
             paper_value = match.group(1)
             numeric_value = float(match.group(1))
-        elif match := re.search(r"\bBrier(?: score)?\b\s*=?\s*([0-9.]+)", stripped, flags=re.I):
+        elif match := re.search(
+            r"\bBrier(?: score)?\b\s*=?\s*([0-9.]+)", stripped, flags=re.I
+        ):
             metric = "Brier_score"
             paper_value = match.group(1)
             numeric_value = float(match.group(1))
@@ -775,7 +826,16 @@ def _iter_profile_targets(profile: PaperProfile) -> Iterable[tuple[str, str]]:
 
 
 def _infer_time_windows(profile: PaperProfile) -> List[str]:
-    text = " ".join(filter(None, [profile.cohort_definition, profile.primary_analysis_method, *profile.secondary_analyses])).lower()
+    text = " ".join(
+        filter(
+            None,
+            [
+                profile.cohort_definition,
+                profile.primary_analysis_method,
+                *profile.secondary_analyses,
+            ],
+        )
+    ).lower()
     windows = []
     if "24h" in text or "24 h" in text or "24-hour" in text or "first 24" in text:
         windows.append("first_24h")
@@ -784,7 +844,12 @@ def _infer_time_windows(profile: PaperProfile) -> List[str]:
     return windows or ["first_24h"]
 
 
-def _update_metric(metrics: Dict[str, Any], target_key: str, summary: Dict[str, Any], candidates: Sequence[str]) -> None:
+def _update_metric(
+    metrics: Dict[str, Any],
+    target_key: str,
+    summary: Dict[str, Any],
+    candidates: Sequence[str],
+) -> None:
     if target_key in metrics:
         return
     for candidate in candidates:
@@ -843,7 +908,7 @@ def postprocess_paper_replication(
         ReplicationDesignAuditor,
         ReplicationResultComparator,
     )
-    from ..evidence import EvidenceStore
+    from ..authority.evidence_store import EvidenceStore
     from ..schema import PipelineResult
 
     run_dir = Path(result.workdir)
@@ -942,10 +1007,16 @@ def postprocess_paper_replication(
         encoding="utf-8",
     )
 
-    manuscript_bound_path = run_dir / manifest.get("manuscript_path", "manuscript_scaffold_bound.md")
+    manuscript_bound_path = run_dir / manifest.get(
+        "manuscript_path", "manuscript_scaffold_bound.md"
+    )
     if not manuscript_bound_path.exists():
         manuscript_bound_path = run_dir / "manuscript_scaffold_bound.md"
-    bound_text = manuscript_bound_path.read_text(encoding="utf-8") if manuscript_bound_path.exists() else ""
+    bound_text = (
+        manuscript_bound_path.read_text(encoding="utf-8")
+        if manuscript_bound_path.exists()
+        else ""
+    )
     showcase_text = render_showcase_manuscript(
         bound_manuscript=bound_text,
         paper_profile=paper_profile,
@@ -976,9 +1047,7 @@ def postprocess_paper_replication(
         and paper_claims_parsed
         and replication_report_path.exists()
     )
-    showcase_errors = [
-        f for f in publication_claim_findings if f.severity == "error"
-    ]
+    showcase_errors = [f for f in publication_claim_findings if f.severity == "error"]
     showcase_manuscript_ready = bool(
         mode == "manuscript"
         and readiness.get("manuscript_ready")
@@ -1027,13 +1096,19 @@ def postprocess_paper_replication(
     status_payload["status"] = (
         "publication_ready"
         if readiness.get("publication_ready") and showcase_manuscript_ready
-        else "manuscript_ready"
-        if showcase_manuscript_ready
-        else "replication_ready"
-        if readiness.get("replication_report_ready")
-        else "analysis_only"
-        if readiness.get("execution_complete")
-        else "diagnostic_only"
+        else (
+            "manuscript_ready"
+            if showcase_manuscript_ready
+            else (
+                "replication_ready"
+                if readiness.get("replication_report_ready")
+                else (
+                    "analysis_only"
+                    if readiness.get("execution_complete")
+                    else "diagnostic_only"
+                )
+            )
+        )
     )
     status_payload["gates"] = readiness
     status_payload["canonical_outputs"] = artifact_paths
@@ -1043,17 +1118,27 @@ def postprocess_paper_replication(
     )
 
     author_note_path = run_dir / "author_review_note.md"
-    base_note = author_note_path.read_text(encoding="utf-8") if author_note_path.exists() else "# Author review note\n\n"
+    base_note = (
+        author_note_path.read_text(encoding="utf-8")
+        if author_note_path.exists()
+        else "# Author review note\n\n"
+    )
     paper_status = (
         "publication_ready"
         if readiness.get("publication_ready") and showcase_manuscript_ready
-        else "manuscript_ready"
-        if showcase_manuscript_ready
-        else "replication_ready"
-        if readiness.get("replication_report_ready")
-        else "analysis_only"
-        if readiness.get("execution_complete")
-        else "diagnostic_only"
+        else (
+            "manuscript_ready"
+            if showcase_manuscript_ready
+            else (
+                "replication_ready"
+                if readiness.get("replication_report_ready")
+                else (
+                    "analysis_only"
+                    if readiness.get("execution_complete")
+                    else "diagnostic_only"
+                )
+            )
+        )
     )
     base_note = re.sub(
         r"(?m)^- Status: `[^`]+`$",
@@ -1061,7 +1146,10 @@ def postprocess_paper_replication(
         base_note,
         count=1,
     )
-    if readiness.get("replication_report_ready") and "Use `replication_report.md`" not in base_note:
+    if (
+        readiness.get("replication_report_ready")
+        and "Use `replication_report.md`" not in base_note
+    ):
         base_note = base_note.rstrip() + (
             "\n\n## Replication review\n\n"
             "The analysis run completed for paper replication. Use `replication_report.md` "
@@ -1081,12 +1169,42 @@ def postprocess_paper_replication(
     )
 
     for evidence_id, kind, description, path in (
-        ("paper_profile", "log", "Parsed source-paper profile for replication mode.", profile_path),
-        ("replication_spec", "log", "Typed EasyICU replication specification derived from the paper.", spec_path),
-        ("paper_claim_ledger", "table", "Ledger of parsed result claims from the source paper.", claim_csv_path),
-        ("replication_comparison", "table", "Claim-by-claim comparison of source paper and EasyICU results.", comparison_csv_path),
-        ("replication_report", "log", "Narrative EasyICU replication report.", replication_report_path),
-        ("deviation_report", "log", "Structured deviation report for unsupported or approximated design elements.", deviation_md_path),
+        (
+            "paper_profile",
+            "log",
+            "Parsed source-paper profile for replication mode.",
+            profile_path,
+        ),
+        (
+            "replication_spec",
+            "log",
+            "Typed EasyICU replication specification derived from the paper.",
+            spec_path,
+        ),
+        (
+            "paper_claim_ledger",
+            "table",
+            "Ledger of parsed result claims from the source paper.",
+            claim_csv_path,
+        ),
+        (
+            "replication_comparison",
+            "table",
+            "Claim-by-claim comparison of source paper and EasyICU results.",
+            comparison_csv_path,
+        ),
+        (
+            "replication_report",
+            "log",
+            "Narrative EasyICU replication report.",
+            replication_report_path,
+        ),
+        (
+            "deviation_report",
+            "log",
+            "Structured deviation report for unsupported or approximated design elements.",
+            deviation_md_path,
+        ),
     ):
         if evidence.get(evidence_id) is None:
             evidence.register_file(
@@ -1099,7 +1217,9 @@ def postprocess_paper_replication(
                 generation_mode="system",
             )
 
-    manifest["evidence"] = [record.model_dump(mode="json") for record in evidence.records()]
+    manifest["evidence"] = [
+        record.model_dump(mode="json") for record in evidence.records()
+    ]
     manifest_path.write_text(
         json.dumps(manifest, indent=2, ensure_ascii=False, default=str),
         encoding="utf-8",
@@ -1162,15 +1282,15 @@ def write_fail_closed_paper_package(
     DataFrame) into a parquet file under ``run_dir``.
 
     Lazy imports break the ``replication.paper`` ↔ ``audits.validators``
-    and ``replication.paper`` ↔ ``pipeline_report`` cycles that would
+    and ``replication.paper`` ↔ ``reporting.readiness`` cycles that would
     otherwise be created.
     """
     from ..audits.validators import ReplicationDesignAuditor
-    from ..context import build_naive_research_context
-    from ..evidence import EvidenceStore
-    from ..llm import MockLLMClient
-    from ..pipeline_report import render_report, write_readiness_artifacts
-    from ..prompts import PROMPT_PACK_VERSION, prompt_pack_files
+    from ..research_context.builder import build_naive_research_context
+    from ..authority.evidence_store import EvidenceStore
+    from ..providers.mocks import MockLLMClient
+    from ..reporting.readiness import render_report, write_readiness_artifacts
+    from ..providers.prompts import PROMPT_PACK_VERSION, prompt_pack_files
 
     run_id = (
         "paperrep_"
@@ -1183,9 +1303,11 @@ def write_fail_closed_paper_package(
     cohort_path = materialise_cohort(cohort, run_dir)
     df = pd.read_parquet(cohort_path)
     context = ResearchContext(
-        research_question=paper_profile.research_question or "Paper replication failed closed before execution.",
+        research_question=paper_profile.research_question
+        or "Paper replication failed closed before execution.",
         cohort=build_naive_research_context(
-            research_question=paper_profile.research_question or "Paper replication failed closed.",
+            research_question=paper_profile.research_question
+            or "Paper replication failed closed.",
             cohort=cohort_path,
             cohort_name=cohort_name,
             database=database,
@@ -1211,7 +1333,9 @@ def write_fail_closed_paper_package(
     spec_path = run_dir / "replication_spec.json"
     spec_path.write_text(replication_spec.model_dump_json(indent=2), encoding="utf-8")
     deviation_md_path = run_dir / "deviation_report.md"
-    deviation_md_path.write_text(render_deviation_report(deviation_report), encoding="utf-8")
+    deviation_md_path.write_text(
+        render_deviation_report(deviation_report), encoding="utf-8"
+    )
     claim_csv_path = write_claim_csv(
         run_dir / "paper_claim_ledger.csv",
         [
@@ -1221,7 +1345,9 @@ def write_fail_closed_paper_package(
                 "sentence": claim.sentence,
                 "metric": claim.metric or "",
                 "paper_value": claim.paper_value or "",
-                "numeric_value": "" if claim.numeric_value is None else claim.numeric_value,
+                "numeric_value": (
+                    "" if claim.numeric_value is None else claim.numeric_value
+                ),
                 "direction": claim.direction or "",
                 "predictor": claim.predictor or "",
                 "outcome": claim.outcome or "",
@@ -1260,7 +1386,10 @@ def write_fail_closed_paper_package(
             spec=replication_spec,
             deviation_report=deviation_report,
             comparison_rows=[],
-            ledger=PaperResultLedger(paper_claims=paper_profile.key_claims, easyicu_metrics={"n_stays": int(len(df))}),
+            ledger=PaperResultLedger(
+                paper_claims=paper_profile.key_claims,
+                easyicu_metrics={"n_stays": int(len(df))},
+            ),
         ),
         encoding="utf-8",
     )
@@ -1304,12 +1433,42 @@ def write_fail_closed_paper_package(
         }
     )
     for evidence_id, kind, description, path in (
-        ("paper_profile", "log", "Parsed source-paper profile for replication mode.", profile_path),
-        ("replication_spec", "log", "Typed EasyICU replication specification derived from the paper.", spec_path),
-        ("paper_claim_ledger", "table", "Ledger of parsed result claims from the source paper.", claim_csv_path),
-        ("replication_comparison", "table", "Claim-by-claim comparison of source paper and EasyICU results.", comparison_csv_path),
-        ("replication_report", "log", "Narrative EasyICU replication report.", replication_report_path),
-        ("deviation_report", "log", "Structured deviation report for unsupported or approximated design elements.", deviation_md_path),
+        (
+            "paper_profile",
+            "log",
+            "Parsed source-paper profile for replication mode.",
+            profile_path,
+        ),
+        (
+            "replication_spec",
+            "log",
+            "Typed EasyICU replication specification derived from the paper.",
+            spec_path,
+        ),
+        (
+            "paper_claim_ledger",
+            "table",
+            "Ledger of parsed result claims from the source paper.",
+            claim_csv_path,
+        ),
+        (
+            "replication_comparison",
+            "table",
+            "Claim-by-claim comparison of source paper and EasyICU results.",
+            comparison_csv_path,
+        ),
+        (
+            "replication_report",
+            "log",
+            "Narrative EasyICU replication report.",
+            replication_report_path,
+        ),
+        (
+            "deviation_report",
+            "log",
+            "Structured deviation report for unsupported or approximated design elements.",
+            deviation_md_path,
+        ),
     ):
         if evidence.get(evidence_id) is None:
             evidence.register_file(

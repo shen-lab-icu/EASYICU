@@ -2185,6 +2185,23 @@ class ConceptResolver:
                         extra_columns.append(source.index_var)
                     if getattr(source, 'unit_var', None):
                         extra_columns.append(source.unit_var)
+                    # Some callbacks need a second, explicitly declared source column
+                    # to interpret the value column. Keep this generic and
+                    # dictionary-owned instead of teaching the loader callback names.
+                    source_extra_vars = source.params.get("extra_vars", [])
+                    if isinstance(source_extra_vars, str):
+                        source_extra_vars = [source_extra_vars]
+                    if not isinstance(source_extra_vars, (list, tuple)):
+                        raise TypeError(
+                            "Concept source 'extra_vars' must be a string or a list of strings"
+                        )
+                    for extra_var in source_extra_vars:
+                        if not isinstance(extra_var, str) or not extra_var.strip():
+                            raise TypeError(
+                                "Concept source 'extra_vars' entries must be non-empty strings"
+                            )
+                        extra_columns.append(extra_var)
+                    extra_columns = list(dict.fromkeys(extra_columns))
                     
                     # 🚀 DuckDB层聚合优化：对有分桶目录的表直接在DuckDB中降采样
                     # 支持所有数据库（AUMC/HiRID/MIIV/MIMIC/SIC/eICU），只要表有分桶目录

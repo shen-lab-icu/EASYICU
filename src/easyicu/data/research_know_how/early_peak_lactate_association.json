@@ -1,0 +1,127 @@
+{
+  "schema_version": "easyicu.research_know_how/2",
+  "card_id": "early_peak_lactate_association",
+  "version": "1.0.0",
+  "title": "Early peak lactate and clinical outcomes",
+  "summary": "Design coordinates for descriptive or prognostic associations using peak lactate in a prespecified early ICU window. Peak values are affected by the observation window, assay harmonization, clinical measurement intensity, and early outcomes; the analysis must distinguish an association from a causal effect and must retain the measured-versus-unmeasured denominator.",
+  "clinical_topics": ["peak lactate", "early lactate", "hyperlactatemia", "mortality", "serial biomarker", "informative measurement"],
+  "topic_aliases": ["peak lactate", "early lactate", "first 24h lactate", "first-24h lactate", "24h lactate", "lactate mortality", "lactate", "lactic acid", "乳酸峰值", "早期乳酸", "乳酸与死亡", "乳酸"],
+  "study_families": ["association", "descriptive", "prediction"],
+  "applicable_databases": ["miiv", "mimic_iv", "mimic_iii", "eicu", "hirid", "aumc", "sicdb"],
+  "design_candidates": {
+    "population": "A locked ICU cohort with an explicit hospital-outcome denominator; retain all eligible stays for the lactate-measured versus unmeasured comparison and define the lactate-measured analysis subset separately.",
+    "time_zero": "A prespecified clinical anchor such as ICU admission; do not choose the anchor after inspecting lactate or outcome values.",
+    "observation_window": "A fixed early window anchored to time zero; include only lactate values whose timestamps and units are verified and exclude values recorded after death or discharge.",
+    "prediction_or_followup_window": "For a descriptive in-hospital association, state that exposure ascertainment and outcome time may overlap; for prospective or time-to-event claims, start follow-up after the exposure window or use a correctly specified time-varying analysis.",
+    "eligibility_candidates": [
+      "Do not require repeated lactate measurements when the prespecified exposure is a peak; one verified in-window value is sufficient",
+      "Preserve measured, unmeasured, and source-missing states; never encode unmeasured lactate as zero",
+      "Report specimen, assay, and units or document the harmonization contract"
+    ],
+    "exposure": "Maximum verified lactate within the locked early window, reported in harmonized units with its skewed distribution and prespecified continuous or categorical representation.",
+    "outcome": "A clearly defined hospital or time-bounded mortality outcome with the denominator and event horizon reported.",
+    "estimand": "A descriptive adjusted association between early peak lactate and the declared outcome among the stated analysis population; do not label it a causal effect.",
+    "recommended_methods": [
+      "Report the full-cohort lactate measurement rate and compare measured versus unmeasured patients before modelling",
+      "Report median and interquartile range for skewed lactate and estimate a continuous association with uncertainty; assess nonlinearity rather than assuming one linear unit effect",
+      "Choose covariates using prespecified baseline roles and keep post-exposure treatment variables out of a primary descriptive adjustment unless their role is explicitly justified"
+    ],
+    "sensitivity_analyses": [
+      "Alternative prespecified early windows and initial versus peak lactate when both are available",
+      "Restriction to patients alive and under observation at the end of the exposure window when a post-window estimand is claimed",
+      "Quantify selection by lactate measurement status or sampling intensity rather than treating observed measurements as random"
+    ]
+  },
+  "required_concepts": ["lactate", "measurement_time", "icu_admission_time", "death"],
+  "stop_conditions": [
+    "Lactate timestamps, units, or the early-window anchor cannot be verified",
+    "Measured, unmeasured, and source-missing lactate states cannot be distinguished",
+    "A prospective or causal conclusion is requested but the exposure window overlaps outcome follow-up without a valid temporal strategy"
+  ],
+  "requires_confirmation": [
+    "Confirm the time-zero anchor, early-window duration, and whether initial or peak lactate is primary",
+    "Confirm that the target is descriptive association, prognosis, or a causal question; these require different estimands"
+  ],
+  "citations": [
+    {
+      "citation_id": "surviving_sepsis_2021",
+      "title": "Surviving Sepsis Campaign: international guidelines for management of sepsis and septic shock 2021",
+      "year": 2021,
+      "source_type": "guideline",
+      "url": "https://pubmed.ncbi.nlm.nih.gov/34599691/",
+      "doi": "10.1007/s00134-021-06506-y",
+      "supports": ["clinical interpretation of lactate in context", "serial lactate assessment in sepsis and shock"]
+    },
+    {
+      "citation_id": "goutay_peak_lactate_2021",
+      "title": "Assessment of Metabolic Dysfunction in Sepsis in a Retrospective Single-Centre Cohort",
+      "year": 2021,
+      "source_type": "representative_study",
+      "url": "https://pmc.ncbi.nlm.nih.gov/articles/PMC8712182/",
+      "doi": "10.1155/2021/3045454",
+      "supports": ["maximum lactate within 24 hours", "short-term mortality association"]
+    },
+    {
+      "citation_id": "villar_peak_lactate_2019",
+      "title": "Lactate Predicts Both Short- and Long-Term Mortality in Patients With and Without Sepsis",
+      "year": 2019,
+      "source_type": "representative_study",
+      "url": "https://pmc.ncbi.nlm.nih.gov/articles/PMC6686323/",
+      "doi": "10.1177/1178633719862776",
+      "supports": ["peak lactate exposure", "graded mortality association"]
+    },
+    {
+      "citation_id": "sisk_informative_observation_2021",
+      "title": "Informative presence and observation in routine health data: A review of methodology for clinical risk prediction",
+      "year": 2021,
+      "source_type": "methods",
+      "url": "https://pmc.ncbi.nlm.nih.gov/articles/PMC7810439/",
+      "doi": "10.1093/jamia/ocaa242",
+      "supports": ["informative measurement status", "measurement-process sensitivity analysis"]
+    },
+    {
+      "citation_id": "gleiss_landmark_2018",
+      "title": "An unjustified benefit: immortal time bias in the analysis of time-dependent events",
+      "year": 2018,
+      "source_type": "methods",
+      "url": "https://pubmed.ncbi.nlm.nih.gov/29024071/",
+      "doi": "10.1111/tri.13081",
+      "supports": ["landmark analysis", "temporal alignment of exposure and follow-up"]
+    },
+    {
+      "citation_id": "strobe_2007",
+      "title": "The Strengthening the Reporting of Observational Studies in Epidemiology (STROBE) statement: guidelines for reporting observational studies",
+      "year": 2007,
+      "source_type": "reporting_standard",
+      "url": "https://pubmed.ncbi.nlm.nih.gov/18313558/",
+      "doi": "10.1016/j.jclinepi.2007.11.008",
+      "supports": ["transparent cohort and variable definitions", "reporting missing data and analysis methods"]
+    }
+  ],
+  "claims": [
+    {"claim_id": "locked_outcome_denominator", "field": "population", "text": "A locked ICU cohort with an explicit hospital-outcome denominator; retain all eligible stays for the lactate-measured versus unmeasured comparison and define the lactate-measured analysis subset separately.", "citation_ids": ["strobe_2007", "sisk_informative_observation_2021"], "evidence_scope": "reporting_standard"},
+    {"claim_id": "prespecified_time_zero", "field": "time_zero", "text": "A prespecified clinical anchor such as ICU admission; do not choose the anchor after inspecting lactate or outcome values.", "citation_ids": ["gleiss_landmark_2018", "strobe_2007"], "evidence_scope": "methods"},
+    {"claim_id": "locked_early_lactate_window", "field": "observation_window", "text": "A fixed early window anchored to time zero; include only lactate values whose timestamps and units are verified and exclude values recorded after death or discharge.", "citation_ids": ["goutay_peak_lactate_2021", "gleiss_landmark_2018"], "evidence_scope": "representative_study"},
+    {"claim_id": "overlap_limits_claim", "field": "followup_window", "text": "For a descriptive in-hospital association, state that exposure ascertainment and outcome time may overlap; for prospective or time-to-event claims, start follow-up after the exposure window or use a correctly specified time-varying analysis.", "citation_ids": ["gleiss_landmark_2018", "strobe_2007"], "evidence_scope": "methods"},
+    {"claim_id": "peak_does_not_require_serial_values", "field": "eligibility", "text": "Do not require repeated lactate measurements when the prespecified exposure is a peak; one verified in-window value is sufficient", "citation_ids": ["goutay_peak_lactate_2021", "villar_peak_lactate_2019"], "evidence_scope": "representative_study"},
+    {"claim_id": "preserve_lactate_measurement_state", "field": "eligibility", "text": "Preserve measured, unmeasured, and source-missing states; never encode unmeasured lactate as zero", "citation_ids": ["sisk_informative_observation_2021", "strobe_2007"], "evidence_scope": "methods"},
+    {"claim_id": "report_lactate_measurement_contract", "field": "eligibility", "text": "Report specimen, assay, and units or document the harmonization contract", "citation_ids": ["strobe_2007", "surviving_sepsis_2021"], "evidence_scope": "reporting_standard"},
+    {"claim_id": "peak_lactate_exposure", "field": "exposure", "text": "Maximum verified lactate within the locked early window, reported in harmonized units with its skewed distribution and prespecified continuous or categorical representation.", "citation_ids": ["goutay_peak_lactate_2021", "villar_peak_lactate_2019"], "evidence_scope": "representative_study"},
+    {"claim_id": "defined_mortality_outcome", "field": "outcome", "text": "A clearly defined hospital or time-bounded mortality outcome with the denominator and event horizon reported.", "citation_ids": ["strobe_2007", "villar_peak_lactate_2019"], "evidence_scope": "reporting_standard"},
+    {"claim_id": "descriptive_noncausal_estimand", "field": "estimand", "text": "A descriptive adjusted association between early peak lactate and the declared outcome among the stated analysis population; do not label it a causal effect.", "citation_ids": ["strobe_2007", "villar_peak_lactate_2019"], "evidence_scope": "methods"},
+    {"claim_id": "measurement_status_audit", "field": "method", "text": "Report the full-cohort lactate measurement rate and compare measured versus unmeasured patients before modelling", "citation_ids": ["sisk_informative_observation_2021", "strobe_2007"], "evidence_scope": "methods"},
+    {"claim_id": "skew_and_nonlinearity", "field": "method", "text": "Report median and interquartile range for skewed lactate and estimate a continuous association with uncertainty; assess nonlinearity rather than assuming one linear unit effect", "citation_ids": ["goutay_peak_lactate_2021", "villar_peak_lactate_2019"], "evidence_scope": "representative_study"},
+    {"claim_id": "baseline_covariate_roles", "field": "method", "text": "Choose covariates using prespecified baseline roles and keep post-exposure treatment variables out of a primary descriptive adjustment unless their role is explicitly justified", "citation_ids": ["strobe_2007", "gleiss_landmark_2018"], "evidence_scope": "methods"},
+    {"claim_id": "alternative_window_sensitivity", "field": "sensitivity", "text": "Alternative prespecified early windows and initial versus peak lactate when both are available", "citation_ids": ["goutay_peak_lactate_2021", "surviving_sepsis_2021"], "evidence_scope": "representative_study"},
+    {"claim_id": "post_window_landmark_sensitivity", "field": "sensitivity", "text": "Restriction to patients alive and under observation at the end of the exposure window when a post-window estimand is claimed", "citation_ids": ["gleiss_landmark_2018"], "evidence_scope": "methods"},
+    {"claim_id": "measurement_selection_sensitivity", "field": "sensitivity", "text": "Quantify selection by lactate measurement status or sampling intensity rather than treating observed measurements as random", "citation_ids": ["sisk_informative_observation_2021"], "evidence_scope": "methods"},
+    {"claim_id": "stop_unverified_lactate_window", "field": "stop_condition", "text": "Lactate timestamps, units, or the early-window anchor cannot be verified", "citation_ids": ["strobe_2007", "goutay_peak_lactate_2021"], "evidence_scope": "reporting_standard"},
+    {"claim_id": "stop_unknown_measurement_state", "field": "stop_condition", "text": "Measured, unmeasured, and source-missing lactate states cannot be distinguished", "citation_ids": ["sisk_informative_observation_2021"], "evidence_scope": "methods"},
+    {"claim_id": "stop_temporal_claim_mismatch", "field": "stop_condition", "text": "A prospective or causal conclusion is requested but the exposure window overlaps outcome follow-up without a valid temporal strategy", "citation_ids": ["gleiss_landmark_2018"], "evidence_scope": "methods"},
+    {"claim_id": "confirm_peak_lactate_coordinates", "field": "requires_confirmation", "text": "Confirm the time-zero anchor, early-window duration, and whether initial or peak lactate is primary", "citation_ids": ["goutay_peak_lactate_2021", "strobe_2007"], "evidence_scope": "expert_consensus"},
+    {"claim_id": "confirm_lactate_study_role", "field": "requires_confirmation", "text": "Confirm that the target is descriptive association, prognosis, or a causal question; these require different estimands", "citation_ids": ["strobe_2007", "gleiss_landmark_2018"], "evidence_scope": "expert_consensus"}
+  ],
+  "trust_level": "built_in_reviewed",
+  "review_status": "curated_mvp",
+  "review_attestation": null
+}

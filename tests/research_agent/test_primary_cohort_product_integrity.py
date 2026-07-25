@@ -4,17 +4,19 @@ from __future__ import annotations
 
 from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
 
 import pandas as pd
 import pytest
 
-from easyicu.research_agent.cohort_schema import (
+from easyicu.research_agent.cohort.schema import (
     CohortDefinition,
     ConceptPredicate,
     TimeWindow,
 )
-from easyicu.research_agent.declared_product_contract import (
+from easyicu.research_agent.contracts.declared_product import (
     primary_analysis_cohort_integrity_findings,
+    primary_analysis_cohort_plan_findings,
     primary_analysis_cohort_producer_uses_universe,
 )
 from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep
@@ -124,6 +126,103 @@ def test_unique_closed_primary_cohort_producer_uses_raw_universe() -> None:
     step = _cohort_step()
 
     assert primary_analysis_cohort_producer_uses_universe(step=step, plan=_plan(step))
+    assert primary_analysis_cohort_plan_findings(plan=_plan(step)) == []
+
+
+def test_plan_preflight_rejects_noncanonical_extra_attrition_product() -> None:
+    """Regression for the fresh E3 plan rejected only after three Coder calls."""
+
+    step = _cohort_step(method="cohort_definition_with_attrition").model_copy(
+        update={
+            "expected_outputs": [
+                "dataset:analysis_cohort",
+                "table:cohort_flow",
+                "table:eligibility_attrition",
+            ]
+        }
+    )
+
+    findings = primary_analysis_cohort_plan_findings(plan=_plan(step))
+
+    assert len(findings) == 1
+    assert findings[0].validator == "plan_primary_analysis_cohort_integrity"
+    assert findings[0].severity == "error"
+    assert findings[0].detail == {
+        "issue": "primary_cohort_product_owner_ambiguous",
+        "step_id": step.step_id,
+    }
+
+
+def test_plan_preflight_rejects_definition_artifact_in_place_of_cohort_data(
+    tmp_path: Path,
+) -> None:
+    """A prose/status artifact cannot masquerade as a materialised cohort."""
+
+    step = _cohort_step(method="explicit_eligibility_filter_with_attrition").model_copy(
+        update={
+            "expected_outputs": [
+                "artifact:cohort_defined",
+                "table:cohort_flow",
+                "table:cohort_attrition",
+            ]
+        }
+    )
+
+    findings = primary_analysis_cohort_plan_findings(plan=_plan(step))
+
+    assert len(findings) == 1
+    assert findings[0].validator == "plan_primary_analysis_cohort_integrity"
+    assert findings[0].severity == "error"
+    assert findings[0].detail == {
+        "issue": "primary_cohort_product_missing",
+        "step_id": step.step_id,
+        "declared_closed_candidates": [],
+    }
+    assert not primary_analysis_cohort_producer_uses_universe(
+        step=step,
+        plan=_plan(step),
+    )
+    execution_findings = primary_analysis_cohort_integrity_findings(
+        step=step,
+        plan=_plan(step),
+        step_summary={},
+        out_dir=tmp_path,
+        universe_path=tmp_path / "universe.parquet",
+        authoritative_cohort_path=tmp_path / "analysis_cohort.parquet",
+    )
+    assert len(execution_findings) == 1
+    assert execution_findings[0].detail["issue"] == "primary_cohort_product_missing"
+
+
+def test_semantic_eligibility_method_with_closed_cohort_is_accepted() -> None:
+    step = _cohort_step(method="explicit_eligibility_filter_with_attrition").model_copy(
+        update={
+            "expected_outputs": [
+                "cohort:analysis_set",
+                "table:cohort_flow",
+                "table:cohort_attrition",
+            ]
+        }
+    )
+
+    assert primary_analysis_cohort_plan_findings(plan=_plan(step)) == []
+    assert primary_analysis_cohort_producer_uses_universe(step=step, plan=_plan(step))
+
+
+def test_plan_preflight_rejects_multiple_primary_cohort_owners() -> None:
+    primary = _cohort_step()
+    competing = AnalysisStep(
+        step_id="02_other_cohort",
+        intent="Emit a competing primary cohort identity.",
+        inputs=["stay_id"],
+        expected_outputs=["dataset:analysis_cohort"],
+        method="data_preparation",
+    )
+
+    findings = primary_analysis_cohort_plan_findings(plan=_plan(primary, competing))
+
+    assert len(findings) == 1
+    assert findings[0].detail["step_id"] == primary.step_id
 
 
 def test_analysis_set_alias_is_a_closed_primary_cohort_product() -> None:
@@ -180,6 +279,10 @@ def test_named_cohort_product_must_match_planner_cohort_name() -> None:
         "cohort_definition_with_sensitivity",
         "cohort_definition_with_robustness",
         "cohort_definition_and_attrition_with_sensitivity",
+        "matched_cohort_construction",
+        "subgroup_cohort_definition",
+        "secondary_cohort_definition",
+        "external_validation_cohort_definition",
     ],
 )
 def test_primary_cohort_method_riders_cannot_claim_universe(method: str) -> None:
@@ -1088,6 +1191,77 @@ def test_same_ids_with_changed_authoritative_values_fail_closed(tmp_path: Path) 
     assert findings[0].detail["issue"] == "analysis_cohort_value_mismatch"
 
 
+def test_nullable_boolean_and_exact_zero_one_storage_are_equivalent(
+    tmp_path: Path,
+) -> None:
+    step = _cohort_step()
+    plan = _plan(step)
+    universe_path, authoritative_path, authoritative = _write_authorities(tmp_path)
+    universe = pd.read_parquet(universe_path)
+    universe["source_flag"] = pd.Series(
+        [True, False, None, True, None, False, True, None], dtype="boolean"
+    )
+    universe.to_parquet(universe_path, index=False)
+    authoritative = universe[universe["stay_id"].isin([3, 4, 6, 7])].copy()
+    authoritative_storage = authoritative.copy()
+    authoritative_storage["source_flag"] = authoritative_storage["source_flag"].astype(
+        "Float64"
+    )
+    authoritative_storage.to_parquet(authoritative_path, index=False)
+    out_dir = tmp_path / "outputs"
+    summary = _write_outputs(
+        out_dir,
+        produced=authoritative,
+        universe_n=8,
+        final_n=4,
+    )
+
+    assert (
+        primary_analysis_cohort_integrity_findings(
+            step=step,
+            plan=plan,
+            step_summary=summary,
+            out_dir=out_dir,
+            universe_path=universe_path,
+            authoritative_cohort_path=authoritative_path,
+        )
+        == []
+    )
+
+
+def test_nullable_boolean_storage_still_rejects_changed_flag(tmp_path: Path) -> None:
+    step = _cohort_step()
+    plan = _plan(step)
+    universe_path, authoritative_path, _authoritative = _write_authorities(tmp_path)
+    universe = pd.read_parquet(universe_path)
+    universe["source_flag"] = pd.Series(
+        [True, False, None, True, None, False, True, None], dtype="boolean"
+    )
+    universe.to_parquet(universe_path, index=False)
+    authoritative = universe[universe["stay_id"].isin([3, 4, 6, 7])].copy()
+    authoritative_storage = authoritative.copy()
+    authoritative_storage["source_flag"] = authoritative_storage["source_flag"].astype(
+        "Float64"
+    )
+    authoritative_storage.to_parquet(authoritative_path, index=False)
+    changed = authoritative.copy().reset_index(drop=True)
+    changed.loc[1, "source_flag"] = False
+    out_dir = tmp_path / "outputs"
+    summary = _write_outputs(out_dir, produced=changed, universe_n=8, final_n=4)
+
+    findings = primary_analysis_cohort_integrity_findings(
+        step=step,
+        plan=plan,
+        step_summary=summary,
+        out_dir=out_dir,
+        universe_path=universe_path,
+        authoritative_cohort_path=authoritative_path,
+    )
+
+    assert len(findings) == 1
+    assert findings[0].detail["issue"] == "analysis_cohort_value_mismatch"
+
+
 def test_primary_cohort_alias_participates_in_plan_contracts() -> None:
     from easyicu.research_agent.plan_utils import (
         _cohort_change_contract_applies,
@@ -1198,6 +1372,105 @@ def test_detailed_remaining_rows_schema_is_verified(tmp_path: Path) -> None:
         )
         == []
     )
+
+
+def test_detailed_attrition_accepts_host_bound_materialized_column_name(
+    tmp_path: Path,
+) -> None:
+    """A proven concept-to-column binding may name the actual column in QC."""
+
+    window = TimeWindow(
+        anchor="icu_admit",
+        start_offset_hours=0,
+        end_offset_hours=24,
+    )
+    definition = CohortDefinition(
+        name="primary",
+        inclusion=(
+            ConceptPredicate(
+                concept_id="age",
+                time_window=window,
+                aggregation="first",
+                op=">=",
+                value=18,
+            ),
+        ),
+    )
+    step = _cohort_step().model_copy(
+        update={"inputs": ["stay_id", "age_baseline_first"]}
+    )
+    plan = AnalysisPlan(
+        research_question="Test one host-bound cohort predicate.",
+        cohort=definition,
+        steps=[step],
+    )
+    context = SimpleNamespace(
+        primary_exposure="age_baseline_first",
+        target_outcome=None,
+        variables=[
+            SimpleNamespace(
+                name="age_baseline_first",
+                source_concept="age",
+                role=SimpleNamespace(value="exposure"),
+                analysis_window="icu_admit_0_24h",
+            )
+        ],
+    )
+    universe = pd.DataFrame(
+        {
+            "stay_id": [1, 2, 3, 4],
+            "age_baseline_first": [17, 18, 30, 16],
+        }
+    )
+    authoritative = universe.loc[universe["age_baseline_first"] >= 18].copy()
+    universe_path = tmp_path / "cohort.parquet"
+    authoritative_path = tmp_path / "cohort_analysis.parquet"
+    universe.to_parquet(universe_path, index=False)
+    authoritative.to_parquet(authoritative_path, index=False)
+    out_dir = tmp_path / "outputs"
+    summary = _write_outputs(
+        out_dir,
+        produced=authoritative,
+        universe_n=4,
+        final_n=2,
+    )
+    detailed = pd.DataFrame(
+        {
+            "criterion_id": ["universe", "include_01_age_baseline_first"],
+            "n_remaining_rows": [4, 2],
+            "n_excluded_rows": [0, 2],
+        }
+    )
+    detailed.to_csv(out_dir / "cohort_flow.csv", index=False)
+    detailed.to_csv(out_dir / "cohort_attrition.csv", index=False)
+
+    assert (
+        primary_analysis_cohort_integrity_findings(
+            step=step,
+            plan=plan,
+            context=context,
+            step_summary=summary,
+            out_dir=out_dir,
+            universe_path=universe_path,
+            authoritative_cohort_path=authoritative_path,
+        )
+        == []
+    )
+
+    detailed["criterion_id"] = ["universe", "include_01_unrelated_column"]
+    detailed.to_csv(out_dir / "cohort_flow.csv", index=False)
+    detailed.to_csv(out_dir / "cohort_attrition.csv", index=False)
+    findings = primary_analysis_cohort_integrity_findings(
+        step=step,
+        plan=plan,
+        context=context,
+        step_summary=summary,
+        out_dir=out_dir,
+        universe_path=universe_path,
+        authoritative_cohort_path=authoritative_path,
+    )
+
+    assert findings[0].detail["issue"] == "attrition_sequence_rule_ids_mismatch"
 
 
 def test_sequential_attrition_cannot_swap_planner_predicate_ids(

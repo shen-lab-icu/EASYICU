@@ -26,7 +26,7 @@ from pathlib import Path
 
 
 def test_sanitise_bibtex_key_strips_unsafe_chars(ra):
-    from easyicu.research_agent.bibtex import sanitise_bibtex_key
+    from easyicu.research_agent.reporting.bibtex import sanitise_bibtex_key
     assert sanitise_bibtex_key("vincent_sofa_1996") == "vincent_sofa_1996"
     assert sanitise_bibtex_key("Vincent JL — 1996") == "vincent_jl___1996" or \
            sanitise_bibtex_key("Vincent JL — 1996").startswith("vincent_jl")
@@ -39,7 +39,7 @@ def test_sanitise_bibtex_key_strips_unsafe_chars(ra):
 
 def test_render_bibtex_basic(ra):
     from easyicu.research_agent.literature import CitationRecord, LiteratureBundle
-    from easyicu.research_agent.bibtex import render_bibtex
+    from easyicu.research_agent.reporting.bibtex import render_bibtex
     bundle = LiteratureBundle(
         research_question="x",
         citations=[
@@ -82,7 +82,7 @@ def test_render_bibtex_basic(ra):
 
 def test_render_bibtex_disambiguates_duplicate_keys(ra):
     from easyicu.research_agent.literature import CitationRecord, LiteratureBundle
-    from easyicu.research_agent.bibtex import render_bibtex
+    from easyicu.research_agent.reporting.bibtex import render_bibtex
     bundle = LiteratureBundle(
         research_question="x",
         citations=[
@@ -97,7 +97,7 @@ def test_render_bibtex_disambiguates_duplicate_keys(ra):
 
 
 def test_render_bibtex_empty(ra):
-    from easyicu.research_agent.bibtex import render_bibtex
+    from easyicu.research_agent.reporting.bibtex import render_bibtex
     assert render_bibtex(None) == ""
     from easyicu.research_agent.literature import LiteratureBundle
     assert render_bibtex(LiteratureBundle(research_question="x", citations=[])) == ""
@@ -105,7 +105,7 @@ def test_render_bibtex_empty(ra):
 
 def test_render_bibtex_escapes_field_specials(ra):
     from easyicu.research_agent.literature import CitationRecord, LiteratureBundle
-    from easyicu.research_agent.bibtex import render_bibtex
+    from easyicu.research_agent.reporting.bibtex import render_bibtex
     bundle = LiteratureBundle(
         research_question="x",
         citations=[
@@ -123,7 +123,7 @@ def test_render_bibtex_escapes_field_specials(ra):
 
 def test_thebibliography_block(ra):
     from easyicu.research_agent.literature import CitationRecord, LiteratureBundle
-    from easyicu.research_agent.bibtex import render_thebibliography_block
+    from easyicu.research_agent.reporting.bibtex import render_thebibliography_block
     bundle = LiteratureBundle(
         research_question="x",
         citations=[
@@ -146,7 +146,7 @@ def test_thebibliography_block(ra):
 
 def test_scaffold_to_latex_emits_bibliography_directives(ra):
     from easyicu.research_agent.literature import CitationRecord, LiteratureBundle
-    from easyicu.research_agent.latex import scaffold_to_latex
+    from easyicu.research_agent.reporting.latex import scaffold_to_latex
 
     bundle = LiteratureBundle(
         research_question="x",
@@ -168,7 +168,7 @@ def test_scaffold_to_latex_emits_bibliography_directives(ra):
 
 def test_scaffold_to_latex_inline_bibliography_fallback(ra):
     from easyicu.research_agent.literature import CitationRecord, LiteratureBundle
-    from easyicu.research_agent.latex import scaffold_to_latex
+    from easyicu.research_agent.reporting.latex import scaffold_to_latex
 
     bundle = LiteratureBundle(
         research_question="x",
@@ -189,7 +189,7 @@ def test_scaffold_to_latex_inline_bibliography_fallback(ra):
 
 def test_scaffold_to_latex_no_bibliography(ra):
     """Without a bundle, no References section / nocite is emitted."""
-    from easyicu.research_agent.latex import scaffold_to_latex
+    from easyicu.research_agent.reporting.latex import scaffold_to_latex
     tex = scaffold_to_latex(markdown="# Methods\n\nbody\n", bibliography=None)
     assert r"\bibliography{" not in tex
     assert r"\nocite{" not in tex
@@ -197,7 +197,7 @@ def test_scaffold_to_latex_no_bibliography(ra):
 
 
 def test_latex_template_preamble_supports_venues(ra):
-    from easyicu.research_agent.latex import latex_template_preamble, scaffold_to_latex
+    from easyicu.research_agent.reporting.latex import latex_template_preamble, scaffold_to_latex
 
     assert r"\documentclass{nature}" in latex_template_preamble("nature")
     assert "sn-jnl" in latex_template_preamble("npj")

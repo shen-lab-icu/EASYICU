@@ -3,8 +3,8 @@
 Two layers exercised:
 
 * ``CostMeter`` + ``MeteredClient`` in isolation — token capture from
-  an inner client's ``last_usage`` (authoritative path) and from the
-  ``chars/4`` fallback when the inner client doesn't expose usage.
+  a call-scoped ``complete_with_usage`` result (authoritative path) and from
+  the ``chars/4`` fallback when the inner client doesn't expose usage.
 * End-to-end: ``ResearchAgentPipeline(enable_cost_tracking=True)``
   populates ``manifest.cost_records`` with multiple roles, and writes
   ``cost_summary.md`` + ``cost_records.json`` to the run directory.
@@ -13,10 +13,11 @@ Two layers exercised:
 from __future__ import annotations
 
 import json
+import threading
+import time
 from pathlib import Path
 
 import pytest
-
 
 # ---------------------------------------------------------------------------
 # CostMeter unit tests
@@ -25,27 +26,24 @@ import pytest
 
 def test_meter_records_authoritative_usage_when_inner_exposes_it(ra):
     LLMMessage = ra.LLMRouter  # ensure llm module is loaded for type
-    from easyicu.research_agent.llm import LLMMessage  # noqa: F401
+    from easyicu.research_agent.providers.llm import LLMMessage  # noqa: F401
 
     class _ClientWithUsage:
         name = "stub-with-usage"
 
-        def __init__(self) -> None:
-            self.last_usage = None
-
-        def complete(self, messages, *, max_tokens=2048, temperature=0.2):
-            self.last_usage = {
+        def complete_with_usage(self, messages, *, max_tokens=2048, temperature=0.2):
+            return "OK", {
                 "prompt_tokens": 123,
                 "completion_tokens": 45,
                 "total_tokens": 168,
             }
-            return "OK"
 
     inner = _ClientWithUsage()
     meter = ra.CostMeter()
     metered = ra.MeteredClient(inner, role="planner", meter=meter)
 
-    from easyicu.research_agent.llm import LLMMessage as _Msg
+    from easyicu.research_agent.providers.llm import LLMMessage as _Msg
+
     metered.complete([_Msg(role="user", content="hi")])
     assert len(meter.records) == 1
     rec = meter.records[0]
@@ -58,7 +56,7 @@ def test_meter_records_authoritative_usage_when_inner_exposes_it(ra):
 
 
 def test_meter_falls_back_to_heuristic_when_no_last_usage(ra):
-    from easyicu.research_agent.llm import LLMMessage
+    from easyicu.research_agent.providers.llm import LLMMessage
 
     class _ClientNoUsage:
         name = "stub-no-usage"
@@ -81,8 +79,10 @@ def test_meter_falls_back_to_heuristic_when_no_last_usage(ra):
 def test_estimated_cost_uses_price_table(ra):
     meter = ra.CostMeter(price_table={"toy-model": (1.0, 2.0)})
     rec = meter.record(
-        role="planner", model="toy-model",
-        prompt_tokens=1_000_000, completion_tokens=500_000,
+        role="planner",
+        model="toy-model",
+        prompt_tokens=1_000_000,
+        completion_tokens=500_000,
     )
     # 1M @ $1 prompt + 0.5M @ $2 completion = $1 + $1 = $2
     assert rec.estimated_cost_usd == pytest.approx(2.0)
@@ -94,8 +94,10 @@ def test_deepseek_models_are_in_default_price_table(ra):
     meter = ra.CostMeter()
     for model in ("deepseek-chat", "deepseek-reasoner"):
         rec = meter.record(
-            role="coder", model=model,
-            prompt_tokens=1_000_000, completion_tokens=0,
+            role="coder",
+            model=model,
+            prompt_tokens=1_000_000,
+            completion_tokens=0,
         )
         assert rec.estimated_cost_usd is not None
         assert rec.estimated_cost_usd > 0
@@ -106,8 +108,10 @@ def test_free_models_record_zero_cost_not_none(ra):
     # row (cost == 0.0) rather than dropping to ``None``.
     meter = ra.CostMeter()
     rec = meter.record(
-        role="analyzer", model="openai/gpt-oss-120b:free",
-        prompt_tokens=200_000, completion_tokens=20_000,
+        role="analyzer",
+        model="openai/gpt-oss-120b:free",
+        prompt_tokens=200_000,
+        completion_tokens=20_000,
     )
     assert rec.estimated_cost_usd == pytest.approx(0.0)
 
@@ -115,8 +119,10 @@ def test_free_models_record_zero_cost_not_none(ra):
 def test_estimated_cost_none_for_unknown_model(ra):
     meter = ra.CostMeter()
     rec = meter.record(
-        role="planner", model="some-unknown-model-9000",
-        prompt_tokens=10, completion_tokens=20,
+        role="planner",
+        model="some-unknown-model-9000",
+        prompt_tokens=10,
+        completion_tokens=20,
     )
     assert rec.estimated_cost_usd is None
 
@@ -155,33 +161,222 @@ def test_summary_handles_empty_meter(ra):
     assert s["any_heuristic"] is False
 
 
-def test_metered_client_does_not_double_count_when_inner_keeps_stale_usage(ra):
-    """If the inner client's ``last_usage`` is left over from a prior call,
-    the meter must reset it before invoking ``complete`` so the new
-    record reflects only the new call."""
-    from easyicu.research_agent.llm import LLMMessage
+def test_metered_client_never_trusts_shared_stale_usage(ra):
+    """Legacy shared usage is ignored rather than misattributed."""
+    from easyicu.research_agent.providers.llm import LLMMessage
 
     class _ClientStale:
         name = "stub-stale"
 
         def __init__(self) -> None:
             # Pre-populate as if from a previous call.
-            self.last_usage = {"prompt_tokens": 9999,
-                                "completion_tokens": 9999,
-                                "total_tokens": 19998}
+            self.last_usage = {
+                "prompt_tokens": 9999,
+                "completion_tokens": 9999,
+                "total_tokens": 19998,
+            }
 
         def complete(self, messages, *, max_tokens=2048, temperature=0.2):
-            # This call's "real" usage:
-            self.last_usage = {"prompt_tokens": 10,
-                                "completion_tokens": 5,
-                                "total_tokens": 15}
+            self.last_usage = {
+                "prompt_tokens": 10,
+                "completion_tokens": 5,
+                "total_tokens": 15,
+            }
             return "x"
 
     meter = ra.CostMeter()
     metered = ra.MeteredClient(_ClientStale(), role="writer", meter=meter)
     metered.complete([LLMMessage(role="user", content="x")])
-    assert meter.records[-1].prompt_tokens == 10
-    assert meter.records[-1].completion_tokens == 5
+    assert meter.records[-1].is_heuristic is True
+    assert meter.records[-1].prompt_tokens != 10
+
+
+def test_transport_receipt_terminalizes_keyboard_interrupt_without_content(
+    ra, tmp_path
+):
+    from easyicu.research_agent.providers.llm import LLMMessage
+
+    class _InterruptedClient:
+        name = "interrupted-provider"
+
+        def complete_with_usage(self, messages, **kwargs):
+            raise KeyboardInterrupt
+
+    meter = ra.CostMeter(runtime_dir=tmp_path / ".runtime")
+    metered = ra.MeteredClient(_InterruptedClient(), role="planner", meter=meter)
+
+    with pytest.raises(KeyboardInterrupt):
+        metered.complete([LLMMessage(role="user", content="private prompt sentinel")])
+
+    receipts = list((tmp_path / ".runtime/provider_transport_receipts").glob("*.json"))
+    assert len(receipts) == 1
+    payload = json.loads(receipts[0].read_text(encoding="utf-8"))
+    assert payload["state"] == "cancelled"
+    assert payload["error_type"] == "KeyboardInterrupt"
+    assert payload["role"] == "planner"
+    assert payload["request_sha256"]
+    assert "private prompt sentinel" not in receipts[0].read_text(encoding="utf-8")
+    assert meter.records == []
+
+
+def test_transport_receipt_records_completed_call_usage(ra, tmp_path):
+    from easyicu.research_agent.providers.llm import LLMMessage
+
+    class _CompletedClient:
+        name = "completed-provider"
+
+        def complete_with_usage(self, messages, **kwargs):
+            return "private response sentinel", {
+                "prompt_tokens": 7,
+                "completion_tokens": 3,
+            }
+
+    meter = ra.CostMeter(runtime_dir=tmp_path / ".runtime")
+    metered = ra.MeteredClient(_CompletedClient(), role="coder", meter=meter)
+    assert metered.complete([LLMMessage(role="user", content="prompt")]) == (
+        "private response sentinel"
+    )
+
+    receipt = next((tmp_path / ".runtime/provider_transport_receipts").glob("*.json"))
+    raw = receipt.read_text(encoding="utf-8")
+    payload = json.loads(raw)
+    assert payload["state"] == "completed"
+    assert payload["usage"] == {
+        "prompt_tokens": 7,
+        "completion_tokens": 3,
+        "total_tokens": 10,
+        "is_heuristic": False,
+    }
+    assert payload["response_sha256"]
+    assert "private response sentinel" not in raw
+
+
+def test_concurrent_writer_usage_cannot_be_charged_to_another_role(ra):
+    from easyicu.research_agent.providers.cost import metered_role_resolver
+    from easyicu.research_agent.providers.llm import LLMMessage
+
+    class SharedUsageClient:
+        name = "shared-provider"
+
+        def __init__(self) -> None:
+            self.calls_entered = threading.Barrier(2)
+
+        def complete_with_usage(self, messages, **_kwargs):  # noqa: ANN003
+            role = messages[0].content
+            self.calls_entered.wait(timeout=2)
+            time.sleep(0.15)
+            if role == "writer":
+                return "writer result", {
+                    "prompt_tokens": 11,
+                    "completion_tokens": 3,
+                }
+            return "analyzer result", {
+                "prompt_tokens": 29,
+                "completion_tokens": 7,
+            }
+
+    shared = SharedUsageClient()
+    meter = ra.CostMeter()
+    resolver = metered_role_resolver(shared, meter)
+    writer = resolver("writer")
+    analyzer = resolver("analyzer")
+    writer_thread = threading.Thread(
+        target=lambda: writer.complete([LLMMessage(role="user", content="writer")])
+    )
+    analyzer_thread = threading.Thread(
+        target=lambda: analyzer.complete([LLMMessage(role="user", content="analyzer")])
+    )
+    started = time.monotonic()
+    writer_thread.start()
+    analyzer_thread.start()
+    writer_thread.join(timeout=2)
+    analyzer_thread.join(timeout=2)
+    elapsed = time.monotonic() - started
+
+    by_role = {record.role: record for record in meter.records}
+    assert by_role["writer"].prompt_tokens == 11
+    assert by_role["writer"].completion_tokens == 3
+    assert by_role["analyzer"].prompt_tokens == 29
+    assert by_role["analyzer"].completion_tokens == 7
+    assert elapsed < 0.27
+
+
+def test_reproducibility_wrapper_keeps_concurrent_provider_calls_parallel(ra):
+    from easyicu.research_agent.providers.llm import LLMMessage
+    from easyicu.research_agent.replication.envelope import envelope_role_resolver
+
+    class SharedUsageClient:
+        name = "shared-provider"
+
+        def __init__(self) -> None:
+            self.calls_entered = threading.Barrier(2)
+
+        def complete_with_usage(self, messages, **_kwargs):  # noqa: ANN003
+            role = messages[0].content
+            self.calls_entered.wait(timeout=2)
+            time.sleep(0.15)
+            if role == "writer":
+                return "writer result", {
+                    "prompt_tokens": 31,
+                    "completion_tokens": 5,
+                }
+            return "analyzer result", {
+                "prompt_tokens": 41,
+                "completion_tokens": 9,
+            }
+
+    shared = SharedUsageClient()
+    envelope = ra.ReproEnvelope(run_id="parallel-usage")
+    envelope_resolver = envelope_role_resolver(shared, envelope, seed=11)
+    meter = ra.CostMeter()
+    writer = ra.MeteredClient(envelope_resolver("writer"), role="writer", meter=meter)
+    analyzer = ra.MeteredClient(
+        envelope_resolver("analyzer"), role="analyzer", meter=meter
+    )
+    writer_thread = threading.Thread(
+        target=lambda: writer.complete([LLMMessage(role="user", content="writer")])
+    )
+    analyzer_thread = threading.Thread(
+        target=lambda: analyzer.complete([LLMMessage(role="user", content="analyzer")])
+    )
+    started = time.monotonic()
+    writer_thread.start()
+    analyzer_thread.start()
+    writer_thread.join(timeout=2)
+    analyzer_thread.join(timeout=2)
+    elapsed = time.monotonic() - started
+
+    by_role = {record.role: record for record in meter.records}
+    assert by_role["writer"].prompt_tokens == 31
+    assert by_role["analyzer"].prompt_tokens == 41
+    assert all(not record.is_heuristic for record in meter.records)
+    assert len(envelope.calls) == 2
+    assert elapsed < 0.27
+
+
+def test_meter_uses_reproducibility_wrappers_resolved_model_identity(ra):
+    from easyicu.research_agent.providers.llm import LLMMessage
+
+    class _OpenAIStyleClient:
+        name = "openai"
+        _model = "gpt-4o"
+
+        def complete_with_usage(self, messages, **_kwargs):  # noqa: ANN003
+            return "ok", {"prompt_tokens": 1_000, "completion_tokens": 100}
+
+    envelope = ra.ReproEnvelope(run_id="cost-model-identity")
+    recording = ra.ReproRecordingClient(
+        _OpenAIStyleClient(),
+        role="planner",
+        envelope=envelope,
+    )
+    meter = ra.CostMeter(price_table={"gpt-4o": (1.0, 2.0)})
+    metered = ra.MeteredClient(recording, role="planner", meter=meter)
+
+    metered.complete([LLMMessage(role="user", content="plan")])
+
+    assert meter.records[0].model == "gpt-4o"
+    assert meter.records[0].estimated_cost_usd is not None
 
 
 # ---------------------------------------------------------------------------
@@ -189,12 +384,18 @@ def test_metered_client_does_not_double_count_when_inner_keeps_stale_usage(ra):
 # ---------------------------------------------------------------------------
 
 
-def test_pipeline_with_cost_tracking_records_per_role_calls(ra, synthetic_cohort, tmp_path):
+def test_pipeline_with_cost_tracking_records_per_role_calls(
+    ra, synthetic_cohort, tmp_path
+):
     """A full pipeline run with ``enable_cost_tracking=True`` must:
     1. populate ``manifest.cost_records`` with at least one entry per
        agent role that actually ran;
     2. write ``cost_summary.md`` + ``cost_records.json`` artefacts to
-       the run directory and register both in the evidence store."""
+       the run directory and register both in the evidence store.
+
+    The built-in contextual mock now produces valid deterministic scripts, so
+    the clean path reaches Analyzer and Writer without spending a repair call.
+    """
     pipeline = ra.ResearchAgentPipeline(
         workdir=str(tmp_path),
         llm=ra.MockLLMClient(),
@@ -205,8 +406,9 @@ def test_pipeline_with_cost_tracking_records_per_role_calls(ra, synthetic_cohort
         enable_memory=False,
         enable_latex=False,
     )
-    result = pipeline.run(skill="association_analysis", cohort=synthetic_cohort,
-                          database="synthetic")
+    result = pipeline.run(
+        skill="association_analysis", cohort=synthetic_cohort, database="synthetic"
+    )
 
     run_dir = Path(result.workdir)
     assert (run_dir / "cost_summary.md").exists()
@@ -225,11 +427,11 @@ def test_pipeline_with_cost_tracking_records_per_role_calls(ra, synthetic_cohort
 
     records = json.loads((run_dir / "cost_records.json").read_text(encoding="utf-8"))
     assert isinstance(records, list)
-    assert len(records) >= 2  # coder + analyzer at minimum (writer is also there)
+    assert len(records) >= 2
 
-    # At least the coder, analyzer and writer roles should appear.
     roles = {r["role"] for r in records if r.get("role")}
     assert "coder" in roles
+    assert "repair" not in roles
     assert "analyzer" in roles
     assert "writer" in roles
 
@@ -239,7 +441,9 @@ def test_pipeline_with_cost_tracking_records_per_role_calls(ra, synthetic_cohort
     assert len(manifest["cost_records"]) == len(records)
 
 
-def test_pipeline_without_cost_tracking_writes_no_cost_files(ra, synthetic_cohort, tmp_path):
+def test_pipeline_without_cost_tracking_writes_no_cost_files(
+    ra, synthetic_cohort, tmp_path
+):
     """Default pipeline behaviour: no cost_summary.md, no cost_records.json,
     empty cost_records in the manifest."""
     pipeline = ra.ResearchAgentPipeline(
@@ -251,8 +455,9 @@ def test_pipeline_without_cost_tracking_writes_no_cost_files(ra, synthetic_cohor
         enable_memory=False,
         enable_latex=False,
     )
-    result = pipeline.run(skill="association_analysis", cohort=synthetic_cohort,
-                          database="synthetic")
+    result = pipeline.run(
+        skill="association_analysis", cohort=synthetic_cohort, database="synthetic"
+    )
 
     run_dir = Path(result.workdir)
     assert not (run_dir / "cost_summary.md").exists()

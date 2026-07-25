@@ -18,9 +18,8 @@ Pins:
 6. End-to-end: ``ResearchAgentPipeline.reflect_and_persist_experience``
    reads a ``run_status.json`` and writes back records via the bank
    when enabled; is a no-op when disabled.
-7. Planner integration: retrieved records are surfaced to the planner
-   prompt as advisory hints, with explicit language that ICU rules
-   still come from the concept dictionary and validators.
+7. Planner isolation: retrieved legacy records never enter Planner context;
+   completed-run lessons are mirrored only into permissioned quarantine.
 """
 
 from __future__ import annotations
@@ -30,13 +29,12 @@ from pathlib import Path
 
 import pytest
 
-from easyicu.research_agent.experience import (
+from easyicu.research_agent.learning.experience import (
     ExperienceBank,
     ExperienceRecord,
     jaccard_similarity,
     mine_experience_from_run,
 )
-
 
 # ---------------------------------------------------------------------
 # 1. Jaccard similarity
@@ -185,7 +183,9 @@ def test_retrieve_top_k_and_min_similarity(tmp_path: Path) -> None:
     # Unrelated record below threshold
     bank.add(_rec(research_question="completely unrelated topic", summary="N"))
     hits = bank.retrieve(
-        research_question="lactate sepsis target", top_k=2, min_similarity=0.3,
+        research_question="lactate sepsis target",
+        top_k=2,
+        min_similarity=0.3,
     )
     assert len(hits) == 2
     for rec, score in hits:
@@ -306,7 +306,7 @@ def test_mine_is_deterministic_on_same_inputs() -> None:
 
 def _make_pipeline_with_bank(tmp_path: Path, enable: bool):
     from easyicu.research_agent.pipeline import ResearchAgentPipeline
-    from easyicu.research_agent.llm import MockLLMClient
+    from easyicu.research_agent.providers.mocks import MockLLMClient
 
     return ResearchAgentPipeline(
         workdir=tmp_path,
@@ -412,7 +412,7 @@ def test_pipeline_retrieve_returns_hits_when_enabled(tmp_path: Path) -> None:
     assert hits[0][0].summary.startswith("Prefer load_sepsis3")
 
 
-def test_pipeline_surfaces_experience_hints_to_planner_prompt(
+def test_pipeline_does_not_surface_unreviewed_experience_to_planner_prompt(
     ra,
     synthetic_cohort,
     tmp_path: Path,
@@ -429,31 +429,17 @@ def test_pipeline_surfaces_experience_hints_to_planner_prompt(
         )
     )
 
-    class _PlannerSpy(ra.MockLLMClient):
-        def __init__(self) -> None:
-            super().__init__()
-            self.planner_prompts = []
+    from easyicu.research_agent.providers.mocks import PatternScriptedMockLLMClient
 
-        def complete(self, messages, *, max_tokens=2048, temperature=0.2):
-            prompt = next(
-                (m.content for m in reversed(messages) if m.role == "user"),
-                "",
-            )
-            if "ICU-AWARE RESEARCH PLAN" in prompt:
-                self.planner_prompts.append(prompt)
-            return super().complete(
-                messages,
-                max_tokens=max_tokens,
-                temperature=temperature,
-            )
-
-    planner = _PlannerSpy()
+    planner = PatternScriptedMockLLMClient([], contextual_default=True)
     router = ra.LLMRouter(default=ra.MockLLMClient(), planner=planner)
     pipeline = ra.ResearchAgentPipeline(
         workdir=tmp_path / "runs",
         llm=router,
+        enable_memory=True,
         enable_experience_bank=True,
         experience_bank_path=bank_path,
+        runner_kind="subprocess",
     )
 
     result = pipeline.run(
@@ -465,21 +451,57 @@ def test_pipeline_surfaces_experience_hints_to_planner_prompt(
         stop_after_analysis=True,
     )
 
-    assert planner.planner_prompts, "planner prompt was not captured"
-    prompt = "\n".join(planner.planner_prompts)
-    assert "Experience hints for planner:" in prompt
-    assert "Prefer load_sepsis3 over manual ICD regex." in prompt
-    assert "not ICU rules" in prompt
-    assert (
-        "cohort definitions and clinical rules still come from the "
-        "concept dictionary and validators"
-    ) in prompt
+    planner_prompts = [
+        message.content
+        for messages, _kwargs in planner.calls
+        for message in messages
+        if message.role == "user"
+        and "ICU-AWARE RESEARCH PLAN" in message.content
+    ]
+    assert planner_prompts, "planner prompt was not captured"
+    prompt = "\n".join(planner_prompts)
+    assert "Experience hints for planner:" not in prompt
+    assert "Prefer load_sepsis3 over manual ICD regex." not in prompt
 
     audit_path = Path(result.workdir) / "experience_hints.md"
-    audit_text = audit_path.read_text(encoding="utf-8")
-    assert "Selected 1 card(s)" in audit_text
-    assert "Prefer load_sepsis3 over manual ICD regex." in audit_text
-    assert "not ICU rules" in audit_text
+    assert not audit_path.exists()
+    quarantined = list((tmp_path / "runs" / ".memory_v2").rglob("*.json"))
+    assert len(quarantined) == 1
+    payload = json.loads(quarantined[0].read_text(encoding="utf-8"))
+    assert payload["review_status"] == "quarantined"
+    assert payload["namespace"].startswith("run_lessons/quarantine/")
+
+
+def test_permissioned_quarantine_mirror_failure_is_nonfatal_to_completed_run(
+    ra,
+    synthetic_cohort,
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    def _fail_quarantine(*_args, **_kwargs):
+        raise OSError("simulated quarantine storage failure")
+
+    monkeypatch.setattr(
+        "easyicu.research_agent.orchestration.finalize.quarantine_run_lesson",
+        _fail_quarantine,
+    )
+    pipeline = ra.ResearchAgentPipeline(
+        workdir=tmp_path / "runs",
+        llm=ra.MockLLMClient(),
+        enable_memory=True,
+        runner_kind="subprocess",
+    )
+
+    result = pipeline.run(
+        question="Does SOFA-2 predict mortality on MIMIC-IV?",
+        cohort=synthetic_cohort,
+        cohort_name="sepsis3_aware",
+        database="miiv",
+        target_outcome="death",
+        stop_after_analysis=True,
+    )
+
+    assert Path(result.manifest_path).exists()
 
 
 def test_pipeline_reflect_handles_missing_run_status(tmp_path: Path) -> None:

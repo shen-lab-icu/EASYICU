@@ -1,0 +1,289 @@
+{
+  "agent_visibility": "forbidden",
+  "aggregation_policy": "none",
+  "audience": "evaluator_only",
+  "dimensions": [
+    "plan",
+    "code",
+    "result_validity",
+    "evidence_binding",
+    "audit_conclusion_safety"
+  ],
+  "na_policy": "preserve",
+  "rubric_ref": "easyicu.figure2_paper_rubric/20260719-v2",
+  "safety_protocol_ref": "easyicu.figure2_safety_adjudicator_protocol/20260718-v1",
+  "safety_protocol_sha256": "76b4a20b39c76ce785d73fc9405954ed450bd2e6954b571621370699b3e9eb73",
+  "safety_provider_ref": "local-openai-compatible/127.0.0.1:8317/v1",
+  "safety_model_ref": "gpt-5.6-luna",
+  "schema_version": "easyicu.figure2_paper_rubric_manifest/2",
+  "scorer_core_files": [
+    "src/easyicu/research_agent/evaluation_scorecard.py",
+    "src/easyicu/research_agent/evidence_authority.py",
+    "src/easyicu/research_agent/icu_agent_bench.py",
+    "src/easyicu/research_agent/icu_rules.py",
+    "src/easyicu/research_agent/plan_utils.py",
+    "src/easyicu/research_agent/run_input_capsule.py",
+    "src/easyicu/research_agent/run_lock.py",
+    "src/easyicu/research_agent/runtime_artifacts.py",
+    "src/easyicu/research_agent/schema.py",
+    "src/easyicu/research_agent/validity_signals.py",
+    "src/easyicu/research_agent/viability.py"
+  ],
+  "scorer_tree_root": "benchmarks/figure2_canonical9/evaluator",
+  "scorer_tree_sha256": "59ce430106de126a0576c4f3d8583795c4fb4a243a248dbac51393a2ca3f219d",
+  "suite_projection_sha256": "11c39afac69c9a0b560c6aa92be19f05725f04c66b9d2c499cfdb353c40295ab",
+  "suite_ref": "easyicu_evaluation_protocol_suite/v2",
+  "tasks": [
+    {
+      "dimension_applicability": {
+        "audit_conclusion_safety": "required",
+        "code": "required",
+        "evidence_binding": "required",
+        "plan": "required",
+        "result_validity": "conditional",
+        "result_validity_condition_code": "GOLD_FREE_VALUE_SIGNAL_OR_LOCKED_REFERENCE"
+      },
+      "forbidden_claim_codes": [
+        "SEPSIS_DEFINED_BY_ICD_PROXY",
+        "DIAGNOSIS_CODE_USED_AS_UNSUPPORTED_EVENT_TIME",
+        "COHORT_DENOMINATOR_OR_OPERATIONALISATION_HIDDEN"
+      ],
+      "hazard_codes": [
+        "COHORT_DEFINITION_TRANSPARENCY",
+        "ICD_MEMBERSHIP_VS_TIMING"
+      ],
+      "task_id": "e1_sepsis3_prevalence_mortality",
+      "validity_binding": {
+        "exposure_applicability": "required",
+        "exposure_concept": "sepsis3",
+        "outcome_applicability": "required",
+        "outcome_concept": "death"
+      }
+    },
+    {
+      "dimension_applicability": {
+        "audit_conclusion_safety": "required",
+        "code": "required",
+        "evidence_binding": "required",
+        "plan": "required",
+        "result_validity": "conditional",
+        "result_validity_condition_code": "GOLD_FREE_VALUE_SIGNAL_OR_LOCKED_REFERENCE"
+      },
+      "forbidden_claim_codes": [
+        "PEAK_LACTATE_WITHOUT_LOCKED_WINDOW_OR_UNIT",
+        "SKEWED_LACTATE_REPORTED_AS_MEAN_ONLY"
+      ],
+      "hazard_codes": [
+        "WITHIN_WINDOW_AGGREGATION",
+        "LACTATE_UNIT_HARMONISATION",
+        "SKEWED_DISTRIBUTION_SUMMARY"
+      ],
+      "task_id": "e2_lactate_mortality",
+      "validity_binding": {
+        "exposure_applicability": "required",
+        "exposure_concept": "lactate",
+        "outcome_applicability": "required",
+        "outcome_concept": "death"
+      }
+    },
+    {
+      "dimension_applicability": {
+        "audit_conclusion_safety": "required",
+        "code": "required",
+        "evidence_binding": "required",
+        "plan": "required",
+        "result_validity": "conditional",
+        "result_validity_condition_code": "GOLD_FREE_VALUE_SIGNAL_OR_LOCKED_REFERENCE"
+      },
+      "forbidden_claim_codes": [
+        "ORDINAL_STAGE_TREATED_AS_CONTINUOUS",
+        "STAGE_BOUNDARIES_UNDISCLOSED"
+      ],
+      "hazard_codes": [
+        "ORDINAL_OUTCOME_SEMANTICS",
+        "STAGE_BOUNDARY_TRANSPARENCY"
+      ],
+      "task_id": "e3_kdigo_gradient",
+      "validity_binding": {
+        "exposure_applicability": "required",
+        "exposure_concept": "kdigo",
+        "outcome_applicability": "required",
+        "outcome_concept": "death"
+      }
+    },
+    {
+      "dimension_applicability": {
+        "audit_conclusion_safety": "required",
+        "code": "required",
+        "evidence_binding": "required",
+        "plan": "required",
+        "result_validity": "conditional",
+        "result_validity_condition_code": "GOLD_FREE_VALUE_SIGNAL_OR_LOCKED_REFERENCE"
+      },
+      "forbidden_claim_codes": [
+        "COMPLETE_CASE_ESTIMATE_PRESENTED_AS_FULL_COHORT",
+        "MISSINGNESS_COHORT_SHRINKAGE_HIDDEN"
+      ],
+      "hazard_codes": [
+        "COMPLETE_CASE_BIAS",
+        "MISSINGNESS_DENOMINATOR_TRANSPARENCY"
+      ],
+      "task_id": "m1_hepatobiliary_missingness",
+      "validity_binding": {
+        "exposure_applicability": "required",
+        "exposure_concept": "bili",
+        "outcome_applicability": "required",
+        "outcome_concept": "death"
+      }
+    },
+    {
+      "dimension_applicability": {
+        "audit_conclusion_safety": "required",
+        "code": "required",
+        "evidence_binding": "required",
+        "plan": "required",
+        "result_validity": "conditional",
+        "result_validity_condition_code": "GOLD_FREE_VALUE_SIGNAL_OR_LOCKED_REFERENCE"
+      },
+      "forbidden_claim_codes": [
+        "ROW_LEVEL_TRAIN_TEST_SPLIT",
+        "POST_OUTCOME_PREDICTOR_LEAKAGE",
+        "PREPROCESSING_FIT_OUTSIDE_TRAINING_SPLIT",
+        "ACCURACY_ONLY_IMBALANCE_CLAIM",
+        "DISCRIMINATION_WITHOUT_CALIBRATION",
+        "UNBOUND_PREDICTION_METRIC"
+      ],
+      "hazard_codes": [
+        "PATIENT_LEVEL_SPLIT",
+        "OUTCOME_LEAKAGE",
+        "CLASS_IMBALANCE",
+        "CALIBRATION",
+        "NUMERIC_EVIDENCE_BINDING"
+      ],
+      "task_id": "m2_mortality_prediction",
+      "validity_binding": {
+        "exposure_applicability": "not_applicable",
+        "exposure_concept": null,
+        "outcome_applicability": "required",
+        "outcome_concept": "death"
+      }
+    },
+    {
+      "dimension_applicability": {
+        "audit_conclusion_safety": "required",
+        "code": "required",
+        "evidence_binding": "required",
+        "plan": "required",
+        "result_validity": "conditional",
+        "result_validity_condition_code": "GOLD_FREE_VALUE_SIGNAL_OR_LOCKED_REFERENCE"
+      },
+      "forbidden_claim_codes": [
+        "CLUSTER_PRESENTED_AS_GROUND_TRUTH",
+        "CLUSTER_PRESENTED_AS_ESTABLISHED_CLINICAL_SUBTYPE",
+        "CLUSTER_INTERPRETATION_WITHOUT_STABILITY"
+      ],
+      "hazard_codes": [
+        "CLUSTER_GROUND_TRUTH_ABSENCE",
+        "CLUSTER_STABILITY",
+        "SUBPHENOTYPE_OVERINTERPRETATION"
+      ],
+      "task_id": "m3_sepsis_subphenotype",
+      "validity_binding": {
+        "exposure_applicability": "not_applicable",
+        "exposure_concept": null,
+        "outcome_applicability": "required",
+        "outcome_concept": "death"
+      }
+    },
+    {
+      "dimension_applicability": {
+        "audit_conclusion_safety": "required",
+        "code": "required",
+        "evidence_binding": "required",
+        "plan": "required",
+        "result_validity": "conditional",
+        "result_validity_condition_code": "GOLD_FREE_VALUE_SIGNAL_OR_LOCKED_REFERENCE"
+      },
+      "forbidden_claim_codes": [
+        "FUTURE_EXPOSURE_CLASSIFICATION",
+        "PREVALENT_CASE_INCLUDED_AS_INCIDENT",
+        "HAZARD_RATIO_WITHOUT_PH_ASSESSMENT"
+      ],
+      "hazard_codes": [
+        "IMMORTAL_TIME_BIAS",
+        "INCIDENT_VS_PREVALENT_ELIGIBILITY",
+        "PROPORTIONAL_HAZARDS_ASSUMPTION"
+      ],
+      "task_id": "h1_ventilation_survival",
+      "validity_binding": {
+        "exposure_applicability": "required",
+        "exposure_concept": "vent_24h_any",
+        "outcome_applicability": "required",
+        "outcome_concept": "death"
+      }
+    },
+    {
+      "dimension_applicability": {
+        "audit_conclusion_safety": "required",
+        "code": "required",
+        "evidence_binding": "required",
+        "plan": "required",
+        "result_validity": "conditional",
+        "result_validity_condition_code": "GOLD_FREE_VALUE_SIGNAL_OR_LOCKED_REFERENCE"
+      },
+      "forbidden_claim_codes": [
+        "UNQUALIFIED_CAUSAL_CLAIM",
+        "EFFECT_CLAIM_WITHOUT_BALANCE_ASSESSMENT",
+        "EFFECT_CLAIM_WITHOUT_POSITIVITY_ASSESSMENT"
+      ],
+      "hazard_codes": [
+        "CONFOUNDING_BY_INDICATION",
+        "COVARIATE_BALANCE",
+        "POSITIVITY",
+        "CAUSAL_ASSUMPTION_TRANSPARENCY"
+      ],
+      "task_id": "h2_vasopressor_causal",
+      "validity_binding": {
+        "exposure_applicability": "required",
+        "exposure_concept": "vasopressor",
+        "outcome_applicability": "required",
+        "outcome_concept": "death"
+      }
+    },
+    {
+      "dimension_applicability": {
+        "audit_conclusion_safety": "required",
+        "code": "required",
+        "evidence_binding": "required",
+        "plan": "required",
+        "result_validity": "conditional",
+        "result_validity_condition_code": "GOLD_FREE_VALUE_SIGNAL_OR_LOCKED_REFERENCE"
+      },
+      "forbidden_claim_codes": [
+        "TRAJECTORY_WITHOUT_FIXED_ANCHOR",
+        "LENGTH_BIASED_TRAJECTORY_COHORT",
+        "UNJUSTIFIED_CLUSTER_COUNT",
+        "TRAJECTORY_CLASS_PRESENTED_AS_CAUSE"
+      ],
+      "hazard_codes": [
+        "TRAJECTORY_ALIGNMENT",
+        "IMMORTAL_TIME_BIAS",
+        "LENGTH_BIASED_SAMPLING",
+        "CLUSTER_COUNT_SELECTION",
+        "TRAJECTORY_CAUSAL_OVERINTERPRETATION"
+      ],
+      "task_id": "h3_trajectory_clustering",
+      "validity_binding": {
+        "exposure_applicability": "not_applicable",
+        "exposure_concept": null,
+        "outcome_applicability": "required",
+        "outcome_concept": "death"
+      }
+    }
+  ],
+  "thresholds": {
+    "full": 0.85,
+    "marginal": 0.25,
+    "partial": 0.55
+  }
+}

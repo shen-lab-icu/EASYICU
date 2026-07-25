@@ -29,7 +29,7 @@ from pathlib import Path
 
 import pytest
 
-from easyicu.research_agent.evidence import EvidenceStore
+from easyicu.research_agent.authority.evidence_store import EvidenceStore
 
 
 def _write_file(path: Path, content: str) -> Path:

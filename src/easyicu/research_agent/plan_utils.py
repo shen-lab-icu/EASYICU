@@ -34,9 +34,10 @@ from typing import Any, Dict, List, Mapping, Optional, Sequence, Set, Tuple
 
 from pydantic import ValidationError
 
-from .declared_product_contract import (
+from .contracts.declared_product import (
     PLAN_MATERIALIZABLE_TYPED_OUTPUT_KINDS,
     RUNTIME_BINDABLE_TYPED_INPUT_KINDS,
+    _is_primary_analysis_cohort_method,
     _primary_analysis_cohort_attrition_candidate,
     declared_product_contract_findings,
     effect_adjustment_family,
@@ -55,10 +56,11 @@ from .icu_rules import (
     overadjustment_caution,
     treatment_mediator_caution,
 )
-from .ordered_stratified_contract import (
+from .contracts.ordered_stratified import (
     is_ordered_stratified_analysis_step,
     ordered_stratified_structure_findings,
 )
+from .contracts.table_one import bind_table_one_execution_spec, table_one_output_findings
 from .scalar_utils import (
     _first_numeric_scalar_with_key_fragment,
     _first_present_scalar,
@@ -68,17 +70,17 @@ from .schema import (
     ADJUSTED_ASSOCIATION_BINARY_METHOD_FAMILIES,
     AnalysisPlan,
     AnalysisStep,
+    ArtifactConsumptionContract,
     ClusterSelectionManifest,
     ResearchContext,
     ValidationFinding,
     VariableRole,
 )
-from .trajectory_contract import (
+from .trajectory.contract import (
     TRAJECTORY_PHENOTYPING_REQUIRED_OUTPUTS,
     trajectory_phenotyping_contract_applies,
 )
-from .trajectory_plan_contract import trajectory_plan_contract_applies
-
+from .trajectory.plan_contract import trajectory_plan_contract_applies
 
 _WIDE_MEASUREMENT_VALUE_SUFFIXES = (
     "_median",
@@ -91,6 +93,37 @@ _WIDE_MEASUREMENT_VALUE_SUFFIXES = (
 )
 
 
+def _migrate_render_step_contract(
+    child: AnalysisStep,
+    source_tokens: Sequence[str],
+    *,
+    intent: Optional[str] = None,
+    method: Optional[str] = None,
+) -> AnalysisStep:
+    """Rebind one render step and its cardinality contracts atomically."""
+
+    existing = {
+        str(contract.input_key): contract
+        for contract in child.input_consumption_contracts
+    }
+    contracts = [
+        existing.get(token)
+        or ArtifactConsumptionContract(input_key=token, mode="all_rows")
+        for token in source_tokens
+        if (parsed := typed_product(token)) is not None
+        and parsed[0] in {"table", "statistic"}
+    ]
+    update: Dict[str, Any] = {
+        "inputs": list(source_tokens),
+        "input_consumption_contracts": contracts,
+    }
+    if intent is not None:
+        update["intent"] = intent
+    if method is not None:
+        update["method"] = method
+    return child.model_copy(update=update)
+
+
 def _augment_measurement_companion_inputs(
     *,
     plan: AnalysisPlan,
@@ -99,10 +132,8 @@ def _augment_measurement_companion_inputs(
     """Close structural provenance inputs for selected wide summaries.
 
     The planner remains the owner of which clinical values a step analyzes.
-    Once it selects a registered per-stay summary, however, its exact count and
-    measured companions are provenance inputs rather than new scientific
-    choices. Add only companions that actually exist in ResearchContext and
-    never infer a concept by fuzzy matching.
+    Exact count/measured companions are provenance inputs, not new scientific
+    choices; add only registered companions and never fuzzy-match concepts.
     """
 
     available = {str(variable.name) for variable in context.variables}
@@ -138,6 +169,7 @@ def _augment_measurement_companion_inputs(
             revised_steps.append(step.model_copy(update={"inputs": inputs}))
         else:
             revised_steps.append(step)
+        bind_table_one_execution_spec(revised_steps[-1], context)
 
     if not additions_by_step:
         return plan, []
@@ -303,9 +335,7 @@ def _step_is_figure_only(step: AnalysisStep) -> bool:
     and is never the primary estimand. But a *combined* model+figure step that
     the replanner can emit before the figure/table splitter runs
     (``['statistic:primary_estimate', 'figure:forest_plot']``) still owns the
-    result product and must remain eligible as the primary model -- excluding it
-    here would make ``_preserve_primary_estimand_step_after_replan`` re-attach a
-    stale duplicate of the primary model.
+    result product and must remain eligible as the primary model.
     """
 
     if not _step_expects_figure(step):
@@ -507,7 +537,7 @@ def _article_display_roles(steps: Sequence[AnalysisStep]) -> set[str]:
             }
         ):
             roles.add("data_quality")
-        if (
+        if step.planned_analysis_role == "primary" and (
             _effect_contract_applies(step)
             or _prediction_contract_applies(step)
             or _clustering_contract_applies(
@@ -680,6 +710,23 @@ def _clustering_contract_applies(
         else _CLUSTERING_ANALYSIS_METHODS
     )
     return head in allowed_methods and len(output_signals) >= minimum_output_signals
+
+
+def clustering_contract_applies(step: AnalysisStep) -> bool:
+    """Return whether ``step`` owns a closed clustering-analysis contract.
+
+    This public, case-neutral predicate is shared by prompt projection and
+    execution routing so method-family guidance cannot drift into a second
+    private allowlist.  Ownership still requires both an exact normalized
+    method family and declared structured clustering products.
+    """
+
+    return _clustering_contract_applies(
+        method=str(step.method or ""),
+        step_id=str(step.step_id or ""),
+        intent=str(step.intent or ""),
+        expected_outputs=step.expected_outputs or [],
+    )
 
 
 _PLAN_FAMILY_METHODS: dict[str, frozenset[str]] = {
@@ -889,6 +936,8 @@ _PREDICTION_CONTRACT_PRODUCTS = frozenset(
         "calibration_intercept",
         "calibration_intercept_median",
         "model_performance",
+        "model_performance_train_test",
+        "prediction_performance",
         "validation_performance",
         "horizon_performance",
         "time_varying_auroc",
@@ -993,15 +1042,29 @@ def _prediction_contract_applies(step: AnalysisStep) -> bool:
     )
 
 
+def prediction_contract_applies(step: AnalysisStep) -> bool:
+    """Public single-source predicate for a typed prediction owner."""
+
+    return _prediction_contract_applies(step)
+
+
 def _cohort_change_contract_applies(step: AnalysisStep) -> bool:
     """Whether a cohort owner declares a closed attrition/overlap product."""
 
-    return _normalised_method_head(
-        str(step.method or "")
-    ) in _COHORT_CHANGE_OWNER_METHODS and _has_closed_contract_product(
+    method = str(step.method or "")
+    method_matches = _normalised_method_head(
+        method
+    ) in _COHORT_CHANGE_OWNER_METHODS or _is_primary_analysis_cohort_method(method)
+    return method_matches and _has_closed_contract_product(
         step.expected_outputs or [],
         products=_COHORT_CHANGE_PRODUCTS,
     )
+
+
+def cohort_change_contract_applies(step: AnalysisStep) -> bool:
+    """Public single-source predicate for a structured cohort-change owner."""
+
+    return _cohort_change_contract_applies(step)
 
 
 def _plan_step_owns_contract_family(family: str, step: AnalysisStep) -> bool:
@@ -1347,16 +1410,6 @@ def _enforce_advanced_plan_contract(
         },
     )
     return revised, [finding]
-
-
-def _question_primary_predictor_is_vasopressor_or_unknown(
-    context: ResearchContext,
-) -> bool:
-    predictor = _infer_primary_predictor_from_context(context)
-    if not predictor:
-        return True
-    tokens = _predictor_tokens(predictor)
-    return bool(tokens & {"vaso", "vasopressor", "vasopressors", "norepinephrine"})
 
 
 def _infer_primary_predictor_from_context(
@@ -1903,6 +1956,45 @@ def _split_table_and_figure_outputs_in_plan(
             else step.model_copy(update={"expected_outputs": outputs})
         )
         method = _normalised_method_head(str(working_step.method or ""))
+        typed_table_inputs = [
+            str(raw_input)
+            for raw_input in working_step.inputs
+            if (parsed_input := typed_product(raw_input)) is not None
+            and parsed_input[0] == "table"
+        ]
+        if (
+            method == "visualization"
+            and typed_table_inputs
+            and not working_step.input_consumption_contracts
+        ):
+            working_step = working_step.model_copy(
+                update={
+                    "input_consumption_contracts": [
+                        ArtifactConsumptionContract(
+                            input_key=input_key,
+                            mode="all_rows",
+                        )
+                        for input_key in typed_table_inputs
+                    ]
+                }
+            )
+            findings.append(
+                ValidationFinding(
+                    validator="plan_contract",
+                    severity="warning",
+                    message=(
+                        f"Bound visualization step '{working_step.step_id}' to "
+                        "preserve all rows from each exact typed table input; "
+                        "role-specific row selection requires an explicit Planner "
+                        "consumption contract."
+                    ),
+                    detail={
+                        "reason": "visualization_all_rows_consumption_default",
+                        "step_id": working_step.step_id,
+                        "inputs": typed_table_inputs,
+                    },
+                )
+            )
         if method in {
             "association_robustness",
             "bias_audit_association",
@@ -1991,12 +2083,22 @@ def _split_table_and_figure_outputs_in_plan(
         )
         figure_step = AnalysisStep(
             step_id=figure_step_id,
+            planned_analysis_role="auxiliary",
             intent=figure_intent,
             inputs=render_source_outputs,
             expected_outputs=figure_outputs,
             method="visualization",
             icu_rule_refs=list(working_step.icu_rule_refs or [])
             + ["visualization_rule"],
+            input_consumption_contracts=[
+                ArtifactConsumptionContract(
+                    input_key=str(input_key),
+                    mode="all_rows",
+                )
+                for input_key in render_source_outputs
+                if (parsed_input := typed_product(input_key)) is not None
+                and parsed_input[0] == "table"
+            ],
         )
         new_steps.append(figure_step)
         findings.append(
@@ -2102,6 +2204,7 @@ def _ensure_publication_figure_step_in_plan(
     next_index = len(plan.steps or []) + 1
     fallback_step = AnalysisStep(
         step_id=f"{next_index:02d}_publication_figure_fallback",
+        planned_analysis_role="auxiliary",
         intent=(
             "Render a publication-ready overview using only the exact typed "
             "table inputs bound by the host. Do not scan the run directory, "
@@ -2117,6 +2220,10 @@ def _ensure_publication_figure_step_in_plan(
         inputs=render_inputs,
         expected_outputs=["figure:overview"],
         icu_rule_refs=["visualization_rule"],
+        input_consumption_contracts=[
+            ArtifactConsumptionContract(input_key=input_key, mode="all_rows")
+            for input_key in render_inputs
+        ],
     )
     new_steps = list(plan.steps or []) + [fallback_step]
     preserved = plan.model_copy(update={"steps": new_steps})
@@ -2177,6 +2284,7 @@ def _ensure_audit_panel_step_in_plan(
     next_index = len(plan.steps or []) + 1
     audit_step = AnalysisStep(
         step_id=f"{next_index:02d}_audit_panel",
+        planned_analysis_role="auxiliary",
         intent=(
             "Render an audit panel that summarises the analysis's robustness: "
             "data completeness / missingness, the pre-specified sensitivity / "
@@ -2238,40 +2346,125 @@ def _preserve_figure_steps_after_replan(
         for step in current.steps
         if step.step_id not in revised_ids and _step_produces_figure(step)
     ]
-    if not dropped_figure_steps:
-        return revised, []
     new_steps = list(revised.steps) + list(dropped_figure_steps)
+
+    # A host-split render child carries exact typed inputs from its direct
+    # parent.  A replanner may echo the original, pre-normalised parent while
+    # dropping the split child.  Re-attaching only the child would then create
+    # an impossible DAG: the child asks for products that the echoed parent no
+    # longer declares.  Restore only products that were already declared by
+    # that same direct parent in ``current``.  This is structural contract
+    # preservation, not authority to choose a new table, model, or estimand.
+    current_output_owners: Dict[Tuple[str, str], List[Tuple[str, str]]] = {}
+    for step in current.steps:
+        for raw_output in step.expected_outputs or []:
+            product = typed_product(raw_output)
+            if product is not None:
+                current_output_owners.setdefault(product, []).append(
+                    (str(step.step_id), str(raw_output))
+                )
+
+    resulting_producers: Dict[Tuple[str, str], Set[str]] = {}
+    for step in new_steps:
+        for raw_output in step.expected_outputs or []:
+            product = typed_product(raw_output)
+            if product is not None:
+                resulting_producers.setdefault(product, set()).add(str(step.step_id))
+
+    result_ids = {str(step.step_id) for step in new_steps}
+    current_figure_ids = {
+        str(step.step_id) for step in current.steps if _step_produces_figure(step)
+    }
+    restored_by_parent: Dict[str, List[str]] = {}
+    for figure_step in new_steps:
+        if str(figure_step.step_id) not in current_figure_ids:
+            continue
+        parent_id = _parent_step_id_for_figure_step(figure_step)
+        if not parent_id or parent_id not in result_ids:
+            continue
+        for raw_input in figure_step.inputs or []:
+            product = typed_product(raw_input)
+            if product is None or resulting_producers.get(product):
+                continue
+            prior_owners = current_output_owners.get(product, [])
+            if len(prior_owners) != 1 or prior_owners[0][0] != parent_id:
+                continue
+            restored_output = prior_owners[0][1]
+            restored_by_parent.setdefault(parent_id, []).append(restored_output)
+            resulting_producers.setdefault(product, set()).add(parent_id)
+
+    if restored_by_parent:
+        repaired_steps: List[AnalysisStep] = []
+        for step in new_steps:
+            additions = restored_by_parent.get(str(step.step_id), [])
+            if not additions:
+                repaired_steps.append(step)
+                continue
+            repaired_steps.append(
+                step.model_copy(
+                    update={
+                        "expected_outputs": list(
+                            dict.fromkeys([*(step.expected_outputs or []), *additions])
+                        )
+                    }
+                )
+            )
+        new_steps = repaired_steps
+
+    if not dropped_figure_steps and not restored_by_parent:
+        return revised, []
+
     preserved = revised.model_copy(update={"steps": new_steps})
-    findings = [
-        ValidationFinding(
-            validator="replanner",
-            severity="warning",
-            message=(
-                "Replanner attempted to drop "
-                f"{len(dropped_figure_steps)} figure-producing step(s); "
-                "they were re-attached to preserve task contract."
-            ),
-            detail={
-                "preserved_step_ids": [s.step_id for s in dropped_figure_steps],
-            },
+    findings: List[ValidationFinding] = []
+    if dropped_figure_steps:
+        findings.append(
+            ValidationFinding(
+                validator="replanner",
+                severity="warning",
+                message=(
+                    "Replanner attempted to drop "
+                    f"{len(dropped_figure_steps)} figure-producing step(s); "
+                    "they were re-attached to preserve task contract."
+                ),
+                detail={
+                    "preserved_step_ids": [s.step_id for s in dropped_figure_steps],
+                },
+            )
         )
-    ]
+    if restored_by_parent:
+        findings.append(
+            ValidationFinding(
+                validator="replanner",
+                severity="warning",
+                message=(
+                    "Restored exact typed outputs on existing direct parent "
+                    "steps so preserved figure children retain a valid product DAG."
+                ),
+                detail={
+                    "reason": "preserved_figure_parent_output_contract",
+                    "restored_outputs_by_parent": restored_by_parent,
+                },
+            )
+        )
     return preserved, findings
 
 
 def _step_is_primary_estimand_model(step: AnalysisStep) -> bool:
     """True when ``step`` is a result-bearing PRIMARY model (the estimand).
 
-    Requires both a compatible method family and a structured result product.
-    Free-text id/intent tokens and preparation-only outputs do not establish
-    ownership of the primary estimand.
+    Requires the Planner's typed ``primary`` role, a compatible method family,
+    and a structured result product. Free-text id/intent tokens and
+    preparation-only outputs do not establish ownership of the primary
+    estimand.
     """
+
+    if step.planned_analysis_role != "primary":
+        return False
 
     # Exclude only a PURE figure/render child, not a combined model+figure step
     # (which the replanner can emit before the figure/table splitter runs). Both
     # contract helpers below already require a closed result-bearing product, so
-    # a combined step that owns the estimand stays primary and is not duplicated
-    # by _preserve_primary_estimand_step_after_replan.
+    # a combined step that owns the estimand stays primary.
     if _step_is_figure_only(step):
         return False
     # Both helpers normalize only the ``<head>`` of a ``<head>_with_<rider>``
@@ -2307,54 +2500,6 @@ def _step_is_baseline_context_table(step: AnalysisStep) -> bool:
             "baseline characteristics",
         )
     )
-
-
-def _preserve_primary_estimand_step_after_replan(
-    *,
-    current: AnalysisPlan,
-    revised: AnalysisPlan,
-) -> Tuple[AnalysisPlan, List[ValidationFinding]]:
-    """Re-add a result-bearing PRIMARY model step the replanner silently dropped.
-
-    The replanner is an LLM call and can drop the adjusted-model step that
-    produces the primary estimand while inserting an audit/reconciliation step,
-    even when its own rationale claims it is keeping the primary model. The
-    article contract still requires a primary estimand, so the primary model
-    step is load-bearing: if ``current`` has one and
-    ``revised`` has NO result-bearing model step at all, re-attach the dropped
-    step(s).
-
-    Mirrors ``_preserve_figure_steps_after_replan``. Fires ONLY when the revised
-    plan has lost EVERY primary model step — a legitimately renamed or replaced
-    model still satisfies ``_step_is_primary_estimand_model`` and is left alone,
-    so this cannot duplicate a model the replanner kept under a new name.
-    """
-
-    if any(_step_is_primary_estimand_model(step) for step in revised.steps):
-        return revised, []
-    dropped = [step for step in current.steps if _step_is_primary_estimand_model(step)]
-    if not dropped:
-        return revised, []
-    revised_ids = {step.step_id for step in revised.steps}
-    reattach = [step for step in dropped if step.step_id not in revised_ids]
-    if not reattach:
-        return revised, []
-    new_steps = list(revised.steps) + list(reattach)
-    preserved = revised.model_copy(update={"steps": new_steps})
-    findings = [
-        ValidationFinding(
-            validator="replanner",
-            severity="warning",
-            message=(
-                "Replanner dropped the primary result-bearing model step(s) "
-                f"({', '.join(s.step_id for s in reattach)}); the revised plan had "
-                "no model producing the primary estimand, so they were re-attached "
-                "to preserve the article contract."
-            ),
-            detail={"preserved_step_ids": [s.step_id for s in reattach]},
-        )
-    ]
-    return preserved, findings
 
 
 def _typed_plan_dependency_graph(
@@ -2632,10 +2777,16 @@ def _cap_plan_preserving_figure_steps(
     protected_ids = {
         str(step_id) for step_id in (protected_step_ids or []) if step_id in step_by_id
     }
-    for predicate in (
-        _step_is_primary_estimand_model,
-        _step_is_baseline_context_table,
-    ):
+    # Role authority is method-family agnostic.  A survival, phenotyping, or
+    # causal primary result is just as load-bearing as an association model and
+    # must not disappear merely because it sits beyond the numerical cap.
+    primary_owner = next(
+        (step for step in steps if step.planned_analysis_role == "primary"),
+        None,
+    )
+    if primary_owner is not None:
+        protected_ids.add(primary_owner.step_id)
+    for predicate in (_step_is_baseline_context_table,):
         owner = next((step for step in steps if predicate(step)), None)
         if owner is not None:
             protected_ids.add(owner.step_id)
@@ -3038,30 +3189,6 @@ def _primary_effect_from_summary(step_summary: Dict[str, Any]) -> Optional[float
     return None
 
 
-def _primary_effect_from_completed_records(
-    completed_step_records: Optional[Sequence[Dict[str, Any]]],
-    *,
-    current_step_id: str,
-) -> Optional[Tuple[str, float]]:
-    if not completed_step_records:
-        return None
-    for record in completed_step_records:
-        if not isinstance(record, dict):
-            continue
-        source_step_id = str(record.get("step_id") or "")
-        if not source_step_id or source_step_id == current_step_id:
-            continue
-        if record.get("status") != "ok":
-            continue
-        step_summary = record.get("step_summary")
-        if not isinstance(step_summary, dict):
-            continue
-        effect = _primary_effect_from_summary(step_summary)
-        if effect is not None:
-            return source_step_id, effect
-    return None
-
-
 _AUROC_SCALAR_KEYS = (
     "auroc",
     "statistic:auroc",
@@ -3088,8 +3215,8 @@ def _prediction_auroc_from_completed_records(
 ) -> Optional[Tuple[str, float]]:
     """Find an auditable AUROC in a *sibling* completed step's summary.
 
-    Mirrors :func:`_primary_effect_from_completed_records` for the prediction
-    requirement: a figure/rendering step (e.g. ``*_model_training_figure``)
+    This fallback is limited to the prediction requirement: a figure/rendering
+    step (e.g. ``*_model_training_figure``)
     often does not re-register the metric under a key its own renderer
     recognises, but the discrimination estimate is genuinely produced and bound
     (``statistic:auroc``) by the upstream training step it renders. When that is
@@ -3365,13 +3492,13 @@ def _summary_has_association_effect(step_summary: Mapping[str, Any]) -> bool:
 
 
 def _exposure_names_match(required: str, actual: str) -> bool:
-    """Lenient name match: only a *clearly unrelated* predictor counts as wrong.
-
-    Normalises to alphabetic characters, then treats the names as matching on
-    a substring or any shared 4-gram. Being lenient means a false *non*-match
-    (which would trigger an unnecessary repair) is rare; a genuine swap like
-    ``sepsis3`` -> ``sofa_max_int`` shares nothing and is flagged.
-    """
+    """Lenient text match that preserves numeric exposure identity."""
+    required_numbers = set(re.findall(r"\d+", required.lower()))
+    actual_numbers = set(re.findall(r"\d+", actual.lower()))
+    if (not required_numbers and actual_numbers) or not required_numbers.issubset(
+        actual_numbers
+    ):
+        return False
     r = re.sub(r"[^a-z]", "", required.lower())
     a = re.sub(r"[^a-z]", "", actual.lower())
     if not r or not a:
@@ -3694,6 +3821,7 @@ def read_model_covariate_names(
                         value
                         and value.lower() not in _NON_COVARIATE_TERMS
                         and value not in names
+                        and row.get("term_role") not in ("exposure", "outcome")
                     ):
                         names.append(value)
         except (OSError, ValueError):
@@ -3907,8 +4035,7 @@ def _primary_exposure_overadjustment_findings(
     if not exposure:
         return []
     covariates = read_adjustment_covariates(out_dir)
-    if not covariates:
-        return []
+    covariates = step.without_required_primary_exposure_terms(covariates)
     offenders = detect_overadjustment(exposure, covariates)
     if not offenders:
         # No resolvable constituent matched. If the exposure is nonetheless a
@@ -4100,6 +4227,7 @@ def _step_contract_findings(
             step_summary=step_summary,
         )
     )
+    findings.extend(table_one_output_findings(step=step, out_dir=out_dir))
 
     # Figure-only follow-up steps (created by ``_split_table_and_figure_outputs_in_plan``)
     # inherit the parent's step_id with a ``_figure`` suffix, e.g.
@@ -4231,32 +4359,7 @@ def _step_contract_findings(
     effect_required = not figure_only_step and _effect_contract_applies(step)
     if effect_required:
         effect_value = _primary_effect_from_summary(step_summary)
-        fallback_effect = None
         if effect_value is None:
-            fallback_effect = _primary_effect_from_completed_records(
-                completed_step_records,
-                current_step_id=str(step.step_id or ""),
-            )
-        if effect_value is None and fallback_effect is not None:
-            source_step_id, _source_effect = fallback_effect
-            findings.append(
-                ValidationFinding(
-                    validator="step_contract",
-                    severity="warning",
-                    message=(
-                        f"Step {step.step_id} did not record its own primary association "
-                        f"estimate, but the requirement was satisfied by successful step "
-                        f"{source_step_id}."
-                    ),
-                    detail={
-                        "step_id": step.step_id,
-                        "fallback_step_id": source_step_id,
-                        "expected_outputs": list(step.expected_outputs or []),
-                        "summary_keys": sorted(step_summary.keys()),
-                    },
-                )
-            )
-        elif effect_value is None:
             _append_missing(
                 (
                     f"Step {step.step_id} was expected to report a primary association "

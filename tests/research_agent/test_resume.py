@@ -32,10 +32,10 @@ from easyicu.research_agent.pipeline import (
     _load_compatible_resume_plan,
     _load_resume_state,
 )
-from easyicu.research_agent.evidence import EvidenceStore
+from easyicu.research_agent.authority.evidence_store import EvidenceStore
 from easyicu.research_agent.plan_utils import _render_only_figure_step_intent
-from easyicu.research_agent.context import build_research_context
-from easyicu.research_agent.run_input_capsule import (
+from easyicu.research_agent.research_context.builder import build_research_context
+from easyicu.research_agent.authority.run_input import (
     RUN_INPUT_CAPSULE_FILENAME,
     RunInputIdentityError,
     build_environment_identity,
@@ -45,8 +45,80 @@ from easyicu.research_agent.run_input_capsule import (
     prepare_existing_resume_input,
     seal_run_input_capsule,
 )
-from easyicu.research_agent.runtime_artifacts import verified_run_evidence_path
+from easyicu.research_agent.authority.runtime_artifacts import (
+    verified_run_evidence_path,
+)
+from easyicu.research_agent.authority.provider_budget import (
+    StepProviderCallBudget,
+    load_provider_call_budget_state,
+    provider_call_budget_receipt_path,
+)
 from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep, TimeWindow
+from easyicu.research_agent.providers.mocks import PatternScriptedMockLLMClient
+
+
+def _pattern_llm(
+    *,
+    plan: dict,
+    code: str | BaseException,
+    repairs: list[str | BaseException] | None = None,
+    interpretation: str = "{}",
+    manuscript: str = "{}",
+) -> PatternScriptedMockLLMClient:
+    """Build an exact trusted prompt router for resume integration tests."""
+
+    plan_response = json.dumps(plan)
+    repair_responses = list(repairs or [])
+    return PatternScriptedMockLLMClient(
+        [
+            ("PRODUCE AN ICU-AWARE RESEARCH PLAN", [plan_response] * 8),
+            ("WRITE THE PYTHON CODE FOR STEP", [code] * 8),
+            ("REPAIR THE PYTHON CODE FOR STEP", repair_responses * 8),
+            ("INTERPRET THE RESULTS OF STEP", [interpretation] * 8),
+            ("WRITE A MANUSCRIPT SCAFFOLD", [manuscript] * 8),
+        ]
+    )
+
+
+def _prompt_calls(
+    client: PatternScriptedMockLLMClient,
+    marker: str,
+    *,
+    full: bool = False,
+) -> list[str]:
+    folded_marker = marker.casefold()
+    matched: list[str] = []
+    for messages, _kwargs in client.calls:
+        user = next(
+            (
+                str(message.content or "")
+                for message in reversed(messages)
+                if message.role == "user"
+            ),
+            "",
+        )
+        if folded_marker not in user.casefold():
+            continue
+        matched.append(
+            "\n".join(str(message.content or "") for message in messages)
+            if full
+            else user
+        )
+    return matched
+
+
+def _disable_article_contract(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep resume fixtures focused on lifecycle semantics, not paper roles."""
+
+    from easyicu.research_agent.agents.core import PlannerAgent
+
+    original_run = PlannerAgent.run
+
+    def run_without_article_contract(self, context, **kwargs):
+        kwargs["enforce_article_contract"] = False
+        return original_run(self, context, **kwargs)
+
+    monkeypatch.setattr(PlannerAgent, "run", run_without_article_contract)
 
 
 def _run_full(ra, synthetic_cohort, workdir: Path):
@@ -60,7 +132,11 @@ def _run_full(ra, synthetic_cohort, workdir: Path):
     )
 
 
-def _write_bench_resume_checkpoint(run_dir: Path, *, complete: bool = False) -> None:
+def _write_bench_resume_checkpoint(
+    run_dir: Path,
+    *,
+    run_status_claims_complete: bool = False,
+) -> None:
     run_dir.mkdir(parents=True, exist_ok=True)
     (run_dir / "analysis_plan.json").write_text(
         json.dumps({"steps": []}), encoding="utf-8"
@@ -68,7 +144,7 @@ def _write_bench_resume_checkpoint(run_dir: Path, *, complete: bool = False) -> 
     (run_dir / "manifest_partial.json").write_text(
         json.dumps({"per_step_records": []}), encoding="utf-8"
     )
-    if complete:
+    if run_status_claims_complete:
         (run_dir / "run_status.json").write_text(
             json.dumps({"gates": {"execution_complete": True}}),
             encoding="utf-8",
@@ -301,6 +377,10 @@ def test_resume_environment_drift_is_receipted_without_overwriting_inputs(
         **original_environment,
         "engine_code_sha256": "f" * 64,
         "validator_code_sha256": "e" * 64,
+        "metadata_projection_sha256": "d" * 64,
+        "metadata_sidecar_sha256": "c" * 64,
+        "icu_rules_sha256": "b" * 64,
+        "metadata_implementation_bundle_sha256": "a" * 64,
     }
     monkeypatch.setattr(
         pipeline_module,
@@ -332,10 +412,41 @@ def test_resume_environment_drift_is_receipted_without_overwriting_inputs(
         "llm_signature_sha256",
         "engine_code_sha256",
         "validator_code_sha256",
+        "metadata_projection_sha256",
+        "metadata_sidecar_sha256",
+        "icu_rules_sha256",
+        "metadata_implementation_bundle_sha256",
     } <= set(payload["changed_fields"])
     assert (run_dir / "research_context.json").read_bytes() == context_before
     assert (run_dir / "cohort.parquet").read_bytes() == cohort_before
     assert (run_dir / RUN_INPUT_CAPSULE_FILENAME).is_file()
+
+
+def test_resume_rechecks_input_authority_immediately_before_receipt(
+    ra,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from easyicu.research_agent.authority import run_input as capsule_module
+
+    pipeline, run_dir, run_kwargs = _write_capsule_resume_fixture(ra, tmp_path)
+    real_invalidate = capsule_module.invalidate_unverified_successful_steps
+
+    def corrupt_after_initial_verification(**kwargs):
+        result = real_invalidate(**kwargs)
+        (run_dir / "cohort.parquet").write_bytes(b"changed-after-verification")
+        return result
+
+    monkeypatch.setattr(
+        capsule_module,
+        "invalidate_unverified_successful_steps",
+        corrupt_after_initial_verification,
+    )
+
+    with pytest.raises(RunInputIdentityError, match="staged cohort bytes"):
+        pipeline.run(**run_kwargs)
+
+    assert not list(run_dir.glob("resume_environment_receipt_*.json"))
 
 
 def test_legacy_failed_attempt_without_capsule_cannot_mix_new_inputs(
@@ -1373,36 +1484,25 @@ def test_legacy_completed_resume_is_adopted_only_from_verified_context_and_cohor
         evidence_id="provenance_sources",
     )
 
-    index_path = run_dir / "evidence" / "evidence_index.json"
-    index = json.loads(index_path.read_text(encoding="utf-8"))
-    capsule_record = next(
-        record for record in index if record["evidence_id"] == "run_input_capsule"
-    )
-    Path(run_dir / capsule_record["relative_path"]).unlink()
-    index_path.write_text(
-        json.dumps(
-            [
-                record
-                for record in index
-                if record["evidence_id"] != "run_input_capsule"
-            ],
-            indent=2,
-        ),
-        encoding="utf-8",
-    )
-    aliases_path = run_dir / "evidence" / "evidence_aliases.json"
-    aliases = json.loads(aliases_path.read_text(encoding="utf-8"))
-    aliases_path.write_text(
-        json.dumps(
-            {
-                alias: evidence_id
-                for alias, evidence_id in aliases.items()
-                if evidence_id != "run_input_capsule"
-            },
-            indent=2,
-        ),
-        encoding="utf-8",
-    )
+    capsule_record = evidence.get("run_input_capsule")
+    assert capsule_record is not None
+    capsule_evidence_path = run_dir / capsule_record.relative_path
+    # Emulate a completed run created before RunInputCapsule existed while
+    # keeping the modern evidence ledger authoritative. Flat projection edits
+    # cannot remove selected evidence once a full-state generation exists.
+    with evidence._lock:
+        evidence._records = [
+            record
+            for record in evidence._records
+            if record.evidence_id != "run_input_capsule"
+        ]
+        evidence._aliases = {
+            alias: evidence_id
+            for alias, evidence_id in evidence._aliases.items()
+            if evidence_id != "run_input_capsule"
+        }
+        evidence._save()
+    capsule_evidence_path.unlink()
     (run_dir / RUN_INPUT_CAPSULE_FILENAME).unlink()
 
     partial = json.loads(
@@ -1484,11 +1584,40 @@ def test_bench_runner_explicit_resume_id_wins_over_auto_discovery(tmp_path: Path
     )
 
 
-def test_bench_runner_auto_resume_ignores_complete_runs(tmp_path: Path):
+def test_bench_runner_auto_resume_does_not_trust_run_status_only_completion(
+    tmp_path: Path,
+):
+    interrupted = tmp_path / "run_20260701T010000_interrupted"
+    unverified_latest = tmp_path / "run_20260701T999999_unverified"
+    _write_bench_resume_checkpoint(interrupted)
+    _write_bench_resume_checkpoint(
+        unverified_latest,
+        run_status_claims_complete=True,
+    )
+
+    assert (
+        _resolve_resume_run_id(
+            workdir=tmp_path,
+            reuse_existing=True,
+            resume_run_id=None,
+        )
+        == unverified_latest.name
+    )
+
+
+def test_bench_runner_auto_resume_ignores_authoritatively_complete_runs(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
     interrupted = tmp_path / "run_20260701T010000_interrupted"
     complete_latest = tmp_path / "run_20260701T999999_complete"
     _write_bench_resume_checkpoint(interrupted)
-    _write_bench_resume_checkpoint(complete_latest, complete=True)
+    _write_bench_resume_checkpoint(complete_latest)
+    (complete_latest / "manifest.json").write_text("{}\n", encoding="utf-8")
+    monkeypatch.setattr(
+        "tools.run_research_agent_bench._run_reached_execution_complete",
+        lambda run_dir: run_dir == complete_latest,
+    )
 
     assert (
         _resolve_resume_run_id(
@@ -1553,6 +1682,10 @@ def test_bench_runner_ehrflow_resume_requires_single_row(tmp_path: Path):
 
 
 def test_resume_prefers_latest_compatible_plan_revision(tmp_path: Path):
+    from easyicu.research_agent.authority.plan_scope import (
+        _serializable_plan_scientific_scope_signature,
+    )
+
     run_dir = tmp_path / "run_20260701T000000_revision"
     run_dir.mkdir()
     original = AnalysisPlan(
@@ -1629,10 +1762,19 @@ def test_resume_prefers_latest_compatible_plan_revision(tmp_path: Path):
     )
     resume_state = {
         "plan_path": "analysis_plan.json",
-        "per_step_records": [
-            {"step_id": "00_probe", "status": "ok"},
-            {"step_id": "01_cohort", "status": "ok"},
-            {"step_id": "02_table", "status": "ok"},
+        "per_step_records": [{"step_id": "00_probe", "status": "ok"}]
+        + [
+            {
+                "step_id": step.step_id,
+                "status": "ok",
+                "planned_analysis_role": step.planned_analysis_role,
+                "analysis_request": {"step": step.model_dump(mode="json")},
+                "plan_scientific_signature": (
+                    _serializable_plan_scientific_scope_signature(revision)
+                ),
+            }
+            for step in revision.steps
+            if step.step_id in {"01_cohort", "02_table"}
         ],
     }
 
@@ -1652,6 +1794,10 @@ def test_resume_prefers_latest_compatible_plan_revision(tmp_path: Path):
 
 
 def test_resume_plan_compatibility_uses_latest_step_status(tmp_path: Path):
+    from easyicu.research_agent.authority.plan_scope import (
+        _serializable_plan_scientific_scope_signature,
+    )
+
     run_dir = tmp_path / "run_latest_step_authority"
     run_dir.mkdir()
     plan = AnalysisPlan(
@@ -1677,7 +1823,15 @@ def test_resume_plan_compatibility_uses_latest_step_status(tmp_path: Path):
     )
     resume_state = {
         "per_step_records": [
-            {"step_id": "01_current_success", "status": "ok"},
+            {
+                "step_id": "01_current_success",
+                "status": "ok",
+                "planned_analysis_role": plan.steps[0].planned_analysis_role,
+                "analysis_request": {"step": plan.steps[0].model_dump(mode="json")},
+                "plan_scientific_signature": (
+                    _serializable_plan_scientific_scope_signature(plan)
+                ),
+            },
             {"step_id": "02_superseded", "status": "ok"},
             {"step_id": "02_superseded", "status": "contract_failed"},
         ]
@@ -1692,16 +1846,125 @@ def test_resume_plan_compatibility_uses_latest_step_status(tmp_path: Path):
     assert selected_path == verified_run_evidence_path(run_dir, record)
 
 
+def test_resume_plan_skips_newest_revision_without_locked_cohort(
+    tmp_path: Path,
+) -> None:
+    from easyicu.research_agent.cohort.schema import (
+        CohortDefinition,
+        write_locked_cohort_definition,
+    )
+
+    run_dir = tmp_path / "run_locked_cohort_revision"
+    run_dir.mkdir()
+    original = AnalysisPlan(
+        research_question="Resume the locked cohort.",
+        cohort=CohortDefinition(name="locked_primary_cohort"),
+        steps=[
+            AnalysisStep(
+                step_id="01_summary",
+                intent="Summarize the locked cohort.",
+                expected_outputs=["table:summary"],
+            )
+        ],
+    )
+    drifted_revision = original.model_copy(update={"cohort": None, "revision": 2})
+    original_path = run_dir / "analysis_plan.json"
+    revision_path = run_dir / "analysis_plan_revision_2.json"
+    original_path.write_text(original.model_dump_json(indent=2), encoding="utf-8")
+    revision_path.write_text(
+        drifted_revision.model_dump_json(indent=2), encoding="utf-8"
+    )
+    evidence = EvidenceStore(run_dir)
+    original_record = evidence.register_file(
+        kind="log",
+        description="Original plan with locked cohort.",
+        source_path=original_path,
+        evidence_id="analysis_plan",
+        producer="planner",
+        generation_mode="llm",
+    )
+    evidence.register_file(
+        kind="log",
+        description="Incomplete replan without cohort authority.",
+        source_path=revision_path,
+        evidence_id="analysis_plan_revision_2",
+        producer="replanner",
+        generation_mode="llm",
+    )
+    write_locked_cohort_definition(
+        run_dir=run_dir,
+        plan=original,
+        evidence=evidence,
+        prompt_pack_version=None,
+        llm_signature="test",
+    )
+
+    selected, selected_path = _load_compatible_resume_plan(
+        run_dir=run_dir,
+        resume_state={"per_step_records": []},
+    )
+
+    assert selected == original
+    assert selected_path == verified_run_evidence_path(run_dir, original_record)
+
+
+def test_resume_plan_rejects_completed_role_mismatch(tmp_path: Path) -> None:
+    from easyicu.research_agent.authority.plan_scope import (
+        _serializable_plan_scientific_scope_signature,
+    )
+
+    run_dir = tmp_path / "run_role_mismatch"
+    run_dir.mkdir()
+    saved_step = AnalysisStep(
+        step_id="01_model",
+        intent="Estimate the result.",
+        planned_analysis_role="auxiliary",
+        expected_outputs=["table:estimate"],
+    )
+    saved_plan = AnalysisPlan(research_question="q", steps=[saved_step])
+    path = run_dir / "analysis_plan.json"
+    path.write_text(saved_plan.model_dump_json(indent=2), encoding="utf-8")
+    evidence = EvidenceStore(run_dir)
+    evidence.register_file(
+        kind="log",
+        description="Saved plan.",
+        source_path=path,
+        evidence_id="analysis_plan",
+        producer="planner",
+        generation_mode="llm",
+    )
+    executed_step = saved_step.model_copy(update={"planned_analysis_role": "primary"})
+    executed_plan = saved_plan.model_copy(update={"steps": [executed_step]})
+    selected, selected_path = _load_compatible_resume_plan(
+        run_dir=run_dir,
+        resume_state={
+            "per_step_records": [
+                {
+                    "step_id": executed_step.step_id,
+                    "status": "ok",
+                    "planned_analysis_role": "primary",
+                    "analysis_request": {"step": executed_step.model_dump(mode="json")},
+                    "plan_scientific_signature": (
+                        _serializable_plan_scientific_scope_signature(executed_plan)
+                    ),
+                }
+            ]
+        },
+    )
+    assert selected is None
+    assert selected_path is None
+
+
 def test_implicit_resume_offers_only_latest_contract_failed_code_once(
     tmp_path: Path,
 ) -> None:
     """Normal resume may replay one exact failed-contract script, not history."""
 
-    from easyicu.research_agent.pipeline_execute import (
+    from easyicu.research_agent.execution.phase import (
         _failed_contract_code_can_be_reused_before_coder,
         _serializable_plan_scientific_scope_signature,
     )
-    from easyicu.research_agent.pipeline_resume import ResumeController
+    from easyicu.research_agent.orchestration.resume import ResumeController
 
     step = AnalysisStep(
         step_id="01_summary",
@@ -1816,22 +2079,19 @@ def test_partial_manifest_is_written_after_run(ra, synthetic_cohort, tmp_path: P
 def test_partial_manifest_checkpoints_executed_step_before_interpretation(
     ra, synthetic_cohort, tmp_path: Path
 ):
-    class InterruptingAnalyzerLLM(ra.MockLLMClient):
-        name = "interrupting-analyzer"
-
-        def complete(self, messages, *, max_tokens=2048, temperature=0.2):
-            user = next((m.content for m in reversed(messages) if m.role == "user"), "")
-            if "INTERPRET THE RESULTS" in user.upper():
-                raise KeyboardInterrupt("simulate interruption after runner outputs")
-            return super().complete(
-                messages,
-                max_tokens=max_tokens,
-                temperature=temperature,
-            )
+    from easyicu.research_agent.providers.mocks import PatternScriptedMockLLMClient
 
     pipeline = ra.ResearchAgentPipeline(
         workdir=tmp_path,
-        llm=InterruptingAnalyzerLLM(),
+        llm=PatternScriptedMockLLMClient(
+            [
+                (
+                    "INTERPRET THE RESULTS",
+                    [KeyboardInterrupt("simulate interruption after runner outputs")],
+                )
+            ],
+            contextual_default=True,
+        ),
         enable_literature=False,
     )
     with pytest.raises(KeyboardInterrupt):
@@ -2004,51 +2264,41 @@ def test_resume_from_completed_step_can_stop_after_that_step(
         "reuse_step_code",
         "mark_prior_contract_failed",
         "explicit_resume",
-        "expected_coder_calls",
     ),
     [
-        (False, False, True, 1),
-        (True, False, True, 0),
-        (False, True, True, 0),
-        (False, True, False, 0),
+        (False, False, True),
+        (True, False, True),
+        (False, True, True),
+        (False, True, False),
     ],
 )
-def test_resume_from_step_reuses_prior_code(
+def test_resume_from_step_prefers_verified_capsule_over_legacy_code_reuse(
     ra,
     tmp_path: Path,
     monkeypatch,
     reuse_step_code: bool,
     mark_prior_contract_failed: bool,
     explicit_resume: bool,
-    expected_coder_calls: int,
 ):
-    """Resume reuses valid prior code only on failure or explicit opt-in."""
+    """A verified capsule outranks opt-in legacy code-evidence recovery."""
 
-    class SingleStepLLM:
-        name = "single-step-llm"
-
-        def complete(self, messages, *, max_tokens=2048, temperature=0.2):
-            user = next((m.content for m in reversed(messages) if m.role == "user"), "")
-            upper = user.upper()
-            if "ICU-AWARE RESEARCH PLAN" in upper:
-                return json.dumps(
-                    {
-                        "research_question": "Is SOFA associated with ICU mortality?",
-                        "steps": [
-                            {
-                                "step_id": "04_primary_association",
-                                "intent": "Estimate SOFA and ICU mortality association.",
-                                "inputs": ["sofa2", "death"],
-                                "expected_outputs": ["table:cohort_summary"],
-                                "method": "descriptive",
-                                "icu_rule_refs": ["aggregation_rule_for"],
-                            }
-                        ],
-                        "rationale": "single-step resume code reuse test",
-                    }
-                )
-            if "WRITE THE PYTHON CODE" in upper:
-                return """
+    _disable_article_contract(monkeypatch)
+    plan = {
+        "research_question": "Is SOFA associated with ICU mortality?",
+        "steps": [
+            {
+                "step_id": "04_primary_association",
+                "planned_analysis_role": "primary",
+                "intent": "Estimate SOFA and ICU mortality association.",
+                "inputs": ["sofa2", "death"],
+                "expected_outputs": ["table:cohort_summary"],
+                "method": "descriptive",
+                "icu_rule_refs": ["aggregation_rule_for"],
+            }
+        ],
+        "rationale": "single-step resume code reuse test",
+    }
+    code = """
 import json
 import os
 import pandas as pd
@@ -2062,34 +2312,12 @@ summary = {
     "mortality_rate": float(df["death"].mean()),
 }
 pd.DataFrame([summary]).to_csv(os.path.join(out, "cohort_summary.csv"), index=False)
-summary["output_files"] = [
-    {"kind": "table", "name": "cohort_summary", "path": "cohort_summary.csv"}
-]
+summary["output_files"] = {
+    "table:cohort_summary": "cohort_summary.csv"
+}
 with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as f:
     json.dump(summary, f)
 """
-            if "INTERPRET THE RESULTS" in upper:
-                return "The cohort table is available {evidence:cohort_summary}."
-            if "MANUSCRIPT SCAFFOLD" in upper:
-                return "# Title\n\n## Results\n\nThe table is available {evidence:cohort_summary}."
-            return "{}"
-
-    class FailingCoderLLM(SingleStepLLM):
-        name = "failing-coder-llm"
-
-        def __init__(self):
-            self.coder_calls = 0
-
-        def complete(self, messages, *, max_tokens=2048, temperature=0.2):
-            user = next((m.content for m in reversed(messages) if m.role == "user"), "")
-            if "WRITE THE PYTHON CODE" in user.upper():
-                self.coder_calls += 1
-                raise RuntimeError("simulated coder outage")
-            return super().complete(
-                messages,
-                max_tokens=max_tokens,
-                temperature=temperature,
-            )
 
     cohort = pd.DataFrame(
         {
@@ -2100,7 +2328,17 @@ with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as f:
     )
     first_pipeline = ra.ResearchAgentPipeline(
         workdir=tmp_path,
-        llm=SingleStepLLM(),
+        llm=_pattern_llm(
+            plan=plan,
+            code=code,
+            interpretation=(
+                "The cohort table is available {evidence:cohort_summary}."
+            ),
+            manuscript=(
+                "# Title\n\n## Results\n\n"
+                "The table is available {evidence:cohort_summary}."
+            ),
+        ),
         enable_literature=False,
         enable_visual_qa=False,
         enable_latex=False,
@@ -2177,7 +2415,10 @@ with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as f:
     monkeypatch.delenv("EASYICU_RESUME_REUSE_STEP_CODE", raising=False)
     if reuse_step_code:
         monkeypatch.setenv("EASYICU_RESUME_REUSE_STEP_CODE", "1")
-    second_llm = FailingCoderLLM()
+    second_llm = _pattern_llm(
+        plan=plan,
+        code=RuntimeError("simulated coder outage"),
+    )
     second_pipeline = ra.ResearchAgentPipeline(
         workdir=tmp_path,
         llm=second_llm,
@@ -2199,7 +2440,7 @@ with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as f:
         stop_after_analysis=True,
     )
     assert second.run_id == first.run_id
-    assert second_llm.coder_calls == expected_coder_calls
+    assert _prompt_calls(second_llm, "WRITE THE PYTHON CODE") == []
 
     partial = json.loads(
         (Path(second.workdir) / "manifest_partial.json").read_text(encoding="utf-8")
@@ -2210,18 +2451,9 @@ with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as f:
         if record.get("step_id") == "04_primary_association"
     ]
     assert records[-1]["status"] == "ok"
-    assert records[-1]["generation_mode"] == "resumed_code_reuse"
-    assert records[-1]["resumed_code_evidence_id"]
-    assert records[-1]["resumed_code_evidence_id"] != "code_bad"
-    source_code_record = next(
-        record
-        for record in partial["evidence"]
-        if record.get("evidence_id") == records[-1]["resumed_code_evidence_id"]
-    )
-    assert (
-        records[-1]["resumed_from_generation_mode"]
-        == source_code_record["generation_mode"]
-    )
+    if explicit_resume:
+        assert records[-1]["step_authority_capsule_reused"] is True
+    assert "resumed_code_evidence_id" not in records[-1]
     final_code_records = [
         record
         for record in partial["evidence"]
@@ -2229,43 +2461,18 @@ with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as f:
         and record.get("produced_by_step") == "04_primary_association"
         and record.get("generation_mode") == "resumed_code_reuse"
     ]
-    assert final_code_records
-    assert records[-1]["script_evidence_id"] == final_code_records[-1]["evidence_id"]
-    assert (
-        final_code_records[-1]["evidence_id"] != records[-1]["resumed_code_evidence_id"]
-    )
-    assert final_code_records[-1]["description"].startswith(
-        "Reused prior agent-generated analysis script"
-    )
-    assert final_code_records[-1]["metadata"]["resumed_code_evidence_id"]
-    assert (
-        final_code_records[-1]["metadata"]["resumed_from_generation_mode"]
-        == source_code_record["generation_mode"]
-    )
+    if explicit_resume:
+        assert len(final_code_records) == 1
+        assert records[-1]["script_evidence_id"] == final_code_records[0]["evidence_id"]
+    else:
+        assert final_code_records == []
+    assert records[-1]["script_evidence_id"] != "code_bad"
     if explicit_resume:
         assert not any(
             "stale pre-resume" in finding.get("message", "")
             for finding in partial["findings"]
         )
-    assert any(
-        finding.get("validator") == "coder"
-        and "reused prior agent-generated code" in finding.get("message", "")
-        and "source mode:" in finding.get("message", "")
-        for finding in partial["findings"]
-    )
-    coder_messages = [
-        finding.get("message", "")
-        for finding in partial["findings"]
-        if finding.get("validator") == "coder"
-    ]
-    preflight_reuse = reuse_step_code or mark_prior_contract_failed
-    if preflight_reuse:
-        assert any("before requesting a new coder script" in m for m in coder_messages)
-    else:
-        assert any("Coder agent failed" in m for m in coder_messages)
-    assert records[-1].get("resumed_failed_contract_code_preflight") is (
-        True if mark_prior_contract_failed else None
-    )
+    assert records[-1].get("resumed_failed_contract_code_preflight") is None
 
 
 def test_concept_repair_failure_resumes_quarantined_draft_fail_closed(
@@ -2273,10 +2480,11 @@ def test_concept_repair_failure_resumes_quarantined_draft_fail_closed(
 ):
     """A rejected draft is repaired on resume, never reused as executable code."""
 
+    _disable_article_contract(monkeypatch)
     from easyicu.research_agent.audits.validators import LLMConceptAuditor
-    from easyicu.research_agent.contracts import ValidationFinding
-    from easyicu.research_agent.runner import CodeRunner
-    from easyicu.research_agent.runtime_artifacts import (
+    from easyicu.research_agent.contracts.runtime import ValidationFinding
+    from easyicu.research_agent.execution.runner import CodeRunner
+    from easyicu.research_agent.authority.runtime_artifacts import (
         current_evidence_records,
         current_successful_step_ids,
     )
@@ -2325,9 +2533,9 @@ out = os.environ["STEP_OUT_DIR"]
 summary = {
     "n": int(len(df)),
     "draft_marker": True,
-    "output_files": [
-        {"kind": "table", "name": "cohort_summary", "path": "cohort_summary.csv"}
-    ],
+    "output_files": {
+        "table:cohort_summary": "cohort_summary.csv"
+    },
 }
 pd.DataFrame([summary]).to_csv(os.path.join(out, "cohort_summary.csv"), index=False)
 with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as f:
@@ -2337,54 +2545,37 @@ with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as f:
         '"draft_marker": True', '"status": "ok", "repaired_marker": True'
     )
 
-    class QuarantineLLM:
-        name = "quarantine-resume-llm"
+    plan = {
+        "research_question": "Summarize the ICU cohort.",
+        "steps": [
+            {
+                "step_id": "01_summary",
+                "planned_analysis_role": "auxiliary",
+                "intent": "Produce a descriptive cohort summary.",
+                "inputs": ["stay_id"],
+                "expected_outputs": ["table:cohort_summary"],
+                "method": "descriptive_summary",
+                "icu_rule_refs": [],
+            }
+        ],
+        "rationale": "single-step quarantine resume test",
+    }
 
-        def __init__(self, *, repair_succeeds: bool, repair_code: str | None = None):
-            self.repair_succeeds = repair_succeeds
-            self.repair_code = repair_code
-            self.write_calls = 0
-            self.repair_calls = 0
-            self.repair_prompts = []
-
-        def complete(self, messages, *, max_tokens=2048, temperature=0.2):
-            del max_tokens, temperature
-            user = next((m.content for m in reversed(messages) if m.role == "user"), "")
-            upper = user.upper()
-            if "ICU-AWARE RESEARCH PLAN" in upper:
-                return json.dumps(
-                    {
-                        "research_question": "Summarize the ICU cohort.",
-                        "steps": [
-                            {
-                                "step_id": "01_summary",
-                                "intent": "Produce a descriptive cohort summary.",
-                                "inputs": ["stay_id"],
-                                "expected_outputs": ["table:cohort_summary"],
-                                "method": "descriptive_summary",
-                                "icu_rule_refs": [],
-                            }
-                        ],
-                        "rationale": "single-step quarantine resume test",
-                    }
-                )
-            if "REPAIR THE PYTHON CODE" in upper:
-                self.repair_calls += 1
-                self.repair_prompts.append(user)
-                if not self.repair_succeeds:
-                    raise RuntimeError("simulated repair quota exhaustion")
-                return self.repair_code or repaired_code
-            if "WRITE THE PYTHON CODE" in upper:
-                self.write_calls += 1
-                return draft_code
-            if "INTERPRET THE RESULTS" in upper:
-                return "The cohort summary is available {evidence:cohort_summary}."
-            if "MANUSCRIPT SCAFFOLD" in upper:
-                return "# Title\n\n## Results\n\nSummary {evidence:cohort_summary}."
-            return "{}"
+    def quarantine_llm(
+        repair_response: str | BaseException,
+    ) -> PatternScriptedMockLLMClient:
+        return _pattern_llm(
+            plan=plan,
+            code=draft_code,
+            repairs=[repair_response],
+            interpretation=(
+                "The cohort summary is available {evidence:cohort_summary}."
+            ),
+            manuscript="# Title\n\n## Results\n\nSummary {evidence:cohort_summary}.",
+        )
 
     cohort = pd.DataFrame({"stay_id": [1, 2, 3], "death": [0, 1, 0]})
-    first_llm = QuarantineLLM(repair_succeeds=False)
+    first_llm = quarantine_llm(RuntimeError("simulated repair quota exhaustion"))
     first_pipeline = ra.ResearchAgentPipeline(
         workdir=tmp_path,
         llm=first_llm,
@@ -2415,8 +2606,8 @@ with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as f:
         if record.get("step_id") == "01_summary"
     )
     assert first_record["status"] == "repair_failed"
-    assert first_llm.write_calls == 1
-    assert first_llm.repair_calls == 1
+    assert len(_prompt_calls(first_llm, "WRITE THE PYTHON CODE")) == 1
+    assert len(_prompt_calls(first_llm, "REPAIR THE PYTHON CODE")) == 1
     assert runner_calls == ["01_summary"]
     assert (run_dir / "steps" / "01_summary" / "analysis.py").exists()
     assert not any((run_dir / "steps" / "01_summary" / "outputs").iterdir())
@@ -2439,7 +2630,7 @@ with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as f:
     # Simulate a nondeterministic auditor forgetting its prior error. The saved
     # error must still force REPAIR, and another outage must still not execute.
     audit_state["emit_error"] = False
-    second_llm = QuarantineLLM(repair_succeeds=False)
+    second_llm = quarantine_llm(RuntimeError("simulated repair quota exhaustion"))
     second_pipeline = ra.ResearchAgentPipeline(
         workdir=tmp_path,
         llm=second_llm,
@@ -2462,21 +2653,25 @@ with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as f:
         stop_after_step_id="01_summary",
         stop_after_analysis=True,
     )
-    assert second_llm.write_calls == 0
-    assert second_llm.repair_calls == 1
-    assert persisted_message in second_llm.repair_prompts[-1]
+    assert _prompt_calls(second_llm, "WRITE THE PYTHON CODE") == []
+    second_repair_prompts = _prompt_calls(
+        second_llm,
+        "REPAIR THE PYTHON CODE",
+        full=True,
+    )
+    assert len(second_repair_prompts) == 1
+    assert persisted_message in second_repair_prompts[-1]
     assert runner_calls == ["01_summary"]
     assert (run_dir / "steps" / "01_summary" / ".quarantine").is_dir()
 
     # Both allowed logical repairs have now been spent across two processes.
     # Constructing another pipeline must not buy a fresh attempt, even if that
     # model claims it could return a materially inert edit.
-    noop_llm = QuarantineLLM(
-        repair_succeeds=True,
-        repair_code=(
+    noop_llm = quarantine_llm(
+        (
             draft_code
             + "\n# claimed repair, no semantic change\npass\n'claimed repair'\n"
-        ),
+        )
     )
     noop_pipeline = ra.ResearchAgentPipeline(
         workdir=tmp_path,
@@ -2508,8 +2703,8 @@ with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as f:
         for record in noop_partial["per_step_records"]
         if record.get("step_id") == "01_summary"
     )
-    assert noop_llm.write_calls == 0
-    assert noop_llm.repair_calls == 0
+    assert _prompt_calls(noop_llm, "WRITE THE PYTHON CODE") == []
+    assert _prompt_calls(noop_llm, "REPAIR THE PYTHON CODE") == []
     assert noop_record["status"] == "blocked_by_concept_audit"
     assert noop_record["quarantined_repair_succeeded"] is False
     assert noop_record["step_llm_repair_attempts"] == 2
@@ -2523,10 +2718,7 @@ with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as f:
     # The last durable candidate remains quarantined and unexecuted.
     partial_code = draft_code.replace("draft_marker", "partial_marker")
     audit_state["reject_marker"] = "partial_marker"
-    partial_llm = QuarantineLLM(
-        repair_succeeds=True,
-        repair_code=partial_code,
-    )
+    partial_llm = quarantine_llm(partial_code)
     partial_pipeline = ra.ResearchAgentPipeline(
         workdir=tmp_path,
         llm=partial_llm,
@@ -2549,13 +2741,13 @@ with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as f:
         stop_after_step_id="01_summary",
         stop_after_analysis=True,
     )
-    from easyicu.research_agent.pipeline_resume import (
+    from easyicu.research_agent.orchestration.resume import (
         load_quarantined_concept_draft,
     )
 
     latest_draft = load_quarantined_concept_draft(run_dir=run_dir, step_id="01_summary")
     assert latest_draft is not None
-    assert partial_llm.repair_calls == 0
+    assert _prompt_calls(partial_llm, "REPAIR THE PYTHON CODE") == []
     assert "draft_marker" in latest_draft.code
     assert "partial_marker" not in latest_draft.code
     assert runner_calls == ["01_summary"]
@@ -2564,8 +2756,9 @@ with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as f:
 def test_resume_repair_ticket_uses_only_current_deterministic_coordinates(
     ra, tmp_path: Path, monkeypatch
 ):
+    _disable_article_contract(monkeypatch)
     from easyicu.research_agent.audits.validators import ConceptUsageAuditor
-    from easyicu.research_agent.contracts import ValidationFinding
+    from easyicu.research_agent.contracts.runtime import ValidationFinding
 
     coordinate = {"call_line": 10}
 
@@ -2608,42 +2801,31 @@ with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as f:
     json.dump(summary, f)
 """
 
-    class CoordinateLLM:
-        name = "current-coordinate-resume-llm"
+    plan = {
+        "research_question": "Summarize the cohort.",
+        "steps": [
+            {
+                "step_id": "01_summary",
+                "planned_analysis_role": "auxiliary",
+                "intent": "Produce a descriptive cohort summary.",
+                "inputs": ["stay_id"],
+                "expected_outputs": ["table:summary"],
+                "method": "descriptive_summary",
+                "icu_rule_refs": [],
+            }
+        ],
+        "rationale": "coordinate refresh regression",
+    }
 
-        def __init__(self):
-            self.repair_prompts = []
-
-        def complete(self, messages, *, max_tokens=2048, temperature=0.2):
-            del max_tokens, temperature
-            user = next((m.content for m in reversed(messages) if m.role == "user"), "")
-            upper = user.upper()
-            if "ICU-AWARE RESEARCH PLAN" in upper:
-                return json.dumps(
-                    {
-                        "research_question": "Summarize the cohort.",
-                        "steps": [
-                            {
-                                "step_id": "01_summary",
-                                "intent": "Produce a descriptive cohort summary.",
-                                "inputs": ["stay_id"],
-                                "expected_outputs": ["table:summary"],
-                                "method": "descriptive_summary",
-                                "icu_rule_refs": [],
-                            }
-                        ],
-                        "rationale": "coordinate refresh regression",
-                    }
-                )
-            if "WRITE THE PYTHON CODE" in upper:
-                return draft_code
-            if "REPAIR THE PYTHON CODE" in upper:
-                self.repair_prompts.append(user)
-                raise RuntimeError("stop after recording repair prompt")
-            return "{}"
+    def coordinate_llm() -> PatternScriptedMockLLMClient:
+        return _pattern_llm(
+            plan=plan,
+            code=draft_code,
+            repairs=[RuntimeError("stop after recording repair prompt")],
+        )
 
     cohort = pd.DataFrame({"stay_id": [1, 2, 3], "death": [0, 1, 0]})
-    first_llm = CoordinateLLM()
+    first_llm = coordinate_llm()
     first_pipeline = ra.ResearchAgentPipeline(
         workdir=tmp_path,
         llm=first_llm,
@@ -2664,10 +2846,15 @@ with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as f:
         stop_after_step_id="01_summary",
         stop_after_analysis=True,
     )
-    assert '"call_line": 10' in first_llm.repair_prompts[-1]
+    first_repair_prompts = _prompt_calls(
+        first_llm,
+        "REPAIR THE PYTHON CODE",
+        full=True,
+    )
+    assert '"call_line": 10' in first_repair_prompts[-1]
 
     coordinate["call_line"] = 20
-    resumed_llm = CoordinateLLM()
+    resumed_llm = coordinate_llm()
     resumed_pipeline = ra.ResearchAgentPipeline(
         workdir=tmp_path,
         llm=resumed_llm,
@@ -2691,17 +2878,20 @@ with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as f:
         stop_after_analysis=True,
     )
 
-    prompt = resumed_llm.repair_prompts[-1]
-    current_ticket = prompt.split(
-        "TYPED REPAIR TICKET (authoritative routing):", 1
-    )[1].split("HUMAN-READABLE FINDINGS:", 1)[0]
-    historical = prompt.split(
-        "PREVIOUSLY REPAIRED CONCEPT FINDINGS", 1
-    )[1]
+    prompt = _prompt_calls(
+        resumed_llm,
+        "REPAIR THE PYTHON CODE",
+        full=True,
+    )[-1]
+    authority_payload = prompt.split(
+        "HOST-OWNED REPAIR AUTHORITY (typed; verbatim):", 1
+    )[1].split("REPAIR THE PYTHON CODE", 1)[0]
+    parsed_authority = json.loads(authority_payload)
+    current_ticket = json.dumps(parsed_authority["typed_ticket"], sort_keys=True)
     assert '"call_line": 20' in current_ticket
     assert '"call_line": 10' not in current_ticket
-    assert '"call_line"' not in historical
-    assert "provenance_helper_result_not_immediately_guarded" in historical
+    assert "provenance_helper_result_not_immediately_guarded" in current_ticket
+    assert parsed_authority["host_guidance"] == {}
 
 
 @pytest.mark.parametrize(
@@ -2714,7 +2904,7 @@ with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as f:
     ],
 )
 def test_quarantined_repair_materiality_rejects_inert_edits(after: str) -> None:
-    from easyicu.research_agent.pipeline_execute import (
+    from easyicu.research_agent.execution.phase import (
         _python_repair_is_materially_changed,
     )
 
@@ -2725,7 +2915,7 @@ def test_quarantined_repair_materiality_rejects_inert_edits(after: str) -> None:
 
 
 def test_logical_repair_budget_restore_is_monotonic_across_early_failure() -> None:
-    from easyicu.research_agent.pipeline_execute import (
+    from easyicu.research_agent.execution.phase import (
         _monotonic_step_llm_repair_history,
     )
 
@@ -2763,9 +2953,10 @@ def test_resume_retires_unchanged_draft_after_deterministic_policy_supersession(
 ) -> None:
     """A validator-policy fix may retire its own stale error without code churn."""
 
+    _disable_article_contract(monkeypatch)
     from easyicu.research_agent.audits.validators import LLMConceptAuditor
-    from easyicu.research_agent.contracts import ValidationFinding
-    from easyicu.research_agent.runner import CodeRunner
+    from easyicu.research_agent.contracts.runtime import ValidationFinding
+    from easyicu.research_agent.execution.runner import CodeRunner
 
     audit_state = {"old_policy": True}
 
@@ -2806,9 +2997,9 @@ out = os.environ["STEP_OUT_DIR"]
 summary = {
     "status": "ok",
     "n": int(len(y)),
-    "output_files": [
-        {"kind": "table", "name": "cohort_summary", "path": "cohort_summary.csv"}
-    ],
+    "output_files": {
+        "table:cohort_summary": "cohort_summary.csv"
+    },
 }
 pd.DataFrame([summary]).to_csv(
     os.path.join(out, "cohort_summary.csv"), index=False
@@ -2817,50 +3008,35 @@ with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as f:
     json.dump(summary, f)
 """
 
-    class PolicyTransitionLLM:
-        name = "quarantine-policy-transition"
+    plan = {
+        "research_question": "Summarize the cohort for in-hospital mortality.",
+        "steps": [
+            {
+                "step_id": "01_summary",
+                "planned_analysis_role": "auxiliary",
+                "intent": "Produce a descriptive cohort summary.",
+                "inputs": ["death"],
+                "expected_outputs": ["table:cohort_summary"],
+                "method": "descriptive_summary",
+                "icu_rule_refs": [],
+            }
+        ],
+        "rationale": "single-step policy transition test",
+    }
 
-        def __init__(self):
-            self.write_calls = 0
-            self.repair_calls = 0
-
-        def complete(self, messages, *, max_tokens=2048, temperature=0.2):
-            del max_tokens, temperature
-            user = next((m.content for m in reversed(messages) if m.role == "user"), "")
-            upper = user.upper()
-            if "ICU-AWARE RESEARCH PLAN" in upper:
-                return json.dumps(
-                    {
-                        "research_question": (
-                            "Summarize the cohort for in-hospital mortality."
-                        ),
-                        "steps": [
-                            {
-                                "step_id": "01_summary",
-                                "intent": "Produce a descriptive cohort summary.",
-                                "inputs": ["death"],
-                                "expected_outputs": ["table:cohort_summary"],
-                                "method": "descriptive_summary",
-                                "icu_rule_refs": [],
-                            }
-                        ],
-                        "rationale": "single-step policy transition test",
-                    }
-                )
-            if "REPAIR THE PYTHON CODE" in upper:
-                self.repair_calls += 1
-                raise RuntimeError("simulated old-policy repair outage")
-            if "WRITE THE PYTHON CODE" in upper:
-                self.write_calls += 1
-                return draft_code
-            if "INTERPRET THE RESULTS" in upper:
-                return "The cohort summary is available {evidence:cohort_summary}."
-            if "MANUSCRIPT SCAFFOLD" in upper:
-                return "# Title\n\n## Results\n\nSummary {evidence:cohort_summary}."
-            return "{}"
+    def policy_transition_llm() -> PatternScriptedMockLLMClient:
+        return _pattern_llm(
+            plan=plan,
+            code=draft_code,
+            repairs=[RuntimeError("simulated old-policy repair outage")],
+            interpretation=(
+                "The cohort summary is available {evidence:cohort_summary}."
+            ),
+            manuscript="# Title\n\n## Results\n\nSummary {evidence:cohort_summary}.",
+        )
 
     cohort = pd.DataFrame({"stay_id": [1, 2, 3], "death": [0, 1, 0]})
-    first_llm = PolicyTransitionLLM()
+    first_llm = policy_transition_llm()
     first_pipeline = ra.ResearchAgentPipeline(
         workdir=tmp_path,
         llm=first_llm,
@@ -2881,8 +3057,8 @@ with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as f:
         stop_after_analysis=True,
     )
     run_dir = Path(first.workdir)
-    assert first_llm.write_calls == 1
-    assert first_llm.repair_calls == 1
+    assert len(_prompt_calls(first_llm, "WRITE THE PYTHON CODE")) == 1
+    assert len(_prompt_calls(first_llm, "REPAIR THE PYTHON CODE")) == 1
     assert (run_dir / "steps" / "01_summary" / ".quarantine").is_dir()
 
     audit_state["old_policy"] = False
@@ -2903,7 +3079,7 @@ with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as f:
         )
 
     monkeypatch.setattr(CodeRunner, "run", run_after_policy_supersession)
-    resumed_llm = PolicyTransitionLLM()
+    resumed_llm = policy_transition_llm()
     resumed_pipeline = ra.ResearchAgentPipeline(
         workdir=tmp_path,
         llm=resumed_llm,
@@ -2935,8 +3111,8 @@ with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as f:
         for item in partial["per_step_records"]
         if item.get("step_id") == "01_summary"
     )
-    assert resumed_llm.write_calls == 0
-    assert resumed_llm.repair_calls == 0
+    assert _prompt_calls(resumed_llm, "WRITE THE PYTHON CODE") == []
+    assert _prompt_calls(resumed_llm, "REPAIR THE PYTHON CODE") == []
     assert quarantine_absent_at_runner == [True]
     assert record["status"] == "ok"
     assert record["resumed_quarantined_draft"] is True
@@ -2961,36 +3137,41 @@ def test_resume_reaudits_material_deterministic_quarantine_repair(
 ) -> None:
     """A deterministic replay retires stale findings without a new coder call."""
 
-    import easyicu.research_agent.pipeline_execute as execute_module
+    import easyicu.research_agent.repairs.coordination as coordination_module
 
-    real_repair = execute_module.deterministic_concept_audit_repair
+    real_repair = coordination_module.deterministic_concept_audit_repair
     repair_enabled = {"value": False}
+    from easyicu.research_agent.agents.core import PlannerAgent
 
-    def gated_repair(code, messages):
+    original_planner_run = PlannerAgent.run
+
+    def run_without_article_suite(self, context, **kwargs):
+        kwargs["enforce_article_contract"] = False
+        return original_planner_run(self, context, **kwargs)
+
+    monkeypatch.setattr(PlannerAgent, "run", run_without_article_suite)
+
+    def gated_repair(
+        code,
+        messages,
+        *,
+        repair_reasons=(),
+        repair_findings=(),
+    ):
         if not repair_enabled["value"]:
             return code, []
-        return real_repair(code, messages)
+        return real_repair(
+            code,
+            messages,
+            repair_reasons=repair_reasons,
+            repair_findings=repair_findings,
+        )
 
     monkeypatch.setattr(
-        execute_module,
+        coordination_module,
         "deterministic_concept_audit_repair",
         gated_repair,
     )
-    real_repair_history = execute_module._monotonic_step_llm_repair_history
-    exhaust_logical_budget = {"value": False}
-
-    def forced_repair_history(records, *, limit):
-        attempts, classes, invalid = real_repair_history(records, limit=limit)
-        if not exhaust_logical_budget["value"]:
-            return attempts, classes, invalid
-        return limit, ["concept"] * limit, invalid
-
-    monkeypatch.setattr(
-        execute_module,
-        "_monotonic_step_llm_repair_history",
-        forced_repair_history,
-    )
-
     draft_code = """
 import json
 import os
@@ -3013,7 +3194,9 @@ def main():
         "registered_outputs": {
             "table:cohort_summary": "cohort_summary.csv",
         },
-        "output_files": ["cohort_summary.csv", "step_summary.json"],
+        "output_files": {
+            "table:cohort_summary": "cohort_summary.csv",
+        },
     }
     if invalid_pair_n > 0 or discordant_n > 0:
         summary["status"] = "failed_provenance_audit"
@@ -3027,48 +3210,63 @@ if __name__ == "__main__":
     main()
 """
 
-    class DeterministicResumeLLM:
-        name = "deterministic-quarantine-resume"
+    from easyicu.research_agent.providers.mocks import PatternScriptedMockLLMClient
 
-        def __init__(self):
-            self.write_calls = 0
-            self.repair_calls = 0
+    plan_response = json.dumps(
+        {
+            "research_question": "Summarize the ICU cohort.",
+            "steps": [
+                {
+                    "step_id": "01_summary",
+                    "planned_analysis_role": "auxiliary",
+                    "intent": "Produce a descriptive cohort summary.",
+                    "inputs": ["stay_id"],
+                    "expected_outputs": ["table:cohort_summary"],
+                    "method": "descriptive_summary",
+                    "icu_rule_refs": [],
+                }
+            ],
+            "rationale": "single-step deterministic resume test",
+        }
+    )
 
-        def complete(self, messages, *, max_tokens=2048, temperature=0.2):
-            del max_tokens, temperature
-            user = next((m.content for m in reversed(messages) if m.role == "user"), "")
-            upper = user.upper()
-            if "ICU-AWARE RESEARCH PLAN" in upper:
-                return json.dumps(
-                    {
-                        "research_question": "Summarize the ICU cohort.",
-                        "steps": [
-                            {
-                                "step_id": "01_summary",
-                                "intent": "Produce a descriptive cohort summary.",
-                                "inputs": ["stay_id"],
-                                "expected_outputs": ["table:cohort_summary"],
-                                "method": "descriptive_summary",
-                                "icu_rule_refs": [],
-                            }
-                        ],
-                        "rationale": "single-step deterministic resume test",
-                    }
-                )
-            if "REPAIR THE PYTHON CODE" in upper:
-                self.repair_calls += 1
-                raise RuntimeError("simulated first-pass repair outage")
-            if "WRITE THE PYTHON CODE" in upper:
-                self.write_calls += 1
-                return draft_code
-            if "INTERPRET THE RESULTS" in upper:
-                return "The cohort summary is available {evidence:cohort_summary}."
-            if "MANUSCRIPT SCAFFOLD" in upper:
-                return "# Title\n\n## Results\n\nSummary {evidence:cohort_summary}."
-            return "{}"
+    def deterministic_resume_llm() -> PatternScriptedMockLLMClient:
+        return PatternScriptedMockLLMClient(
+            [
+                ("ICU-AWARE RESEARCH PLAN", [plan_response] * 4),
+                ("WRITE THE PYTHON CODE", [draft_code]),
+                (
+                    "REPAIR THE PYTHON CODE",
+                    [RuntimeError("simulated first-pass repair outage")],
+                ),
+                (
+                    "INTERPRET THE RESULTS",
+                    ["The cohort summary is available {evidence:cohort_summary}."],
+                ),
+                (
+                    "MANUSCRIPT SCAFFOLD",
+                    ["# Title\n\n## Results\n\nSummary {evidence:cohort_summary}."],
+                ),
+            ]
+        )
+
+    def call_count(llm: PatternScriptedMockLLMClient, marker: str) -> int:
+        count = 0
+        for messages, _kwargs in llm.calls:
+            prompt = "\n".join(
+                message.content.upper()
+                for message in messages
+                if message.role == "user"
+            )
+            if marker not in prompt:
+                continue
+            if marker == "WRITE THE PYTHON CODE" and "REPAIR THE PYTHON CODE" in prompt:
+                continue
+            count += 1
+        return count
 
     cohort = pd.DataFrame({"stay_id": [1, 2, 3], "death": [0, 1, 0]})
-    first_llm = DeterministicResumeLLM()
+    first_llm = deterministic_resume_llm()
     first_pipeline = ra.ResearchAgentPipeline(
         workdir=tmp_path,
         llm=first_llm,
@@ -3090,8 +3288,8 @@ if __name__ == "__main__":
         stop_after_analysis=True,
     )
     run_dir = Path(first.workdir)
-    assert first_llm.write_calls == 1
-    assert first_llm.repair_calls == 1
+    assert call_count(first_llm, "WRITE THE PYTHON CODE") == 1
+    assert call_count(first_llm, "REPAIR THE PYTHON CODE") == 1
     assert (run_dir / "steps" / "01_summary" / ".quarantine").is_dir()
     first_partial = json.loads(
         (run_dir / "manifest_partial.json").read_text(encoding="utf-8")
@@ -3105,13 +3303,31 @@ if __name__ == "__main__":
         first_record.get("step_provider_call_categories") or []
     )
     # Deterministic revalidation/repair runs before the coder-repair budget
-    # branch.  It remains available when that durable logical budget is fully
-    # spent without requesting another coder generation or coder repair.  Other
-    # pipeline roles may still be invoked while the resumed step is finalized.
-    exhaust_logical_budget["value"] = True
+    # branch. Exhaust the NEW durable logical ledger without buying another
+    # provider call; resume must recover this receipt-ahead-of-step-snapshot
+    # state and still permit deterministic revalidation.
+    provider_receipt = provider_call_budget_receipt_path(
+        run_dir,
+        step_id="01_summary",
+    )
+    provider_state = load_provider_call_budget_state(
+        provider_receipt,
+        step_id="01_summary",
+        expected_reserved_final_category=None,
+    )
+    durable_budget = StepProviderCallBudget(
+        provider_state.limit,
+        step_id="01_summary",
+        consumed_categories=provider_state.categories,
+        logical_repair_entries=provider_state.logical_repairs,
+        receipt_path=provider_receipt,
+        reserved_final_category=None,
+    )
+    assert durable_budget.logical_repair_classes == ("concept",)
+    assert durable_budget.reserve_logical_repair("concept", max_repairs=2) == 2
 
     if legacy_stale_checkpoint:
-        from easyicu.research_agent.pipeline_resume import (
+        from easyicu.research_agent.orchestration.resume import (
             load_quarantined_concept_draft,
             store_quarantined_concept_draft,
         )
@@ -3139,15 +3355,34 @@ if __name__ == "__main__":
         # Reproduce the legacy checkpoint written by the pre-fix execute loop:
         # the exact digest is already repaired, but its pre-repair deterministic
         # finding was accidentally persisted beside it.
-        store_quarantined_concept_draft(
+        repaired_checkpoint = store_quarantined_concept_draft(
             run_dir=run_dir,
             step_id="01_summary",
             code=repaired_checkpoint_code,
             findings=list(stale_draft.findings),
         )
+        # Reproduce the legacy writer's internally consistent checkpoint: its
+        # step record pointed at the repaired draft digest even though the
+        # attached deterministic finding was stale. A digest mismatch is a
+        # different authority failure and must correctly trigger regeneration.
+        for collection_name in ("per_step_records", "step_attempt_history"):
+            for record in first_partial.get(collection_name, []):
+                if (
+                    record.get("step_id") != "01_summary"
+                    or record.get("quarantined_requires_repair") is not True
+                ):
+                    continue
+                record["quarantined_draft_sha256"] = repaired_checkpoint.sha256
+                record["quarantined_draft_relative_path"] = (
+                    repaired_checkpoint.relative_path
+                )
+        (run_dir / "manifest_partial.json").write_text(
+            json.dumps(first_partial, indent=2, ensure_ascii=False),
+            encoding="utf-8",
+        )
 
     repair_enabled["value"] = True
-    from easyicu.research_agent.runner import CodeRunner
+    from easyicu.research_agent.execution.runner import CodeRunner
 
     quarantine_absent_at_runner = []
     original_run = CodeRunner.run
@@ -3166,7 +3401,7 @@ if __name__ == "__main__":
         )
 
     monkeypatch.setattr(CodeRunner, "run", run_after_quarantine_revalidation)
-    resumed_llm = DeterministicResumeLLM()
+    resumed_llm = deterministic_resume_llm()
     resumed_pipeline = ra.ResearchAgentPipeline(
         workdir=tmp_path,
         llm=resumed_llm,
@@ -3198,8 +3433,10 @@ if __name__ == "__main__":
         for item in partial["per_step_records"]
         if item.get("step_id") == "01_summary"
     )
-    assert resumed_llm.write_calls == 0
-    assert resumed_llm.repair_calls == 0
+    assert call_count(resumed_llm, "WRITE THE PYTHON CODE") == int(
+        legacy_stale_checkpoint
+    )
+    assert call_count(resumed_llm, "REPAIR THE PYTHON CODE") == 0
     resumed_provider_categories = list(
         record.get("step_provider_call_categories") or []
     )
@@ -3209,40 +3446,39 @@ if __name__ == "__main__":
     new_provider_categories = resumed_provider_categories[
         len(first_provider_categories) :
     ]
-    assert not any(
-        category == "initial_generation"
-        or category.endswith(("_patch", "_full_rewrite"))
-        for category in new_provider_categories
-    )
+    if legacy_stale_checkpoint:
+        # Once evidence authority has been selected, a mutable legacy manifest
+        # cannot re-authorize hand-rewritten quarantine code. Fail closed and
+        # regenerate exactly once; do not silently promote the stale draft.
+        assert new_provider_categories.count("initial_generation") == 1
+    else:
+        assert not any(
+            category == "initial_generation"
+            or category.endswith(("_patch", "_full_rewrite"))
+            for category in new_provider_categories
+        )
     assert record["step_llm_repair_attempts"] == 2
     assert record["step_llm_repair_budget"] == 2
-    assert quarantine_absent_at_runner == [True]
+    assert quarantine_absent_at_runner == [not legacy_stale_checkpoint]
     assert record["status"] == "ok"
     if legacy_stale_checkpoint:
-        assert not record.get("deterministic_concept_repairs")
-        assert not record.get("quarantined_repair_materially_changed")
-        assert record["quarantined_repair_succeeded"] is False
-        assert record["quarantine_deterministic_revalidation_succeeded"] is True
-        retired = record["quarantine_deterministic_revalidated_findings"]
-        assert retired[0]["validator"] == "mechanical_code_preflight"
-        assert retired[0]["quarantined_script_sha256"]
-        assert retired[0]["deterministic_gate_fingerprint"]
-        assert record["quarantine_retired_by"] == (
-            "deterministic_code_gate_revalidation"
-        )
+        assert record["deterministic_concept_repairs"] == 1
+        assert not record.get("quarantined_repair_succeeded")
+        assert not record.get("quarantine_deterministic_revalidation_succeeded")
+        assert not record.get("quarantine_retired")
     else:
         assert record["deterministic_concept_repairs"] == 1
         assert record["quarantined_repair_materially_changed"] is True
         assert record["quarantined_repair_succeeded"] is True
         assert not record.get("quarantine_deterministic_revalidation_succeeded")
-    assert record["quarantine_retired"] is True
+        assert record["quarantine_retired"] is True
     assert not record.get("monotonic_concept_constraints")
     assert not (run_dir / "steps" / "01_summary" / ".quarantine").exists()
 
 
 def test_quarantine_deterministic_revalidation_is_fail_closed() -> None:
-    from easyicu.research_agent.contracts import ValidationFinding
-    from easyicu.research_agent.pipeline_execute import (
+    from easyicu.research_agent.contracts.runtime import ValidationFinding
+    from easyicu.research_agent.execution.phase import (
         _quarantined_deterministic_errors_resolved_by_current_gate,
     )
 
@@ -3295,8 +3531,8 @@ def test_quarantine_deterministic_revalidation_is_fail_closed() -> None:
 def test_quarantine_deterministic_revalidation_never_retires_foreign_or_mixed_errors(
     foreign_validator: str,
 ) -> None:
-    from easyicu.research_agent.contracts import ValidationFinding
-    from easyicu.research_agent.pipeline_execute import (
+    from easyicu.research_agent.contracts.runtime import ValidationFinding
+    from easyicu.research_agent.execution.phase import (
         _quarantined_deterministic_errors_resolved_by_current_gate,
     )
 
@@ -3360,7 +3596,7 @@ y = df["death"]
 
 def _stored_horizon_error(ra):
     del ra
-    from easyicu.research_agent.contracts import ValidationFinding
+    from easyicu.research_agent.contracts.runtime import ValidationFinding
 
     return ValidationFinding(
         validator="llm_concept_auditor",
@@ -3380,7 +3616,7 @@ def _stored_horizon_error(ra):
 
 
 def test_quarantine_policy_supersession_reclassifies_the_stored_error(ra) -> None:
-    from easyicu.research_agent.pipeline_execute import (
+    from easyicu.research_agent.execution.phase import (
         _quarantined_errors_superseded_by_current_policy,
     )
 
@@ -3424,8 +3660,8 @@ def test_quarantine_policy_supersession_reclassifies_the_stored_error(ra) -> Non
 def test_quarantine_policy_supersession_reclassifies_isolated_raw_branch_false_override(
     ra,
 ) -> None:
-    from easyicu.research_agent.contracts import ValidationFinding
-    from easyicu.research_agent.pipeline_execute import (
+    from easyicu.research_agent.contracts.runtime import ValidationFinding
+    from easyicu.research_agent.execution.phase import (
         _quarantined_errors_superseded_by_current_policy,
     )
 
@@ -3485,8 +3721,8 @@ model = sm.Logit(outcome, pd.DataFrame({'treatment': treatment}))
 
 
 def test_quarantine_policy_does_not_trust_artifact_literal_decoy_flow(ra) -> None:
-    from easyicu.research_agent.contracts import ValidationFinding
-    from easyicu.research_agent.pipeline_execute import (
+    from easyicu.research_agent.contracts.runtime import ValidationFinding
+    from easyicu.research_agent.execution.phase import (
         _quarantined_errors_superseded_by_current_policy,
     )
 
@@ -3529,8 +3765,8 @@ treatment = consume()
 
 
 def test_quarantine_policy_does_not_trust_uncalled_return_as_consumption(ra) -> None:
-    from easyicu.research_agent.contracts import ValidationFinding
-    from easyicu.research_agent.pipeline_execute import (
+    from easyicu.research_agent.contracts.runtime import ValidationFinding
+    from easyicu.research_agent.execution.phase import (
         _quarantined_errors_superseded_by_current_policy,
     )
 
@@ -3573,8 +3809,8 @@ treatment = helper_result.values
 
 
 def test_quarantine_policy_does_not_trust_audit_only_authority_flow(ra) -> None:
-    from easyicu.research_agent.contracts import ValidationFinding
-    from easyicu.research_agent.pipeline_execute import (
+    from easyicu.research_agent.contracts.runtime import ValidationFinding
+    from easyicu.research_agent.execution.phase import (
         _quarantined_errors_superseded_by_current_policy,
     )
 
@@ -3644,8 +3880,8 @@ model = sm.Logit(outcome, pd.DataFrame({'treatment': raw_wrong}))
 def test_quarantine_policy_supersession_does_not_trust_fresh_audit_absence_or_warnings(
     ra, current_findings
 ) -> None:
-    from easyicu.research_agent.contracts import ValidationFinding
-    from easyicu.research_agent.pipeline_execute import (
+    from easyicu.research_agent.contracts.runtime import ValidationFinding
+    from easyicu.research_agent.execution.phase import (
         _quarantined_errors_superseded_by_current_policy,
     )
 
@@ -3669,8 +3905,8 @@ def test_quarantine_policy_supersession_does_not_trust_fresh_audit_absence_or_wa
 
 
 def test_quarantine_policy_supersession_requires_zero_current_errors(ra) -> None:
-    from easyicu.research_agent.contracts import ValidationFinding
-    from easyicu.research_agent.pipeline_execute import (
+    from easyicu.research_agent.contracts.runtime import ValidationFinding
+    from easyicu.research_agent.execution.phase import (
         _quarantined_errors_superseded_by_current_policy,
     )
 
@@ -3729,6 +3965,7 @@ def test_resume_reuses_locked_plan_instead_of_replanning(
                         "steps": [
                             {
                                 "step_id": "88_resume_should_ignore_this",
+                                "planned_analysis_role": "primary",
                                 "intent": "This plan must be ignored on resume.",
                                 "inputs": ["sofa2", "death"],
                                 "expected_outputs": ["table:ignored"],
@@ -3850,35 +4087,9 @@ def test_resume_adopts_legacy_figure_edge_migration_without_replanning(
         observed_migration,
     )
 
-    class PlannerCountingLLM(ra.MockLLMClient):
-        def __init__(self):
-            super().__init__()
-            self.planner_calls = 0
+    from easyicu.research_agent.providers.mocks import PatternScriptedMockLLMClient
 
-        def complete(self, messages, *, max_tokens=2048, temperature=0.2):
-            user = next(
-                (
-                    message.content
-                    for message in reversed(messages)
-                    if message.role == "user"
-                ),
-                "",
-            )
-            upper = user.upper()
-            if upper.startswith(
-                (
-                    "PRODUCE AN ICU-AWARE RESEARCH PLAN",
-                    "REVISE THE ICU-AWARE RESEARCH PLAN",
-                )
-            ):
-                self.planner_calls += 1
-            return super().complete(
-                messages,
-                max_tokens=max_tokens,
-                temperature=temperature,
-            )
-
-    llm = PlannerCountingLLM()
+    llm = PatternScriptedMockLLMClient([], contextual_default=True)
     pipeline = ra.ResearchAgentPipeline(
         workdir=tmp_path,
         llm=llm,
@@ -3909,7 +4120,19 @@ def test_resume_adopts_legacy_figure_edge_migration_without_replanning(
 
     assert result.run_id == run_id
     assert migration_calls == 1
-    assert llm.planner_calls == 0
+    planner_calls = [
+        message.content
+        for messages, _kwargs in llm.calls
+        for message in messages
+        if message.role == "user"
+        and message.content.upper().startswith(
+            (
+                "PRODUCE AN ICU-AWARE RESEARCH PLAN",
+                "REVISE THE ICU-AWARE RESEARCH PLAN",
+            )
+        )
+    ]
+    assert not planner_calls
     revision_path = run_dir / "analysis_plan_revision_4.json"
     assert revision_path.is_file()
     migrated = AnalysisPlan.model_validate_json(
@@ -3954,7 +4177,11 @@ def test_resume_to_nonexistent_run_id_starts_fresh_directory(
     assert (Path(result.workdir) / "manifest_partial.json").exists()
 
 
-def test_final_manifest_keeps_step_records_for_metered_hosted_stub(ra, tmp_path: Path):
+def test_final_manifest_keeps_step_records_for_metered_hosted_stub(
+    ra,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
     """The final manifest must keep per-step resume records outside Mock paths.
 
     The real hosted path is wrapped in ``MeteredClient`` when cost
@@ -3963,31 +4190,23 @@ def test_final_manifest_keeps_step_records_for_metered_hosted_stub(ra, tmp_path:
     paper/provenance tooling reads.
     """
 
-    class HostedStubLLM:
-        name = "hosted-stub"
-
-        def complete(self, messages, *, max_tokens=2048, temperature=0.2):
-            user = next((m.content for m in reversed(messages) if m.role == "user"), "")
-            upper = user.upper()
-            if "ICU-AWARE RESEARCH PLAN" in upper:
-                return json.dumps(
-                    {
-                        "research_question": "Is SOFA associated with ICU mortality?",
-                        "steps": [
-                            {
-                                "step_id": "04_primary_association",
-                                "intent": "Estimate SOFA and ICU mortality association.",
-                                "inputs": ["sofa2", "death"],
-                                "expected_outputs": ["table:primary_association"],
-                                "method": "descriptive",
-                                "icu_rule_refs": ["aggregation_rule_for"],
-                            }
-                        ],
-                        "rationale": "single-step hosted-stub resume test",
-                    }
-                )
-            if "WRITE THE PYTHON CODE" in upper:
-                return """
+    _disable_article_contract(monkeypatch)
+    plan = {
+        "research_question": "Is SOFA associated with ICU mortality?",
+        "steps": [
+            {
+                "step_id": "04_primary_association",
+                "planned_analysis_role": "primary",
+                "intent": "Estimate SOFA and ICU mortality association.",
+                "inputs": ["sofa2", "death"],
+                "expected_outputs": ["table:primary_association"],
+                "method": "descriptive",
+                "icu_rule_refs": ["aggregation_rule_for"],
+            }
+        ],
+        "rationale": "single-step metered mock resume test",
+    }
+    code = """
 import json
 import os
 import pandas as pd
@@ -3999,16 +4218,26 @@ summary = {
     "n": int(len(df)),
     "sofa2_median": float(df["sofa2"].median()),
     "mortality_rate": float(df["death"].mean()),
+    "output_files": {
+        "table:primary_association": "primary_association.csv"
+    },
 }
 pd.DataFrame([summary]).to_csv(os.path.join(out, "primary_association.csv"), index=False)
 with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as f:
     json.dump(summary, f)
 """
-            if "INTERPRET THE RESULTS" in upper:
-                return "The primary association table is available {evidence:primary_association}."
-            if "MANUSCRIPT SCAFFOLD" in upper:
-                return "# Title\n\n## Results\n\nThe table is available {evidence:primary_association}."
-            return "{}"
+    llm = _pattern_llm(
+        plan=plan,
+        code=code,
+        interpretation=(
+            "The primary association table is available "
+            "{evidence:primary_association}."
+        ),
+        manuscript=(
+            "# Title\n\n## Results\n\n"
+            "The table is available {evidence:primary_association}."
+        ),
+    )
 
     cohort = pd.DataFrame(
         {
@@ -4019,7 +4248,7 @@ with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as f:
     )
     pipeline = ra.ResearchAgentPipeline(
         workdir=tmp_path,
-        llm=HostedStubLLM(),
+        llm=llm,
         enable_cost_tracking=True,
         enable_literature=False,
         enable_visual_qa=False,

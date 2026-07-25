@@ -17,14 +17,19 @@ without anyone having to spend a real LLM call.
 from __future__ import annotations
 
 import importlib
+import json
 import sys
 import types
 from pathlib import Path
 
+import pytest
+
+from easyicu.research_agent.providers.mocks import ScriptedMockLLMClient
+
 
 def _load_agents_helpers(ra):
-    """The helpers are private to ``agents`` — load the submodule directly."""
-    return importlib.import_module(ra.__name__ + ".agents")
+    """Load parser helpers from their canonical implementation module."""
+    return importlib.import_module(ra.__name__ + ".agents.core")
 
 
 def test_strip_code_fence_handles_leading_prose(ra):
@@ -78,6 +83,7 @@ def test_first_json_block_skips_braces_in_strings(ra):
     block = helpers._first_json_block(raw)
     assert block is not None
     import json as _json
+
     parsed = _json.loads(block)
     assert parsed["steps"][0]["step_id"] == "01"
 
@@ -87,13 +93,16 @@ def test_planner_parse_recovers_fenced_json(ra):
     raw = (
         "Sure, here's the plan:\n```json\n"
         '{"research_question": "Is sofa2 -> death?", "steps":'
-        ' [{"step_id":"01_table_one","intent":"t1","inputs":[],"expected_outputs":[]}]}\n'
+        ' [{"step_id":"01_table_one","planned_analysis_role":"auxiliary",'
+        '"intent":"t1","inputs":[],"expected_outputs":[]}]}\n'
         "```"
     )
     schema = ra.schema
     ctx = schema.ResearchContext(
         research_question="Is sofa2 -> death?",
-        cohort=schema.CohortDescriptor(cohort_name="c", database="d", n_patients=1, n_stays=1),
+        cohort=schema.CohortDescriptor(
+            cohort_name="c", database="d", n_patients=1, n_stays=1
+        ),
         variables=[],
     )
 
@@ -103,21 +112,59 @@ def test_planner_parse_recovers_fenced_json(ra):
         def complete(self, messages, **kwargs):
             return raw
 
-    from easyicu.research_agent.agents import PlannerAgent
+    from easyicu.research_agent.agents.core import PlannerAgent
+
     plan = PlannerAgent(_DummyLLM())._parse(raw, ctx)
     assert plan.steps and plan.steps[0].step_id == "01_table_one"
+
+
+def test_planner_parse_preserves_declared_display_labels(ra):
+    raw = (
+        '{"research_question":"Estimate an association.",'
+        '"display_labels":{"death":"In-hospital mortality",'
+        '"primary":"Primary analysis"},'
+        '"steps":[{"step_id":"01_model",'
+        '"planned_analysis_role":"primary","intent":"fit",'
+        '"inputs":[],"expected_outputs":["statistic:adjusted_effect"]}]}'
+    )
+    schema = ra.schema
+    ctx = schema.ResearchContext(
+        research_question="Estimate an association.",
+        cohort=schema.CohortDescriptor(
+            cohort_name="c", database="d", n_patients=1, n_stays=1
+        ),
+        variables=[],
+    )
+
+    class _DummyLLM:
+        name = "dummy"
+
+        def complete(self, messages, **kwargs):
+            return raw
+
+    from easyicu.research_agent.agents.core import PlannerAgent
+
+    plan = PlannerAgent(_DummyLLM())._parse(raw, ctx)
+
+    assert plan.display_labels == {
+        "death": "In-hospital mortality",
+        "primary": "Primary analysis",
+    }
 
 
 def test_planner_parse_drops_extra_step_fields(ra):
     raw = (
         '{"research_question": "Is sofa2 -> death?", "extra": "drop me", "steps":'
-        ' [{"step_id":"06_cross_database","intent":"protocol","inputs":[],'
+        ' [{"step_id":"06_cross_database","planned_analysis_role":"auxiliary",'
+        '"intent":"protocol","inputs":[], '
         '"expected_outputs":[],"note":"external cohort unavailable"}]}'
     )
     schema = ra.schema
     ctx = schema.ResearchContext(
         research_question="Is sofa2 -> death?",
-        cohort=schema.CohortDescriptor(cohort_name="c", database="d", n_patients=1, n_stays=1),
+        cohort=schema.CohortDescriptor(
+            cohort_name="c", database="d", n_patients=1, n_stays=1
+        ),
         variables=[],
     )
 
@@ -127,7 +174,8 @@ def test_planner_parse_drops_extra_step_fields(ra):
         def complete(self, messages, **kwargs):
             return raw
 
-    from easyicu.research_agent.agents import PlannerAgent
+    from easyicu.research_agent.agents.core import PlannerAgent
+
     plan = PlannerAgent(_DummyLLM())._parse(raw, ctx)
     assert plan.steps[0].step_id == "06_cross_database"
     assert not hasattr(plan.steps[0], "note")
@@ -138,27 +186,468 @@ def test_planner_uses_enough_completion_budget(ra):
     schema = ra.schema
     ctx = schema.ResearchContext(
         research_question="Is sofa2 -> death?",
-        cohort=schema.CohortDescriptor(cohort_name="c", database="d", n_patients=1, n_stays=1),
+        cohort=schema.CohortDescriptor(
+            cohort_name="c", database="d", n_patients=1, n_stays=1
+        ),
         variables=[],
     )
 
-    class _CapturingLLM:
-        name = "dummy"
+    from easyicu.research_agent.agents.core import PlannerAgent
 
-        def __init__(self):
-            self.kwargs = None
-
-        def complete(self, messages, **kwargs):
-            self.kwargs = kwargs
-            return (
-                '{"research_question": "Is sofa2 -> death?", "steps":'
-                ' [{"step_id":"01_table_one","intent":"t1","inputs":[],"expected_outputs":[]}]}'
-            )
-
-    from easyicu.research_agent.agents import PlannerAgent
-    llm = _CapturingLLM()
+    llm = ScriptedMockLLMClient(
+        [
+            '{"research_question": "Is sofa2 -> death?", "steps":'
+            ' [{"step_id":"01_table_one","planned_analysis_role":"auxiliary",'
+            '"intent":"t1","inputs":[],"expected_outputs":[]}]}'
+        ]
+    )
     PlannerAgent(llm).run(ctx)
-    assert llm.kwargs["max_tokens"] >= 4096
+    assert llm.calls[0][1]["max_tokens"] >= 4096
+
+
+def test_planner_retries_dictionary_concept_absent_from_sealed_typed_input(
+    tmp_path,
+):
+    """A legal global concept is not executable authority for every cohort."""
+
+    from easyicu.research_agent.agents.core import PlannerAgent
+    from tests.research_agent.test_materialized_column_metadata import (
+        _build_v2_context,
+    )
+
+    context = _build_v2_context(tmp_path)
+
+    def response(concept_id: str) -> str:
+        return (
+            '{"research_question":"Describe the sealed cohort.",'
+            '"analysis_type":"descriptive_epidemiology",'
+            '"cohort":{"name":"primary","inclusion":[{'
+            f'"concept_id":"{concept_id}",'
+            '"time_window":{"anchor":"icu_admission",'
+            '"start_offset_hours":0,"end_offset_hours":24},'
+            '"aggregation":"max","op":"not_missing","value":null}],'
+            '"exclusion":[]},'
+            '"steps":[{"step_id":"01_define_cohort",'
+            '"planned_analysis_role":"auxiliary",'
+            '"intent":"Materialize the declared analysis cohort.",'
+            '"inputs":["lact_max"],'
+            '"expected_outputs":["artifact:analysis_cohort"],'
+            '"method":"cohort_definition"}]}'
+        )
+
+    llm = ScriptedMockLLMClient([response("hr"), response("lact")])
+    plan = PlannerAgent(llm).run(context)
+
+    assert len(llm.calls) == 2
+    assert plan.cohort is not None
+    assert plan.cohort.inclusion[0].concept_id == "lact"
+    feedback = llm.calls[1][0][-1].content
+    assert "not executable against this sealed input" in feedback
+    assert "lact_max" in feedback
+
+
+def test_cohort_concept_allowlist_includes_sofa2_overlay() -> None:
+    from easyicu.research_agent.planning.cohort_contract import known_concept_ids
+
+    assert {"sofa2", "sep3_sofa2", "sofa2_resp"} <= known_concept_ids()
+
+
+def test_planner_retries_non_column_step_and_model_references(tmp_path) -> None:
+    """Semantic labels must not survive as executable typed dataframe fields."""
+
+    from easyicu.research_agent.agents.core import PlannerAgent
+    from tests.research_agent.test_materialized_column_metadata import (
+        _build_v2_context,
+    )
+
+    context = _build_v2_context(tmp_path)
+
+    def response(exposure: str, outcome: str) -> str:
+        return (
+            '{"research_question":"Estimate the sealed association.",'
+            '"analysis_type":"association_study",'
+            '"steps":[{"step_id":"01_model",'
+            '"planned_analysis_role":"primary",'
+            '"intent":"Fit the declared adjusted association.",'
+            f'"inputs":["{exposure}","{outcome}"],'
+            '"expected_outputs":["table:adjusted_association_estimates"],'
+            '"method":"adjusted_association_models",'
+            '"model_requirements":[{'
+            '"requirement_id":"primary_sealed_association",'
+            f'"outcome":"{outcome}","outcome_type":"binary",'
+            '"method_family":"logistic_regression",'
+            f'"exposure_source":"{exposure}",'
+            '"analysis_role":"primary","analysis_set":"complete_case",'
+            '"required_for_step_success":true}]}]}'
+        )
+
+    llm = ScriptedMockLLMClient(
+        [response("lactate", "mortality"), response("lact_max", "death")]
+    )
+    plan = PlannerAgent(llm).run(context)
+
+    assert len(llm.calls) == 2
+    assert plan.steps[0].inputs == ["lact_max", "death"]
+    feedback = llm.calls[1][0][-1].content
+    assert "typed plan references are not executable" in feedback
+    assert "raw name 'lactate'" in feedback
+    assert "'step inputs': 1" in feedback
+    assert "'model exposures': 1" in feedback
+    assert "raw name 'mortality'" in feedback
+    assert "'model outcomes': 1" in feedback
+
+
+def test_typed_binding_gate_covers_robustness_fields(tmp_path) -> None:
+    from types import SimpleNamespace
+
+    from easyicu.research_agent.cohort.schema import (
+        CohortSchemaError,
+        validate_plan_typed_bindings_against_context,
+    )
+    from tests.research_agent.test_materialized_column_metadata import (
+        _build_v2_context,
+    )
+
+    context = _build_v2_context(tmp_path)
+    plan = SimpleNamespace(
+        cohort=None,
+        steps=[],
+        robustness_specs=[
+            SimpleNamespace(
+                spec_id="missing_aliases",
+                cohort_override=None,
+                missing_override={
+                    "strategy": "complete_case",
+                    "variables": ["lactate", "death"],
+                    "audit_flags": ["measurement_status"],
+                },
+                outcome_override=None,
+            ),
+            SimpleNamespace(
+                spec_id="outcome_alias",
+                cohort_override=None,
+                missing_override=None,
+                outcome_override={
+                    "concept_id": "mortality",
+                    "time_column": "mortality_time",
+                },
+            ),
+        ],
+    )
+
+    with pytest.raises(CohortSchemaError) as caught:
+        validate_plan_typed_bindings_against_context(plan=plan, context=context)
+
+    message = str(caught.value)
+    assert "raw name 'lactate'" in message
+    assert "'robustness missing variables': 1" in message
+    assert "raw name 'measurement_status'" in message
+    assert "'robustness audit flags': 1" in message
+    assert "raw name 'mortality'" in message
+    assert "raw name 'mortality_time'" in message
+    assert message.count("'robustness outcome fields': 1") == 2
+
+
+def test_typed_binding_gate_rejects_direct_suffix_with_wrong_window(tmp_path) -> None:
+    from types import SimpleNamespace
+
+    from easyicu.research_agent.cohort.schema import (
+        CohortSchemaError,
+        validate_plan_typed_bindings_against_context,
+    )
+    from easyicu.research_agent.planning.cohort_contract import (
+        CohortDefinition,
+        ConceptPredicate,
+        TimeWindow,
+    )
+    from tests.research_agent.test_materialized_column_metadata import (
+        _build_v2_context,
+    )
+
+    context = _build_v2_context(tmp_path)
+    producer = SimpleNamespace(
+        step_id="01_cohort",
+        inputs=["lact_max", "death"],
+        expected_outputs=["artifact:analysis_cohort"],
+        method="cohort_definition",
+    )
+    six_hour = CohortDefinition(
+        name="six_hour",
+        inclusion=[
+            ConceptPredicate(
+                concept_id="lact",
+                time_window=TimeWindow(
+                    anchor="icu_admission",
+                    start_offset_hours=0,
+                    end_offset_hours=6,
+                ),
+                aggregation="max",
+                op=">=",
+                value=0,
+            )
+        ],
+    )
+    plan = SimpleNamespace(
+        cohort=None,
+        steps=[producer],
+        robustness_specs=[
+            SimpleNamespace(
+                spec_id="six_hour",
+                cohort_override=six_hour,
+                missing_override=None,
+                outcome_override=None,
+            )
+        ],
+    )
+
+    with pytest.raises(CohortSchemaError, match="proven matching aggregation and time"):
+        validate_plan_typed_bindings_against_context(plan=plan, context=context)
+
+
+def test_typed_binding_gate_accepts_direct_static_column_without_window(
+    tmp_path,
+) -> None:
+    from types import SimpleNamespace
+
+    from easyicu.research_agent.cohort.schema import (
+        validate_plan_typed_bindings_against_context,
+    )
+    from easyicu.research_agent.planning.cohort_contract import (
+        CohortDefinition,
+        ConceptPredicate,
+        TimeWindow,
+    )
+    from easyicu.research_agent.schema import AnalysisStep
+    from tests.research_agent.test_materialized_column_metadata import (
+        _build_v2_context,
+    )
+
+    context = _build_v2_context(tmp_path)
+    producer = AnalysisStep(
+        step_id="01_cohort",
+        planned_analysis_role="auxiliary",
+        intent="Materialize the adult analysis cohort and its flow.",
+        inputs=["age", "death"],
+        expected_outputs=["cohort:analysis_cohort", "table:cohort_flow"],
+        method="cohort_definition",
+    )
+    adult_cohort = CohortDefinition(
+        name="adult_cohort",
+        inclusion=[
+            ConceptPredicate(
+                concept_id="age",
+                time_window=TimeWindow(
+                    anchor="icu_admission",
+                    start_offset_hours=0,
+                    end_offset_hours=24,
+                ),
+                aggregation="first",
+                op=">=",
+                value=18,
+            )
+        ],
+    )
+    plan = SimpleNamespace(
+        cohort=adult_cohort,
+        steps=[producer],
+        robustness_specs=[],
+    )
+
+    validate_plan_typed_bindings_against_context(plan=plan, context=context)
+
+
+def test_typed_binding_gate_rejects_identity_coordinate_as_raw_step_input(
+    tmp_path,
+) -> None:
+    from types import SimpleNamespace
+
+    from easyicu.research_agent.cohort.schema import (
+        CohortSchemaError,
+        validate_plan_typed_bindings_against_context,
+    )
+    from easyicu.research_agent.schema import AnalysisStep
+    from tests.research_agent.test_materialized_column_metadata import (
+        _build_v2_context,
+    )
+
+    context = _build_v2_context(tmp_path)
+    plan = SimpleNamespace(
+        cohort=None,
+        steps=[
+            AnalysisStep(
+                step_id="01_invalid_coordinate",
+                intent="Use a sealed coordinate as an analysis variable.",
+                inputs=["stay_id", "death"],
+            )
+        ],
+        robustness_specs=[],
+    )
+
+    with pytest.raises(CohortSchemaError, match="raw name 'stay_id'"):
+        validate_plan_typed_bindings_against_context(plan=plan, context=context)
+
+
+def test_planner_retries_robustness_window_absent_from_sealed_input(tmp_path) -> None:
+    """A plausible column suffix cannot authorize a different scientific window."""
+
+    import json
+
+    from easyicu.research_agent.agents.core import PlannerAgent
+    from tests.research_agent.test_materialized_column_metadata import (
+        _build_v2_context,
+    )
+
+    context = _build_v2_context(tmp_path)
+    primary_step = {
+        "step_id": "01_model",
+        "planned_analysis_role": "primary",
+        "intent": "Fit the declared adjusted association.",
+        "inputs": ["lact_max", "death"],
+        "expected_outputs": ["table:adjusted_association_estimates"],
+        "method": "adjusted_association_models",
+        "model_requirements": [
+            {
+                "requirement_id": "primary_sealed_association",
+                "outcome": "death",
+                "outcome_type": "binary",
+                "method_family": "logistic_regression",
+                "exposure_source": "lact_max",
+                "analysis_role": "primary",
+                "analysis_set": "complete_case",
+                "required_for_step_success": True,
+            }
+        ],
+    }
+    unsupported_window = {
+        "research_question": "Estimate the sealed association.",
+        "analysis_type": "association_study",
+        "steps": [primary_step],
+        "robustness_specs": [
+            {
+                "spec_id": "six_hour_lactate",
+                "axis": "cohort",
+                "description": "Restrict by a six-hour maximum.",
+                "cohort_override": {
+                    "name": "six_hour_lactate",
+                    "inclusion": [
+                        {
+                            "concept_id": "lact",
+                            "time_window": {
+                                "anchor": "icu_admission",
+                                "start_offset_hours": 0,
+                                "end_offset_hours": 6,
+                            },
+                            "aggregation": "max",
+                            "op": ">=",
+                            "value": 0,
+                        }
+                    ],
+                    "exclusion": [],
+                },
+            }
+        ],
+    }
+    supported_missingness = {
+        **unsupported_window,
+        "robustness_specs": [
+            {
+                "spec_id": "complete_case",
+                "axis": "missing",
+                "description": "Restrict the model to complete cases.",
+                "missing_override": {
+                    "strategy": "complete_case",
+                    "variables": ["lact_max", "death"],
+                },
+            }
+        ],
+    }
+    llm = ScriptedMockLLMClient(
+        [json.dumps(unsupported_window), json.dumps(supported_missingness)]
+    )
+
+    plan = PlannerAgent(llm).run(context)
+
+    assert len(llm.calls) == 2
+    assert plan.robustness_specs[0].spec_id == "complete_case"
+    feedback = llm.calls[1][0][-1].content
+    assert "proven matching aggregation and time" in feedback
+    assert "icu_admission[0.0,6.0]h/max" in feedback
+    assert "icu_admission[0,24]h" in feedback
+
+
+def test_planner_retries_primary_cohort_that_erases_its_closed_comparison(
+    tmp_path,
+) -> None:
+    """Eligibility cannot erase a Planner-declared downstream contrast."""
+
+    from easyicu.research_agent.agents.core import PlannerAgent
+    from tests.research_agent.test_materialized_column_metadata import (
+        _build_v2_context,
+    )
+
+    context = _build_v2_context(tmp_path)
+
+    def response(cohort_op: str, cohort_value: str) -> str:
+        return (
+            '{"research_question":"Compare a closed exposure in the sealed cohort.",'
+            '"analysis_type":"association_study",'
+            '"cohort":{"name":"primary","inclusion":[{'
+            '"concept_id":"mech_vent",'
+            '"time_window":{"anchor":"icu_admission",'
+            '"start_offset_hours":0,"end_offset_hours":24},'
+            f'"aggregation":"max","op":"{cohort_op}","value":{cohort_value}'
+            '}],"exclusion":[]},'
+            '"steps":[{"step_id":"01_define_cohort",'
+            '"planned_analysis_role":"auxiliary",'
+            '"intent":"Materialize the declared analysis cohort.",'
+            '"inputs":["mech_vent_max"],'
+            '"expected_outputs":["artifact:analysis_cohort"],'
+            '"method":"cohort_definition"},'
+            '{"step_id":"02_table_one",'
+            '"planned_analysis_role":"auxiliary",'
+            '"intent":"Describe both closed exposure groups.",'
+            '"inputs":["artifact:analysis_cohort","mech_vent_max","age"],'
+            '"expected_outputs":["table:table_one"],'
+            '"method":"descriptive",'
+            '"table_one_spec":{"group_by":"mech_vent_max",'
+            '"group_levels":["__easyicu_level_1__","__easyicu_level_2__"],'
+            '"variables":[{"name":"age","variable_kind":"continuous",'
+            '"summary":"median_iqr","test":"mann_whitney_or_kruskal",'
+            '"levels":[]}],"include_overall":true,'
+            '"missing_group_policy":"fail_closed",'
+            '"missingness_display":"n_percent_by_group",'
+            '"p_values_required":true,'
+            '"p_value_adjustment":"none_descriptive_table"}},'
+            '{"step_id":"03_primary_association",'
+            '"planned_analysis_role":"primary",'
+            '"intent":"Fit the required primary adjusted association.",'
+            '"inputs":["artifact:analysis_cohort","lact_max","death"],'
+            '"expected_outputs":["table:adjusted_association_estimates"],'
+            '"method":"adjusted_association_models",'
+            '"model_requirements":[{'
+            '"requirement_id":"primary_adjusted",'
+            '"outcome":"death","outcome_type":"binary",'
+            '"method_family":"logistic_regression",'
+            '"exposure_source":"lact_max",'
+            '"analysis_role":"primary","analysis_set":"source_aware",'
+            '"required_for_step_success":true}]}]}'
+        )
+
+    llm = ScriptedMockLLMClient(
+        [
+            response(">=", "1"),
+            response("not_missing", "null"),
+        ]
+    )
+    plan = PlannerAgent(llm).run(context)
+
+    assert len(llm.calls) == 2
+    assert plan.cohort is not None
+    assert plan.cohort.inclusion[0].op == "not_missing"
+    feedback = llm.calls[1][0][-1].content
+    assert "collapse a downstream closed comparison" in feedback
+    assert "below two retained levels" in feedback
+    assert "retained_values" not in feedback
 
 
 def test_openai_client_passes_provider_extra_body(ra, monkeypatch):
@@ -184,9 +673,12 @@ def test_openai_client_passes_provider_extra_body(ra, monkeypatch):
                 completions=_FakeCompletions(),
             )
 
-    monkeypatch.setitem(sys.modules, "openai", types.SimpleNamespace(OpenAI=_FakeOpenAI))
+    monkeypatch.setitem(
+        sys.modules, "openai", types.SimpleNamespace(OpenAI=_FakeOpenAI)
+    )
 
-    from easyicu.research_agent.llm import LLMMessage, OpenAIClient
+    from easyicu.research_agent.providers.factory import authorize_provider_client
+    from easyicu.research_agent.providers.llm import LLMMessage, OpenAIClient
 
     extra_body = {"reasoning": {"effort": "none", "exclude": True}}
     client = OpenAIClient(
@@ -194,6 +686,14 @@ def test_openai_client_passes_provider_extra_body(ra, monkeypatch):
         api_key="test-key",
         base_url="https://openrouter.ai/api/v1",
         extra_body=extra_body,
+    )
+    authorize_provider_client(
+        client,
+        provider="openai",
+        model="z-ai/glm-4.5-air:free",
+        base_url="https://openrouter.ai/api/v1",
+        destination="external",
+        environment={"EASYICU_ALLOW_EXTERNAL_LLM": "1"},
     )
     assert client.complete([LLMMessage(role="user", content="hi")]) == "ok"
     assert calls["create"]["extra_body"] == extra_body
@@ -204,20 +704,19 @@ def test_writer_strips_markdown_fence(ra, tmp_path: Path):
     still see raw markdown so it can locate ``{evidence:*}``."""
     raw = "```markdown\n# Title\n\nCohort: {evidence:table_one}.\n```"
 
-    class _DummyLLM:
-        name = "dummy"
+    from easyicu.research_agent.agents.core import WriterAgent
 
-        def complete(self, messages, **kwargs):
-            return raw
-
-    from easyicu.research_agent.agents import WriterAgent
     schema = ra.schema
     ctx = schema.ResearchContext(
         research_question="x",
-        cohort=schema.CohortDescriptor(cohort_name="c", database="d", n_patients=1, n_stays=1),
+        cohort=schema.CohortDescriptor(
+            cohort_name="c", database="d", n_patients=1, n_stays=1
+        ),
         variables=[],
     )
-    out = WriterAgent(_DummyLLM()).run(context=ctx, evidence_ids=["table_one"])
+    out = WriterAgent(ScriptedMockLLMClient([raw], repeat_last=True)).run(
+        context=ctx, evidence_ids=["table_one"]
+    )
     # The fence must be stripped so the binder regex matches.
     assert "{evidence:table_one}" in out
     assert "```markdown" not in out
@@ -225,30 +724,31 @@ def test_writer_strips_markdown_fence(ra, tmp_path: Path):
 
 def test_writer_language_prompt_preserves_evidence_ids(ra):
     """The Chinese writer mode should ask for zh prose but keep evidence ids ASCII."""
-    captured = {}
+    from easyicu.research_agent.agents.core import WriterAgent
 
-    class _DummyLLM:
-        name = "dummy"
-
-        def complete(self, messages, **kwargs):
-            captured["prompt"] = messages[-1].content
-            return "# 标题\n\n结果：12 例 {evidence:table_one}。\n"
-
-    from easyicu.research_agent.agents import WriterAgent
     schema = ra.schema
     ctx = schema.ResearchContext(
         research_question="x",
-        cohort=schema.CohortDescriptor(cohort_name="c", database="d", n_patients=1, n_stays=1),
+        cohort=schema.CohortDescriptor(
+            cohort_name="c", database="d", n_patients=1, n_stays=1
+        ),
         variables=[],
     )
 
-    out = WriterAgent(_DummyLLM(), language="zh").run(
+    llm = ScriptedMockLLMClient(
+        ["# 标题\n\n结果：12 例 {evidence:table_one}。\n"],
+        repeat_last=True,
+    )
+    out = WriterAgent(llm, language="zh").run(
         context=ctx,
         evidence_ids=["table_one"],
     )
 
-    assert "Simplified Chinese" in captured["prompt"]
-    assert "do not translate evidence ids" in captured["prompt"]
+    prompts = "\n".join(
+        message.content for messages, _kwargs in llm.calls for message in messages
+    )
+    assert "Simplified Chinese" in prompts
+    assert "do not translate evidence ids" in prompts
     assert "{evidence:table_one}" in out
 
 
@@ -257,30 +757,38 @@ def test_writer_prompt_discourages_tbd_and_manifest_narration(ra):
     # *system* message of every per-section LLM call. Capture the full
     # joined prompt across every section so we can assert on contract
     # text regardless of which section was last called.
-    captured = {"system": "", "user": ""}
+    from easyicu.research_agent.agents.core import WriterAgent
 
-    class _DummyLLM:
-        name = "dummy"
-
-        def complete(self, messages, **kwargs):
-            for msg in messages:
-                captured[msg.role] = captured.get(msg.role, "") + msg.content + "\n"
-            return "# Title\n\n## Results\n\nBaseline characteristics are summarised in Table 1 {evidence:table_one}.\n"
-
-    from easyicu.research_agent.agents import WriterAgent
     schema = ra.schema
     ctx = schema.ResearchContext(
         research_question="x",
-        cohort=schema.CohortDescriptor(cohort_name="c", database="d", n_patients=1, n_stays=1),
+        cohort=schema.CohortDescriptor(
+            cohort_name="c", database="d", n_patients=1, n_stays=1
+        ),
         variables=[],
     )
 
-    out = WriterAgent(_DummyLLM()).run(context=ctx, evidence_ids=["table_one"])
+    llm = ScriptedMockLLMClient(
+        [
+            "# Title\n\n## Results\n\nBaseline characteristics are summarised "
+            "in Table 1 {evidence:table_one}.\n"
+        ],
+        repeat_last=True,
+    )
+    out = WriterAgent(llm).run(context=ctx, evidence_ids=["table_one"])
+
+    captured = {"system": "", "user": ""}
+    for messages, _kwargs in llm.calls:
+        for message in messages:
+            captured[message.role] += message.content + "\n"
 
     # Writer contract assertions land in the system prompt.
     assert "`[TBD]`" in captured["system"]
     assert "warning: see manifest" in captured["system"]
-    assert "Only cite `table_one`, `outcome_rate`, or `primary_association`" in captured["system"]
+    assert (
+        "Only cite `table_one`, `outcome_rate`, or `primary_association`"
+        in captured["system"]
+    )
     # Writer contract should reference `model_performance` as a fallback
     # baseline source for prediction tasks. Exact wording has shifted; we
     # assert on the alias token rather than a specific sentence.
@@ -294,8 +802,74 @@ def test_writer_prompt_discourages_tbd_and_manifest_narration(ra):
     assert "{evidence:table_one}" in out
 
 
+def test_writer_evidence_repair_returns_cite_or_drop_decisions():
+    from easyicu.research_agent.reporting.writer_evidence_repair import (
+        decide_writer_evidence_repairs,
+    )
+
+    raw = json.dumps(
+        {
+            "decisions": [
+                {
+                    "index": 0,
+                    "action": "cite",
+                    "evidence_ids": ["literature_prisma"],
+                },
+                {"index": 1, "action": "drop", "evidence_ids": []},
+            ]
+        }
+    )
+    decisions = decide_writer_evidence_repairs(
+        ScriptedMockLLMClient([raw], repeat_last=True),
+        evidence_ids=["literature_prisma", "primary_association"],
+        evidence_digest="literature_prisma: background evidence",
+        missing_sentences=[
+            "Sepsis is clinically important.",
+            "No estimate was available for reporting.",
+        ],
+    )
+
+    assert decisions == [
+        {
+            "index": 0,
+            "action": "cite",
+            "evidence_ids": ["literature_prisma"],
+        },
+        {"index": 1, "action": "drop", "evidence_ids": []},
+    ]
+
+
+def test_writer_evidence_repair_rejects_unregistered_evidence_id():
+    from easyicu.research_agent.providers.structured_retry import (
+        StructuredResponseFailure,
+    )
+    from easyicu.research_agent.reporting.writer_evidence_repair import (
+        decide_writer_evidence_repairs,
+    )
+
+    raw = json.dumps(
+        {
+            "decisions": [
+                {
+                    "index": 0,
+                    "action": "cite",
+                    "evidence_ids": ["invented_id"],
+                }
+            ]
+        }
+    )
+
+    with pytest.raises(StructuredResponseFailure):
+        decide_writer_evidence_repairs(
+            ScriptedMockLLMClient([raw], repeat_last=True),
+            evidence_ids=["literature_prisma"],
+            evidence_digest="literature_prisma: background evidence",
+            missing_sentences=["Sepsis is clinically important."],
+        )
+
+
 def test_openrouter_reasoning_extra_body_skips_gpt_oss(ra):
-    from easyicu.research_agent.llm import openrouter_reasoning_extra_body
+    from easyicu.research_agent.providers.llm import openrouter_reasoning_extra_body
 
     assert openrouter_reasoning_extra_body("openai/gpt-oss-120b:free") is None
     assert openrouter_reasoning_extra_body("z-ai/glm-4.5-air:free") == {

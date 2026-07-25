@@ -17,7 +17,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from easyicu.research_agent.pipeline_report import execution_gate_status
+from easyicu.research_agent.reporting.readiness import execution_gate_status
 
 
 def _plan(*step_ids: str):
@@ -228,13 +228,7 @@ def test_symlinked_repair_export_cannot_escape_its_outputs_dir(tmp_path: Path):
     )
     outside = tmp_path / "outside.png"
     outside.write_bytes(b"\x89PNG\r\n\x1a\n")
-    link = (
-        tmp_path
-        / "steps"
-        / "03c1_flow_figure_repair"
-        / "outputs"
-        / "fig.png"
-    )
+    link = tmp_path / "steps" / "03c1_flow_figure_repair" / "outputs" / "fig.png"
     try:
         link.symlink_to(outside)
     except OSError:
@@ -431,9 +425,7 @@ def test_unledgered_stale_repair_file_does_not_credit_modern_run(tmp_path: Path)
     )
 
     assert gate["execution_complete"] is False
-    assert gate["failed_steps"] == [
-        {"step_id": fig, "status": "execution_failed"}
-    ]
+    assert gate["failed_steps"] == [{"step_id": fig, "status": "execution_failed"}]
 
 
 def test_failed_repair_does_not_credit(tmp_path: Path):
@@ -466,9 +458,7 @@ def test_parent_mismatch_does_not_credit_wrong_figure(tmp_path: Path):
         run_dir=tmp_path,
     )
     assert gate["execution_complete"] is False
-    assert gate["failed_steps"] == [
-        {"step_id": failed, "status": "execution_failed"}
-    ]
+    assert gate["failed_steps"] == [{"step_id": failed, "status": "execution_failed"}]
 
 
 def test_renderer_self_report_cannot_claim_unledgered_target(tmp_path: Path):

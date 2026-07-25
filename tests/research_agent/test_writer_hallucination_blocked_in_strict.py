@@ -14,7 +14,7 @@ import pytest
 
 
 def test_strict_writer_numeric_hallucination_is_blocked(ra, tmp_path: Path):
-    from easyicu.research_agent.manuscript_post import bind_numeric_values
+    from easyicu.research_agent.reporting.manuscript_post import bind_numeric_values
 
     store = ra.EvidenceStore(root=tmp_path, enforcement_mode="strict")
     store.register_step_summary_numerics(
@@ -31,7 +31,7 @@ def test_strict_writer_numeric_hallucination_is_blocked(ra, tmp_path: Path):
 
 
 def test_soft_writer_numeric_hallucination_is_annotated(ra, tmp_path: Path):
-    from easyicu.research_agent.manuscript_post import bind_numeric_values
+    from easyicu.research_agent.reporting.manuscript_post import bind_numeric_values
 
     store = ra.EvidenceStore(root=tmp_path, enforcement_mode="soft")
     store.register_step_summary_numerics(
@@ -52,7 +52,7 @@ def test_soft_writer_numeric_hallucination_is_annotated(ra, tmp_path: Path):
 
 
 def test_registered_and_derived_writer_numbers_pass_strict(ra, tmp_path: Path):
-    from easyicu.research_agent.manuscript_post import bind_numeric_values
+    from easyicu.research_agent.reporting.manuscript_post import bind_numeric_values
 
     store = ra.EvidenceStore(root=tmp_path, enforcement_mode="strict")
     store.register_numeric_claim(

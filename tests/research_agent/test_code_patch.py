@@ -1,10 +1,35 @@
-from easyicu.research_agent.code_patch import repair_code_excerpt
+from easyicu.research_agent.repairs.patch import (
+    looks_like_executable_python,
+    repair_code_excerpt,
+)
+from easyicu.research_agent.repairs.reasons import RepairPromptAuthority
+
+
+def test_executable_candidate_detection_keeps_runtime_failure_paths():
+    assert looks_like_executable_python("raise RuntimeError('repair me')")
+    assert looks_like_executable_python("print('no artifact yet')")
+    assert looks_like_executable_python("result = 1")
+    assert looks_like_executable_python("pass")
+
+
+def test_executable_candidate_detection_rejects_inert_or_invalid_payloads():
+    for payload in (
+        "{}",
+        "[]",
+        "plain_prose",
+        "1 + 2",
+        "return 1",
+        "not python !",
+        'f"Analysis complete; import pandas"',
+        '"import " + "pandas"',
+        "analysis_complete  # import pandas",
+        "pd.DataFrame",
+    ):
+        assert not looks_like_executable_python(payload)
 
 
 def test_repair_excerpt_keeps_module_audit_initialization_loop_and_guard():
-    decoy_body = "\n".join(
-        f"    unused_{index} = {'x' * 120!r}" for index in range(30)
-    )
+    decoy_body = "\n".join(f"    unused_{index} = {'x' * 120!r}" for index in range(30))
     code = f"""
 import os
 import pandas as pd
@@ -34,14 +59,25 @@ first_scientific_sink = pd.DataFrame(provenance_checks)
 
 step_summary = {{"padding": {'y' * 3000!r}}}
 """.lstrip()
-    run_log = """
-DETAIL: {"reason":"provenance_audit_not_fail_closed","issues":[{
-  "failure_mode":"module_provenance_scope_not_proven_fail_closed",
-  "helper_name":"<module>"
-}]}
-"""
+    authority = RepairPromptAuthority.create(
+        typed_ticket=[
+            {
+                "reason": "provenance_audit_not_fail_closed",
+                "issues": [
+                    {
+                        "failure_mode": (
+                            "module_provenance_scope_not_proven_fail_closed"
+                        ),
+                        "helper_name": "<module>",
+                    }
+                ],
+            }
+        ]
+    )
 
-    excerpt = repair_code_excerpt(code, run_log, char_limit=2_400)
+    excerpt = repair_code_excerpt(
+        code, repair_metadata=authority.metadata(), char_limit=2_400
+    )
 
     assert len(code) > 2_400
     assert len(excerpt) <= 2_400
@@ -56,12 +92,8 @@ DETAIL: {"reason":"provenance_audit_not_fail_closed","issues":[{
 
 
 def test_repair_excerpt_anchors_oversized_function_without_blind_truncation():
-    prefix = "\n".join(
-        f"    pre_{index} = {'p' * 100!r}" for index in range(70)
-    )
-    suffix = "\n".join(
-        f"    post_{index} = {'q' * 100!r}" for index in range(70)
-    )
+    prefix = "\n".join(f"    pre_{index} = {'p' * 100!r}" for index in range(70))
+    suffix = "\n".join(f"    post_{index} = {'q' * 100!r}" for index in range(70))
     code = f"""
 import os
 import pandas as pd
@@ -84,19 +116,31 @@ def main(frame):
         for index, line in enumerate(code.splitlines(), start=1)
         if "provenance_summary, provenance_ok" in line
     )
-    run_log = f"""
-TYPED REPAIR TICKET (authoritative routing):
-[{{"reason":"PROVENANCE_NOT_FAIL_CLOSED",
-  "structured_reason":"provenance_audit_not_fail_closed",
-  "detail":{{"issues":[{{
-    "failure_mode":"provenance_helper_result_not_immediately_guarded",
-    "helper_name":"provenance_audit",
-    "call_line":{call_line},
-    "following_guard_line":{call_line + 1}
-  }}]}}}}]
-"""
+    authority = RepairPromptAuthority.create(
+        typed_ticket=[
+            {
+                "validator": "mechanical_code_preflight",
+                "reason": "PROVENANCE_NOT_FAIL_CLOSED",
+                "structured_reason": "provenance_audit_not_fail_closed",
+                "detail": {
+                    "issues": [
+                        {
+                            "failure_mode": (
+                                "provenance_helper_result_not_immediately_guarded"
+                            ),
+                            "helper_name": "provenance_audit",
+                            "call_line": call_line,
+                            "following_guard_line": call_line + 1,
+                        }
+                    ]
+                },
+            }
+        ]
+    )
 
-    excerpt = repair_code_excerpt(code, run_log, char_limit=2_600)
+    excerpt = repair_code_excerpt(
+        code, repair_metadata=authority.metadata(), char_limit=2_600
+    )
 
     assert len(code) > 10_000
     assert len(excerpt) < 2_600

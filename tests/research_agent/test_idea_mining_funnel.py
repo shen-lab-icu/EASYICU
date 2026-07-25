@@ -4,14 +4,14 @@ from typing import Sequence
 
 import easyicu.research_agent as ra
 
-from easyicu.research_agent.idea_mining import freeze_source_snapshot
-from easyicu.research_agent.idea_mining_funnel import (
+from easyicu.research_agent.discovery.idea_mining import freeze_source_snapshot
+from easyicu.research_agent.discovery.idea_mining_funnel import (
     LiteratureFunnelSpec,
     build_literature_funnel_queries,
     extract_gap_sections_from_text,
     fetch_literature_funnel_corpus,
 )
-from easyicu.research_agent.idea_scope import LiteratureScopeSpec
+from easyicu.research_agent.discovery.idea_scope import LiteratureScopeSpec
 from easyicu.research_agent.literature import CitationRecord
 
 

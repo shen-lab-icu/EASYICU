@@ -1,23 +1,19 @@
 """Tests for the L2 data-foundation agent (concept selection + acquisition)."""
+
 from __future__ import annotations
 
-import easyicu.research_agent.data_foundation as df_mod
-from easyicu.research_agent.data_catalog import AvailableCatalog, CatalogConcept
-from easyicu.research_agent.data_foundation import (
+import easyicu.research_agent.acquisition.foundation as df_mod
+from easyicu.research_agent.acquisition.catalog import AvailableCatalog, CatalogConcept
+from easyicu.research_agent.acquisition.foundation import (
     DataFoundationAgent,
     _extract_json,
     acquire_universe_for_question,
 )
+from easyicu.research_agent.providers.mocks import ScriptedMockLLMClient
 
 
-class _StubLLM:
-    """Returns a fixed completion string regardless of the prompt."""
-
-    def __init__(self, response: str) -> None:
-        self._response = response
-
-    def complete(self, messages, *, max_tokens=2048, temperature=0.1, **kw) -> str:
-        return self._response
+def _stub(response: str) -> ScriptedMockLLMClient:
+    return ScriptedMockLLMClient([response])
 
 
 def _catalog(*ids: str) -> AvailableCatalog:
@@ -33,7 +29,7 @@ def test_extract_json_handles_fenced_and_bare():
 
 
 def test_agent_selects_concepts_and_reports_coverage():
-    llm = _StubLLM(
+    llm = _stub(
         '{"selected_concepts": ["sep3_sofa2", "sofa2", "death", "made_up"], '
         '"inclusion_exclusion": ["adults", "ICU LoS >= 1 day"], '
         '"rationale": "sepsis exposure + severity"}'
@@ -51,11 +47,46 @@ def test_agent_selects_concepts_and_reports_coverage():
 
 
 def test_agent_empty_or_garbage_response_is_safe():
-    sel = DataFoundationAgent(_StubLLM("garbage")).select_concepts(
+    sel = DataFoundationAgent(_stub("garbage")).select_concepts(
         question="q", catalog=_catalog("death")
     )
     assert sel.selected_concepts == []
-    assert sel.coverage is not None and sel.coverage.sufficient  # nothing requested
+    assert sel.coverage is not None
+    assert sel.selection_succeeded is False
+    assert "parseable JSON object" in sel.selection_error
+    assert sel.to_dict()["selection_succeeded"] is False
+
+
+def test_acquire_blocks_unparseable_selection_before_materialization(monkeypatch):
+    called = {"materialize": False}
+
+    monkeypatch.setattr(
+        df_mod,
+        "build_available_catalog",
+        lambda _d: _catalog("death", "age"),
+    )
+    import easyicu.research_agent.cohort.materializer as cm
+
+    def _fake_materialize(**_kwargs):
+        called["materialize"] = True
+        return {"parquet": "u.parquet", "provenance": "u.json"}
+
+    monkeypatch.setattr(cm, "materialize_to_parquet", _fake_materialize)
+
+    result = acquire_universe_for_question(
+        export_dir="/nonexistent",
+        question="q",
+        llm=_stub("garbage"),
+        output_dir="/tmp/x",
+        target_outcome="death",
+        outcome_concepts=["death"],
+        static_concepts=["age"],
+    )
+
+    assert result.blocked is True
+    assert result.selection.selection_succeeded is False
+    assert "selection failed" in result.note.lower()
+    assert called["materialize"] is False
 
 
 def test_acquire_blocks_when_outcome_missing(monkeypatch):
@@ -66,16 +97,20 @@ def test_acquire_blocks_when_outcome_missing(monkeypatch):
         called["materialize"] = True
         return {"parquet": "x.parquet", "provenance": "x.json"}
 
-    monkeypatch.setattr(df_mod, "build_available_catalog", lambda _d: _catalog("lact", "sofa2"))
+    monkeypatch.setattr(
+        df_mod, "build_available_catalog", lambda _d: _catalog("lact", "sofa2")
+    )
     # patch the lazily-imported materializer symbol
-    import easyicu.research_agent.cohort_materializer as cm
+    import easyicu.research_agent.cohort.materializer as cm
+
     monkeypatch.setattr(cm, "materialize_to_parquet", _fake_materialize)
 
     res = acquire_universe_for_question(
         export_dir="/nonexistent",
         question="q",
-        llm=_StubLLM('{"selected_concepts": ["lact"]}'),
+        llm=_stub('{"selected_concepts": ["lact"]}'),
         output_dir="/tmp/x",
+        target_outcome="death",
         outcome_concepts=["death"],
     )
     assert res.blocked
@@ -91,17 +126,20 @@ def test_acquire_proceeds_on_available_subset_when_outcome_present(monkeypatch):
         return {"parquet": "u.parquet", "provenance": "u.json"}
 
     monkeypatch.setattr(
-        df_mod, "build_available_catalog",
+        df_mod,
+        "build_available_catalog",
         lambda _d: _catalog("sofa2", "lact", "death", "age", "sex", "los_icu"),
     )
-    import easyicu.research_agent.cohort_materializer as cm
+    import easyicu.research_agent.cohort.materializer as cm
+
     monkeypatch.setattr(cm, "materialize_to_parquet", _fake_materialize)
 
     res = acquire_universe_for_question(
         export_dir="/nonexistent",
         question="q",
-        llm=_StubLLM('{"selected_concepts": ["sofa2", "lact", "made_up", "death"]}'),
+        llm=_stub('{"selected_concepts": ["sofa2", "lact", "made_up", "death"]}'),
         output_dir="/tmp/x",
+        target_outcome="death",
         outcome_concepts=["death"],
         static_concepts=["age", "sex", "los_icu"],
     )
@@ -113,108 +151,178 @@ def test_acquire_proceeds_on_available_subset_when_outcome_present(monkeypatch):
     assert "re-extract" in res.note.lower()
 
 
+def test_outcome_free_acquisition_materialises_required_trajectory_concept(
+    monkeypatch,
+):
+    captured = {}
+
+    monkeypatch.setattr(
+        df_mod,
+        "build_available_catalog",
+        lambda _d: _catalog("sofa2", "age"),
+    )
+    import easyicu.research_agent.cohort.materializer as cm
+
+    monkeypatch.setattr(
+        cm,
+        "materialize_to_parquet",
+        lambda **kwargs: captured.update(kwargs)
+        or {"parquet": "u.parquet", "provenance": "u.json"},
+    )
+
+    result = acquire_universe_for_question(
+        export_dir="/nonexistent",
+        question="Are SOFA-2 trajectories reproducible?",
+        llm=_stub('{"selected_concepts": []}'),
+        output_dir="/tmp/x",
+        target_outcome=None,
+        outcome_concepts=(),
+        required_feature_concepts=("sofa2",),
+        require_outcome=False,
+    )
+
+    assert result.blocked is False
+    assert captured["feature_concepts"] == ["sofa2"]
+    assert captured["outcome_concepts"] == []
+    assert captured["trajectory_concepts"] == ["sofa2"]
+
+
+def test_required_trajectory_concept_missing_blocks_before_materialisation(
+    monkeypatch,
+):
+    called = {"materialize": False}
+    monkeypatch.setattr(
+        df_mod,
+        "build_available_catalog",
+        lambda _d: _catalog("age"),
+    )
+    import easyicu.research_agent.cohort.materializer as cm
+
+    def _fake_materialize(**_kwargs):
+        called["materialize"] = True
+        return {"parquet": "u.parquet", "provenance": "u.json"}
+
+    monkeypatch.setattr(cm, "materialize_to_parquet", _fake_materialize)
+
+    result = acquire_universe_for_question(
+        export_dir="/nonexistent",
+        question="Are SOFA-2 trajectories reproducible?",
+        llm=_stub('{"selected_concepts": []}'),
+        output_dir="/tmp/x",
+        target_outcome=None,
+        outcome_concepts=(),
+        required_feature_concepts=("sofa2",),
+        require_outcome=False,
+    )
+
+    assert result.blocked is True
+    assert called["materialize"] is False
+    assert "sofa2" in result.note
+
+
+def test_acquire_preserves_legacy_trajectory_without_typed_loader(
+    monkeypatch, tmp_path
+):
+    """A legacy export trajectory is path/provenance bound, not typed-authority bound."""
+
+    universe = tmp_path / "universe.parquet"
+    provenance = tmp_path / "universe_provenance.json"
+    trajectory = tmp_path / "universe_trajectory.parquet"
+    trajectory_provenance = tmp_path / "universe_trajectory_provenance.json"
+
+    monkeypatch.setattr(
+        df_mod,
+        "build_available_catalog",
+        lambda _d: _catalog("sofa2", "death", "age"),
+    )
+    monkeypatch.setattr(
+        df_mod, "load_verified_materialized_cohort_authority", lambda _path: None
+    )
+
+    def _typed_loader_must_not_run(*_args, **_kwargs):
+        raise AssertionError("legacy trajectory was sent through the typed loader")
+
+    monkeypatch.setattr(
+        df_mod,
+        "load_verified_materialized_trajectory_authority",
+        _typed_loader_must_not_run,
+    )
+    import easyicu.research_agent.cohort.materializer as cm
+
+    monkeypatch.setattr(
+        cm,
+        "materialize_to_parquet",
+        lambda **_kwargs: {
+            "parquet": universe,
+            "provenance": provenance,
+            "trajectory": trajectory,
+            "trajectory_provenance": trajectory_provenance,
+        },
+    )
+
+    result = acquire_universe_for_question(
+        export_dir=tmp_path,
+        question="q",
+        llm=_stub('{"selected_concepts": ["sofa2", "death"]}'),
+        output_dir=tmp_path,
+        target_outcome="death",
+        outcome_concepts=["death"],
+        static_concepts=["age"],
+    )
+
+    assert result.blocked is False
+    assert result.trajectory_path == trajectory
+    assert result.trajectory_provenance_path == trajectory_provenance
+    assert result.trajectory_authority_path is None
+    assert result.trajectory_authority_ref is None
+
+
 def test_acquire_captures_selection_token_usage_and_cost(monkeypatch):
     # A metered client exposes last_usage + model; the selection's token cost
     # is recorded on the result (it runs as a pre-sandbox stage).
-    class _MeteredStub(_StubLLM):
-        # OpenAIClient stores the model id as the private ``_model``.
-        _model = "deepseek-chat"
-        last_usage = {"prompt_tokens": 1000, "completion_tokens": 200,
-                      "total_tokens": 1200}
+    llm = _stub('{"selected_concepts": ["sofa2", "death"]}')
+    llm._model = "deepseek-chat"
+    llm.last_usage = {
+        "prompt_tokens": 1000,
+        "completion_tokens": 200,
+        "total_tokens": 1200,
+    }
 
     monkeypatch.setattr(
-        df_mod, "build_available_catalog",
+        df_mod,
+        "build_available_catalog",
         lambda _d: _catalog("sofa2", "death", "age", "sex", "los_icu"),
     )
-    import easyicu.research_agent.cohort_materializer as cm
+    import easyicu.research_agent.cohort.materializer as cm
+
     monkeypatch.setattr(
-        cm, "materialize_to_parquet",
+        cm,
+        "materialize_to_parquet",
         lambda **kw: {"parquet": "u.parquet", "provenance": "u.json"},
     )
 
     res = acquire_universe_for_question(
         export_dir="/nonexistent",
         question="q",
-        llm=_MeteredStub('{"selected_concepts": ["sofa2", "death"]}'),
+        llm=llm,
         output_dir="/tmp/x",
+        target_outcome="death",
         outcome_concepts=["death"],
     )
     assert res.selection_model == "deepseek-chat"
-    assert res.selection_usage == {"prompt_tokens": 1000, "completion_tokens": 200,
-                                   "total_tokens": 1200}
+    assert res.selection_usage == {
+        "prompt_tokens": 1000,
+        "completion_tokens": 200,
+        "total_tokens": 1200,
+    }
     # deepseek-chat priced at (0.27, 1.10)/1M -> 0.001*0.27 + 0.0002*1.10
     assert res.selection_cost_usd is not None and res.selection_cost_usd > 0
 
 
-def test_default_static_concepts_carry_survival_censoring():
-    """Survival-readiness contract: the universe must carry both LOS concepts.
-
-    Time-to-event designs (H1 ventilation survival, etc.) need an event time AND
-    a survivor follow-up end. The materializer emits ``death_time`` (event time)
-    from the outcome's timestamp; the survivor censoring time comes from
-    ``los_hosp`` (hospital length of stay). Both LOS concepts must stay in the
-    default static set, or a regenerated universe silently reverts to a timeless
-    binary outcome and blocks survival analysis again.
-    """
+def test_acquisition_requires_caller_owned_outcome_and_has_no_static_science_default():
     import inspect
 
-    default = inspect.signature(
-        acquire_universe_for_question
-    ).parameters["static_concepts"].default
-    assert "los_icu" in default
-    assert "los_hosp" in default
-
-
-def test_augment_certified_followup_columns_builds_clean_survival_time(tmp_path):
-    """The data-foundation layer certifies an ICU-anchored follow-up so a
-    survival step can run KM/Cox instead of declining on censoring. death_time
-    (hours) is the event time; survivors are censored at los_hosp*24; negative /
-    post-discharge / non-positive artifacts are repaired."""
-    import pandas as pd
-    from easyicu.research_agent.data_foundation import _augment_certified_followup_columns
-
-    p = tmp_path / "universe.parquet"
-    pd.DataFrame(
-        {
-            "stay_id": [1, 2, 3, 4, 5],
-            "death": [1, 0, 1, 1, 0],
-            "death_time": [50.0, None, -23.0, 9000.0, None],  # hours; -23 & huge are artifacts
-            "los_hosp": [3.0, 5.0, 2.0, 4.0, 10.0],           # DAYS
-        }
-    ).to_parquet(p, index=False)
-
-    prov = _augment_certified_followup_columns(p)
-    out = pd.read_parquet(p)
-    ft = out["followup_time_hours"]
-
-    assert prov["n_event_observed"] == 3
-    assert out["event_observed"].tolist() == [1, 0, 1, 1, 0]
-    # stay 1: valid death at 50h -> 50
-    assert ft.iloc[0] == 50.0
-    # stay 2: survivor -> los_hosp*24 = 120
-    assert ft.iloc[1] == 120.0
-    # stay 3: negative death_time artifact -> hospital-discharge proxy 2*24 = 48
-    assert ft.iloc[2] == 48.0
-    # stay 4: death_time 9000 > los_hosp*24 (96) -> capped at 96 (no post-discharge death)
-    assert ft.iloc[3] == 96.0
-    # stay 5: survivor -> 240
-    assert ft.iloc[4] == 240.0
-    # every follow-up strictly positive
-    assert (ft > 0).all()
-
-
-def test_augment_certified_followup_is_noop_without_event_time():
-    """Prediction/association universes (no death_time) are untouched."""
-    import pandas as pd
-    import tempfile
-    from pathlib import Path
-    from easyicu.research_agent.data_foundation import _augment_certified_followup_columns
-
-    with tempfile.TemporaryDirectory() as d:
-        p = Path(d) / "u.parquet"
-        pd.DataFrame({"stay_id": [1, 2], "death": [1, 0], "los_hosp": [3.0, 5.0]}).to_parquet(p, index=False)
-        prov = _augment_certified_followup_columns(p)
-        out = pd.read_parquet(p)
-    assert prov is None
-    assert "followup_time_hours" not in out.columns
-    assert "event_observed" not in out.columns
+    parameters = inspect.signature(acquire_universe_for_question).parameters
+    assert parameters["target_outcome"].default is inspect.Parameter.empty
+    assert parameters["outcome_concepts"].default is inspect.Parameter.empty
+    assert parameters["static_concepts"].default == ()

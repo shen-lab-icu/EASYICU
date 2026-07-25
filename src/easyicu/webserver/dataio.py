@@ -25,8 +25,13 @@ import hashlib
 import json
 import re
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Set, Tuple
+from typing import Any, Callable, Dict, List, Optional, Sequence, Set, Tuple
 
+from easyicu.concept.export_metadata import (
+    ExportMetadataError,
+    build_export_file_metadata_binding,
+    missing_primary_metadata_concepts,
+)
 from easyicu.webserver.input_validation import parse_bool
 
 # Core metadata tables per database — a folder that holds these (as parquet or
@@ -49,6 +54,7 @@ _DB_LABELS = {
 }
 
 _MODULE_MANIFESTS = ("easyicu_export_manifest.json", "_manifest.json")
+_NATIVE_EXPORT_SCHEMA_V2 = "easyicu_native_export_v2"
 DEFAULT_OBSERVATION_WINDOW_HOURS = 24 * 30
 _WORKSPACE_SAMPLE_LIMIT = 500
 
@@ -740,6 +746,13 @@ def _render_export_readme(
         "## Reproducibility files",
         "",
         "- `_manifest.json` contains the machine-readable extraction contract, module files, row counts, and cohort report.",
+        *(
+            [
+                "- The content-addressed column metadata sidecar binds each authorized physical output to its source concept, role, units, ranges, lineage, and derivation window."
+            ]
+            if isinstance(manifest.get("column_metadata"), dict)
+            else []
+        ),
         "- Each module file contains the extracted concept table for the same resolved cohort.",
         *(
             [
@@ -762,6 +775,11 @@ def _render_export_readme(
     for f in definition_files or []:
         lines.append(
             f"- `{f.get('file')}` — feature definition manifest, records `{f.get('records', '')}`"
+        )
+    metadata_descriptor = manifest.get("column_metadata")
+    if isinstance(metadata_descriptor, dict) and metadata_descriptor.get("file"):
+        lines.append(
+            f"- `{metadata_descriptor.get('file')}` — typed physical-column metadata, records `{metadata_descriptor.get('record_count', '')}`"
         )
     lines.append("")
     return "\n".join(lines)
@@ -1058,6 +1076,45 @@ def _write_feature_definition_files(
             "records": payload.get("record_count", 0),
         },
     ]
+
+
+def _build_export_file_metadata_binding(
+    *,
+    relative_path: str,
+    module: str,
+    frame: Any,
+    concept_ids: Sequence[str],
+    database: str,
+    database_class_prefixes: Sequence[str],
+    dictionary: Any,
+):
+    """Bind producer-owned physical outputs to typed metadata exactly once."""
+
+    try:
+        return build_export_file_metadata_binding(
+            relative_path=relative_path,
+            module=module,
+            frame=frame,
+            concept_ids=concept_ids,
+            database=database,
+            database_class_prefixes=database_class_prefixes,
+            dictionary=dictionary,
+        )
+    except ExportMetadataError as exc:
+        raise ExportCohortError(exc.error, exc.detail) from exc
+
+
+def _missing_primary_metadata_concepts(
+    *,
+    concept_plan: Dict[str, List[str]],
+    file_bindings: Sequence[Any],
+) -> List[str]:
+    """Return selected concepts without one unambiguous typed primary column."""
+
+    return missing_primary_metadata_concepts(
+        concept_plan=concept_plan,
+        file_bindings=file_bindings,
+    )
 
 
 def _coerce_int(
@@ -1657,6 +1714,13 @@ def make_export_runner(
         os.environ.setdefault("EASYICU_FORCE_INPROCESS_BATCH", "1")
         import easyicu.api as api
         from easyicu.concept.catalog import CONCEPT_GROUPS_INTERNAL
+        from easyicu.concept.metadata_sidecar import (
+            EXPORT_PHYSICAL_SCOPE,
+            ColumnMetadataSidecar,
+            write_content_addressed_sidecar,
+        )
+        from easyicu.config import load_src_cfg
+        from easyicu.resources import load_dictionary
 
         sel_modules = [
             m
@@ -1747,9 +1811,27 @@ def make_export_runner(
             }
         )
 
+        current_manifest = out / "_manifest.json"
+        if current_manifest.exists() or current_manifest.is_symlink():
+            if current_manifest.is_symlink() or not current_manifest.is_file():
+                raise ExportCohortError(
+                    "existing_export_manifest_invalid",
+                    {"path": str(current_manifest)},
+                )
+            current_manifest.unlink()
+
         files: List[Dict[str, Any]] = []
+        metadata_file_bindings: List[Any] = []
         definition_files: List[Dict[str, Any]] = []
         definition_payload: Optional[Dict[str, Any]] = None
+        metadata_database = str(database).strip().lower()
+        metadata_dictionary = load_dictionary(include_sofa2=True)
+        metadata_source_config = load_src_cfg(metadata_database)
+        metadata_class_prefixes = tuple(
+            str(value).strip().lower()
+            for value in metadata_source_config.class_prefix
+            if str(value).strip()
+        )
         total = len(sel)
         with api.keep_cache(database=database, data_path=str(data_path)):
             for i, mod in enumerate(sel, start=1):
@@ -1776,6 +1858,15 @@ def make_export_runner(
                 if isinstance(df, dict):
                     for key, sub in df.items():
                         fname = f"{mod}__{key}.{ext}"
+                        binding = _build_export_file_metadata_binding(
+                            relative_path=fname,
+                            module=mod,
+                            frame=sub,
+                            concept_ids=module_concepts,
+                            database=metadata_database,
+                            database_class_prefixes=metadata_class_prefixes,
+                            dictionary=metadata_dictionary,
+                        )
                         rows = _write_frame(sub, out / fname, export_format)
                         written.append(
                             {
@@ -1786,8 +1877,19 @@ def make_export_runner(
                                 "rows": rows,
                             }
                         )
+                        written[-1]["column_metadata_columns"] = list(binding.columns)
+                        metadata_file_bindings.append(binding)
                 else:
                     fname = f"{mod}.{ext}"
+                    binding = _build_export_file_metadata_binding(
+                        relative_path=fname,
+                        module=mod,
+                        frame=df,
+                        concept_ids=module_concepts,
+                        database=metadata_database,
+                        database_class_prefixes=metadata_class_prefixes,
+                        dictionary=metadata_dictionary,
+                    )
                     rows = _write_frame(df, out / fname, export_format)
                     written.append(
                         {
@@ -1798,6 +1900,8 @@ def make_export_runner(
                             "rows": rows,
                         }
                     )
+                    written[-1]["column_metadata_columns"] = list(binding.columns)
+                    metadata_file_bindings.append(binding)
                 files.extend(written)
                 job.emit(
                     {
@@ -1820,6 +1924,16 @@ def make_export_runner(
                 "cancelled_at": "modules",
             }
 
+        missing_primary_metadata = _missing_primary_metadata_concepts(
+            concept_plan={module: concept_plan[module] for module in sel},
+            file_bindings=metadata_file_bindings,
+        )
+        if missing_primary_metadata:
+            raise ExportCohortError(
+                "column_metadata_primary_binding_missing",
+                {"concepts": missing_primary_metadata},
+            )
+
         if include_feature_definitions:
             definition_payload = _feature_definition_payload(
                 database=database,
@@ -1831,7 +1945,16 @@ def make_export_runner(
             )
             definition_files = _write_feature_definition_files(out, definition_payload)
 
+        metadata_sidecar = ColumnMetadataSidecar(
+            source_database=metadata_database,
+            source_database_class_prefixes=metadata_class_prefixes,
+            scope=EXPORT_PHYSICAL_SCOPE,
+            files=tuple(metadata_file_bindings),
+        )
+        metadata_ref = write_content_addressed_sidecar(out, metadata_sidecar)
+
         manifest = {
+            "schema_version": _NATIVE_EXPORT_SCHEMA_V2,
             "database": database,
             "data_path": str(data_path),
             "format": export_format,
@@ -1862,6 +1985,7 @@ def make_export_runner(
                 if definition_payload
                 else {"included": False}
             ),
+            "column_metadata": metadata_ref.to_dict(),
         }
         (out / "_manifest.json").write_text(
             json.dumps(manifest, indent=2, ensure_ascii=False)
@@ -1886,6 +2010,8 @@ def make_export_runner(
             "feature_definitions_csv": (
                 "feature_definitions.csv" if definition_files else None
             ),
+            "column_metadata": metadata_ref.file,
+            "column_metadata_sha256": metadata_ref.sha256,
         }
 
     return runner

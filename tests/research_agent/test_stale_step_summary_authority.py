@@ -9,10 +9,10 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from easyicu.research_agent.evaluation_scorecard import score_run_from_dir
-from easyicu.research_agent.evidence import EvidenceStore
+from easyicu.research_agent.authority.evidence_store import EvidenceStore
 from easyicu.research_agent.icu_agent_bench import ICUAgentBenchTask
-from easyicu.research_agent.pipeline_primary_effect import _extract_primary_effect_row
-from easyicu.research_agent.pipeline_report import (
+from easyicu.research_agent.robustness.primary_effect import _extract_primary_effect_row
+from easyicu.research_agent.reporting.readiness import (
     _blocked_outcome_step_ids,
     _compute_readiness_gates,
     primary_result_plausibility_errors,
@@ -103,10 +103,7 @@ def test_failed_current_step_makes_stale_readiness_files_inert(tmp_path: Path):
 
     assert _blocked_outcome_step_ids(tmp_path) == []
     assert primary_result_plausibility_errors(tmp_path) == []
-    assert (
-        primary_survival_estimate_integrity_errors(_survival_plan(), tmp_path)
-        == []
-    )
+    assert primary_survival_estimate_integrity_errors(_survival_plan(), tmp_path) == []
 
     manuscript = tmp_path / "manuscript.md"
     manuscript.write_text(
@@ -158,8 +155,7 @@ def test_blocked_outcome_gate_fails_closed_when_evidence_is_tampered(
     evidence_dir.mkdir()
     gate_path = evidence_dir / "outcome_gate__outcome_gate.csv"
     gate_path.write_text(
-        "status,primary_analysis_authorized,outcome\n"
-        "blocked,false,mortality\n",
+        "status,primary_analysis_authorized,outcome\n" "blocked,false,mortality\n",
         encoding="utf-8",
     )
     evidence_id = "outcome_gate"
@@ -187,12 +183,12 @@ def test_blocked_outcome_gate_fails_closed_when_evidence_is_tampered(
     assert _blocked_outcome_step_ids(tmp_path, records) == [step_id]
 
     gate_path.write_text(
-        "status,primary_analysis_authorized,outcome\n"
-        "ok,true,mortality\n",
+        "status,primary_analysis_authorized,outcome\n" "ok,true,mortality\n",
         encoding="utf-8",
     )
 
     assert _blocked_outcome_step_ids(tmp_path, records) == [step_id]
+
 
 def test_validity_signals_ignore_failed_summary_and_failed_evidence(
     tmp_path: Path,
@@ -422,7 +418,7 @@ def _pipeline_result(run_dir: Path) -> PipelineResult:
     )
 
 
-def test_cross_database_primary_effect_uses_active_then_legacy_summary(
+def test_cross_database_primary_effect_uses_only_host_authorized_active_record(
     tmp_path: Path,
 ):
     step_id = "01_primary_model"
@@ -437,7 +433,18 @@ def test_cross_database_primary_effect_uses_active_then_legacy_summary(
     _write_manifest(
         tmp_path,
         [
-            {"step_id": step_id, "status": "ok", "step_summary": stale},
+            {
+                "step_id": step_id,
+                "status": "ok",
+                "planned_analysis_role": "primary",
+                "analysis_request": {
+                    "step": {
+                        "step_id": step_id,
+                        "planned_analysis_role": "primary",
+                    }
+                },
+                "step_summary": stale,
+            },
             {
                 "step_id": step_id,
                 "status": "contract_failed",
@@ -461,7 +468,20 @@ def test_cross_database_primary_effect_uses_active_then_legacy_summary(
     }
     _write_manifest(
         tmp_path,
-        [{"step_id": step_id, "status": "ok", "step_summary": active_summary}],
+        [
+            {
+                "step_id": step_id,
+                "status": "ok",
+                "planned_analysis_role": "primary",
+                "analysis_request": {
+                    "step": {
+                        "step_id": step_id,
+                        "planned_analysis_role": "primary",
+                    }
+                },
+                "step_summary": active_summary,
+            }
+        ],
     )
     active = _extract_primary_effect_row(
         database="miiv",
@@ -470,8 +490,9 @@ def test_cross_database_primary_effect_uses_active_then_legacy_summary(
     assert active["primary_or"] == 1.25
 
     (tmp_path / "manifest_partial.json").unlink()
-    legacy = _extract_primary_effect_row(
+    orphaned_legacy_summary = _extract_primary_effect_row(
         database="miiv",
         result=_pipeline_result(tmp_path),
     )
-    assert legacy["primary_or"] == 9.9
+    assert orphaned_legacy_summary["primary_or"] is None
+    assert orphaned_legacy_summary["status"] == "missing_primary_association"

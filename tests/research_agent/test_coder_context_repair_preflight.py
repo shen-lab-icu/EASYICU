@@ -6,30 +6,28 @@ import json
 
 import pytest
 
-from easyicu.research_agent.agents import CoderAgent, _looks_like_python_script
-from easyicu.research_agent.code_preflight import audit_mechanical_code_contracts
-from easyicu.research_agent.code_repair import deterministic_concept_audit_repair
-from easyicu.research_agent.coder_context import (
+from easyicu.research_agent.agents.core import CoderAgent, _looks_like_python_script
+from easyicu.research_agent.gates.preflight import audit_mechanical_code_contracts
+from easyicu.research_agent.repairs.binary_domain import (
+    patch_observed_binary_primary_exposure_guard,
+)
+from easyicu.research_agent.repairs.source import deterministic_concept_audit_repair
+from easyicu.research_agent.research_context.prompt_scope import (
     coder_guide_for_step,
     scoped_coder_context,
 )
-from easyicu.research_agent.concept_audit_cache import LLMConceptAuditCache
-from easyicu.research_agent.pipeline_resume import _looks_like_generated_python
-from easyicu.research_agent.provider_budget import (
+from easyicu.research_agent.execution.concept_audit_cache import LLMConceptAuditCache
+from easyicu.research_agent.orchestration.resume import _looks_like_generated_python
+from easyicu.research_agent.authority.provider_budget import (
     ProviderCallBudgetExhausted,
     StepProviderCallBudget,
 )
 from easyicu.research_agent.schema import ValidationFinding
+from easyicu.research_agent.providers.mocks import ScriptedMockLLMClient
 
 
-class _SequenceLLM:
-    def __init__(self, responses):  # noqa: ANN001
-        self.responses = list(responses)
-        self.calls = []
-
-    def complete(self, messages, **kwargs):  # noqa: ANN001, ANN003
-        self.calls.append((list(messages), dict(kwargs)))
-        return self.responses.pop(0)
+def _SequenceLLM(responses):  # noqa: ANN001, N802
+    return ScriptedMockLLMClient(responses)
 
 
 def _context(ra, *, variable_count: int = 0):
@@ -147,7 +145,55 @@ def test_step_scoped_context_keeps_all_declared_source_concept_companions(ra):
     assert len(scoped.variables) <= 36
 
 
-def test_step_scoped_context_never_truncates_an_authoritative_companion_family(ra):
+def test_step_scoped_context_does_not_auto_add_unrequested_time_siblings(ra):
+    variables = [
+        ra.ConceptDescriptor(
+            name="event_first", dtype="float64", source_concept="event"
+        ),
+        ra.ConceptDescriptor(name="event_n", dtype="int64", source_concept="event"),
+        ra.ConceptDescriptor(
+            name="event_measured", dtype="bool", source_concept="event"
+        ),
+        ra.ConceptDescriptor(
+            name="event_first_time", dtype="float64", source_concept="event"
+        ),
+        ra.ConceptDescriptor(
+            name="event_last_time", dtype="float64", source_concept="event"
+        ),
+    ]
+    context = ra.ResearchContext(
+        research_question="Audit the Planner-selected event value.",
+        cohort=ra.CohortDescriptor(
+            cohort_name="demo", database="synthetic", n_stays=20, n_patients=18
+        ),
+        variables=variables,
+    )
+    undeclared_time_step = ra.AnalysisStep(
+        step_id="event_qc",
+        intent="Audit value availability.",
+        inputs=["event_first"],
+        expected_outputs=["table:event_qc"],
+        method="data_quality_audit",
+    )
+    declared_time_step = undeclared_time_step.model_copy(
+        update={"inputs": ["event_first", "event_first_time"]}
+    )
+
+    automatic_names = {
+        variable.name
+        for variable in scoped_coder_context(context, undeclared_time_step).variables
+    }
+    declared_names = {
+        variable.name
+        for variable in scoped_coder_context(context, declared_time_step).variables
+    }
+
+    assert automatic_names == {"event_first", "event_n", "event_measured"}
+    assert "event_first_time" in declared_names
+    assert "event_last_time" not in declared_names
+
+
+def test_step_scoped_context_drops_unrequested_sibling_summaries(ra):
     variables = [
         ra.ConceptDescriptor(
             name=f"event_companion_{index}",
@@ -175,14 +221,39 @@ def test_step_scoped_context_never_truncates_an_authoritative_companion_family(r
 
     scoped = scoped_coder_context(context, step, max_variables=36)
 
+    assert [variable.name for variable in scoped.variables] == ["event_companion_0"]
+
+
+def test_step_scoped_context_never_truncates_explicit_planner_inputs(ra):
+    variables = [
+        ra.ConceptDescriptor(name=f"declared_{index}", dtype="float64")
+        for index in range(40)
+    ]
+    context = ra.ResearchContext(
+        research_question="Summarise every Planner-declared variable.",
+        cohort=ra.CohortDescriptor(
+            cohort_name="demo", database="synthetic", n_stays=20, n_patients=18
+        ),
+        variables=variables,
+    )
+    step = ra.AnalysisStep(
+        step_id="wide_summary",
+        intent="Summarise the declared variables.",
+        inputs=[variable.name for variable in variables],
+        expected_outputs=["table:wide_summary"],
+        method="descriptive_summary",
+    )
+
+    scoped = scoped_coder_context(context, step, max_variables=36)
+
     assert len(scoped.variables) == 40
     assert {variable.name for variable in scoped.variables} == {
-        f"event_companion_{index}" for index in range(40)
+        f"declared_{index}" for index in range(40)
     }
 
 
 def test_figure_coder_guide_excludes_unrelated_method_families(ra):
-    from easyicu.research_agent.agents import _CODER_GUIDE
+    from easyicu.research_agent.agents.core import _CODER_GUIDE
 
     guide = coder_guide_for_step(_CODER_GUIDE, _figure_step(ra))
 
@@ -193,8 +264,27 @@ def test_figure_coder_guide_excludes_unrelated_method_families(ra):
     assert len(guide) < len(_CODER_GUIDE) * 0.7
 
 
+def test_render_only_descriptive_method_does_not_load_table_contract(ra):
+    from easyicu.research_agent.agents.core import _CODER_GUIDE
+
+    step = ra.AnalysisStep(
+        step_id="render",
+        intent="Render the declared descriptive figure.",
+        inputs=["artifact:summary"],
+        expected_outputs=["figure:summary"],
+        method="descriptive_summary",
+    )
+
+    guide = coder_guide_for_step(_CODER_GUIDE, step)
+
+    assert "For rendering-only figure steps" in guide
+    assert 'Use matplotlib\'s "Agg" backend' in guide
+    assert "TABLE-ONE / DESCRIPTIVE SUMMARIES:" not in guide
+    assert "CLINICAL SCORE AND MISSINGNESS SEMANTICS:" not in guide
+
+
 def test_table_coder_guide_loads_host_owned_descriptive_input_contract(ra):
-    from easyicu.research_agent.agents import _CODER_GUIDE
+    from easyicu.research_agent.agents.core import _CODER_GUIDE
 
     step = ra.AnalysisStep(
         step_id="describe",
@@ -216,6 +306,36 @@ def test_table_coder_guide_loads_host_owned_descriptive_input_contract(ra):
     assert "Never invent a provenance pair" in guide
     assert "level/count-only `.table`" in guide
     assert "percentage denominator" in guide
+
+
+def test_mechanical_preflight_rejects_closed_counts_runtime_introspection(ra):
+    step = ra.AnalysisStep(
+        step_id="describe",
+        intent="Describe an Agent-selected closed category.",
+        inputs=["selected_variable"],
+        expected_outputs=["table:table_one"],
+        method="table_one",
+    )
+    findings = audit_mechanical_code_contracts(
+        """
+import inspect
+from easyicu.research_agent.methods.descriptive_inputs import closed_categorical_counts
+
+def invoke_counts(series, levels):
+    signature = inspect.signature(closed_categorical_counts)
+    return closed_categorical_counts(series, declared_levels=levels)
+""".lstrip(),
+        step,
+    )
+
+    assert any(
+        finding.validator == "mechanical_code_preflight"
+        and finding.severity == "error"
+        and finding.detail
+        and finding.detail.get("reason") == "host_helper_runtime_introspection"
+        and finding.detail.get("helper_name") == "closed_categorical_counts"
+        for finding in findings
+    )
 
 
 def test_coder_repair_applies_minimal_patch_without_full_rewrite(ra):
@@ -273,6 +393,34 @@ def test_coder_repair_budget_exhaustion_prevents_full_rewrite(ra):
     assert exc_info.value.category == "repair_full_rewrite"
     assert len(llm.calls) == 1
     assert budget.categories == ("repair_patch",)
+
+
+def test_coder_repair_uses_last_non_audit_slot_for_direct_rewrite(ra):
+    """Do not strand a repair by spending its sole slot on a bad patch."""
+    llm = _SequenceLLM(["import os\nvalue = 3\n"])
+    budget = StepProviderCallBudget(
+        3,
+        step_id="render",
+        reserved_final_category="concept_audit",
+    )
+    budget.consume("initial_generation")
+
+    coder = CoderAgent(llm)
+    repaired = coder.repair(
+        context=_context(ra),
+        step=_figure_step(ra),
+        code="import os\nvalue = 1\n",
+        run_log="ERROR: local value is invalid",
+        provider_budget=budget,
+    )
+
+    assert repaired.endswith("value = 3")
+    assert len(llm.calls) == 1
+    assert budget.categories == ("initial_generation", "repair_full_rewrite")
+    assert coder.last_repair_transport == "full_rewrite"
+    assert coder.last_repair_provider_calls == 1
+    assert budget.can_consume("concept_audit") is True
+    assert budget.can_consume("repair_patch") is False
 
 
 def test_patch_json_is_never_accepted_as_complete_python_script():
@@ -556,6 +704,503 @@ count = int(
         and finding.detail.get("reason") == "scalar_cast_before_reduction"
         for finding in audit_mechanical_code_contracts(repaired, _figure_step(ra))
     )
+
+
+def test_scalar_cast_repair_routes_from_structured_reason_not_prose(ra):
+    code = """
+import pandas as pd
+
+left = pd.Series([True, False, True])
+right = pd.Series([True, True, False])
+count = int(left & right).sum()
+"""
+    finding = next(
+        finding
+        for finding in audit_mechanical_code_contracts(code, _figure_step(ra))
+        if (finding.detail or {}).get("reason") == "scalar_cast_before_reduction"
+    )
+    assert "scalar_cast_before_reduction" not in finding.message
+
+    repaired, repair_names = deterministic_concept_audit_repair(
+        code,
+        [finding.message],
+        repair_findings=[finding],
+    )
+
+    assert repair_names == ["scalar_cast_before_reduction_v1"]
+    assert "int((left & right).sum())" in repaired
+
+
+def test_binary_primary_exposure_guard_uses_host_observed_domain(ra):
+    context = _context(ra)
+    context = context.model_copy(
+        update={
+            "variables": [
+                (
+                    variable.model_copy(
+                        update={"observed_domain": {"is_binary": True, "n_unique": 2}}
+                    )
+                    if variable.name == context.primary_exposure
+                    else variable
+                )
+                for variable in context.variables
+            ]
+        }
+    )
+    code = """
+numeric = {"selected_first": frame["selected_first"]}
+exposure = numeric["selected_first"]
+groups = exposure.copy().astype(object)
+groups.loc[exposure.astype(float) <= 0] = "No exposure"
+groups.loc[exposure.astype(float) > 0] = "Exposure"
+"""
+    finding = ValidationFinding(
+        validator="llm_concept_auditor",
+        severity="error",
+        message="Untrusted prose is not routing authority.",
+        detail={"issue_code": "other", "variables": ["selected_first"]},
+    )
+
+    repaired = patch_observed_binary_primary_exposure_guard(
+        code,
+        context=context,
+        repair_findings=[finding],
+    )
+
+    assert repaired != code
+    assert "if not bool(exposure.dropna().isin([0, 1]).all()):" in repaired
+    assert "groups.loc[exposure.astype(float) > 0]" in repaired
+
+
+def test_binary_primary_exposure_guard_refuses_unproven_domain(ra):
+    context = _context(ra)
+    code = """
+numeric = {"selected_first": frame["selected_first"]}
+exposure = numeric["selected_first"]
+groups = exposure.copy().astype(object)
+groups.loc[exposure <= 0] = "No exposure"
+groups.loc[exposure > 0] = "Exposure"
+"""
+    finding = ValidationFinding(
+        validator="llm_concept_auditor",
+        severity="error",
+        message="Untrusted prose is not routing authority.",
+        detail={"issue_code": "other", "variables": ["selected_first"]},
+    )
+
+    repaired = patch_observed_binary_primary_exposure_guard(
+        code,
+        context=context,
+        repair_findings=[finding],
+    )
+
+    assert repaired == code
+
+
+def test_local_read_before_assignment_repair_moves_existing_call(ra):
+    code = """
+binding = {"column": "exposure"}
+frame = load_frame()
+if "stay_id" not in frame:
+    if exposure_column not in cohort:
+        raise RuntimeError("missing exposure")
+    frame = cohort[["stay_id", exposure_column]].copy()
+exposure_column = product_executable_column(binding)
+result = frame[["stay_id", exposure_column]]
+"""
+    findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+    finding = next(
+        finding
+        for finding in findings
+        if (finding.detail or {}).get("reason") == "local_read_before_assignment"
+    )
+
+    repaired, repair_names = deterministic_concept_audit_repair(
+        code,
+        [finding.message],
+        repair_findings=[finding],
+    )
+
+    assert repair_names == ["local_read_before_assignment_hoist_v1"]
+    assert repaired.count("exposure_column = product_executable_column(binding)") == 1
+    assert repaired.index("exposure_column =") < repaired.index(
+        'if "stay_id" not in frame:'
+    )
+    assert not any(
+        (item.detail or {}).get("reason") == "local_read_before_assignment"
+        for item in audit_mechanical_code_contracts(repaired, _figure_step(ra))
+    )
+
+
+def test_local_read_repair_refuses_dependency_rebound_before_assignment(ra):
+    code = """
+binding = {"column": "first"}
+if exposure_column not in cohort:
+    raise RuntimeError("missing exposure")
+binding = {"column": "second"}
+exposure_column = product_executable_column(binding)
+"""
+    finding = next(
+        finding
+        for finding in audit_mechanical_code_contracts(code, _figure_step(ra))
+        if (finding.detail or {}).get("reason") == "local_read_before_assignment"
+    )
+
+    repaired, repair_names = deterministic_concept_audit_repair(
+        code,
+        [finding.message],
+        repair_findings=[finding],
+    )
+
+    assert repaired == code
+    assert repair_names == []
+
+
+def _binary_feasibility_script(*, with_fit_gate: bool = True) -> str:
+    fit_body = "pipeline.fit(X, A)" if with_fit_gate else "pipeline.predict(X)"
+    return f"""
+def series_to_binary(series, name):
+    numeric = strict_numeric(series, name)
+    levels = sorted(pd.Series(numeric.dropna().unique()).tolist())
+    if levels != [0, 1]:
+        raise RuntimeError(f"{{name}} must be binary, got {{levels}}")
+    return numeric
+
+treatment = series_to_binary(df[exposure_column], exposure_column)
+outcome = series_to_binary(df["death"], "death")
+df["_treatment"] = treatment
+df["_death"] = outcome
+fit_note = None
+if int(df.loc[complete_mask, "_treatment"].sum()) < 10:
+    fit_note = "too few treated"
+elif int((1 - df.loc[complete_mask, "_treatment"]).sum()) < 10:
+    fit_note = "too few untreated"
+if fit_note is None:
+    {fit_body}
+"""
+
+
+def test_binary_domain_guard_defers_sample_variation_to_authored_fit_gate(ra):
+    code = _binary_feasibility_script()
+    findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+    target = [
+        finding
+        for finding in findings
+        if (finding.detail or {}).get("reason")
+        == "binary_domain_preempts_authored_feasibility"
+    ]
+
+    repaired, repair_names = deterministic_concept_audit_repair(
+        code,
+        [finding.message for finding in target],
+        repair_findings=target,
+    )
+
+    assert len(target) == 1
+    assert repair_names == ["binary_domain_authored_feasibility_v1"]
+    assert "if not set(levels).issubset({0, 1}):" in repaired
+    assert not any(
+        (finding.detail or {}).get("reason")
+        == "binary_domain_preempts_authored_feasibility"
+        for finding in audit_mechanical_code_contracts(repaired, _figure_step(ra))
+    )
+
+
+def test_binary_domain_guard_is_not_relaxed_without_two_group_fit_gate(ra):
+    code = _binary_feasibility_script(with_fit_gate=False)
+
+    assert not any(
+        (finding.detail or {}).get("reason")
+        == "binary_domain_preempts_authored_feasibility"
+        for finding in audit_mechanical_code_contracts(code, _figure_step(ra))
+    )
+
+
+def test_mechanical_preflight_repairs_unreduced_boolean_mask_count(ra):
+    code = """
+import pandas as pd
+
+original = pd.Series([1.0, float("inf"), None])
+coerced = pd.to_numeric(original, errors="coerce").where(lambda s: s != float("inf"))
+invalid_n = int(
+    original.notna() & coerced.isna()
+)
+if invalid_n > 0:
+    detected = True
+else:
+    detected = False
+"""
+    findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+    messages = [
+        finding.detail.get("reason")
+        for finding in findings
+        if finding.detail
+        and finding.detail.get("reason") == "scalar_cast_before_reduction"
+    ]
+
+    repaired, repair_names = deterministic_concept_audit_repair(code, messages)
+    repaired_again, repair_names_again = deterministic_concept_audit_repair(
+        repaired, messages
+    )
+    namespace = {}
+    exec(repaired, namespace)
+
+    assert messages == ["scalar_cast_before_reduction"]
+    assert repair_names == ["scalar_cast_before_reduction_v1"]
+    assert repair_names_again == []
+    assert repaired_again == repaired
+    assert namespace["invalid_n"] == 1
+    assert namespace["detected"] is True
+
+
+def test_mechanical_preflight_repairs_inverted_right_mask_reduction(ra):
+    code = """
+import numpy as np
+import pandas as pd
+
+frame = pd.DataFrame({"stage": [0.0, np.inf, np.nan]})
+stage = pd.to_numeric(frame["stage"], errors="coerce")
+invalid_stage_counts = {
+    "nonfinite_n": int(
+        frame["stage"].notna()
+        & ~np.isfinite(stage.to_numpy(dtype=float))
+        .sum()
+    )
+}
+if invalid_stage_counts["nonfinite_n"] > 0:
+    detected = True
+else:
+    detected = False
+"""
+    findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+    messages = [
+        finding.detail.get("reason")
+        for finding in findings
+        if finding.detail
+        and finding.detail.get("reason") == "scalar_cast_before_reduction"
+    ]
+
+    repaired, repair_names = deterministic_concept_audit_repair(code, messages)
+    namespace = {}
+    exec(repaired, namespace)
+
+    assert messages == ["scalar_cast_before_reduction"]
+    assert repair_names == ["scalar_cast_before_reduction_v1"]
+    assert namespace["invalid_stage_counts"]["nonfinite_n"] == 1
+    assert namespace["detected"] is True
+    assert not any(
+        finding.detail
+        and finding.detail.get("reason") == "scalar_cast_before_reduction"
+        for finding in audit_mechanical_code_contracts(repaired, _figure_step(ra))
+    )
+
+
+def test_mechanical_preflight_repairs_uniquely_bound_left_mask_alias(ra):
+    code = """
+import numpy as np
+import pandas as pd
+
+values = pd.Series([1.0, np.inf, np.nan])
+authoritative_nonmissing = values.notna()
+invalid_nonfinite = int(
+    authoritative_nonmissing
+    & ~np.isfinite(values.to_numpy(dtype=float))
+    .sum()
+)
+if invalid_nonfinite > 0:
+    detected = True
+else:
+    detected = False
+"""
+    findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+    messages = [
+        finding.detail.get("reason")
+        for finding in findings
+        if finding.detail
+        and finding.detail.get("reason") == "scalar_cast_before_reduction"
+    ]
+
+    repaired, repair_names = deterministic_concept_audit_repair(code, messages)
+    namespace = {}
+    exec(repaired, namespace)
+
+    assert messages == ["scalar_cast_before_reduction"]
+    assert repair_names == ["scalar_cast_before_reduction_v1"]
+    assert namespace["invalid_nonfinite"] == 1
+    assert namespace["detected"] is True
+    assert not any(
+        finding.detail
+        and finding.detail.get("reason") == "scalar_cast_before_reduction"
+        for finding in audit_mechanical_code_contracts(repaired, _figure_step(ra))
+    )
+
+
+def test_mechanical_preflight_does_not_repair_rebound_mask_alias(ra):
+    code = """
+import numpy as np
+import pandas as pd
+
+values = pd.Series([1.0, np.inf, np.nan])
+authoritative_nonmissing = values.notna()
+authoritative_nonmissing = custom_mask
+invalid_nonfinite = int(
+    authoritative_nonmissing
+    & ~np.isfinite(values.to_numpy(dtype=float))
+    .sum()
+)
+"""
+    findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+    repaired, repair_names = deterministic_concept_audit_repair(
+        code, ["scalar_cast_before_reduction"]
+    )
+
+    assert not any(
+        finding.detail
+        and finding.detail.get("reason") == "scalar_cast_before_reduction"
+        for finding in findings
+    )
+    assert repair_names == []
+    assert repaired == code
+
+
+@pytest.mark.parametrize(
+    "shadowing",
+    [
+        "def authoritative_nonmissing():\n    return custom_mask",
+        "from custom_masks import authoritative_nonmissing",
+        "globals()['authoritative_nonmissing'] = custom_mask",
+    ],
+    ids=["function-binding", "import-binding", "dynamic-namespace"],
+)
+def test_mechanical_preflight_does_not_repair_shadowed_mask_alias(ra, shadowing):
+    code = f"""
+import numpy as np
+import pandas as pd
+
+values = pd.Series([1.0, np.inf, np.nan])
+authoritative_nonmissing = values.notna()
+{shadowing}
+invalid_nonfinite = int(
+    authoritative_nonmissing
+    & ~np.isfinite(values.to_numpy(dtype=float))
+    .sum()
+)
+"""
+    findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+    repaired, repair_names = deterministic_concept_audit_repair(
+        code, ["scalar_cast_before_reduction"]
+    )
+
+    assert not any(
+        finding.detail
+        and finding.detail.get("reason") == "scalar_cast_before_reduction"
+        for finding in findings
+    )
+    assert repair_names == []
+    assert repaired == code
+
+
+def test_mechanical_preflight_repairs_composite_mask_with_array_value_alias(ra):
+    code = """
+import numpy as np
+import pandas as pd
+
+values = pd.Series([1.0, np.inf, -1.0, 1.5, np.nan])
+nonmissing = values.notna()
+array_values = values.to_numpy(dtype=float)
+invalid_n = int(
+    nonmissing
+    & (
+        ~np.isfinite(array_values)
+        | (array_values < 0)
+        | (array_values != np.floor(array_values))
+    )
+)
+if invalid_n != 0:
+    detected = True
+else:
+    detected = False
+"""
+    findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+    messages = [
+        finding.detail.get("reason")
+        for finding in findings
+        if finding.detail
+        and finding.detail.get("reason") == "scalar_cast_before_reduction"
+    ]
+    repaired, repair_names = deterministic_concept_audit_repair(code, messages)
+    namespace = {}
+    exec(repaired, namespace)
+
+    assert messages == ["scalar_cast_before_reduction"]
+    assert repair_names == ["scalar_cast_before_reduction_v1"]
+    assert namespace["invalid_n"] == 3
+    assert namespace["detected"] is True
+
+
+def test_mechanical_preflight_does_not_move_scalar_right_reduction(ra):
+    code = """
+left = True
+right = 2
+count = int(left & ~right.sum())
+"""
+
+    findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+    repaired, repair_names = deterministic_concept_audit_repair(
+        code,
+        ["scalar_cast_before_reduction"],
+    )
+
+    assert not any(
+        finding.detail
+        and finding.detail.get("reason") == "scalar_cast_before_reduction"
+        for finding in findings
+    )
+    assert repair_names == []
+    assert repaired == code
+
+
+def test_mechanical_preflight_does_not_rewrite_scalar_bitwise_integer_guard(ra):
+    code = """
+left = True
+right = False
+invalid_n = int(left & right)
+if invalid_n > 0:
+    raise RuntimeError("invalid")
+"""
+    findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+    repaired, repair_names = deterministic_concept_audit_repair(
+        code,
+        ["scalar_cast_before_reduction"],
+    )
+
+    assert not any(
+        finding.detail
+        and finding.detail.get("reason") == "scalar_cast_before_reduction"
+        for finding in findings
+    )
+    assert repair_names == []
+    assert repaired == code
+
+
+def test_mechanical_preflight_does_not_guess_unproven_boolean_mask_intent(ra):
+    code = """
+def encode(original, coerced):
+    return int(original.notna() & coerced.isna())
+"""
+    findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+    repaired, repair_names = deterministic_concept_audit_repair(
+        code,
+        ["scalar_cast_before_reduction"],
+    )
+
+    assert not any(
+        finding.detail
+        and finding.detail.get("reason") == "scalar_cast_before_reduction"
+        for finding in findings
+    )
+    assert repair_names == []
+    assert repaired == code
 
 
 def test_mechanical_preflight_preserves_shadowed_int_before_sum(ra):
@@ -849,6 +1494,292 @@ model.fit(frame)
     findings = audit_mechanical_code_contracts(code, _figure_step(ra))
 
     assert not any(
+        finding.detail
+        and finding.detail.get("reason") == "provenance_audit_not_fail_closed"
+        for finding in findings
+    )
+
+
+def test_mechanical_preflight_accepts_self_raising_provenance_helper_assignment(ra):
+    code = """
+def fail(message):
+    raise RuntimeError(message)
+
+def provenance_audit(frame):
+    invalid_pair_n = int(frame['invalid_pair'].sum())
+    discordant_n = int(frame['discordant'].sum())
+    checks = [{
+        'role': 'audit_only',
+        'invalid_pair_n': invalid_pair_n,
+        'discordant_n': discordant_n,
+    }]
+    if invalid_pair_n > 0 or discordant_n > 0:
+        fail('invalid measurement provenance')
+    return {'checks': checks}
+
+def main(frame):
+    audit = provenance_audit(frame)
+    if not audit or not audit.get('checks'):
+        fail('measurement provenance audit returned no checks')
+    model.fit(frame)
+
+main(frame)
+"""
+    findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+
+    assert not any(
+        finding.detail
+        and finding.detail.get("reason") == "provenance_audit_not_fail_closed"
+        for finding in findings
+    )
+
+
+def test_mechanical_preflight_accepts_proven_unavailable_provenance_branch(ra):
+    code = """
+def provenance_audit(frame):
+    measured_column = 'measured'
+    count_column = 'count'
+    measured = frame[measured_column]
+    count_exists = count_column in frame.columns
+    measured_numeric = pd.to_numeric(measured, errors='coerce')
+    measured_invalid = (
+        measured.notna()
+        & (measured_numeric.isna()
+           | ~np.isfinite(measured_numeric.to_numpy(dtype=float))
+           | ~measured_numeric.isin([0, 1]))
+    )
+    if not count_exists:
+        check = {
+            'measured_column': measured_column,
+            'count_column': count_column,
+            'status': 'unavailable',
+            'invalid_pair_n': None,
+            'discordant_n': None,
+            'role': 'audit_only',
+        }
+        if bool(measured_invalid.any()):
+            raise RuntimeError('invalid measured flag')
+        return {'checks': [check]}
+    invalid_pair_n = int(measured_invalid.sum())
+    discordant_n = int((measured_numeric != (frame[count_column] > 0)).sum())
+    check = {
+        'measured_column': measured_column,
+        'count_column': count_column,
+        'status': 'checked',
+        'invalid_pair_n': invalid_pair_n,
+        'discordant_n': discordant_n,
+        'role': 'audit_only',
+    }
+    if invalid_pair_n or discordant_n:
+        raise RuntimeError('invalid measurement provenance')
+    return {'checks': [check]}
+
+audit = provenance_audit(frame)
+if not audit.get('checks'):
+    raise RuntimeError('missing audit checks')
+model.fit(frame)
+"""
+    findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+
+    assert not any(
+        finding.detail
+        and finding.detail.get("reason") == "provenance_audit_not_fail_closed"
+        for finding in findings
+    )
+
+
+def test_mechanical_preflight_rejects_early_branch_claiming_checked_audit(ra):
+    code = """
+def provenance_audit(frame, debug):
+    measured_column = 'measured'
+    count_column = 'count'
+    measured = frame[measured_column]
+    count_exists = count_column in frame.columns
+    measured_numeric = pd.to_numeric(measured, errors='coerce')
+    measured_invalid = measured.notna() & measured_numeric.isna()
+    if not count_exists:
+        check = {
+            'measured_column': measured_column,
+            'count_column': count_column,
+            'status': 'checked',
+            'invalid_pair_n': 0,
+            'discordant_n': 0,
+            'role': 'audit_only',
+        }
+        if debug:
+            raise RuntimeError('debug only')
+        return {'checks': [check]}
+    invalid_pair_n = int(measured_invalid.sum())
+    discordant_n = int((measured_numeric != (frame[count_column] > 0)).sum())
+    check = {
+        'measured_column': measured_column,
+        'count_column': count_column,
+        'status': 'checked',
+        'invalid_pair_n': invalid_pair_n,
+        'discordant_n': discordant_n,
+        'role': 'audit_only',
+    }
+    if invalid_pair_n or discordant_n:
+        raise RuntimeError('invalid measurement provenance')
+    return {'checks': [check]}
+
+provenance_audit(frame, debug)
+model.fit(frame)
+"""
+    findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+
+    assert any(
+        finding.detail
+        and finding.detail.get("reason") == "provenance_audit_not_fail_closed"
+        for finding in findings
+    )
+
+
+def test_mechanical_preflight_accepts_immediately_returned_provenance_audit_row(ra):
+    code = """
+def fail(message):
+    raise RuntimeError(message)
+
+def provenance_audit(frame):
+    invalid_pair_n = int(frame['invalid_pair'].sum())
+    discordant_n = int(frame['discordant'].sum())
+    if invalid_pair_n > 0 or discordant_n > 0:
+        fail('invalid measurement provenance')
+    return {'checks': [{
+        'role': 'audit_only',
+        'invalid_pair_n': invalid_pair_n,
+        'discordant_n': discordant_n,
+    }]}
+
+def main(frame):
+    audit = provenance_audit(frame)
+    if not audit or not audit.get('checks'):
+        fail('measurement provenance audit returned no checks')
+    model.fit(frame)
+
+main(frame)
+"""
+    findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+
+    assert not any(
+        finding.detail
+        and finding.detail.get("reason") == "provenance_audit_not_fail_closed"
+        for finding in findings
+    )
+
+
+def test_mechanical_preflight_accepts_separate_complete_provenance_guards(ra):
+    code = """
+def fail(message):
+    raise RuntimeError(message)
+
+def main(frame):
+    invalid_pair_n = int(frame['invalid_pair'].sum())
+    discordant_n = int(frame['discordant'].sum())
+    if invalid_pair_n > 0:
+        fail('invalid measurement-provenance pairs')
+    if discordant_n > 0:
+        fail('discordant measurement-provenance pairs')
+    checks = [{
+        'role': 'audit_only',
+        'invalid_pair_n': int(invalid_pair_n),
+        'discordant_n': int(discordant_n),
+    }]
+    model.fit(frame)
+
+main(frame)
+"""
+    findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+
+    assert not any(
+        finding.detail
+        and finding.detail.get("reason") == "provenance_audit_not_fail_closed"
+        for finding in findings
+    )
+
+
+def test_mechanical_preflight_rejects_incomplete_separate_provenance_guards(ra):
+    code = """
+def fail(message):
+    raise RuntimeError(message)
+
+def main(frame):
+    invalid_pair_n = int(frame['invalid_pair'].sum())
+    discordant_n = int(frame['discordant'].sum())
+    if invalid_pair_n > 0:
+        fail('invalid measurement-provenance pairs')
+    checks = [{
+        'role': 'audit_only',
+        'invalid_pair_n': int(invalid_pair_n),
+        'discordant_n': int(discordant_n),
+    }]
+    model.fit(frame)
+
+main(frame)
+"""
+    findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+
+    assert any(
+        finding.detail
+        and finding.detail.get("reason") == "provenance_audit_not_fail_closed"
+        for finding in findings
+    )
+
+
+def test_mechanical_preflight_rejects_rebound_returned_provenance_count(ra):
+    code = """
+def fail(message):
+    raise RuntimeError(message)
+
+def provenance_audit(frame):
+    invalid_pair_n = int(frame['invalid_pair'].sum())
+    discordant_n = int(frame['discordant'].sum())
+    invalid_pair_n = 0
+    if invalid_pair_n > 0 or discordant_n > 0:
+        fail('invalid measurement provenance')
+    return {'checks': [{
+        'role': 'audit_only',
+        'invalid_pair_n': invalid_pair_n,
+        'discordant_n': discordant_n,
+    }]}
+
+audit = provenance_audit(frame)
+model.fit(frame)
+"""
+    findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+
+    assert any(
+        finding.detail
+        and finding.detail.get("reason") == "provenance_audit_not_fail_closed"
+        for finding in findings
+    )
+
+
+def test_mechanical_preflight_rejects_nonterminal_provenance_fail_helper(ra):
+    code = """
+def fail(message):
+    if strict:
+        raise RuntimeError(message)
+    return None
+
+def provenance_audit(frame):
+    invalid_pair_n = int(frame['invalid_pair'].sum())
+    discordant_n = int(frame['discordant'].sum())
+    checks = [{
+        'role': 'audit_only',
+        'invalid_pair_n': invalid_pair_n,
+        'discordant_n': discordant_n,
+    }]
+    if invalid_pair_n > 0 or discordant_n > 0:
+        fail('invalid measurement provenance')
+    return {'checks': checks}
+
+audit = provenance_audit(frame)
+model.fit(frame)
+"""
+    findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+
+    assert any(
         finding.detail
         and finding.detail.get("reason") == "provenance_audit_not_fail_closed"
         for finding in findings
@@ -1155,6 +2086,231 @@ main(frame)
     findings = audit_mechanical_code_contracts(code, _figure_step(ra))
 
     assert not any(
+        finding.detail
+        and finding.detail.get("reason") == "provenance_audit_not_fail_closed"
+        for finding in findings
+    )
+
+
+def test_mechanical_preflight_accepts_direct_host_shaped_provenance_guard(ra):
+    code = """
+def main(frame):
+    invalid_pair_n = int(frame['invalid_pair_n'])
+    discordant_n = int(frame['discordant_n'])
+    audit = {
+        'source': 'COHORT_PARQUET',
+        'checks': [{
+            'role': 'audit_only',
+            'status': 'checked',
+            'invalid_pair_n': invalid_pair_n,
+            'discordant_n': discordant_n,
+        }],
+    }
+    if invalid_pair_n > 0 or discordant_n > 0:
+        raise RuntimeError('invalid measurement provenance')
+    model.fit(frame)
+
+main(frame)
+"""
+    findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+
+    assert not any(
+        finding.detail
+        and finding.detail.get("reason") == "provenance_audit_not_fail_closed"
+        for finding in findings
+    )
+
+
+@pytest.mark.parametrize(
+    "call_site",
+    [
+        "checks.append(validate_provenance(frame))",
+        "record_check(result=validate_provenance(frame))",
+    ],
+    ids=["positional-argument", "keyword-argument"],
+)
+def test_mechanical_preflight_accepts_self_raising_provenance_call_as_eager_argument(
+    ra, call_site
+):
+    code = f"""
+def validate_provenance(frame):
+    invalid_pair_n = int(frame['measured'].isna().sum())
+    discordant_n = int((frame['measured'] != (frame['count'] > 0)).sum())
+    check = {{
+        'role': 'audit_only',
+        'invalid_pair_n': invalid_pair_n,
+        'discordant_n': discordant_n,
+    }}
+    if invalid_pair_n or discordant_n:
+        raise RuntimeError('invalid measurement provenance')
+    return check
+
+checks = []
+{call_site}
+model.fit(frame)
+"""
+
+    findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+
+    assert not any(
+        finding.detail
+        and finding.detail.get("reason") == "provenance_audit_not_fail_closed"
+        for finding in findings
+    )
+
+
+@pytest.mark.parametrize(
+    "call_site",
+    [
+        "if enabled:\n    checks.append(validate_provenance(frame))",
+        "callback = lambda: checks.append(validate_provenance(frame))",
+        (
+            "try:\n    checks.append(validate_provenance(frame))\n"
+            "except RuntimeError:\n    pass"
+        ),
+    ],
+    ids=["conditional", "lazy-lambda", "swallowed"],
+)
+def test_mechanical_preflight_rejects_non_direct_eager_argument_provenance_call(
+    ra, call_site
+):
+    code = f"""
+def validate_provenance(frame):
+    invalid_pair_n = int(frame['measured'].isna().sum())
+    discordant_n = int((frame['measured'] != (frame['count'] > 0)).sum())
+    check = {{
+        'role': 'audit_only',
+        'invalid_pair_n': invalid_pair_n,
+        'discordant_n': discordant_n,
+    }}
+    if invalid_pair_n or discordant_n:
+        raise RuntimeError('invalid measurement provenance')
+    return check
+
+checks = []
+{call_site}
+model.fit(frame)
+"""
+
+    findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+
+    assert any(
+        finding.detail
+        and finding.detail.get("reason") == "provenance_audit_not_fail_closed"
+        for finding in findings
+    )
+
+
+def test_mechanical_preflight_accepts_self_raising_provenance_call_in_covered_loop(
+    ra,
+):
+    code = """
+def validate_provenance(frame, measured_column, count_column):
+    invalid_pair_n = int(frame[measured_column].isna().sum())
+    discordant_n = int(
+        (frame[measured_column] != (frame[count_column] > 0)).sum()
+    )
+    check = {
+        'role': 'audit_only',
+        'invalid_pair_n': invalid_pair_n,
+        'discordant_n': discordant_n,
+    }
+    if invalid_pair_n or discordant_n:
+        raise RuntimeError('invalid measurement provenance')
+    return check
+
+def main(frame, stems, declared_columns):
+    checks = []
+    for stem in stems:
+        measured_column = f'{stem}_measured'
+        count_column = f'{stem}_n'
+        if measured_column not in declared_columns or count_column not in declared_columns:
+            raise ValueError('incomplete provenance pair')
+        checks.append(
+            validate_provenance(
+                frame,
+                measured_column=measured_column,
+                count_column=count_column,
+            )
+        )
+    if not checks:
+        raise RuntimeError('no completed provenance checks')
+    model.fit(frame)
+
+main(frame, stems, declared_columns)
+"""
+
+    findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+
+    assert not any(
+        finding.detail
+        and finding.detail.get("reason") == "provenance_audit_not_fail_closed"
+        for finding in findings
+    )
+
+
+@pytest.mark.parametrize(
+    "loop_or_guard",
+    [
+        """for stem in stems:
+        if enabled:
+            checks.append(validate_provenance(frame))
+    if not checks:
+        raise RuntimeError('no checks')""",
+        """for stem in stems:
+        checks.append(validate_provenance(frame))""",
+        """checks.append({'role': 'decoy'})
+    for stem in stems:
+        checks.append(validate_provenance(frame))
+    if not checks:
+        raise RuntimeError('no checks')""",
+        """for stem in stems:
+        checks.append(validate_provenance(frame))
+        model.fit(frame)
+    if not checks:
+        raise RuntimeError('no checks')""",
+        """for stem in stems:
+        checks.append(validate_provenance(frame))
+        if stop:
+            break
+    if not checks:
+        raise RuntimeError('no checks')""",
+    ],
+    ids=[
+        "conditional-append",
+        "missing-empty-guard",
+        "prepopulated-decoy",
+        "result-sink-before-full-coverage",
+        "break-before-full-coverage",
+    ],
+)
+def test_mechanical_preflight_rejects_uncovered_eager_argument_provenance_loop(
+    ra, loop_or_guard
+):
+    code = f"""
+def validate_provenance(frame):
+    invalid_pair_n = int(frame['measured'].isna().sum())
+    discordant_n = int((frame['measured'] != (frame['count'] > 0)).sum())
+    check = {{
+        'role': 'audit_only',
+        'invalid_pair_n': invalid_pair_n,
+        'discordant_n': discordant_n,
+    }}
+    if invalid_pair_n or discordant_n:
+        raise RuntimeError('invalid measurement provenance')
+    return check
+
+def main(frame, stems, enabled):
+    checks = []
+    {loop_or_guard}
+    model.fit(frame)
+
+main(frame, stems, enabled)
+"""
+
+    findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+
+    assert any(
         finding.detail
         and finding.detail.get("reason") == "provenance_audit_not_fail_closed"
         for finding in findings
@@ -1691,6 +2847,97 @@ model.fit(frame)
     findings = audit_mechanical_code_contracts(code, _figure_step(ra))
 
     assert not any(
+        finding.detail
+        and finding.detail.get("reason") == "provenance_audit_not_fail_closed"
+        for finding in findings
+    )
+
+
+def test_mechanical_preflight_allows_unrelated_literal_getattr_after_provenance(ra):
+    code = """
+def provenance_audit(frame):
+    invalid_pair_n = int(frame['measured'].isna().sum())
+    discordant_n = int((frame['measured'] != (frame['count'] > 0)).sum())
+    checks = [{'role': 'audit_only', 'invalid_pair_n': invalid_pair_n,
+               'discordant_n': discordant_n}]
+    if invalid_pair_n or discordant_n:
+        raise RuntimeError('invalid measurement provenance')
+
+provenance_audit(frame)
+iterations = getattr(model_result, "iterations", None)
+model.fit(frame)
+"""
+
+    findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+
+    assert not any(
+        finding.detail
+        and finding.detail.get("reason") == "provenance_audit_not_fail_closed"
+        for finding in findings
+    )
+
+
+def test_null_unavailable_receipt_does_not_create_numeric_guard_obligation(ra):
+    code = """
+from easyicu.research_agent.methods.descriptive_inputs import (
+    measurement_provenance_receipt,
+)
+
+checks = []
+if measured_column not in declared_columns or count_column not in declared_columns:
+    checks.append({
+        "role": "audit_only",
+        "status": "unavailable",
+        "invalid_pair_n": None,
+        "discordant_n": None,
+    })
+    raise ValueError("declared provenance pair is unavailable")
+checks.append(measurement_provenance_receipt(
+    frame,
+    measured_column=measured_column,
+    count_column=count_column,
+))
+iterations = getattr(model_result, "iterations", None)
+model.fit(frame)
+"""
+
+    findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+
+    assert not any(
+        finding.detail
+        and finding.detail.get("reason") == "provenance_audit_not_fail_closed"
+        for finding in findings
+    )
+
+
+@pytest.mark.parametrize(
+    "lookup",
+    [
+        "helper = getattr(holder, helper_name)",
+        'helper = getattr(holder, "provenance_audit")',
+    ],
+    ids=["dynamic-name", "protected-helper-name"],
+)
+def test_mechanical_preflight_rejects_getattr_that_can_select_provenance_helper(
+    ra, lookup
+):
+    code = f"""
+def provenance_audit(frame):
+    invalid_pair_n = int(frame['measured'].isna().sum())
+    discordant_n = int((frame['measured'] != (frame['count'] > 0)).sum())
+    checks = [{{'role': 'audit_only', 'invalid_pair_n': invalid_pair_n,
+               'discordant_n': discordant_n}}]
+    if invalid_pair_n or discordant_n:
+        raise RuntimeError('invalid measurement provenance')
+
+{lookup}
+helper(frame)
+model.fit(frame)
+"""
+
+    findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+
+    assert any(
         finding.detail
         and finding.detail.get("reason") == "provenance_audit_not_fail_closed"
         for finding in findings
@@ -2698,6 +3945,146 @@ model.fit(frame)
     )
 
 
+def test_provenance_preflight_does_not_treat_required_key_set_as_audit_row(ra):
+    code = """
+def normalise_receipt(receipt):
+    required = {
+        "invalid_pair_n",
+        "discordant_n",
+        "audit_only",
+    }
+    if not required.issubset(receipt):
+        raise ValueError("receipt fields missing")
+    return receipt
+
+normalise_receipt(receipt)
+"""
+
+    findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+
+    assert not any(
+        finding.detail
+        and finding.detail.get("reason") == "provenance_audit_not_fail_closed"
+        for finding in findings
+    )
+
+
+def test_provenance_preflight_defers_direct_host_receipt_to_host_gate(ra):
+    code = """
+from easyicu.research_agent.methods.descriptive_inputs import (
+    measurement_provenance_receipt,
+)
+
+def main(frame):
+    receipt = measurement_provenance_receipt(
+        frame,
+        measured_column="signal_measured",
+        count_column="signal_n",
+    )
+    checks = [{
+        "role": "audit_only",
+        "invalid_pair_n": receipt["invalid_pair_n"],
+        "discordant_n": receipt["discordant_n"],
+    }]
+    return {"checks": checks}
+
+main(frame)
+"""
+
+    findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+
+    assert not any(
+        finding.detail
+        and finding.detail.get("reason") == "provenance_audit_not_fail_closed"
+        for finding in findings
+    )
+
+
+def test_provenance_preflight_accepts_guard_immediately_before_audit_row(ra):
+    code = """
+def main(frame):
+    invalid_pair_n = int(frame["invalid"].sum())
+    discordant_n = int(frame["discordant"].sum())
+    if invalid_pair_n > 0 or discordant_n > 0:
+        raise RuntimeError("invalid provenance")
+    audit = {"checks": [{
+        "role": "audit_only",
+        "invalid_pair_n": invalid_pair_n,
+        "discordant_n": discordant_n,
+    }]}
+    model.fit(frame)
+    return audit
+
+main(frame)
+"""
+
+    findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+
+    assert not any(
+        finding.detail
+        and finding.detail.get("reason") == "provenance_audit_not_fail_closed"
+        for finding in findings
+    )
+
+
+def test_provenance_preflight_accepts_module_guard_before_audit_row(ra):
+    code = """
+def fail(message):
+    raise RuntimeError(message)
+
+def strict_numeric(values):
+    return pd.to_numeric(values, errors="coerce")
+
+frame = pd.read_parquet(path)
+measured = strict_numeric(frame["measured"])
+invalid_pair_n = int(measured.isna().sum())
+discordant_n = int((measured != (frame["count"] > 0)).sum())
+if invalid_pair_n > 0 or discordant_n > 0:
+    fail("invalid provenance")
+measurement_provenance_audit = {"checks": [{
+    "role": "audit_only",
+    "invalid_pair_n": invalid_pair_n,
+    "discordant_n": discordant_n,
+}]}
+model.fit(frame)
+"""
+
+    findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+
+    assert not any(
+        finding.detail
+        and finding.detail.get("reason") == "provenance_audit_not_fail_closed"
+        for finding in findings
+    )
+
+
+def test_provenance_preflight_requires_post_guard_audit_row_to_be_immediate(ra):
+    code = """
+def main(frame):
+    invalid_pair_n = int(frame["invalid"].sum())
+    discordant_n = int(frame["discordant"].sum())
+    if invalid_pair_n > 0 or discordant_n > 0:
+        raise RuntimeError("invalid provenance")
+    mutate_or_publish(frame)
+    audit = {"checks": [{
+        "role": "audit_only",
+        "invalid_pair_n": invalid_pair_n,
+        "discordant_n": discordant_n,
+    }]}
+    return audit
+
+main(frame)
+"""
+
+    findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+
+    assert any(
+        finding.detail
+        and finding.detail.get("reason") == "provenance_audit_not_fail_closed"
+        for finding in findings
+    )
+
+
 def test_mechanical_preflight_accepts_extra_monotonic_failure_appends(ra):
     code = """
 def provenance_audit(frame):
@@ -3162,6 +4549,68 @@ def run(frame):
         summary['status'] = 'failed_provenance_audit'
     write_analysis_cohort(frame[final_mask])
     summary['registered_outputs'] = {'artifact:analysis_cohort': 'cohort.parquet'}
+"""
+    findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+
+    assert any(
+        finding.detail
+        and finding.detail.get("reason") == "provenance_audit_not_fail_closed"
+        for finding in findings
+    )
+
+
+def test_mechanical_preflight_accepts_each_inline_provenance_row_guarded_in_loop(ra):
+    code = """
+def main(frame, pairs):
+    checks = []
+    for measured_column, count_column in pairs:
+        invalid_pair_n = int(frame[measured_column].isna().sum())
+        discordant_n = int(
+            (frame[measured_column] != (frame[count_column] > 0)).sum()
+        )
+        checks.append({
+            'role': 'audit_only',
+            'invalid_pair_n': invalid_pair_n,
+            'discordant_n': discordant_n,
+        })
+        if invalid_pair_n > 0 or discordant_n > 0:
+            raise RuntimeError('invalid measurement provenance')
+    model.fit(frame)
+
+if __name__ == '__main__':
+    main(frame, pairs)
+"""
+    findings = audit_mechanical_code_contracts(code, _figure_step(ra))
+
+    assert not any(
+        finding.detail
+        and finding.detail.get("reason") == "provenance_audit_not_fail_closed"
+        for finding in findings
+    )
+
+
+def test_mechanical_preflight_rejects_inline_loop_guard_after_continue(ra):
+    code = """
+def main(frame, pairs):
+    checks = []
+    for measured_column, count_column in pairs:
+        invalid_pair_n = int(frame[measured_column].isna().sum())
+        discordant_n = int(
+            (frame[measured_column] != (frame[count_column] > 0)).sum()
+        )
+        if should_skip(measured_column):
+            continue
+        checks.append({
+            'role': 'audit_only',
+            'invalid_pair_n': invalid_pair_n,
+            'discordant_n': discordant_n,
+        })
+        if invalid_pair_n > 0 or discordant_n > 0:
+            raise RuntimeError('invalid measurement provenance')
+    model.fit(frame)
+
+if __name__ == '__main__':
+    main(frame, pairs)
 """
     findings = audit_mechanical_code_contracts(code, _figure_step(ra))
 
@@ -5044,3 +6493,128 @@ def test_llm_concept_audit_cache_does_not_persist_transient_failures(
 
     assert cache.get(key) is None
     assert not cache.path.exists()
+
+
+def test_hardcoded_execution_cohort_count_uses_host_runtime_coordinate(ra):
+    step = ra.AnalysisStep(
+        step_id="cohort_summary",
+        intent="Summarize the exact locked execution cohort.",
+        inputs=["age"],
+        expected_outputs=["table:cohort_summary"],
+        method="descriptive_summary",
+    )
+    code = """\
+import os
+import pandas as pd
+
+cohort_path = os.environ["COHORT_PARQUET"]
+df = pd.read_parquet(cohort_path)
+locked_n = int(len(df))
+if locked_n != 94458:
+    raise ValueError("locked cohort row count mismatch")
+"""
+
+    findings = audit_mechanical_code_contracts(code, step)
+    row_findings = [
+        finding
+        for finding in findings
+        if (finding.detail or {}).get("reason")
+        == "execution_cohort_row_count_hardcoded"
+    ]
+
+    assert len(row_findings) == 1
+    repaired, names = deterministic_concept_audit_repair(
+        code,
+        [row_findings[0].message],
+        repair_findings=row_findings,
+    )
+    assert names == ["execution_cohort_runtime_row_count_v1"]
+    assert "94458" not in repaired
+    assert 'environ["EASYICU_COHORT_ROWS"]' in repaired
+    assert not any(
+        (finding.detail or {}).get("reason") == "execution_cohort_row_count_hardcoded"
+        for finding in audit_mechanical_code_contracts(repaired, step)
+    )
+
+
+def test_dynamic_execution_cohort_count_and_unrelated_table_constants_are_allowed(ra):
+    step = ra.AnalysisStep(
+        step_id="cohort_summary",
+        intent="Summarize the exact locked execution cohort.",
+        inputs=["age"],
+        expected_outputs=["table:cohort_summary"],
+        method="descriptive_summary",
+    )
+    code = """\
+import os
+import pandas as pd
+
+df = pd.read_parquet(os.environ["COHORT_PARQUET"])
+expected_n = int(os.environ["EASYICU_COHORT_ROWS"])
+if len(df) != expected_n:
+    raise ValueError("locked cohort row count mismatch")
+display_rows = [{"label": "n"}, {"label": "missing"}]
+if len(display_rows) != 2:
+    raise ValueError("display schema changed")
+"""
+
+    assert not any(
+        (finding.detail or {}).get("reason") == "execution_cohort_row_count_hardcoded"
+        for finding in audit_mechanical_code_contracts(code, step)
+    )
+
+
+def test_outbound_opaque_levels_bind_to_digest_verified_local_context(ra):
+    step = ra.AnalysisStep(
+        step_id="cohort_summary",
+        intent="Summarize a closed categorical distribution.",
+        inputs=["sex"],
+        expected_outputs=["table:cohort_summary"],
+        method="descriptive_summary",
+    )
+    code = """\
+sex_metadata = next(
+    variable for variable in context["variables"] if variable["name"] == "sex"
+)
+sex_levels = sex_metadata["observed_shape"]["opaque_levels"]
+"""
+
+    findings = audit_mechanical_code_contracts(code, step)
+    level_findings = [
+        finding
+        for finding in findings
+        if (finding.detail or {}).get("reason")
+        == "runtime_context_opaque_levels_projection"
+    ]
+
+    assert len(level_findings) == 1
+    repaired, names = deterministic_concept_audit_repair(
+        code,
+        [level_findings[0].message],
+        repair_findings=level_findings,
+    )
+    assert names == ["runtime_context_private_levels_v1"]
+    assert "sex_metadata['observed_domain']['levels']" in repaired
+    assert "Female" not in repaired
+    assert "Male" not in repaired
+    assert not audit_mechanical_code_contracts(repaired, step)
+
+
+def test_runtime_context_level_bridge_does_not_rewrite_unrelated_shape_metadata(ra):
+    step = ra.AnalysisStep(
+        step_id="cohort_summary",
+        intent="Inspect a safe metadata projection.",
+        inputs=["sex"],
+        expected_outputs=["table:cohort_summary"],
+        method="descriptive_summary",
+    )
+    code = """\
+shape = variable["observed_shape"]["shape"]
+levels = variable["observed_domain"]["levels"]
+"""
+
+    assert not any(
+        (finding.detail or {}).get("reason")
+        == "runtime_context_opaque_levels_projection"
+        for finding in audit_mechanical_code_contracts(code, step)
+    )

@@ -9,9 +9,9 @@ from pathlib import Path
 import pandas as pd
 
 from easyicu.research_agent.audits.patterns import AnalysisPatternAuditor
-from easyicu.research_agent.agentic_coder import AgenticCoderAgent
-from easyicu.research_agent.context import build_research_context
-from easyicu.research_agent.method_compatibility import (
+from easyicu.research_agent.agents.agentic_coder import AgenticCoderAgent
+from easyicu.research_agent.research_context.builder import build_research_context
+from easyicu.research_agent.gates.method_compatibility import (
     detect_forbidden_pattern_usage,
 )
 from easyicu.research_agent.schema import (
@@ -23,12 +23,13 @@ from easyicu.research_agent.schema import (
     TemporalConstraint,
     VariableRole,
 )
-from easyicu.research_agent.trajectory_contract import (
+from easyicu.research_agent.trajectory.contract import (
     TRAJECTORY_PHENOTYPING_REQUIRED_OUTPUTS,
     _stability_findings,
     infer_fixed_window_trajectory_metadata,
     trajectory_phenotyping_artifact_findings,
     trajectory_phenotyping_contract_applies,
+    trajectory_future_imputation_detected,
     trajectory_zero_imputation_detected,
 )
 from easyicu.research_agent.plan_utils import (
@@ -252,7 +253,9 @@ def test_trajectory_zero_imputation_is_error_for_literal_and_dynamic_selection()
     step = _clustering_step()
     for code in _scripts(zero_impute=True):
         violations = detect_forbidden_pattern_usage(code, context, step)
-        assert any(item["matched_patterns"] == ["zero_imputation"] for item in violations)
+        assert any(
+            item["matched_patterns"] == ["zero_imputation"] for item in violations
+        )
         errors = [
             finding
             for finding in AnalysisPatternAuditor().audit(
@@ -324,6 +327,38 @@ def test_unrelated_column_zero_fill_is_not_a_trajectory_error():
     )
     assert not trajectory_zero_imputation_detected(
         'X = df["age"]\nX = np.nan_to_num(X)',
+        trajectory_columns=["severity_state_h0_6"],
+    )
+
+
+def test_trajectory_future_looking_imputation_is_error():
+    context = _trajectory_context(fractional=True)
+    step = _clustering_step()
+    for code in (
+        'cols = ["severity_state_h0_6", "severity_state_h6_12"]\n'
+        "X = df[cols].bfill()",
+        'cols = ["severity_state_h0_6", "severity_state_h6_12"]\n'
+        'X = df[cols].fillna(method="backfill")',
+        'cols = ["severity_state_h0_6", "severity_state_h6_12"]\n'
+        "X = df[cols].interpolate()",
+    ):
+        assert trajectory_future_imputation_detected(
+            code,
+            trajectory_columns=["severity_state_h0_6", "severity_state_h6_12"],
+        )
+        findings = AnalysisPatternAuditor().audit(
+            context=context,
+            script_text=code,
+            step=step,
+        )
+        assert any(
+            finding.detail.get("kind") == "trajectory_future_imputation"
+            and finding.severity == "error"
+            for finding in findings
+        )
+
+    assert not trajectory_future_imputation_detected(
+        'cols = ["severity_state_h0_6"]\nX = df[cols].ffill()',
         trajectory_columns=["severity_state_h0_6"],
     )
 
@@ -456,7 +491,15 @@ def _write_truthful_bundle(tmp_path: Path):
         {
             "stay_id": [1, 2, 3, 4, 5, 6, 7],
             "severity_h0_6": [0.0, 0.5, 1.0, 5.0, 5.5, 6.0, float("nan")],
-            "severity_h6_12": [1.0, 1.5, float("nan"), 6.0, 6.5, float("nan"), float("nan")],
+            "severity_h6_12": [
+                1.0,
+                1.5,
+                float("nan"),
+                6.0,
+                6.5,
+                float("nan"),
+                float("nan"),
+            ],
             "severity_h12_18": [2.0, 2.5, 3.0, 7.0, 7.5, 8.0, float("nan")],
             "death": [0, 0, 0, 1, 1, 1, 1],
         }
@@ -523,7 +566,9 @@ def _write_truthful_bundle(tmp_path: Path):
             "observed_window_count": observed,
             "meets_min_observed_windows": included,
             "included_in_clustering": included,
-            "exclusion_reason": ["" if value else "below_minimum" for value in included],
+            "exclusion_reason": [
+                "" if value else "below_minimum" for value in included
+            ],
         }
     ).to_csv(out_dir / "trajectory_membership.csv", index=False)
     assignments = pd.DataFrame(
@@ -603,9 +648,7 @@ def _write_truthful_bundle(tmp_path: Path):
     pd.DataFrame(stability_assignment_rows).to_csv(
         out_dir / "cluster_stability_assignments.csv", index=False
     )
-    pd.DataFrame(stability_rows).to_csv(
-        out_dir / "cluster_stability.csv", index=False
-    )
+    pd.DataFrame(stability_rows).to_csv(out_dir / "cluster_stability.csv", index=False)
 
     outcome_rows = []
     for cluster, group in merged.groupby("cluster"):
@@ -778,9 +821,10 @@ def test_outcome_artifact_is_conditional_on_agent_plan(tmp_path: Path):
         no_outcome_step,
     )
     (out_dir / "outcome_by_cluster.csv").unlink()
-    assert _artifact_errors(
-        (context, cohort_path, no_outcome_step, out_dir, summary)
-    ) == []
+    assert (
+        _artifact_errors((context, cohort_path, no_outcome_step, out_dir, summary))
+        == []
+    )
 
     errors = _artifact_errors((context, cohort_path, step, out_dir, summary))
     assert errors[0].detail["kind"] == "missing_trajectory_artifacts"
@@ -789,15 +833,11 @@ def test_outcome_artifact_is_conditional_on_agent_plan(tmp_path: Path):
 def test_cluster_selection_manifest_rejects_forged_or_thin_evidence(tmp_path: Path):
     mutations = (
         (
-            lambda payload: payload.update(
-                {"candidates": payload["candidates"][:1]}
-            ),
+            lambda payload: payload.update({"candidates": payload["candidates"][:1]}),
             "invalid_cluster_selection_manifest",
         ),
         (
-            lambda payload: payload["candidates"][2].update(
-                {"criterion_value": 90.0}
-            ),
+            lambda payload: payload["candidates"][2].update({"criterion_value": 90.0}),
             "cluster_selection_replay_mismatch",
         ),
         (
@@ -865,7 +905,11 @@ def test_forged_cluster_size_profile_outcome_and_stability_are_caught(
         ("cluster_sizes.csv", "n", "cluster_sizes_mismatch"),
         ("trajectory_profiles.csv", "value", "trajectory_profiles_mismatch"),
         ("outcome_by_cluster.csv", "event_n", "outcome_by_cluster_replay_mismatch"),
-        ("cluster_stability.csv", "adjusted_rand_index", "cluster_stability_replay_mismatch"),
+        (
+            "cluster_stability.csv",
+            "adjusted_rand_index",
+            "cluster_stability_replay_mismatch",
+        ),
     )
     for index, (filename, column, expected_kind) in enumerate(mutations):
         case_dir = tmp_path / f"case_{index}"
@@ -951,18 +995,21 @@ def test_stability_resample_may_omit_a_rare_declared_cluster():
             }
         )
 
-    assert _stability_findings(
-        step=AnalysisStep(
-            step_id="phenotyping",
-            intent="Assess agent-planned phenotyping stability.",
-        ),
-        id_column="stay_id",
-        method="agent_selected_method",
-        n_clusters=3,
-        cluster_by_id=cluster_by_id,
-        stability=pd.DataFrame(summary_rows),
-        stability_assignments=pd.DataFrame(assignment_rows),
-    ) == []
+    assert (
+        _stability_findings(
+            step=AnalysisStep(
+                step_id="phenotyping",
+                intent="Assess agent-planned phenotyping stability.",
+            ),
+            id_column="stay_id",
+            method="agent_selected_method",
+            n_clusters=3,
+            cluster_by_id=cluster_by_id,
+            stability=pd.DataFrame(summary_rows),
+            stability_assignments=pd.DataFrame(assignment_rows),
+        )
+        == []
+    )
 
 
 def test_duplicate_or_extra_size_and_flow_rows_are_rejected(tmp_path: Path):

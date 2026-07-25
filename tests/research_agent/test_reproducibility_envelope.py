@@ -20,14 +20,13 @@ from pathlib import Path
 
 import pytest
 
-
 # ---------------------------------------------------------------------------
 # ReproEnvelope unit tests
 # ---------------------------------------------------------------------------
 
 
 def test_sha256_messages_is_deterministic_across_calls(ra):
-    from easyicu.research_agent.llm import LLMMessage
+    from easyicu.research_agent.providers.llm import LLMMessage
     from easyicu.research_agent.replication.envelope import sha256_messages
 
     msgs = [
@@ -41,7 +40,7 @@ def test_sha256_messages_is_deterministic_across_calls(ra):
 
 
 def test_sha256_messages_changes_on_content_change(ra):
-    from easyicu.research_agent.llm import LLMMessage
+    from easyicu.research_agent.providers.llm import LLMMessage
     from easyicu.research_agent.replication.envelope import sha256_messages
 
     base = [LLMMessage(role="user", content="plan the analysis")]
@@ -50,7 +49,7 @@ def test_sha256_messages_changes_on_content_change(ra):
 
 
 def test_recording_client_records_prompt_and_response_hashes(ra):
-    from easyicu.research_agent.llm import LLMMessage
+    from easyicu.research_agent.providers.llm import LLMMessage
 
     class _Stub:
         name = "stub"
@@ -73,14 +72,15 @@ def test_recording_client_records_prompt_and_response_hashes(ra):
     assert rec.temperature == 0.1
     assert rec.max_tokens == 32
     assert rec.requested_seed is None
-    assert rec.prompt_sha256 == hashlib.sha256(
-        f"<<<user>>>\n{msg.content}".encode("utf-8")
-    ).hexdigest()
+    assert (
+        rec.prompt_sha256
+        == hashlib.sha256(f"<<<user>>>\n{msg.content}".encode("utf-8")).hexdigest()
+    )
     assert rec.response_sha256 == hashlib.sha256(out.encode("utf-8")).hexdigest()
 
 
 def test_recording_client_forwards_seed_when_inner_accepts_it(ra):
-    from easyicu.research_agent.llm import LLMMessage
+    from easyicu.research_agent.providers.llm import LLMMessage
 
     observed = {}
 
@@ -94,7 +94,10 @@ def test_recording_client_forwards_seed_when_inner_accepts_it(ra):
 
     env = ra.ReproEnvelope(run_id="run-seed")
     recorder = ra.ReproRecordingClient(
-        _WithSeed(), role="coder", envelope=env, seed=1234,
+        _WithSeed(),
+        role="coder",
+        envelope=env,
+        seed=1234,
     )
     out = recorder.complete([LLMMessage(role="user", content="go")])
     assert observed["seed"] == 1234
@@ -103,7 +106,7 @@ def test_recording_client_forwards_seed_when_inner_accepts_it(ra):
 
 
 def test_recording_client_records_top_p_when_caller_sets_it(ra):
-    from easyicu.research_agent.llm import LLMMessage
+    from easyicu.research_agent.providers.llm import LLMMessage
 
     observed = {}
 
@@ -111,9 +114,7 @@ def test_recording_client_records_top_p_when_caller_sets_it(ra):
         name = "with-top-p"
         _model = "topp-aware"
 
-        def complete(
-            self, messages, *, max_tokens=2048, temperature=0.2, top_p=None
-        ):
+        def complete(self, messages, *, max_tokens=2048, temperature=0.2, top_p=None):
             observed["top_p"] = top_p
             return "ok"
 
@@ -133,7 +134,7 @@ def test_recording_client_records_top_p_when_caller_sets_it(ra):
 
 
 def test_recording_client_records_provider_default_when_top_p_unset(ra):
-    from easyicu.research_agent.llm import LLMMessage
+    from easyicu.research_agent.providers.llm import LLMMessage
 
     class _NoTopP:
         name = "no-top-p"
@@ -154,8 +155,36 @@ def test_recording_client_records_provider_default_when_top_p_unset(ra):
     assert summary["requested_top_ps"] == []
 
 
+def test_recording_client_records_reasoning_effort_and_elapsed_time(ra):
+    from easyicu.research_agent.providers.llm import LLMMessage
+
+    class _EffortClient:
+        name = "effort-client"
+        _model = "effort-model"
+        _extra_body = {"reasoning": {"effort": "medium"}}
+
+        def complete(self, messages, *, max_tokens=2048, temperature=0.2):
+            return "ok"
+
+    env = ra.ReproEnvelope(run_id="run-effort")
+    recorder = ra.ReproRecordingClient(
+        _EffortClient(),
+        role="planner",
+        envelope=env,
+    )
+    recorder.complete([LLMMessage(role="user", content="x")])
+
+    record = env.calls[0]
+    assert record.reasoning_effort == "medium"
+    assert record.elapsed_ms is not None and record.elapsed_ms >= 0
+    assert record.to_json()["reasoning_effort"] == "medium"
+    summary = env.to_manifest_summary()
+    assert summary["reasoning_efforts"] == ["medium"]
+    assert summary["recorded_elapsed_ms_total"] >= 0
+
+
 def test_recording_client_degrades_gracefully_for_clients_without_seed(ra):
-    from easyicu.research_agent.llm import LLMMessage
+    from easyicu.research_agent.providers.llm import LLMMessage
 
     class _NoSeed:
         name = "no-seed"
@@ -166,7 +195,10 @@ def test_recording_client_degrades_gracefully_for_clients_without_seed(ra):
 
     env = ra.ReproEnvelope(run_id="run-no-seed")
     recorder = ra.ReproRecordingClient(
-        _NoSeed(), role="writer", envelope=env, seed=42,
+        _NoSeed(),
+        role="writer",
+        envelope=env,
+        seed=42,
     )
     # Should not raise even though the inner client has no seed kwarg.
     out = recorder.complete([LLMMessage(role="user", content="go")])
@@ -176,8 +208,43 @@ def test_recording_client_degrades_gracefully_for_clients_without_seed(ra):
     assert env.calls[0].requested_seed == 42
 
 
+def test_recording_client_returns_usage_owned_by_the_same_call(ra):
+    from easyicu.research_agent.providers.llm import LLMMessage
+
+    class _WithCallUsage:
+        name = "call-usage"
+        _model = "usage-model"
+
+        def complete_with_usage(
+            self, messages, *, max_tokens=2048, temperature=0.2, seed=None
+        ):
+            assert seed == 77
+            return "ok", {
+                "prompt_tokens": 13,
+                "completion_tokens": 5,
+                "total_tokens": 18,
+            }
+
+    env = ra.ReproEnvelope(run_id="run-call-usage")
+    recorder = ra.ReproRecordingClient(
+        _WithCallUsage(), role="writer", envelope=env, seed=77
+    )
+    response, usage = recorder.complete_with_usage(
+        [LLMMessage(role="user", content="go")]
+    )
+
+    assert response == "ok"
+    assert usage == {
+        "prompt_tokens": 13,
+        "completion_tokens": 5,
+        "total_tokens": 18,
+    }
+    assert recorder.last_usage == usage
+    assert len(env.calls) == 1
+
+
 def test_manifest_summary_aggregates_by_role_and_model(ra):
-    from easyicu.research_agent.llm import LLMMessage
+    from easyicu.research_agent.providers.llm import LLMMessage
 
     class _A:
         name = "a"
@@ -214,7 +281,7 @@ def test_manifest_summary_aggregates_by_role_and_model(ra):
 
 
 def test_envelope_to_disk_roundtrips(ra, tmp_path):
-    from easyicu.research_agent.llm import LLMMessage
+    from easyicu.research_agent.providers.llm import LLMMessage
 
     class _C:
         name = "c"
@@ -304,9 +371,7 @@ def test_pipeline_without_envelope_stays_bit_identical_for_manifest_field(
     assert not (run_dir / "reproducibility_envelope.json").exists()
 
 
-def test_pipeline_envelope_composes_with_cost_tracking(
-    ra, synthetic_cohort, tmp_path
-):
+def test_pipeline_envelope_composes_with_cost_tracking(ra, synthetic_cohort, tmp_path):
     cohort_path = _write_cohort(synthetic_cohort, tmp_path)
     pipeline = ra.ResearchAgentPipeline(
         workdir=tmp_path / "out",

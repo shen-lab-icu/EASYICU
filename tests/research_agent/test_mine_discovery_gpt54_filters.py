@@ -5,7 +5,7 @@ from argparse import Namespace
 from pathlib import Path
 from types import ModuleType
 
-from easyicu.research_agent.idea_mining_funnel import (
+from easyicu.research_agent.discovery.idea_mining_funnel import (
     LiteratureFunnelSpec,
     build_literature_funnel_queries,
 )

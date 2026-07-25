@@ -12,6 +12,15 @@ import pandas as pd
 import pytest
 
 
+def test_run_result_has_one_dependency_neutral_contract_owner():
+    import easyicu.research_agent as research_agent
+    from easyicu.research_agent.contracts.runtime import RunResult as ContractRunResult
+    from easyicu.research_agent.execution.runner import RunResult as RunnerRunResult
+
+    assert research_agent.RunResult is ContractRunResult
+    assert RunnerRunResult is ContractRunResult
+
+
 def _is_python_executable(command: str) -> bool:
     return Path(command).name.startswith("python")
 
@@ -61,6 +70,204 @@ def test_runner_records_real_duration(ra, tmp_path: Path):
     assert 0 <= result.duration_seconds < 10
     log_text = (result.cwd / "run.log").read_text(encoding="utf-8")
     assert "duration_seconds:" in log_text
+
+
+def test_code_runner_exposes_current_cohort_row_count(ra, tmp_path: Path):
+    cohort_path = tmp_path / "cohort.parquet"
+    pd.DataFrame({"stay_id": [1, 2, 3], "death": [0, 1, 0]}).to_parquet(
+        cohort_path,
+        index=False,
+    )
+    runner = ra.CodeRunner(
+        workdir=tmp_path / "run",
+        cohort_parquet=cohort_path,
+        timeout_seconds=10,
+        network_policy="allow",
+        allow_unsafe_host_fallback=True,
+    )
+
+    result = runner.run(
+        step_id="cohort_rows",
+        code=(
+            "import os\n"
+            "from pathlib import Path\n"
+            "Path(os.environ['STEP_OUT_DIR'], 'rows.txt').write_text("
+            "os.environ['EASYICU_COHORT_ROWS'])\n"
+        ),
+    )
+
+    assert result.succeeded
+    assert (result.out_dir / "rows.txt").read_text(encoding="utf-8") == "3"
+
+
+def test_code_runner_never_collects_generated_output_symlinks(ra, tmp_path: Path):
+    cohort_path = tmp_path / "cohort.parquet"
+    pd.DataFrame({"stay_id": [1], "death": [0]}).to_parquet(cohort_path, index=False)
+    runner = ra.CodeRunner(
+        workdir=tmp_path / "run",
+        cohort_parquet=cohort_path,
+        timeout_seconds=10,
+        network_policy="allow",
+        allow_unsafe_host_fallback=True,
+    )
+    result = runner.run(
+        step_id="symlink_output",
+        code=(
+            "import os\n"
+            "from pathlib import Path\n"
+            "Path(os.environ['STEP_OUT_DIR'], 'forged.parquet').symlink_to("
+            "os.environ['COHORT_PARQUET'])\n"
+        ),
+    )
+
+    assert result.succeeded
+    assert all(path.name != "forged.parquet" for path in result.artefacts)
+    assert not (result.out_dir / "forged.parquet").exists()
+    assert cohort_path.is_file()
+
+
+def test_code_runner_control_writes_never_follow_planted_symlinks(ra, tmp_path: Path):
+    # The macOS sandbox lets generated code write anywhere under the step dir,
+    # and the step dir is reused across repair attempts. A prior attempt can
+    # therefore leave analysis.py / run.log as symlinks pointing at a host file
+    # outside the sandbox. The host must overwrite the *link* with a fresh
+    # regular file, never write through it onto the victim.
+    cohort_path = tmp_path / "cohort.parquet"
+    pd.DataFrame({"stay_id": [1], "death": [0]}).to_parquet(cohort_path, index=False)
+
+    victim = tmp_path / "victim_outside_sandbox.txt"
+    victim.write_text("must survive", encoding="utf-8")
+
+    workdir = tmp_path / "run"
+    step_dir = workdir / "steps" / "hostile"
+    step_dir.mkdir(parents=True)
+    planted_script = step_dir / "analysis.py"
+    planted_log = step_dir / "run.log"
+    planted_script.symlink_to(victim)
+    planted_log.symlink_to(victim)
+
+    runner = ra.CodeRunner(
+        workdir=workdir,
+        cohort_parquet=cohort_path,
+        timeout_seconds=10,
+        allow_unsafe_host_fallback=True,
+    )
+    result = runner.run(
+        step_id="hostile",
+        code=(
+            "import os\n"
+            "from pathlib import Path\n"
+            "Path(os.environ['STEP_OUT_DIR'], 'ok.txt').write_text('ok')\n"
+        ),
+    )
+
+    assert result.succeeded
+    # The victim host file was never written through either planted link.
+    assert victim.read_text(encoding="utf-8") == "must survive"
+    # Both control files are now real, single-hardlink regular files.
+    for control in (planted_script, planted_log):
+        assert control.is_file() and not control.is_symlink()
+        assert control.stat().st_nlink == 1
+    # And they hold their real content, not the victim's.
+    assert "STEP_OUT_DIR" in planted_script.read_text(encoding="utf-8")
+    assert "duration_seconds:" in planted_log.read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize("unsafe_value", ["false", "0", "no", 0, 1])
+def test_code_runner_rejects_non_bool_unsafe_host_fallback(
+    ra, tmp_path: Path, unsafe_value
+):
+    # bool("false") is True: a quoted config value must not silently enable
+    # unsafe host execution. Only True/False/None are accepted.
+    cohort_path = tmp_path / "cohort.parquet"
+    pd.DataFrame({"stay_id": [1]}).to_parquet(cohort_path, index=False)
+    with pytest.raises(TypeError, match="allow_unsafe_host_fallback"):
+        ra.CodeRunner(
+            workdir=tmp_path / "run",
+            cohort_parquet=cohort_path,
+            allow_unsafe_host_fallback=unsafe_value,
+        )
+
+
+def test_code_runner_authority_binds_extra_inputs_and_isolation(ra, tmp_path: Path):
+    cohort_path = tmp_path / "cohort.parquet"
+    pd.DataFrame({"stay_id": [1]}).to_parquet(cohort_path, index=False)
+    supplemental = tmp_path / "supplemental.csv"
+    supplemental.write_text("x\n1\n", encoding="utf-8")
+    first = ra.CodeRunner(
+        workdir=tmp_path / "run-a",
+        cohort_parquet=cohort_path,
+        python_executable=sys.executable,
+        extra_env={"SUPPLEMENTAL": str(supplemental)},
+        allow_unsafe_host_fallback=False,
+    )
+    first_identity = first.authority_identity_sha256
+
+    supplemental.write_text("x\n2\n", encoding="utf-8")
+    changed_input = ra.CodeRunner(
+        workdir=tmp_path / "run-b",
+        cohort_parquet=cohort_path,
+        python_executable=sys.executable,
+        extra_env={"SUPPLEMENTAL": str(supplemental)},
+        allow_unsafe_host_fallback=False,
+    )
+    changed_policy = ra.CodeRunner(
+        workdir=tmp_path / "run-c",
+        cohort_parquet=cohort_path,
+        python_executable=sys.executable,
+        extra_env={"SUPPLEMENTAL": str(supplemental)},
+        allow_unsafe_host_fallback=True,
+    )
+    input_dir = tmp_path / "input-dir"
+    input_dir.mkdir()
+    (input_dir / "value.txt").write_text("one", encoding="utf-8")
+    directory_before = ra.CodeRunner(
+        workdir=tmp_path / "run-d",
+        cohort_parquet=cohort_path,
+        python_executable=sys.executable,
+        extra_env={"INPUT_DIR": str(input_dir)},
+    ).authority_identity_sha256
+    (input_dir / "value.txt").write_text("two", encoding="utf-8")
+    directory_after = ra.CodeRunner(
+        workdir=tmp_path / "run-e",
+        cohort_parquet=cohort_path,
+        python_executable=sys.executable,
+        extra_env={"INPUT_DIR": str(input_dir)},
+    ).authority_identity_sha256
+
+    assert first_identity != changed_input.authority_identity_sha256
+    assert changed_input.authority_identity_sha256 != (
+        changed_policy.authority_identity_sha256
+    )
+    assert directory_before != directory_after
+
+
+def test_code_runner_authority_probe_failure_is_fail_closed(
+    ra,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    cohort_path = tmp_path / "cohort.parquet"
+    pd.DataFrame({"stay_id": [1]}).to_parquet(cohort_path, index=False)
+    runner = ra.CodeRunner(
+        workdir=tmp_path / "run",
+        cohort_parquet=cohort_path,
+        python_executable=sys.executable,
+    )
+    import easyicu.research_agent.execution.runner as runner_module
+
+    monkeypatch.setattr(
+        runner_module.subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(
+            returncode=1,
+            stdout="",
+            stderr="probe failed",
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="authority probe failed"):
+        _ = runner.authority_identity_sha256
 
 
 def test_code_runner_exposes_run_level_artifact_env(ra, tmp_path: Path):
@@ -128,7 +335,7 @@ def test_code_runner_exposes_digest_bound_current_authority_snapshot(
         code=(
             "import hashlib, json, os\n"
             "from pathlib import Path\n"
-            "from easyicu.research_agent.deterministic_robustness import (\n"
+            "from easyicu.research_agent.execution.runners.deterministic_robustness import (\n"
             "    _run_robustness_preflight_from_env,\n"
             ")\n"
             "path = Path(os.environ['EASYICU_RUN_ARTIFACT_AUTHORITY_SNAPSHOT'])\n"
@@ -297,7 +504,7 @@ def test_code_runner_scrubs_secrets_and_reports_filesystem_degradation(
 def test_code_runner_default_does_not_retry_failed_sandbox_on_host(
     ra, tmp_path: Path, monkeypatch
 ):
-    import easyicu.research_agent.runner as runner_mod
+    import easyicu.research_agent.execution.runner as runner_mod
 
     cohort_path = tmp_path / "cohort.parquet"
     pd.DataFrame({"stay_id": [1], "death": [0]}).to_parquet(cohort_path, index=False)
@@ -320,7 +527,7 @@ def test_code_runner_default_does_not_retry_failed_sandbox_on_host(
         ],
     )
     monkeypatch.setattr(runner_mod.sys, "platform", "darwin")
-    monkeypatch.setattr(runner_mod.subprocess, "run", _fake_run)
+    monkeypatch.setattr(runner_mod, "_run_capturing_with_descendant_reaping", _fake_run)
 
     result = runner.run(step_id="sandbox_abort", code="print('must not retry')\n")
 
@@ -334,7 +541,7 @@ def test_code_runner_default_does_not_retry_failed_sandbox_on_host(
 def test_code_runner_default_blocks_direct_host_execution(
     ra, tmp_path: Path, monkeypatch
 ):
-    import easyicu.research_agent.runner as runner_mod
+    import easyicu.research_agent.execution.runner as runner_mod
 
     cohort_path = tmp_path / "cohort.parquet"
     pd.DataFrame({"stay_id": [1], "death": [0]}).to_parquet(cohort_path, index=False)
@@ -345,8 +552,8 @@ def test_code_runner_default_blocks_direct_host_execution(
         lambda *, script_path: [runner.python_executable, str(script_path)],
     )
     monkeypatch.setattr(
-        runner_mod.subprocess,
-        "run",
+        runner_mod,
+        "_run_capturing_with_descendant_reaping",
         lambda *args, **kwargs: pytest.fail("generated code must not run on host"),
     )
 
@@ -446,6 +653,7 @@ def test_pipeline_runner_receives_target_outcome_env(ra, tmp_path: Path):
     pipeline = ra.ResearchAgentPipeline(
         workdir=tmp_path / "work",
         enable_memory=False,
+        runner_kind="subprocess",
     )
 
     runner = pipeline._build_runner(
@@ -457,7 +665,9 @@ def test_pipeline_runner_receives_target_outcome_env(ra, tmp_path: Path):
     assert runner.extra_env["OUTCOME_COL"] == "endpoint_x"
 
 
-def test_pipeline_runner_auto_discovers_trajectory_sibling(ra, tmp_path: Path):
+def test_pipeline_runner_does_not_discover_unstaged_trajectory_sibling(
+    ra, tmp_path: Path
+):
     cohort_path = tmp_path / "cohort.parquet"
     pd.DataFrame({"stay_id": [1], "endpoint_x": [0]}).to_parquet(
         cohort_path, index=False
@@ -467,24 +677,24 @@ def test_pipeline_runner_auto_discovers_trajectory_sibling(ra, tmp_path: Path):
     # sibling trajectory next to the universe
     (tmp_path / "universe_trajectory.parquet").write_bytes(b"x")
 
-    pipeline = ra.ResearchAgentPipeline(workdir=tmp_path / "work", enable_memory=False)
+    pipeline = ra.ResearchAgentPipeline(
+        workdir=tmp_path / "work",
+        enable_memory=False,
+        runner_kind="subprocess",
+    )
     runner = pipeline._build_runner(
         run_dir=tmp_path / "run",
         cohort_path=cohort_path,
         target_outcome="endpoint_x",
         universe_path=universe_path,
     )
-    assert runner.extra_env["TRAJECTORY_PARQUET"] == str(
-        tmp_path / "universe_trajectory.parquet"
-    )
+    assert "TRAJECTORY_PARQUET" not in runner.extra_env
 
 
-def test_materialise_cohort_carries_trajectory_sibling_then_runner_exposes_it(
+def test_materialise_cohort_does_not_copy_unverified_trajectory_sibling(
     ra, tmp_path: Path
 ):
-    # End-to-end of the staging fix: a universe parquet with a sibling
-    # trajectory, staged into the run_dir, must carry the trajectory so the
-    # runner's auto-discovery exposes TRAJECTORY_PARQUET.
+    # Cohort staging has no authority to discover/copy a mutable sibling.
     universe_dir = tmp_path / "universe"
     universe_dir.mkdir()
     src = universe_dir / "discovery_universe.parquet"
@@ -498,16 +708,7 @@ def test_materialise_cohort_carries_trajectory_sibling_then_runner_exposes_it(
     run_dir.mkdir()
     cohort_path = pipeline._materialise_cohort(src, run_dir)
 
-    assert (run_dir / "cohort_trajectory.parquet").exists()
-    runner = pipeline._build_runner(
-        run_dir=run_dir,
-        cohort_path=cohort_path,
-        target_outcome="aki",
-        universe_path=cohort_path,  # how pipeline_execute wires it
-    )
-    assert runner.extra_env["TRAJECTORY_PARQUET"] == str(
-        run_dir / "cohort_trajectory.parquet"
-    )
+    assert not (run_dir / "cohort_trajectory.parquet").exists()
 
 
 def test_pipeline_runner_no_trajectory_env_when_sibling_absent(ra, tmp_path: Path):
@@ -518,7 +719,11 @@ def test_pipeline_runner_no_trajectory_env_when_sibling_absent(ra, tmp_path: Pat
     universe_path = tmp_path / "universe.parquet"
     pd.DataFrame({"stay_id": [1]}).to_parquet(universe_path, index=False)
 
-    pipeline = ra.ResearchAgentPipeline(workdir=tmp_path / "work", enable_memory=False)
+    pipeline = ra.ResearchAgentPipeline(
+        workdir=tmp_path / "work",
+        enable_memory=False,
+        runner_kind="subprocess",
+    )
     runner = pipeline._build_runner(
         run_dir=tmp_path / "run",
         cohort_path=cohort_path,
@@ -528,7 +733,7 @@ def test_pipeline_runner_no_trajectory_env_when_sibling_absent(ra, tmp_path: Pat
     assert "TRAJECTORY_PARQUET" not in runner.extra_env
 
 
-def test_pipeline_runner_preserves_explicit_outcome_env_override(ra, tmp_path: Path):
+def test_pipeline_runner_rejects_explicit_outcome_env_override(ra, tmp_path: Path):
     cohort_path = tmp_path / "cohort.parquet"
     pd.DataFrame({"stay_id": [1], "endpoint_x": [0]}).to_parquet(
         cohort_path, index=False
@@ -539,13 +744,95 @@ def test_pipeline_runner_preserves_explicit_outcome_env_override(ra, tmp_path: P
         runner_kwargs={"extra_env": {"OUTCOME_COL": "manual_endpoint"}},
     )
 
-    runner = pipeline._build_runner(
-        run_dir=tmp_path / "run",
-        cohort_path=cohort_path,
-        target_outcome="endpoint_x",
+    with pytest.raises(ValueError, match="OUTCOME_COL"):
+        pipeline._build_runner(
+            run_dir=tmp_path / "run",
+            cohort_path=cohort_path,
+            target_outcome="endpoint_x",
+        )
+
+
+def test_pipeline_runner_rejects_universe_authority_override(ra, tmp_path: Path):
+    cohort_path = tmp_path / "cohort.parquet"
+    pd.DataFrame({"stay_id": [1], "endpoint_x": [0]}).to_parquet(
+        cohort_path, index=False
+    )
+    pipeline = ra.ResearchAgentPipeline(
+        workdir=tmp_path / "work",
+        enable_memory=False,
+        runner_kwargs={
+            "extra_env": {"EASYICU_UNIVERSE_PARQUET": str(tmp_path / "forged")}
+        },
     )
 
-    assert runner.extra_env["OUTCOME_COL"] == "manual_endpoint"
+    with pytest.raises(ValueError, match="EASYICU_UNIVERSE_PARQUET"):
+        pipeline._build_runner(
+            run_dir=tmp_path / "run",
+            cohort_path=cohort_path,
+            universe_path=cohort_path,
+        )
+
+
+def test_pipeline_runner_rejects_unsealed_typed_trajectory(ra, tmp_path: Path):
+    from easyicu.research_agent.intake.materialized_metadata import (
+        MaterializedCohortAuthorityRef,
+        MaterializedMetadataError,
+    )
+
+    cohort_path = tmp_path / "cohort.parquet"
+    pd.DataFrame({"stay_id": [1], "endpoint_x": [0]}).to_parquet(
+        cohort_path, index=False
+    )
+    (tmp_path / "cohort_trajectory.parquet").write_bytes(b"unsealed")
+    pipeline = ra.ResearchAgentPipeline(workdir=tmp_path / "work", enable_memory=False)
+
+    with pytest.raises(MaterializedMetadataError, match="exact sealed authority"):
+        pipeline._build_runner(
+            run_dir=tmp_path / "run",
+            cohort_path=cohort_path,
+            universe_path=cohort_path,
+            universe_is_typed=True,
+            universe_authority_ref=MaterializedCohortAuthorityRef(
+                file="materialized_authority.json",
+                sha256="1" * 64,
+                size=1,
+            ),
+            trajectory_path=tmp_path / "cohort_trajectory.parquet",
+        )
+
+
+def test_code_runner_rejects_host_owned_output_override(ra, tmp_path: Path):
+    cohort_path = tmp_path / "cohort.parquet"
+    pd.DataFrame({"stay_id": [1], "endpoint_x": [0]}).to_parquet(
+        cohort_path, index=False
+    )
+
+    with pytest.raises(ValueError, match="STEP_OUT_DIR"):
+        ra.CodeRunner(
+            workdir=tmp_path / "run",
+            cohort_parquet=cohort_path,
+            extra_env={"STEP_OUT_DIR": str(tmp_path / "forged")},
+        )
+
+
+@pytest.mark.parametrize(
+    "key",
+    ["COHORT_PARQUET=forged", "BAD-KEY", "9INVALID", "BAD\nKEY"],
+)
+def test_code_runner_rejects_invalid_extra_env_keys(
+    ra,
+    tmp_path: Path,
+    key: str,
+):
+    cohort_path = tmp_path / "cohort.parquet"
+    pd.DataFrame({"stay_id": [1]}).to_parquet(cohort_path, index=False)
+
+    with pytest.raises(ValueError, match="invalid environment key"):
+        ra.CodeRunner(
+            workdir=tmp_path / "run",
+            cohort_parquet=cohort_path,
+            extra_env={key: "yes"},
+        )
 
 
 def test_runner_retries_without_unshare_when_linux_namespace_is_unavailable(
@@ -553,7 +840,7 @@ def test_runner_retries_without_unshare_when_linux_namespace_is_unavailable(
     tmp_path: Path,
     monkeypatch,
 ):
-    import easyicu.research_agent.runner as runner_mod
+    import easyicu.research_agent.execution.runner as runner_mod
 
     cohort_path = tmp_path / "cohort.parquet"
     pd.DataFrame({"stay_id": [1], "death": [0]}).to_parquet(cohort_path, index=False)
@@ -567,7 +854,7 @@ def test_runner_retries_without_unshare_when_linux_namespace_is_unavailable(
 
     calls: list[list[str]] = []
 
-    def _fake_run(cmd, *, cwd, env, capture_output, text, timeout, encoding, errors):
+    def _fake_run(cmd, *, cwd, env, timeout):
         calls.append(list(cmd))
         if cmd[0] == "unshare":
             return SimpleNamespace(
@@ -584,7 +871,7 @@ def test_runner_retries_without_unshare_when_linux_namespace_is_unavailable(
         lambda *, script_path: ["unshare", "-n", "--", "python", str(script_path)],
     )
     monkeypatch.setattr(runner_mod.sys, "platform", "linux")
-    monkeypatch.setattr(runner_mod.subprocess, "run", _fake_run)
+    monkeypatch.setattr(runner_mod, "_run_capturing_with_descendant_reaping", _fake_run)
 
     result = runner.run(
         step_id="linux_unshare_fallback",
@@ -607,7 +894,7 @@ def test_runner_forces_single_thread_env_for_sandboxed_numeric_stacks(
     tmp_path: Path,
     monkeypatch,
 ):
-    import easyicu.research_agent.runner as runner_mod
+    import easyicu.research_agent.execution.runner as runner_mod
 
     cohort_path = tmp_path / "cohort.parquet"
     pd.DataFrame({"stay_id": [1], "death": [0]}).to_parquet(cohort_path, index=False)
@@ -616,12 +903,12 @@ def test_runner_forces_single_thread_env_for_sandboxed_numeric_stacks(
     monkeypatch.setenv("MKL_NUM_THREADS", "8")
     captured_env = {}
 
-    def _fake_run(cmd, *, cwd, env, capture_output, text, timeout, encoding, errors):
+    def _fake_run(cmd, *, cwd, env, timeout):
         captured_env.update(env)
         Path(env["STEP_OUT_DIR"], "ok.txt").write_text("ok", encoding="utf-8")
         return SimpleNamespace(stdout="", stderr="", returncode=0)
 
-    monkeypatch.setattr(runner_mod.subprocess, "run", _fake_run)
+    monkeypatch.setattr(runner_mod, "_run_capturing_with_descendant_reaping", _fake_run)
 
     runner = ra.CodeRunner(
         workdir=tmp_path / "run",
@@ -643,7 +930,7 @@ def test_runner_retries_without_macos_sandbox_when_openmp_shm_is_blocked(
     tmp_path: Path,
     monkeypatch,
 ):
-    import easyicu.research_agent.runner as runner_mod
+    import easyicu.research_agent.execution.runner as runner_mod
 
     cohort_path = tmp_path / "cohort.parquet"
     pd.DataFrame({"stay_id": [1], "death": [0]}).to_parquet(cohort_path, index=False)
@@ -657,7 +944,7 @@ def test_runner_retries_without_macos_sandbox_when_openmp_shm_is_blocked(
 
     calls: list[list[str]] = []
 
-    def _fake_run(cmd, *, cwd, env, capture_output, text, timeout, encoding, errors):
+    def _fake_run(cmd, *, cwd, env, timeout):
         calls.append(list(cmd))
         if cmd[0] == "sandbox-exec":
             return SimpleNamespace(
@@ -680,7 +967,7 @@ def test_runner_retries_without_macos_sandbox_when_openmp_shm_is_blocked(
         ],
     )
     monkeypatch.setattr(runner_mod.sys, "platform", "darwin")
-    monkeypatch.setattr(runner_mod.subprocess, "run", _fake_run)
+    monkeypatch.setattr(runner_mod, "_run_capturing_with_descendant_reaping", _fake_run)
 
     result = runner.run(step_id="macos_omp_fallback", code="print('ok')\n")
 
@@ -700,7 +987,7 @@ def test_runner_retries_without_macos_sandbox_when_profile_apply_is_denied(
     tmp_path: Path,
     monkeypatch,
 ):
-    import easyicu.research_agent.runner as runner_mod
+    import easyicu.research_agent.execution.runner as runner_mod
 
     cohort_path = tmp_path / "cohort.parquet"
     pd.DataFrame({"stay_id": [1], "death": [0]}).to_parquet(cohort_path, index=False)
@@ -715,7 +1002,7 @@ def test_runner_retries_without_macos_sandbox_when_profile_apply_is_denied(
     calls: list[list[str]] = []
     captured_env = {}
 
-    def _fake_run(cmd, *, cwd, env, capture_output, text, timeout, encoding, errors):
+    def _fake_run(cmd, *, cwd, env, timeout):
         calls.append(list(cmd))
         captured_env.update(env)
         if cmd[0] == "sandbox-exec":
@@ -739,7 +1026,7 @@ def test_runner_retries_without_macos_sandbox_when_profile_apply_is_denied(
         ],
     )
     monkeypatch.setattr(runner_mod.sys, "platform", "darwin")
-    monkeypatch.setattr(runner_mod.subprocess, "run", _fake_run)
+    monkeypatch.setattr(runner_mod, "_run_capturing_with_descendant_reaping", _fake_run)
 
     result = runner.run(step_id="macos_sandbox_apply_fallback", code="print('ok')\n")
 
@@ -760,7 +1047,7 @@ def test_runner_retries_without_macos_sandbox_when_stdio_is_blocked(
     tmp_path: Path,
     monkeypatch,
 ):
-    import easyicu.research_agent.runner as runner_mod
+    import easyicu.research_agent.execution.runner as runner_mod
 
     cohort_path = tmp_path / "cohort.parquet"
     pd.DataFrame({"stay_id": [1], "death": [0]}).to_parquet(cohort_path, index=False)
@@ -774,7 +1061,7 @@ def test_runner_retries_without_macos_sandbox_when_stdio_is_blocked(
 
     calls: list[list[str]] = []
 
-    def _fake_run(cmd, *, cwd, env, capture_output, text, timeout, encoding, errors):
+    def _fake_run(cmd, *, cwd, env, timeout):
         calls.append(list(cmd))
         if cmd[0] == "sandbox-exec":
             return SimpleNamespace(
@@ -800,7 +1087,7 @@ def test_runner_retries_without_macos_sandbox_when_stdio_is_blocked(
         ],
     )
     monkeypatch.setattr(runner_mod.sys, "platform", "darwin")
-    monkeypatch.setattr(runner_mod.subprocess, "run", _fake_run)
+    monkeypatch.setattr(runner_mod, "_run_capturing_with_descendant_reaping", _fake_run)
 
     result = runner.run(step_id="macos_stdio_fallback", code="print('ok')\n")
 

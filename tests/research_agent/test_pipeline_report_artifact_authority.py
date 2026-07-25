@@ -7,13 +7,13 @@ from pathlib import Path
 
 import pytest
 
-from easyicu.research_agent.evidence import EvidenceStore
-from easyicu.research_agent.pipeline_report import (
+from easyicu.research_agent.authority.evidence_store import EvidenceStore
+from easyicu.research_agent.reporting.readiness import (
     _latest_publication_figure_audit_status,
     _publication_figure_bundle_ready,
     _publication_provenance_ready,
 )
-from easyicu.research_agent.publication_figures import (
+from easyicu.research_agent.figures.publication import (
     PUBLICATION_FIGURE_SKILL_POLICY_VERSION,
 )
 
@@ -208,9 +208,7 @@ def test_digest_bound_clean_audit_for_current_bundle_is_authoritative(
         if record.evidence_id.startswith("publication_figure_source_")
     ]
     figure_ids = [
-        record.evidence_id
-        for record in evidence.records()
-        if record.kind == "figure"
+        record.evidence_id for record in evidence.records() if record.kind == "figure"
     ]
     evidence.register_json(
         kind="log",
@@ -299,7 +297,9 @@ def test_tampered_clean_audit_cannot_supersede_current_error(tmp_path: Path) -> 
         evidence_id="publication_figure_skill_summary",
     )
     (tmp_path / summary_record.relative_path).write_text(
-        json.dumps({"source_evidence_ids": [source_record.evidence_id], "audit_findings": []}),
+        json.dumps(
+            {"source_evidence_ids": [source_record.evidence_id], "audit_findings": []}
+        ),
         encoding="utf-8",
     )
 

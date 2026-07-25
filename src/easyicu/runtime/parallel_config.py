@@ -132,6 +132,25 @@ def get_parallel_config(
         # 手动指定 (用于测试或限制资源)
         config = get_parallel_config(override_memory_gb=8, override_workers=2)
     """
+    # Env overrides so a memory-constrained host can cap the datasource bucket-scan
+    # parallelism without a code change (workers are threads that each hold a
+    # bucket's DataFrame, so this is the primary peak-RAM lever on a 16GB box for
+    # very large cohorts like eICU). Explicit args still win over the env.
+    if override_workers is None:
+        _env_w = os.getenv('EASYICU_PARALLEL_MAX_WORKERS')
+        if _env_w:
+            try:
+                override_workers = max(1, int(_env_w))
+            except ValueError:
+                pass
+    if override_memory_gb is None:
+        _env_m = os.getenv('EASYICU_OVERRIDE_MEMORY_GB')
+        if _env_m:
+            try:
+                override_memory_gb = float(_env_m)
+            except ValueError:
+                pass
+
     # 获取系统信息
     total_mem, available_mem = get_system_memory()
     cpu_count = get_cpu_count()

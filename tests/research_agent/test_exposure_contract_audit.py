@@ -83,7 +83,16 @@ def test_exposure_names_match_table():
     assert _exposure_names_match("sepsis3", "sofa_max_int") is False
     assert _exposure_names_match("sepsis3", "sepsis3") is True
     assert _exposure_names_match("sepsis3", "sepsis3_binary") is True
+    assert _exposure_names_match("sepsis3", "sep3_sofa2_max") is True
     assert _exposure_names_match("vasopressor", "norepinephrine") is False
+
+
+def test_exposure_names_do_not_discard_identity_bearing_numbers():
+    assert _exposure_names_match("sofa2", "sofa") is False
+    assert _exposure_names_match("sofa", "sofa2") is False
+    assert _exposure_names_match("sepsis3", "sepsis2") is False
+    assert _exposure_names_match("stage1", "stage3") is False
+    assert _exposure_names_match("lactate6h", "lactate24h") is False
 
 
 def test_flags_primary_exposure_collapsed_by_measurement_filter():

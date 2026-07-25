@@ -1,0 +1,290 @@
+"""Compact, lossless variable metadata for coder prompt transport.
+
+Wide fixed-window trajectory panels repeat the same family policy on every
+physical time-bin column. The coder still needs every exact column, window,
+domain shape/cardinality, and missingness fact, but cohort literals and extrema
+remain local evidence. This module separates shared and per-column coordinates
+without selecting variables or changing scientific authority.
+"""
+
+from __future__ import annotations
+
+from collections import defaultdict
+from dataclasses import dataclass
+from typing import Any, Dict, Optional, Sequence
+
+from ..schema import ConceptDescriptor
+
+_MAX_OPAQUE_LEVEL_TOKENS = 20
+
+
+@dataclass(frozen=True)
+class CompactTrajectoryPromptProjection:
+    """Shared family lines and exact per-column lines for repeated windows."""
+
+    shared_lines: tuple[str, ...]
+    variable_lines: tuple[tuple[str, str], ...]
+
+
+def project_observed_domain(domain: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """Project local value-domain evidence onto non-literal prompt metadata.
+
+    Cohort values, extrema, and categorical labels are local evidence. They are
+    never prompt metadata by default. The projection preserves only shape and
+    cardinality needed for planning and mechanical validation.
+    """
+
+    if not domain:
+        return {}
+    projected: Dict[str, Any] = {}
+    if domain.get("is_constant"):
+        projected["shape"] = "constant"
+    elif domain.get("is_binary"):
+        projected["shape"] = "binary_numeric_indicator"
+    elif domain.get("levels"):
+        projected["shape"] = "categorical"
+    elif domain.get("min") is not None or domain.get("max") is not None:
+        projected["shape"] = "numeric"
+    else:
+        projected["shape"] = "unknown"
+    levels = domain.get("levels")
+    n_unique = domain.get("n_unique")
+    if not isinstance(n_unique, int) or isinstance(n_unique, bool):
+        if isinstance(levels, list):
+            n_unique = len(levels)
+        elif domain.get("is_binary"):
+            n_unique = 2
+    if isinstance(n_unique, int) and not isinstance(n_unique, bool) and n_unique >= 0:
+        projected["n_unique"] = n_unique
+        if projected["shape"] == "binary_numeric_indicator" or (
+            projected["shape"] == "categorical" and isinstance(levels, list)
+        ):
+            projected["opaque_levels"] = list(opaque_level_tokens(n_unique))
+    return projected
+
+
+def opaque_level_tokens(n_unique: int) -> tuple[str, ...]:
+    """Return deterministic placeholders without revealing local literals."""
+
+    count = int(n_unique)
+    if count < 2 or count > _MAX_OPAQUE_LEVEL_TOKENS:
+        return ()
+    return tuple(f"__easyicu_level_{index}__" for index in range(1, count + 1))
+
+
+def format_observed_domain(domain: Optional[Dict[str, Any]]) -> str:
+    """Render cohort shape/cardinality without literal observed values."""
+
+    projected = project_observed_domain(domain)
+    if not projected:
+        return ""
+    shape = projected.get("shape")
+    n_unique = projected.get("n_unique")
+    opaque_levels = projected.get("opaque_levels")
+    token_suffix = (
+        f"; opaque_levels={opaque_levels!r}"
+        if isinstance(opaque_levels, list) and opaque_levels
+        else ""
+    )
+    if shape == "constant":
+        return " observed=CONSTANT(single value; no variation to model)"
+    if shape == "binary_numeric_indicator":
+        return (
+            " observed=BINARY_NUMERIC_INDICATOR(two-level; another numeric "
+            f"cutoff is degenerate; literals withheld{token_suffix})"
+        )
+    if shape == "categorical":
+        suffix = f" n_unique={n_unique}" if n_unique is not None else ""
+        return (
+            f" observed=CATEGORICAL{suffix} "
+            f"(literal levels withheld{token_suffix})"
+        )
+    if shape == "numeric":
+        suffix = f" n_unique={n_unique}" if n_unique is not None else ""
+        return f" observed=NUMERIC{suffix} (cohort extrema withheld)"
+    if n_unique is not None:
+        return f" observed_n_unique={n_unique}"
+    return ""
+
+
+def _normalised_description(variable: ConceptDescriptor) -> str:
+    return " ".join(str(variable.description or "").split())
+
+
+def _shared_signature(variable: ConceptDescriptor) -> tuple[object, ...]:
+    metadata = variable.fixed_window_trajectory
+    if metadata is None:  # pragma: no cover - caller filters this condition
+        raise ValueError("fixed-window trajectory metadata is required")
+    return (
+        variable.role.value,
+        variable.dtype,
+        variable.unit,
+        tuple(variable.valid_range or ()),
+        variable.source_concept,
+        _normalised_description(variable),
+        variable.is_ordinal,
+        tuple(variable.ordinal_levels or ()),
+        (
+            variable.aggregation_default.value
+            if variable.aggregation_default is not None
+            else "unspecified"
+        ),
+        variable.temporal_resolution,
+        metadata.window_width_hours,
+        metadata.time_axis,
+        metadata.anchor,
+        metadata.source_scale,
+        metadata.representation_kind,
+        metadata.observed_fractional_values,
+        tuple(variable.pitfalls),
+    )
+
+
+def _shared_line(
+    variable: ConceptDescriptor,
+    *,
+    group_id: str,
+    member_count: int,
+    families: tuple[str, ...],
+) -> str:
+    metadata = variable.fixed_window_trajectory
+    if metadata is None:  # pragma: no cover - caller filters this condition
+        raise ValueError("fixed-window trajectory metadata is required")
+    fields = [
+        f"  - trajectory_group={group_id!r}",
+        f"members={member_count}",
+        f"families={list(families)!r}",
+        f"role={variable.role.value}",
+        f"dtype={variable.dtype}",
+    ]
+    if variable.unit:
+        fields.append(f"unit={variable.unit}")
+    if variable.valid_range:
+        fields.append(
+            "plausibility_range(flag_only;never_exclude_rows)="
+            f"{variable.valid_range}"
+        )
+    if variable.source_concept:
+        fields.append(f"source_concept={variable.source_concept}")
+    description = _normalised_description(variable)
+    if description:
+        fields.append(f"description={description!r}")
+    fields.extend(
+        [
+            f"is_ordinal={str(variable.is_ordinal).lower()}",
+            "ordinal_cardinality="
+            + (
+                str(len(variable.ordinal_levels))
+                if variable.ordinal_levels is not None
+                else "unspecified"
+            ),
+            "agg_default="
+            + (
+                variable.aggregation_default.value
+                if variable.aggregation_default is not None
+                else "unspecified"
+            ),
+            f"window_width={metadata.window_width_hours:g}h",
+            f"time_axis={metadata.time_axis}",
+            f"source_scale={metadata.source_scale}",
+            f"representation={metadata.representation_kind}",
+            f"anchor={metadata.anchor or 'unspecified_agent_must_declare'}",
+            "observed_fractional_values="
+            f"{str(metadata.observed_fractional_values).lower()}",
+        ]
+    )
+    if variable.temporal_resolution:
+        fields.append(f"temporal_resolution={variable.temporal_resolution!r}")
+    if variable.pitfalls:
+        fields.append(f"pitfalls={variable.pitfalls!r}")
+    return " | ".join(fields)
+
+
+def _variable_line(variable: ConceptDescriptor, *, group_id: str) -> str:
+    metadata = variable.fixed_window_trajectory
+    if metadata is None:  # pragma: no cover - caller filters this condition
+        raise ValueError("fixed-window trajectory metadata is required")
+    missingness = ""
+    if variable.missingness is not None:
+        missingness = (
+            f" m={variable.missingness.fraction_missing:.1%}/"
+            f"{variable.missingness.missingness_severity}"
+        )
+    domain = project_observed_domain(variable.observed_domain)
+    if domain.get("shape") == "constant":
+        observed = " obs=constant(no-model-variation)"
+    elif domain.get("shape") == "binary_numeric_indicator":
+        observed = " obs=binary(two-level;literals-withheld)"
+    elif domain.get("shape") == "categorical":
+        observed = f" obs=categorical/u{domain.get('n_unique')}"
+    elif domain.get("shape") == "numeric":
+        observed = f" obs=numeric/u{domain.get('n_unique')}"
+    elif domain.get("n_unique") is not None:
+        observed = f" obs=u{domain['n_unique']}"
+    else:
+        observed = ""
+    return (
+        f"- {variable.name} | g={group_id!r}"
+        f" f={metadata.family!r}"
+        f" t=[{metadata.window_start_hours:g},{metadata.window_end_hours:g})h"
+        f"{observed}{missingness}"
+    )
+
+
+def compact_fixed_window_trajectory_prompt(
+    variables: Sequence[ConceptDescriptor],
+    *,
+    minimum_group_size: int = 4,
+) -> CompactTrajectoryPromptProjection:
+    """Factor exact repeated window metadata without dropping any column.
+
+    Only columns with an identical shared-policy signature are grouped.  Small
+    groups retain the ordinary variable formatter, avoiding a second notation
+    when it would not materially reduce transport.
+    """
+
+    grouped: dict[tuple[object, ...], list[ConceptDescriptor]] = defaultdict(list)
+    for variable in variables:
+        if variable.fixed_window_trajectory is not None:
+            grouped[_shared_signature(variable)].append(variable)
+
+    accepted = [
+        (signature, members)
+        for signature, members in grouped.items()
+        if len(members) >= max(2, int(minimum_group_size))
+    ]
+    shared_lines: list[str] = []
+    variable_lines: list[tuple[str, str]] = []
+    for group_number, (_signature, members) in enumerate(accepted, start=1):
+        families = tuple(
+            dict.fromkeys(
+                variable.fixed_window_trajectory.family  # type: ignore[union-attr]
+                for variable in members
+            )
+        )
+        group_id = f"trajectory_policy#{group_number}"
+        shared_lines.append(
+            _shared_line(
+                members[0],
+                group_id=group_id,
+                member_count=len(members),
+                families=families,
+            )
+        )
+        variable_lines.extend(
+            (variable.name, _variable_line(variable, group_id=group_id))
+            for variable in members
+        )
+    return CompactTrajectoryPromptProjection(
+        shared_lines=tuple(shared_lines),
+        variable_lines=tuple(variable_lines),
+    )
+
+
+__all__ = [
+    "CompactTrajectoryPromptProjection",
+    "compact_fixed_window_trajectory_prompt",
+    "format_observed_domain",
+    "opaque_level_tokens",
+    "project_observed_domain",
+]

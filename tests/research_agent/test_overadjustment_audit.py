@@ -17,10 +17,36 @@ from easyicu.research_agent.plan_utils import (
     read_adjustment_covariates,
     read_model_covariate_names,
 )
+from easyicu.research_agent.schema import AnalysisStep, PlannedModelRequirement
 
 
-def _step(step_id="06_primary_association"):
-    return SimpleNamespace(step_id=step_id)
+def _step(
+    step_id="06_primary_association",
+    *,
+    primary_source=None,
+    source_role="primary",
+):
+    model_requirements = []
+    if primary_source is not None:
+        model_requirements.append(
+            PlannedModelRequirement(
+                requirement_id=f"{source_role}_model",
+                outcome="death",
+                outcome_type="binary",
+                method_family="logistic_regression",
+                exposure_source=primary_source,
+                analysis_role=source_role,
+                analysis_set="complete_case",
+                required_for_step_success=True,
+            )
+        )
+    return AnalysisStep(
+        step_id=step_id,
+        intent="Estimate the adjusted association.",
+        method="adjusted_association_models",
+        expected_outputs=["table:adjusted_association_estimates"],
+        model_requirements=model_requirements,
+    )
 
 
 def _ctx(required="sepsis3"):
@@ -69,6 +95,35 @@ def test_reader_detects_coef_table_with_term_identifier_column(tmp_path: Path):
                 {"model_id": "m1", "term": v, "coefficient": "0.1", "odds_ratio": "1.1"}
             )
     assert read_model_covariate_names(tmp_path) == ["sepsis3", "age", "map_first"]
+
+
+def test_reader_excludes_structured_exposure_term_from_adjustment_set(
+    tmp_path: Path,
+):
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    with (tmp_path / "coefficients.csv").open("w", newline="", encoding="utf-8") as fh:
+        w = csv.DictWriter(
+            fh, fieldnames=["term", "term_role", "source_variable", "odds_ratio"]
+        )
+        w.writeheader()
+        w.writerow(
+            {
+                "term": "sep3_sofa2_max",
+                "term_role": "exposure",
+                "source_variable": "sep3_sofa2_max",
+                "odds_ratio": "1.6",
+            }
+        )
+        w.writerow(
+            {
+                "term": "age",
+                "term_role": "adjustment",
+                "source_variable": "age",
+                "odds_ratio": "1.02",
+            }
+        )
+
+    assert read_model_covariate_names(tmp_path) == ["age"]
 
 
 def test_reader_detects_predictor_identifier_column(tmp_path: Path):
@@ -126,6 +181,44 @@ def test_flags_overadjustment_for_exposure_constituent(tmp_path: Path):
     assert "sofa_max" in f.message
 
 
+def test_overadjustment_detector_does_not_match_incidental_substrings():
+    from easyicu.research_agent.icu_rules import detect_overadjustment
+
+    covariates = [
+        "acute_pancreatitis",
+        "history_of_pancreatitis",
+        "increase_from_baseline",
+        "mapped_diagnosis",
+        "age",
+    ]
+
+    assert detect_overadjustment("sofa", covariates) == []
+    assert detect_overadjustment("kdigo", covariates) == []
+    assert detect_overadjustment("sepsis3", covariates) == []
+
+
+def test_overadjustment_detector_keeps_explicit_tokens_aliases_and_suffixes():
+    from easyicu.research_agent.icu_rules import detect_overadjustment
+
+    offenders = detect_overadjustment(
+        "sepsis3",
+        [
+            "crea_first",
+            "baseline_creatinine",
+            "mean_arterial_pressure",
+            "sofa_renal",
+            "age",
+        ],
+    )
+
+    assert offenders == [
+        "crea_first",
+        "baseline_creatinine",
+        "mean_arterial_pressure",
+        "sofa_renal",
+    ]
+
+
 def test_exposure_row_itself_is_not_flagged(tmp_path: Path):
     # The exposure appears in its own coefficient table; that is correct, not
     # overadjustment, and must not be flagged.
@@ -136,6 +229,54 @@ def test_exposure_row_itself_is_not_flagged(tmp_path: Path):
         )
         == []
     )
+
+
+def test_planner_operational_primary_source_is_not_overadjustment(tmp_path: Path):
+    # Real E1 shape: ResearchContext preserves the clinical concept while the
+    # typed model roster binds a row-aligned operational representation.  The
+    # operational predictor is the exposure itself, not an adjusted-for SOFA
+    # constituent merely because its column name contains ``sofa``.
+    _write_coef_table(
+        tmp_path,
+        ["const", "sep3_sofa2_max", "age", "sex", "charlson_max"],
+        name="adjusted_association_estimates.csv",
+    )
+    assert (
+        _primary_exposure_overadjustment_findings(
+            step=_step(primary_source="sep3_sofa2_max"),
+            context=_ctx("sepsis3"),
+            out_dir=tmp_path,
+        )
+        == []
+    )
+
+
+def test_operational_source_exemption_does_not_hide_real_constituent(
+    tmp_path: Path,
+):
+    _write_coef_table(
+        tmp_path,
+        ["const", "sep3_sofa2_max", "age", "sofa_renal"],
+        name="adjusted_association_estimates.csv",
+    )
+    findings = _primary_exposure_overadjustment_findings(
+        step=_step(primary_source="sep3_sofa2_max"),
+        context=_ctx("sepsis3"),
+        out_dir=tmp_path,
+    )
+    assert len(findings) == 1
+    assert findings[0].detail["offending_covariates"] == ["sofa_renal"]
+
+
+def test_secondary_source_cannot_exempt_a_primary_constituent(tmp_path: Path):
+    _write_coef_table(tmp_path, ["const", "sepsis3", "age", "sofa_max"])
+    findings = _primary_exposure_overadjustment_findings(
+        step=_step(primary_source="sofa_max", source_role="secondary"),
+        context=_ctx("sepsis3"),
+        out_dir=tmp_path,
+    )
+    assert len(findings) == 1
+    assert findings[0].detail["offending_covariates"] == ["sofa_max"]
 
 
 def test_no_flag_without_required_exposure(tmp_path: Path):
@@ -337,8 +478,8 @@ def test_genuine_constituent_still_fires_after_negation_guard(tmp_path: Path):
 
 
 def test_replanner_injects_methodological_principles(monkeypatch):
-    from easyicu.research_agent import agents as A
-    from easyicu.research_agent import structured_retry as SR
+    from easyicu.research_agent.agents import core as A
+    from easyicu.research_agent.providers import structured_retry as SR
     from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep
 
     # The overadjustment principle must actually be in the shared guide. The
@@ -357,7 +498,7 @@ def test_replanner_injects_methodological_principles(monkeypatch):
 
     # Sidestep the heavy ResearchContext rendering; we only assert the system
     # message the replanner builds, not the user prompt.
-    monkeypatch.setattr(A, "_format_context", lambda ctx: "CTX")
+    monkeypatch.setattr(A, "_format_context", lambda ctx, **_kwargs: "CTX")
     monkeypatch.setattr(SR, "call_llm_with_structured_retry", _fake_retry)
 
     out = A.ReplannerAgent(llm=object()).run(

@@ -8,7 +8,7 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
-from easyicu.research_agent.analysis_types import (
+from easyicu.research_agent.planning.analysis_types import (
     is_concept_set_family,
     normalize_analysis_family,
 )
@@ -47,7 +47,7 @@ def test_bare_word_model_does_not_force_prediction(ra):
     which then dragged the study-design family to prediction. Real prediction
     cues (predict/auroc/calibration/...) still route correctly (see M2).
     """
-    from easyicu.research_agent.study_design import infer_study_design_family
+    from easyicu.research_agent.planning.study_design import infer_study_design_family
 
     ctx = ra.ResearchContext(
         research_question=(
@@ -69,7 +69,7 @@ def test_bare_word_model_does_not_force_prediction(ra):
 def test_primary_cohort_workflow_boilerplate_does_not_override_scientific_family(ra):
     """One required cohort definition plus data QC is workflow, not sensitivity."""
 
-    from easyicu.research_agent.study_design import infer_study_design_family
+    from easyicu.research_agent.planning.study_design import infer_study_design_family
 
     ctx = ra.ResearchContext(
         research_question=(
@@ -155,7 +155,7 @@ def test_disclaimed_causal_does_not_hijack_trajectory_clustering(ra):
 
 
 def test_existing_cluster_membership_remains_an_association_exposure(ra):
-    from easyicu.research_agent.study_design import infer_study_design_family
+    from easyicu.research_agent.planning.study_design import infer_study_design_family
 
     for membership in (
         "a previously assigned subphenotype",
@@ -178,10 +178,10 @@ def test_existing_cluster_membership_remains_an_association_exposure(ra):
 
 
 def test_clustering_variance_language_for_patients_is_not_phenotype_discovery(ra):
-    from easyicu.research_agent.analysis_types import (
+    from easyicu.research_agent.planning.analysis_types import (
         strong_trajectory_clustering_framing,
     )
-    from easyicu.research_agent.study_design import infer_study_design_family
+    from easyicu.research_agent.planning.study_design import infer_study_design_family
 
     questions = (
         "Fit mixed effects with site-level clustering for patients and report "
@@ -209,10 +209,10 @@ def test_clustering_variance_language_for_patients_is_not_phenotype_discovery(ra
 
 
 def test_gaussian_mixture_phenotype_discovery_is_clustering(ra):
-    from easyicu.research_agent.analysis_types import (
+    from easyicu.research_agent.planning.analysis_types import (
         strong_trajectory_clustering_framing,
     )
-    from easyicu.research_agent.study_design import infer_study_design_family
+    from easyicu.research_agent.planning.study_design import infer_study_design_family
 
     question = (
         "Discover longitudinal patient phenotypes using a Gaussian mixture "
@@ -233,7 +233,7 @@ def test_gaussian_mixture_phenotype_discovery_is_clustering(ra):
 
 
 def test_causal_disclaimer_and_fixed_followup_endpoint_do_not_choose_science(ra):
-    from easyicu.research_agent.study_design import infer_study_design_family
+    from easyicu.research_agent.planning.study_design import infer_study_design_family
 
     questions = (
         "Estimate the adjusted association between exposure and mortality; do "
@@ -255,7 +255,7 @@ def test_causal_disclaimer_and_fixed_followup_endpoint_do_not_choose_science(ra)
 
 
 def test_chinese_negation_and_cluster_nuisance_do_not_hijack_family(ra):
-    from easyicu.research_agent.study_design import infer_study_design_family
+    from easyicu.research_agent.planning.study_design import infer_study_design_family
 
     questions = (
         "采用混合效应回归和医院层面聚类稳健标准误，评估既有轨迹分群与死亡的关联。",
@@ -441,7 +441,7 @@ def test_reused_mock_pipeline_refreshes_context_between_prediction_and_clusterin
     assert "04_trajectory_clustering_analysis" in second_step_ids, second_step_ids
 
 
-def test_mock_planner_routes_survival_question_to_protocol_and_saves_user_preferences(
+def test_mock_planner_rejects_protocol_only_survival_plan(
     ra, tmp_path: Path
 ):
     cohort = pd.DataFrame(
@@ -454,48 +454,36 @@ def test_mock_planner_routes_survival_question_to_protocol_and_saves_user_prefer
         }
     )
     pipeline = ra.ResearchAgentPipeline(workdir=tmp_path, llm=ra.MockLLMClient())
-    result = pipeline.run(
-        question=(
-            "Evaluate 28-day survival after ICU admission with explicit time zero, "
-            "censoring rules, Kaplan-Meier curves, and a Cox-style model."
-        ),
-        cohort=cohort,
-        cohort_name="survival_protocol_test",
-        database="synthetic",
-        target_outcome="death",
-        user_preferences={
-            "inferred_analysis_family": "survival",
-            "timing_and_design": "time zero at ICU admission; 28-day follow-up",
-            "must_have_outputs": "Kaplan-Meier plot and hazard ratio table",
-        },
+    from easyicu.research_agent.providers.structured_retry import (
+        StructuredResponseFailure,
     )
 
-    plan = json.loads(Path(result.plan_path).read_text(encoding="utf-8"))
-    ctx = json.loads(
-        (Path(result.workdir) / "research_context.json").read_text(encoding="utf-8")
-    )
-    step_ids = [step["step_id"] for step in plan["steps"]]
-
-    # The mock agent chose a protocol-only survival plan. The framework may
-    # review that choice, but it must not invent a Cox estimand or rewrite the
-    # agent plan into a canonical method-shaped mega-step.
-    assert plan["analysis_type"] == "survival"
-    protocol = next(
-        step for step in plan["steps"] if step["step_id"] == "04_survival_protocol"
-    )
-    assert protocol["method"] == "survival_protocol"
-    assert protocol["expected_outputs"] == ["log:survival_protocol"]
-    assert "01_survival_analysis" not in step_ids, step_ids
-    assert "04_primary_association" not in step_ids
-    assert ctx["user_preferences"]["inferred_analysis_family"] == "survival"
-    assert "Kaplan-Meier" in (ctx["user_preferences"]["must_have_outputs"] or "")
+    with pytest.raises(
+        StructuredResponseFailure,
+        match="survival_effect, temporal_absolute_risk",
+    ):
+        pipeline.run(
+            question=(
+                "Evaluate 28-day survival after ICU admission with explicit time zero, "
+                "censoring rules, Kaplan-Meier curves, and a Cox-style model."
+            ),
+            cohort=cohort,
+            cohort_name="survival_protocol_test",
+            database="synthetic",
+            target_outcome="death",
+            user_preferences={
+                "inferred_analysis_family": "survival",
+                "timing_and_design": "time zero at ICU admission; 28-day follow-up",
+                "must_have_outputs": "Kaplan-Meier plot and hazard ratio table",
+            },
+        )
 
 
 def test_planner_prompt_suggests_inferred_family(ra):
     """The planner sees a focused suggestion plus the full catalog."""
     import importlib
 
-    agents = importlib.import_module("easyicu.research_agent.agents")
+    agents = importlib.import_module("easyicu.research_agent.agents.core")
 
     def _ctx(question: str):
         return ra.ResearchContext(
@@ -539,7 +527,7 @@ def test_parse_fills_inferred_analysis_type_only_when_agent_omits_it(ra):
     import importlib
     import json
 
-    agents = importlib.import_module("easyicu.research_agent.agents")
+    agents = importlib.import_module("easyicu.research_agent.agents.core")
 
     ctx = ra.ResearchContext(
         research_question="Cox proportional hazards survival of 28-day mortality.",
@@ -559,6 +547,7 @@ def test_parse_fills_inferred_analysis_type_only_when_agent_omits_it(ra):
             "steps": [
                 {
                     "step_id": "01_fit",
+                    "planned_analysis_role": "primary",
                     "intent": "fit cox model",
                     "inputs": [],
                     "expected_outputs": ["table:hr"],
@@ -578,7 +567,7 @@ def test_parse_fills_inferred_analysis_type_only_when_agent_omits_it(ra):
 def test_parse_preserves_agent_selected_family_and_rationale(ra):
     import importlib
 
-    agents = importlib.import_module("easyicu.research_agent.agents")
+    agents = importlib.import_module("easyicu.research_agent.agents.core")
     ctx = ra.ResearchContext(
         research_question=(
             "Estimate a binary mortality association at 28 days after follow-up "
@@ -598,9 +587,23 @@ def test_parse_preserves_agent_selected_family_and_rationale(ra):
             "steps": [
                 {
                     "step_id": "01_association",
+                    "planned_analysis_role": "primary",
                     "intent": "Fit the prespecified logistic association.",
-                    "method": "logistic_regression",
-                    "expected_outputs": ["table:association_estimates"],
+                    "inputs": ["exposure", "death"],
+                    "method": "adjusted_association_models",
+                    "expected_outputs": ["table:adjusted_association_estimates"],
+                    "model_requirements": [
+                        {
+                            "requirement_id": "primary_exposure_death",
+                            "outcome": "death",
+                            "outcome_type": "binary",
+                            "method_family": "logistic_regression",
+                            "exposure_source": "exposure",
+                            "analysis_role": "primary",
+                            "analysis_set": "complete_case",
+                            "required_for_step_success": True,
+                        }
+                    ],
                 }
             ],
             "rationale": (
@@ -621,7 +624,7 @@ def test_parse_preserves_agent_selected_family_and_rationale(ra):
 def test_parse_rejects_unknown_analysis_type_instead_of_bypassing_contract(ra):
     import importlib
 
-    agents = importlib.import_module("easyicu.research_agent.agents")
+    agents = importlib.import_module("easyicu.research_agent.agents.core")
     ctx = ra.ResearchContext(
         research_question="Estimate a time-to-event association.",
         cohort=ra.CohortDescriptor(
@@ -637,6 +640,7 @@ def test_parse_rejects_unknown_analysis_type_instead_of_bypassing_contract(ra):
             "steps": [
                 {
                     "step_id": "01_model",
+                    "planned_analysis_role": "primary",
                     "intent": "Fit the declared model.",
                     "method": "cox_proportional_hazards",
                     "expected_outputs": ["table:hazard_ratio"],
@@ -689,11 +693,14 @@ def test_infer_does_not_misclassify_lab_names_as_multimodal(ra):
             target_outcome="death",
         )
 
-    from easyicu.research_agent.analysis_types import infer_analysis_type
+    from easyicu.research_agent.planning.analysis_types import infer_analysis_type
 
     # Lab names containing the substring 'ct'/'note' etc. must NOT score multimodal.
     assert infer_analysis_type(_ctx(["lactate"])).key == "association_study"
-    assert infer_analysis_type(_ctx(["lactate", "extract_flag"])).key == "association_study"
+    assert (
+        infer_analysis_type(_ctx(["lactate", "extract_flag"])).key
+        == "association_study"
+    )
     # Genuine modality variables must still be detected as multimodal.
     assert infer_analysis_type(_ctx(["ct_scan_present"])).key == "multimodal"
     assert infer_analysis_type(_ctx(["clinical_note"])).key == "multimodal"

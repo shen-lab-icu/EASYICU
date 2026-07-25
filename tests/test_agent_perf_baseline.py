@@ -22,15 +22,30 @@ _spec.loader.exec_module(apb)
 
 
 def _write_receipt(
-    run_dir: Path, step_id: str, categories: list[str], *, tamper: bool = False
+    run_dir: Path,
+    step_id: str,
+    categories: list[str],
+    *,
+    tamper: bool = False,
+    logical_repairs: list[dict] | None = None,
+    schema_version: int | None = None,
+    final_reservation_state: dict | None = None,
+    initial_generation: dict | None = None,
 ) -> None:
+    resolved_schema = schema_version or (3 if logical_repairs is not None else 2)
     payload = {
         "categories": categories,
         "limit": 7,
         "reserved_final_category": "concept_audit",
-        "schema_version": 2,
+        "schema_version": resolved_schema,
         "step_id": step_id,
     }
+    if logical_repairs is not None:
+        payload["logical_repairs"] = logical_repairs
+    if final_reservation_state is not None:
+        payload["final_reservation_state"] = final_reservation_state
+    if initial_generation is not None:
+        payload["initial_generation"] = initial_generation
     payload["sha256"] = apb._receipt_digest({k: v for k, v in payload.items()})
     if tamper:
         payload["categories"] = categories + [
@@ -221,6 +236,274 @@ def test_receipt_digest_tampered_fails_closed(tmp_path):
         run, "01_cohort_flow", ["initial_generation", "concept_audit"], tamper=True
     )
     with pytest.raises(apb.BaselineError, match="digest invalid"):
+        apb.read_receipts(str(run), {})
+
+
+def test_schema_v3_logical_repair_ledger_is_reported(tmp_path):
+    run = tmp_path / "run"
+    run.mkdir()
+    categories = ["initial_generation"]
+    _write_receipt(
+        run,
+        "01_cohort_flow",
+        categories,
+        logical_repairs=[
+            {
+                "attempt_id": 1,
+                "repair_class": "contract",
+                "provider_history_len": 1,
+                "provider_history_sha256": apb._receipt_digest(
+                    {"categories": categories}
+                ),
+            }
+        ],
+    )
+
+    receipts = apb.read_receipts(str(run), {})
+
+    assert receipts[0]["total_calls"] == 1
+    assert receipts[0]["logical_repair_attempts"] == 1
+    assert receipts[0]["logical_repair_classes"] == ["contract"]
+
+
+def test_schema_v3_logical_history_inconsistency_fails_closed(tmp_path):
+    run = tmp_path / "run"
+    run.mkdir()
+    _write_receipt(
+        run,
+        "01_cohort_flow",
+        ["initial_generation"],
+        logical_repairs=[
+            {
+                "attempt_id": 1,
+                "repair_class": "runtime",
+                "provider_history_len": 1,
+                "provider_history_sha256": "0" * 64,
+            }
+        ],
+    )
+
+    with pytest.raises(apb.BaselineError, match="logical repair history"):
+        apb.read_receipts(str(run), {})
+
+
+def test_schema_v4_final_audit_state_is_validated(tmp_path):
+    run = tmp_path / "run_v4"
+    run.mkdir()
+    categories = ["initial_generation", "concept_audit"]
+    _write_receipt(
+        run,
+        "01_model",
+        categories,
+        schema_version=4,
+        logical_repairs=[],
+        final_reservation_state={
+            "required_token": "audit-authority",
+            "bound_provider_history_len": 1,
+            "bound_provider_history_sha256": apb._receipt_digest(
+                {"categories": categories[:1]}
+            ),
+            "completed_token": "audit-authority",
+            "released": False,
+        },
+    )
+    assert apb.read_receipts(str(run), {})[0]["total_calls"] == 2
+
+    path = next((run / ".runtime" / "provider_call_budgets").glob("*.json"))
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["final_reservation_state"]["released"] = True
+    payload["final_reservation_state"]["completed_token"] = None
+    body = {key: value for key, value in payload.items() if key != "sha256"}
+    payload["sha256"] = apb._receipt_digest(body)
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(apb.BaselineError, match="reservation state"):
+        apb.read_receipts(str(run), {})
+
+
+def test_schema_v5_repair_transport_is_validated(tmp_path):
+    run = tmp_path / "run_v5"
+    run.mkdir()
+    categories = ["runtime_repair_patch"]
+    logical_repairs = [
+        {
+            "attempt_id": 1,
+            "repair_class": "runtime",
+            "provider_history_len": 0,
+            "provider_history_sha256": apb._receipt_digest({"categories": []}),
+            "transport": {
+                "state": "completed",
+                "mode": "minimal_patch",
+                "after_code_sha256": "a" * 64,
+                "provider_history_len": 1,
+                "provider_history_sha256": apb._receipt_digest(
+                    {"categories": categories}
+                ),
+                "provider_calls": 1,
+            },
+        }
+    ]
+    _write_receipt(
+        run,
+        "01_model",
+        categories,
+        schema_version=5,
+        logical_repairs=logical_repairs,
+        final_reservation_state={
+            "required_token": None,
+            "bound_provider_history_len": None,
+            "bound_provider_history_sha256": None,
+            "completed_token": None,
+            "released": False,
+        },
+    )
+    assert apb.read_receipts(str(run), {})[0]["logical_repair_attempts"] == 1
+
+    path = next((run / ".runtime" / "provider_call_budgets").glob("*.json"))
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["logical_repairs"][0]["transport"]["provider_calls"] = 2
+    body = {key: value for key, value in payload.items() if key != "sha256"}
+    payload["sha256"] = apb._receipt_digest(body)
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(apb.BaselineError, match="transport inconsistent"):
+        apb.read_receipts(str(run), {})
+
+
+def test_schema_v5_v2_binding_counts_only_owned_repair_calls(tmp_path):
+    run = tmp_path / "run_v5_owned"
+    run.mkdir()
+    categories = ["concept_audit", "runtime_repair_patch"]
+    binding = {
+        "schema_version": "easyicu.repair_authority_binding/2",
+        "provider_category": "runtime_repair",
+    }
+    _write_receipt(
+        run,
+        "01_model",
+        categories,
+        schema_version=5,
+        logical_repairs=[
+            {
+                "attempt_id": 1,
+                "repair_class": "runtime",
+                "provider_history_len": 0,
+                "provider_history_sha256": apb._receipt_digest({"categories": []}),
+                "binding": binding,
+                "binding_sha256": apb._receipt_digest(binding),
+                "transport": {
+                    "state": "completed",
+                    "mode": "minimal_patch",
+                    "after_code_sha256": "a" * 64,
+                    "provider_history_len": 2,
+                    "provider_history_sha256": apb._receipt_digest(
+                        {"categories": categories}
+                    ),
+                    "provider_calls": 1,
+                },
+            }
+        ],
+        final_reservation_state={
+            "required_token": None,
+            "bound_provider_history_len": None,
+            "bound_provider_history_sha256": None,
+            "completed_token": None,
+            "released": False,
+        },
+    )
+
+    receipt = apb.read_receipts(str(run), {})[0]
+    assert receipt["logical_repair_attempts"] == 1
+
+
+def test_schema_v5_legacy_binding_keeps_full_history_delta_accounting(tmp_path):
+    run = tmp_path / "run_v5_legacy"
+    run.mkdir()
+    categories = ["concept_audit", "runtime_repair_patch"]
+    binding = {"schema_version": "easyicu.repair_authority_binding/1"}
+    _write_receipt(
+        run,
+        "01_model",
+        categories,
+        schema_version=5,
+        logical_repairs=[
+            {
+                "attempt_id": 1,
+                "repair_class": "runtime",
+                "provider_history_len": 0,
+                "provider_history_sha256": apb._receipt_digest({"categories": []}),
+                "binding": binding,
+                "binding_sha256": apb._receipt_digest(binding),
+                "transport": {
+                    "state": "completed",
+                    "mode": "minimal_patch",
+                    "after_code_sha256": "a" * 64,
+                    "provider_history_len": 2,
+                    "provider_history_sha256": apb._receipt_digest(
+                        {"categories": categories}
+                    ),
+                    "provider_calls": 2,
+                },
+            }
+        ],
+        final_reservation_state={
+            "required_token": None,
+            "bound_provider_history_len": None,
+            "bound_provider_history_sha256": None,
+            "completed_token": None,
+            "released": False,
+        },
+    )
+
+    assert apb.read_receipts(str(run), {})[0]["logical_repair_attempts"] == 1
+
+
+def test_schema_v6_initial_generation_transport_is_verified(tmp_path):
+    run = tmp_path / "run_v6_initial"
+    run.mkdir()
+    categories = ["initial_generation"]
+    binding = {"schema_version": "easyicu.initial_generation_authority/1"}
+    initial_generation = {
+        "binding": binding,
+        "binding_sha256": apb._receipt_digest(binding),
+        "provider_history_len": 0,
+        "provider_history_sha256": apb._receipt_digest({"categories": []}),
+        "provider_transport_id": "initial_generation:1",
+        "transport": {
+            "state": "completed",
+            "after_code_sha256": "a" * 64,
+            "after_code_size_bytes": 42,
+            "provider_history_len": 1,
+            "provider_history_sha256": apb._receipt_digest({"categories": categories}),
+            "provider_calls": 1,
+        },
+    }
+    _write_receipt(
+        run,
+        "01_model",
+        categories,
+        schema_version=6,
+        logical_repairs=[],
+        initial_generation=initial_generation,
+        final_reservation_state={
+            "required_token": None,
+            "bound_provider_history_len": None,
+            "bound_provider_history_sha256": None,
+            "completed_token": None,
+            "released": False,
+        },
+    )
+
+    assert apb.read_receipts(str(run), {})[0]["total_calls"] == 1
+
+    path = next((run / ".runtime" / "provider_call_budgets").glob("*.json"))
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["initial_generation"]["transport"]["after_code_size_bytes"] = -1
+    body = {key: value for key, value in payload.items() if key != "sha256"}
+    payload["sha256"] = apb._receipt_digest(body)
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(apb.BaselineError, match="completed initial generation"):
         apb.read_receipts(str(run), {})
 
 

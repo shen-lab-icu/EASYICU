@@ -18,8 +18,16 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from easyicu.research_agent.agents import _format_observed_domain
-from easyicu.research_agent.context import _observed_domain
+from easyicu.research_agent.agents.core import _format_observed_domain
+from easyicu.research_agent.cohort.artifact_facts import observed_domain_for_series
+from easyicu.research_agent.research_context.builder import _observed_domain
+from easyicu.research_agent.research_context.prompt_variables import (
+    project_observed_domain,
+)
+
+
+def test_legacy_observed_domain_name_is_canonical_object() -> None:
+    assert _observed_domain is observed_domain_for_series
 
 
 def test_binary_criterion_flagged_binary():
@@ -29,8 +37,31 @@ def test_binary_criterion_flagged_binary():
     assert d["is_binary"] is True
     assert d["is_constant"] is False
     assert d["n_unique"] == 2
+    assert d["levels"] == [0, 1]
     hint = _format_observed_domain(d)
     assert "BINARY" in hint and "degenerate" in hint
+    assert "[0, 1]" not in hint
+
+
+def test_float_binary_levels_are_locally_bound_but_outbound_opaque():
+    series = pd.Series([0.0, 1.0, 1.0, 0.0], dtype="float64")
+
+    domain = _observed_domain(series)
+
+    assert domain["levels"] == [0.0, 1.0]
+    assert project_observed_domain(domain) == {
+        "shape": "binary_numeric_indicator",
+        "n_unique": 2,
+        "opaque_levels": ["__easyicu_level_1__", "__easyicu_level_2__"],
+    }
+
+
+def test_single_observed_binary_value_does_not_invent_missing_level():
+    domain = _observed_domain(pd.Series([1.0, 1.0], dtype="float64"))
+
+    assert domain["is_binary"] is True
+    assert domain["n_unique"] == 1
+    assert "levels" not in domain
 
 
 def test_continuous_score_not_flagged_binary():
@@ -40,7 +71,8 @@ def test_continuous_score_not_flagged_binary():
     assert d["is_binary"] is False
     assert d["min"] == 0.0 and d["max"] == 24.0
     hint = _format_observed_domain(d)
-    assert "[0,24]" in hint and "BINARY" not in hint
+    assert "NUMERIC" in hint and "n_unique=25" in hint and "BINARY" not in hint
+    assert "[0,24]" not in hint
 
 
 def test_constant_column_flagged_constant():
@@ -81,7 +113,8 @@ def test_categorical_two_level_is_not_numeric_binary():
     assert d["is_binary"] is False
     assert d["levels"] == ["Female", "Male"]
     hint = _format_observed_domain(d)
-    assert "{0,1}" not in hint and "Male" in hint and "categorical" in hint
+    assert "{0,1}" not in hint and "Male" not in hint
+    assert "CATEGORICAL" in hint and "n_unique=2" in hint
 
 
 def test_high_cardinality_categorical_omits_levels():
@@ -91,10 +124,17 @@ def test_high_cardinality_categorical_omits_levels():
     assert d["is_binary"] is False
 
 
+def test_opaque_tokens_require_host_bindable_levels():
+    projection = project_observed_domain(
+        {"is_categorical": True, "is_binary": False, "n_unique": 2}
+    )
+    assert projection == {"shape": "unknown", "n_unique": 2}
+
+
 def test_descriptor_carries_observed_domain():
     # End-to-end: build_research_context attaches observed_domain so the binary
     # criterion is visible to the planner.
-    from easyicu.research_agent.context import build_research_context
+    from easyicu.research_agent.research_context.builder import build_research_context
 
     df = pd.DataFrame(
         {
@@ -113,4 +153,5 @@ def test_descriptor_carries_observed_domain():
     )
     by_name = {v.name: v for v in ctx.variables}
     assert by_name["sep3_sofa2_max"].observed_domain["is_binary"] is True
+    assert by_name["sep3_sofa2_max"].observed_domain["levels"] == [0, 1]
     assert by_name["age"].observed_domain["is_binary"] is False

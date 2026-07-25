@@ -4,7 +4,7 @@ import json
 import re
 from pathlib import Path
 
-from easyicu.research_agent import code_repair
+from easyicu.research_agent.repairs import source as code_repair
 from easyicu.research_agent.repair_registry import (
     InvariantStatus,
     RepairClass,
@@ -18,6 +18,7 @@ from easyicu.research_agent.repair_registry import (
     make_repair_provenance,
     repair_metadata_for,
 )
+from easyicu.research_agent.repairs import coordination as repair_coordination
 
 
 def test_repair_registry_invariants_hold() -> None:
@@ -48,6 +49,32 @@ def test_dynamic_repair_id_patterns_are_classified() -> None:
         is RepairClass.METHOD_SUBSTITUTION
     )
     assert not automatic_repair_allowed("undefined_helper_stub_to_json_serializable_v1")
+
+
+def test_unused_nullable_numeric_validation_is_structural_and_automatic() -> None:
+    repair_id = "unused_nullable_numeric_validation_v1"
+    assert repair_metadata_for(repair_id).repair_class is RepairClass.STRUCTURAL
+    assert automatic_repair_allowed(repair_id)
+
+
+def test_structured_analysis_role_selection_is_structural_and_automatic() -> None:
+    repair_id = "structured_analysis_role_selection_v1"
+    assert repair_metadata_for(repair_id).repair_class is RepairClass.STRUCTURAL
+    assert automatic_repair_allowed(repair_id)
+
+
+def test_render_only_effect_echo_suppression_is_structural_and_automatic() -> None:
+    repair_id = "render_only_effect_echo_suppression_v1"
+    assert repair_metadata_for(repair_id).repair_class is RepairClass.STRUCTURAL
+    assert automatic_repair_allowed(repair_id)
+
+
+def test_typed_output_normalization_is_structural_and_automatic() -> None:
+    repair_id = "typed_output_normalization_v1"
+    metadata = repair_metadata_for(repair_id)
+    assert metadata.repair_class is RepairClass.STRUCTURAL
+    assert metadata.introduces_numbers is False
+    assert automatic_repair_allowed(repair_id)
 
 
 def test_retired_case_specific_repair_ids_are_not_registered() -> None:
@@ -155,6 +182,153 @@ def test_syntactic_repair_has_no_invariants_and_passes_vacuously() -> None:
     assert evaluation.passed is True
 
 
+def test_closed_counts_stable_keyword_repair_is_syntactic_and_automatic() -> None:
+    metadata = repair_metadata_for("closed_counts_stable_keywords_v1")
+
+    assert metadata.classification_source == "exact"
+    assert metadata.repair_class is RepairClass.SYNTACTIC
+    assert metadata.invariants == ()
+    assert metadata.introduces_numbers is False
+    assert metadata.requires_disclosure is False
+    assert automatic_repair_allowed(metadata.repair_id)
+
+
+def test_preflight_only_helper_repairs_are_syntactic_and_automatic() -> None:
+    for repair_id in (
+        "publication_export_audit_paths_v1",
+        "boolean_reduction_identity_v1",
+    ):
+        metadata = repair_metadata_for(repair_id)
+
+        assert metadata.classification_source == "exact"
+        assert metadata.repair_class is RepairClass.SYNTACTIC
+        assert metadata.invariants == ()
+        assert metadata.introduces_numbers is False
+        assert metadata.requires_disclosure is False
+        assert automatic_repair_allowed(repair_id)
+
+
+def test_audit_only_companion_selector_repair_is_structural_and_automatic() -> None:
+    metadata = repair_metadata_for("audit_only_companion_value_selector_v1")
+
+    assert metadata.classification_source == "exact"
+    assert metadata.repair_class is RepairClass.STRUCTURAL
+    assert metadata.invariants
+    assert metadata.introduces_numbers is False
+    assert automatic_repair_allowed(metadata.repair_id)
+
+
+def test_local_read_hoist_is_syntactic_and_automatic() -> None:
+    metadata = repair_metadata_for("local_read_before_assignment_hoist_v1")
+
+    assert metadata.repair_class is RepairClass.SYNTACTIC
+    assert metadata.invariants == ()
+    assert metadata.introduces_numbers is False
+    assert automatic_repair_allowed(metadata.repair_id)
+
+
+def test_merge_collision_guard_is_syntactic_and_automatic() -> None:
+    metadata = repair_metadata_for("pandas_merge_dynamic_column_collision_guard_v1")
+
+    assert metadata.repair_class is RepairClass.SYNTACTIC
+    assert metadata.invariants == ()
+    assert metadata.introduces_numbers is False
+    assert automatic_repair_allowed(metadata.repair_id)
+
+
+def test_near_match_mapping_alias_is_syntactic_and_automatic() -> None:
+    metadata = repair_metadata_for("undefined_mapping_near_match_alias_v1")
+
+    assert metadata.repair_class is RepairClass.SYNTACTIC
+    assert metadata.invariants == ()
+    assert metadata.introduces_numbers is False
+    assert automatic_repair_allowed(metadata.repair_id)
+
+
+def test_attrition_rule_id_canonicalization_is_syntactic_and_automatic() -> None:
+    metadata = repair_metadata_for("attrition_rule_id_canonicalization_v1")
+
+    assert metadata.classification_source == "exact"
+    assert metadata.repair_class is RepairClass.SYNTACTIC
+    assert metadata.invariants == ()
+    assert metadata.introduces_numbers is False
+    assert metadata.requires_disclosure is False
+    assert automatic_repair_allowed(metadata.repair_id)
+
+
+def test_measurement_provenance_summary_mapping_is_structural_and_automatic() -> None:
+    for repair_id in (
+        "measurement_provenance_summary_mapping_v1",
+        "measurement_provenance_summary_mapping_v2",
+        "measurement_provenance_host_receipts_v1",
+    ):
+        metadata = repair_metadata_for(repair_id)
+
+        assert metadata.repair_class is RepairClass.STRUCTURAL
+        assert metadata.introduces_numbers is False
+        assert metadata.requires_disclosure is False
+        assert automatic_repair_allowed(metadata.repair_id)
+
+
+def test_penalized_convergence_contract_is_structural_and_automatic() -> None:
+    for repair_id in (
+        "penalized_convergence_contract_v1",
+        "penalized_convergence_contract_v2",
+    ):
+        metadata = repair_metadata_for(repair_id)
+
+        assert metadata.classification_source == "exact"
+        assert metadata.repair_class is RepairClass.STRUCTURAL
+        assert metadata.introduces_numbers is False
+        assert metadata.requires_disclosure is False
+        assert automatic_repair_allowed(metadata.repair_id)
+
+
+def test_observed_binary_domain_guard_is_structural_and_automatic() -> None:
+    metadata = repair_metadata_for("observed_binary_primary_exposure_guard_v1")
+
+    assert metadata.repair_class is RepairClass.STRUCTURAL
+    assert metadata.introduces_numbers is False
+    assert metadata.requires_disclosure is False
+    assert automatic_repair_allowed(metadata.repair_id)
+
+
+def test_llm_proven_numeric_domain_guards_are_structural_and_automatic() -> None:
+    metadata = repair_metadata_for("llm_proven_numeric_domain_guards_v1")
+
+    assert metadata.repair_class is RepairClass.STRUCTURAL
+    assert metadata.introduces_numbers is False
+    assert metadata.requires_disclosure is False
+    assert automatic_repair_allowed(metadata.repair_id)
+
+
+def test_authored_binary_feasibility_repair_is_structural_and_automatic() -> None:
+    metadata = repair_metadata_for("binary_domain_authored_feasibility_v1")
+
+    assert metadata.repair_class is RepairClass.STRUCTURAL
+    assert metadata.invariants
+    assert metadata.introduces_numbers is False
+    assert automatic_repair_allowed(metadata.repair_id)
+
+
+def test_provenance_checked_status_contract_is_structural_and_automatic() -> None:
+    metadata = repair_metadata_for("provenance_checked_status_contract_v1")
+
+    assert metadata.repair_class is RepairClass.STRUCTURAL
+    assert metadata.introduces_numbers is False
+    assert metadata.requires_disclosure is False
+    assert automatic_repair_allowed(metadata.repair_id)
+
+
+def test_sklearn_runtime_object_diagnostics_is_structural_and_automatic() -> None:
+    metadata = repair_metadata_for("sklearn_runtime_object_diagnostics_v1")
+
+    assert metadata.repair_class is RepairClass.STRUCTURAL
+    assert metadata.introduces_numbers is False
+    assert metadata.requires_disclosure is False
+    assert automatic_repair_allowed(metadata.repair_id)
+
+
 def test_all_method_substitutions_are_auto_denied() -> None:
     for repair_id in (
         "drop_overadjustment_covariates_v1",
@@ -183,20 +357,48 @@ def test_all_method_substitutions_are_auto_denied() -> None:
 
 
 def test_every_generic_repair_entrypoint_crosses_central_authorization_gate() -> None:
-    source = (
-        Path(code_repair.__file__)
-        .with_name("pipeline_execute.py")
-        .read_text(encoding="utf-8")
-    )
+    research_agent_root = Path(code_repair.__file__).resolve().parents[1]
+    source = (research_agent_root / "execution/phase.py").read_text(encoding="utf-8")
+    publication_figure_source = (
+        research_agent_root / "execution" / "publication_figure.py"
+    ).read_text(encoding="utf-8")
+    repair_coordination_source = (
+        research_agent_root / "repairs" / "coordination.py"
+    ).read_text(encoding="utf-8")
 
-    assert source.count("_deterministic_summary_repair(") == 3
+    # Two in-loop boundaries remain in the execute phase.  The resumed-failure
+    # boundary is owned by repairs.coordination and returns a candidate to the
+    # execute phase's central authorization callback before it can run.
+    assert source.count("_deterministic_summary_repair(") == 2
+    assert repair_coordination_source.count("_deterministic_summary_repair(") == 1
+    resume_boundary = source.index("candidate = resume_deterministic_repair_candidate(")
+    resume_authorization = source.index(
+        "repair = _authorize_automatic_repair(", resume_boundary
+    )
+    assert resume_authorization - resume_boundary < 500
     assert source.count("deterministic_contract_repair(") == 1
     assert source.count("_deterministic_runner_repair(") == 1
-    assert source.count("deterministic_concept_audit_repair(") == 1
-    # Six historical code-candidate boundaries, the rendering-only adapter,
-    # plus the local helper definition. Case-plugin candidates share the runner
-    # boundary and therefore cannot bypass it.
-    assert source.count("_authorize_automatic_repair(") == 8
+    # A2 batch-1 moved the concept-audit repair behind
+    # repair_coordination.authorized_deterministic_concept_repair, which
+    # enforces the all-or-nothing central authorization via its mandatory
+    # ``authorize`` callback. pipeline_execute must never call the raw
+    # repair directly again.
+    assert source.count("deterministic_concept_audit_repair(") == 0
+    coordination_source = Path(repair_coordination.__file__).read_text(encoding="utf-8")
+    assert coordination_source.count("deterministic_concept_audit_repair(") == 1
+    assert "authorize(" in coordination_source
+    assert "authorize=_authorize_automatic_repair" in source
+    # Six historical code-candidate boundaries minus the extracted concept
+    # helper, the rendering-only adapter, plus the local helper definition.
+    # Case-plugin candidates share the runner boundary and therefore cannot
+    # bypass it.
+    assert source.count("_authorize_automatic_repair(") == 6
+    assert publication_figure_source.count("_authorize_automatic_repair(") == 1
+    assert (
+        source.count("_authorize_automatic_repair(")
+        + publication_figure_source.count("_authorize_automatic_repair(")
+        == 7
+    )
     assert "authorizer=lambda repair_id: _automatic_repair_authorized(" in source
 
 
@@ -208,12 +410,13 @@ def test_only_closed_source_figure_renderers_are_structural_and_automatic() -> N
         "association_publication_bundle_from_planned_model_contract_v1",
         "cohort_flow_publication_bundle_from_parent_outputs_v1",
         "sensitivity_publication_bundle_from_locked_summary_v1",
+        "missingness_publication_bundle_from_parent_outputs_v1",
     ):
         metadata = repair_metadata_for(repair_id)
         assert metadata.repair_class is RepairClass.STRUCTURAL, repair_id
-        assert metadata.execution_policy is RepairExecutionPolicy.SEALED_RENDERER, (
-            repair_id
-        )
+        assert (
+            metadata.execution_policy is RepairExecutionPolicy.SEALED_RENDERER
+        ), repair_id
         assert is_sealed_renderer_repair(repair_id), repair_id
         assert metadata.figure_product_slots, repair_id
         assert metadata.planner_methods, repair_id
@@ -242,7 +445,6 @@ def test_only_closed_source_figure_renderers_are_structural_and_automatic() -> N
         "sensitivity_publication_bundle_from_parent_outputs_v2",
         "survival_publication_bundle_from_parent_outputs_v1",
         "cohort_overlap_publication_bundle_from_parent_outputs_v1",
-        "missingness_publication_bundle_from_parent_outputs_v1",
         "phenotype_publication_bundle_from_parent_outputs_v1",
         "descriptive_publication_bundle_from_parent_outputs_v1",
         "absolute_risk_publication_bundle_from_parent_outputs_v1",
@@ -308,9 +510,9 @@ def test_summary_salvage_minimal_contract_is_not_auto_authorized() -> None:
 
 
 def test_salvage_step_summary_records_stdout_salvage_end_to_end(tmp_path: Path) -> None:
-    from easyicu.research_agent.runner import RunResult
+    from easyicu.research_agent.contracts.runtime import RunResult
     from easyicu.research_agent.schema import AnalysisStep
-    from easyicu.research_agent.summary_repair import salvage_step_summary
+    from easyicu.research_agent.repairs.summary import salvage_step_summary
 
     out_dir = tmp_path / "outputs"
     out_dir.mkdir()
@@ -354,9 +556,9 @@ def test_salvage_step_summary_records_stdout_salvage_end_to_end(tmp_path: Path) 
 def test_salvage_step_summary_does_not_select_from_result_tables(
     tmp_path: Path,
 ) -> None:
-    from easyicu.research_agent.runner import RunResult
+    from easyicu.research_agent.contracts.runtime import RunResult
     from easyicu.research_agent.schema import AnalysisStep
-    from easyicu.research_agent.summary_repair import salvage_step_summary
+    from easyicu.research_agent.repairs.summary import salvage_step_summary
 
     out_dir = tmp_path / "outputs"
     out_dir.mkdir()
@@ -384,9 +586,9 @@ def test_salvage_step_summary_does_not_select_from_result_tables(
 
 
 def test_salvage_step_summary_returns_none_when_summary_present(tmp_path: Path) -> None:
-    from easyicu.research_agent.runner import RunResult
+    from easyicu.research_agent.contracts.runtime import RunResult
     from easyicu.research_agent.schema import AnalysisStep
-    from easyicu.research_agent.summary_repair import salvage_step_summary
+    from easyicu.research_agent.repairs.summary import salvage_step_summary
 
     out_dir = tmp_path / "outputs"
     out_dir.mkdir()

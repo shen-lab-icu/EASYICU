@@ -25,9 +25,12 @@ from pathlib import Path
 
 import pytest
 
-from easyicu.research_agent.evidence import EvidenceEnforcementError, EvidenceStore
-from easyicu.research_agent.pipeline_write import run_write_phase
-from easyicu.research_agent.pipeline_writer_aux import (
+from easyicu.research_agent.authority.evidence_store import (
+    EvidenceEnforcementError,
+    EvidenceStore,
+)
+from easyicu.research_agent.reporting.write_phase import run_write_phase
+from easyicu.research_agent.reporting.writer_evidence import (
     WRITER_DIGEST_PREFERRED_KEYS,
     _preferred_writer_evidence_names,
     _render_writer_evidence_digest,

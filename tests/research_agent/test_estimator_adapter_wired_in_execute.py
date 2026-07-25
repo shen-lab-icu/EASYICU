@@ -7,13 +7,13 @@ import pandas as pd
 
 
 def test_opt_in_adapter_primary_cannot_enter_final_panel(tmp_path) -> None:
-    from easyicu.research_agent.cohort_schema import (
+    from easyicu.research_agent.cohort.schema import (
         CohortDefinition,
         ConceptPredicate,
         TimeWindow,
     )
-    from easyicu.research_agent.estimators import fit_robustness_rows_from_records
-    from easyicu.research_agent.robustness_panel import (
+    from easyicu.research_agent.robustness.estimators import fit_robustness_rows_from_records
+    from easyicu.research_agent.robustness.panel import (
         RobustnessSpec,
         build_robustness_panel_from_records,
     )

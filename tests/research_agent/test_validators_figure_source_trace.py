@@ -51,28 +51,57 @@ def test_effect_source_inherits_primary_tier_only_from_matching_model_contract()
             },
         }
     ]
-    assert FigureSourceDataValidator._contract_scoped_effect_product(
-        product="table:adjusted_association_estimates",
-        source_frame=source,
-        upstream_step_id="05_model",
-        completed_step_records=completed,
-    ) == "table:primary_adjusted_association_estimates"
+    assert (
+        FigureSourceDataValidator._contract_scoped_effect_product(
+            product="table:adjusted_association_estimates",
+            source_frame=source,
+            upstream_step_id="05_model",
+            completed_step_records=completed,
+        )
+        == "table:primary_adjusted_association_estimates"
+    )
 
     forged = source.assign(source_variable="different_marker")
-    assert FigureSourceDataValidator._contract_scoped_effect_product(
-        product="table:adjusted_association_estimates",
-        source_frame=forged,
-        upstream_step_id="05_model",
-        completed_step_records=completed,
-    ) == "table:adjusted_association_estimates"
+    assert (
+        FigureSourceDataValidator._contract_scoped_effect_product(
+            product="table:adjusted_association_estimates",
+            source_frame=forged,
+            upstream_step_id="05_model",
+            completed_step_records=completed,
+        )
+        == "table:adjusted_association_estimates"
+    )
 
     adjustment_row = source.assign(term_role="adjustment")
-    assert FigureSourceDataValidator._contract_scoped_effect_product(
-        product="table:adjusted_association_estimates",
-        source_frame=adjustment_row,
-        upstream_step_id="05_model",
-        completed_step_records=completed,
-    ) == "table:adjusted_association_estimates"
+    assert (
+        FigureSourceDataValidator._contract_scoped_effect_product(
+            product="table:adjusted_association_estimates",
+            source_frame=adjustment_row,
+            upstream_step_id="05_model",
+            completed_step_records=completed,
+        )
+        == "table:adjusted_association_estimates"
+    )
+
+    positional_source = pd.DataFrame({"source_row_index": [0, 1]})
+    upstream = pd.DataFrame(
+        {
+            "model_id": ["planned_model", "planned_model"],
+            "term_role": ["exposure", "adjustment"],
+            "source_variable": ["marker_max", "age"],
+            "odds_ratio": [1.25, 1.01],
+        }
+    )
+    assert (
+        FigureSourceDataValidator._contract_scoped_effect_product(
+            product="table:adjusted_association_estimates",
+            source_frame=positional_source,
+            upstream_frame=upstream,
+            upstream_step_id="05_model",
+            completed_step_records=completed,
+        )
+        == "table:primary_adjusted_association_estimates"
+    )
 
 
 def _write_upstream(tmp_path: Path) -> Path:
@@ -120,6 +149,43 @@ def test_fabricated_contrast_id_still_flagged(tmp_path: Path):
     )
     assert res.get("ok") is False
     assert res.get("reason") == "source_rows_not_in_upstream", res
+
+
+def test_nullable_boolean_metadata_does_not_break_exact_numeric_projection(
+    tmp_path: Path,
+):
+    upstream = tmp_path / "robustness_summary.csv"
+    pd.DataFrame(
+        {
+            "analysis": ["primary", "complete_case"],
+            "odds_ratio": [1.25, 1.20],
+            "estimate_identical_to_primary": [None, False],
+        }
+    ).to_csv(upstream, index=False)
+    source = pd.DataFrame(
+        {
+            "source_row_index": [0, 1],
+            "analysis": ["primary", "complete_case"],
+            "odds_ratio": [1.25, 1.20],
+            "estimate_identical_to_primary": [None, False],
+        }
+    )
+
+    clean = FigureSourceDataValidator._compare_source_to_upstream(
+        source_df=source,
+        source_path=tmp_path / "robustness_source_data.csv",
+        upstream_path=upstream,
+    )
+    assert clean.get("ok") is True, clean
+
+    source.loc[1, "odds_ratio"] = 9.99
+    drift = FigureSourceDataValidator._compare_source_to_upstream(
+        source_df=source,
+        source_path=tmp_path / "robustness_source_data.csv",
+        upstream_path=upstream,
+    )
+    assert drift.get("ok") is False, drift
+    assert drift.get("reason") == "source_values_disagree", drift
 
 
 def test_model_id_term_composite_key_disambiguates_shared_terms_and_flags_drift(
@@ -713,6 +779,43 @@ def test_source_row_index_alias_accepts_truthful_parent_projection(
     assert res.get("ok") is True, res
     assert res.get("key_column") == position_col, res
     assert {"n", "event_n", "risk"} <= set(res.get("verified_value_mappings", {}))
+
+
+def test_source_row_index_disambiguates_repeated_named_keys_and_metadata_columns(
+    tmp_path: Path,
+):
+    up = tmp_path / "table_one.csv"
+    upstream = pd.DataFrame(
+        {
+            "variable": ["age", "age", "sex", "sex"],
+            "group": ["overall", "exposed", "overall", "exposed"],
+            "count_column": ["", "", "sex", "sex"],
+            "count": [100, 40, 55, 21],
+        }
+    )
+    upstream.to_csv(up, index=False)
+    source = upstream.copy()
+    source.insert(0, "source_table", up.name)
+    source.insert(0, "source_row_index", range(len(source)))
+
+    res = FigureSourceDataValidator._compare_source_to_upstream(
+        source_df=source,
+        source_path=tmp_path / "publication_figure_source_data.csv",
+        upstream_path=up,
+    )
+
+    assert res.get("ok") is True, res
+    assert res.get("key_column") == "source_row_index", res
+    assert res.get("verified_value_mappings", {}).get("count") == "count", res
+
+    source.loc[1, "count"] = 41
+    forged = FigureSourceDataValidator._compare_source_to_upstream(
+        source_df=source,
+        source_path=tmp_path / "publication_figure_source_data.csv",
+        upstream_path=up,
+    )
+    assert forged.get("ok") is False, forged
+    assert forged.get("reason") == "source_values_disagree", forged
 
 
 def test_underscore_source_row_index_still_flags_tampered_value(tmp_path: Path):
@@ -2502,6 +2605,55 @@ def test_truthful_statistic_backed_figure_has_value_lineage(tmp_path: Path):
     assert [finding for finding in findings if finding.severity == "error"] == []
 
 
+def test_standalone_statistic_artifact_authenticates_current_figure(
+    tmp_path: Path,
+):
+    figure_out, step, summary, records, bindings = _statistic_figure_fixture(
+        tmp_path,
+        source_value=0.81,
+    )
+    statistic_path = tmp_path / "evidence" / "metric__auroc.json"
+    statistic_path.write_text(
+        json.dumps({"name": "auroc", "estimate": 0.81}),
+        encoding="utf-8",
+    )
+    digest = hashlib.sha256(statistic_path.read_bytes()).hexdigest()
+    records[0]["evidence_ids"].append("metric_artifact")
+    bindings["statistic:auroc"] = {
+        "declared_kind": "statistic",
+        "product": "auroc",
+        "produced_by_step": "03_model",
+        "evidence_id": "metric_artifact",
+        "sha256": digest,
+        "absolute_path": str(statistic_path),
+    }
+
+    findings = FigureSourceDataValidator().audit(
+        step=step,
+        out_dir=figure_out,
+        run_dir=tmp_path,
+        step_summary=summary,
+        completed_step_records=records,
+        resolved_input_bindings=bindings,
+    )
+
+    assert [finding for finding in findings if finding.severity == "error"] == []
+
+    records[0]["evidence_ids"].remove("metric_artifact")
+    rejected = FigureSourceDataValidator().audit(
+        step=step,
+        out_dir=figure_out,
+        run_dir=tmp_path,
+        step_summary=summary,
+        completed_step_records=records,
+        resolved_input_bindings=bindings,
+    )
+    assert any(
+        finding.detail.get("reason") == "resolved_input_evidence_mismatch"
+        for finding in rejected
+    )
+
+
 def test_statistic_backed_figure_rejects_wrong_source_value(tmp_path: Path):
     figure_out, step, summary, records, bindings = _statistic_figure_fixture(
         tmp_path,
@@ -2876,6 +3028,76 @@ def test_cohort_score_columns_cannot_authenticate_model_performance(tmp_path: Pa
     )
 
     assert [finding for finding in findings if finding.severity == "error"]
+
+
+def test_exact_typed_input_key_can_name_its_hash_verified_source_table(
+    tmp_path: Path,
+):
+    upstream = pd.DataFrame(
+        {"group": ["low", "high"], "n": [40, 60], "rate": [0.1, 0.2]}
+    )
+    source = upstream.assign(source_table="table:grouped_result")
+    findings = _audit_bound_tabular_figures(
+        tmp_path,
+        declared_input="table:grouped_result",
+        upstream=upstream,
+        source=source,
+        figure_products=["figure:outcome_distribution"],
+    )
+    assert [finding for finding in findings if finding.severity == "error"] == []
+
+
+def test_foreign_typed_input_key_cannot_name_a_bound_source_table(tmp_path: Path):
+    upstream = pd.DataFrame(
+        {"group": ["low", "high"], "n": [40, 60], "rate": [0.1, 0.2]}
+    )
+    source = upstream.assign(source_table="table:foreign_result")
+    findings = _audit_bound_tabular_figures(
+        tmp_path,
+        declared_input="table:grouped_result",
+        upstream=upstream,
+        source=source,
+        figure_products=["figure:outcome_distribution"],
+    )
+    errors = [finding for finding in findings if finding.severity == "error"]
+    assert errors
+    assert any(
+        (finding.detail or {}).get("reason")
+        in {"declared_source_table_not_found", "incomplete_source_lineage_coverage"}
+        or (finding.detail or {}).get("best_mismatch", {}).get("reason")
+        == "declared_source_table_not_found"
+        for finding in errors
+    )
+
+
+def test_value_name_is_not_shadowed_by_semantic_source_metadata(
+    tmp_path: Path,
+):
+    source_path = tmp_path / "figure_source.csv"
+    upstream_path = tmp_path / "model_estimates.csv"
+    source = pd.DataFrame(
+        {
+            "term": ["const", "exposure"],
+            "effect": [0.25, 1.5],
+            "effect_source": ["odds_ratio", "odds_ratio"],
+        }
+    )
+    source.to_csv(source_path, index=False)
+    pd.DataFrame(
+        {
+            "term": ["const", "exposure"],
+            "odds_ratio": [0.25, 1.5],
+        }
+    ).to_csv(upstream_path, index=False)
+
+    comparison = FigureSourceDataValidator._compare_source_to_upstream(
+        source_df=source,
+        source_path=source_path,
+        upstream_path=upstream_path,
+    )
+
+    assert comparison["ok"] is True
+    assert comparison["verified_value_mappings"]["effect"] == "odds_ratio"
 
 
 def test_cohort_counts_cannot_authenticate_compound_prediction_figure(

@@ -1418,6 +1418,7 @@ def composite_constituents(
             ptok = _normalise_token(part)
             if ptok and ptok != base and ptok != full:
                 tokens.add(ptok)
+                tokens.update(_CONCEPT_ALIASES_NORM.get(ptok, ()))
 
     return tuple(sorted(tokens))
 
@@ -1442,6 +1443,25 @@ def _is_exposure_self(cov_tok: str, exp_tok: str) -> bool:
     return False
 
 
+def _covariate_matches_constituent(covariate: str, constituent: str) -> bool:
+    """Match a constituent by identity, never by an incidental substring."""
+
+    constituent_token = _normalise_token(constituent)
+    if not constituent_token:
+        return False
+    raw_parts = [
+        part for part in re.split(r"[^a-z0-9]+", str(covariate).lower()) if part
+    ]
+    covariate_token = "".join(raw_parts)
+    if constituent_token == covariate_token or constituent_token in raw_parts:
+        return True
+    if covariate_token.startswith(constituent_token):
+        remainder = covariate_token[len(constituent_token) :]
+        if remainder in _STAT_SUFFIXES:
+            return True
+    return False
+
+
 def detect_overadjustment(
     exposure: str,
     adjustment_covariates: Sequence[str],
@@ -1451,9 +1471,10 @@ def detect_overadjustment(
 
     Conditioning on a constituent of the exposure is overadjustment. Conservative
     by design: fires only when ``exposure`` is a recognised composite/derived
-    score (``composite_constituents`` non-empty) and a covariate name contains
-    one of its constituent tokens. The exposure variable itself is never flagged.
-    An empty list means no overadjustment detected.
+    score (``composite_constituents`` non-empty) and a covariate names one of its
+    constituent tokens or an explicit alias. Incidental substrings do not carry
+    scientific identity. The exposure variable itself is never flagged. An
+    empty list means no overadjustment detected.
     """
     part_toks = [t for t in composite_constituents(exposure, dictionary) if t]
     if not part_toks:
@@ -1464,7 +1485,7 @@ def detect_overadjustment(
         cov_tok = _normalise_token(cov)
         if not cov_tok or _is_exposure_self(cov_tok, exp_tok):
             continue  # the exposure itself is not an over-adjustment
-        if any(pt in cov_tok for pt in part_toks):
+        if any(_covariate_matches_constituent(str(cov), pt) for pt in part_toks):
             offenders.append(str(cov))
     return offenders
 

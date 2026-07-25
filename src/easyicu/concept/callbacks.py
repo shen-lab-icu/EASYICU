@@ -1502,8 +1502,14 @@ def _callback_aumc_death(
     tables: Dict[str, ICUTable],
     ctx: ConceptCallbackContext,
 ) -> ICUTable:
-    """AUMC death callback: marks death if it occurred within 72 hours of ICU discharge.
-    
+    """AUMC death callback (SUPERSEDED — not on the active extraction path).
+
+    NOTE (2026-07-16): the live `death` extraction dispatches through
+    ``callback_apply._apply_callback`` (``if expr == "aumc_death"``), which applies the
+    ricu 72h-of-ICU-discharge proxy in the loader's minute scale. This
+    CALLBACK_REGISTRY entry has no consumer for `death`; it is kept only for backward
+    compatibility and must not be reused without correcting its millisecond threshold.
+
     R ricu logic: x[, val_var := is_true(index_var - val_var < hours(72L))]
     where index_var = dateofdeath, val_var = dischargedat
     
@@ -1556,7 +1562,13 @@ def _callback_sic_death(
     tables: Dict[str, ICUTable],
     ctx: ConceptCallbackContext,
 ) -> ICUTable:
-    """SICdb death callback: marks death based on OffsetOfDeath in cases table.
+    """SICdb death callback (SUPERSEDED — not on the active extraction path).
+
+    NOTE (2026-07-16): the live `death` extraction dispatches through
+    ``callback_apply._apply_callback`` (``if expr == "sic_death"``), which now reads
+    `HospitalDischargeType == 2028` (Deceased) for in-hospital mortality. Flagging any
+    non-null OffsetOfDeath (below) captures registry deaths up to ~1yr of follow-up
+    (~annual mortality, not in-hospital) and must not be reused.
 
     SICdb stores OffsetOfDeath in seconds from ICU admission.
     If OffsetOfDeath is NaN, patient survived.
@@ -6899,6 +6911,86 @@ def _callback_driving_pressure(
     )
 
 
+def _callback_driving_pressure_controlled(
+    tables: Dict[str, ICUTable],
+    ctx: ConceptCallbackContext,
+) -> ICUTable:
+    """Driving pressure kept only under controlled (passive) ventilation.
+
+    driving pressure = plateau − PEEP is physiologically interpretable only when the
+    breath is machine-controlled: under spontaneous / SIMV / assisted modes the airway
+    "plateau" is not an alveolar plateau, so the value there is a mode artifact. This
+    concept computes the ordinary driving pressure, then keeps it only where the
+    harmonised `vent_breath_seq` is 'controlled', NaN elsewhere.
+
+    Ventilator mode is a persisting STATE, not an instantaneous measurement, so the mode
+    is forward-filled (LOCF) within each stay before being aligned to the driving-pressure
+    rows. A same-hour join loses almost everything where mode is charted sparsely
+    (verified: MIMIC-IV 0% same-hour vs 92% after LOCF).
+    """
+    def _df(t):
+        if t is None:
+            return None
+        d = t.data if hasattr(t, "data") else (t.to_dataframe() if hasattr(t, "to_dataframe") else t)
+        return d.data if hasattr(d, "data") else d
+
+    plateau_df, peep_df, seq_df = _df(tables.get("plateau_pres")), _df(tables.get("peep")), _df(tables.get("vent_breath_seq"))
+
+    def _empty():
+        return ICUTable(
+            data=pd.DataFrame(columns=["stay_id", "charttime", "driving_pres_controlled"]),
+            id_columns=["stay_id"], index_column="charttime", value_column="driving_pres_controlled")
+
+    if plateau_df is None or peep_df is None or plateau_df.empty or peep_df.empty:
+        return _empty()
+
+    from easyicu.callbacks import driving_pressure
+    database = None
+    if hasattr(ctx, "data_source") and ctx.data_source and hasattr(ctx.data_source, "config"):
+        database = getattr(ctx.data_source.config, "name", None)
+    dp = driving_pressure(plateau_pres=plateau_df, peep=peep_df,
+                          match_win=pd.Timedelta(hours=1), database=database)
+    if dp is None or dp.empty:
+        return _empty()
+
+    id_col = next((c for c in ["stay_id", "icustay_id", "patientunitstayid", "admissionid", "patientid", "CaseID"]
+                   if c in dp.columns), "stay_id")
+    time_col = next((c for c in ["charttime", "measuredat", "measuredat_minutes", "observationoffset", "datetime", "registeredat"]
+                     if c in dp.columns), "charttime")
+
+    # If no mode data, the concept is undefined -> emit nothing (honest missing).
+    if seq_df is None or seq_df.empty or "vent_breath_seq" not in seq_df.columns:
+        return _empty()
+    s_id = next((c for c in [id_col] + ["stay_id", "patientunitstayid", "admissionid", "patientid", "CaseID"]
+                 if c in seq_df.columns), None)
+    s_time = next((c for c in [time_col] + ["charttime", "measuredat", "measuredat_minutes", "observationoffset", "datetime"]
+                   if c in seq_df.columns), None)
+    if s_id is None or s_time is None:
+        return _empty()
+
+    dp = dp.copy()
+    dp["_row"] = np.arange(len(dp))
+    left = dp[[id_col, time_col, "_row"]].rename(columns={id_col: "_id", time_col: "_t"})
+    left["_kind"] = "dp"
+    right = seq_df[[s_id, s_time, "vent_breath_seq"]].rename(columns={s_id: "_id", s_time: "_t"})
+    right["_kind"] = "mode"
+    right["_row"] = -1
+    both = pd.concat([left, right], ignore_index=True, sort=False)
+    both["_t"] = pd.to_numeric(both["_t"], errors="coerce")
+    both["_krank"] = (both["_kind"] == "dp").astype(int)  # mode sorts before dp at equal time
+    both = both.sort_values(["_id", "_t", "_krank"], kind="mergesort")
+    both["_state"] = both.groupby("_id")["vent_breath_seq"].ffill()
+    state = both.loc[both["_kind"] == "dp", ["_row", "_state"]]
+    dp = dp.merge(state, on="_row", how="left").drop(columns=["_row"])
+
+    dp["driving_pres_controlled"] = dp["driving_pres"].where(dp["_state"].eq("controlled"))
+    out = dp.dropna(subset=["driving_pres_controlled"])[[id_col, time_col, "driving_pres_controlled"]]
+    if out.empty:
+        return _empty()
+    return ICUTable(data=out.reset_index(drop=True), id_columns=[id_col],
+                    index_column=time_col, value_column="driving_pres_controlled")
+
+
 def _callback_kdigo_aki(
     tables: Dict[str, ICUTable],
     ctx: ConceptCallbackContext,
@@ -7324,6 +7416,33 @@ def _callback_fluid_balance_hourly(
             value_column="fluid_balance",
         )
 
+    # ── Integrity guard (2026-07-17) ───────────────────────────────────
+    # fluid_balance = total_input_ml − urine. If a database has NO total_input_ml
+    # source (input_tbl None/empty), the downstream .fillna(0) on the input side
+    # silently yields fluid_balance = 0 − urine = −urine — a fabricated "balance"
+    # that is really negated urine (max 0, never positive). This masked the
+    # HiRID/SIC intake gaps. Refuse: return EMPTY (a visible gap) rather than an
+    # artifact, and warn.
+    def _tbl_missing(_t):
+        return (_t is None) or (getattr(_t, "data", None) is None) or _t.data.empty
+
+    # Symmetric: a balance needs BOTH sides. urine missing -> input - 0 = +input
+    # (the mirror artifact of input missing -> 0 - urine = -urine). Refuse both.
+    _input_missing = _tbl_missing(input_tbl) or _tbl_missing(urine_tbl)
+    if _input_missing:
+        import logging as _logging
+        _gid = ref_tbl.id_columns[0] if ref_tbl.id_columns else "stay_id"
+        _logging.getLogger("easyicu.concept").warning(
+            "fluid_balance: total_input_ml absent/empty for this database — "
+            "returning EMPTY (refusing to emit the −urine artifact)."
+        )
+        return _as_icutbl(
+            pd.DataFrame(columns=[_gid, "charttime", "fluid_balance"]),
+            id_columns=[_gid],
+            index_column="charttime",
+            value_column="fluid_balance",
+        )
+
     id_col = ref_tbl.id_columns[0] if ref_tbl.id_columns else "stay_id"
     declared_time_col = ref_tbl.index_column or "charttime"
 
@@ -7347,9 +7466,19 @@ def _callback_fluid_balance_hourly(
         if "charttime" in df.columns:
             pass  # already canonical
         else:
-            # Find first available time-like column and rename
-            for candidate in (declared_time_col, "starttime", "start", "time",
-                              "measuredat", "givenat", "Offset", "datetime"):
+            # FIX 2026-07-17: prefer THIS table's OWN declared index column. Using the
+            # reference table's `declared_time_col` silently failed whenever the two
+            # dependencies carry different native time columns (eICU: total_input_ml ->
+            # "charttime" but urine -> "intakeoutputoffset"), making to_df() return an
+            # EMPTY frame for urine -> urine_ml filled 0 -> fluid_balance = input - 0
+            # = input (a fabricated "balance" with no negatives). Also extend the
+            # fallback list with the db-native offset columns.
+            _own_time = getattr(tbl, "index_column", None)
+            for candidate in (_own_time, declared_time_col, "starttime", "start", "time",
+                              "measuredat", "measuredat_minutes", "givenat", "datetime",
+                              "intakeoutputoffset", "labresultoffset", "observationoffset",
+                              "nursingchartoffset", "respchartoffset", "infusionoffset",
+                              "Offset", "offset"):
                 if candidate and candidate in df.columns:
                     df = df.rename(columns={candidate: "charttime"})
                     break
@@ -7531,10 +7660,24 @@ def _callback_nlr(tables, ctx):
 
 
 def _callback_plr(tables, ctx):
-    """Platelet-to-lymphocyte ratio."""
+    """Platelet-to-lymphocyte ratio = platelets / ABSOLUTE lymphocyte count.
+
+    `lymph` is a percentage in all six databases (the absolute sources AUMC 14258 and
+    HiRID 24000480 are converted to % by the blood_cell_ratio callback), so the absolute
+    count has to be reconstructed as lymph% * wbc / 100. plt and wbc share the same unit
+    (K/uL == 10^9/L), so the ratio is dimensionless.
+    """
+
+    def f(m):
+        lymph_abs = (
+            pd.to_numeric(m["lymph"], errors="coerce")
+            * pd.to_numeric(m["wbc"], errors="coerce")
+            / 100.0
+        )
+        return _safe_div(m["plt"], lymph_abs)
+
     return _derive_rowwise(
-        tables, ctx, value_name="plr",
-        compute=lambda m: _safe_div(m["plt"], m["lymph"]), lo=1.0, hi=2000.0,
+        tables, ctx, value_name="plr", compute=f, lo=1.0, hi=2000.0,
     )
 
 
@@ -7588,9 +7731,22 @@ def _callback_egfr(tables, ctx):
 
     def _broadcast(frame_tbl, value_col):
         df = frame_tbl.data
-        keys = [c for c in frame_tbl.id_columns if c in df.columns and c in id_cols]
-        if not keys or value_col not in df.columns:
+        if value_col not in df.columns:
             return None
+        keys = [c for c in frame_tbl.id_columns if c in df.columns and c in id_cols]
+        if not keys:
+            # The ICU-stay id column can be named differently on the crea time
+            # series and on the id-level demographics for the same database.
+            # MIMIC-III labels it 'icustay_id' on labevents/chartevents (crea) but
+            # 'stay_id' on the patients-derived age/sex concepts. Both are the single
+            # ICU-stay identifier carrying identical values, so when each side has
+            # exactly one id column, align by renaming rather than dropping every row.
+            demo_ids = [c for c in frame_tbl.id_columns if c in df.columns]
+            if len(demo_ids) == 1 and len(id_cols) == 1 and demo_ids[0] != id_cols[0]:
+                df = df.rename(columns={demo_ids[0]: id_cols[0]})
+                keys = [id_cols[0]]
+            else:
+                return None
         return df[keys + [value_col]].drop_duplicates(subset=keys), keys
 
     age_bc = _broadcast(age_t, "age")
@@ -7637,6 +7793,66 @@ def _callback_persistent_critical_illness(tables, ctx):
         compute=lambda m: (pd.to_numeric(m["los_icu"], errors="coerce") >= 10).astype(float),
         lo=0.0, hi=1.0,
     )
+
+
+_VENT_MODE_MAP_CACHE = None
+
+
+def _load_vent_mode_map():
+    """Load and cache the cross-DB ventilator-mode harmonisation map."""
+    global _VENT_MODE_MAP_CACHE
+    if _VENT_MODE_MAP_CACHE is None:
+        import json as _json
+        from pathlib import Path as _Path
+        _p = _Path(__file__).resolve().parents[1] / "data" / "vent_mode_map.json"
+        _VENT_MODE_MAP_CACHE = _json.load(open(_p, encoding="utf-8"))
+    return _VENT_MODE_MAP_CACHE
+
+
+def apply_vent_mode_frame(frame, value_column, db_name, axis, out_column):
+    """Frame-level harmonisation of a native ventilator-mode column onto one axis.
+
+    Called from concept/callback_apply.py for the vent_mode_control / vent_mode_seq
+    source callbacks. axis is 'control' (feeds vent_mode) or 'seq' (feeds vent_breath_seq).
+    Unlike a bare apply_map this (a) strips trailing whitespace -- AUMC charts 'PC '/'VC '
+    with a trailing space and those are the two largest control modes; (b) drops any native
+    string not in the map (NaN) rather than leaving an out-of-vocabulary level; (c) selects
+    the per-DB submap; (d) routes MIMIC-IV BiPap itemid 227577 through its own submap.
+    Returns the frame with `out_column` set and unmapped rows removed.
+    """
+    import pandas as _pd
+    vm = _load_vent_mode_map()
+    db_key = {"eicu_demo": "eicu", "mimic_demo": "mimic"}.get(db_name, db_name)
+    submap = vm.get(db_key)
+    if submap is None or value_column not in frame.columns:
+        frame = frame.copy()
+        frame[out_column] = _pd.Series([None] * len(frame), index=frame.index, dtype=object)
+        return frame.iloc[0:0]
+
+    base_map = {k: v.get(axis) for k, v in submap.get("map", {}).items()}
+    vals = frame[value_column]
+    if submap.get("_by", "value") == "code":
+        def _norm_code(x):
+            try:
+                return str(int(float(x)))
+            except (TypeError, ValueError):
+                return None
+        keys = vals.map(_norm_code)
+    else:
+        keys = vals.astype(str).str.strip()
+    mapped = keys.map(base_map)
+
+    map227577 = submap.get("map_227577")
+    if map227577 is not None and "itemid" in frame.columns:
+        bipap_map = {k: v.get(axis) for k, v in map227577.items()}
+        is_bipap = frame["itemid"].astype(str) == "227577"
+        if is_bipap.any():
+            bipap_vals = frame.loc[is_bipap, value_column].astype(str).str.strip().map(bipap_map)
+            mapped = mapped.where(~is_bipap, bipap_vals)
+
+    frame = frame.copy()
+    frame[out_column] = mapped
+    return frame.dropna(subset=[out_column]).reset_index(drop=True)
 
 
 CALLBACK_REGISTRY: MutableMapping[str, CallbackFn] = {
@@ -7719,6 +7935,7 @@ CALLBACK_REGISTRY: MutableMapping[str, CallbackFn] = {
     "ca": lambda tables, ctx: _callback_simple_passthrough(tables, ctx, "ca"),
     # Ventilator parameters
     "driving_pressure": _callback_driving_pressure,
+    "driving_pressure_controlled": _callback_driving_pressure_controlled,
     # KDIGO AKI callbacks (loaded from kdigo_aki module)
     "kdigo_aki": _callback_kdigo_aki,
     "kdigo_creatinine": _callback_kdigo_creatinine,

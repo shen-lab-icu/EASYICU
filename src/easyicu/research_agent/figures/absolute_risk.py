@@ -20,8 +20,8 @@ from typing import Any, Mapping, Optional
 
 import pandas as pd
 
-from ..declared_product_contract import read_digest_bound_artifact_snapshot
-from ..publication_figures import (
+from ..contracts.declared_product import read_digest_bound_artifact_snapshot
+from .publication import (
     add_panel_label,
     apply_publication_style,
     make_figure_contract,
@@ -30,7 +30,11 @@ from ..publication_figures import (
 
 
 REPAIR_ID = "absolute_risk_incidence_prevalence_publication_bundle_v1"
-CONTROLLED_METHOD = "binary_outcome_incidence_and_absolute_risk"
+from ..planning.method_vocabulary import (
+    BINARY_OUTCOME_INCIDENCE_AND_ABSOLUTE_RISK,
+)
+
+CONTROLLED_METHOD = BINARY_OUTCOME_INCIDENCE_AND_ABSOLUTE_RISK
 _OUTCOME_TABLE = "outcome_incidence.csv"
 _PREVALENCE_TABLE = "exposure_prevalence.csv"
 _SNAPSHOT_NAMES = {"step_summary.json", _OUTCOME_TABLE, _PREVALENCE_TABLE}

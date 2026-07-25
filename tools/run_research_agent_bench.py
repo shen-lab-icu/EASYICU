@@ -47,11 +47,13 @@ runs reproducible from one entrypoint.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import importlib
 import json
 import math
 import os
 import re
+import stat
 import sys
 import time
 from datetime import datetime, timezone
@@ -60,7 +62,7 @@ from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any, Dict, List, Mapping, Optional, Sequence
 
 if TYPE_CHECKING:
-    from easyicu.research_agent.pipeline_profiles import SubmissionProfile
+    from easyicu.research_agent.orchestration.profiles import SubmissionProfile
 
 
 def _bootstrap_imports():
@@ -81,12 +83,63 @@ def _bootstrap_imports():
 _REQUIRED_KINDS = {"code", "log", "table", "figure", "statistic"}
 _ARM_ORDER = ("naive", "aware")
 _ARM_LABELS = {"naive": "Naive", "aware": "ICU-aware"}
-_DEFAULT_SUBMISSION_PROFILE_REF = "npj_dm/20260611"
-_TRAJECTORY_ENV_KEYS = (
-    "TRAJECTORY_PARQUET",
-    "EASYICU_TRAJECTORY_PARQUET",
-    "COHORT_TRAJECTORY_PARQUET",
-)
+
+
+class _JSONLObjectDecodeError(ValueError):
+    """Raised when one benchmark JSONL row is not a strict JSON object."""
+
+
+_FIGURE2_PAPER_ACCEPTANCE_EXIT_CODE = 3
+
+
+def _is_figure2_task_id(value: object) -> bool:
+    """Return True only for an exact frozen Canonical9 identifier."""
+
+    from benchmarks.figure2_canonical9.evaluator.rubric_v1 import FIGURE2_TASK_IDS
+
+    return type(value) is str and value in FIGURE2_TASK_IDS
+
+
+def _operational_exposure_for_item(item: object) -> object:
+    """Resolve the execution exposure once without laundering falsey values."""
+
+    declared = getattr(item, "operational_exposure", None)
+    if declared is not None:
+        return declared
+    return getattr(item, "primary_predictor", None)
+
+
+def _reject_jsonl_duplicate_pairs(
+    pairs: Sequence[tuple[str, object]],
+) -> Dict[str, object]:
+    decoded: Dict[str, object] = {}
+    for key, value in pairs:
+        if key in decoded:
+            raise _JSONLObjectDecodeError(f"duplicate JSON key: {key!r}")
+        decoded[key] = value
+    return decoded
+
+
+def _reject_jsonl_nonfinite_constant(value: str) -> object:
+    raise _JSONLObjectDecodeError(f"non-finite JSON constant is forbidden: {value}")
+
+
+def _decode_jsonl_object(line: str) -> Dict[str, Any]:
+    """Decode one handoff row without JSON's duplicate/non-finite extensions."""
+
+    try:
+        decoded = json.loads(
+            line,
+            object_pairs_hook=_reject_jsonl_duplicate_pairs,
+            parse_constant=_reject_jsonl_nonfinite_constant,
+        )
+    except _JSONLObjectDecodeError:
+        raise
+    except (json.JSONDecodeError, TypeError, ValueError) as exc:
+        raise _JSONLObjectDecodeError(str(exc)) from exc
+    if not isinstance(decoded, dict):
+        raise _JSONLObjectDecodeError("benchmark JSONL row must be an object")
+    return decoded
 
 
 def _normalize_arms(arms: Optional[Sequence[str]]) -> List[str]:
@@ -102,12 +155,23 @@ def _normalize_arms(arms: Optional[Sequence[str]]) -> List[str]:
 
 def _resolve_submission_profile(profile_ref: Optional[str]):
     _bootstrap_imports()
-    from easyicu.research_agent.pipeline_profiles import get_submission_profile
+    from easyicu.research_agent.orchestration.profiles import get_submission_profile
 
     try:
-        return get_submission_profile(profile_ref or _DEFAULT_SUBMISSION_PROFILE_REF)
+        return get_submission_profile(profile_ref)
     except ValueError as exc:
         raise SystemExit(str(exc)) from exc
+
+
+def _default_submission_profile_ref() -> str:
+    """Resolve the benchmark CLI default from the canonical registry."""
+
+    _bootstrap_imports()
+    from easyicu.research_agent.orchestration.profiles import (
+        DEFAULT_SUBMISSION_PROFILE_REF,
+    )
+
+    return DEFAULT_SUBMISSION_PROFILE_REF
 
 
 def _register_case_patterns(case_name: Optional[str]) -> Optional[Dict[str, Any]]:
@@ -119,7 +183,7 @@ def _register_case_patterns(case_name: Optional[str]) -> Optional[Dict[str, Any]
             "numbers, and underscores"
         )
     _bootstrap_imports()
-    from easyicu.research_agent.cohort_schema import default_pattern_registry
+    from easyicu.research_agent.cohort.schema import default_pattern_registry
 
     module_name = f"benchmark.cases.{case_name}.register_patterns"
     try:
@@ -707,17 +771,10 @@ def _active_error_count(manifest: Dict[str, Any]) -> Optional[int]:
 def _gate_ladder(run_dir: Path, readiness: Dict[str, Any]) -> Optional[str]:
     """Final gate-ladder status for the run (publication_ready > ... ).
 
-    Prefer run_status.json's own ``status`` string; fall back to the
-    manifest readiness booleans when the file is missing (older runs).
+    The selected manifest readiness is the authority supplied by the caller;
+    mutable run-root summaries are never allowed to override it.
     """
-    rs = run_dir / "run_status.json"
-    if rs.exists():
-        try:
-            status = json.loads(rs.read_text(encoding="utf-8")).get("status")
-            if isinstance(status, str) and status:
-                return status
-        except Exception:
-            pass
+    del run_dir
     if not isinstance(readiness, dict) or not readiness:
         return None
     for key in ("publication_ready", "manuscript_ready", "analysis_validated"):
@@ -728,6 +785,86 @@ def _gate_ladder(run_dir: Path, readiness: Dict[str, Any]) -> Optional[str]:
                 else key
             )
     return "analysis_only" if readiness.get("execution_complete") else "incomplete"
+
+
+def _figure2_canary_passed(score: Mapping[str, Any]) -> bool:
+    """Require the first formal Canonical9 item to clear paper-facing gates."""
+
+    aware = score.get("aware")
+    if not isinstance(aware, Mapping):
+        return False
+    evaluation = aware.get("figure2_evaluation_attempt")
+    paper_tristate: Optional[str] = None
+    if isinstance(evaluation, Mapping):
+        envelope = evaluation.get("envelope")
+        paper_scorecard = (
+            envelope.get("scorecard") if isinstance(envelope, Mapping) else None
+        )
+        canonical_scorecard = (
+            paper_scorecard.get("scorecard_canonical_json")
+            if isinstance(paper_scorecard, Mapping)
+            else None
+        )
+        if isinstance(canonical_scorecard, str):
+            try:
+                parsed_scorecard = json.loads(canonical_scorecard)
+            except (TypeError, ValueError):
+                parsed_scorecard = None
+            if isinstance(parsed_scorecard, Mapping):
+                paper_tristate = str(parsed_scorecard.get("tristate") or "")
+    return bool(
+        aware.get("publication_ready")
+        and aware.get("manuscript_ready")
+        and int(aware.get("n_errors") or 0) == 0
+        and isinstance(evaluation, Mapping)
+        and evaluation.get("status") == "valid"
+        and paper_tristate == "gate_reportable"
+    )
+
+
+def _write_figure2_canary_gate(
+    *,
+    out_root: Path,
+    task_id: str,
+    score: Optional[Mapping[str, Any]],
+    status: str,
+    reason: str,
+) -> Path:
+    """Persist why a formal batch did or did not advance beyond its canary."""
+
+    score_payload = dict(score or {})
+    payload = {
+        "schema_version": "easyicu.figure2_canary_gate/1",
+        "task_id": str(task_id),
+        "status": str(status),
+        "reason": str(reason),
+        "score_sha256": (
+            hashlib.sha256(
+                json.dumps(
+                    score_payload,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                    ensure_ascii=False,
+                    default=str,
+                ).encode("utf-8")
+            ).hexdigest()
+            if score_payload
+            else None
+        ),
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+    }
+    path = Path(out_root) / "figure2_canary_gate.json"
+    path.write_text(
+        json.dumps(
+            payload,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    return path
 
 
 def _writer_attempts(run_dir: Path, readiness: Dict[str, Any]) -> Optional[int]:
@@ -765,6 +902,53 @@ def _writer_attempts(run_dir: Path, readiness: Dict[str, Any]) -> Optional[int]:
     return count
 
 
+def _figure2_evaluation_attempt(*, run_dir: Path, item) -> Dict[str, Any]:
+    """Seal and score one exact Canonical9 run without touching Agent calls."""
+
+    from benchmarks.figure2_canonical9.evaluator.scoring import (
+        FIGURE2_EVALUATION_ATTEMPT_SCHEMA,
+        Figure2EvaluationAttempt,
+        evaluate_figure2_run_from_receipt_path,
+    )
+    from benchmarks.figure2_canonical9.evaluator.scoring_inputs import (
+        seal_figure2_run_task_authority,
+    )
+
+    task_id = str(getattr(item, "key", "") or "")
+    try:
+        seal_figure2_run_task_authority(
+            run_dir,
+            task_id=task_id,
+            research_question=str(getattr(item, "research_question", "") or ""),
+            exposure_concept=getattr(item, "primary_predictor", None),
+            outcome_concept=getattr(item, "target_outcome", None),
+            operational_exposure=_operational_exposure_for_item(item),
+        )
+    except Exception as exc:  # evaluator metadata must never abort a bench run
+        return Figure2EvaluationAttempt(
+            schema_version=FIGURE2_EVALUATION_ATTEMPT_SCHEMA,
+            status="invalid",
+            task_id=task_id,
+            run_id=run_dir.name or None,
+            invalid_reason_codes=("SCORING_INPUT_AUTHORITY_INVALID",),
+            invalid_details=(f"posthoc task-authority seal failed: {exc}",),
+        ).model_dump(mode="json")
+    try:
+        return evaluate_figure2_run_from_receipt_path(
+            run_dir,
+            task_id=task_id,
+        ).model_dump(mode="json")
+    except Exception as exc:  # scorer failures are evaluator results, not run failures
+        return Figure2EvaluationAttempt(
+            schema_version=FIGURE2_EVALUATION_ATTEMPT_SCHEMA,
+            status="invalid",
+            task_id=task_id,
+            run_id=run_dir.name or None,
+            invalid_reason_codes=("SCORER_ERROR",),
+            invalid_details=(f"posthoc Figure 2 scorer failed: {exc}",),
+        ).model_dump(mode="json")
+
+
 def _score_arm(*, run_dir: Path, item, label: str) -> Dict[str, Any]:
     manifest = _load_manifest(run_dir)
     historical_error_count = sum(
@@ -779,7 +963,7 @@ def _score_arm(*, run_dir: Path, item, label: str) -> Dict[str, Any]:
         research_question=getattr(item, "research_question", ""),
         manifest=manifest,
     )
-    return {
+    result = {
         "arm": label,
         "run_id": manifest.get("run_id"),
         "workdir": str(run_dir),
@@ -829,6 +1013,13 @@ def _score_arm(*, run_dir: Path, item, label: str) -> Dict[str, Any]:
         # the manuscript cost table; {} when cost tracking was off.
         "cost_summary": _load_cost_summary(run_dir),
     }
+    if _is_figure2_task_id(getattr(item, "key", None)):
+        result["execution_identity"] = manifest.get("execution_identity")
+        result["figure2_evaluation_attempt"] = _figure2_evaluation_attempt(
+            run_dir=run_dir,
+            item=item,
+        )
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -847,14 +1038,10 @@ def _find_resumable_run(workdir: Path) -> Optional[str]:
     candidates = []
     for partial in workdir.glob("run_*/manifest_partial.json"):
         run_dir = partial.parent
-        rs = run_dir / "run_status.json"
-        if rs.exists():
-            try:
-                gates = json.loads(rs.read_text(encoding="utf-8")).get("gates", {})
-                if gates.get("execution_complete"):
-                    continue  # already finished — nothing to resume
-            except (json.JSONDecodeError, OSError):
-                pass
+        if (run_dir / "manifest.json").exists() and _run_reached_execution_complete(
+            run_dir
+        ):
+            continue
         candidates.append(run_dir.name)
     return sorted(candidates)[-1] if candidates else None
 
@@ -921,17 +1108,16 @@ def _run_one_arm(
     force_writer_probe: bool = False,
 ) -> Dict[str, Any]:
     from easyicu.research_agent import ResearchAgentPipeline  # type: ignore
-    from easyicu.research_agent.cohort_schema import register_cohort_concept_ids
-    from easyicu.research_agent.reporting_checklist import checklist_names_for_kind
+    from easyicu.research_agent.cohort.schema import register_cohort_concept_ids
+    from easyicu.research_agent.reporting.reporting_checklist import (
+        checklist_names_for_kind,
+    )
 
     # The provided cohort is already materialised; let the planner reference any
     # of its columns in a CTAS predicate without tripping the static dictionary
     # check ("unknown concept_id: <derived column>").
     register_cohort_concept_ids(
-        list(
-            getattr(item, "cohort_columns", None)
-            or getattr(cohort, "columns", [])
-        )
+        list(getattr(item, "cohort_columns", None) or getattr(cohort, "columns", []))
     )
 
     workdir.mkdir(parents=True, exist_ok=True)
@@ -971,11 +1157,7 @@ def _run_one_arm(
         )
     started = time.monotonic()
     database = str(getattr(item, "database", "") or "bench").strip() or "bench"
-    operational_exposure = (
-        getattr(item, "operational_exposure", None)
-        or getattr(item, "primary_predictor", None)
-        or None
-    )
+    operational_exposure = _operational_exposure_for_item(item)
     exposure_display_name = getattr(item, "primary_predictor", None) or None
     normalized_question = re.sub(
         r"[^a-z0-9]+", "_", str(item.research_question or "").lower()
@@ -1000,12 +1182,19 @@ def _run_one_arm(
     result = pipeline.run(
         question=item.research_question,
         cohort=cohort,
+        cohort_authority_path=getattr(item, "cohort_authority_path", None),
+        cohort_authority_ref=getattr(item, "cohort_authority_ref", None),
+        trajectory_path=getattr(item, "trajectory_path", None),
+        trajectory_authority_path=getattr(item, "trajectory_authority_path", None),
+        trajectory_authority_ref=getattr(item, "trajectory_authority_ref", None),
         cohort_name=f"bench_{item.key}",
         database=database,
         target_outcome=item.target_outcome,
         primary_exposure=operational_exposure,
         concept_descriptions=concept_descriptions,
         inclusion_criteria=item.inclusion_criteria,
+        id_columns=(getattr(item, "id_columns", None) or None),
+        notes=getattr(item, "notes", None),
         resume_run_id=resolved_resume_run_id,
         resume_from_step_id=resume_from_step_id,
         stop_after_step_id=stop_after_step_id,
@@ -1086,19 +1275,350 @@ def _run_one_item(
     return payload
 
 
+def _run_reached_execution_complete(run_dir: Path) -> bool:
+    """Return True only when current checkpoint and EvidenceStore status agree."""
+
+    from easyicu.research_agent.authority.run_lock import (
+        RunExecutionLockError,
+        acquire_run_execution_lock,
+    )
+    from easyicu.research_agent.authority.runtime_artifacts import (
+        RunArtifactAuthorityError,
+        current_evidence_records,
+        load_run_artifact_authority,
+        verified_run_evidence_path,
+    )
+    from easyicu.research_agent.authority.evidence_snapshot import (
+        EvidenceAuthorityIntegrityError,
+        load_current_evidence_snapshot,
+    )
+
+    try:
+        with acquire_run_execution_lock(workdir=run_dir.parent, run_id=run_dir.name):
+            selected = load_run_artifact_authority(run_dir)
+            if selected is None:
+                return False
+
+            def read_regular_object(
+                path: Path, *, expected_sha256: str | None = None
+            ) -> Dict[str, object]:
+                descriptor: int | None = None
+                try:
+                    flags = (
+                        os.O_RDONLY
+                        | getattr(os, "O_CLOEXEC", 0)
+                        | getattr(os, "O_NONBLOCK", 0)
+                        | getattr(os, "O_NOFOLLOW", 0)
+                    )
+                    descriptor = os.open(path, flags)
+                    metadata = os.fstat(descriptor)
+                    if (
+                        not stat.S_ISREG(metadata.st_mode)
+                        or metadata.st_size > 1024 * 1024
+                    ):
+                        raise OSError("run authority document is not a small file")
+                    chunks: list[bytes] = []
+                    total = 0
+                    while True:
+                        chunk = os.read(descriptor, 64 * 1024)
+                        if not chunk:
+                            break
+                        total += len(chunk)
+                        if total > 1024 * 1024:
+                            raise OSError("run authority document exceeds 1 MiB")
+                        chunks.append(chunk)
+                    payload = b"".join(chunks)
+                    if expected_sha256 is not None and (
+                        hashlib.sha256(payload).hexdigest() != expected_sha256
+                    ):
+                        raise OSError("run authority document digest changed")
+                    return _decode_jsonl_object(payload.decode("utf-8"))
+                finally:
+                    if descriptor is not None:
+                        os.close(descriptor)
+
+            final_manifest = read_regular_object(run_dir / "manifest.json")
+            if selected != final_manifest:
+                return False
+            readiness = selected.get("readiness")
+            raw_steps = selected.get("per_step_records")
+            raw_records = selected.get("evidence")
+            if (
+                not isinstance(readiness, dict)
+                or readiness.get("execution_complete") is not True
+                or not isinstance(raw_steps, list)
+                or any(not isinstance(item, dict) for item in raw_steps)
+                or not isinstance(raw_records, list)
+                or any(not isinstance(item, dict) for item in raw_records)
+            ):
+                return False
+            snapshot = load_current_evidence_snapshot(run_dir)
+            if snapshot.source != "authority":
+                return False
+            coordinate_fields = (
+                "evidence_id",
+                "relative_path",
+                "sha256",
+                "kind",
+                "producer",
+                "generation_mode",
+                "produced_by_step",
+            )
+            from collections import Counter
+
+            checkpoint_coordinates = Counter(
+                tuple(record.get(field) for field in coordinate_fields)
+                for record in raw_records
+            )
+            evidence_coordinates = Counter(
+                tuple(record.get(field) for field in coordinate_fields)
+                for record in snapshot.records
+            )
+            if checkpoint_coordinates != evidence_coordinates:
+                return False
+            current_records = [
+                dict(record)
+                for record in current_evidence_records(snapshot.records, raw_steps)
+                if isinstance(record, Mapping)
+            ]
+            status_records = [
+                record
+                for record in current_records
+                if record.get("evidence_id") == "run_status"
+            ]
+            if len(status_records) != 1:
+                return False
+            status_record = status_records[0]
+            status_path = verified_run_evidence_path(run_dir, status_record)
+            if status_path is None:
+                return False
+            status_payload = read_regular_object(
+                status_path,
+                expected_sha256=str(status_record.get("sha256") or ""),
+            )
+            gates = status_payload.get("gates")
+            return (
+                isinstance(gates, dict)
+                and gates.get("execution_complete") is True
+                and gates == readiness
+            )
+    except (
+        OSError,
+        UnicodeDecodeError,
+        _JSONLObjectDecodeError,
+        EvidenceAuthorityIntegrityError,
+        RunArtifactAuthorityError,
+        RunExecutionLockError,
+        ValueError,
+    ):
+        return False
+
+
+def _figure2_run_is_reusable(run_dir: Path, item: object) -> bool:
+    """Require the exact paper sidecar authority before suppressing a new run."""
+
+    if not _run_reached_execution_complete(run_dir):
+        return False
+    from benchmarks.figure2_canonical9.evaluator.scoring_inputs import (
+        load_figure2_scoring_inputs,
+        seal_figure2_run_task_authority,
+    )
+
+    try:
+        seal_figure2_run_task_authority(
+            run_dir,
+            task_id=str(getattr(item, "key", "") or ""),
+            research_question=str(getattr(item, "research_question", "") or ""),
+            exposure_concept=getattr(item, "primary_predictor", None),
+            outcome_concept=getattr(item, "target_outcome", None),
+            operational_exposure=_operational_exposure_for_item(item),
+        )
+        load_figure2_scoring_inputs(
+            run_dir,
+            expected_task_id=str(getattr(item, "key", "") or ""),
+        )
+    except Exception:
+        return False
+    return True
+
+
 def _reuse_arm_if_complete(
-    *, arm_dir: Path, item, label: str
+    *, arm_dir: Path, item, label: str, expected_execution_identity_sha256: str
 ) -> Optional[Dict[str, Any]]:
     if not arm_dir.exists():
         return None
     runs = sorted(
-        (p for p in arm_dir.glob("run_*") if (p / "manifest.json").exists()),
+        (
+            p
+            for p in arm_dir.glob("run_*")
+            if (p / "manifest.json").exists()
+            and _manifest_execution_identity_matches(
+                p,
+                expected_execution_identity_sha256,
+            )
+            and (
+                _figure2_run_is_reusable(p, item)
+                if _is_figure2_task_id(getattr(item, "key", None))
+                else _run_reached_execution_complete(p)
+            )
+        ),
         key=lambda p: p.name,
         reverse=True,
     )
     if not runs:
         return None
-    return _score_arm(run_dir=runs[0], item=item, label=label)
+    result = _score_arm(run_dir=runs[0], item=item, label=label)
+    attempt = result.get("figure2_evaluation_attempt")
+    if (
+        _is_figure2_task_id(getattr(item, "key", None))
+        and isinstance(attempt, dict)
+        and attempt.get("status") == "invalid"
+        and "SCORING_INPUT_AUTHORITY_INVALID"
+        in set(attempt.get("invalid_reason_codes") or ())
+    ):
+        return None
+    return result
+
+
+def _manifest_execution_identity_matches(
+    run_dir: Path,
+    expected_sha256: str,
+) -> bool:
+    """Require an exact validated ExecutionIdentity before reusing a run."""
+
+    from easyicu.research_agent.authority.execution_identity import ExecutionIdentity
+
+    try:
+        manifest = _load_manifest(run_dir)
+        identity = ExecutionIdentity.model_validate(
+            manifest.get("execution_identity"),
+            strict=True,
+        )
+    except Exception:
+        return False
+    return identity.identity_sha256 == expected_sha256
+
+
+def _benchmark_execution_identity(
+    pipeline_options: Optional[Dict[str, Any]],
+    llm: Any = None,
+    *,
+    provider: str | None = None,
+    model: str | None = None,
+    reasoning_effort_profile: str = "provider_default",
+):
+    from easyicu.research_agent.authority.execution_identity import ExecutionIdentity
+    from easyicu.research_agent.providers.factory import (
+        provider_authorization_for_configuration,
+    )
+
+    options = dict(pipeline_options or {})
+    provider_authorization = None
+    if llm is None:
+        if provider is None or model is None:
+            raise ValueError("benchmark execution identity requires provider/model")
+        provider_authorization = provider_authorization_for_configuration(
+            provider=provider,
+            model=model,
+            reasoning_effort_profile=reasoning_effort_profile,
+        )
+    return ExecutionIdentity.create(
+        submission_profile_name=options.get("submission_profile_name"),
+        submission_profile_version=options.get("submission_profile_version"),
+        runner=str(options.get("runner_kind") or "auto"),
+        runner_image_digest=options.get("expected_runner_image_digest"),
+        network_policy=str(options.get("runner_network") or "none"),
+        provider_client=llm,
+        provider_authorization=provider_authorization,
+        llm_seed=options.get("llm_seed"),
+        data_seed=options.get("execution_data_seed"),
+        input_authority_sha256=options.get("execution_input_authority_sha256"),
+        host_runner_authorized=bool(options.get("host_runner_authorized", False)),
+    )
+
+
+def _benchmark_input_authority_sha256(cohort: Any) -> str:
+    """Hash the exact benchmark input without exposing its values."""
+
+    def _canonical_bytes(payload: object) -> bytes:
+        return json.dumps(
+            payload,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+            default=str,
+        ).encode("utf-8")
+
+    if isinstance(cohort, (str, Path)):
+        from benchmarks.figure2_canonical9.realrun_authority import (
+            production_cohort_input_sha256,
+        )
+
+        # ONE algorithm, shared with the real-run freeze gate's per-task input
+        # digest, so the frozen ``input_sha256`` and this runtime-bound digest can
+        # never silently diverge.
+        return production_cohort_input_sha256(cohort)
+
+    try:
+        import pandas as pd
+
+        if isinstance(cohort, pd.DataFrame):
+            digest = hashlib.sha256()
+            digest.update(
+                _canonical_bytes(
+                    {
+                        "kind": "dataframe",
+                        "columns": [str(column) for column in cohort.columns],
+                        "dtypes": [str(dtype) for dtype in cohort.dtypes],
+                        "row_count": int(len(cohort)),
+                    }
+                )
+            )
+            try:
+                hashed = pd.util.hash_pandas_object(
+                    cohort,
+                    index=True,
+                    categorize=True,
+                )
+                digest.update(hashed.to_numpy(dtype="uint64", copy=False).tobytes())
+            except (TypeError, ValueError):
+                digest.update(
+                    cohort.to_json(
+                        orient="split",
+                        date_format="iso",
+                        date_unit="ns",
+                        default_handler=str,
+                    ).encode("utf-8")
+                )
+            return digest.hexdigest()
+    except ImportError:  # pragma: no cover - benchmark installs pandas
+        pass
+
+    return hashlib.sha256(
+        _canonical_bytes({"kind": "jsonable", "value": cohort})
+    ).hexdigest()
+
+
+def _bind_benchmark_execution_input(
+    pipeline_options: Optional[Mapping[str, Any]],
+    *,
+    cohort: Any,
+    data_seed: int | None,
+) -> Dict[str, Any]:
+    """Bind reuse and the persisted run identity to the current input."""
+
+    options = dict(pipeline_options or {})
+    input_digest = _benchmark_input_authority_sha256(cohort)
+    declared_digest = options.get("execution_input_authority_sha256")
+    if declared_digest is not None and declared_digest != input_digest:
+        raise ValueError("benchmark input authority override does not match cohort")
+    declared_seed = options.get("execution_data_seed")
+    if declared_seed is not None and declared_seed != data_seed:
+        raise ValueError("benchmark data seed override does not match invocation")
+    options["execution_input_authority_sha256"] = input_digest
+    options["execution_data_seed"] = data_seed
+    return options
 
 
 def _run_one_item_with_reuse(
@@ -1119,19 +1639,31 @@ def _run_one_item_with_reuse(
     if verbose:
         print(f"\n=== {item.key} — {item.name} ===")
     cohort = item.cohort_factory(seed)
+    bound_pipeline_options = _bind_benchmark_execution_input(
+        pipeline_options,
+        cohort=cohort,
+        data_seed=seed,
+    )
     item_root = out_root / item.key
     selected = set(_normalize_arms(arms))
+    expected_identity = _benchmark_execution_identity(bound_pipeline_options, llm)
 
     naive = _skipped_arm("naive")
     aware = _skipped_arm("aware")
     if reuse_existing and not resume_run_id:
         if "naive" in selected:
             naive = _reuse_arm_if_complete(
-                arm_dir=item_root / "naive", item=item, label="naive"
+                arm_dir=item_root / "naive",
+                item=item,
+                label="naive",
+                expected_execution_identity_sha256=expected_identity.identity_sha256,
             ) or _skipped_arm("naive")
         if "aware" in selected:
             aware = _reuse_arm_if_complete(
-                arm_dir=item_root / "aware", item=item, label="aware"
+                arm_dir=item_root / "aware",
+                item=item,
+                label="aware",
+                expected_execution_identity_sha256=expected_identity.identity_sha256,
             ) or _skipped_arm("aware")
 
     if "naive" in selected and not _arm_was_run(naive):
@@ -1142,7 +1674,7 @@ def _run_one_item_with_reuse(
             disable_icu_context=True,
             label="naive",
             llm=llm,
-            pipeline_options=pipeline_options,
+            pipeline_options=bound_pipeline_options,
             resume_run_id=resume_run_id,
             resume_from_step_id=resume_from_step_id,
             stop_after_step_id=stop_after_step_id,
@@ -1156,7 +1688,7 @@ def _run_one_item_with_reuse(
             disable_icu_context=False,
             label="aware",
             llm=llm,
-            pipeline_options=pipeline_options,
+            pipeline_options=bound_pipeline_options,
             resume_run_id=resume_run_id,
             resume_from_step_id=resume_from_step_id,
             stop_after_step_id=stop_after_step_id,
@@ -1513,23 +2045,60 @@ def _render_run_registry(payload: Dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
-def _make_llm(*, provider: str, model: str, request_timeout: float):
+def _make_llm(
+    *,
+    provider: str,
+    model: str,
+    request_timeout: float,
+    reasoning_effort_profile: str = "provider_default",
+):
     _bootstrap_imports()
-    from easyicu.research_agent import MockLLMClient, OpenAIClient  # type: ignore
+    from easyicu.research_agent import (  # type: ignore
+        LLMRouter,
+        MockLLMClient,
+        OpenAIClient,
+    )
     from easyicu.research_agent.providers import (  # type: ignore
         ProviderConfigurationError,
         build_provider_client,
     )
+    from easyicu.research_agent.providers.llm import reasoning_effort_by_role
 
     if provider == "mock":
         return MockLLMClient()
     try:
-        return build_provider_client(
-            provider=provider,
-            model=model,
-            request_timeout=request_timeout,
-            title="EasyICU research-agent benchmark",
-            client_cls=OpenAIClient,
+        effort_by_role = reasoning_effort_by_role(reasoning_effort_profile)
+        if not effort_by_role:
+            return build_provider_client(
+                provider=provider,
+                model=model,
+                request_timeout=request_timeout,
+                title="EasyICU research-agent benchmark",
+                client_cls=OpenAIClient,
+            )
+        clients_by_effort = {
+            effort: build_provider_client(
+                provider=provider,
+                model=model,
+                request_timeout=request_timeout,
+                title="EasyICU research-agent benchmark",
+                client_cls=OpenAIClient,
+                extra_body={"reasoning": {"effort": effort}},
+            )
+            for effort in sorted(set(effort_by_role.values()))
+        }
+        role_clients = {
+            role: clients_by_effort[effort] for role, effort in effort_by_role.items()
+        }
+        return LLMRouter(
+            default=role_clients["coder"],
+            planner=role_clients["planner"],
+            coder=role_clients["coder"],
+            analyzer=role_clients["analyzer"],
+            writer=role_clients["writer"],
+            literature=role_clients["literature"],
+            repair=role_clients["repair"],
+            reasoning_effort_profile=reasoning_effort_profile,
         )
     except ProviderConfigurationError as exc:
         raise SystemExit(str(exc)) from exc
@@ -1567,9 +2136,14 @@ def _benchmark_pipeline_options(
     llm_seed: Optional[int] = None,
     writer_digest_widened: bool = False,
     strict_evidence: bool = False,
+    enable_cross_run_memory: bool = False,
+    enable_pubmed: bool = False,
     submission_profile: Optional["SubmissionProfile"] = None,
     runner_kind: Optional[str] = None,
-    enable_retrospective_trajectory_stability_design: bool = False,
+    host_runner_authorized: bool = False,
+    development_sample_size: Optional[int] = None,
+    development_sample_seed: int = 20260719,
+    development_diagnostic: bool = False,
 ) -> Dict[str, Any]:
     options: Dict[str, Any] = {}
     if submission_profile:
@@ -1580,6 +2154,28 @@ def _benchmark_pipeline_options(
         # the run manifest / bench_results.json document the execution
         # isolation the manuscript Methods section cites.
         options["runner_kind"] = runner_kind
+    if host_runner_authorized:
+        options["host_runner_authorized"] = True
+    if development_sample_size is not None:
+        if submission_profile is not None:
+            raise SystemExit(
+                "--development-sample-size is non-paper authority and cannot be "
+                "combined with --submission-profile. Use it for development "
+                "runs, then rerun the frozen task on full data for the paper."
+            )
+        if int(development_sample_size) <= 0:
+            raise SystemExit("--development-sample-size must be positive.")
+        options["development_sample_size"] = int(development_sample_size)
+        options["development_sample_seed"] = int(development_sample_seed)
+    if development_diagnostic:
+        if submission_profile is not None:
+            raise SystemExit(
+                "--development-diagnostic is non-paper authority and cannot "
+                "be combined with --submission-profile."
+            )
+        options["development_diagnostic"] = True
+    if enable_pubmed:
+        options["enable_pubmed"] = True
     # These are independent execution budgets.  The ordinary timeout bounds
     # model-generated scripts; registered standards use their own longer
     # planner-owned workload budget.
@@ -1612,8 +2208,30 @@ def _benchmark_pipeline_options(
         options["writer_digest_widened"] = True
     if llm_seed is not None:
         options["llm_seed"] = int(llm_seed)
-    if enable_retrospective_trajectory_stability_design:
-        options["enable_retrospective_trajectory_stability_design"] = True
+    # Cross-run RunMemory (StrategyCard) injection is OFF by default for
+    # benchmark/canonical runs. Every resume reuses the same workdir, so a prior
+    # run's distilled StrategyCards would be re-injected into the planner on the
+    # next run — unvalidated procedural memory that undermines reproducibility of
+    # a fresh/resumed canonical run. Disabling it also stops the run from writing
+    # new cards. Within-run authority (StepAuthorityCapsule / checkpoints /
+    # evidence store) does not use RunMemory and is unaffected. ExperienceBank is
+    # already opt-in (engine default False; the harness never enables it). No
+    # submission profile sets ``enable_memory``, so this is deterministic.
+    # ``--enable-cross-run-memory`` opts back in for non-canonical runs ONLY.
+    # A submission profile already pins both flags off as submission-defining
+    # options (see SubmissionProfile.as_pipeline_options), and the profile must
+    # win: fail closed rather than let a flag silently re-open cross-run memory
+    # on a paper-facing run.
+    if submission_profile is not None and enable_cross_run_memory:
+        raise SystemExit(
+            "--enable-cross-run-memory is incompatible with a submission "
+            "profile: a paper-facing canonical run must not inject cross-run "
+            "StrategyCards into the planner. Drop --submission-profile for an "
+            "exploratory run instead."
+        )
+    # ``setdefault`` so a profile's pinned values (applied above) always win.
+    options.setdefault("enable_memory", bool(enable_cross_run_memory))
+    options.setdefault("enable_experience_bank", False)
     return options
 
 
@@ -1695,7 +2313,7 @@ def _enforce_submission_profile_runner(
             f"Submission profile '{profile.ref}' is paper-facing and must "
             f"execute agent-generated code in a network-isolated sandbox: "
             f"pass '--runner {required}'. Build the image first with "
-            "`docker build -t easyicu-research-agent:latest -f "
+            "`docker build -t easyicu-research-agent:1.0.0 -f "
             "src/easyicu/research_agent/runner_image/Dockerfile .`. For a "
             "non-archival development run only, pass '--allow-host-runner'."
         )
@@ -1707,9 +2325,22 @@ def _enforce_mock_aware_provider(
     *,
     provider: str,
     allow_mock_aware: bool = False,
+    submission_profile: Optional["SubmissionProfile"] = None,
 ) -> None:
     """Reject mock-provider aware runs unless they are explicit smoke tests."""
     selected_arms = _normalize_arms(arms)
+    if (
+        "aware" in selected_arms
+        and provider == "mock"
+        and submission_profile is not None
+        and submission_profile.requires_real_provider is True
+    ):
+        raise SystemExit(
+            f"Submission profile '{submission_profile.ref}' requires a real "
+            "provider. The mock aware arm is fixture-only and cannot receive "
+            "paper-facing authority; drop --submission-profile for an offline "
+            "plumbing smoke test."
+        )
     # The MockLLMClient returns canned responses, so an "aware" arm run on
     # the mock provider reports fixture output rather than a genuine
     # ICU-aware analysis. Paper-facing results must use a real provider.
@@ -1744,6 +2375,7 @@ def _run_suite(
     case_registration: Optional[Dict[str, Any]] = None,
     force_writer_probe: bool = False,
     allow_mock_aware: bool = False,
+    reasoning_effort_profile: str = "provider_default",
 ) -> Dict[str, Any]:
     selected_arms = _normalize_arms(arms)
     _enforce_mock_aware_provider(
@@ -1751,7 +2383,12 @@ def _run_suite(
         provider=provider,
         allow_mock_aware=allow_mock_aware,
     )
-    llm = _make_llm(provider=provider, model=model, request_timeout=request_timeout)
+    llm = _make_llm(
+        provider=provider,
+        model=model,
+        request_timeout=request_timeout,
+        reasoning_effort_profile=reasoning_effort_profile,
+    )
     from easyicu.research_agent import (  # type: ignore
         default_icu_agent_bench_suite,
         icu_agent_bench_markdown,
@@ -1784,6 +2421,7 @@ def _run_suite(
         "bench_kind": bench_kind,
         "provider": provider,
         "model": model,
+        "reasoning_effort_profile": reasoning_effort_profile,
         "backend_base_url": _resolve_backend_base_url(provider),
         "arms": selected_arms,
         "case_registration": case_registration,
@@ -1872,11 +2510,338 @@ def _render_model_matrix(runs: List[Dict[str, Any]]) -> str:
     return "\n".join(lines)
 
 
+def _canonical_execution_config_from_args(args):
+    """Normalize the run-semantics argv into the frozen canonical execution config.
+
+    Pure — reads only parsed args, touches no Provider/runner/data.  The gate
+    compares this object's digest to the operator's ``execution_config_sha256`` pin.
+    """
+
+    from benchmarks.figure2_canonical9.realrun_authority import (
+        build_canonical_execution_config,
+    )
+
+    return build_canonical_execution_config(
+        seed=int(getattr(args, "seed", 7)),
+        timeout_seconds=float(getattr(args, "timeout", 300.0)),
+        standard_executor_timeout_seconds=float(
+            getattr(args, "standard_executor_timeout", 3600.0)
+        ),
+        request_timeout_seconds=float(getattr(args, "request_timeout", 180.0)),
+        stop_after_step_id=getattr(args, "stop_after_step_id", None),
+        llm_seed=getattr(args, "llm_seed", None),
+        disable_replanning=bool(getattr(args, "disable_replanning", False)),
+        max_total_steps=getattr(args, "max_total_steps", None),
+        max_code_repair_attempts=getattr(args, "max_code_repair_attempts", None),
+        max_step_llm_repair_attempts=getattr(
+            args, "max_step_llm_repair_attempts", None
+        ),
+        enable_repro_envelope=not bool(getattr(args, "no_repro_envelope", False)),
+        enable_cost_tracking=not bool(getattr(args, "no_cost_tracking", False)),
+        strict_evidence=bool(getattr(args, "strict_evidence", False)),
+        writer_digest_widened=bool(getattr(args, "writer_digest_widened", False)),
+        enable_pubmed=bool(getattr(args, "enable_pubmed", False)),
+        case=getattr(args, "case", None),
+        development_sample_size=getattr(args, "development_sample_size", None),
+        development_sample_seed=int(getattr(args, "development_sample_seed", 20260719)),
+        models=tuple(getattr(args, "models", None) or ()),
+        reasoning_effort_profile=str(
+            getattr(args, "reasoning_effort_profile", "provider_default")
+        ),
+    )
+
+
+def _verify_figure2_development_diagnostic(
+    args,
+    *,
+    jsonl_path: Path,
+    task_ids: tuple,
+) -> None:
+    """Verify an explicit non-paper Canonical9 development input binding."""
+
+    if bool(getattr(args, "submission_profile", False)) or bool(
+        getattr(args, "require_figure2_paper_acceptance", False)
+    ):
+        raise ValueError(
+            "development diagnostics cannot enable a submission profile or "
+            "paper acceptance"
+        )
+    if any(
+        getattr(args, name, None)
+        for name in (
+            "figure2_realrun_authorization",
+            "figure2_expected_execution_identity",
+            "figure2_production_input_authority",
+        )
+    ):
+        raise ValueError(
+            "development diagnostics cannot carry paper authority coordinates"
+        )
+    if str(getattr(args, "runner", "") or "") != "docker":
+        raise ValueError("development diagnostics require --runner docker")
+    if _normalize_arms(getattr(args, "arms", None)) != ["aware"]:
+        raise ValueError("development diagnostics require exactly --arms aware")
+    if str(getattr(args, "provider", "") or "") == "mock":
+        raise ValueError("development diagnostics require a real Provider")
+    if not task_ids:
+        raise ValueError("development diagnostic JSONL has no Canonical9 task")
+
+    receipt_raw = str(
+        getattr(args, "figure2_development_binding_receipt", "") or ""
+    ).strip()
+    if not receipt_raw:
+        raise ValueError(
+            "--development-diagnostic requires " "--figure2-development-binding-receipt"
+        )
+    receipt_path = Path(receipt_raw).expanduser()
+    if not receipt_path.is_absolute() or receipt_path.is_symlink():
+        raise ValueError("development binding receipt must be absolute and non-symlink")
+    receipt_path = receipt_path.resolve(strict=True)
+    if not receipt_path.is_file():
+        raise ValueError("development binding receipt must be a regular file")
+    payload = json.loads(
+        receipt_path.read_text(encoding="utf-8"),
+        object_pairs_hook=_reject_jsonl_duplicate_pairs,
+        parse_constant=_reject_jsonl_nonfinite_constant,
+    )
+    if not isinstance(payload, dict):
+        raise ValueError("development binding receipt must be a JSON object")
+    if (
+        payload.get("schema_version")
+        != "easyicu.canonical9_development_binding_receipt/1"
+        or payload.get("paper_authority") is not False
+    ):
+        raise ValueError(
+            "development binding receipt must explicitly deny paper authority"
+        )
+    if payload.get("output_jsonl") != str(jsonl_path):
+        raise ValueError("development binding receipt does not bind this JSONL path")
+    observed_sha256 = hashlib.sha256(jsonl_path.read_bytes()).hexdigest()
+    if payload.get("output_sha256") != observed_sha256:
+        raise ValueError("development binding receipt does not bind these JSONL bytes")
+
+
+def _figure2_realrun_authorization_gate(args):
+    """Fail-closed real-run authorization, enforced before anything is launched.
+
+    Returns ``(exit_code_or_None, batch_binding_or_None)``.  A non-None exit
+    code stops the launcher immediately; ``None`` proceeds.  Called right after
+    argument parsing, so a blocked / missing / tampered authority — and a Canonical9
+    or paper-acceptance run that omits the declaration entirely — exits with zero
+    pipeline / subprocess / Provider / data-load activity.
+
+    The gate does NOT trust the declaration's own restated fields: it builds a
+    :class:`RealRunInvocation` from the actual argv (plus the handoff JSONL keys and
+    cohort paths) and verifies the declaration matches that real intent knob-for-knob.
+    """
+
+    from benchmarks.figure2_canonical9.realrun_authority import (
+        RealRunAuthorizationRequest,
+        RealRunBatchBinding,
+        RealRunInvocation,
+        jsonl_references_canonical9,
+        read_canonical_jsonl_invocation,
+        resolve_strict_jsonl_path,
+        reserve_authorized_batch_root,
+        verify_realrun_authorization,
+    )
+
+    declaration = getattr(args, "figure2_realrun_authorization", None)
+    jsonl = getattr(args, "ehrflowbench_jsonl", None)
+    require_acceptance = bool(getattr(args, "require_figure2_paper_acceptance", False))
+    development_diagnostic = bool(getattr(args, "development_diagnostic", False))
+
+    # First classify an existing JSONL without changing ordinary, non-canonical
+    # EHRFlowBench behavior.  If it references Canonical9 (or if explicit paper
+    # authority was requested), we immediately switch to the strict absolute,
+    # non-symlink resolver below.  A relative/symlink canonical manifest therefore
+    # cannot evade the gate, while legacy non-canonical fixtures retain their
+    # longstanding CLI semantics.
+    strict_jsonl: Optional[Path] = None
+    task_ids: tuple = ()
+    cohort_paths: tuple = ()
+    if jsonl:
+        try:
+            probe_jsonl = Path(jsonl).expanduser().resolve(strict=True)
+            if not probe_jsonl.is_file():
+                raise ValueError("ehrflowbench JSONL must be a regular file")
+            task_ids, cohort_paths = read_canonical_jsonl_invocation(probe_jsonl)
+        except Exception as exc:  # noqa: BLE001
+            if declaration or require_acceptance:
+                print(
+                    "[realrun-authority] an authority-requested JSONL must be "
+                    "readable for Canonical9 classification; refusing to launch "
+                    f"({type(exc).__name__}: {exc}).",
+                    file=sys.stderr,
+                )
+                return 2, None
+
+    references_canonical = bool(task_ids) and jsonl_references_canonical9(task_ids)
+    real_canonical_run = require_acceptance or references_canonical
+
+    if declaration or real_canonical_run or development_diagnostic:
+        try:
+            strict_jsonl = resolve_strict_jsonl_path(jsonl)
+            task_ids, cohort_paths = read_canonical_jsonl_invocation(strict_jsonl)
+        except Exception as exc:  # noqa: BLE001
+            print(
+                "[realrun-authority] Canonical9 / authority-requested JSONL must "
+                "be an absolute, regular, non-symlink, strictly-readable manifest; "
+                f"refusing to launch ({type(exc).__name__}: {exc}).",
+                file=sys.stderr,
+            )
+            return 2, None
+
+    if development_diagnostic:
+        if not references_canonical:
+            print(
+                "[development-diagnostic] the explicit development path is only "
+                "valid for Canonical9 JSONL inputs.",
+                file=sys.stderr,
+            )
+            return 2, None
+        try:
+            _verify_figure2_development_diagnostic(
+                args,
+                jsonl_path=strict_jsonl,
+                task_ids=task_ids,
+            )
+        except Exception as exc:  # noqa: BLE001
+            print(
+                "[development-diagnostic] BLOCKED — no pipeline, subprocess, "
+                f"Provider, or data load has started ({type(exc).__name__}: {exc}).",
+                file=sys.stderr,
+            )
+            return 2, None
+        print(
+            "[development-diagnostic] verified non-paper input binding; results "
+            "are development-only and require a fresh authorized rerun for paper use.",
+            file=sys.stderr,
+        )
+        return None, None
+
+    # 1) Mandatory activation: a Canonical9 / paper-acceptance run cannot bypass the
+    #    gate by omitting the declaration.
+    if not declaration:
+        if real_canonical_run:
+            print(
+                "[realrun-authority] a Canonical9 / paper-acceptance run REQUIRES "
+                "--figure2-realrun-authorization (plus "
+                "--figure2-expected-execution-identity and "
+                "--figure2-production-input-authority); refusing to launch.",
+                file=sys.stderr,
+            )
+            return 2, None
+        return None, None
+
+    identity = getattr(args, "figure2_expected_execution_identity", None)
+    if not identity:
+        print(
+            "[realrun-authority] --figure2-realrun-authorization requires "
+            "--figure2-expected-execution-identity",
+            file=sys.stderr,
+        )
+        return 2, None
+
+    repo_root = Path(__file__).resolve().parents[1]
+    production = getattr(args, "figure2_production_input_authority", None)
+
+    # Effective model + runner, exactly as the launcher will resolve them downstream.
+    provider = str(getattr(args, "provider", "mock"))
+    effective_model = (
+        str(getattr(args, "model", "mock")) if provider != "mock" else "mock"
+    )
+    models = getattr(args, "models", None)
+    if models:
+        effective_model = str(models[0])
+    requested_runner = getattr(args, "runner", None)
+    profile_enabled = bool(getattr(args, "submission_profile", False))
+    effective_runner = (
+        str(requested_runner)
+        if requested_runner
+        else ("docker" if profile_enabled else "auto")
+    )
+
+    invocation = RealRunInvocation(
+        arms=tuple(_normalize_arms(getattr(args, "arms", None))),
+        task_ids=task_ids,
+        task_cohort_paths=tuple(zip(task_ids, cohort_paths)),
+        ehrflowbench_jsonl_path=strict_jsonl,
+        provider=provider,
+        model=effective_model,
+        submission_profile_enabled=profile_enabled,
+        submission_profile_ref=(str(getattr(args, "profile", "")) or None),
+        runner=effective_runner,
+        out_root=Path(getattr(args, "out_root", ".")),
+        require_paper_acceptance=require_acceptance,
+        execution_config=_canonical_execution_config_from_args(args),
+        reuse_existing=bool(getattr(args, "reuse_existing", False)),
+        repeat=int(getattr(args, "repeat", 1) or 1),
+        force_writer_probe=bool(getattr(args, "force_writer_probe", False)),
+        development_sample_size=getattr(args, "development_sample_size", None),
+        allow_host_runner=bool(getattr(args, "allow_host_runner", False)),
+        allow_mock_aware=bool(getattr(args, "allow_mock_aware", False)),
+        resume_run_id=getattr(args, "resume_run_id", None),
+        resume_from_step_id=getattr(args, "resume_from_step_id", None),
+        cross_run_memory=bool(getattr(args, "enable_cross_run_memory", False)),
+    )
+    request = RealRunAuthorizationRequest(
+        declaration_path=Path(declaration),
+        expected_execution_identity_path=Path(identity),
+        input_freeze_path=(
+            repo_root / "benchmarks/figure2_canonical9/canonical_input_freeze_v1.json"
+        ),
+        rubric_path=(
+            repo_root / "benchmarks/figure2_canonical9/figure2_paper_rubric_v3.json"
+        ),
+        invocation=invocation,
+        production_input_authority_path=(Path(production) if production else None),
+    )
+    authorization = verify_realrun_authorization(request)
+    print(authorization.model_dump_json(indent=2))
+    if authorization.status != "authorized":
+        print(
+            "[realrun-authority] BLOCKED — no pipeline, subprocess, Provider, or "
+            "data load has started.",
+            file=sys.stderr,
+        )
+        return 2, None
+
+    # ``authorization`` contains the *already verified* declaration and input
+    # authority values.  Do not reopen either mutable path after verification.
+    # Reserve the batch root with mkdir(O_EXCL semantics) before a Provider, runner,
+    # or data load can start; concurrent replay of a declaration loses this race.
+    batch_binding = RealRunBatchBinding(
+        batch_id=authorization.batch_id,
+        declaration_sha256=authorization.declaration_sha256,
+        input_authority_digest=authorization.input_authority_digest,
+        frozen_input_by_task=authorization.frozen_input_by_task,
+    )
+    try:
+        batch_binding = reserve_authorized_batch_root(
+            invocation.out_root, batch_binding
+        )
+    except Exception as exc:  # noqa: BLE001
+        print(
+            "[realrun-authority] unable to atomically reserve the authorized batch "
+            f"root; refusing to launch ({type(exc).__name__}: {exc}).",
+            file=sys.stderr,
+        )
+        return 2, None
+    print(
+        "[realrun-authority] authority verified; launching the real run still "
+        "requires the operator's explicit action.",
+        file=sys.stderr,
+    )
+    return None, batch_binding
+
+
 def main() -> int:
     _bootstrap_imports()
 
     from tests.bench import ANALYSIS_BENCH_ITEMS, RULE_BENCH_ITEMS  # type: ignore
 
+    default_submission_profile_ref = _default_submission_profile_ref()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--bench-kind",
@@ -1931,6 +2896,17 @@ def main() -> int:
         help="Per-request timeout for real LLM providers.",
     )
     parser.add_argument(
+        "--reasoning-effort-profile",
+        choices=["provider_default", "adaptive_v1"],
+        default="provider_default",
+        help=(
+            "Per-request reasoning policy. 'provider_default' sends no override; "
+            "'adaptive_v1' uses medium for planning/coding, low for "
+            "analysis/writing/literature, and high only for validated repairs. "
+            "The selected profile is bound into Canonical9 execution authority."
+        ),
+    )
+    parser.add_argument(
         "--timeout",
         type=float,
         default=300.0,
@@ -1982,21 +2958,13 @@ def main() -> int:
         ),
     )
     parser.add_argument(
-        "--allow-retrospective-stability-design",
-        action="store_true",
-        help=(
-            "Development-only: on an explicit step resume, let PlannerAgent add "
-            "a typed trajectory-stability design to an older saved plan. This "
-            "is forbidden for submission-profile/canonical runs."
-        ),
-    )
-    parser.add_argument(
         "--stop-after-step-id",
         default=None,
         help=(
             "Stop execution after the named plan step. Useful for reviewing one "
-            "resumed step at a time. Use '@first' to stop after the Agent's "
-            "first planned step without depending on its generated step id."
+            "resumed step at a time. Use '@first' for the first planned step, "
+            "'@index:N' for the one-based Nth step, or "
+            "'@product:kind:name' for the unique producer of a typed output."
         ),
     )
     parser.add_argument(
@@ -2009,11 +2977,51 @@ def main() -> int:
         ),
     )
     parser.add_argument(
+        "--development-sample-size",
+        type=int,
+        default=None,
+        help=(
+            "Non-paper acceleration: after the Agent locks and materializes the "
+            "analysis cohort and QC, execute a deterministic identity-hash "
+            "sample of this many stays (for example 1000). Any trajectory is "
+            "filtered to the same stays. Incompatible with --submission-profile "
+            "and Figure 2 paper acceptance."
+        ),
+    )
+    parser.add_argument(
+        "--development-sample-seed",
+        type=int,
+        default=20260719,
+        help="Stable seed for --development-sample-size (default: 20260719).",
+    )
+    parser.add_argument(
         "--disable-replanning",
         action="store_true",
         help=(
             "Disable LLM replanning inside ResearchAgentPipeline. Useful for "
             "low-cost dry runs before protocol freeze."
+        ),
+    )
+    parser.add_argument(
+        "--enable-cross-run-memory",
+        action="store_true",
+        help=(
+            "Opt back into cross-run RunMemory (StrategyCard) injection. OFF by "
+            "default for benchmark/canonical runs: distilling and re-injecting "
+            "StrategyCards from a prior run of the same workdir (every resume "
+            "reuses the workdir) feeds unvalidated procedural cards into the "
+            "planner and hurts reproducibility. Within-run authority "
+            "(StepAuthorityCapsule / checkpoints / evidence) is unaffected. Use "
+            "only for non-canonical exploratory runs."
+        ),
+    )
+    parser.add_argument(
+        "--enable-pubmed",
+        action="store_true",
+        help=(
+            "Retrieve similar PubMed studies before planning and pass bounded, "
+            "source-backed study-design excerpts to the Planner. Network failure "
+            "degrades to the curated offline literature registry."
         ),
     )
     parser.add_argument(
@@ -2083,10 +3091,10 @@ def main() -> int:
     )
     parser.add_argument(
         "--profile",
-        default=_DEFAULT_SUBMISSION_PROFILE_REF,
+        default=default_submission_profile_ref,
         help=(
             "Versioned submission profile ref used with --submission-profile "
-            f"(default: {_DEFAULT_SUBMISSION_PROFILE_REF})."
+            f"(default: {default_submission_profile_ref})."
         ),
     )
     parser.add_argument(
@@ -2137,6 +3145,62 @@ def main() -> int:
         "key, question, cohort_path, target_outcome, expected_or_direction.",
     )
     parser.add_argument(
+        "--development-diagnostic",
+        action="store_true",
+        help=(
+            "Run a Canonical9 input only as an explicitly non-paper Docker "
+            "diagnostic. Requires --figure2-development-binding-receipt; the "
+            "result cannot be promoted and must be rerun under fresh paper authority."
+        ),
+    )
+    parser.add_argument(
+        "--figure2-development-binding-receipt",
+        default=None,
+        help=(
+            "Absolute non-symlink receipt binding the exact development JSONL "
+            "path and SHA256 with paper_authority=false."
+        ),
+    )
+    parser.add_argument(
+        "--require-figure2-paper-acceptance",
+        action="store_true",
+        help=(
+            "After every EHRFlowBench row has run and results are written, "
+            "require deterministic replay verification of one valid aware-arm "
+            "attempt for each exact Canonical9 task. Invalid attempts remain "
+            "nonfatal per item, but the completed batch exits with status 3."
+        ),
+    )
+    parser.add_argument(
+        "--figure2-expected-execution-identity",
+        default=None,
+        help=(
+            "Absolute path to an operator-frozen ExpectedExecutionIdentity JSON. "
+            "Required with --require-figure2-paper-acceptance and forbidden "
+            "inside the benchmark output root."
+        ),
+    )
+    parser.add_argument(
+        "--figure2-realrun-authorization",
+        default=None,
+        help=(
+            "Path to an operator freeze declaration JSON. When set, the real-run "
+            "authorization gate is enforced BEFORE any pipeline, subprocess, "
+            "Provider, or data load; a blocked/missing/tampered authority exits "
+            "with status 2 having launched nothing. Requires "
+            "--figure2-expected-execution-identity."
+        ),
+    )
+    parser.add_argument(
+        "--figure2-production-input-authority",
+        default=None,
+        help=(
+            "Path to a typed full-9 production input authority JSON. Absent means "
+            "the input is not yet frozen for a real run (the v1 assessment stays "
+            "blocked), so the gate fails closed."
+        ),
+    )
+    parser.add_argument(
         "--force-writer-probe",
         action="store_true",
         help=(
@@ -2157,6 +3221,9 @@ def main() -> int:
         ),
     )
     args = parser.parse_args()
+    _realrun_gate_rc, _figure2_batch_binding = _figure2_realrun_authorization_gate(args)
+    if _realrun_gate_rc is not None:
+        return _realrun_gate_rc
     case_registration = _register_case_patterns(args.case)
     submission_profile = (
         _resolve_submission_profile(args.profile)
@@ -2166,6 +3233,12 @@ def main() -> int:
     args.arms = _enforce_submission_profile_arms(
         args.arms,
         profile=submission_profile,
+    )
+    _enforce_mock_aware_provider(
+        args.arms,
+        provider=args.provider,
+        allow_mock_aware=bool(args.allow_mock_aware),
+        submission_profile=submission_profile,
     )
     explicit_resume_run_id = _normalize_resume_run_id(
         getattr(args, "resume_run_id", None)
@@ -2189,21 +3262,6 @@ def main() -> int:
         resume_from_step_id=resume_from_step_id,
         profile=submission_profile,
     )
-    allow_retrospective_stability_design = bool(
-        getattr(args, "allow_retrospective_stability_design", False)
-    )
-    if allow_retrospective_stability_design and (
-        not explicit_resume_run_id or not resume_from_step_id
-    ):
-        raise SystemExit(
-            "--allow-retrospective-stability-design requires both "
-            "--resume-run-id and --resume-from-step-id."
-        )
-    if allow_retrospective_stability_design and submission_profile is not None:
-        raise SystemExit(
-            "--allow-retrospective-stability-design is development-only and "
-            "cannot be used with --submission-profile."
-        )
     if explicit_resume_run_id and args.models and len(args.models) != 1:
         raise SystemExit("--resume-run-id cannot be combined with multiple models.")
     runner_kind = _enforce_submission_profile_runner(
@@ -2226,22 +3284,50 @@ def main() -> int:
         max_code_repair_attempts=args.max_code_repair_attempts,
         max_step_llm_repair_attempts=max_step_llm_repair_attempts,
         timeout_seconds=float(args.timeout),
-        standard_executor_timeout_seconds=float(
-            args.standard_executor_timeout
-        ),
+        standard_executor_timeout_seconds=float(args.standard_executor_timeout),
         enable_repro_envelope=not bool(getattr(args, "no_repro_envelope", False)),
         enable_cost_tracking=not bool(getattr(args, "no_cost_tracking", False)),
         llm_seed=getattr(args, "llm_seed", None),
         writer_digest_widened=bool(args.writer_digest_widened),
         strict_evidence=bool(args.strict_evidence),
+        enable_cross_run_memory=bool(getattr(args, "enable_cross_run_memory", False)),
+        enable_pubmed=bool(getattr(args, "enable_pubmed", False)),
         submission_profile=submission_profile,
         runner_kind=runner_kind,
-        enable_retrospective_trajectory_stability_design=(
-            allow_retrospective_stability_design
-        ),
+        host_runner_authorized=bool(getattr(args, "allow_host_runner", False)),
+        development_sample_size=getattr(args, "development_sample_size", None),
+        development_sample_seed=int(getattr(args, "development_sample_seed", 20260719)),
+        development_diagnostic=bool(getattr(args, "development_diagnostic", False)),
     )
 
+    if (
+        bool(args.require_figure2_paper_acceptance)
+        and getattr(args, "development_sample_size", None) is not None
+    ):
+        raise SystemExit(
+            "--require-figure2-paper-acceptance cannot score a non-paper "
+            "development sample. Rerun the frozen task on the full cohort."
+        )
+    expected_execution_identity_path = getattr(
+        args,
+        "figure2_expected_execution_identity",
+        None,
+    )
+    if bool(args.require_figure2_paper_acceptance) and not (
+        str(expected_execution_identity_path or "").strip()
+    ):
+        raise SystemExit(
+            "--require-figure2-paper-acceptance requires "
+            "--figure2-expected-execution-identity."
+        )
+
     if args.ehrflowbench_jsonl:
+        if bool(args.require_figure2_paper_acceptance) and _normalize_arms(
+            args.arms
+        ) != ["aware"]:
+            raise SystemExit(
+                "--require-figure2-paper-acceptance requires exactly '--arms aware'."
+            )
         ehrflow_model = args.model if args.provider != "mock" else "mock"
         if args.models:
             ehrflow_model = args.models[0]
@@ -2253,9 +3339,21 @@ def main() -> int:
                 "start fresh runs, resume continues one existing run."
             )
 
+        # Canonical9 batches run exactly the strict path verified by the gate.  An
+        # ordinary EHRFlowBench JSONL keeps the pre-existing relative/symlink CLI
+        # behavior, which is intentionally not paper authority.
+        if _figure2_batch_binding is not None:
+            from benchmarks.figure2_canonical9.realrun_authority import (
+                resolve_strict_jsonl_path as _resolve_strict_jsonl_path,
+            )
+
+            _ehrflow_jsonl_path = _resolve_strict_jsonl_path(args.ehrflowbench_jsonl)
+        else:
+            _ehrflow_jsonl_path = Path(args.ehrflowbench_jsonl).expanduser().resolve()
+
         def _run_ehrflow_into(target_out_root: Path) -> int:
             return _run_ehrflowbench_jsonl(
-                jsonl_path=Path(args.ehrflowbench_jsonl).resolve(),
+                jsonl_path=_ehrflow_jsonl_path,
                 out_root=target_out_root,
                 seed=args.seed,
                 arms=args.arms,
@@ -2269,6 +3367,16 @@ def main() -> int:
                 stop_after_step_id=stop_after_step_id,
                 force_writer_probe=bool(args.force_writer_probe),
                 allow_mock_aware=bool(args.allow_mock_aware),
+                require_figure2_paper_acceptance=bool(
+                    args.require_figure2_paper_acceptance
+                ),
+                expected_execution_identity_path=(
+                    Path(expected_execution_identity_path).expanduser().resolve()
+                    if expected_execution_identity_path
+                    else None
+                ),
+                batch_binding=_figure2_batch_binding,
+                reasoning_effort_profile=str(args.reasoning_effort_profile),
             )
 
         if n_repeat == 1:
@@ -2284,6 +3392,11 @@ def main() -> int:
             rc = rc or rc_i
         _write_stability_report(base_out_root, repeat_roots, arms=args.arms)
         return rc
+
+    if bool(args.require_figure2_paper_acceptance):
+        raise SystemExit(
+            "--require-figure2-paper-acceptance requires --ehrflowbench-jsonl."
+        )
 
     all_items = list(
         RULE_BENCH_ITEMS if args.bench_kind == "rule" else ANALYSIS_BENCH_ITEMS
@@ -2337,6 +3450,7 @@ def main() -> int:
             case_registration=case_registration,
             force_writer_probe=bool(args.force_writer_probe),
             allow_mock_aware=bool(args.allow_mock_aware),
+            reasoning_effort_profile=str(args.reasoning_effort_profile),
         )
         all_runs.append(payload)
         totals = payload["totals"]
@@ -2390,12 +3504,8 @@ def _ehrflow_item_done(item_root: Path) -> bool:
     that already finished cleanly. Quota-disrupted (incomplete) runs return
     False so they are redone.
     """
-    for rs in item_root.glob("*/run_*/run_status.json"):
-        try:
-            gates = json.loads(rs.read_text(encoding="utf-8")).get("gates", {})
-        except (json.JSONDecodeError, OSError):
-            continue
-        if gates.get("execution_complete"):
+    for run_dir in item_root.glob("*/run_*"):
+        if _run_reached_execution_complete(run_dir):
             return True
     return False
 
@@ -2568,32 +3678,6 @@ def _write_stability_report(
     print(f"  -> {base_out_root / 'stability_report.json'}")
 
 
-def _pipeline_options_with_trajectory(
-    pipeline_options: Optional[Dict[str, Any]],
-    *,
-    trajectory_path: Optional[Path],
-) -> Dict[str, Any]:
-    """Pass one declared trajectory through the runner's explicit env surface."""
-
-    options = dict(pipeline_options or {})
-    if trajectory_path is None:
-        return options
-    resolved = Path(trajectory_path).resolve()
-    runner_kwargs = dict(options.get("runner_kwargs") or {})
-    extra_env = dict(runner_kwargs.get("extra_env") or {})
-    for key in _TRAJECTORY_ENV_KEYS:
-        existing = extra_env.get(key)
-        if existing is not None and Path(str(existing)).expanduser().resolve() != resolved:
-            raise ValueError(
-                f"Conflicting {key}: {existing!r} does not match "
-                f"declared trajectory_path {str(resolved)!r}"
-            )
-        extra_env[key] = str(resolved)
-    runner_kwargs["extra_env"] = extra_env
-    options["runner_kwargs"] = runner_kwargs
-    return options
-
-
 _EXTERNAL_DIFFICULTY_ALIASES = {
     "easy": "basic",
     "medium": "intermediate",
@@ -2641,9 +3725,14 @@ def _external_item_from_row(
     row: Mapping[str, Any],
     key: str,
     question: str,
-    target: str,
+    target: Optional[str],
     cohort_columns: Sequence[Any],
     cohort_size: int,
+    cohort_authority_path: Optional[Path] = None,
+    cohort_authority_ref: Optional[Mapping[str, object]] = None,
+    trajectory_path: Optional[Path] = None,
+    trajectory_authority_path: Optional[Path] = None,
+    trajectory_authority_ref: Optional[Mapping[str, object]] = None,
 ) -> SimpleNamespace:
     """Build one external item from structured protocol fields.
 
@@ -2693,9 +3782,7 @@ def _external_item_from_row(
         None,
     )
     operational_exposure = (
-        str(row.get(operational_source) or "").strip()
-        if operational_source
-        else ""
+        str(row.get(operational_source) or "").strip() if operational_source else ""
     )
     if not scoring_predictor and operational_exposure:
         scoring_predictor = operational_exposure
@@ -2801,15 +3888,21 @@ def _external_item_from_row(
     expected_findings = _external_string_list(
         row, "expected_finding_substrings", diagnostics
     )
-    expected_steps = _external_string_list(
-        row, "expected_step_substrings", diagnostics
-    )
+    expected_steps = _external_string_list(row, "expected_step_substrings", diagnostics)
     expected_artifacts = _external_string_list(
         row, "expected_artifact_substrings", diagnostics
     )
 
     protocol_adapter = {
-        "schema_version": "easyicu.external_benchmark_adapter/1",
+        "schema_version": (
+            "easyicu.external_benchmark_adapter/3"
+            if trajectory_authority_ref is not None
+            else (
+                "easyicu.external_benchmark_adapter/2"
+                if cohort_authority_ref is not None
+                else "easyicu.external_benchmark_adapter/1"
+            )
+        ),
         "database": {
             "value": database,
             "source_field": database_source,
@@ -2825,9 +3918,7 @@ def _external_item_from_row(
             "source_field": operational_source,
             "defaulted": operational_source is None,
             "declared_column_present": (
-                operational_column_present
-                if operational_source is not None
-                else None
+                operational_column_present if operational_source is not None else None
             ),
             "resolved_column_present": operational_column_present,
         },
@@ -2838,7 +3929,7 @@ def _external_item_from_row(
         key=key,
         name=str(row.get("name") or key),
         research_question=str(question),
-        target_outcome=str(target),
+        target_outcome=(str(target) if target is not None else None),
         database=database,
         primary_predictor=scoring_predictor,
         operational_exposure=operational_exposure or None,
@@ -2854,9 +3945,11 @@ def _external_item_from_row(
         target_databases=_external_string_list(row, "target_databases", diagnostics),
         required_warnings=_external_string_list(row, "required_warnings", diagnostics),
         forbidden_outputs=_external_string_list(row, "forbidden_outputs", diagnostics),
-        numeric_targets=dict(row.get("numeric_targets") or {})
-        if isinstance(row.get("numeric_targets"), Mapping)
-        else {},
+        numeric_targets=(
+            dict(row.get("numeric_targets") or {})
+            if isinstance(row.get("numeric_targets"), Mapping)
+            else {}
+        ),
         gold_answer=dict(gold_answer) if isinstance(gold_answer, Mapping) else None,
         gold_answer_status=gold_status,
         gold_derivation=str(row.get("gold_derivation") or ""),
@@ -2864,6 +3957,7 @@ def _external_item_from_row(
         inclusion_criteria=_external_string_list(
             row, "inclusion_criteria", diagnostics
         ),
+        id_columns=_external_string_list(row, "id_columns", diagnostics),
         candidate_variables=_external_string_list(
             row, "candidate_variables", diagnostics
         ),
@@ -2874,14 +3968,23 @@ def _external_item_from_row(
         evidence_basis=str(row.get("evidence_basis") or "external_import"),
         claim_scope=str(row.get("claim_scope") or "external_import_only"),
         notes=(str(row.get("notes") or "").strip() or None),
-        interpretation_note=(
-            str(row.get("interpretation_note") or "").strip() or None
-        ),
+        interpretation_note=(str(row.get("interpretation_note") or "").strip() or None),
         protocol_version=(str(row.get("protocol_version") or "").strip() or None),
         rubric_version=(str(row.get("rubric_version") or "").strip() or None),
         protocol_adapter=protocol_adapter,
         cohort_size=int(cohort_size),
         cohort_columns=[str(column) for column in cohort_columns],
+        cohort_authority_path=cohort_authority_path,
+        cohort_authority_ref=(
+            dict(cohort_authority_ref) if cohort_authority_ref is not None else None
+        ),
+        trajectory_path=trajectory_path,
+        trajectory_authority_path=trajectory_authority_path,
+        trajectory_authority_ref=(
+            dict(trajectory_authority_ref)
+            if trajectory_authority_ref is not None
+            else None
+        ),
     )
 
 
@@ -2901,9 +4004,28 @@ def _run_ehrflowbench_jsonl(
     stop_after_step_id: Optional[str] = None,
     force_writer_probe: bool = False,
     allow_mock_aware: bool = False,
+    require_figure2_paper_acceptance: bool = False,
+    expected_execution_identity_path: Path | None = None,
+    batch_binding: Optional[Any] = None,
+    reasoning_effort_profile: str = "provider_default",
 ) -> int:
     """Run an external EHRFlowBench-style JSONL export when available."""
     import pandas as pd
+
+    # An authorized real-run batch carries its per-task frozen input map + identity.
+    frozen_input_authority_by_task: Optional[Mapping[str, str]] = (
+        batch_binding.frozen_input_by_task if batch_binding is not None else None
+    )
+    from easyicu.research_agent.intake.materialized_metadata import (
+        MaterializedCohortAuthorityRef,
+        MaterializedMetadataError,
+        load_verified_materialized_cohort_authority,
+    )
+    from easyicu.research_agent.intake.materialized_trajectory import (
+        MaterializedTrajectoryAuthorityRef,
+        MaterializedTrajectoryError,
+        load_verified_materialized_trajectory_authority,
+    )
 
     _enforce_mock_aware_provider(
         arms,
@@ -2913,17 +4035,39 @@ def _run_ehrflowbench_jsonl(
     if not jsonl_path.exists():
         print(f"EHRFlowBench JSONL not found: {jsonl_path}")
         return 2
-    out_root.mkdir(parents=True, exist_ok=True)
+    if batch_binding is not None:
+        # The gate atomically created this batch root and its immutable receipt
+        # before any data/Provider/runner work.  Re-check it instead of creating or
+        # overwriting a receipt here.
+        from benchmarks.figure2_canonical9.realrun_authority import (
+            verify_batch_authorization_receipt,
+        )
+
+        if batch_binding.batch_root != Path(out_root).expanduser().resolve():
+            raise ValueError("EHRFlow batch root differs from the authorized binding")
+        verify_batch_authorization_receipt(batch_binding)
+    else:
+        out_root.mkdir(parents=True, exist_ok=True)
     rows: List[Dict[str, Any]] = []
-    for line in jsonl_path.read_text(encoding="utf-8").splitlines():
+    invalid_row_indices: set[int] = set()
+    for line_number, line in enumerate(
+        jsonl_path.read_text(encoding="utf-8").splitlines(),
+        start=1,
+    ):
         line = line.strip()
         if not line or line.startswith("#"):
             continue
         try:
-            rows.append(json.loads(line))
-        except json.JSONDecodeError as exc:
+            rows.append(_decode_jsonl_object(line))
+        except _JSONLObjectDecodeError as exc:
+            invalid_row_indices.add(len(rows))
             rows.append(
-                {"status": "invalid_json", "error": str(exc), "raw": line[:200]}
+                {
+                    "status": "invalid_json",
+                    "error": str(exc),
+                    "raw": line[:200],
+                    "line": line_number,
+                }
             )
     if resume_run_id and len(rows) != 1:
         raise SystemExit(
@@ -2933,17 +4077,44 @@ def _run_ehrflowbench_jsonl(
 
     scores: List[Dict[str, Any]] = []
     pending: List[Dict[str, Any]] = []
+    input_task_ids = [
+        str(row.get("key") or row.get("id") or f"ehrflowbench_{idx:03d}")
+        for idx, row in enumerate(rows)
+    ]
+    formal_canary_task_id: Optional[str] = None
+    if batch_binding is not None:
+        from benchmarks.figure2_canonical9.evaluator.rubric_v1 import (
+            FIGURE2_TASK_IDS,
+        )
+
+        formal_canary_task_id = str(FIGURE2_TASK_IDS[0])
+        if not input_task_ids or input_task_ids[0] != formal_canary_task_id:
+            raise ValueError(
+                "A formal Canonical9 batch must start with its locked E1 canary."
+            )
     for idx, row in enumerate(rows):
         key = str(row.get("key") or row.get("id") or f"ehrflowbench_{idx:03d}")
+        if idx in invalid_row_indices:
+            pending.append({"key": key, **row})
+            continue
         cohort_path = row.get("cohort_path") or row.get("cohort")
         question = row.get("question") or row.get("research_question")
         target = row.get("target_outcome") or row.get("outcome")
-        if not cohort_path or not question or not target:
+        task_kind = str(row.get("kind") or "descriptive_association").strip()
+        outcome_optional = task_kind in {
+            "longitudinal_trajectory_analysis",
+            "subphenotype_clustering",
+        }
+        if not cohort_path or not question or (not target and not outcome_optional):
             pending.append(
                 {
                     "key": key,
                     "status": "pending_missing_fields",
-                    "required": ["question", "cohort_path", "target_outcome"],
+                    "required": (
+                        ["question", "cohort_path"]
+                        if outcome_optional
+                        else ["question", "cohort_path", "target_outcome"]
+                    ),
                 }
             )
             continue
@@ -2957,6 +4128,80 @@ def _run_ehrflowbench_jsonl(
                 }
             )
             continue
+        raw_authority_path = row.get("cohort_authority_path")
+        raw_authority_ref = row.get("cohort_authority_ref")
+        authority_required = row.get("cohort_authority_required")
+        authority_declared = (
+            raw_authority_path is not None or raw_authority_ref is not None
+        )
+        if authority_required is not None and not isinstance(authority_required, bool):
+            pending.append({"key": key, "status": "invalid_cohort_authority_marker"})
+            continue
+        if (raw_authority_path is None) != (raw_authority_ref is None) or (
+            authority_required is True and not authority_declared
+        ):
+            pending.append(
+                {"key": key, "status": "incomplete_cohort_authority_declaration"}
+            )
+            continue
+        cohort_authority_path: Optional[Path] = None
+        cohort_authority_ref: Optional[MaterializedCohortAuthorityRef] = None
+        if authority_declared:
+            if not isinstance(raw_authority_ref, Mapping):
+                pending.append(
+                    {"key": key, "status": "invalid_cohort_authority_reference"}
+                )
+                continue
+            try:
+                cohort_authority_ref = MaterializedCohortAuthorityRef.from_dict(
+                    raw_authority_ref
+                )
+                cohort_authority_path = Path(str(raw_authority_path)).expanduser()
+                expected_path = path.parent / cohort_authority_ref.file
+                if (
+                    cohort_authority_path.is_symlink()
+                    or cohort_authority_path.resolve() != expected_path.resolve()
+                ):
+                    raise MaterializedMetadataError(
+                        "authority path does not match the declared reference"
+                    )
+                verified = load_verified_materialized_cohort_authority(
+                    path,
+                    expected_authority=cohort_authority_ref,
+                )
+                if verified is None:  # pragma: no cover - exact ref forbids legacy
+                    raise MaterializedMetadataError(
+                        "declared typed cohort lost its authority"
+                    )
+            except (OSError, MaterializedMetadataError, ValueError, TypeError) as exc:
+                pending.append(
+                    {
+                        "key": key,
+                        "status": "invalid_cohort_authority",
+                        "error": f"{type(exc).__name__}: {exc}",
+                    }
+                )
+                continue
+        elif path.suffix.lower() in {".parquet", ".pq"}:
+            try:
+                discovered_authority = load_verified_materialized_cohort_authority(path)
+            except MaterializedMetadataError as exc:
+                pending.append(
+                    {
+                        "key": key,
+                        "status": "invalid_cohort_authority",
+                        "error": f"{type(exc).__name__}: {exc}",
+                    }
+                )
+                continue
+            if discovered_authority is not None:
+                pending.append(
+                    {
+                        "key": key,
+                        "status": "typed_cohort_authority_not_declared",
+                    }
+                )
+                continue
         if path.suffix.lower() in {".parquet", ".pq"}:
             cohort = pd.read_parquet(path)
         elif path.suffix.lower() in {".csv", ".tsv"}:
@@ -2973,55 +4218,169 @@ def _run_ehrflowbench_jsonl(
             )
             continue
         raw_trajectory_path = row.get("trajectory_path")
+        raw_trajectory_authority_path = row.get("trajectory_authority_path")
+        raw_trajectory_authority_ref = row.get("trajectory_authority_ref")
+        trajectory_authority_required = row.get("trajectory_authority_required")
+        trajectory_authority_declared = (
+            raw_trajectory_authority_path is not None
+            or raw_trajectory_authority_ref is not None
+        )
+        if trajectory_authority_required is not None and not isinstance(
+            trajectory_authority_required, bool
+        ):
+            pending.append(
+                {"key": key, "status": "invalid_trajectory_authority_marker"}
+            )
+            continue
+        if (raw_trajectory_authority_path is None) != (
+            raw_trajectory_authority_ref is None
+        ) or (
+            trajectory_authority_required is True and not trajectory_authority_declared
+        ):
+            pending.append(
+                {
+                    "key": key,
+                    "status": "incomplete_trajectory_authority_declaration",
+                }
+            )
+            continue
         trajectory_path: Optional[Path] = None
+        trajectory_authority_path: Optional[Path] = None
+        trajectory_authority_ref: Optional[MaterializedTrajectoryAuthorityRef] = None
         if raw_trajectory_path:
-            trajectory_path = Path(str(raw_trajectory_path)).expanduser().resolve()
-            if not trajectory_path.is_file():
+            trajectory_candidate = Path(str(raw_trajectory_path)).expanduser()
+            if trajectory_candidate.is_symlink() or not trajectory_candidate.is_file():
                 pending.append(
                     {
                         "key": key,
                         "status": "pending_missing_trajectory",
-                        "trajectory_path": str(trajectory_path),
+                        "trajectory_path": str(trajectory_candidate.absolute()),
                     }
                 )
                 continue
-            if trajectory_path.suffix.lower() not in {".parquet", ".pq"}:
+            if trajectory_candidate.suffix.lower() not in {".parquet", ".pq"}:
                 pending.append(
                     {
                         "key": key,
                         "status": "unsupported_trajectory_format",
+                        "trajectory_path": str(trajectory_candidate.absolute()),
+                    }
+                )
+                continue
+            trajectory_path = trajectory_candidate.resolve(strict=True)
+            if trajectory_authority_declared:
+                if cohort_authority_ref is None or not isinstance(
+                    raw_trajectory_authority_ref, Mapping
+                ):
+                    pending.append(
+                        {"key": key, "status": "invalid_trajectory_authority_reference"}
+                    )
+                    continue
+                try:
+                    trajectory_authority_ref = (
+                        MaterializedTrajectoryAuthorityRef.from_dict(
+                            raw_trajectory_authority_ref
+                        )
+                    )
+                    trajectory_authority_path = Path(
+                        str(raw_trajectory_authority_path)
+                    ).expanduser()
+                    expected_path = trajectory_path.parent / (
+                        trajectory_authority_ref.file
+                    )
+                    if (
+                        trajectory_authority_path.is_symlink()
+                        or trajectory_authority_path.resolve()
+                        != expected_path.resolve()
+                    ):
+                        raise MaterializedTrajectoryError(
+                            "trajectory authority path does not match its reference"
+                        )
+                    verified_trajectory = (
+                        load_verified_materialized_trajectory_authority(
+                            trajectory_path,
+                            expected_authority=trajectory_authority_ref,
+                            expected_universe_authority=cohort_authority_ref,
+                        )
+                    )
+                    if verified_trajectory is None:
+                        raise MaterializedTrajectoryError(
+                            "declared typed trajectory lost its authority"
+                        )
+                except (
+                    OSError,
+                    MaterializedTrajectoryError,
+                    ValueError,
+                    TypeError,
+                ) as exc:
+                    pending.append(
+                        {
+                            "key": key,
+                            "status": "invalid_trajectory_authority",
+                            "error": f"{type(exc).__name__}: {exc}",
+                        }
+                    )
+                    continue
+            elif cohort_authority_ref is not None:
+                pending.append(
+                    {
+                        "key": key,
+                        "status": "typed_trajectory_authority_required",
                         "trajectory_path": str(trajectory_path),
                     }
                 )
                 continue
+        elif trajectory_authority_declared:
+            pending.append(
+                {"key": key, "status": "trajectory_authority_without_artifact"}
+            )
+            continue
         item = _external_item_from_row(
             row=row,
             key=key,
             question=str(question),
-            target=str(target),
+            target=(str(target) if target else None),
             cohort_size=int(len(cohort)),
             cohort_columns=list(cohort.columns),
+            cohort_authority_path=cohort_authority_path,
+            cohort_authority_ref=(
+                cohort_authority_ref.to_dict()
+                if cohort_authority_ref is not None
+                else None
+            ),
+            trajectory_path=trajectory_path,
+            trajectory_authority_path=trajectory_authority_path,
+            trajectory_authority_ref=(
+                trajectory_authority_ref.to_dict()
+                if trajectory_authority_ref is not None
+                else None
+            ),
         )
-        # Resume support: skip items that already finished cleanly so a quota
-        # 502 mid-batch never forces a full redo. An item counts as "done" only
-        # if its latest run reached execution_complete — quota-disrupted
-        # diagnostic_only runs are redone.
-        if reuse_existing and not resume_run_id and _ehrflow_item_done(out_root / key):
-            print(f"\n=== {key} — reuse existing complete run ===")
-            pending.append({"key": key, "status": "reused_complete"})
-            continue
+        row_pipeline_options = dict(pipeline_options or {})
+        if frozen_input_authority_by_task and key in frozen_input_authority_by_task:
+            # Bind THIS task's frozen input digest so _bind_benchmark_execution_input
+            # fails closed if the runtime cohort differs from the authorized input.
+            row_pipeline_options["execution_input_authority_sha256"] = (
+                frozen_input_authority_by_task[key]
+            )
+        # Exact reuse is decided inside ``_run_one_item_from_cohort`` after the
+        # current ExecutionIdentity is constructed. A broad "execution complete"
+        # shortcut here would bypass profile/image/provider/prompt/git matching.
         # Per-item isolation: a provider 502 / crash on one item must not abort
         # the remaining items. Record the failure and continue.
         try:
             score = _run_one_item_from_cohort(
                 item=item,
+                # Preserve the source path even for a legacy/untyped export.
+                # The pipeline can then verify and stage the adjacent
+                # materialization provenance instead of losing it through an
+                # eager DataFrame handoff (which also duplicates the full table
+                # in memory before post-QC development sampling).
                 cohort=path,
+                seed=seed,
                 out_root=out_root,
                 arms=arms,
-                pipeline_options=_pipeline_options_with_trajectory(
-                    pipeline_options,
-                    trajectory_path=trajectory_path,
-                ),
+                pipeline_options=row_pipeline_options,
                 provider=provider,
                 model=model,
                 request_timeout=request_timeout,
@@ -3030,8 +4389,33 @@ def _run_ehrflowbench_jsonl(
                 resume_from_step_id=resume_from_step_id,
                 stop_after_step_id=stop_after_step_id,
                 force_writer_probe=force_writer_probe,
+                reasoning_effort_profile=reasoning_effort_profile,
             )
             scores.append(score)
+            if formal_canary_task_id is not None and key == formal_canary_task_id:
+                canary_passed = _figure2_canary_passed(score)
+                _write_figure2_canary_gate(
+                    out_root=out_root,
+                    task_id=key,
+                    score=score,
+                    status="passed" if canary_passed else "blocked",
+                    reason=(
+                        "publication, manuscript, zero-error, and locked paper "
+                        "scorecard gates passed"
+                        if canary_passed
+                        else "formal canary did not clear every paper-facing gate"
+                    ),
+                )
+                if not canary_passed:
+                    pending.extend(
+                        {
+                            "key": later_key,
+                            "status": "batch_canary_blocked",
+                            "blocked_by": key,
+                        }
+                        for later_key in input_task_ids[idx + 1 :]
+                    )
+                    break
         except Exception as exc:  # noqa: BLE001 — keep batch alive on 502/etc.
             import traceback as _tb
 
@@ -3054,6 +4438,23 @@ def _run_ehrflowbench_jsonl(
                     "error": f"{type(exc).__name__}: {str(exc)[:300]}",
                 }
             )
+            if formal_canary_task_id is not None and key == formal_canary_task_id:
+                _write_figure2_canary_gate(
+                    out_root=out_root,
+                    task_id=key,
+                    score=None,
+                    status="blocked",
+                    reason=f"canary raised {type(exc).__name__}",
+                )
+                pending.extend(
+                    {
+                        "key": later_key,
+                        "status": "batch_canary_blocked",
+                        "blocked_by": key,
+                    }
+                    for later_key in input_task_ids[idx + 1 :]
+                )
+                break
             continue
 
     totals = _aggregate(scores) if scores else {"naive": {}, "aware": {}}
@@ -3062,13 +4463,16 @@ def _run_ehrflowbench_jsonl(
         "source": str(jsonl_path),
         "seed": seed,
         "arms": _normalize_arms(arms),
+        "reasoning_effort_profile": reasoning_effort_profile,
         "pipeline_options": dict(pipeline_options or {}),
         "force_writer_probe": bool(force_writer_probe),
+        "items": input_task_ids,
         "scores": scores,
         "pending": pending,
         "totals": totals,
     }
-    (out_root / "ehrflowbench_results.json").write_text(
+    results_path = out_root / "ehrflowbench_results.json"
+    results_path.write_text(
         json.dumps(payload, indent=2, ensure_ascii=False, default=str),
         encoding="utf-8",
     )
@@ -3091,8 +4495,86 @@ def _run_ehrflowbench_jsonl(
         for p in pending:
             md.append(f"- `{p['key']}` — {p['status']}")
     (out_root / "ehrflowbench_results.md").write_text("\n".join(md), encoding="utf-8")
-    print(f"  -> {out_root / 'ehrflowbench_results.json'}")
+    acceptance_status: str | None = None
+    if require_figure2_paper_acceptance or any(
+        _is_figure2_task_id(task_id) for task_id in input_task_ids
+    ):
+        from benchmarks.figure2_canonical9.evaluator.acceptance import (
+            FIGURE2_PAPER_ACCEPTANCE_SCHEMA,
+            Figure2AcceptanceIssue,
+            Figure2PaperAcceptance,
+            evaluate_figure2_paper_acceptance,
+        )
+        from benchmarks.figure2_canonical9.evaluator.rubric_v1 import (
+            FIGURE2_TASK_IDS,
+        )
+
+        try:
+            acceptance = evaluate_figure2_paper_acceptance(
+                results_path,
+                expected_execution_identity_path=expected_execution_identity_path,
+            )
+        except Exception as exc:  # paper gate must not truncate item outputs
+            acceptance = Figure2PaperAcceptance(
+                schema_version=FIGURE2_PAPER_ACCEPTANCE_SCHEMA,
+                status="invalid",
+                results_sha256=hashlib.sha256(results_path.read_bytes()).hexdigest(),
+                expected_task_ids=tuple(FIGURE2_TASK_IDS),
+                observed_task_ids=tuple(input_task_ids),
+                issues=(
+                    Figure2AcceptanceIssue(
+                        code="ACCEPTANCE_EVALUATOR_ERROR",
+                        detail=f"{type(exc).__name__}: {exc}"[:2048],
+                    ),
+                ),
+            )
+        acceptance_path = out_root / "figure2_paper_acceptance.json"
+        acceptance_path.write_text(
+            json.dumps(
+                acceptance.model_dump(mode="json"),
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=False,
+                allow_nan=False,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        acceptance_status = acceptance.status
+        print(f"  -> {acceptance_path}")
+    print(f"  -> {results_path}")
     print(f"  -> {out_root / 'ehrflowbench_results.md'}")
+    if batch_binding is not None:
+        # Post-run: each written aware manifest must carry ITS task's frozen input
+        # authority (the evaluator, being scorer-tree-locked, only checks presence),
+        # and every Canonical9 child run must map back to the batch in a final
+        # ledger (child run_id + manifest sha + identity + input digest).
+        from benchmarks.figure2_canonical9.realrun_authority import (
+            build_batch_ledger,
+            verify_results_frozen_input_authority,
+            write_batch_ledger,
+        )
+
+        ledger = build_batch_ledger(payload, out_root, batch_binding)
+        ledger_path = write_batch_ledger(ledger, out_root)
+        print(f"  -> {ledger_path}")
+        input_authority_mismatches = verify_results_frozen_input_authority(
+            payload, batch_binding.frozen_input_by_task
+        )
+        if input_authority_mismatches or not ledger.get("complete"):
+            for task_id, reason in input_authority_mismatches:
+                print(
+                    "[realrun-authority] POST-RUN input authority mismatch for "
+                    f"{task_id}: {reason}"
+                )
+            if not ledger.get("complete"):
+                print(
+                    "[realrun-authority] POST-RUN batch ledger incomplete: not every "
+                    "Canonical9 child run mapped back to the declaration."
+                )
+            return 2
+    if require_figure2_paper_acceptance and acceptance_status != "accepted":
+        return _FIGURE2_PAPER_ACCEPTANCE_EXIT_CODE
     return 0
 
 
@@ -3100,6 +4582,7 @@ def _run_one_item_from_cohort(
     *,
     item,
     cohort,
+    seed: int | None = None,
     out_root: Path,
     arms: Sequence[str],
     pipeline_options: Optional[Dict[str, Any]] = None,
@@ -3111,13 +4594,51 @@ def _run_one_item_from_cohort(
     resume_from_step_id: Optional[str] = None,
     stop_after_step_id: Optional[str] = None,
     force_writer_probe: bool = False,
+    reasoning_effort_profile: str = "provider_default",
 ) -> Dict[str, Any]:
-    llm = _make_llm(provider=provider, model=model, request_timeout=request_timeout)
     item_root = out_root / item.key
     selected = set(_normalize_arms(arms))
+    bound_pipeline_options = _bind_benchmark_execution_input(
+        pipeline_options,
+        cohort=cohort,
+        data_seed=seed,
+    )
     naive = _skipped_arm("naive")
     aware = _skipped_arm("aware")
-    if "naive" in selected:
+    expected_identity = _benchmark_execution_identity(
+        bound_pipeline_options,
+        provider=provider,
+        model=model,
+        reasoning_effort_profile=reasoning_effort_profile,
+    )
+    if reuse_existing and not resume_run_id:
+        if "naive" in selected:
+            naive = _reuse_arm_if_complete(
+                arm_dir=item_root / "naive",
+                item=item,
+                label="naive",
+                expected_execution_identity_sha256=expected_identity.identity_sha256,
+            ) or _skipped_arm("naive")
+        if "aware" in selected:
+            aware = _reuse_arm_if_complete(
+                arm_dir=item_root / "aware",
+                item=item,
+                label="aware",
+                expected_execution_identity_sha256=expected_identity.identity_sha256,
+            ) or _skipped_arm("aware")
+    run_naive = "naive" in selected and not _arm_was_run(naive)
+    run_aware = "aware" in selected and not _arm_was_run(aware)
+    llm = (
+        _make_llm(
+            provider=provider,
+            model=model,
+            request_timeout=request_timeout,
+            reasoning_effort_profile=reasoning_effort_profile,
+        )
+        if run_naive or run_aware
+        else None
+    )
+    if run_naive:
         naive = _run_one_arm(
             item=item,
             cohort=(cohort if isinstance(cohort, (str, Path)) else cohort.copy()),
@@ -3125,14 +4646,14 @@ def _run_one_item_from_cohort(
             disable_icu_context=True,
             label="naive",
             llm=llm,
-            pipeline_options=pipeline_options,
+            pipeline_options=bound_pipeline_options,
             reuse_existing=reuse_existing,
             resume_run_id=resume_run_id,
             resume_from_step_id=resume_from_step_id,
             stop_after_step_id=stop_after_step_id,
             force_writer_probe=force_writer_probe,
         )
-    if "aware" in selected:
+    if run_aware:
         aware = _run_one_arm(
             item=item,
             cohort=(cohort if isinstance(cohort, (str, Path)) else cohort.copy()),
@@ -3140,7 +4661,7 @@ def _run_one_item_from_cohort(
             disable_icu_context=False,
             label="aware",
             llm=llm,
-            pipeline_options=pipeline_options,
+            pipeline_options=bound_pipeline_options,
             reuse_existing=reuse_existing,
             resume_run_id=resume_run_id,
             resume_from_step_id=resume_from_step_id,
@@ -3157,6 +4678,7 @@ def _run_one_item_from_cohort(
         "expected_predictor": item.primary_predictor,
         "operational_exposure": getattr(item, "operational_exposure", None),
         "database": getattr(item, "database", "bench"),
+        "reasoning_effort_profile": reasoning_effort_profile,
         "expected_or_direction": item.expected_or_direction,
         "benchmark_family": getattr(item, "benchmark_family", "external"),
         "difficulty": getattr(item, "difficulty", "external"),

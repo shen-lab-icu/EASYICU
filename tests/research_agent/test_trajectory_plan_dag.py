@@ -13,7 +13,7 @@ from easyicu.research_agent.schema import (
     ResearchContext,
     VariableRole,
 )
-from easyicu.research_agent.trajectory_plan_contract import (
+from easyicu.research_agent.trajectory.plan_contract import (
     augment_trajectory_plan_products,
     evaluate_trajectory_plan_dag,
     trajectory_plan_contract_applies,

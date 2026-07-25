@@ -18,23 +18,76 @@ they are a stable v1 the rest of the module can lean on.
 
 from __future__ import annotations
 
+import math
 import re
 from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional, Sequence
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    PrivateAttr,
+    field_validator,
+    model_serializer,
+    model_validator,
+)
 
-from .cohort_schema import (
+from .planning.cohort_contract import (
     CohortDefinition,
     CohortSchemaError,
     coerce_cohort_definition,
 )
-from .robustness_panel import (
+from .planning.robustness_contract import (
     RobustnessPlanError,
     RobustnessSpec,
     validate_robustness_specs,
+)
+
+PlannedAnalysisRole = Literal[
+    "primary",
+    "secondary",
+    "sensitivity",
+    "auxiliary",
+]
+
+ArtifactConsumptionMode = Literal[
+    "all_rows",
+    "single_row",
+    "one_per_role",
+]
+
+TableOneVariableKind = Literal["continuous", "categorical", "ordinal"]
+TableOneSummary = Literal["mean_sd", "median_iqr", "both", "count_percent"]
+TableOneTest = Literal[
+    "welch_t_or_anova",
+    "mann_whitney_or_kruskal",
+    "chi_square_with_fisher_exact_for_sparse_2x2",
+]
+
+
+def _closed_table_one_levels(values: List[Any], *, label: str) -> List[Any]:
+    tokens: list[tuple[str, str]] = []
+    for value in values:
+        if not isinstance(value, (str, bool, int, float)):
+            raise ValueError(f"{label} must contain only JSON scalar values")
+        if isinstance(value, float) and not math.isfinite(value):
+            raise ValueError(f"{label} must contain only finite values")
+        tokens.append((type(value).__name__, repr(value)))
+    if len(tokens) != len(set(tokens)):
+        raise ValueError(f"{label} must contain unique typed values")
+    return list(values)
+
+
+_PRIMARY_RESULT_KIND_ALIASES = {
+    "cohort": "dataset",
+    "metric": "statistic",
+    "statistics": "statistic",
+}
+_PRIMARY_SCIENTIFIC_RESULT_KINDS = frozenset(
+    {"artifact", "dataset", "model", "statistic", "table"}
 )
 
 # ---------------------------------------------------------------------------
@@ -234,9 +287,10 @@ class ClusterSelectionManifest(BaseModel):
             raise ValueError("minimum selection requires direction=minimize")
         if self.selection_rule == "maximum" and self.direction != "maximize":
             raise ValueError("maximum selection requires direction=maximize")
-        if self.selection_rule in {"elbow", "multi_criteria"} and not str(
-            self.rationale or ""
-        ).strip():
+        if (
+            self.selection_rule in {"elbow", "multi_criteria"}
+            and not str(self.rationale or "").strip()
+        ):
             raise ValueError("elbow/multi_criteria selection requires rationale")
         return self
 
@@ -435,6 +489,11 @@ class ResearchContext(BaseModel):
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
+
+    # Private entropy used only to derive reversible outbound-safe tokens.
+    # It is never part of research_context.json or any Provider prompt; the
+    # authority layer persists it separately in a mode-0600 runtime checkpoint.
+    _table_one_token_secrets: Dict[str, str] = PrivateAttr(default_factory=dict)
 
     schema_version: str = RESEARCH_CONTEXT_SCHEMA_VERSION
     research_question: str
@@ -674,12 +733,162 @@ class TrajectoryStabilitySpec(BaseModel):
         return self
 
 
+class ArtifactConsumptionContract(BaseModel):
+    """Planner-owned rule for consuming one exact typed tabular input.
+
+    The contract prevents a downstream consumer from silently treating a
+    multi-row result as a singleton or selecting one scientific role by row
+    position.  It never assigns roles itself: ``expected_roles`` must be
+    declared by the Planner when role-specific consumption is intended.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal["easyicu.artifact_consumption/1"] = (
+        "easyicu.artifact_consumption/1"
+    )
+    input_key: str = Field(
+        ...,
+        description="Exact kind:product input declared on the same step.",
+    )
+    mode: ArtifactConsumptionMode
+    role_column: Optional[str] = None
+    expected_roles: List[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _mode_coordinates_are_closed(self) -> "ArtifactConsumptionContract":
+        if not re.fullmatch(r"[a-z][a-z0-9_]*:[a-z][a-z0-9_]*", self.input_key):
+            raise ValueError("input_key must be one canonical typed kind:product")
+        roles = [str(value).strip() for value in self.expected_roles]
+        if any(not value for value in roles) or len(set(roles)) != len(roles):
+            raise ValueError("expected_roles must contain unique non-empty values")
+        if self.mode == "one_per_role":
+            if not str(self.role_column or "").strip() or not roles:
+                raise ValueError("one_per_role requires role_column and expected_roles")
+        elif self.role_column is not None or roles:
+            raise ValueError(
+                "all_rows/single_row must not declare role_column or expected_roles"
+            )
+        self.expected_roles[:] = roles
+        return self
+
+
+class TableOneVariableSpec(BaseModel):
+    """Planner-owned summary and comparison rule for one Table 1 variable."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str
+    variable_kind: TableOneVariableKind
+    summary: TableOneSummary
+    test: TableOneTest
+    levels: List[Any] = Field(default_factory=list)
+
+    @field_validator("levels")
+    @classmethod
+    def _closed_levels(cls, values: List[Any]) -> List[Any]:
+        return _closed_table_one_levels(values, label="Table 1 variable levels")
+
+    @model_validator(mode="after")
+    def _compatible_summary_and_test(self) -> "TableOneVariableSpec":
+        self.name = str(self.name or "").strip()
+        if not self.name:
+            raise ValueError("Table 1 variable name must be non-empty")
+        numeric_summary = self.summary in {"mean_sd", "median_iqr", "both"}
+        numeric_test = self.test in {
+            "welch_t_or_anova",
+            "mann_whitney_or_kruskal",
+        }
+        if self.variable_kind == "continuous":
+            if not numeric_summary or not numeric_test or self.levels:
+                raise ValueError(
+                    "continuous Table 1 variables require a numeric summary/test "
+                    "and must not declare categorical levels"
+                )
+        elif self.summary == "count_percent":
+            if self.test != "chi_square_with_fisher_exact_for_sparse_2x2":
+                raise ValueError(
+                    "count/percent Table 1 variables require the categorical test"
+                )
+            if len(self.levels) < 2:
+                raise ValueError(
+                    "categorical/ordinal count summaries require at least two "
+                    "Planner-declared closed levels"
+                )
+        else:
+            if (
+                self.variable_kind != "ordinal"
+                or not numeric_summary
+                or not numeric_test
+            ):
+                raise ValueError(
+                    "only ordinal variables may use a numeric Table 1 summary/test "
+                    "outside the continuous variable kind"
+                )
+            if self.levels:
+                raise ValueError(
+                    "numeric ordinal Table 1 summaries must not declare category levels"
+                )
+        return self
+
+
+class TableOneSpec(BaseModel):
+    """Planner-owned grouped baseline-table design.
+
+    The host executes this declaration but never selects the grouping variable,
+    variable roles, summary family, or inferential test.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal["easyicu.table_one/1"] = "easyicu.table_one/1"
+    group_by: str
+    group_levels: List[Any] = Field(min_length=2)
+    variables: List[TableOneVariableSpec] = Field(min_length=1)
+    include_overall: Literal[True] = True
+    missing_group_policy: Literal["fail_closed"] = "fail_closed"
+    missingness_display: Literal["n_percent_by_group"] = "n_percent_by_group"
+    p_values_required: Literal[True] = True
+    p_value_adjustment: Literal["none_descriptive_table"] = "none_descriptive_table"
+
+    @field_validator("group_levels")
+    @classmethod
+    def _closed_group_levels(cls, values: List[Any]) -> List[Any]:
+        return _closed_table_one_levels(values, label="Table 1 group_levels")
+
+    @model_validator(mode="after")
+    def _closed_design(self) -> "TableOneSpec":
+        self.group_by = str(self.group_by or "").strip()
+        if not self.group_by:
+            raise ValueError("Table 1 group_by must be non-empty")
+        names = [item.name for item in self.variables]
+        if len(names) != len(set(names)):
+            raise ValueError("Table 1 variable names must be unique")
+        if self.group_by in names:
+            raise ValueError("Table 1 group_by must not also be a row variable")
+        return self
+
+
 class AnalysisStep(BaseModel):
     """One step in a planner-emitted analysis plan."""
 
     model_config = ConfigDict(extra="forbid")
 
+    # Local execution authority is deliberately absent from model_dump/json.
+    # It may contain digest-verified categorical labels that must never return
+    # to Planner, Replanner, Coder, or repair prompts.
+    _table_one_execution_binding: Any = PrivateAttr(default=None)
+
     step_id: str
+    planned_analysis_role: PlannedAnalysisRole = Field(
+        default="auxiliary",
+        description=(
+            "Planner-owned scientific role of this step. Exactly one step may "
+            "be 'primary'; plans may also have no primary step. Host/internal "
+            "construction defaults to 'auxiliary', while Planner LLM responses "
+            "must explicitly declare the role for every step."
+        ),
+    )
     intent: str = Field(
         ..., description="One-sentence description of what this step does."
     )
@@ -701,6 +910,23 @@ class AnalysisStep(BaseModel):
             "step contract and is required for other analysis families."
         ),
     )
+    input_consumption_contracts: List[ArtifactConsumptionContract] = Field(
+        default_factory=list,
+        description=(
+            "Optional Planner-owned cardinality/role rules for exact typed table "
+            "inputs. Rendering-only children synthesized by the host receive "
+            "all_rows contracts so they cannot silently collapse a multi-row "
+            "source to one row."
+        ),
+    )
+    table_one_spec: Optional[TableOneSpec] = Field(
+        default=None,
+        description=(
+            "Planner-owned grouping, variable summaries, and tests for an exact "
+            "table:table_one output. Overall-only descriptive summaries must use "
+            "a different product name instead of masquerading as Table 1."
+        ),
+    )
     trajectory_stability_spec: Optional[TrajectoryStabilitySpec] = Field(
         default=None,
         description=(
@@ -710,12 +936,102 @@ class AnalysisStep(BaseModel):
         ),
     )
 
+    def required_primary_exposure_sources(self) -> tuple[str, ...]:
+        """Return required PRIMARY sources from the Planner-owned model roster."""
+
+        return tuple(
+            dict.fromkeys(
+                item.exposure_source
+                for item in self.model_requirements
+                if item.analysis_role == "primary"
+                and item.required_for_step_success
+            )
+        )
+
+    def primary_exposure_authority_sources(
+        self,
+        declared_primary: str,
+        operational_sources: Sequence[str] = (),
+    ) -> tuple[str, ...]:
+        """Unify the clinical concept, prior alias, and typed model source."""
+
+        values = [str(declared_primary or "").strip()]
+        values.extend(str(value or "").strip() for value in operational_sources)
+        values.extend(self.required_primary_exposure_sources())
+        return tuple(dict.fromkeys(value for value in values if value))
+
+    def without_required_primary_exposure_terms(
+        self,
+        terms: Sequence[str],
+    ) -> List[str]:
+        """Remove only exact typed PRIMARY sources from adjustment terms."""
+
+        sources = {
+            source.casefold() for source in self.required_primary_exposure_sources()
+        }
+        return [
+            term for term in terms if str(term).strip().casefold() not in sources
+        ]
+
     @model_validator(mode="after")
     def _model_requirement_ids_are_unique(self) -> "AnalysisStep":
+        if self.table_one_spec is not None:
+            if "table:table_one" not in self.expected_outputs:
+                raise ValueError(
+                    "table_one_spec requires expected output 'table:table_one'"
+                )
+            required_inputs = {
+                self.table_one_spec.group_by,
+                *(item.name for item in self.table_one_spec.variables),
+            }
+            missing_inputs = sorted(required_inputs - set(self.inputs))
+            if missing_inputs:
+                raise ValueError(
+                    "table_one_spec variables must be explicit step inputs; "
+                    f"missing {missing_inputs!r}"
+                )
+        consumption_keys = [
+            contract.input_key for contract in self.input_consumption_contracts
+        ]
+        if len(consumption_keys) != len(set(consumption_keys)):
+            raise ValueError(
+                "input_consumption_contracts input_key values must be unique"
+            )
+        missing_consumption_inputs = sorted(set(consumption_keys) - set(self.inputs))
+        if missing_consumption_inputs:
+            raise ValueError(
+                "input_consumption_contracts must target exact inputs on the same "
+                f"step; missing {missing_consumption_inputs!r}"
+            )
+        if (
+            str(self.method or "").strip().lower().split(" with ", 1)[0]
+            == "visualization"
+            and consumption_keys
+        ):
+            typed_table_inputs = {
+                value
+                for value in self.inputs
+                if re.fullmatch(r"table:[a-z][a-z0-9_]*", str(value))
+            }
+            if set(consumption_keys) != typed_table_inputs:
+                raise ValueError(
+                    "visualization input_consumption_contracts must cover every "
+                    "exact typed table input"
+                )
         requirement_ids = [item.requirement_id for item in self.model_requirements]
         if len(requirement_ids) != len(set(requirement_ids)):
             raise ValueError("model_requirements requirement_id values must be unique")
         if self.model_requirements:
+            primary_requirements = [
+                item
+                for item in self.model_requirements
+                if item.analysis_role == "primary"
+            ]
+            if self.planned_analysis_role == "primary" and not primary_requirements:
+                raise ValueError(
+                    "a primary adjusted-association step must declare at least one "
+                    "primary model requirement"
+                )
             method_head = str(self.method or "").lower().split(" with ", 1)[0]
             method = _normalise_model_contract_token(method_head)
             outputs = set()
@@ -747,6 +1063,65 @@ class AnalysisStep(BaseModel):
         return self
 
 
+class KnowHowDecision(BaseModel):
+    """Planner disposition for one retrieved, evidence-bound protocol claim."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    card_id: str
+    card_version: str
+    card_sha256: str
+    claim_id: str
+    disposition: Literal["adopted", "rejected", "unresolved", "requires_confirmation"]
+    reason_code: str
+    rationale: str = Field(max_length=500)
+    citation_ids: List[str] = Field(min_length=1, max_length=8)
+
+    @field_validator("card_id", "claim_id", "reason_code")
+    @classmethod
+    def _validate_stable_id(cls, value: str) -> str:
+        value = str(value or "").strip()
+        if not re.fullmatch(r"[a-z][a-z0-9_]{2,79}", value):
+            raise ValueError(
+                "know-how decision ids must be stable lowercase identifiers"
+            )
+        return value
+
+    @field_validator("card_version")
+    @classmethod
+    def _validate_card_version(cls, value: str) -> str:
+        value = str(value or "").strip()
+        if not re.fullmatch(r"[1-9][0-9]*\.[0-9]+\.[0-9]+", value):
+            raise ValueError("know-how decision card_version must be semantic x.y.z")
+        return value
+
+    @field_validator("card_sha256")
+    @classmethod
+    def _validate_card_sha(cls, value: str) -> str:
+        value = str(value or "").strip()
+        if not re.fullmatch(r"[0-9a-f]{64}", value):
+            raise ValueError("know-how decision card_sha256 must be SHA-256")
+        return value
+
+    @field_validator("rationale")
+    @classmethod
+    def _validate_rationale(cls, value: str) -> str:
+        value = " ".join(str(value or "").split())
+        if not value:
+            raise ValueError("know-how decision rationale must be non-empty")
+        return value
+
+    @field_validator("citation_ids")
+    @classmethod
+    def _validate_citations(cls, values: List[str]) -> List[str]:
+        cleaned = [str(value or "").strip() for value in values]
+        if any(not re.fullmatch(r"[a-z][a-z0-9_]{2,79}", item) for item in cleaned):
+            raise ValueError("know-how decision citation_ids must be stable ids")
+        if len(cleaned) != len(set(cleaned)):
+            raise ValueError("know-how decision citation_ids must be unique")
+        return cleaned
+
+
 class AnalysisPlan(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -775,8 +1150,74 @@ class AnalysisPlan(BaseModel):
             "When present, the specs must cover cohort, missingness, and outcome axes."
         ),
     )
+    display_labels: Dict[str, str] = Field(
+        default_factory=dict,
+        description=(
+            "Planner/run-owned human-facing labels keyed by exact variable, "
+            "contrast, or robustness-spec id. Renderers may consume these "
+            "labels but must not invent clinical endpoint semantics from a "
+            "column name."
+        ),
+    )
+    know_how_decisions: List[KnowHowDecision] = Field(
+        default_factory=list,
+        description=(
+            "Claim-level dispositions for retrieved protocol advice. Card, claim, "
+            "citation, version, and SHA coordinates are validated against this run's "
+            "deterministic retrieval. Empty decisions are omitted for legacy/default-off runs."
+        ),
+    )
     rationale: Optional[str] = None
     revision: int = 1
+
+    @field_validator("know_how_decisions")
+    @classmethod
+    def _validate_know_how_decisions(
+        cls, values: List[KnowHowDecision]
+    ) -> List[KnowHowDecision]:
+        coordinates = [(item.card_id, item.claim_id) for item in values]
+        if len(coordinates) != len(set(coordinates)):
+            raise ValueError("know_how_decisions must not repeat a card/claim pair")
+        return values
+
+    @model_serializer(mode="wrap")
+    def _serialize_optional_know_how_decisions(self, handler: Any) -> Dict[str, Any]:
+        payload = handler(self)
+        if not self.know_how_decisions:
+            payload.pop("know_how_decisions", None)
+        return payload
+
+    @field_validator("display_labels", mode="before")
+    @classmethod
+    def _validate_display_labels(cls, value: Any) -> Dict[str, str]:
+        if value is None:
+            return {}
+        if not isinstance(value, dict):
+            raise ValueError("display_labels must be an object mapping ids to labels")
+        labels: Dict[str, str] = {}
+        normalized_keys: Dict[str, str] = {}
+        for raw_key, raw_label in value.items():
+            key = str(raw_key or "").strip()
+            label = " ".join(str(raw_label or "").split())
+            if not key or not label:
+                raise ValueError("display_labels keys and values must be non-empty")
+            if len(key) > 256 or len(label) > 256:
+                raise ValueError(
+                    "display_labels keys and values must be <=256 characters"
+                )
+            normalized = re.sub(r"[^a-z0-9]+", "_", key.casefold()).strip("_")
+            if not normalized:
+                raise ValueError(
+                    "display_labels keys must contain at least one letter or digit"
+                )
+            prior = normalized_keys.get(normalized)
+            if prior is not None and prior != label:
+                raise ValueError(
+                    "display_labels contains conflicting normalized keys: " f"{key!r}"
+                )
+            normalized_keys[normalized] = label
+            labels[key] = label
+        return labels
 
     @field_validator("cohort", mode="before")
     @classmethod
@@ -793,6 +1234,32 @@ class AnalysisPlan(BaseModel):
         step_ids = [str(step.step_id) for step in self.steps]
         if len(step_ids) != len(set(step_ids)):
             raise ValueError("analysis plan step_id values must be unique")
+        primary_step_ids = [
+            str(step.step_id)
+            for step in self.steps
+            if step.planned_analysis_role == "primary"
+        ]
+        if len(primary_step_ids) > 1:
+            raise ValueError(
+                "analysis plan may declare at most one step with "
+                "planned_analysis_role='primary'; found " + ", ".join(primary_step_ids)
+            )
+        for step in self.steps:
+            if step.planned_analysis_role != "primary":
+                continue
+            typed_output_kinds = {
+                _PRIMARY_RESULT_KIND_ALIASES.get(kind, kind)
+                for raw in step.expected_outputs
+                if isinstance(raw, str)
+                and (separator := raw.strip().partition(":"))[1]
+                and (kind := separator[0].strip().lower())
+                and separator[2].strip()
+            }
+            if not (typed_output_kinds & _PRIMARY_SCIENTIFIC_RESULT_KINDS):
+                raise ValueError(
+                    "a planned primary step must declare at least one typed, "
+                    "non-rendering scientific result product owned by the analysis"
+                )
         if self.robustness_specs:
             try:
                 validate_robustness_specs(self.robustness_specs)
@@ -1088,6 +1555,20 @@ class AnalysisManifest(BaseModel):
             "ResearchAgentPipeline(enable_reproducibility_envelope=True)."
         ),
     )
+    provider_authorization: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description=(
+            "Exact non-secret provider/model/endpoint destination and the "
+            "factory authorization decision used by this run."
+        ),
+    )
+    execution_identity: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description=(
+            "Content-addressed profile/runner/image/network/provider/prompt/git/seed "
+            "identity required for exact reuse and paper acceptance."
+        ),
+    )
     code_version: Optional[Dict[str, Any]] = Field(
         default=None,
         description=(
@@ -1347,6 +1828,13 @@ class StepRecord(BaseModel):
     # Always set on construction.
     step_id: str
     intent: str
+    planned_analysis_role: Optional[PlannedAnalysisRole] = Field(
+        default=None,
+        description=(
+            "Host-recorded copy of the Planner-owned step role. New execution "
+            "records populate it; None remains readable for historical records."
+        ),
+    )
 
     # Lifecycle / status.
     status: Optional[str] = Field(
@@ -1382,6 +1870,24 @@ class StepRecord(BaseModel):
     runner_repair: Optional[str] = None
     deterministic_code_fallback: Optional[str] = None
 
+    # Immutable StepAuthorityCapsule checkpoint/replay coordinates. These do
+    # not grant evidence authority; they select the exact candidate/audit/
+    # execution snapshot that resume may verify and reuse.
+    step_authority_capsule_ref: Optional[Dict[str, Any]] = None
+    step_authority_capsule_stage: Optional[str] = None
+    step_authority_capsule_reused: Optional[bool] = None
+    step_authority_frozen_context_reused: Optional[bool] = None
+    step_authority_capsule_cache_miss: Optional[str] = None
+    step_authority_execution_cache_miss: Optional[str] = None
+    step_authority_audit_cache_miss: Optional[str] = None
+    capsule_execution_replayed: Optional[bool] = None
+    capsule_concept_audit_replayed: Optional[bool] = None
+    capsule_pending_initial_transport_id: Optional[str] = None
+    capsule_pending_initial_binding_sha256: Optional[str] = None
+    capsule_pending_repair_attempt_id: Optional[int] = None
+    capsule_pending_repair_binding_sha256: Optional[str] = None
+    capsule_pending_repair_failure_status: Optional[str] = None
+
     # Concept / contract / quality findings.
     concept_audit_error_count: Optional[int] = None
     concept_repair_attempts: Optional[int] = None
@@ -1399,6 +1905,7 @@ class StepRecord(BaseModel):
 
 
 __all__ = [
+    "PlannedAnalysisRole",
     "VariableRole",
     "AggregationRule",
     "TimeWindow",

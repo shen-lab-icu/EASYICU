@@ -10,11 +10,11 @@ import pandas as pd
 import pytest
 
 from easyicu.research_agent.audits.validators import FigureSourceDataValidator
-from easyicu.research_agent.declared_product_contract import (
+from easyicu.research_agent.contracts.declared_product import (
     authorize_declared_figure_product_slots,
     bind_declared_figure_products,
 )
-from easyicu.research_agent.evidence import EvidenceStore
+from easyicu.research_agent.authority.evidence_store import EvidenceStore
 from easyicu.research_agent.figures.absolute_risk import (
     REPAIR_ID,
     prepare_absolute_risk_inputs,
@@ -26,7 +26,7 @@ from easyicu.research_agent.pipeline import (
     _sealed_renderer_figure_step_matches_parent,
     deterministic_figure_repair_id_for_upstream,
 )
-from easyicu.research_agent.pipeline_execute import _sealed_parent_planner_anchors
+from easyicu.research_agent.execution.phase import _sealed_parent_planner_anchors
 from easyicu.research_agent.schema import AnalysisStep
 
 

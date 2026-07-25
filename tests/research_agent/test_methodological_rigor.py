@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from easyicu.research_agent.methodological_rigor import (
+from easyicu.research_agent.review.methodological_rigor import (
     MethodSignals,
     MethodologicalRigorAuditor,
     audit_method_appropriateness,

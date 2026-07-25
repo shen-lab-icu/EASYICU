@@ -17,7 +17,7 @@ import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Mapping, Optional
 
 
 def _bootstrap_imports() -> Path:
@@ -33,29 +33,29 @@ def _bootstrap_imports() -> Path:
 
 REPO_ROOT = _bootstrap_imports()
 
-from easyicu.research_agent.data_foundation import (  # noqa: E402
+from easyicu.research_agent.acquisition.foundation import (  # noqa: E402
     acquire_universe_for_question,
 )
-from easyicu.research_agent.discovery_handoff import (  # noqa: E402
+from easyicu.research_agent.discovery.discovery_handoff import (  # noqa: E402
     assert_discovery_analysis_ready,
     build_handoff_from_row,
     load_discovery_ledger,
     select_discovery_row,
     write_handoff_packet,
 )
-from easyicu.research_agent.discovery_package import (  # noqa: E402
+from easyicu.research_agent.discovery.discovery_package import (  # noqa: E402
     validate_discovery_manuscript_package,
     write_discovery_package_assessment,
 )
-from easyicu.research_agent.discovery_story_figure import (  # noqa: E402
+from easyicu.research_agent.discovery.discovery_story_figure import (  # noqa: E402
     render_discovery_story_figure,
 )
-from easyicu.research_agent.evidence import (  # noqa: E402
+from easyicu.research_agent.authority.evidence_store import (  # noqa: E402
     EvidenceRecord,
     EvidenceStore,
     sha256_of_file,
 )
-from easyicu.research_agent.llm import OpenAIClient  # noqa: E402
+from easyicu.research_agent.providers.llm import OpenAIClient  # noqa: E402
 from easyicu.research_agent.providers import (  # noqa: E402
     ProviderConfigurationError,
     build_provider_client,
@@ -144,6 +144,9 @@ def main(argv: Optional[list[str]] = None) -> int:
         rows,
         index=args.idea_index,
         require_analysis_ready=args.run_analysis,
+        # Pairwise ideas require a resolved endpoint; concept-set analyses such
+        # as trajectory phenotyping instead require resolved analysis concepts.
+        require_executable_shape=not bool(args.target_outcome),
     )
     handoff = build_handoff_from_row(
         selected,
@@ -195,7 +198,9 @@ def main(argv: Optional[list[str]] = None) -> int:
         stem="discovery_universe",
         target_outcome=handoff.target_outcome,
         outcome_concepts=outcome_concepts,
+        required_feature_concepts=handoff.resolved_analysis_concepts,
         database=handoff.database,
+        require_outcome=bool(handoff.target_outcome),
     )
     acquisition_path = out_root / "data_foundation_acquisition.json"
     acquisition_path.write_text(
@@ -205,23 +210,29 @@ def main(argv: Optional[list[str]] = None) -> int:
     if acquisition.blocked or acquisition.universe_path is None:
         raise SystemExit(f"data foundation blocked: {acquisition.note}")
 
-    # Declare the long-format trajectory in the JSONL handoff. The bench keeps
-    # the cohort as a path and forwards only these explicit input paths through
-    # runner_kwargs, so both CodeRunner and DockerRunner can expose it without
-    # inheriting the launcher's ambient environment.
-    trajectory_path = Path(acquisition.universe_path).with_name(
-        f"{Path(acquisition.universe_path).stem}_trajectory.parquet"
-    )
-    if trajectory_path.exists():
+    # The trajectory is selected by AcquisitionResult authority coordinates;
+    # never infer a mutable sibling by naming convention for a typed cohort.
+    trajectory_path = acquisition.trajectory_path
+    if trajectory_path is not None:
         print(f"[discovery] trajectory: {trajectory_path}")
-    else:
-        trajectory_path = None
 
     jsonl_path = _write_ehrflowbench_row(
         out_root=out_root,
         handoff=handoff,
         cohort_path=acquisition.universe_path,
+        cohort_authority_path=acquisition.cohort_authority_path,
+        cohort_authority_ref=(
+            acquisition.cohort_authority_ref.to_dict()
+            if acquisition.cohort_authority_ref is not None
+            else None
+        ),
         trajectory_path=trajectory_path,
+        trajectory_authority_path=acquisition.trajectory_authority_path,
+        trajectory_authority_ref=(
+            acquisition.trajectory_authority_ref.to_dict()
+            if acquisition.trajectory_authority_ref is not None
+            else None
+        ),
     )
     bench_root = out_root / "bench"
     cmd = [
@@ -301,7 +312,7 @@ def _normalise_endpoint(value: Any) -> str:
 
 def _outcome_concepts_for_handoff(
     *,
-    handoff_target: str,
+    handoff_target: Optional[str],
     requested: Optional[str],
 ) -> tuple[str, ...]:
     """Return the sole licensed outcome concept for universe materialisation.
@@ -313,7 +324,12 @@ def _outcome_concepts_for_handoff(
 
     target = str(handoff_target or "").strip()
     if not target:
-        raise SystemExit("discovery handoff has no target_outcome")
+        if requested is not None:
+            raise SystemExit(
+                "--outcome-concepts cannot be supplied for an outcome-free "
+                "concept-set handoff"
+            )
+        return ()
     if requested is not None:
         supplied = [item.strip() for item in requested.split(",") if item.strip()]
         if len(supplied) != 1 or _normalise_endpoint(
@@ -463,6 +479,7 @@ def _register_story_figure_provenance(
             / "src"
             / "easyicu"
             / "research_agent"
+            / "discovery"
             / "discovery_story_figure.py"
         ),
         kind="code",
@@ -556,21 +573,61 @@ def _write_ehrflowbench_row(
     out_root: Path,
     handoff,
     cohort_path: Path,
+    cohort_authority_path: Optional[Path] = None,
+    cohort_authority_ref: Optional[Mapping[str, object]] = None,
     trajectory_path: Optional[Path] = None,
+    trajectory_authority_path: Optional[Path] = None,
+    trajectory_authority_ref: Optional[Mapping[str, object]] = None,
 ) -> Path:
+    if (cohort_authority_path is None) != (cohort_authority_ref is None):
+        raise ValueError(
+            "cohort authority path and reference must be handed off together"
+        )
+    if (trajectory_authority_path is None) != (trajectory_authority_ref is None):
+        raise ValueError(
+            "trajectory authority path and reference must be handed off together"
+        )
+    if trajectory_authority_ref is not None and trajectory_path is None:
+        raise ValueError("trajectory authority requires a trajectory path")
     row: Dict[str, Any] = {
         "key": f"discovery_{handoff.literature_idea_id}",
         "name": handoff.candidate_topic[:120],
         "question": handoff.research_question,
         "cohort_path": str(cohort_path.resolve()),
-        "target_outcome": handoff.target_outcome,
-        "primary_predictor": handoff.resolved_predictor_concept or "agent_mined_idea",
         "expected_or_direction": 0,
-        "kind": "descriptive_association",
+        "kind": (
+            "longitudinal_trajectory_analysis"
+            if getattr(handoff, "analysis_family", None) == "trajectory_clustering"
+            else "descriptive_association"
+        ),
         "inclusion_criteria": list(handoff.inclusion_criteria),
     }
+    analysis_family = str(
+        getattr(handoff, "analysis_family", "association_study") or "association_study"
+    )
+    analysis_concepts = [
+        str(value) for value in getattr(handoff, "resolved_analysis_concepts", []) or []
+    ]
+    row["analysis_family"] = analysis_family
+    if analysis_concepts:
+        row["analysis_concepts"] = analysis_concepts
+        row["candidate_variables"] = analysis_concepts
+    if getattr(handoff, "target_outcome", None):
+        row["target_outcome"] = handoff.target_outcome
+    if getattr(handoff, "resolved_predictor_concept", None):
+        row["primary_predictor"] = handoff.resolved_predictor_concept
+    if cohort_authority_path is not None and cohort_authority_ref is not None:
+        row["cohort_authority_required"] = True
+        row["cohort_authority_path"] = str(Path(cohort_authority_path).resolve())
+        row["cohort_authority_ref"] = dict(cohort_authority_ref)
     if trajectory_path is not None:
         row["trajectory_path"] = str(Path(trajectory_path).resolve())
+    if trajectory_authority_path is not None and trajectory_authority_ref is not None:
+        row["trajectory_authority_required"] = True
+        row["trajectory_authority_path"] = str(
+            Path(trajectory_authority_path).resolve()
+        )
+        row["trajectory_authority_ref"] = dict(trajectory_authority_ref)
     path = out_root / "discovery_ehrflowbench.jsonl"
     path.write_text(json.dumps(row, ensure_ascii=False) + "\n", encoding="utf-8")
     return path

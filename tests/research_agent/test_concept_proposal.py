@@ -5,14 +5,14 @@ from __future__ import annotations
 import importlib
 import inspect
 
-from easyicu.research_agent.concept_proposal import (
+from easyicu.research_agent.discovery.concept_proposal import (
     ConceptProposalDraft,
     DistributionStat,
     gather_candidate_rows,
     propose_concept_selection,
     validate_concept_proposal,
 )
-from easyicu.research_agent.idea_mining_feasibility_tier import SourceItemIndex
+from easyicu.research_agent.discovery.idea_mining_feasibility_tier import SourceItemIndex
 
 
 def _index() -> SourceItemIndex:
@@ -244,7 +244,7 @@ def test_selection_parses_fenced_json():
 
 def test_module_is_a_leaf_does_not_import_idea_mining():
     src = inspect.getsource(
-        importlib.import_module("easyicu.research_agent.concept_proposal")
+        importlib.import_module("easyicu.research_agent.discovery.concept_proposal")
     )
     assert "import idea_mining" not in src
     assert "from .idea_mining import" not in src

@@ -91,19 +91,85 @@ def test_bounds_metadata_helpers_preserve_manifest_fields():
     assert df.attrs["easyicu_bounds_dropped"] is None
 
 
-def test_module_extraction_manifest_records_bounds_audit(monkeypatch, tmp_path):
-    monkeypatch.setattr(api, "_CONCEPT_BOUNDS_CACHE", {"test_signal": (0.0, 10.0)})
+def test_module_extraction_writes_one_wide_module_file(monkeypatch, tmp_path):
+    # Unified with the web export path (dataio.py): _run_module_extraction now calls
+    # load_concepts(merge=True) and writes ONE wide {module}.parquet (id + time + one column
+    # per concept). Concept-bounds enforcement (incl. unit-suspect skip + unbounded retry)
+    # is load_concepts' pre-aggregation filter_bounds — covered by the
+    # test_enforce_concept_bounds_* unit tests above; the module exporter no longer runs its
+    # own per-concept post-guard, so the mock returns an already-enforced wide frame exactly
+    # as real load_concepts would.
+    def fake_load_concepts(**kwargs):
+        assert kwargs.get("merge") is True
+        return pd.DataFrame(
+            {"stay_id": [1, 1], "charttime": [1, 2], "test_signal": [1.0, 2.0]}
+        )
+
+    monkeypatch.setattr(easyicu, "load_concepts", fake_load_concepts)
+
+    api._run_module_extraction(
+        "test_module", ["test_signal"], "miiv", str(tmp_path), None, None, str(tmp_path)
+    )
+
+    manifest = json.loads((tmp_path / "_manifest.json").read_text())
+    assert manifest["errors"] == []
+    assert manifest["warnings"] == []
+    saved = manifest["saved"]["test_module"]
+    assert saved["rows"] == 2
+    assert saved["concepts"] == ["test_signal"]
+    exported = pd.read_parquet(saved["path"])
+    assert list(exported.columns) == ["stay_id", "charttime", "test_signal"]
+    assert exported["test_signal"].tolist() == [1.0, 2.0]
+
+
+def test_module_extraction_sanitises_mixed_object_columns(monkeypatch, tmp_path):
+    # Indicator concepts (e.g. mech_circ_support) can return object dtype mixing bool/float/
+    # NaN, which pyarrow refuses to write to parquet. The exporter losslessly coerces such
+    # object columns to numeric before writing; genuine string columns (sex) stay untouched.
+    wide = pd.DataFrame(
+        {
+            "stay_id": [1, 2, 3],
+            "charttime": [0, 0, 0],
+            "mech_circ_support": pd.Series([True, 1.0, None], dtype=object),
+            "sex": pd.Series(["M", "F", None], dtype=object),
+        }
+    )
+    monkeypatch.setattr(easyicu, "load_concepts", lambda **kwargs: wide)
+
+    api._run_module_extraction(
+        "circulatory",
+        ["mech_circ_support", "sex"],
+        "miiv",
+        str(tmp_path),
+        None,
+        None,
+        str(tmp_path),
+    )
+
+    manifest = json.loads((tmp_path / "_manifest.json").read_text())
+    assert manifest["errors"] == []
+    exported = pd.read_parquet(manifest["saved"]["circulatory"]["path"])
+    # mixed bool/float object column -> numeric (True->1.0, 1.0->1.0, None->NaN)
+    assert exported["mech_circ_support"].tolist()[:2] == [1.0, 1.0]
+    # genuine string column left as-is
+    assert exported["sex"].tolist()[:2] == ["M", "F"]
+
+
+def test_module_extraction_streams_patient_batches_directly_to_parquet(
+    monkeypatch, tmp_path
+):
+    calls = []
 
     def fake_load_concepts(**kwargs):
-        return {
-            "test_signal": pd.DataFrame(
-                {
-                    "stay_id": [1, 1, 1, 1],
-                    "charttime": [0, 1, 2, 3],
-                    "test_signal": [-1, 1, 2, 99],
-                }
-            )
-        }
+        ids = list(kwargs["patient_ids"]["stay_id"])
+        calls.append(ids)
+        return pd.DataFrame(
+            {
+                "stay_id": ids,
+                "charttime": [0] * len(ids),
+                "test_signal": [float(value) for value in ids],
+            }
+        )
 
     monkeypatch.setattr(easyicu, "load_concepts", fake_load_concepts)
 
@@ -112,67 +178,49 @@ def test_module_extraction_manifest_records_bounds_audit(monkeypatch, tmp_path):
         ["test_signal"],
         "miiv",
         str(tmp_path),
-        None,
-        None,
+        {"stay_id": [1, 2, 3, 4, 5]},
+        2,
         str(tmp_path),
+        stream_output_batches=True,
     )
 
     manifest = json.loads((tmp_path / "_manifest.json").read_text())
-    saved = manifest["saved"]["test_signal"]
-
     assert manifest["errors"] == []
-    assert manifest["warnings"] == []
-    assert saved["rows_before"] == 4
-    assert saved["rows"] == 2
-    assert saved["bounds_dropped"] is None
-    assert saved["bounds_dropped_post_aggregation"] == 2
-    assert saved["bounds_count_status"] == "pre_aggregation_count_unavailable"
-    assert saved["bounds_skipped"] is False
-    assert saved["bounds_status"] == "enforced"
+    assert calls == [[1, 2], [3, 4], [5]]
+    exported = pd.read_parquet(manifest["saved"]["test_module"]["path"])
+    assert exported["stay_id"].tolist() == [1, 2, 3, 4, 5]
+    assert not (tmp_path / ".test_module.partial.parquet").exists()
 
 
-def test_module_extraction_manifest_marks_loader_unit_suspect(monkeypatch, tmp_path):
-    monkeypatch.setattr(api, "_CONCEPT_BOUNDS_CACHE", {"temperature": (32.0, 42.0)})
-
-    recovered = pd.DataFrame({"stay_id": [1], "charttime": [0], "temperature": [98.6]})
-    recovered.attrs["easyicu_bounds_loader"] = {
-        "bounds_raw_transformed_non_null": 100,
-        "bounds_bounded_transformed_non_null": 0,
-        "bounds_bounded_aggregate_non_null": 0,
-        "bounds_unit_suspect": True,
-        "bounds_unbounded_retry": True,
-    }
-    monkeypatch.setattr(
-        easyicu,
-        "load_concepts",
-        lambda **kwargs: {"temperature": recovered},
+def test_streamed_special_export_uses_published_dependency_parquets(tmp_path):
+    source = tmp_path / "published"
+    output = tmp_path / "special"
+    source.mkdir()
+    output.mkdir()
+    time = pd.to_datetime(["2026-01-01T00:00:00", "2026-01-01T01:00:00"])
+    pd.DataFrame(
+        {"stay_id": [1, 1], "charttime": time, "susp_inf": [False, True]}
+    ).to_parquet(source / "sepsis_shared.parquet", index=False)
+    pd.DataFrame({"stay_id": [1, 1], "charttime": time, "sofa": [0.0, 3.0]}).to_parquet(
+        source / "sofa1_score.parquet", index=False
     )
+    pd.DataFrame(
+        {"stay_id": [1, 1], "charttime": time, "sofa2": [0.0, 3.0]}
+    ).to_parquet(source / "sofa2_score.parquet", index=False)
 
-    api._run_module_extraction(
-        "vitals",
-        ["temperature"],
+    api._stream_special_extraction_batches(
+        ["sepsis3_sofa1", "sepsis3_sofa2"],
         "miiv",
         str(tmp_path),
-        None,
-        None,
-        str(tmp_path),
+        {"stay_id": [1]},
+        1,
+        str(output),
+        use_sofa2=True,
+        published_output_dir=str(source),
     )
 
-    manifest = json.loads((tmp_path / "_manifest.json").read_text())
-    saved = manifest["saved"]["temperature"]
-    exported = pd.read_parquet(saved["path"])
-
-    assert exported["temperature"].tolist() == pytest.approx([98.6])
+    manifest = json.loads((output / "_manifest.json").read_text())
     assert manifest["errors"] == []
-    assert manifest["warnings"] == [
-        "temperature: BOUNDS SKIPPED (unit-suspect: median outside declared range)"
-    ]
-    assert saved["bounds_status"] == "skipped_unit_suspect"
-    assert saved["bounds_skipped"] is True
-    assert saved["bounds_count_status"] == "skipped_unit_suspect"
-    assert saved["bounds_dropped"] is None
-    assert saved["bounds_raw_transformed_non_null"] == 100
-    assert saved["bounds_bounded_transformed_non_null"] == 0
-    assert saved["bounds_bounded_aggregate_non_null"] == 0
-    assert saved["bounds_unit_suspect"] is True
-    assert saved["bounds_unbounded_retry"] is True
+    assert set(manifest["saved"]) == {"sep3_sofa1", "sep3_sofa2"}
+    assert (output / "sep3_sofa1.parquet").is_file()
+    assert (output / "sep3_sofa2.parquet").is_file()

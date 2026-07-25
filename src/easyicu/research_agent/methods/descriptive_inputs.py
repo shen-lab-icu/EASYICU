@@ -17,7 +17,6 @@ from typing import Any, Sequence
 import numpy as np
 import pandas as pd
 
-
 _NUMERIC_CATEGORY_STRING = re.compile(
     r"[+-]?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?\Z"
 )
@@ -84,16 +83,30 @@ def _semantic_numeric(
     return numeric, semantic_valid
 
 
-def strict_numeric_input(series: pd.Series) -> StrictNumericInput:
+def strict_numeric_input(
+    series: pd.Series,
+    *,
+    name: str | None = None,
+    column: str | None = None,
+) -> StrictNumericInput:
     """Convert an explicitly selected Series without hiding invalid values.
 
     True input missingness remains missing.  A nonmissing value that cannot be
     converted, a semantically nonnumeric value (for example a timestamp), or a
-    nonfinite numeric value raises :class:`DescriptiveInputError`.
+    nonfinite numeric value raises :class:`DescriptiveInputError`.  ``name`` and
+    ``column`` are equivalent diagnostic labels accepted for generated-analysis
+    wrappers; they never select data or relax validation.
     """
 
     if not isinstance(series, pd.Series):
         raise TypeError("strict_numeric_input requires a pandas Series")
+    if name is not None and column is not None and name != column:
+        raise ValueError("name and column diagnostic labels disagree")
+    diagnostic_label = name if name is not None else column
+    if diagnostic_label is not None and (
+        not isinstance(diagnostic_label, str) or not diagnostic_label.strip()
+    ):
+        raise ValueError("numeric input diagnostic label must be a non-empty string")
 
     raw_missing = series.isna()
     numeric, semantic_valid = _semantic_numeric(series, allow_boolean=False)
@@ -119,8 +132,9 @@ def strict_numeric_input(series: pd.Series) -> StrictNumericInput:
         or audit["semantic_invalid_n"]
         or audit["nonfinite_n"]
     ):
+        label = f" {diagnostic_label!r}" if diagnostic_label is not None else ""
         raise DescriptiveInputError(
-            "numeric input contains unconvertible, semantically invalid, or "
+            f"numeric input{label} contains unconvertible, semantically invalid, or "
             "nonfinite values",
             audit=audit,
         )

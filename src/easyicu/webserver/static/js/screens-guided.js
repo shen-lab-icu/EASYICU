@@ -238,7 +238,7 @@
   const GUIDED_EXTRACT_WINDOW_HOURS = 24 * 30;
   const GUIDED_EXTRACT_MODULES = [
     ['demographics', 'Demographics', '人口统计', 6, true],
-    ['vitals', 'Vital signs', '生命体征', 11, true],
+    ['vitals', 'Vital signs', '生命体征', 12, true],
     ['chemistry', 'Lab — Chemistry', '实验室-生化', 49, true],
     ['sofa2_score', 'SOFA-2 scores', 'SOFA-2 评分', 7, true],
     ['sepsis3_sofa2', 'Sepsis-3 (SOFA-2)', 'Sepsis-3 (SOFA-2)', 1, true],
@@ -247,7 +247,7 @@
     ['sepsis3_sofa1', 'Sepsis-3 (SOFA-1)', 'Sepsis-3 (SOFA-1)', 1, false],
     ['sepsis_shared', 'Sepsis shared', 'Sepsis 共享概念', 5, false],
     ['respiratory', 'Respiratory', '呼吸系统', 15, false],
-    ['ventilator', 'Ventilator', '呼吸机参数', 12, false],
+    ['ventilator', 'Ventilator', '呼吸机参数', 15, false],
     ['blood_gas', 'Blood gas', '血气分析', 9, false],
     ['hematology', 'Lab — Hematology', '实验室-血液学', 25, false],
     ['vasopressors', 'Vasopressors', '血管活性药物', 17, false],

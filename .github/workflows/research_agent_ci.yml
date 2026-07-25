@@ -5,20 +5,25 @@ on:
     paths:
       - "src/easyicu/research_agent/**"
       - "tests/research_agent/**"
+      - "tests/test_arch_measure.py"
+      - "tools/arch_measure.py"
+      - "tools/arch_baselines/execution_phase.json"
       - "examples/research_agent_*.py"
       - ".github/workflows/research_agent_ci.yml"
   pull_request:
     paths:
       - "src/easyicu/research_agent/**"
       - "tests/research_agent/**"
+      - "tests/test_arch_measure.py"
+      - "tools/arch_measure.py"
+      - "tools/arch_baselines/execution_phase.json"
       - "examples/research_agent_*.py"
       - ".github/workflows/research_agent_ci.yml"
 
 # T1.1 — research_agent has its own CI gate so a regression in the
 # minimum supported Python/runtime dependency stack shows up before it
-# lands in the main suite. The job stays slim: we install only what
-# research_agent imports (pandas, pydantic, pyarrow, matplotlib,
-# numpy, scipy, pytest) plus the package itself in editable mode.
+# lands in the main suite. The job installs the package's complete core
+# runtime explicitly, then installs EasyICU editable without extras.
 jobs:
   test:
     name: research_agent tests (py${{ matrix.python-version }})
@@ -36,27 +41,40 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
 
-      - name: Install minimal research_agent dependencies
+      - name: Install research_agent runtime dependencies
         run: |
           python -m pip install --upgrade pip
-          # Only what research_agent itself needs — keep this slim so a
-          # regression in an unrelated extra (webapp, llmserver) does
-          # not block the agent CI.
+          # Keep this explicit so missing package metadata cannot silently
+          # hide an import required by the agent test collection.
           pip install \
             "pandas>=1.5" \
+            "openpyxl>=3.1" \
             "pyarrow>=14.0.0" \
             "numpy>=1.23" \
             "pydantic>=2.0" \
             "matplotlib>=3.7" \
+            "requests>=2.28" \
+            "tqdm>=4.65" \
+            "duckdb>=0.9.0" \
             "scipy>=1.10" \
             "pytest>=7.0" \
             "pyyaml>=6.0" \
             "scikit-learn>=1.3" \
-            "statsmodels>=0.14"
+            "statsmodels>=0.14" \
+            "openai>=1.0" \
+            "langgraph==1.1.2"
           # Editable install of the easyicu package without extras so
-          # ``import easyicu.research_agent`` succeeds.
+          # import easyicu.research_agent succeeds.
           pip install --no-deps -e .
 
       - name: Run research_agent test suite
         run: |
-          pytest tests/research_agent -q
+          python tools/arch_measure.py --diff tools/arch_baselines/execution_phase.json
+          pytest tests/test_arch_measure.py -q
+          # Keep fail-closed runner policy tests in their default environment.
+          pytest tests/research_agent/test_runner.py -q
+          # The remaining offline integration tests execute deterministic
+          # generated fixtures on the ephemeral Actions host.
+          EASYICU_TEST_RUNNER_KIND=subprocess \
+          EASYICU_ALLOW_UNSAFE_HOST_FALLBACK=1 \
+            pytest tests/research_agent -q --ignore=tests/research_agent/test_runner.py

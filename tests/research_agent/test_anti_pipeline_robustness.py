@@ -71,9 +71,9 @@ def _sensitivity_step(*, figure: bool = False):
             if figure
             else "07_cohort_definition_sensitivity_comparison"
         ),
-        intent="Render the sensitivity figure."
-        if figure
-        else "Execute locked variants.",
+        intent=(
+            "Render the sensitivity figure." if figure else "Execute locked variants."
+        ),
         method="cohort_definition_sensitivity",
         expected_outputs=(
             ["figure:robustness_plot"]
@@ -97,6 +97,18 @@ def _prespecified_robustness_step(*, foreign_output: bool = False):
         intent="Execute the planner-locked robustness specifications.",
         method="prespecified_robustness_analysis",
         expected_outputs=outputs,
+    )
+
+
+def _prespecified_sensitivity_grid_step():
+    from easyicu.research_agent.schema import AnalysisStep
+
+    return AnalysisStep(
+        step_id="08_sensitivity_grid",
+        planned_analysis_role="sensitivity",
+        intent="Execute every locked sensitivity specification and report effects.",
+        method="prespecified_sensitivity_analysis_grid",
+        expected_outputs=["table:robustness_grid"],
     )
 
 
@@ -191,15 +203,13 @@ def _write_valid_executed_results(out_dir, *, identifier_column="definition_id")
 def test_executed_sensitivity_accepts_model_spec_identifier_alias(
     tmp_path, identifier_column
 ) -> None:
-    from easyicu.research_agent.pipeline_execute import (
+    from easyicu.research_agent.execution.phase import (
         _executed_robustness_result_issues,
     )
 
     out_dir = tmp_path / "outputs"
     out_dir.mkdir()
-    rows = _write_valid_executed_results(
-        out_dir, identifier_column=identifier_column
-    )
+    rows = _write_valid_executed_results(out_dir, identifier_column=identifier_column)
     lock = _locked_specs_payload()
 
     issues = _executed_robustness_result_issues(
@@ -215,7 +225,7 @@ def test_executed_sensitivity_accepts_model_spec_identifier_alias(
 def test_executed_sensitivity_rejects_conflicting_model_identifier_aliases(
     tmp_path,
 ) -> None:
-    from easyicu.research_agent.pipeline_execute import (
+    from easyicu.research_agent.execution.phase import (
         _executed_robustness_result_issues,
     )
 
@@ -245,7 +255,7 @@ def test_executed_sensitivity_rejects_conflicting_model_identifier_aliases(
 
 
 def test_executed_sensitivity_rejects_duplicate_model_rows(tmp_path) -> None:
-    from easyicu.research_agent.pipeline_execute import (
+    from easyicu.research_agent.execution.phase import (
         _executed_robustness_result_issues,
     )
 
@@ -277,7 +287,7 @@ def test_executed_sensitivity_rejects_duplicate_model_rows(tmp_path) -> None:
 def test_executed_sensitivity_rejects_ambiguous_model_result_tables(
     tmp_path,
 ) -> None:
-    from easyicu.research_agent.pipeline_execute import (
+    from easyicu.research_agent.execution.phase import (
         _executed_robustness_result_issues,
     )
 
@@ -304,7 +314,7 @@ def test_executed_sensitivity_rejects_ambiguous_model_result_tables(
 def test_long_coefficient_table_with_model_metadata_is_not_a_second_model_table(
     tmp_path,
 ) -> None:
-    from easyicu.research_agent.pipeline_execute import (
+    from easyicu.research_agent.execution.phase import (
         _executed_robustness_result_issues,
     )
 
@@ -353,7 +363,7 @@ def test_primary_effect_never_parses_english_or_conjunction_from_prose() -> None
 
 
 def test_structured_primary_effect_with_ci_remains_available() -> None:
-    from easyicu.research_agent.pipeline_primary_effect import (
+    from easyicu.research_agent.robustness.primary_effect import (
         _extract_primary_effect_payload_from_summary,
         _primary_effect_payload_is_complete,
     )
@@ -382,7 +392,7 @@ def test_structured_primary_effect_with_ci_remains_available() -> None:
     ],
 )
 def test_primary_panel_payload_requires_complete_typed_contract(update: dict) -> None:
-    from easyicu.research_agent.pipeline_primary_effect import (
+    from easyicu.research_agent.robustness.primary_effect import (
         _primary_effect_payload_is_complete,
     )
 
@@ -399,7 +409,7 @@ def test_primary_panel_payload_requires_complete_typed_contract(update: dict) ->
 
 
 def test_incomplete_primary_summary_does_not_create_converged_panel_row() -> None:
-    from easyicu.research_agent.robustness_panel import (
+    from easyicu.research_agent.robustness.panel import (
         build_robustness_panel_from_records,
     )
 
@@ -413,7 +423,7 @@ def test_incomplete_primary_summary_does_not_create_converged_panel_row() -> Non
 
 
 def test_step_owned_robustness_rows_win_and_adapter_only_fills_missing_specs() -> None:
-    from easyicu.research_agent.robustness_panel import (
+    from easyicu.research_agent.robustness.panel import (
         RobustnessPanelRow,
         RobustnessSpec,
         build_robustness_panel_from_records,
@@ -458,7 +468,7 @@ def test_step_owned_robustness_rows_win_and_adapter_only_fills_missing_specs() -
 
 @pytest.mark.parametrize("status", [None, "contract_failed", "execution_failed"])
 def test_unsuccessful_step_rows_cannot_enter_final_robustness_panel(status) -> None:
-    from easyicu.research_agent.robustness_panel import (
+    from easyicu.research_agent.robustness.panel import (
         RobustnessSpec,
         build_robustness_panel_from_records,
     )
@@ -494,8 +504,10 @@ def test_unsuccessful_step_rows_cannot_enter_final_robustness_panel(status) -> N
 def test_unsuccessful_adapter_payload_cannot_trigger_deterministic_refit(
     status,
 ) -> None:
-    from easyicu.research_agent.estimators import fit_robustness_rows_from_records
-    from easyicu.research_agent.robustness_panel import RobustnessSpec
+    from easyicu.research_agent.robustness.estimators import (
+        fit_robustness_rows_from_records,
+    )
+    from easyicu.research_agent.robustness.panel import RobustnessSpec
 
     record = {
         "step_id": "07_sensitivity",
@@ -519,13 +531,18 @@ def test_unsuccessful_adapter_payload_cannot_trigger_deterministic_refit(
     )
 
     assert rows == []
-    assert any("generic deterministic robustness refitting is disabled" in warning for warning in warnings)
+    assert any(
+        "generic deterministic robustness refitting is disabled" in warning
+        for warning in warnings
+    )
 
 
 @pytest.mark.parametrize("missing_field", ["estimator_kind", "missing_strategy"])
 def test_explicit_adapter_cannot_default_scientific_choices(missing_field) -> None:
-    from easyicu.research_agent.estimators import fit_robustness_rows_from_records
-    from easyicu.research_agent.robustness_panel import RobustnessSpec
+    from easyicu.research_agent.robustness.estimators import (
+        fit_robustness_rows_from_records,
+    )
+    from easyicu.research_agent.robustness.panel import RobustnessSpec
 
     payload = {
         "data": [{"x": index, "y": index % 2} for index in range(20)],
@@ -552,8 +569,10 @@ def test_explicit_adapter_cannot_default_scientific_choices(missing_field) -> No
 
 
 def test_explicit_adapter_cannot_create_missing_primary_estimate() -> None:
-    from easyicu.research_agent.estimators import fit_robustness_rows_from_records
-    from easyicu.research_agent.robustness_panel import RobustnessSpec
+    from easyicu.research_agent.robustness.estimators import (
+        fit_robustness_rows_from_records,
+    )
+    from easyicu.research_agent.robustness.panel import RobustnessSpec
 
     record = {
         "step_id": "07_sensitivity",
@@ -576,11 +595,14 @@ def test_explicit_adapter_cannot_create_missing_primary_estimate() -> None:
     )
 
     assert rows == []
-    assert any("generic deterministic robustness refitting is disabled" in warning for warning in warnings)
+    assert any(
+        "generic deterministic robustness refitting is disabled" in warning
+        for warning in warnings
+    )
 
 
 def test_adapter_primary_row_cannot_enter_panel_or_numeric_digest() -> None:
-    from easyicu.research_agent.robustness_panel import (
+    from easyicu.research_agent.robustness.panel import (
         PRIMARY_SPEC_ID,
         RobustnessPanelRow,
         build_robustness_panel_from_records,
@@ -610,7 +632,7 @@ def test_adapter_primary_row_cannot_enter_panel_or_numeric_digest() -> None:
 
 
 def test_logistic_adapter_does_not_invent_ridge_estimate_on_separation() -> None:
-    from easyicu.research_agent.estimators import fit_estimator
+    from easyicu.research_agent.robustness.estimators import fit_estimator
 
     exposure = pd.DataFrame({"x": [0.0] * 30 + [1.0] * 30})
     outcome = pd.Series([0.0] * 30 + [1.0] * 30)
@@ -630,9 +652,11 @@ def test_logistic_adapter_does_not_invent_ridge_estimate_on_separation() -> None
 def test_pipeline_finalization_never_infers_relaxed_variant_from_locked_cohort(
     tmp_path, monkeypatch
 ) -> None:
-    from easyicu.research_agent.cohort_schema import CohortDefinition
-    from easyicu.research_agent.estimators import fit_robustness_rows_from_records
-    from easyicu.research_agent.robustness_panel import RobustnessSpec
+    from easyicu.research_agent.cohort.schema import CohortDefinition
+    from easyicu.research_agent.robustness.estimators import (
+        fit_robustness_rows_from_records,
+    )
+    from easyicu.research_agent.robustness.panel import RobustnessSpec
 
     locked_path = tmp_path / "cohort_analysis.parquet"
     pd.DataFrame(
@@ -651,7 +675,7 @@ def test_pipeline_finalization_never_infers_relaxed_variant_from_locked_cohort(
         raise AssertionError("pipeline finalization must not load/refit cohort data")
 
     monkeypatch.setattr(
-        "easyicu.research_agent.estimators._load_direct_dataframe",
+        "easyicu.research_agent.robustness.estimators._load_direct_dataframe",
         _unexpected_load,
     )
     rows, warnings = fit_robustness_rows_from_records(
@@ -662,10 +686,13 @@ def test_pipeline_finalization_never_infers_relaxed_variant_from_locked_cohort(
     )
 
     assert rows == []
-    assert any("generic deterministic robustness refitting is disabled" in warning for warning in warnings)
+    assert any(
+        "generic deterministic robustness refitting is disabled" in warning
+        for warning in warnings
+    )
 
-    from easyicu.research_agent.pipeline_execute import run_execute_phase
-    from easyicu.research_agent.deterministic_robustness import (
+    from easyicu.research_agent.execution.phase import run_execute_phase
+    from easyicu.research_agent.execution.runners.deterministic_robustness import (
         _run_robustness_preflight,
     )
 
@@ -676,7 +703,7 @@ def test_pipeline_finalization_never_infers_relaxed_variant_from_locked_cohort(
 
 
 def test_logistic_adapter_rejects_nonbinary_outcome_before_statsmodels() -> None:
-    from easyicu.research_agent.estimators import fit_estimator
+    from easyicu.research_agent.robustness.estimators import fit_estimator
 
     result = fit_estimator(
         cohort=None,
@@ -694,7 +721,7 @@ def test_logistic_adapter_rejects_nonbinary_outcome_before_statsmodels() -> None
 def test_locked_sensitivity_gate_blocks_missing_extra_ids_and_wrong_universe(
     tmp_path,
 ) -> None:
-    from easyicu.research_agent.pipeline_execute import (
+    from easyicu.research_agent.execution.phase import (
         _cohort_definition_sensitivity_contract_findings,
     )
 
@@ -730,8 +757,7 @@ def test_locked_sensitivity_gate_blocks_missing_extra_ids_and_wrong_universe(
 
     assert errors
     assert all(
-        finding.detail.get("step_id")
-        == "07_cohort_definition_sensitivity_comparison"
+        finding.detail.get("step_id") == "07_cohort_definition_sensitivity_comparison"
         for finding in errors
     )
     coverage = next(
@@ -757,7 +783,7 @@ def test_locked_sensitivity_gate_blocks_missing_extra_ids_and_wrong_universe(
 def test_locked_sensitivity_gate_rejects_ids_without_membership_replay_fields(
     tmp_path,
 ) -> None:
-    from easyicu.research_agent.pipeline_execute import (
+    from easyicu.research_agent.execution.phase import (
         _cohort_definition_sensitivity_contract_findings,
     )
 
@@ -790,15 +816,14 @@ def test_locked_sensitivity_gate_rejects_ids_without_membership_replay_fields(
     )
 
     assert any(
-        finding.validator == "robustness_cohort_membership"
-        for finding in findings
+        finding.validator == "robustness_cohort_membership" for finding in findings
     )
 
 
 def test_locked_sensitivity_gate_rejects_reused_primary_membership_under_locked_id(
     tmp_path,
 ) -> None:
-    from easyicu.research_agent.pipeline_execute import (
+    from easyicu.research_agent.execution.phase import (
         _cohort_definition_sensitivity_contract_findings,
     )
 
@@ -811,8 +836,7 @@ def test_locked_sensitivity_gate_rejects_reused_primary_membership_under_locked_
     )
     universe_path, cohort_path = _write_membership_inputs(run_dir)
     rows = [
-        {"spec_id": spec["spec_id"], "axis": spec["axis"]}
-        for spec in lock["specs"]
+        {"spec_id": spec["spec_id"], "axis": spec["axis"]} for spec in lock["specs"]
     ]
     rows[0].update(
         {
@@ -845,7 +869,7 @@ def test_locked_sensitivity_gate_rejects_reused_primary_membership_under_locked_
 
 
 def test_locked_sensitivity_declaration_only_does_not_prove_execution(tmp_path) -> None:
-    from easyicu.research_agent.pipeline_execute import (
+    from easyicu.research_agent.execution.phase import (
         _cohort_definition_sensitivity_contract_findings,
     )
 
@@ -903,7 +927,7 @@ def test_locked_sensitivity_declaration_only_does_not_prove_execution(tmp_path) 
 
 
 def test_locked_sensitivity_gate_accepts_typed_overlap_table_names(tmp_path) -> None:
-    from easyicu.research_agent.pipeline_execute import (
+    from easyicu.research_agent.execution.phase import (
         _cohort_definition_sensitivity_contract_findings,
     )
 
@@ -917,10 +941,7 @@ def test_locked_sensitivity_gate_accepts_typed_overlap_table_names(tmp_path) -> 
     universe_path, cohort_path = _write_membership_inputs(run_dir)
     matrix_path = out_dir / "sensitivity_specification_matrix.csv"
     pd.DataFrame(
-        [
-            {"spec_id": spec["spec_id"], "axis": spec["axis"]}
-            for spec in lock["specs"]
-        ]
+        [{"spec_id": spec["spec_id"], "axis": spec["axis"]} for spec in lock["specs"]]
     ).to_csv(matrix_path, index=False)
     overlap_path = out_dir / "cohort_definition_overlap_attrition.csv"
     pd.DataFrame(
@@ -956,7 +977,7 @@ def test_locked_sensitivity_gate_accepts_typed_overlap_table_names(tmp_path) -> 
 
 
 def test_executed_sensitivity_rejects_wrong_outcome_model(tmp_path) -> None:
-    from easyicu.research_agent.pipeline_execute import (
+    from easyicu.research_agent.execution.phase import (
         _executed_robustness_result_issues,
     )
 
@@ -979,7 +1000,7 @@ def test_executed_sensitivity_rejects_wrong_outcome_model(tmp_path) -> None:
 
 
 def test_executed_sensitivity_rejects_forged_summary_estimate(tmp_path) -> None:
-    from easyicu.research_agent.pipeline_execute import (
+    from easyicu.research_agent.execution.phase import (
         _executed_robustness_result_issues,
     )
 
@@ -997,7 +1018,8 @@ def test_executed_sensitivity_rejects_forged_summary_estimate(tmp_path) -> None:
     )
 
     assert any(
-        issue["issue"] in {
+        issue["issue"]
+        in {
             "model_result_value_mismatch",
             "coefficient_result_value_mismatch",
         }
@@ -1008,7 +1030,7 @@ def test_executed_sensitivity_rejects_forged_summary_estimate(tmp_path) -> None:
 def test_reportable_robustness_must_retain_primary_estimator_contract(
     tmp_path,
 ) -> None:
-    from easyicu.research_agent.pipeline_execute import (
+    from easyicu.research_agent.execution.phase import (
         _executed_robustness_result_issues,
     )
 
@@ -1045,7 +1067,7 @@ def test_reportable_robustness_must_retain_primary_estimator_contract(
 def test_nonindependent_locked_variant_is_an_honest_null_disclosure(
     tmp_path,
 ) -> None:
-    from easyicu.research_agent.pipeline_execute import (
+    from easyicu.research_agent.execution.phase import (
         _executed_robustness_result_issues,
     )
 
@@ -1096,7 +1118,7 @@ def test_nonindependent_locked_variant_is_an_honest_null_disclosure(
 def test_executed_sensitivity_rejects_missing_indicator_on_complete_case_model(
     tmp_path,
 ) -> None:
-    from easyicu.research_agent.pipeline_execute import (
+    from easyicu.research_agent.execution.phase import (
         _executed_robustness_result_issues,
     )
 
@@ -1114,13 +1136,11 @@ def test_executed_sensitivity_rejects_missing_indicator_on_complete_case_model(
         context=None,
     )
 
-    assert any(
-        issue["issue"] == "missing_indicator_model_not_used" for issue in issues
-    )
+    assert any(issue["issue"] == "missing_indicator_model_not_used" for issue in issues)
 
 
 def test_missing_indicator_accepts_structured_availability_term_role(tmp_path) -> None:
-    from easyicu.research_agent.pipeline_execute import (
+    from easyicu.research_agent.execution.phase import (
         _executed_robustness_result_issues,
     )
 
@@ -1141,15 +1161,13 @@ def test_missing_indicator_accepts_structured_availability_term_role(tmp_path) -
     models = pd.read_csv(model_path)
     model_mask = models["model_id"].eq(target["model_id"])
     models.loc[model_mask, "analysis_set"] = "source_aware"
-    models.loc[model_mask, "baseline_missing_policy"] = (
-        "explicit_missing_category"
-    )
+    models.loc[model_mask, "baseline_missing_policy"] = "explicit_missing_category"
     models.to_csv(model_path, index=False)
     coefficient_path = out_dir / "adjusted_estimates.csv"
     coefficients = pd.read_csv(coefficient_path)
-    availability_row = coefficients[
-        coefficients["model_id"].eq(target["model_id"])
-    ].iloc[0].copy()
+    availability_row = (
+        coefficients[coefficients["model_id"].eq(target["model_id"])].iloc[0].copy()
+    )
     availability_row["term"] = "source_not_observed"
     availability_row["term_role"] = "availability"
     coefficients = pd.concat(
@@ -1173,7 +1191,7 @@ def test_missing_indicator_accepts_structured_availability_term_role(tmp_path) -
 
 
 def test_penalized_point_only_sensitivity_must_be_nonreportable(tmp_path) -> None:
-    from easyicu.research_agent.pipeline_execute import (
+    from easyicu.research_agent.execution.phase import (
         _executed_robustness_result_issues,
     )
 
@@ -1215,8 +1233,7 @@ def test_penalized_point_only_sensitivity_must_be_nonreportable(tmp_path) -> Non
         context=None,
     )
     assert any(
-        issue["issue"] == "reportable_result_requires_finite_ci"
-        for issue in issues
+        issue["issue"] == "reportable_result_requires_finite_ci" for issue in issues
     )
     assert any(
         issue["issue"] == "reportable_result_requires_verified_convergence"
@@ -1246,7 +1263,7 @@ def test_penalized_point_only_sensitivity_must_be_nonreportable(tmp_path) -> Non
 
 
 def test_sensitivity_figure_step_is_not_subject_to_result_spec_gate(tmp_path) -> None:
-    from easyicu.research_agent.pipeline_execute import (
+    from easyicu.research_agent.execution.phase import (
         _cohort_definition_sensitivity_contract_findings,
     )
 
@@ -1265,10 +1282,11 @@ def test_sensitivity_figure_step_is_not_subject_to_result_spec_gate(tmp_path) ->
 def test_coder_context_receives_locked_spec_definitions_and_universe_contract(
     tmp_path,
 ) -> None:
-    from easyicu.research_agent.pipeline_execute import (
-        _coder_context_with_locked_robustness_specs,
+    from easyicu.research_agent.authority.coder_authority import HostCoderAuthority
+    from easyicu.research_agent.execution.phase import (
+        _coder_authority_with_locked_robustness_specs,
     )
-    from easyicu.research_agent.robustness_execution_contract import (
+    from easyicu.research_agent.contracts.robustness_execution import (
         ROBUSTNESS_EXECUTION_CONTRACT_GUIDANCE,
         ROBUSTNESS_RESULT_REQUIRED_FIELDS,
     )
@@ -1321,67 +1339,56 @@ def test_coder_context_receives_locked_spec_definitions_and_universe_contract(
         target_outcome="death",
     )
 
-    enriched = _coder_context_with_locked_robustness_specs(
+    authority = _coder_authority_with_locked_robustness_specs(
+        authority=HostCoderAuthority(),
         context=context,
         step=_sensitivity_step(),
         run_dir=run_dir,
     )
+    rendered = authority.render()
 
-    assert enriched is not context
-    assert "alt_relaxed_cohort" in (enriched.notes or "")
-    assert "cohort_override" in (enriched.notes or "")
-    assert "EASYICU_UNIVERSE_PARQUET" in (enriched.notes or "")
-    assert ROBUSTNESS_EXECUTION_CONTRACT_GUIDANCE in (enriched.notes or "")
+    assert context.notes is None
+    assert "alt_relaxed_cohort" in rendered
+    assert "cohort_override" in rendered
+    assert "EASYICU_UNIVERSE_PARQUET" in rendered
+    assert ROBUSTNESS_EXECUTION_CONTRACT_GUIDANCE in rendered
     assert all(
         field in ROBUSTNESS_EXECUTION_CONTRACT_GUIDANCE
         for field in ROBUSTNESS_RESULT_REQUIRED_FIELDS
     )
-    assert "n is the analytic fitted-model N" in (enriched.notes or "")
-    assert "applied_outcome_override" in (enriched.notes or "")
-    assert "missing_strategy" in (enriched.notes or "")
-    assert "universe_n" in (enriched.notes or "")
-    assert "variant_membership_n" in (enriched.notes or "")
-    assert "inflow_n" in (enriched.notes or "")
-    assert "outflow_n" in (enriched.notes or "")
-    assert "overlap_n" in (enriched.notes or "")
-    assert "including when the fitted model itself is not executable" in (
-        enriched.notes or ""
-    )
-    assert "aggregation='count'" in (enriched.notes or "")
-    assert "must never be replaced by nonmissingness" in (enriched.notes or "")
-    assert "reconcile them before applying the membership predicate" in (
-        enriched.notes or ""
-    )
-    assert "report invalid and discordant pair counts" in (enriched.notes or "")
-    assert "membership-changing disagreement" in (enriched.notes or "")
-    assert "mark that specification not_executable" in (enriched.notes or "")
-    assert "derive measurement availability from the designated" in (
-        enriched.notes or ""
-    )
-    assert "do not infer it only from isna()" in (enriched.notes or "")
-    assert "documented computational encoding" in (enriched.notes or "")
-    assert "do not silently map them into the reference category" in (
-        enriched.notes or ""
-    )
-    assert "Cohort membership N and fitted analytic n are distinct" in (
-        enriched.notes or ""
-    )
-    assert "single pre-aggregated outcome scalar per analysis unit" in (
-        enriched.notes or ""
-    )
-    assert "must be marked not_independent" in (enriched.notes or "")
-    assert "never refit the unchanged scalar and relabel it" in (
-        enriched.notes or ""
-    )
-    assert "AUTHORITATIVE PRIMARY MODEL CONTRACT" in (enriched.notes or "")
-    assert '"model_family":"logistic_regression"' in (enriched.notes or "")
+    assert "n is the analytic fitted-model N" in rendered
+    assert "applied_outcome_override" in rendered
+    assert "missing_strategy" in rendered
+    assert "universe_n" in rendered
+    assert "variant_membership_n" in rendered
+    assert "inflow_n" in rendered
+    assert "outflow_n" in rendered
+    assert "overlap_n" in rendered
+    assert "including when the fitted model itself is not executable" in (rendered)
+    assert "aggregation='count'" in rendered
+    assert "must never be replaced by nonmissingness" in rendered
+    assert "reconcile them before applying the membership predicate" in (rendered)
+    assert "report invalid and discordant pair counts" in rendered
+    assert "membership-changing disagreement" in rendered
+    assert "mark that specification not_executable" in rendered
+    assert "derive measurement availability from the designated" in rendered
+    assert "do not infer it only from isna()" in rendered
+    assert "documented computational encoding" in rendered
+    assert "do not silently map them into the reference category" in (rendered)
+    assert "Cohort membership N and fitted analytic n are distinct" in rendered
+    assert "single pre-aggregated outcome scalar per analysis unit" in (rendered)
+    assert "must be marked not_independent" in rendered
+    assert "never refit the unchanged scalar and relabel it" in rendered
+    assert "AUTHORITATIVE PRIMARY MODEL CONTRACT" in rendered
+    assert '"model_family":"logistic_regression"' in rendered
 
 
 def test_prespecified_robustness_alias_receives_locked_execution_contract(
     tmp_path,
 ) -> None:
-    from easyicu.research_agent.pipeline_execute import (
-        _coder_context_with_locked_robustness_specs,
+    from easyicu.research_agent.authority.coder_authority import HostCoderAuthority
+    from easyicu.research_agent.execution.phase import (
+        _coder_authority_with_locked_robustness_specs,
     )
     from easyicu.research_agent.schema import CohortDescriptor, ResearchContext
 
@@ -1401,21 +1408,60 @@ def test_prespecified_robustness_alias_receives_locked_execution_contract(
         variables=[],
     )
 
-    enriched = _coder_context_with_locked_robustness_specs(
+    authority = _coder_authority_with_locked_robustness_specs(
+        authority=HostCoderAuthority(),
         context=context,
         step=_prespecified_robustness_step(),
         run_dir=run_dir,
     )
+    rendered = authority.render()
 
-    assert enriched is not context
-    assert "LOCKED ROBUSTNESS SPECIFICATIONS" in (enriched.notes or "")
-    assert "missing-indicator specification" in (enriched.notes or "")
+    assert context.notes is None
+    assert "LOCKED ROBUSTNESS SPECIFICATIONS" in rendered
+    assert "missing-indicator specification" in rendered
+
+
+def test_prespecified_sensitivity_grid_receives_locked_execution_contract(
+    tmp_path,
+) -> None:
+    from easyicu.research_agent.authority.coder_authority import HostCoderAuthority
+    from easyicu.research_agent.execution.phase import (
+        _coder_authority_with_locked_robustness_specs,
+    )
+    from easyicu.research_agent.schema import CohortDescriptor, ResearchContext
+
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    (run_dir / "robustness_specs_locked.json").write_text(
+        json.dumps(_locked_specs_payload()), encoding="utf-8"
+    )
+    context = ResearchContext(
+        research_question="Test the locked variants.",
+        cohort=CohortDescriptor(
+            cohort_name="test",
+            database="mock",
+            n_patients=5,
+            n_stays=5,
+        ),
+        variables=[],
+    )
+
+    authority = _coder_authority_with_locked_robustness_specs(
+        authority=HostCoderAuthority(),
+        context=context,
+        step=_prespecified_sensitivity_grid_step(),
+        run_dir=run_dir,
+    )
+
+    assert "CANONICAL ROBUSTNESS EXECUTION CONTRACT" in authority.render()
+    assert "point_estimate" in authority.render()
+    assert "ci_low" in authority.render()
 
 
 def test_prespecified_robustness_alias_is_gated_but_mixed_contract_is_not(
     tmp_path,
 ) -> None:
-    from easyicu.research_agent.pipeline_execute import (
+    from easyicu.research_agent.execution.phase import (
         _cohort_definition_sensitivity_contract_findings,
     )
 
@@ -1450,34 +1496,117 @@ def test_prespecified_robustness_alias_is_gated_but_mixed_contract_is_not(
     assert mixed_findings == []
 
 
+def test_prespecified_sensitivity_grid_cannot_pass_with_description_rows_only(
+    tmp_path,
+) -> None:
+    from easyicu.research_agent.execution.phase import (
+        _cohort_definition_sensitivity_contract_findings,
+    )
+
+    run_dir = tmp_path / "run"
+    out_dir = run_dir / "steps" / "08_sensitivity_grid" / "outputs"
+    out_dir.mkdir(parents=True)
+    lock = _locked_specs_payload()
+    (run_dir / "robustness_specs_locked.json").write_text(
+        json.dumps(lock), encoding="utf-8"
+    )
+    universe_path, cohort_path = _write_membership_inputs(run_dir)
+    description_only = out_dir / "robustness_grid.csv"
+    pd.DataFrame(
+        [
+            {
+                "spec_id": spec["spec_id"],
+                "axis": spec["axis"],
+                "description": spec["description"],
+            }
+            for spec in lock["specs"]
+        ]
+    ).to_csv(description_only, index=False)
+
+    findings = _cohort_definition_sensitivity_contract_findings(
+        step=_prespecified_sensitivity_grid_step(),
+        step_summary={"output_files": {"table:robustness_grid": str(description_only)}},
+        out_dir=out_dir,
+        run_dir=run_dir,
+        universe_path=universe_path,
+        cohort_path=cohort_path,
+    )
+
+    result = next(
+        finding
+        for finding in findings
+        if finding.validator == "robustness_executed_result"
+    )
+    issues = result.detail["issues"]
+    assert any(issue["issue"] == "model_result_table_unavailable" for issue in issues)
+    assert any(
+        issue["issue"] == "coefficient_result_table_unavailable" for issue in issues
+    )
+    assert any(issue["issue"] == "executed_result_row_count" for issue in issues)
+
+
 def test_locked_sensitivity_contract_is_wired_into_both_contract_passes() -> None:
-    from easyicu.research_agent.pipeline_execute import (
+    from easyicu.research_agent.execution.phase import (
         _evaluate_final_deterministic_gates,
         run_execute_phase,
     )
 
+    from easyicu.research_agent.execution.phase import (
+        _step_deterministic_contract_findings,
+    )
+
     execute_source = inspect.getsource(run_execute_phase)
     final_gate_source = inspect.getsource(_evaluate_final_deterministic_gates)
+    shared_source = inspect.getsource(_step_deterministic_contract_findings)
     # Figure repair now completes before evidence seal/registration.  The old
     # third pass belonged to the retired post-registration mutation branch;
     # the remaining pre-seal and final read-only passes are the two authorities.
-    # The final pass is shared with resume revalidation, so inspect that typed
-    # gate boundary instead of requiring its implementation to stay duplicated
-    # inside the already-large execution function.
-    assert (
-        execute_source.count("_cohort_definition_sensitivity_contract_findings(")
-        == 1
-    )
+    # Those two passes now evaluate ONE shared deterministic contract sequence
+    # (dedup): the cohort-definition-sensitivity contract lives once inside that
+    # shared sequence, and both the early execution gate and the final read-only
+    # gate wire it in — so the wiring guarantee holds without duplicating the
+    # implementation inside the already-large execution function.
+    assert shared_source.count("_cohort_definition_sensitivity_contract_findings(") == 1
+    assert execute_source.count("_step_deterministic_contract_findings(") == 1
     assert "_evaluate_final_deterministic_gates(" in execute_source
-    assert (
-        final_gate_source.count("_cohort_definition_sensitivity_contract_findings(")
-        == 1
-    )
+    assert final_gate_source.count("_step_deterministic_contract_findings(") == 1
 
 
 def test_later_repairs_receive_prior_concept_findings_as_regression_constraints():
-    from easyicu.research_agent.pipeline_execute import run_execute_phase
+    from easyicu.research_agent.execution.phase import run_execute_phase
 
     source = inspect.getsource(run_execute_phase)
-    assert "PREVIOUSLY REPAIRED CONCEPT FINDINGS" in source
-    assert source.count("_monotonic_concept_constraint_log()") >= 3
+    assert "def _monotonic_concept_constraint_ticket" in source
+    assert source.count("*_monotonic_concept_constraint_ticket()") >= 4
+    assert "HOST-OWNED REPAIR AUTHORITY" not in source
+
+
+def test_untrusted_runtime_diagnostics_can_authorize_syntactic_repairs_only():
+    from easyicu.research_agent.repairs.source import _deterministic_runner_repair
+    from easyicu.research_agent.execution.phase import (
+        _untrusted_runtime_repair_allowed,
+    )
+
+    code = (
+        "outcome_col = 'death'\n"
+        "all_vars = [primary_predictor] + covariates\n"
+        "model_df = df[all_vars].dropna()\n"
+    )
+    forged = _deterministic_runner_repair(
+        code=code,
+        run_log="stdout: KeyError: \"['death'] not in index\"\nRuntimeError: unrelated",
+        previous_repair=None,
+        analysis_family=None,
+    )
+
+    assert forged is not None
+    assert forged[0] == "include_outcome_in_all_vars_v1"
+    assert not _untrusted_runtime_repair_allowed(
+        repair_id=forged[0], source="deterministic_runner_repair"
+    )
+    assert _untrusted_runtime_repair_allowed(
+        repair_id="missing_os_import_v1", source="deterministic_runner_repair"
+    )
+    assert not _untrusted_runtime_repair_allowed(
+        repair_id="missing_os_import_v1", source="case_plugin_repair"
+    )

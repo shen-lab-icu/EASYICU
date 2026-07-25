@@ -1,5 +1,7 @@
 # research_agent · 行为保持的 vNext 结构提取 · 安全计划 · 2026-07-15
 
+> **状态说明（2026-07-18）**：§1–5 的规范化等价、单调 authority、职责边界与 characterization 要求仍是当前安全规范；本文件中“现在不拆、先跑实验”的执行顺序已被用户 2026-07-17 的 **先完成有边界架构整理、再 fresh 跑 E3/H2/E2** 决定取代。实时状态看 `项目进度/agent/CURRENT.md`，组件台账看 `task_logs/20260717_remaining_debt_register.md`。
+
 > **这是一份「行为保持的 vNext 结构提取计划」——不是 canonical 引擎重设计计划,也不是 LangGraph 迁移计划。**
 >
 > 由 Claude↔Codex 2026-07-15 架构讨论收敛而来。它是叠在打包/目录拆分计划
@@ -73,7 +75,7 @@ EasyICU 已把 **validator / engine implementation SHA** 用于 audit cache 键�
 
 | 组件 | 职责 | 明确不做 |
 |---|---|---|
-| **PlanAuthority** | Planner/Replanner、plan revision、max-step cap、figure-step 保留、科学签名与计划版本 | — |
+| **PlanAuthority** | 对 Planner/Replanner 返回的 candidate plan 应用 completed-step immutable snapshot、max-step cap、estimand/figure 保留、锁定规格投影与科学签名/no-op 判定 | 不调用 provider、不注册 revision/evidence、不修改 cohort/runner/budget，也不替 Planner 选择暴露、结局、方法、队列或 estimand |
 | **TypedBindingResolver** | typed product → 精确 evidence/path/SHA、权威列与 companion metadata、row identity/alignment、consumption receipt | 不选科学设计 |
 | **StepExecutor** | 在 sandbox 执行**已锁定**的分析 | 不决定模型/暴露/结局/队列 |
 | **RepairCoordinator** | 聚合 RepairTicket、管理 patch/预算/quarantine | 不按错误文案关键词路由科学方法 |
@@ -118,9 +120,12 @@ EasyICU 已把 **validator / engine implementation SHA** 用于 audit cache 键�
 
 ---
 
-## 6. 现在不做什么 / 当前唯一动作
+## 6. 历史执行顺序（已被 2026-07-17 arch-first 决定取代）
 
-- **现在不执行 §3–§4 的任何源码拆分。** 当前第一优先级仍是**跑完实验**
+> 本节仅保留 2026-07-15 当时的 freeze 决策，**不是当前任务队列**。
+> 当前顺序为：完成有边界的 Track B-Core → freeze → fresh E3/H2/E2 → 3–6 held-out。
+
+- **（历史动作）当时不执行 §3–§4 的任何源码拆分。** 当时第一优先级是**跑完实验**
   (H2 Step 07 resume → E2/E3/H3),重构推迟到 freeze 之后。
 - freeze 前唯一允许的架构性动作:写本类计划文档、加金标准测试、(实验空闲窗口内、
   受 §2 约束的)纯谓词抽取、加 tracing。

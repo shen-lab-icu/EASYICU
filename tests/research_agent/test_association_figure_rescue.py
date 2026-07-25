@@ -17,7 +17,7 @@ from easyicu.research_agent.audits.validators import (
     FigureContractQualityValidator,
     FigureSourceDataValidator,
 )
-from easyicu.research_agent.declared_product_contract import (
+from easyicu.research_agent.contracts.declared_product import (
     bind_declared_figure_products,
 )
 from easyicu.research_agent.pipeline import (
@@ -225,6 +225,362 @@ def test_missingness_rescue_recomputes_percentages_from_counts(tmp_path: Path):
     assert len(contract["panels"]) == 2
     assert contract["panels"][1]["title"] == "Analytic availability"
     assert "absence-as-negative" in contract["panels"][1]["claim"]
+
+
+def test_exact_missingness_source_contract_uses_sealed_renderer(
+    tmp_path: Path, monkeypatch
+) -> None:
+    repair_id = "missingness_publication_bundle_from_parent_outputs_v1"
+    parent_step = "03_missingness_measurement_audit"
+    figure_step = f"{parent_step}_figure"
+    parent = tmp_path / "steps" / parent_step / "outputs"
+    parent.mkdir(parents=True)
+    pd.DataFrame(
+        {
+            "concept": ["lactate", "creatinine"],
+            "variable": ["lactate", "creatinine"],
+            "value_column": ["lactate_max", "creatinine_max"],
+            "n_total": [100, 100],
+            "n_nonmissing": [60, 80],
+            "missing_n": [40, 20],
+            "missing_pct": [40.0, 20.0],
+        }
+    ).to_csv(parent / "missingness_audit.csv", index=False)
+    pd.DataFrame(
+        {
+            "concept": ["lactate", "creatinine"],
+            "variable": ["lactate", "creatinine"],
+            "value_column": ["lactate_max", "creatinine_max"],
+            "n_total": [100, 100],
+            "measured_one_n": [60, 80],
+            "value_missing_n": [40, 20],
+            "indicator_semantics": [
+                "measurement_availability",
+                "measurement_availability",
+            ],
+            "missingness_kind": ["measurement_missing", "measurement_missing"],
+        }
+    ).to_csv(parent / "measurement_source_audit.csv", index=False)
+    (parent / "step_summary.json").write_text(
+        json.dumps(
+            {
+                "analysis_family": "data_quality",
+                "method": "missingness_and_source_availability_audit",
+                "output_files": {
+                    "table:missingness_audit": "missingness_audit.csv",
+                    "table:measurement_source_audit": "measurement_source_audit.csv",
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    seal = {
+        path.name: hashlib.sha256(path.read_bytes()).hexdigest()
+        for path in sorted(parent.iterdir())
+    }
+    request_step = {
+        "step_id": parent_step,
+        "method": "missingness_and_source_availability_audit",
+        "inputs": ["artifact:analysis_cohort"],
+        "expected_outputs": [
+            "table:missingness_audit",
+            "table:measurement_source_audit",
+        ],
+    }
+    import easyicu.research_agent.pipeline as pipeline_module
+    from easyicu.research_agent.figures import missingness_source
+
+    monkeypatch.setattr(
+        missingness_source,
+        "_verified_direct_parent_artifact_digests",
+        lambda run_dir, step_id: dict(seal),
+    )
+    monkeypatch.setattr(
+        missingness_source,
+        "_resolve_upstream_manifest_step",
+        lambda run_dir, step_id: dict(request_step),
+    )
+
+    monkeypatch.setattr(
+        pipeline_module,
+        "_verified_direct_parent_artifact_digests",
+        lambda run_dir, step_id: dict(seal),
+    )
+    monkeypatch.setattr(
+        pipeline_module,
+        "_verified_direct_parent_table_names",
+        lambda run_dir, step_id: {
+            "missingness_audit.csv",
+            "measurement_source_audit.csv",
+        },
+    )
+    monkeypatch.setattr(
+        pipeline_module,
+        "_resolve_upstream_manifest_analysis_request",
+        lambda run_dir, step_id: {"step": dict(request_step)},
+    )
+    monkeypatch.setattr(
+        pipeline_module,
+        "_resolve_upstream_analysis_method",
+        lambda run_dir, step_id: "missingness_and_source_availability_audit",
+    )
+
+    assert _sealed_renderer_parent_digest_seal(tmp_path, figure_step, repair_id) == seal
+    assert deterministic_figure_repair_id_for_upstream(tmp_path, figure_step) == (
+        repair_id
+    )
+    from easyicu.research_agent.contracts.declared_product import (
+        authorize_declared_figure_product_slots,
+    )
+
+    assert authorize_declared_figure_product_slots(
+        declared_products=["fig:missingness_measurement"],
+        renderer_repair_id=repair_id,
+        planner_parent_anchors=(
+            "table:missingness_audit",
+            "table:measurement_source_audit",
+        ),
+        authoritative_display_subjects=(),
+    ) == {"figure:missingness_measurement": "missingness_measurement"}
+    out = tmp_path / "steps" / figure_step / "outputs"
+    assert (
+        _render_authorized_sealed_publication_bundle(
+            repair_id=repair_id,
+            run_dir=tmp_path,
+            current_step_id=figure_step,
+            out_dir=out,
+            parent_artifact_digests=seal,
+        )
+        == repair_id
+    )
+    source = pd.read_csv(out / "missingness_measurement_panel_source_data.csv")
+    assert source.set_index("variable")["missing_pct"].to_dict() == {
+        "lactate": pytest.approx(40.0),
+        "creatinine": pytest.approx(20.0),
+    }
+    for suffix in ("png", "svg", "pdf", "tiff"):
+        assert (out / f"missingness_measurement_panel.{suffix}").stat().st_size > 0
+
+
+def _sealed_missingness_snapshot(
+    *,
+    kinds: list,
+    measured: list,
+) -> dict:
+    """Build a digest-preverified parent snapshot for the sealed renderer."""
+    import io as _io
+
+    n_total = [100] * len(kinds)
+    missing = [total - one for total, one in zip(n_total, measured)]
+    concepts = [f"concept_{index}" for index in range(len(kinds))]
+
+    def _csv(frame: pd.DataFrame) -> bytes:
+        buffer = _io.BytesIO()
+        frame.to_csv(buffer, index=False)
+        return buffer.getvalue()
+
+    missingness_bytes = _csv(
+        pd.DataFrame(
+            {
+                "concept": concepts,
+                "variable": concepts,
+                "value_column": [f"{name}_max" for name in concepts],
+                "n_total": n_total,
+                "n_nonmissing": measured,
+                "missing_n": missing,
+                "missing_pct": [100.0 * m / t for m, t in zip(missing, n_total)],
+            }
+        )
+    )
+    source_bytes = _csv(
+        pd.DataFrame(
+            {
+                "concept": concepts,
+                "variable": concepts,
+                "value_column": [f"{name}_max" for name in concepts],
+                "n_total": n_total,
+                "measured_one_n": measured,
+                "value_missing_n": missing,
+                "indicator_semantics": ["measurement_availability"] * len(kinds),
+                "missingness_kind": kinds,
+            }
+        )
+    )
+    summary_bytes = json.dumps(
+        {
+            "analysis_family": "data_quality",
+            "method": "missingness_and_source_availability_audit",
+            "output_files": {
+                "table:missingness_audit": "missingness_audit.csv",
+                "table:measurement_source_audit": "measurement_source_audit.csv",
+            },
+        }
+    ).encode("utf-8")
+    return {
+        "step_summary.json": summary_bytes,
+        "missingness_audit.csv": missingness_bytes,
+        "measurement_source_audit.csv": source_bytes,
+    }
+
+
+def test_sealed_missingness_renderer_accepts_structural_no_source(
+    tmp_path: Path,
+) -> None:
+    """A cross-database structural no-source row renders inside the sealed
+    figure (0% available, distinct label) instead of abandoning it."""
+    from easyicu.research_agent.figures.missingness_source import (
+        REPAIR_ID,
+        render_missingness_source_bundle,
+    )
+
+    out = tmp_path / "steps" / "03_audit_figure" / "outputs"
+    snapshot = _sealed_missingness_snapshot(
+        kinds=["measurement_missing", "structural_no_source"],
+        measured=[60, 0],
+    )
+    assert (
+        render_missingness_source_bundle(
+            run_dir=tmp_path,
+            current_step_id="03_audit_figure",
+            out_dir=out,
+            preverified_parent_artifacts=snapshot,
+        )
+        == REPAIR_ID
+    )
+    source = pd.read_csv(out / "missingness_measurement_panel_source_data.csv")
+    structural = source[source["missingness_kind"] == "structural_no_source"].iloc[0]
+    assert structural["available_pct"] == pytest.approx(0.0)
+    assert structural["missing_pct"] == pytest.approx(100.0)
+    assert (out / "missingness_measurement_panel.png").stat().st_size > 0
+    svg = (out / "missingness_measurement_panel.svg").read_text(encoding="utf-8")
+    assert "Measurement missing" in svg
+    assert "No source" in svg
+
+
+def test_sealed_missingness_panel_anchors_authorized_product_slot(
+    tmp_path: Path,
+) -> None:
+    """Regression (E3 archived-run root cause).
+
+    The sealed missingness renderer rendered all four figure formats, then died
+    at ``bind_declared_figure_products`` with ``ValueError: authorized product
+    slot is not anchored to a contract panel`` because its contract panel
+    carried ``metadata: {}`` -- no ``planner_product_slots``. The whole E3 run
+    dead-ended at the *already-rendered* figure step (4/7) and never reached the
+    primary model. This locks the emitted panel to the registry-authorized slot
+    and drives the real binding gate end-to-end.
+    """
+    import hashlib
+
+    from easyicu.research_agent.contracts.declared_product import (
+        bind_declared_figure_products,
+    )
+    from easyicu.research_agent.figures import missingness_source as _mod
+    from easyicu.research_agent.figures.missingness_source import (
+        REPAIR_ID,
+        render_missingness_source_bundle,
+    )
+    from easyicu.research_agent.repair_registry import repair_metadata_for
+
+    out = tmp_path / "steps" / "03_audit_figure" / "outputs"
+    snapshot = _sealed_missingness_snapshot(
+        kinds=["measurement_missing", "structural_no_source"],
+        measured=[60, 0],
+    )
+    assert (
+        render_missingness_source_bundle(
+            run_dir=tmp_path,
+            current_step_id="03_audit_figure",
+            out_dir=out,
+            preverified_parent_artifacts=snapshot,
+        )
+        == REPAIR_ID
+    )
+
+    # (1) The rendered contract panel anchors exactly the registry-authorized
+    #     figure product slot -- no drift between renderer and repair registry.
+    contract = json.loads(
+        (out / "missingness_measurement_panel.figure_contract.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    authorized = list(repair_metadata_for(REPAIR_ID).figure_product_slots)
+    panel_slots = [
+        slot
+        for panel in contract["panels"]
+        for slot in (panel.get("metadata") or {}).get("planner_product_slots", [])
+    ]
+    assert panel_slots == authorized == ["missingness_measurement"]
+
+    # (2) The real sealed binding gate now anchors the declared figure product
+    #     end-to-end. Before the panel carried the slot this raised
+    #     "authorized product slot is not anchored to a contract panel".
+    parent_digests = {
+        name: hashlib.sha256(payload).hexdigest() for name, payload in snapshot.items()
+    }
+    assert (
+        bind_declared_figure_products(
+            out_dir=out,
+            declared_products=["fig:missingness_measurement"],
+            authorized_product_slots={
+                "figure:missingness_measurement": "missingness_measurement"
+            },
+            renderer_repair_id=REPAIR_ID,
+            renderer_implementation_sha256=hashlib.sha256(
+                Path(_mod.__file__).read_bytes()
+            ).hexdigest(),
+            renderer_parent_digests=parent_digests,
+        )
+        is True
+    )
+
+
+def test_sealed_missingness_renderer_refuses_flag_conflict_rows(
+    tmp_path: Path,
+) -> None:
+    """Flag/value discordance keeps refusing the sealed render (fallback path)."""
+    from easyicu.research_agent.figures.missingness_source import (
+        render_missingness_source_bundle,
+    )
+
+    out = tmp_path / "steps" / "03_audit_figure" / "outputs"
+    snapshot = _sealed_missingness_snapshot(
+        kinds=["measurement_missing", "measurement_flag_conflict"],
+        measured=[60, 70],
+    )
+    assert (
+        render_missingness_source_bundle(
+            run_dir=tmp_path,
+            current_step_id="03_audit_figure",
+            out_dir=out,
+            preverified_parent_artifacts=snapshot,
+        )
+        is None
+    )
+
+
+def test_sealed_missingness_renderer_refuses_contradictory_structural_row(
+    tmp_path: Path,
+) -> None:
+    """structural_no_source with a nonzero measured count is a contradiction."""
+    from easyicu.research_agent.figures.missingness_source import (
+        render_missingness_source_bundle,
+    )
+
+    out = tmp_path / "steps" / "03_audit_figure" / "outputs"
+    snapshot = _sealed_missingness_snapshot(
+        kinds=["measurement_missing", "structural_no_source"],
+        measured=[60, 5],
+    )
+    assert (
+        render_missingness_source_bundle(
+            run_dir=tmp_path,
+            current_step_id="03_audit_figure",
+            out_dir=out,
+            preverified_parent_artifacts=snapshot,
+        )
+        is None
+    )
 
 
 def test_missingness_split_figure_reads_only_its_direct_parent(tmp_path: Path):
@@ -1333,7 +1689,7 @@ def test_association_renderer_keeps_primary_exposure_and_matching_sensitivity_wi
         upstream_path=parent / "coefficients.csv",
     )
     assert result.get("ok") is True, result
-    assert result.get("key_column") == "model_id+term", result
+    assert result.get("key_column") == "source_row_index", result
     summary = json.loads((out / "step_summary.json").read_text(encoding="utf-8"))
     assert summary["publication_figure_repair"]["source_association_table"].endswith(
         "05_primary_missingness_aware_association/outputs/coefficients.csv"
@@ -1408,7 +1764,7 @@ def test_graded_exposure_forest_keys_by_varying_level_not_constant_model(
         upstream_path=parent / "primary_adjusted_odds_ratios.csv",
     )
     assert res.get("ok") is True, res
-    assert res.get("key_column") == "level", res
+    assert res.get("key_column") == "source_row_index", res
 
 
 def test_ordinal_stage_gradient_figure_routes_to_association_renderer(tmp_path: Path):

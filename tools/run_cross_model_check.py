@@ -19,18 +19,18 @@ SRC = ROOT / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
-from easyicu.research_agent.cohort_schema import (  # noqa: E402
+from easyicu.research_agent.cohort.schema import (  # noqa: E402
     CohortDefinition,
     ConceptPredicate,
     TimeWindow,
 )
-from easyicu.research_agent.cross_model_panel import (  # noqa: E402
+from easyicu.research_agent.evaluation.cross_model_panel import (  # noqa: E402
     BackendIdentity,
     compare_panel_primaries,
     compare_plans,
     write_cross_model_report,
 )
-from easyicu.research_agent.robustness_panel import (  # noqa: E402
+from easyicu.research_agent.robustness.panel import (  # noqa: E402
     PRIMARY_SPEC_ID,
     RobustnessPanel,
     RobustnessPanelRow,
@@ -45,7 +45,9 @@ def main(argv: Optional[List[str]] = None) -> int:
             "This infrastructure smoke test does not call real LLM APIs."
         )
     )
-    parser.add_argument("--backends", required=True, help="JSON file of backend identities.")
+    parser.add_argument(
+        "--backends", required=True, help="JSON file of backend identities."
+    )
     parser.add_argument(
         "--mode",
         choices=["plan_only", "plan_and_panel"],
@@ -53,7 +55,9 @@ def main(argv: Optional[List[str]] = None) -> int:
         help="Whether to compare only plans or also mock panel primary rows.",
     )
     parser.add_argument("--question", help="Research question text.")
-    parser.add_argument("--question-file", help="Path to a text file containing the question.")
+    parser.add_argument(
+        "--question-file", help="Path to a text file containing the question."
+    )
     parser.add_argument(
         "--out-dir",
         default="cross_model_check",
@@ -125,9 +129,11 @@ def _mock_plan(question: str, backend: BackendIdentity) -> AnalysisPlan:
         steps=[
             AnalysisStep(
                 step_id="01_primary",
+                planned_analysis_role="primary",
                 intent="Fit the primary mock association model.",
                 inputs=["age", "death"],
-                expected_outputs=["primary_association"],
+                expected_outputs=["statistic:primary_association"],
+                method="logistic_regression",
             )
         ],
     )

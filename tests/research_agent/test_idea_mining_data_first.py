@@ -5,7 +5,7 @@ from __future__ import annotations
 import importlib
 import inspect
 
-from easyicu.research_agent.idea_mining_data_first import (
+from easyicu.research_agent.discovery.idea_mining_data_first import (
     DataFirstCandidate,
     generate_data_first_candidates,
 )
@@ -187,7 +187,7 @@ def test_real_engine_wiring_smoke():
 
 def test_module_is_a_leaf_does_not_import_idea_mining():
     src = inspect.getsource(
-        importlib.import_module("easyicu.research_agent.idea_mining_data_first")
+        importlib.import_module("easyicu.research_agent.discovery.idea_mining_data_first")
     )
     assert "import idea_mining" not in src
     assert "from .idea_mining import" not in src

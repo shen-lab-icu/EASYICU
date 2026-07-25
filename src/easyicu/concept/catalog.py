@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+from ..concept_output_sources import (
+    COMPOSITE_CONCEPT_OUTPUT_SOURCES as COMPOSITE_CONCEPT_OUTPUT_SOURCES,
+)
+
 # 数据字典定义 - 特征缩写及其含义
 CONCEPT_DICTIONARY = {
     # 生命体征
@@ -10,6 +14,7 @@ CONCEPT_DICTIONARY = {
     'sbp': ('Systolic Blood Pressure', '收缩压', 'mmHg'),
     'dbp': ('Diastolic Blood Pressure', '舒张压', 'mmHg'),
     'pulse_pressure': ('Pulse Pressure (SBP - DBP)', '脉压差 (收缩压 - 舒张压)', 'mmHg'),
+    'cvp': ('Central Venous Pressure', '中心静脉压', 'mmHg'),
     'shock_index': ('Shock Index', '休克指数', 'ratio'),
     'modified_shock_index': ('Modified Shock Index', '改良休克指数', 'ratio'),
     'diastolic_shock_index': ('Diastolic Shock Index', '舒张压休克指数', 'ratio'),
@@ -25,6 +30,9 @@ CONCEPT_DICTIONARY = {
     'o2sat': ('Oxygen Saturation (SpO2)', '血氧饱和度', '%'),
     'sao2': ('Arterial Oxygen Saturation', '动脉血氧饱和度', '%'),
     'mech_vent': ('Mechanical Ventilation', '机械通气', 'boolean'),
+    'vent_mode': ('Ventilator Breath-Control Mode', '呼吸机控制类型', 'category'),
+    'vent_breath_seq': ('Ventilator Breath Sequencing', '呼吸机呼吸序列', 'category'),
+    'driving_pres_controlled': ('Driving Pressure (controlled vent)', '驱动压(控制通气)', 'cmH2O'),
     'ett_gcs': ('Intubation/Tracheostomy Status', '气管插管/切开状态', 'boolean'),
     'fio2': ('Fraction of Inspired Oxygen', '吸入氧浓度', '%'),
 
@@ -471,9 +479,9 @@ CONCEPT_GROUPS_INTERNAL = {
     'sepsis3_sofa2': ['sep3_sofa2'],  # 🔧 共享概念移到单独的 sepsis_shared 模块
     'sepsis3_sofa1': ['sep3_sofa1'],  # 🔧 共享概念移到单独的 sepsis_shared 模块
     'sepsis_shared': ['susp_inf', 'infection_icd', 'samp', 'culture_positive', 'bld_culture_positive'],  # Sepsis共享概念（已移除sep3）
-    'vitals': ['hr', 'map', 'sbp', 'dbp', 'pulse_pressure', 'temp', 'spo2', 'resp', 'shock_index', 'modified_shock_index', 'diastolic_shock_index'],  # 🔧 etco2 移到 ventilator
+    'vitals': ['hr', 'map', 'sbp', 'dbp', 'pulse_pressure', 'cvp', 'temp', 'spo2', 'resp', 'shock_index', 'modified_shock_index', 'diastolic_shock_index'],  # 🔧 etco2 移到 ventilator；cvp(中心静脉压,measured 血流动力学 vital,dict category=vitals)接入 vitals 模块,不再走单独 cvp_extraction
     'respiratory': ['pafi', 'safi', 'fio2', 'supp_o2', 'vent_ind', 'vent_start', 'vent_end', 'o2sat', 'sao2', 'mech_vent', 'ett_gcs', 'ecmo', 'ecmo_indication', 'adv_resp', 'oxygenation_index'],
-    'ventilator': ['peep', 'tidal_vol', 'tidal_vol_set', 'pip', 'plateau_pres', 'mean_airway_pres', 'minute_vol', 'vent_rate', 'etco2', 'compliance', 'driving_pres', 'ps'],
+    'ventilator': ['peep', 'tidal_vol', 'tidal_vol_set', 'pip', 'plateau_pres', 'mean_airway_pres', 'minute_vol', 'vent_rate', 'etco2', 'compliance', 'driving_pres', 'ps', 'vent_mode', 'vent_breath_seq', 'driving_pres_controlled'],
     'blood_gas': ['be', 'cai', 'hbco', 'lact', 'methb', 'pco2', 'ph', 'po2', 'tco2'],
     'chemistry': ['alb', 'alp', 'alt', 'ast', 'anion_gap', 'bicar', 'bili', 'bili_dir', 'bun', 'ca', 'ck', 'ckmb', 'cl', 'crea', 'crp', 'glu', 'k', 'mg', 'na', 'phos', 'tnt', 'tri', 'ammonia', 'amylase', 'd_dimer', 'ferritin', 'ldh', 'lipase', 'osmolality', 'corrected_calcium', 'ggt', 'trig', 'tsh', 'total_protein', 'ntprobnp', 'cortisol', 'pct', 'bnp', 'uric_acid', 'cholesterol', 'hdl', 'ldl', 'iron', 'tibc', 'transferrin', 'ft4', 'prealbumin', 'myoglobin', 't4'],
     'hematology': ['bnd', 'basos', 'eos', 'esr', 'fgn', 'hba1c', 'hct', 'hgb', 'inr_pt', 'lymph', 'mch', 'mchc', 'mcv', 'neut', 'plt', 'pt', 'ptt', 'rbc', 'rdw', 'wbc', 'nlr', 'plr', 'monos', 'mpv', 'retic'],
@@ -494,46 +502,11 @@ CONCEPT_GROUPS_INTERNAL = {
     'outcome': ['death', 'los_icu', 'los_hosp', 'mort_28d', 'mort_90d', 'mort_365d', 'icu_free_days_28', 'vent_free_days_28', 'icu_readmission', 'persistent_critical_illness'],
 }
 
-# Canonical web concepts that are produced by composite loaders rather than by
-# one flat dictionary entry with the same name.  Keep UI/export names canonical
-# (for example `aki_stage`) while preserving the lower-level extraction source
-# (`kdigo_aki`, `kdigo_creat`, `kdigo_uo`, `sep3`, or the dedicated
-# circulatory-failure loader).
-COMPOSITE_CONCEPT_OUTPUT_SOURCES = {
-    'aki': 'kdigo_aki',
-    'aki_stage': 'kdigo_aki',
-    'aki_stage_rrt': 'kdigo_aki',
-    'aki_stage_creat': 'kdigo_creat',
-    'creat_low_past_48hr': 'kdigo_creat',
-    'creat_low_past_7day': 'kdigo_creat',
-    'aki_stage_uo': 'kdigo_uo',
-    'uo_rt_6hr': 'kdigo_uo',
-    'uo_rt_12hr': 'kdigo_uo',
-    'uo_rt_24hr': 'kdigo_uo',
-    'circ_event': 'circ_failure_loader',
-    'circ_failure': 'circ_failure_loader',
-    'sep3_sofa1': 'sep3',
-    # Comorbidity indices (easyicu.comorbidity.load_comorbidity)
-    'charlson': 'comorbidity_loader',
-    'elixhauser': 'comorbidity_loader',
-    # Composite outcome endpoints (easyicu.outcomes.load_outcomes)
-    'mort_28d': 'outcomes_loader',
-    'mort_90d': 'outcomes_loader',
-    'mort_365d': 'outcomes_loader',
-    'icu_free_days_28': 'outcomes_loader',
-    'vent_free_days_28': 'outcomes_loader',
-    'icu_readmission': 'outcomes_loader',
-    # Microbiology culture positivity (easyicu.microbiology.load_microbiology)
-    'culture_positive': 'microbiology_loader',
-    'bld_culture_positive': 'microbiology_loader',
-}
-
 # Concepts present in the extraction dictionary but intentionally hidden from
 # the user-facing catalog.  They are loader entry points or legacy/source aliases
 # whose outputs are surfaced through canonical web concepts above.
 HIDDEN_DICTIONARY_CONCEPTS = {
     'bicarb',
-    'cvp',
     'kdigo_aki',
     'kdigo_creat',
     'kdigo_uo',
@@ -645,6 +618,7 @@ CLINICAL_THRESHOLDS = {
     'na':   {'lines': [135, 145], 'colors': ['#f59e0b', '#f59e0b'], 'labels': ['Hyponatremia', 'Hypernatremia'], 'unit': 'mEq/L', 'source': 'standard reference range'},
     'anion_gap': {'lines': [8, 16], 'colors': ['#3b82f6', '#ef4444'], 'labels': ['Low AG', 'High AG (metabolic acidosis)'], 'unit': 'mEq/L', 'source': 'standard chemistry'},
     'pulse_pressure': {'lines': [25, 60], 'colors': ['#ef4444', '#f59e0b'], 'labels': ['Narrow PP (shock)', 'Wide PP'], 'unit': 'mmHg', 'source': 'hemodynamic textbook'},
+    'cvp':  {'lines': [12], 'colors': ['#ef4444'], 'labels': ['Venous congestion (↑AKI risk)'], 'unit': 'mmHg', 'source': 'venous congestion / CVP-AKI literature'},
     'plt':  {'lines': [150], 'colors': ['#ef4444'], 'labels': ['Thrombocytopenia'], 'unit': '×10³/µL', 'source': 'SOFA coag component'},
     'hgb':  {'lines': [7], 'colors': ['#ef4444'], 'labels': ['Severe Anemia'], 'unit': 'g/dL', 'source': 'WHO anemia; TRICC transfusion'},
     'inr_pt': {'lines': [1.5], 'colors': ['#f59e0b'], 'labels': ['Coagulopathy'], 'unit': '', 'source': 'clinical coagulopathy threshold'},
@@ -658,7 +632,7 @@ CLINICAL_THRESHOLDS = {
 
 # 临床概念分道映射
 CLINICAL_LANES = {
-    'vitals': ['hr', 'map', 'sbp', 'dbp', 'temp', 'spo2', 'resp'],
+    'vitals': ['hr', 'map', 'sbp', 'dbp', 'cvp', 'temp', 'spo2', 'resp'],
     'labs': ['lact', 'crea', 'bili', 'plt', 'hgb', 'wbc', 'inr_pt', 'glu', 'k', 'na', 'alb', 'crp', 'tnt', 'ph', 'po2', 'pco2'],
     'interventions': ['norepi_rate', 'epi_rate', 'dopa_rate', 'dobu_rate', 'fio2', 'peep', 'ins', 'abx', 'cort', 'rrt'],
     'scores': ['sofa', 'sofa2', 'qsofa', 'sirs', 'gcs', 'mews', 'news', 'pafi', 'safi'],
@@ -675,10 +649,12 @@ CONCEPT_DB_COVERAGE = {
     'pafi': 5, 'safi': 5, 'urine': 5,
     'peep': 4, 'tidal_vol': 4, 'ins': 4,
     'mech_vent': 3, 'vent_ind': 3, 'ecmo': 2, 'rrt': 4,
+    'vent_mode': 4, 'vent_breath_seq': 4,  # miiv/mimic/aumc/hirid (eICU 332 stays, SIC none)
+    'driving_pres_controlled': 4,  # plateau+mode overlap: miiv/mimic/aumc/hirid
     'furosemide': 6,
     'propofol': 6, 'midazolam': 6, 'dexmedetomidine': 5,
     'fentanyl': 6, 'morphine': 6, 'heparin': 6,
-    'mannitol': 5, 'amiodarone': 6, 'milrinone': 5, 'rocuronium': 5,
+    'mannitol': 5, 'amiodarone': 6, 'milrinone': 6, 'rocuronium': 5,
     # Rate concepts (2026-05-13): HiRID pharma has no propofol reference;
     # SIC removed pending AmountPerMinute unit audit (see
     # audit_reports/sic_amount_per_minute_unit_audit_20260513.md)
@@ -698,15 +674,15 @@ CONCEPT_DB_COVERAGE = {
     'meropenem': 6,
     'calcium_iv': 6,
     # Batch 4 (2026-05-13; HiRID additions audited 2026-05-27)
-    'potassium_iv': 5,
+    'potassium_iv': 6,
     'magnesium_iv': 6,
-    'albumin_iv': 4,
-    'packed_rbc': 5,
+    'albumin_iv': 5,
+    'packed_rbc': 6,
     # Batch 5 (2026-05-13; round-3 additions audited 2026-05-27)
     'bicarbonate': 6,
     'dextrose50': 5,
     'ffp': 5,
-    'platelets': 5,
+    'platelets': 6,
     # Batch 6 (2026-05-13; prescriptions/HiRID/AUMC additions audited 2026-05-27)
     'levetiracetam': 6,
     'dexamethasone': 6,
@@ -716,12 +692,12 @@ CONCEPT_DB_COVERAGE = {
     'phenytoin': 5,
     'labetalol': 6,
     'esmolol': 6,
-    'diltiazem': 6,
+    'diltiazem': 5,
     'nicardipine': 4,
     # Batch 8 (2026-05-14; prescriptions/HiRID additions audited 2026-05-27)
-    'warfarin': 5,
+    'warfarin': 6,
     'apixaban': 1,
-    'enoxaparin': 5,
+    'enoxaparin': 6,
     'aspirin': 6,
     'insulin': 5,  # MIIV+MIMIC+eICU+AUMC+HiRID
     # Fluid balance (2026-05-14)

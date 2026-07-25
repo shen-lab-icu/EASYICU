@@ -24,10 +24,9 @@ from pathlib import Path
 
 import easyicu.research_agent as ra
 from easyicu.research_agent.evaluation_scorecard import compute_tristate
-from easyicu.research_agent.evidence import EvidenceStore
-from easyicu.research_agent.pipeline_report import _compute_readiness_gates
+from easyicu.research_agent.authority.evidence_store import EvidenceStore
+from easyicu.research_agent.reporting.readiness import _compute_readiness_gates
 from easyicu.research_agent.schema import ResearchContext, ValidationFinding
-
 
 # ---------------------------------------------------------------------------
 # 1. Pipeline effective-cap wiring
@@ -198,7 +197,7 @@ def test_scratch_dir_isolated():
 # is churny-but-successful, so the cap is advisory, not a demotion.
 # ---------------------------------------------------------------------------
 
-from easyicu.research_agent.pipeline_report import (  # noqa: E402
+from easyicu.research_agent.reporting.readiness import (  # noqa: E402
     _deterministic_primary_estimate_bound,
     _replan_budget_demotes,
 )

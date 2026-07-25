@@ -141,9 +141,19 @@ def test_calcium_iv_excludes_crrt_only_variants(cdict):
 
 
 def test_calcium_iv_aumc_round3_source_is_audited(cdict):
-    """AUMC calcium source was added in the 2026-05-27 Round 3 audit."""
+    """AUMC calcium source was added in the 2026-05-27 Round 3 audit, and extended
+    on 2026-07-17 with the product AUMC actually uses.
+
+    Round 3 mapped only the Anglo-named Calciumgluconaat (18783: 14,302 rows / 2,060
+    admissions; 19164: 229 / 150). It missed 7412 'Calcium Glubionaat (Calcium
+    Sandoz)' = 27,041 rows / 7,361 admissions -- more than 3x the other two combined,
+    so AUMC calcium_iv captured ~23% of its true admissions. This was also
+    self-contradictory: HiRID already wires the identical Calcium Sandoz product
+    (pharmaid 1000292). Post-fix integration check: 164 of 400 sampled admissions =
+    41.0%, against a whole-database expectation of 41.6%.
+    """
     aumc = cdict["calcium_iv"]["sources"]["aumc"][0]
-    assert set(aumc["ids"]) == {18783, 19164}
+    assert set(aumc["ids"]) == {18783, 19164, 7412}
     assert aumc["callback"] == "transform_fun(set_val(TRUE))"
 
 

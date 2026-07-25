@@ -93,78 +93,91 @@ def _apply_callback(
     if expr == "identity_callback":
         return frame
 
+    if expr in ("vent_mode_control", "vent_mode_seq"):
+        # Harmonise a native ventilator-mode label/code onto one axis (control | seq)
+        # via the per-DB map in data/vent_mode_map.json. See apply_vent_mode_frame.
+        from .callbacks import apply_vent_mode_frame
+        axis = "control" if expr == "vent_mode_control" else "seq"
+        out_column = "vent_mode" if expr == "vent_mode_control" else "vent_breath_seq"
+        val_col = concept_name if concept_name in frame.columns else (source.value_var or "value")
+        db_name = None
+        try:
+            db_name = data_source.config.name
+        except Exception:
+            pass
+        result = apply_vent_mode_frame(frame, val_col, db_name, axis, out_column)
+        # rename the harmonised column to concept_name if the loader expects it there
+        if out_column in result.columns and concept_name != out_column:
+            result = result.rename(columns={out_column: concept_name})
+        return result
+
     if expr == "aumc_death":
-        # R ricu logic: is_true(index_var - val_var < hours(72L))
-        # where index_var = dateofdeath, val_var = dischargedat
-        # AUMC times are in milliseconds, 72 hours = 72 * 3600 * 1000 = 259200000 ms
-        # is_true(x) returns TRUE if x is TRUE (not NA)
-        def _pick(col: Optional[str], fallbacks: List[str]) -> Optional[str]:
-            ordered = [col] if col else []
-            ordered.extend(fallbacks)
-            for candidate in ordered:
-                if candidate and candidate in frame.columns:
-                    return candidate
-            return None
-
-        index_col = _pick(source.index_var, ["dateofdeath", "deathdate", "dod", "death_time"])
-        value_col = _pick(source.value_var, [concept_name, "dischargedat", "dischargetime", "dischargeat"])
-
-        if index_col is None or value_col is None:
-            return frame
-
+        # In-hospital mortality, matching ricu's aumc_death:
+        #   x[, val_var := is_true(dateofdeath - dischargedat < hours(72L))]
+        # i.e. died within 72h of ICU discharge. AmsterdamUMCdb has no hospital discharge
+        # date, so ricu uses this 72h-of-ICU-discharge window as its in-hospital proxy
+        # (it captures in-ICU deaths plus early post-ICU-discharge deaths). We keep this
+        # ricu-faithful; the proxy nature is documented in Table 1's footnote.
+        #   index_var = dateofdeath, value_var = dischargedat (renamed to concept_name by
+        #   the loader). Both are in MINUTES as delivered by the loader.
+        #
+        # BUG HISTORY (fixed 2026-07-16): the threshold was hard-coded as 72h in
+        # MILLISECONDS (259,200,000) while the loader delivers minutes, so the window was a
+        # no-op and every patient with a registry `dateofdeath` was flagged. The declared
+        # source contract is now applied deterministically in minutes. Endpoint semantics
+        # must never switch based on the mortality prevalence of the requested cohort.
         df = frame.copy()
-        # Use raw millisecond values directly (like R ricu does)
-        # Don't convert to datetime - AUMC stores times as milliseconds relative to admission
-        dateofdeath = pd.to_numeric(df[index_col], errors='coerce')
-        dischargedat = pd.to_numeric(df[value_col], errors='coerce')
-        
-        # 72 hours in milliseconds
-        hours_72_ms = 72 * 3600 * 1000
-        
-        # Calculate diff in ms
-        diff_ms = dateofdeath - dischargedat
-        
-        # is_true: TRUE if dateofdeath is not NA AND (dateofdeath - dischargedat) < 72h
-        # For rows where dateofdeath is NA, result should be NA (not FALSE)
-        # This matches ricu behavior where survived patients have death=NA
-        within_window = (diff_ms < hours_72_ms) & dateofdeath.notna()
-        
-        # Set death value: TRUE if within 72h, FALSE if beyond 72h, NA if no dateofdeath
-        # Use object dtype to support True/False/None
+        dod_col = (source.index_var if (source.index_var and source.index_var in df.columns)
+                   else ('dateofdeath' if 'dateofdeath' in df.columns else None))
+        dis_col = (concept_name if concept_name in df.columns
+                   else ('dischargedat' if 'dischargedat' in df.columns else None))
+        if dod_col is None or dis_col is None:
+            raise ValueError(
+                "aumc_death requires dateofdeath and dischargedat in loader-minute units"
+            )
+        dod = pd.to_numeric(df[dod_col], errors='coerce')
+        dis = pd.to_numeric(df[dis_col], errors='coerce')
+        died = (dod.notna() & ((dod - dis) < 72 * 60)).fillna(False)
         death_values = pd.Series(index=df.index, dtype=object)
-        death_values[dateofdeath.notna()] = within_window[dateofdeath.notna()]
-        # Rows with dateofdeath NA remain as None (NA)
-        
-        df[value_col] = death_values
+        death_values[died] = True  # survivors -> NA (ricu convention)
+        df[concept_name] = death_values
         return df
 
-    # 🔧 SICdb death callback — OffsetOfDeath in seconds, NaN = survived
+    # 🔧 SICdb death callback — in-hospital mortality via HospitalDischargeType.
     if expr == "sic_death":
         df = frame.copy()
-        # OffsetOfDeath is both index_var and val_var, so it gets renamed to
-        # concept_name ('death') before this callback runs. The numeric values
-        # (seconds from ICU admission) are now in the 'death' column.
-        offset_col = None
-        # First try the original column name
-        for c in ['OffsetOfDeath', 'offsetofdeath']:
+        # In-hospital mortality: HospitalDischargeType == 2028 (Deceased).
+        #
+        # PREVIOUS BUG (fixed 2026-07-16): death was flagged whenever OffsetOfDeath was
+        # non-null. OffsetOfDeath carries registry deaths up to ~1yr of follow-up (median
+        # 43 days post-admission), so this reported ~annual mortality (18.6%, == mort_365d)
+        # rather than in-hospital mortality (7.8%). ricu does not define SICdb `death`;
+        # HospitalDischargeType is the source's hospital discharge disposition.
+        #
+        # OffsetOfDeath (val_var==index_var) is renamed to concept_name before this
+        # callback; reuse it as the death charttime (seconds -> hours) where present.
+        offset_secs = None
+        for c in ['OffsetOfDeath', 'offsetofdeath', concept_name]:
             if c in df.columns:
-                offset_col = c
+                offset_secs = pd.to_numeric(df[c], errors='coerce')
                 break
-        # Fallback: val_var was renamed to concept_name
-        if offset_col is None and concept_name in df.columns:
-            offset_col = concept_name
-
-        if offset_col is None:
-            return df.head(0)
-
-        offset_vals = pd.to_numeric(df[offset_col], errors='coerce')
-        # death = TRUE if OffsetOfDeath is not NaN, NA otherwise (matches ricu behavior)
+        disp_col = None
+        for c in ['HospitalDischargeType', 'hospitaldischargetype']:
+            if c in df.columns:
+                disp_col = c
+                break
+        if disp_col is None:
+            raise ValueError(
+                "sic_death requires HospitalDischargeType; OffsetOfDeath alone "
+                "cannot identify in-hospital mortality"
+            )
+        disp = pd.to_numeric(df[disp_col], errors='coerce')
+        died = (disp == 2028)  # 2028 = Deceased
         death_values = pd.Series(index=df.index, dtype=object)
-        death_values[offset_vals.notna()] = True
-        # NaN = survived (NA, not FALSE)
+        death_values[died] = True  # survivors/unknown -> NA (ricu convention)
         df[concept_name] = death_values
-        # Add charttime as OffsetOfDeath converted to hours
-        df['charttime'] = offset_vals / 3600.0
+        if offset_secs is not None:
+            df['charttime'] = (offset_secs / 3600.0).where(died)
         return df
 
     # 🔧 HiRID death callback — matches R ricu hirid_death (callback-itm.R:197)

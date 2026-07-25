@@ -18,7 +18,7 @@ from __future__ import annotations
 import pytest
 
 from easyicu.research_agent.concept_catalog import load_concept_catalog
-from easyicu.research_agent.idea_mining import (
+from easyicu.research_agent.discovery.idea_mining import (
     _build_concept_lookup,
     _feature_derivation_status,
     _resolve_concept,

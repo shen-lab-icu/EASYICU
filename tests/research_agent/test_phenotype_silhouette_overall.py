@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from easyicu.research_agent.evidence import EvidenceStore
+from easyicu.research_agent.authority.evidence_store import EvidenceStore
 from easyicu.research_agent.figures.phenotype import _silhouette_value
 
 

@@ -40,7 +40,7 @@ def _backend() -> str:
 
 
 def _require_cli(ra):
-    from easyicu.research_agent.llm import cli_backend_available
+    from easyicu.research_agent.providers.llm import cli_backend_available
 
     backend = _backend()
     if not cli_backend_available(backend):
@@ -96,9 +96,9 @@ def test_agentic_coder_authors_a_runnable_script_against_real_data(ra, monkeypat
     # this env through to the CLI sandbox unchanged.
     monkeypatch.setenv("COHORT_PARQUET", str(cohort_parquet))
 
-    from easyicu.research_agent.agentic_coder import AgenticCoderAgent
-    from easyicu.research_agent.llm import MockLLMClient
-    from easyicu.research_agent.agents import CoderAgent
+    from easyicu.research_agent.agents.agentic_coder import AgenticCoderAgent
+    from easyicu.research_agent.providers.mocks import MockLLMClient
+    from easyicu.research_agent.agents.core import CoderAgent
 
     context = _research_context(ra)
     step = _analysis_step(ra)

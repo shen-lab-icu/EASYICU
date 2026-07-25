@@ -4,9 +4,15 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from easyicu.research_agent.providers.mocks import (
+    ScriptedMockLLMClient,
+    ScriptedVisionMockLLMClient,
+)
+
 
 def _write_plot(path: Path) -> None:
     import matplotlib
+
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
@@ -23,28 +29,23 @@ def test_visual_qa_vlm_adapter_appends_findings(ra, tmp_path: Path):
     fig_path = tmp_path / "figure.png"
     _write_plot(fig_path)
 
-    class _VisionLLM:
-        name = "vision"
+    from easyicu.research_agent.gates.visual_qa import (
+        VLMVisualQAAdapter,
+        VisualQAAuditor,
+    )
 
-        def __init__(self):
-            self.seen_paths = None
-
-        def complete_with_images(self, *, prompt, image_paths, **kwargs):
-            self.seen_paths = list(image_paths)
-            return (
-                '{"findings":[{"path":"figure.png","severity":"warning",'
-                '"message":"Legend text may be too small.",'
-                '"detail":{"panel":"main"}}]}'
-            )
-
-    from easyicu.research_agent.visual_qa import VLMVisualQAAdapter, VisualQAAuditor
-
-    llm = _VisionLLM()
+    llm = ScriptedVisionMockLLMClient(
+        [
+            '{"findings":[{"path":"figure.png","severity":"warning",'
+            '"message":"Legend text may be too small.",'
+            '"detail":{"panel":"main"}}]}'
+        ]
+    )
     findings = VisualQAAuditor(
         vlm_adapter=VLMVisualQAAdapter(llm),
     ).audit(figure_paths=[fig_path])
 
-    assert llm.seen_paths == [fig_path]
+    assert llm.image_calls[0]["image_paths"] == [fig_path]
     assert any(f.validator == "vlm_visual_qa" for f in findings)
     vlm = [f for f in findings if f.validator == "vlm_visual_qa"][0]
     assert vlm.severity == "warning"
@@ -52,51 +53,28 @@ def test_visual_qa_vlm_adapter_appends_findings(ra, tmp_path: Path):
 
 
 def test_pipeline_enables_vlm_visual_qa_when_client_is_configured(ra, tmp_path: Path):
-    class _VisionLLM:
-        name = "vision"
-
-        def complete_with_images(self, *, prompt, image_paths, **kwargs):
-            return '{"findings":[]}'
-
     pipeline = ra.ResearchAgentPipeline(
         workdir=tmp_path,
         llm=ra.MockLLMClient(),
-        vlm_client=_VisionLLM(),
+        vlm_client=ScriptedVisionMockLLMClient(['{"findings":[]}']),
     )
 
     assert pipeline._enable_vlm_visual_qa is True
 
 
 def test_pipeline_auto_enables_vlm_visual_qa_for_vision_capable_llm(ra, tmp_path: Path):
-    class _VisionLLM:
-        name = "vision"
-        supports_vision = True
-
-        def complete(self, messages, *, max_tokens=2048, temperature=0.2):
-            return '{"findings":[]}'
-
-        def complete_with_images(self, *, prompt, image_paths, **kwargs):
-            return '{"findings":[]}'
-
     pipeline = ra.ResearchAgentPipeline(
         workdir=tmp_path,
-        llm=_VisionLLM(),
+        llm=ScriptedVisionMockLLMClient(['{"findings":[]}']),
     )
 
     assert pipeline._enable_vlm_visual_qa is True
 
 
 def test_pipeline_auto_disables_vlm_visual_qa_for_text_only_llm(ra, tmp_path: Path):
-    class _TextOnlyLLM:
-        name = "text-only"
-        supports_vision = False
-
-        def complete(self, messages, *, max_tokens=2048, temperature=0.2):
-            return '{"findings":[]}'
-
     pipeline = ra.ResearchAgentPipeline(
         workdir=tmp_path,
-        llm=_TextOnlyLLM(),
+        llm=ScriptedMockLLMClient(['{"findings":[]}']),
     )
 
     assert pipeline._enable_vlm_visual_qa is False
@@ -109,7 +87,7 @@ def test_parse_vlm_visual_qa_response_tolerates_json_fence(ra, tmp_path: Path):
 {"findings":[{"path":"a.png","severity":"error","message":"Blank panel."}]}
 ```"""
 
-    from easyicu.research_agent.visual_qa import parse_vlm_visual_qa_response
+    from easyicu.research_agent.gates.visual_qa import parse_vlm_visual_qa_response
 
     findings = parse_vlm_visual_qa_response(raw, known_paths=[fig_path])
     assert len(findings) == 1
@@ -134,11 +112,13 @@ def test_visual_qa_flags_svg_text_overlap(ra, tmp_path: Path):
         encoding="utf-8",
     )
 
-    from easyicu.research_agent.visual_qa import VisualQAAuditor
+    from easyicu.research_agent.gates.visual_qa import VisualQAAuditor
 
     findings = VisualQAAuditor(min_bytes=1).audit(figure_paths=[fig_path])
 
-    assert any(f.severity == "error" and "overlapping text" in f.message for f in findings)
+    assert any(
+        f.severity == "error" and "overlapping text" in f.message for f in findings
+    )
 
 
 def test_visual_qa_downgrades_panel_label_title_overlap(ra, tmp_path: Path):
@@ -158,12 +138,17 @@ def test_visual_qa_downgrades_panel_label_title_overlap(ra, tmp_path: Path):
         encoding="utf-8",
     )
 
-    from easyicu.research_agent.visual_qa import VisualQAAuditor
+    from easyicu.research_agent.gates.visual_qa import VisualQAAuditor
 
     findings = VisualQAAuditor(min_bytes=1).audit(figure_paths=[fig_path])
 
-    assert any(f.severity == "warning" and "panel label close to a title" in f.message for f in findings)
-    assert not any(f.severity == "error" and "overlapping text" in f.message for f in findings)
+    assert any(
+        f.severity == "warning" and "panel label close to a title" in f.message
+        for f in findings
+    )
+    assert not any(
+        f.severity == "error" and "overlapping text" in f.message for f in findings
+    )
 
 
 def test_visual_qa_flags_svg_cropped_text(ra, tmp_path: Path):
@@ -180,14 +165,16 @@ def test_visual_qa_flags_svg_cropped_text(ra, tmp_path: Path):
         encoding="utf-8",
     )
 
-    from easyicu.research_agent.visual_qa import VisualQAAuditor
+    from easyicu.research_agent.gates.visual_qa import VisualQAAuditor
 
     findings = VisualQAAuditor(min_bytes=1).audit(figure_paths=[fig_path])
 
     assert any("outside the canvas" in f.message for f in findings)
 
 
-def test_visual_qa_svg_numeric_consistency_passes_when_value_is_present(ra, tmp_path: Path):
+def test_visual_qa_svg_numeric_consistency_passes_when_value_is_present(
+    ra, tmp_path: Path
+):
     fig_path = tmp_path / "numbers_ok.svg"
     fig_path.write_text(
         """
@@ -201,7 +188,7 @@ def test_visual_qa_svg_numeric_consistency_passes_when_value_is_present(ra, tmp_
         encoding="utf-8",
     )
 
-    from easyicu.research_agent.visual_qa import VisualQAAuditor
+    from easyicu.research_agent.gates.visual_qa import VisualQAAuditor
 
     findings = VisualQAAuditor(min_bytes=1).audit_with_expected(
         figure_paths=[fig_path],
@@ -211,7 +198,9 @@ def test_visual_qa_svg_numeric_consistency_passes_when_value_is_present(ra, tmp_
     assert not any("numeric consistency" in f.message for f in findings)
 
 
-def test_visual_qa_svg_numeric_consistency_warns_when_value_is_missing(ra, tmp_path: Path):
+def test_visual_qa_svg_numeric_consistency_warns_when_value_is_missing(
+    ra, tmp_path: Path
+):
     fig_path = tmp_path / "numbers_bad.svg"
     fig_path.write_text(
         """
@@ -225,7 +214,7 @@ def test_visual_qa_svg_numeric_consistency_warns_when_value_is_missing(ra, tmp_p
         encoding="utf-8",
     )
 
-    from easyicu.research_agent.visual_qa import VisualQAAuditor
+    from easyicu.research_agent.gates.visual_qa import VisualQAAuditor
 
     findings = VisualQAAuditor(min_bytes=1).audit_with_expected(
         figure_paths=[fig_path],

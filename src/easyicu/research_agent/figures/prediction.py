@@ -20,7 +20,7 @@ from typing import Any, Dict, List, Optional
 
 import pandas as pd
 
-from ..evidence import EvidenceStore
+from ..authority.evidence_store import EvidenceStore
 from ..schema import AnalysisPlan, EvidenceRecord, ResearchContext
 from .base import RenderedFigure, load_table, numeric_series, resolve_column
 
@@ -216,7 +216,7 @@ def render_prediction_figure(
     import matplotlib.pyplot as plt
     import numpy as np
 
-    from ..publication_figures import add_panel_label, apply_publication_style
+    from .publication import add_panel_label, apply_publication_style
 
     palette = apply_publication_style()
     blue = palette.get("blue", "#0F4D92")

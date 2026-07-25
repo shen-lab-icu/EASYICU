@@ -343,6 +343,28 @@ def estimate_memory_mb(
     return estimated
 
 
+# ============================================================
+# 提取分批的统一默认：最多切几份
+# ============================================================
+# ICU 队列即使 ~20 万患者（eICU 最大库）也至多切 3 份即可完成提取——配合每模块
+# 流式落盘（extract_database 每个概念算完立刻 to_parquet、不在内存累积）+ DuckDB
+# memory_limit 封顶后溢出落盘，单份峰值受控。切更多份只会让 chartevents /
+# labevents 等共享大表被重复扫描，正是"提取怎么这么慢"的根因。
+#
+# 这是 EasyICU 全库统一默认，所有调用方共用，**不应**由使用者每次手调
+# batch_size / 内存预算等一堆易漂移的参数。要覆盖极端机器仍可显式传 batch_size
+# 或设 EASYICU_ONESHOT_BUDGET_MB，但默认的份数上限固定为此值。
+MAX_EXTRACT_CHUNKS = 3
+
+
+def _ceil_div(a: int, b: int) -> int:
+    """正整数向上取整除法（不引入 float / math 依赖）。"""
+    b = int(b)
+    if b <= 0:
+        return int(a)
+    return -(-int(a) // b)
+
+
 def auto_batch_size(
     concepts: List[str],
     database: str,
@@ -381,47 +403,39 @@ def auto_batch_size(
         )
         return None
     
-    # 需要分批：基于 (base + combined_fixed + combined_marginal * N) 模型反算 N。
-    # 必须与 estimate_memory_mb 用同一组合规则（_combined_coefficients），否则
-    # 反算出的 batch_size 与触发分批的估算自相矛盾。
-    # 每批的固定开销 = (base_mb + combined_fixed) * safety，每批工作集相同。
-    combined_fixed, combined_marginal = _combined_coefficients(concepts)
-    db_coeff = _DB_COEFFICIENTS.get(database, 1.0)
+    # 需要分批：份数 = 把估算峰值压到预算内所需的**最小**份数，但硬顶
+    # MAX_EXTRACT_CHUNKS 份（默认 3）。这直接实现"~20 万患者最多切 3 份"的统一
+    # 默认——不再反算出可能几十份的 batch_size，也不再有 batch_size=500 那种
+    # 无意义小批。每份患者数 = ceil(total / 份数)，配合每模块流式落盘 + DuckDB
+    # 溢出落盘，单份峰值受控；再多份只是重复扫共享大表、纯浪费时间。
+    n_chunks = _ceil_div(int(full_estimate), max(1, int(memory_budget)))
+    n_chunks = min(n_chunks, MAX_EXTRACT_CHUNKS)
 
-    batch_fixed = (_BASE_MB + combined_fixed) * _SAFETY_MARGIN
-    batch_marginal = combined_marginal * db_coeff * _SAFETY_MARGIN  # MB per patient
-    
-    # batch_fixed + batch_marginal * N ≤ budget → N = (budget - batch_fixed) / batch_marginal
-    if batch_marginal > 0:
-        max_batch = int((memory_budget - batch_fixed) / batch_marginal)
-    else:
-        max_batch = total_patients
-    
-    # 🔧 2026-05-11: 保底从 500 提升到 10000。
-    # 实测（hr/vitals/sofa1_full 在 N=3k/10k/30k）显示，分桶+pushdown 让 DuckDB
-    # 工作集（pool_max ~20-60 MB）几乎不随患者数变化，峰值由 output DataFrame 决定。
-    # batch_size=500 没有内存意义，反而导致 ~190 次 subprocess fork 的巨大开销。
-    # 即使在低内存系统上，10000 一批的单次峰值（实测 vitals 7-concept @ 10k = 830 MB）
-    # 也远低于 12GB 系统的可用预算。
-    MIN_BATCH = 10000
-    batch_size = max(MIN_BATCH, min(max_batch, total_patients))
-    
-    # 取整到 1000 的倍数（更整洁）
-    batch_size = max(MIN_BATCH, (batch_size // 1000) * 1000)
-    
-    # 极端情况：若全量已经小于保底批，则不分批
+    if n_chunks <= 1:
+        logger.debug(
+            f"📊 内存估算: 1 份即可（估算 {full_estimate:.0f}MB / 预算 "
+            f"{memory_budget:.0f}MB，上限 {MAX_EXTRACT_CHUNKS} 份），不分批"
+        )
+        return None
+
+    # 每份患者数向上取整到 1000 便于阅读；向上取整只会让实际份数 ≤ n_chunks，
+    # 不会因取整反而多出一份。
+    batch_size = _ceil_div(total_patients, n_chunks)
+    batch_size = _ceil_div(batch_size, 1000) * 1000
+
+    # 极端情况：若一份已覆盖全队列，则不分批
     if batch_size >= total_patients:
         logger.debug(
             f"📊 内存估算: batch_size ({batch_size}) >= total ({total_patients}), 不分批"
         )
         return None
-    
+
     logger.info(
-        f"📊 自动分批: {total_patients} patients, "
-        f"估算峰值 {full_estimate:.0f}MB > 预算 {memory_budget:.0f}MB, "
-        f"推荐 batch_size={batch_size}"
+        f"📊 自动分批: {total_patients} patients → {_ceil_div(total_patients, batch_size)} 份"
+        f"（上限 {MAX_EXTRACT_CHUNKS}）, 估算峰值 {full_estimate:.0f}MB > 预算 "
+        f"{memory_budget:.0f}MB, batch_size={batch_size}"
     )
-    
+
     return batch_size
 
 

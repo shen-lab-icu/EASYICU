@@ -1,9 +1,9 @@
 """Deterministic temporal-feature primitives over the long trajectory.
 
-The research agent's wide per-stay universe (``cohort_materializer``) is a
+The research agent's wide per-stay universe (``cohort.materializer``) is a
 baseline-summary lens: it cannot express *when* a value crossed a clinical
 threshold, an *incident-after-exposure* endpoint, or a *landmark* design. The
-long trajectory (``cohort_materializer.build_trajectory_long`` →
+long trajectory (``cohort.materializer.build_trajectory_long`` →
 ``TRAJECTORY_PARQUET``: ``stay_id, charttime, concept, value_num, value_str``)
 carries the per-timepoint detail, but turning it into analysis inputs is the
 same handful of operations every timing/causal question needs.

@@ -60,6 +60,7 @@ class RepairMetadata:
     execution_policy: RepairExecutionPolicy = RepairExecutionPolicy.MUTABLE
     figure_product_slots: Tuple[str, ...] = ()
     planner_methods: Tuple[str, ...] = ()
+    planner_method_required: bool = True
     planner_parent_output_role_groups: Tuple[Tuple[Tuple[str, ...], ...], ...] = ()
     implementation_modules: Tuple[str, ...] = ()
     description: str = ""
@@ -230,6 +231,7 @@ def _meta(
     execution_policy: RepairExecutionPolicy = RepairExecutionPolicy.MUTABLE,
     figure_product_slots: Sequence[str] = (),
     planner_methods: Sequence[str] = (),
+    planner_method_required: bool = True,
     planner_parent_output_role_groups: Sequence[Sequence[Sequence[str]]] = (),
     implementation_modules: Sequence[str] = (),
     description: str = "",
@@ -244,6 +246,7 @@ def _meta(
         execution_policy=execution_policy,
         figure_product_slots=tuple(figure_product_slots),
         planner_methods=tuple(str(value) for value in planner_methods),
+        planner_method_required=planner_method_required,
         planner_parent_output_role_groups=tuple(
             tuple(tuple(str(token) for token in suffix) for suffix in alternatives)
             for alternatives in planner_parent_output_role_groups
@@ -254,55 +257,124 @@ def _meta(
 
 
 _SYNTACTIC_REPAIRS = {
+    "attrition_rule_id_canonicalization_v1",
     "boolean_mask_reduction_precedence_v1",
+    "boolean_reduction_identity_v1",
+    "categorical_distribution_clinical_bin_role_v1",
+    "categorical_declared_order_check_v1",
+    "closed_counts_declared_levels_binding_v1",
+    "closed_counts_direct_host_call_v1",
+    "closed_counts_level_column_v1",
+    "closed_counts_stable_keywords_v1",
     "figure_contract_source_data_schema_v1",
+    "fstring_runtime_quote_compat_v1",
+    "host_helper_keyword_only_call_v1",
+    "local_helper_unpack_receipt_v1",
+    "local_read_before_assignment_hoist_v1",
     "missing_os_import_v1",
+    "pandas_boolean_index_alignment_v1",
+    "pandas_merge_dynamic_column_collision_guard_v1",
     "strip_python_prefix_v1",
     "restore_shadowed_json_module_v1",
     "replace_hallucinated_figure_utils_import_v1",
     "prediction_calibration_import_fix_v1",
+    "publication_export_audit_paths_v1",
+    "relocate_known_host_helper_import_v1",
+    "resolved_context_digest_load_v1",
+    "resolved_input_manifest_env_v1",
+    "resolved_input_identity_key_v1",
+    "resolved_input_json_document_adapter_v1",
+    "resolved_input_run_root_v1",
+    "resolved_typed_input_precedence_v1",
     "scalar_cast_before_reduction_v1",
+    "superseded_manual_provenance_receipt_v1",
+    "table_one_planner_spec_binding_v1",
+    "validation_finding_json_default_v1",
+    "undefined_mapping_near_match_alias_v1",
 }
 
 _STRUCTURAL_REPAIRS = {
+    "all_rows_outcome_coordinate_filter_v1",
+    "arbitrary_column_fallback_fail_closed_v1",
+    "audit_only_companion_value_selector_v1",
+    "binary_domain_authored_feasibility_v1",
+    "bound_figure_source_projection_v1",
+    "bound_figure_source_projection_v2",
+    "bound_percentage_identity_guard_v1",
     "cohort_csv_to_parquet_v1",
     "cohort_file_direct_read_v1",
+    "flag_only_plausibility_range_retention_v1",
+    "categorical_level_reconciliation_guard_v1",
+    "conditional_nonfinite_fail_closed_guard_v1",
+    "direct_bound_figure_source_materialization_v1",
+    "direct_bound_figure_source_projection_v1",
+    "host_schema_numeric_alias_v1",
     "dedupe_predictor_numeric_design_v1",
     "dedupe_required_cols_outcome_v1",
     "include_outcome_in_all_vars_v1",
     "inline_missing_to_jsonable_utils_v1",
     "json_dump_numpy_key_sanitizer_v1",
+    "host_validation_helper_reraise_v1",
     "local_wilson_proportion_confint_v1",
+    "lossy_numeric_coercion_guard_v1",
+    "llm_proven_numeric_domain_guards_v1",
     "matplotlib_errorbar_xerr_shape_v1",
+    "measurement_provenance_summary_mapping_v1",
+    "measurement_provenance_summary_mapping_v2",
+    "measurement_provenance_host_receipts_v1",
+    "measurement_provenance_before_outputs_v1",
+    "nonfinite_audit_preserve_observed_v1",
+    "nonfinite_audit_host_strict_boundary_v2",
+    "non_tabular_companion_row_gate_v1",
     "normalize_first_time_companion_v1",
+    "observed_binary_primary_exposure_guard_v1",
+    "penalized_convergence_contract_v1",
+    "penalized_convergence_contract_v2",
     "primary_predictor_safe_summary_lookup_v1",
+    "raw_input_physical_superset_guard_v1",
+    "host_receipt_source_envelope_v1",
     "provenance_bidirectional_pair_scan_v1",
+    "provenance_checked_status_contract_v1",
+    "provenance_custom_helper_to_host_receipt_v1",
     "provenance_fail_closed_guard_v1",
     "provenance_helper_reraise_v1",
     "proportion_confint_nobs_keyword_v1",
     "publication_bundle_promote_v1",
+    "returned_coercion_loss_guard_v1",
+    "render_only_effect_echo_suppression_v1",
     "remove_pandas_cut_observed_keyword_v1",
     "sklearn_bool_imputer_cast_v1",
     "sibling_figure_exports_promote_v1",
     "statsmodels_conf_int_filter_axis_v1",
     "statsmodels_dummy_design_float_v1",
     "statsmodels_helper_design_float_v1",
+    "strict_numeric_nonfinite_guard_v1",
+    "structured_analysis_role_selection_v1",
     "table_one_binary_key_string_v1",
+    "text_distribution_denominator_from_counts_v1",
+    "typed_output_normalization_v1",
+    "unavailable_figure_full_source_projection_v1",
+    "unused_nullable_numeric_validation_v1",
     # Only renderers with an exact direct-parent product, closed source schema,
     # and no scientific selection are automatic.  Heuristic result-table,
     # exposure, outcome, or model selection remains METHOD_SUBSTITUTION by the
     # conservative unknown-id fallback until it gains a typed source contract.
     "ordered_category_distribution_publication_bundle_v1",
+    "ordered_category_distribution_availability_publication_bundle_v2",
     "distribution_availability_publication_bundle_from_parent_outputs_v1",
+    "continuous_measurement_audit_publication_bundle_v1",
     "absolute_risk_incidence_prevalence_publication_bundle_v1",
     "association_publication_bundle_from_planned_model_contract_v1",
     "cohort_flow_publication_bundle_from_parent_outputs_v1",
     "sensitivity_publication_bundle_from_locked_summary_v1",
+    "missingness_publication_bundle_from_parent_outputs_v1",
     # Step-summary salvage that faithfully relocates the agent's own output
     # (stdout JSON / a named summary artefact) into step_summary.json. No new
     # numbers are introduced; it is a representation/location change.
     "summary_salvage_stdout_json_v1",
     "summary_salvage_named_json_v1",
+    "summary_output_registry_canonicalization_v1",
+    "sklearn_runtime_object_diagnostics_v1",
     # Adds the missing ``elif var == "age"`` branch to a covariate-coding
     # metadata table so the loop stops KeyError-ing on the one demographic
     # covariate that has no measured-indicator entry. The model, rows, and
@@ -318,11 +390,14 @@ _STRUCTURAL_REPAIRS = {
 # credits the structural renderer.
 _SEALED_RENDERER_REPAIRS = {
     "ordered_category_distribution_publication_bundle_v1",
+    "ordered_category_distribution_availability_publication_bundle_v2",
     "distribution_availability_publication_bundle_from_parent_outputs_v1",
+    "continuous_measurement_audit_publication_bundle_v1",
     "absolute_risk_incidence_prevalence_publication_bundle_v1",
     "association_publication_bundle_from_planned_model_contract_v1",
     "cohort_flow_publication_bundle_from_parent_outputs_v1",
     "sensitivity_publication_bundle_from_locked_summary_v1",
+    "missingness_publication_bundle_from_parent_outputs_v1",
 }
 
 _SEALED_RENDERER_PRODUCT_SLOTS: Dict[str, Tuple[str, ...]] = {
@@ -330,7 +405,15 @@ _SEALED_RENDERER_PRODUCT_SLOTS: Dict[str, Tuple[str, ...]] = {
         "distribution",
         "availability",
     ),
+    "ordered_category_distribution_availability_publication_bundle_v2": (
+        "distribution",
+        "availability",
+    ),
     "distribution_availability_publication_bundle_from_parent_outputs_v1": (
+        "distribution",
+        "availability",
+    ),
+    "continuous_measurement_audit_publication_bundle_v1": (
         "distribution",
         "availability",
     ),
@@ -347,34 +430,68 @@ _SEALED_RENDERER_PRODUCT_SLOTS: Dict[str, Tuple[str, ...]] = {
         "robustness_plot",
         "robustness_denominator_audit",
     ),
+    "missingness_publication_bundle_from_parent_outputs_v1": (
+        "missingness_measurement",
+    ),
 }
 
 # Sealed renderers are selected only from the host-recorded Planner contract.
 # Each outer tuple item is one required logical parent-output role; its inner
 # tuple lists exact terminal-token alternatives for that role.  No prose or
 # physical filename participates in this registry.
+from .planning.method_vocabulary import (
+    ADJUSTED_ASSOCIATION_MODELS,
+    BINARY_OUTCOME_INCIDENCE_AND_ABSOLUTE_RISK,
+    COHORT_DEFINITION,
+    COHORT_DEFINITION_SENSITIVITY,
+    DISTRIBUTION_SUMMARY_AND_MISSINGNESS_AUDIT,
+    EXPOSURE_DISTRIBUTION_AND_MISSINGNESS_AUDIT,
+    MISSINGNESS_SOURCE_AVAILABILITY_AUDIT,
+    ORDINAL_EXPOSURE_DERIVATION_AND_QUALITY_CONTROL,
+    RIGHT_SKEWED_DISTRIBUTION_AND_MEASUREMENT_AVAILABILITY_AUDIT,
+)
+
 _SEALED_RENDERER_PLANNER_METHODS: Dict[str, Tuple[str, ...]] = {
     "ordered_category_distribution_publication_bundle_v1": (
-        "ordinal_exposure_derivation_and_quality_control",
+        ORDINAL_EXPOSURE_DERIVATION_AND_QUALITY_CONTROL,
     ),
+    # v2 is an additive compatibility renderer for an already-sealed Planner
+    # product pair.  It is authorized by exact typed output roles plus a
+    # digest-bound ordinal/schema contract, never by a model-authored method
+    # string.  Keeping this tuple empty prevents accidental text routing.
+    "ordered_category_distribution_availability_publication_bundle_v2": (),
     "distribution_availability_publication_bundle_from_parent_outputs_v1": (
-        "exposure_distribution_and_missingness_audit",
+        EXPOSURE_DISTRIBUTION_AND_MISSINGNESS_AUDIT,
+    ),
+    "continuous_measurement_audit_publication_bundle_v1": (
+        RIGHT_SKEWED_DISTRIBUTION_AND_MEASUREMENT_AVAILABILITY_AUDIT,
+        DISTRIBUTION_SUMMARY_AND_MISSINGNESS_AUDIT,
     ),
     "absolute_risk_incidence_prevalence_publication_bundle_v1": (
-        "binary_outcome_incidence_and_absolute_risk",
+        BINARY_OUTCOME_INCIDENCE_AND_ABSOLUTE_RISK,
     ),
     "association_publication_bundle_from_planned_model_contract_v1": (
-        "adjusted_association_models",
+        ADJUSTED_ASSOCIATION_MODELS,
     ),
-    "cohort_flow_publication_bundle_from_parent_outputs_v1": ("cohort_definition",),
+    "cohort_flow_publication_bundle_from_parent_outputs_v1": (COHORT_DEFINITION,),
     "sensitivity_publication_bundle_from_locked_summary_v1": (
-        "cohort_definition_sensitivity",
+        COHORT_DEFINITION_SENSITIVITY,
+    ),
+    "missingness_publication_bundle_from_parent_outputs_v1": (
+        MISSINGNESS_SOURCE_AVAILABILITY_AUDIT,
     ),
 }
 _SEALED_RENDERER_PARENT_OUTPUT_ROLE_GROUPS: Dict[
     str, Tuple[Tuple[Tuple[str, ...], ...], ...]
 ] = {
     "ordered_category_distribution_publication_bundle_v1": ((("distribution",),),),
+    "ordered_category_distribution_availability_publication_bundle_v2": (
+        (("distribution",),),
+        (
+            ("measurement", "availability"),
+            ("availability",),
+        ),
+    ),
     "distribution_availability_publication_bundle_from_parent_outputs_v1": (
         (("distribution",),),
         (
@@ -384,6 +501,10 @@ _SEALED_RENDERER_PARENT_OUTPUT_ROLE_GROUPS: Dict[
             ("source", "coverage"),
             ("missingness",),
         ),
+    ),
+    "continuous_measurement_audit_publication_bundle_v1": (
+        (("distribution",),),
+        (("missingness",),),
     ),
     "absolute_risk_incidence_prevalence_publication_bundle_v1": (
         (("outcome", "incidence"),),
@@ -399,22 +520,35 @@ _SEALED_RENDERER_PARENT_OUTPUT_ROLE_GROUPS: Dict[
     "sensitivity_publication_bundle_from_locked_summary_v1": (
         (("robustness", "summary"),),
     ),
+    "missingness_publication_bundle_from_parent_outputs_v1": (
+        (("missingness", "audit"),),
+        (("measurement", "source", "audit"),),
+    ),
 }
 
 _COMMON_SEALED_RENDERER_MODULES = (
     "easyicu.research_agent.pipeline",
-    "easyicu.research_agent.declared_product_contract",
+    "easyicu.research_agent.contracts.declared_product",
     "easyicu.research_agent.repair_registry",
-    "easyicu.research_agent.publication_figures",
+    "easyicu.research_agent.figures.publication",
 )
 _SEALED_RENDERER_IMPLEMENTATION_MODULES: Dict[str, Tuple[str, ...]] = {
     "ordered_category_distribution_publication_bundle_v1": (
         *_COMMON_SEALED_RENDERER_MODULES,
         "easyicu.research_agent.figures.ordered_distribution",
     ),
+    "ordered_category_distribution_availability_publication_bundle_v2": (
+        *_COMMON_SEALED_RENDERER_MODULES,
+        "easyicu.research_agent.authority.figure_renderer",
+        "easyicu.research_agent.figures.ordered_distribution",
+    ),
     "distribution_availability_publication_bundle_from_parent_outputs_v1": (
         *_COMMON_SEALED_RENDERER_MODULES,
         "easyicu.research_agent.figures.distribution_availability",
+    ),
+    "continuous_measurement_audit_publication_bundle_v1": (
+        *_COMMON_SEALED_RENDERER_MODULES,
+        "easyicu.research_agent.figures.continuous_measurement_audit",
     ),
     "absolute_risk_incidence_prevalence_publication_bundle_v1": (
         *_COMMON_SEALED_RENDERER_MODULES,
@@ -428,6 +562,10 @@ _SEALED_RENDERER_IMPLEMENTATION_MODULES: Dict[str, Tuple[str, ...]] = {
     ),
     "sensitivity_publication_bundle_from_locked_summary_v1": (
         *_COMMON_SEALED_RENDERER_MODULES,
+    ),
+    "missingness_publication_bundle_from_parent_outputs_v1": (
+        *_COMMON_SEALED_RENDERER_MODULES,
+        "easyicu.research_agent.figures.missingness_source",
     ),
 }
 
@@ -501,6 +639,10 @@ REPAIR_METADATA: Dict[str, RepairMetadata] = {
             ),
             figure_product_slots=_SEALED_RENDERER_PRODUCT_SLOTS.get(repair_id, ()),
             planner_methods=_SEALED_RENDERER_PLANNER_METHODS.get(repair_id, ()),
+            planner_method_required=(
+                repair_id
+                != "ordered_category_distribution_availability_publication_bundle_v2"
+            ),
             planner_parent_output_role_groups=(
                 _SEALED_RENDERER_PARENT_OUTPUT_ROLE_GROUPS.get(repair_id, ())
             ),
@@ -572,6 +714,7 @@ def repair_metadata_for(repair_id: str) -> RepairMetadata:
                 execution_policy=metadata.execution_policy,
                 figure_product_slots=metadata.figure_product_slots,
                 planner_methods=metadata.planner_methods,
+                planner_method_required=metadata.planner_method_required,
                 planner_parent_output_role_groups=(
                     metadata.planner_parent_output_role_groups
                 ),
@@ -670,11 +813,17 @@ def assert_repair_metadata_invariants(metadata: RepairMetadata) -> None:
                 f"{metadata.repair_id} is a sealed renderer without unique "
                 "figure product slots."
             )
-        if not metadata.planner_methods or len(metadata.planner_methods) != len(
-            set(metadata.planner_methods)
+        if metadata.planner_method_required and (
+            not metadata.planner_methods
+            or len(metadata.planner_methods) != len(set(metadata.planner_methods))
         ):
             raise AssertionError(
                 f"{metadata.repair_id} is a sealed renderer without unique "
+                "Planner methods."
+            )
+        if not metadata.planner_method_required and metadata.planner_methods:
+            raise AssertionError(
+                f"{metadata.repair_id} disables method routing but still declares "
                 "Planner methods."
             )
         if not metadata.planner_parent_output_role_groups or any(

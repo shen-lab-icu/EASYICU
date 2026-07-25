@@ -16,7 +16,7 @@ from typing import Any, Dict, Mapping, Optional
 
 from pydantic import ValidationError
 
-from easyicu.research_agent.discovery_handoff import (
+from easyicu.research_agent.discovery.discovery_handoff import (
     DiscoveryHandoffPacket,
     DiscoverySelectionMode,
     build_handoff_from_row,
@@ -58,6 +58,20 @@ def map_web_ledger_row(
     ]
     outcome_concept = _role_concept(mapped_concepts, "outcome")
     predictor_concept = _predictor_concept(mapped_concepts)
+    resolved_analysis_concepts = [
+        str(value).strip()
+        for value in idea.get("resolved_analysis_concepts") or []
+        if str(value).strip()
+    ]
+    if not resolved_analysis_concepts:
+        resolved_analysis_concepts = list(
+            dict.fromkeys(
+                str(item.get("concept_id") or "").strip()
+                for item in mapped_concepts
+                if str(item.get("role") or "").strip().lower() != "outcome"
+                and str(item.get("concept_id") or "").strip()
+            )
+        )
     prior_art = _prior_art_payload(idea, prior_art_check)
     feasibility = idea.get("feasibility") or {}
     source_title = str(source.get("title") or "").strip()
@@ -76,9 +90,7 @@ def map_web_ledger_row(
                 or "unknown_until_search"
             ),
             "feasibility_route": str(
-                feasibility.get("tier")
-                or pre_experiment.get("status")
-                or "blocked"
+                feasibility.get("tier") or pre_experiment.get("status") or "blocked"
             ),
             "feasibility_next_action": str(
                 idea.get("next_action")
@@ -87,6 +99,7 @@ def map_web_ledger_row(
             ),
             "resolved_predictor_concept": predictor_concept,
             "resolved_outcome_concept": outcome_concept,
+            "resolved_analysis_concepts": resolved_analysis_concepts,
             "web_handoff_context": {
                 "plan_status": plan.get("plan_status"),
                 "analysis_family": plan.get("analysis_family")
@@ -218,11 +231,11 @@ def _validate_legacy_identity(
     packet: DiscoveryHandoffPacket,
 ) -> None:
     envelope_idea_id = str(envelope.get("idea_id") or "").strip()
-    selected_idea_id = str(
-        packet.selected_ledger_row.get("idea_id") or ""
-    ).strip()
-    if not envelope_idea_id or not selected_idea_id or not (
-        envelope_idea_id == packet.literature_idea_id == selected_idea_id
+    selected_idea_id = str(packet.selected_ledger_row.get("idea_id") or "").strip()
+    if (
+        not envelope_idea_id
+        or not selected_idea_id
+        or not (envelope_idea_id == packet.literature_idea_id == selected_idea_id)
     ):
         raise CanonicalHandoffIntegrityError(
             "legacy envelope idea_id does not match the canonical handoff"

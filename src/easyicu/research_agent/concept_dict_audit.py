@@ -90,7 +90,10 @@ def assert_dict_matches(
             "concept-dict.json SHA mismatch: "
             f"expected={expected_concept_dict_sha} actual={fingerprint.concept_dict_sha}"
         )
-    if expected_sofa2_dict_sha and fingerprint.sofa2_dict_sha != expected_sofa2_dict_sha:
+    if (
+        expected_sofa2_dict_sha
+        and fingerprint.sofa2_dict_sha != expected_sofa2_dict_sha
+    ):
         warnings.append(
             "sofa2-dict.json SHA mismatch: "
             f"expected={expected_sofa2_dict_sha} actual={fingerprint.sofa2_dict_sha}"
@@ -108,7 +111,9 @@ def write_concept_dict_fingerprint(path: Path) -> ConceptDictFingerprint:
     return fingerprint
 
 
-def _manifest_expected_shas(manifest: Dict[str, Any]) -> tuple[Optional[str], Optional[str]]:
+def _manifest_expected_shas(
+    manifest: Dict[str, Any],
+) -> tuple[Optional[str], Optional[str]]:
     fingerprint = manifest.get("concept_dict_fingerprint")
     if isinstance(fingerprint, dict):
         return (
@@ -134,12 +139,31 @@ def verify_replay_dict_match(
 
     manifest_path = Path(run_dir) / "manifest.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    return verify_recorded_dict_match(manifest, mode=mode, require_recorded=True)
+
+
+def verify_recorded_dict_match(
+    manifest: Dict[str, Any],
+    *,
+    mode: Literal["strict", "soft"] = "strict",
+    require_recorded: bool = False,
+) -> List[str]:
+    """Verify current package dictionaries against one manifest authority.
+
+    Resume callers already hold the checkpoint-selected manifest in memory.
+    Verifying that object before any run-directory write avoids rereading a
+    stale final manifest and prevents a newer package dictionary from silently
+    replacing the authority recorded by the interrupted run.  Very old
+    manifests without dictionary coordinates remain compatible unless the
+    caller explicitly sets ``require_recorded``.
+    """
+
     expected_concept_sha, expected_sofa2_sha = _manifest_expected_shas(manifest)
     if not expected_concept_sha and not expected_sofa2_sha:
         warnings = ["manifest has no concept dictionary fingerprint to verify"]
-        if mode == "strict":
+        if mode == "strict" and require_recorded:
             raise ConceptDictDriftError(warnings[0])
-        return warnings
+        return warnings if mode == "soft" else []
     return assert_dict_matches(
         compute_concept_dict_fingerprint(),
         expected_concept_dict_sha=expected_concept_sha,
@@ -155,6 +179,7 @@ __all__ = [
     "ConceptDictFingerprint",
     "assert_dict_matches",
     "compute_concept_dict_fingerprint",
+    "verify_recorded_dict_match",
     "verify_replay_dict_match",
     "write_concept_dict_fingerprint",
 ]

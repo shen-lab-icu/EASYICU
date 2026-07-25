@@ -3,11 +3,10 @@ from __future__ import annotations
 import inspect
 import json
 from typing import Sequence
-
 import pytest
 
-import easyicu.research_agent.idea_mining as idea_mining_mod
-from easyicu.research_agent.idea_mining import (
+import easyicu.research_agent.discovery.idea_mining as idea_mining_mod
+from easyicu.research_agent.discovery.idea_mining import (
     ExecutableHypothesisCandidate,
     IdeaExtractionError,
     LiteratureIdeaCandidate,
@@ -22,31 +21,23 @@ from easyicu.research_agent.idea_mining import (
     map_literature_idea_to_executable_candidate,
     run_idea_mining_dry_run,
 )
-from easyicu.research_agent.idea_registry import (
+from easyicu.research_agent.discovery.idea_registry import (
     CandidateNotExecutableError as RegistryCandidateNotExecutableError,
     IdeaCandidateRegistry,
 )
+from easyicu.research_agent.discovery.idea_mining_selection import (
+    select_actionable_prior_art_screen,
+)
+from easyicu.research_agent.discovery.hypothesis_generator import (
+    HypothesisFeasibilitySignal,
+)
 from easyicu.research_agent.literature import CitationRecord
-from easyicu.research_agent.llm import LLMMessage
+from easyicu.research_agent.providers.mocks import ScriptedMockLLMClient
 from easyicu.research_agent.schema import ConceptDescriptor, VariableRole
 
 
-class CapturingIdeaLLM:
-    name = "capturing-idea-llm"
-
-    def __init__(self, response: object):
-        self.response = response
-        self.messages: Sequence[LLMMessage] = ()
-
-    def complete(
-        self,
-        messages: Sequence[LLMMessage],
-        *,
-        max_tokens: int = 2048,
-        temperature: float = 0.2,
-    ) -> str:
-        self.messages = messages
-        return json.dumps(self.response)
+def CapturingIdeaLLM(response: object) -> ScriptedMockLLMClient:
+    return ScriptedMockLLMClient([json.dumps(response)])
 
 
 class FakePriorArtSearchClient:
@@ -135,7 +126,7 @@ def test_extract_literature_ideas_from_user_excerpt_with_traceable_quote() -> No
     assert candidate.literature_idea_id
     assert candidate.source_quote == quote
     assert candidate.source_adapter_level == "user_supplied_excerpt"
-    assert llm.messages[0].role == "system"
+    assert llm.calls[0][0][0].role == "system"
 
 
 def test_prior_art_queries_use_literature_phrase_not_canonical_concept_key() -> None:
@@ -685,7 +676,7 @@ def test_extract_literature_ideas_truncates_overlong_traceable_quote() -> None:
     # A verbatim-but-over-long quote must not abort the run: it passes the
     # traceability check, then is truncated to the schema bound. The tool is
     # reviewer-facing -- one noisy extraction cannot crash the whole mining pass.
-    from easyicu.research_agent.idea_mining import (
+    from easyicu.research_agent.discovery.idea_mining import (
         _LITERATURE_IDEA_SOURCE_QUOTE_MAX as QUOTE_MAX,
     )
 
@@ -1432,7 +1423,7 @@ def test_dry_run_wires_pairwise_feasibility_registry_and_stops_at_gate(
     assert ledger_by_predictor["crea"]["evidence_map_counts"]["direct_same_topic"] >= 1
     assert ledger_by_predictor["crea"]["direct_same_topic_pmids"] == ["111"]
 
-    import easyicu.research_agent.idea_mining as idea_mining_module
+    import easyicu.research_agent.discovery.idea_mining as idea_mining_module
 
     assert ".pipeline" not in inspect.getsource(idea_mining_module)
 
@@ -1940,8 +1931,10 @@ class FakeScopeSearchClient:
 
 
 def test_fetch_source_materials_from_scope_builds_query_and_wraps_metadata() -> None:
-    from easyicu.research_agent.idea_scope import LiteratureScopeSpec
-    from easyicu.research_agent.idea_mining import fetch_source_materials_from_scope
+    from easyicu.research_agent.discovery.idea_scope import LiteratureScopeSpec
+    from easyicu.research_agent.discovery.idea_mining import (
+        fetch_source_materials_from_scope,
+    )
 
     client = FakeScopeSearchClient(
         [
@@ -1978,7 +1971,7 @@ def test_fetch_source_materials_from_scope_builds_query_and_wraps_metadata() -> 
 
 
 def test_dry_run_scope_retrieves_corpus_and_freezes_query(tmp_path) -> None:
-    from easyicu.research_agent.idea_scope import LiteratureScopeSpec
+    from easyicu.research_agent.discovery.idea_scope import LiteratureScopeSpec
 
     quote = "early vasopressin exposure and intensive-care unit mortality"
     client = FakeScopeSearchClient(
@@ -2050,8 +2043,8 @@ def test_dry_run_scope_retrieves_corpus_and_freezes_query(tmp_path) -> None:
 
 
 def test_dry_run_scope_without_client_or_materials_fails_closed(tmp_path) -> None:
-    from easyicu.research_agent.idea_scope import LiteratureScopeSpec
-    from easyicu.research_agent.idea_mining import IdeaMiningError
+    from easyicu.research_agent.discovery.idea_scope import LiteratureScopeSpec
+    from easyicu.research_agent.discovery.idea_mining import IdeaMiningError
 
     scope = LiteratureScopeSpec(journal_preset="critical_care_top3", last_n_years=2)
     with pytest.raises(IdeaMiningError, match="source_search_client"):
@@ -2174,38 +2167,41 @@ def test_generic_outcome_without_mortality_default_still_blocks() -> None:
     assert not executable.executable
 
 
-class _BatchAwareIdeaLLM:
-    """Returns one idea per material present in each batch; records call count."""
+def _batch_response(indices: Sequence[int]) -> str:
+    return json.dumps(
+        [
+            {
+                "citation_key": f"review_{index:02d}",
+                "population": "adult ICU patients",
+                "exposure_or_predictor": "serum lactate",
+                "outcome": "in-hospital mortality",
+                "rationale": "Open direction from the source.",
+                "source_quote": " ".join(
+                    _excerpt_material(index).source_text.split()[:6]
+                ),
+                "analysis_family": "association",
+            }
+            for index in indices
+        ]
+    )
 
-    name = "batch-aware-idea-llm"
 
-    def __init__(self) -> None:
-        self.calls = 0
-        self.batch_sizes: list[int] = []
-
-    def complete(
-        self, messages, *, max_tokens: int = 2048, temperature: float = 0.0
-    ) -> str:
-        self.calls += 1
-        payload = json.loads(messages[-1].content)
-        sources = payload.get("sources", [])
-        self.batch_sizes.append(len(sources))
-        out = []
-        for src in sources:
-            text = src.get("available_source_text", "")
-            quote = " ".join(text.split()[:6])  # traceable verbatim prefix
-            out.append(
-                {
-                    "citation_key": src["citation_key"],
-                    "population": "adult ICU patients",
-                    "exposure_or_predictor": "serum lactate",
-                    "outcome": "in-hospital mortality",
-                    "rationale": "Open direction from the source.",
-                    "source_quote": quote,
-                    "analysis_family": "association",
-                }
-            )
-        return json.dumps(out)
+def _batch_idea_llm(
+    batches: Sequence[Sequence[int]],
+    *,
+    malformed_call: int | None = None,
+) -> ScriptedMockLLMClient:
+    responses = [
+        (
+            '[{"citation_key" "missing-colon"}]'
+            if malformed_call == call_index
+            else _batch_response(indices)
+        )
+        for call_index, indices in enumerate(batches, start=1)
+    ]
+    client = ScriptedMockLLMClient(responses)
+    client.batch_sizes = [len(indices) for indices in batches]
+    return client
 
 
 def _excerpt_material(idx: int) -> SourceMaterial:
@@ -2228,7 +2224,7 @@ def test_extract_literature_ideas_batches_so_yield_scales_with_corpus() -> None:
     # 7 articles with batch_size=3 must produce 3 calls (3+3+1) and 7 ideas,
     # proving the corpus is fully processed rather than capped by one call.
     materials = [_excerpt_material(i) for i in range(7)]
-    llm = _BatchAwareIdeaLLM()
+    llm = _batch_idea_llm([[0, 1, 2], [3, 4, 5], [6]])
 
     candidates = extract_literature_ideas(
         materials=materials,
@@ -2237,7 +2233,7 @@ def test_extract_literature_ideas_batches_so_yield_scales_with_corpus() -> None:
         batch_size=3,
     )
 
-    assert llm.calls == 3
+    assert len(llm.calls) == 3
     assert llm.batch_sizes == [3, 3, 1]
     assert len(candidates) == 7
     assert {c.citation_key for c in candidates} == {f"review_{i:02d}" for i in range(7)}
@@ -2245,7 +2241,7 @@ def test_extract_literature_ideas_batches_so_yield_scales_with_corpus() -> None:
 
 def test_extract_literature_ideas_single_batch_when_corpus_small() -> None:
     materials = [_excerpt_material(i) for i in range(2)]
-    llm = _BatchAwareIdeaLLM()
+    llm = _batch_idea_llm([[0, 1]])
 
     candidates = extract_literature_ideas(
         materials=materials,
@@ -2254,14 +2250,85 @@ def test_extract_literature_ideas_single_batch_when_corpus_small() -> None:
         batch_size=6,
     )
 
-    assert llm.calls == 1
+    assert len(llm.calls) == 1
     assert len(candidates) == 2
+
+
+def test_extraction_batch_receipts_isolate_failure_and_resume_only_failed_batch(
+    tmp_path,
+) -> None:
+    materials = [_excerpt_material(i) for i in range(6)]
+    receipt_dir = tmp_path / "receipts"
+    dropped: list[list[str]] = []
+    first_llm = _batch_idea_llm([[0, 1], [2, 3], [4, 5]], malformed_call=2)
+
+    first = extract_literature_ideas(
+        materials=materials,
+        source_snapshot_id="source-snapshot/sha256:receipt-resume",
+        llm=first_llm,
+        batch_size=2,
+        malformed_batch_policy="skip",
+        dropped_malformed_batches=dropped,
+        batch_receipt_dir=receipt_dir,
+    )
+
+    assert len(first_llm.calls) == 3
+    assert {idea.citation_key for idea in first} == {
+        "review_00",
+        "review_01",
+        "review_04",
+        "review_05",
+    }
+    assert dropped == [["review_02", "review_03"]]
+    assert len(list(receipt_dir.glob("*_parsed_*.json"))) == 2
+    assert len(list(receipt_dir.glob("*_malformed_*.json"))) == 1
+
+    resumed_llm = _batch_idea_llm([[2, 3]])
+    resumed = extract_literature_ideas(
+        materials=materials,
+        source_snapshot_id="source-snapshot/sha256:receipt-resume",
+        llm=resumed_llm,
+        batch_size=2,
+        malformed_batch_policy="skip",
+        dropped_malformed_batches=[],
+        batch_receipt_dir=receipt_dir,
+    )
+
+    assert len(resumed_llm.calls) == 1
+    assert resumed_llm.batch_sizes == [2]
+    assert {idea.citation_key for idea in resumed} == {
+        f"review_{idx:02d}" for idx in range(6)
+    }
+
+
+def test_extraction_batch_receipt_tampering_fails_closed(tmp_path) -> None:
+    materials = [_excerpt_material(0)]
+    receipt_dir = tmp_path / "receipts"
+    first_llm = _batch_idea_llm([[0]])
+    extract_literature_ideas(
+        materials=materials,
+        source_snapshot_id="source-snapshot/sha256:receipt-tamper",
+        llm=first_llm,
+        batch_receipt_dir=receipt_dir,
+    )
+    receipt_path = next(receipt_dir.glob("*_parsed_*.json"))
+    payload = json.loads(receipt_path.read_text(encoding="utf-8"))
+    payload["raw_response"] += " "
+    receipt_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(RuntimeError, match="receipt digest mismatch"):
+        extract_literature_ideas(
+            materials=materials,
+            source_snapshot_id="source-snapshot/sha256:receipt-tamper",
+            llm=_batch_idea_llm([[0]]),
+            batch_receipt_dir=receipt_dir,
+        )
 
 
 def test_label_prior_art_high_broad_count_blocks_false_sparse() -> None:
     # The bug: a heavily-studied pairing returns 0 on the over-specific exact
     # phrase but hundreds on broad recall; it must NOT be called sparse/gap.
-    from easyicu.research_agent.idea_mining_priorart import _label_prior_art
+    from easyicu.research_agent.discovery.idea_mining_priorart import _label_prior_art
 
     label = _label_prior_art(
         broad_count=300,
@@ -2274,7 +2341,7 @@ def test_label_prior_art_high_broad_count_blocks_false_sparse() -> None:
 
 
 def test_label_prior_art_genuinely_sparse_still_sparse() -> None:
-    from easyicu.research_agent.idea_mining_priorart import _label_prior_art
+    from easyicu.research_agent.discovery.idea_mining_priorart import _label_prior_art
 
     # Few broad hits and no exact hits remains a genuine gap/sparse signal.
     gap = _label_prior_art(
@@ -2294,7 +2361,7 @@ def test_label_prior_art_genuinely_sparse_still_sparse() -> None:
 
 
 def test_label_prior_art_direct_hit_still_already_done() -> None:
-    from easyicu.research_agent.idea_mining_priorart import _label_prior_art
+    from easyicu.research_agent.discovery.idea_mining_priorart import _label_prior_art
 
     assert (
         _label_prior_art(broad_count=300, exact_count=10, direct_same_topic_count=2)
@@ -2303,7 +2370,9 @@ def test_label_prior_art_direct_hit_still_already_done() -> None:
 
 
 def test_construct_is_vague_detection() -> None:
-    from easyicu.research_agent.idea_mining_priorart import _construct_is_vague
+    from easyicu.research_agent.discovery.idea_mining_priorart import (
+        _construct_is_vague,
+    )
 
     # vague: decorator/method shells with no substantive clinical noun
     assert _construct_is_vague("robust multiparametric clinical scores") is True
@@ -2317,7 +2386,7 @@ def test_construct_is_vague_detection() -> None:
 
 
 def test_label_prior_art_vague_construct_blocks_false_sparse() -> None:
-    from easyicu.research_agent.idea_mining_priorart import _label_prior_art
+    from easyicu.research_agent.discovery.idea_mining_priorart import _label_prior_art
 
     # Even with 0 broad/exact hits, a vague construct cannot be a sparse gap.
     assert (
@@ -2345,7 +2414,7 @@ def test_label_prior_art_vague_construct_blocks_false_sparse() -> None:
 
 def _minimal_prior_art_assessment() -> object:
     """A neutral assessment; the go/no-go branch under test returns before it is read."""
-    from easyicu.research_agent.idea_mining_priorart import PriorArtAssessment
+    from easyicu.research_agent.discovery.idea_mining_priorart import PriorArtAssessment
 
     return PriorArtAssessment(
         novelty_snapshot_id="novelty-snapshot/sha256:deadbeef",
@@ -2394,7 +2463,7 @@ def test_both_concepts_resolved_but_unknown_determinability_is_hold_not_db_canno
     # is human operationalization of the outcome event -> a "hold", not a
     # database limitation. (This does not fabricate feasibility: the candidate
     # stays non-executable and unranked.)
-    from easyicu.research_agent.idea_mining_priorart import _go_no_go_decision
+    from easyicu.research_agent.discovery.idea_mining_priorart import _go_no_go_decision
 
     candidate = _candidate_with(
         predictor_concept="urine24",
@@ -2417,7 +2486,7 @@ def test_genuinely_absent_concept_stays_db_cannot_do() -> None:
     # The complement: when a concept is genuinely absent (predictor unresolved),
     # the verdict must remain "db-cannot-do" -- the fix must not reclassify a true
     # database limitation as a doable hold.
-    from easyicu.research_agent.idea_mining_priorart import _go_no_go_decision
+    from easyicu.research_agent.discovery.idea_mining_priorart import _go_no_go_decision
 
     candidate = _candidate_with(
         predictor_concept=None,
@@ -2539,19 +2608,10 @@ def test_pairwise_trajectory_idea_stays_on_predictor_outcome_path() -> None:
     assert candidate.resolved_analysis_concepts == []
 
 
-class SequenceIdeaLLM:
-    """Mock LLM returning a scripted response per call (extract, then refine...)."""
+def SequenceIdeaLLM(responses: Sequence[str]) -> ScriptedMockLLMClient:
+    """Return the built-in static sequence mock for extract/refine calls."""
 
-    name = "sequence-idea-llm"
-
-    def __init__(self, responses):
-        self.responses = list(responses)
-        self.calls = 0
-
-    def complete(self, messages, **kwargs):
-        idx = min(self.calls, len(self.responses) - 1)
-        self.calls += 1
-        return self.responses[idx]
+    return ScriptedMockLLMClient(list(responses))
 
 
 def _reflection_material() -> SourceMaterial:
@@ -2639,7 +2699,7 @@ def test_reflection_zero_rounds_is_single_pass() -> None:
         reflection_rounds=0,
     )
     assert len(ideas) == 1
-    assert llm.calls == 1  # only the extraction call, no reflection call
+    assert len(llm.calls) == 1  # only the extraction call, no reflection call
 
 
 def test_reflection_drops_idea_with_tampered_untraceable_quote() -> None:
@@ -2716,7 +2776,9 @@ def _sparse_idea_and_search():
 def test_novelty_judge_duplicate_verdict_tightens_label() -> None:
     # Phase 3: the count screen alone labels this "sparse"; an LLM judge that
     # reads the hits and calls it a duplicate must tighten it to already_done.
-    from easyicu.research_agent.idea_mining_priorart import assess_prior_art_for_idea
+    from easyicu.research_agent.discovery.idea_mining_priorart import (
+        assess_prior_art_for_idea,
+    )
 
     idea, search = _sparse_idea_and_search()
     baseline = assess_prior_art_for_idea(
@@ -2742,7 +2804,9 @@ def test_novelty_judge_duplicate_verdict_tightens_label() -> None:
 def test_novelty_judge_cannot_upgrade_label() -> None:
     # Veto-net: a "differentiated" verdict must NOT make a sparse label look more
     # novel; the count screen remains the ceiling on novelty.
-    from easyicu.research_agent.idea_mining_priorart import assess_prior_art_for_idea
+    from easyicu.research_agent.discovery.idea_mining_priorart import (
+        assess_prior_art_for_idea,
+    )
 
     idea, search = _sparse_idea_and_search()
 
@@ -2760,7 +2824,9 @@ def test_novelty_judge_cannot_upgrade_label() -> None:
 
 
 def test_more_conservative_novelty_helper() -> None:
-    from easyicu.research_agent.idea_mining_priorart import _more_conservative_novelty
+    from easyicu.research_agent.discovery.idea_mining_priorart import (
+        _more_conservative_novelty,
+    )
 
     assert (
         _more_conservative_novelty("apparently_gap", "already_done") == "already_done"
@@ -2774,7 +2840,9 @@ def test_more_conservative_novelty_helper() -> None:
 
 def test_novelty_judge_error_is_best_effort_noop() -> None:
     # A judge that raises must leave the count label untouched (best-effort).
-    from easyicu.research_agent.idea_mining_priorart import assess_prior_art_for_idea
+    from easyicu.research_agent.discovery.idea_mining_priorart import (
+        assess_prior_art_for_idea,
+    )
 
     idea, search = _sparse_idea_and_search()
 
@@ -2810,7 +2878,9 @@ def _idea(
 def test_collapse_near_duplicate_ideas_archive() -> None:
     # Phase 2b idea archive: the same construct restated (token-order/case/synonym
     # noise) collapses to one; genuinely distinct ideas survive.
-    from easyicu.research_agent.idea_mining import _collapse_near_duplicate_ideas
+    from easyicu.research_agent.discovery.idea_mining import (
+        _collapse_near_duplicate_ideas,
+    )
 
     ideas = [
         _idea(predictor="lactate clearance", outcome="mortality"),
@@ -2826,7 +2896,9 @@ def test_collapse_near_duplicate_ideas_archive() -> None:
 def test_reflection_prompt_includes_prior_art_titles_when_supplied() -> None:
     # Phase 2b retrieval augmentation: supplied prior-art titles surface in the
     # reflection prompt with the drop-or-differentiate instruction.
-    from easyicu.research_agent.idea_mining import build_idea_reflection_messages
+    from easyicu.research_agent.discovery.idea_mining import (
+        build_idea_reflection_messages,
+    )
 
     ideas = [_idea(predictor="lactate", outcome="mortality")]
     material = SourceMaterial(
@@ -2972,3 +3044,304 @@ def test_generic_outcome_blocks_when_only_unrelated_binary_is_available() -> Non
         "outcome concept is not available" in reason
         for reason in executable.non_executable_reasons
     )
+
+
+def test_low_specificity_shared_word_cannot_create_a_false_concept_binding() -> None:
+    idea = LiteratureIdeaCandidate(
+        source_snapshot_id="source-snapshot/sha256:abc123",
+        citation_key="neutral_review_2026",
+        source_adapter_level="user_supplied_excerpt",
+        population="adults undergoing cardiac surgery",
+        exposure_or_predictor="Pulsatile blood flow during cardiopulmonary bypass",
+        outcome="acute kidney injury",
+        rationale="The review identifies an unresolved intervention question.",
+        source_quote="future trials should evaluate pulsatile blood flow",
+        analysis_family="treatment_response",
+    )
+
+    executable = map_literature_idea_to_executable_candidate(
+        idea,
+        available_concepts=["ph", "aki"],
+        concept_aliases={
+            "ph": ["pH of blood"],
+            "aki": ["acute kidney injury"],
+        },
+        outcome_determinability={
+            "aki": OutcomeDeterminability(outcome="aki", status="known_0_1")
+        },
+    )
+
+    assert executable.resolved_predictor_concept is None
+    assert executable.resolved_outcome_concept == "kdigo_aki"
+    assert executable.executable is False
+
+
+def test_treatment_wording_cannot_bind_to_lab_but_can_bind_to_medication() -> None:
+    def _idea(exposure: str) -> LiteratureIdeaCandidate:
+        return LiteratureIdeaCandidate(
+            source_snapshot_id="source-snapshot/sha256:abc123",
+            citation_key="neutral_review_2026",
+            source_adapter_level="user_supplied_excerpt",
+            population="adult ICU patients",
+            exposure_or_predictor=exposure,
+            outcome="mortality",
+            rationale="The review identifies an unresolved treatment question.",
+            source_quote="future work should study treatment timing",
+            analysis_family="treatment_response",
+        )
+
+    kwargs = {
+        "available_concepts": ["total_protein", "adh_rate", "kdigo_uo", "death"],
+        "concept_aliases": {
+            "total_protein": ["protein", "total serum protein"],
+            "adh_rate": ["vasopressin", "vasopressin rate"],
+            "kdigo_uo": ["KDIGO", "urine-output KDIGO stage"],
+            "death": ["mortality"],
+        },
+        "concept_categories": {
+            "total_protein": "chemistry",
+            "adh_rate": "medications",
+            "kdigo_uo": "renal",
+            "death": "outcome",
+        },
+        "outcome_determinability": {
+            "death": OutcomeDeterminability(outcome="death", status="known_0_1")
+        },
+    }
+
+    protein = map_literature_idea_to_executable_candidate(
+        _idea("protein dosing"), **kwargs
+    )
+    vasopressin = map_literature_idea_to_executable_candidate(
+        _idea("vasopressin initiation"), **kwargs
+    )
+    care_bundle = map_literature_idea_to_executable_candidate(
+        _idea("KDIGO care bundle"), **kwargs
+    )
+
+    assert protein.resolved_predictor_concept is None
+    assert protein.executable is False
+    assert any(
+        "administration/treatment wording" in reason
+        for reason in protein.non_executable_reasons
+    )
+    assert vasopressin.resolved_predictor_concept == "adh_rate"
+    assert vasopressin.executable is True
+    assert care_bundle.resolved_predictor_concept is None
+    assert care_bundle.executable is False
+
+
+def test_bounded_prior_art_screens_only_actionable_differentiated_candidates(
+    tmp_path,
+) -> None:
+    material = SourceMaterial(
+        citation=_citation(),
+        source_adapter_level="user_supplied_excerpt",
+        source_text=(
+            "marker a remains a general candidate. marker b during the first "
+            "six hours is an unresolved time-window question. marker c is not "
+            "available in the prepared data."
+        ),
+    )
+    llm = CapturingIdeaLLM(
+        [
+            {
+                "citation_key": "neutral_review_2026",
+                "population": "adult ICU patients",
+                "exposure_or_predictor": "marker a",
+                "outcome": "mortality",
+                "rationale": "A general association is proposed.",
+                "source_quote": "marker a remains a general candidate",
+                "analysis_family": "association",
+            },
+            {
+                "citation_key": "neutral_review_2026",
+                "population": "adult ICU patients",
+                "exposure_or_predictor": "marker b",
+                "outcome": "mortality",
+                "rationale": "A specific early window remains unresolved.",
+                "source_quote": (
+                    "marker b during the first six hours is an unresolved "
+                    "time-window question"
+                ),
+                "analysis_family": "association",
+                "time_window_hint": "first six hours",
+            },
+            {
+                "citation_key": "neutral_review_2026",
+                "population": "adult ICU patients",
+                "exposure_or_predictor": "marker c",
+                "outcome": "mortality",
+                "rationale": "The construct is not in the prepared data.",
+                "source_quote": "marker c is not available in the prepared data",
+                "analysis_family": "association",
+            },
+        ]
+    )
+
+    def fake_probe(**kwargs):
+        predictor, outcome = kwargs["concepts"]
+        completeness = 0.99 if predictor == "marker_a" else 0.80
+        return {
+            predictor: {
+                "joint_fraction_complete": completeness,
+                "n_joint_complete": int(completeness * 100),
+                "denominator_n": 100,
+                "predictor_contrast_fraction": 0.25,
+                "source": "synthetic_fixture",
+            },
+            outcome: {
+                "joint_fraction_complete": completeness,
+                "n_joint_complete": int(completeness * 100),
+                "denominator_n": 100,
+                "source": "synthetic_fixture",
+            },
+        }
+
+    search = FakePriorArtSearchClient()
+    result = run_idea_mining_dry_run(
+        materials=[material],
+        llm=llm,
+        available_concepts=["marker_a", "marker_b", "death"],
+        outcome_determinability={
+            "death": OutcomeDeterminability(outcome="death", status="known_0_1")
+        },
+        output_dir=tmp_path / "dry_run",
+        feasibility_probe=fake_probe,
+        prior_art_search_client=search,
+        prior_art_candidate_limit=1,
+    )
+
+    assert result.yield_report.n_literature_ideas == 3
+    assert result.yield_report.n_executable == 2
+    assert len(result.prior_art_assessments) == 1
+    assert result.prior_art_assessments[0].predictor_literature_phrase == "marker b"
+    assert len(search.queries) == 2  # one bounded candidate: broad + exact
+    assert len(result.ranked_candidates) == 1
+    assert len(result.candidate_records) == 1
+    triage = json.loads(
+        (tmp_path / "dry_run" / "candidate_triage_report.json").read_text()
+    )
+    assert triage["prior_art_screening"]["literature_ideas_total"] == 3
+    assert triage["prior_art_screening"]["literature_ideas_screened"] == 1
+    assert not any(
+        "did not match ranked candidate pairs" in warning for warning in result.warnings
+    )
+
+
+def test_actionable_screen_rejects_zero_joint_zero_contrast_and_age_mismatch() -> None:
+    def _idea(key: str, population: str, family: str = "association"):
+        return LiteratureIdeaCandidate(
+            source_snapshot_id="source-snapshot/sha256:answerability",
+            citation_key=key,
+            source_adapter_level="user_supplied_excerpt",
+            population=population,
+            exposure_or_predictor=key,
+            outcome="mortality",
+            rationale="A source-grounded unresolved question.",
+            source_quote="future work should test this association",
+            analysis_family=family,
+        )
+
+    ideas = [
+        _idea("zero_joint", "adult ICU patients"),
+        _idea("zero_contrast", "adult ICU patients"),
+        _idea("pediatric_marker", "children with sepsis"),
+        _idea("valid_marker", "adult ICU patients"),
+    ]
+    candidates = [
+        ExecutableHypothesisCandidate(
+            executable_candidate_id=f"execidea_{idx:016d}",
+            literature_idea_id=str(idea.literature_idea_id),
+            source_snapshot_id=idea.source_snapshot_id,
+            citation_key=idea.citation_key,
+            population=idea.population,
+            predictor_label=idea.exposure_or_predictor,
+            outcome_label=idea.outcome,
+            resolved_predictor_concept=idea.exposure_or_predictor,
+            resolved_outcome_concept="death",
+            feasibility_pair_key=(idea.exposure_or_predictor, "death"),
+            analysis_family=idea.analysis_family,
+            research_question="test",
+            source_quote=idea.source_quote,
+        )
+        for idx, idea in enumerate(ideas, start=1)
+    ]
+    feasibility = {
+        ("zero_joint", "death"): HypothesisFeasibilitySignal(
+            joint_fraction_complete=0.0,
+            predictor_contrast_fraction=None,
+        ),
+        ("zero_contrast", "death"): HypothesisFeasibilitySignal(
+            joint_fraction_complete=0.9,
+            predictor_contrast_fraction=0.0,
+        ),
+        ("pediatric_marker", "death"): HypothesisFeasibilitySignal(
+            joint_fraction_complete=0.9,
+            predictor_contrast_fraction=0.3,
+        ),
+        ("valid_marker", "death"): HypothesisFeasibilitySignal(
+            joint_fraction_complete=0.9,
+            predictor_contrast_fraction=0.3,
+        ),
+    }
+
+    selected_ideas, selected_candidates = select_actionable_prior_art_screen(
+        literature_ideas=ideas,
+        executable_candidates=candidates,
+        feasibility_by_pair=feasibility,
+        limit=10,
+        analytic_population_age_group="adult",
+    )
+
+    assert [idea.exposure_or_predictor for idea in selected_ideas] == ["valid_marker"]
+    assert [
+        candidate.resolved_predictor_concept for candidate in selected_candidates
+    ] == ["valid_marker"]
+
+
+def test_actionable_screen_requires_broad_observation_for_treatment_without_absence_contract() -> (
+    None
+):
+    idea = LiteratureIdeaCandidate(
+        source_snapshot_id="source-snapshot/sha256:treatment-observation",
+        citation_key="treatment_review",
+        source_adapter_level="user_supplied_excerpt",
+        population="adult ICU patients",
+        exposure_or_predictor="vasopressin initiation",
+        outcome="mortality",
+        rationale="Timing remains unresolved.",
+        source_quote="future work should test vasopressin timing",
+        analysis_family="treatment_response",
+    )
+    candidate = ExecutableHypothesisCandidate(
+        executable_candidate_id="execidea_0000000000000001",
+        literature_idea_id=str(idea.literature_idea_id),
+        source_snapshot_id=idea.source_snapshot_id,
+        citation_key=idea.citation_key,
+        population=idea.population,
+        predictor_label=idea.exposure_or_predictor,
+        outcome_label=idea.outcome,
+        resolved_predictor_concept="adh_rate",
+        resolved_outcome_concept="death",
+        feasibility_pair_key=("adh_rate", "death"),
+        analysis_family=idea.analysis_family,
+        research_question="test",
+        source_quote=idea.source_quote,
+    )
+
+    selected, _ = select_actionable_prior_art_screen(
+        literature_ideas=[idea],
+        executable_candidates=[candidate],
+        feasibility_by_pair={
+            ("adh_rate", "death"): HypothesisFeasibilitySignal(
+                joint_fraction_complete=0.06,
+                n_joint_complete=5600,
+                denominator_n=94458,
+                predictor_contrast_fraction=0.3,
+            )
+        },
+        limit=1,
+    )
+
+    assert selected == []

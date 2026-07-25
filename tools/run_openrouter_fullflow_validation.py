@@ -25,7 +25,7 @@ import time
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Sequence
+from typing import Any, Callable, Dict, List, Optional
 
 
 def _bootstrap_imports() -> Path:
@@ -350,25 +350,21 @@ def _default_tasks() -> List[ValidationTask]:
 
 
 def _make_llm(*, provider: str, model: str, request_timeout: float):
-    from easyicu.research_agent import OpenAIClient  # type: ignore
+    from easyicu.research_agent.providers.factory import build_provider_client
+    from easyicu.research_agent.providers.llm import OpenAIClient
 
     if provider != "openrouter":
         raise SystemExit("This runner currently supports only --provider openrouter.")
-    key = os.environ.get("OPENROUTER_API_KEY") or os.environ.get("OPENAI_API_KEY")
-    if not key:
+    if not os.environ.get("OPENROUTER_API_KEY"):
         raise SystemExit(
             "OPENROUTER_API_KEY is required for the OpenRouter validation run."
         )
-    return OpenAIClient(
+    return build_provider_client(
+        provider="openrouter",
         model=model,
-        api_key=key,
-        base_url=os.environ.get("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"),
         request_timeout=float(request_timeout),
-        extra_headers={
-            "HTTP-Referer": "https://github.com/shen-lab-icu/easyicu",
-            "X-Title": "EasyICU full-flow validation",
-        },
-        extra_body={"reasoning": {"effort": "none", "exclude": True}},
+        title="EasyICU full-flow validation",
+        client_cls=OpenAIClient,
     )
 
 

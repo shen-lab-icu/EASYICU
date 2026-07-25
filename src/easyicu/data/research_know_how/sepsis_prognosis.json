@@ -1,0 +1,72 @@
+{
+  "schema_version": "easyicu.research_know_how/2",
+  "card_id": "sepsis_prognosis",
+  "version": "1.0.0",
+  "title": "Sepsis prognosis in the ICU",
+  "summary": "Candidate design coordinates for prognosis after a reproducible sepsis landmark. The card does not authorize a sepsis label, cohort exclusion, mortality horizon, or causal interpretation without matching typed variables and the user's question.",
+  "clinical_topics": ["sepsis", "septic shock", "prognosis", "organ dysfunction", "mortality"],
+  "topic_aliases": ["sepsis", "septic shock", "sepsis prognosis", "sepsis mortality", "脓毒症", "感染性休克", "脓毒症预后"],
+  "study_families": ["descriptive", "association", "time_to_event", "prediction"],
+  "applicable_databases": ["miiv", "mimic_iv", "mimic_iii", "eicu", "hirid", "aumc", "sicdb"],
+  "design_candidates": {
+    "population": "ICU patients meeting a reproducible, data-observable sepsis definition; distinguish general sepsis from septic shock when the question requires it.",
+    "time_zero": "First qualifying sepsis landmark or ICU admission, chosen before exposure assessment and outcomes.",
+    "observation_window": "Baseline physiology, organ dysfunction, treatment, and measurement-process variables available by the declared landmark.",
+    "prediction_or_followup_window": "In-hospital or prespecified fixed-horizon follow-up with discharge and censoring defined explicitly.",
+    "eligibility_candidates": ["Declare infection and organ-dysfunction operationalization", "Prevent duplicate stays from crossing validation sets", "Separate prevalent from incident sepsis when relevant"],
+    "exposure": "Question-specific baseline severity, biomarker, treatment, or predictor set measured before or at the landmark.",
+    "outcome": "Prespecified mortality or organ-support outcome with a defined horizon and ascertainment source.",
+    "estimand": "Association, survival probability, or prognostic risk at the declared horizon for the target sepsis population.",
+    "recommended_methods": ["Model outcome type and censoring explicitly", "Report absolute risks with adjusted estimates", "Audit missingness and treatment timing"],
+    "sensitivity_analyses": ["Alternative sepsis landmark or operational definition", "Fixed-horizon versus time-to-event analysis", "Restriction to first ICU stay"]
+  },
+  "required_concepts": ["suspected_infection", "sofa", "icu_admission_time", "death", "discharge"],
+  "stop_conditions": ["A reproducible sepsis landmark cannot be constructed", "Outcome timing is unavailable", "Exposure is measured after the outcome window begins without an explicit landmark design"],
+  "requires_confirmation": ["Confirm the operational sepsis or septic-shock definition and landmark", "Confirm whether the task is descriptive, prognostic, or treatment-effect estimation"],
+  "citations": [
+    {
+      "citation_id": "sepsis3_2016",
+      "title": "The Third International Consensus Definitions for Sepsis and Septic Shock",
+      "year": 2016,
+      "source_type": "consensus",
+      "url": "https://pubmed.ncbi.nlm.nih.gov/26903338/",
+      "doi": "10.1001/jama.2016.0287",
+      "supports": ["sepsis concept", "organ dysfunction", "septic shock distinction"]
+    },
+    {
+      "citation_id": "surviving_sepsis_2021",
+      "title": "Surviving Sepsis Campaign: international guidelines for management of sepsis and septic shock 2021",
+      "year": 2021,
+      "source_type": "guideline",
+      "url": "https://pubmed.ncbi.nlm.nih.gov/34599691/",
+      "doi": "10.1007/s00134-021-06506-y",
+      "supports": ["clinical context", "outcome and treatment interpretation"]
+    }
+  ],
+  "claims": [
+    {"claim_id":"sepsis_population","field":"population","text":"ICU patients meeting a reproducible, data-observable sepsis definition; distinguish general sepsis from septic shock when the question requires it.","citation_ids":["sepsis3_2016","surviving_sepsis_2021"],"evidence_scope":"expert_consensus"},
+    {"claim_id":"sepsis_landmark","field":"time_zero","text":"First qualifying sepsis landmark or ICU admission, chosen before exposure assessment and outcomes.","citation_ids":["sepsis3_2016"],"evidence_scope":"expert_consensus"},
+    {"claim_id":"baseline_window","field":"observation_window","text":"Baseline physiology, organ dysfunction, treatment, and measurement-process variables available by the declared landmark.","citation_ids":["sepsis3_2016","surviving_sepsis_2021"],"evidence_scope":"guideline"},
+    {"claim_id":"sepsis_followup","field":"followup_window","text":"In-hospital or prespecified fixed-horizon follow-up with discharge and censoring defined explicitly.","citation_ids":["surviving_sepsis_2021"],"evidence_scope":"guideline"},
+    {"claim_id":"operational_definition","field":"eligibility","text":"Declare infection and organ-dysfunction operationalization","citation_ids":["sepsis3_2016"],"evidence_scope":"expert_consensus"},
+    {"claim_id":"patient_split","field":"eligibility","text":"Prevent duplicate stays from crossing validation sets","citation_ids":["surviving_sepsis_2021"],"evidence_scope":"expert_consensus"},
+    {"claim_id":"prevalent_incident_sepsis","field":"eligibility","text":"Separate prevalent from incident sepsis when relevant","citation_ids":["sepsis3_2016"],"evidence_scope":"expert_consensus"},
+    {"claim_id":"pre_landmark_exposure","field":"exposure","text":"Question-specific baseline severity, biomarker, treatment, or predictor set measured before or at the landmark.","citation_ids":["surviving_sepsis_2021"],"evidence_scope":"guideline"},
+    {"claim_id":"declared_sepsis_outcome","field":"outcome","text":"Prespecified mortality or organ-support outcome with a defined horizon and ascertainment source.","citation_ids":["surviving_sepsis_2021"],"evidence_scope":"guideline"},
+    {"claim_id":"sepsis_estimand","field":"estimand","text":"Association, survival probability, or prognostic risk at the declared horizon for the target sepsis population.","citation_ids":["surviving_sepsis_2021"],"evidence_scope":"guideline"},
+    {"claim_id":"outcome_censoring_method","field":"method","text":"Model outcome type and censoring explicitly","citation_ids":["surviving_sepsis_2021"],"evidence_scope":"guideline"},
+    {"claim_id":"absolute_adjusted_estimates","field":"method","text":"Report absolute risks with adjusted estimates","citation_ids":["surviving_sepsis_2021"],"evidence_scope":"guideline"},
+    {"claim_id":"missingness_timing_audit","field":"method","text":"Audit missingness and treatment timing","citation_ids":["surviving_sepsis_2021"],"evidence_scope":"guideline"},
+    {"claim_id":"definition_landmark_sensitivity","field":"sensitivity","text":"Alternative sepsis landmark or operational definition","citation_ids":["sepsis3_2016"],"evidence_scope":"expert_consensus"},
+    {"claim_id":"followup_model_sensitivity","field":"sensitivity","text":"Fixed-horizon versus time-to-event analysis","citation_ids":["surviving_sepsis_2021"],"evidence_scope":"guideline"},
+    {"claim_id":"first_stay_sensitivity","field":"sensitivity","text":"Restriction to first ICU stay","citation_ids":["surviving_sepsis_2021"],"evidence_scope":"expert_consensus"},
+    {"claim_id":"stop_no_landmark","field":"stop_condition","text":"A reproducible sepsis landmark cannot be constructed","citation_ids":["sepsis3_2016"],"evidence_scope":"expert_consensus"},
+    {"claim_id":"stop_no_outcome_timing","field":"stop_condition","text":"Outcome timing is unavailable","citation_ids":["surviving_sepsis_2021"],"evidence_scope":"guideline"},
+    {"claim_id":"stop_temporal_leakage","field":"stop_condition","text":"Exposure is measured after the outcome window begins without an explicit landmark design","citation_ids":["surviving_sepsis_2021"],"evidence_scope":"guideline"},
+    {"claim_id":"confirm_sepsis_definition","field":"requires_confirmation","text":"Confirm the operational sepsis or septic-shock definition and landmark","citation_ids":["sepsis3_2016"],"evidence_scope":"expert_consensus"},
+    {"claim_id":"confirm_study_role","field":"requires_confirmation","text":"Confirm whether the task is descriptive, prognostic, or treatment-effect estimation","citation_ids":["sepsis3_2016","surviving_sepsis_2021"],"evidence_scope":"expert_consensus"}
+  ],
+  "trust_level": "built_in_reviewed",
+  "review_status": "curated_mvp",
+  "review_attestation": null
+}

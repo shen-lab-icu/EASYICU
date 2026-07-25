@@ -13,22 +13,23 @@ from easyicu.research_agent.audits.validators import (
     FigureContractQualityValidator,
     FigureSourceDataValidator,
 )
-from easyicu.research_agent.evidence import EvidenceStore
+from easyicu.research_agent.agents.core import PlannerAgent
+from easyicu.research_agent.authority.evidence_store import EvidenceStore
 from easyicu.research_agent.figures.distribution_availability import (
     REPAIR_ID,
+    _distribution_availability_parent_digest_seal,
     render_distribution_availability_bundle_from_prior_outputs,
 )
 from easyicu.research_agent.pipeline import (
-    _distribution_availability_parent_digest_seal,
     _distribution_availability_figure_step_matches_parent,
     _render_publication_bundle_from_prior_outputs_for_step,
     _step_contract_findings,
     deterministic_figure_repair_id_for_upstream,
 )
+from easyicu.research_agent.providers.mocks import PatternScriptedMockLLMClient
 from easyicu.research_agent.schema import AnalysisStep
 from easyicu.research_agent.schema import ResearchContext
 from easyicu.research_agent.schema import ValidationFinding
-
 
 PARENT_STEP = "02_marker_audit"
 FIGURE_STEP = f"{PARENT_STEP}_figure"
@@ -1062,58 +1063,52 @@ def test_sealed_renderer_authority_and_failure_policy(
     visual_message: str | None,
     expected_status: str,
 ) -> None:
-    class PlannedAuditLLM:
-        name = "planned-audit-llm"
+    original_planner_run = PlannerAgent.run
 
-        def __init__(self) -> None:
-            self.code_calls = 0
-            self.repair_calls = 0
+    def run_without_unrelated_article_suite(self, context, **kwargs):
+        # This regression owns the sealed figure adapter, not the independent
+        # article-suite completeness contract. Keep its two-step plan focused.
+        kwargs["enforce_article_contract"] = False
+        return original_planner_run(self, context, **kwargs)
 
-        def complete(self, messages, *, max_tokens=2048, temperature=0.2):
-            del max_tokens, temperature
-            user = next(
-                (
-                    message.content
-                    for message in reversed(messages)
-                    if message.role == "user"
-                ),
-                "",
-            )
-            upper = user.upper()
-            if "ICU-AWARE RESEARCH PLAN" in upper:
-                return json.dumps(
-                    {
-                        "research_question": "Describe a planned marker audit.",
-                        "steps": [
-                            {
-                                "step_id": PARENT_STEP,
-                                "intent": "Audit the planned marker distribution and availability.",
-                                "inputs": ["marker_value"],
-                                "expected_outputs": [
-                                    "table:descriptive_distribution",
-                                    "table:marker_missingness",
-                                ],
-                                "method": "exposure_distribution_and_missingness_audit",
-                                "icu_rule_refs": [],
-                            },
-                            {
-                                "step_id": FIGURE_STEP,
-                                "intent": "Render the direct parent's planned descriptive audit.",
-                                "inputs": [
-                                    "table:descriptive_distribution",
-                                    "table:marker_missingness",
-                                ],
-                                "expected_outputs": figure_outputs,
-                                "method": "publication_figure_generation",
-                                "icu_rule_refs": [],
-                            },
-                        ],
-                        "rationale": "The figure is a rendering-only child of the audit.",
-                    }
-                )
-            if "WRITE THE PYTHON CODE" in upper:
-                self.code_calls += 1
-                return r"""
+    monkeypatch.setattr(
+        PlannerAgent,
+        "run",
+        run_without_unrelated_article_suite,
+    )
+    plan_response = json.dumps(
+        {
+            "research_question": "Describe a planned marker audit.",
+            "steps": [
+                {
+                    "step_id": PARENT_STEP,
+                    "planned_analysis_role": "primary",
+                    "intent": "Audit the planned marker distribution and availability.",
+                    "inputs": ["marker_value"],
+                    "expected_outputs": [
+                        "table:descriptive_distribution",
+                        "table:marker_missingness",
+                    ],
+                    "method": "exposure_distribution_and_missingness_audit",
+                    "icu_rule_refs": [],
+                },
+                {
+                    "step_id": FIGURE_STEP,
+                    "planned_analysis_role": "auxiliary",
+                    "intent": "Render the direct parent's planned descriptive audit.",
+                    "inputs": [
+                        "table:descriptive_distribution",
+                        "table:marker_missingness",
+                    ],
+                    "expected_outputs": figure_outputs,
+                    "method": "publication_figure_generation",
+                    "icu_rule_refs": [],
+                },
+            ],
+            "rationale": "The figure is a rendering-only child of the audit.",
+        }
+    )
+    code_response = r"""
 import json
 import os
 import pandas as pd
@@ -1196,14 +1191,23 @@ with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as hand
     json.dump(summary, handle)
 print(json.dumps(summary))
 """
-            if "REPAIR THE PYTHON CODE" in upper:
-                self.repair_calls += 1
-                raise AssertionError("sealed renderer must not call coder repair")
-            if "INTERPRET THE RESULTS" in upper:
-                return "The planned descriptive audit completed."
-            return "{}"
+    llm = PatternScriptedMockLLMClient(
+        [
+            ("ICU-AWARE RESEARCH PLAN", [plan_response]),
+            ("WRITE THE PYTHON CODE", [code_response, code_response]),
+            (
+                "REPAIR THE PYTHON CODE",
+                [AssertionError("sealed renderer must not call coder repair")],
+            ),
+            (
+                "INTERPRET THE RESULTS",
+                ["The planned descriptive audit completed."] * 2,
+            ),
+        ]
+    )
 
-    from easyicu.research_agent import pipeline_execute
+    from easyicu.research_agent.execution import phase as pipeline_execute
+    from easyicu.research_agent.gates import visual as visual_gate_module
 
     class ControlledVisualAuditor:
         def __init__(self, *args, **kwargs):
@@ -1231,7 +1235,7 @@ print(json.dumps(summary))
             return []
 
     monkeypatch.setattr(
-        pipeline_execute,
+        visual_gate_module,
         "VisualQAAuditor",
         ControlledVisualAuditor,
     )
@@ -1277,7 +1281,6 @@ print(json.dumps(summary))
             "FigureContractQualityValidator",
             ControlledContractValidator,
         )
-    llm = PlannedAuditLLM()
     pipeline = ra.ResearchAgentPipeline(
         workdir=tmp_path,
         llm=llm,
@@ -1307,7 +1310,6 @@ print(json.dumps(summary))
         cohort=cohort,
         cohort_name="planned_marker_audit",
         database="synthetic",
-        target_outcome="response_flag",
         primary_exposure="marker_value",
         stop_after_analysis=True,
     )
@@ -1320,13 +1322,31 @@ print(json.dumps(summary))
         if record.get("step_id") == FIGURE_STEP
     )
     if sealed_case == "host_slot_denial":
-        assert llm.code_calls == 2
+        assert (
+            sum(
+                "WRITE THE PYTHON CODE"
+                in "\n".join(message.content for message in messages).upper()
+                for messages, _kwargs in llm.calls
+            )
+            == 2
+        )
         assert figure_record["status"] == expected_status
         assert "sealed_renderer_repair" not in figure_record
         assert "deterministic_code_fallback" not in figure_record
         return
-    assert llm.code_calls == 1
-    assert llm.repair_calls == 0
+    assert (
+        sum(
+            "WRITE THE PYTHON CODE"
+            in "\n".join(message.content for message in messages).upper()
+            for messages, _kwargs in llm.calls
+        )
+        == 1
+    )
+    assert not any(
+        "REPAIR THE PYTHON CODE"
+        in "\n".join(message.content for message in messages).upper()
+        for messages, _kwargs in llm.calls
+    )
     assert figure_record["status"] == expected_status
     assert figure_record["runner_repair"] == REPAIR_ID
     assert figure_record["deterministic_code_fallback"] == (

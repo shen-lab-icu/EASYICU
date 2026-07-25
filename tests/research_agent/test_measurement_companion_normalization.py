@@ -3,7 +3,7 @@ from __future__ import annotations
 import duckdb
 import pandas as pd
 
-from easyicu.research_agent.easyicu_case_builder import (
+from easyicu.research_agent.case_plugins.builder import (
     _normalize_measurement_count_pair,
 )
 from tools.build_discovery_universe import normalize_measurement_companions

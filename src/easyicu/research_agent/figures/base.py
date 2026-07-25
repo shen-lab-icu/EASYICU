@@ -1,7 +1,7 @@
 """Shared helpers for the study-design-aware figure renderers.
 
-This module has no dependency on :mod:`figure_skill`, so importing it from the
-skill (``figure_skill`` -> ``figures`` -> ``figures.base``) creates no cycle.
+This module has no dependency on :mod:`.skill`, so importing it from the
+skill (``figures.skill`` -> ``figures`` -> ``figures.base``) creates no cycle.
 It owns:
 
 * :class:`RenderedFigure` -- the renderer -> skill hand-off object;
@@ -21,7 +21,7 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import pandas as pd
 
-from ..evidence import EvidenceStore
+from ..authority.evidence_store import EvidenceStore
 from ..schema import EvidenceRecord
 
 

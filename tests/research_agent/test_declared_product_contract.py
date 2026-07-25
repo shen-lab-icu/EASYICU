@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from easyicu.research_agent.declared_product_contract import (
+from easyicu.research_agent.contracts.declared_product import (
     authorize_declared_figure_product_slots,
     bind_declared_figure_products,
     declared_product_contract_findings,
@@ -434,6 +434,77 @@ def test_primary_exposure_binding_contract_canonicalizes_one_declared_column(
     assert contract["time_window"] == "baseline"
 
 
+def test_exposure_definition_contract_joins_summary_artifact_and_cohort(tmp_path):
+    cohort = tmp_path / "cohort.csv"
+    cohort.write_text("stay_id,treatment\n1,0\n2,1\n", encoding="utf-8")
+    artifact = tmp_path / "exposure_definition.json"
+    artifact.write_text(
+        json.dumps(
+            {
+                "authoritative_exposure": "treatment",
+                "derived_exposure": "treatment_any",
+                "rule": "Use the sealed treatment indicator without recoding.",
+                "locked_cohort_n": 2,
+                "usable_variation": True,
+                "weighted_association_feasibility": "eligible",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    contract = typed_product_binding_contract(
+        product_name="exposure_definition",
+        step_summary={
+            "authoritative_exposure": "treatment",
+            "derived_exposure": "treatment_any",
+            "derived_exposure_rule": (
+                "Use the sealed treatment indicator without recoding."
+            ),
+            "locked_cohort_n": 2,
+        },
+        artifact_path=artifact,
+        authoritative_cohort_path=cohort,
+    )
+
+    assert contract is not None
+    assert contract["executable_column"] == "treatment"
+    assert contract["exposure_column"] == "treatment"
+    assert contract["derived_exposure"] == "treatment_any"
+    assert contract["usable_variation"] is True
+
+
+def test_exposure_definition_contract_refuses_cross_surface_drift(tmp_path):
+    cohort = tmp_path / "cohort.csv"
+    cohort.write_text("stay_id,treatment\n1,0\n", encoding="utf-8")
+    artifact = tmp_path / "exposure_definition.json"
+    artifact.write_text(
+        json.dumps(
+            {
+                "authoritative_exposure": "different_treatment",
+                "derived_exposure": "treatment_any",
+                "rule": "sealed rule",
+                "locked_cohort_n": 1,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert (
+        typed_product_binding_contract(
+            product_name="exposure_definition",
+            step_summary={
+                "authoritative_exposure": "treatment",
+                "derived_exposure": "treatment_any",
+                "derived_exposure_rule": "sealed rule",
+                "locked_cohort_n": 1,
+            },
+            artifact_path=artifact,
+            authoritative_cohort_path=cohort,
+        )
+        is None
+    )
+
+
 def test_primary_exposure_binding_contract_does_not_resolve_conflicting_columns(
     tmp_path,
 ):
@@ -845,9 +916,7 @@ def test_typed_kind_shorthand_accepts_absolute_path_with_relative_output_dir(
         step=_step(outputs=["table:summary"]),
         step_summary={
             "status": "ok",
-            "output_files": [
-                {"kind": "table:summary", "path": str(output_path)}
-            ],
+            "output_files": [{"kind": "table:summary", "path": str(output_path)}],
         },
         effect_method_authorized=False,
         out_dir=out_dir,
@@ -933,9 +1002,7 @@ def test_typed_kind_shorthand_rejects_output_root_escape(tmp_path):
         step=_step(outputs=["table:summary"]),
         step_summary={
             "status": "ok",
-            "output_files": [
-                {"kind": "table:summary", "path": "../outside.csv"}
-            ],
+            "output_files": [{"kind": "table:summary", "path": "../outside.csv"}],
         },
         effect_method_authorized=False,
         out_dir=out_dir,
@@ -1371,6 +1438,81 @@ def test_nested_effect_estimate_is_scientific_output_not_diagnostic_companion():
         effect_method_authorized=False,
     )
     assert "unauthorized_effect_product" in _kinds(findings)
+
+
+@pytest.mark.parametrize("status", ["deferred", "non-estimable", "not_estimated"])
+def test_noncomputed_effect_status_is_not_an_effect_result(status):
+    findings = declared_product_contract_findings(
+        step=_step(outputs=["artifact:target_trial_protocol"]),
+        step_summary={
+            "output_files": {
+                "artifact:target_trial_protocol": "target_trial_protocol.json"
+            },
+            "estimability": {
+                "primary_adjusted_or_weighted_contrast": status,
+                "reason": "The protocol did not estimate an effect.",
+            },
+        },
+        effect_method_authorized=False,
+    )
+
+    assert "unauthorized_effect_product" not in _kinds(findings)
+
+
+def test_explicit_false_effect_created_flag_is_not_an_effect_result():
+    findings = declared_product_contract_findings(
+        step=_step(outputs=["artifact:analysis_cohort"]),
+        step_summary={
+            "output_files": {"artifact:analysis_cohort": "analysis_cohort.parquet"},
+            "output_scope": {"effect_estimates_created": False},
+        },
+        effect_method_authorized=False,
+    )
+
+    assert "unauthorized_effect_product" not in _kinds(findings)
+
+
+def test_explicit_true_no_effect_flag_is_not_an_effect_result():
+    findings = declared_product_contract_findings(
+        step=_step(outputs=["table:distribution"]),
+        step_summary={
+            "output_files": {"table:distribution": "distribution.csv"},
+            "distribution_interpretation": {
+                "no_effect_estimate_or_model_fitted": True,
+            },
+        },
+        effect_method_authorized=False,
+    )
+
+    assert "unauthorized_effect_product" not in _kinds(findings)
+
+
+def test_explicit_true_effect_created_flag_remains_fail_closed():
+    findings = declared_product_contract_findings(
+        step=_step(outputs=["artifact:analysis_cohort"]),
+        step_summary={
+            "output_files": {"artifact:analysis_cohort": "analysis_cohort.parquet"},
+            "output_scope": {"effect_estimates_created": True},
+        },
+        effect_method_authorized=False,
+    )
+
+    assert "unauthorized_effect_product" in _kinds(findings)
+
+
+def test_textual_or_numeric_effect_value_remains_effect_bearing():
+    for value in (1.4, "OR=1.4"):
+        findings = declared_product_contract_findings(
+            step=_step(outputs=["artifact:target_trial_protocol"]),
+            step_summary={
+                "output_files": {
+                    "artifact:target_trial_protocol": "target_trial_protocol.json"
+                },
+                "primary_adjusted_or_weighted_contrast": value,
+            },
+            effect_method_authorized=False,
+        )
+        assert "unauthorized_effect_product" in _kinds(findings)
 
 
 def test_effect_method_owner_may_realise_its_declared_effect():
@@ -2963,7 +3105,7 @@ def test_digest_bound_snapshot_parses_the_verified_bytes_after_path_mutation(tmp
     ],
 )
 def test_reported_fail_closed_status_fails_outer_step_contract(reported_status):
-    from easyicu.research_agent.pipeline_execute import (
+    from easyicu.research_agent.execution.phase import (
         _step_status_from_contract_findings,
     )
 
