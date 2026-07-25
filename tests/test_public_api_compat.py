@@ -271,7 +271,6 @@ def test_ids_the_map_does_not_cover_stop_the_conversion_by_default() -> None:
 
     message = str(excinfo.value)
     assert "2 of 3 row(s)" in message
-    assert "11" in message and "20" in message  # names the ids it could not map
     assert "on_unmapped" in message
 
 
@@ -281,9 +280,17 @@ def test_unmapped_rows_can_be_dropped_or_kept_when_the_caller_says_so() -> None:
     dropped = change_id(BY_STAY, PARTIAL_MAP, "stay_id", "hadm_id", on_unmapped="drop")
     assert list(dropped["hr"]) == [80.0]
 
-    kept = change_id(BY_STAY, PARTIAL_MAP, "stay_id", "hadm_id", on_unmapped="keep")
+    kept = change_id(
+        BY_STAY,
+        PARTIAL_MAP,
+        "stay_id",
+        "hadm_id",
+        keep_old_id=True,
+        on_unmapped="keep",
+    )
     assert len(kept) == 3
     assert kept["hadm_id"].isna().sum() == 2
+    assert list(kept["stay_id"]) == [10, 11, 20]  # each still identifiable
 
 
 def test_downgrade_id_does_not_let_groupby_delete_the_unmapped_rows() -> None:
@@ -298,9 +305,11 @@ def test_downgrade_id_does_not_let_groupby_delete_the_unmapped_rows() -> None:
 
     partial = pd.DataFrame({"stay_id": [10, 11], "hadm_id": [1, 1]})
 
-    kept = downgrade_id(BY_STAY, partial, "stay_id", "hadm_id", on_unmapped="keep")
-    assert len(kept) == 2
+    kept = downgrade_id(
+        BY_STAY, partial, "stay_id", "hadm_id", keep_old_id=True, on_unmapped="keep"
+    )
     assert 90.0 in list(kept["hr"])  # stay 20 survives under a null hadm_id
+    assert 20 in list(kept["stay_id"])  # and is still identifiable
 
     dropped = downgrade_id(BY_STAY, partial, "stay_id", "hadm_id", on_unmapped="drop")
     assert list(dropped["hadm_id"]) == [1]
@@ -312,6 +321,124 @@ def test_an_unknown_unmapped_policy_is_rejected() -> None:
 
     with pytest.raises(ValueError, match="on_unmapped must be one of"):
         change_id(BY_STAY, PARTIAL_MAP, "stay_id", "hadm_id", on_unmapped="ignore")
+
+
+def test_keeping_unmapped_rows_requires_keeping_their_identity() -> None:
+    """``keep`` without ``keep_old_id`` produced rows belonging to nobody.
+
+    And in ``downgrade_id`` it was worse: every unmapped subject shared the
+    same null group key, so three patients came back as one row holding their
+    mean. The single unmapped row in the first version of these tests could not
+    show that.
+    """
+
+    from easyicu.table.id_conversion import change_id, downgrade_id, upgrade_id
+
+    for call in (
+        lambda: change_id(
+            BY_STAY, PARTIAL_MAP, "stay_id", "hadm_id", on_unmapped="keep"
+        ),
+        lambda: downgrade_id(
+            BY_STAY, PARTIAL_MAP, "stay_id", "hadm_id", on_unmapped="keep"
+        ),
+        lambda: upgrade_id(
+            BY_HADM,
+            pd.DataFrame({"hadm_id": [1], "stay_id": [10]}),
+            "hadm_id",
+            "stay_id",
+            on_unmapped="keep",
+        ),
+    ):
+        with pytest.raises(ValueError, match="requires keep_old_id=True"):
+            call()
+
+
+def test_kept_unmapped_subjects_stay_separate_rows() -> None:
+    three_unmapped = pd.DataFrame(
+        {"stay_id": [10, 20, 21, 22], "hr": [80.0, 90.0, 70.0, 80.0]}
+    )
+    from easyicu.table.id_conversion import downgrade_id
+
+    result = downgrade_id(
+        three_unmapped,
+        PARTIAL_MAP,
+        "stay_id",
+        "hadm_id",
+        keep_old_id=True,
+        on_unmapped="keep",
+    )
+
+    assert list(result["stay_id"]) == [10, 20, 21, 22]
+    assert list(result["hr"]) == [80.0, 90.0, 70.0, 80.0]
+    assert result["hadm_id"].isna().sum() == 3
+
+
+def test_the_unmapped_error_does_not_name_a_patient() -> None:
+    """This message reaches web job errors, MCP stderr, CI logs and findings.
+
+    ``WindowExpansionError`` stopped quoting patient rows for the same reason;
+    quoting ids in a new message would have put them back.
+    """
+
+    from easyicu.table.id_conversion import UnmappedIdError, change_id
+
+    with pytest.raises(UnmappedIdError) as excinfo:
+        change_id(BY_STAY, PARTIAL_MAP, "stay_id", "hadm_id")
+
+    message = str(excinfo.value)
+    assert "2 of 3 row(s)" in message
+    assert "2 distinct stay_id" in message
+    assert "sha256" in message
+    for identifier in ("11", "20"):
+        assert identifier not in message, f"raw id {identifier} leaked into the error"
+
+
+# ---------------------------------------------------------------------------
+# Null pairs inside the id map
+# ---------------------------------------------------------------------------
+
+
+def test_a_null_pair_does_not_shadow_a_real_mapping() -> None:
+    """The two halves of the conversion have to read the same map.
+
+    ``classify_id_relation`` dropped null pairs before reading the direction
+    while the merge used the raw frame. A map holding both ``10 -> 1`` and
+    ``10 -> NaN`` therefore looked one-to-one, and ``dict(zip(...))`` let the
+    null pair overwrite the real one — a stay that *has* a hadm_id came back
+    reported as unmapped.
+    """
+
+    from easyicu.table.id_conversion import change_id, classify_id_relation
+
+    shadowed = pd.DataFrame({"stay_id": [10, 10], "hadm_id": [1.0, None]})
+
+    assert classify_id_relation(shadowed, "stay_id", "hadm_id") == "one_to_one"
+    result = change_id(
+        pd.DataFrame({"stay_id": [10], "hr": [80.0]}), shadowed, "stay_id", "hadm_id"
+    )
+    assert list(result["hadm_id"]) == [1.0]
+
+
+def test_a_null_source_id_in_the_map_is_ignored_not_matched() -> None:
+    from easyicu.table.id_conversion import change_id
+
+    with_null_source = pd.DataFrame({"stay_id": [10, None], "hadm_id": [1.0, 2.0]})
+    result = change_id(
+        pd.DataFrame({"stay_id": [10], "hr": [80.0]}),
+        with_null_source,
+        "stay_id",
+        "hadm_id",
+    )
+    assert list(result["hadm_id"]) == [1.0]
+
+
+def test_a_map_of_only_null_pairs_is_refused_like_an_empty_one() -> None:
+    from easyicu.table.id_conversion import IdMapRelationError, change_id
+
+    all_null = pd.DataFrame({"stay_id": [10, 11], "hadm_id": [None, None]})
+
+    with pytest.raises(IdMapRelationError, match="no usable pairs"):
+        change_id(BY_STAY, all_null, "stay_id", "hadm_id")
 
 
 # ---------------------------------------------------------------------------

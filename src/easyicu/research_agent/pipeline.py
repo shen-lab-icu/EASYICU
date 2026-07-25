@@ -39,6 +39,7 @@ import functools
 import logging
 import math
 import os
+from copy import deepcopy
 import re
 import shutil
 import textwrap
@@ -431,7 +432,11 @@ from .authority.run_input import (
     seal_run_input_capsule,
     verify_legacy_trajectory_capsule_receipt,
 )
-from .authority.run_lock import current_locked_run_id, exclusive_run_execution
+from .authority.run_lock import (
+    acquire_run_execution_lock,
+    current_locked_run_id,
+    exclusive_run_execution,
+)
 from .audits.validators import (
     ClinicalConstraintValidator,
     ConceptUsageAuditor,
@@ -4408,7 +4413,9 @@ class ResearchAgentPipeline:
         def _review_evidence_store():
             if reviewed_plan:
                 return reviewed_plan[-1].evidence
-            return EvidenceStore(run_dir, enforcement_mode=self._evidence_enforcement_mode)
+            return EvidenceStore(
+                run_dir, enforcement_mode=self._evidence_enforcement_mode
+            )
 
         def _human_review_invoker(plan_result):
             from .graph import human_review_requests_for_plan
@@ -4580,6 +4587,22 @@ class ResearchAgentPipeline:
             "graph": graph,
             "invoke_config": invoke_config,
             "pending": pending,
+            # Captured here, not read off the instance at resume time. A second
+            # run on the same pipeline overwrites
+            # ``_validated_runtime_capabilities`` during its own preflight, so
+            # a review approved against image A could otherwise be resumed
+            # under image B's allow-list — the environment the reviewer signed
+            # off is not the one that would finish the analysis. A tuple of
+            # import names, copied, not a provider callable.
+            # ``getattr`` rather than attribute access: this method is reached
+            # by test doubles that never ran ``__init__``, and a pause must not
+            # start failing because the capability fields are absent.
+            "runtime_capabilities": tuple(
+                getattr(self, "_validated_runtime_capabilities", None) or ()
+            ),
+            "runtime_bundle": deepcopy(
+                getattr(self, "_validated_runtime_bundle", None)
+            ),
         }
         return pending
 
@@ -4629,13 +4652,13 @@ class ResearchAgentPipeline:
                 f"not {str(run_id)!r}"
             )
         # The pause ended the run's capability scope, so the provider the
-        # runner published is gone. Republish from the validated snapshot held
-        # on this instance — an immutable tuple of import names, not a callable
-        # captured from the paused job — so the resumed steps see the same
-        # allow-list the plan was validated against. Resume is same-process and
-        # same-instance (checked above), which is what makes this available.
-        if self._validated_runtime_capabilities is not None:
-            resumed_snapshot = self._validated_runtime_capabilities
+        # runner published is gone. Republish the snapshot captured *at the
+        # pause* rather than whatever the instance holds now: a second run on
+        # this pipeline overwrites the instance field during its own preflight,
+        # and resuming under another image's allow-list would finish the
+        # analysis in an environment the reviewer never saw.
+        resumed_snapshot = tuple(pending_state.get("runtime_capabilities") or ())
+        if resumed_snapshot:
             set_runtime_capability_snapshot_provider(lambda: resumed_snapshot)
 
         payload = [
@@ -4644,14 +4667,22 @@ class ResearchAgentPipeline:
         ]
         from langgraph.types import Command
 
-        final_state = pending_state["graph"].invoke(
-            Command(resume={"decisions": payload}),
-            **(
-                {"config": pending_state["invoke_config"]}
-                if pending_state["invoke_config"]
-                else {}
-            ),
-        )
+        # Same writer lease ``run`` holds, bound to the paused run's own id
+        # rather than a fresh one: resuming writes into that run's directory
+        # and evidence store, so it must not proceed while another call is
+        # writing there. ``run`` returns when it pauses, releasing its lease,
+        # which is exactly why resume has to take one of its own.
+        with acquire_run_execution_lock(
+            workdir=Path(self.workdir), run_id=pending.run_id
+        ):
+            final_state = pending_state["graph"].invoke(
+                Command(resume={"decisions": payload}),
+                **(
+                    {"config": pending_state["invoke_config"]}
+                    if pending_state["invoke_config"]
+                    else {}
+                ),
+            )
         return self._pipeline_result_or_pending(
             final_state,
             graph=pending_state["graph"],

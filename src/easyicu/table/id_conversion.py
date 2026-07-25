@@ -18,6 +18,7 @@ below the typed-table classes without importing them.
 
 from __future__ import annotations
 
+import hashlib
 from typing import Callable, Dict, Optional, Union
 
 import pandas as pd
@@ -46,6 +47,45 @@ class UnmappedIdError(ValueError):
     """
 
 
+def _validate_unmapped_policy(on_unmapped: str, keep_old_id: bool) -> None:
+    """``keep`` has to keep the identity, not just the row.
+
+    Keeping a row whose target id is null while dropping the source id leaves a
+    measurement attached to no one — the exact outcome ``on_unmapped`` exists to
+    prevent. Worse, ``downgrade_id`` then groups on that null: every unmapped
+    patient lands in one group and comes back as a single row holding their
+    mean. Requiring ``keep_old_id`` makes the group key ``[to_id, from_id]``, so
+    each unmapped patient stays their own row and stays identifiable.
+    """
+
+    if on_unmapped not in ON_UNMAPPED_POLICIES:
+        raise ValueError(
+            f"on_unmapped must be one of {ON_UNMAPPED_POLICIES}, got {on_unmapped!r}"
+        )
+    if on_unmapped == "keep" and not keep_old_id:
+        raise ValueError(
+            "on_unmapped='keep' requires keep_old_id=True. Keeping a row whose "
+            "target id is null while dropping its source id leaves data with no "
+            "identifier at all, and aggregation would then merge every unmapped "
+            "subject into one group. Pass keep_old_id=True to keep them "
+            "distinguishable, or on_unmapped='drop' to remove them."
+        )
+
+
+def _unmapped_id_digest(values: "pd.Series") -> str:
+    """A stable fingerprint of the unmapped ids, without the ids.
+
+    This message reaches web job errors, MCP stderr, CI logs and agent
+    findings. The same message carrying ``stay_id = 30042318`` would put a
+    patient identifier in all four — which is why ``WindowExpansionError``
+    stopped quoting patient rows. A digest still lets two reports of the same
+    failure be recognised as the same failure.
+    """
+
+    ordered = sorted(str(value) for value in values.dropna().unique())
+    return hashlib.sha256("\n".join(ordered).encode("utf-8")).hexdigest()[:16]
+
+
 def _apply_unmapped_policy(
     result: pd.DataFrame,
     from_id: str,
@@ -61,11 +101,6 @@ def _apply_unmapped_policy(
     a cohort on purpose is legitimate. Choosing it silently is not.
     """
 
-    if on_unmapped not in ON_UNMAPPED_POLICIES:
-        raise ValueError(
-            f"on_unmapped must be one of {ON_UNMAPPED_POLICIES}, got {on_unmapped!r}"
-        )
-
     unmapped = result[to_id].isna()
     count = int(unmapped.sum())
     if count == 0 or on_unmapped == "keep":
@@ -74,11 +109,11 @@ def _apply_unmapped_policy(
         return result.loc[~unmapped].reset_index(drop=True)
 
     if from_id in result.columns:
-        missing = result.loc[unmapped, from_id].dropna().unique().tolist()
-        examples = ", ".join(repr(value) for value in missing[:5])
-        if len(missing) > 5:
-            examples += f", ... ({len(missing)} distinct)"
-        detail = f" ({from_id} = {examples})" if examples else ""
+        missing = result.loc[unmapped, from_id]
+        detail = (
+            f" across {missing.dropna().nunique()} distinct {from_id} "
+            f"(sha256 {_unmapped_id_digest(missing)})"
+        )
     else:
         detail = ""
 
@@ -86,25 +121,30 @@ def _apply_unmapped_policy(
         f"{operation} from {from_id!r} to {to_id!r}: the id map covers no "
         f"{to_id} for {count} of {len(result)} row(s){detail}. Those rows would "
         f"keep their measurements while losing their identity. Pass "
-        "on_unmapped='drop' to remove them or on_unmapped='keep' to accept a "
-        f"null {to_id}."
+        "on_unmapped='drop' to remove them, or on_unmapped='keep' with "
+        f"keep_old_id=True to carry them through with a null {to_id}."
     )
 
 
-def _require_non_empty_map(
-    id_map: pd.DataFrame, from_id: str, to_id: str
-) -> pd.DataFrame:
-    """An empty map is a failed load, not a relation with no rows.
+def _canonical_id_map(id_map: pd.DataFrame, from_id: str, to_id: str) -> pd.DataFrame:
+    """The one form of the map every step here agrees on.
 
-    It is worth separating from the incomplete-map case: ``on_unmapped`` says
-    what to do about ids outside the map, whereas an empty map means the map
-    itself never arrived — wrong column names, a filter that matched nothing, a
-    read that returned no rows — and every answer to "what should happen to the
+    ``classify_id_relation`` dropped null pairs before reading the direction
+    while the conversion merged on the raw frame, so the two disagreed about
+    what the map said. A map holding both ``10 -> 1`` and ``10 -> NaN`` looked
+    one-to-one, and then ``dict(zip(...))`` let the null pair overwrite the real
+    one: a subject that *has* an id was reported as unmapped. Null pairs carry
+    no information in either direction, so they are dropped once, here.
+
+    An empty map is separated from an incomplete one: ``on_unmapped`` says what
+    to do about ids outside the map, whereas an empty map means the map itself
+    never arrived — wrong column names, a filter that matched nothing, a read
+    that returned no rows — and every answer to "what should happen to the
     unmapped rows" is wrong when the real answer is "fix the map".
     """
 
-    mapping = id_map[[from_id, to_id]].drop_duplicates()
-    if mapping.dropna().empty:
+    mapping = id_map[[from_id, to_id]].dropna(subset=[from_id, to_id]).drop_duplicates()
+    if mapping.empty:
         raise IdMapRelationError(
             f"the id map from {from_id!r} to {to_id!r} contains no usable pairs, "
             f"so every row would be assigned a null {to_id}. Check that the map "
@@ -158,9 +198,10 @@ def upgrade_id(
         raise ValueError(f"Column '{from_id}' not found in data")
     if from_id not in id_map.columns or to_id not in id_map.columns:
         raise ValueError(f"Columns '{from_id}' and '{to_id}' must be in id_map")
+    _validate_unmapped_policy(on_unmapped, keep_old_id)
 
     # Get unique mapping (remove duplicates in id_map)
-    mapping = _require_non_empty_map(id_map, from_id, to_id)
+    mapping = _canonical_id_map(id_map, from_id, to_id)
 
     # Merge to add new ID
     result = data.merge(mapping, on=from_id, how="left")
@@ -237,9 +278,10 @@ def downgrade_id(
         raise ValueError(f"Column '{from_id}' not found in data")
     if from_id not in id_map.columns or to_id not in id_map.columns:
         raise ValueError(f"Columns '{from_id}' and '{to_id}' must be in id_map")
+    _validate_unmapped_policy(on_unmapped, keep_old_id)
 
     # Get unique mapping
-    mapping = _require_non_empty_map(id_map, from_id, to_id)
+    mapping = _canonical_id_map(id_map, from_id, to_id)
 
     # Merge to add new ID
     result = data.merge(mapping, on=from_id, how="left")
@@ -394,12 +436,13 @@ def change_id(
         >>> # Auto-detect direction
         >>> change_id(data, mapping, 'hadm_id', 'icustay_id')
     """
+    _validate_unmapped_policy(on_unmapped, keep_old_id)
     relation = classify_id_relation(id_map, from_id, to_id)
 
     if relation == "empty":
         # Reached before the direction is known: with no pairs there is nothing
         # to read a direction from, so neither branch below could be chosen.
-        _require_non_empty_map(id_map, from_id, to_id)
+        _canonical_id_map(id_map, from_id, to_id)
 
     if relation == "many_to_many":
         if on_many_to_many == "expand":
@@ -440,7 +483,7 @@ def change_id(
         )
 
     # Proven one-to-one, so no key in the dict can shadow another.
-    mapping = _require_non_empty_map(id_map, from_id, to_id)
+    mapping = _canonical_id_map(id_map, from_id, to_id)
     mapping_dict = dict(zip(mapping[from_id], mapping[to_id]))
     result = data.copy()
     result[to_id] = result[from_id].map(mapping_dict)
