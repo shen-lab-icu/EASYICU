@@ -792,6 +792,13 @@ __all__ = [
     "dur_var",
     "meta_vars",
     "data_vars",
+    # ``upgrade_id`` belongs here, with the two functions it has to agree with
+    # about direction, and not in the conditional ``_HAS_DATA_UTILS`` block
+    # below where it used to be listed: the attribute is bound unconditionally
+    # from ``.table``, so listing it under an optional import meant a failed
+    # ``data_utils`` import would drop the name from ``__all__`` while
+    # ``easyicu.upgrade_id`` kept working.
+    "upgrade_id",
     "table_upgrade_id",
     "downgrade_id",
     "change_id",
@@ -925,7 +932,9 @@ if _HAS_DATA_UTILS:
         "stay_windows_utils",
         "id_windows",
         "id_origin",
-        "upgrade_id",
+        # ``upgrade_id`` is deliberately absent: this module's version converts
+        # the opposite way, so the exported name is the canonical one from
+        # ``.table`` and is listed with it above.
     ])
 
 if _HAS_DATA_ENV:
