@@ -28,6 +28,7 @@ disable visual QA entirely.
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Sequence
@@ -183,10 +184,54 @@ def authorize_figure_upload(
     return entries
 
 
+def register_figure_egress_receipt(
+    *,
+    policy: Optional[FigureEgressPolicy],
+    evidence: Any,
+    run_dir: Path,
+) -> Optional[Any]:
+    """Persist what this run actually sent to an external provider.
+
+    ``FigureEgressPolicy.uploaded`` is an in-memory list on an object the write
+    phase builds and drops, so an authorized upload left no trace: the finished
+    run could not answer which images left the host. The receipt is written
+    whenever a policy existed — an empty list is the meaningful evidence that
+    nothing was uploaded, and is exactly what a privacy reviewer needs to see.
+    """
+
+    if policy is None:
+        return None
+    uploads = list(getattr(policy, "uploaded", ()) or ())
+    payload = {
+        "schema": "easyicu.figure_egress_receipt/1",
+        "allow_external_upload": bool(policy.allow_external_upload),
+        "uploaded_count": len(uploads),
+        "uploads": uploads,
+    }
+    receipt_path = Path(run_dir) / "figure_egress_receipt.json"
+    receipt_path.write_text(
+        json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8"
+    )
+    return evidence.register_file(
+        kind="log",
+        description=(
+            "Which rendered figures, if any, were authorized to leave the host "
+            "for external visual review, with their evidence ids and digests."
+        ),
+        source_path=receipt_path,
+        evidence_id="figure_egress_receipt",
+        producer="pipeline",
+        generation_mode="system",
+        metadata={"uploaded_count": len(uploads)},
+        on_sha_change="new_id",
+    )
+
+
 __all__ = [
     "AGGREGATE_ONLY_METADATA_KEY",
     "LOCAL_DESTINATIONS",
     "FigureEgressError",
     "FigureEgressPolicy",
     "authorize_figure_upload",
+    "register_figure_egress_receipt",
 ]

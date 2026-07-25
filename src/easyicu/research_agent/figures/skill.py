@@ -2153,6 +2153,77 @@ def _unique_evidence_ids(records: Sequence[EvidenceRecord]) -> List[str]:
     return ids
 
 
+#: Panel roles that plot summaries by construction — effect estimates, curves
+#: over binned risk, cohort counts, performance metrics. A figure built only
+#: from these carries no per-patient mark, which is what makes it eligible to
+#: leave the host for a VLM review.
+#:
+#: Roles are omitted when a panel of that role can legitimately render one
+#: glyph per stay: ``phenotype_structure`` / ``phenotype_profile`` (embedding
+#: scatters), ``stability`` (per-subject trajectories), ``explainability``
+#: (per-patient SHAP beeswarms) and the free-form ``overview`` /
+#: ``relationship`` / ``mechanism`` / ``workflow`` roles. A figure containing
+#: one of those simply does not get the flag, and the egress gate keeps
+#: refusing to upload it.
+AGGREGATE_ONLY_PANEL_ROLES = frozenset(
+    {
+        "baseline_context",
+        "calibration",
+        "causal_contrast",
+        "causal_protocol",
+        "clinical_utility",
+        "cohort_accounting",
+        "data_quality",
+        "descriptive_result",
+        "deviation",
+        "diagnostics",
+        "heterogeneity",
+        "model_performance",
+        "primary_estimand",
+        "robustness",
+        "supplementary_provenance",
+        "survival_effect",
+        "temporal_absolute_risk",
+        "transportability",
+        "validation",
+    }
+)
+
+
+def _aggregate_disclosure_metadata(contract: Any) -> Dict[str, Any]:
+    """Declare whether every panel in ``contract`` is aggregate-only.
+
+    The figure-egress gate refuses to send image bytes to an external provider
+    without this declaration. Producing it here — from the contract the figure
+    was actually rendered from — is what makes the gate reachable in
+    production instead of only in a test that hand-builds the metadata.
+
+    Absence is meaningful: an un-flagged figure is refused, which is the
+    correct answer for a panel type that can carry per-patient marks.
+    """
+
+    panels = list(getattr(contract, "panels", ()) or ())
+    roles = [str(getattr(panel, "role", "") or "") for panel in panels]
+    if not panels:
+        return {"aggregate_only": False, "aggregate_only_reason": "no panels declared"}
+    non_aggregate = sorted(
+        {role for role in roles if role not in AGGREGATE_ONLY_PANEL_ROLES}
+    )
+    if non_aggregate:
+        return {
+            "aggregate_only": False,
+            "aggregate_only_reason": (
+                "panel role(s) may render per-subject marks: "
+                + ", ".join(non_aggregate)
+            ),
+        }
+    return {
+        "aggregate_only": True,
+        "aggregate_only_basis": "panel_roles",
+        "aggregate_only_roles": sorted(set(roles)),
+    }
+
+
 def _source_fingerprint_metadata(
     evidence: EvidenceStore,
     source_ids: Sequence[str],
@@ -2266,6 +2337,7 @@ def _register_publication_figure_bundle(
                 "source_evidence_ids": source_ids,
                 "figure_contract": contract_record.evidence_id,
                 "figure_role": "publication_figure",
+                **_aggregate_disclosure_metadata(contract),
             },
             on_sha_change="new_id",
         )

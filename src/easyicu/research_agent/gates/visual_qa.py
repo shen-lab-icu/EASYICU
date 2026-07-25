@@ -727,8 +727,13 @@ class VLMVisualQAAdapter:
 
 
 def _figure_metadata(path: Path) -> Dict[str, Any]:
+    # ``name`` only. The absolute path names the operator's account, the run
+    # directory and often the study — host layout that the text outbound
+    # projection strips everywhere else, and that a metadata-only degrade path
+    # has no reason to reinstate. The model addresses figures by name, and the
+    # response parser already maps a bare name back to the full path.
     out: Dict[str, Any] = {
-        "path": str(path),
+        "path": path.name,
         "name": path.name,
         "bytes": path.stat().st_size if path.exists() else 0,
     }
