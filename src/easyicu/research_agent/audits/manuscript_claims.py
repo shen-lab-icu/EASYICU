@@ -23,7 +23,7 @@ no callers outside this module.
 from __future__ import annotations
 
 import re
-from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Mapping, NamedTuple, Optional, Sequence, Tuple
 
 from ..authority.runtime_artifacts import current_successful_step_records
 from ..schema import ValidationFinding
@@ -134,13 +134,24 @@ def audit_manuscript_numeric_claims(
             # It stays as the fallback for an unbound claim, where there is no
             # step coordinate to scope by — and where the untraced-numeric
             # finding already fires.
-            scoped, step_id = _scoped_registered_values(
+            scope = _scoped_registered_values(
                 summaries=summaries,
                 summary_owners=summary_owners,
                 keys=_AUROC_SUMMARY_KEYS,
                 footnote_steps=footnote_steps,
                 footnote_id=footnote_id,
             )
+            if scope.cited_step_lacks_metric:
+                findings.append(
+                    _cited_step_lacks_metric_finding(
+                        metric="auroc",
+                        label="AUROC",
+                        claimed=claimed,
+                        cited_step=scope.cited_step,
+                    )
+                )
+                continue
+            scoped, step_id = scope.values, scope.step_id
             comparison = scoped or registered_aurocs
             # Allow ordinary two-decimal rounding (0.7769 -> 0.78), but not
             # manuscript-friendly drift such as 0.82.
@@ -182,11 +193,17 @@ def audit_manuscript_numeric_claims(
             )
             if step_id
         }
-        ci_summaries = [
-            summary
-            for summary, owner in zip(summaries, summary_owners)
-            if owner in ci_steps
-        ] or list(summaries)
+        # No `or list(summaries)` fallback: when the sentence names steps, a
+        # *different* step owning CI bounds does not cover it. Falling back
+        # there is the same borrowing the point-estimate scope closed.
+        if ci_steps:
+            ci_summaries = [
+                summary
+                for summary, owner in zip(summaries, summary_owners)
+                if owner in ci_steps
+            ]
+        else:
+            ci_summaries = list(summaries)
         ci_low = _first_summary_scalar(ci_summaries, _AUROC_CI_LOWER_KEYS)
         ci_high = _first_summary_scalar(ci_summaries, _AUROC_CI_UPPER_KEYS)
         if (ci_low is None or ci_high is None) and re.search(
@@ -199,10 +216,25 @@ def audit_manuscript_numeric_claims(
                     validator="manuscript_numeric_auditor",
                     severity="error",
                     message=(
-                        "Manuscript reports an AUROC confidence interval, but no "
-                        "AUROC CI bounds are registered in step_summary evidence."
+                        "Manuscript reports an AUROC confidence interval, but "
+                        + (
+                            "the step(s) it cites register no AUROC CI bounds: "
+                            + ", ".join(sorted(ci_steps))
+                            + "."
+                            if ci_steps
+                            else "no AUROC CI bounds are registered in "
+                            "step_summary evidence."
+                        )
                     ),
-                    detail={"metric": "auroc_ci"},
+                    detail={
+                        "metric": "auroc_ci",
+                        "cited_steps": sorted(ci_steps),
+                        "reason": (
+                            "cited_step_does_not_register_metric"
+                            if ci_steps
+                            else "metric_not_registered"
+                        ),
+                    },
                 )
             )
 
@@ -212,13 +244,24 @@ def audit_manuscript_numeric_claims(
         for claimed, footnote_id in _extract_metric_claims_with_footnote(
             bound_manuscript, r"\bBrier(?: score)?\b"
         ):
-            scoped, step_id = _scoped_registered_values(
+            scope = _scoped_registered_values(
                 summaries=summaries,
                 summary_owners=summary_owners,
                 keys=_BRIER_SUMMARY_KEYS,
                 footnote_steps=footnote_steps,
                 footnote_id=footnote_id,
             )
+            if scope.cited_step_lacks_metric:
+                findings.append(
+                    _cited_step_lacks_metric_finding(
+                        metric="brier_score",
+                        label="Brier score",
+                        claimed=claimed,
+                        cited_step=scope.cited_step,
+                    )
+                )
+                continue
+            scoped, step_id = scope.values, scope.step_id
             comparison = scoped or registered_briers
             nearest = min(comparison, key=lambda r: abs(claimed - r))
             if abs(claimed - nearest) > 0.015:
@@ -253,13 +296,24 @@ def audit_manuscript_numeric_claims(
             r"\b(?:baseline prevalence|mortality|death|outcome incidence)\b",
             skip_stratified_context=True,
         ):
-            scoped, step_id = _scoped_registered_values(
+            scope = _scoped_registered_values(
                 summaries=summaries,
                 summary_owners=summary_owners,
                 keys=_PREVALENCE_SUMMARY_KEYS,
                 footnote_steps=footnote_steps,
                 footnote_id=footnote_id,
             )
+            if scope.cited_step_lacks_metric:
+                findings.append(
+                    _cited_step_lacks_metric_finding(
+                        metric="baseline_prevalence",
+                        label="baseline prevalence",
+                        claimed=claimed,
+                        cited_step=scope.cited_step,
+                    )
+                )
+                continue
+            scoped, step_id = scope.values, scope.step_id
             comparison = scoped or registered_baselines
             nearest = min(comparison, key=lambda r: abs(claimed - r))
             if abs(claimed - nearest) > 0.015:
@@ -395,6 +449,22 @@ def _extract_metric_claims(text: str, metric_pattern: str) -> List[float]:
     ]
 
 
+class _ScopedMetric(NamedTuple):
+    """What the step a claim cites actually registered for one metric family."""
+
+    #: Values that step registered. Empty when it registered none.
+    values: List[float]
+    #: The step whose values ``values`` holds — None when it holds none.
+    step_id: Optional[str]
+    #: The step the footnote resolved to, whether or not it owns the metric.
+    #: This is what separates "unbound number" from "bound to the wrong step".
+    cited_step: Optional[str]
+
+    @property
+    def cited_step_lacks_metric(self) -> bool:
+        return bool(self.cited_step) and not self.values
+
+
 def _scoped_registered_values(
     *,
     summaries: Sequence[Dict[str, Any]],
@@ -402,7 +472,7 @@ def _scoped_registered_values(
     keys: Sequence[str],
     footnote_steps: Mapping[str, str],
     footnote_id: Optional[str],
-) -> Tuple[List[float], Optional[str]]:
+) -> _ScopedMetric:
     """Values registered by the step this claim's footnote names, if any.
 
     Match-any answers "is this number registered *somewhere* in the run?",
@@ -411,23 +481,57 @@ def _scoped_registered_values(
     was scoped first and leaving Brier, prevalence and the CI check on
     match-any made the auditor's own contract inconsistent.
 
-    Returns ``([], None)`` when the claim carries no resolvable step, and the
-    caller falls back to match-any — that is a different failure (an unbound
-    number), and the untraced-numeric finding already reports it.
+    Three outcomes, and they are not the same failure:
+
+    * a resolvable step that owns the metric → scope to it;
+    * a resolvable step that owns *no* such metric → the citation is wrong, and
+      falling back to match-any is what lets the sensitivity step's Brier score
+      vouch for a sentence about the primary model. Reported by the caller as
+      its own error, never fallen back from;
+    * no resolvable step → ``cited_step`` is None and the caller falls back to
+      match-any. That is an unbound number, which the untraced-numeric finding
+      already reports.
     """
 
-    step_id = footnote_steps.get(footnote_id or "") if footnote_id else None
-    if not step_id:
-        return [], None
+    cited_step = footnote_steps.get(footnote_id or "") if footnote_id else None
+    if not cited_step:
+        return _ScopedMetric([], None, None)
     scoped = _all_summary_scalars(
         [
             summary
             for summary, owner in zip(summaries, summary_owners)
-            if owner == step_id
+            if owner == cited_step
         ],
         keys,
     )
-    return scoped, (step_id if scoped else None)
+    return _ScopedMetric(scoped, (cited_step if scoped else None), cited_step)
+
+
+def _cited_step_lacks_metric_finding(
+    *,
+    metric: str,
+    label: str,
+    claimed: float,
+    cited_step: str,
+) -> ValidationFinding:
+    """The sentence names a step; that step never registered this metric."""
+
+    return ValidationFinding(
+        validator="manuscript_numeric_auditor",
+        severity="error",
+        message=(
+            f"Manuscript {label} claim {claimed:.3g} is footnoted to step "
+            f"{cited_step!r}, which registers no {label}. The number may be "
+            "correct for a different step, but the sentence attributes it to "
+            "this one."
+        ),
+        detail={
+            "metric": metric,
+            "claimed": claimed,
+            "cited_step": cited_step,
+            "reason": "cited_step_does_not_register_metric",
+        },
+    )
 
 
 def _extract_metric_claims_with_footnote(
