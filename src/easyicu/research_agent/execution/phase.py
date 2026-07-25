@@ -9745,6 +9745,10 @@ def run_execute_phase(
                 timed_out=bool(run_result.timed_out),
                 step_id=step.step_id,
                 returncode=run_result.returncode,
+                timeout_seconds=execution_timeout_seconds,
+                deterministic_executor_used=bool(
+                    worker_progress.deterministic_standard_executor_used
+                ),
             )
             if runtime_failure is not None:
                 step_record.update(runtime_failure.step_updates)

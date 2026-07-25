@@ -356,7 +356,11 @@ def test_default_budget_fits_two_semantic_repairs_final_audit_and_analyzer(
     tmp_path,
 ):
     limit = PipelineConfig(workdir=tmp_path).max_step_provider_calls
-    assert limit == 7
+    # The claim is that the default *fits* this sequence, not that it equals
+    # its length. The budget was raised 7 -> 9 on 2026-07-25 precisely because
+    # a default equal to the entitled spend leaves a structured-retry to be
+    # paid for out of a repair the step was promised.
+    assert limit >= 7
     budget = StepProviderCallBudget(
         limit,
         step_id="01_model",
