@@ -33,7 +33,24 @@ from easyicu.webserver.routes.workspaces import router as workspaces_router
 
 STATIC_DIR = Path(__file__).with_name("static")
 
-app = FastAPI(title="EasyICU", version="0.1.0")
+
+def _package_version() -> str:
+    """Single source of truth for the version reported by the web API.
+
+    Hardcoding it here made the OpenAPI doc, error reports and run evidence
+    disagree with the installed package (0.1.0 vs 1.0.0), which is exactly the
+    kind of drift that wastes time during support triage.
+    """
+
+    from importlib.metadata import PackageNotFoundError, version
+
+    try:
+        return version("easyicu")
+    except PackageNotFoundError:  # pragma: no cover - source checkout w/o install
+        return "0+unknown"
+
+
+app = FastAPI(title="EasyICU", version=_package_version())
 
 
 def _web_allowed_hosts() -> list[str]:
