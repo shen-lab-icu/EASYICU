@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import Optional, Sequence
+from typing import Any, Optional, Sequence
 
 import numpy as np
 import pandas as pd
@@ -65,6 +65,59 @@ class DurationUnitError(ValueError):
 
 class DurationValueError(ValueError):
     """Raised when a ``dur_var`` value cannot be a real window duration."""
+
+
+class WindowContractError(ValueError):
+    """Raised when window tables being combined do not describe one window."""
+
+
+def assert_window_contract(
+    specs: Sequence[tuple],
+    *,
+    column: Optional[str],
+) -> None:
+    """Check that every window input agrees on what its window *is*.
+
+    ``specs`` is a sequence of ``(label, dur_var, index_var, id_vars)``, one per
+    window table taking part in the combine. Kept as plain tuples so this
+    module stays free of any table-class dependency.
+
+    The unit check alone was not enough. It is driven by one column name — the
+    first input's ``dur_var`` — so a right-hand table whose duration column is
+    called something else simply has no column to check: it is skipped, its
+    unit declaration is dropped, and its duration survives into the result as
+    an ordinary numeric column with its window meaning gone. Nothing raises,
+    and the combined table claims to be a window table over the *other*
+    column. Binding a duration to the wrong index or the wrong id is the same
+    class of silent error, so all three are checked here.
+    """
+
+    windows = [spec for spec in specs if spec is not None]
+    if len(windows) < 2:
+        return
+
+    def _mismatch(field: str, position: int, expected: Any, found: Any) -> None:
+        raise WindowContractError(
+            f"cannot combine window tables with different {field}: input 0 has "
+            f"{expected!r} and input {position} has {found!r}. A window table's "
+            f"{field} carries its meaning; combining them would keep the first "
+            "table's declaration and silently demote the other's duration to an "
+            "ordinary column. Align them before combining."
+        )
+
+    _, base_dur, base_index, base_ids = windows[0]
+    if column is not None and base_dur is not None and str(base_dur) != str(column):
+        raise WindowContractError(
+            f"window combine was asked to check column {column!r} but the first "
+            f"window table declares dur_var {base_dur!r}"
+        )
+    for label, dur_var, index_var, id_vars in windows[1:]:
+        if str(dur_var) != str(base_dur):
+            _mismatch("dur_var", label, base_dur, dur_var)
+        if str(index_var) != str(base_index):
+            _mismatch("index_var", label, base_index, index_var)
+        if tuple(id_vars or ()) != tuple(base_ids or ()):
+            _mismatch("id_vars", label, base_ids, id_vars)
 
 
 def _env_flag(name: str) -> bool:
@@ -339,6 +392,8 @@ __all__ = [
     "VALID_DUR_VAR_UNITS",
     "STRICT_ENV_VAR",
     "DurationUnitError",
+    "WindowContractError",
+    "assert_window_contract",
     "strict_dur_var_units",
     "set_dur_var_unit",
     "get_dur_var_unit",

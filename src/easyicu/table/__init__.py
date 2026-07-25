@@ -898,7 +898,7 @@ def rbind_tbl(*tables: Union[IdTbl, pd.DataFrame],
 
 
 def _combined_dur_unit(tables, frames, column):
-    """The one ``dur_var`` unit a combined WinTbl may declare.
+    """The one window contract, and the one ``dur_var`` unit, a combine may keep.
 
     Rebuilding a WinTbl from combined frames used to copy only ``dur_var`` and
     ``interval`` from the first input, so binding a minutes table onto an hours
@@ -906,15 +906,43 @@ def _combined_dur_unit(tables, frames, column):
     is read from every input — the structural ``WinTbl.dur_unit`` as well as
     the frame ``attrs``, because ``pd.concat``/``pd.merge`` do not reliably
     carry ``attrs`` through.
+
+    The unit check is keyed on a single column name, so it can only speak for
+    inputs that *have* that column. The structural check runs first and covers
+    the case it cannot see: a window table whose duration column is named
+    differently, or which is windowed over a different index or id.
     """
 
-    from .duration import combine_dur_var_units
+    from .duration import assert_window_contract, combine_dur_var_units
 
+    assert_window_contract(
+        [
+            (
+                position,
+                getattr(tbl, "dur_var", None),
+                getattr(tbl, "index_var", None),
+                _as_column_tuple(getattr(tbl, "id_vars", None)),
+            )
+            for position, tbl in enumerate(tables)
+            if isinstance(tbl, WinTbl)
+        ],
+        column=column,
+    )
     return combine_dur_var_units(
         list(frames),
         column=column,
         declared=[getattr(tbl, "dur_unit", None) for tbl in tables],
     )
+
+
+def _as_column_tuple(value) -> tuple:
+    """Normalise an ``id_vars`` that may be a bare string or a sequence."""
+
+    if value is None:
+        return ()
+    if isinstance(value, str):
+        return (value,)
+    return tuple(value)
 
 
 def cbind_tbl(*tables: Union[IdTbl, pd.DataFrame],
