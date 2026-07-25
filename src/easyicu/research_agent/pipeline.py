@@ -436,6 +436,7 @@ from .audits.validators import (
     StatisticalValidator,
     dedupe_findings,
 )
+from .gates.figure_egress import FigureEgressPolicy
 from .gates.visual_qa import VLMVisualQAAdapter, VisualQAAuditor
 
 
@@ -1440,6 +1441,7 @@ class ResearchAgentPipeline:
         enable_vlm_visual_qa: Optional[bool] = None,
         vlm_client: Optional[LLMClient] = None,
         visual_qa_adapter: Optional[VLMVisualQAAdapter] = None,
+        allow_external_figure_upload: bool = False,
         enable_llm_concept_audit: Optional[bool] = None,
         llm_concept_auditor_client: Optional[LLMClient] = None,
         enable_memory: bool = True,
@@ -1549,6 +1551,10 @@ class ResearchAgentPipeline:
         self._enable_publication_figure_skill = bool(enable_publication_figure_skill)
         self._vlm_client = vlm_client
         self._visual_qa_adapter = visual_qa_adapter
+        # Deny-by-default: a rendered figure is not covered by the text
+        # outbound projection, so uploading its bytes to an external VLM is a
+        # separate decision from authorizing the provider.
+        self._allow_external_figure_upload = bool(allow_external_figure_upload)
         self._llm_concept_auditor_client = llm_concept_auditor_client
         if enable_vlm_visual_qa is None:
             self._enable_vlm_visual_qa = bool(
@@ -1856,6 +1862,22 @@ class ResearchAgentPipeline:
             enabled=self._enable_reviewed_memory,
             store=self._permissioned_memory_store,
             allowed_namespaces=self._reviewed_memory_namespaces,
+        )
+
+    def _figure_egress_policy(
+        self,
+        *,
+        evidence: Optional[Any] = None,
+        run_dir: Optional[Path] = None,
+        active_step_evidence_ids: Optional[frozenset] = None,
+    ) -> FigureEgressPolicy:
+        """Authority for putting rendered figure bytes on the network."""
+
+        return FigureEgressPolicy(
+            allow_external_upload=self._allow_external_figure_upload,
+            evidence=evidence,
+            run_dir=run_dir,
+            active_step_evidence_ids=active_step_evidence_ids,
         )
 
     def _build_runner(

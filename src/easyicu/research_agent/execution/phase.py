@@ -11574,7 +11574,12 @@ def run_execute_phase(
         if vlm_adapter is None and pipeline._enable_vlm_visual_qa:
             client = pipeline._vlm_client or role_resolver("analyzer")
             if client is not None:
-                vlm_adapter = VLMVisualQAAdapter(client)
+                vlm_adapter = VLMVisualQAAdapter(
+                    client,
+                    egress_policy=pipeline._figure_egress_policy(
+                        evidence=evidence, run_dir=run_dir
+                    ),
+                )
         final_visual_findings = VisualQAAuditor(vlm_adapter=vlm_adapter).audit(
             figure_paths=fig_paths
         )
