@@ -35,6 +35,7 @@ import asyncio
 import csv
 import io
 import json
+import functools
 import logging
 import math
 import os
@@ -374,7 +375,10 @@ from .execution.runner import (
     reject_reserved_runner_env,
     select_safe_runner_kind,
 )
-from .execution.method_capabilities import set_runtime_capability_snapshot_provider
+from .execution.method_capabilities import (
+    runtime_capability_job_scope,
+    set_runtime_capability_snapshot_provider,
+)
 from .concept_availability import normalize_database_name
 from .schema import (
     AgentRuntimeState,
@@ -447,6 +451,28 @@ from .orchestration.finalize import (
     _concept_dictionary_manifest_fields,  # noqa: F401
     _render_cost_summary,  # noqa: F401
 )
+
+
+def _one_capability_job(method: Callable[..., Any]) -> Callable[..., Any]:
+    """Bind a public entry point to one runtime-capability publication scope.
+
+    Applied at the entry point rather than around each
+    ``set_runtime_capability_snapshot_provider`` call because publication has
+    to outlive the runner constructor that performs it — the coder prompt is
+    rendered later. The boundary that matters is the job: whatever a job
+    publishes is visible for the whole job and gone once the job returns,
+    including when it returns a ``HumanReviewPending`` or raises.
+
+    A decorator keeps this a three-line change to a ~900-line method; the
+    alternative would be re-indenting the whole body into a ``with`` block.
+    """
+
+    @functools.wraps(method)
+    def wrapper(self: Any, *args: Any, **kwargs: Any) -> Any:
+        with runtime_capability_job_scope():
+            return method(self, *args, **kwargs)
+
+    return wrapper
 
 
 def _defer_typed_plan_dag_findings_until_probe(
@@ -3635,6 +3661,7 @@ class ResearchAgentPipeline:
     # ------------------------------------------------------------------
 
     @exclusive_run_execution
+    @_one_capability_job
     def run(
         self,
         *,
@@ -4556,6 +4583,7 @@ class ResearchAgentPipeline:
         }
         return pending
 
+    @_one_capability_job
     def resume_human_review(
         self,
         decisions: Sequence[Union[Any, Mapping[str, Any]]],
@@ -4600,6 +4628,16 @@ class ResearchAgentPipeline:
                 f"pending human review belongs to run {pending.run_id!r}, "
                 f"not {str(run_id)!r}"
             )
+        # The pause ended the run's capability scope, so the provider the
+        # runner published is gone. Republish from the validated snapshot held
+        # on this instance — an immutable tuple of import names, not a callable
+        # captured from the paused job — so the resumed steps see the same
+        # allow-list the plan was validated against. Resume is same-process and
+        # same-instance (checked above), which is what makes this available.
+        if self._validated_runtime_capabilities is not None:
+            resumed_snapshot = self._validated_runtime_capabilities
+            set_runtime_capability_snapshot_provider(lambda: resumed_snapshot)
+
         payload = [
             item if isinstance(item, Mapping) else item.model_dump(mode="json")
             for item in decisions
