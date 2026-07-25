@@ -1282,3 +1282,27 @@ def test_p0_2_paper_profile_rejects_a_client_claimed_reviewer(monkeypatch, tmp_p
                 }
             ]
         )
+
+
+def test_p0_2_a_warning_with_the_same_reason_does_not_halt_a_run():
+    """Severity is the run's own statement about whether the state blocks.
+
+    A development profile records a provenance failure as a warning because it
+    makes no provenance claim. If the review gate keyed on the reason code
+    alone, that warning would stop every such run waiting for a signature.
+    """
+
+    from easyicu.research_agent.graph import human_review_requests_for_plan
+    from easyicu.research_agent.schema import ValidationFinding
+
+    plan = SimpleNamespace(steps=())
+    warning = ValidationFinding(
+        validator="provenance",
+        severity="warning",
+        message="Failed to compute raw-EHR provenance bundle.",
+        detail={"reason": "raw_ehr_provenance_unavailable"},
+    )
+    error = warning.model_copy(update={"severity": "error"})
+
+    assert human_review_requests_for_plan(findings=[warning], plan=plan) == ()
+    assert len(human_review_requests_for_plan(findings=[error], plan=plan)) == 1

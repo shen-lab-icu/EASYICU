@@ -152,6 +152,12 @@ def human_review_requests_for_plan(
     requests: list[HumanReviewRequest] = []
     seen: set[str] = set()
     for finding in findings or ():
+        # Severity is the run's own statement about whether the state blocks.
+        # The same reason code can be raised as a warning by a development
+        # profile that makes no claim about it (raw-EHR provenance is the live
+        # example), and a warning must not halt a run waiting for a signature.
+        if str(getattr(finding, "severity", "") or "") != "error":
+            continue
         detail = getattr(finding, "detail", None) or {}
         reason = str(detail.get("reason") or "")
         kind = HUMAN_REVIEW_FINDING_REASONS.get(reason)
