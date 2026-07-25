@@ -178,6 +178,7 @@ from .concept_dict_audit import (
 )
 from .cohort.schema import (
     COHORT_LOCK_FILENAME,
+    CohortAuthorityError,
     _load_locked_cohort_definition,
     ensure_cohort_definition,
     materialize_locked_analysis_cohort,
@@ -254,6 +255,7 @@ from .authority.evidence_store import (
 from .authority.evidence_snapshot import load_current_evidence_snapshot
 from .learning.experience import (
     ExperienceBank,
+    ExperienceBankCorruptError,
     ExperienceRecord,
     mine_experience_from_run,
 )
@@ -1516,6 +1518,7 @@ class ResearchAgentPipeline:
         capability_request: Optional[Mapping[str, object]] = None,
         capability_approval: Optional[Mapping[str, object]] = None,
         capability_activation: Optional[Mapping[str, object]] = None,
+        human_review_gate: Optional[Any] = None,
         know_how_paths: Sequence[Union[str, Path]] = (),
         know_how_top_k: int = 3,
         know_how_min_score: float = 0.15,
@@ -1793,6 +1796,12 @@ class ResearchAgentPipeline:
             approval=capability_approval,
             activation=capability_activation,
         )
+        # Operator-supplied control plane for the LangGraph review interrupt.
+        # Any object exposing ``checkpointer`` and, optionally,
+        # ``reviewer_identity_resolver`` / ``invoke_config``. Left ``None`` a
+        # run cannot answer an interrupt, so a plan that raises one fails
+        # closed rather than continuing unattended.
+        self._human_review_gate = human_review_gate
         self._know_how_paths = tuple(Path(path) for path in know_how_paths)
         self._know_how_top_k = int(know_how_top_k)
         self._know_how_min_score = float(know_how_min_score)
@@ -2018,6 +2027,7 @@ class ResearchAgentPipeline:
                     image=self._runner_image,
                     network=self._runner_network,
                     extra_env=extra_env,
+                    submission_profile_name=self._submission_profile_name,
                     **runner_kwargs,
                 )
             else:
@@ -3296,17 +3306,36 @@ class ResearchAgentPipeline:
                     )
                 )
             elif analysis_cohort["status"] == "error":
+                # The comment above this block records why the materializer
+                # exists: run10/run11 left 纳排 to each generated step, and the
+                # primary model silently ran on the full universe. Falling back
+                # to "downstream steps must apply it themselves" on failure
+                # reinstates exactly that path, on a run that has already
+                # *locked* a cohort definition. A locked cohort that cannot be
+                # applied is a stop, not a warning.
                 findings.append(
                     ValidationFinding(
                         validator="cohort_materializer",
-                        severity="warning",
+                        severity="error",
                         message=(
-                            "Could not auto-apply the locked cohort definition to the "
-                            "universe; downstream steps read the unfiltered universe "
-                            "and must apply inclusion/exclusion themselves. Reason: "
-                            f"{analysis_cohort['error']}"
+                            "Could not apply the locked cohort definition to the "
+                            "universe. The run is stopped rather than analysing "
+                            "the unfiltered universe under a cohort the plan "
+                            f"declared. Reason: {analysis_cohort['error']}"
                         ),
+                        detail={
+                            "reason": "locked_cohort_not_materialized",
+                            "materializer_error": str(analysis_cohort["error"]),
+                            "cohort_definition_sha256": analysis_cohort.get(
+                                "cohort_definition_sha256"
+                            ),
+                        },
                     )
+                )
+                raise CohortAuthorityError(
+                    "the locked cohort definition could not be materialised "
+                    f"({analysis_cohort['error']}); refusing to continue on the "
+                    "unfiltered universe"
                 )
         emit_progress(
             "plan",
@@ -3513,12 +3542,22 @@ class ResearchAgentPipeline:
         bank = self._experience_bank()
         if bank is None:
             return []
-        return bank.retrieve(
-            research_question=research_question,
-            database=database,
-            top_k=self._experience_bank_top_k,
-            min_similarity=self._experience_bank_min_similarity,
-        )
+        try:
+            return bank.retrieve(
+                research_question=research_question,
+                database=database,
+                top_k=self._experience_bank_top_k,
+                min_similarity=self._experience_bank_min_similarity,
+            )
+        except ExperienceBankCorruptError:
+            # Plan with no bank rather than with an unprovable subset of one.
+            # Logged loudly: a corrupt shared bank is an operator problem that
+            # will otherwise recur on every run that reads it.
+            logger.error(
+                "experience bank %s is corrupt; planning without it",
+                self._experience_bank_path,
+            )
+            return []
 
     def reflect_and_persist_experience(
         self,
@@ -4205,16 +4244,34 @@ class ResearchAgentPipeline:
                         generation_mode="system",
                     )
             except Exception as exc:
+                # A paper-facing profile claims the full raw EHR → cohort →
+                # analysis → manuscript chain. If the first link cannot be
+                # hashed, that claim is unsupported, so the run stops instead
+                # of finishing with a warning nobody reads. Development runs
+                # keep the warning: they make no provenance claim.
+                from .orchestration.profiles import is_paper_facing_profile
+
+                paper_facing = is_paper_facing_profile(self._submission_profile_name)
                 plan_result.findings.append(
                     ValidationFinding(
                         validator="provenance",
-                        severity="warning",
+                        severity="error" if paper_facing else "warning",
                         message=(
                             f"Failed to compute raw-EHR provenance bundle: "
                             f"{type(exc).__name__}: {exc}"
                         ),
+                        detail={
+                            "reason": "raw_ehr_provenance_unavailable",
+                            "submission_profile_name": self._submission_profile_name,
+                        },
                     )
                 )
+                if paper_facing:
+                    raise RuntimeError(
+                        "raw-EHR provenance could not be computed under submission "
+                        f"profile {self._submission_profile_name!r}; the "
+                        "manuscript's provenance chain would be incomplete"
+                    ) from exc
             if plan_result.evidence.get("orchestration_runtime") is None:
                 plan_result.evidence.register_file(
                     kind="log",
@@ -4307,6 +4364,85 @@ class ResearchAgentPipeline:
                 emit_progress=_emit_progress,
             )
 
+        # The recorder needs this run's own EvidenceStore, which lives on the
+        # plan result rather than in ``run()``'s locals. The review node calls
+        # the invoker and the recorder in that order, in the same node, so
+        # capturing it here is enough.
+        reviewed_plan: List[Any] = []
+
+        def _human_review_invoker(plan_result):
+            from .graph import human_review_requests_for_plan
+
+            reviewed_plan.append(plan_result)
+            requests = human_review_requests_for_plan(
+                findings=plan_result.findings,
+                plan=plan_result.plan,
+            )
+            if requests and self._human_review_gate is None:
+                # The graph primitive can pause, but only a caller that owns a
+                # checkpointer and a resume channel can answer. Proceeding
+                # unattended past a state that was classified as needing human
+                # sign-off is exactly the failure the interrupt exists to
+                # prevent, so an unconfigured run stops here instead.
+                raise RuntimeError(
+                    "this run reached "
+                    f"{len(requests)} state(s) that require human review "
+                    f"({', '.join(sorted({item.kind for item in requests}))}) "
+                    "but no human_review_gate is configured; supply one or "
+                    "resolve the blocking findings before re-running"
+                )
+            return requests
+
+        def _human_review_recorder(records):
+            if not records:
+                return
+            from .orchestration.profiles import is_paper_facing_profile
+
+            if is_paper_facing_profile(self._submission_profile_name):
+                unauthenticated = [
+                    record["request"]["review_id"]
+                    for record in records
+                    if record.get("reviewer_identity_source") != "authenticated"
+                ]
+                if unauthenticated:
+                    raise RuntimeError(
+                        "human review under submission profile "
+                        f"{self._submission_profile_name!r} requires an "
+                        "authenticated reviewer identity; a client-claimed "
+                        "reviewer is diagnostic-only "
+                        f"(unauthenticated: {', '.join(unauthenticated)})"
+                    )
+            decisions_path = run_dir / "human_review_decisions.json"
+            decisions_path.write_text(
+                json.dumps(
+                    {
+                        "schema": "easyicu.human_review_decisions/1",
+                        "run_id": run_id,
+                        "decisions": list(records),
+                    },
+                    indent=2,
+                    sort_keys=True,
+                ),
+                encoding="utf-8",
+            )
+            # Registering into this run's own store is what puts the decision
+            # into the final manifest: graph state is discarded at exit, so an
+            # unregistered approval leaves the run unable to answer who
+            # authorised it, against which digest, and when.
+            reviewed_plan[-1].evidence.register_file(
+                kind="log",
+                description=(
+                    "Operator decisions for the human-review interrupts raised "
+                    "by this run, with server-stamped decision time and the "
+                    "authority digest each decision was bound to."
+                ),
+                source_path=decisions_path,
+                evidence_id="human_review_decisions",
+                producer="pipeline",
+                generation_mode="human_confirmed",
+            )
+
+        gate = self._human_review_gate
         from .graph import build_pipeline_graph
 
         graph = build_pipeline_graph(
@@ -4315,8 +4451,23 @@ class ResearchAgentPipeline:
             write_invoker=_write_invoker,
             finalise_invoker=_finalise_invoker,
             provenance_hook=_provenance_hook,
+            human_review_invoker=_human_review_invoker,
+            human_review_recorder=_human_review_recorder,
+            reviewer_identity_resolver=(
+                getattr(gate, "reviewer_identity_resolver", None)
+                if gate is not None
+                else None
+            ),
+            checkpointer=(
+                getattr(gate, "checkpointer", None) if gate is not None else None
+            ),
         )
-        final_state = graph.invoke({})
+        invoke_config = (
+            getattr(gate, "invoke_config", None) if gate is not None else None
+        )
+        final_state = graph.invoke(
+            {}, **({"config": invoke_config} if invoke_config else {})
+        )
         return final_state["final_result"]
 
     def run_from_spec(

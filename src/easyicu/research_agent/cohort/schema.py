@@ -63,6 +63,16 @@ class CohortDataError(KeyError):
     """Raised when materialised data cannot satisfy a CTAS definition."""
 
 
+class CohortAuthorityError(RuntimeError):
+    """Raised when a locked cohort definition cannot be enforced on the data.
+
+    Distinct from :class:`CohortDataError`, which is about one predicate being
+    unsatisfiable. This one means the run declared a cohort and then could not
+    apply it, so any downstream number would describe a population the plan
+    did not authorise.
+    """
+
+
 def _file_sha256(path: Path) -> str:
     digest = hashlib.sha256()
     with open(path, "rb") as handle:
@@ -1489,6 +1499,7 @@ def _apply_op(series: Any, op: str, value: Any) -> Any:
 __all__ = [
     "ALLOWED_CTAS_AGGREGATIONS",
     "COHORT_LOCK_FILENAME",
+    "CohortAuthorityError",
     "CohortDefinition",
     "CohortDataError",
     "CohortSchemaError",
