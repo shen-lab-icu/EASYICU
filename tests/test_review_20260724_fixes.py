@@ -21,9 +21,11 @@ from easyicu.api import (
     _expand_public_numeric_win_tbl_output,
 )
 from easyicu.table.duration import (
+    ALLOW_GUESS_ENV_VAR,
     UNIT_HOURS,
     UNIT_MINUTES,
     DurationUnitError,
+    DurationValueError,
     get_dur_var_unit,
     resolve_dur_var_hours,
     set_dur_var_unit,
@@ -89,20 +91,104 @@ def test_p0_2_timedelta_is_self_describing():
     assert resolve_dur_var_hours(frame).iloc[0] == pytest.approx(10.0 / 60.0)
 
 
-def test_p0_2_strict_mode_refuses_to_guess():
-    frame = pd.DataFrame({"dur_var": [10.0]})
+def test_p0_2_undeclared_unit_fails_closed_by_default(monkeypatch):
+    """Round 2: a warning does not stop a wrong number reaching a manuscript."""
+
+    monkeypatch.delenv(ALLOW_GUESS_ENV_VAR, raising=False)
     with pytest.raises(DurationUnitError, match="no declared unit"):
-        resolve_dur_var_hours(frame, concept="norepi_rate", strict=True)
+        _expand_public_numeric_win_tbl_output(_win_frame([10.0]), "norepi_rate", "1h")
 
 
-def test_p0_2_undeclared_unit_warns_but_still_works(caplog):
-    """No hard break for untagged legacy paths — but the guess is announced."""
+def test_p0_2_guess_requires_explicit_opt_out(monkeypatch, caplog):
+    """The legacy guess survives only for a caller who asks for it by name."""
 
-    frame = _win_frame([10.0])
+    monkeypatch.setenv(ALLOW_GUESS_ENV_VAR, "1")
     with caplog.at_level("WARNING", logger="easyicu.table.duration"):
-        out = _expand_public_numeric_win_tbl_output(frame, "norepi_rate", "1h")
+        out = _expand_public_numeric_win_tbl_output(
+            _win_frame([10.0]), "norepi_rate", "1h"
+        )
     assert not out.empty
     assert "no declared unit" in caplog.text
+
+
+# --- Round 2: the datetime branch used to ignore the declaration entirely ---
+
+
+@pytest.mark.parametrize(
+    ("unit", "expected_rows"),
+    [(UNIT_MINUTES, 1), (UNIT_HOURS, 11)],
+)
+def test_p0_2_datetime_index_honours_declared_unit(unit, expected_rows):
+    """A datetime index with a numeric dur_var used to be forced to minutes.
+
+    That is the same 60x error as the distribution guess, on the other branch:
+    a frame declaring hours came out 60x too short.
+    """
+
+    frame = pd.DataFrame(
+        {
+            "stay_id": [1],
+            "charttime": pd.to_datetime(["2026-01-01 00:00"]),
+            "dur_var": [10.0],
+            "norepi_rate": [0.1],
+        }
+    )
+    set_dur_var_unit(frame, unit)
+    out = _expand_public_numeric_win_tbl_output(frame, "norepi_rate", "1h")
+    assert len(out) == expected_rows
+
+
+def test_p0_2_datetime_and_numeric_branches_agree():
+    """The two index branches must not disagree about the same duration."""
+
+    numeric = _win_frame([90.0])
+    set_dur_var_unit(numeric, UNIT_MINUTES)
+
+    datetime_frame = pd.DataFrame(
+        {
+            "stay_id": [1],
+            "charttime": pd.to_datetime(["2026-01-01 00:00"]),
+            "dur_var": [90.0],
+            "norepi_rate": [0.1],
+        }
+    )
+    set_dur_var_unit(datetime_frame, UNIT_MINUTES)
+
+    assert len(_expand_public_numeric_win_tbl_output(numeric, "norepi_rate", "1h")) == (
+        len(_expand_public_numeric_win_tbl_output(datetime_frame, "norepi_rate", "1h"))
+    )
+
+
+# --- Round 2: corrupt durations used to become valid zero-length exposures ---
+
+
+@pytest.mark.parametrize("bad", [-5.0, float("inf"), float("-inf")])
+def test_p0_2_corrupt_duration_fails_closed(bad):
+    """A negative/infinite duration became a valid exposure point via max(x, 0)."""
+
+    frame = _win_frame([bad])
+    set_dur_var_unit(frame, UNIT_HOURS)
+    with pytest.raises(DurationValueError):
+        _expand_public_numeric_win_tbl_output(frame, "norepi_rate", "1h")
+
+
+def test_p0_2_missing_duration_is_dropped_not_zeroed(caplog):
+    """NaN must not silently become a zero-length window that still emits a point."""
+
+    frame = pd.DataFrame(
+        {
+            "stay_id": [1, 2],
+            "charttime": [0.0, 0.0],
+            "dur_var": [float("nan"), 2.0],
+            "norepi_rate": [0.1, 0.2],
+        }
+    )
+    set_dur_var_unit(frame, UNIT_HOURS)
+    with caplog.at_level("WARNING", logger="easyicu.table.duration"):
+        out = _expand_public_numeric_win_tbl_output(frame, "norepi_rate", "1h")
+
+    assert set(out["stay_id"]) == {2}, "the NaN-duration stay must not appear"
+    assert "missing dur_var" in caplog.text
 
 
 def test_p0_2_producers_declare_their_unit():
@@ -478,3 +564,204 @@ def test_p2_4_web_api_version_matches_the_package():
     from easyicu.webserver.app import app
 
     assert app.version == version("easyicu")
+
+
+# ==========================================================================
+# Round 2 (2026-07-25) — findings raised against the first remediation
+# ==========================================================================
+
+
+def test_r2_loader_is_not_torn_down_while_another_thread_uses_it(monkeypatch):
+    """Switching database must not clear a loader another thread is using.
+
+    The first remediation released the previous loader when the config changed,
+    which emptied its ConceptResolver and DataSource caches underneath a caller
+    that was still mid-extraction.
+    """
+
+    from easyicu import api
+
+    cleared: list[str] = []
+
+    class _FakeLoader:
+        def __init__(self, database=None, data_path=None, dict_path=None, **kwargs):
+            self.database = database
+
+        def clear_cache(self):
+            cleared.append(self.database)
+
+    monkeypatch.setattr(api, "BaseICULoader", _FakeLoader)
+    api.clear_global_loader()
+    cleared.clear()
+
+    holder: dict[str, object] = {}
+    acquired = threading.Event()
+    may_finish = threading.Event()
+
+    def _long_running_consumer():
+        holder["loader"] = api._get_global_loader(
+            database="miiv", data_path=Path("/data/mimiciv")
+        )
+        acquired.set()
+        may_finish.wait(timeout=5)
+
+    worker = threading.Thread(target=_long_running_consumer)
+    worker.start()
+    assert acquired.wait(timeout=5)
+
+    other = api._get_global_loader(database="eicu", data_path=Path("/data/eicu"))
+
+    assert other.database == "eicu"
+    assert holder["loader"].database == "miiv"
+    assert "miiv" not in cleared, "loader was cleared while still in use"
+
+    may_finish.set()
+    worker.join(timeout=5)
+    api.clear_global_loader()
+
+
+def test_r2_loader_cache_returns_the_same_instance_per_config(monkeypatch):
+    """Alternating databases must not rebuild (and re-scan) a loader each time."""
+
+    from easyicu import api
+
+    class _FakeLoader:
+        def __init__(self, database=None, data_path=None, dict_path=None, **kwargs):
+            self.database = database
+
+        def clear_cache(self):
+            pass
+
+    monkeypatch.setattr(api, "BaseICULoader", _FakeLoader)
+    api.clear_global_loader()
+
+    first = api._get_global_loader(database="miiv", data_path=Path("/data/mimiciv"))
+    api._get_global_loader(database="eicu", data_path=Path("/data/eicu"))
+    again = api._get_global_loader(database="miiv", data_path=Path("/data/mimiciv"))
+
+    assert again is first
+    api.clear_global_loader()
+
+
+def test_r2_flat_mimic_iv_is_not_mistaken_for_mimic_iii(tmp_path):
+    """Both generations ship icustays/patients/admissions — use the schema.
+
+    A converted MIMIC-IV in a flat parquet layout, in a directory whose name
+    carries no version token, was detected as MIMIC-III.
+    """
+
+    from easyicu.webserver.dataio import _detect_database
+
+    for name, columns, expected in (
+        ("prepared_v4", ["stay_id", "subject_id"], "miiv"),
+        ("prepared_v3", ["icustay_id", "subject_id"], "miii"),
+    ):
+        root = tmp_path / name
+        root.mkdir()
+        for table in ("admissions", "patients"):
+            pd.DataFrame(columns=["x"]).to_parquet(root / f"{table}.parquet")
+        pd.DataFrame(columns=columns).to_parquet(root / "icustays.parquet")
+        assert _detect_database(root) == expected
+
+
+def test_r2_unidentifiable_mimic_layout_returns_unknown(tmp_path):
+    root = tmp_path / "prepared"
+    root.mkdir()
+    for table in ("admissions", "patients", "icustays"):
+        pd.DataFrame(columns=["foo", "bar"]).to_parquet(root / f"{table}.parquet")
+
+    from easyicu.webserver.dataio import _detect_database
+
+    assert _detect_database(root) == "unknown"
+
+
+def test_r2_output_deeper_than_the_sweep_limit_fails_closed(tmp_path):
+    """An artefact the sweep cannot register must not coexist with success."""
+
+    from easyicu.research_agent.execution import runner
+
+    deep = tmp_path
+    for level in range(runner.MAX_OUTPUT_ARTIFACT_DEPTH + 2):
+        deep = deep / f"level{level}"
+    deep.mkdir(parents=True)
+    (deep / "result.csv").write_text("x", encoding="utf-8")
+
+    with pytest.raises(runner.OutputArtifactPolicyError, match="nested deeper"):
+        runner._collect_safe_output_artifacts(tmp_path)
+
+
+def test_r2_oversized_output_file_fails_closed(tmp_path, monkeypatch):
+    from easyicu.research_agent.execution import runner
+
+    monkeypatch.setattr(runner, "MAX_OUTPUT_ARTIFACT_FILE_BYTES", 16)
+    (tmp_path / "big.csv").write_text("x" * 64, encoding="utf-8")
+
+    with pytest.raises(runner.OutputArtifactPolicyError, match="per-file limit"):
+        runner._collect_safe_output_artifacts(tmp_path)
+
+
+def test_r2_too_many_output_files_fails_closed(tmp_path, monkeypatch):
+    from easyicu.research_agent.execution import runner
+
+    monkeypatch.setattr(runner, "MAX_OUTPUT_ARTIFACT_FILES", 3)
+    for index in range(6):
+        (tmp_path / f"f{index}.csv").write_text("x", encoding="utf-8")
+
+    with pytest.raises(runner.OutputArtifactPolicyError, match="more than 3"):
+        runner._collect_safe_output_artifacts(tmp_path)
+
+
+@pytest.mark.parametrize("bad", [8192.9, "8192", True])
+def test_r2_relay_rejects_non_integer_numerics(relay_client, bad):
+    """Validating a coerced copy while forwarding the raw value is not enough."""
+
+    client, headers = relay_client
+    response = client.post(
+        "/v1/chat/completions",
+        headers=headers,
+        json={
+            "model": "hosted-default",
+            "messages": [{"role": "user", "content": "hi"}],
+            "max_tokens": bad,
+        },
+    )
+    assert response.status_code == 400
+
+
+def test_r2_relay_forwards_the_normalised_value():
+    import easyicu.hosted_llm_server as relay
+
+    validated = relay._validate_request_shape(
+        {
+            "model": "hosted-default",
+            "messages": [{"role": "user", "content": "hi"}],
+            "max_tokens": 4096,
+        }
+    )
+    assert relay._build_upstream_payload(validated)["max_tokens"] == 4096
+
+
+def test_r2_relay_ceiling_is_not_used_as_the_default():
+    """An omitted max_tokens must not bill at the maximum allowed length."""
+
+    import easyicu.hosted_llm_server as relay
+
+    upstream = relay._build_upstream_payload(
+        {"model": "hosted-default", "messages": [{"role": "user", "content": "hi"}]}
+    )
+    assert upstream["max_tokens"] == relay.HOSTED_DEFAULT_OUTPUT_TOKENS
+    assert upstream["max_tokens"] < relay.HOSTED_MAX_OUTPUT_TOKENS
+
+
+def test_r2_relay_does_not_block_the_event_loop_on_upstream():
+    """A slow upstream call must not stall other routes on the same worker."""
+
+    import inspect
+
+    import easyicu.hosted_llm_server as relay
+
+    source = inspect.getsource(relay.chat_completions)
+    assert (
+        "run_in_threadpool" in source
+    ), "synchronous _post_upstream must not be awaited directly on the loop"
+    assert "_upstream_slot" in source, "in-flight upstream calls must be bounded"
