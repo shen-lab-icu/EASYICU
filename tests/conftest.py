@@ -138,6 +138,12 @@ def pytest_addoption(parser):
         default=False,
         help="Run tests that hit a real LLM provider (OpenAI / OpenRouter / Anthropic).",
     )
+    parser.addoption(
+        "--run-packaging",
+        action="store_true",
+        default=False,
+        help="Run tests that build and install a real wheel (slow, ~2 min).",
+    )
 
 
 _REAL_LLM_KEY_ENV_VARS = (

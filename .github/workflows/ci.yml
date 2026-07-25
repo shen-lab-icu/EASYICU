@@ -38,3 +38,51 @@ jobs:
           EASYICU_TEST_RUNNER_KIND=subprocess \
           EASYICU_ALLOW_UNSAFE_HOST_FALLBACK=1 \
             pytest -q --ignore=tests/research_agent/test_runner.py
+
+  packaging:
+    name: wheel + sdist install
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install build tooling
+        run: |
+          python -m pip install --upgrade pip
+          pip install build pytest
+
+      # An editable install cannot catch missing package-data: the files are
+      # still on disk either way. Only a real wheel proves that the Docker
+      # runner build context DockerRunner documents actually ships.
+      - name: Build wheel and sdist
+        run: python -m build
+
+      - name: Install the built wheel into a clean environment
+        run: |
+          python -m venv /tmp/clean-env
+          /tmp/clean-env/bin/pip install --upgrade pip
+          /tmp/clean-env/bin/pip install dist/*.whl
+          /tmp/clean-env/bin/pip check
+
+      - name: Verify shipped package data
+        run: |
+          /tmp/clean-env/bin/python - <<'PY'
+          from importlib.resources import files
+          root = files("easyicu.research_agent") / "runner_image"
+          names = sorted(p.name for p in root.iterdir())
+          for required in ("Dockerfile", "requirements.lock", "README.md"):
+              assert required in names, f"{required} missing from the wheel: {names}"
+          print("runner_image ships:", ", ".join(names))
+          PY
+
+      - name: Install the sdist into a clean environment
+        run: |
+          python -m venv /tmp/sdist-env
+          /tmp/sdist-env/bin/pip install --upgrade pip
+          /tmp/sdist-env/bin/pip install dist/*.tar.gz
+          /tmp/sdist-env/bin/pip check
