@@ -36,6 +36,41 @@ from ..authority.provider_budget import (
 )
 from .protocol import LLMClient, LLMMessage
 
+#: Per-field ceiling for the optional LLM debug dump. A full prompt is tens of
+#: kilobytes, and an unbounded per-call dump fills the disk of a machine that
+#: is already tight on space during a long run.
+LLM_DEBUG_FIELD_CHARS = 4000
+
+
+def _truncated_debug_text(value: Any) -> str:
+    text = value if isinstance(value, str) else str(value)
+    if len(text) <= LLM_DEBUG_FIELD_CHARS:
+        return text
+    return f"{text[:LLM_DEBUG_FIELD_CHARS]}… [{len(text)} chars total]"
+
+
+def _truncated_debug_messages(messages: Any) -> Any:
+    """Bound each debug-dumped message so one call cannot write megabytes."""
+
+    if not isinstance(messages, (list, tuple)):
+        return _truncated_debug_text(messages)
+    bounded = []
+    for message in messages:
+        if isinstance(message, dict):
+            bounded.append(
+                {
+                    key: (
+                        _truncated_debug_text(value)
+                        if isinstance(value, str)
+                        else value
+                    )
+                    for key, value in message.items()
+                }
+            )
+        else:
+            bounded.append(_truncated_debug_text(message))
+    return bounded
+
 
 def _strip_reasoning_blocks(text: str) -> str:
     """Remove private reasoning blocks from OpenAI-compatible model output."""
@@ -821,21 +856,40 @@ class OpenAIClient:
                     or "./research_output/llm_debug"
                 )
                 log_dir.mkdir(parents=True, exist_ok=True)
+                # The dump contains the full prompt: the research question,
+                # variable definitions, cohort description and every method
+                # detail the agent reasoned over. That is study-sensitive even
+                # though it is not patient-level, so the directory is owner-only
+                # and each file is written 0600.
+                try:
+                    os.chmod(log_dir, 0o700)
+                except OSError:
+                    pass
                 ts = datetime.now().strftime("%Y%m%dT%H%M%S_%f")
                 payload = {
                     "model": self._model,
                     "finish_reason": getattr(choice, "finish_reason", None),
-                    "prompt_messages": chat_messages,
-                    "raw_message": (
-                        msg.model_dump() if hasattr(msg, "model_dump") else str(msg)
+                    "prompt_messages": _truncated_debug_messages(chat_messages),
+                    "raw_message_head": _truncated_debug_text(
+                        msg.model_dump_json()
+                        if hasattr(msg, "model_dump_json")
+                        else str(msg)
                     ),
                     "extracted_content_head": content[:1200],
                     "extracted_content_chars": len(content),
+                    "note": (
+                        "Truncated debug dump. Contains study design detail; "
+                        "keep it out of shared or synced directories."
+                    ),
                 }
-                (log_dir / f"{ts}.json").write_text(
-                    json.dumps(payload, indent=2, ensure_ascii=False, default=str),
-                    encoding="utf-8",
+                target = log_dir / f"{ts}.json"
+                descriptor = os.open(
+                    target, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600
                 )
+                with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+                    json.dump(
+                        payload, handle, indent=2, ensure_ascii=False, default=str
+                    )
             except Exception:
                 pass
 
