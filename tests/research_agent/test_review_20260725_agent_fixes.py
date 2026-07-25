@@ -42,6 +42,7 @@ from easyicu.research_agent.mcp_policy import (
     MAX_PREVIEW_ROWS,
     MCP_ALLOWED_ROOTS_ENV,
     MCP_ALLOW_IDENTIFIER_COLUMNS_ENV,
+    MCP_AUDIT_ROOT_ENV,
     MCP_ALLOW_PATIENT_DATA_ENV,
     MCP_SCOPES_ENV,
     MIN_ROWS_FOR_AGGREGATE_STATS,
@@ -79,6 +80,7 @@ def _cohort_frame(rows: int = 40) -> pd.DataFrame:
 @pytest.fixture
 def roots(tmp_path, monkeypatch):
     monkeypatch.setenv(MCP_ALLOWED_ROOTS_ENV, str(tmp_path))
+    monkeypatch.setenv(MCP_AUDIT_ROOT_ENV, str(tmp_path / "audit"))
     return tmp_path
 
 
@@ -213,11 +215,14 @@ def test_p0_1_patient_data_access_is_recorded_as_evidence(roots, monkeypatch):
         },
     )
 
-    records = EvidenceStore(workdir).records()
+    # The trail is server-owned (2026-07-26): keying it off the caller's
+    # workdir let a client suppress it by simply omitting the argument.
+    store = EvidenceStore(roots / "audit" / ".easyicu_mcp_audit")
+    records = store.records()
     audits = [r for r in records if "mcp_patient_data_access" in str(r.relative_path)]
     assert audits, [r.relative_path for r in records]
 
-    payload = json.loads((workdir / audits[0].relative_path).read_text())
+    payload = json.loads((store.root / audits[0].relative_path).read_text())
     assert payload["schema"] == "easyicu.mcp_patient_data_access/1"
     assert payload["requested_patient_ids"] == 3
     assert payload["disclosed_patient_rows"] == 0
@@ -965,17 +970,17 @@ def test_p1_5_debug_messages_are_truncated():
     assert out["role"] == "user"
 
 
-def test_p1_5_debug_dump_is_owner_only(tmp_path, monkeypatch):
-    from easyicu.research_agent.providers import llm as llm_module
+def test_p1_5_debug_dump_is_owner_only():
+    """Superseded by a real on-disk mode check.
 
-    monkeypatch.setenv("EASYICU_LLM_DEBUG", "1")
-    monkeypatch.setenv("EASYICU_LLM_DEBUG_DIR", str(tmp_path / "dbg"))
+    This asserted that the chmod/O_EXCL calls appeared in the module source,
+    which passes whether or not they are reached. The 2026-07-26 review was
+    right to reject that; see
+    ``test_review_20260726_agent_fixes.py::test_p1_5_debug_dump_is_owner_only_on_disk``,
+    which drives a completion and stats the file the dump wrote.
+    """
 
-    source = Path(llm_module.__file__).read_text(encoding="utf-8")
-    assert "os.chmod(log_dir, 0o700)" in source
-    assert "os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600" in source
-    # The raw message is bounded rather than dumped whole.
-    assert '"raw_message":' not in source
+    pytest.skip("replaced by the on-disk mode assertion in the 20260726 suite")
 
 
 # ---------------------------------------------------------------------------
