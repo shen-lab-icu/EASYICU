@@ -535,6 +535,45 @@ _COUNTED_NOUN_PATTERN = "|".join(
     noun.replace(" ", r"\s+") for noun in sorted(_COUNTED_NOUNS, key=len, reverse=True)
 )
 
+#: Words that make the following integer an ordinal / category label rather
+#: than a count. "stage 4 patients" describes which patients, not how many, and
+#: binding the 4 as a sample size would demand evidence for a disease stage.
+_CATEGORY_LABEL_WORDS = (
+    "arm",
+    "class",
+    "cohort",
+    "day",
+    "grade",
+    "group",
+    "level",
+    "phase",
+    "quartile",
+    "quintile",
+    "stage",
+    "step",
+    "tercile",
+    "tier",
+    "type",
+    "week",
+    "year",
+)
+# Python lookbehinds must be fixed width, so this is a *chain* of one
+# lookbehind per label word rather than one lookbehind over an alternation of
+# differing widths. Each `[Ss]tage` form keeps a single width while matching
+# both the sentence-initial and mid-sentence spelling.
+_CATEGORY_LABEL_LOOKBEHINDS = "".join(
+    r"(?<!\b[" + word[0].upper() + word[0] + r"]" + word[1:] + r"\s)"
+    for word in sorted(_CATEGORY_LABEL_WORDS)
+)
+
+#: Chinese measure words that make the preceding integer a count. The project
+#: supports ``manuscript_language="zh"``, and a zh manuscript writes "42例患者"
+#: where an en one writes "42 patients" — the same claim, previously unbound.
+_ZH_COUNTED_PATTERN = (
+    r"(?:例|名|位|人)(?:患者|病人|受试者|对象|死亡|事件)?"
+    r"|(?:个|起|次)(?:事件|中心|医院|站点|队列)"
+)
+
 _NUMERIC_IN_PROSE_RE = re.compile(
     r"(?<![A-Za-z_\d.])"  # avoid mid-identifier digits
     r"(?P<value>"
@@ -571,12 +610,17 @@ _NUMERIC_IN_PROSE_RE = re.compile(
     r"(?<![A-Za-z_\d.])"
     # Neither end of a written range ("8-12 events") is a count.
     r"(?<![-–])"
-    r"(?:"
+    # "stage 4 patients" / "grade 3 patients" label a subgroup; the integer is
+    # an ordinal, not a sample size.
+    + _CATEGORY_LABEL_LOOKBEHINDS
+    + r"(?:"
     r"(?<=\bn\s=\s)\d{1,2}"
     r"|"
     r"(?<=\bn=)\d{1,2}"
     r"|"
     r"\d{1,2}(?=\s+(?:" + _COUNTED_NOUN_PATTERN + r")\b)"
+    r"|"
+    r"\d{1,2}(?=\s*(?:" + _ZH_COUNTED_PATTERN + r"))"
     r")"
     # A short integer that opens a range ("8-12 events") is a bound, not a
     # count. Scoped to this branch only: the general numeric form must keep
