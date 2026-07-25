@@ -621,24 +621,55 @@ async def chat_completions(request: Request):
     # directly on the event loop would let one slow upstream call stall every
     # other request on this worker — including /health. Run it on the threadpool
     # and bound how many can be in flight at once.
+    if stream:
+        # A streaming call is not "done" when requests.post returns — the body
+        # has not been consumed yet. Releasing the slot here would let an
+        # unbounded number of long-lived streams run concurrently while the
+        # semaphore looked satisfied, so the slot has to span the whole stream.
+        return await _bounded_streaming_response(request, upstream_payload)
+
     async with _upstream_slot():
         upstream_response = await run_in_threadpool(
-            _post_upstream, request, upstream_payload, stream=stream
+            _post_upstream, request, upstream_payload, stream=False
         )
-
-    if stream:
-        if upstream_response.status_code >= 400:
-            data = _json_or_text(upstream_response)
-            upstream_response.close()
-            return JSONResponse(status_code=upstream_response.status_code, content=data)
-        return StreamingResponse(
-            _stream_upstream(upstream_response),
-            media_type="text/event-stream",
-            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
-        )
-
     data = _json_or_text(upstream_response)
     return JSONResponse(status_code=upstream_response.status_code, content=data)
+
+
+async def _bounded_streaming_response(request: Request, upstream_payload: dict):
+    """Hold an upstream slot for the lifetime of a streamed response."""
+
+    slot = _upstream_slot()
+    await slot.__aenter__()
+    try:
+        upstream_response = await run_in_threadpool(
+            _post_upstream, request, upstream_payload, stream=True
+        )
+    except BaseException:
+        await slot.__aexit__(None, None, None)
+        raise
+
+    if upstream_response.status_code >= 400:
+        data = _json_or_text(upstream_response)
+        upstream_response.close()
+        await slot.__aexit__(None, None, None)
+        return JSONResponse(status_code=upstream_response.status_code, content=data)
+
+    async def _release_after(iterator):
+        try:
+            for chunk in iterator:
+                yield chunk
+        finally:
+            # Runs on client disconnect too, so an abandoned stream cannot
+            # leak the slot.
+            upstream_response.close()
+            await slot.__aexit__(None, None, None)
+
+    return StreamingResponse(
+        _release_after(_stream_upstream(upstream_response)),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 def build_parser() -> argparse.ArgumentParser:
