@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import Optional
+from typing import Optional, Sequence
 
 import numpy as np
 import pandas as pd
@@ -122,6 +122,98 @@ def clear_dur_var_unit(frame: pd.DataFrame) -> pd.DataFrame:
     if isinstance(frame, pd.DataFrame):
         frame.attrs.pop(DUR_VAR_UNIT_ATTR, None)
     return frame
+
+
+def convert_dur_var_unit(
+    frame: pd.DataFrame,
+    *,
+    column: str,
+    from_unit: str,
+    to_unit: str,
+) -> pd.DataFrame:
+    """Rescale a numeric ``dur_var`` column from one unit to another.
+
+    Returns a copy with the converted column and the new unit declared. A
+    ``timedelta`` column is self-describing and is never rescaled — mixing it
+    with a numeric column is a contract error the caller must resolve.
+    """
+
+    if from_unit == to_unit:
+        return frame
+    if UNIT_TIMEDELTA in {from_unit, to_unit}:
+        raise DurationUnitError(
+            f"cannot convert {column!r} between {from_unit!r} and {to_unit!r}: a "
+            "timedelta duration and a numeric duration are different "
+            "representations, not different scales"
+        )
+    if from_unit not in _HOURS_PER_UNIT or to_unit not in _HOURS_PER_UNIT:
+        raise DurationUnitError(
+            f"cannot convert {column!r} from {from_unit!r} to {to_unit!r}"
+        )
+    scale = _HOURS_PER_UNIT[from_unit] / _HOURS_PER_UNIT[to_unit]
+    converted = frame.copy()
+    if column in converted.columns:
+        converted[column] = converted[column] * scale
+    return set_dur_var_unit(converted, to_unit)
+
+
+def combine_dur_var_units(
+    frames: Sequence[pd.DataFrame],
+    *,
+    column: str,
+    declared: Sequence[Optional[str]] = (),
+) -> Optional[str]:
+    """Return the single unit a combined ``dur_var`` column may carry.
+
+    Row-binding a minutes table onto an hours table produced a column whose
+    values were 60× apart with the *first* table's unit label attached — a
+    silent 60× error in every downstream window, and exactly the class of bug
+    the declared-unit contract exists to prevent.
+
+    Rules:
+
+    * every input agreeing (or exactly one declaring) → that unit;
+    * numeric units disagreeing → the caller must convert, so this raises with
+      both units named rather than picking one;
+    * a ``timedelta`` mixed with a numeric unit → always an error;
+    * nothing declared → ``None``, preserving the undeclared path;
+    * some declared, some not → an error under
+      :func:`strict_dur_var_units`, otherwise the declared unit with a warning.
+    """
+
+    # Only inputs that actually carry the duration column are party to the
+    # contract. A frame joined column-wise (a covariate table, a label table)
+    # has no duration to declare, and counting it as "undeclared" would block
+    # every ordinary merge.
+    declared_units = list(declared) + [None] * max(0, len(frames) - len(declared))
+    units: list = []
+    for frame, declared_unit in zip(frames, declared_units):
+        if not isinstance(frame, pd.DataFrame) or column not in frame.columns:
+            continue
+        units.append(declared_unit or get_dur_var_unit(frame))
+    seen = {unit for unit in units if unit}
+    if not seen:
+        return None
+    if len(seen) == 1:
+        unit = next(iter(seen))
+        undeclared = sum(1 for item in units if not item)
+        if undeclared:
+            message = (
+                f"combining {column!r} across {len(units)} inputs where "
+                f"{undeclared} declare no unit and the rest declare {unit!r}; "
+                "an undeclared duration is not assumed to share the declared "
+                "unit — declare it at the producer with set_dur_var_unit()"
+            )
+            if strict_dur_var_units():
+                raise DurationUnitError(message)
+            logger.warning("%s (assuming %s)", message, unit)
+        return unit
+    raise DurationUnitError(
+        f"cannot combine {column!r} across inputs declaring different units "
+        f"({', '.join(sorted(seen))}); convert them to one unit first with "
+        "convert_dur_var_unit() — row-binding them would leave a column whose "
+        "values differ by a scale factor under a single unit label"
+    )
 
 
 def _validate_hours(
@@ -251,5 +343,7 @@ __all__ = [
     "set_dur_var_unit",
     "get_dur_var_unit",
     "clear_dur_var_unit",
+    "combine_dur_var_units",
+    "convert_dur_var_unit",
     "resolve_dur_var_hours",
 ]

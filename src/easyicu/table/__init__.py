@@ -881,7 +881,8 @@ def rbind_tbl(*tables: Union[IdTbl, pd.DataFrame],
             tables[0].id_vars,
             tables[0].index_var,
             tables[0].dur_var,
-            tables[0].interval
+            tables[0].interval,
+            dur_unit=_combined_dur_unit(tables, dfs, tables[0].dur_var),
         )
     elif isinstance(tables[0], TsTbl):
         return TsTbl(
@@ -894,6 +895,27 @@ def rbind_tbl(*tables: Union[IdTbl, pd.DataFrame],
         return IdTbl(result, tables[0].id_vars)
     else:
         return result
+
+
+def _combined_dur_unit(tables, frames, column):
+    """The one ``dur_var`` unit a combined WinTbl may declare.
+
+    Rebuilding a WinTbl from combined frames used to copy only ``dur_var`` and
+    ``interval`` from the first input, so binding a minutes table onto an hours
+    table produced a 60x-mixed column wearing the first table's label. The unit
+    is read from every input — the structural ``WinTbl.dur_unit`` as well as
+    the frame ``attrs``, because ``pd.concat``/``pd.merge`` do not reliably
+    carry ``attrs`` through.
+    """
+
+    from .duration import combine_dur_var_units
+
+    return combine_dur_var_units(
+        list(frames),
+        column=column,
+        declared=[getattr(tbl, "dur_unit", None) for tbl in tables],
+    )
+
 
 def cbind_tbl(*tables: Union[IdTbl, pd.DataFrame],
               check_names: bool = False) -> Union[IdTbl, pd.DataFrame]:
@@ -923,7 +945,14 @@ def cbind_tbl(*tables: Union[IdTbl, pd.DataFrame],
     
     # Return same type as first input
     if isinstance(tables[0], WinTbl):
-        return WinTbl(result, tables[0].id_vars, tables[0].index_var, tables[0].dur_var, tables[0].interval)
+        return WinTbl(
+            result,
+            tables[0].id_vars,
+            tables[0].index_var,
+            tables[0].dur_var,
+            tables[0].interval,
+            dur_unit=_combined_dur_unit(tables, dfs, tables[0].dur_var),
+        )
     elif isinstance(tables[0], TsTbl):
         return TsTbl(result, tables[0].id_vars, tables[0].index_var, tables[0].interval)
     elif isinstance(tables[0], IdTbl):
@@ -972,7 +1001,8 @@ def merge_lst(tables: List[Union[IdTbl, pd.DataFrame]],
             tables[0].id_vars,
             tables[0].index_var,
             tables[0].dur_var,
-            tables[0].interval
+            tables[0].interval,
+            dur_unit=_combined_dur_unit(tables, dfs, tables[0].dur_var),
         )
     elif isinstance(tables[0], TsTbl):
         return TsTbl(
@@ -1421,7 +1451,8 @@ def rbind_lst(
                 metadata['id_vars'],
                 metadata['index_var'],
                 metadata['dur_var'],
-                metadata['interval']
+                metadata['interval'],
+                dur_unit=_combined_dur_unit(tables, dfs, metadata['dur_var']),
             )
     elif metadata and 'id_columns' in metadata:
         return ICUTable(
