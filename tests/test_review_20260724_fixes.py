@@ -765,3 +765,275 @@ def test_r2_relay_does_not_block_the_event_loop_on_upstream():
         "run_in_threadpool" in source
     ), "synchronous _post_upstream must not be awaited directly on the loop"
     assert "_upstream_slot" in source, "in-flight upstream calls must be bounded"
+
+
+# ==========================================================================
+# Round 3 (2026-07-25) — findings raised against the second remediation
+# ==========================================================================
+
+
+def test_r3_change_dur_unit_updates_the_declaration():
+    """Converting the values without relabelling them is a 60x error.
+
+    120 minutes -> 2 hours must also stop saying "minutes", otherwise the next
+    consumer divides by 60 again and reads 0.033 h.
+    """
+
+    from easyicu.io.data_tools import change_dur_unit
+    from easyicu.table import WinTbl
+
+    frame = pd.DataFrame({"pid": [1], "t": [0.0], "dur": [120.0], "v": [1.0]})
+    set_dur_var_unit(frame, UNIT_MINUTES)
+    table = WinTbl(frame, id_vars=["pid"], index_var="t", dur_var="dur")
+
+    converted = change_dur_unit(table, "hours")
+
+    assert converted.data["dur"].iloc[0] == pytest.approx(2.0)
+    assert get_dur_var_unit(converted.data) == UNIT_HOURS
+    assert converted.dur_unit == UNIT_HOURS
+    assert resolve_dur_var_hours(converted.data, column="dur").iloc[0] == pytest.approx(
+        2.0
+    )
+
+
+@pytest.mark.parametrize(
+    ("start_unit", "target", "value", "expected"),
+    [
+        (UNIT_MINUTES, "hours", 120.0, 2.0),
+        (UNIT_HOURS, "minutes", 2.0, 120.0),
+        (UNIT_MINUTES, "seconds", 2.0, 120.0),
+        (UNIT_HOURS, "days", 48.0, 2.0),
+    ],
+)
+def test_r3_change_dur_unit_converts_between_all_units(
+    start_unit, target, value, expected
+):
+    from easyicu.io.data_tools import change_dur_unit
+    from easyicu.table import WinTbl
+
+    frame = pd.DataFrame({"pid": [1], "t": [0.0], "dur": [value], "v": [1.0]})
+    set_dur_var_unit(frame, start_unit)
+    table = WinTbl(frame, id_vars=["pid"], index_var="t", dur_var="dur")
+
+    converted = change_dur_unit(table, target)
+    assert converted.data["dur"].iloc[0] == pytest.approx(expected)
+    assert get_dur_var_unit(converted.data) == target
+
+
+def test_r3_change_dur_unit_round_trips():
+    from easyicu.io.data_tools import change_dur_unit
+    from easyicu.table import WinTbl
+
+    frame = pd.DataFrame({"pid": [1], "t": [0.0], "dur": [90.0], "v": [1.0]})
+    set_dur_var_unit(frame, UNIT_MINUTES)
+    table = WinTbl(frame, id_vars=["pid"], index_var="t", dur_var="dur")
+
+    back = change_dur_unit(change_dur_unit(table, "hours"), "minutes")
+    assert back.data["dur"].iloc[0] == pytest.approx(90.0)
+    assert get_dur_var_unit(back.data) == UNIT_MINUTES
+
+
+def test_r3_change_dur_unit_converts_timedelta_and_labels_it():
+    from easyicu.io.data_tools import change_dur_unit
+    from easyicu.table import WinTbl
+
+    frame = pd.DataFrame(
+        {
+            "pid": [1],
+            "t": [0.0],
+            "dur": pd.to_timedelta([90], unit="m"),
+            "v": [1.0],
+        }
+    )
+    table = WinTbl(frame, id_vars=["pid"], index_var="t", dur_var="dur")
+
+    converted = change_dur_unit(table, "hours")
+    assert converted.data["dur"].iloc[0] == pytest.approx(1.5)
+    assert get_dur_var_unit(converted.data) == UNIT_HOURS
+
+
+def test_r3_change_dur_unit_refuses_undeclared_numeric():
+    """ "Already numeric, assume minutes" is the guess this contract removes."""
+
+    from easyicu.io.data_tools import change_dur_unit
+    from easyicu.table import WinTbl
+
+    frame = pd.DataFrame({"pid": [1], "t": [0.0], "dur": [120.0], "v": [1.0]})
+    table = WinTbl(frame, id_vars=["pid"], index_var="t", dur_var="dur")
+
+    with pytest.raises(DurationUnitError, match="CURRENT unit"):
+        change_dur_unit(table, "hours")
+
+
+def test_r3_wintbl_carries_the_unit_as_a_structural_field():
+    """attrs alone is too fragile a carrier; WinTbl records it too."""
+
+    from easyicu.table import WinTbl
+
+    frame = pd.DataFrame({"pid": [1], "t": [0.0], "dur": [30.0], "v": [1.0]})
+    table = WinTbl(
+        frame, id_vars=["pid"], index_var="t", dur_var="dur", dur_unit=UNIT_MINUTES
+    )
+    assert table.dur_unit == UNIT_MINUTES
+    assert get_dur_var_unit(table.data) == UNIT_MINUTES
+
+    timedelta_frame = pd.DataFrame(
+        {"pid": [1], "t": [0.0], "dur": pd.to_timedelta([30], unit="m"), "v": [1.0]}
+    )
+    self_describing = WinTbl(
+        timedelta_frame, id_vars=["pid"], index_var="t", dur_var="dur"
+    )
+    assert self_describing.dur_unit == "timedelta"
+
+
+def test_r3_evidence_scan_fails_closed_on_unreadable_directory(tmp_path, monkeypatch):
+    """An unenumerable output directory is a failure, not a gap to skip."""
+
+    from easyicu.research_agent.execution import runner
+
+    nested = tmp_path / "figures"
+    nested.mkdir()
+    (nested / "fig.png").write_text("x", encoding="utf-8")
+
+    real_iterdir = Path.iterdir
+
+    def _explode(self):
+        if self.name == "figures":
+            raise PermissionError(13, "Permission denied")
+        return real_iterdir(self)
+
+    monkeypatch.setattr(Path, "iterdir", _explode)
+
+    with pytest.raises(runner.OutputArtifactPolicyError, match="cannot enumerate"):
+        runner._collect_safe_output_artifacts(tmp_path)
+
+
+def test_r3_evidence_scan_fails_closed_on_real_unreadable_directory(tmp_path):
+    """Same contract against a real chmod-000 directory where the OS allows it."""
+
+    if os.getuid() == 0:
+        pytest.skip("root ignores directory permissions")
+
+    from easyicu.research_agent.execution import runner
+
+    nested = tmp_path / "locked"
+    nested.mkdir()
+    (nested / "fig.png").write_text("x", encoding="utf-8")
+    nested.chmod(0o000)
+    try:
+        with pytest.raises(runner.OutputArtifactPolicyError, match="cannot enumerate"):
+            runner._collect_safe_output_artifacts(tmp_path)
+    finally:
+        nested.chmod(0o700)
+
+
+def test_r3_cache_manager_does_not_pin_evicted_loader_components():
+    """Registering a cache must not keep it alive after its owner is gone."""
+
+    import gc
+
+    from easyicu.runtime.cache_manager import CacheManager
+
+    class _Resolver:
+        def clear(self):
+            pass
+
+    manager = CacheManager()
+    resolver = _Resolver()
+    manager.register_memory_cache(resolver)
+    tracked = __import__("weakref").ref(resolver)
+
+    assert tracked() is not None
+    del resolver
+    gc.collect()
+
+    assert (
+        tracked() is None
+    ), "CacheManager still holds a strong reference to an evicted component"
+
+
+def test_r3_cache_manager_still_clears_live_caches():
+    from easyicu.runtime.cache_manager import CacheManager
+
+    cleared = []
+
+    class _Resolver:
+        def clear(self):
+            cleared.append(True)
+
+    manager = CacheManager()
+    resolver = _Resolver()
+    manager.register_memory_cache(resolver)
+    manager.clear_memory_cache()
+
+    assert cleared, "a live registered cache must still be cleared"
+
+
+def test_r3_streaming_holds_its_upstream_slot_for_the_whole_stream():
+    """Not a source grep: actually run concurrent streams and count them.
+
+    Releasing the slot when requests.post returns bounded only the connect,
+    so unbounded long-lived streams could run at once.
+    """
+
+    import asyncio
+    import time as _time
+
+    import easyicu.hosted_llm_server as relay
+
+    original_limit = relay.HOSTED_MAX_CONCURRENT_UPSTREAM
+    original_semaphore = relay._UPSTREAM_SEMAPHORE
+    original_post = relay._post_upstream
+
+    relay.HOSTED_MAX_CONCURRENT_UPSTREAM = 2
+    relay._UPSTREAM_SEMAPHORE = None
+    state = {"live": 0, "peak": 0}
+
+    class _FakeResponse:
+        status_code = 200
+
+        def iter_content(self, chunk_size=1024):
+            for _ in range(3):
+                _time.sleep(0.02)
+                yield b"chunk"
+
+        def close(self):
+            state["live"] -= 1
+
+    def _fake_post(request, payload, *, stream):
+        state["live"] += 1
+        state["peak"] = max(state["peak"], state["live"])
+        return _FakeResponse()
+
+    relay._post_upstream = _fake_post
+
+    async def _drive():
+        async def _one():
+            response = await relay._bounded_streaming_response(None, {"model": "m"})
+            async for _ in response.body_iterator:
+                pass
+
+        await asyncio.gather(*[_one() for _ in range(8)])
+
+    try:
+        asyncio.run(_drive())
+        assert (
+            state["peak"] <= 2
+        ), f"{state['peak']} concurrent upstream streams exceeded the limit of 2"
+        assert relay._UPSTREAM_SEMAPHORE._value == 2, "a slot leaked"
+    finally:
+        relay.HOSTED_MAX_CONCURRENT_UPSTREAM = original_limit
+        relay._UPSTREAM_SEMAPHORE = original_semaphore
+        relay._post_upstream = original_post
+
+
+def test_r3_api_has_no_stale_chunk_invariance_claim():
+    """The measurement replaced the claim; the claim must not survive anywhere."""
+
+    import inspect
+
+    from easyicu import api
+
+    source = inspect.getsource(api._get_auto_chunk_strategy)
+    assert "can still change SOFA" not in source
+    assert "measured" in source.lower() or "invariance" in source.lower()
