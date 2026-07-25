@@ -234,8 +234,15 @@ def _collect_safe_output_artifacts(out_dir: Path) -> List[Path]:
         current, depth = pending.pop()
         try:
             entries = sorted(current.iterdir())
-        except OSError:
-            continue
+        except OSError as exc:
+            # Skipping here would let an unreadable directory — or a transient
+            # I/O error — drop its files from the evidence list while the run
+            # still reported success. Under an evidence-bound contract an
+            # unenumerable output directory is a failure, not a gap.
+            raise OutputArtifactPolicyError(
+                "cannot enumerate generated output directory "
+                f"{current}: {exc}"
+            ) from exc
         for output_path in entries:
             metadata = os.lstat(output_path)
             if stat.S_ISREG(metadata.st_mode) and metadata.st_nlink == 1:
