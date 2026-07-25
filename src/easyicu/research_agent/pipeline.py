@@ -1802,6 +1802,10 @@ class ResearchAgentPipeline:
         # run cannot answer an interrupt, so a plan that raises one fails
         # closed rather than continuing unattended.
         self._human_review_gate = human_review_gate
+        # Set by ``run()`` when the graph pauses; consumed by
+        # ``resume_human_review()``. Holds the compiled graph because its
+        # nodes close over this run's evidence store and phase invokers.
+        self._pending_human_review: Optional[Dict[str, Any]] = None
         self._know_how_paths = tuple(Path(path) for path in know_how_paths)
         self._know_how_top_k = int(know_how_top_k)
         self._know_how_min_score = float(know_how_min_score)
@@ -4365,10 +4369,18 @@ class ResearchAgentPipeline:
             )
 
         # The recorder needs this run's own EvidenceStore, which lives on the
-        # plan result rather than in ``run()``'s locals. The review node calls
-        # the invoker and the recorder in that order, in the same node, so
-        # capturing it here is enough.
+        # plan result rather than in ``run()``'s locals. In a single-process
+        # pause-and-resume the review node calls the invoker and the recorder
+        # in that order, so this list holds the live store. When the graph is
+        # resumed from a checkpoint the plan node does not re-run and the list
+        # stays empty, so the recorder re-opens the store from ``run_dir``
+        # instead of indexing an empty list.
         reviewed_plan: List[Any] = []
+
+        def _review_evidence_store():
+            if reviewed_plan:
+                return reviewed_plan[-1].evidence
+            return EvidenceStore(run_dir, enforcement_mode=self._evidence_enforcement_mode)
 
         def _human_review_invoker(plan_result):
             from .graph import human_review_requests_for_plan
@@ -4377,6 +4389,7 @@ class ResearchAgentPipeline:
             requests = human_review_requests_for_plan(
                 findings=plan_result.findings,
                 plan=plan_result.plan,
+                evidence=getattr(plan_result, "evidence", None),
             )
             if requests and self._human_review_gate is None:
                 # The graph primitive can pause, but only a caller that owns a
@@ -4399,8 +4412,12 @@ class ResearchAgentPipeline:
             from .orchestration.profiles import is_paper_facing_profile
 
             if is_paper_facing_profile(self._submission_profile_name):
+                # Field names follow ``graph._human_review_decision_record``,
+                # which emits a flat record. Reading a nested ``request`` key
+                # here raised KeyError on every real decision and turned the
+                # authentication check into a crash.
                 unauthenticated = [
-                    record["request"]["review_id"]
+                    str(record.get("review_id") or "<unknown>")
                     for record in records
                     if record.get("reviewer_identity_source") != "authenticated"
                 ]
@@ -4429,7 +4446,7 @@ class ResearchAgentPipeline:
             # into the final manifest: graph state is discarded at exit, so an
             # unregistered approval leaves the run unable to answer who
             # authorised it, against which digest, and when.
-            reviewed_plan[-1].evidence.register_file(
+            _review_evidence_store().register_file(
                 kind="log",
                 description=(
                     "Operator decisions for the human-review interrupts raised "
@@ -4445,6 +4462,7 @@ class ResearchAgentPipeline:
         gate = self._human_review_gate
         from .graph import build_pipeline_graph
 
+        checkpointer = getattr(gate, "checkpointer", None) if gate is not None else None
         graph = build_pipeline_graph(
             plan_invoker=_plan_invoker,
             execute_invoker=_execute_invoker,
@@ -4458,17 +4476,132 @@ class ResearchAgentPipeline:
                 if gate is not None
                 else None
             ),
-            checkpointer=(
-                getattr(gate, "checkpointer", None) if gate is not None else None
-            ),
+            checkpointer=checkpointer,
         )
         invoke_config = (
             getattr(gate, "invoke_config", None) if gate is not None else None
         )
+        # ``interrupt()`` needs a thread to suspend against. A gate that
+        # supplies a checkpointer but no config gets the run id as its thread,
+        # so configuring the gate is one object rather than two.
+        if checkpointer is not None and not invoke_config:
+            invoke_config = {"configurable": {"thread_id": run_id}}
         final_state = graph.invoke(
             {}, **({"config": invoke_config} if invoke_config else {})
         )
-        return final_state["final_result"]
+        return self._pipeline_result_or_pending(
+            final_state,
+            graph=graph,
+            invoke_config=invoke_config,
+            run_id=run_id,
+            run_dir=run_dir,
+        )
+
+    def _pipeline_result_or_pending(
+        self,
+        final_state: Mapping[str, Any],
+        *,
+        graph: Any,
+        invoke_config: Optional[Mapping[str, Any]],
+        run_id: str,
+        run_dir: Path,
+    ) -> Any:
+        """Return the run's result, or the typed pause that replaced it.
+
+        A run that stopped inside the human-review node has no
+        ``final_result``: nothing downstream of the interrupt executed. The
+        old code indexed the key regardless and raised ``KeyError`` on exactly
+        the state the gate exists to produce.
+        """
+
+        from .graph import HumanReviewPending, HumanReviewRequest
+
+        if "final_result" in final_state:
+            self._pending_human_review = None
+            return final_state["final_result"]
+
+        interrupts = final_state.get("__interrupt__") or ()
+        raw_requests: List[Any] = []
+        for item in interrupts:
+            value = getattr(item, "value", item)
+            if isinstance(value, Mapping):
+                raw_requests.extend(value.get("requests") or ())
+        if not raw_requests:
+            raise RuntimeError(
+                "the pipeline graph finished without a final result and "
+                "without a human-review interrupt; this is an orchestration "
+                f"bug, not a reviewable state (state keys: {sorted(final_state)})"
+            )
+        thread_id = str(
+            dict((invoke_config or {}).get("configurable") or {}).get("thread_id")
+            or run_id
+        )
+        pending = HumanReviewPending(
+            run_id=run_id,
+            thread_id=thread_id,
+            run_dir=str(run_dir),
+            requests=tuple(
+                HumanReviewRequest.model_validate(item) for item in raw_requests
+            ),
+        )
+        # Held so ``resume_human_review`` can drive the *same* compiled graph:
+        # its nodes close over this run's evidence store, run dir and phase
+        # invokers, none of which are reconstructible from the checkpoint
+        # alone.
+        self._pending_human_review = {
+            "graph": graph,
+            "invoke_config": invoke_config,
+            "pending": pending,
+        }
+        return pending
+
+    def resume_human_review(
+        self,
+        decisions: Sequence[Union[Any, Mapping[str, Any]]],
+        *,
+        run_id: Optional[str] = None,
+    ) -> Any:
+        """Answer the review that paused :meth:`run` and finish the run.
+
+        ``decisions`` must contain exactly one entry per paused request, each
+        carrying the request's own ``authority_sha256`` — the graph rejects a
+        decision that does not bind the request it claims to answer, so an
+        approval cannot be replayed against a different pause.
+        """
+
+        pending_state = self._pending_human_review
+        if not pending_state:
+            raise RuntimeError(
+                "no human review is pending on this pipeline instance; "
+                "resume_human_review() answers the pause returned by run()"
+            )
+        pending = pending_state["pending"]
+        if run_id is not None and str(run_id) != pending.run_id:
+            raise RuntimeError(
+                f"pending human review belongs to run {pending.run_id!r}, "
+                f"not {str(run_id)!r}"
+            )
+        payload = [
+            item if isinstance(item, Mapping) else item.model_dump(mode="json")
+            for item in decisions
+        ]
+        from langgraph.types import Command
+
+        final_state = pending_state["graph"].invoke(
+            Command(resume={"decisions": payload}),
+            **(
+                {"config": pending_state["invoke_config"]}
+                if pending_state["invoke_config"]
+                else {}
+            ),
+        )
+        return self._pipeline_result_or_pending(
+            final_state,
+            graph=pending_state["graph"],
+            invoke_config=pending_state["invoke_config"],
+            run_id=pending.run_id,
+            run_dir=Path(pending.run_dir),
+        )
 
     def run_from_spec(
         self,
