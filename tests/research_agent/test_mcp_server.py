@@ -6,8 +6,23 @@ import json
 from types import SimpleNamespace
 
 import pandas as pd
+import pytest
 
 from easyicu.concept.availability_signal import ConceptAvailabilityRecord
+from easyicu.research_agent.mcp_policy import MCP_ALLOWED_ROOTS_ENV
+
+
+@pytest.fixture(autouse=True)
+def _mcp_roots(tmp_path, monkeypatch):
+    """Grant the test's tmp_path as an MCP root.
+
+    Every filesystem argument is confined to a root configured at startup, so
+    without this an operator-style declaration the tools would refuse to touch
+    ``tmp_path`` at all. Declaring it here keeps each test exercising the guard
+    it is actually about rather than the outer confinement.
+    """
+
+    monkeypatch.setenv(MCP_ALLOWED_ROOTS_ENV, str(tmp_path))
 
 
 def test_mcp_initialize_and_tools_list(ra):
@@ -325,6 +340,7 @@ def test_mcp_run_returns_clear_error_without_llm_configuration(
         {
             "question": "Inspect the cohort.",
             "cohort_path": str(tmp_path / "cohort.parquet"),
+            "workdir": str(tmp_path / "run"),
         },
     )
 
@@ -395,6 +411,7 @@ def test_mcp_run_rejects_key_exfiltration_base_url(ra, tmp_path, monkeypatch):
         {
             "question": "Inspect the cohort.",
             "cohort_path": str(tmp_path / "cohort.parquet"),
+            "workdir": str(tmp_path / "run"),
             "provider": "openai",
             "model": "test-model",
             "base_url": "https://attacker.example/collect?next=localhost",
@@ -433,6 +450,7 @@ def test_mcp_run_loopback_override_does_not_forward_environment_key(
         {
             "question": "Inspect the cohort.",
             "cohort_path": str(tmp_path / "cohort.parquet"),
+            "workdir": str(tmp_path / "run"),
             "provider": "openai",
             "model": "test-model",
             "base_url": "http://127.0.0.1:8787/v1",

@@ -38,10 +38,11 @@ import os
 import queue
 import secrets
 import sys
+import threading
 import urllib.parse
 import uuid
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Mapping, Optional
 
 from .concept_availability import (
     concept_database_availability_from_load_record,
@@ -54,11 +55,43 @@ from .pipeline import ResearchAgentPipeline
 from .providers import ProviderConfigurationError, build_provider_client
 from .skills import list_skills
 from .audits.validators import CohortAuditor, ConceptUsageAuditor
+from .mcp_policy import (
+    MCP_PATIENT_DATA_TOKEN_ENV,
+    SCOPE_BIND_EVIDENCE,
+    SCOPE_METADATA,
+    SCOPE_READ_PATIENT_DATA,
+    SCOPE_RUN_PIPELINE,
+    SCOPE_WRITE_ARTIFACTS,
+    DisclosurePolicy,
+    MCPAuthorizationError,
+    MCPPathError,
+    granted_scopes,
+    patient_data_audit_payload,
+    process_scopes,
+    scope_override,
+    path_digest as _path_digest,
+    require_scope,
+    resolve_within_roots,
+    summarise_frame,
+)
 
 PROTOCOL_VERSION = "2024-11-05"
-SERVER_INFO = {"name": "easyicu-research-agent", "version": "0.1.0"}
 MCP_BEARER_TOKEN_ENV = "EASYICU_MCP_BEARER_TOKEN"
 DEFAULT_HTTP_MAX_BODY_BYTES = 1024 * 1024
+
+
+def _server_version() -> str:
+    """Report the installed package version rather than a frozen literal."""
+
+    try:
+        from importlib.metadata import version
+
+        return version("easyicu")
+    except Exception:  # pragma: no cover - source checkout without metadata
+        return "0+unknown"
+
+
+SERVER_INFO = {"name": "easyicu-research-agent", "version": _server_version()}
 
 
 def _provider_configuration_error_payload(
@@ -139,10 +172,14 @@ def _safe_run_id(value: Any) -> str:
 
 
 def _tool_run(args: Dict[str, Any]) -> Dict[str, Any]:
-    workdir = args.pop("workdir", "./research_output")
+    require_scope(SCOPE_RUN_PIPELINE, tool="research_agent.run")
+    workdir = resolve_within_roots(
+        args.pop("workdir", None) or "./research_output", field="workdir"
+    )
     cohort = args.pop("cohort_path", None)
     if cohort is None:
         return {"error": "cohort_path is required"}
+    cohort = str(resolve_within_roots(cohort, field="cohort_path"))
     try:
         llm, config_error = _build_run_llm(args)
     except Exception as exc:
@@ -186,7 +223,9 @@ def _tool_list_skills(args: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _tool_read_manifest(args: Dict[str, Any]) -> Dict[str, Any]:
-    workdir = Path(args.get("workdir", "./research_output")).expanduser().resolve()
+    workdir = resolve_within_roots(
+        args.get("workdir") or "./research_output", field="workdir"
+    )
     run_id = args.get("run_id")
     if not run_id:
         return {"error": "run_id is required"}
@@ -201,10 +240,15 @@ def _tool_read_manifest(args: Dict[str, Any]) -> Dict[str, Any]:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
-def _build_context_from_args(args: Dict[str, Any]):
+def _cohort_path_from_args(args: Dict[str, Any]) -> Path:
     cohort = args.get("cohort_path")
     if cohort is None:
         raise ValueError("cohort_path is required")
+    return resolve_within_roots(cohort, field="cohort_path")
+
+
+def _build_context_from_args(args: Dict[str, Any]):
+    cohort = _cohort_path_from_args(args)
     return build_research_context(
         research_question=args.get("question") or "Inspect this ICU cohort.",
         cohort=cohort,
@@ -281,7 +325,7 @@ def _tool_audit_cohort(args: Dict[str, Any]) -> Dict[str, Any]:
     ctx = _build_context_from_args(args)
     findings = CohortAuditor().audit(
         context=ctx,
-        cohort_path=Path(args["cohort_path"]),
+        cohort_path=_cohort_path_from_args(args),
     )
     return {"findings": [f.model_dump(mode="json") for f in findings]}
 
@@ -292,7 +336,7 @@ def _tool_run_validator(args: Dict[str, Any]) -> Dict[str, Any]:
     if validator in {"cohort", "cohort_auditor"}:
         findings = CohortAuditor().audit(
             context=ctx,
-            cohort_path=Path(args["cohort_path"]),
+            cohort_path=_cohort_path_from_args(args),
         )
     elif validator in {"concept_usage", "concept_usage_auditor"}:
         script_text = args.get("script_text")
@@ -374,10 +418,17 @@ def _tool_load_concepts(args: Dict[str, Any]) -> Dict[str, Any]:
         if key in args:
             kwargs[key] = args[key]
 
+    if "data_path" in kwargs:
+        # A caller-supplied database path is a read of the host filesystem, so
+        # it is confined to the roots the operator configured at startup.
+        kwargs["data_path"] = str(
+            resolve_within_roots(kwargs["data_path"], field="data_path")
+        )
+
     availability_sink: Dict[str, Any] = {}
     kwargs["availability_sink"] = availability_sink
     result = easyicu_load_concepts(**kwargs)
-    preview_rows = int(args.get("preview_rows") or 5)
+    policy = DisclosurePolicy.current(args.get("preview_rows") or 5)
     output_paths = _write_concept_result_if_requested(
         result=result,
         args=args,
@@ -388,12 +439,23 @@ def _tool_load_concepts(args: Dict[str, Any]) -> Dict[str, Any]:
         args=args,
         concepts=[str(c) for c in concepts],
     )
+    summary = _summarise_concept_result(result, policy=policy)
+    _record_patient_data_access(
+        tool="research_agent.load_concepts",
+        args=args,
+        concepts=[str(c) for c in concepts],
+        summary=summary,
+        output_paths=output_paths,
+        policy=policy,
+    )
     return {
         "api": "easyicu.load_concepts",
         "concepts": [str(c) for c in concepts],
         "database": args.get("database"),
-        "data_path": args.get("data_path"),
-        "summary": _summarise_concept_result(result, preview_rows=preview_rows),
+        "data_path_sha256": (
+            _path_digest(kwargs.get("data_path")) if kwargs.get("data_path") else None
+        ),
+        "summary": summary,
         "availability": {
             str(concept): concept_database_availability_from_load_record(
                 record,
@@ -420,7 +482,10 @@ def _tool_extract_concept(args: Dict[str, Any]) -> Dict[str, Any]:
 
 def _tool_bind_evidence(args: Dict[str, Any]) -> Dict[str, Any]:
     """Register an external artefact without exposing database internals."""
-    workdir = Path(args.get("workdir") or "./research_output")
+    require_scope(SCOPE_BIND_EVIDENCE, tool="research_agent.bind_evidence")
+    workdir = resolve_within_roots(
+        args.get("workdir") or "./research_output", field="workdir"
+    )
     kind = str(args.get("kind") or "log")
     if kind not in {"table", "figure", "statistic", "log", "code"}:
         return {"error": "kind must be one of table, figure, statistic, log, code"}
@@ -458,7 +523,7 @@ def _tool_bind_evidence(args: Dict[str, Any]) -> Dict[str, Any]:
     }
     if source_path is not None:
         record = store.register_file(
-            source_path=Path(str(source_path)),
+            source_path=resolve_within_roots(source_path, field="source_path"),
             script_evidence_id=args.get("script_evidence_id"),
             prompt_pack_version=args.get("prompt_pack_version"),
             **common,
@@ -483,32 +548,87 @@ def _tool_bind_evidence(args: Dict[str, Any]) -> Dict[str, Any]:
     return {"evidence": record.model_dump(mode="json")}
 
 
-def _summarise_concept_result(result: Any, *, preview_rows: int) -> Dict[str, Any]:
+def _summarise_concept_result(
+    result: Any, *, policy: DisclosurePolicy
+) -> Dict[str, Any]:
     if isinstance(result, dict):
         return {
             "result_type": "dict",
             "concepts": {
-                str(name): _summarise_frame(frame, preview_rows=preview_rows)
+                str(name): _summarise_frame(frame, policy=policy)
                 for name, frame in result.items()
             },
         }
     return {
         "result_type": type(result).__name__,
-        "frame": _summarise_frame(result, preview_rows=preview_rows),
+        "frame": _summarise_frame(result, policy=policy),
     }
 
 
-def _summarise_frame(frame: Any, *, preview_rows: int) -> Dict[str, Any]:
-    if not hasattr(frame, "shape") or not hasattr(frame, "columns"):
-        return {"type": type(frame).__name__, "repr": repr(frame)[:500]}
-    preview = frame.head(max(preview_rows, 0)).to_dict(orient="records")
-    return {
-        "type": type(frame).__name__,
-        "rows": int(frame.shape[0]),
-        "columns": [str(c) for c in frame.columns],
-        "dtypes": {str(c): str(t) for c, t in frame.dtypes.items()},
-        "preview": _jsonable(preview),
-    }
+def _summarise_frame(frame: Any, *, policy: DisclosurePolicy) -> Dict[str, Any]:
+    """Project one frame through the MCP disclosure policy."""
+
+    summary = summarise_frame(frame, policy=policy)
+    if "preview" in summary:
+        summary["preview"] = _jsonable(summary["preview"])
+    return summary
+
+
+def _frame_summaries(summary: Mapping[str, Any]) -> Dict[str, Any]:
+    """Flatten ``_summarise_concept_result`` output to name -> frame summary."""
+
+    concepts = summary.get("concepts")
+    if isinstance(concepts, Mapping):
+        return {str(name): value for name, value in concepts.items()}
+    frame = summary.get("frame")
+    return {"frame": frame} if isinstance(frame, Mapping) else {}
+
+
+def _record_patient_data_access(
+    *,
+    tool: str,
+    args: Dict[str, Any],
+    concepts: List[str],
+    summary: Mapping[str, Any],
+    output_paths: List[Path],
+    policy: DisclosurePolicy,
+) -> None:
+    """Register a PHI-free audit record for one extraction call.
+
+    Best-effort: an audit failure must not silently drop the extraction the
+    caller already paid for, but it is reported in the server log so an
+    operator can see that the trail has a hole.
+    """
+
+    workdir = args.get("workdir")
+    if not workdir:
+        return
+    payload = patient_data_audit_payload(
+        tool=tool,
+        concepts=concepts,
+        database=args.get("database"),
+        data_path=args.get("data_path"),
+        patient_ids=args.get("patient_ids"),
+        frame_summaries=_frame_summaries(summary),
+        output_paths=output_paths,
+        policy=policy,
+    )
+    try:
+        store = EvidenceStore(resolve_within_roots(workdir, field="workdir"))
+        store.register_json(
+            kind="log",
+            description="Audit record for one MCP concept extraction call.",
+            payload=payload,
+            filename="mcp_patient_data_access.json",
+            producer="mcp_server",
+            generation_mode="system",
+        )
+    except Exception as exc:  # pragma: no cover - audit must not mask results
+        print(
+            f"easyicu-mcp: could not record the patient-data access audit: "
+            f"{type(exc).__name__}",
+            file=sys.stderr,
+        )
 
 
 def _write_concept_result_if_requested(
@@ -520,11 +640,14 @@ def _write_concept_result_if_requested(
     should_write = bool(args.get("output_path") or args.get("register_evidence"))
     if not should_write:
         return []
+    require_scope(SCOPE_WRITE_ARTIFACTS, tool="research_agent.load_concepts")
     output_path = args.get("output_path")
     if output_path:
-        base = Path(str(output_path))
+        base = resolve_within_roots(output_path, field="output_path")
     else:
-        workdir = Path(args.get("workdir") or "./research_output")
+        workdir = resolve_within_roots(
+            args.get("workdir") or "./research_output", field="workdir"
+        )
         stem = _safe_filename("_".join(concepts[:6])) or "concepts"
         base = (
             workdir / "mcp_concept_extracts" / f"{stem}_{uuid.uuid4().hex[:8]}.parquet"
@@ -553,9 +676,12 @@ def _register_concept_outputs_if_requested(
 ) -> List[Dict[str, Any]]:
     if not args.get("register_evidence"):
         return []
+    require_scope(SCOPE_BIND_EVIDENCE, tool="research_agent.load_concepts")
     if not output_paths:
         return [{"error": "register_evidence requires writable concept output"}]
-    workdir = Path(args.get("workdir") or "./research_output")
+    workdir = resolve_within_roots(
+        args.get("workdir") or "./research_output", field="workdir"
+    )
     store = EvidenceStore(workdir)
     records = []
     for index, path in enumerate(output_paths):
@@ -576,7 +702,7 @@ def _register_concept_outputs_if_requested(
             metadata={
                 "concepts": concepts,
                 "database": args.get("database"),
-                "data_path": args.get("data_path"),
+                "data_path_sha256": _path_digest(args.get("data_path")),
                 "interval": args.get("interval"),
                 "win_length": args.get("win_length"),
                 "aggregate": args.get("aggregate"),
@@ -835,7 +961,14 @@ TOOL_SCHEMAS: List[Dict[str, Any]] = [
                 "sample_strategy": {"type": "string"},
                 "batch_size": {"type": "integer"},
                 "memory_efficient": {"type": "boolean"},
-                "preview_rows": {"type": "integer"},
+                "preview_rows": {
+                    "type": "integer",
+                    "maximum": 20,
+                    "description": (
+                        "Patient-level rows to preview. Ignored unless the "
+                        "server grants the read_patient_data scope; capped at 20."
+                    ),
+                },
                 "output_path": {"type": "string"},
                 "register_evidence": {"type": "boolean"},
                 "workdir": {"type": "string"},
@@ -883,7 +1016,14 @@ TOOL_SCHEMAS: List[Dict[str, Any]] = [
                 "keep_components": {"type": "boolean"},
                 "use_sofa2": {"type": "boolean"},
                 "merge": {"type": "boolean"},
-                "preview_rows": {"type": "integer"},
+                "preview_rows": {
+                    "type": "integer",
+                    "maximum": 20,
+                    "description": (
+                        "Patient-level rows to preview. Ignored unless the "
+                        "server grants the read_patient_data scope; capped at 20."
+                    ),
+                },
                 "output_path": {"type": "string"},
                 "register_evidence": {"type": "boolean"},
                 "workdir": {"type": "string"},
@@ -945,18 +1085,68 @@ TOOL_SCHEMAS: List[Dict[str, Any]] = [
 ]
 
 
+#: Minimum scope each tool needs before it may run at all. Patient-level
+#: disclosure is deliberately *not* listed here: extraction still runs without
+#: it (the parquet stays server-side and the evidence record is still written);
+#: what the missing scope removes is the row preview in the response.
+TOOL_SCOPES: Dict[str, str] = {
+    "research_agent.run": SCOPE_RUN_PIPELINE,
+    "research_agent.list_skills": SCOPE_METADATA,
+    "research_agent.read_manifest": SCOPE_METADATA,
+    "research_agent.build_context": SCOPE_METADATA,
+    "research_agent.list_concepts": SCOPE_METADATA,
+    "research_agent.describe_concept": SCOPE_METADATA,
+    "research_agent.audit_cohort": SCOPE_METADATA,
+    "research_agent.run_validator": SCOPE_METADATA,
+    "research_agent.load_concepts": SCOPE_METADATA,
+    "research_agent.extract_concept": SCOPE_METADATA,
+    "research_agent.cross_database_concept_availability": SCOPE_METADATA,
+    "research_agent.bind_evidence": SCOPE_BIND_EVIDENCE,
+}
+
+
 def dispatch(
     tool_name: str, arguments: Optional[Dict[str, Any]] = None
 ) -> Dict[str, Any]:
-    """Run a tool by name. Returns either the tool's result dict or an error."""
+    """Run a tool by name. Returns either the tool's result dict or an error.
+
+    Errors are returned as a stable ``error_code`` plus a message written for
+    an external caller. Raw exception text is not echoed back: it can carry
+    absolute paths, table and column names, database layout and fragments of
+    generated SQL. The full detail goes to the server's stderr log instead.
+    """
+
     arguments = dict(arguments or {})
     fn = TOOLS.get(tool_name)
     if fn is None:
-        return {"error": f"unknown tool '{tool_name}'", "known": list(TOOLS)}
+        return {
+            "error": f"unknown tool '{tool_name}'",
+            "error_code": "unknown_tool",
+            "known": list(TOOLS),
+        }
     try:
+        required = TOOL_SCOPES.get(tool_name)
+        if required is not None:
+            require_scope(required, tool=tool_name)
         return fn(arguments)
+    except MCPAuthorizationError as exc:
+        return {"error": str(exc), "error_code": "scope_not_granted"}
+    except MCPPathError as exc:
+        return {"error": str(exc), "error_code": "path_not_allowed"}
+    except ValueError as exc:
+        # Argument-shape problems are the caller's to fix, so the message is
+        # useful to them and does not describe server internals.
+        return {"error": str(exc), "error_code": "invalid_argument"}
     except Exception as exc:
-        return {"error": f"{type(exc).__name__}: {exc}"}
+        print(
+            f"easyicu-mcp: tool {tool_name} failed: {type(exc).__name__}: {exc}",
+            file=sys.stderr,
+        )
+        return {
+            "error": (f"tool {tool_name!r} failed; see the MCP server log for detail"),
+            "error_code": "tool_failed",
+            "error_type": type(exc).__name__,
+        }
 
 
 # ---------------------------------------------------------------------------
@@ -1096,12 +1286,49 @@ def _run_stdio() -> int:  # pragma: no cover - covered through handle_jsonrpc
 # ---------------------------------------------------------------------------
 
 
+#: Ceilings for the SSE transport. Unbounded sessions and unbounded per-session
+#: queues let any authenticated client (or any local process on a loopback
+#: bind) hold every ThreadingHTTPServer worker open and grow server memory
+#: without limit, which starves real MCP traffic.
+MAX_SSE_SESSIONS = 32
+SSE_QUEUE_MAXSIZE = 256
+SSE_IDLE_TIMEOUT_SECONDS = 300.0
+SSE_HEARTBEAT_SECONDS = 15.0
+
+
 class _SSESession:
     def __init__(self) -> None:
-        self.queue: "queue.Queue[Dict[str, Any]]" = queue.Queue()
+        self.queue: "queue.Queue[Dict[str, Any]]" = queue.Queue(
+            maxsize=SSE_QUEUE_MAXSIZE
+        )
 
 
 _SSE_SESSIONS: Dict[str, _SSESession] = {}
+#: ThreadingHTTPServer runs each request on its own thread, so the session
+#: table is shared mutable state and needs a lock, not just a bound.
+_SSE_SESSIONS_LOCK = threading.Lock()
+
+
+def _open_sse_session() -> Optional[tuple[str, _SSESession]]:
+    """Register a new SSE session, or None when the server is at capacity."""
+
+    session_id = uuid.uuid4().hex
+    session = _SSESession()
+    with _SSE_SESSIONS_LOCK:
+        if len(_SSE_SESSIONS) >= MAX_SSE_SESSIONS:
+            return None
+        _SSE_SESSIONS[session_id] = session
+    return session_id, session
+
+
+def _close_sse_session(session_id: str) -> None:
+    with _SSE_SESSIONS_LOCK:
+        _SSE_SESSIONS.pop(session_id, None)
+
+
+def _get_sse_session(session_id: str) -> Optional[_SSESession]:
+    with _SSE_SESSIONS_LOCK:
+        return _SSE_SESSIONS.get(session_id)
 
 
 def _normalise_http_host(value: str) -> Optional[str]:
@@ -1238,9 +1465,20 @@ def _make_sse_handler(
             if parsed.path not in {"/sse", "/events"}:
                 self.send_error(404, "not found")
                 return
-            session_id = uuid.uuid4().hex
-            session = _SSESession()
-            _SSE_SESSIONS[session_id] = session
+            opened = _open_sse_session()
+            if opened is None:
+                self._write_json(
+                    {
+                        "error": (
+                            "the MCP SSE server already has "
+                            f"{MAX_SSE_SESSIONS} open sessions"
+                        ),
+                        "error_code": "sse_session_limit",
+                    },
+                    status=503,
+                )
+                return
+            session_id, session = opened
 
             self.send_response(200)
             self.send_header("Content-Type", "text/event-stream")
@@ -1250,16 +1488,27 @@ def _make_sse_handler(
 
             endpoint = f"/messages?session_id={session_id}"
             self._write_sse("endpoint", endpoint)
+            idle = 0.0
             try:
                 while True:
-                    item = session.queue.get()
+                    try:
+                        item = session.queue.get(timeout=SSE_HEARTBEAT_SECONDS)
+                    except queue.Empty:
+                        idle += SSE_HEARTBEAT_SECONDS
+                        if idle >= SSE_IDLE_TIMEOUT_SECONDS:
+                            # An idle session is holding a server worker
+                            # thread; reclaim it instead of blocking forever.
+                            break
+                        self._write_sse("ping", "{}")
+                        continue
+                    idle = 0.0
                     self._write_sse(
                         "message", json.dumps(item, ensure_ascii=False, default=str)
                     )
             except (BrokenPipeError, ConnectionError):
                 pass
             finally:
-                _SSE_SESSIONS.pop(session_id, None)
+                _close_sse_session(session_id)
 
         def do_POST(self) -> None:  # noqa: N802
             if not self._request_authorized():
@@ -1309,15 +1558,36 @@ def _make_sse_handler(
                 self._write_json(_error(None, -32700, "Parse error"), status=400)
                 return
 
-            response = handle_jsonrpc(req)
+            # Patient-level disclosure needs its own credential even on a
+            # loopback bind, where the general bearer token is optional: any
+            # local process could otherwise read patient rows through MCP.
+            request_scopes = process_scopes()
+            if not self._patient_data_authorized():
+                request_scopes = request_scopes - {SCOPE_READ_PATIENT_DATA}
+            with scope_override(request_scopes):
+                response = handle_jsonrpc(req)
+
             if parsed.path in {"/messages", "/message"}:
                 session_id = (qs.get("session_id") or qs.get("sessionId") or [""])[0]
-                session = _SSE_SESSIONS.get(session_id)
+                session = _get_sse_session(session_id)
                 if session is None:
                     self._write_json({"error": "unknown SSE session"}, status=404)
                     return
                 if response is not None:
-                    session.queue.put(response)
+                    try:
+                        session.queue.put_nowait(response)
+                    except queue.Full:
+                        self._write_json(
+                            {
+                                "error": (
+                                    "the SSE session queue is full; the client is "
+                                    "not reading its event stream"
+                                ),
+                                "error_code": "sse_queue_full",
+                            },
+                            status=429,
+                        )
+                        return
                 self._write_json({"accepted": True})
                 return
 
@@ -1326,6 +1596,22 @@ def _make_sse_handler(
                 return
 
             self.send_error(404, "not found")
+
+        def _patient_data_authorized(self) -> bool:
+            """Check the separate patient-data credential for this request.
+
+            Returns False when no patient-data token is configured, so an
+            operator who only set the general bearer token never accidentally
+            exposes rows.
+            """
+
+            expected = str(os.environ.get(MCP_PATIENT_DATA_TOKEN_ENV, "") or "").strip()
+            if not expected:
+                return False
+            supplied = str(self.headers.get("X-EasyICU-Patient-Data", "") or "").strip()
+            if not supplied:
+                return False
+            return secrets.compare_digest(supplied, expected)
 
         def _request_authorized(self) -> bool:
             host_header = self.headers.get("Host", "")

@@ -13,6 +13,8 @@ from types import SimpleNamespace
 
 import pytest
 
+from easyicu.research_agent.mcp_policy import MCP_ALLOWED_ROOTS_ENV
+
 
 @contextmanager
 def _mcp_http_server(*, bearer_token=None, max_body_bytes=1024 * 1024):
@@ -61,6 +63,11 @@ def test_mcp_loopback_environment_url_never_forwards_provider_secrets(
 ):
     import easyicu.research_agent.mcp_server as mcp
 
+    # Every MCP filesystem argument is confined to a root configured at
+    # startup; declare tmp_path so this test still exercises the credential
+    # boundary it is about rather than the outer path confinement.
+    monkeypatch.setenv(MCP_ALLOWED_ROOTS_ENV, str(tmp_path))
+
     seen = {}
 
     class FakeClient:
@@ -85,6 +92,7 @@ def test_mcp_loopback_environment_url_never_forwards_provider_secrets(
         {
             "question": "Inspect the cohort.",
             "cohort_path": str(tmp_path / "cohort.parquet"),
+            "workdir": str(tmp_path / "run"),
             "provider": "openai",
             "model": "local-model",
         },
