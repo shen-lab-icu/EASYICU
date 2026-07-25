@@ -121,30 +121,51 @@ class FigureEgressPolicy:
     #: reading it as "these were sent" overstates every failed upload.
     uploaded: List[Dict[str, str]] = field(default_factory=list)
 
-    def record_upload(self, entries: Sequence[Mapping[str, str]]) -> None:
+    def record_upload(
+        self, entries: Sequence[Mapping[str, str]]
+    ) -> List[Dict[str, str]]:
+        """Record one authorization attempt per entry and return the rows.
+
+        Each row gets an ``attempt_id`` unique within the run. Sending the same
+        figure twice — a retry, or the same panel to two destinations — is two
+        attempts with two outcomes, and a receipt that cannot tell them apart
+        cannot say which one failed.
+        """
+
+        recorded: List[Dict[str, str]] = []
         for entry in entries:
             item = dict(entry)
             item.setdefault("transport", TRANSPORT_AUTHORIZED)
+            digest = str(item.get("sha256") or "")[:12]
+            item["attempt_id"] = f"{len(self.uploaded) + 1:04d}-{digest}"
             self.uploaded.append(item)
+            recorded.append(item)
+        return recorded
 
     def record_transport_outcome(
         self,
         entries: Sequence[Mapping[str, str]],
         outcome: str,
     ) -> None:
-        """Close the loop on entries this policy authorized.
+        """Close the loop on the exact attempts this policy authorized.
 
-        Matched by image digest, so a re-authorized image updates its own row
-        rather than the first one that happens to share a path.
+        Matched by ``attempt_id``. Matching on the image digest closed every
+        open attempt for that image at once, so one failed retry marked an
+        earlier successful send failed as well — and a fan-out to two
+        destinations recorded one outcome twice.
         """
 
         if outcome not in TRANSPORT_OUTCOMES:
             raise ValueError(f"unknown figure transport outcome {outcome!r}")
-        digests = {str(entry.get("sha256") or "") for entry in entries}
+        attempts = {
+            str(entry.get("attempt_id") or "")
+            for entry in entries
+            if entry.get("attempt_id")
+        }
         for item in self.uploaded:
             if item.get("transport") != TRANSPORT_AUTHORIZED:
                 continue
-            if str(item.get("sha256") or "") in digests:
+            if str(item.get("attempt_id") or "") in attempts:
                 item["transport"] = outcome
 
     def transport_summary(self) -> Dict[str, int]:
@@ -422,7 +443,9 @@ def authorize_figure_upload(
         )
 
     if policy is not None:
-        policy.record_upload(entries)
+        # Return the policy's own rows, so the caller closes the exact attempts
+        # that were opened rather than something merely equal to them.
+        return policy.record_upload(entries)
     return entries
 
 

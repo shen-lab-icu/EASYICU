@@ -739,11 +739,15 @@ def test_a_differently_named_duration_no_longer_slips_past(tmp_path):
 
 
 def test_a_different_index_var_is_refused():
-    from easyicu.table import cbind_tbl
+    # Via rbind: on the column-bind path the 2026-07-29 key-alignment check
+    # now refuses this pair one step earlier, because the second table does not
+    # carry the first's index column at all. The window contract itself is what
+    # this test is about, so it exercises the path that still reaches it.
+    from easyicu.table import rbind_tbl
     from easyicu.table.duration import WindowContractError
 
     with pytest.raises(WindowContractError, match="different index_var"):
-        cbind_tbl(_win("dur", "hours"), _win("dur", "hours", index="charttime"))
+        rbind_tbl(_win("dur", "hours"), _win("dur", "hours", index="charttime"))
 
 
 def test_a_different_id_var_is_refused():
@@ -832,11 +836,12 @@ def test_the_policy_records_a_completed_send(tmp_path):
     )
 
     policy = FigureEgressPolicy(allow_external_upload=True)
-    entries = [{"path": "a.png", "sha256": "a" * 64}]
-    policy.record_upload(entries)
+    # The rows the policy hands back are the attempts; closing an attempt means
+    # naming it, not describing an image that resembles it (2026-07-29).
+    recorded = policy.record_upload([{"path": "a.png", "sha256": "a" * 64}])
     assert policy.transport_summary() == {"authorized": 1}
 
-    policy.record_transport_outcome(entries, TRANSPORT_COMPLETED)
+    policy.record_transport_outcome(recorded, TRANSPORT_COMPLETED)
     assert policy.transport_summary() == {"transport_completed": 1}
 
 
@@ -852,10 +857,10 @@ def test_the_receipt_distinguishes_the_five_states(tmp_path):
             return SimpleNamespace(evidence_id=kwargs["evidence_id"])
 
     policy = FigureEgressPolicy(allow_external_upload=True)
-    policy.record_upload(
+    recorded = policy.record_upload(
         [{"path": "a.png", "sha256": "a" * 64}, {"path": "b.png", "sha256": "b" * 64}]
     )
-    policy.record_transport_outcome([{"sha256": "a" * 64}], TRANSPORT_COMPLETED)
+    policy.record_transport_outcome(recorded[:1], TRANSPORT_COMPLETED)
 
     register_figure_egress_receipt(
         policy=policy, evidence=_Store(), run_dir=tmp_path, phase="completed"
