@@ -13,6 +13,7 @@ resume through the real ``Command`` channel and let the *graph's own*
 
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 from types import MappingProxyType, SimpleNamespace
@@ -416,8 +417,27 @@ class _FakeEvidence:
         return self._records.get(evidence_id)
 
 
-def _record(relative_path, sha="e" * 64):
-    return SimpleNamespace(relative_path=relative_path, sha256=sha, kind="figure")
+def _record(relative_path, sha=None, root=None):
+    """A record whose digest matches the file, the way a real store's does.
+
+    A hand-written placeholder digest would make every audit fail at the
+    re-hash step for a reason the test is not about — and would hide whichever
+    check it was actually written to exercise. ``sha`` is overridable so the
+    digest-mismatch path can be tested deliberately.
+    """
+
+    if sha is None and root is not None:
+        path = Path(root) / relative_path
+        sha = _sha256_of(path) if path.is_file() else "e" * 64
+    return SimpleNamespace(
+        relative_path=relative_path, sha256=sha or "e" * 64, kind="figure"
+    )
+
+
+def _sha256_of(path):
+    digest = hashlib.sha256()
+    digest.update(Path(path).read_bytes())
+    return digest.hexdigest()
 
 
 def test_p0_privacy_audit_refuses_a_source_with_a_subject_identifier(tmp_path):
@@ -428,7 +448,7 @@ def test_p0_privacy_audit_refuses_a_source_with_a_subject_identifier(tmp_path):
 
     source = tmp_path / "primary.csv"
     source.write_text("stay_id,risk\n1,0.5\n2,0.6\n", encoding="utf-8")
-    evidence = _FakeEvidence(tmp_path, {"primary": _record("primary.csv")})
+    evidence = _FakeEvidence(tmp_path, {"primary": _record("primary.csv", root=tmp_path)})
 
     audit = audit_figure_privacy(
         contract=_contract(roles=("primary_estimand",), sources=("primary",)),
@@ -451,7 +471,7 @@ def test_p0_privacy_audit_clears_an_aggregate_source(tmp_path):
         json.dumps({"odds_ratio": 1.42, "ci_lower": 1.11, "n_patients": 4_218}),
         encoding="utf-8",
     )
-    evidence = _FakeEvidence(tmp_path, {"summary": _record("summary.json")})
+    evidence = _FakeEvidence(tmp_path, {"summary": _record("summary.json", root=tmp_path)})
 
     audit = audit_figure_privacy(
         contract=_contract(roles=("primary_estimand", "calibration")),
@@ -472,7 +492,7 @@ def test_p0_privacy_audit_refuses_a_small_declared_group(tmp_path):
 
     source = tmp_path / "strata.json"
     source.write_text(json.dumps({"strata": [{"n_patients": 3}]}), encoding="utf-8")
-    evidence = _FakeEvidence(tmp_path, {"strata": _record("strata.json")})
+    evidence = _FakeEvidence(tmp_path, {"strata": _record("strata.json", root=tmp_path)})
 
     audit = audit_figure_privacy(
         contract=_contract(roles=("heterogeneity",)),
@@ -492,7 +512,7 @@ def test_p0_privacy_audit_refuses_an_uninspectable_source(tmp_path):
 
     source = tmp_path / "opaque.bin"
     source.write_bytes(b"\x00\x01\x02")
-    evidence = _FakeEvidence(tmp_path, {"opaque": _record("opaque.bin")})
+    evidence = _FakeEvidence(tmp_path, {"opaque": _record("opaque.bin", root=tmp_path)})
 
     audit = audit_figure_privacy(
         contract=_contract(),
@@ -508,7 +528,7 @@ def test_p0_privacy_audit_refuses_an_uninspectable_source(tmp_path):
 def test_p0_privacy_audit_refuses_a_missing_source(tmp_path):
     from easyicu.research_agent.gates.figure_privacy import audit_figure_privacy
 
-    evidence = _FakeEvidence(tmp_path, {"gone": _record("gone.json")})
+    evidence = _FakeEvidence(tmp_path, {"gone": _record("gone.json", root=tmp_path)})
     audit = audit_figure_privacy(
         contract=_contract(),
         evidence=evidence,
@@ -527,7 +547,7 @@ def test_p0_privacy_audit_refuses_an_identifier_in_rendered_text(tmp_path):
 
     source = tmp_path / "summary.json"
     source.write_text(json.dumps({"odds_ratio": 1.42}), encoding="utf-8")
-    evidence = _FakeEvidence(tmp_path, {"summary": _record("summary.json")})
+    evidence = _FakeEvidence(tmp_path, {"summary": _record("summary.json", root=tmp_path)})
     contract = _contract()
     contract.panels[0].claim = "Index case 30042318 drives the effect."
 
@@ -552,7 +572,7 @@ def test_p0_role_alone_no_longer_authorizes_egress(tmp_path):
     source.write_text(
         "subject_id,predicted,observed\n1,0.2,0\n2,0.4,1\n", encoding="utf-8"
     )
-    evidence = _FakeEvidence(tmp_path, {"scatter": _record("scatter.csv")})
+    evidence = _FakeEvidence(tmp_path, {"scatter": _record("scatter.csv", root=tmp_path)})
 
     audit = audit_figure_privacy(
         contract=_contract(roles=("validation",)),
@@ -616,8 +636,10 @@ def test_p0_egress_receipt_has_two_phases(tmp_path):
     completed = json.loads(
         (tmp_path / "figure_egress_receipt.json").read_text("utf-8")
     )
-    assert intent["uploaded_count"] == 0
-    assert completed["uploaded_count"] == 1
+    assert intent["authorized_count"] == 0
+    assert completed["authorized_count"] == 1
+    # Authorized but never closed out: recorded as unknown, not as a success.
+    assert completed["transport_counts"] == {"transport_unknown": 1}
 
 
 def test_p0_write_phase_does_not_demote_an_egress_receipt_failure():

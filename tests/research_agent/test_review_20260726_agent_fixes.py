@@ -835,11 +835,14 @@ def test_p1_2_egress_receipt_is_persisted_even_when_nothing_was_uploaded(ra, tmp
     payload = json.loads(
         (tmp_path / "figure_egress_receipt.json").read_text(encoding="utf-8")
     )
-    # Schema moved to /2 on 2026-07-27 when the receipt became two-phase
-    # (an intent record before upload, a completed record after).
-    assert payload["schema"] == "easyicu.figure_egress_receipt/2"
+    # Schema moved to /2 on 2026-07-27 when the receipt became two-phase (an
+    # intent record before upload, a completed record after), and to /3 on
+    # 2026-07-28 when each entry gained its own transport outcome — an
+    # authorized upload and a delivered one are different facts.
+    assert payload["schema"] == "easyicu.figure_egress_receipt/3"
     assert payload["phase"] == "completed"
-    assert payload["uploaded_count"] == 0
+    assert payload["authorized_count"] == 0
+    assert payload["transport_counts"] == {}
     assert store.get("figure_egress_receipt") is not None
 
 

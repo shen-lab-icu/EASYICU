@@ -290,9 +290,60 @@ def test_p0_1_sse_patient_data_needs_its_own_token_even_on_loopback():
 
 
 def _registered_figure(tmp_path: Path, *, aggregate_only: bool = True):
+    """A figure cleared the way production clears one.
+
+    Originally this hand-wrote ``{aggregate_only: True}`` into the metadata,
+    which is exactly the flag the 2026-07-28 review showed a caller can forge.
+    Now the fixture runs the real host audit over a real source artefact and
+    registers its receipt, so these tests exercise the gate a production figure
+    actually meets. ``aggregate_only=False`` gives the source a small cell, so
+    the *audit* refuses rather than the fixture asserting a refusal.
+    """
+
+    from types import SimpleNamespace
+
+    from easyicu.research_agent.gates.figure_privacy import audit_figure_privacy
+    from easyicu.research_agent.figures.skill import AGGREGATE_ONLY_PANEL_ROLES
+
     run_dir = tmp_path / "run"
     run_dir.mkdir(parents=True, exist_ok=True)
     evidence = EvidenceStore(run_dir)
+    source = evidence.register_json(
+        kind="statistic",
+        description="fixture aggregate source",
+        payload={"n_patients": 4200 if aggregate_only else 3},
+        filename="summary.json",
+        evidence_id="summary",
+        producer="publication_figure_skill",
+        generation_mode="deterministic_figure_skill",
+    )
+    contract = SimpleNamespace(
+        figure_id="fig1",
+        core_claim="A claim.",
+        statistics_note=None,
+        image_integrity_note=None,
+        panels=[
+            SimpleNamespace(role="primary_estimand", title="Panel", claim="A claim.")
+        ],
+        source_data=[source.evidence_id],
+    )
+    audit = audit_figure_privacy(
+        contract=contract,
+        evidence=evidence,
+        run_dir=run_dir,
+        source_evidence_ids=[source.evidence_id],
+        allowed_panel_roles=AGGREGATE_ONLY_PANEL_ROLES,
+    )
+    assert audit.aggregate_only is aggregate_only, audit.reasons
+    audit_record = evidence.register_json(
+        kind="log",
+        description="fixture privacy audit",
+        payload=audit.as_receipt(),
+        filename="figure_privacy_audit_fig1.json",
+        evidence_id="figure_privacy_audit_fig1",
+        producer="publication_figure_skill",
+        generation_mode="deterministic_figure_skill",
+    )
     record = evidence.register_text(
         kind="figure",
         description="fixture figure",
@@ -300,7 +351,13 @@ def _registered_figure(tmp_path: Path, *, aggregate_only: bool = True):
         filename="fig1.svg",
         producer="publication_figure_skill",
         generation_mode="deterministic_skill",
-        metadata={AGGREGATE_ONLY_METADATA_KEY: aggregate_only},
+        metadata={
+            "figure_id": "fig1",
+            "source_evidence_ids": [source.evidence_id],
+            "source_evidence_sha256": {source.evidence_id: source.sha256},
+            "figure_privacy_audit_evidence_id": audit_record.evidence_id,
+            **audit.as_metadata(),
+        },
     )
     return run_dir, evidence, run_dir / record.relative_path, record
 
