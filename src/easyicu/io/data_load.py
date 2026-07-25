@@ -1,7 +1,25 @@
-"""Low-level data loading functions (R ricu data-load.R).
+"""Advanced low-level data loading (interface design inspired by R ricu).
 
-Provides load_src, load_difftime, load_id, load_ts, and load_win functions
-for loading data from ICU data sources.
+``load_src``, ``load_difftime``, ``load_id``, ``load_ts`` and ``load_win`` read
+a *named source table* into a typed ICU table, with timestamps expressed
+relative to the ID system's declared origin.
+
+**For clinical variables, use :func:`easyicu.load_concepts` instead.** That is
+the supported path: it resolves concepts across all six databases through the
+concept dictionary, applies the callback chain, and is what every extraction in
+this project runs on. The functions here are for reading a table the concept
+layer does not cover — a custom export, a source-specific table, an ad-hoc
+join — and they hand back raw source columns with no concept harmonisation,
+no unit normalisation and no bounds checking.
+
+These entry points are shaped like ricu's, but this is not a compatibility
+layer and no ricu-API equivalence is claimed; ``pyproject.toml`` says
+"inspired by", and the real inheritance from ricu is the concept dictionary.
+
+Nothing inside EasyICU calls this module, which is how three signature errors
+and a dead relative-time conversion survived here until 2026-07-29. Treat it as
+a supported but lightly-travelled road: changes need their own tests, because
+the extraction suite will not exercise them.
 """
 
 from __future__ import annotations

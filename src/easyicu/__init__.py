@@ -63,6 +63,12 @@ from .table import (
     dur_var,
     meta_vars,
     data_vars,
+    # ``upgrade_id`` is exported under its own name, alongside ``change_id``
+    # and ``downgrade_id``, so the three agree about direction. It used to be
+    # aliased away so that ``easyicu.io.data_utils.upgrade_id`` — which
+    # converts the other way — could hold the plain name. ``table_upgrade_id``
+    # stays as an alias for anyone who reached for the renamed form.
+    upgrade_id,
     upgrade_id as table_upgrade_id,
     downgrade_id,
     change_id,
@@ -313,7 +319,12 @@ try:
         stay_windows as stay_windows_utils,
         id_windows,
         id_origin,
-        upgrade_id,
+        # NOT ``upgrade_id``. This module's version converts fine -> coarse,
+        # the opposite of the canonical ``easyicu.table.upgrade_id`` imported
+        # above, and importing it here shadowed the canonical one — so
+        # ``easyicu.change_id`` and ``easyicu.upgrade_id`` disagreed about
+        # direction inside a single namespace. It stays reachable at
+        # ``easyicu.io.data_utils.upgrade_id``, where its own docstring applies.
     )
     _HAS_DATA_UTILS = True
 except ImportError:
