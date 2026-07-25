@@ -74,6 +74,29 @@ WEB_ALLOWED_HOSTS = _web_allowed_hosts()
 app.add_middleware(AllowedHostsMiddleware, allowed_hosts=WEB_ALLOWED_HOSTS)
 
 
+#: Headers a reverse proxy adds. A browser on this machine never sends them.
+_PROXY_HEADERS = (
+    "x-forwarded-for",
+    "x-forwarded-host",
+    "x-forwarded-proto",
+    "x-real-ip",
+    "forwarded",
+)
+
+
+def _trusts_proxy() -> bool:
+    return os.getenv("EASYICU_WEB_TRUST_PROXY", "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
+def _is_proxied_request(request: Request) -> bool:
+    return any(header in request.headers for header in _PROXY_HEADERS)
+
+
 def _is_local_web_client(request: Request) -> bool:
     peer = request.client.host if request.client else ""
     if peer in {"testclient", "testserver"}:
@@ -96,6 +119,25 @@ async def local_clients_only(request: Request, call_next):
         return JSONResponse(
             status_code=403,
             content={"detail": "EasyICU WebApp accepts loopback clients only."},
+        )
+    # A loopback peer is only evidence of a local user when nothing sits in
+    # front. Put this behind nginx, caddy, an SSH forward or a desktop proxy
+    # and every remote request arrives from 127.0.0.1 — the check above passes
+    # for the whole internet, and these APIs read and write the filesystem.
+    # The forwarding headers are what gives that away; a browser on this
+    # machine does not send them.
+    if _is_proxied_request(request) and not _trusts_proxy():
+        return JSONResponse(
+            status_code=403,
+            content={
+                "detail": (
+                    "This request was forwarded by a proxy. EasyICU WebApp has no "
+                    "remote authentication, so a loopback peer behind a proxy is "
+                    "not proof of a local user. Connect directly, or set "
+                    "EASYICU_WEB_TRUST_PROXY=1 if the proxy in front of it "
+                    "authenticates every request itself."
+                )
+            },
         )
     return await call_next(request)
 
