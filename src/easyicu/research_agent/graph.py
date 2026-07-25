@@ -58,6 +58,7 @@ except ImportError:  # pragma: no cover - py<3.8 not supported anyway
 __all__ = [
     "HUMAN_REVIEW_FINDING_REASONS",
     "HumanReviewDecision",
+    "HumanReviewPending",
     "HumanReviewRequest",
     "OrchestrationRuntimeReceipt",
     "PipelineGraphState",
@@ -125,6 +126,35 @@ class HumanReviewDecision(BaseModel):
     note: str = Field(default="", max_length=1_000)
 
 
+class HumanReviewPending(BaseModel):
+    """What :meth:`ResearchAgentPipeline.run` returns when the run paused.
+
+    A paused run has *no* ``PipelineResult`` — the graph stopped inside the
+    review node and nothing downstream of it has executed. Returning a typed
+    object rather than reaching into the interrupted state for a
+    ``final_result`` that is not there is what makes the pause a supported
+    outcome instead of a ``KeyError``.
+
+    ``thread_id`` is the resume coordinate: pass it (or the whole object) back
+    to :meth:`ResearchAgentPipeline.resume_human_review` together with one
+    decision per request.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal["easyicu.human_review_pending/1"] = (
+        "easyicu.human_review_pending/1"
+    )
+    run_id: str
+    thread_id: str
+    run_dir: str
+    requests: tuple[HumanReviewRequest, ...]
+
+    @property
+    def review_ids(self) -> tuple[str, ...]:
+        return tuple(item.review_id for item in self.requests)
+
+
 #: Plan-phase finding reasons that must not be walked past unattended, mapped
 #: to the review kind they raise. Keyed on the typed ``detail["reason"]`` rather
 #: than on message text so a reworded finding cannot silently drop out of the
@@ -137,20 +167,53 @@ HUMAN_REVIEW_FINDING_REASONS: Mapping[str, str] = {
 }
 
 
+def _plan_authority_payload(plan: Any, evidence: Any) -> dict[str, Any]:
+    """The plan state a reviewer's signature is a signature *of*.
+
+    Binding only the finding text meant one approval covered any plan that
+    raised the same finding: the reviewer's authority digest did not move when
+    the plan was revised or when the evidence underneath it changed. Including
+    the revision and the source-artefact digests makes the approval specific to
+    what was actually shown, so an edited plan needs a new signature.
+    """
+
+    payload: dict[str, Any] = {
+        "plan_revision": getattr(plan, "revision", None),
+        "plan_step_ids": [
+            str(getattr(step, "step_id", "")) for step in getattr(plan, "steps", ())
+        ],
+    }
+    digests: dict[str, str] = {}
+    if evidence is not None:
+        try:
+            for record in evidence.records():
+                digests[str(record.evidence_id)] = str(record.sha256)
+        except Exception:  # noqa: BLE001 - an unreadable store binds nothing
+            digests = {}
+    payload["plan_evidence_sha256"] = dict(sorted(digests.items()))
+    return payload
+
+
 def human_review_requests_for_plan(
     *,
     findings: Sequence[Any],
     plan: Any = None,
+    evidence: Any = None,
 ) -> tuple[HumanReviewRequest, ...]:
     """Derive the review requests a completed plan phase implies.
 
     Deliberately derived from *typed finding state* rather than from a caller
     flag: the point of the gate is that the run itself decides when a human is
     required, so an operator cannot disable it by not asking for it.
+
+    ``evidence`` binds the approval to the artefacts the plan rests on. Passing
+    it is what makes the authority digest change when the underlying evidence
+    changes, so a stale approval cannot be replayed onto revised work.
     """
 
     requests: list[HumanReviewRequest] = []
     seen: set[str] = set()
+    plan_authority = _plan_authority_payload(plan, evidence)
     for finding in findings or ():
         # Severity is the run's own statement about whether the state blocks.
         # The same reason code can be raised as a warning by a development
@@ -170,9 +233,11 @@ def human_review_requests_for_plan(
             "severity": getattr(finding, "severity", None),
             "reason": reason or "human_review_required",
             "evidence_ids": list(getattr(finding, "evidence_ids", ()) or ()),
-            "plan_step_ids": [
-                str(getattr(step, "step_id", "")) for step in getattr(plan, "steps", ())
-            ],
+            # A capability request is the thing being approved in the
+            # ``capability_request`` case, so its own digest is part of what
+            # the signature covers.
+            "capability_request_sha256": detail.get("capability_request_sha256"),
+            **plan_authority,
         }
         request = HumanReviewRequest.create(
             kind=kind,  # type: ignore[arg-type]
@@ -275,6 +340,14 @@ class PipelineGraphState(TypedDict, total=False):
     module scope: langgraph resolves these annotations when the
     ``StateGraph`` is constructed, and a ``TYPE_CHECKING``-only import would
     raise ``NameError`` there.
+
+    The three phase handoffs are ``_phase_ref`` handles rather than the objects
+    themselves whenever a checkpointer is configured. A ``_PlanPhaseResult``
+    holds an open ``EvidenceStore`` (and therefore a ``threading.RLock``), and
+    a checkpointer serialises every node output — so putting it in the state
+    made *any* checkpointed run die at the first write, which in turn made the
+    human-review interrupt unusable in production. The objects live in a
+    per-graph registry instead; the state carries only their keys.
     """
 
     plan_result: _PlanPhaseResult
@@ -283,6 +356,7 @@ class PipelineGraphState(TypedDict, total=False):
     final_result: PipelineResult
     aborted: bool
     human_review_decisions: tuple[dict[str, Any], ...]
+    phase_refs: dict[str, str]
 
 
 def build_pipeline_graph(
@@ -331,6 +405,30 @@ def build_pipeline_graph(
 
     from langgraph.graph import StateGraph, END
 
+    # Per-graph registry for the unserialisable phase handoffs. One compiled
+    # graph is one run, and ``resume_human_review`` drives the *same* compiled
+    # graph, so the registry is alive for the whole pause-and-resume cycle.
+    phase_results: dict[str, Any] = {}
+
+    def _put(name: str, value: Any) -> dict[str, Any]:
+        """Store a phase result and return what belongs in the graph state."""
+
+        phase_results[name] = value
+        if checkpointer is None:
+            return {name: value}
+        return {"phase_refs": {name: name}}
+
+    def _get(state: PipelineGraphState, name: str) -> Any:
+        if name in state:
+            return state[name]
+        if name in phase_results:
+            return phase_results[name]
+        raise RuntimeError(
+            f"phase result {name!r} is not available in this process; a run "
+            "paused for human review must be resumed through the same "
+            "ResearchAgentPipeline instance that started it"
+        )
+
     def plan_node(state: PipelineGraphState) -> dict[str, Any]:
         plan_result = plan_invoker()
         aborted_result = (
@@ -340,22 +438,22 @@ def build_pipeline_graph(
         )
         if aborted_result is not None:
             return {
-                "plan_result": plan_result,
+                **_put("plan_result", plan_result),
                 "final_result": aborted_result,
                 "aborted": True,
             }
         if provenance_hook is not None:
             provenance_hook(plan_result)
-        return {"plan_result": plan_result, "aborted": False}
+        return {**_put("plan_result", plan_result), "aborted": False}
 
     def execute_node(state: PipelineGraphState) -> dict[str, Any]:
-        execute_result = execute_invoker(state["plan_result"])
-        return {"execute_result": execute_result}
+        execute_result = execute_invoker(_get(state, "plan_result"))
+        return _put("execute_result", execute_result)
 
     def human_review_node(state: PipelineGraphState) -> dict[str, Any]:
         if human_review_invoker is None:
             return {"human_review_decisions": ()}
-        requests = tuple(human_review_invoker(state["plan_result"]))
+        requests = tuple(human_review_invoker(_get(state, "plan_result")))
         if not requests:
             return {"human_review_decisions": ()}
         request_ids = [item.review_id for item in requests]
@@ -408,14 +506,16 @@ def build_pipeline_graph(
         return {"human_review_decisions": tuple(records)}
 
     def write_node(state: PipelineGraphState) -> dict[str, Any]:
-        write_result = write_invoker(state["plan_result"], state["execute_result"])
-        return {"write_result": write_result}
+        write_result = write_invoker(
+            _get(state, "plan_result"), _get(state, "execute_result")
+        )
+        return _put("write_result", write_result)
 
     def finalise_node(state: PipelineGraphState) -> dict[str, Any]:
         final_result = finalise_invoker(
-            state["plan_result"],
-            state["execute_result"],
-            state["write_result"],
+            _get(state, "plan_result"),
+            _get(state, "execute_result"),
+            _get(state, "write_result"),
         )
         return {"final_result": final_result}
 
