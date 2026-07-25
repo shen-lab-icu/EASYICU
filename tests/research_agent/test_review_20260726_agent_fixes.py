@@ -1164,3 +1164,121 @@ def test_p1_5_debug_dump_is_owner_only_on_disk(tmp_path, monkeypatch):
 
 if sys.version_info < (3, 10):  # pragma: no cover - repo targets 3.10+
     raise RuntimeError("these tests assume Python 3.10+")
+
+
+def test_p0_2_the_wired_recorder_binds_the_decision_into_run_evidence(
+    monkeypatch, tmp_path
+):
+    """Exercise the recorder closure ``run()`` actually installs.
+
+    Capturing the callable and driving it is the only way to reach this code
+    without a full provider-backed run, and it still uses the real ``run_dir``,
+    ``run_id`` and evidence store the closure captured.
+    """
+
+    import easyicu.research_agent.graph as graph_module
+    from easyicu.research_agent import pipeline as pipeline_module
+    from easyicu.research_agent.authority.evidence_store import EvidenceStore
+
+    captured = {}
+
+    def _fake_build(**kwargs):
+        captured.update(kwargs)
+        raise RuntimeError("stop after graph construction")
+
+    monkeypatch.setattr(graph_module, "build_pipeline_graph", _fake_build)
+
+    frame = pd.DataFrame(
+        {
+            "stay_id": range(1, 31),
+            "sofa2": [3.0 + (i % 4) for i in range(30)],
+            "death": [i % 3 == 0 for i in range(30)],
+        }
+    )
+    cohort = tmp_path / "cohort.parquet"
+    frame.to_parquet(cohort)
+
+    agent = pipeline_module.ResearchAgentPipeline(
+        workdir=tmp_path / "wd", llm=MockLLMClient()
+    )
+    with pytest.raises(RuntimeError, match="stop after graph construction"):
+        agent.run(question="Does SOFA-2 predict death?", cohort=cohort)
+
+    run_dir = next((tmp_path / "wd").glob("run_*"))
+    store = EvidenceStore(run_dir)
+    captured["human_review_invoker"](
+        SimpleNamespace(findings=[], plan=SimpleNamespace(steps=()), evidence=store)
+    )
+    captured["human_review_recorder"](
+        [
+            {
+                "schema": "easyicu.human_review_decision/1",
+                "request": {"review_id": "review-0123456789abcdef"},
+                "reviewer_identity": "operator@example.invalid",
+                "reviewer_identity_source": "authenticated",
+                "server_decided_at": "2026-07-26T00:00:00Z",
+            }
+        ]
+    )
+
+    assert store.get("human_review_decisions") is not None
+    payload = json.loads(
+        (run_dir / "human_review_decisions.json").read_text(encoding="utf-8")
+    )
+    assert payload["schema"] == "easyicu.human_review_decisions/1"
+    assert payload["decisions"][0]["reviewer_identity_source"] == "authenticated"
+
+
+def test_p0_2_paper_profile_rejects_a_client_claimed_reviewer(monkeypatch, tmp_path):
+    import easyicu.research_agent.graph as graph_module
+    from easyicu.research_agent import pipeline as pipeline_module
+    from easyicu.research_agent.authority.evidence_store import EvidenceStore
+
+    captured = {}
+
+    def _fake_build(**kwargs):
+        captured.update(kwargs)
+        raise RuntimeError("stop after graph construction")
+
+    monkeypatch.setattr(graph_module, "build_pipeline_graph", _fake_build)
+
+    frame = pd.DataFrame(
+        {
+            "stay_id": range(1, 31),
+            "sofa2": [3.0 + (i % 4) for i in range(30)],
+            "death": [i % 3 == 0 for i in range(30)],
+        }
+    )
+    cohort = tmp_path / "cohort.parquet"
+    frame.to_parquet(cohort)
+
+    agent = pipeline_module.ResearchAgentPipeline(
+        workdir=tmp_path / "paper",
+        submission_profile_name="npj_dm",
+        submission_profile_version="20260527",
+        llm=MockLLMClient(),
+    )
+    with pytest.raises(RuntimeError, match="stop after graph construction"):
+        agent.run(question="Does SOFA-2 predict death?", cohort=cohort)
+
+    run_dir = next((tmp_path / "paper").glob("run_*"))
+    captured["human_review_invoker"](
+        SimpleNamespace(
+            findings=[],
+            plan=SimpleNamespace(steps=()),
+            evidence=EvidenceStore(run_dir),
+        )
+    )
+
+    with pytest.raises(RuntimeError, match="authenticated reviewer identity"):
+        captured["human_review_recorder"](
+            [
+                {
+                    "schema": "easyicu.human_review_decision/1",
+                    "request": {"review_id": "review-0123456789abcdef"},
+                    "reviewer_identity": None,
+                    "reviewer_identity_source": "unauthenticated_client_claim",
+                    "server_decided_at": "2026-07-26T00:00:00Z",
+                }
+            ]
+        )
