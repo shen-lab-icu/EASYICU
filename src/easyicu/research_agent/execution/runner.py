@@ -196,6 +196,22 @@ def _docker_mount_entry(source: str, target: str, *, readonly: bool) -> str:
 #: enough that a runaway mkdir loop cannot stall evidence collection.
 MAX_OUTPUT_ARTIFACT_DEPTH = 8
 
+#: Ceilings on the generated-output tree. An evidence-bound run must not be
+#: able to produce output the sweep silently skips, nor exhaust inodes or disk
+#: while the sweep tries to enumerate it.
+MAX_OUTPUT_ARTIFACT_FILES = 5_000
+MAX_OUTPUT_ARTIFACT_DIRECTORIES = 1_000
+MAX_OUTPUT_ARTIFACT_TOTAL_BYTES = 2 * 1024**3
+MAX_OUTPUT_ARTIFACT_FILE_BYTES = 512 * 1024**2
+
+
+class OutputArtifactPolicyError(RuntimeError):
+    """Raised when generated output breaks the evidence-collection contract.
+
+    Fail closed rather than skip: in an evidence-bound design an artefact the
+    sweep cannot register must not be able to coexist with a successful run.
+    """
+
 
 def _collect_safe_output_artifacts(out_dir: Path) -> List[Path]:
     """Collect lexical single-link regular files from generated output.
@@ -212,6 +228,8 @@ def _collect_safe_output_artifacts(out_dir: Path) -> List[Path]:
 
     artefacts: List[Path] = []
     pending: List[tuple[Path, int]] = [(out_dir, 0)]
+    directories = 0
+    total_bytes = 0
     while pending:
         current, depth = pending.pop()
         try:
@@ -221,11 +239,40 @@ def _collect_safe_output_artifacts(out_dir: Path) -> List[Path]:
         for output_path in entries:
             metadata = os.lstat(output_path)
             if stat.S_ISREG(metadata.st_mode) and metadata.st_nlink == 1:
+                if metadata.st_size > MAX_OUTPUT_ARTIFACT_FILE_BYTES:
+                    raise OutputArtifactPolicyError(
+                        f"generated output {output_path.relative_to(out_dir)} is "
+                        f"{metadata.st_size} bytes, over the "
+                        f"{MAX_OUTPUT_ARTIFACT_FILE_BYTES}-byte per-file limit"
+                    )
+                total_bytes += metadata.st_size
+                if total_bytes > MAX_OUTPUT_ARTIFACT_TOTAL_BYTES:
+                    raise OutputArtifactPolicyError(
+                        "generated output exceeds the "
+                        f"{MAX_OUTPUT_ARTIFACT_TOTAL_BYTES}-byte total limit"
+                    )
                 artefacts.append(output_path)
+                if len(artefacts) > MAX_OUTPUT_ARTIFACT_FILES:
+                    raise OutputArtifactPolicyError(
+                        f"generated output has more than {MAX_OUTPUT_ARTIFACT_FILES} "
+                        "files; evidence collection refuses to enumerate it"
+                    )
                 continue
             if stat.S_ISDIR(metadata.st_mode):
-                if depth < MAX_OUTPUT_ARTIFACT_DEPTH:
-                    pending.append((output_path, depth + 1))
+                if depth >= MAX_OUTPUT_ARTIFACT_DEPTH:
+                    raise OutputArtifactPolicyError(
+                        f"generated output directory "
+                        f"{output_path.relative_to(out_dir)} is nested deeper than "
+                        f"{MAX_OUTPUT_ARTIFACT_DEPTH} levels; anything below it "
+                        "would be omitted from the evidence artefact list"
+                    )
+                directories += 1
+                if directories > MAX_OUTPUT_ARTIFACT_DIRECTORIES:
+                    raise OutputArtifactPolicyError(
+                        f"generated output has more than "
+                        f"{MAX_OUTPUT_ARTIFACT_DIRECTORIES} directories"
+                    )
+                pending.append((output_path, depth + 1))
                 continue
             # Symlink, hardlink, fifo, socket, device — never an artefact.
             output_path.unlink(missing_ok=True)
