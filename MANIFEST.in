@@ -21,6 +21,7 @@ recursive-include examples *.py
 recursive-include benchmarks *.py *.json *.jsonl *.md
 recursive-include tests *.py
 include src/easyicu/research_agent/README.md
+recursive-include src/easyicu/research_agent/runner_image *
 
 # Include data files
 recursive-include src/easyicu/data *.json
