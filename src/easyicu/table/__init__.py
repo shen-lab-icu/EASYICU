@@ -562,10 +562,11 @@ class WinTbl(TsTbl):
         index_var: Optional[str] = None,
         dur_var: Optional[str] = None,
         interval: Optional[pd.Timedelta] = None,
-        by_ref: bool = False
+        by_ref: bool = False,
+        dur_unit: Optional[str] = None,
     ):
         """Initialize WinTbl.
-        
+
         Args:
             data: DataFrame with windowed time series data
             id_vars: ID column name(s)
@@ -573,15 +574,43 @@ class WinTbl(TsTbl):
             dur_var: Duration column (auto-detected if None)
             interval: Time step (auto-detected if None)
             by_ref: If True, use data by reference
+            dur_unit: Unit of ``dur_var`` ('seconds'/'minutes'/'hours'/'days'/
+                'timedelta'). Structural, unlike ``DataFrame.attrs``, which does
+                not survive every pandas operation. When given it is also
+                written to the frame so the attrs-based readers agree; when
+                omitted it is read back from the frame if declared there.
         """
         # Auto-detect dur_var if not provided
         if dur_var is None:
             dur_var = self._detect_dur_var(data, index_var)
         
         self.dur_var = dur_var
-        
+
+        # Duration unit as a structural field. A timedelta column is
+        # self-describing; a numeric one is only meaningful with a unit, and
+        # attrs alone is too fragile a carrier (concat/groupby can drop it).
+        from .duration import (
+            UNIT_TIMEDELTA,
+            get_dur_var_unit,
+            set_dur_var_unit,
+        )
+
+        if dur_unit is None:
+            declared = get_dur_var_unit(data)
+            if declared is None and dur_var in getattr(data, "columns", []):
+                if pd.api.types.is_timedelta64_dtype(data[dur_var]):
+                    declared = UNIT_TIMEDELTA
+            dur_unit = declared
+        elif isinstance(data, pd.DataFrame):
+            set_dur_var_unit(data, dur_unit)
+        self.dur_unit = dur_unit
+
         # Initialize parent
         super().__init__(data, id_vars, index_var, interval, by_ref)
+
+        # Re-assert on the stored frame: the parent may have copied it.
+        if self.dur_unit is not None and isinstance(self.data, pd.DataFrame):
+            set_dur_var_unit(self.data, self.dur_unit)
     
     @staticmethod
     def _detect_dur_var(data: pd.DataFrame, index_var: Optional[str] = None) -> str:

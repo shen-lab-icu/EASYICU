@@ -365,12 +365,13 @@ def load_win(
     dur_var: Optional[str] = None,
     interval: Optional[pd.Timedelta] = None,
     src: Optional[str] = None,
+    duration_unit: Optional[str] = None,
     **kwargs
 ) -> WinTbl:
     """Load data as win_tbl (R ricu load_win).
-    
+
     Loads windowed time series data and returns as WinTbl.
-    
+
     Args:
         x: Table name (string) or source table object
         rows: Optional row filter function
@@ -380,14 +381,22 @@ def load_win(
         dur_var: Duration variable
         interval: Time series interval
         src: Data source name (if x is a string)
+        duration_unit: Unit of a NUMERIC duration column ('seconds'/'minutes'/
+            'hours'/'days'). Required for numeric durations — a bare number
+            carries no unit, and inferring one is what inflated windows 60x.
+            Not needed for a timedelta column, which is self-describing.
         **kwargs: Additional arguments
-        
+
     Returns:
         WinTbl with specified metadata
-        
+
+    Raises:
+        DurationUnitError: numeric duration loaded without ``duration_unit``.
+
     Examples:
         >>> load_win('ventilation', src='mimic_demo', id_var='icustay_id',
-        ...          index_var='starttime', dur_var='duration')
+        ...          index_var='starttime', dur_var='duration',
+        ...          duration_unit='minutes')
     """
     # Load as ts_tbl first
     ts_tbl = load_ts(x, rows=rows, cols=cols, id_var=id_var, 
@@ -405,9 +414,38 @@ def load_win(
         if dur_var is None:
             raise ValueError("Cannot determine dur_var")
     
+    # A numeric duration is meaningless without a unit, so demand one here
+    # rather than letting a downstream consumer guess.
+    from ..table.duration import (
+        UNIT_TIMEDELTA,
+        VALID_DUR_VAR_UNITS,
+        DurationUnitError,
+        set_dur_var_unit,
+    )
+
+    duration_is_timedelta = pd.api.types.is_timedelta64_dtype(ts_tbl.data[dur_var])
+    if duration_unit is not None:
+        if duration_unit not in VALID_DUR_VAR_UNITS:
+            raise DurationUnitError(
+                f"unknown duration_unit {duration_unit!r}; expected one of "
+                + ", ".join(sorted(VALID_DUR_VAR_UNITS))
+            )
+        set_dur_var_unit(ts_tbl.data, duration_unit)
+    elif duration_is_timedelta:
+        duration_unit = UNIT_TIMEDELTA
+        set_dur_var_unit(ts_tbl.data, UNIT_TIMEDELTA)
+    else:
+        raise DurationUnitError(
+            f"load_win: duration column {dur_var!r} is numeric, so its unit "
+            "cannot be inferred. Pass duration_unit='minutes' (or 'hours', "
+            "'seconds', 'days')."
+        )
+
     # Convert to win_tbl
     win_tbl = as_win_tbl(ts_tbl, dur_var=dur_var)
-    
+    win_tbl.dur_unit = duration_unit
+    set_dur_var_unit(win_tbl.data, duration_unit)
+
     return win_tbl
 
 def _resolve_id_hint(data: pd.DataFrame, config: DataSourceConfig, hint: Optional[str]) -> str:
