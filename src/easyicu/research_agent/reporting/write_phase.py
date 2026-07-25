@@ -69,6 +69,7 @@ from .reporting_checklist import (
 from .reviewer import run_reviewer_round
 from ..schema import CritiqueReport, EvidenceRef, ManuscriptDraftPacket
 from .side_findings import collect_side_findings
+from ..gates.figure_egress import register_figure_egress_receipt
 from ..gates.visual_qa import VLMVisualQAAdapter, VisualQAAuditor
 from .pdf_render import render_pdf_for_run
 
@@ -590,18 +591,25 @@ def run_write_phase(
                         fig_paths.append(run_dir / record.relative_path)
                 if fig_paths:
                     vlm_adapter = pipeline._visual_qa_adapter
+                    egress_policy = None
                     if vlm_adapter is None and pipeline._enable_vlm_visual_qa:
                         client = pipeline._vlm_client or role_resolver("analyzer")
                         if client is not None:
+                            egress_policy = pipeline._figure_egress_policy(
+                                evidence=evidence, run_dir=run_dir
+                            )
                             vlm_adapter = VLMVisualQAAdapter(
-                                client,
-                                egress_policy=pipeline._figure_egress_policy(
-                                    evidence=evidence, run_dir=run_dir
-                                ),
+                                client, egress_policy=egress_policy
                             )
                     publication_visual_findings = VisualQAAuditor(
                         vlm_adapter=vlm_adapter
                     ).audit(figure_paths=fig_paths)
+                    if egress_policy is not None:
+                        register_figure_egress_receipt(
+                            policy=egress_policy,
+                            evidence=evidence,
+                            run_dir=run_dir,
+                        )
                     findings.extend(
                         demote_cosmetic_publication_visual_findings(
                             publication_visual_findings
