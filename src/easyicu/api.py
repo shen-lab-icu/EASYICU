@@ -922,11 +922,13 @@ def _get_auto_chunk_strategy(
         else:
             auto_chunk_size = 1000
     elif normalized.intersection(sofa_heavy_concepts):
-        # Deliberately NOT memory-tiered. Chunk size can still change SOFA
-        # window-expansion results, so letting free RAM pick it would make the
-        # same cohort on the same data produce different scores on a laptop and
-        # on a workstation. A low-memory host must opt into a smaller chunk
-        # explicitly via EASYICU_AUTO_CHUNK_SIZE and own that choice.
+        # Deliberately NOT memory-tiered: a fixed profile bounds resource use
+        # and keeps the execution configuration stable, so a run is reproducible
+        # from its parameters rather than from the host's free RAM. Partition
+        # invariance itself is measured (see the docstring): SOFA/SOFA-2 agree
+        # across chunk sizes up to 10k stays on MIMIC-IV and eICU. Full-database
+        # scale is not yet measured. A low-memory host can opt into a smaller
+        # chunk via EASYICU_AUTO_CHUNK_SIZE.
         auto_chunk_size = SOFA_FIXED_CHUNK_SIZE
     elif available_memory_mb >= 10 * 1024:
         auto_chunk_size = 8000
