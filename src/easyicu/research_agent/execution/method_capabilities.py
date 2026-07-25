@@ -18,8 +18,9 @@ defensible result (the degradation ladder).
 from __future__ import annotations
 
 import importlib.util
+from contextlib import contextmanager
 from contextvars import ContextVar
-from typing import Callable, Collection, List, Optional
+from typing import Callable, Collection, Iterator, List, Optional
 
 from ..contracts.method_packages import (
     BASELINE_PACKAGES,
@@ -40,11 +41,46 @@ def set_runtime_capability_snapshot_provider(
 
     ``DockerRunner`` installs a lazy provider backed by its immutable image
     snapshot. ``CodeRunner`` clears it so host execution continues to probe the
-    active interpreter. A ContextVar prevents concurrent runner contexts from
+    active interpreter. A ContextVar keeps concurrent runner contexts from
     leaking one image's allow-list into another.
+
+    This publishes for the rest of the job on purpose: the coder prompt is
+    rendered after the runner is constructed, so the value has to outlive the
+    call that sets it. Scoping therefore belongs at the job boundary — see
+    :func:`runtime_capability_job_scope` — and not around the setter.
     """
 
     _RUNTIME_SNAPSHOT_PROVIDER.set(provider)
+
+
+@contextmanager
+def runtime_capability_job_scope() -> Iterator[None]:
+    """Bind one pipeline job's capability publication to this ``with`` block.
+
+    Publication is deliberately long-lived within a job, so the runners publish
+    with a bare ``set`` and the value survives until the coder prompt is
+    rendered and the step executes. What was missing was the other end: nothing
+    put the ContextVar back, so a value published by one job stayed visible to
+    whatever ran next in the same context.
+
+    That is not only a test artefact. A ``DockerRunner`` job that raises between
+    publishing its image allow-list and finishing leaves that allow-list in
+    place; the next job on the same long-lived process — a web request, an MCP
+    session, a benchmark loop — then renders a coder prompt offering packages
+    its own interpreter does not have. The runner constructors each call
+    ``set_runtime_capability_snapshot_provider(None)`` defensively for exactly
+    this reason, but a defensive clear only covers paths that build a runner.
+
+    Entering resets to "no provider" and leaving restores whatever was
+    published before, via the ``Token``, so nesting (``run_from_spec`` calling
+    ``run``) restores the outer publication rather than clearing it.
+    """
+
+    token = _RUNTIME_SNAPSHOT_PROVIDER.set(None)
+    try:
+        yield
+    finally:
+        _RUNTIME_SNAPSHOT_PROVIDER.reset(token)
 
 
 def runtime_capability_snapshot() -> Optional[frozenset[str]]:
@@ -153,6 +189,7 @@ __all__ = [
     "CURATED_METHOD_PACKAGES",
     "available_method_packages",
     "coder_method_capability_block",
+    "runtime_capability_job_scope",
     "runtime_capability_snapshot",
     "set_runtime_capability_snapshot_provider",
 ]
