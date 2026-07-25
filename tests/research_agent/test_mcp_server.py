@@ -9,20 +9,29 @@ import pandas as pd
 import pytest
 
 from easyicu.concept.availability_signal import ConceptAvailabilityRecord
-from easyicu.research_agent.mcp_policy import MCP_ALLOWED_ROOTS_ENV
+from easyicu.research_agent.mcp_policy import MCP_ALLOWED_ROOTS_ENV, MCP_SCOPES_ENV
 
 
 @pytest.fixture(autouse=True)
 def _mcp_roots(tmp_path, monkeypatch):
-    """Grant the test's tmp_path as an MCP root.
+    """Grant the test's tmp_path as an MCP root, and the working scopes.
 
     Every filesystem argument is confined to a root configured at startup, so
     without this an operator-style declaration the tools would refuse to touch
     ``tmp_path`` at all. Declaring it here keeps each test exercising the guard
     it is actually about rather than the outer confinement.
+
+    The process default is ``metadata`` only: running a pipeline, writing
+    artefacts and binding evidence are authorities an operator grants
+    explicitly, so these tests grant them the same way a deployment would.
+    ``read_patient_data`` / ``read_internal_context`` stay ungranted — the
+    tests that need those opt in individually.
     """
 
     monkeypatch.setenv(MCP_ALLOWED_ROOTS_ENV, str(tmp_path))
+    monkeypatch.setenv(
+        MCP_SCOPES_ENV, "metadata,run_pipeline,write_artifacts,bind_evidence"
+    )
 
 
 def test_mcp_initialize_and_tools_list(ra):
@@ -162,10 +171,14 @@ def test_mcp_exposes_atomic_context_and_validator_tools(ra, tmp_path):
     )
     assert audited["validator"] == "concept_usage_auditor"
     # Mean of an ordinal score is an advisory caution (impartiality contract),
-    # surfaced as a warning rather than a blocking error.
+    # surfaced as a warning rather than a blocking error. The caller identifies
+    # it from the projected detail: ``message`` is an interpolated sentence and
+    # is not disclosed over MCP.
+    assert not any("message" in f for f in audited["findings"])
     assert any(
         f["severity"] == "warning"
-        and ("ordinal" in f["message"].lower() or "sofa" in f["message"].lower())
+        and f.get("detail", {}).get("column") == "sofa2"
+        and f.get("detail", {}).get("function") == "mean"
         for f in audited["findings"]
     )
 
