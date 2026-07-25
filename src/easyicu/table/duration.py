@@ -32,11 +32,23 @@ logger = logging.getLogger(__name__)
 #: ``DataFrame.attrs`` key carrying the declared unit of ``dur_var``.
 DUR_VAR_UNIT_ATTR = "easyicu_dur_var_unit"
 
+UNIT_SECONDS = "seconds"
 UNIT_MINUTES = "minutes"
 UNIT_HOURS = "hours"
+UNIT_DAYS = "days"
 UNIT_TIMEDELTA = "timedelta"
 
-VALID_DUR_VAR_UNITS = frozenset({UNIT_MINUTES, UNIT_HOURS, UNIT_TIMEDELTA})
+VALID_DUR_VAR_UNITS = frozenset(
+    {UNIT_SECONDS, UNIT_MINUTES, UNIT_HOURS, UNIT_DAYS, UNIT_TIMEDELTA}
+)
+
+#: Hours per numeric unit, so every conversion is one multiplication.
+_HOURS_PER_UNIT = {
+    UNIT_SECONDS: 1.0 / 3600.0,
+    UNIT_MINUTES: 1.0 / 60.0,
+    UNIT_HOURS: 1.0,
+    UNIT_DAYS: 24.0,
+}
 
 #: Opt-OUT flag. Guessing is off by default: a warning does not stop a wrong
 #: number from reaching a manuscript, so an undeclared unit is an error unless
@@ -191,10 +203,10 @@ def resolve_dur_var_hours(
 
     numeric = pd.to_numeric(series, errors="coerce")
     unit = get_dur_var_unit(frame)
-    if unit == UNIT_HOURS:
-        return _validate_hours(numeric, column=column, concept=concept)
-    if unit == UNIT_MINUTES:
-        return _validate_hours(numeric.div(60.0), column=column, concept=concept)
+    if unit in _HOURS_PER_UNIT:
+        return _validate_hours(
+            numeric.mul(_HOURS_PER_UNIT[unit]), column=column, concept=concept
+        )
     if unit == UNIT_TIMEDELTA:
         # Declared timedelta but already coerced to a numeric dtype upstream:
         # the values are nanoseconds, which is never a plausible duration.
