@@ -27,6 +27,7 @@ Environment variables:
 from __future__ import annotations
 
 import argparse
+import asyncio
 import hmac
 import ipaddress
 import json
@@ -34,11 +35,13 @@ import os
 import threading
 import time
 from collections import OrderedDict, deque
+from contextlib import asynccontextmanager
 from typing import Any, Iterator, Sequence
 
 import requests
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from easyicu.webserver.host_security import AllowedHostsMiddleware
@@ -127,6 +130,11 @@ HOSTED_MAX_MESSAGES = int(os.getenv("EASYICU_HOSTED_MAX_MESSAGES", "200") or 0)
 HOSTED_MAX_OUTPUT_TOKENS = int(
     os.getenv("EASYICU_HOSTED_MAX_OUTPUT_TOKENS", "8192") or 0
 )
+# Separate from the ceiling: a request that does not ask for a length should not
+# be billed as if it asked for the maximum.
+HOSTED_DEFAULT_OUTPUT_TOKENS = int(
+    os.getenv("EASYICU_HOSTED_DEFAULT_OUTPUT_TOKENS", "2048") or 0
+)
 HOSTED_MAX_COMPLETIONS = int(os.getenv("EASYICU_HOSTED_MAX_COMPLETIONS", "1") or 0)
 
 # Fields forwarded upstream. An allowlist (rather than copying the whole client
@@ -156,6 +164,12 @@ HOSTED_FORWARDED_FIELDS = frozenset(
 HOSTED_RATE_LIMIT_MAX_TRACKED_IPS = int(
     os.getenv("EASYICU_HOSTED_RATE_LIMIT_MAX_IPS", "4096") or 0
 )
+
+#: Upper bound on simultaneous upstream calls (see _upstream_slot).
+HOSTED_MAX_CONCURRENT_UPSTREAM = int(
+    os.getenv("EASYICU_HOSTED_MAX_CONCURRENT_UPSTREAM", "8") or 1
+)
+_UPSTREAM_SEMAPHORE: "asyncio.Semaphore | None" = None
 
 _RATE_LIMIT_LOCK = threading.Lock()
 _RATE_LIMIT_STATE: "OrderedDict[str, deque[float]]" = OrderedDict()
@@ -335,9 +349,46 @@ async def _read_bounded_body(request: Request) -> bytes:
     return b"".join(chunks)
 
 
-def _validate_request_shape(payload: dict[str, Any]) -> None:
-    """Reject requests whose size the relay is not willing to pay for."""
+@asynccontextmanager
+async def _upstream_slot():
+    """Bound how many upstream calls are in flight at once.
 
+    Without this the threadpool is the only limit, so a burst of slow upstream
+    calls exhausts it and starves every other route.
+    """
+
+    global _UPSTREAM_SEMAPHORE
+    if _UPSTREAM_SEMAPHORE is None:
+        _UPSTREAM_SEMAPHORE = asyncio.Semaphore(HOSTED_MAX_CONCURRENT_UPSTREAM)
+    async with _UPSTREAM_SEMAPHORE:
+        yield
+
+
+def _strict_int(value: Any, field: str) -> int:
+    """Accept only a real integer — not 8192.9, not "8192", not True.
+
+    ``int(8192.9)`` silently truncates, which let a value pass the ceiling check
+    in one form and reach the provider in another.
+    """
+
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise HTTPException(
+            status_code=400,
+            detail=f"{field!r} must be an integer, got {type(value).__name__}.",
+        )
+    return value
+
+
+def _validate_request_shape(payload: dict[str, Any]) -> dict[str, Any]:
+    """Reject oversized requests and return a NORMALISED payload.
+
+    Validating a coerced copy while forwarding the caller's raw value let
+    ``max_tokens: 8192.9`` (or the string ``"8192"``) pass the ceiling check and
+    still reach the provider un-normalised. The normalised values are written
+    back so what was checked is what is sent.
+    """
+
+    payload = dict(payload)
     messages = payload.get("messages")
     if messages is not None:
         if not isinstance(messages, list):
@@ -352,12 +403,8 @@ def _validate_request_shape(payload: dict[str, Any]) -> None:
 
     max_tokens = payload.get("max_tokens")
     if max_tokens is not None:
-        try:
-            max_tokens = int(max_tokens)
-        except (TypeError, ValueError) as exc:
-            raise HTTPException(
-                status_code=400, detail="'max_tokens' must be an integer."
-            ) from exc
+        max_tokens = _strict_int(max_tokens, "max_tokens")
+        payload["max_tokens"] = max_tokens
         if max_tokens < 1:
             raise HTTPException(
                 status_code=400, detail="'max_tokens' must be positive."
@@ -373,12 +420,8 @@ def _validate_request_shape(payload: dict[str, Any]) -> None:
 
     completions = payload.get("n")
     if completions is not None:
-        try:
-            completions = int(completions)
-        except (TypeError, ValueError) as exc:
-            raise HTTPException(
-                status_code=400, detail="'n' must be an integer."
-            ) from exc
+        completions = _strict_int(completions, "n")
+        payload["n"] = completions
         if completions < 1 or (
             HOSTED_MAX_COMPLETIONS > 0 and completions > HOSTED_MAX_COMPLETIONS
         ):
@@ -386,6 +429,12 @@ def _validate_request_shape(payload: dict[str, Any]) -> None:
                 status_code=413,
                 detail=f"'n' exceeds the hosted ceiling of {HOSTED_MAX_COMPLETIONS}.",
             )
+
+    stream_value = payload.get("stream")
+    if stream_value is not None and not isinstance(stream_value, bool):
+        raise HTTPException(status_code=400, detail="'stream' must be a boolean.")
+
+    return payload
 
 
 def _build_upstream_payload(payload: dict[str, Any]) -> dict[str, Any]:
@@ -395,8 +444,10 @@ def _build_upstream_payload(payload: dict[str, Any]) -> dict[str, Any]:
         key: value for key, value in payload.items() if key in HOSTED_FORWARDED_FIELDS
     }
     upstream_payload["model"] = _resolve_model(payload.get("model"))
-    if HOSTED_MAX_OUTPUT_TOKENS > 0:
-        upstream_payload.setdefault("max_tokens", HOSTED_MAX_OUTPUT_TOKENS)
+    # A ceiling is not a default. Defaulting an omitted max_tokens to the
+    # maximum allowed made every unspecified request bill at the ceiling.
+    if HOSTED_DEFAULT_OUTPUT_TOKENS > 0:
+        upstream_payload.setdefault("max_tokens", HOSTED_DEFAULT_OUTPUT_TOKENS)
     return upstream_payload
 
 
@@ -521,7 +572,9 @@ def health() -> dict[str, Any]:
         "max_body_bytes": HOSTED_MAX_BODY_BYTES,
         "max_messages": HOSTED_MAX_MESSAGES,
         "max_output_tokens": HOSTED_MAX_OUTPUT_TOKENS,
+        "default_output_tokens": HOSTED_DEFAULT_OUTPUT_TOKENS,
         "max_completions": HOSTED_MAX_COMPLETIONS,
+        "max_concurrent_upstream": HOSTED_MAX_CONCURRENT_UPSTREAM,
     }
 
 
@@ -561,13 +614,17 @@ async def chat_completions(request: Request):
         ) from exc
     if not isinstance(payload, dict):
         raise HTTPException(status_code=400, detail="Request body must be an object.")
-    _validate_request_shape(payload)
+    payload = _validate_request_shape(payload)
     upstream_payload = _build_upstream_payload(payload)
-    stream_value = upstream_payload.get("stream", False)
-    if not isinstance(stream_value, bool):
-        raise HTTPException(status_code=400, detail="stream must be a boolean.")
-    stream = stream_value
-    upstream_response = _post_upstream(request, upstream_payload, stream=stream)
+    stream = bool(upstream_payload.get("stream", False))
+    # _post_upstream uses a synchronous client with a 180 s timeout. Awaiting it
+    # directly on the event loop would let one slow upstream call stall every
+    # other request on this worker — including /health. Run it on the threadpool
+    # and bound how many can be in flight at once.
+    async with _upstream_slot():
+        upstream_response = await run_in_threadpool(
+            _post_upstream, request, upstream_payload, stream=stream
+        )
 
     if stream:
         if upstream_response.status_code >= 400:
