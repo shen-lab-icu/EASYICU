@@ -49,6 +49,10 @@ from .concept_availability import (
     cross_database_concept_availability,
 )
 from .research_context.builder import build_research_context
+from .research_context.outbound import (
+    outbound_safe_context_payload,
+    project_outbound_records,
+)
 from .authority.evidence_store import EvidenceStore
 from .providers.llm import OpenAIClient
 from .pipeline import ResearchAgentPipeline
@@ -56,9 +60,11 @@ from .providers import ProviderConfigurationError, build_provider_client
 from .skills import list_skills
 from .audits.validators import CohortAuditor, ConceptUsageAuditor
 from .mcp_policy import (
+    MCP_AUDIT_ROOT_ENV,
     MCP_PATIENT_DATA_TOKEN_ENV,
     SCOPE_BIND_EVIDENCE,
     SCOPE_METADATA,
+    SCOPE_READ_INTERNAL_CONTEXT,
     SCOPE_READ_PATIENT_DATA,
     SCOPE_RUN_PIPELINE,
     SCOPE_WRITE_ARTIFACTS,
@@ -67,6 +73,7 @@ from .mcp_policy import (
     MCPPathError,
     granted_scopes,
     patient_data_audit_payload,
+    patient_data_audit_root,
     process_scopes,
     scope_override,
     path_digest as _path_digest,
@@ -237,7 +244,89 @@ def _tool_read_manifest(args: Dict[str, Any]) -> Dict[str, Any]:
         raise ValueError("manifest path escapes workdir") from exc
     if not path.exists():
         return {"error": f"manifest not found at {path}"}
-    return json.loads(path.read_text(encoding="utf-8"))
+    manifest = json.loads(path.read_text(encoding="utf-8"))
+    if _internal_context_granted():
+        return manifest
+    return _safe_manifest_payload(manifest)
+
+
+#: Manifest keys that are host-generated run provenance with no patient-derived
+#: content: identity, timing, and the content-addressed authority envelopes.
+_SAFE_MANIFEST_KEYS = (
+    "schema_version",
+    "checkpoint_sequence",
+    "run_id",
+    "research_question",
+    "started_at",
+    "finished_at",
+    "cost_records",
+    "reproducibility",
+    "provider_authorization",
+    "execution_identity",
+    "code_version",
+    "submission_profile_name",
+    "submission_profile_version",
+)
+
+
+def _safe_manifest_payload(manifest: Mapping[str, Any]) -> Dict[str, Any]:
+    """Project a run manifest down to identity, status and evidence index.
+
+    A manifest embeds host paths (``context_path``, ``plan_path``), validator
+    prose that can quote cohort values, and full evidence descriptions. An
+    external client needs to know *which* artefacts exist and whether they
+    verify — not what they say.
+    """
+
+    payload: Dict[str, Any] = {
+        key: manifest[key] for key in _SAFE_MANIFEST_KEYS if key in manifest
+    }
+    payload["context_path_sha256"] = (
+        _path_digest(manifest["context_path"]) if manifest.get("context_path") else None
+    )
+    payload["plan_path_sha256"] = (
+        _path_digest(manifest["plan_path"]) if manifest.get("plan_path") else None
+    )
+    evidence = manifest.get("evidence")
+    if isinstance(evidence, list):
+        payload["evidence"] = [
+            {
+                key: record.get(key)
+                for key in (
+                    "evidence_id",
+                    "kind",
+                    "sha256",
+                    "produced_by_step",
+                    "script_evidence_id",
+                    "producer",
+                    "generation_mode",
+                    "prompt_pack_version",
+                    "finding_severity",
+                    "created_at",
+                )
+                if key in record
+            }
+            for record in evidence
+            if isinstance(record, Mapping)
+        ]
+    findings = manifest.get("findings")
+    if isinstance(findings, list):
+        payload["findings"] = [
+            {
+                key: finding.get(key)
+                for key in ("validator", "severity")
+                if key in finding
+            }
+            for finding in findings
+            if isinstance(finding, Mapping)
+        ]
+    records = manifest.get("per_step_records")
+    if isinstance(records, list):
+        payload["per_step_records"] = project_outbound_records(
+            [record for record in records if isinstance(record, Mapping)]
+        )
+    payload["projection"] = _projection_note()
+    return payload
 
 
 def _cohort_path_from_args(args: Dict[str, Any]) -> Path:
@@ -293,17 +382,48 @@ def _concept_payload(variable) -> Dict[str, Any]:
     }
 
 
+def _internal_context_granted() -> bool:
+    return SCOPE_READ_INTERNAL_CONTEXT in granted_scopes()
+
+
+def _projection_note() -> str:
+    return (
+        "outbound-safe projection (the same one the Planner prompt receives); "
+        f"grant the {SCOPE_READ_INTERNAL_CONTEXT!r} scope for the internal "
+        "ResearchContext shape"
+    )
+
+
 def _tool_build_context(args: Dict[str, Any]) -> Dict[str, Any]:
+    """Return the study context an external client is allowed to see.
+
+    The internal :class:`ResearchContext` carries the cohort parquet path,
+    free-text user notes, cohort/parser provenance and per-variable source
+    tables and item ids. Every *other* outbound path in the agent — Planner,
+    Coder, Replanner — projects that through
+    :func:`outbound_safe_context_payload` first; MCP returned the raw dump.
+    """
+
     ctx = _build_context_from_args(args)
-    return ctx.model_dump(mode="json")
+    if _internal_context_granted():
+        return ctx.model_dump(mode="json")
+    return {**outbound_safe_context_payload(ctx), "projection": _projection_note()}
 
 
 def _tool_list_concepts(args: Dict[str, Any]) -> Dict[str, Any]:
     ctx = _build_context_from_args(args)
+    if _internal_context_granted():
+        return {
+            "cohort": ctx.cohort.model_dump(mode="json"),
+            "target_outcome": ctx.target_outcome,
+            "concepts": [_concept_payload(v) for v in ctx.variables],
+        }
+    payload = outbound_safe_context_payload(ctx)
     return {
-        "cohort": ctx.cohort.model_dump(mode="json"),
-        "target_outcome": ctx.target_outcome,
-        "concepts": [_concept_payload(v) for v in ctx.variables],
+        "cohort": payload.get("cohort", {}),
+        "target_outcome": payload.get("target_outcome"),
+        "concepts": payload.get("variables", []),
+        "projection": _projection_note(),
     }
 
 
@@ -318,7 +438,15 @@ def _tool_describe_concept(args: Dict[str, Any]) -> Dict[str, Any]:
             "error": f"concept '{name}' not found",
             "known_concepts": [v.name for v in ctx.variables],
         }
-    return {"concept": _concept_payload(variable)}
+    if _internal_context_granted():
+        return {"concept": _concept_payload(variable)}
+    projected = outbound_safe_context_payload(ctx, variable_names=[variable.name]).get(
+        "variables", []
+    )
+    return {
+        "concept": projected[0] if projected else {"name": variable.name},
+        "projection": _projection_note(),
+    }
 
 
 def _tool_audit_cohort(args: Dict[str, Any]) -> Dict[str, Any]:
@@ -595,14 +723,16 @@ def _record_patient_data_access(
 ) -> None:
     """Register a PHI-free audit record for one extraction call.
 
-    Best-effort: an audit failure must not silently drop the extraction the
-    caller already paid for, but it is reported in the server log so an
-    operator can see that the trail has a hole.
+    Fail-closed, and written to a **server-owned** root. The earlier version
+    keyed off the caller's ``workdir`` and swallowed registration errors, so a
+    client could receive patient rows with no trail simply by omitting
+    ``workdir`` — the two conditions that make an audit worth having were both
+    under the audited party's control.
+
+    Calls that disclose no rows still record the access, but a failure there is
+    logged rather than raised: there is nothing to withhold.
     """
 
-    workdir = args.get("workdir")
-    if not workdir:
-        return
     payload = patient_data_audit_payload(
         tool=tool,
         concepts=concepts,
@@ -613,9 +743,11 @@ def _record_patient_data_access(
         output_paths=output_paths,
         policy=policy,
     )
+    disclosed = int(payload.get("disclosed_patient_rows") or 0)
     try:
-        store = EvidenceStore(resolve_within_roots(workdir, field="workdir"))
-        store.register_json(
+        root = patient_data_audit_root()
+        root.mkdir(parents=True, exist_ok=True)
+        EvidenceStore(root).register_json(
             kind="log",
             description="Audit record for one MCP concept extraction call.",
             payload=payload,
@@ -623,12 +755,18 @@ def _record_patient_data_access(
             producer="mcp_server",
             generation_mode="system",
         )
-    except Exception as exc:  # pragma: no cover - audit must not mask results
+    except Exception as exc:
         print(
             f"easyicu-mcp: could not record the patient-data access audit: "
-            f"{type(exc).__name__}",
+            f"{type(exc).__name__}: {exc}",
             file=sys.stderr,
         )
+        if disclosed > 0:
+            raise MCPAuthorizationError(
+                "patient-level rows are withheld because the access audit could "
+                "not be written; set "
+                f"{MCP_AUDIT_ROOT_ENV} to a writable directory"
+            ) from exc
 
 
 def _write_concept_result_if_requested(
@@ -1295,6 +1433,22 @@ SSE_QUEUE_MAXSIZE = 256
 SSE_IDLE_TIMEOUT_SECONDS = 300.0
 SSE_HEARTBEAT_SECONDS = 15.0
 
+#: Host-wide ceiling on tool calls executing at once, across every HTTP
+#: endpoint and session. Session and queue caps bound *delivery*; this bounds
+#: *work*, which is what actually consumes memory, CPU and Docker slots.
+MAX_CONCURRENT_TOOL_CALLS = 4
+#: How long an over-limit request waits for a slot before being turned away.
+#: Short on purpose: a client should retry, not hold a server worker.
+TOOL_ADMISSION_TIMEOUT_SECONDS = 5.0
+
+_TOOL_EXECUTION_SLOTS = threading.BoundedSemaphore(MAX_CONCURRENT_TOOL_CALLS)
+
+#: What an unauthenticated caller gets over the HTTP transport. The stdio
+#: transport keeps the full process scopes: a desktop client mounting the
+#: server is an explicit operator action, whereas a loopback socket with no
+#: token is reachable by anything running as the same user.
+LOOPBACK_ANONYMOUS_SCOPES = frozenset({SCOPE_METADATA})
+
 
 class _SSESession:
     def __init__(self) -> None:
@@ -1558,21 +1712,68 @@ def _make_sse_handler(
                 self._write_json(_error(None, -32700, "Parse error"), status=400)
                 return
 
-            # Patient-level disclosure needs its own credential even on a
-            # loopback bind, where the general bearer token is optional: any
-            # local process could otherwise read patient rows through MCP.
-            request_scopes = process_scopes()
-            if not self._patient_data_authorized():
-                request_scopes = request_scopes - {SCOPE_READ_PATIENT_DATA}
-            with scope_override(request_scopes):
-                response = handle_jsonrpc(req)
-
+            # Admission control runs BEFORE the tool does. A request naming a
+            # session that does not exist, or whose delivery queue is already
+            # full, produces a result nobody can receive — running a full
+            # extraction first and discarding it afterwards is free work for an
+            # unauthenticated local caller.
+            session = None
+            session_id = ""
             if parsed.path in {"/messages", "/message"}:
                 session_id = (qs.get("session_id") or qs.get("sessionId") or [""])[0]
                 session = _get_sse_session(session_id)
                 if session is None:
                     self._write_json({"error": "unknown SSE session"}, status=404)
                     return
+                if session.queue.full():
+                    self._write_json(
+                        {
+                            "error": (
+                                "SSE session delivery queue is full; the client "
+                                "is not draining /sse fast enough"
+                            )
+                        },
+                        status=429,
+                    )
+                    return
+
+            # One host-wide ceiling on tools actually executing. Without it a
+            # local caller can start unbounded concurrent pipeline runs and
+            # extractions through /jsonrpc, each holding memory and a Docker
+            # slot, regardless of the session and queue caps above.
+            if not _TOOL_EXECUTION_SLOTS.acquire(
+                timeout=TOOL_ADMISSION_TIMEOUT_SECONDS
+            ):
+                self._write_json(
+                    {
+                        "error": (
+                            "server is already running the maximum of "
+                            f"{MAX_CONCURRENT_TOOL_CALLS} concurrent tool calls"
+                        )
+                    },
+                    status=429,
+                )
+                return
+            try:
+                # Patient-level disclosure needs its own credential even on a
+                # loopback bind, where the general bearer token is optional: any
+                # local process could otherwise read patient rows through MCP.
+                request_scopes = process_scopes()
+                if not self._patient_data_authorized():
+                    request_scopes = request_scopes - {SCOPE_READ_PATIENT_DATA}
+                if bearer_token is None:
+                    # An unauthenticated loopback bind is reachable by every
+                    # process on the machine. Read-only metadata is a fair
+                    # default there; starting expensive agent runs, writing
+                    # files under the allowed roots and registering evidence are
+                    # not. Configure EASYICU_MCP_BEARER_TOKEN to get them back.
+                    request_scopes = request_scopes & LOOPBACK_ANONYMOUS_SCOPES
+                with scope_override(request_scopes):
+                    response = handle_jsonrpc(req)
+            finally:
+                _TOOL_EXECUTION_SLOTS.release()
+
+            if session is not None:
                 if response is not None:
                     try:
                         session.queue.put_nowait(response)

@@ -56,6 +56,9 @@ SCOPE_READ_PATIENT_DATA = "read_patient_data"
 SCOPE_WRITE_ARTIFACTS = "write_artifacts"
 #: Authority to register artefacts in the EvidenceStore.
 SCOPE_BIND_EVIDENCE = "bind_evidence"
+#: Authority to receive the *internal* ResearchContext / manifest shape rather
+#: than the deny-by-default outbound projection every other agent path uses.
+SCOPE_READ_INTERNAL_CONTEXT = "read_internal_context"
 
 ALL_SCOPES: FrozenSet[str] = frozenset(
     {
@@ -64,19 +67,28 @@ ALL_SCOPES: FrozenSet[str] = frozenset(
         SCOPE_READ_PATIENT_DATA,
         SCOPE_WRITE_ARTIFACTS,
         SCOPE_BIND_EVIDENCE,
+        SCOPE_READ_INTERNAL_CONTEXT,
     }
 )
 
-#: Everything except patient-level disclosure. Extraction still runs, writes
+#: Everything except the two disclosure scopes. Extraction still runs, writes
 #: its parquet and registers evidence; what changes is that the *response*
-#: carries shape and aggregate statistics instead of rows.
-DEFAULT_SCOPES: FrozenSet[str] = ALL_SCOPES - {SCOPE_READ_PATIENT_DATA}
+#: carries shape and aggregate statistics instead of rows, and study metadata
+#: arrives as the same outbound-safe projection the Planner prompt gets.
+DEFAULT_SCOPES: FrozenSet[str] = ALL_SCOPES - {
+    SCOPE_READ_PATIENT_DATA,
+    SCOPE_READ_INTERNAL_CONTEXT,
+}
 
 MCP_SCOPES_ENV = "EASYICU_MCP_SCOPES"
 MCP_ALLOW_PATIENT_DATA_ENV = "EASYICU_MCP_ALLOW_PATIENT_DATA"
 MCP_ALLOWED_ROOTS_ENV = "EASYICU_MCP_ALLOWED_ROOTS"
 MCP_ALLOW_IDENTIFIER_COLUMNS_ENV = "EASYICU_MCP_ALLOW_IDENTIFIER_COLUMNS"
 MCP_PATIENT_DATA_TOKEN_ENV = "EASYICU_MCP_PATIENT_DATA_TOKEN"
+#: Server-owned directory for the patient-data access trail. The audit must not
+#: depend on a caller-supplied ``workdir``: a client that simply omits it would
+#: otherwise receive rows with no record that it did.
+MCP_AUDIT_ROOT_ENV = "EASYICU_MCP_AUDIT_ROOT"
 
 #: Hard ceiling on preview rows even when patient-level disclosure is granted.
 MAX_PREVIEW_ROWS = 20
@@ -84,6 +96,12 @@ MAX_PREVIEW_ROWS = 20
 #: Below this row count, per-column aggregate statistics are withheld: a min,
 #: max or mean over three rows is close to disclosing the rows themselves.
 MIN_ROWS_FOR_AGGREGATE_STATS = 20
+
+#: The same floor applied *per column*. A frame-level row count is not enough:
+#: a 100-row extract whose rare assay has one non-missing value would otherwise
+#: report ``count=1, mean=min=max=<that patient's value>``, which discloses the
+#: row the frame-level floor was meant to protect.
+MIN_NON_MISSING_FOR_COLUMN_STATS = 20
 
 _IDENTIFIER_COLUMN = re.compile(
     r"(?i)^(?:subject_id|hadm_id|stay_id|icustay_id|patientunitstayid|"
@@ -362,6 +380,20 @@ def _aggregate_statistics(
             series = frame[column]
             if "float" not in str(series.dtype) and "int" not in str(series.dtype):
                 continue
+            non_missing = int(series.notna().sum())
+            if non_missing < MIN_NON_MISSING_FOR_COLUMN_STATS:
+                # min/max/mean over a handful of contributing rows reproduces
+                # those rows.  Report only the suppressed cell size, which is
+                # already visible through ``missing_fraction``.
+                stats[str(column)] = {
+                    "withheld": True,
+                    "non_missing_count": non_missing,
+                    "reason": (
+                        f"fewer than {MIN_NON_MISSING_FOR_COLUMN_STATS} "
+                        "non-missing values in this column"
+                    ),
+                }
+                continue
             described = series.describe()
         except Exception:  # pragma: no cover - exotic dtypes
             continue
@@ -378,6 +410,21 @@ def _is_nan(value: Any) -> bool:
         return value != value  # noqa: PLR0124 - NaN self-inequality
     except Exception:  # pragma: no cover
         return False
+
+
+def patient_data_audit_root() -> Path:
+    """Return the server-owned directory the patient-data trail is written to.
+
+    Deliberately independent of the caller's ``workdir``: the audit answers
+    "who read patient rows from this host", so a client must not be able to
+    redirect it, and must not be able to suppress it by leaving ``workdir``
+    unset. Defaults to the first configured root so a stdio server started
+    with no extra configuration still keeps a trail.
+    """
+
+    configured = (os.environ.get(MCP_AUDIT_ROOT_ENV) or "").strip()
+    root = Path(configured).expanduser() if configured else allowed_roots()[0]
+    return (root / ".easyicu_mcp_audit").resolve()
 
 
 def patient_data_audit_payload(
@@ -410,7 +457,17 @@ def patient_data_audit_payload(
             for name, summary in frame_summaries.items()
             if isinstance(summary, Mapping)
         },
-        "disclosed_patient_rows": policy.preview_rows if policy.patient_data else 0,
+        # The actual number of rows this response carried, not the configured
+        # cap: a request capped at 20 that returned 3 must not be audited as 20,
+        # and a capped request over an empty frame must not look like a leak.
+        "disclosed_patient_rows": sum(
+            len(summary.get("preview") or ())
+            for summary in frame_summaries.values()
+            if isinstance(summary, Mapping)
+        ),
+        "disclosed_patient_rows_cap": (
+            policy.preview_rows if policy.patient_data else 0
+        ),
         "output_path_sha256": [path_digest(p) for p in output_paths],
         "granted_scopes": sorted(granted_scopes()),
     }
@@ -423,14 +480,18 @@ __all__ = [
     "MCP_ALLOWED_ROOTS_ENV",
     "MCP_ALLOW_IDENTIFIER_COLUMNS_ENV",
     "MCP_ALLOW_PATIENT_DATA_ENV",
+    "MCP_AUDIT_ROOT_ENV",
     "MCP_PATIENT_DATA_TOKEN_ENV",
     "MCP_SCOPES_ENV",
+    "MIN_NON_MISSING_FOR_COLUMN_STATS",
     "MIN_ROWS_FOR_AGGREGATE_STATS",
     "SCOPE_BIND_EVIDENCE",
     "SCOPE_METADATA",
+    "SCOPE_READ_INTERNAL_CONTEXT",
     "SCOPE_READ_PATIENT_DATA",
     "SCOPE_RUN_PIPELINE",
     "SCOPE_WRITE_ARTIFACTS",
+    "patient_data_audit_root",
     "DisclosurePolicy",
     "MCPAuthorizationError",
     "MCPPathError",
