@@ -47,7 +47,7 @@ from .manuscript_post import (
     _repair_common_writer_citation_omissions,
     _repair_common_writer_placeholders,
 )
-from .readiness import execution_gate_status
+from .readiness import _is_cosmetic_visual_error, execution_gate_status
 from .writer_evidence import (
     _preferred_writer_evidence_names,
     _render_writer_evidence_digest,
@@ -85,6 +85,31 @@ _DEVELOPMENT_MUTABLE_PROVENANCE_FIELDS = frozenset(
         "requirements_sha256",
     }
 )
+
+
+def demote_cosmetic_publication_visual_findings(
+    findings: Sequence[ValidationFinding],
+) -> List[ValidationFinding]:
+    """Demote only the cosmetic visual errors on the publication bundle.
+
+    This used to demote *every* ``error`` from the final publication audit,
+    and it ran before readiness — so ``readiness._is_cosmetic_visual_error``,
+    which exists precisely to separate a text-spacing nit from a blank,
+    cropped, unreadable or numerically inconsistent figure, never saw the
+    original severity. A genuinely broken publication figure reached the
+    readiness gate as a warning and could no longer block ``manuscript_ready``.
+
+    Reusing the readiness predicate keeps one rule instead of two.
+    """
+
+    return [
+        (
+            finding.model_copy(update={"severity": "warning"})
+            if _is_cosmetic_visual_error(finding)
+            else finding
+        )
+        for finding in findings
+    ]
 
 
 def _runtime_dependency_rows(lock_bytes: bytes) -> Tuple[str, ...]:
@@ -568,22 +593,19 @@ def run_write_phase(
                     if vlm_adapter is None and pipeline._enable_vlm_visual_qa:
                         client = pipeline._vlm_client or role_resolver("analyzer")
                         if client is not None:
-                            vlm_adapter = VLMVisualQAAdapter(client)
+                            vlm_adapter = VLMVisualQAAdapter(
+                                client,
+                                egress_policy=pipeline._figure_egress_policy(
+                                    evidence=evidence, run_dir=run_dir
+                                ),
+                            )
                     publication_visual_findings = VisualQAAuditor(
                         vlm_adapter=vlm_adapter
                     ).audit(figure_paths=fig_paths)
-                    # See the final-pass demotion above: layout-style
-                    # visual_qa errors raised on the publication
-                    # bundle are cosmetic and must not block
-                    # acceptance after the per-step repair budget
-                    # has been exhausted upstream.
                     findings.extend(
-                        (
-                            finding.model_copy(update={"severity": "warning"})
-                            if finding.severity == "error"
-                            else finding
+                        demote_cosmetic_publication_visual_findings(
+                            publication_visual_findings
                         )
-                        for finding in publication_visual_findings
                     )
         except Exception as exc:
             findings.append(
