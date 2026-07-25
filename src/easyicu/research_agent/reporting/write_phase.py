@@ -69,7 +69,10 @@ from .reporting_checklist import (
 from .reviewer import run_reviewer_round
 from ..schema import CritiqueReport, EvidenceRef, ManuscriptDraftPacket
 from .side_findings import collect_side_findings
-from ..gates.figure_egress import register_figure_egress_receipt
+from ..gates.figure_egress import (
+    FigureEgressReceiptError,
+    register_figure_egress_receipt,
+)
 from ..gates.visual_qa import VLMVisualQAAdapter, VisualQAAuditor
 from .pdf_render import render_pdf_for_run
 
@@ -601,20 +604,44 @@ def run_write_phase(
                             vlm_adapter = VLMVisualQAAdapter(
                                 client, egress_policy=egress_policy
                             )
-                    publication_visual_findings = VisualQAAuditor(
-                        vlm_adapter=vlm_adapter
-                    ).audit(figure_paths=fig_paths)
                     if egress_policy is not None:
+                        # Phase 1 of the egress record, written *before* any
+                        # byte can leave. If the upload succeeds and the host
+                        # then dies, the run still carries the intent and its
+                        # authority; a completed receipt that is missing is
+                        # then a detectable gap rather than silence.
                         register_figure_egress_receipt(
                             policy=egress_policy,
                             evidence=evidence,
                             run_dir=run_dir,
+                            phase="intent",
                         )
+                    try:
+                        publication_visual_findings = VisualQAAuditor(
+                            vlm_adapter=vlm_adapter
+                        ).audit(figure_paths=fig_paths)
+                    finally:
+                        # Phase 2 runs even when visual QA raised, because the
+                        # upload may already have happened. Failure to write it
+                        # is not demotable: an unrecorded egress is exactly the
+                        # state this receipt exists to make impossible.
+                        if egress_policy is not None:
+                            register_figure_egress_receipt(
+                                policy=egress_policy,
+                                evidence=evidence,
+                                run_dir=run_dir,
+                                phase="completed",
+                            )
                     findings.extend(
                         demote_cosmetic_publication_visual_findings(
                             publication_visual_findings
                         )
                     )
+        except FigureEgressReceiptError:
+            # Deliberately not caught by the blanket handler below: the run
+            # sent (or may have sent) image bytes off the host and cannot say
+            # so in its own evidence.
+            raise
         except Exception as exc:
             findings.append(
                 ValidationFinding(

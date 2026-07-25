@@ -2190,38 +2190,42 @@ AGGREGATE_ONLY_PANEL_ROLES = frozenset(
 )
 
 
-def _aggregate_disclosure_metadata(contract: Any) -> Dict[str, Any]:
-    """Declare whether every panel in ``contract`` is aggregate-only.
+def _aggregate_disclosure_audit(
+    contract: Any,
+    *,
+    evidence: EvidenceStore,
+    source_ids: Sequence[str],
+) -> Any:
+    """Run the host-owned privacy audit that authorizes (or refuses) egress.
 
     The figure-egress gate refuses to send image bytes to an external provider
-    without this declaration. Producing it here — from the contract the figure
-    was actually rendered from — is what makes the gate reachable in
-    production instead of only in a test that hand-builds the metadata.
+    without an ``aggregate_only`` declaration. Producing it here — from the
+    artefacts the figure was actually drawn from — is what makes the gate
+    reachable in production instead of only in a test that hand-builds the
+    metadata.
 
-    Absence is meaningful: an un-flagged figure is refused, which is the
-    correct answer for a panel type that can carry per-patient marks.
+    Panel role is an *input* to the audit, not the authorization: ``role`` is
+    written by the planner or by generated code, so a panel labelled
+    ``validation`` can still be a per-stay scatter. The audit additionally
+    opens every source artefact and refuses to clear a figure whose sources
+    expose subject identifiers, event timestamps, sub-threshold group counts,
+    or that it cannot read at all.
+
+    Absence is meaningful: an un-cleared figure is refused, which is the
+    correct answer whenever the host could not prove the image is aggregate.
     """
 
-    panels = list(getattr(contract, "panels", ()) or ())
-    roles = [str(getattr(panel, "role", "") or "") for panel in panels]
-    if not panels:
-        return {"aggregate_only": False, "aggregate_only_reason": "no panels declared"}
-    non_aggregate = sorted(
-        {role for role in roles if role not in AGGREGATE_ONLY_PANEL_ROLES}
+    from ..gates.figure_privacy import audit_figure_privacy
+
+    return audit_figure_privacy(
+        contract=contract,
+        evidence=evidence,
+        # ``relative_path`` on every record is relative to the store root, so
+        # the store root *is* the run directory for resolution purposes.
+        run_dir=Path(evidence.root),
+        source_evidence_ids=source_ids,
+        allowed_panel_roles=AGGREGATE_ONLY_PANEL_ROLES,
     )
-    if non_aggregate:
-        return {
-            "aggregate_only": False,
-            "aggregate_only_reason": (
-                "panel role(s) may render per-subject marks: "
-                + ", ".join(non_aggregate)
-            ),
-        }
-    return {
-        "aggregate_only": True,
-        "aggregate_only_basis": "panel_roles",
-        "aggregate_only_roles": sorted(set(roles)),
-    }
 
 
 def _source_fingerprint_metadata(
@@ -2266,6 +2270,9 @@ def _register_publication_figure_bundle(
 
     source_ids = _figure_contract_source_ids(contract)
     source_metadata = _source_fingerprint_metadata(evidence, source_ids)
+    privacy_audit = _aggregate_disclosure_audit(
+        contract, evidence=evidence, source_ids=source_ids
+    )
     script_record = evidence.register_file(
         kind="code",
         description="Deterministic PublicationFigureSkill renderer source.",
@@ -2306,6 +2313,31 @@ def _register_publication_figure_bundle(
         on_sha_change="new_id",
     )
 
+    # Registered whether or not the figure cleared: a refusal is the part a
+    # privacy reviewer most needs to be able to read back, and an unrecorded
+    # clearance is indistinguishable from one that was never performed.
+    privacy_record = evidence.register_json(
+        kind="log",
+        description=(
+            "Host-owned privacy audit deciding whether this figure's rendered "
+            "bytes may be sent to an external provider, with every source "
+            "artefact it inspected."
+        ),
+        payload=privacy_audit.as_receipt(),
+        filename=f"figure_privacy_audit_{contract.figure_id}.json",
+        evidence_id=f"figure_privacy_audit_{contract.figure_id}",
+        inputs=source_ids,
+        producer=PublicationFigureSkill.name,
+        generation_mode="deterministic_figure_skill",
+        prompt_pack_version=prompt_pack_version,
+        metadata={
+            "artifact_role": "figure_privacy_audit",
+            "figure_id": contract.figure_id,
+            "aggregate_only": privacy_audit.aggregate_only,
+        },
+        on_sha_change="new_id",
+    )
+
     figure_records: List[EvidenceRecord] = []
     for key, path in paths.items():
         suffix = path.suffix.lower()
@@ -2337,7 +2369,8 @@ def _register_publication_figure_bundle(
                 "source_evidence_ids": source_ids,
                 "figure_contract": contract_record.evidence_id,
                 "figure_role": "publication_figure",
-                **_aggregate_disclosure_metadata(contract),
+                "figure_privacy_audit_evidence_id": privacy_record.evidence_id,
+                **privacy_audit.as_metadata(),
             },
             on_sha_change="new_id",
         )
