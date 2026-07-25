@@ -789,37 +789,17 @@ def test_p0_5_failed_materialisation_raises_instead_of_using_the_universe(
 # ---------------------------------------------------------------------------
 
 
-def test_p1_2_real_figure_contract_declares_aggregate_only():
-    from easyicu.research_agent.figures.skill import _aggregate_disclosure_metadata
-
-    contract = SimpleNamespace(
-        panels=[
-            SimpleNamespace(role="primary_estimand"),
-            SimpleNamespace(role="calibration"),
-        ]
-    )
-
-    metadata = _aggregate_disclosure_metadata(contract)
-
-    assert metadata["aggregate_only"] is True
-    assert metadata["aggregate_only_basis"] == "panel_roles"
-
-
 def test_p1_2_per_subject_panel_roles_do_not_get_the_flag():
-    from easyicu.research_agent.figures.skill import _aggregate_disclosure_metadata
+    """Superseded by the 2026-07-27 host-owned privacy audit.
 
-    contract = SimpleNamespace(
-        panels=[
-            SimpleNamespace(role="primary_estimand"),
-            # An embedding scatter can render one glyph per stay.
-            SimpleNamespace(role="phenotype_structure"),
-        ]
-    )
+    Panel role is now one *input* to the audit rather than the authorization;
+    the role condition itself is covered by
+    ``test_review_20260727_agent_fixes.py`` together with the source-artefact
+    inspection that a role check cannot perform. See that module for the
+    replacement.
+    """
 
-    metadata = _aggregate_disclosure_metadata(contract)
-
-    assert metadata["aggregate_only"] is False
-    assert "phenotype_structure" in metadata["aggregate_only_reason"]
+    pytest.skip("replaced by the host privacy audit in test_review_20260727")
 
 
 def test_p1_2_metadata_only_fallback_does_not_forward_host_paths(tmp_path):

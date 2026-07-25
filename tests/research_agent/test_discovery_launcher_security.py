@@ -13,7 +13,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from easyicu.research_agent.mcp_policy import MCP_ALLOWED_ROOTS_ENV
+from easyicu.research_agent.mcp_policy import MCP_ALLOWED_ROOTS_ENV, MCP_SCOPES_ENV
 
 
 @contextmanager
@@ -65,8 +65,11 @@ def test_mcp_loopback_environment_url_never_forwards_provider_secrets(
 
     # Every MCP filesystem argument is confined to a root configured at
     # startup; declare tmp_path so this test still exercises the credential
-    # boundary it is about rather than the outer path confinement.
+    # boundary it is about rather than the outer path confinement. Running a
+    # pipeline is likewise an explicitly-granted scope now, so grant it here
+    # the way a deployment would.
     monkeypatch.setenv(MCP_ALLOWED_ROOTS_ENV, str(tmp_path))
+    monkeypatch.setenv(MCP_SCOPES_ENV, "metadata,run_pipeline")
 
     seen = {}
 
