@@ -249,6 +249,8 @@ def test_load_concepts_required_bounded_sample_fails_closed(
 def test_load_concepts_bounded_flag_preserves_legacy_positional_tail() -> None:
     parameters = list(inspect.signature(api.load_concepts).parameters)
 
+    # New flags may only be APPENDED here — every existing name must keep its
+    # index so legacy positional callers stay correct.
     assert parameters[parameters.index("max_patients") : parameters.index("kwargs")] == [
         "max_patients",
         "limit",
@@ -256,6 +258,7 @@ def test_load_concepts_bounded_flag_preserves_legacy_positional_tail() -> None:
         "batch_size",
         "memory_efficient",
         "require_bounded_sample",
+        "allow_unbounded_fallback",
     ]
 
 
