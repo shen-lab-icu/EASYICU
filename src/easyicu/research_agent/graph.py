@@ -13,11 +13,12 @@ Why this design:
   pipeline closes over its prelude locals (audit logger, progress
   emitter, run dir, etc.) when constructing these callables, so the
   graph itself stays free of pipeline-specific argument plumbing.
-* Phase outputs flow through a ``TypedDict`` graph state. The state
-  uses ``Any`` for the phase result fields because the underlying
-  ``_PlanPhaseResult`` / ``_ExecutePhaseResult`` / ``_WritePhaseResult``
-  dataclasses are pipeline-internal and we do not want to import them
-  at module top to avoid a circular dependency.
+* Phase outputs flow through a ``TypedDict`` graph state, typed with the
+  real ``_PlanPhaseResult`` / ``_ExecutePhaseResult`` / ``_WritePhaseResult``
+  contracts so a type checker can see phase-contract drift. Those live in
+  ``contracts.runtime``, which does not import this module, so the top-level
+  import is not a cycle — and it has to be top-level, because langgraph
+  resolves the state annotations when the ``StateGraph`` is constructed.
 * Aborts during planning route directly to ``END`` without running
   execute/write/finalise. The pipeline's own ``_finalise_aborted`` has
   already been called inside ``_run_plan_phase`` in that branch, so the
@@ -31,10 +32,22 @@ from __future__ import annotations
 import hashlib
 import json
 from collections.abc import Mapping, Sequence
+from datetime import datetime, timezone
 from importlib import metadata
 from typing import Any, Callable, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+# Imported at module scope, not under TYPE_CHECKING: langgraph resolves the
+# state TypedDict's annotations at ``StateGraph(...)`` construction time, so a
+# forward reference here raises NameError. Neither module imports this one, so
+# there is no cycle.
+from .contracts.runtime import (
+    _ExecutePhaseResult,
+    _PlanPhaseResult,
+    _WritePhaseResult,
+)
+from .schema import PipelineResult
 
 try:
     from typing import TypedDict
@@ -110,6 +123,48 @@ class HumanReviewDecision(BaseModel):
     note: str = Field(default="", max_length=1_000)
 
 
+def _human_review_decision_record(
+    *,
+    request: HumanReviewRequest,
+    decision: HumanReviewDecision,
+    reviewer_identity: Optional[str],
+) -> dict[str, Any]:
+    """Build the auditable record for one approved human review.
+
+    ``reviewer`` and ``decided_at`` arrive in the resume payload, so they are
+    whatever the client typed. They are kept for context but are not the
+    authority: ``reviewer_identity`` comes from the caller's authentication
+    layer (``None`` when the deployment has none, which is itself recorded),
+    and ``server_decided_at`` is stamped here so a decision cannot be
+    backdated by editing the payload.
+    """
+
+    request_payload = request.model_dump(mode="json")
+    decision_payload = decision.model_dump(mode="json")
+    record: dict[str, Any] = {
+        "schema": "easyicu.human_review_decision/1",
+        "review_id": decision.review_id,
+        "authority_sha256": decision.authority_sha256,
+        "decision": decision.decision,
+        "claimed_reviewer": decision.reviewer,
+        "claimed_decided_at": decision.decided_at,
+        "reviewer_identity": reviewer_identity,
+        "reviewer_identity_source": (
+            "authenticated" if reviewer_identity else "unauthenticated_client_claim"
+        ),
+        "server_decided_at": datetime.now(timezone.utc).isoformat(),
+        "note": decision.note,
+        "request_sha256": _canonical_sha256(request_payload),
+        "decision_sha256": _canonical_sha256(decision_payload),
+    }
+    return record
+
+
+def _canonical_sha256(payload: Mapping[str, Any]) -> str:
+    rendered = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
+    return hashlib.sha256(rendered.encode("utf-8")).hexdigest()
+
+
 class OrchestrationRuntimeReceipt(BaseModel):
     """Non-scientific receipt identifying the phase dispatcher."""
 
@@ -150,12 +205,18 @@ class PipelineGraphState(TypedDict, total=False):
     not ``None``; the conditional edge after ``plan`` then routes
     directly to ``END`` and the value of ``final_result`` is already
     correct.
+
+    The phase-result fields carry their real types rather than ``Any``, so a
+    type checker can flag phase-contract drift. They must be imported at
+    module scope: langgraph resolves these annotations when the
+    ``StateGraph`` is constructed, and a ``TYPE_CHECKING``-only import would
+    raise ``NameError`` there.
     """
 
-    plan_result: Any  # _PlanPhaseResult
-    execute_result: Any  # _ExecutePhaseResult
-    write_result: Any  # _WritePhaseResult
-    final_result: Any  # PipelineResult
+    plan_result: _PlanPhaseResult
+    execute_result: _ExecutePhaseResult
+    write_result: _WritePhaseResult
+    final_result: PipelineResult
     aborted: bool
     human_review_decisions: tuple[dict[str, Any], ...]
 
@@ -170,6 +231,10 @@ def build_pipeline_graph(
     human_review_invoker: Optional[
         Callable[[Any], Sequence[HumanReviewRequest]]
     ] = None,
+    human_review_recorder: Optional[
+        Callable[[Sequence[Mapping[str, Any]]], None]
+    ] = None,
+    reviewer_identity_resolver: Optional[Callable[[], str]] = None,
     checkpointer: Any = None,
 ):
     """Build the compiled langgraph StateGraph for the pipeline.
@@ -252,17 +317,31 @@ def build_pipeline_graph(
         observed = {item.review_id: item for item in decisions}
         if set(observed) != set(expected):
             raise ValueError("human review decisions must cover exact paused requests")
+        records: list[dict[str, Any]] = []
         for review_id, decision in observed.items():
             request = expected[review_id]
             if decision.authority_sha256 != request.authority_sha256:
                 raise ValueError("human review decision authority digest mismatch")
             if decision.decision != "approved":
                 raise RuntimeError(f"human review rejected request {review_id}")
-        return {
-            "human_review_decisions": tuple(
-                item.model_dump(mode="json") for item in decisions
+            records.append(
+                _human_review_decision_record(
+                    request=request,
+                    decision=decision,
+                    reviewer_identity=(
+                        reviewer_identity_resolver()
+                        if reviewer_identity_resolver is not None
+                        else None
+                    ),
+                )
             )
-        }
+        if human_review_recorder is not None:
+            # Binding the decision into the run's own evidence store is what
+            # lets the finished run answer "who approved what, against which
+            # authority digest, and when" — the graph state alone is discarded
+            # when the process exits.
+            human_review_recorder(tuple(records))
+        return {"human_review_decisions": tuple(records)}
 
     def write_node(state: PipelineGraphState) -> dict[str, Any]:
         write_result = write_invoker(state["plan_result"], state["execute_result"])
