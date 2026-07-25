@@ -29,6 +29,7 @@ easyicu 高层API - 提供简单易用的接口，同时支持高级自定义
 from typing import List, Union, Optional, Dict
 from pathlib import Path
 import os
+import re
 import threading
 from collections import OrderedDict
 import numpy as np
@@ -136,12 +137,23 @@ def _guard_window_expansion(
 
     if emitted <= MAX_WINDOW_EXPANSION_POINTS:
         return
+    # Describe the row, do not reproduce it. This message travels: it becomes a
+    # web job error, a line in CI output, an agent finding, and part of an API
+    # response. Pasting the offending record in put that patient's identifier
+    # and event times into all four. The digest is enough to match the row
+    # against the source table during debugging, and carries nothing on its own.
+    import hashlib
+
+    fingerprint = hashlib.sha256(
+        repr(sorted((str(k), str(v)) for k, v in row.items())).encode("utf-8")
+    ).hexdigest()
     raise WindowExpansionError(
         f"concept {concept_name!r}: one window expanded past "
         f"{MAX_WINDOW_EXPANSION_POINTS} points (duration={duration} {unit}). "
         "This almost always means dur_var was read in the wrong unit — declare "
-        "it at the producer with set_dur_var_unit(). Offending row: "
-        + repr({k: v for k, v in row.items() if k != concept_name})
+        "it at the producer with set_dur_var_unit(). Offending row: field(s) "
+        + ", ".join(sorted(str(key) for key in row))
+        + f"; sha256 {fingerprint[:16]}"
     )
 
 
@@ -668,12 +680,33 @@ def _get_total_patient_count(loader: "BaseICULoader") -> Optional[int]:
         return None
 
 
+#: Columns whose float64 precision is part of the result, not overhead.
+#: float32 carries ~7 significant digits, which is ample for a heart rate and
+#: not for a p value of 3.2e-9, a regression coefficient, a CI bound, or a
+#: model probability compared against a threshold. Downcasting these silently
+#: changes reported numbers and breaks R/Python parity, so they keep float64.
+_PRECISION_COLUMN_RE = re.compile(
+    r"(?:^|_)(?:p|pval|p_value|pvalue|q|qval|padj|prob|probability|proba|score"
+    r"|coef|coefficient|beta|se|std_err|stderr|ci|ci_low|ci_lower|ci_high"
+    r"|ci_upper|lower|upper|hr|or|rr|auroc|auc|brier|weight|weights|estimate"
+    r"|statistic|pred|predicted|risk)$",
+    re.IGNORECASE,
+)
+
+
+def _keeps_full_precision(name: str) -> bool:
+    lowered = str(name).strip().lower()
+    if lowered in {"time", "index", "duration", "dur_var", "offset"}:
+        return True
+    return bool(_PRECISION_COLUMN_RE.search(lowered))
+
+
 def _compress_dtypes(df: pd.DataFrame, verbose: bool = False) -> pd.DataFrame:
     """
     压缩 DataFrame 的数据类型以减少内存使用
 
     - int64 -> int32 (如果值范围允许)
-    - float64 -> float32 (对于非精确值)
+    - float64 -> float32 (对于非精确值，统计量列除外)
     - 保持 datetime64 不变
 
     可以节省约 50-60% 的内存
@@ -689,6 +722,9 @@ def _compress_dtypes(df: pd.DataFrame, verbose: bool = False) -> pd.DataFrame:
 
     for col in df.columns:
         col_type = df[col].dtype
+
+        if _keeps_full_precision(col):
+            continue
 
         # 整数类型压缩
         if col_type == np.int64:

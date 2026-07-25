@@ -215,7 +215,11 @@ def test_p0_2_expansion_is_capped_instead_of_exhausting_memory():
     with pytest.raises(WindowExpansionError) as excinfo:
         _expand_public_numeric_win_tbl_output(frame, "norepi_rate", "1h")
     assert str(MAX_WINDOW_EXPANSION_POINTS) in str(excinfo.value)
+    # The row is described, not reproduced (2026-07-29): field names and a
+    # digest identify it for debugging; its values would put a patient
+    # identifier and event times into every log this message reaches.
     assert "stay_id" in str(excinfo.value), "the offending row must be reported"
+    assert "sha256" in str(excinfo.value)
 
 
 # --------------------------------------------------------------------------
