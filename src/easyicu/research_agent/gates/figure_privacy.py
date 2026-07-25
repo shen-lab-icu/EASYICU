@@ -44,7 +44,9 @@ by inspection and which was answered by construction.
 from __future__ import annotations
 
 import csv
+import datetime as _dt
 import json
+import math
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -76,6 +78,27 @@ IDENTIFIER_COLUMNS = frozenset(
 )
 
 _IDENTIFIER_SUFFIX_RE = re.compile(r"(?:^|_)(?:id|ids)$", re.IGNORECASE)
+
+#: Words that scope a column to one subject rather than to a population.
+_SUBJECT_WORD_RE = re.compile(
+    r"(?:^|_)(?:patient|subject|case|record|stay|admission|admissions|person"
+    r"|encounter|mrn|hadm|icustay|unitstay)(?:_|$)",
+    re.IGNORECASE,
+)
+
+#: Suffixes that name an identity rather than a magnitude. ``patient_number``
+#: says *which* patient; ``patient_count`` says *how many*. Only the first is an
+#: identifier, and only when a subject word scopes it — ``total_number`` is a
+#: magnitude.
+_IDENTITY_SUFFIX_RE = re.compile(
+    r"(?:^|_)(?:no|num|number|code|key|mrn|identifier)$", re.IGNORECASE
+)
+
+#: A timestamp written into a cell. The date alone is deliberately not enough:
+#: an x axis of study months is ordinary aggregate content, whereas a
+#: time-of-day component is an event time, and an event time is what turns a
+#: summary row back into one subject's record.
+_TIMESTAMP_VALUE_RE = re.compile(r"\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}")
 
 #: Column/key names carrying an event time. A per-event timestamp is what turns
 #: an aggregate table back into a per-subject one.
@@ -207,9 +230,12 @@ class FigurePrivacyAudit:
 
 #: Bumped whenever what the audit actually proves changes. 1.1.0 added
 #: value-level scanning (Parquet/CSV/JSON cells, not just names) and source
-#: re-hashing; the egress gate refuses a clearance produced by an audit version
-#: it does not know, so an older receipt cannot authorize under the new rules.
-FIGURE_PRIVACY_AUDIT_VERSION = "1.1.0"
+#: re-hashing; 1.2.0 closed the dtype holes in that scan — whole-number floats
+#: (a nullable Parquet id column), counts written as ``3.0``, event timestamps
+#: in generically named columns, and ``patient_number``-style identities that
+#: read as magnitudes. The egress gate refuses a clearance produced by an audit
+#: version it does not know, so a 1.1.0 receipt no longer authorizes an upload.
+FIGURE_PRIVACY_AUDIT_VERSION = "1.2.0"
 
 FIGURE_PRIVACY_RECEIPT_SCHEMA = "easyicu.figure_privacy_audit/2"
 
@@ -224,6 +250,10 @@ def _is_identifier_name(name: str) -> bool:
     if lowered in IDENTIFIER_COLUMNS:
         return True
     if lowered in {"id", "ids"}:
+        return True
+    if _SUBJECT_WORD_RE.search(lowered) and _IDENTITY_SUFFIX_RE.search(lowered):
+        # ``patient_number``, ``record_number``, ``case_no``: an identity that
+        # does not end in ``_id`` and would otherwise read as a magnitude.
         return True
     return bool(_IDENTIFIER_SUFFIX_RE.search(lowered)) and lowered not in {
         "evidence_id",
@@ -264,6 +294,65 @@ def _is_magnitude_name(name: str) -> bool:
     return bool(_MAGNITUDE_NAME_RE.search(lowered))
 
 
+def _as_count(value: Any) -> Optional[int]:
+    """Read a declared group size however the file spelled it.
+
+    ``int("3.0")`` raises, so a CSV that writes its counts as ``3.0`` — which
+    is what a float column round-tripped through pandas produces — used to skip
+    the small-cell check entirely. Parse through float, then require the value
+    to actually be a whole number so a rate in a mis-named column is not read
+    as a count.
+    """
+
+    if value is None or isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(number) or not number.is_integer():
+        return None
+    return int(number)
+
+
+def _identifier_text(value: Any) -> Optional[str]:
+    """The text to scan for identifier digits, or ``None`` to skip the cell.
+
+    A Parquet identifier column with any missing value arrives as float64, so
+    stay 30042318 reads back as ``30042318.0``. Skipping every float — which is
+    what the first version of this scanner did — therefore skipped precisely
+    the column most likely to leak. Whole-number floats are scanned as the
+    integers they are; fractional floats are measurements and estimates and
+    stay exempt, which is what keeps a six-decimal p value from reading as an
+    identifier.
+    """
+
+    if isinstance(value, float):
+        if not math.isfinite(value) or not value.is_integer():
+            return None
+        return str(int(value))
+    if isinstance(value, _dt.datetime):
+        return value.isoformat()
+    return str(value)
+
+
+def _is_event_timestamp(value: Any) -> bool:
+    """Whether a cell carries a time of day, not just a calendar date."""
+
+    if isinstance(value, _dt.datetime):
+        return (value.hour, value.minute, value.second, value.microsecond) != (
+            0,
+            0,
+            0,
+            0,
+        )
+    if isinstance(value, str):
+        return bool(_TIMESTAMP_VALUE_RE.search(value))
+    return False
+
+
 def _mask_identifier_token(token: str) -> str:
     """Describe an identifier-shaped token without reproducing it.
 
@@ -290,30 +379,30 @@ class _ValueScanner:
     def __init__(self) -> None:
         self.small_cells: Set[str] = set()
         self.identifier_hits: Dict[str, int] = {}
+        self.timestamp_hits: Dict[str, int] = {}
         self.cells_scanned = 0
 
     def add(self, name: Any, value: Any) -> None:
         self.cells_scanned += 1
         lowered = str(name).strip().lower()
         if lowered in GROUP_SIZE_KEYS:
-            try:
-                count = int(value)
-            except (TypeError, ValueError):
-                count = None
+            count = _as_count(value)
             if count is not None and 0 < count < MIN_DISCLOSED_GROUP_SIZE:
                 self.small_cells.add(f"{name}={count}")
             return
         if value is None or isinstance(value, bool):
             return
-        if _is_magnitude_name(lowered):
+        column = str(name)
+        if _is_event_timestamp(value):
+            self.timestamp_hits[column] = self.timestamp_hits.get(column, 0) + 1
             return
-        if isinstance(value, float):
-            # A float is a measurement or an estimate. Identifiers are stored
-            # as integers or strings; scanning floats would flag long sums and
-            # high-precision statistics for no gain.
+        if _is_magnitude_name(lowered) and not _is_identifier_name(lowered):
+            # A cohort total legitimately runs to six digits. An identity does
+            # not become a magnitude by being called ``patient_number``, so a
+            # subject-scoped name keeps its scan.
             return
-        if _IDENTIFIER_TOKEN_RE.search(str(value)):
-            column = str(name)
+        text = _identifier_text(value)
+        if text is not None and _IDENTIFIER_TOKEN_RE.search(text):
             self.identifier_hits[column] = self.identifier_hits.get(column, 0) + 1
 
     def add_rows(self, header: Sequence[Any], row: Sequence[Any]) -> None:
@@ -331,6 +420,12 @@ class _ValueScanner:
             named = sorted(self.identifier_hits.items())[:_MAX_VALUE_FINDINGS]
             found.append(
                 "identifier-shaped value(s) in "
+                + ", ".join(f"{column} ({count} cell(s))" for column, count in named)
+            )
+        if self.timestamp_hits:
+            named = sorted(self.timestamp_hits.items())[:_MAX_VALUE_FINDINGS]
+            found.append(
+                "event timestamp value(s) in "
                 + ", ".join(f"{column} ({count} cell(s))" for column, count in named)
             )
         return found
