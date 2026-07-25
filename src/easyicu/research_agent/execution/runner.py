@@ -57,6 +57,7 @@ from ..contracts.method_packages import (
     OPTIONAL_BASELINE_PACKAGES,
 )
 from ..contracts.runtime import RunResult
+from ..orchestration.profiles import is_paper_facing_profile
 from .method_capabilities import set_runtime_capability_snapshot_provider
 
 _SAFE_INHERITED_ENV_KEYS = (
@@ -240,8 +241,7 @@ def _collect_safe_output_artifacts(out_dir: Path) -> List[Path]:
             # still reported success. Under an evidence-bound contract an
             # unenumerable output directory is a failure, not a gap.
             raise OutputArtifactPolicyError(
-                "cannot enumerate generated output directory "
-                f"{current}: {exc}"
+                "cannot enumerate generated output directory " f"{current}: {exc}"
             ) from exc
         for output_path in entries:
             metadata = os.lstat(output_path)
@@ -1091,7 +1091,8 @@ class CodeRunner:
             )
             _replace_regular_file_atomically(
                 log_path,
-                textwrap.dedent(f"""
+                textwrap.dedent(
+                    f"""
                     === step {step_id} ===
                     cmd: {' '.join(cmd)}
                     cwd: {step_dir}
@@ -1108,7 +1109,10 @@ class CodeRunner:
 
                     ---- stderr ----
                     {stderr}
-                    """).strip().encode("utf-8"),
+                    """
+                )
+                .strip()
+                .encode("utf-8"),
             )
             return RunResult(
                 step_id=step_id,
@@ -1351,7 +1355,8 @@ class CodeRunner:
         # fresh regular file rather than writing through it to a host victim.
         _replace_regular_file_atomically(
             log_path,
-            textwrap.dedent(f"""
+            textwrap.dedent(
+                f"""
                 === step {step_id} ===
                 cmd: {' '.join(cmd)}
                 original_cmd: {' '.join(original_cmd)}
@@ -1370,7 +1375,10 @@ class CodeRunner:
                 {stdout}
                 ---- stderr ----
                 {stderr}
-                """).strip().encode("utf-8"),
+                """
+            )
+            .strip()
+            .encode("utf-8"),
         )
 
         artefacts = _collect_safe_output_artifacts(out_dir)
@@ -1473,6 +1481,7 @@ class DockerRunner:
         memory_limit: Optional[str] = None,
         pids_limit: Optional[int] = None,
         open_files_limit: Optional[int] = None,
+        submission_profile_name: Optional[str] = None,
         user: Optional[str] = None,
         platform: Optional[str] = None,
     ) -> None:
@@ -1513,6 +1522,29 @@ class DockerRunner:
             if open_files_limit is None
             else int(open_files_limit or 0)
         )
+        # A paper-facing profile pins the execution environment into the run's
+        # authority identity. "Docker was used" is not that environment if the
+        # caller could also pass ``memory_limit=""``: two runs claiming the
+        # same profile would then have run under different, unrecorded
+        # ceilings. Development profiles keep the opt-out.
+        if is_paper_facing_profile(submission_profile_name):
+            disabled = [
+                name
+                for name, value in (
+                    ("cpu_limit", self.cpu_limit),
+                    ("memory_limit", self.memory_limit),
+                    ("pids_limit", self.pids_limit),
+                    ("open_files_limit", self.open_files_limit),
+                )
+                if not value
+            ]
+            if disabled:
+                raise ValueError(
+                    "submission profile "
+                    f"{submission_profile_name!r} requires every container "
+                    "resource ceiling to be set; disabled: "
+                    + ", ".join(sorted(disabled))
+                )
         if user is not None:
             self.user = user
         elif os.name == "posix" and hasattr(os, "getuid") and hasattr(os, "getgid"):
@@ -1781,7 +1813,9 @@ class DockerRunner:
         if self.pids_limit:
             cmd.append(f"--pids-limit={self.pids_limit}")
         if self.open_files_limit:
-            cmd.append(f"--ulimit=nofile={self.open_files_limit}:{self.open_files_limit}")
+            cmd.append(
+                f"--ulimit=nofile={self.open_files_limit}:{self.open_files_limit}"
+            )
 
         # Mount the complete run tree read-only.  Mount both the writable
         # attempt output and immutable script at independent container paths.
@@ -2674,7 +2708,8 @@ class DockerRunner:
                 monitor_thread.join(timeout=1.0)
         duration = time.monotonic() - started
 
-        log_content = textwrap.dedent(f"""
+        log_content = textwrap.dedent(
+            f"""
                 === step {step_id} (DockerRunner) ===
                 image: {self.image}
                 image_id: {runtime_provenance.get("image_id")}
@@ -2689,7 +2724,8 @@ class DockerRunner:
                 {stdout}
                 ---- stderr ----
                 {stderr}
-                """).strip()
+                """
+        ).strip()
 
         if teardown_confirmed:
             self._ensure_real_directory(step_dir, replace_unsafe=False)

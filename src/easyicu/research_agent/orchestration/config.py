@@ -34,9 +34,22 @@ from __future__ import annotations
 
 import hashlib
 import json
-from dataclasses import asdict, dataclass, replace
+import re
+from dataclasses import dataclass, fields, replace
 from pathlib import Path
 from typing import Any, Callable, Dict, Mapping, Optional, Sequence, Union
+
+
+#: Field/key names whose *value* must never appear in run provenance. Matched
+#: on the name, not on the value, so a key rotated to a new format stays
+#: redacted.
+_SECRET_FIELD_RE = re.compile(
+    r"(?i)(?:^|_)(?:api_key|apikey|key|token|secret|password|passwd|credential)s?$"
+)
+
+
+def _is_secret_field(name: str) -> bool:
+    return bool(_SECRET_FIELD_RE.search(str(name)))
 
 
 @dataclass(frozen=True)
@@ -280,6 +293,9 @@ class PipelineConfig:
     enable_capability_workflow: bool = False
     expected_runner_image_digest: Optional[str] = None
     capability_request: Optional[Dict[str, Any]] = None
+    # Operator-supplied control plane for the human-review interrupt. A live
+    # object (it owns a checkpointer), so it must never be deep-copied.
+    human_review_gate: Optional[Any] = None
     capability_approval: Optional[Dict[str, Any]] = None
     capability_activation: Optional[Dict[str, Any]] = None
     know_how_paths: Sequence[Union[str, Path]] = ()
@@ -321,11 +337,26 @@ class PipelineConfig:
         """
         return replace(self, **overrides)
 
+    def _field_values(self) -> Dict[str, Any]:
+        """Return every field by *reference*.
+
+        Deliberately not :func:`dataclasses.asdict`, which recursively
+        ``copy.deepcopy``s anything that is not a dataclass or a builtin
+        container. Several fields hold live objects — a provider client with an
+        open ``httpx`` connection pool, a runner factory, a visual-QA adapter, a
+        human-review checkpointer. Deep-copying those either raises
+        (``TypeError: cannot pickle '_thread.lock' object``) or, worse,
+        succeeds and hands the pipeline a *clone*, so the object the provider
+        factory authorised is not the object that makes the calls.
+        """
+
+        return {f.name: getattr(self, f.name) for f in fields(self)}
+
     def as_kwargs(self) -> Dict[str, Any]:
         """Return a plain-dict view suitable for the legacy
         ``ResearchAgentPipeline(**config.as_kwargs())`` form.
         """
-        return asdict(self)
+        return self._field_values()
 
     def canonical_payload(self) -> Dict[str, Any]:
         """Return a JSON-safe rendering of every field.
@@ -333,20 +364,31 @@ class PipelineConfig:
         Live objects (an ``llm`` client, a ``runner_factory``) are rendered by
         type rather than value: what matters for provenance is which kind of
         component was configured, not its memory address.
+
+        Secret-bearing string fields are replaced by a digest: the payload is
+        written into run provenance, and an API key in a manifest is a leak
+        even though the key is genuinely part of the configuration.
         """
 
-        def _render(value: Any) -> Any:
+        def _render(value: Any, *, key: str = "") -> Any:
+            if _is_secret_field(key) and isinstance(value, str) and value:
+                return "sha256:" + hashlib.sha256(value.encode("utf-8")).hexdigest()
             if value is None or isinstance(value, (bool, int, float, str)):
                 return value
             if isinstance(value, Path):
                 return str(value)
             if isinstance(value, Mapping):
-                return {str(k): _render(v) for k, v in sorted(value.items())}
+                return {
+                    str(k): _render(v, key=str(k)) for k, v in sorted(value.items())
+                }
             if isinstance(value, (list, tuple, set, frozenset)):
-                return [_render(v) for v in value]
+                return [_render(v, key=key) for v in value]
             return f"<{type(value).__module__}.{type(value).__qualname__}>"
 
-        return {key: _render(value) for key, value in sorted(asdict(self).items())}
+        return {
+            key: _render(value, key=key)
+            for key, value in sorted(self._field_values().items())
+        }
 
     def canonical_digest(self) -> str:
         """SHA-256 over :meth:`canonical_payload`, for run provenance."""
