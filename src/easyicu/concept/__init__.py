@@ -60,6 +60,18 @@ WINDOW_AGGREGATE_OVERRIDES: Dict[str, tuple] = {
 }
 
 
+def _declare_dur_var_hours(frame) -> None:
+    """Record that ``frame``'s ``dur_var`` is now expressed in hours.
+
+    Every timedelta→hours conversion below must call this, otherwise the
+    public expansion path has to guess the unit back from the values.
+    """
+
+    from ..table.duration import UNIT_HOURS, set_dur_var_unit
+
+    set_dur_var_unit(frame, UNIT_HOURS)
+
+
 def resolve_window_aggregate(concept_name: str, agg_method):
     """套用概念级窗口聚合覆盖，返回最终的 agg_method（纯函数，便于单测）。
 
@@ -5111,7 +5123,20 @@ class ConceptResolver:
         if _any_win_tbl and 'dur_var' in combined.columns and index_column:
             from ..table import WinTbl
             # 🔧 FIX: Ensure dur_var is numeric (can become object after pd.concat with NaN)
-            combined['dur_var'] = pd.to_numeric(combined['dur_var'], errors='coerce')
+            # pd.to_numeric on a timedelta column yields NANOSECONDS, which any
+            # downstream unit reading would misread by ~10 orders of magnitude —
+            # convert those through the declared-unit helper instead.
+            if pd.api.types.is_timedelta64_dtype(combined['dur_var']):
+                from ..table.duration import UNIT_HOURS, set_dur_var_unit
+
+                combined['dur_var'] = (
+                    combined['dur_var'].dt.total_seconds() / 3600.0
+                )
+                set_dur_var_unit(combined, UNIT_HOURS)
+            else:
+                combined['dur_var'] = pd.to_numeric(
+                    combined['dur_var'], errors='coerce'
+                )
             # Separate rows: with dur_var (WinTbl sources) and without (TsTbl sources)
             ts_source_rows = combined[combined['dur_var'].isna()].copy()
             combined = combined.dropna(subset=['dur_var'])
@@ -5458,10 +5483,23 @@ class ConceptResolver:
             # computation hit pd.to_datetime four times per call, so we
             # drop it entirely. If a future caller actually needs ICU
             # window length, read it off self._icustays_cache directly.
-            # Convert dur_var from minutes to hours (same as datetime path at L4388)
-            # Callbacks like hirid_vent produce dur_var in minutes; index is already in hours
-            if 'dur_var' in data.columns and pd.api.types.is_numeric_dtype(data['dur_var']):
-                data['dur_var'] = data['dur_var'] / 60.0
+            # Normalise dur_var to hours so the index and the duration share a
+            # unit. Which conversion applies depends on what the producer
+            # declared — hirid_vent emits minutes, ts_to_win_tbl on a numeric
+            # index already emits hours, and blindly dividing both by 60 made
+            # the second case 60x too short.
+            if 'dur_var' in data.columns:
+                from ..table.duration import (
+                    UNIT_HOURS,
+                    resolve_dur_var_hours,
+                    set_dur_var_unit,
+                )
+
+                if pd.api.types.is_numeric_dtype(
+                    data['dur_var']
+                ) or pd.api.types.is_timedelta64_dtype(data['dur_var']):
+                    data['dur_var'] = resolve_dur_var_hours(data)
+                    set_dur_var_unit(data, UNIT_HOURS)
             return data
         
         # 检查时间列是否是有效的datetime类型
@@ -5908,6 +5946,7 @@ class ConceptResolver:
                         dur_col,
                     )
                 result.data[dur_col] = result.data[dur_col].dt.total_seconds() / 3600.0
+                _declare_dur_var_hours(result.data)
 
         # R代码中，递归概念的回调返回结果就是最终结果，不需要再次聚合
         # aggregate参数已经在加载子概念时应用了
@@ -5952,6 +5991,7 @@ class ConceptResolver:
                         if pd.api.types.is_timedelta64_dtype(result.data[dur_col]):
                             # timedelta 转换为小时数
                             result.data[dur_col] = result.data[dur_col].dt.total_seconds() / 3600.0
+                            _declare_dur_var_hours(result.data)
                         elif pd.api.types.is_datetime64_any_dtype(result.data[dur_col]):
                             # 如果是 datetime（不应该，但保险起见），记录警告
                             print(f"   ⚠️  警告: WinTbl 的 dur_var '{dur_col}' 是 datetime 类型，预期是 timedelta")
@@ -5977,6 +6017,7 @@ class ConceptResolver:
                     if dur_col and dur_col in result.data.columns:
                         if pd.api.types.is_timedelta64_dtype(result.data[dur_col]):
                             result.data[dur_col] = result.data[dur_col].dt.total_seconds() / 3600.0
+                            _declare_dur_var_hours(result.data)
             
             # CRITICAL: Expand WinTbl to time series before applying interval aggregation
             # WinTbl represents time windows (start_time, duration) and must be expanded
