@@ -42,7 +42,7 @@ import threading
 import urllib.parse
 import uuid
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Mapping, Optional
+from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence
 
 from .concept_availability import (
     concept_database_availability_from_load_record,
@@ -312,11 +312,7 @@ def _safe_manifest_payload(manifest: Mapping[str, Any]) -> Dict[str, Any]:
     findings = manifest.get("findings")
     if isinstance(findings, list):
         payload["findings"] = [
-            {
-                key: finding.get(key)
-                for key in ("validator", "severity")
-                if key in finding
-            }
+            _safe_finding_payload(finding)
             for finding in findings
             if isinstance(finding, Mapping)
         ]
@@ -327,6 +323,61 @@ def _safe_manifest_payload(manifest: Mapping[str, Any]) -> Dict[str, Any]:
         )
     payload["projection"] = _projection_note()
     return payload
+
+
+#: Detail keys that describe *which rule fired*, never *what the data said*.
+#: A validator detail bucket is free-form and routinely carries column names,
+#: value ranges, outliers, small-cell sizes and host paths, so it is projected
+#: by allow-list rather than filtered by deny-list.
+_SAFE_FINDING_DETAIL_KEYS = (
+    "code",
+    # Column names are schema, not patient data: the outbound projection
+    # already discloses variable names and definitions, and the caller wrote
+    # these ones in the script it submitted.
+    "column",
+    "columns",
+    "duplicate_count",
+    "fallback",
+    "function",
+    "human_review_required",
+    "kind",
+    "reason",
+    "rule",
+    "step_id",
+    "validator",
+)
+
+
+def _safe_finding_payload(finding: Any) -> Dict[str, Any]:
+    """Reduce one validation finding to its stable, PHI-free identity.
+
+    ``message`` is dropped: it is an interpolated sentence and the place a
+    concrete value ("only 3 stays have lactate") most often ends up.
+    """
+
+    raw = finding if isinstance(finding, Mapping) else finding.model_dump(mode="json")
+    payload: Dict[str, Any] = {
+        key: raw.get(key) for key in ("validator", "severity") if key in raw
+    }
+    detail = raw.get("detail")
+    if isinstance(detail, Mapping):
+        projected = {
+            key: detail[key] for key in _SAFE_FINDING_DETAIL_KEYS if key in detail
+        }
+        if projected:
+            payload["detail"] = projected
+        withheld = sorted(set(detail) - set(_SAFE_FINDING_DETAIL_KEYS))
+        if withheld:
+            payload["detail_withheld_keys"] = withheld
+    return payload
+
+
+def _project_findings(findings: Sequence[Any]) -> List[Dict[str, Any]]:
+    """Project auditor findings unless the caller holds the internal scope."""
+
+    if _internal_context_granted():
+        return [f.model_dump(mode="json") for f in findings]
+    return [_safe_finding_payload(f) for f in findings]
 
 
 def _cohort_path_from_args(args: Dict[str, Any]) -> Path:
@@ -455,7 +506,10 @@ def _tool_audit_cohort(args: Dict[str, Any]) -> Dict[str, Any]:
         context=ctx,
         cohort_path=_cohort_path_from_args(args),
     )
-    return {"findings": [f.model_dump(mode="json") for f in findings]}
+    return {
+        "findings": _project_findings(findings),
+        "projection": _projection_note(),
+    }
 
 
 def _tool_run_validator(args: Dict[str, Any]) -> Dict[str, Any]:
@@ -481,7 +535,8 @@ def _tool_run_validator(args: Dict[str, Any]) -> Dict[str, Any]:
         }
     return {
         "validator": validator,
-        "findings": [f.model_dump(mode="json") for f in findings],
+        "findings": _project_findings(findings),
+        "projection": _projection_note(),
     }
 
 
