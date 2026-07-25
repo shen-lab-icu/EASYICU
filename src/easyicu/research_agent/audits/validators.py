@@ -36,8 +36,8 @@ from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Set, 
 
 import pandas as pd
 
-from ..analysis_method_suite import figure_product_source_obligations
-from ..declared_product_contract import (
+from ..planning.analysis_method_suite import figure_product_source_obligations
+from ..contracts.declared_product import (
     effect_adjustment_family,
     effect_bearing_product,
     effect_estimand_tier,
@@ -45,8 +45,12 @@ from ..declared_product_contract import (
     effect_role_family,
     typed_product,
 )
-from ..replication.paper import compare_metric_values
-from ..ordered_stratified_contract import ordered_stratified_numeric_findings
+from ..contracts.fraction_scale import (
+    is_scale_descriptor_field,
+    normalize_metric_key,
+)
+from ..replication.metrics import compare_metric_values
+from ..contracts.ordered_stratified import ordered_stratified_numeric_findings
 from ..schema import (
     ADJUSTED_ASSOCIATION_BINARY_METHOD_FAMILIES,
     ADJUSTED_ASSOCIATION_CONTINUOUS_METHOD_FAMILIES,
@@ -64,8 +68,13 @@ from ..schema import (
     ValidationFinding,
     VariableRole,
 )
-from ..llm import LLMClient, LLMMessage
-from ..provider_budget import (
+from ..providers.protocol import LLMClient, LLMMessage
+from ..providers.factory import authorized_complete
+from ..research_context.outbound import (
+    format_outbound_safe_context,
+    outbound_safe_script,
+)
+from ..authority.provider_budget import (
     ProviderCallBudgetError,
     StepProviderCallBudget,
     complete_with_provider_budget,
@@ -76,13 +85,12 @@ from .outcome_semantics import (
     _script_has_conflicting_mortality_semantics,
     _script_uses_bound_outcome,
 )
-from ..runtime_artifacts import (
+from ..authority.runtime_artifacts import (
     current_run_evidence_records,
     current_successful_step_records,
     verified_run_evidence_path,
 )
-from ..trajectory_contract import trajectory_phenotyping_artifact_findings
-
+from ..trajectory.contract import trajectory_phenotyping_artifact_findings
 
 # ---------------------------------------------------------------------------
 # CohortAuditor
@@ -132,23 +140,25 @@ def cohort_hygiene_findings(
     outcome = getattr(context, "target_outcome", None)
     has_patient_id = any(pid in cols for pid in _PATIENT_ID_COLUMNS)
     if outcome and not has_patient_id:
-        findings.append(ValidationFinding(
-            validator="cohort_auditor",
-            severity="warning",
-            message=(
-                "Cohort is keyed at the ICU-stay level with no patient "
-                "identifier; within-patient non-independence and first-stay "
-                "selection cannot be assessed from this export. Re-extract "
-                "with a patient identifier (e.g. subject_id) if repeat ICU "
-                "stays could affect the outcome model."
-            ),
-            detail={
-                "kind": "cohort_hygiene",
-                "subkind": "patient_independence_unassessable",
-                "structural_no_source": True,
-                "impartial": True,
-            },
-        ))
+        findings.append(
+            ValidationFinding(
+                validator="cohort_auditor",
+                severity="warning",
+                message=(
+                    "Cohort is keyed at the ICU-stay level with no patient "
+                    "identifier; within-patient non-independence and first-stay "
+                    "selection cannot be assessed from this export. Re-extract "
+                    "with a patient identifier (e.g. subject_id) if repeat ICU "
+                    "stays could affect the outcome model."
+                ),
+                detail={
+                    "kind": "cohort_hygiene",
+                    "subkind": "patient_independence_unassessable",
+                    "structural_no_source": True,
+                    "impartial": True,
+                },
+            )
+        )
 
     # (B) Short-stay exposure. If an ICU LoS column (days) is present, report
     # the fraction of very short stays. Excluding <24h stays is a defensible
@@ -163,24 +173,26 @@ def cohort_hygiene_findings(
         if not los.empty:
             frac_short = float((los < 1.0).mean())
             if frac_short > 0:
-                findings.append(ValidationFinding(
-                    validator="cohort_auditor",
-                    severity="warning",
-                    message=(
-                        f"{frac_short:.0%} of stays have ICU length-of-stay "
-                        f"<1 day (column '{los_col}'); consider whether "
-                        "incomplete exposure affects the analysis. No "
-                        "minimum-LoS filter is imposed — recorded for the "
-                        "analyst to judge."
-                    ),
-                    detail={
-                        "kind": "cohort_hygiene",
-                        "subkind": "short_stay_exposure",
-                        "fraction_los_under_1_day": frac_short,
-                        "los_column": los_col,
-                        "impartial": True,
-                    },
-                ))
+                findings.append(
+                    ValidationFinding(
+                        validator="cohort_auditor",
+                        severity="warning",
+                        message=(
+                            f"{frac_short:.0%} of stays have ICU length-of-stay "
+                            f"<1 day (column '{los_col}'); consider whether "
+                            "incomplete exposure affects the analysis. No "
+                            "minimum-LoS filter is imposed — recorded for the "
+                            "analyst to judge."
+                        ),
+                        detail={
+                            "kind": "cohort_hygiene",
+                            "subkind": "short_stay_exposure",
+                            "fraction_los_under_1_day": frac_short,
+                            "los_column": los_col,
+                            "impartial": True,
+                        },
+                    )
+                )
 
     return findings
 
@@ -200,69 +212,90 @@ class CohortAuditor:
         try:
             df = pd.read_parquet(cohort_path)
         except Exception as exc:
-            return [ValidationFinding(
-                validator=self.name, severity="error",
-                message=f"Could not read cohort parquet: {exc}",
-            )]
+            return [
+                ValidationFinding(
+                    validator=self.name,
+                    severity="error",
+                    message=f"Could not read cohort parquet: {exc}",
+                )
+            ]
 
         # Row count
         if context.cohort.n_stays != int(len(df)):
-            findings.append(ValidationFinding(
-                validator=self.name, severity="error",
-                message=(
-                    f"Row count mismatch: descriptor says n_stays={context.cohort.n_stays:,} "
-                    f"but cohort parquet has {len(df):,} rows."
-                ),
-            ))
+            findings.append(
+                ValidationFinding(
+                    validator=self.name,
+                    severity="error",
+                    message=(
+                        f"Row count mismatch: descriptor says n_stays={context.cohort.n_stays:,} "
+                        f"but cohort parquet has {len(df):,} rows."
+                    ),
+                )
+            )
 
         # Required id columns
         for col in context.cohort.id_columns:
             if col not in df.columns:
-                findings.append(ValidationFinding(
-                    validator=self.name, severity="error",
-                    message=f"Declared id column '{col}' missing from cohort.",
-                ))
+                findings.append(
+                    ValidationFinding(
+                        validator=self.name,
+                        severity="error",
+                        message=f"Declared id column '{col}' missing from cohort.",
+                    )
+                )
 
         # Target outcome present and binary if labelled binary
         outcome = context.target_outcome
         if outcome:
             if outcome not in df.columns:
-                findings.append(ValidationFinding(
-                    validator=self.name, severity="error",
-                    message=f"Target outcome '{outcome}' missing from cohort.",
-                ))
+                findings.append(
+                    ValidationFinding(
+                        validator=self.name,
+                        severity="error",
+                        message=f"Target outcome '{outcome}' missing from cohort.",
+                    )
+                )
             else:
                 v = context.variable(outcome)
                 if v and v.role == VariableRole.OUTCOME:
                     s = df[outcome].dropna()
                     if not s.empty and set(s.unique()) - {0, 1, True, False, 0.0, 1.0}:
-                        findings.append(ValidationFinding(
-                            validator=self.name, severity="warning",
-                            message=(
-                                f"Target outcome '{outcome}' has non-binary values "
-                                f"({sorted(set(s.unique()))[:5]}…); confirm this is intended."
-                            ),
-                        ))
+                        findings.append(
+                            ValidationFinding(
+                                validator=self.name,
+                                severity="warning",
+                                message=(
+                                    f"Target outcome '{outcome}' has non-binary values "
+                                    f"({sorted(set(s.unique()))[:5]}…); confirm this is intended."
+                                ),
+                            )
+                        )
 
         # NaN-only columns
         for col in df.columns:
             if df[col].isna().all():
-                findings.append(ValidationFinding(
-                    validator=self.name, severity="warning",
-                    message=f"Column '{col}' is entirely missing in the cohort.",
-                ))
+                findings.append(
+                    ValidationFinding(
+                        validator=self.name,
+                        severity="warning",
+                        message=f"Column '{col}' is entirely missing in the cohort.",
+                    )
+                )
 
         # High-missing flag for any declared variable
         for v in context.variables:
             if v.missingness and v.missingness.fraction_missing > 0.5:
-                findings.append(ValidationFinding(
-                    validator=self.name, severity="warning",
-                    message=(
-                        f"Variable '{v.name}' has {v.missingness.fraction_missing:.0%} "
-                        "missingness; downstream associations are at risk of selection bias."
-                    ),
-                    detail={"fraction_missing": v.missingness.fraction_missing},
-                ))
+                findings.append(
+                    ValidationFinding(
+                        validator=self.name,
+                        severity="warning",
+                        message=(
+                            f"Variable '{v.name}' has {v.missingness.fraction_missing:.0%} "
+                            "missingness; downstream associations are at risk of selection bias."
+                        ),
+                        detail={"fraction_missing": v.missingness.fraction_missing},
+                    )
+                )
 
         # Impartial, advisory cohort-hygiene flags (patient-level
         # non-independence, short-stay exposure). Always severity="warning",
@@ -286,11 +319,26 @@ _FORBIDDEN_AGG_PATTERNS_BY_KIND = {
     # legitimately enter a regression or Cox model as a linear covariate;
     # this auditor covers reporting/aggregation misuse only, not model
     # specification choices.
-    ("ordinal_score", "mean"): "Mean of an ordinal SOFA component may be misleading; for manuscript-facing summaries prefer max-within-window or a level distribution.",
-    ("ordinal_score", "std"):  "Standard deviation of an ordinal SOFA component is rarely interpretable; prefer a level distribution.",
-    ("composite_score", "mean"): "Mean of a composite ordinal score (total SOFA = sum of 0–4 components) is a reporting-practice violation for bounded integer clinical scores; for manuscript-facing summaries prefer max-within-window, median (IQR) or a level distribution.",
-    ("composite_score", "std"):  "Standard deviation of a composite ordinal score may be misleading; prefer median (IQR) or a level distribution.",
-    ("ordinal_score_gcs", "mean"): "GCS is ordinal; for manuscript-facing summaries prefer worst (min) or a representative (last / first) value rather than mean.",
+    (
+        "ordinal_score",
+        "mean",
+    ): "Mean of an ordinal SOFA component may be misleading; for manuscript-facing summaries prefer max-within-window or a level distribution.",
+    (
+        "ordinal_score",
+        "std",
+    ): "Standard deviation of an ordinal SOFA component is rarely interpretable; prefer a level distribution.",
+    (
+        "composite_score",
+        "mean",
+    ): "Mean of a composite ordinal score (total SOFA = sum of 0–4 components) is a reporting-practice violation for bounded integer clinical scores; for manuscript-facing summaries prefer max-within-window, median (IQR) or a level distribution.",
+    (
+        "composite_score",
+        "std",
+    ): "Standard deviation of a composite ordinal score may be misleading; prefer median (IQR) or a level distribution.",
+    (
+        "ordinal_score_gcs",
+        "mean",
+    ): "GCS is ordinal; for manuscript-facing summaries prefer worst (min) or a representative (last / first) value rather than mean.",
 }
 
 
@@ -306,11 +354,20 @@ _FORBIDDEN_AGG_PATTERNS_BY_KIND = {
 # probe/descriptive stages) so a supplementary ablation can compare the two
 # policies on the same benchmark without re-running unrelated logic.
 _PROBE_STAGE_TOKENS = (
-    "probe", "descriptive", "exploratory", "qc", "summary",
-    "missingness_audit", "score_qc",
+    "probe",
+    "descriptive",
+    "exploratory",
+    "qc",
+    "summary",
+    "missingness_audit",
+    "score_qc",
 )
 _BLOCKING_STAGE_TOKENS = (
-    "primary_", "manuscript", "final_report", "publication", "evidence_binding",
+    "primary_",
+    "manuscript",
+    "final_report",
+    "publication",
+    "evidence_binding",
 )
 
 
@@ -339,6 +396,7 @@ def _forbidden_agg_severity(step: Optional["AnalysisStep"]) -> str:
     keeping probe/descriptive stages advisory.
     """
     import os
+
     if os.environ.get("EASYICU_AUDIT_ORDINAL_STRICT") != "1":
         return "warning"
     sid = (getattr(step, "step_id", "") or "").lower()
@@ -388,7 +446,11 @@ class ConceptUsageAuditor:
                     if isinstance(target, ast.Name) and cols:
                         alias_map[target.id] = set(cols)
             elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
-                cols = _extract_column_names(node.value, alias_map) if node.value else set()
+                cols = (
+                    _extract_column_names(node.value, alias_map)
+                    if node.value
+                    else set()
+                )
                 if cols:
                     alias_map[node.target.id] = set(cols)
 
@@ -399,18 +461,30 @@ class ConceptUsageAuditor:
             role_key = v.role.value
             key = (role_key, fn)
             if key in _FORBIDDEN_AGG_PATTERNS_BY_KIND:
-                findings.append(ValidationFinding(
-                    validator=self.name, severity=_forbidden_agg_severity(step),
-                    message=_FORBIDDEN_AGG_PATTERNS_BY_KIND[key],
-                    detail={"column": col, "function": fn, "step_id": step.step_id if step else None},
-                ))
+                findings.append(
+                    ValidationFinding(
+                        validator=self.name,
+                        severity=_forbidden_agg_severity(step),
+                        message=_FORBIDDEN_AGG_PATTERNS_BY_KIND[key],
+                        detail={
+                            "column": col,
+                            "function": fn,
+                            "step_id": step.step_id if step else None,
+                        },
+                    )
+                )
                 return
             if v.name.lower() == "gcs" and fn == "mean":
-                findings.append(ValidationFinding(
-                    validator=self.name, severity=_forbidden_agg_severity(step),
-                    message=_FORBIDDEN_AGG_PATTERNS_BY_KIND[("ordinal_score_gcs", "mean")],
-                    detail={"column": col, "function": fn},
-                ))
+                findings.append(
+                    ValidationFinding(
+                        validator=self.name,
+                        severity=_forbidden_agg_severity(step),
+                        message=_FORBIDDEN_AGG_PATTERNS_BY_KIND[
+                            ("ordinal_score_gcs", "mean")
+                        ],
+                        detail={"column": col, "function": fn},
+                    )
+                )
 
         def _call_receiver_key(node: ast.Call) -> Optional[str]:
             func = node.func
@@ -485,17 +559,23 @@ class ConceptUsageAuditor:
                 )
             elif func_name == "eval":
                 for expr in _string_literals(node):
-                    if ".mean(" in expr or '.agg("mean")' in expr or ".agg('mean')" in expr:
-                        findings.append(ValidationFinding(
-                            validator=self.name,
-                            severity="warning",
-                            message=(
-                                "Detected DataFrame.eval() expression containing mean-style "
-                                "aggregation. Review this script manually because string-eval "
-                                "can bypass column-level ICU aggregation checks."
-                            ),
-                            detail={"expression": expr[:200]},
-                        ))
+                    if (
+                        ".mean(" in expr
+                        or '.agg("mean")' in expr
+                        or ".agg('mean')" in expr
+                    ):
+                        findings.append(
+                            ValidationFinding(
+                                validator=self.name,
+                                severity="warning",
+                                message=(
+                                    "Detected DataFrame.eval() expression containing mean-style "
+                                    "aggregation. Review this script manually because string-eval "
+                                    "can bypass column-level ICU aggregation checks."
+                                ),
+                                detail={"expression": expr[:200]},
+                            )
+                        )
 
         for col in sorted(mean_columns):
             v = var_by_name.get(col)
@@ -506,25 +586,31 @@ class ConceptUsageAuditor:
                 and col not in median_columns
                 and not (mean_receivers & median_receivers)
             ):
-                findings.append(ValidationFinding(
-                    validator=self.name, severity="warning",
-                    message=(
-                        f"Lab variable '{col}' summarised by mean() with no median() in "
-                        "the same script. Right-skewed labs are conventionally reported "
-                        "as median (IQR)."
-                    ),
-                    detail={"column": col, "function": "mean"},
-                ))
+                findings.append(
+                    ValidationFinding(
+                        validator=self.name,
+                        severity="warning",
+                        message=(
+                            f"Lab variable '{col}' summarised by mean() with no median() in "
+                            "the same script. Right-skewed labs are conventionally reported "
+                            "as median (IQR)."
+                        ),
+                        detail={"column": col, "function": "mean"},
+                    )
+                )
 
         if fillna_zero_columns:
-            findings.append(ValidationFinding(
-                validator=self.name, severity="warning",
-                message=(
-                    "Detected fillna(0) — silent imputation to zero is rarely correct for "
-                    "ICU variables. Use a missing-indicator or document the imputation explicitly."
-                ),
-                detail={"columns": sorted(fillna_zero_columns)},
-            ))
+            findings.append(
+                ValidationFinding(
+                    validator=self.name,
+                    severity="warning",
+                    message=(
+                        "Detected fillna(0) — silent imputation to zero is rarely correct for "
+                        "ICU variables. Use a missing-indicator or document the imputation explicitly."
+                    ),
+                    detail={"columns": sorted(fillna_zero_columns)},
+                )
+            )
         return findings
 
     def _regex_fallback(
@@ -535,9 +621,15 @@ class ConceptUsageAuditor:
         step: Optional[AnalysisStep] = None,
     ) -> List[ValidationFinding]:
         findings: List[ValidationFinding] = []
-        pat_bracket = re.compile(r"""\[(['"])(?P<col>[^'"]+)\1\]\s*\.\s*(?P<fn>mean|std)\s*\(""")
-        pat_attr = re.compile(r"""\.(?P<col>[a-zA-Z_][a-zA-Z0-9_]*)\s*\.\s*(?P<fn>mean|std)\s*\(""")
-        for match in list(pat_bracket.finditer(script_text)) + list(pat_attr.finditer(script_text)):
+        pat_bracket = re.compile(
+            r"""\[(['"])(?P<col>[^'"]+)\1\]\s*\.\s*(?P<fn>mean|std)\s*\("""
+        )
+        pat_attr = re.compile(
+            r"""\.(?P<col>[a-zA-Z_][a-zA-Z0-9_]*)\s*\.\s*(?P<fn>mean|std)\s*\("""
+        )
+        for match in list(pat_bracket.finditer(script_text)) + list(
+            pat_attr.finditer(script_text)
+        ):
             col = match.group("col")
             fn = match.group("fn")
             var = var_by_name.get(col)
@@ -545,22 +637,26 @@ class ConceptUsageAuditor:
                 continue
             key = (var.role.value, fn)
             if key in _FORBIDDEN_AGG_PATTERNS_BY_KIND:
-                findings.append(ValidationFinding(
-                    validator=self.name,
-                    severity=_forbidden_agg_severity(step),
-                    message=_FORBIDDEN_AGG_PATTERNS_BY_KIND[key],
-                    detail={"column": col, "function": fn, "fallback": "regex"},
-                ))
+                findings.append(
+                    ValidationFinding(
+                        validator=self.name,
+                        severity=_forbidden_agg_severity(step),
+                        message=_FORBIDDEN_AGG_PATTERNS_BY_KIND[key],
+                        detail={"column": col, "function": fn, "fallback": "regex"},
+                    )
+                )
         if re.search(r"\.fillna\s*\(\s*0\s*\)", script_text):
-            findings.append(ValidationFinding(
-                validator=self.name,
-                severity="warning",
-                message=(
-                    "Detected fillna(0) — silent imputation to zero is rarely correct for "
-                    "ICU variables. Use a missing-indicator or document the imputation explicitly."
-                ),
-                detail={"fallback": "regex"},
-            ))
+            findings.append(
+                ValidationFinding(
+                    validator=self.name,
+                    severity="warning",
+                    message=(
+                        "Detected fillna(0) — silent imputation to zero is rarely correct for "
+                        "ICU variables. Use a missing-indicator or document the imputation explicitly."
+                    ),
+                    detail={"fallback": "regex"},
+                )
+            )
         return findings
 
 
@@ -586,7 +682,9 @@ def _extract_column_names(
     if isinstance(node, ast.Attribute):
         if isinstance(node.value, ast.Name):
             base = node.value.id.lower()
-            if base in {"df", "data", "cohort", "frame", "table"} or base.endswith("df"):
+            if base in {"df", "data", "cohort", "frame", "table"} or base.endswith(
+                "df"
+            ):
                 return {node.attr}
             return set(alias_map.get(node.value.id, set()))
         return _extract_column_names(node.value, alias_map)
@@ -618,7 +716,9 @@ def _extract_column_names(
             cols.update(_extract_column_names(value, alias_map))
         return cols
     if isinstance(node, ast.BinOp):
-        return _extract_column_names(node.left, alias_map) | _extract_column_names(node.right, alias_map)
+        return _extract_column_names(node.left, alias_map) | _extract_column_names(
+            node.right, alias_map
+        )
     if isinstance(node, ast.UnaryOp):
         return _extract_column_names(node.operand, alias_map)
     if isinstance(node, ast.Compare):
@@ -752,7 +852,8 @@ class LLMConceptAuditor:
             raw = complete_with_provider_budget(
                 budget=provider_budget,
                 category="concept_audit",
-                call=lambda: self.llm.complete(
+                call=lambda: authorized_complete(
+                    self.llm,
                     [
                         LLMMessage(
                             role="system",
@@ -874,37 +975,11 @@ class LLMConceptAuditor:
             priority_variables + referenced_variables + remaining_variables
         )[:80]
 
-        variables = [
-            {
-                "name": v.name,
-                "description": v.description,
-                "role": v.role.value,
-                "unit": v.unit,
-                "source_concept": v.source_concept,
-                "observed_domain": v.observed_domain,
-                "is_ordinal": v.is_ordinal,
-                "ordinal_levels": v.ordinal_levels,
-                "range_policy": (
-                    {
-                        "plausibility_range": v.valid_range,
-                        "semantics": "flag_only",
-                        "out_of_range_action": "retain_and_flag",
-                    }
-                    if v.valid_range is not None
-                    else None
-                ),
-                "allowed_aggregations": [a.value for a in v.allowed_aggregations],
-                "pitfalls": v.pitfalls,
-                "clinical_caveats": v.clinical_caveats,
-                "cross_database_notes": v.cross_database_notes,
-                "analysis_window": v.analysis_window,
-                "missingness": (
-                    v.missingness.model_dump(mode="json")
-                    if v.missingness is not None else None
-                ),
-            }
-            for v in selected_variables
-        ]
+        safe_context = format_outbound_safe_context(
+            context,
+            variable_names={variable.name for variable in selected_variables},
+        )
+        safe_script = outbound_safe_script(step, script_text)
         return (
             "Review this generated analysis script for ICU concept-use risks "
             "that deterministic regex checks may miss. Focus only on: ordinal "
@@ -926,6 +1001,30 @@ class LLMConceptAuditor:
             "value column's own missingness and numeric/domain rules determine its "
             "descriptive or modelling availability; the companions audit source "
             "provenance and must not change its row-level denominator. "
+            "A direct, uncaught call imported exactly as "
+            "`measurement_provenance_receipt` from "
+            "`easyicu.research_agent.methods.descriptive_inputs` is already a "
+            "host-owned fail-closed boundary: it raises on missing, invalid, or "
+            "discordant measured/count pairs. Do not demand a second status "
+            "guard or inspection of its successful receipt. "
+            "A value returned by a direct call imported exactly as "
+            "`strict_numeric_input` from that same host module has already "
+            "failed closed on every non-missing value that is unconvertible, "
+            "semantically nonnumeric, or non-finite. When a result-bearing "
+            "summary consumes only that returned `.values` Series (including "
+            "through a local wrapper), do not demand a second `isfinite` guard "
+            "or infer that later JSON null handling can hide non-finite input. "
+            "If you believe a named result variable bypasses this exact host "
+            "boundary, use issue_code "
+            "`strict_numeric_nonfinite_guard_required` and include every "
+            "affected name in `detail.variables`. "
+            "A Step input whose exact ConceptDescriptor names a source_concept, "
+            "analysis_window, and aggregation-compatible materialized column is "
+            "a host-owned binding. Direct use of that exact input is therefore "
+            "the authoritative planned summary; do not require generated code "
+            "to re-prove the host metadata or flag it merely because its column "
+            "name contains first/max/min/mean. Flag a substitution only when the "
+            "script selects a different column or contradicts that binding. "
             "A ConceptDescriptor `valid_range` is host-owned physiological "
             "plausibility metadata, not a locked eligibility or exclusion rule. "
             "Its typed `range_policy` is therefore `flag_only` with "
@@ -991,6 +1090,7 @@ class LLMConceptAuditor:
             "derives the event from event-time/follow-up data.\n\n"
             "Every finding must include `detail.issue_code`. For these narrow "
             "cases use exactly `audit_only_companion_row_gating_required`, "
+            "`strict_numeric_nonfinite_guard_required`, "
             "`finalized_exposure_missing_reconciliation`, "
             "`finalized_exposure_overridden`, or "
             "`finalized_exposure_forced_raw_reconciliation`, or "
@@ -1011,16 +1111,17 @@ class LLMConceptAuditor:
                 default=str,
             )
             + "\n"
-            "Variables:\n"
-            + json.dumps(variables, ensure_ascii=False, default=str)
+            "Outbound-safe context:\n"
+            + safe_context
             + "\n\nScript:\n"
-            + _concept_audit_script_excerpt(script_text)
+            + _concept_audit_script_excerpt(safe_script)
         )
 
 
 _LLM_CONCEPT_ISSUE_CODES = frozenset(
     {
         "audit_only_companion_row_gating_required",
+        "strict_numeric_nonfinite_guard_required",
         "finalized_exposure_missing_reconciliation",
         "finalized_exposure_overridden",
         "finalized_exposure_forced_raw_reconciliation",
@@ -1135,12 +1236,14 @@ def parse_llm_concept_audit_response(
             detail.setdefault("step_id", step_id)
         if _llm_outcome_confusion_is_nonblocking(msg, detail):
             sev = "warning"
-        findings.append(ValidationFinding(
-            validator=validator,
-            severity=sev,  # type: ignore[arg-type]
-            message=msg,
-            detail=detail or None,
-        ))
+        findings.append(
+            ValidationFinding(
+                validator=validator,
+                severity=sev,  # type: ignore[arg-type]
+                message=msg,
+                detail=detail or None,
+            )
+        )
     return findings
 
 
@@ -1231,8 +1334,7 @@ def _downgrade_metadata_supported_outcome_findings(
             ).lower()
             ambiguity = any(token in text for token in ambiguity_tokens)
             horizon_mismatch = (
-                copies_full_stay
-                and _finding_claims_mortality_horizon_mismatch(text)
+                copies_full_stay and _finding_claims_mortality_horizon_mismatch(text)
             )
             if ambiguity or horizon_mismatch:
                 detail = dict(finding.detail or {})
@@ -1252,13 +1354,132 @@ def _downgrade_metadata_supported_outcome_findings(
                     ),
                 )
                 downgraded.append(
-                    finding.model_copy(
-                        update={"severity": "warning", "detail": detail}
-                    )
+                    finding.model_copy(update={"severity": "warning", "detail": detail})
                 )
                 continue
         downgraded.append(finding)
     return downgraded
+
+
+_MEASUREMENT_RECEIPT_MODULE = "easyicu.research_agent.methods.descriptive_inputs"
+_MEASUREMENT_RECEIPT_HELPER = "measurement_provenance_receipt"
+_MEASUREMENT_VALUE_SUFFIXES = ("_first", "_last", "_max", "_mean", "_median", "_min")
+
+
+def _measurement_concept_root(value: str) -> str:
+    normalized = str(value or "").strip().lower()
+    for suffix in ("_measured", "_n", *_MEASUREMENT_VALUE_SUFFIXES):
+        if normalized.endswith(suffix):
+            return normalized[: -len(suffix)]
+    return normalized
+
+
+def _is_standard_main_guard(node: ast.AST) -> bool:
+    return bool(
+        isinstance(node, ast.Compare)
+        and isinstance(node.left, ast.Name)
+        and node.left.id == "__name__"
+        and len(node.ops) == len(node.comparators) == 1
+        and isinstance(node.ops[0], ast.Eq)
+        and isinstance(node.comparators[0], ast.Constant)
+        and node.comparators[0].value == "__main__"
+    )
+
+
+def _direct_host_measurement_receipt_roots(tree: ast.Module) -> set[str]:
+    """Prove direct execution of exact self-raising host receipt calls."""
+
+    exact_imports = [
+        node
+        for node in tree.body
+        if isinstance(node, ast.ImportFrom)
+        and node.level == 0
+        and node.module == _MEASUREMENT_RECEIPT_MODULE
+        and any(
+            alias.name == _MEASUREMENT_RECEIPT_HELPER and alias.asname is None
+            for alias in node.names
+        )
+    ]
+    if len(exact_imports) != 1:
+        return set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store):
+            if node.id == _MEASUREMENT_RECEIPT_HELPER:
+                return set()
+        if isinstance(node, ast.arg) and node.arg == _MEASUREMENT_RECEIPT_HELPER:
+            return set()
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            if node.name == _MEASUREMENT_RECEIPT_HELPER:
+                return set()
+
+    entrypoints: set[str] = set()
+    for statement in tree.body:
+        if not isinstance(statement, ast.If) or not _is_standard_main_guard(
+            statement.test
+        ):
+            continue
+        entrypoints.update(
+            item.value.func.id
+            for item in statement.body
+            if isinstance(item, ast.Expr)
+            and isinstance(item.value, ast.Call)
+            and isinstance(item.value.func, ast.Name)
+            and not item.value.args
+            and not item.value.keywords
+        )
+    functions = {
+        node.name: node
+        for node in tree.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and not node.decorator_list
+    }
+    parents = {
+        id(child): parent
+        for parent in ast.walk(tree)
+        for child in ast.iter_child_nodes(parent)
+    }
+    roots: set[str] = set()
+    for call in ast.walk(tree):
+        if not (
+            isinstance(call, ast.Call)
+            and isinstance(call.func, ast.Name)
+            and call.func.id == _MEASUREMENT_RECEIPT_HELPER
+        ):
+            continue
+        if len(call.args) != 1 or {kw.arg for kw in call.keywords} != {
+            "measured_column",
+            "count_column",
+        }:
+            return set()
+        values = {kw.arg: kw.value for kw in call.keywords if kw.arg}
+        if not all(
+            isinstance(values[name], ast.Constant)
+            and isinstance(values[name].value, str)
+            for name in ("measured_column", "count_column")
+        ):
+            return set()
+        measured_root = _measurement_concept_root(values["measured_column"].value)
+        count_root = _measurement_concept_root(values["count_column"].value)
+        if not measured_root or measured_root != count_root:
+            return set()
+
+        current: ast.AST = call
+        while not isinstance(current, ast.stmt):
+            parent = parents.get(id(current))
+            if parent is None or isinstance(
+                parent, (ast.comprehension, ast.IfExp, ast.Lambda)
+            ):
+                return set()
+            current = parent
+        scope = parents.get(id(current))
+        if not (
+            isinstance(scope, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and scope.name in entrypoints
+            and functions.get(scope.name) is scope
+        ):
+            return set()
+        roots.add(measured_root)
+    return roots
 
 
 def _downgrade_audit_only_companion_gating_findings(
@@ -1278,9 +1499,60 @@ def _downgrade_audit_only_companion_gating_findings(
     issue_code = "audit_only_companion_row_gating_required"
     derived_provenance_flags: Dict[str, bool] = {}
 
+    def _named_value_selectors_are_value_owned(
+        detail: Mapping[str, Any], tree: ast.AST
+    ) -> Optional[bool]:
+        raw_variables = detail.get("variables")
+        if not isinstance(raw_variables, list):
+            return None
+        names = {
+            value
+            for value in raw_variables
+            if isinstance(value, str) and value.isidentifier()
+        }
+        assignments: Dict[str, List[ast.Assign]] = {}
+        for node in ast.walk(tree):
+            if (
+                isinstance(node, ast.Assign)
+                and len(node.targets) == 1
+                and isinstance(node.targets[0], ast.Name)
+            ):
+                assignments.setdefault(node.targets[0].id, []).append(node)
+        observed = False
+        for name in names:
+            definitions = assignments.get(name, [])
+            if len(definitions) != 1:
+                continue
+            selectors = [
+                node
+                for node in ast.walk(definitions[0].value)
+                if isinstance(node, ast.Subscript)
+                and isinstance(node.value, ast.Attribute)
+                and node.value.attr == "loc"
+                and isinstance(node.value.value, ast.Name)
+                and isinstance(node.slice, ast.Name)
+            ]
+            for selector in selectors:
+                observed = True
+                mask_definitions = assignments.get(selector.slice.id, [])
+                if len(mask_definitions) != 1:
+                    return False
+                receiver = selector.value.value.id
+                if not any(
+                    isinstance(candidate, ast.Name)
+                    and candidate.id == receiver
+                    and isinstance(candidate.ctx, ast.Load)
+                    for candidate in ast.walk(mask_definitions[0].value)
+                ):
+                    return False
+        return True if observed else None
+
     def _failure_guard(test: ast.AST) -> bool:
         if isinstance(test, ast.Name):
-            return derived_provenance_flags.get(test.id.lower()) is True
+            name = test.id.lower()
+            return name in {"invalid_pair_n", "discordant_n"} or (
+                derived_provenance_flags.get(name) is True
+            )
         if isinstance(test, ast.UnaryOp) and isinstance(test.op, ast.Not):
             return (
                 isinstance(test.operand, ast.Name)
@@ -1288,7 +1560,10 @@ def _downgrade_audit_only_companion_gating_findings(
             )
         if isinstance(test, ast.BoolOp) and isinstance(test.op, ast.Or):
             return any(_failure_guard(value) for value in test.values)
-        if isinstance(test, ast.Compare) and len(test.ops) == len(test.comparators) == 1:
+        if (
+            isinstance(test, ast.Compare)
+            and len(test.ops) == len(test.comparators) == 1
+        ):
             left = test.left
             right = test.comparators[0]
             if not isinstance(left, ast.Name) or not isinstance(right, ast.Constant):
@@ -1308,6 +1583,7 @@ def _downgrade_audit_only_companion_gating_findings(
     except SyntaxError:
         tree = None
     ast_tokens = set()
+    host_receipt_roots: set[str] = set()
     if tree is not None:
         for node in ast.walk(tree):
             if isinstance(node, ast.Name):
@@ -1349,11 +1625,14 @@ def _downgrade_audit_only_companion_gating_findings(
             if failure_value is None:
                 continue
             targets = node.targets if isinstance(node, ast.Assign) else [node.target]
-            derived_provenance_flags.update({
-                target.id.lower(): failure_value
-                for target in targets
-                if isinstance(target, ast.Name)
-            })
+            derived_provenance_flags.update(
+                {
+                    target.id.lower(): failure_value
+                    for target in targets
+                    if isinstance(target, ast.Name)
+                }
+            )
+        host_receipt_roots = _direct_host_measurement_receipt_roots(tree)
     contract_tokens = {
         "measurement_provenance_audit",
         "invalid_pair_n",
@@ -1367,7 +1646,9 @@ def _downgrade_audit_only_companion_gating_findings(
         and isinstance(node.body[0], ast.Raise)
         for node in ast.walk(tree)
     )
-    audit_contract_present = contract_tokens.issubset(ast_tokens) and fail_closed_guard
+    audit_contract_present = bool(host_receipt_roots) or (
+        contract_tokens.issubset(ast_tokens) and fail_closed_guard
+    )
     if not audit_contract_present:
         return list(findings)
 
@@ -1376,17 +1657,41 @@ def _downgrade_audit_only_companion_gating_findings(
         if finding.validator == LLMConceptAuditor.name and finding.severity == "error":
             if str((finding.detail or {}).get("issue_code") or "") == issue_code:
                 detail = dict(finding.detail or {})
+                value_selector_proof = (
+                    _named_value_selectors_are_value_owned(detail, tree)
+                    if tree is not None
+                    else None
+                )
+                if value_selector_proof is False:
+                    downgraded.append(finding)
+                    continue
+                variables = {
+                    _measurement_concept_root(str(value))
+                    for value in detail.get("variables", [])
+                    if str(value).strip()
+                }
+                if (
+                    host_receipt_roots
+                    and variables
+                    and not variables.issubset(host_receipt_roots)
+                ):
+                    downgraded.append(finding)
+                    continue
                 detail.setdefault(
                     "downgraded_reason",
-                    "The script records the canonical audit-only measured/count "
-                    "comparison and fails the whole completed step on invalid or "
-                    "discordant provenance. Companion fields must not gate "
-                    "row-level physiological values.",
+                    (
+                        "The script directly invokes the exact host-owned, "
+                        "self-raising measurement provenance receipt for every "
+                        "reported concept; no second status guard is required."
+                        if host_receipt_roots
+                        else "The script records the canonical audit-only measured/count "
+                        "comparison and fails the whole completed step on invalid or "
+                        "discordant provenance. Companion fields must not gate "
+                        "row-level physiological values."
+                    ),
                 )
                 downgraded.append(
-                    finding.model_copy(
-                        update={"severity": "warning", "detail": detail}
-                    )
+                    finding.model_copy(update={"severity": "warning", "detail": detail})
                 )
                 continue
         downgraded.append(finding)
@@ -1516,7 +1821,10 @@ def _host_manifest_names(tree: ast.Module) -> set[str]:
             if not _path_expression(node.value):
                 continue
             for target in _targets(node):
-                if isinstance(target, ast.Name) and target.id not in manifest_path_names:
+                if (
+                    isinstance(target, ast.Name)
+                    and target.id not in manifest_path_names
+                ):
                     manifest_path_names.add(target.id)
                     changed = True
 
@@ -1536,7 +1844,10 @@ def _host_manifest_names(tree: ast.Module) -> set[str]:
             if not _manifest_text_expression(node.value):
                 continue
             for target in _targets(node):
-                if isinstance(target, ast.Name) and target.id not in manifest_text_names:
+                if (
+                    isinstance(target, ast.Name)
+                    and target.id not in manifest_text_names
+                ):
                     manifest_text_names.add(target.id)
                     changed = True
 
@@ -1697,7 +2008,9 @@ def _authoritative_exposure_names(tree: ast.Module) -> set[str]:
                 }
                 if not referenced & names:
                     continue
-                targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+                targets = (
+                    node.targets if isinstance(node, ast.Assign) else [node.target]
+                )
                 for target in targets:
                     if isinstance(target, ast.Name) and target.id not in names:
                         names.add(target.id)
@@ -1711,10 +2024,13 @@ def _authoritative_exposure_names(tree: ast.Module) -> set[str]:
             function = functions[_call_name(node)]
             parameters = [*function.args.posonlyargs, *function.args.args]
             for parameter, argument in zip(parameters, node.args):
-                if any(
-                    isinstance(item, ast.Name) and item.id in names
-                    for item in ast.walk(argument)
-                ) and parameter.arg not in names:
+                if (
+                    any(
+                        isinstance(item, ast.Name) and item.id in names
+                        for item in ast.walk(argument)
+                    )
+                    and parameter.arg not in names
+                ):
                     names.add(parameter.arg)
                     changed = True
             keyword_parameters = {parameter.arg for parameter in parameters}
@@ -1824,7 +2140,8 @@ def _verified_authoritative_exposure_flow(
         if isinstance(node, (ast.Assign, ast.AnnAssign))
         and node.value is not None
         and _in_executable_scope(node)
-        and "executable_column" in {
+        and "executable_column"
+        in {
             str(item.value)
             for item in ast.walk(node.value)
             if isinstance(item, ast.Constant) and isinstance(item.value, str)
@@ -1862,7 +2179,8 @@ def _verified_authoritative_exposure_flow(
     assignments = [
         node
         for node in ast.walk(tree)
-        if isinstance(node, (ast.Assign, ast.AnnAssign)) and node.value is not None
+        if isinstance(node, (ast.Assign, ast.AnnAssign))
+        and node.value is not None
         and _in_executable_scope(node)
     ]
     changed = True
@@ -1874,8 +2192,7 @@ def _verified_authoritative_exposure_flow(
             if not returns or not isinstance(function.body[-1], ast.Return):
                 continue
             if all(
-                returned.value is not None
-                and _return_is_authority_only(returned.value)
+                returned.value is not None and _return_is_authority_only(returned.value)
                 for returned in returns
             ):
                 selected_return_functions.add(function_name)
@@ -1894,7 +2211,9 @@ def _verified_authoritative_exposure_flow(
             ):
                 continue
             targets = node.targets if isinstance(node, ast.Assign) else [node.target]
-            new = {target.id for target in targets if isinstance(target, ast.Name)} - selected
+            new = {
+                target.id for target in targets if isinstance(target, ast.Name)
+            } - selected
             if new:
                 selected.update(new)
                 changed = True
@@ -1903,9 +2222,7 @@ def _verified_authoritative_exposure_flow(
 
     def _expression_consumes_selected(node: ast.AST) -> bool:
         return selects_authority(node) or any(
-            name.id in selected
-            for name in ast.walk(node)
-            if isinstance(name, ast.Name)
+            name.id in selected for name in ast.walk(node) if isinstance(name, ast.Name)
         )
 
     # A name-based taint set is only safe while no executable scope rebinds a
@@ -2039,10 +2356,12 @@ def _verified_authoritative_exposure_flow(
     domain_checked = any(
         _call_name(call) == "isin"
         and _is_negated_in_guard(call, test)
-        and {0, 1} <= {
+        and {0, 1}
+        <= {
             item.value
             for item in ast.walk(call)
-            if isinstance(item, ast.Constant) and isinstance(item.value, (int, float))
+            if isinstance(item, ast.Constant)
+            and isinstance(item.value, (int, float))
             and not isinstance(item.value, bool)
         }
         for call, test in guard_calls
@@ -2078,16 +2397,12 @@ def _verified_authoritative_exposure_flow(
 
     model_roots = [call for call in executable_calls if _is_model_sink(call)]
     visual_roots = [
-        call
-        for call in executable_calls
-        if _call_name(call) in _VISUAL_EXPOSURE_SINKS
+        call for call in executable_calls if _call_name(call) in _VISUAL_EXPOSURE_SINKS
     ]
     consumed = (
-        bool(model_roots)
-        and all(_call_consumes_selected(call) for call in model_roots)
+        bool(model_roots) and all(_call_consumes_selected(call) for call in model_roots)
     ) or (
-        not model_roots
-        and any(_call_consumes_selected(call) for call in visual_roots)
+        not model_roots and any(_call_consumes_selected(call) for call in visual_roots)
     )
     return domain_checked and missing_checked and finite_checked and consumed
 
@@ -2118,8 +2433,7 @@ def _finalized_branch_isolates_reconciliation(script_text: str) -> bool:
         if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
             continue
         if any(
-            isinstance(child, ast.Call)
-            and _call_name(child) == reconciliation_name
+            isinstance(child, ast.Call) and _call_name(child) == reconciliation_name
             for child in ast.walk(node)
         ):
             wrapper_names.add(node.name)
@@ -2292,9 +2606,7 @@ def _downgrade_finalized_exposure_reconciliation_findings(
                     ),
                 )
                 downgraded.append(
-                    finding.model_copy(
-                        update={"severity": "warning", "detail": detail}
-                    )
+                    finding.model_copy(update={"severity": "warning", "detail": detail})
                 )
                 continue
         downgraded.append(finding)
@@ -2309,7 +2621,17 @@ def _reclassify_flag_only_plausibility_range_findings(
     """Keep plausible-range metadata from silently changing the analysis set."""
 
     issue_code = "plausibility_range_exclusion_required"
-    exclusion_actions = {"drop", "exclude", "fail_closed", "invalidate"}
+    exclusion_actions = {"drop", "exclude", "fail_close", "fail_closed", "invalidate"}
+
+    def _requests_exclusion(value: object) -> bool:
+        """Recognize the typed action when an auditor appends its target."""
+
+        normalized = re.sub(r"[^a-z0-9]+", "_", str(value or "").lower()).strip("_")
+        return any(
+            normalized == action or normalized.startswith(f"{action}_")
+            for action in exclusion_actions
+        )
+
     reclassified: List[ValidationFinding] = []
     for finding in findings:
         detail = dict(finding.detail or {})
@@ -2317,8 +2639,7 @@ def _reclassify_flag_only_plausibility_range_findings(
             finding.validator == LLMConceptAuditor.name
             and finding.severity == "error"
             and str(detail.get("issue_code") or "") == issue_code
-            and str(detail.get("requested_action") or "").strip().lower()
-            in exclusion_actions
+            and _requests_exclusion(detail.get("requested_action"))
             and str(detail.get("value_class") or "").strip().lower()
             == "finite_outside_plausibility_range"
         ):
@@ -2395,12 +2716,12 @@ def _strip_jsonish(text: str) -> str:
     if "```" not in text:
         return text
     start = text.find("```")
-    rest = text[start + 3:]
+    rest = text[start + 3 :]
     nl = rest.find("\n")
     if nl >= 0:
         tag = rest[:nl].strip().lower()
         if tag in {"json", "js", "javascript"} or not tag:
-            rest = rest[nl + 1:]
+            rest = rest[nl + 1 :]
     end = rest.find("```")
     if end >= 0:
         rest = rest[:end]
@@ -2472,9 +2793,7 @@ class CrossStepCohortLockValidator:
         return int(number)
 
     @classmethod
-    def _extract_count(
-        cls, summary: Dict[str, Any]
-    ) -> Optional[tuple[int, str]]:
+    def _extract_count(cls, summary: Dict[str, Any]) -> Optional[tuple[int, str]]:
         for path in cls._COUNT_PATHS:
             value: Any = summary
             for key in path:
@@ -2639,9 +2958,7 @@ class CrossStepRegisteredOutputValidator:
     _TABLE_SUFFIXES = (".csv", ".parquet", ".tsv", ".feather", ".xlsx")
 
     @classmethod
-    def _availability_blocks(
-        cls, summary: Dict[str, Any]
-    ) -> List[Dict[str, Any]]:
+    def _availability_blocks(cls, summary: Dict[str, Any]) -> List[Dict[str, Any]]:
         blocks: List[Dict[str, Any]] = []
 
         def visit(value: Any, path: tuple[str, ...] = ()) -> None:
@@ -2690,21 +3007,13 @@ class CrossStepRegisteredOutputValidator:
         summary = record.get("step_summary")
         if not isinstance(summary, dict):
             return sorted(set(artifacts))
-
-        def collect(value: Any) -> None:
-            if isinstance(value, str):
-                if value.strip().lower().endswith(cls._TABLE_SUFFIXES):
-                    artifacts.append(value.strip())
-            elif isinstance(value, dict):
-                for child in value.values():
-                    collect(child)
-            elif isinstance(value, list):
-                for child in value:
-                    collect(child)
-
-        for key in ("output_files", "outputs"):
-            if key in summary:
-                collect(summary[key])
+        output_files = summary.get("output_files")
+        if isinstance(output_files, Mapping):
+            for raw_path in output_files.values():
+                if isinstance(raw_path, str) and raw_path.strip().lower().endswith(
+                    cls._TABLE_SUFFIXES
+                ):
+                    artifacts.append(raw_path.strip())
         return sorted(set(artifacts))
 
     @classmethod
@@ -2784,11 +3093,6 @@ class StepSummaryFractionValidator:
     ) -> List[tuple[str, float, str]]:
         invalid: List[tuple[str, float, str]] = []
 
-        def normalise_key(value: Any) -> str:
-            return re.sub(
-                r"[^a-z0-9]+", "_", str(value).strip().lower()
-            ).strip("_")
-
         effect_scale_names = {
             "hr",
             "or",
@@ -2802,7 +3106,7 @@ class StepSummaryFractionValidator:
         }
 
         def is_effect_scale_field(key: Any) -> bool:
-            name = normalise_key(key)
+            name = normalize_metric_key(key)
             ci_base = re.sub(r"_(?:ci_)?(?:low|high|lower|upper)$", "", name)
             return ci_base in effect_scale_names or any(
                 ci_base.endswith(f"_{effect_scale}")
@@ -2820,7 +3124,7 @@ class StepSummaryFractionValidator:
             still allowed to encode category -> fraction values.
             """
 
-            name = normalise_key(key)
+            name = normalize_metric_key(key)
             if not name or any(
                 token in name for token in ("pct", "percent", "percentage")
             ):
@@ -2951,19 +3255,6 @@ class StepSummaryFractionValidator:
             "value",
         }
         generic_ci_children = {"ci_low", "ci_high", "ci_lower", "ci_upper"}
-        scale_descriptor_names = {
-            "effect_measure",
-            "estimand",
-            "measure",
-            "measure_type",
-            "metric",
-            "metric_name",
-            "scale",
-            "statistic",
-            "type",
-            "unit",
-            "units",
-        }
         bounded_scale_descriptors = {
             "0_1",
             "dimensionless",
@@ -3079,15 +3370,10 @@ class StepSummaryFractionValidator:
             return (
                 is_structural_child(name)
                 or name in coordinate_children
-                or (
-                    name.endswith(coordinate_suffixes)
-                    and not name.startswith("by_")
-                )
+                or (name.endswith(coordinate_suffixes) and not name.startswith("by_"))
                 or name in non_bounded_scale_descriptors
                 or bool(name_tokens & domain_changing_tokens)
-                or any(
-                    token in name for token in ("pct", "percent", "percentage")
-                )
+                or any(token in name for token in ("pct", "percent", "percentage"))
                 or name.startswith("fractional_")
                 or is_effect_scale_field(key)
                 or ci_base == "at_risk"
@@ -3101,22 +3387,17 @@ class StepSummaryFractionValidator:
                 }
             )
 
-        def is_scale_descriptor_name(name: str) -> bool:
-            return name in scale_descriptor_names or name.endswith(
-                ("_measure", "_metric", "_scale", "_type", "_unit", "_units")
-            )
-
         def mapping_declares_non_bounded_scale(value: Any) -> bool:
             if not isinstance(value, dict):
                 return False
             for key, descriptor in value.items():
-                if not is_scale_descriptor_name(normalise_key(key)) or not isinstance(
+                if not is_scale_descriptor_field(key) or not isinstance(
                     descriptor, str
                 ):
                     continue
                 if descriptor.strip() == "%":
                     return True
-                descriptor_name = normalise_key(descriptor)
+                descriptor_name = normalize_metric_key(descriptor)
                 if not descriptor_name:
                     continue
                 if (
@@ -3133,7 +3414,7 @@ class StepSummaryFractionValidator:
 
         def mapping_has_generic_metric_payload(value: Any) -> bool:
             return isinstance(value, dict) and any(
-                normalise_key(key) in scalar_value_children | generic_ci_children
+                normalize_metric_key(key) in scalar_value_children | generic_ci_children
                 for key in value
             )
 
@@ -3160,7 +3441,7 @@ class StepSummaryFractionValidator:
                     is_effect_scale_field(key) for key in value
                 )
                 for key, child in value.items():
-                    normalised = normalise_key(key)
+                    normalised = normalize_metric_key(key)
                     key_context = bounded_field_kind(key)
                     inherited_context = bounded_context
                     if inherited_context:
@@ -3170,9 +3451,12 @@ class StepSummaryFractionValidator:
                             scalar_value_children | generic_ci_children
                         ):
                             inherited_context = None
-                    if normalised in generic_ci_children and (
-                        sibling_context or bounded_context
-                    ) and not has_effect_scale_sibling and not local_non_bounded_scale:
+                    if (
+                        normalised in generic_ci_children
+                        and (sibling_context or bounded_context)
+                        and not has_effect_scale_sibling
+                        and not local_non_bounded_scale
+                    ):
                         key_context = sibling_context or bounded_context
                     visit(
                         child,
@@ -3264,9 +3548,14 @@ class StepSummaryFractionValidator:
                         pct_key = f"{key_text}_pct"
                         left = numeric_mapping(child)
                         right = numeric_mapping(value.get(pct_key))
-                        if left and right and left.keys() == right.keys() and all(
-                            abs(right[item] - 100.0 * left[item]) <= 1e-8
-                            for item in left
+                        if (
+                            left
+                            and right
+                            and left.keys() == right.keys()
+                            and all(
+                                abs(right[item] - 100.0 * left[item]) <= 1e-8
+                                for item in left
+                            )
                         ):
                             summary_path = ".".join((*path, key_text))
                             findings.append(
@@ -3285,9 +3574,7 @@ class StepSummaryFractionValidator:
                                     detail={
                                         "step_id": step.step_id,
                                         "summary_path": summary_path,
-                                        "pct_summary_path": ".".join(
-                                            (*path, pct_key)
-                                        ),
+                                        "pct_summary_path": ".".join((*path, pct_key)),
                                     },
                                 )
                             )
@@ -3599,9 +3886,7 @@ class PrimaryModelContractValidator:
         return str(metadata.get("fit_failure_reason") or "").strip()
 
     @classmethod
-    def _finite_nonfitted_result_fields(
-        cls, rows: pd.DataFrame
-    ) -> List[str]:
+    def _finite_nonfitted_result_fields(cls, rows: pd.DataFrame) -> List[str]:
         fields: List[str] = []
         for column in cls._NONFITTED_RESULT_FIELDS:
             if column not in rows.columns:
@@ -3653,9 +3938,7 @@ class PrimaryModelContractValidator:
         if a == b:
             return True
         left_tokens = [token for token in re.split(r"[^a-z0-9]+", left_text) if token]
-        right_tokens = [
-            token for token in re.split(r"[^a-z0-9]+", right_text) if token
-        ]
+        right_tokens = [token for token in re.split(r"[^a-z0-9]+", right_text) if token]
 
         def is_operational_alias(base: List[str], candidate: List[str]) -> bool:
             return bool(
@@ -3679,14 +3962,13 @@ class PrimaryModelContractValidator:
         context: ResearchContext,
         step_summary: Mapping[str, Any],
     ) -> bool:
-        has_planned_requirements = bool(
-            getattr(step, "model_requirements", []) or []
-        )
-        if not (context.primary_exposure or "").strip() and not has_planned_requirements:
+        has_planned_requirements = bool(getattr(step, "model_requirements", []) or [])
+        if (
+            not (context.primary_exposure or "").strip()
+            and not has_planned_requirements
+        ):
             return False
-        method = cls._normalise(
-            str(step.method or "").lower().split(" with ", 1)[0]
-        )
+        method = cls._normalise(str(step.method or "").lower().split(" with ", 1)[0])
         raw_outputs = [
             str(output or "").strip().lower()
             for output in (step.expected_outputs or [])
@@ -3696,9 +3978,7 @@ class PrimaryModelContractValidator:
             output_kind, separator, output_name = output.partition(":")
             if not separator:
                 continue
-            outputs.add(
-                (cls._normalise(output_kind), cls._normalise(output_name))
-            )
+            outputs.add((cls._normalise(output_kind), cls._normalise(output_name)))
         figure_only_outputs = bool(raw_outputs) and all(
             output.startswith("figure:") for output in raw_outputs
         )
@@ -3711,9 +3991,8 @@ class PrimaryModelContractValidator:
             # AnalysisStep validation normally guarantees this scope. Keep the
             # runtime predicate defensive because model_copy(update=...) can
             # construct an unvalidated object in internal/test code.
-            return (
-                method in cls._CLOSED_EFFECT_METHODS
-                and bool(outputs & cls._CLOSED_EFFECT_PRODUCTS)
+            return method in cls._CLOSED_EFFECT_METHODS and bool(
+                outputs & cls._CLOSED_EFFECT_PRODUCTS
             )
         # Once a step emits the machine contract key, even an empty or malformed
         # value must be audited rather than escaping through a prose router, but
@@ -3722,9 +4001,8 @@ class PrimaryModelContractValidator:
         # their own family-specific validators.
         if "model_contracts" in step_summary:
             return method in cls._CLOSED_EFFECT_METHODS or supported_direct_method
-        return (
-            method in cls._CLOSED_EFFECT_METHODS
-            and bool(outputs & cls._CLOSED_EFFECT_PRODUCTS)
+        return method in cls._CLOSED_EFFECT_METHODS and bool(
+            outputs & cls._CLOSED_EFFECT_PRODUCTS
         )
 
     @staticmethod
@@ -3781,9 +4059,8 @@ class PrimaryModelContractValidator:
         def visit(value: Any) -> None:
             if isinstance(value, Mapping):
                 for key, child in value.items():
-                    if (
-                        cls._normalise(key) == "representation_locked"
-                        and isinstance(child, str)
+                    if cls._normalise(key) == "representation_locked" and isinstance(
+                        child, str
                     ):
                         locks.append(child)
                     visit(child)
@@ -3791,9 +4068,7 @@ class PrimaryModelContractValidator:
                 for child in value:
                     visit(child)
 
-        for record in cls._authoritative_completed_records(
-            completed_step_records
-        ):
+        for record in cls._authoritative_completed_records(completed_step_records):
             summary = record.get("step_summary")
             if isinstance(summary, Mapping):
                 visit(summary)
@@ -3857,9 +4132,7 @@ class PrimaryModelContractValidator:
                 for child in value:
                     visit(child)
 
-        for record in cls._authoritative_completed_records(
-            completed_step_records
-        ):
+        for record in cls._authoritative_completed_records(completed_step_records):
             summary = record.get("step_summary")
             if isinstance(summary, Mapping):
                 visit(summary)
@@ -4044,10 +4317,7 @@ class PrimaryModelContractValidator:
             return
         fit_method = cls._normalise(metadata.get("fit_method"))
         penalty = cls._normalise(metadata.get("penalty"))
-        if not (
-            re.search(r"(?:^|_)ridge(?:_|$)", fit_method)
-            or penalty == "ridge"
-        ):
+        if not (re.search(r"(?:^|_)ridge(?:_|$)", fit_method) or penalty == "ridge"):
             return
         diagnostics = contract.get("diagnostics")
         if not isinstance(diagnostics, Mapping):
@@ -4147,8 +4417,10 @@ class PrimaryModelContractValidator:
                 if has_standard_error
                 else 0.0
             )
-            has_any_interval = low is not None or high is not None or (
-                has_standard_error and standard_error is not None
+            has_any_interval = (
+                low is not None
+                or high is not None
+                or (has_standard_error and standard_error is not None)
             )
             if point_only:
                 reasons: List[str] = []
@@ -4174,9 +4446,7 @@ class PrimaryModelContractValidator:
                 reasons.append("missing_or_nonfinite_ci")
             elif low > high:
                 reasons.append("reversed_ci")
-            if has_standard_error and (
-                standard_error is None or standard_error < 0
-            ):
+            if has_standard_error and (standard_error is None or standard_error < 0):
                 reasons.append("missing_nonfinite_or_negative_standard_error")
             if reasons:
                 issues.append(
@@ -4262,10 +4532,9 @@ class PrimaryModelContractValidator:
         metadata: Mapping[str, Any],
         rows: pd.DataFrame,
     ) -> List[Dict[str, Any]]:
-        if (
-            cls._as_bool(contract.get("penalized")) is not True
-            and not cls._method_declares_penalty(contract, metadata)
-        ):
+        if cls._as_bool(
+            contract.get("penalized")
+        ) is not True and not cls._method_declares_penalty(contract, metadata):
             return []
         model_id = str(contract.get("model_id") or "")
         interval_method = cls._normalise(metadata.get("interval_method"))
@@ -4277,7 +4546,10 @@ class PrimaryModelContractValidator:
                 for _, row in rows.iterrows()
             )
         issues: List[Dict[str, Any]] = []
-        if finite_intervals and interval_method not in cls._CONTROLLED_PENALIZED_INTERVAL_METHODS:
+        if (
+            finite_intervals
+            and interval_method not in cls._CONTROLLED_PENALIZED_INTERVAL_METHODS
+        ):
             issues.append(
                 {
                     "model_id": model_id,
@@ -4294,9 +4566,7 @@ class PrimaryModelContractValidator:
                 }
             )
         if cls._as_bool(contract.get("converged")) is True:
-            convergence_method = cls._normalise(
-                metadata.get("convergence_method")
-            )
+            convergence_method = cls._normalise(metadata.get("convergence_method"))
             optimizer_success = cls._as_bool(metadata.get("optimizer_success"))
             verified = (
                 convergence_method in cls._CONTROLLED_CONVERGENCE_METHODS
@@ -4304,9 +4574,7 @@ class PrimaryModelContractValidator:
             )
             if verified and convergence_method == "kkt_residual":
                 residual = cls._finite_number(metadata.get("max_abs_kkt"))
-                tolerance = cls._finite_number(
-                    metadata.get("convergence_tolerance")
-                )
+                tolerance = cls._finite_number(metadata.get("convergence_tolerance"))
                 if tolerance is None:
                     tolerance = 1e-6
                 verified = residual is not None and residual <= tolerance
@@ -4342,6 +4610,7 @@ class PrimaryModelContractValidator:
         outcome_type: str,
         covariates: Sequence[str],
         contract: Mapping[str, Any],
+        raw_exposure_source: Optional[str] = None,
     ) -> Optional[tuple[int, Optional[int]]]:
         if outcome not in frame.columns:
             return None
@@ -4362,8 +4631,12 @@ class PrimaryModelContractValidator:
             return None
 
         analysis_set = cls._normalise(contract.get("analysis_set"))
-        if analysis_set == "complete_case":
-            exposure = str(contract.get("exposure_source") or "")
+        exposure_requires_observation = analysis_set == "complete_case" or (
+            analysis_set == "source_aware"
+            and policy in {"drop_missing", "drop_missing_baseline", "complete_case"}
+        )
+        if exposure_requires_observation:
+            exposure = raw_exposure_source or str(contract.get("exposure_source") or "")
             if exposure not in frame.columns:
                 return None
             values = frame[exposure]
@@ -4379,6 +4652,39 @@ class PrimaryModelContractValidator:
             int(outcome_values.loc[mask].sum()) if outcome_type == "binary" else None
         )
         return int(mask.sum()), event_n
+
+    @classmethod
+    def _raw_exposure_source(
+        cls,
+        *,
+        frame: Optional[pd.DataFrame],
+        contract: Mapping[str, Any],
+        exposure_rows: pd.DataFrame,
+    ) -> Optional[str]:
+        """Resolve a derived exposure to one host-verifiable physical column."""
+
+        declared = str(contract.get("exposure_source") or "").strip()
+        if frame is not None and declared in frame.columns:
+            return declared
+        if exposure_rows.empty:
+            return None
+        sources = {
+            str(value).strip()
+            for value in exposure_rows["_source"].tolist()
+            if str(value).strip() and str(value).strip().lower() != "nan"
+        }
+        if len(sources) != 1:
+            return None
+        source = next(iter(sources))
+        if frame is not None and source not in frame.columns:
+            return None
+        expression = str(contract.get("exposure_expression") or "")
+        if not re.search(
+            rf"(?<![A-Za-z0-9_]){re.escape(source)}(?![A-Za-z0-9_])",
+            expression,
+        ):
+            return None
+        return source
 
     @classmethod
     def _coefficient_source_authority_issues(
@@ -4438,6 +4744,7 @@ class PrimaryModelContractValidator:
         outcome_type: str,
         covariates: Sequence[str],
         contract: Mapping[str, Any],
+        raw_exposure_source: Optional[str] = None,
     ) -> Dict[str, Any]:
         policy = cls._normalise(contract.get("baseline_missing_policy"))
         analysis_set = cls._normalise(contract.get("analysis_set"))
@@ -4445,7 +4752,9 @@ class PrimaryModelContractValidator:
         if policy in {"drop_missing", "drop_missing_baseline", "complete_case"}:
             required_sources.extend(str(value) for value in covariates)
         if analysis_set == "complete_case":
-            required_sources.append(str(contract.get("exposure_source") or ""))
+            required_sources.append(
+                raw_exposure_source or str(contract.get("exposure_source") or "")
+            )
         required_sources = [value for value in dict.fromkeys(required_sources) if value]
         authoritative_columns = [str(column) for column in frame.columns]
         missing = [
@@ -4508,15 +4817,15 @@ class PrimaryModelContractValidator:
             )
             contracts: List[Mapping[str, Any]] = []
         else:
-            contracts = [
-                item for item in raw_contracts if isinstance(item, Mapping)
-            ]
+            contracts = [item for item in raw_contracts if isinstance(item, Mapping)]
             if len(contracts) != len(raw_contracts):
                 issues.append({"issue": "model_contract_must_be_object"})
 
         model_ids: Set[str] = set()
         for index, contract in enumerate(contracts):
-            missing = [field for field in self._REQUIRED_FIELDS if field not in contract]
+            missing = [
+                field for field in self._REQUIRED_FIELDS if field not in contract
+            ]
             if missing:
                 issues.append(
                     {
@@ -4558,11 +4867,9 @@ class PrimaryModelContractValidator:
                         }
                     )
 
-        requirement_issues, requirements_by_id = (
-            self._planned_model_requirement_issues(
-                step=step,
-                contracts=contracts,
-            )
+        requirement_issues, requirements_by_id = self._planned_model_requirement_issues(
+            step=step,
+            contracts=contracts,
         )
         issues.extend(requirement_issues)
 
@@ -4571,7 +4878,29 @@ class PrimaryModelContractValidator:
             for contract in contracts
             if self._normalise(contract.get("analysis_role")) == "primary"
         ]
-        if len(primary_models) != 1:
+        planner_primary_requirements = [
+            requirement
+            for requirement in (getattr(step, "model_requirements", []) or [])
+            if self._normalise(requirement.analysis_role) == "primary"
+        ]
+        planner_authorized_secondary_only = (
+            bool(getattr(step, "model_requirements", []) or [])
+            and not planner_primary_requirements
+        )
+        if planner_authorized_secondary_only and primary_models:
+            issues.append(
+                {
+                    "issue": "unplanned_primary_model",
+                    "reported": len(primary_models),
+                    "planner_model_roles": sorted(
+                        {
+                            self._normalise(requirement.analysis_role)
+                            for requirement in step.model_requirements
+                        }
+                    ),
+                }
+            )
+        elif not planner_authorized_secondary_only and len(primary_models) != 1:
             issues.append(
                 {
                     "issue": "exactly_one_primary_model_required",
@@ -4579,17 +4908,19 @@ class PrimaryModelContractValidator:
                 }
             )
         declared_primary = str(context.primary_exposure or "")
-        declared_primary_sources = (
-            [
+        declared_primary_sources = list(
+            step.primary_exposure_authority_sources(
                 declared_primary,
-                *self._operational_primary_sources(
-                    declared_primary=declared_primary,
-                    completed_step_records=completed_step_records,
-                    step_summary=step_summary,
+                (
+                    self._operational_primary_sources(
+                        declared_primary=declared_primary,
+                        completed_step_records=completed_step_records,
+                        step_summary=step_summary,
+                    )
+                    if declared_primary.strip()
+                    else ()
                 ),
-            ]
-            if declared_primary.strip()
-            else []
+            )
         )
         if len(primary_models) == 1 and declared_primary_sources:
             primary = primary_models[0]
@@ -4727,9 +5058,9 @@ class PrimaryModelContractValidator:
             coefficient_rows["_term_role"] = coefficient_rows["term_role"].map(
                 self._normalise
             )
-            coefficient_rows["_source"] = coefficient_rows[
-                "source_variable"
-            ].astype(str)
+            coefficient_rows["_source"] = coefficient_rows["source_variable"].astype(
+                str
+            )
             actual_covariates_by_model = self._actual_adjustment_sources_by_model(
                 coefficient_rows
             )
@@ -4750,9 +5081,7 @@ class PrimaryModelContractValidator:
                 source = str(contract.get("exposure_source") or "")
                 metadata = self._model_metadata(contract, metadata_by_id)
                 fit_status = self._normalise(contract.get("fit_status"))
-                rows = coefficient_rows[
-                    coefficient_rows["_model_id"].eq(model_id)
-                ]
+                rows = coefficient_rows[coefficient_rows["_model_id"].eq(model_id)]
                 if fit_status != "fitted":
                     finite_fields = self._finite_nonfitted_result_fields(rows)
                     if finite_fields:
@@ -4766,10 +5095,20 @@ class PrimaryModelContractValidator:
                     )
                     continue
                 exposure_rows = rows[rows["_term_role"].eq("exposure")]
-                if exposure_rows.empty or any(
-                    not self._names_match(source, value)
+                raw_exposure_source = self._raw_exposure_source(
+                    frame=None,
+                    contract=contract,
+                    exposure_rows=exposure_rows,
+                )
+                exposure_source_matches = not exposure_rows.empty and all(
+                    self._names_match(source, value)
+                    or (
+                        raw_exposure_source is not None
+                        and self._names_match(raw_exposure_source, value)
+                    )
                     for value in exposure_rows["_source"]
-                ):
+                )
+                if not exposure_source_matches:
                     issues.append(
                         {
                             "model_id": model_id,
@@ -4858,9 +5197,7 @@ class PrimaryModelContractValidator:
                         term = str(expected_term.get("term") or "")
                         if not term:
                             continue
-                        rows = model_rows[
-                            model_rows["term"].astype(str).eq(term)
-                        ]
+                        rows = model_rows[model_rows["term"].astype(str).eq(term)]
                         if rows.empty:
                             issues.append(
                                 {
@@ -4878,7 +5215,10 @@ class PrimaryModelContractValidator:
                         )
                         for summary_field, table_field in comparisons:
                             expected_value = expected_term.get(summary_field)
-                            if expected_value is None or table_field not in rows.columns:
+                            if (
+                                expected_value is None
+                                or table_field not in rows.columns
+                            ):
                                 continue
                             expected_number = pd.to_numeric(
                                 pd.Series([expected_value]), errors="coerce"
@@ -4956,9 +5296,7 @@ class PrimaryModelContractValidator:
             converged = self._as_bool(contract.get("converged"))
             separation = self._as_bool(contract.get("separation_detected"))
             penalized = self._as_bool(contract.get("penalized"))
-            method_declares_penalty = self._method_declares_penalty(
-                contract, metadata
-            )
+            method_declares_penalty = self._method_declares_penalty(contract, metadata)
             effective_penalized = penalized is True or method_declares_penalty
             reported_n = self._as_nonnegative_int(contract.get("n"))
             reported_events = (
@@ -4974,9 +5312,7 @@ class PrimaryModelContractValidator:
                     }
                 )
             if not str(contract.get("fit_method") or "").strip():
-                issues.append(
-                    {"model_id": model_id, "issue": "fit_method_required"}
-                )
+                issues.append({"model_id": model_id, "issue": "fit_method_required"})
             fit_method_text = str(contract.get("fit_method") or "").lower()
             if method_declares_penalty and penalized is False:
                 issues.append(
@@ -5058,10 +5394,15 @@ class PrimaryModelContractValidator:
                         "issue": "fitted_model_must_converge",
                     }
                 )
-            if separation is True and penalized is not True and fit_status not in {
-                "separation_no_estimate",
-                "not_fitted",
-            }:
+            if (
+                separation is True
+                and penalized is not True
+                and fit_status
+                not in {
+                    "separation_no_estimate",
+                    "not_fitted",
+                }
+            ):
                 issues.append(
                     {
                         "model_id": model_id,
@@ -5086,12 +5427,26 @@ class PrimaryModelContractValidator:
                     }
                 )
             if cohort is not None:
+                model_rows = (
+                    coefficient_rows[
+                        coefficient_rows["_model_id"].eq(model_id)
+                        & coefficient_rows["_term_role"].eq("exposure")
+                    ]
+                    if coefficient_rows is not None
+                    else pd.DataFrame()
+                )
+                raw_exposure_source = self._raw_exposure_source(
+                    frame=cohort,
+                    contract=contract,
+                    exposure_rows=model_rows,
+                )
                 expected = self._expected_denominator(
                     frame=cohort,
                     outcome=outcome,
                     outcome_type=outcome_type,
                     covariates=model_covariates,
                     contract=contract,
+                    raw_exposure_source=raw_exposure_source,
                 )
                 if expected is None:
                     issues.append(
@@ -5104,6 +5459,7 @@ class PrimaryModelContractValidator:
                                 outcome_type=outcome_type,
                                 covariates=model_covariates,
                                 contract=contract,
+                                raw_exposure_source=raw_exposure_source,
                             ),
                         }
                     )
@@ -5125,9 +5481,7 @@ class PrimaryModelContractValidator:
                         covariates=model_covariates,
                         contract=metadata,
                         coefficient_rows=(
-                            coefficient_rows[
-                                coefficient_rows["_model_id"].eq(model_id)
-                            ]
+                            coefficient_rows[coefficient_rows["_model_id"].eq(model_id)]
                             if coefficient_rows is not None
                             else None
                         ),
@@ -5140,11 +5494,7 @@ class PrimaryModelContractValidator:
                                 "cells": zero_cells[:10],
                             }
                         )
-                    if (
-                        zero_cells
-                        and fit_status == "fitted"
-                        and penalized is not True
-                    ):
+                    if zero_cells and fit_status == "fitted" and penalized is not True:
                         issues.append(
                             {
                                 "model_id": model_id,
@@ -5163,8 +5513,14 @@ class PrimaryModelContractValidator:
                     f"Complex primary-association step {step.step_id} violates "
                     f"the machine-verifiable multi-model contract ({len(issues)} "
                     "issue(s)). Emit step_summary.model_contracts with the fixed "
-                    "fields, keep exactly one context-declared primary exposure, "
-                    "label alternate representations secondary/sensitivity, fit "
+                    "fields, "
+                    + (
+                        "preserve the Planner-authorized secondary-only roster "
+                        "without inventing a primary exposure, "
+                        if planner_authorized_secondary_only
+                        else "keep exactly one context-declared primary exposure, "
+                    )
+                    + "label alternate representations secondary/sensitivity, fit "
                     "separate models without mutual adjustment, use only the "
                     "planned baseline covariates, satisfy every planner-owned "
                     "required model requirement, report honest non-fit reasons, "
@@ -5226,9 +5582,7 @@ class PrimaryModelContractValidator:
             raw = contract.get(key)
             if isinstance(raw, list):
                 declared_categorical.update(
-                    cls._normalise(value)
-                    for value in raw
-                    if str(value or "").strip()
+                    cls._normalise(value) for value in raw if str(value or "").strip()
                 )
 
         cells: List[Dict[str, Any]] = []
@@ -5239,9 +5593,9 @@ class PrimaryModelContractValidator:
             modeled_as_categorical = False
             if coefficient_rows is not None and not coefficient_rows.empty:
                 source_rows = coefficient_rows[
-                    coefficient_rows["source_variable"].map(cls._normalise).eq(
-                        cls._normalise(covariate)
-                    )
+                    coefficient_rows["source_variable"]
+                    .map(cls._normalise)
+                    .eq(cls._normalise(covariate))
                 ]
                 terms = [str(value) for value in source_rows.get("term", [])]
                 modeled_as_categorical = len(source_rows) > 1 or any(
@@ -5271,9 +5625,11 @@ class PrimaryModelContractValidator:
             if policy == "explicit_missing_category":
                 values = values.astype("object").where(values.notna(), "<missing>")
             observed_outcome = outcome_values.loc[mask]
-            grouped = pd.DataFrame(
-                {"level": values.astype(str), "outcome": observed_outcome}
-            ).groupby("level", dropna=False)["outcome"].agg(["count", "sum"])
+            grouped = (
+                pd.DataFrame({"level": values.astype(str), "outcome": observed_outcome})
+                .groupby("level", dropna=False)["outcome"]
+                .agg(["count", "sum"])
+            )
             for level, row in grouped.iterrows():
                 count = int(row["count"])
                 event_n = int(row["sum"])
@@ -5462,6 +5818,7 @@ class CrossStepReconciliationTraceValidator:
             return current
         rows: List[Dict[str, Any]] = []
         for _, source in current.iterrows():
+
             def first_value(*names: str) -> Any:
                 for name in names:
                     if name not in current.columns:
@@ -5483,9 +5840,7 @@ class CrossStepReconciliationTraceValidator:
                 first_value("requested_estimate_type", "estimate_type")
             )
             requested_level = first_value("requested_level", "level")
-            requested_status = first_value(
-                "requested_source_status", "source_status"
-            )
+            requested_status = first_value("requested_source_status", "source_status")
             requested_stratum_raw = first_value(
                 "requested_stratum", "stratum", "requested_group_value"
             )
@@ -5493,7 +5848,8 @@ class CrossStepReconciliationTraceValidator:
             if (
                 requested_level is not None
                 or stratum_type in {"exposure_level", "level"}
-                or explicit_role_normalised in {
+                or explicit_role_normalised
+                in {
                     "level",
                     "ordinal_level",
                     "required_valid_ordinal_level",
@@ -5614,9 +5970,7 @@ class CrossStepReconciliationTraceValidator:
         return pd.DataFrame(rows)
 
     @classmethod
-    def _parent_match(
-        cls, parent: pd.DataFrame, row: pd.Series
-    ) -> pd.DataFrame:
+    def _parent_match(cls, parent: pd.DataFrame, row: pd.Series) -> pd.DataFrame:
         required_parent = {
             "exposure",
             "group_type",
@@ -5628,9 +5982,7 @@ class CrossStepReconciliationTraceValidator:
         source = cls._normalise(row.get("source_variable"))
         role = cls._normalise(row.get("requested_role"))
         target = row.get("requested_stratum")
-        work = parent[
-            parent["exposure"].map(cls._normalise).eq(source)
-        ].copy()
+        work = parent[parent["exposure"].map(cls._normalise).eq(source)].copy()
 
         if "ordinal_level" in role:
             return work[
@@ -5674,15 +6026,11 @@ class CrossStepReconciliationTraceValidator:
             ):
                 continue
             matched = cls._parent_match(parent, row)
-            label = (
-                f"{row.get('source_variable')}:{row.get('requested_stratum')}"
-            )
+            label = f"{row.get('source_variable')}:{row.get('requested_stratum')}"
             reported_status = cls._normalise(row.get("registered_output_status"))
             if len(matched) == 0:
                 if reported_status == "row_supported":
-                    issues.append(
-                        {"row": label, "issue": "false_parent_support"}
-                    )
+                    issues.append({"row": label, "issue": "false_parent_support"})
                 continue
             if len(matched) != 1:
                 issues.append(
@@ -5733,9 +6081,7 @@ class CrossStepReconciliationTraceValidator:
                     expected_value = cls._as_float(expected.get(statistic))
                     if expected_value is None:
                         continue
-                    reported_value = cls._as_float(
-                        row.get(f"registered_{statistic}")
-                    )
+                    reported_value = cls._as_float(row.get(f"registered_{statistic}"))
                     if (
                         reported_value is None
                         or abs(reported_value - expected_value) > 1e-10
@@ -5791,8 +6137,7 @@ class CrossStepReconciliationTraceValidator:
             expected_risk = cls._as_float(expected.get("outcome_risk"))
             reported_risk = cls._as_float(row.get("registered_risk"))
             if expected_risk is not None and (
-                reported_risk is None
-                or abs(reported_risk - expected_risk) > 1e-10
+                reported_risk is None or abs(reported_risk - expected_risk) > 1e-10
             ):
                 issues.append(
                     {
@@ -5827,9 +6172,8 @@ class CrossStepReconciliationTraceValidator:
         def collect_declared(value: Any) -> None:
             if isinstance(value, dict):
                 for key, child in value.items():
-                    if (
-                        cls._normalise(key) == "range_flag_counts"
-                        and isinstance(child, dict)
+                    if cls._normalise(key) == "range_flag_counts" and isinstance(
+                        child, dict
                     ):
                         declared.update(cls._normalise(flag) for flag in child)
                     collect_declared(child)
@@ -5846,8 +6190,7 @@ class CrossStepReconciliationTraceValidator:
         for column in ("local_range_flag", "range_flag", "requested_range_flag"):
             if column in current.columns:
                 present.update(
-                    cls._normalise(value)
-                    for value in current[column].dropna().tolist()
+                    cls._normalise(value) for value in current[column].dropna().tolist()
                 )
         role_columns = (
             "requested_role",
@@ -5880,9 +6223,7 @@ class CrossStepReconciliationTraceValidator:
         issues: List[Dict[str, Any]] = []
         for expected in sorted(declared):
             if any(
-                expected == actual
-                or expected in actual
-                or actual in expected
+                expected == actual or expected in actual or actual in expected
                 for actual in present
             ):
                 continue
@@ -5951,9 +6292,7 @@ class CrossStepReconciliationTraceValidator:
                         pd.read_csv(candidate, nrows=1).columns
                     )
                 except Exception as exc:
-                    candidate_columns[str(candidate)] = {
-                        "read_error": str(exc)[:300]
-                    }
+                    candidate_columns[str(candidate)] = {"read_error": str(exc)[:300]}
             return [
                 ValidationFinding(
                     validator=self.name,
@@ -6053,7 +6392,9 @@ class CrossStepSourceStatusValidator:
         tokens = set(cls._normalise(value).split("_"))
         if cls._is_valid_observed_label(value):
             return "valid_observed"
-        if "no" in tokens and tokens.intersection({"source", "recorded", "observation"}):
+        if "no" in tokens and tokens.intersection(
+            {"source", "recorded", "observation"}
+        ):
             return "no_source"
         if (
             tokens.intersection({"measured", "observed"})
@@ -6078,6 +6419,45 @@ class CrossStepSourceStatusValidator:
         return int(number)
 
     @classmethod
+    def _flat_status_counts(
+        cls, value: Any
+    ) -> Optional[tuple[List[tuple[str, int]], Set[str]]]:
+        """Parse one explicit four-role status mapping without guessing roles."""
+
+        if not isinstance(value, dict):
+            return None
+        parsed = [
+            (str(category), count)
+            for category, raw_count in value.items()
+            if (count := cls._as_count(raw_count)) is not None
+        ]
+        if not parsed or len(parsed) != len(value):
+            return None
+        present_roles = {
+            role
+            for category, _ in parsed
+            if (role := cls._status_role(category)) is not None
+        }
+        return parsed, present_roles
+
+    @classmethod
+    def _declared_primary_source_summary(cls, summary: Dict[str, Any]) -> Optional[str]:
+        """Return an explicitly declared primary summary column, if unique."""
+
+        primary = summary.get("primary_exposure")
+        if isinstance(primary, str) and primary.strip():
+            return primary.strip()
+        if isinstance(primary, dict):
+            candidates = [
+                str(primary.get(key) or "").strip()
+                for key in ("column", "summary_variable", "source_summary")
+            ]
+            candidates = [value for value in candidates if value]
+            if len(set(candidates)) == 1:
+                return candidates[0]
+        return None
+
+    @classmethod
     def _prior_locks(
         cls, completed_step_records: Sequence[Dict[str, Any]]
     ) -> List[Dict[str, Any]]:
@@ -6096,6 +6476,42 @@ class CrossStepSourceStatusValidator:
             summary = record.get("step_summary")
             if not isinstance(summary, dict):
                 continue
+            # A value-quality step may publish one exact top-level status map
+            # bound to its explicit primary exposure.  This is the same closed
+            # contract as the older nested ``missingness`` representation.
+            source_summary = cls._declared_primary_source_summary(summary)
+            flat = cls._flat_status_counts(summary.get("source_status_counts"))
+            if source_summary and flat is not None:
+                parsed, present_roles = flat
+                required_roles = {
+                    "valid_observed",
+                    "no_source",
+                    "measured_summary_missing",
+                    "contradictory_invalid",
+                }
+                valid_counts = [
+                    count
+                    for category, count in parsed
+                    if cls._is_valid_observed_label(category)
+                ]
+                if len(valid_counts) == 1 and required_roles <= present_roles:
+                    role_counts = {
+                        role: count
+                        for category, count in parsed
+                        if (role := cls._status_role(category)) is not None
+                    }
+                    locks.append(
+                        {
+                            "concept": cls._normalise(source_summary),
+                            "source_summary": source_summary,
+                            "scope": "step_summary.source_status_counts",
+                            "total_n": sum(count for _, count in parsed),
+                            "valid_observed_n": valid_counts[0],
+                            "role_counts": role_counts,
+                            "step_id": str(record.get("step_id") or "prior_step"),
+                            "record_index": record_index,
+                        }
+                    )
             missingness = summary.get("missingness")
             if not isinstance(missingness, dict):
                 continue
@@ -6137,6 +6553,42 @@ class CrossStepSourceStatusValidator:
     def _current_status_blocks(cls, summary: Dict[str, Any]) -> List[Dict[str, Any]]:
         blocks: List[Dict[str, Any]] = []
 
+        # Current descriptive steps may use ``source_status_schema`` for the
+        # same four-category count contract.  Bind it only to an explicit
+        # primary exposure; a free-standing map is intentionally ignored.
+        source_summary = cls._declared_primary_source_summary(summary)
+        flat = cls._flat_status_counts(summary.get("source_status_schema"))
+        if source_summary and flat is not None:
+            parsed, present_roles = flat
+            valid_counts = [
+                count
+                for category, count in parsed
+                if cls._is_valid_observed_label(category)
+            ]
+            required_roles = {
+                "valid_observed",
+                "no_source",
+                "measured_summary_missing",
+                "contradictory_invalid",
+            }
+            if len(valid_counts) == 1:
+                role_counts = {
+                    role: count
+                    for category, count in parsed
+                    if (role := cls._status_role(category)) is not None
+                }
+                blocks.append(
+                    {
+                        "concept": cls._normalise(source_summary),
+                        "source_summary": source_summary,
+                        "path": "source_status_schema",
+                        "total_n": sum(count for _, count in parsed),
+                        "valid_observed_n": valid_counts[0],
+                        "role_counts": role_counts,
+                        "missing_status_roles": sorted(required_roles - present_roles),
+                    }
+                )
+
         declarations: List[Dict[str, str]] = []
 
         def collect_declarations(value: Any, path: tuple[str, ...] = ()) -> None:
@@ -6166,9 +6618,7 @@ class CrossStepSourceStatusValidator:
 
         def declared_source_for(path: tuple[str, ...]) -> Optional[str]:
             hint = cls._normalise(path[-1] if path else "")
-            hint = re.sub(
-                r"_(?:measurement_)?status(?:_counts)?$", "", hint
-            )
+            hint = re.sub(r"_(?:measurement_)?status(?:_counts)?$", "", hint)
             exact = [
                 declaration
                 for declaration in declarations
@@ -6226,9 +6676,7 @@ class CrossStepSourceStatusValidator:
                             {
                                 "concept": cls._normalise(source_summary),
                                 "source_summary": source_summary,
-                                "path": ".".join(
-                                    (*path, "source_status_counts")
-                                ),
+                                "path": ".".join((*path, "source_status_counts")),
                                 "total_n": sum(count for _, count in parsed_direct),
                                 "valid_observed_n": valid_counts[0],
                                 "missing_status_roles": sorted(
@@ -6276,9 +6724,7 @@ class CrossStepSourceStatusValidator:
                                 "concept": cls._normalise(source_summary),
                                 "source_summary": source_summary,
                                 "path": ".".join((*path, "counts")),
-                                "total_n": sum(
-                                    count for _, count in parsed_concept
-                                ),
+                                "total_n": sum(count for _, count in parsed_concept),
                                 "valid_observed_n": valid_counts[0],
                                 "missing_status_roles": sorted(
                                     required_roles - present_roles
@@ -6286,18 +6732,13 @@ class CrossStepSourceStatusValidator:
                             }
                         )
                 if path and any(
-                    "source_status_count" in cls._normalise(segment)
-                    for segment in path
+                    "source_status_count" in cls._normalise(segment) for segment in path
                 ):
                     parsed_nested = [
                         (str(category), count)
                         for category, raw in value.items()
                         if isinstance(raw, dict)
-                        and (
-                            count := cls._as_count(
-                                raw.get("count", raw.get("n"))
-                            )
-                        )
+                        and (count := cls._as_count(raw.get("count", raw.get("n"))))
                         is not None
                     ]
                     valid_nested = [
@@ -6323,9 +6764,7 @@ class CrossStepSourceStatusValidator:
                                 "concept": cls._normalise(source_summary),
                                 "source_summary": source_summary,
                                 "path": ".".join(path),
-                                "total_n": sum(
-                                    count for _, count in parsed_nested
-                                ),
+                                "total_n": sum(count for _, count in parsed_nested),
                                 "valid_observed_n": valid_nested[0],
                                 "missing_status_roles": sorted(
                                     required_roles - present_roles
@@ -6453,6 +6892,39 @@ class CrossStepSourceStatusValidator:
                         },
                     )
                 )
+            expected_role_counts = expected.get("role_counts")
+            current_role_counts = current.get("role_counts")
+            if (
+                isinstance(expected_role_counts, dict)
+                and isinstance(current_role_counts, dict)
+                and not missing_status_roles
+                and current_role_counts != expected_role_counts
+            ):
+                findings.append(
+                    ValidationFinding(
+                        validator=self.name,
+                        severity="error",
+                        message=(
+                            f"Source-status category drift for "
+                            f"{current['source_summary']}: step {step.step_id} "
+                            "reallocated rows among observed, no-source, "
+                            "measured-summary-missing, or contradictory states "
+                            f"relative to completed step {expected['step_id']}. "
+                            "Preserve the earlier closed source-status mapping."
+                        ),
+                        detail={
+                            "step_id": step.step_id,
+                            "summary_path": current["path"],
+                            "source_summary": current["source_summary"],
+                            "cohort_n": current["total_n"],
+                            "reported_status_counts": current_role_counts,
+                            "expected_status_counts": expected_role_counts,
+                            "expected_from_step": expected["step_id"],
+                            "expected_scope": expected["scope"],
+                        },
+                    )
+                )
+                continue
             if current["valid_observed_n"] == expected["valid_observed_n"]:
                 continue
             findings.append(
@@ -6509,11 +6981,15 @@ class StatisticalValidator:
 
         primary_exposure = step_summary.get("primary_exposure")
         if isinstance(primary_exposure, Mapping):
-            status = str(
-                primary_exposure.get("reconciliation_status")
-                or primary_exposure.get("status")
-                or ""
-            ).strip().lower()
+            status = (
+                str(
+                    primary_exposure.get("reconciliation_status")
+                    or primary_exposure.get("status")
+                    or ""
+                )
+                .strip()
+                .lower()
+            )
             cohort_n = self._finite_nonnegative_count(step_summary.get("cohort_n"))
             missing_n = self._finite_nonnegative_count(
                 primary_exposure.get("missing_n")
@@ -6556,16 +7032,22 @@ class StatisticalValidator:
                 and usable_group_n <= 0
             )
             all_missing_by_counts = counted_total_n > 0 and usable_group_n <= 0
-            if status in {
-                "unavailable",
-                "failed",
-                "error",
-                "not_available",
-                "fail_closed",
-                "failed_closed",
-                "fail-closed",
-                "failed-closed",
-            } or all_missing_by_cohort or all_missing_by_counts or explicit_no_usable:
+            if (
+                status
+                in {
+                    "unavailable",
+                    "failed",
+                    "error",
+                    "not_available",
+                    "fail_closed",
+                    "failed_closed",
+                    "fail-closed",
+                    "failed-closed",
+                }
+                or all_missing_by_cohort
+                or all_missing_by_counts
+                or explicit_no_usable
+            ):
                 findings.append(
                     ValidationFinding(
                         validator=self.name,
@@ -6617,19 +7099,25 @@ class StatisticalValidator:
                     if reported is not None:
                         diff = abs(float(reported) - truth)
                         if diff > 1e-3:
-                            findings.append(ValidationFinding(
-                                validator=self.name, severity="error",
-                                message=(
-                                    f"Reported outcome rate {reported:.4f} disagrees with "
-                                    f"cohort recompute {truth:.4f} (Δ={diff:.4f})."
-                                ),
-                                detail={"reported": reported, "truth": truth},
-                            ))
+                            findings.append(
+                                ValidationFinding(
+                                    validator=self.name,
+                                    severity="error",
+                                    message=(
+                                        f"Reported outcome rate {reported:.4f} disagrees with "
+                                        f"cohort recompute {truth:.4f} (Δ={diff:.4f})."
+                                    ),
+                                    detail={"reported": reported, "truth": truth},
+                                )
+                            )
             except Exception as exc:
-                findings.append(ValidationFinding(
-                    validator=self.name, severity="warning",
-                    message=f"Could not recompute outcome rate: {exc}",
-                ))
+                findings.append(
+                    ValidationFinding(
+                        validator=self.name,
+                        severity="warning",
+                        message=f"Could not recompute outcome rate: {exc}",
+                    )
+                )
 
         # 2. Primary-association OR cross-check (T1.6).
         #    The mock pipeline writes ``primary_association.csv`` with one
@@ -6643,34 +7131,51 @@ class StatisticalValidator:
                 pa = pd.read_csv(pa_csv)
                 reported = step_summary.get("primary_or")
                 predictor = step_summary.get("predictor")
-                if reported is not None and predictor and "variable" in pa.columns and "odds_ratio" in pa.columns:
+                if (
+                    reported is not None
+                    and predictor
+                    and "variable" in pa.columns
+                    and "odds_ratio" in pa.columns
+                ):
                     match = pa.loc[pa["variable"] == predictor, "odds_ratio"]
                     if not match.empty:
                         recomputed = float(match.iloc[0])
                         diff = abs(float(reported) - recomputed)
                         if diff > 1e-3:
-                            findings.append(ValidationFinding(
-                                validator=self.name, severity="error",
-                                message=(
-                                    f"Reported primary OR {reported:.4f} disagrees "
-                                    f"with recompute from {pa_csv.name} ({recomputed:.4f}, "
-                                    f"Δ={diff:.4f})."
-                                ),
-                                detail={"reported": reported, "recomputed": recomputed,
-                                        "predictor": predictor},
-                            ))
+                            findings.append(
+                                ValidationFinding(
+                                    validator=self.name,
+                                    severity="error",
+                                    message=(
+                                        f"Reported primary OR {reported:.4f} disagrees "
+                                        f"with recompute from {pa_csv.name} ({recomputed:.4f}, "
+                                        f"Δ={diff:.4f})."
+                                    ),
+                                    detail={
+                                        "reported": reported,
+                                        "recomputed": recomputed,
+                                        "predictor": predictor,
+                                    },
+                                )
+                            )
             except Exception as exc:
-                findings.append(ValidationFinding(
-                    validator=self.name, severity="warning",
-                    message=f"Could not parse primary_association.csv: {exc}",
-                ))
+                findings.append(
+                    ValidationFinding(
+                        validator=self.name,
+                        severity="warning",
+                        message=f"Could not parse primary_association.csv: {exc}",
+                    )
+                )
 
         # 3. Sanity: the script must have produced some artefact.
         if not any(out_dir.iterdir()):
-            findings.append(ValidationFinding(
-                validator=self.name, severity="error",
-                message=f"Step '{step.step_id}' produced no output artefacts.",
-            ))
+            findings.append(
+                ValidationFinding(
+                    validator=self.name,
+                    severity="error",
+                    message=f"Step '{step.step_id}' produced no output artefacts.",
+                )
+            )
 
         # 4. Codex-grade train/test performance metrics (T1.8). Whenever a
         #    step writes ``model_performance_train_test.csv``, re-validate
@@ -6688,37 +7193,52 @@ class StatisticalValidator:
                     brier = row.get("brier", float("nan"))
                     cal_slope = row.get("calibration_slope", float("nan"))
                     if pd.notna(auc) and not (0.5 <= float(auc) <= 1.0):
-                        findings.append(ValidationFinding(
-                            validator=self.name, severity="error",
-                            message=(
-                                f"Model '{model}' held-out AUC {auc:.3f} outside "
-                                "the plausible discriminative range [0.5, 1.0]."
-                            ),
-                            detail={"model": model, "auc": float(auc)},
-                        ))
+                        findings.append(
+                            ValidationFinding(
+                                validator=self.name,
+                                severity="error",
+                                message=(
+                                    f"Model '{model}' held-out AUC {auc:.3f} outside "
+                                    "the plausible discriminative range [0.5, 1.0]."
+                                ),
+                                detail={"model": model, "auc": float(auc)},
+                            )
+                        )
                     if pd.notna(brier) and not (0.0 <= float(brier) <= 0.5):
-                        findings.append(ValidationFinding(
-                            validator=self.name, severity="warning",
-                            message=(
-                                f"Model '{model}' Brier score {brier:.3f} outside "
-                                "the plausible range [0, 0.5]."
-                            ),
-                            detail={"model": model, "brier": float(brier)},
-                        ))
+                        findings.append(
+                            ValidationFinding(
+                                validator=self.name,
+                                severity="warning",
+                                message=(
+                                    f"Model '{model}' Brier score {brier:.3f} outside "
+                                    "the plausible range [0, 0.5]."
+                                ),
+                                detail={"model": model, "brier": float(brier)},
+                            )
+                        )
                     if pd.notna(cal_slope) and not (0.5 <= float(cal_slope) <= 2.0):
-                        findings.append(ValidationFinding(
-                            validator=self.name, severity="warning",
-                            message=(
-                                f"Model '{model}' calibration slope {cal_slope:.3f} "
-                                "outside the well-calibrated range [0.5, 2.0]."
-                            ),
-                            detail={"model": model, "calibration_slope": float(cal_slope)},
-                        ))
+                        findings.append(
+                            ValidationFinding(
+                                validator=self.name,
+                                severity="warning",
+                                message=(
+                                    f"Model '{model}' calibration slope {cal_slope:.3f} "
+                                    "outside the well-calibrated range [0.5, 2.0]."
+                                ),
+                                detail={
+                                    "model": model,
+                                    "calibration_slope": float(cal_slope),
+                                },
+                            )
+                        )
             except Exception as exc:
-                findings.append(ValidationFinding(
-                    validator=self.name, severity="warning",
-                    message=f"Could not parse {perf_csv.name}: {exc}",
-                ))
+                findings.append(
+                    ValidationFinding(
+                        validator=self.name,
+                        severity="warning",
+                        message=f"Could not parse {perf_csv.name}: {exc}",
+                    )
+                )
 
         # 5. Degenerate-partition disclosure caution (clustering / trajectory).
         #    When a step emits a cluster-size distribution, surface an OBJECTIVE
@@ -6733,17 +7253,20 @@ class StatisticalValidator:
         #    fact and never imposes k, algorithm, scaling or outlier handling.
         deg = self._degenerate_partition(out_dir, step_summary)
         if deg is not None:
-            findings.append(ValidationFinding(
-                validator=self.name, severity="warning",
-                message=(
-                    f"Degenerate cluster partition ({deg['reason']}). Silhouette "
-                    "and resampling ARI on such a partition are inflated by "
-                    "outlier isolation, not evidence of separated subphenotypes; "
-                    "disclose the cluster sizes and do not present this as a "
-                    "robust multi-subphenotype solution."
-                ),
-                detail=deg,
-            ))
+            findings.append(
+                ValidationFinding(
+                    validator=self.name,
+                    severity="warning",
+                    message=(
+                        f"Degenerate cluster partition ({deg['reason']}). Silhouette "
+                        "and resampling ARI on such a partition are inflated by "
+                        "outlier isolation, not evidence of separated subphenotypes; "
+                        "disclose the cluster sizes and do not present this as a "
+                        "robust multi-subphenotype solution."
+                    ),
+                    detail=deg,
+                )
+            )
 
         return findings
 
@@ -7188,9 +7711,9 @@ class FigureSourceDataValidator:
 
     @staticmethod
     def _role_present(value: Any, role: str) -> bool:
-        normalised = re.sub(
-            r"[^a-z0-9]+", "_", str(value or "").strip().lower()
-        ).strip("_")
+        normalised = re.sub(r"[^a-z0-9]+", "_", str(value or "").strip().lower()).strip(
+            "_"
+        )
         return normalised == role or f"_{role}_" in f"_{normalised}_"
 
     @classmethod
@@ -7349,10 +7872,7 @@ class FigureSourceDataValidator:
     @staticmethod
     def _series_has_finite_numeric(series: pd.Series) -> bool:
         numeric = pd.to_numeric(series, errors="coerce")
-        return any(
-            math.isfinite(float(value))
-            for value in numeric.dropna().tolist()
-        )
+        return any(math.isfinite(float(value)) for value in numeric.dropna().tolist())
 
     @staticmethod
     def _finite_numeric_values(series: pd.Series) -> List[float]:
@@ -7379,10 +7899,14 @@ class FigureSourceDataValidator:
             return False
         has_zero = any(math.isclose(value, 0.0, abs_tol=1e-12) for value in values)
         has_one = any(math.isclose(value, 1.0, abs_tol=1e-12) for value in values)
-        return has_zero and has_one and all(
-            math.isclose(value, 0.0, abs_tol=1e-12)
-            or math.isclose(value, 1.0, abs_tol=1e-12)
-            for value in values
+        return (
+            has_zero
+            and has_one
+            and all(
+                math.isclose(value, 0.0, abs_tol=1e-12)
+                or math.isclose(value, 1.0, abs_tol=1e-12)
+                for value in values
+            )
         )
 
     @classmethod
@@ -7485,8 +8009,7 @@ class FigureSourceDataValidator:
 
         parsed_product = typed_product(product)
         product_supported = any(
-            cls._role_present(product, role)
-            for role in cls._PREDICTION_SOURCE_ROLES
+            cls._role_present(product, role) for role in cls._PREDICTION_SOURCE_ROLES
         )
         if not product_supported:
             return set()
@@ -7655,12 +8178,8 @@ class FigureSourceDataValidator:
             if len(point_payloads) == 1 and not (
                 point_payloads[0]["lower"] or point_payloads[0]["upper"]
             ):
-                point_payloads[0]["lower"].extend(
-                    generic_metric_intervals["lower"]
-                )
-                point_payloads[0]["upper"].extend(
-                    generic_metric_intervals["upper"]
-                )
+                point_payloads[0]["lower"].extend(generic_metric_intervals["lower"])
+                point_payloads[0]["upper"].extend(generic_metric_intervals["upper"])
             elif point_payloads:
                 performance_payload_valid = False
         for payload in metric_payloads.values():
@@ -7777,9 +8296,9 @@ class FigureSourceDataValidator:
                 break
 
             replayable_raw_horizons: Set[float] = set()
-            for horizon_value, group in frame.dropna(
-                subset=[time_column]
-            ).groupby(time_column):
+            for horizon_value, group in frame.dropna(subset=[time_column]).groupby(
+                time_column
+            ):
                 probability_replay = cls._has_row_paired_prediction_outcome(
                     group,
                     probability_columns,
@@ -7864,10 +8383,7 @@ class FigureSourceDataValidator:
                 return False
         elif input_tiers & {"secondary", "sensitivity", "corroborative"}:
             return False
-        if (
-            output_adjustment is not None
-            and output_adjustment not in input_adjustments
-        ):
+        if output_adjustment is not None and output_adjustment not in input_adjustments:
             return False
         return True
 
@@ -7877,6 +8393,7 @@ class FigureSourceDataValidator:
         *,
         product: str,
         source_frame: pd.DataFrame,
+        upstream_frame: Optional[pd.DataFrame] = None,
         upstream_step_id: str,
         completed_step_records: Optional[Sequence[Dict[str, Any]]],
     ) -> str:
@@ -7891,16 +8408,31 @@ class FigureSourceDataValidator:
         """
 
         parsed = typed_product(product)
+        contract_frame = source_frame
+        if (
+            "model_id" not in contract_frame.columns
+            and upstream_frame is not None
+            and "source_row_index" in source_frame.columns
+        ):
+            positions = pd.to_numeric(source_frame["source_row_index"], errors="coerce")
+            if (
+                positions.notna().all()
+                and positions.mod(1).eq(0).all()
+                and positions.between(0, len(upstream_frame) - 1).all()
+            ):
+                contract_frame = upstream_frame.iloc[
+                    positions.astype(int).tolist()
+                ].reset_index(drop=True)
         if (
             parsed is None
             or not effect_bearing_product(product)
-            or "model_id" not in source_frame.columns
+            or "model_id" not in contract_frame.columns
             or not completed_step_records
         ):
             return product
         model_ids = {
             str(value).strip()
-            for value in source_frame["model_id"].dropna().tolist()
+            for value in contract_frame["model_id"].dropna().tolist()
             if str(value).strip()
         }
         if not model_ids:
@@ -7914,9 +8446,7 @@ class FigureSourceDataValidator:
             return product
         summary = parent_records[0].get("step_summary")
         contracts = (
-            summary.get("model_contracts")
-            if isinstance(summary, Mapping)
-            else None
+            summary.get("model_contracts") if isinstance(summary, Mapping) else None
         )
         contract_by_model: Dict[str, Mapping[str, Any]] = {}
         for contract in contracts or []:
@@ -7934,25 +8464,29 @@ class FigureSourceDataValidator:
             for contract in selected_contracts
         }
         allowed_tiers = {"primary", "secondary", "sensitivity", "corroborative"}
-        if len(tiers) != 1 or not tiers <= allowed_tiers or any(
-            cls._normalise(contract.get("fit_status")) != "fitted"
-            for contract in selected_contracts
+        if (
+            len(tiers) != 1
+            or not tiers <= allowed_tiers
+            or any(
+                cls._normalise(contract.get("fit_status")) != "fitted"
+                for contract in selected_contracts
+            )
         ):
             return product
-        if not {"term_role", "source_variable"} <= set(source_frame.columns):
+        if not {"term_role", "source_variable"} <= set(contract_frame.columns):
             return product
-        exposure_rows = source_frame.loc[
-            source_frame["term_role"].map(cls._normalise).eq("exposure")
+        exposure_rows = contract_frame.loc[
+            contract_frame["term_role"].map(cls._normalise).eq("exposure")
         ]
-        if exposure_rows.empty or len(exposure_rows) != len(source_frame):
+        if exposure_rows.empty:
             return product
         for _, row in exposure_rows.iterrows():
-            contract = contract_by_model.get(
-                str(row.get("model_id") or "").strip()
-            )
-            if contract is None or str(
-                row.get("source_variable") or ""
-            ).strip() != str(contract.get("exposure_source") or "").strip():
+            contract = contract_by_model.get(str(row.get("model_id") or "").strip())
+            if (
+                contract is None
+                or str(row.get("source_variable") or "").strip()
+                != str(contract.get("exposure_source") or "").strip()
+            ):
                 return product
         tier = next(iter(tiers))
         kind, name = parsed
@@ -7998,7 +8532,9 @@ class FigureSourceDataValidator:
             interval_columns.setdefault(
                 prefix,
                 {"lower": [], "upper": []},
-            )[side].append(str(column))
+            )[
+                side
+            ].append(str(column))
         normalised_points = {
             str(column): cls._normalise(column) for column in ratio_point_columns
         }
@@ -8011,8 +8547,7 @@ class FigureSourceDataValidator:
                 if normalised == prefix
                 or (
                     prefix_family is not None
-                    and effect_measure_family(f"table:{normalised}")
-                    == prefix_family
+                    and effect_measure_family(f"table:{normalised}") == prefix_family
                 )
             ]
 
@@ -8242,7 +8777,10 @@ class FigureSourceDataValidator:
         def visit(value: Any) -> None:
             if isinstance(value, Mapping):
                 declared_name = value.get("name") or value.get("statistic")
-                if declared_name is not None and cls._normalise(declared_name) == target:
+                if (
+                    declared_name is not None
+                    and cls._normalise(declared_name) == target
+                ):
                     for field in ("value", "estimate", "result"):
                         numeric = cls._as_float(value.get(field))
                         if numeric is not None:
@@ -8288,9 +8826,7 @@ class FigureSourceDataValidator:
                 return False
             return all(
                 math.isfinite(float(value))
-                and math.isclose(
-                    float(value), expected, rel_tol=1e-9, abs_tol=1e-9
-                )
+                and math.isclose(float(value), expected, rel_tol=1e-9, abs_tol=1e-9)
                 for value in values
             )
 
@@ -8319,9 +8855,9 @@ class FigureSourceDataValidator:
             normalised_labels = source_df[label_column].map(cls._normalise)
             matching_rows = normalised_labels.eq(target)
             if target_family is not None:
-                matching_rows |= normalised_labels.map(
-                    cls._statistic_family
-                ).eq(target_family)
+                matching_rows |= normalised_labels.map(cls._statistic_family).eq(
+                    target_family
+                )
             if not matching_rows.any():
                 continue
             for value_column in value_columns:
@@ -8386,9 +8922,7 @@ class FigureSourceDataValidator:
         def agrees(value: Any, expected_values: Sequence[float]) -> bool:
             numeric = cls._as_float(value)
             return numeric is not None and any(
-                math.isclose(
-                    numeric, expected, rel_tol=1e-9, abs_tol=1e-9
-                )
+                math.isclose(numeric, expected, rel_tol=1e-9, abs_tol=1e-9)
                 for expected in expected_values
             )
 
@@ -8518,8 +9052,7 @@ class FigureSourceDataValidator:
             )
 
         return {
-            product: list(dict.fromkeys(paths))
-            for product, paths in resolved.items()
+            product: list(dict.fromkeys(paths)) for product, paths in resolved.items()
         }
 
     @classmethod
@@ -8546,11 +9079,7 @@ class FigureSourceDataValidator:
             if (parsed := typed_product(raw)) is not None
             and parsed[0] in {"artifact", "dataset", "table"}
         }
-        excluded = {
-            path.resolve()
-            for path in excluded_paths
-            if path.exists()
-        }
+        excluded = {path.resolve() for path in excluded_paths if path.exists()}
         result_families = cls._planned_result_families(step)
         tables: Dict[Path, str] = {}
         for container_key in ("output_files", "outputs"):
@@ -8565,7 +9094,9 @@ class FigureSourceDataValidator:
                     if Path(raw_path).suffix.lower() not in cls._TABULAR_SUFFIXES:
                         continue
                     relative = Path(raw_path)
-                    candidate = relative if relative.is_absolute() else out_dir / relative
+                    candidate = (
+                        relative if relative.is_absolute() else out_dir / relative
+                    )
                     if (
                         cls._safe_regular_run_file(candidate, run_dir=run_dir)
                         and candidate.parent.resolve() == out_dir.resolve()
@@ -8576,14 +9107,17 @@ class FigureSourceDataValidator:
                         except Exception:
                             continue
                         product = declared[role]
-                        if not any(
-                            cls._source_supports_result_family(
-                                product=product,
-                                frame=frame,
-                                family=family,
+                        if (
+                            not any(
+                                cls._source_supports_result_family(
+                                    product=product,
+                                    frame=frame,
+                                    family=family,
+                                )
+                                for family in result_families
                             )
-                            for family in result_families
-                        ) and result_families:
+                            and result_families
+                        ):
                             continue
                         tables[candidate.resolve()] = product
         return tables
@@ -8627,8 +9161,7 @@ class FigureSourceDataValidator:
         declared_result_kinds = {
             parsed[0]
             for raw in (step.expected_outputs or [])
-            if (parsed := typed_product(raw)) is not None
-            and parsed[0] != "figure"
+            if (parsed := typed_product(raw)) is not None and parsed[0] != "figure"
         }
         has_data_input = bool(
             (declared_input_kinds | declared_result_kinds)
@@ -8639,7 +9172,9 @@ class FigureSourceDataValidator:
         )
         planned_result_families = cls._planned_result_families(step)
         method_head = cls._normalised_method_head(step.method)
-        compute_and_render = bool(planned) and method_head not in cls._PURE_RENDER_METHODS
+        compute_and_render = (
+            bool(planned) and method_head not in cls._PURE_RENDER_METHODS
+        )
         host_requires_source = bool(
             has_data_input
             or has_untyped_input
@@ -8795,9 +9330,11 @@ class FigureSourceDataValidator:
             raw_source_names = (
                 [declared_sources]
                 if isinstance(declared_sources, str)
-                else list(declared_sources)
-                if isinstance(declared_sources, (list, tuple, set))
-                else ([] if declared_sources is None else [declared_sources])
+                else (
+                    list(declared_sources)
+                    if isinstance(declared_sources, (list, tuple, set))
+                    else ([] if declared_sources is None else [declared_sources])
+                )
             )
             invalid_source_descriptors = [
                 {
@@ -8897,9 +9434,7 @@ class FigureSourceDataValidator:
         run_dir: Path,
         step_summary: Dict[str, Any],
         completed_step_records: Optional[Sequence[Dict[str, Any]]] = None,
-        resolved_input_bindings: Optional[
-            Mapping[str, Mapping[str, Any]]
-        ] = None,
+        resolved_input_bindings: Optional[Mapping[str, Mapping[str, Any]]] = None,
     ) -> List[ValidationFinding]:
         if not self._is_rendering_step(step=step, step_summary=step_summary):
             return []
@@ -8975,9 +9510,7 @@ class FigureSourceDataValidator:
                 if not isinstance(binding, Mapping):
                     invalid_bindings.append(str(raw_input))
                     continue
-                declared_kind = str(
-                    binding.get("declared_kind") or ""
-                ).strip().lower()
+                declared_kind = str(binding.get("declared_kind") or "").strip().lower()
                 producer_id = str(binding.get("produced_by_step") or "").strip()
                 evidence_id = str(binding.get("evidence_id") or "").strip()
                 digest = str(binding.get("sha256") or "").strip()
@@ -8987,8 +9520,7 @@ class FigureSourceDataValidator:
                     declared_kind
                     not in {"artifact", "dataset", "model", "statistic", "table"}
                     or parsed_input != (declared_kind, self._normalise(product))
-                    or
-                    not self._safe_step_id(producer_id)
+                    or not self._safe_step_id(producer_id)
                     or not evidence_id
                     or not product
                     or re.fullmatch(r"[0-9a-fA-F]{64}", digest) is None
@@ -9030,18 +9562,14 @@ class FigureSourceDataValidator:
                         ),
                         detail={
                             "step_id": step.step_id,
-                            "declared_upstream_step_ids": sorted(
-                                declared_upstream_ids
-                            ),
+                            "declared_upstream_step_ids": sorted(declared_upstream_ids),
                             "resolved_upstream_step_ids": sorted(upstream_step_ids),
                             "reason": "resolved_upstream_binding_mismatch",
                         },
                     )
                 ]
         unsafe_step_ids = sorted(
-            step_id
-            for step_id in upstream_step_ids
-            if not self._safe_step_id(step_id)
+            step_id for step_id in upstream_step_ids if not self._safe_step_id(step_id)
         )
         if unsafe_step_ids:
             return [
@@ -9087,18 +9615,13 @@ class FigureSourceDataValidator:
         authoritative_tables = (
             None
             if authoritative_evidence is None
-            else {
-                item["path"]
-                for item in authoritative_evidence.values()
-            }
+            else {item["path"] for item in authoritative_evidence.values()}
         )
         if same_step_tables and authoritative_tables is not None:
             authoritative_tables.update(same_step_tables)
 
         required_table_paths: Set[Path] = set()
-        required_statistics: Dict[str, tuple[str, float]] = dict(
-            same_step_statistics
-        )
+        required_statistics: Dict[str, tuple[str, float]] = dict(same_step_statistics)
         table_products: Dict[Path, str] = dict(same_step_tables)
         table_frames: Dict[Path, pd.DataFrame] = {}
         declared_table_aliases: Dict[str, Set[Path]] = {}
@@ -9113,9 +9636,7 @@ class FigureSourceDataValidator:
                 )
             }
             for raw_input, binding in bound_input_bindings.items():
-                declared_kind = str(
-                    binding.get("declared_kind") or ""
-                ).strip().lower()
+                declared_kind = str(binding.get("declared_kind") or "").strip().lower()
                 evidence_id = str(binding.get("evidence_id") or "").strip()
                 producer_id = str(binding.get("produced_by_step") or "").strip()
                 product_name = self._normalise(binding.get("product"))
@@ -9141,6 +9662,9 @@ class FigureSourceDataValidator:
                         declared_table_aliases.setdefault(
                             evidence_path.name, set()
                         ).add(bound_path.resolve())
+                    declared_table_aliases.setdefault(str(raw_input), set()).add(
+                        bound_path.resolve()
+                    )
                 elif (
                     not self._safe_regular_run_file(bound_path, run_dir=run_dir)
                     or self._sha256_file(bound_path) != expected_sha
@@ -9149,23 +9673,24 @@ class FigureSourceDataValidator:
                     continue
                 if declared_kind == "statistic":
                     record = current_records.get(producer_id)
-                    if (
-                        record is None
-                        or evidence_id
-                        != str(record.get("step_summary_evidence_id") or "").strip()
-                        or evidence_id
-                        not in {
-                            str(item)
-                            for item in (record.get("evidence_ids") or [])
-                        }
-                    ):
+                    if record is None or evidence_id not in {
+                        str(item) for item in (record.get("evidence_ids") or [])
+                    }:
+                        invalid_bound_evidence.append(raw_input)
+                        continue
+                    try:
+                        statistic_payload = json.loads(
+                            bound_path.read_text(encoding="utf-8")
+                        )
+                    except (OSError, UnicodeError, json.JSONDecodeError):
                         invalid_bound_evidence.append(raw_input)
                         continue
                     value = self._extract_statistic_value(
-                        record.get("step_summary"), product_name
+                        statistic_payload,
+                        product_name,
                     )
                     if value is None:
-                        invalid_bound_evidence.append(raw_input)
+                        unsupported_value_inputs.append(raw_input)
                         continue
                     if not result_families or any(
                         self._source_supports_result_family(
@@ -9216,9 +9741,7 @@ class FigureSourceDataValidator:
                         ),
                         detail={
                             "step_id": step.step_id,
-                            "invalid_resolved_inputs": sorted(
-                                invalid_bound_evidence
-                            ),
+                            "invalid_resolved_inputs": sorted(invalid_bound_evidence),
                             "reason": "resolved_input_evidence_mismatch",
                         },
                     )
@@ -9229,9 +9752,7 @@ class FigureSourceDataValidator:
         if completed_step_records is not None:
             current_parent_ids = {
                 str(record.get("step_id") or "").strip()
-                for record in current_successful_step_records(
-                    completed_step_records
-                )
+                for record in current_successful_step_records(completed_step_records)
             }
             same_step_ids = (
                 {str(step.step_id)}
@@ -9331,12 +9852,11 @@ class FigureSourceDataValidator:
                 semantic_product = self._contract_scoped_effect_product(
                     product=product,
                     source_frame=source_frame,
+                    upstream_frame=frame,
                     upstream_step_id=self._table_step_id(table_path, run_dir=run_dir),
                     completed_step_records=completed_step_records,
                 )
-                for figure in source_figure_products.get(
-                    source_path.resolve(), set()
-                ):
+                for figure in source_figure_products.get(source_path.resolve(), set()):
                     if figure not in required_figure_obligations:
                         continue
                     family = self._figure_result_family(
@@ -9369,9 +9889,7 @@ class FigureSourceDataValidator:
             for statistic_id in statistic_ids:
                 product_name, expected = required_statistics[statistic_id]
                 product = f"statistic:{product_name}"
-                for figure in source_figure_products.get(
-                    source_path.resolve(), set()
-                ):
+                for figure in source_figure_products.get(source_path.resolve(), set()):
                     if figure not in required_figure_obligations:
                         continue
                     family = self._figure_result_family(
@@ -9520,9 +10038,10 @@ class FigureSourceDataValidator:
                 )
             )
             source_statistic_matches: Set[str] = set()
-            for statistic_id, (product_name, expected_value) in (
-                required_statistics.items()
-            ):
+            for statistic_id, (
+                product_name,
+                expected_value,
+            ) in required_statistics.items():
                 if self._source_contains_statistic(
                     source_df,
                     product_name=product_name,
@@ -9541,9 +10060,7 @@ class FigureSourceDataValidator:
                     )
                     if source_statistic_matches:
                         matched_statistics.update(source_statistic_matches)
-                        credit_statistic_source(
-                            source_path, source_statistic_matches
-                        )
+                        credit_statistic_source(source_path, source_statistic_matches)
                     return True
                 if not source_statistic_matches:
                     return False
@@ -9583,9 +10100,7 @@ class FigureSourceDataValidator:
                 current_out_dir=out_dir,
                 authoritative_tables=authoritative_tables,
                 allowed_step_ids=(
-                    upstream_step_ids
-                    if resolved_input_bindings is not None
-                    else None
+                    upstream_step_ids if resolved_input_bindings is not None else None
                 ),
             )
             candidate_tables = list(upstream_tables)
@@ -9642,9 +10157,7 @@ class FigureSourceDataValidator:
                     declared_parent_step: Optional[str] = None
                     if "source_step_id" in group_df.columns:
                         declared_step_values = group_df["source_step_id"].map(
-                            lambda item: (
-                                str(item).strip() if pd.notna(item) else ""
-                            )
+                            lambda item: (str(item).strip() if pd.notna(item) else "")
                         )
                         declared_parent_steps = {
                             item for item in declared_step_values if item
@@ -9720,9 +10233,7 @@ class FigureSourceDataValidator:
                         )
                         for upstream_path in group_tables
                     ]
-                    group_comparisons = [
-                        item for _, item in group_comparison_pairs
-                    ]
+                    group_comparisons = [item for _, item in group_comparison_pairs]
                     comparisons.extend(group_comparisons)
                     if any(item.get("ok") for item in group_comparisons):
                         source_matched_table_paths.update(
@@ -9736,8 +10247,7 @@ class FigureSourceDataValidator:
                         comparisons = [
                             item
                             for item in comparisons
-                            if item not in group_comparisons
-                            or item.get("ok")
+                            if item not in group_comparisons or item.get("ok")
                         ]
                 failed_comparisons = [
                     item for item in comparisons if not item.get("ok")
@@ -9764,9 +10274,7 @@ class FigureSourceDataValidator:
                 ]
                 comparisons = [item for _, item in comparison_pairs]
                 successful_paths = {
-                    path.resolve()
-                    for path, item in comparison_pairs
-                    if item.get("ok")
+                    path.resolve() for path, item in comparison_pairs if item.get("ok")
                 }
                 if successful_paths:
                     source_matched_table_paths.update(successful_paths)
@@ -9808,7 +10316,11 @@ class FigureSourceDataValidator:
                         "source_table": source_path.name,
                         "upstream_step_ids": sorted(upstream_step_ids),
                         "candidate_upstream_tables": [
-                            str(p.relative_to(run_dir)) if p.is_relative_to(run_dir) else str(p)
+                            (
+                                str(p.relative_to(run_dir))
+                                if p.is_relative_to(run_dir)
+                                else str(p)
+                            )
                             for p in ordered_upstream_tables
                         ],
                         "best_mismatch": best,
@@ -9845,8 +10357,7 @@ class FigureSourceDataValidator:
                     if figure in products
                 ),
                 "missing_obligations": sorted(
-                    required_obligations
-                    - matched_figure_obligations.get(figure, set())
+                    required_obligations - matched_figure_obligations.get(figure, set())
                 ),
             }
             for figure, required_obligations in required_figure_obligations.items()
@@ -9914,10 +10425,14 @@ class FigureSourceDataValidator:
                         "count_column": count_col,
                         "total_column": total_col,
                         "row_index": idx,
-                        "observed_pct": None if pd.isna(pct.loc[idx]) else float(pct.loc[idx]),
-                        "expected_pct": None
-                        if pd.isna(expected.loc[idx])
-                        else float(expected.loc[idx]),
+                        "observed_pct": (
+                            None if pd.isna(pct.loc[idx]) else float(pct.loc[idx])
+                        ),
+                        "expected_pct": (
+                            None
+                            if pd.isna(expected.loc[idx])
+                            else float(expected.loc[idx])
+                        ),
                         "abs_diff": float(bad.loc[idx]),
                     },
                 )
@@ -10188,8 +10703,7 @@ class FigureSourceDataValidator:
         }:
             return True
         return any(
-            Path(value).suffix.lower()
-            in {".png", ".svg", ".pdf", ".tif", ".tiff"}
+            Path(value).suffix.lower() in {".png", ".svg", ".pdf", ".tif", ".tiff"}
             for value in cls._iter_string_values(step_summary or {})
         )
 
@@ -10217,9 +10731,7 @@ class FigureSourceDataValidator:
         return found
 
     @classmethod
-    def _explicit_upstream_step_ids(
-        cls, step_summary: Mapping[str, Any]
-    ) -> Set[str]:
+    def _explicit_upstream_step_ids(cls, step_summary: Mapping[str, Any]) -> Set[str]:
         """Return structured producer claims without prose/name inference."""
 
         found: Set[str] = set()
@@ -10325,9 +10837,7 @@ class FigureSourceDataValidator:
         current_ids = (
             {
                 str(record.get("step_id") or "").strip()
-                for record in current_successful_step_records(
-                    completed_step_records
-                )
+                for record in current_successful_step_records(completed_step_records)
             }
             if completed_step_records is not None
             else None
@@ -10338,9 +10848,8 @@ class FigureSourceDataValidator:
             if str(record.get("kind") or "").strip().lower() != "table":
                 continue
             step_id = str(record.get("produced_by_step") or "").strip()
-            if (
-                not cls._safe_step_id(step_id)
-                or (current_ids is not None and step_id not in current_ids)
+            if not cls._safe_step_id(step_id) or (
+                current_ids is not None and step_id not in current_ids
             ):
                 continue
             expected_sha = str(record.get("sha256") or "").strip().lower()
@@ -10479,15 +10988,13 @@ class FigureSourceDataValidator:
         for path in sorted(steps_dir.glob("*/outputs/*")):
             if (
                 path.suffix.lower() not in cls._TABULAR_SUFFIXES
-                or
-                path.name not in declared_names
+                or path.name not in declared_names
                 or not cls._safe_regular_run_file(path, run_dir=run_dir)
             ):
                 continue
             if (
                 allowed_step_ids is not None
-                and cls._table_step_id(path, run_dir=run_dir)
-                not in allowed_step_ids
+                and cls._table_step_id(path, run_dir=run_dir) not in allowed_step_ids
             ):
                 continue
             if path.parent.resolve() == current_resolved:
@@ -10530,7 +11037,10 @@ class FigureSourceDataValidator:
             (
                 tuple(cols)
                 for cols in cls._COMPOSITE_KEY_COLUMNS
-                if all(col in source_df.columns and col in upstream_df.columns for col in cols)
+                if all(
+                    col in source_df.columns and col in upstream_df.columns
+                    for col in cols
+                )
             ),
             None,
         )
@@ -10668,7 +11178,7 @@ class FigureSourceDataValidator:
                         "verified_panels": panel_results,
                     }
 
-        if key_cols is None and selected_position_col is not None:
+        if selected_position_col is not None:
             positional_key_label = selected_position_col
             join_col = "__easyicu_parent_row_position"
             while join_col in source.columns or join_col in upstream.columns:
@@ -10677,7 +11187,7 @@ class FigureSourceDataValidator:
             upstream[join_col] = pd.Series(
                 range(len(upstream)), index=upstream.index, dtype=int
             ).astype(str)
-            key_cols = (join_col,)
+            key_cols = (join_col, *(key_cols or ()))
         if key_cols is None:
             # Structural fallback: no composite / named / positional key matched,
             # but a faithfully-derived figure often preserves the parent's OWN key
@@ -10780,7 +11290,7 @@ class FigureSourceDataValidator:
         }
         shared_columns = (set(source.columns) & set(upstream.columns)) - set(key_cols)
         text_name = re.compile(
-            r"(?:^|_)(?:label|name|category|group|stratum|term|id|level|stage|band|role|status|"
+            r"(?:^|_)(?:label|name|category|group|stratum|term|id|level|stage|band|role|status|column|"
             r"method|table|source|description|note)(?:_|$)"
         )
         value_name = re.compile(
@@ -10815,6 +11325,14 @@ class FigureSourceDataValidator:
             present = raw.notna() & raw.astype(str).str.strip().ne("")
             if not present.any():
                 return False
+            # CSV round-trips commonly represent nullable boolean metadata as
+            # object dtype (for example ``[False, NaN]``). A name such as
+            # ``estimate_identical_to_primary`` contains the token
+            # ``estimate`` but remains a flag, not a numeric result. Treating
+            # it as numeric turns two identical ``False`` values into matching
+            # parse failures and falsely rejects an exact parent projection.
+            if pd.api.types.infer_dtype(raw[present], skipna=True) == "boolean":
+                return False
             parsed = _clean_numeric(raw[present])
             numeric_evidence = bool(
                 pd.api.types.is_numeric_dtype(raw) or parsed.notna().all()
@@ -10842,11 +11360,19 @@ class FigureSourceDataValidator:
 
         def _merged_source(col: str) -> pd.Series:
             suffixed = f"{col}_source"
-            return merged[suffixed] if suffixed in merged.columns else merged[col]
+            return (
+                merged[suffixed]
+                if col in upstream.columns and suffixed in merged.columns
+                else merged[col]
+            )
 
         def _merged_upstream(col: str) -> pd.Series:
             suffixed = f"{col}_upstream"
-            return merged[suffixed] if suffixed in merged.columns else merged[col]
+            return (
+                merged[suffixed]
+                if col in source.columns and suffixed in merged.columns
+                else merged[col]
+            )
 
         def _numeric_comparison(
             source_name: str, upstream_name: str
@@ -10877,8 +11403,8 @@ class FigureSourceDataValidator:
                 & ~left_finite
                 & ~right_finite
             )
-            parse_failure = (
-                (left_present & left.isna()) | (right_present & right.isna())
+            parse_failure = (left_present & left.isna()) | (
+                right_present & right.isna()
             )
             bad = (
                 (left_present ^ right_present)
@@ -10911,9 +11437,7 @@ class FigureSourceDataValidator:
             small and case-neutral; same-name comparisons remain authoritative.
             """
 
-            name = re.sub(r"[^a-z0-9]+", "_", str(col).strip().lower()).strip(
-                "_"
-            )
+            name = re.sub(r"[^a-z0-9]+", "_", str(col).strip().lower()).strip("_")
             tokens = set(name.split("_")) if name else set()
             if tokens & {"percent", "percentage", "pct"}:
                 return "percent"
@@ -10921,7 +11445,8 @@ class FigureSourceDataValidator:
                 name in {"n", "count", "denominator", "sample_size"}
                 or tokens & {"count", "events", "deaths"}
                 or "denominator" in tokens
-                or "sample" in tokens and "size" in tokens
+                or "sample" in tokens
+                and "size" in tokens
                 or name.startswith("n_")
                 or name.endswith("_n")
             ):
@@ -10935,15 +11460,13 @@ class FigureSourceDataValidator:
                 "probability",
             }:
                 return "rate"
-            if (
-                ("ci" in tokens and tokens & {"low", "lower", "lcl"})
-                or tokens & {"lcl"}
-            ):
+            if ("ci" in tokens and tokens & {"low", "lower", "lcl"}) or tokens & {
+                "lcl"
+            }:
                 return "ci_low"
-            if (
-                ("ci" in tokens and tokens & {"high", "upper", "ucl"})
-                or tokens & {"ucl"}
-            ):
+            if ("ci" in tokens and tokens & {"high", "upper", "ucl"}) or tokens & {
+                "ucl"
+            }:
                 return "ci_high"
             if name in {
                 "se",
@@ -10953,8 +11476,7 @@ class FigureSourceDataValidator:
                 "standard_err",
                 "standard_error",
             } or (
-                bool(tokens & {"std", "standard"})
-                and bool(tokens & {"err", "error"})
+                bool(tokens & {"std", "standard"}) and bool(tokens & {"err", "error"})
             ):
                 return "standard_error"
             if name in {"p", "pval", "p_val", "pvalue", "p_value"} or (
@@ -11066,7 +11588,10 @@ class FigureSourceDataValidator:
                 "standard_error",
                 "p_value",
             }
-            if source_family in inferential_specific or upstream_family in inferential_specific:
+            if (
+                source_family in inferential_specific
+                or upstream_family in inferential_specific
+            ):
                 return source_family == upstream_family
             # A presentation-neutral estimate may project a rate/risk or ratio
             # when its complete vector matches.  Location summaries require a
@@ -11125,8 +11650,7 @@ class FigureSourceDataValidator:
                     abs_tolerance = (
                         cls._PERCENTAGE_ABS_TOL
                         if any(
-                            token in source_col.lower()
-                            for token in ("_pct", "percent")
+                            token in source_col.lower() for token in ("_pct", "percent")
                         )
                         else cls._DEFAULT_NUMERIC_ABS_TOL
                     )
@@ -11139,7 +11663,9 @@ class FigureSourceDataValidator:
                                 None if pd.isna(left.loc[idx]) else float(left.loc[idx])
                             ),
                             "upstream": (
-                                None if pd.isna(right.loc[idx]) else float(right.loc[idx])
+                                None
+                                if pd.isna(right.loc[idx])
+                                else float(right.loc[idx])
                             ),
                             "abs_diff": (
                                 None if pd.isna(diff.loc[idx]) else float(diff.loc[idx])
@@ -11173,7 +11699,9 @@ class FigureSourceDataValidator:
                                 None if pd.isna(left.loc[idx]) else float(left.loc[idx])
                             ),
                             "upstream": (
-                                None if pd.isna(right.loc[idx]) else float(right.loc[idx])
+                                None
+                                if pd.isna(right.loc[idx])
+                                else float(right.loc[idx])
                             ),
                             "abs_diff": (
                                 None if pd.isna(diff.loc[idx]) else float(diff.loc[idx])
@@ -11196,8 +11724,8 @@ class FigureSourceDataValidator:
                     continue
                 if not _cross_name_families_compatible(source_col, upstream_col):
                     continue
-                verified, _disagrees, _bad, _left, _right, _diff = (
-                    _numeric_comparison(source_col, upstream_col)
+                verified, _disagrees, _bad, _left, _right, _diff = _numeric_comparison(
+                    source_col, upstream_col
                 )
                 if verified:
                     matching_upstream_columns.append(upstream_col)
@@ -11214,11 +11742,7 @@ class FigureSourceDataValidator:
             *,
             tolerance: Optional[float] = None,
         ) -> bool:
-            tolerance = (
-                cls._DEFAULT_NUMERIC_ABS_TOL
-                if tolerance is None
-                else tolerance
-            )
+            tolerance = cls._DEFAULT_NUMERIC_ABS_TOL if tolerance is None else tolerance
             left_raw = _merged_source(source_col)
             left_present = left_raw.notna() & left_raw.astype(str).str.strip().ne("")
             left = _clean_numeric(left_raw)
@@ -11242,9 +11766,7 @@ class FigureSourceDataValidator:
         # from already verified source values.  This preserves honest renderer
         # aliases without allowing an unrelated truthful count to launder a
         # forged estimate.
-        for source_col in sorted(
-            source_value_columns - set(verified_value_mappings)
-        ):
+        for source_col in sorted(source_value_columns - set(verified_value_mappings)):
             source_family = _structured_source_family(source_col)
             for verified_source_col in sorted(verified_value_mappings):
                 verified_family = _structured_source_family(verified_source_col)
@@ -11520,7 +12042,9 @@ class FigureSourceDataValidator:
             "key_column": key_label,
             "n_source_rows": int(len(source_df)),
             "verified_value_mappings": verified_value_mappings,
-            "join_mode": "structural_fallback" if used_structural_fallback else "declared_key",
+            "join_mode": (
+                "structural_fallback" if used_structural_fallback else "declared_key"
+            ),
         }
 
 
@@ -11615,7 +12139,7 @@ class FigureContractQualityValidator:
                     step_summary=step_summary,
                     manuscript_facing=True,
                 )
-        )
+            )
         return findings
 
     @staticmethod
@@ -11871,9 +12395,11 @@ class FigureContractQualityValidator:
         """
         if step is None:
             return False
-        step_id = cls._normalise_supporting_identifier(
-            getattr(step, "step_id", "")
-        )
+        if str(getattr(step, "planned_analysis_role", "") or "").strip().lower() == (
+            "auxiliary"
+        ):
+            return True
+        step_id = cls._normalise_supporting_identifier(getattr(step, "step_id", ""))
         step_id = re.sub(r"^\d+_", "", step_id)
         if step_id.endswith("_figure"):
             step_id = step_id[: -len("_figure")]
@@ -11881,8 +12407,7 @@ class FigureContractQualityValidator:
             return True
         expected_outputs = getattr(step, "expected_outputs", None) or []
         return any(
-            cls._normalise_supporting_identifier(output)
-            in cls._SUPPORTING_ARTIFACT_IDS
+            cls._normalise_supporting_identifier(output) in cls._SUPPORTING_ARTIFACT_IDS
             for output in expected_outputs
             if str(output or "").strip().lower().startswith("figure:")
         )
@@ -11893,7 +12418,7 @@ class FigureContractQualityValidator:
     ) -> bool:
         """True when the CONTRACT itself identifies a supporting audit/QC figure.
 
-        The real figure_skill call sites do not thread the step, so an exact
+        The real figures.skill call sites do not thread the step, so an exact
         normalized figure_id remains as a compatibility signal for separately
         registered supporting artifacts. Panel roles are handled structurally
         by :meth:`_is_result_like_contract`; titles, claims, and identifier
@@ -11931,11 +12456,13 @@ class FigureContractQualityValidator:
             for panel in panels:
                 if not isinstance(panel, dict):
                     continue
-                parts.extend([
-                    str(panel.get("title") or ""),
-                    str(panel.get("claim") or ""),
-                    str(panel.get("review_risk") or ""),
-                ])
+                parts.extend(
+                    [
+                        str(panel.get("title") or ""),
+                        str(panel.get("claim") or ""),
+                        str(panel.get("review_risk") or ""),
+                    ]
+                )
         return "\n".join(part for part in parts if part)
 
 
@@ -11978,7 +12505,8 @@ class ClinicalConstraintValidator:
         findings: List[ValidationFinding] = []
         family = (
             (context.user_preferences.inferred_analysis_family or "").lower()
-            if context.user_preferences else ""
+            if context.user_preferences
+            else ""
         )
         question = (context.research_question or "").lower()
         timing = (
@@ -11989,7 +12517,12 @@ class ClinicalConstraintValidator:
         combined = " ".join(
             filter(
                 None,
-                [question, timing, (step.intent or "").lower(), json.dumps(step_summary, ensure_ascii=False).lower()],
+                [
+                    question,
+                    timing,
+                    (step.intent or "").lower(),
+                    json.dumps(step_summary, ensure_ascii=False).lower(),
+                ],
             )
         )
         method_head = self._normalise(
@@ -12002,48 +12535,74 @@ class ClinicalConstraintValidator:
         )
 
         if causal_step_owner:
-            if not any(term in combined for term in ("time zero", "time-zero", "eligibility", "anchor", "alignment")):
-                findings.append(ValidationFinding(
-                    validator=self.name,
-                    severity="warning",
-                    message=(
-                        "Treatment-effect style analysis without an explicit time-zero or alignment description "
-                        "risks immortal time bias. Document eligibility, anchor time, and treatment assignment timing."
-                    ),
-                    detail={
-                        "analysis_family": step_family or family or "unspecified",
-                        "method": method_head,
-                    },
-                ))
+            if not any(
+                term in combined
+                for term in (
+                    "time zero",
+                    "time-zero",
+                    "eligibility",
+                    "anchor",
+                    "alignment",
+                )
+            ):
+                findings.append(
+                    ValidationFinding(
+                        validator=self.name,
+                        severity="warning",
+                        message=(
+                            "Treatment-effect style analysis without an explicit time-zero or alignment description "
+                            "risks immortal time bias. Document eligibility, anchor time, and treatment assignment timing."
+                        ),
+                        detail={
+                            "analysis_family": step_family or family or "unspecified",
+                            "method": method_head,
+                        },
+                    )
+                )
             if "post-treatment" in combined:
-                findings.append(ValidationFinding(
-                    validator=self.name,
-                    severity="warning",
-                    message=(
-                        "A post-treatment variable appears in the analysis description. "
-                        "Confirm this is not conditioning on a mediator or downstream treatment effect."
-                    ),
-                ))
+                findings.append(
+                    ValidationFinding(
+                        validator=self.name,
+                        severity="warning",
+                        message=(
+                            "A post-treatment variable appears in the analysis description. "
+                            "Confirm this is not conditioning on a mediator or downstream treatment effect."
+                        ),
+                    )
+                )
 
-        if family == "survival" or any(term in combined for term in ("survival", "cox", "kaplan", "hazard")):
-            if any(term in combined for term in ("length of stay", "los", "discharge")) and "competing" not in combined:
-                findings.append(ValidationFinding(
-                    validator=self.name,
-                    severity="warning",
-                    message=(
-                        "Length-of-stay or discharge-oriented survival analyses often require a competing-risks framing. "
-                        "Consider discharge/death competition explicitly rather than a single-event survival model."
-                    ),
-                ))
-            if "time-varying" in combined and "landmark" not in combined and "time updated" not in combined:
-                findings.append(ValidationFinding(
-                    validator=self.name,
-                    severity="warning",
-                    message=(
-                        "Time-varying covariates are mentioned without an explicit handling strategy. "
-                        "Specify landmarking, time-updated modeling, or another deterministic design."
-                    ),
-                ))
+        if family == "survival" or any(
+            term in combined for term in ("survival", "cox", "kaplan", "hazard")
+        ):
+            if (
+                any(term in combined for term in ("length of stay", "los", "discharge"))
+                and "competing" not in combined
+            ):
+                findings.append(
+                    ValidationFinding(
+                        validator=self.name,
+                        severity="warning",
+                        message=(
+                            "Length-of-stay or discharge-oriented survival analyses often require a competing-risks framing. "
+                            "Consider discharge/death competition explicitly rather than a single-event survival model."
+                        ),
+                    )
+                )
+            if (
+                "time-varying" in combined
+                and "landmark" not in combined
+                and "time updated" not in combined
+            ):
+                findings.append(
+                    ValidationFinding(
+                        validator=self.name,
+                        severity="warning",
+                        message=(
+                            "Time-varying covariates are mentioned without an explicit handling strategy. "
+                            "Specify landmarking, time-updated modeling, or another deterministic design."
+                        ),
+                    )
+                )
 
         return findings
 
@@ -12065,11 +12624,15 @@ class StatisticalGuard:
         findings: List[ValidationFinding] = []
         family = (
             (context.user_preferences.inferred_analysis_family or "").lower()
-            if context.user_preferences else ""
+            if context.user_preferences
+            else ""
         )
         df = pd.read_parquet(cohort_path)
 
-        if family == "prediction_model" or (out_dir / "model_performance_train_test.csv").exists():
+        if (
+            family == "prediction_model"
+            or (out_dir / "model_performance_train_test.csv").exists()
+        ):
             summary_text = json.dumps(step_summary or {}, ensure_ascii=False).lower()
 
             def _summary_has_any(tokens: Sequence[str]) -> bool:
@@ -12080,7 +12643,10 @@ class StatisticalGuard:
             if not perf_candidates:
                 for candidate in out_dir.glob("*.csv"):
                     name = candidate.name.lower()
-                    if any(token in name for token in ("performance", "prediction", "model")):
+                    if any(
+                        token in name
+                        for token in ("performance", "prediction", "model")
+                    ):
                         perf_candidates.append(candidate)
             has_performance_metric = _summary_has_any(
                 (
@@ -12096,7 +12662,9 @@ class StatisticalGuard:
             perf_columns: Set[str] = set()
             for candidate in perf_candidates:
                 try:
-                    perf_columns.update(str(c).lower() for c in pd.read_csv(candidate, nrows=5).columns)
+                    perf_columns.update(
+                        str(c).lower() for c in pd.read_csv(candidate, nrows=5).columns
+                    )
                 except Exception:
                     continue
             has_performance_metric = has_performance_metric or any(
@@ -12111,14 +12679,16 @@ class StatisticalGuard:
                 )
             )
             if not has_performance_metric:
-                findings.append(ValidationFinding(
-                    validator=self.name,
-                    severity="warning",
-                    message=(
-                        "Prediction-model style analysis did not emit held-out performance artefacts. "
-                        "Report train/test (or equivalent validation) performance before publication."
-                    ),
-                ))
+                findings.append(
+                    ValidationFinding(
+                        validator=self.name,
+                        severity="warning",
+                        message=(
+                            "Prediction-model style analysis did not emit held-out performance artefacts. "
+                            "Report train/test (or equivalent validation) performance before publication."
+                        ),
+                    )
+                )
             else:
                 has_calibration = (
                     "calibration_slope" in perf_columns
@@ -12128,11 +12698,13 @@ class StatisticalGuard:
                     or "calibration" in summary_text
                 )
                 if not has_calibration:
-                    findings.append(ValidationFinding(
-                        validator=self.name,
-                        severity="warning",
-                        message="Prediction model performance is missing calibration_slope or Brier/calibration metadata.",
-                    ))
+                    findings.append(
+                        ValidationFinding(
+                            validator=self.name,
+                            severity="warning",
+                            message="Prediction model performance is missing calibration_slope or Brier/calibration metadata.",
+                        )
+                    )
             has_split_metadata = any(
                 k in (step_summary or {})
                 for k in (
@@ -12143,55 +12715,90 @@ class StatisticalGuard:
                     "validation_scheme",
                     "cross_validation",
                 )
-            ) or _summary_has_any(("5-fold", "cross-validation", "cv_folds", "split_strategy"))
+            ) or _summary_has_any(
+                ("5-fold", "cross-validation", "cv_folds", "split_strategy")
+            )
             if not has_split_metadata:
-                findings.append(ValidationFinding(
-                    validator=self.name,
-                    severity="warning",
-                    message=(
-                        "Prediction analysis did not document a train/test split or equivalent validation scheme. "
-                        "Guard against leakage by recording split_strategy, n_train, and n_test."
-                    ),
-                ))
-            if context.target_outcome and context.target_outcome in df.columns:
-                try:
-                    events = int(pd.to_numeric(df[context.target_outcome], errors="coerce").fillna(0).astype(int).sum())
-                except Exception:
-                    events = 0
-                requested_covariates = len(getattr(context.user_preferences, "covariates", []) or [])
-                if requested_covariates > 0 and events < max(10, 10 * requested_covariates):
-                    findings.append(ValidationFinding(
+                findings.append(
+                    ValidationFinding(
                         validator=self.name,
                         severity="warning",
                         message=(
-                            f"Only {events} events were available for {requested_covariates} requested adjustment covariates. "
-                            "This may be an events-per-variable problem for a stable prediction model."
+                            "Prediction analysis did not document a train/test split or equivalent validation scheme. "
+                            "Guard against leakage by recording split_strategy, n_train, and n_test."
                         ),
-                        detail={"events": events, "requested_covariates": requested_covariates},
-                    ))
+                    )
+                )
+            if context.target_outcome and context.target_outcome in df.columns:
+                try:
+                    events = int(
+                        pd.to_numeric(df[context.target_outcome], errors="coerce")
+                        .fillna(0)
+                        .astype(int)
+                        .sum()
+                    )
+                except Exception:
+                    events = 0
+                requested_covariates = len(
+                    getattr(context.user_preferences, "covariates", []) or []
+                )
+                if requested_covariates > 0 and events < max(
+                    10, 10 * requested_covariates
+                ):
+                    findings.append(
+                        ValidationFinding(
+                            validator=self.name,
+                            severity="warning",
+                            message=(
+                                f"Only {events} events were available for {requested_covariates} requested adjustment covariates. "
+                                "This may be an events-per-variable problem for a stable prediction model."
+                            ),
+                            detail={
+                                "events": events,
+                                "requested_covariates": requested_covariates,
+                            },
+                        )
+                    )
 
-        if family == "survival" or any(term in (step.intent or "").lower() for term in ("survival", "cox", "kaplan", "hazard")):
+        if family == "survival" or any(
+            term in (step.intent or "").lower()
+            for term in ("survival", "cox", "kaplan", "hazard")
+        ):
             step_text = json.dumps(step_summary, ensure_ascii=False).lower()
             if "cox" in step_text or "cox" in (step.method or "").lower():
                 documented = any(
                     token in step_text
                     for token in ("ph_assumption", "proportional hazards", "schoenfeld")
                 )
-                documented = documented or any("ph" in p.name.lower() and p.suffix.lower() in {".csv", ".json", ".txt"} for p in out_dir.iterdir())
+                documented = documented or any(
+                    "ph" in p.name.lower()
+                    and p.suffix.lower() in {".csv", ".json", ".txt"}
+                    for p in out_dir.iterdir()
+                )
                 if not documented:
-                    findings.append(ValidationFinding(
-                        validator=self.name,
-                        severity="warning",
-                        message="Cox-style survival analysis did not document a proportional-hazards assumption check.",
-                    ))
+                    findings.append(
+                        ValidationFinding(
+                            validator=self.name,
+                            severity="warning",
+                            message="Cox-style survival analysis did not document a proportional-hazards assumption check.",
+                        )
+                    )
 
         for csv_path in [p for p in out_dir.iterdir() if p.suffix.lower() == ".csv"]:
             try:
                 tab = pd.read_csv(csv_path)
             except Exception:
                 continue
-            pval_cols = [c for c in tab.columns if c.lower() in {"p", "p_value", "pvalue", "pval"}]
-            adjust_cols = [c for c in tab.columns if c.lower() in {"q_value", "adjusted_p", "p_adj", "padj", "fdr"}]
+            pval_cols = [
+                c
+                for c in tab.columns
+                if c.lower() in {"p", "p_value", "pvalue", "pval"}
+            ]
+            adjust_cols = [
+                c
+                for c in tab.columns
+                if c.lower() in {"q_value", "adjusted_p", "p_adj", "padj", "fdr"}
+            ]
             family_col = next(
                 (
                     column
@@ -12214,9 +12821,7 @@ class StatisticalGuard:
                     ).strip("_")
                 )
                 scoped = scoped.loc[
-                    ~roles.isin(
-                        {"intercept", "adjustment", "availability", "nuisance"}
-                    )
+                    ~roles.isin({"intercept", "adjustment", "availability", "nuisance"})
                 ]
             if "analysis_role" in scoped.columns:
                 analysis_roles = scoped["analysis_role"].map(
@@ -12248,23 +12853,28 @@ class StatisticalGuard:
                     )
                     for column in adjust_cols
                 )
-                if finite_p_value_count <= 1 or finite_adjusted_count >= finite_p_value_count:
+                if (
+                    finite_p_value_count <= 1
+                    or finite_adjusted_count >= finite_p_value_count
+                ):
                     continue
-                findings.append(ValidationFinding(
-                    validator=self.name,
-                    severity="warning",
-                    message=(
-                        f"Table '{csv_path.name}' contains multiple p-values without an adjusted-p / q-value column. "
-                        "If this is a family of simultaneous tests, control multiplicity explicitly."
-                    ),
-                    detail={
-                        "table": csv_path.name,
-                        "hypothesis_family_id": str(family_id),
-                        "p_value_columns": pval_cols,
-                        "finite_p_value_count": finite_p_value_count,
-                        "finite_adjusted_p_count": finite_adjusted_count,
-                    },
-                ))
+                findings.append(
+                    ValidationFinding(
+                        validator=self.name,
+                        severity="warning",
+                        message=(
+                            f"Table '{csv_path.name}' contains multiple p-values without an adjusted-p / q-value column. "
+                            "If this is a family of simultaneous tests, control multiplicity explicitly."
+                        ),
+                        detail={
+                            "table": csv_path.name,
+                            "hypothesis_family_id": str(family_id),
+                            "p_value_columns": pval_cols,
+                            "finite_p_value_count": finite_p_value_count,
+                            "finite_adjusted_p_count": finite_adjusted_count,
+                        },
+                    )
+                )
                 warned = True
                 break
             if warned:
@@ -12292,7 +12902,9 @@ class ReplicationDesignAuditor:
                     severity="error",
                     message=(
                         "Paper is unsupported or underspecified for strict replication: "
-                        + "; ".join(paper_profile.unsupported_reasons or ["no reason recorded"])
+                        + "; ".join(
+                            paper_profile.unsupported_reasons or ["no reason recorded"]
+                        )
                     ),
                 )
             )
@@ -12350,7 +12962,9 @@ class ReplicationResultComparator:
                     "claim_id": claim.claim_id,
                     "paper_claim": claim.sentence,
                     "paper_value": claim.paper_value or "",
-                    "easyicu_value": "" if easyicu_value is None else str(easyicu_value),
+                    "easyicu_value": (
+                        "" if easyicu_value is None else str(easyicu_value)
+                    ),
                     "alignment_status": alignment,
                     "reason_if_mismatch": reason,
                     "metric": claim.metric or "",
@@ -12358,7 +12972,9 @@ class ReplicationResultComparator:
             )
         return rows
 
-    def findings_from_rows(self, rows: Sequence[Dict[str, Any]]) -> List[ValidationFinding]:
+    def findings_from_rows(
+        self, rows: Sequence[Dict[str, Any]]
+    ) -> List[ValidationFinding]:
         findings: List[ValidationFinding] = []
         if not rows:
             return [
@@ -12430,7 +13046,9 @@ class PublicationClaimAuditor:
                     message="Showcase manuscript does not identify EasyICU as the cohort source.",
                 )
             )
-        if deviation_report.items and not re.search(r"\bdeviation|differ|limitation|harmoni[sz]ation\b", lower):
+        if deviation_report.items and not re.search(
+            r"\bdeviation|differ|limitation|harmoni[sz]ation\b", lower
+        ):
             findings.append(
                 ValidationFinding(
                     validator=self.name,
@@ -12438,7 +13056,10 @@ class PublicationClaimAuditor:
                     message="Showcase manuscript does not explain replication deviations/limitations.",
                 )
             )
-        if re.search(r"\boriginal paper\b", lower) and "original paper reported" not in lower:
+        if (
+            re.search(r"\boriginal paper\b", lower)
+            and "original paper reported" not in lower
+        ):
             findings.append(
                 ValidationFinding(
                     validator=self.name,

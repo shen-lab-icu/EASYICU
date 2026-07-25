@@ -8,8 +8,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from easyicu.research_agent.contracts import ValidationFinding
-from easyicu.research_agent.evidence import EvidenceStore
+from easyicu.research_agent.contracts.runtime import ValidationFinding
+from easyicu.research_agent.authority.evidence_store import EvidenceStore
 from easyicu.research_agent.schema import (
     AnalysisPlan,
     AnalysisStep,
@@ -83,7 +83,7 @@ def _empty_gates(pipeline_execute):
 
 @pytest.fixture
 def replay_environment(monkeypatch, tmp_path):
-    from easyicu.research_agent import pipeline_execute
+    from easyicu.research_agent.execution import phase as pipeline_execute
 
     run_dir = tmp_path / "run"
     run_dir.mkdir()
@@ -119,9 +119,14 @@ def _revalidate(
     resume_from_step_id: str | None = None,
     cohort_path: Path | None = None,
     universe_path: Path | None = None,
+    attempt_history: list[dict] | None = None,
 ):
     return pipeline_execute._selectively_revalidate_resume_successes(
-        resume_state={"per_step_records": records, "findings": []},
+        resume_state={
+            "per_step_records": records,
+            "step_attempt_history": attempt_history or [],
+            "findings": [],
+        },
         plan=plan,
         context=_context(),
         evidence=evidence,
@@ -133,7 +138,7 @@ def _revalidate(
 
 
 def test_current_fingerprint_is_a_true_zero_work_fast_path(monkeypatch, tmp_path):
-    from easyicu.research_agent import pipeline_execute
+    from easyicu.research_agent.execution import phase as pipeline_execute
 
     class EvidenceMustNotBeRead:
         def records(self):
@@ -215,10 +220,190 @@ def test_legacy_success_revalidates_once_and_retires_stale_input_receipt(
         records=first.resume_state["per_step_records"],
         plan=plan,
     )
-    assert second.resume_state["per_step_records"] == first.resume_state[
-        "per_step_records"
-    ]
+    assert (
+        second.resume_state["per_step_records"]
+        == first.resume_state["per_step_records"]
+    )
     assert calls == [step.step_id]
+
+
+def test_replay_projects_only_digest_bound_absolute_output_paths(
+    replay_environment,
+    tmp_path,
+):
+    from easyicu.research_agent.contracts.declared_product import (
+        declared_product_contract_findings,
+    )
+
+    pipeline_execute, run_dir, evidence = replay_environment
+    step = AnalysisStep(step_id="01_model", intent="Produce a sealed table.")
+    original_out = tmp_path / "historical" / "steps" / step.step_id / "outputs"
+    original_out.mkdir(parents=True)
+    table_path = original_out / "result.csv"
+    table_path.write_text("n\n2\n", encoding="utf-8")
+    unbound_path = original_out / "unbound.csv"
+
+    record, script, _summary = _register_success(
+        run_dir=run_dir,
+        evidence=evidence,
+        step=step,
+    )
+    table = evidence.register_file(
+        kind="table",
+        description="Sealed result table.",
+        source_path=table_path,
+        evidence_id=f"{step.step_id}_table",
+        produced_by_step=step.step_id,
+        script_evidence_id=script.evidence_id,
+        producer="runner",
+        generation_mode="executed",
+    )
+    record["evidence_ids"].append(table.evidence_id)
+    evidence_by_id = {item.evidence_id: item for item in evidence.records()}
+    replay_out = run_dir / "replay" / "outputs"
+
+    materialized = pipeline_execute._materialize_verified_step_output_view(
+        record=record,
+        evidence_by_id=evidence_by_id,
+        run_dir=run_dir,
+        destination=replay_out,
+    )
+    sealed_summary = {
+        "output_files": [
+            {
+                "kind": "table",
+                "name": "result.csv",
+                "path": str(table_path),
+                "description": str(table_path),
+            },
+            {
+                "kind": "table",
+                "name": "unbound.csv",
+                "path": str(unbound_path),
+            },
+        ],
+        "provenance": {"path": str(table_path)},
+    }
+    projected = pipeline_execute._project_verified_replay_output_paths(
+        sealed_summary,
+        materialized_evidence_by_source_name=materialized,
+    )
+
+    assert materialized["result.csv"] == table.evidence_id
+    assert set(materialized) == {
+        f"{step.step_id}_analysis.py",
+        "step_summary.json",
+        "result.csv",
+    }
+    assert projected["output_files"][0]["path"] == "result.csv"
+    assert projected["output_files"][0]["description"] == str(table_path)
+    assert projected["output_files"][1]["path"] == str(unbound_path)
+    assert projected["provenance"]["path"] == str(table_path)
+    assert sealed_summary["output_files"][0]["path"] == str(table_path)
+    assert (replay_out / "result.csv").read_text(encoding="utf-8") == "n\n2\n"
+
+    bound_findings = declared_product_contract_findings(
+        step=AnalysisStep(
+            step_id=step.step_id,
+            intent="Produce a sealed table.",
+            expected_outputs=["table:result"],
+        ),
+        step_summary=projected,
+        effect_method_authorized=False,
+        out_dir=replay_out,
+    )
+    assert not any(
+        (finding.detail or {}).get("kind") == "declared_product_missing"
+        for finding in bound_findings
+    )
+
+    unbound_findings = declared_product_contract_findings(
+        step=AnalysisStep(
+            step_id=step.step_id,
+            intent="Produce an unsealed table.",
+            expected_outputs=["table:unbound"],
+        ),
+        step_summary=projected,
+        effect_method_authorized=False,
+        out_dir=replay_out,
+    )
+    assert any(
+        (finding.detail or {}).get("kind") == "declared_product_missing"
+        for finding in unbound_findings
+    )
+
+
+def test_revalidation_passes_projected_summary_without_mutating_sealed_paths(
+    replay_environment,
+    monkeypatch,
+    tmp_path,
+):
+    pipeline_execute, run_dir, evidence = replay_environment
+    step = AnalysisStep(
+        step_id="01_model",
+        intent="Produce a declared result table.",
+        expected_outputs=["table:result"],
+    )
+    plan = AnalysisPlan(research_question="Question", steps=[step])
+    historical_out = tmp_path / "old_run" / "steps" / step.step_id / "outputs"
+    historical_out.mkdir(parents=True)
+    table_path = historical_out / "result.csv"
+    table_path.write_text("n\n2\n", encoding="utf-8")
+    summary_payload = {
+        "status": "ok",
+        "output_files": [
+            {
+                "kind": "table",
+                "name": "result.csv",
+                "path": str(table_path),
+            }
+        ],
+    }
+    record, script, summary = _register_success(
+        run_dir=run_dir,
+        evidence=evidence,
+        step=step,
+        summary_payload=summary_payload,
+    )
+    table = evidence.register_file(
+        kind="table",
+        description="Sealed result table.",
+        source_path=table_path,
+        evidence_id=f"{step.step_id}_table",
+        produced_by_step=step.step_id,
+        script_evidence_id=script.evidence_id,
+        producer="runner",
+        generation_mode="executed",
+    )
+    record["evidence_ids"].append(table.evidence_id)
+    captured = {}
+
+    def capture_gates(**kwargs):
+        captured["summary"] = kwargs["step_summary"]
+        assert kwargs["out_dir"].joinpath("result.csv").is_file()
+        return _empty_gates(pipeline_execute)
+
+    monkeypatch.setattr(
+        pipeline_execute,
+        "_evaluate_final_deterministic_gates",
+        capture_gates,
+    )
+
+    result = _revalidate(
+        pipeline_execute,
+        run_dir=run_dir,
+        evidence=evidence,
+        records=[record],
+        plan=plan,
+    )
+
+    latest = result.resume_state["per_step_records"][-1]
+    assert latest["status"] == "ok"
+    assert latest["revalidated_without_execution"] is True
+    assert captured["summary"]["output_files"][0]["path"] == "result.csv"
+    assert latest["step_summary"]["output_files"][0]["path"] == str(table_path)
+    sealed = json.loads((run_dir / summary.relative_path).read_text(encoding="utf-8"))
+    assert sealed["output_files"][0]["path"] == str(table_path)
 
 
 def test_missing_or_tampered_summary_fails_closed(
@@ -232,7 +417,9 @@ def test_missing_or_tampered_summary_fails_closed(
         evidence=evidence,
         step=step,
     )
-    from easyicu.research_agent.runtime_artifacts import verified_run_evidence_path
+    from easyicu.research_agent.authority.runtime_artifacts import (
+        verified_run_evidence_path,
+    )
 
     summary_path = verified_run_evidence_path(run_dir, summary)
     assert summary_path is not None
@@ -259,8 +446,8 @@ def test_missing_or_tampered_summary_fails_closed(
 
 
 def test_historical_invalid_upstream_blocks_later_explicit_cut(tmp_path):
-    from easyicu.research_agent import pipeline_execute
-    from easyicu.research_agent.run_input_capsule import RunInputIdentityError
+    from easyicu.research_agent.execution import phase as pipeline_execute
+    from easyicu.research_agent.authority.run_input import RunInputIdentityError
 
     upstream = AnalysisStep(step_id="01_upstream", intent="Produce inputs.")
     downstream = AnalysisStep(step_id="02_downstream", intent="Consume inputs.")
@@ -457,6 +644,7 @@ def test_host_cohort_materializer_revalidates_without_script_or_llm(
     assert latest["status"] == "ok"
     assert latest["revalidated_without_execution"] is True
     assert latest["deterministic_gate_fingerprint"]
+    assert latest["plan_scientific_signature"]
 
 
 def test_arbitrary_table_cannot_impersonate_host_cohort_materializer(
@@ -553,9 +741,10 @@ def test_deterministic_error_invalidates_evidence_dependent_downstream(
     }
     assert current[upstream.step_id]["status"] == "resume_validator_invalid"
     assert current[downstream.step_id]["status"] == "resume_validator_invalid"
-    assert "invalidated upstream" in current[downstream.step_id][
-        "resume_invalidation_reason"
-    ]
+    assert (
+        "invalidated upstream"
+        in current[downstream.step_id]["resume_invalidation_reason"]
+    )
     assert "current_primary_result" not in evidence.aliases()
 
 
@@ -626,9 +815,10 @@ def test_prior_blocking_critic_cannot_be_upgraded_by_replay(
 
     latest = result.resume_state["per_step_records"][-1]
     assert latest["status"] == "resume_validator_invalid"
-    assert "prior deterministic Critic status remains blocked" in latest[
-        "resume_invalidation_reason"
-    ]
+    assert (
+        "prior deterministic Critic status remains blocked"
+        in latest["resume_invalidation_reason"]
+    )
 
 
 def test_invalid_checkpoint_inherits_monotonic_provider_and_repair_budgets(
@@ -653,6 +843,17 @@ def test_invalid_checkpoint_inherits_monotonic_provider_and_repair_budgets(
         "step_llm_repair_classes": ["contract", "runtime"],
     }
     record.update(inherited)
+    record.update(
+        {
+            "attempt_id": "01_model:attempt:1",
+            "executed_code_sha256": "a" * 64,
+            "step_authority_capsule_ref": {
+                "schema_version": "easyicu.step_authority_capsule_ref/1",
+                "step_id": step.step_id,
+                "capsule_sha256": "b" * 64,
+            },
+        }
+    )
     error = ValidationFinding(
         validator="test_gate",
         severity="error",
@@ -677,6 +878,101 @@ def test_invalid_checkpoint_inherits_monotonic_provider_and_repair_budgets(
 
     assert latest["status"] == "resume_validator_invalid"
     assert {key: latest[key] for key in inherited} == inherited
+    assert latest["resume_revalidation_candidate_code_sha256"] == "a" * 64
+    assert latest["resume_revalidation_candidate_capsule_ref"] == {
+        "schema_version": "easyicu.step_authority_capsule_ref/1",
+        "step_id": step.step_id,
+        "capsule_sha256": "b" * 64,
+    }
+
+
+def test_legacy_invalid_checkpoint_gets_monotonic_capsule_recovery_continuation(
+    replay_environment,
+) -> None:
+    pipeline_execute, run_dir, evidence = replay_environment
+    step = AnalysisStep(step_id="01_model", intent="Fit the planned model.")
+    success, _, _ = _register_success(
+        run_dir=run_dir,
+        evidence=evidence,
+        step=step,
+    )
+    success.update(
+        {
+            "attempt_id": "01_model:attempt:1",
+            "executed_code_sha256": "a" * 64,
+            "step_authority_capsule_ref": {
+                "schema_version": "easyicu.step_authority_capsule_ref/1",
+                "step_id": step.step_id,
+                "capsule_sha256": "b" * 64,
+            },
+        }
+    )
+    invalid = {
+        "step_id": step.step_id,
+        "status": "resume_validator_invalid",
+        "attempt_id": "01_model:resume_revalidation:1",
+        "revalidated_without_execution": True,
+        "evidence_ids": [],
+    }
+
+    result = _revalidate(
+        pipeline_execute,
+        run_dir=run_dir,
+        evidence=evidence,
+        records=[success, invalid],
+        plan=AnalysisPlan(research_question="Question", steps=[step]),
+        resume_from_step_id=step.step_id,
+    )
+
+    latest = result.resume_state["per_step_records"][-1]
+    assert latest["status"] == "resume_validator_invalid"
+    assert latest["attempt_id"].endswith(":candidate_recovery")
+    assert latest["resume_revalidation_candidate_code_sha256"] == "a" * 64
+    assert result.invalidated_step_ids == (step.step_id,)
+
+
+def test_compact_authority_view_cannot_hide_newer_invalid_attempt_history(
+    replay_environment,
+) -> None:
+    pipeline_execute, run_dir, evidence = replay_environment
+    step = AnalysisStep(step_id="01_model", intent="Fit the planned model.")
+    success, _, _ = _register_success(
+        run_dir=run_dir,
+        evidence=evidence,
+        step=step,
+    )
+    success.update(
+        {
+            "attempt_id": "01_model:attempt:1",
+            "executed_code_sha256": "a" * 64,
+            "step_authority_capsule_ref": {
+                "schema_version": "easyicu.step_authority_capsule_ref/1",
+                "step_id": step.step_id,
+                "capsule_sha256": "b" * 64,
+            },
+        }
+    )
+    invalid = {
+        "step_id": step.step_id,
+        "status": "resume_validator_invalid",
+        "attempt_id": "01_model:resume_revalidation:1",
+        "revalidated_without_execution": True,
+        "evidence_ids": [],
+    }
+
+    result = _revalidate(
+        pipeline_execute,
+        run_dir=run_dir,
+        evidence=evidence,
+        records=[],
+        attempt_history=[success, invalid],
+        plan=AnalysisPlan(research_question="Question", steps=[step]),
+        resume_from_step_id=step.step_id,
+    )
+
+    latest = result.resume_state["per_step_records"][-1]
+    assert latest["status"] == "resume_validator_invalid"
+    assert latest["resume_revalidation_candidate_code_sha256"] == "a" * 64
 
 
 def test_alias_retirement_failure_rolls_back_manifest_and_alias_authority(
@@ -776,22 +1072,31 @@ def test_checkpoint_write_failure_never_retires_aliases(
 def test_replay_uses_shared_gates_and_never_constructs_llm_auditor():
     import inspect
 
-    from easyicu.research_agent import pipeline_execute
+    from easyicu.research_agent.execution import phase as pipeline_execute
+    from easyicu.research_agent.execution import (
+        concept_audit as concept_audit_execution,
+    )
 
     replay_source = inspect.getsource(
         pipeline_execute._selectively_revalidate_resume_successes
     )
     fresh_source = inspect.getsource(pipeline_execute.run_execute_phase)
+    concept_execution_source = inspect.getsource(
+        concept_audit_execution.ConceptAuditCoordinator.findings_for_code
+    )
 
     assert "_deterministic_code_gate_findings(" in replay_source
     assert "_evaluate_final_deterministic_gates(" in replay_source
     assert "LLMConceptAuditor(" not in replay_source
-    assert "_deterministic_code_gate_findings(" in fresh_source
+    assert "ConceptAuditCoordinator(" in fresh_source
+    assert "concept_audit.findings_for_code(" in fresh_source
+    assert "deterministic_code_gate_findings(" in concept_execution_source
+    assert "LLMConceptAuditor(" not in fresh_source
     assert "_evaluate_final_deterministic_gates(" in fresh_source
 
 
 def test_resume_application_preserves_append_only_revalidation_history(tmp_path):
-    from easyicu.research_agent.pipeline_resume import ResumeController
+    from easyicu.research_agent.orchestration.resume import ResumeController
 
     step = AnalysisStep(step_id="01_model", intent="Fit the planned model.")
     history = [
@@ -813,10 +1118,42 @@ def test_resume_application_preserves_append_only_revalidation_history(tmp_path)
     assert applied.per_step_records == [history[-1]]
 
 
+def test_resume_application_merges_outer_records_missing_from_saved_history(tmp_path):
+    from easyicu.research_agent.orchestration.resume import ResumeController
+
+    first = AnalysisStep(step_id="01_first", intent="First step")
+    later = AnalysisStep(step_id="02_later", intent="Later step")
+    saved = {"step_id": first.step_id, "status": "ok", "attempt_id": "first:1"}
+    failed = {
+        "step_id": later.step_id,
+        "status": "execution_failed",
+        "attempt_id": "later:1",
+        "step_authority_capsule_ref": {
+            "schema_version": "easyicu.step_authority_capsule_ref/1",
+            "step_id": later.step_id,
+            "capsule_sha256": "a" * 64,
+        },
+    }
+
+    applied = ResumeController(
+        plan=AnalysisPlan(research_question="Question", steps=[first, later]),
+        run_dir=tmp_path,
+        resume_state={
+            "per_step_records": [saved, failed],
+            "step_attempt_history": [saved],
+            "findings": [],
+        },
+        resume_from_step_id=first.step_id,
+    ).apply()
+
+    assert applied.audit_history == [saved, failed]
+    assert applied.per_step_records == []
+
+
 def test_execute_phase_writes_resume_audit_history_separately_from_authority_view():
     import inspect
 
-    from easyicu.research_agent import pipeline_execute
+    from easyicu.research_agent.execution import phase as pipeline_execute
 
     source = inspect.getsource(pipeline_execute.run_execute_phase)
 

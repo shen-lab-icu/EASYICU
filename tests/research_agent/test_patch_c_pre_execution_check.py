@@ -19,20 +19,20 @@ post-hoc validator in ``audits/patterns.py`` records the issue.
 
 from __future__ import annotations
 
-from typing import List
-
+import json
 import pytest
 
-from easyicu.research_agent.agents import (
+from easyicu.research_agent.agents.core import (
     CoderAgent,
     _MAX_PRE_EXEC_COMPATIBILITY_REPAIRS,
 )
-from easyicu.research_agent.llm import LLMMessage
-from easyicu.research_agent.method_compatibility import (
+from easyicu.research_agent.repairs.patch import PATCH_FORMAT
+from easyicu.research_agent.providers.mocks import ScriptedMockLLMClient
+from easyicu.research_agent.gates.method_compatibility import (
     detect_forbidden_pattern_usage,
     format_violation_message,
 )
-from easyicu.research_agent.provider_budget import (
+from easyicu.research_agent.authority.provider_budget import (
     ProviderCallBudgetExhausted,
     StepProviderCallBudget,
 )
@@ -43,7 +43,6 @@ from easyicu.research_agent.schema import (
     ResearchContext,
     VariableRole,
 )
-
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -87,18 +86,36 @@ rho, p = spearmanr(df["gcs"], df["hr"])
 """
 
 
-class _ScriptedLLM:
-    name = "scripted"
+def _patch(*edits: tuple[str, str]) -> str:
+    return json.dumps(
+        {
+            "format": PATCH_FORMAT,
+            "edits": [
+                {"old": old, "new": new, "expected_count": 1} for old, new in edits
+            ],
+        }
+    )
 
-    def __init__(self, replies: List[str]) -> None:
-        self.replies = list(replies)
-        self.calls: List[List[LLMMessage]] = []
 
-    def complete(self, messages, *, max_tokens=2048, temperature=0.2):
-        self.calls.append(list(messages))
-        if not self.replies:
-            raise RuntimeError("scripted LLM ran out of replies")
-        return self.replies.pop(0)
+_CLEAN_PATCH = _patch(
+    (
+        "from sklearn.cluster import MiniBatchKMeans",
+        "from scipy.stats import spearmanr",
+    ),
+    (
+        'X = df[["gcs", "hr"]].fillna(0).values\n'
+        "clusters = MiniBatchKMeans(n_clusters=3, random_state=0).fit_predict(X)",
+        'rho, p = spearmanr(df["gcs"], df["hr"])',
+    ),
+)
+
+
+def _still_bad_patch(index: int) -> str:
+    return _patch((f"random_state={index}", f"random_state={index + 1}"))
+
+
+def _ScriptedLLM(replies: list[str]):  # noqa: N802
+    return ScriptedMockLLMClient(replies)
 
 
 # ---------------------------------------------------------------------------
@@ -160,6 +177,95 @@ def test_detector_uses_word_boundary_for_variable_name():
     assert detect_forbidden_pattern_usage(script, ctx) == []
 
 
+def test_detector_ignores_forbidden_method_words_in_comments_and_docstrings():
+    ctx = ResearchContext(
+        research_question="Estimate a binary outcome.",
+        cohort=CohortDescriptor(
+            cohort_name="t",
+            database="miiv",
+            n_patients=10,
+            n_stays=10,
+            id_columns=["stay_id"],
+            outcome_columns=["death"],
+        ),
+        variables=[
+            ConceptDescriptor(
+                name="death",
+                dtype="bool",
+                role=VariableRole.OUTCOME,
+            ),
+            ConceptDescriptor(name="age", dtype="float64"),
+        ],
+        target_outcome="death",
+    )
+    script = '''\
+"""OLS and linear regression are inappropriate for the binary outcome."""
+# Do not use a linear regression for death.
+model = LogisticRegression().fit(df[["age"]], df["death"])
+'''
+    assert detect_forbidden_pattern_usage(script, ctx) == []
+
+
+def test_detector_does_not_mistake_builtin_map_for_umap():
+    ctx = _ordinal_context()
+    script = 'values = set(map(str, df["gcs"].dropna().unique()))'
+
+    assert detect_forbidden_pattern_usage(script, ctx) == []
+
+
+def test_detector_binds_ols_to_the_outcome_not_binary_covariates():
+    ctx = ResearchContext(
+        research_question="Estimate length of stay.",
+        cohort=CohortDescriptor(
+            cohort_name="t",
+            database="miiv",
+            n_patients=10,
+            n_stays=10,
+            id_columns=["stay_id"],
+            outcome_columns=["los_icu"],
+        ),
+        variables=[
+            ConceptDescriptor(
+                name="los_icu",
+                dtype="float64",
+                role=VariableRole.OUTCOME,
+            ),
+            ConceptDescriptor(name="exposed", dtype="bool"),
+        ],
+        target_outcome="los_icu",
+    )
+    script = 'model = sm.OLS(df["los_icu"], sm.add_constant(df[["exposed"]])).fit()'
+    assert detect_forbidden_pattern_usage(script, ctx) == []
+
+
+def test_detector_flags_ols_only_when_binary_outcome_flows_into_call():
+    ctx = ResearchContext(
+        research_question="Estimate mortality.",
+        cohort=CohortDescriptor(
+            cohort_name="t",
+            database="miiv",
+            n_patients=10,
+            n_stays=10,
+            id_columns=["stay_id"],
+            outcome_columns=["death"],
+        ),
+        variables=[
+            ConceptDescriptor(
+                name="death",
+                dtype="bool",
+                role=VariableRole.OUTCOME,
+            ),
+            ConceptDescriptor(name="age", dtype="float64"),
+        ],
+        target_outcome="death",
+    )
+    script = 'model = sm.OLS(df["death"], sm.add_constant(df[["age"]])).fit()'
+    violations = detect_forbidden_pattern_usage(script, ctx)
+    assert [(item["variable"], item["kind"]) for item in violations] == [
+        ("death", "binary")
+    ]
+
+
 def test_format_violation_message_includes_preferred_alternatives():
     ctx = _ordinal_context()
     violations = detect_forbidden_pattern_usage(_BAD_SCRIPT, ctx)
@@ -184,32 +290,24 @@ def test_coderagent_requests_full_token_budget():
     """Regression (E1 20260611): code generation must request the full
     ``_CODER_MAX_TOKENS`` so a verbose model's analysis.py is not truncated
     mid-expression (SyntaxError "'(' was never closed")."""
-    from easyicu.research_agent.agents import _CODER_MAX_TOKENS
+    from easyicu.research_agent.agents.core import _CODER_MAX_TOKENS
 
-    captured = {}
-
-    class _RecordingLLM:
-        name = "rec"
-
-        def complete(self, messages, *, max_tokens=2048, temperature=0.2):
-            captured["max_tokens"] = max_tokens
-            return _CLEAN_SCRIPT
-
-    agent = CoderAgent(_RecordingLLM())
+    llm = ScriptedMockLLMClient([_CLEAN_SCRIPT])
+    agent = CoderAgent(llm)
     agent.run(context=_ordinal_context(), step=_step())
     assert _CODER_MAX_TOKENS >= 8192
-    assert captured["max_tokens"] == _CODER_MAX_TOKENS
+    assert llm.calls[0][1]["max_tokens"] == _CODER_MAX_TOKENS
 
 
 def test_coderagent_run_triggers_repair_on_violation_then_returns_clean_code():
-    llm = _ScriptedLLM([_BAD_SCRIPT, _CLEAN_SCRIPT])
+    llm = _ScriptedLLM([_BAD_SCRIPT, _CLEAN_PATCH])
     agent = CoderAgent(llm)
     code = agent.run(context=_ordinal_context(), step=_step())
     assert code == _CLEAN_SCRIPT.strip() or "spearman" in code
     # First call: initial. Second call: repair triggered by violation.
     assert len(llm.calls) == 2
     # The repair user message must include the violation block.
-    repair_user_msg = llm.calls[1][-1].content
+    repair_user_msg = llm.calls[1][0][-1].content
     assert "PRE-EXECUTION COMPATIBILITY CHECK FAILED" in repair_user_msg
     assert (
         "MiniBatchKMeans" in repair_user_msg
@@ -238,7 +336,7 @@ def test_coderagent_repair_rejects_non_script_output():
 
 
 def test_coderagent_repair_allows_only_contract_named_method_modules():
-    llm = _ScriptedLLM([_CLEAN_SCRIPT])
+    llm = _ScriptedLLM([_CLEAN_PATCH])
     agent = CoderAgent(llm)
 
     agent.repair(
@@ -253,7 +351,7 @@ def test_coderagent_repair_allows_only_contract_named_method_modules():
         attempt=1,
     )
 
-    repair_prompt = llm.calls[0][-1].content
+    repair_prompt = llm.calls[0][0][-1].content
     assert "easyicu.research_agent.methods.*" in repair_prompt
     assert "explicitly named by the code contract" in repair_prompt
     assert "All other project-local imports" in repair_prompt
@@ -274,24 +372,36 @@ def test_coderagent_run_gives_up_after_max_repairs_and_returns_last_attempt():
     """If the LLM keeps writing forbidden patterns, return the last attempt
     so the post-hoc validator can record it in the audit trail.
 
-    The repair budget is bounded by _MAX_PRE_EXEC_COMPATIBILITY_REPAIRS;
-    we never call the LLM more than (1 + budget) times.
+    The logical repair budget is bounded by
+    _MAX_PRE_EXEC_COMPATIBILITY_REPAIRS. This fixture returns a successful
+    minimal patch for each logical attempt, so each attempt uses one call.
     """
-    # Initial + budget repairs all return bad scripts
+    # Initial generation returns a bad script. Each exact patch changes code but
+    # deliberately leaves the forbidden method in place for the next check.
     n_attempts = 1 + _MAX_PRE_EXEC_COMPATIBILITY_REPAIRS
-    llm = _ScriptedLLM([_BAD_SCRIPT] * n_attempts)
+    llm = _ScriptedLLM(
+        [
+            _BAD_SCRIPT,
+            *(
+                _still_bad_patch(index)
+                for index in range(_MAX_PRE_EXEC_COMPATIBILITY_REPAIRS)
+            ),
+        ]
+    )
     agent = CoderAgent(llm)
     code = agent.run(context=_ordinal_context(), step=_step())
     # Returns last attempt (still bad)
     assert "MiniBatchKMeans" in code
     assert len(llm.calls) == n_attempts
-    assert agent.last_compatibility_repair_attempts == _MAX_PRE_EXEC_COMPATIBILITY_REPAIRS
+    assert (
+        agent.last_compatibility_repair_attempts == _MAX_PRE_EXEC_COMPATIBILITY_REPAIRS
+    )
     # Violations are still recorded for the final state.
     assert len(agent.last_compatibility_violations) >= 1
 
 
 def test_coderagent_compatibility_repairs_share_provider_budget():
-    llm = _ScriptedLLM([_BAD_SCRIPT, _BAD_SCRIPT, _CLEAN_SCRIPT])
+    llm = _ScriptedLLM([_BAD_SCRIPT, _still_bad_patch(0)])
     agent = CoderAgent(llm)
     budget = StepProviderCallBudget(2, step_id="01_test")
 

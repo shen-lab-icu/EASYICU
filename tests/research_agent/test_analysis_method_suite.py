@@ -15,10 +15,10 @@ from pathlib import Path
 
 import pytest
 
-from easyicu.research_agent import analysis_method_suite as ams
-from easyicu.research_agent import capability_registry as cr
 from easyicu.research_agent.figures import FAMILY_RENDERERS
-from easyicu.research_agent.study_design_playbook import StudyDesignFamily
+from easyicu.research_agent.planning import analysis_method_suite as ams
+from easyicu.research_agent.planning import capability_registry as cr
+from easyicu.research_agent.planning.study_design_playbook import StudyDesignFamily
 
 try:  # StudyDesignFamily is a typing.Literal — recover its allowed values
     _VALID_FAMILIES = frozenset(StudyDesignFamily.__args__)  # type: ignore[attr-defined]
@@ -43,9 +43,9 @@ def test_every_suite_family_is_valid_and_in_capability_registry():
     reg_families = {c.family for c in cr.CAPABILITY_REGISTRY}
     for suite in ams.METHOD_SUITE_REGISTRY:
         assert suite.family in _VALID_FAMILIES, suite.family
-        assert suite.family in reg_families, (
-            f"{suite.family} has a method suite but no capability_registry record"
-        )
+        assert (
+            suite.family in reg_families
+        ), f"{suite.family} has a method suite but no capability_registry record"
 
 
 def test_no_duplicate_families():
@@ -112,9 +112,9 @@ def test_planned_methods_carry_no_runner():
     # imply it exists. It must fail closed, never be silently approximated.
     for suite, m in _ALL_METHODS:
         if m.tier == "planned" or m.implementation == "planned":
-            assert m.runner is None, (
-                f"{suite.family}.{m.key} is planned but names a runner {m.runner!r}"
-            )
+            assert (
+                m.runner is None
+            ), f"{suite.family}.{m.key} is planned but names a runner {m.runner!r}"
 
 
 def test_deterministic_methods_name_a_real_runner():
@@ -126,13 +126,9 @@ def test_deterministic_methods_name_a_real_runner():
         known = (
             m.runner in ams.KNOWN_PRIMARY_RUNNER_NAMES
             or m.runner in renderer_keys
-            or importlib.util.find_spec(
-                f"easyicu.research_agent.{m.runner}"
-            )
+            or importlib.util.find_spec(f"easyicu.research_agent.{m.runner}")
             is not None
-            or importlib.util.find_spec(
-                f"easyicu.research_agent.methods.{m.runner}"
-            )
+            or importlib.util.find_spec(f"easyicu.research_agent.methods.{m.runner}")
             is not None
         )
         assert known, (
@@ -201,10 +197,12 @@ def test_accessors_and_roadmap_nonempty():
 
 def test_docs_analysis_method_suite_matches_registry():
     # docs/analysis_method_suite.md is generated from the registry; regenerate with:
-    #   python -m easyicu.research_agent.analysis_method_suite > docs/analysis_method_suite.md
+    #   python -m easyicu.research_agent.planning.analysis_method_suite > docs/analysis_method_suite.md
     repo_root = Path(__file__).resolve().parents[2]
     doc = repo_root / "docs" / "analysis_method_suite.md"
     assert doc.exists(), "docs/analysis_method_suite.md missing — regenerate it"
     committed = doc.read_text(encoding="utf-8").rstrip("\n")
     rendered = ams.render_method_suite_markdown().rstrip("\n")
-    assert committed == rendered, "docs/analysis_method_suite.md is stale — regenerate it"
+    assert (
+        committed == rendered
+    ), "docs/analysis_method_suite.md is stale — regenerate it"

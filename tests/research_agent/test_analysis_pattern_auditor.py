@@ -31,7 +31,10 @@ def _ctx(ra, roles=None):
     return ResearchContext(
         research_question="test",
         cohort=CohortDescriptor(
-            cohort_name="test", database="miiv", n_stays=800, n_patients=800,
+            cohort_name="test",
+            database="miiv",
+            n_stays=800,
+            n_patients=800,
         ),
         variables=[
             ConceptDescriptor(name=name, role=role, dtype="float64")
@@ -58,7 +61,10 @@ def test_kmeans_on_ordinal_is_error(ra):
     """)
     findings = auditor.audit(context=_ctx(ra), script_text=code)
     errors = [f for f in findings if f.severity == "error"]
-    assert any("ordinal" in f.message.lower() or "distance" in f.message.lower() for f in errors)
+    assert any(
+        "ordinal" in f.message.lower() or "distance" in f.message.lower()
+        for f in errors
+    )
 
 
 def test_kmeans_without_scaler_warns(ra):
@@ -73,7 +79,9 @@ def test_kmeans_without_scaler_warns(ra):
     """)
     findings = auditor.audit(context=_ctx(ra), script_text=code)
     warnings = [f for f in findings if f.severity == "warning"]
-    assert any("scaler" in f.message.lower() or "scale" in f.message.lower() for f in warnings)
+    assert any(
+        "scaler" in f.message.lower() or "scale" in f.message.lower() for f in warnings
+    )
 
 
 def test_kmeans_with_scaler_no_scale_warning(ra):
@@ -89,7 +97,11 @@ def test_kmeans_with_scaler_no_scale_warning(ra):
         km.fit(X_scaled)
     """)
     findings = auditor.audit(context=_ctx(ra), script_text=code)
-    scale_warnings = [f for f in findings if "scaler" in f.message.lower() or "scale" in f.message.lower()]
+    scale_warnings = [
+        f
+        for f in findings
+        if "scaler" in f.message.lower() or "scale" in f.message.lower()
+    ]
     assert not scale_warnings
 
 
@@ -134,7 +146,9 @@ def test_id_column_in_features_warns(ra):
     """)
     findings = auditor.audit(context=_ctx(ra), script_text=code)
     warnings = [f for f in findings if f.severity == "warning"]
-    assert any("id" in f.message.lower() or "identity" in f.message.lower() for f in warnings)
+    assert any(
+        "id" in f.message.lower() or "identity" in f.message.lower() for f in warnings
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -167,7 +181,94 @@ def test_supervised_without_split_warns(ra):
     )
     findings = auditor.audit(context=ctx, script_text=code, step=step)
     warnings = [f for f in findings if f.severity == "warning"]
-    assert any("split" in f.message.lower() or "in-sample" in f.message.lower() for f in warnings)
+    assert any(
+        "split" in f.message.lower() or "in-sample" in f.message.lower()
+        for f in warnings
+    )
+
+
+def test_prediction_rejects_imputer_or_scaler_fitted_before_split(ra):
+    auditor = ra.AnalysisPatternAuditor()
+    code = textwrap.dedent("""\
+        from sklearn.impute import SimpleImputer
+        from sklearn.preprocessing import StandardScaler
+        from sklearn.model_selection import train_test_split
+        X = df[["lact", "age"]]
+        y = df["death"]
+        X = SimpleImputer(strategy="median").fit_transform(X)
+        X = StandardScaler().fit_transform(X)
+        X_train, X_test, y_train, y_test = train_test_split(X, y)
+    """)
+    ctx = _ctx(ra).model_copy(
+        update={
+            "research_question": "Build a mortality prediction model.",
+            "user_preferences": ra.schema.UserPreferences(
+                inferred_analysis_family="prediction_model"
+            ),
+        }
+    )
+    step = ra.schema.AnalysisStep(
+        step_id="01_prediction",
+        planned_analysis_role="primary",
+        intent="Fit and evaluate a held-out mortality prediction model.",
+        expected_outputs=["statistic:auroc"],
+    )
+
+    findings = auditor.audit(context=ctx, script_text=code, step=step)
+
+    leakage = [
+        finding
+        for finding in findings
+        if finding.detail.get("kind") == "pre_split_preprocessing_leakage"
+    ]
+    assert len(leakage) == 1
+    assert leakage[0].severity == "error"
+    assert {item["method"] for item in leakage[0].detail["transforms"]} == {
+        "SimpleImputer.fit_transform",
+        "StandardScaler.fit_transform",
+    }
+
+
+def test_prediction_allows_training_only_preprocessing(ra):
+    code = textwrap.dedent("""\
+        from sklearn.impute import SimpleImputer
+        from sklearn.preprocessing import StandardScaler
+        from sklearn.model_selection import train_test_split
+        X = df[["lact", "age"]]
+        y = df["death"]
+        X_train, X_test, y_train, y_test = train_test_split(X, y)
+        imputer = SimpleImputer(strategy="median")
+        X_train = imputer.fit_transform(X_train)
+        X_test = imputer.transform(X_test)
+        scaler = StandardScaler()
+        X_train = scaler.fit_transform(X_train)
+        X_test = scaler.transform(X_test)
+    """)
+    ctx = _ctx(ra).model_copy(
+        update={
+            "research_question": "Build a mortality prediction model.",
+            "user_preferences": ra.schema.UserPreferences(
+                inferred_analysis_family="prediction_model"
+            ),
+        }
+    )
+    step = ra.schema.AnalysisStep(
+        step_id="01_prediction",
+        planned_analysis_role="primary",
+        intent="Fit and evaluate a held-out mortality prediction model.",
+        expected_outputs=["statistic:auroc"],
+    )
+
+    findings = ra.AnalysisPatternAuditor().audit(
+        context=ctx,
+        script_text=code,
+        step=step,
+    )
+
+    assert not any(
+        finding.detail.get("kind") == "pre_split_preprocessing_leakage"
+        for finding in findings
+    )
 
 
 def test_association_logistic_without_split_is_not_prediction_warning(ra):
@@ -218,7 +319,9 @@ def test_pca_without_scaler_warns(ra):
     """)
     findings = auditor.audit(context=_ctx(ra), script_text=code)
     warnings = [f for f in findings if f.severity == "warning"]
-    assert any("pca" in f.message.lower() or "scaler" in f.message.lower() for f in warnings)
+    assert any(
+        "pca" in f.message.lower() or "scaler" in f.message.lower() for f in warnings
+    )
 
 
 # ---------------------------------------------------------------------------

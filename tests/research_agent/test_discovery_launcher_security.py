@@ -220,11 +220,20 @@ def test_discovery_outcome_materialisation_uses_only_frozen_handoff_target():
         launcher._outcome_concepts_for_handoff(
             handoff_target="aki", requested="aki,death"
         )
+    assert (
+        launcher._outcome_concepts_for_handoff(handoff_target=None, requested=None)
+        == ()
+    )
+    with pytest.raises(SystemExit, match="outcome-free concept-set handoff"):
+        launcher._outcome_concepts_for_handoff(
+            handoff_target=None,
+            requested="death",
+        )
 
 
 def test_discovery_handoff_registration_blocks_existing_id_hash_mismatch(tmp_path):
     import tools.run_discovery_to_manuscript as launcher
-    from easyicu.research_agent.evidence import EvidenceStore
+    from easyicu.research_agent.authority.evidence_store import EvidenceStore
 
     store = EvidenceStore(tmp_path / "run")
     source = tmp_path / "handoff.json"
@@ -261,7 +270,7 @@ def _write_json(path: Path, payload) -> None:
 
 def test_discovery_story_exports_receive_closed_provenance(tmp_path):
     import tools.run_discovery_to_manuscript as launcher
-    from easyicu.research_agent.evidence import EvidenceStore
+    from easyicu.research_agent.authority.evidence_store import EvidenceStore
 
     run_dir = tmp_path / "run"
     run_dir.mkdir()

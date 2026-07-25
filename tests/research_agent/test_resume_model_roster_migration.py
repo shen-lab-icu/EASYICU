@@ -8,14 +8,21 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
-from easyicu.research_agent.context import build_research_context
-from easyicu.research_agent.evidence import EvidenceStore
+from easyicu.research_agent.research_context.builder import build_research_context
+from easyicu.research_agent.authority.evidence_store import EvidenceStore
+from easyicu.research_agent.authority.plan_scope import (
+    _serializable_plan_scientific_scope_signature,
+    verified_plan_evidence_rank,
+)
 from easyicu.research_agent.pipeline import (
     LegacyResumePlanMigrationError,
     _load_compatible_resume_plan,
     _migrate_legacy_resume_model_requirements,
 )
-from easyicu.research_agent.runtime_artifacts import verified_run_evidence_path
+from easyicu.research_agent.providers.mocks import ScriptedMockLLMClient
+from easyicu.research_agent.authority.runtime_artifacts import (
+    verified_run_evidence_path,
+)
 from easyicu.research_agent.schema import (
     AnalysisPlan,
     AnalysisStep,
@@ -109,6 +116,103 @@ def _evidence_with_base_plan(run_dir: Path, plan: AnalysisPlan) -> EvidenceStore
     return evidence
 
 
+def _successful_step_record(plan: AnalysisPlan, step_id: str) -> dict:
+    step = next(step for step in plan.steps if step.step_id == step_id)
+    return {
+        "step_id": step_id,
+        "status": "ok",
+        "planned_analysis_role": step.planned_analysis_role,
+        "analysis_request": {"step": step.model_dump(mode="json")},
+        "plan_scientific_signature": (
+            _serializable_plan_scientific_scope_signature(plan)
+        ),
+    }
+
+
+def _legacy_host_cohort_record(plan: AnalysisPlan) -> dict:
+    step = plan.steps[0]
+    return {
+        "step_id": step.step_id,
+        "status": "ok",
+        "planned_analysis_role": step.planned_analysis_role,
+        "analysis_request": {"step": step.model_dump(mode="json")},
+        "generation_mode": "deterministic_cohort_materializer",
+        "step_authority_kind": "host_deterministic_cohort_materializer",
+    }
+
+
+def test_resume_accepts_one_unambiguous_legacy_host_cohort_plan(
+    tmp_path: Path,
+) -> None:
+    plan = AnalysisPlan(
+        research_question="Define the analysis cohort.",
+        steps=[
+            AnalysisStep(
+                step_id="01_cohort",
+                intent="Define the locked analysis cohort.",
+                expected_outputs=[
+                    "artifact:analysis_cohort",
+                    "table:cohort_flow",
+                ],
+            )
+        ],
+    )
+    _evidence_with_base_plan(tmp_path, plan)
+
+    loaded, path = _load_compatible_resume_plan(
+        run_dir=tmp_path,
+        resume_state={
+            "per_step_records": [_legacy_host_cohort_record(plan)],
+        },
+    )
+
+    assert loaded == plan
+    assert path is not None
+    assert path.name == "analysis_plan__analysis_plan.json"
+
+
+def test_resume_rejects_legacy_host_cohort_without_scope_when_plans_are_ambiguous(
+    tmp_path: Path,
+) -> None:
+    plan = AnalysisPlan(
+        research_question="Define the analysis cohort.",
+        steps=[
+            AnalysisStep(
+                step_id="01_cohort",
+                intent="Define the locked analysis cohort.",
+                expected_outputs=[
+                    "artifact:analysis_cohort",
+                    "table:cohort_flow",
+                ],
+            )
+        ],
+    )
+    evidence = _evidence_with_base_plan(tmp_path, plan)
+    revision = plan.model_copy(
+        update={"revision": 2, "rationale": "A different plan-level scope."}
+    )
+    revision_path = tmp_path / "analysis_plan_revision_2.json"
+    revision_path.write_text(revision.model_dump_json(indent=2), encoding="utf-8")
+    evidence.register_file(
+        kind="log",
+        description="Ambiguous later plan.",
+        source_path=revision_path,
+        evidence_id="analysis_plan_revision_2",
+        producer="planner",
+        generation_mode="llm",
+    )
+
+    loaded, path = _load_compatible_resume_plan(
+        run_dir=tmp_path,
+        resume_state={
+            "per_step_records": [_legacy_host_cohort_record(plan)],
+        },
+    )
+
+    assert loaded is None
+    assert path is None
+
+
 def _context(tmp_path: Path, plan: AnalysisPlan):
     cohort_path = tmp_path / "cohort.parquet"
     pd.DataFrame(
@@ -160,14 +264,7 @@ def test_resume_migration_uses_planner_packet_and_registers_revision(
             {"step_id": "02_remaining_closed", "status": "ok"},
         ],
     }
-    calls = []
-
-    class PacketLLM:
-        name = "packet-llm"
-
-        def complete(self, messages, *, max_tokens=4096, temperature=0.1):
-            calls.append((messages, max_tokens, temperature))
-            return _valid_packet_json()
+    client = ScriptedMockLLMClient([_valid_packet_json()])
 
     roles = []
 
@@ -177,15 +274,15 @@ def test_resume_migration_uses_planner_packet_and_registers_revision(
         run_dir=tmp_path,
         resume_state=resume_state,
         resume_from_step_id="02_remaining_closed",
-        role_resolver=lambda role: roles.append(role) or PacketLLM(),
+        role_resolver=lambda role: roles.append(role) or client,
         evidence=evidence,
         prompt_version="test-pack",
         llm_signature="test-planner",
     )
 
     assert roles == ["planner"]
-    assert len(calls) == 1
-    prompt = "\n".join(message.content for message in calls[0][0])
+    assert len(client.calls) == 1
+    prompt = "\n".join(message.content for message in client.calls[0][0])
     assert "02_remaining_closed" in prompt
     assert "binary endpoint and continuous length outcome" in prompt
     assert '"inputs": [' in prompt
@@ -226,16 +323,16 @@ def test_resume_migration_uses_planner_packet_and_registers_revision(
     assert revision_evidence is not None
     assert revision_evidence.producer == "planner"
     assert revision_evidence.generation_mode == "llm"
-    assert revision_evidence.metadata["reason"] == (
-        "legacy_missing_model_requirements"
-    )
-    assert revision_evidence.metadata["target_step_ids"] == [
-        "02_remaining_closed"
-    ]
+    assert revision_evidence.metadata["reason"] == ("legacy_missing_model_requirements")
+    assert revision_evidence.metadata["target_step_ids"] == ["02_remaining_closed"]
 
     selected, selected_path = _load_compatible_resume_plan(
         run_dir=tmp_path,
-        resume_state=resume_state,
+        resume_state={
+            "per_step_records": [
+                _successful_step_record(revised, "01_completed_description")
+            ]
+        },
     )
     assert selected_path == verified_run_evidence_path(
         tmp_path,
@@ -275,7 +372,7 @@ def test_resume_loader_ignores_mutable_live_plan_and_unregistered_revision(
         resume_state={
             "plan_path": "analysis_plan_revision_99.json",
             "per_step_records": [
-                {"step_id": "01_completed_description", "status": "ok"},
+                _successful_step_record(plan, "01_completed_description"),
             ],
         },
     )
@@ -287,43 +384,87 @@ def test_resume_loader_ignores_mutable_live_plan_and_unregistered_revision(
     )
 
 
+def test_resume_loader_uses_digest_verified_host_input_closure_plan(
+    tmp_path: Path,
+) -> None:
+    planner_plan = _legacy_plan()
+    evidence = _evidence_with_base_plan(tmp_path, planner_plan)
+    closed_step = planner_plan.steps[0].model_copy(
+        update={"inputs": [*planner_plan.steps[0].inputs, "baseline_n"]}
+    )
+    closed_plan = planner_plan.model_copy(
+        update={"steps": [closed_step, *planner_plan.steps[1:]]}
+    )
+    closure_path = tmp_path / "analysis_plan_input_closure.json"
+    closure_path.write_text(closed_plan.model_dump_json(indent=2), encoding="utf-8")
+    closure_record = evidence.register_file(
+        kind="log",
+        description="Host measurement companion input closure.",
+        source_path=closure_path,
+        evidence_id="analysis_plan_input_closure",
+        producer="runtime_supervisor",
+        generation_mode="system",
+        metadata={"reason": "measurement_companion_input_closure"},
+    )
+    resume_state = {
+        "per_step_records": [
+            {
+                "step_id": closed_step.step_id,
+                "status": "ok",
+                "planned_analysis_role": closed_step.planned_analysis_role,
+                "analysis_request": {"step": closed_step.model_dump(mode="json")},
+                "plan_scientific_signature": (
+                    _serializable_plan_scientific_scope_signature(closed_plan)
+                ),
+            }
+        ]
+    }
+
+    selected, selected_path = _load_compatible_resume_plan(
+        run_dir=tmp_path,
+        resume_state=resume_state,
+    )
+
+    assert selected == closed_plan
+    assert selected_path == verified_run_evidence_path(tmp_path, closure_record)
+
+
+def test_host_input_closure_plan_rank_rejects_spoofed_authority() -> None:
+    record = {
+        "evidence_id": "analysis_plan_input_closure",
+        "producer": "planner",
+        "generation_mode": "llm",
+        "metadata": {"reason": "measurement_companion_input_closure"},
+    }
+
+    assert verified_plan_evidence_rank(record) is None
+
+
 def test_resume_migration_retries_real_incomplete_requirement_shape(
     tmp_path: Path,
 ) -> None:
     plan = _legacy_plan()
     evidence = _evidence_with_base_plan(tmp_path, plan)
     context = _context(tmp_path, plan)
-    llm_calls = []
-
-    class IncompleteThenValidPacketLLM:
-        name = "incomplete-then-valid-packet-llm"
-
-        def complete(self, messages, *, max_tokens=4096, temperature=0.1):
-            llm_calls.append((messages, max_tokens, temperature))
-            if len(llm_calls) == 1:
-                # Exact real failure shape: outcome/outcome_type/analysis_set
-                # absent and analysis_role is a prose label, not the enum.
-                return json.dumps(
-                    {
-                        "steps": [
-                            {
-                                "step_id": "02_remaining_closed",
-                                "model_requirements": [
-                                    {
-                                        "requirement_id": "incomplete_secondary",
-                                        "method_family": "logistic_regression",
-                                        "exposure_source": "exposure",
-                                        "analysis_role": (
-                                            "secondary_adjusted_association"
-                                        ),
-                                        "required_for_step_success": True,
-                                    }
-                                ],
-                            }
-                        ]
-                    }
-                )
-            return _valid_packet_json()
+    incomplete_packet = json.dumps(
+        {
+            "steps": [
+                {
+                    "step_id": "02_remaining_closed",
+                    "model_requirements": [
+                        {
+                            "requirement_id": "incomplete_secondary",
+                            "method_family": "logistic_regression",
+                            "exposure_source": "exposure",
+                            "analysis_role": "secondary_adjusted_association",
+                            "required_for_step_success": True,
+                        }
+                    ],
+                }
+            ]
+        }
+    )
+    client = ScriptedMockLLMClient([incomplete_packet, _valid_packet_json()])
 
     revised, revision_path, target_ids = _migrate_legacy_resume_model_requirements(
         plan=plan,
@@ -335,16 +476,14 @@ def test_resume_migration_retries_real_incomplete_requirement_shape(
             ]
         },
         resume_from_step_id=None,
-        role_resolver=lambda role: (
-            IncompleteThenValidPacketLLM() if role == "planner" else None
-        ),
+        role_resolver=lambda role: client if role == "planner" else None,
         evidence=evidence,
         prompt_version="test-pack",
         llm_signature="test-planner",
     )
 
-    assert len(llm_calls) == 2
-    retry_prompt = "\n".join(message.content for message in llm_calls[1][0])
+    assert len(client.calls) == 2
+    retry_prompt = "\n".join(message.content for message in client.calls[1][0])
     assert "secondary_adjusted_association" in retry_prompt
     assert "outcome" in retry_prompt
     assert "outcome_type" in retry_prompt
@@ -373,49 +512,37 @@ def test_resume_migration_retries_zero_or_multiple_primary_roles(
     plan = _legacy_plan()
     evidence = _evidence_with_base_plan(tmp_path, plan)
     context = _context(tmp_path, plan)
-    calls = []
+    payload = json.loads(_valid_packet_json())
+    roles = (
+        ["secondary", "secondary"]
+        if invalid_primary_count == 0
+        else ["primary", "primary"]
+    )
+    for requirement, role in zip(
+        payload["steps"][0]["model_requirements"],
+        roles,
+    ):
+        requirement["analysis_role"] = role
+    client = ScriptedMockLLMClient([json.dumps(payload), _valid_packet_json()])
 
-    class InvalidThenValidPrimaryPacketLLM:
-        name = "invalid-then-valid-primary-packet-llm"
-
-        def complete(self, messages, *, max_tokens=4096, temperature=0.1):
-            calls.append(messages)
-            if len(calls) == 1:
-                payload = json.loads(_valid_packet_json())
-                roles = (
-                    ["secondary", "secondary"]
-                    if invalid_primary_count == 0
-                    else ["primary", "primary"]
-                )
-                for requirement, role in zip(
-                    payload["steps"][0]["model_requirements"],
-                    roles,
-                ):
-                    requirement["analysis_role"] = role
-                return json.dumps(payload)
-            return _valid_packet_json()
-
-    revised, revision_path, _target_ids = (
-        _migrate_legacy_resume_model_requirements(
-            plan=plan,
-            context=context,
-            run_dir=tmp_path,
-            resume_state={"per_step_records": []},
-            resume_from_step_id=None,
-            role_resolver=lambda _role: InvalidThenValidPrimaryPacketLLM(),
-            evidence=evidence,
-            prompt_version="test-pack",
-            llm_signature="test-planner",
-        )
+    revised, revision_path, _target_ids = _migrate_legacy_resume_model_requirements(
+        plan=plan,
+        context=context,
+        run_dir=tmp_path,
+        resume_state={"per_step_records": []},
+        resume_from_step_id=None,
+        role_resolver=lambda _role: client,
+        evidence=evidence,
+        prompt_version="test-pack",
+        llm_signature="test-planner",
     )
 
-    assert len(calls) == 2
-    retry_prompt = "\n".join(message.content for message in calls[1])
+    assert len(client.calls) == 2
+    retry_prompt = "\n".join(message.content for message in client.calls[1][0])
     assert "exactly one analysis_role='primary'" in retry_prompt
     assert revision_path is not None
     assert [
-        requirement.analysis_role
-        for requirement in revised.steps[1].model_requirements
+        requirement.analysis_role for requirement in revised.steps[1].model_requirements
     ] == ["primary", "secondary"]
 
 
@@ -456,19 +583,12 @@ def test_resume_migration_packet_rejects_out_of_scope_fields(
     plan = _legacy_plan()
     evidence = _evidence_with_base_plan(tmp_path, plan)
     context = _context(tmp_path, plan)
-    calls = []
-
-    class OutOfScopePacketLLM:
-        name = "out-of-scope-packet-llm"
-
-        def complete(self, messages, *, max_tokens=4096, temperature=0.1):
-            calls.append(messages)
-            payload = json.loads(_valid_packet_json())
-            if extra_location == "packet":
-                payload["research_question"] = "Attempted plan rewrite."
-            else:
-                payload["steps"][0]["intent"] = "Attempted step rewrite."
-            return json.dumps(payload)
+    payload = json.loads(_valid_packet_json())
+    if extra_location == "packet":
+        payload["research_question"] = "Attempted plan rewrite."
+    else:
+        payload["steps"][0]["intent"] = "Attempted step rewrite."
+    client = ScriptedMockLLMClient([json.dumps(payload)] * 3)
 
     with pytest.raises(LegacyResumePlanMigrationError):
         _migrate_legacy_resume_model_requirements(
@@ -481,13 +601,13 @@ def test_resume_migration_packet_rejects_out_of_scope_fields(
                 ]
             },
             resume_from_step_id=None,
-            role_resolver=lambda _role: OutOfScopePacketLLM(),
+            role_resolver=lambda _role: client,
             evidence=evidence,
             prompt_version="test-pack",
             llm_signature="test-planner",
         )
 
-    assert len(calls) == 3
+    assert len(client.calls) == 3
     assert not list(tmp_path.glob("analysis_plan_revision_*.json"))
     assert evidence.get("analysis_plan_revision_2") is None
 
@@ -498,14 +618,7 @@ def test_resume_migration_llm_failure_has_no_default_model_fallback(
     plan = _legacy_plan()
     evidence = _evidence_with_base_plan(tmp_path, plan)
     context = _context(tmp_path, plan)
-    calls = []
-
-    class FailingPacketLLM:
-        name = "failing-packet-llm"
-
-        def complete(self, messages, *, max_tokens=4096, temperature=0.1):
-            calls.append(messages)
-            raise RuntimeError("planner unavailable")
+    client = ScriptedMockLLMClient([RuntimeError("planner unavailable")])
 
     with pytest.raises(
         LegacyResumePlanMigrationError,
@@ -517,13 +630,13 @@ def test_resume_migration_llm_failure_has_no_default_model_fallback(
             run_dir=tmp_path,
             resume_state={"per_step_records": []},
             resume_from_step_id=None,
-            role_resolver=lambda _role: FailingPacketLLM(),
+            role_resolver=lambda _role: client,
             evidence=evidence,
             prompt_version="test-pack",
             llm_signature="test-planner",
         )
 
-    assert len(calls) == 1
+    assert len(client.calls) == 1
     assert all(not step.model_requirements for step in plan.steps)
     assert not list(tmp_path.glob("analysis_plan_revision_*.json"))
     assert evidence.get("analysis_plan_revision_2") is None

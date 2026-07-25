@@ -186,14 +186,22 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     args = _build_parser().parse_args(argv)
 
     # Lazy imports so --help works without pandas / openai installed.
-    from .llm import MockLLMClient, OpenAIClient
+    from .providers.factory import build_provider_client
+    from .providers.llm import OpenAIClient
+    from .providers.mocks import MockLLMClient
     from .pipeline import ResearchAgentPipeline
-    from .experiment_spec import load_experiment_spec
+    from .orchestration.experiment_spec import load_experiment_spec
 
     if args.llm is None:
         raise SystemExit("Choose an explicit --llm backend (`mock` or `openai`).")
     if args.llm == "openai":
-        llm = OpenAIClient(model=args.openai_model)
+        llm = build_provider_client(
+            provider="openai",
+            model=args.openai_model,
+            request_timeout=120.0,
+            title="EasyICU research-agent CLI",
+            client_cls=OpenAIClient,
+        )
     else:
         llm = MockLLMClient()
 

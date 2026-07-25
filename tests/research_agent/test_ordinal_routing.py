@@ -14,7 +14,7 @@ plain association / prep step that lacks a dose-response signal.
 
 from __future__ import annotations
 
-from easyicu.research_agent.pipeline_execute import (
+from easyicu.research_agent.execution.phase import (
     _ordinal_dose_response_step_matches as _matches,
 )
 

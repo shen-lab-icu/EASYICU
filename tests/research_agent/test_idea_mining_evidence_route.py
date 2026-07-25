@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from easyicu.research_agent.idea_mining import (
+from easyicu.research_agent.discovery.idea_mining import (
     ExecutableHypothesisCandidate,
     LiteratureIdeaCandidate,
     PriorArtAssessment,

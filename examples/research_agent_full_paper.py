@@ -44,13 +44,22 @@ def main():
     sys.path.insert(0, str(repo_root / "src"))
 
     from easyicu.research_agent import OpenAIClient, ResearchAgentPipeline
+    from easyicu.research_agent.providers.factory import build_provider_client
 
     api_key = os.environ.get("OPENAI_API_KEY") or "local-vllm"
     base_url = os.environ.get("OPENAI_BASE_URL") or "http://localhost:8000/v1"
     model = os.environ.get("EASYICU_MODEL") or "qwen3-coder-30b"
 
-    llm = OpenAIClient(
-        model=model, api_key=api_key, base_url=base_url, request_timeout=600.0,
+    environment = dict(os.environ)
+    environment["OPENAI_API_KEY"] = api_key
+    environment["OPENAI_BASE_URL"] = base_url
+    llm = build_provider_client(
+        provider="openai",
+        model=model,
+        request_timeout=600.0,
+        title="EasyICU full-paper example",
+        client_cls=OpenAIClient,
+        environment=environment,
     )
     print(f"[full-paper] Using {model} @ {base_url}")
 

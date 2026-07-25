@@ -47,9 +47,9 @@ from .concept_availability import (
     concept_database_availability_from_load_record,
     cross_database_concept_availability,
 )
-from .context import build_research_context
-from .evidence import EvidenceStore
-from .llm import OpenAIClient
+from .research_context.builder import build_research_context
+from .authority.evidence_store import EvidenceStore
+from .providers.llm import OpenAIClient
 from .pipeline import ResearchAgentPipeline
 from .providers import ProviderConfigurationError, build_provider_client
 from .skills import list_skills
@@ -81,6 +81,9 @@ def _provider_configuration_error_payload(
     }:
         message = str(error)
         error_code = "llm_configuration_invalid"
+    elif error.issue == "external_llm_not_authorized":
+        message = str(error)
+        error_code = "llm_external_transport_not_authorized"
     else:
         message = f"unsupported provider {error.provider!r}"
         error_code = "llm_configuration_required"

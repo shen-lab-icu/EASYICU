@@ -12,7 +12,7 @@ from typing import List
 
 import pytest
 
-from easyicu.research_agent.idea_mining_extended_feasibility import (
+from easyicu.research_agent.discovery.idea_mining_extended_feasibility import (
     ExtendedFeasibilityIndex,
 )
 
@@ -129,10 +129,10 @@ def test_reconsider_genuinely_absent_returns_none(index):
 
 
 # ---- cross-DB transportability novelty axis (prior-art) ----------------
-from easyicu.research_agent.idea_mining_priorart import (  # noqa: E402
+from easyicu.research_agent.discovery.idea_mining_priorart import (  # noqa: E402
     _cross_db_prior_art_differentiator,
 )
-from easyicu.research_agent.idea_mining_schema import (  # noqa: E402
+from easyicu.research_agent.discovery.idea_mining_schema import (  # noqa: E402
     PriorArtQueryRecord,
     PriorArtSearchHit,
 )
@@ -141,13 +141,18 @@ _TARGETS = ["miiv", "mimic", "eicu", "aumc", "hirid", "sic"]
 
 
 def _qr(*hits):
-    return PriorArtQueryRecord(query_type="broad", query="q", hit_count=len(hits),
-                               top_hits=list(hits))
+    return PriorArtQueryRecord(
+        query_type="broad", query="q", hit_count=len(hits), top_hits=list(hits)
+    )
 
 
 def _hit(title, direct=True, rationale=None):
-    return PriorArtSearchHit(pmid="1", title=title, direct_same_topic=direct,
-                             direct_same_topic_rationale=rationale)
+    return PriorArtSearchHit(
+        pmid="1",
+        title=title,
+        direct_same_topic=direct,
+        direct_same_topic_rationale=rationale,
+    )
 
 
 def test_crossdb_diff_added_when_crowded_and_no_db_mention():
@@ -165,6 +170,28 @@ def test_crossdb_diff_none_when_prior_art_uses_target_db():
 def test_crossdb_diff_none_when_multidb_prior_art():
     hits = [_hit("External validation of the obesity paradox across multiple cohorts")]
     diff = _cross_db_prior_art_differentiator([_qr(*hits)], hits, _TARGETS)
+    assert diff is None
+
+
+def test_crossdb_diff_none_when_abstract_reports_multicenter_prior_art():
+    hit = PriorArtSearchHit(
+        pmid="2",
+        title="A prognostic index in critical illness",
+        relevance="Prospective cohort conducted across 20 hospitals.",
+        direct_same_topic=True,
+    )
+    diff = _cross_db_prior_art_differentiator([_qr(hit)], [hit], _TARGETS)
+    assert diff is None
+
+
+def test_crossdb_diff_none_when_abstract_reports_two_populations():
+    hit = PriorArtSearchHit(
+        pmid="3",
+        title="A prognostic index in critical illness",
+        relevance="The association was evaluated in both populations.",
+        direct_same_topic=True,
+    )
+    diff = _cross_db_prior_art_differentiator([_qr(hit)], [hit], _TARGETS)
     assert diff is None
 
 

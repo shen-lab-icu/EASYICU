@@ -1,0 +1,139 @@
+{
+  "tool_version": "1.8.0",
+  "tool_sha256": "0975ad7ce136ed60980dc261a32ea09917ae3abc689b53aaf47ee964868391b4",
+  "shim_import_paths": [],
+  "files": {
+    "execution/phase.py": {
+      "loc": 11648,
+      "sha256": "2cd9110ab517485784455640de9b20a88ce787cd11126f913615f9e7d1824f85",
+      "intra_package_import_edges": 78,
+      "shim_bypass_violations": []
+    },
+    "pipeline.py": {
+      "loc": 10736,
+      "sha256": "0805199b35097ca9cfe2cba919e40874d3c284761e96f84536bbe3591c5a5c98",
+      "intra_package_import_edges": 93,
+      "shim_bypass_violations": []
+    },
+    "reporting/readiness.py": {
+      "loc": 2971,
+      "sha256": "7f6bec05aac7b0d326103dba1a09098af280975c4d0328c0edc8104ed2931ada",
+      "intra_package_import_edges": 13,
+      "shim_bypass_violations": []
+    },
+    "authority/typed_binding.py": {
+      "loc": 1512,
+      "sha256": "bdcfabf008b34fef28055ac79ebe2d2532fed66f2855cfa1a3bdbdba46a9d0c7",
+      "intra_package_import_edges": 11,
+      "shim_bypass_violations": []
+    },
+    "authority/plan_authority.py": {
+      "loc": 370,
+      "sha256": "5756e1f543b1f0a6ee3c982855a7b8161e26f96d36035cb2b7272b55c3537c63",
+      "intra_package_import_edges": 8,
+      "shim_bypass_violations": []
+    },
+    "authority/typed_input_receipt.py": {
+      "loc": 1067,
+      "sha256": "844e8a015622764ce7fe8f0efda02a01e5d3951a16f6b7274a9f19e253e58c14",
+      "intra_package_import_edges": 3,
+      "shim_bypass_violations": []
+    },
+    "authority/typed_input_sdk.py": {
+      "loc": 180,
+      "sha256": "b4d5bc3475784d7aa2d835b1337e69e041603aec746e099faf8958bee719c5f3",
+      "intra_package_import_edges": 1,
+      "shim_bypass_violations": []
+    },
+    "authority/development_projection.py": {
+      "loc": 154,
+      "sha256": "bf7b8be1494b5d0d977a9c626ed3a3fbb4e3eaac654b58d171db9bf5225d9f2c",
+      "intra_package_import_edges": 3,
+      "shim_bypass_violations": []
+    },
+    "gates/preflight.py": {
+      "loc": 8366,
+      "sha256": "0d192113e2ea5daea3f0d84e7835da6ebaca666741780f11be49d11c46dba966",
+      "intra_package_import_edges": 8,
+      "shim_bypass_violations": []
+    },
+    "gates/typed_input.py": {
+      "loc": 308,
+      "sha256": "024d5e332283f181704200a2740a4eefa6f9a80f6ec1df12088d7616db2bbb6e",
+      "intra_package_import_edges": 2,
+      "shim_bypass_violations": []
+    },
+    "repairs/source.py": {
+      "loc": 7531,
+      "sha256": "d15ec19221f4c5aee8620c4803a4c020ff28455f9c651755ad5a5118b49e4833",
+      "intra_package_import_edges": 26,
+      "shim_bypass_violations": []
+    },
+    "repairs/typed_input.py": {
+      "loc": 635,
+      "sha256": "82bde50102a58a5b12d388db9842a3352561f6917a94b7d071bd8ec4ce3141a4",
+      "intra_package_import_edges": 2,
+      "shim_bypass_violations": []
+    },
+    "audits/validators.py": {
+      "loc": 13135,
+      "sha256": "b2bdb15a4752c282b88997c8bc247a1251777bec07cabd6c623b2800b573cab7",
+      "intra_package_import_edges": 13,
+      "shim_bypass_violations": []
+    },
+    "plan_utils.py": {
+      "loc": 4976,
+      "sha256": "03760d9d4922da4ab52c2b1ab6ef5bebbc929d2cfe360e3abf0d6c8a38dccc63",
+      "intra_package_import_edges": 9,
+      "shim_bypass_violations": []
+    },
+    "agents/core.py": {
+      "loc": 4034,
+      "sha256": "4fd9041cd64c5fd078b321f2ec191011c9b29c4dc7e691129a291836bf5cbfde",
+      "intra_package_import_edges": 31,
+      "shim_bypass_violations": []
+    },
+    "contracts/declared_product.py": {
+      "loc": 3509,
+      "sha256": "020191665aaffa6aaf0066bfbb32d1cbb4691eb198a752a17027e9c6b602824e",
+      "intra_package_import_edges": 5,
+      "shim_bypass_violations": []
+    },
+    "figures/skill.py": {
+      "loc": 3468,
+      "sha256": "aa067a5597e703497e0f6c8e9d3b51dd0ce7f20d4031f2c1c9414d604f05f98d",
+      "intra_package_import_edges": 7,
+      "shim_bypass_violations": []
+    },
+    "authority/evidence_store.py": {
+      "loc": 3151,
+      "sha256": "1234f9367f207623a6d8a34e6fec3dea344fc8601620fe976807b8eb99c144be",
+      "intra_package_import_edges": 3,
+      "shim_bypass_violations": []
+    }
+  },
+  "functions": {
+    "execution/phase.py::_execute_one_step": {
+      "lines": 6309,
+      "line_start": 4870,
+      "direct_nested_funcs": 22,
+      "total_nested_funcs": 24,
+      "own_bound_names": 353,
+      "own_nonlocal_names": [
+        "runtime_state"
+      ],
+      "own_nonlocal_count": 1,
+      "callable_closure_captured_names": 30
+    },
+    "execution/phase.py::run_execute_phase": {
+      "lines": 8052,
+      "line_start": 3585,
+      "direct_nested_funcs": 15,
+      "total_nested_funcs": 43,
+      "own_bound_names": 145,
+      "own_nonlocal_names": [],
+      "own_nonlocal_count": 0,
+      "callable_closure_captured_names": 79
+    }
+  }
+}

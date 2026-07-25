@@ -221,7 +221,7 @@
     const labels = {
       gate_reportable: t('verification passed', '核验通过'),
       reportable: t('verification passed', '核验通过'),
-      // Backend readiness_status success outcomes (pipeline_report.py) — the two
+      // Backend readiness_status success outcomes (reporting/readiness.py) — the two
       // most common results of a completed real run; must not leak as raw snake_case.
       publication_ready: t('publication-ready', '可发表'),
       manuscript_ready: t('manuscript-ready', '手稿就绪'),

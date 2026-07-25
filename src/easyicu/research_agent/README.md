@@ -4,11 +4,18 @@ A traceable, ICU-aware analysis-agent layer that extends EasyICU from
 "data extraction and visualisation" to "data extraction → analysis →
 manuscript scaffold" — without giving up provenance.
 
+Current architecture and retirement status is tracked in
+[`docs/research_agent_module_inventory_20260719.md`](../../../docs/research_agent_module_inventory_20260719.md),
+with the live component scoreboard in
+`task_logs/20260717_remaining_debt_register.md`. The Figure 2 task-generalization
+protocol is [`docs/figure2_taskbank_9x3_protocol.md`](../../../docs/figure2_taskbank_9x3_protocol.md).
+
 ## What this layer adds
 
 EasyICU's distinct contribution is the **ICU-aware research context**
-(`schema.py`, `icu_rules.py`, `context.py`, `case_contexts.py`) and
-the **deterministic hashed evidence store** (`evidence.py`,
+(`schema.py`, `icu_rules.py`, `research_context/builder.py`,
+`case_plugins/contexts.py`) and
+the **deterministic hashed evidence store** (`authority/evidence_store.py`,
 `validators.py`) that every agent output must pass through before it
 can affect the manuscript.
 
@@ -66,6 +73,54 @@ symbols continue to be exposed from `easyicu.research_agent`.
 - **Layer 3 — Agent Orchestration**: planner / replanner / coder / analyzer / writer coordinated through a runtime supervisor pattern.
 - **Layer 4 — Candidate Hypothesis Ranking**: a pre-plan hypothesis blueprint that distills literature, feasibility, self-critique and ICU domain gates before the planner executes, ranking candidate research questions for human curation. It is **not** an autonomous scientific-discovery system; it is a ranking module whose outputs are filtered by humans and constrained by Layers 1–2.
 
+### Control-plane responsibility packages
+
+The execute loop is being decomposed along authority boundaries rather than by
+mechanically moving every top-level file:
+
+| Package | Owns | Must not own |
+| --- | --- | --- |
+| `gates/` | read-only contract, visual and concept findings/decisions | provider calls, repair budget, checkpoint/evidence mutation, scientific design |
+| `execution/` | provider-backed concept audit, explicit host-service boundaries, filesystem execution helpers, and preparation/rendering of already-authorized figure products | cohort, exposure, outcome, method or estimand selection |
+| `execution/runners/` | auxiliary deterministic calculations over an Agent-locked specification | primary estimand selection or benchmark-case routing |
+| `authority/` | replanner-candidate invariants, typed input/evidence binding, typed success-promotion boundaries and digest-bound direct-parent resolution around the existing EvidenceStore/checkpoint authorities | provider calls, scientific plan selection, a second `current` selector, sibling scan, or independent evidence ledger |
+| `repairs/` | typed repair reasons, exact patch/full-rewrite transport, deterministic source repair and summary salvage | scientific redesign, silent gate relaxation or case-specific repair rules |
+| `discovery/` | candidate-hypothesis ranking, feasibility and discovery handoff | manuscript authority or autonomous scientific claims |
+| `reporting/` | manuscript binding, article/display contracts, review artifacts and rendering helpers | unverified numeric claims or a second evidence authority |
+| `planning/` | case-neutral analysis families, pure cohort/robustness contracts, study-design playbooks, capability/method registries and article figure strategy | case-specific benchmark instructions or execution/evidence mutation |
+| `providers/` | provider-neutral LLM protocol plus lazy concrete-client construction | planning, scientific policy, evidence authority or eager import of the concrete client |
+| `research_context/` | typed context authority, cohort-aware context construction and step-scoped Coder projection | scientific method selection, provider calls or run authority mutation |
+| `cohort/` | typed cohort schema, deterministic materialization, artifact facts and case-neutral dataframe primitives | outcome choice, censoring rules or case-specific cohort criteria |
+| `acquisition/` | export catalog, coverage checks and materialization handoff for caller-declared concepts | hidden outcome/static-variable defaults or estimand construction |
+| `contracts/` | dependency-neutral runtime handoffs and deterministic declared-product, ordered-group and robustness execution contracts | provider calls, scientific design selection or evidence mutation |
+| `robustness/` | deterministic estimators, pre-specified robustness panels and primary-effect extraction over an Agent-locked plan | choosing the exposure, outcome, cohort, estimator or primary estimand |
+| `orchestration/` | run configuration, immutable submission profiles, experiment specifications and resume/checkpoint policy | scientific analysis choices, provider execution, evidence registration or compatibility wrappers |
+| `evaluation/` | optional cross-model concordance and Tier-2 jury/rubric adapters over completed artifacts | primary scientific adjudication or hidden manuscript benchmark authority |
+| `review/` | deterministic post-analysis causal-claim and method-appropriateness review | exposure, outcome, cohort, method or estimand selection |
+
+`execution/phase.py` is the canonical execute-phase orchestrator. PlanAuthority's pure
+candidate projection and TypedBindingResolver are now canonical under
+`authority/`; provider calls, revision/evidence registration, cohort mutation,
+runner rebuilding and repair/replan budgets deliberately remain in the sole
+orchestrator. The remaining ExecutionState and StepExecutor/RunCoordinator
+boundaries are now closed as domain-specific state objects and deliberately
+narrow coordination components: they do not absorb plan authority, gates,
+repair, evidence mutation, or scientific decisions. The remaining execute-loop
+body is sequence-sensitive orchestration and maintenance debt, not a reason to
+create a universal state bag or inflate the executor. This is a pre-v1
+breaking-cleanup line: retired top-level module paths are absent rather than
+retained as façades. Fresh runs import responsibility packages directly, and
+the archive tag preserves the former diagnostic state.
+
+The production module-top-level static import graph is now acyclic. `execution.phase` and
+`execution.publication_figure` receive host-owned compatibility helpers through
+a fresh immutable `execution.host_services.ExecutePhaseServices` snapshot; they
+do not statically reverse-import `pipeline`. Sealed-renderer digest selection
+uses a controlled registry-mediated dynamic import of current implementation
+modules. This dependency inversion changes neither
+the Agent's scientific ownership nor the sealed renderer template, and an
+explicit static-graph regression requires zero cyclic modules.
+
 Current scope note: Layer 4 is bounded. It produces an auditable
 `hypothesis_blueprint.json` before planning, ranking candidates by
 coverage / literature-saturation / gate-pass weights, but it should not
@@ -96,12 +151,12 @@ agent.
 Two invariants enforce this split:
 
 1. **The engine is optional, never required — capability degradation ladder.**
-   `llm.build_llm_client(prefer=...)` walks
+   `providers.llm.build_llm_client(prefer=...)` walks
    `CLI agent (codex/claude) → OpenAI → OpenRouter → MockLLMClient`, returning
    an `LLMClientSelection` that records what actually ran and why it fell back.
    A user without any coding-agent CLI or API key still gets a working,
    end-to-end pipeline on the offline `MockLLMClient` floor (design rule #1 in
-   `llm.py`). Adding `CLIAgentLLMClient` did **not** introduce a hard
+   `providers/llm.py`). Adding `CLIAgentLLMClient` did **not** introduce a hard
    dependency.
 
 2. **No engine bypasses `NumericClaim` binding — engine-agnostic provenance.**
@@ -770,3 +825,28 @@ standalone ablation script.
 
 These are deliberate v1 limits. The structure is in place to lift
 each of them without changing the public API.
+
+## Historical names in the provenance ledger (read before auditing evidence.json)
+
+Several identifiers in the evidence ledger predate the current architecture
+and read misleadingly today. They are kept byte-stable because golden runs,
+resume identity, and sealed capsules bind to them; renaming is queued for the
+next protocol-version bump. Until then:
+
+| Ledger name | What it actually is |
+|---|---|
+| evidence id `analysis_cohort_execute_repair`, producer `cohort_repair` | The **standard** host cohort materialization path (prose inclusion/exclusion criteria translated to typed CTAS predicates), not a repair. The name survives from the era when this ran only as a repair flow. |
+| evidence-level `generation_mode="llm"` on the cohort/flow records | Refers to the **origin of the cohort definition** (the Planner's LLM-authored criteria). The numbers themselves are host-computed; the checkpoint-level `generation_mode="deterministic_cohort_materializer"` is the execution-mode authority. |
+| "repair" across the codebase | Four distinct meanings: `repair_registry.py` (sealed renderer + structural repair registry), `repairs/` (LLM patch/rewrite transport), `cohort/repair.py` (prose→CTAS translation), and the `cohort_repair` producer above. |
+
+## The three knowledge packages (do not merge them)
+
+* `learning/` — automatic cross-run memory (`experience.py`, `memory.py`).
+  Default **off**; never enabled for canonical/benchmark runs.
+* `know_how/` — human-reviewed, citation-bound protocol cards. Default
+  **off** until sign-off; unreviewed cards fail closed.
+* `discovery/` — bounded hypothesis ranking and idea mining. Outputs are
+  human-curated candidates, never manuscript results.
+
+They look adjacent but have different authority models (automatic vs
+human-reviewed vs human-curated); keeping them separate is deliberate.

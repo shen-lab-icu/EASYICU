@@ -1,6 +1,6 @@
 """The capability registry must match the code that is actually wired.
 
-The registry (``easyicu.research_agent.capability_registry``) is only useful if
+The registry (``easyicu.research_agent.planning.capability_registry``) is only useful if
 it cannot lie. These tests cross-check every claim against the live pipeline:
 the deterministic-runner names against ``_PRIMARY_DETERMINISTIC_RUNNERS`` in
 BOTH pipeline modules, the figure-renderer keys against
@@ -19,29 +19,20 @@ from pathlib import Path
 import textwrap
 from typing import get_args
 
-from easyicu.research_agent import capability_registry as cr
-from easyicu.research_agent import pipeline_execute
+from easyicu.research_agent.execution import phase as pipeline_execute
 from easyicu.research_agent.figures import FAMILY_RENDERERS
-from easyicu.research_agent.pipeline_execute import (
+from easyicu.research_agent.planning import capability_registry as cr
+from easyicu.research_agent.execution.phase import (
     _PRIMARY_DETERMINISTIC_RUNNERS as EXEC_RUNNERS,
 )
-from easyicu.research_agent.pipeline_report import (
+from easyicu.research_agent.reporting.readiness import (
     _PRIMARY_DETERMINISTIC_RUNNERS as REPORT_RUNNERS,
 )
-from easyicu.research_agent.study_design_playbook import StudyDesignFamily
+from easyicu.research_agent.planning.study_design_playbook import StudyDesignFamily
 
-# runner name -> (module, code-string entrypoint) for the importability check
-_RUNNER_ENTRYPOINTS = {
-    "survival_primary_cox": (
-        "deterministic_survival",
-        "survival_primary_analysis_code",
-    ),
-    "causal_primary_iptw": ("deterministic_causal", "causal_primary_analysis_code"),
-    "ordinal_dose_response": (
-        "deterministic_ordinal",
-        "ordinal_dose_response_analysis_code",
-    ),
-}
+# No deterministic primary-analysis runner is shipped. Primary science remains
+# LLM-coded; only the auxiliary, planner-scoped runners in the registry are live.
+_RUNNER_ENTRYPOINTS: dict[str, tuple[str, str]] = {}
 
 
 def _registry_primary_runners() -> set:
@@ -58,7 +49,7 @@ def _registry_primary_runners() -> set:
 def test_every_registry_runner_is_wired_in_both_pipeline_modules():
     for name in _registry_primary_runners():
         assert name in EXEC_RUNNERS, f"{name} not wired in pipeline_execute"
-        assert name in REPORT_RUNNERS, f"{name} not wired in pipeline_report"
+        assert name in REPORT_RUNNERS, f"{name} not wired in reporting.readiness"
 
 
 def test_every_wired_runner_is_documented_in_the_registry():
@@ -166,7 +157,9 @@ def test_get_capability_disambiguates_association():
 def test_live_auxiliary_dispatch_matches_registry_in_both_directions():
     """Inspect actual execute assignments, not a second hand-maintained set."""
 
-    tree = ast.parse(textwrap.dedent(inspect.getsource(pipeline_execute.run_execute_phase)))
+    tree = ast.parse(
+        textwrap.dedent(inspect.getsource(pipeline_execute.run_execute_phase))
+    )
     active: set[str] = set()
     for node in ast.walk(tree):
         if not isinstance(node, ast.Assign) or not isinstance(node.value, ast.Constant):
@@ -177,9 +170,25 @@ def test_live_auxiliary_dispatch_matches_registry_in_both_directions():
             if not isinstance(target, ast.Subscript):
                 continue
             key = target.slice
-            if isinstance(key, ast.Constant) and key.value == "deterministic_standard_analysis":
+            if (
+                isinstance(key, ast.Constant)
+                and key.value == "deterministic_standard_analysis"
+            ):
                 active.add(node.value.value)
     documented = {runner.name for runner in cr.AUXILIARY_DETERMINISTIC_RUNNERS}
+    # Dedicated executors consume an already-bound standard-analysis marker
+    # instead of assigning it inside run_execute_phase.  Count those exact
+    # dispatch comparisons as live wiring too.
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Compare):
+            continue
+        constants = {
+            child.value
+            for child in ast.walk(node)
+            if isinstance(child, ast.Constant) and isinstance(child.value, str)
+        }
+        if "deterministic_standard_analysis" in constants:
+            active.update(constants & documented)
     assert active == documented
 
 
@@ -189,7 +198,7 @@ def test_live_auxiliary_dispatch_matches_registry_in_both_directions():
 def test_committed_docs_matrix_matches_the_registry_render():
     # docs/capability_matrix.md is generated from the registry; if it drifts,
     # regenerate with:
-    #   python -m easyicu.research_agent.capability_registry > docs/capability_matrix.md
+    #   python -m easyicu.research_agent.planning.capability_registry > docs/capability_matrix.md
     repo_root = Path(__file__).resolve().parents[2]
     doc = repo_root / "docs" / "capability_matrix.md"
     assert doc.exists(), "docs/capability_matrix.md missing — regenerate it"

@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from easyicu.research_agent.review_artifacts import build_review_artifact_payloads
+from easyicu.research_agent.reporting.review_artifacts import build_review_artifact_payloads
 
 
 def _write_contract(

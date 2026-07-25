@@ -45,24 +45,28 @@ sys.path.insert(0, str(REPO / "src"))
 sys.path.insert(0, str(REPO / "tools"))
 
 from easyicu.research_agent.concept_catalog import load_concept_catalog  # noqa: E402
-from easyicu.research_agent.data_catalog import build_available_catalog  # noqa: E402
+from easyicu.research_agent.acquisition.catalog import build_available_catalog  # noqa: E402
 from easyicu.research_agent.concept_catalog import (  # noqa: E402
     normalize_concept_name,
 )
-from easyicu.research_agent.idea_mining import (  # noqa: E402
+from easyicu.research_agent.discovery.idea_mining import (  # noqa: E402
     OutcomeDeterminability,
     run_idea_mining_dry_run,
 )  # noqa: E402
-from easyicu.research_agent.idea_mining_funnel import (  # noqa: E402
+from easyicu.research_agent.discovery.idea_mining_funnel import (  # noqa: E402
     LiteratureFunnelSpec,
     fetch_literature_funnel_corpus,
 )
-from easyicu.research_agent.idea_scope import (  # noqa: E402
+from easyicu.research_agent.discovery.idea_scope import (  # noqa: E402
     JOURNAL_PRESETS,
     LiteratureScopeSpec,
     resolve_journals,
 )
-from easyicu.research_agent.llm import OpenAIClient  # noqa: E402
+from easyicu.research_agent.providers.llm import OpenAIClient  # noqa: E402
+from easyicu.research_agent.providers.factory import (  # noqa: E402
+    authorized_complete,
+    build_provider_client,
+)
 
 import run_idea_mining_s6_validation_harness as H  # noqa: E402
 
@@ -185,10 +189,15 @@ def make_export_feasibility_probe(
 
 def _make_llm(model: str) -> OpenAIClient:
     key = os.environ.get("OPENAI_API_KEY")
-    base = os.environ.get("OPENAI_BASE_URL")
     if not key:
         raise SystemExit("set OPENAI_API_KEY (+ OPENAI_BASE_URL for the local proxy)")
-    return OpenAIClient(model=model, api_key=key, base_url=base, request_timeout=180.0)
+    return build_provider_client(
+        provider="openai",
+        model=model,
+        request_timeout=180.0,
+        title="EasyICU discovery mining",
+        client_cls=OpenAIClient,
+    )
 
 
 _NOVELTY_JUDGE_SYSTEM = (
@@ -201,7 +210,7 @@ _NOVELTY_JUDGE_SYSTEM = (
 
 def make_novelty_judge(llm: OpenAIClient):
     """Phase 3 LLM differentiation judge (veto-net: can only tighten novelty)."""
-    from easyicu.research_agent.llm import LLMMessage  # noqa: E402
+    from easyicu.research_agent.providers.protocol import LLMMessage  # noqa: E402
 
     def judge(*, idea, executable_candidate, hits, count_label):
         construct = idea.exposure_or_predictor.strip() or ", ".join(
@@ -228,7 +237,7 @@ def make_novelty_judge(llm: OpenAIClient):
             LLMMessage(role="system", content=_NOVELTY_JUDGE_SYSTEM),
             LLMMessage(role="user", content=json.dumps(payload, ensure_ascii=False)),
         ]
-        raw = llm.complete(messages, max_tokens=300, temperature=0.0)
+        raw = authorized_complete(llm, messages, max_tokens=300, temperature=0.0)
         text = raw[raw.find("{") : raw.rfind("}") + 1] if "{" in raw else "{}"
         data = json.loads(text)
         return {
@@ -808,7 +817,7 @@ def main() -> None:
     # Extended feasibility: reconsider db-cannot-do via ICD-derivable cohort
     # (Case 1) and dictionary / cross-DB concept reachability (Case 2). Only
     # downgrades to hold (human-confirm); never promotes to executable.
-    from easyicu.research_agent.idea_mining_extended_feasibility import (
+    from easyicu.research_agent.discovery.idea_mining_extended_feasibility import (
         ExtendedFeasibilityIndex,
     )
 

@@ -17,6 +17,8 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from easyicu.research_agent.providers.mocks import PatternScriptedMockLLMClient
+
 
 def _step_record_by_id(records, step_id: str):
     for record in records:
@@ -32,6 +34,51 @@ def _empty_custom_llm_response(user_prompt: str) -> str:
     if "EVERY FINDING MUST INCLUDE" in upper and "RETURN JSON ONLY" in upper:
         return json.dumps({"findings": []})
     return "{}"
+
+
+def _disable_article_contract(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep focused lifecycle fixtures independent of manuscript completeness."""
+
+    import easyicu.research_agent.agents.core as agent_core
+    import easyicu.research_agent.pipeline as pipeline_module
+    from easyicu.research_agent.agents.core import PlannerAgent
+
+    original_run = PlannerAgent.run
+
+    def run_without_article_contract(self, context, **kwargs):
+        kwargs["enforce_article_contract"] = False
+        return original_run(self, context, **kwargs)
+
+    monkeypatch.setattr(PlannerAgent, "run", run_without_article_contract)
+    monkeypatch.setattr(
+        agent_core,
+        "_validate_required_primary_result",
+        lambda **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        pipeline_module,
+        "_enforce_advanced_plan_contract",
+        lambda *, plan, context: (plan, []),
+    )
+    monkeypatch.setattr(
+        pipeline_module,
+        "_ensure_publication_figure_step_in_plan",
+        lambda *, plan, context, force: (plan, []),
+    )
+    monkeypatch.setattr(
+        pipeline_module,
+        "_ensure_audit_panel_step_in_plan",
+        lambda *, plan, context: (plan, []),
+    )
+
+
+def _stable_plan_rules(plan: str):
+    """Return initial and probe-replan routes for a fixed focused test plan."""
+
+    return [
+        ("Produce an ICU-AWARE RESEARCH PLAN as JSON", [plan] * 8),
+        ("REVISE THE ICU-AWARE RESEARCH PLAN", [plan] * 8),
+    ]
 
 
 def test_pipeline_end_to_end_synthetic_cohort(ra, synthetic_cohort, tmp_path: Path):
@@ -319,17 +366,19 @@ def test_pipeline_run_async(ra, synthetic_cohort, tmp_path: Path):
 def test_pipeline_falls_back_when_planner_returns_empty(
     ra, synthetic_cohort, tmp_path: Path
 ):
-    class EmptyPlanner:
-        name = "empty-planner"
-
-        def complete(self, messages, *, max_tokens=2048, temperature=0.2):
-            return ""
-
-    router = ra.LLMRouter(default=ra.MockLLMClient(), planner=EmptyPlanner())
+    empty_planner = PatternScriptedMockLLMClient(
+        [
+            ("Produce an ICU-AWARE RESEARCH PLAN as JSON", [""] * 8),
+            ("REVISE THE ICU-AWARE RESEARCH PLAN", [""] * 8),
+        ],
+        default="",
+    )
+    router = ra.LLMRouter(default=ra.MockLLMClient(), planner=empty_planner)
     pipeline = ra.ResearchAgentPipeline(
         workdir=tmp_path,
         llm=router,
         enable_deterministic_planner_fallback=True,
+        max_code_repair_attempts=0,
     )
     result = pipeline.run(
         question="Is admission SOFA-2 associated with ICU mortality?",
@@ -344,19 +393,21 @@ def test_pipeline_falls_back_when_planner_returns_empty(
 
 
 def test_pipeline_recovers_when_planner_parses_to_zero_steps(
-    ra, synthetic_cohort, tmp_path: Path
+    ra, synthetic_cohort, tmp_path: Path, monkeypatch
 ):
     """A planner that returns *valid JSON with 0 steps* (E1 20260611 v4-flash)
     must not run an empty plan: retry the planner, recover on a non-empty reply.
     """
+    _disable_article_contract(monkeypatch)
     valid_plan = json.dumps(
         {
             "research_question": "Is admission SOFA-2 associated with ICU mortality?",
             "steps": [
                 {
                     "step_id": "01_assoc",
+                    "planned_analysis_role": "primary",
                     "intent": "Fit the adjusted association model.",
-                    "expected_outputs": ["or_table"],
+                    "expected_outputs": ["table:or_table"],
                     "method": "logit",
                 }
             ],
@@ -364,27 +415,22 @@ def test_pipeline_recovers_when_planner_parses_to_zero_steps(
         }
     )
 
-    class FlakyPlanner:
-        name = "flaky-planner"
-
-        def __init__(self):
-            self.calls = 0
-
-        def complete(self, messages, *, max_tokens=2048, temperature=0.2):
-            self.calls += 1
-            # First call parses to an empty plan; the retry returns a real one.
-            return (
-                '{"research_question": "q", "steps": []}'
-                if self.calls == 1
-                else valid_plan
-            )
-
-    flaky = FlakyPlanner()
+    flaky = PatternScriptedMockLLMClient(
+        [
+            (
+                "Produce an ICU-AWARE RESEARCH PLAN as JSON",
+                ['{"research_question": "q", "steps": []}', valid_plan, valid_plan],
+            ),
+            ("REVISE THE ICU-AWARE RESEARCH PLAN", [valid_plan] * 8),
+        ],
+        default=valid_plan,
+    )
     router = ra.LLMRouter(default=ra.MockLLMClient(), planner=flaky)
     pipeline = ra.ResearchAgentPipeline(
         workdir=tmp_path,
         llm=router,
         enable_deterministic_planner_fallback=True,
+        max_code_repair_attempts=0,
     )
     result = pipeline.run(
         question="Is admission SOFA-2 associated with ICU mortality?",
@@ -393,7 +439,7 @@ def test_pipeline_recovers_when_planner_parses_to_zero_steps(
         database="synthetic",
         target_outcome="death",
     )
-    assert flaky.calls >= 2  # the retry happened
+    assert len(flaky.calls) >= 2  # the retry happened
     manifest = json.loads(Path(result.manifest_path).read_text(encoding="utf-8"))
     assert any(
         f["validator"] == "planner"
@@ -420,34 +466,28 @@ def test_remove_tbd_sentences_strips_placeholder_results(ra):
     assert removed == ["Median age was [TBD] years {evidence:table_one}."]
 
 
-def test_pipeline_repairs_failed_generated_code(ra, tmp_path: Path):
+def test_pipeline_repairs_failed_generated_code(ra, tmp_path: Path, monkeypatch):
     """A real-LLM style traceback should trigger one coder repair pass."""
 
-    class RepairLLM:
-        name = "repair-llm"
-
-        def complete(self, messages, *, max_tokens=2048, temperature=0.2):
-            user = next((m.content for m in reversed(messages) if m.role == "user"), "")
-            upper = user.upper()
-            if "ICU-AWARE RESEARCH PLAN" in upper:
-                return json.dumps(
-                    {
-                        "research_question": "Does age describe ICU mortality?",
-                        "steps": [
-                            {
-                                "step_id": "01_table_one",
-                                "intent": "Write a compact cohort table.",
-                                "inputs": ["age", "death"],
-                                "expected_outputs": ["table:table_one"],
-                                "method": "descriptive",
-                                "icu_rule_refs": ["aggregation_rule_for"],
-                            }
-                        ],
-                        "rationale": "minimal repair test",
-                    }
-                )
-            if "REPAIR THE PYTHON CODE" in upper:
-                return """
+    _disable_article_contract(monkeypatch)
+    plan = json.dumps(
+        {
+            "research_question": "Does age describe ICU mortality?",
+            "steps": [
+                {
+                    "step_id": "01_table_one",
+                    "planned_analysis_role": "auxiliary",
+                    "intent": "Write a compact cohort table.",
+                    "inputs": ["age", "death"],
+                    "expected_outputs": ["table:table_one"],
+                    "method": "descriptive",
+                    "icu_rule_refs": ["aggregation_rule_for"],
+                }
+            ],
+            "rationale": "minimal repair test",
+        }
+    )
+    repaired_code = """
 import json
 import os
 import pandas as pd
@@ -463,18 +503,33 @@ with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as f:
     json.dump(summary, f)
 print(json.dumps(summary))
 """
-            if "WRITE THE PYTHON CODE" in upper:
-                return "raise KeyError('intentional first pass failure')\n"
-            if "INTERPRET THE RESULTS" in upper:
-                return "The cohort table was produced {evidence:table_one}."
-            if "MANUSCRIPT SCAFFOLD" in upper:
-                return "# Title\n\n## Results\n\nThe cohort table was produced {evidence:table_one}.\n\n(left to the human author)"
-            return _empty_custom_llm_response(user)
+    llm = PatternScriptedMockLLMClient(
+        [
+            *_stable_plan_rules(plan),
+            (
+                "WRITE THE PYTHON CODE FOR STEP",
+                ["raise KeyError('intentional first pass failure')\n"] * 8,
+            ),
+            ("REPAIR THE PYTHON CODE FOR STEP", [repaired_code] * 8),
+            (
+                "INTERPRET THE RESULTS OF STEP",
+                ["The cohort table was produced {evidence:table_one}."] * 8,
+            ),
+            (
+                "WRITE A MANUSCRIPT SCAFFOLD",
+                [
+                    "# Title\n\n## Results\n\nThe cohort table was produced "
+                    "{evidence:table_one}.\n\n(left to the human author)"
+                ]
+                * 8,
+            ),
+        ]
+    )
 
     cohort = pd.DataFrame({"age": [50, 60, 70], "death": [0, 1, 0]})
     pipeline = ra.ResearchAgentPipeline(
         workdir=tmp_path,
-        llm=RepairLLM(),
+        llm=llm,
         enable_literature=False,
         # Disable deterministic runner repair so LLM repair path is exercised
         enable_deterministic_runner_repair=False,
@@ -502,10 +557,11 @@ print(json.dumps(summary))
 
 
 def test_pipeline_repairs_cross_step_source_status_denominator_drift(
-    ra, tmp_path: Path
+    ra, tmp_path: Path, monkeypatch
 ):
     """A later Table 1 must preserve a prior explicit source-status lock."""
 
+    _disable_article_contract(monkeypatch)
     def source_lock_script() -> str:
         return """
 import json
@@ -563,57 +619,64 @@ with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as f:
 print(json.dumps(summary))
 """
 
-    class CrossStepRepairLLM:
-        name = "cross-step-repair-llm"
-
-        def complete(self, messages, *, max_tokens=2048, temperature=0.2):
-            user = next((m.content for m in reversed(messages) if m.role == "user"), "")
-            upper = user.upper()
-            if "ICU-AWARE RESEARCH PLAN" in upper:
-                return json.dumps(
-                    {
-                        "research_question": "Keep measured lab counts consistent.",
-                        "steps": [
-                            {
-                                "step_id": "01_source_status_audit",
-                                "intent": "Record the source-status denominator lock.",
-                                "inputs": ["lab_max"],
-                                "expected_outputs": [],
-                                "method": "descriptive",
-                                "icu_rule_refs": ["aggregation_rule_for"],
-                            },
-                            {
-                                "step_id": "02_table_one",
-                                "intent": "Build Table 1 without redefining lab validity.",
-                                "inputs": ["lab_max"],
-                                "expected_outputs": ["table:table_one"],
-                                "method": "descriptive",
-                                "icu_rule_refs": ["aggregation_rule_for"],
-                            },
-                        ],
-                        "rationale": "minimal cross-step contract repair test",
-                    }
-                )
-            if "REPAIR THE PYTHON CODE FOR STEP 02_TABLE_ONE" in upper:
-                assert "SOURCE-STATUS DENOMINATOR DRIFT" in upper
-                assert "LOCKED 3" in upper
-                return table_one_script(3)
-            if "WRITE THE PYTHON CODE FOR STEP 01_SOURCE_STATUS_AUDIT" in upper:
-                return source_lock_script()
-            if "WRITE THE PYTHON CODE FOR STEP 02_TABLE_ONE" in upper:
-                return table_one_script(1)
-            if "INTERPRET THE RESULTS" in upper:
-                return "The requested descriptive output was produced."
-            if "MANUSCRIPT SCAFFOLD" in upper:
-                return "# Title\n\n## Results\n\nDescriptive outputs were produced.\n"
-            return _empty_custom_llm_response(user)
+    plan = json.dumps(
+        {
+            "research_question": "Keep measured lab counts consistent.",
+            "steps": [
+                {
+                    "step_id": "01_source_status_audit",
+                    "planned_analysis_role": "auxiliary",
+                    "intent": "Record the source-status denominator lock.",
+                    "inputs": ["lab_max"],
+                    "expected_outputs": [],
+                    "method": "descriptive",
+                    "icu_rule_refs": ["aggregation_rule_for"],
+                },
+                {
+                    "step_id": "02_table_one",
+                    "planned_analysis_role": "auxiliary",
+                    "intent": "Build Table 1 without redefining lab validity.",
+                    "inputs": ["lab_max"],
+                    "expected_outputs": ["table:table_one"],
+                    "method": "descriptive",
+                    "icu_rule_refs": ["aggregation_rule_for"],
+                },
+            ],
+            "rationale": "minimal cross-step contract repair test",
+        }
+    )
+    llm = PatternScriptedMockLLMClient(
+        [
+            *_stable_plan_rules(plan),
+            (
+                "WRITE THE PYTHON CODE FOR STEP 01_SOURCE_STATUS_AUDIT",
+                [source_lock_script()] * 8,
+            ),
+            (
+                "WRITE THE PYTHON CODE FOR STEP 02_TABLE_ONE",
+                [table_one_script(1)] * 8,
+            ),
+            (
+                "REPAIR THE PYTHON CODE FOR STEP 02_TABLE_ONE",
+                [table_one_script(3)] * 8,
+            ),
+            (
+                "INTERPRET THE RESULTS OF STEP",
+                ["The requested descriptive output was produced."] * 8,
+            ),
+            (
+                "WRITE A MANUSCRIPT SCAFFOLD",
+                ["# Title\n\n## Results\n\nDescriptive outputs were produced.\n"] * 8,
+            ),
+        ]
+    )
 
     cohort = pd.DataFrame(
         {"lab_max": [1.0, 2.0, 3.0, np.nan, np.nan], "death": [0, 1, 0, 0, 1]}
     )
     pipeline = ra.ResearchAgentPipeline(
         workdir=tmp_path,
-        llm=CrossStepRepairLLM(),
+        llm=llm,
         enable_literature=False,
         enable_deterministic_runner_repair=False,
         max_code_repair_attempts=1,
@@ -641,9 +704,12 @@ print(json.dumps(summary))
     ]
 
 
-def test_pipeline_repairs_fixed_cohort_drift_in_current_step(ra, tmp_path: Path):
+def test_pipeline_repairs_fixed_cohort_drift_in_current_step(
+    ra, tmp_path: Path, monkeypatch
+):
     """An explicit fixed-cohort promise routes N drift to local code repair."""
 
+    _disable_article_contract(monkeypatch)
     def summary_script(*, cohort_n: int, field: str) -> str:
         return f"""
 import json
@@ -656,55 +722,62 @@ with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as f:
 print(json.dumps(summary))
 """
 
-    class FixedCohortRepairLLM:
-        name = "fixed-cohort-repair-llm"
-
-        def complete(self, messages, *, max_tokens=2048, temperature=0.2):
-            user = next((m.content for m in reversed(messages) if m.role == "user"), "")
-            upper = user.upper()
-            if "ICU-AWARE RESEARCH PLAN" in upper:
-                return json.dumps(
-                    {
-                        "research_question": "Keep the analytic cohort fixed.",
-                        "steps": [
-                            {
-                                "step_id": "01_cohort_lock",
-                                "intent": "Record the completed analytic cohort.",
-                                "inputs": ["age"],
-                                "expected_outputs": [],
-                                "method": "descriptive",
-                                "icu_rule_refs": [],
-                            },
-                            {
-                                "step_id": "02_reconcile",
-                                "intent": "Keep the completed cohort fixed while reconciling outputs.",
-                                "inputs": ["age"],
-                                "expected_outputs": [],
-                                "method": "data_quality_audit",
-                                "icu_rule_refs": [],
-                            },
-                        ],
-                        "rationale": "minimal fixed-cohort repair test",
-                    }
-                )
-            if "REPAIR THE PYTHON CODE FOR STEP 02_RECONCILE" in upper:
-                assert "FIXED-COHORT DRIFT" in upper
-                assert "LOCKED 5" in upper
-                return summary_script(cohort_n=5, field="n_final_cohort")
-            if "WRITE THE PYTHON CODE FOR STEP 01_COHORT_LOCK" in upper:
-                return summary_script(cohort_n=5, field="n_total")
-            if "WRITE THE PYTHON CODE FOR STEP 02_RECONCILE" in upper:
-                return summary_script(cohort_n=4, field="n_final_cohort")
-            if "INTERPRET THE RESULTS" in upper:
-                return "The fixed-cohort reconciliation was completed."
-            if "MANUSCRIPT SCAFFOLD" in upper:
-                return "# Title\n\n## Results\n\nThe cohort was retained.\n"
-            return _empty_custom_llm_response(user)
+    plan = json.dumps(
+        {
+            "research_question": "Keep the analytic cohort fixed.",
+            "steps": [
+                {
+                    "step_id": "01_cohort_lock",
+                    "planned_analysis_role": "auxiliary",
+                    "intent": "Record the completed analytic cohort.",
+                    "inputs": ["age"],
+                    "expected_outputs": [],
+                    "method": "descriptive",
+                    "icu_rule_refs": [],
+                },
+                {
+                    "step_id": "02_reconcile",
+                    "planned_analysis_role": "auxiliary",
+                    "intent": "Keep the completed cohort fixed while reconciling outputs.",
+                    "inputs": ["age"],
+                    "expected_outputs": [],
+                    "method": "data_quality_audit",
+                    "icu_rule_refs": [],
+                },
+            ],
+            "rationale": "minimal fixed-cohort repair test",
+        }
+    )
+    llm = PatternScriptedMockLLMClient(
+        [
+            *_stable_plan_rules(plan),
+            (
+                "WRITE THE PYTHON CODE FOR STEP 01_COHORT_LOCK",
+                [summary_script(cohort_n=5, field="n_total")] * 8,
+            ),
+            (
+                "WRITE THE PYTHON CODE FOR STEP 02_RECONCILE",
+                [summary_script(cohort_n=4, field="n_final_cohort")] * 8,
+            ),
+            (
+                "REPAIR THE PYTHON CODE FOR STEP 02_RECONCILE",
+                [summary_script(cohort_n=5, field="n_final_cohort")] * 8,
+            ),
+            (
+                "INTERPRET THE RESULTS OF STEP",
+                ["The fixed-cohort reconciliation was completed."] * 8,
+            ),
+            (
+                "WRITE A MANUSCRIPT SCAFFOLD",
+                ["# Title\n\n## Results\n\nThe cohort was retained.\n"] * 8,
+            ),
+        ]
+    )
 
     cohort = pd.DataFrame({"age": [40, 50, 60, 70, 80], "death": [0, 1, 0, 1, 0]})
     pipeline = ra.ResearchAgentPipeline(
         workdir=tmp_path,
-        llm=FixedCohortRepairLLM(),
+        llm=llm,
         enable_literature=False,
         enable_deterministic_runner_repair=False,
         max_code_repair_attempts=1,
@@ -733,7 +806,7 @@ print(json.dumps(summary))
 
 
 def test_runtime_crash_after_contract_repair_gets_its_own_repair_budget(
-    ra, tmp_path: Path
+    ra, tmp_path: Path, monkeypatch
 ):
     """A contract repair that *introduces* a crash must not strand the step.
 
@@ -747,86 +820,93 @@ def test_runtime_crash_after_contract_repair_gets_its_own_repair_budget(
     their own repair budget, so the traceback gets a repair pass.
     """
 
-    class ContractThenCrashLLM:
-        name = "contract-then-crash-llm"
-
-        def complete(self, messages, *, max_tokens=2048, temperature=0.2):
-            user = next((m.content for m in reversed(messages) if m.role == "user"), "")
-            upper = user.upper()
-            if "ICU-AWARE RESEARCH PLAN" in upper:
-                return json.dumps(
-                    {
-                        "research_question": "Is the exposure associated with mortality?",
-                        "steps": [
-                            {
-                                "step_id": "05_primary_association",
-                                "intent": "Estimate the adjusted odds ratio for the exposure.",
-                                "inputs": ["age", "death"],
-                                "expected_outputs": ["statistic:primary_association"],
-                                "method": "logistic_regression",
-                                "icu_rule_refs": ["aggregation_rule_for"],
-                            }
-                        ],
-                        "rationale": "minimal contract-then-crash repair test",
-                    }
-                )
-            if "REPAIR THE PYTHON CODE" in upper:
-                # First repair pass is the *contract* repair (run_log says so):
-                # it computes the OR and writes the table, then crashes on a
-                # trailing line — exactly the run10 trap.
-                if "STEP CONTRACT" in upper:
-                    return (
-                        "import os\n"
-                        "import pandas as pd\n"
-                        "out = os.environ['STEP_OUT_DIR']\n"
-                        "pd.DataFrame({'predictor': ['exposure'], 'odds_ratio': [1.47]})"
-                        ".to_csv(os.path.join(out, 'primary_association.csv'), index=False)\n"
-                        "class _Row:\n    pass\n"
-                        "row = _Row()\n"
-                        "_ = row.log_odds  # AttributeError after the OR is written\n"
-                    )
-                # Second repair pass is the *runtime* repair (traceback in
-                # run_log): produce a clean script that records the effect.
-                return (
-                    "import json, os\n"
-                    "import pandas as pd\n"
-                    "out = os.environ['STEP_OUT_DIR']\n"
-                    "pd.DataFrame({'predictor': ['exposure'], 'odds_ratio': [1.47]})"
-                    ".to_csv(os.path.join(out, 'primary_association.csv'), index=False)\n"
-                    "summary = {'primary_or': 1.47, 'odds_ratio': 1.47, "
-                    "'primary_predictor': 'exposure', "
-                    "'output_files': {'statistic:primary_association': 1.47}}\n"
-                    "with open(os.path.join(out, 'step_summary.json'), 'w') as f:\n"
-                    "    json.dump(summary, f)\n"
-                    "print(json.dumps(summary))\n"
-                )
-            if "WRITE THE PYTHON CODE" in upper:
-                # Initial script runs fine (rc=0) but omits the effect size,
-                # so it fails the machine-readable effect contract.
-                return (
-                    "import json, os\n"
-                    "import pandas as pd\n"
-                    "out = os.environ['STEP_OUT_DIR']\n"
-                    "pd.DataFrame({'n': [3]})"
-                    ".to_csv(os.path.join(out, 'primary_association.csv'), index=False)\n"
-                    "summary = {'n': 3}\n"
-                    "with open(os.path.join(out, 'step_summary.json'), 'w') as f:\n"
-                    "    json.dump(summary, f)\n"
-                    "print(json.dumps(summary))\n"
-                )
-            if "INTERPRET THE RESULTS" in upper:
-                return "The adjusted odds ratio was estimated {evidence:primary_association}."
-            if "MANUSCRIPT SCAFFOLD" in upper:
-                return (
+    _disable_article_contract(monkeypatch)
+    plan = json.dumps(
+        {
+            "research_question": "Is the exposure associated with mortality?",
+            "steps": [
+                {
+                    "step_id": "05_primary_association",
+                    "planned_analysis_role": "primary",
+                    "intent": "Estimate the adjusted odds ratio for the exposure.",
+                    "inputs": ["age", "death"],
+                    "expected_outputs": ["statistic:primary_association"],
+                    "method": "logistic_regression",
+                    "icu_rule_refs": ["aggregation_rule_for"],
+                }
+            ],
+            "rationale": "minimal contract-then-crash repair test",
+        }
+    )
+    initial_code = (
+        "import json, os\n"
+        "import pandas as pd\n"
+        "out = os.environ['STEP_OUT_DIR']\n"
+        "pd.DataFrame({'n': [3]})"
+        ".to_csv(os.path.join(out, 'primary_association.csv'), index=False)\n"
+        "summary = {'n': 3}\n"
+        "with open(os.path.join(out, 'step_summary.json'), 'w') as f:\n"
+        "    json.dump(summary, f)\n"
+        "print(json.dumps(summary))\n"
+    )
+    crashing_repair = (
+        "import os\n"
+        "import pandas as pd\n"
+        "out = os.environ['STEP_OUT_DIR']\n"
+        "pd.DataFrame({'predictor': ['exposure'], 'odds_ratio': [1.47]})"
+        ".to_csv(os.path.join(out, 'primary_association.csv'), index=False)\n"
+        "class _Row:\n    pass\n"
+        "row = _Row()\n"
+        "_ = row.log_odds  # AttributeError after the OR is written\n"
+    )
+    runtime_repair = (
+        "import json, os\n"
+        "import pandas as pd\n"
+        "out = os.environ['STEP_OUT_DIR']\n"
+        "pd.DataFrame({'predictor': ['exposure'], 'odds_ratio': [1.47]})"
+        ".to_csv(os.path.join(out, 'primary_association.csv'), index=False)\n"
+        "with open(os.path.join(out, 'primary_association.json'), 'w') as f:\n"
+        "    json.dump({'name': 'primary_association', 'estimate': 1.47, "
+        "'effect_scale': 'odds_ratio'}, f)\n"
+        "summary = {'primary_or': 1.47, 'odds_ratio': 1.47, "
+        "'primary_predictor': 'exposure', "
+        "'output_files': "
+        "{'statistic:primary_association': 'primary_association.json'}}\n"
+        "with open(os.path.join(out, 'step_summary.json'), 'w') as f:\n"
+        "    json.dump(summary, f)\n"
+        "print(json.dumps(summary))\n"
+    )
+    llm = PatternScriptedMockLLMClient(
+        [
+            *_stable_plan_rules(plan),
+            ("WRITE THE PYTHON CODE FOR STEP", [initial_code] * 8),
+            (
+                "REPAIR THE PYTHON CODE FOR STEP",
+                [crashing_repair, crashing_repair, runtime_repair, runtime_repair],
+            ),
+            (
+                "INTERPRET THE RESULTS OF STEP",
+                [
+                    "The adjusted odds ratio was estimated "
+                    "{evidence:primary_association}."
+                ]
+                * 8,
+            ),
+            (
+                "WRITE A MANUSCRIPT SCAFFOLD",
+                [
                     "# Title\n\n## Results\n\nThe adjusted odds ratio was estimated "
                     "{evidence:primary_association}.\n\n(left to the human author)"
-                )
-            return _empty_custom_llm_response(user)
+                ]
+                * 8,
+            ),
+        ]
+    )
 
     cohort = pd.DataFrame({"age": [50, 60, 70], "death": [0, 1, 0]})
     pipeline = ra.ResearchAgentPipeline(
         workdir=tmp_path,
-        llm=ContractThenCrashLLM(),
+        llm=llm,
         enable_literature=False,
         # Pin the tight single-attempt budget so the test exercises the exact
         # starvation case: under the old shared counter the contract repair
@@ -851,7 +931,7 @@ def test_runtime_crash_after_contract_repair_gets_its_own_repair_budget(
     record = _step_record_by_id(partial["per_step_records"], "05_primary_association")
     # The step recovered (no fail-closed) and used a contract repair *and* a
     # separate runtime repair.
-    assert record["status"] == "ok"
+    assert record["status"] == "ok", json.dumps(record, indent=2, sort_keys=True)
     assert record["code_repair_attempts"] == 2
     assert record.get("runtime_repair_attempts") == 1
     assert record["step_llm_repair_attempts"] == 2
@@ -861,42 +941,31 @@ def test_runtime_crash_after_contract_repair_gets_its_own_repair_budget(
 def test_method_substitution_contract_repair_is_blocked_when_budget_is_zero(
     ra,
     tmp_path: Path,
+    monkeypatch,
 ):
-    class OveradjustedLLM:
-        name = "overadjusted-llm"
-
-        def complete(self, messages, *, max_tokens=2048, temperature=0.2):
-            user = next((m.content for m in reversed(messages) if m.role == "user"), "")
-            upper = user.upper()
-            if "ICU-AWARE RESEARCH PLAN" in upper:
-                return json.dumps(
-                    {
-                        "research_question": (
-                            "Estimate the adjusted association between Sepsis-3 "
-                            "and mortality."
-                        ),
-                        "steps": [
-                            {
-                                "step_id": "05_primary_association",
-                                "intent": (
-                                    "Estimate the adjusted odds ratio for Sepsis-3 and "
-                                    "mortality."
-                                ),
-                                "inputs": ["sepsis3", "death", "age", "map_min"],
-                                "expected_outputs": ["statistic:primary_association"],
-                                "method": "logistic",
-                                "icu_rule_refs": [
-                                    "no_overadjustment_for_exposure_constituents"
-                                ],
-                            }
-                        ],
-                        "rationale": "minimal deterministic overadjustment repair test",
-                    }
-                )
-            if "REPAIR THE PYTHON CODE" in upper:
-                raise AssertionError("LLM repair should not be called")
-            if "WRITE THE PYTHON CODE" in upper:
-                return """
+    _disable_article_contract(monkeypatch)
+    plan = json.dumps(
+        {
+            "research_question": (
+                "Estimate the adjusted association between Sepsis-3 and mortality."
+            ),
+            "steps": [
+                {
+                    "step_id": "05_primary_association",
+                    "planned_analysis_role": "primary",
+                    "intent": (
+                        "Estimate the adjusted odds ratio for Sepsis-3 and mortality."
+                    ),
+                    "inputs": ["sepsis3", "death", "age", "map_min"],
+                    "expected_outputs": ["statistic:primary_association"],
+                    "method": "logistic",
+                    "icu_rule_refs": ["no_overadjustment_for_exposure_constituents"],
+                }
+            ],
+            "rationale": "minimal deterministic overadjustment repair test",
+        }
+    )
+    overadjusted_code = """
 import json
 import os
 import pandas as pd
@@ -931,14 +1000,28 @@ with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as f:
     json.dump(summary, f)
 print(json.dumps(summary))
 """
-            if "INTERPRET THE RESULTS" in upper:
-                return (
+    llm = PatternScriptedMockLLMClient(
+        [
+            *_stable_plan_rules(plan),
+            ("WRITE THE PYTHON CODE FOR STEP", [overadjusted_code] * 8),
+            (
+                "REPAIR THE PYTHON CODE FOR STEP",
+                [AssertionError("LLM repair should not be called")],
+            ),
+            (
+                "INTERPRET THE RESULTS OF STEP",
+                [
                     "The adjusted odds ratio was estimated "
                     "{evidence:adjusted_association_death}."
-                )
-            if "MANUSCRIPT SCAFFOLD" in upper:
-                return "# Title\n\n## Results\n\nAnalysis stopped after execution."
-            return _empty_custom_llm_response(user)
+                ]
+                * 8,
+            ),
+            (
+                "WRITE A MANUSCRIPT SCAFFOLD",
+                ["# Title\n\n## Results\n\nAnalysis stopped after execution."] * 8,
+            ),
+        ]
+    )
 
     cohort = pd.DataFrame(
         {
@@ -950,7 +1033,7 @@ print(json.dumps(summary))
     )
     pipeline = ra.ResearchAgentPipeline(
         workdir=tmp_path,
-        llm=OveradjustedLLM(),
+        llm=llm,
         enable_literature=False,
         max_code_repair_attempts=0,
     )
@@ -988,50 +1071,42 @@ print(json.dumps(summary))
     assert blocked[-1]["outcome"] == "blocked_by_automatic_repair_policy"
 
 
-def test_generic_association_figure_coder_failure_fails_closed(ra, tmp_path: Path):
-    class FigureCoderFailureLLM:
-        name = "figure-coder-failure-llm"
-
-        def __init__(self):
-            self.code_calls = 0
-
-        def complete(self, messages, *, max_tokens=2048, temperature=0.2):
-            user = next((m.content for m in reversed(messages) if m.role == "user"), "")
-            upper = user.upper()
-            if "ICU-AWARE RESEARCH PLAN" in upper:
-                return json.dumps(
-                    {
-                        "research_question": (
-                            "Estimate an association and render its publication figure."
-                        ),
-                        "steps": [
-                            {
-                                "step_id": "03_primary_association",
-                                "intent": "Estimate the adjusted odds ratio.",
-                                "inputs": ["sepsis3", "death", "age"],
-                                "expected_outputs": ["statistic:primary_or"],
-                                "method": "logistic_regression",
-                                "icu_rule_refs": [],
-                            },
-                            {
-                                "step_id": "03_primary_association_figure",
-                                "intent": (
-                                    "Render the publication figure(s) declared by "
-                                    "step '03_primary_association'."
-                                ),
-                                "inputs": ["statistic:primary_or"],
-                                "expected_outputs": ["figure:publication_figure"],
-                                "method": "publication_figure_generation",
-                                "icu_rule_refs": [],
-                            },
-                        ],
-                        "rationale": "minimal figure rescue test",
-                    }
-                )
-            if "WRITE THE PYTHON CODE" in upper:
-                self.code_calls += 1
-                if self.code_calls == 1:
-                    return """
+def test_generic_association_figure_coder_failure_fails_closed(
+    ra, tmp_path: Path, monkeypatch
+):
+    _disable_article_contract(monkeypatch)
+    plan = json.dumps(
+        {
+            "research_question": (
+                "Estimate an association and render its publication figure."
+            ),
+            "steps": [
+                {
+                    "step_id": "03_primary_association",
+                    "planned_analysis_role": "primary",
+                    "intent": "Estimate the adjusted odds ratio.",
+                    "inputs": ["sepsis3", "death", "age"],
+                    "expected_outputs": ["statistic:primary_or"],
+                    "method": "logistic_regression",
+                    "icu_rule_refs": [],
+                },
+                {
+                    "step_id": "03_primary_association_figure",
+                    "planned_analysis_role": "auxiliary",
+                    "intent": (
+                        "Render the publication figure(s) declared by "
+                        "step '03_primary_association'."
+                    ),
+                    "inputs": ["statistic:primary_or"],
+                    "expected_outputs": ["figure:publication_figure"],
+                    "method": "publication_figure_generation",
+                    "icu_rule_refs": [],
+                },
+            ],
+            "rationale": "minimal figure rescue test",
+        }
+    )
+    primary_code = """
 import json
 import os
 import pandas as pd
@@ -1062,12 +1137,26 @@ with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as f:
     json.dump(summary, f)
 print(json.dumps(summary))
 """
-                raise RuntimeError("simulated local LLM outage for figure coder")
-            if "INTERPRET THE RESULTS" in upper:
-                return "The step completed with registered evidence."
-            if "MANUSCRIPT SCAFFOLD" in upper:
-                return "# Title\n\n## Results\n\nAnalysis stopped after execution."
-            return _empty_custom_llm_response(user)
+    llm = PatternScriptedMockLLMClient(
+        [
+            *_stable_plan_rules(plan),
+            (
+                "WRITE THE PYTHON CODE FOR STEP",
+                [
+                    primary_code,
+                    RuntimeError("simulated local LLM outage for figure coder"),
+                ],
+            ),
+            (
+                "INTERPRET THE RESULTS OF STEP",
+                ["The step completed with registered evidence."] * 8,
+            ),
+            (
+                "WRITE A MANUSCRIPT SCAFFOLD",
+                ["# Title\n\n## Results\n\nAnalysis stopped after execution."] * 8,
+            ),
+        ]
+    )
 
     cohort = pd.DataFrame(
         {
@@ -1076,7 +1165,6 @@ print(json.dumps(summary))
             "age": [50, 60, 70, 80],
         }
     )
-    llm = FigureCoderFailureLLM()
     pipeline = ra.ResearchAgentPipeline(
         workdir=tmp_path,
         llm=llm,
@@ -1108,8 +1196,135 @@ print(json.dumps(summary))
     assert "deterministic_code_fallback" not in record
     # One call creates the parent analysis; at least one later call still gives
     # the agent its declared figure step before failing closed on the outage.
-    assert llm.code_calls >= 2
+    code_calls = [
+        messages
+        for messages, _kwargs in llm.calls
+        if any(
+            message.role == "user"
+            and "WRITE THE PYTHON CODE FOR STEP" in message.content.upper()
+            for message in messages
+        )
+    ]
+    assert len(code_calls) >= 2
     assert not out_dir.exists() or not list(out_dir.glob("publication_figure*"))
+
+
+@pytest.mark.parametrize(
+    ("failing_status", "expected_code_calls", "error_pattern"),
+    [
+        (
+            "initial_generation_pending",
+            0,
+            "reservation could not be checkpointed",
+        ),
+        (
+            "candidate_checkpointed",
+            1,
+            "candidate authority could not be checkpointed",
+        ),
+    ],
+)
+def test_initial_authority_checkpoint_io_failure_never_enters_code_fallback(
+    ra,
+    tmp_path: Path,
+    monkeypatch,
+    failing_status: str,
+    expected_code_calls: int,
+    error_pattern: str,
+):
+    from easyicu.research_agent.execution import phase as pipeline_execute
+    from easyicu.research_agent.authority.step_runtime import (
+        StepAuthorityRuntimeError,
+    )
+
+    _disable_article_contract(monkeypatch)
+    plan = json.dumps(
+        {
+            "research_question": "Summarize the locked ICU cohort.",
+            "steps": [
+                {
+                    "step_id": "01_summary",
+                    "planned_analysis_role": "auxiliary",
+                    "intent": "Produce the declared cohort summary.",
+                    "inputs": ["stay_id"],
+                    "expected_outputs": ["table:cohort_summary"],
+                    "method": "descriptive_summary",
+                    "icu_rule_refs": [],
+                }
+            ],
+            "rationale": "checkpoint integrity regression",
+        }
+    )
+    valid_code = """
+import json
+import os
+import pandas as pd
+
+df = pd.read_parquet(os.environ["COHORT_PARQUET"])
+out = os.environ["STEP_OUT_DIR"]
+pd.DataFrame({"n": [len(df)]}).to_csv(
+    os.path.join(out, "cohort_summary.csv"), index=False
+)
+summary = {
+    "n": len(df),
+    "output_files": [
+        {"kind": "table", "name": "cohort_summary", "path": "cohort_summary.csv"}
+    ],
+}
+with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as handle:
+    json.dump(summary, handle)
+"""
+    llm = PatternScriptedMockLLMClient(
+        [
+            *_stable_plan_rules(plan),
+            ("WRITE THE PYTHON CODE FOR STEP", [valid_code] * 8),
+        ]
+    )
+
+    original_write = pipeline_execute.write_run_checkpoint
+
+    def fail_target_checkpoint(path, payload):  # noqa: ANN001, ANN202
+        statuses = {
+            str(record.get("status") or "")
+            for record in payload.get("per_step_records", [])
+            if isinstance(record, dict)
+        }
+        if failing_status in statuses:
+            raise OSError(f"simulated {failing_status} checkpoint failure")
+        return original_write(path, payload)
+
+    monkeypatch.setattr(
+        pipeline_execute,
+        "write_run_checkpoint",
+        fail_target_checkpoint,
+    )
+    pipeline = ra.ResearchAgentPipeline(
+        workdir=tmp_path,
+        llm=llm,
+        enable_literature=False,
+        enable_visual_qa=False,
+        enable_latex=False,
+    )
+
+    with pytest.raises(StepAuthorityRuntimeError, match=error_pattern):
+        pipeline.run(
+            question="Summarize the locked ICU cohort.",
+            cohort=pd.DataFrame({"stay_id": [1, 2]}),
+            cohort_name="checkpoint_failure_test",
+            database="synthetic",
+            stop_after_analysis=True,
+        )
+
+    code_calls = [
+        messages
+        for messages, _kwargs in llm.calls
+        if any(
+            message.role == "user"
+            and "WRITE THE PYTHON CODE FOR STEP" in message.content.upper()
+            for message in messages
+        )
+    ]
+    assert len(code_calls) == expected_code_calls
 
 
 def test_promote_prior_publication_bundle_copies_real_figure_exports(tmp_path: Path):
@@ -1253,7 +1468,9 @@ def test_promote_prior_publication_bundle_filters_roles_for_primary_results(
     assert (target_dir / "publication_figure.png").read_bytes() == b"association"
 
 
-def test_pipeline_does_not_block_or_repair_advisory_ordinal_mean(ra, tmp_path: Path):
+def test_pipeline_does_not_block_or_repair_advisory_ordinal_mean(
+    ra, tmp_path: Path, monkeypatch
+):
     """Impartiality: a script that computes ``.mean()`` of an ordinal SOFA
     score (here inside a generic describe-style summary that ALSO reports the
     level distribution) must NOT hard-block or trigger an auto-repair that
@@ -1263,31 +1480,25 @@ def test_pipeline_does_not_block_or_repair_advisory_ordinal_mean(ra, tmp_path: P
     otherwise-correct ordinal analysis down to ``diagnostic_only``.
     """
 
-    class ConceptRepairLLM:
-        name = "concept-repair-llm"
-
-        def complete(self, messages, *, max_tokens=2048, temperature=0.2):
-            user = next((m.content for m in reversed(messages) if m.role == "user"), "")
-            upper = user.upper()
-            if "ICU-AWARE RESEARCH PLAN" in upper:
-                return json.dumps(
-                    {
-                        "research_question": "Does SOFA describe ICU mortality?",
-                        "steps": [
-                            {
-                                "step_id": "04_primary_association",
-                                "intent": "Assess SOFA-2 and mortality.",
-                                "inputs": ["sofa2", "death"],
-                                "expected_outputs": ["table:primary_association"],
-                                "method": "regression",
-                                "icu_rule_refs": ["aggregation_rule_for"],
-                            }
-                        ],
-                        "rationale": "minimal advisory-ordinal-mean test",
-                    }
-                )
-            if "REPAIR THE PYTHON CODE" in upper:
-                return """
+    _disable_article_contract(monkeypatch)
+    plan = json.dumps(
+        {
+            "research_question": "Does SOFA describe ICU mortality?",
+            "steps": [
+                {
+                    "step_id": "04_primary_association",
+                    "planned_analysis_role": "primary",
+                    "intent": "Assess SOFA-2 and mortality.",
+                    "inputs": ["sofa2", "death"],
+                    "expected_outputs": ["table:primary_association"],
+                    "method": "regression",
+                    "icu_rule_refs": ["aggregation_rule_for"],
+                }
+            ],
+            "rationale": "minimal advisory-ordinal-mean test",
+        }
+    )
+    repaired_code = """
 import json
 import os
 import pandas as pd
@@ -1308,12 +1519,7 @@ with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as f:
     json.dump(summary, f)
 print(json.dumps(summary))
 """
-            if "WRITE THE PYTHON CODE" in upper:
-                # Generic describe-style summary: reports the ordinal LEVEL
-                # DISTRIBUTION (the clinically appropriate summary) AND a
-                # supplementary .mean() inside the same helper. The .mean()
-                # is advisory, must not block or trigger a repair.
-                return """
+    initial_code = """
 import json
 import os
 import pandas as pd
@@ -1336,16 +1542,34 @@ with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as f:
     json.dump(summary, f)
 print(json.dumps(summary))
 """
-            if "INTERPRET THE RESULTS" in upper:
-                return "The repaired table was produced {evidence:primary_association_table}."
-            if "MANUSCRIPT SCAFFOLD" in upper:
-                return "# Title\n\n## Results\n\nThe repaired table was produced {evidence:primary_association_table}.\n\n(left to the human author)"
-            return _empty_custom_llm_response(user)
+    llm = PatternScriptedMockLLMClient(
+        [
+            *_stable_plan_rules(plan),
+            ("WRITE THE PYTHON CODE FOR STEP", [initial_code] * 8),
+            ("REPAIR THE PYTHON CODE FOR STEP", [repaired_code] * 8),
+            (
+                "INTERPRET THE RESULTS OF STEP",
+                [
+                    "The repaired table was produced "
+                    "{evidence:primary_association_table}."
+                ]
+                * 8,
+            ),
+            (
+                "WRITE A MANUSCRIPT SCAFFOLD",
+                [
+                    "# Title\n\n## Results\n\nThe repaired table was produced "
+                    "{evidence:primary_association_table}.\n\n(left to the human author)"
+                ]
+                * 8,
+            ),
+        ]
+    )
 
     cohort = pd.DataFrame({"sofa2": [0, 1, 3, 4], "death": [1, 0, 0, 1]})
     pipeline = ra.ResearchAgentPipeline(
         workdir=tmp_path,
-        llm=ConceptRepairLLM(),
+        llm=llm,
         enable_literature=False,
     )
     result = pipeline.run(
@@ -1382,49 +1606,53 @@ print(json.dumps(summary))
 
 
 def test_pipeline_falls_back_to_deterministic_code_after_repair_failure(
-    ra, tmp_path: Path
+    ra, tmp_path: Path, monkeypatch
 ):
     """If hosted-model code and its repair both fail, use mock-safe code."""
 
-    class FallbackLLM:
-        name = "fallback-llm"
-
-        def complete(self, messages, *, max_tokens=2048, temperature=0.2):
-            user = next((m.content for m in reversed(messages) if m.role == "user"), "")
-            upper = user.upper()
-            if "ICU-AWARE RESEARCH PLAN" in upper:
-                return json.dumps(
-                    {
-                        "research_question": "Is SOFA associated with ICU mortality?",
-                        "steps": [
-                            {
-                                "step_id": "01_table_one",
-                                "intent": "Produce a Table 1 cohort summary.",
-                                "inputs": ["sofa2", "death"],
-                                "expected_outputs": ["table:table_one"],
-                                "method": "descriptive",
-                                "icu_rule_refs": ["aggregation_rule_for"],
-                            }
-                        ],
-                        "rationale": "minimal fallback test",
-                    }
-                )
-            if "WRITE THE PYTHON CODE" in upper or "REPAIR THE PYTHON CODE" in upper:
-                # Must satisfy the coder's _looks_like_python_script guard
-                # (a bare `raise` line is refused as non-script output and
-                # would divert to the repair_failed fallback path) while
-                # still failing at execution time on every attempt.
-                return "import os\nraise RuntimeError('still broken')\n"
-            if "INTERPRET THE RESULTS" in upper:
-                return "The fallback table was produced {evidence:table_one}."
-            if "MANUSCRIPT SCAFFOLD" in upper:
-                return "# Title\n\n## Results\n\nThe fallback table was produced {evidence:table_one}.\n\n(left to the human author)"
-            return _empty_custom_llm_response(user)
+    _disable_article_contract(monkeypatch)
+    plan = json.dumps(
+        {
+            "research_question": "Is SOFA associated with ICU mortality?",
+            "steps": [
+                {
+                    "step_id": "01_table_one",
+                    "planned_analysis_role": "auxiliary",
+                    "intent": "Produce a Table 1 cohort summary.",
+                    "inputs": ["sofa2", "death"],
+                    "expected_outputs": ["table:table_one"],
+                    "method": "descriptive",
+                    "icu_rule_refs": ["aggregation_rule_for"],
+                }
+            ],
+            "rationale": "minimal fallback test",
+        }
+    )
+    broken_code = "import os\nraise RuntimeError('still broken')\n"
+    llm = PatternScriptedMockLLMClient(
+        [
+            *_stable_plan_rules(plan),
+            ("WRITE THE PYTHON CODE FOR STEP", [broken_code] * 8),
+            ("REPAIR THE PYTHON CODE FOR STEP", [broken_code] * 8),
+            (
+                "INTERPRET THE RESULTS OF STEP",
+                ["The fallback table was produced {evidence:table_one}."] * 8,
+            ),
+            (
+                "WRITE A MANUSCRIPT SCAFFOLD",
+                [
+                    "# Title\n\n## Results\n\nThe fallback table was produced "
+                    "{evidence:table_one}.\n\n(left to the human author)"
+                ]
+                * 8,
+            ),
+        ]
+    )
 
     cohort = pd.DataFrame({"sofa2": [0, 1, 3, 4], "death": [1, 0, 0, 1]})
     pipeline = ra.ResearchAgentPipeline(
         workdir=tmp_path,
-        llm=FallbackLLM(),
+        llm=llm,
         enable_literature=False,
         enable_deterministic_code_fallback=True,
         # Disable deterministic runner repair so code fallback path is exercised
@@ -1449,46 +1677,59 @@ def test_pipeline_falls_back_to_deterministic_code_after_repair_failure(
     assert record["deterministic_code_fallback"] == "repair_failed"
 
 
-def test_pipeline_falls_back_when_repair_model_call_fails(ra, tmp_path: Path):
+def test_pipeline_falls_back_when_repair_model_call_fails(
+    ra, tmp_path: Path, monkeypatch
+):
     """A provider 429 during repair should not strand the whole step."""
 
-    class RepairRaisesLLM:
-        name = "repair-raises-llm"
-
-        def complete(self, messages, *, max_tokens=2048, temperature=0.2):
-            user = next((m.content for m in reversed(messages) if m.role == "user"), "")
-            upper = user.upper()
-            if "ICU-AWARE RESEARCH PLAN" in upper:
-                return json.dumps(
-                    {
-                        "research_question": "Is SOFA associated with ICU mortality?",
-                        "steps": [
-                            {
-                                "step_id": "01_table_one",
-                                "intent": "Produce a Table 1 cohort summary.",
-                                "inputs": ["sofa2", "death"],
-                                "expected_outputs": ["table:table_one"],
-                                "method": "descriptive",
-                                "icu_rule_refs": ["aggregation_rule_for"],
-                            }
-                        ],
-                        "rationale": "minimal repair-failure fallback test",
-                    }
-                )
-            if "REPAIR THE PYTHON CODE" in upper:
-                raise RuntimeError("provider rate limited")
-            if "WRITE THE PYTHON CODE" in upper:
-                return "raise RuntimeError('broken first draft')\n"
-            if "INTERPRET THE RESULTS" in upper:
-                return "The fallback table was produced {evidence:table_one}."
-            if "MANUSCRIPT SCAFFOLD" in upper:
-                return "# Title\n\n## Results\n\nThe fallback table was produced {evidence:table_one}.\n\n(left to the human author)"
-            return _empty_custom_llm_response(user)
+    _disable_article_contract(monkeypatch)
+    plan = json.dumps(
+        {
+            "research_question": "Is SOFA associated with ICU mortality?",
+            "steps": [
+                {
+                    "step_id": "01_table_one",
+                    "planned_analysis_role": "auxiliary",
+                    "intent": "Produce a Table 1 cohort summary.",
+                    "inputs": ["sofa2", "death"],
+                    "expected_outputs": ["table:table_one"],
+                    "method": "descriptive",
+                    "icu_rule_refs": ["aggregation_rule_for"],
+                }
+            ],
+            "rationale": "minimal repair-failure fallback test",
+        }
+    )
+    llm = PatternScriptedMockLLMClient(
+        [
+            *_stable_plan_rules(plan),
+            (
+                "WRITE THE PYTHON CODE FOR STEP",
+                ["raise RuntimeError('broken first draft')\n"] * 8,
+            ),
+            (
+                "REPAIR THE PYTHON CODE FOR STEP",
+                [RuntimeError("provider rate limited")],
+            ),
+            (
+                "INTERPRET THE RESULTS OF STEP",
+                ["The fallback table was produced {evidence:table_one}."] * 8,
+            ),
+            (
+                "WRITE A MANUSCRIPT SCAFFOLD",
+                [
+                    "# Title\n\n## Results\n\nThe fallback table was produced "
+                    "{evidence:table_one}.\n\n(left to the human author)"
+                ]
+                * 8,
+            ),
+        ]
+    )
 
     cohort = pd.DataFrame({"sofa2": [0, 1, 3, 4], "death": [1, 0, 0, 1]})
     pipeline = ra.ResearchAgentPipeline(
         workdir=tmp_path,
-        llm=RepairRaisesLLM(),
+        llm=llm,
         enable_literature=False,
         enable_deterministic_code_fallback=True,
         # Disable deterministic runner repair so the code fallback path is exercised
@@ -1511,45 +1752,54 @@ def test_pipeline_falls_back_when_repair_model_call_fails(ra, tmp_path: Path):
 
 
 def test_pipeline_falls_back_when_successful_script_writes_no_artefacts(
-    ra, tmp_path: Path
+    ra, tmp_path: Path, monkeypatch
 ):
     """Exit-code 0 with an empty output dir is not a usable analysis step."""
 
-    class NoArtefactLLM:
-        name = "no-artefact-llm"
-
-        def complete(self, messages, *, max_tokens=2048, temperature=0.2):
-            user = next((m.content for m in reversed(messages) if m.role == "user"), "")
-            upper = user.upper()
-            if "ICU-AWARE RESEARCH PLAN" in upper:
-                return json.dumps(
-                    {
-                        "research_question": "Is SOFA associated with ICU mortality?",
-                        "steps": [
-                            {
-                                "step_id": "01_table_one",
-                                "intent": "Produce a Table 1 cohort summary.",
-                                "inputs": ["sofa2", "death"],
-                                "expected_outputs": ["table:table_one"],
-                                "method": "descriptive",
-                                "icu_rule_refs": ["aggregation_rule_for"],
-                            }
-                        ],
-                        "rationale": "minimal no-artefact fallback test",
-                    }
-                )
-            if "WRITE THE PYTHON CODE" in upper:
-                return "print('I forgot to write outputs')\n"
-            if "INTERPRET THE RESULTS" in upper:
-                return "The fallback table was produced {evidence:table_one}."
-            if "MANUSCRIPT SCAFFOLD" in upper:
-                return "# Title\n\n## Results\n\nThe fallback table was produced {evidence:table_one}.\n\n(left to the human author)"
-            return _empty_custom_llm_response(user)
+    _disable_article_contract(monkeypatch)
+    plan = json.dumps(
+        {
+            "research_question": "Is SOFA associated with ICU mortality?",
+            "steps": [
+                {
+                    "step_id": "01_table_one",
+                    "planned_analysis_role": "auxiliary",
+                    "intent": "Produce a Table 1 cohort summary.",
+                    "inputs": ["sofa2", "death"],
+                    "expected_outputs": ["table:table_one"],
+                    "method": "descriptive",
+                    "icu_rule_refs": ["aggregation_rule_for"],
+                }
+            ],
+            "rationale": "minimal no-artefact fallback test",
+        }
+    )
+    llm = PatternScriptedMockLLMClient(
+        [
+            *_stable_plan_rules(plan),
+            (
+                "WRITE THE PYTHON CODE FOR STEP",
+                ["print('I forgot to write outputs')\n"] * 8,
+            ),
+            (
+                "INTERPRET THE RESULTS OF STEP",
+                ["The fallback table was produced {evidence:table_one}."] * 8,
+            ),
+            (
+                "WRITE A MANUSCRIPT SCAFFOLD",
+                [
+                    "# Title\n\n## Results\n\nThe fallback table was produced "
+                    "{evidence:table_one}.\n\n(left to the human author)"
+                ]
+                * 8,
+            ),
+        ]
+    )
 
     cohort = pd.DataFrame({"sofa2": [0, 1, 3, 4], "death": [1, 0, 0, 1]})
     pipeline = ra.ResearchAgentPipeline(
         workdir=tmp_path,
-        llm=NoArtefactLLM(),
+        llm=llm,
         enable_literature=False,
         enable_deterministic_code_fallback=True,
     )
@@ -2102,72 +2352,63 @@ def test_pipeline_keeps_llm_concept_audit_off_for_mock_default(ra, tmp_path: Pat
     assert pipeline._enable_llm_concept_audit is False
 
 
-def test_pipeline_probe_can_trigger_replanning(ra, tmp_path: Path):
-    class ReplanningLLM:
-        name = "replanning-llm"
-
-        def __init__(self):
-            self.coder_prompts = []
-
-        def complete(self, messages, *, max_tokens=2048, temperature=0.2):
-            user = next((m.content for m in reversed(messages) if m.role == "user"), "")
-            upper = user.upper()
-            if "REVISE THE ICU-AWARE RESEARCH PLAN" in upper:
-                return json.dumps(
-                    {
-                        "research_question": "Audit then model mortality.",
-                        "steps": [
-                            {
-                                "step_id": "00_probe",
-                                "intent": "Probe distributions before execution.",
-                                "inputs": [],
-                                "expected_outputs": [],
-                                "method": None,
-                                "icu_rule_refs": [],
-                            },
-                            {
-                                "step_id": "03_missingness_audit",
-                                "intent": "Audit missingness before modelling.",
-                                "inputs": ["lact", "death"],
-                                "expected_outputs": ["table:missingness"],
-                                "method": "missingness_audit",
-                                "icu_rule_refs": ["aggregation_rule_for"],
-                            },
-                            {
-                                "step_id": "04_primary_association",
-                                "intent": "Model lactate and mortality.",
-                                "inputs": ["lact", "death"],
-                                "expected_outputs": ["table:primary_association"],
-                                "method": "regression",
-                                "icu_rule_refs": ["aggregation_rule_for"],
-                            },
-                        ],
-                        "rationale": "Probe revealed substantial missingness; audit first.",
-                        "revision": 2,
-                    }
-                )
-            if "ICU-AWARE RESEARCH PLAN" in upper:
-                return json.dumps(
-                    {
-                        "research_question": "Audit then model mortality.",
-                        "steps": [
-                            {
-                                "step_id": "04_primary_association",
-                                "intent": "Model lactate and mortality.",
-                                "inputs": ["lact", "death"],
-                                "expected_outputs": ["table:primary_association"],
-                                "method": "regression",
-                                "icu_rule_refs": ["aggregation_rule_for"],
-                            }
-                        ],
-                        "rationale": "Initial one-step plan.",
-                        "revision": 1,
-                    }
-                )
-            if "WRITE THE PYTHON CODE" in upper:
-                self.coder_prompts.append(user)
-                if "03_missingness_audit" in upper:
-                    return """
+def test_pipeline_probe_can_trigger_replanning(ra, tmp_path: Path, monkeypatch):
+    _disable_article_contract(monkeypatch)
+    initial_plan = json.dumps(
+        {
+            "research_question": "Audit then model mortality.",
+            "steps": [
+                {
+                    "step_id": "04_primary_association",
+                    "planned_analysis_role": "primary",
+                    "intent": "Model lactate and mortality.",
+                    "inputs": ["lact", "death"],
+                    "expected_outputs": ["table:primary_association"],
+                    "method": "regression",
+                    "icu_rule_refs": ["aggregation_rule_for"],
+                }
+            ],
+            "rationale": "Initial one-step plan.",
+            "revision": 1,
+        }
+    )
+    revised_plan = json.dumps(
+        {
+            "research_question": "Audit then model mortality.",
+            "steps": [
+                {
+                    "step_id": "00_probe",
+                    "planned_analysis_role": "auxiliary",
+                    "intent": "Probe distributions before execution.",
+                    "inputs": [],
+                    "expected_outputs": [],
+                    "method": None,
+                    "icu_rule_refs": [],
+                },
+                {
+                    "step_id": "03_missingness_audit",
+                    "planned_analysis_role": "auxiliary",
+                    "intent": "Audit missingness before modelling.",
+                    "inputs": ["lact", "death"],
+                    "expected_outputs": ["table:missingness"],
+                    "method": "missingness_audit",
+                    "icu_rule_refs": ["aggregation_rule_for"],
+                },
+                {
+                    "step_id": "04_primary_association",
+                    "planned_analysis_role": "primary",
+                    "intent": "Model lactate and mortality.",
+                    "inputs": ["lact", "death"],
+                    "expected_outputs": ["table:primary_association"],
+                    "method": "regression",
+                    "icu_rule_refs": ["aggregation_rule_for"],
+                },
+            ],
+            "rationale": "Probe revealed substantial missingness; audit first.",
+            "revision": 2,
+        }
+    )
+    missingness_code = """
 import json, os, pandas as pd
 df = pd.read_parquet(os.environ["COHORT_PARQUET"])
 out = os.environ["STEP_OUT_DIR"]
@@ -2176,7 +2417,7 @@ summary = {"variable": "lact", "fraction_missing": float(df["lact"].isna().mean(
 with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as f:
     json.dump(summary, f)
 """
-                return """
+    association_code = """
 import json, os, pandas as pd
 df = pd.read_parquet(os.environ["COHORT_PARQUET"]).dropna(subset=["lact", "death"])
 out = os.environ["STEP_OUT_DIR"]
@@ -2185,11 +2426,35 @@ summary = {"predictor": "lact", "primary_or": 1.2}
 with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as f:
     json.dump(summary, f)
 """
-            if "INTERPRET THE RESULTS" in upper:
-                return "See {evidence:primary_association}."
-            if "MANUSCRIPT SCAFFOLD" in upper:
-                return "# Title\n\n## Results\n\nSee {evidence:primary_association}.\n\n(left to the human author)"
-            return _empty_custom_llm_response(user)
+    llm = PatternScriptedMockLLMClient(
+        [
+            (
+                "Produce an ICU-AWARE RESEARCH PLAN as JSON",
+                [initial_plan] * 8,
+            ),
+            ("REVISE THE ICU-AWARE RESEARCH PLAN", [revised_plan] * 8),
+            (
+                "WRITE THE PYTHON CODE FOR STEP 03_MISSINGNESS_AUDIT",
+                [missingness_code] * 8,
+            ),
+            (
+                "WRITE THE PYTHON CODE FOR STEP 04_PRIMARY_ASSOCIATION",
+                [association_code] * 8,
+            ),
+            (
+                "INTERPRET THE RESULTS OF STEP",
+                ["See {evidence:primary_association}."] * 8,
+            ),
+            (
+                "WRITE A MANUSCRIPT SCAFFOLD",
+                [
+                    "# Title\n\n## Results\n\nSee "
+                    "{evidence:primary_association}.\n\n(left to the human author)"
+                ]
+                * 8,
+            ),
+        ]
+    )
 
     cohort = pd.DataFrame(
         {
@@ -2198,7 +2463,6 @@ with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as f:
             "death": [1 if i % 7 == 0 else 0 for i in range(40)],
         }
     )
-    llm = ReplanningLLM()
     pipeline = ra.ResearchAgentPipeline(
         workdir=tmp_path,
         llm=llm,
@@ -2225,7 +2489,14 @@ with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as f:
     assert len(probe_records) == 1
     assert probe_records[0]["status"] == "ok"
     assert probe_records[0]["generation_mode"] == "deterministic_probe"
-    assert not any("00_probe" in prompt for prompt in llm.coder_prompts)
+    coder_prompts = [
+        message.content
+        for messages, _kwargs in llm.calls
+        for message in messages
+        if message.role == "user"
+        and "WRITE THE PYTHON CODE FOR STEP" in message.content.upper()
+    ]
+    assert not any("00_probe" in prompt for prompt in coder_prompts)
     assert "03_missingness_audit" in step_ids
     assert (run_dir / "analysis_plan_revision_2.json").exists()
 
@@ -2879,8 +3150,71 @@ contract = make_figure_contract(
     assert repaired is not None
     name, patched = repaired
     assert name == "replace_hallucinated_figure_utils_import_v1"
-    assert "easyicu.research_agent.publication_figures" in patched
+    assert "easyicu.research_agent.figures.publication" in patched
     assert "easyicu.research_output.figure_utils" not in patched
+
+
+def test_deterministic_runner_repair_does_not_strip_real_host_module(ra):
+    from easyicu.research_agent.pipeline import _deterministic_runner_repair
+
+    code = """
+from easyicu.research_agent.methods.descriptive_inputs import (
+    strict_numeric_input,
+)
+from easyicu.research_agent.methods.table_one import build_grouped_table_one
+
+print(build_grouped_table_one)
+"""
+    repaired = _deterministic_runner_repair(
+        code=code,
+        run_log=(
+            "ModuleNotFoundError: No module named "
+            "'easyicu.research_agent.methods.table_one'"
+        ),
+    )
+    assert repaired is None
+
+
+def test_deterministic_runner_repair_inserts_stub_after_parenthesized_import(ra):
+    import ast
+
+    from easyicu.research_agent.pipeline import _deterministic_runner_repair
+
+    code = """
+from easyicu.research_agent.methods.descriptive_inputs import (
+    strict_numeric_input,
+)
+from easyicu.fake_table_sdk import fake_table
+
+print(fake_table)
+"""
+    repaired = _deterministic_runner_repair(
+        code=code,
+        run_log="ModuleNotFoundError: No module named 'easyicu.fake_table_sdk'",
+    )
+    assert repaired is not None
+    _repair_id, patched = repaired
+    ast.parse(patched)
+    assert patched.index("strict_numeric_input,") < patched.index("def fake_table")
+
+
+def test_deterministic_runner_repair_inserts_stub_before_late_import(ra):
+    from easyicu.research_agent.pipeline import _deterministic_runner_repair
+
+    code = """
+from pathlib import Path
+from easyicu.fake_table_sdk import fake_table
+
+print(fake_table)
+import json
+"""
+    repaired = _deterministic_runner_repair(
+        code=code,
+        run_log="ModuleNotFoundError: No module named 'easyicu.fake_table_sdk'",
+    )
+    assert repaired is not None
+    _repair_id, patched = repaired
+    assert patched.index("def fake_table") < patched.index("print(fake_table)")
 
 
 def test_deterministic_runner_repair_filters_x_cols_after_dummy_encoding(ra):
@@ -3355,7 +3689,7 @@ def test_deterministic_runner_repair_promotes_publication_bundle_script(ra):
     from easyicu.research_agent.pipeline import _deterministic_runner_repair
 
     code = """
-from easyicu.research_agent.publication_figures import make_figure_contract
+from easyicu.research_agent.figures.publication import make_figure_contract
 pub_style = apply_publication_style()
 save_publication_figure(figure_contract, fig)
 """
@@ -4243,6 +4577,18 @@ def test_split_table_and_figure_outputs_in_plan_splits_mixed_step(ra):
     assert figure_step.expected_outputs == ["figure:table_one_visual"]
     assert figure_step.inputs == ["table:table_one"]
     assert figure_step.method == "visualization"
+    assert [
+        contract.model_dump(mode="json")
+        for contract in figure_step.input_consumption_contracts
+    ] == [
+        {
+            "schema_version": "easyicu.artifact_consumption/1",
+            "input_key": "table:table_one",
+            "mode": "all_rows",
+            "role_column": None,
+            "expected_roles": [],
+        }
+    ]
     assert findings and findings[0].severity == "warning"
     assert "01_table_one_figure" in findings[0].message
 
@@ -4604,9 +4950,13 @@ def test_split_table_and_figure_does_not_create_duplicate_child_id(ra):
 
     revised, findings = _split_table_and_figure_outputs_in_plan(plan=plan)
 
-    assert revised is plan
-    assert findings == []
+    assert revised is not plan
+    assert any(
+        finding.detail.get("reason") == "visualization_all_rows_consumption_default"
+        for finding in findings
+    )
     assert [step.step_id for step in revised.steps].count("01_primary_figure") == 1
+    assert revised.steps[1].input_consumption_contracts[0].mode == "all_rows"
 
 
 def test_split_table_and_figure_outputs_in_plan_no_op_for_advanced_self_contained_step(
@@ -4938,6 +5288,7 @@ def test_plan_cap_makes_room_for_late_primary_anchor_without_exceeding_cap(ra):
         + [
             AnalysisStep(
                 step_id="05_primary_adjusted_model",
+                planned_analysis_role="primary",
                 intent="Fit the primary adjusted model.",
                 method="logistic_regression",
                 expected_outputs=["table:primary_estimate"],
@@ -5115,6 +5466,27 @@ def test_manuscript_numeric_auditor_ignores_between_estimate_delta(ra):
     )
 
     assert findings == []
+
+
+def test_manuscript_numeric_auditor_does_not_treat_ordinary_prose_as_delta(ra):
+    from easyicu.research_agent.pipeline import _audit_manuscript_numeric_claims
+
+    for sentence in (
+        "Within the derivation cohort, the model achieved an AUROC of 0.92.",
+        "The AUROC differed by site and was 0.92 in the derivation cohort.",
+    ):
+        findings = _audit_manuscript_numeric_claims(
+            sentence + " [model](evidence/model.csv).\n",
+            per_step_records=[
+                {
+                    "step_id": "01_model_training",
+                    "status": "ok",
+                    "step_summary": {"statistic:auroc": 0.766},
+                }
+            ],
+        )
+
+        assert any("AUROC claim" in finding.message for finding in findings)
 
 
 def test_manuscript_numeric_auditor_ignores_ci_percent_near_outcome_phrase(ra):
@@ -5312,7 +5684,7 @@ def test_manuscript_numeric_auditor_flags_value_matching_no_registered_step(ra):
 
 
 def test_repair_common_writer_placeholders_prediction_fallbacks(ra, tmp_path: Path):
-    from easyicu.research_agent.evidence import EvidenceStore
+    from easyicu.research_agent.authority.evidence_store import EvidenceStore
     from easyicu.research_agent.pipeline import _repair_common_writer_placeholders
 
     store = EvidenceStore(tmp_path)
@@ -5361,7 +5733,7 @@ def test_prediction_placeholder_repair_does_not_create_outcome_rate_for_continuo
     ra,
     tmp_path: Path,
 ):
-    from easyicu.research_agent.evidence import EvidenceStore
+    from easyicu.research_agent.authority.evidence_store import EvidenceStore
     from easyicu.research_agent.pipeline import _repair_common_writer_placeholders
 
     store = EvidenceStore(tmp_path)
@@ -5426,7 +5798,7 @@ def test_repair_common_writer_citation_omissions_for_methods_sentences(
     ra,
     tmp_path: Path,
 ):
-    from easyicu.research_agent.evidence import EvidenceStore
+    from easyicu.research_agent.authority.evidence_store import EvidenceStore
     from easyicu.research_agent.pipeline import _repair_common_writer_citation_omissions
 
     store = EvidenceStore(tmp_path)
@@ -5468,7 +5840,7 @@ def test_repair_common_writer_citation_omissions_handles_mixed_cited_paragraph(
     ra,
     tmp_path: Path,
 ):
-    from easyicu.research_agent.evidence import EvidenceStore
+    from easyicu.research_agent.authority.evidence_store import EvidenceStore
     from easyicu.research_agent.pipeline import _repair_common_writer_citation_omissions
 
     store = EvidenceStore(tmp_path)
@@ -5510,7 +5882,7 @@ def test_repair_common_writer_citation_omissions_fails_closed_without_evidence(
     ra,
     tmp_path: Path,
 ):
-    from easyicu.research_agent.evidence import EvidenceStore
+    from easyicu.research_agent.authority.evidence_store import EvidenceStore
     from easyicu.research_agent.pipeline import _repair_common_writer_citation_omissions
 
     store = EvidenceStore(tmp_path)
@@ -5532,7 +5904,7 @@ def test_repair_common_writer_citation_omissions_skips_manuscript_metadata(
     ra,
     tmp_path: Path,
 ):
-    from easyicu.research_agent.evidence import EvidenceStore
+    from easyicu.research_agent.authority.evidence_store import EvidenceStore
     from easyicu.research_agent.pipeline import _repair_common_writer_citation_omissions
 
     store = EvidenceStore(tmp_path)
@@ -5575,7 +5947,7 @@ def test_repair_common_writer_citation_omissions_does_not_launder_numeric_result
     result-sentence filter instead of being laundered with a Methods citation.
     """
 
-    from easyicu.research_agent.evidence import EvidenceStore
+    from easyicu.research_agent.authority.evidence_store import EvidenceStore
     from easyicu.research_agent.pipeline import _repair_common_writer_citation_omissions
 
     store = EvidenceStore(tmp_path)
@@ -5612,6 +5984,33 @@ def test_repair_common_writer_citation_omissions_does_not_launder_numeric_result
     assert [item["evidence_id"] for item in repairs] == [
         "01_define_cohort_and_derive_sepsis3"
     ]
+
+
+def test_apply_writer_evidence_repair_decisions_cites_or_drops_without_rewriting(ra):
+    from easyicu.research_agent.reporting.manuscript_post import (
+        _apply_writer_evidence_repair_decisions,
+    )
+
+    supported = "Sepsis is clinically important."
+    unsupported = "No estimate was available for reporting."
+    scaffold = f"## Introduction\n\n{supported} {unsupported}\n"
+
+    repaired, applied = _apply_writer_evidence_repair_decisions(
+        scaffold,
+        missing_sentences=[supported, unsupported],
+        decisions=[
+            {
+                "index": 0,
+                "action": "cite",
+                "evidence_ids": ["literature_prisma"],
+            },
+            {"index": 1, "action": "drop", "evidence_ids": []},
+        ],
+    )
+
+    assert "Sepsis is clinically important {evidence:literature_prisma}." in repaired
+    assert unsupported not in repaired
+    assert [item["action"] for item in applied] == ["cite", "drop"]
 
 
 def test_execution_gate_and_parent_figure_dependency_helpers(ra):
@@ -5657,7 +6056,7 @@ def test_execution_gate_and_parent_figure_dependency_helpers(ra):
 
 
 def test_readiness_artifacts_fail_closed_without_manuscript_ready(ra, tmp_path: Path):
-    from easyicu.research_agent.evidence import EvidenceStore
+    from easyicu.research_agent.authority.evidence_store import EvidenceStore
     from easyicu.research_agent.pipeline import _write_readiness_artifacts
     from easyicu.research_agent.schema import ValidationFinding
 
@@ -5732,7 +6131,7 @@ def _evidence_bound_demo_manuscript() -> str:
 
 
 def test_readiness_artifacts_reject_writer_failure_text(ra, tmp_path: Path):
-    from easyicu.research_agent.evidence import EvidenceStore
+    from easyicu.research_agent.authority.evidence_store import EvidenceStore
     from easyicu.research_agent.pipeline import _write_readiness_artifacts
 
     context = ra.ResearchContext(
@@ -5790,7 +6189,7 @@ def test_readiness_artifacts_reject_unresolved_manifest_comments(
     ra,
     tmp_path: Path,
 ):
-    from easyicu.research_agent.evidence import EvidenceStore
+    from easyicu.research_agent.authority.evidence_store import EvidenceStore
     from easyicu.research_agent.pipeline import _write_readiness_artifacts
 
     context = ra.ResearchContext(
@@ -5879,7 +6278,7 @@ def test_readiness_artifacts_reject_unresolved_manifest_comments(
 def test_readiness_artifacts_emit_manuscript_ready_only_after_gates_pass(
     ra, tmp_path: Path
 ):
-    from easyicu.research_agent.evidence import EvidenceStore
+    from easyicu.research_agent.authority.evidence_store import EvidenceStore
     from easyicu.research_agent.pipeline import _write_readiness_artifacts
 
     context = ra.ResearchContext(
@@ -5931,6 +6330,63 @@ def test_readiness_artifacts_emit_manuscript_ready_only_after_gates_pass(
     ) == bound_path.read_text(encoding="utf-8")
 
 
+def test_readiness_artifacts_reject_untraced_numeric_marker(ra, tmp_path: Path):
+    from easyicu.research_agent.authority.evidence_store import EvidenceStore
+    from easyicu.research_agent.pipeline import _write_readiness_artifacts
+
+    context = ra.ResearchContext(
+        research_question="Estimate mortality risk.",
+        cohort=ra.CohortDescriptor(
+            cohort_name="demo",
+            database="synthetic",
+            n_stays=10,
+            n_patients=10,
+        ),
+        variables=[],
+    )
+    plan = ra.AnalysisPlan(
+        research_question=context.research_question,
+        steps=[
+            ra.AnalysisStep(
+                step_id="01_model_training",
+                intent="Train model.",
+                expected_outputs=["table:model_performance"],
+            )
+        ],
+    )
+    evidence = EvidenceStore(tmp_path)
+    bound_path = tmp_path / "manuscript_scaffold_bound.md"
+    bound_path.write_text(
+        _evidence_bound_demo_manuscript()
+        + "\nThe writer added 999 <!-- UNTRACED:999 -->.\n",
+        encoding="utf-8",
+    )
+
+    gates, artifact_paths = _write_readiness_artifacts(
+        context=context,
+        plan=plan,
+        findings=[],
+        per_step_records=[
+            {
+                "step_id": "01_model_training",
+                "status": "ok",
+                "step_summary": {"statistic:auroc": 0.776},
+            }
+        ],
+        evidence=evidence,
+        run_dir=tmp_path,
+        manuscript_path=bound_path,
+        stop_after_analysis=False,
+    )
+
+    assert gates["execution_complete"] is True
+    assert gates["numeric_verified"] is False
+    assert gates["manuscript_ready"] is False
+    assert gates["numeric_error_count"] == 1
+    assert "manuscript_ready" not in artifact_paths
+    assert not (tmp_path / "manuscript_ready.md").exists()
+
+
 def _register_publication_bundle_for_readiness(
     evidence,
     tmp_path: Path,
@@ -5938,7 +6394,7 @@ def _register_publication_bundle_for_readiness(
     contract: dict,
     source_step_id: str | None = None,
 ) -> str:
-    from easyicu.research_agent.publication_figures import (
+    from easyicu.research_agent.figures.publication import (
         PUBLICATION_FIGURE_SKILL_POLICY_VERSION,
     )
 
@@ -6077,6 +6533,20 @@ def _register_complete_display_suite_for_readiness(
         producer="coder",
         generation_mode="llm_code",
     )
+    primary_path = tmp_path / "primary_estimand.csv"
+    primary_path.write_text(
+        "term,estimate,ci_low,ci_high\nsepsis3,1.14,1.02,1.28\n",
+        encoding="utf-8",
+    )
+    primary_record = evidence.register_file(
+        kind="table",
+        description="Planner-owned primary adjusted estimate.",
+        source_path=primary_path,
+        evidence_id="table_primary_estimand",
+        produced_by_step=publication_source_step_id,
+        producer="coder",
+        generation_mode="llm_code",
+    )
     publication_source_id = _register_publication_bundle_for_readiness(
         evidence,
         tmp_path,
@@ -6120,15 +6590,35 @@ def _register_complete_display_suite_for_readiness(
     if table_step_id:
         bound.setdefault(table_step_id, []).append(table_record.evidence_id)
     if publication_source_step_id:
-        bound.setdefault(publication_source_step_id, []).append(publication_source_id)
+        bound.setdefault(publication_source_step_id, []).extend(
+            [primary_record.evidence_id, publication_source_id]
+        )
     return bound
+
+
+def _authoritative_readiness_records(
+    plan,
+    evidence_ids_by_step: dict[str, list[str]],
+) -> list[dict]:
+    """Build the same doubly-bound role records produced by the live pipeline."""
+
+    return [
+        {
+            "step_id": step.step_id,
+            "status": "ok",
+            "planned_analysis_role": step.planned_analysis_role,
+            "analysis_request": {"step": step.model_dump(mode="json")},
+            "evidence_ids": list(evidence_ids_by_step.get(step.step_id, [])),
+        }
+        for step in plan.steps
+    ]
 
 
 def test_readiness_publication_ready_requires_article_display_suite(
     ra,
     tmp_path: Path,
 ):
-    from easyicu.research_agent.evidence import EvidenceStore
+    from easyicu.research_agent.authority.evidence_store import EvidenceStore
     from easyicu.research_agent.pipeline import _write_readiness_artifacts
 
     context = ra.ResearchContext(
@@ -6213,7 +6703,7 @@ def test_readiness_publication_ready_accepts_complete_display_suite(
     ra,
     tmp_path: Path,
 ):
-    from easyicu.research_agent.evidence import EvidenceStore
+    from easyicu.research_agent.authority.evidence_store import EvidenceStore
     from easyicu.research_agent.pipeline import _write_readiness_artifacts
 
     context = ra.ResearchContext(
@@ -6238,7 +6728,8 @@ def test_readiness_publication_ready_accepts_complete_display_suite(
             ra.AnalysisStep(
                 step_id="02_model",
                 intent="Fit adjusted association model.",
-                expected_outputs=["table:adjusted_association"],
+                expected_outputs=["table:primary_estimand"],
+                planned_analysis_role="primary",
             ),
             ra.AnalysisStep(
                 step_id="03_sensitivity",
@@ -6261,19 +6752,7 @@ def test_readiness_publication_ready_accepts_complete_display_suite(
         context=context,
         plan=plan,
         findings=[],
-        per_step_records=[
-            {
-                "step_id": "01_table_one",
-                "status": "ok",
-                "evidence_ids": bound_evidence["01_table_one"],
-            },
-            {
-                "step_id": "02_model",
-                "status": "ok",
-                "evidence_ids": bound_evidence["02_model"],
-            },
-            {"step_id": "03_sensitivity", "status": "ok"},
-        ],
+        per_step_records=_authoritative_readiness_records(plan, bound_evidence),
         evidence=evidence,
         run_dir=tmp_path,
         manuscript_path=bound_path,
@@ -6297,7 +6776,7 @@ def test_display_suite_keeps_step_contracts_supporting_not_primary(
     ra,
     tmp_path: Path,
 ):
-    from easyicu.research_agent.evidence import EvidenceStore
+    from easyicu.research_agent.authority.evidence_store import EvidenceStore
     from easyicu.research_agent.pipeline import _write_readiness_artifacts
 
     context = ra.ResearchContext(
@@ -6532,7 +7011,7 @@ def test_review_gallery_archives_covered_and_duplicate_supporting_figures(
     ra,
     tmp_path: Path,
 ):
-    from easyicu.research_agent.evidence import EvidenceStore
+    from easyicu.research_agent.authority.evidence_store import EvidenceStore
     from easyicu.research_agent.pipeline import _write_readiness_artifacts
 
     def write_support_contract(
@@ -6710,7 +7189,7 @@ def test_article_figure_strategy_rejects_sparse_primary_publication_figure(
     ra,
     tmp_path: Path,
 ):
-    from easyicu.research_agent.figure_strategy import (
+    from easyicu.research_agent.planning.figure_strategy import (
         summarize_article_figure_strategy_coverage,
     )
 
@@ -6806,7 +7285,7 @@ def test_association_display_suite_rejects_generic_chart_only_bundle(
     ra,
     tmp_path: Path,
 ):
-    from easyicu.research_agent.evidence import EvidenceStore
+    from easyicu.research_agent.authority.evidence_store import EvidenceStore
     from easyicu.research_agent.pipeline import _write_readiness_artifacts
 
     context = ra.ResearchContext(
@@ -6916,7 +7395,7 @@ def test_association_display_suite_rejects_risk_difference_without_absolute_risk
     ra,
     tmp_path: Path,
 ):
-    from easyicu.research_agent.evidence import EvidenceStore
+    from easyicu.research_agent.authority.evidence_store import EvidenceStore
     from easyicu.research_agent.pipeline import _write_readiness_artifacts
 
     context = ra.ResearchContext(
@@ -7028,7 +7507,7 @@ def test_readiness_supersedes_stale_publication_figure_contract_quality_error(
     ra,
     tmp_path: Path,
 ):
-    from easyicu.research_agent.evidence import EvidenceStore
+    from easyicu.research_agent.authority.evidence_store import EvidenceStore
     from easyicu.research_agent.pipeline import _write_readiness_artifacts
     from easyicu.research_agent.schema import ValidationFinding
 
@@ -7054,7 +7533,8 @@ def test_readiness_supersedes_stale_publication_figure_contract_quality_error(
             ra.AnalysisStep(
                 step_id="02_model",
                 intent="Fit adjusted association model.",
-                expected_outputs=["table:adjusted_association"],
+                expected_outputs=["table:primary_estimand"],
+                planned_analysis_role="primary",
             ),
             ra.AnalysisStep(
                 step_id="03_sensitivity",
@@ -7097,19 +7577,7 @@ def test_readiness_supersedes_stale_publication_figure_contract_quality_error(
                 ),
             )
         ],
-        per_step_records=[
-            {
-                "step_id": "01_table_one",
-                "status": "ok",
-                "evidence_ids": current_evidence["01_table_one"],
-            },
-            {
-                "step_id": "02_model",
-                "status": "ok",
-                "evidence_ids": current_evidence["02_model"],
-            },
-            {"step_id": "03_sensitivity", "status": "ok"},
-        ],
+        per_step_records=_authoritative_readiness_records(plan, current_evidence),
         evidence=evidence,
         run_dir=tmp_path,
         manuscript_path=bound_path,
@@ -7126,7 +7594,7 @@ def test_author_review_note_marks_superseded_publication_export_error_nonblockin
     ra,
     tmp_path: Path,
 ):
-    from easyicu.research_agent.evidence import EvidenceStore
+    from easyicu.research_agent.authority.evidence_store import EvidenceStore
     from easyicu.research_agent.pipeline import _write_readiness_artifacts
     from easyicu.research_agent.schema import ValidationFinding
 
@@ -7152,7 +7620,8 @@ def test_author_review_note_marks_superseded_publication_export_error_nonblockin
             ra.AnalysisStep(
                 step_id="02_model",
                 intent="Fit adjusted association model.",
-                expected_outputs=["table:adjusted_association"],
+                expected_outputs=["table:primary_estimand"],
+                planned_analysis_role="primary",
             ),
             ra.AnalysisStep(
                 step_id="03_sensitivity",
@@ -7184,19 +7653,7 @@ def test_author_review_note_marks_superseded_publication_export_error_nonblockin
         context=context,
         plan=plan,
         findings=[stale_error],
-        per_step_records=[
-            {
-                "step_id": "01_table_one",
-                "status": "ok",
-                "evidence_ids": current_evidence["01_table_one"],
-            },
-            {
-                "step_id": "02_model",
-                "status": "ok",
-                "evidence_ids": current_evidence["02_model"],
-            },
-            {"step_id": "03_sensitivity", "status": "ok"},
-        ],
+        per_step_records=_authoritative_readiness_records(plan, current_evidence),
         evidence=evidence,
         run_dir=tmp_path,
         manuscript_path=bound_path,
@@ -7217,7 +7674,7 @@ def test_readiness_keeps_current_publication_figure_export_error_active(
     ra,
     tmp_path: Path,
 ):
-    from easyicu.research_agent.evidence import EvidenceStore
+    from easyicu.research_agent.authority.evidence_store import EvidenceStore
     from easyicu.research_agent.pipeline import _write_readiness_artifacts
     from easyicu.research_agent.schema import ValidationFinding
 
@@ -7298,7 +7755,7 @@ def test_readiness_supersedes_stale_strict_writer_error_after_clean_bound_manusc
     ra,
     tmp_path: Path,
 ):
-    from easyicu.research_agent.evidence import EvidenceStore
+    from easyicu.research_agent.authority.evidence_store import EvidenceStore
     from easyicu.research_agent.pipeline import _write_readiness_artifacts
     from easyicu.research_agent.schema import ValidationFinding
 
@@ -7324,7 +7781,8 @@ def test_readiness_supersedes_stale_strict_writer_error_after_clean_bound_manusc
             ra.AnalysisStep(
                 step_id="02_model",
                 intent="Fit adjusted association model.",
-                expected_outputs=["table:adjusted_association"],
+                expected_outputs=["table:primary_estimand"],
+                planned_analysis_role="primary",
             ),
             ra.AnalysisStep(
                 step_id="03_sensitivity",
@@ -7357,19 +7815,7 @@ def test_readiness_supersedes_stale_strict_writer_error_after_clean_bound_manusc
                 ),
             )
         ],
-        per_step_records=[
-            {
-                "step_id": "01_table_one",
-                "status": "ok",
-                "evidence_ids": current_evidence["01_table_one"],
-            },
-            {
-                "step_id": "02_model",
-                "status": "ok",
-                "evidence_ids": current_evidence["02_model"],
-            },
-            {"step_id": "03_sensitivity", "status": "ok"},
-        ],
+        per_step_records=_authoritative_readiness_records(plan, current_evidence),
         evidence=evidence,
         run_dir=tmp_path,
         manuscript_path=bound_path,
@@ -7386,7 +7832,7 @@ def test_readiness_supersedes_stale_numeric_error_after_clean_bound_manuscript(
     ra,
     tmp_path: Path,
 ):
-    from easyicu.research_agent.evidence import EvidenceStore
+    from easyicu.research_agent.authority.evidence_store import EvidenceStore
     from easyicu.research_agent.pipeline import _write_readiness_artifacts
     from easyicu.research_agent.schema import ValidationFinding
 
@@ -7412,7 +7858,8 @@ def test_readiness_supersedes_stale_numeric_error_after_clean_bound_manuscript(
             ra.AnalysisStep(
                 step_id="02_model",
                 intent="Fit adjusted association model.",
-                expected_outputs=["table:adjusted_association"],
+                expected_outputs=["table:primary_estimand"],
+                planned_analysis_role="primary",
             ),
             ra.AnalysisStep(
                 step_id="03_sensitivity",
@@ -7449,19 +7896,7 @@ def test_readiness_supersedes_stale_numeric_error_after_clean_bound_manuscript(
                 ),
             )
         ],
-        per_step_records=[
-            {
-                "step_id": "01_table_one",
-                "status": "ok",
-                "evidence_ids": current_evidence["01_table_one"],
-            },
-            {
-                "step_id": "02_model",
-                "status": "ok",
-                "evidence_ids": current_evidence["02_model"],
-            },
-            {"step_id": "03_sensitivity", "status": "ok"},
-        ],
+        per_step_records=_authoritative_readiness_records(plan, current_evidence),
         evidence=evidence,
         run_dir=tmp_path,
         manuscript_path=bound_path,
@@ -7478,7 +7913,7 @@ def test_readiness_supersedes_stale_critic_error_after_passed_current_critique(
     ra,
     tmp_path: Path,
 ):
-    from easyicu.research_agent.evidence import EvidenceStore
+    from easyicu.research_agent.authority.evidence_store import EvidenceStore
     from easyicu.research_agent.pipeline import _write_readiness_artifacts
     from easyicu.research_agent.schema import ValidationFinding
 
@@ -7504,7 +7939,8 @@ def test_readiness_supersedes_stale_critic_error_after_passed_current_critique(
             ra.AnalysisStep(
                 step_id="02_model",
                 intent="Fit adjusted association model.",
-                expected_outputs=["table:adjusted_association"],
+                expected_outputs=["table:primary_estimand"],
+                planned_analysis_role="primary",
             ),
             ra.AnalysisStep(
                 step_id="03_sensitivity",
@@ -7540,19 +7976,7 @@ def test_readiness_supersedes_stale_critic_error_after_passed_current_critique(
                 ),
             )
         ],
-        per_step_records=[
-            {
-                "step_id": "01_table_one",
-                "status": "ok",
-                "evidence_ids": current_evidence["01_table_one"],
-            },
-            {
-                "step_id": "02_model",
-                "status": "ok",
-                "evidence_ids": current_evidence["02_model"],
-            },
-            {"step_id": "03_sensitivity", "status": "ok"},
-        ],
+        per_step_records=_authoritative_readiness_records(plan, current_evidence),
         evidence=evidence,
         run_dir=tmp_path,
         manuscript_path=bound_path,
@@ -7566,7 +7990,7 @@ def test_readiness_supersedes_stale_critic_error_after_passed_current_critique(
 
 
 def _readiness_fixture_for_manifest_caveats(ra, tmp_path: Path):
-    from easyicu.research_agent.evidence import EvidenceStore
+    from easyicu.research_agent.authority.evidence_store import EvidenceStore
     from easyicu.research_agent.schema import ValidationFinding
 
     context = ra.ResearchContext(
@@ -7591,7 +8015,8 @@ def _readiness_fixture_for_manifest_caveats(ra, tmp_path: Path):
             ra.AnalysisStep(
                 step_id="02_model",
                 intent="Fit adjusted association model.",
-                expected_outputs=["table:adjusted_association"],
+                expected_outputs=["table:primary_estimand"],
+                planned_analysis_role="primary",
             ),
             ra.AnalysisStep(
                 step_id="03_sensitivity",
@@ -7615,19 +8040,7 @@ def _readiness_fixture_for_manifest_caveats(ra, tmp_path: Path):
             "manifest caveats: 0 error and 4 warning comment(s)."
         ),
     )
-    per_step_records = [
-        {
-            "step_id": "01_table_one",
-            "status": "ok",
-            "evidence_ids": current_evidence["01_table_one"],
-        },
-        {
-            "step_id": "02_model",
-            "status": "ok",
-            "evidence_ids": current_evidence["02_model"],
-        },
-        {"step_id": "03_sensitivity", "status": "ok"},
-    ]
+    per_step_records = _authoritative_readiness_records(plan, current_evidence)
     return context, plan, evidence, caveat_finding, per_step_records
 
 
@@ -7703,7 +8116,7 @@ def test_readiness_artifacts_block_outcome_leak_after_blocked_gate(
     ra,
     tmp_path: Path,
 ):
-    from easyicu.research_agent.evidence import EvidenceStore
+    from easyicu.research_agent.authority.evidence_store import EvidenceStore
     from easyicu.research_agent.pipeline import _write_readiness_artifacts
 
     context = ra.ResearchContext(
@@ -7780,9 +8193,9 @@ def test_readiness_artifacts_block_outcome_leak_after_blocked_gate(
 def test_publication_bundle_ready_groups_hash_suffixed_exports_under_one_stem(
     ra, tmp_path: Path
 ):
-    from easyicu.research_agent.evidence import EvidenceStore
+    from easyicu.research_agent.authority.evidence_store import EvidenceStore
     from easyicu.research_agent.pipeline import _publication_figure_bundle_ready
-    from easyicu.research_agent.publication_figures import (
+    from easyicu.research_agent.figures.publication import (
         PUBLICATION_FIGURE_SKILL_POLICY_VERSION,
     )
 
@@ -7838,9 +8251,9 @@ def test_publication_bundle_ready_groups_hash_suffixed_exports_under_one_stem(
 def test_publication_bundle_requires_sources_from_current_checkpoint(
     ra, tmp_path: Path
 ):
-    from easyicu.research_agent.evidence import EvidenceStore
+    from easyicu.research_agent.authority.evidence_store import EvidenceStore
     from easyicu.research_agent.pipeline import _publication_figure_bundle_ready
-    from easyicu.research_agent.publication_figures import (
+    from easyicu.research_agent.figures.publication import (
         PUBLICATION_FIGURE_SKILL_POLICY_VERSION,
     )
 
@@ -7917,7 +8330,7 @@ def test_publication_bundle_requires_sources_from_current_checkpoint(
 
 
 def test_publication_bundle_ready_rejects_outdated_figure_policy(ra, tmp_path: Path):
-    from easyicu.research_agent.evidence import EvidenceStore
+    from easyicu.research_agent.authority.evidence_store import EvidenceStore
     from easyicu.research_agent.pipeline import _publication_figure_bundle_ready
 
     evidence = EvidenceStore(tmp_path)
@@ -7970,7 +8383,7 @@ def test_publication_bundle_ready_rejects_stale_publication_skill_exports(
     ra,
     tmp_path: Path,
 ):
-    from easyicu.research_agent.evidence import EvidenceStore
+    from easyicu.research_agent.authority.evidence_store import EvidenceStore
     from easyicu.research_agent.pipeline import _publication_figure_bundle_ready
 
     evidence = EvidenceStore(tmp_path)
@@ -8022,7 +8435,7 @@ def test_publication_bundle_ready_rejects_uncontracted_forest_plot_png_svg(
     ra,
     tmp_path: Path,
 ):
-    from easyicu.research_agent.evidence import EvidenceStore
+    from easyicu.research_agent.authority.evidence_store import EvidenceStore
     from easyicu.research_agent.pipeline import _publication_figure_bundle_ready
 
     evidence = EvidenceStore(tmp_path)
@@ -8045,9 +8458,9 @@ def test_publication_bundle_ready_rejects_uncontracted_forest_plot_png_svg(
 
 
 def test_publication_bundle_ready_blocks_visual_qa_errors(ra, tmp_path: Path):
-    from easyicu.research_agent.evidence import EvidenceStore
+    from easyicu.research_agent.authority.evidence_store import EvidenceStore
     from easyicu.research_agent.pipeline import _publication_figure_bundle_ready
-    from easyicu.research_agent.publication_figures import (
+    from easyicu.research_agent.figures.publication import (
         PUBLICATION_FIGURE_SKILL_POLICY_VERSION,
     )
     from easyicu.research_agent.schema import ValidationFinding
@@ -8117,7 +8530,7 @@ def test_publication_bundle_ready_blocks_publication_export_visual_errors(
     ra,
     tmp_path: Path,
 ):
-    from easyicu.research_agent.evidence import EvidenceStore
+    from easyicu.research_agent.authority.evidence_store import EvidenceStore
     from easyicu.research_agent.pipeline import _publication_figure_bundle_ready
     from easyicu.research_agent.schema import ValidationFinding
 
@@ -8399,7 +8812,7 @@ def test_manuscript_critic_ignores_markdown_title_and_background_framing(ra):
 
 
 def test_evidence_filter_removes_unquantified_performance_claims(ra, tmp_path: Path):
-    from easyicu.research_agent.evidence import EvidenceStore
+    from easyicu.research_agent.authority.evidence_store import EvidenceStore
 
     store = EvidenceStore(tmp_path)
     scaffold = (
@@ -8604,6 +9017,116 @@ def test_preserve_figure_steps_after_replan_no_op_when_figure_kept(ra):
         "01_table_one",
         "02_summary_figure",
     ]
+
+
+def test_preserve_figure_steps_after_replan_restores_exact_parent_products(ra):
+    """An echoed pre-split parent must not strand the preserved render child."""
+    from easyicu.research_agent.pipeline import (
+        _preserve_figure_steps_after_replan,
+    )
+
+    current_parent = ra.AnalysisStep(
+        step_id="01_model_training",
+        intent="Fit the agent-selected prediction model.",
+        method="prediction_model",
+        expected_outputs=[
+            "statistic:auroc",
+            "table:model_performance",
+            "table:roc_curve",
+        ],
+    )
+    current_figure = ra.AnalysisStep(
+        step_id="01_model_training_figure",
+        intent=(
+            "Render the publication figure declared by step " "'01_model_training'."
+        ),
+        method="visualization",
+        inputs=["table:model_performance", "table:roc_curve"],
+        expected_outputs=["figure:discrimination_calibration"],
+    )
+    current = ra.AnalysisPlan(
+        research_question="build a prediction model",
+        steps=[current_parent, current_figure],
+    )
+    # The replanner echoes the original parent shape and drops the host-split
+    # child. It did not choose a different method or producer.
+    revised = ra.AnalysisPlan(
+        research_question="build a prediction model",
+        steps=[
+            current_parent.model_copy(update={"expected_outputs": ["statistic:auroc"]})
+        ],
+        revision=2,
+    )
+
+    preserved, findings = _preserve_figure_steps_after_replan(
+        current=current,
+        revised=revised,
+    )
+
+    by_id = {step.step_id: step for step in preserved.steps}
+    assert by_id["01_model_training"].expected_outputs == [
+        "statistic:auroc",
+        "table:model_performance",
+        "table:roc_curve",
+    ]
+    assert "01_model_training_figure" in by_id
+    assert any(
+        (finding.detail or {}).get("reason")
+        == "preserved_figure_parent_output_contract"
+        for finding in findings
+    )
+
+
+def test_preserve_figure_steps_after_replan_does_not_invent_missing_parent(ra):
+    """A dropped producer remains a typed-DAG error; preservation cannot guess."""
+    from easyicu.research_agent.pipeline import (
+        _preserve_figure_steps_after_replan,
+    )
+
+    current_parent = ra.AnalysisStep(
+        step_id="01_model_training",
+        intent="Fit the agent-selected prediction model.",
+        expected_outputs=["table:model_performance"],
+    )
+    current_figure = ra.AnalysisStep(
+        step_id="01_model_training_figure",
+        intent=(
+            "Render the publication figure declared by step " "'01_model_training'."
+        ),
+        method="visualization",
+        inputs=["table:model_performance"],
+        expected_outputs=["figure:discrimination_calibration"],
+    )
+    current = ra.AnalysisPlan(
+        research_question="build a prediction model",
+        steps=[current_parent, current_figure],
+    )
+    revised = ra.AnalysisPlan(
+        research_question="build a prediction model",
+        steps=[
+            ra.AnalysisStep(
+                step_id="02_other",
+                intent="Retain an unrelated descriptive step.",
+                expected_outputs=[],
+            )
+        ],
+        revision=2,
+    )
+
+    preserved, findings = _preserve_figure_steps_after_replan(
+        current=current,
+        revised=revised,
+    )
+
+    assert [step.step_id for step in preserved.steps] == [
+        "02_other",
+        "01_model_training_figure",
+    ]
+    assert all(
+        (finding.detail or {}).get("reason")
+        != "preserved_figure_parent_output_contract"
+        for finding in findings
+    )
 
 
 def test_step_contract_repair_guidance_for_prediction_categorical_passthrough(ra):
@@ -10187,7 +10710,7 @@ def test_advanced_plan_contract_does_not_rewrite_cluster_robust_association(ra):
 def test_terminal_publication_repair_replan_skip_requires_satisfied_bundle(
     ra, tmp_path: Path
 ):
-    from easyicu.research_agent.pipeline_execute import (
+    from easyicu.research_agent.execution.phase import (
         _terminal_publication_repair_replan_skip_detail,
     )
 
@@ -10481,7 +11004,7 @@ def test_advanced_plan_contract_infers_robustness_without_user_preferences(ra):
 
 def test_salvage_stdout_json_step_summary(ra, tmp_path: Path):
     from easyicu.research_agent.pipeline import _salvage_stdout_json_step_summary
-    from easyicu.research_agent.runner import RunResult
+    from easyicu.research_agent.contracts.runtime import RunResult
 
     out_dir = tmp_path / "outputs"
     out_dir.mkdir()
@@ -10503,7 +11026,7 @@ def test_salvage_stdout_json_step_summary(ra, tmp_path: Path):
 
 def test_salvage_named_json_step_summary(ra, tmp_path: Path):
     from easyicu.research_agent.pipeline import _salvage_named_json_step_summary
-    from easyicu.research_agent.runner import RunResult
+    from easyicu.research_agent.contracts.runtime import RunResult
 
     out_dir = tmp_path / "outputs"
     out_dir.mkdir()

@@ -10,7 +10,6 @@ from pathlib import Path
 
 import pytest
 
-
 # ---------------------------------------------------------------------------
 # BH / Bonferroni unit tests
 # ---------------------------------------------------------------------------
@@ -111,7 +110,9 @@ def test_extract_pvalues_from_column(ra, tmp_path):
         )
     ]
     report = ra.build_multiple_testing_report(
-        evidence_records=recs, run_dir=run_dir, alpha=0.05,
+        evidence_records=recs,
+        run_dir=run_dir,
+        alpha=0.05,
     )
     assert report.n_tests == 3
     assert all(0.0 <= r.p_value <= 1.0 for r in report.records)
@@ -147,8 +148,7 @@ def test_large_csv_without_pvalue_signal_does_not_iterate_rows(
     _write_csv(
         csv_path,
         rows=(
-            [f"stay_{row_index}", row_index % 12, 6, 0]
-            for row_index in range(20_000)
+            [f"stay_{row_index}", row_index % 12, 6, 0] for row_index in range(20_000)
         ),
         header=[
             "stay_id",
@@ -187,9 +187,7 @@ def test_large_csv_without_pvalue_signal_does_not_iterate_rows(
     assert iteration_count == 0
 
 
-def test_csv_header_preflight_preserves_arbitrary_column_inline_pvalues(
-    ra, tmp_path
-):
+def test_csv_header_preflight_preserves_arbitrary_column_inline_pvalues(ra, tmp_path):
     from easyicu.research_agent.methods.multiple_testing import (
         _extract_pvalues_from_csv,
     )
@@ -237,9 +235,7 @@ def test_inline_pvalue_preflight_preserves_unicode_whitespace(ra, tmp_path):
     assert records[0].p_value == pytest.approx(0.001)
 
 
-def test_nonempty_csv_mmap_value_error_falls_back_to_parser(
-    ra, tmp_path, monkeypatch
-):
+def test_nonempty_csv_mmap_value_error_falls_back_to_parser(ra, tmp_path, monkeypatch):
     from easyicu.research_agent.methods import multiple_testing
 
     csv_path = tmp_path / "mmap_fallback.csv"
@@ -348,7 +344,8 @@ def test_extract_skips_out_of_range_pvalues(ra, tmp_path):
         )
     ]
     report = ra.build_multiple_testing_report(
-        evidence_records=recs, run_dir=run_dir,
+        evidence_records=recs,
+        run_dir=run_dir,
     )
     assert report.n_tests == 1
     assert report.records[0].p_value == 0.01
@@ -394,7 +391,8 @@ def test_extract_from_json_recurses(ra, tmp_path):
         )
     ]
     report = ra.build_multiple_testing_report(
-        evidence_records=recs, run_dir=run_dir,
+        evidence_records=recs,
+        run_dir=run_dir,
     )
     assert report.n_tests == 3
     pvals = sorted(r.p_value for r in report.records)
@@ -410,11 +408,25 @@ def test_structured_coefficients_exclude_nuisance_and_sensitivity_rows(ra, tmp_p
         rows=[
             ["model_a", "const", "intercept", "primary", "planned_effects", 0.8],
             ["model_a", "age", "adjustment", "primary", "planned_effects", 0.04],
-            ["model_a", "available", "availability", "primary", "planned_effects", 0.03],
+            [
+                "model_a",
+                "available",
+                "availability",
+                "primary",
+                "planned_effects",
+                0.03,
+            ],
             ["model_a", "offset", "nuisance", "primary", "planned_effects", 0.02],
             ["model_a", "exposure", "exposure", "primary", "planned_effects", 0.01],
             ["model_a", "interaction", "contrast", "primary", "planned_effects", 0.04],
-            ["model_a", "exposure", "exposure", "sensitivity", "planned_effects", 0.005],
+            [
+                "model_a",
+                "exposure",
+                "exposure",
+                "sensitivity",
+                "planned_effects",
+                0.005,
+            ],
         ],
         header=[
             "model_id",
@@ -439,7 +451,9 @@ def test_structured_coefficients_exclude_nuisance_and_sensitivity_rows(ra, tmp_p
 
     assert report.n_tests == 2
     assert {record.label for record in report.records} == {"exposure", "interaction"}
-    assert {record.family_id for record in report.records} == {"declared:planned_effects"}
+    assert {record.family_id for record in report.records} == {
+        "declared:planned_effects"
+    }
     assert report.bh_adjusted == pytest.approx([0.02, 0.04])
 
 
@@ -528,8 +542,7 @@ def test_explicit_hypothesis_families_are_corrected_separately(ra, tmp_path):
     )
 
     adjusted = {
-        record.label: value
-        for record, value in zip(report.records, report.bh_adjusted)
+        record.label: value for record, value in zip(report.records, report.bh_adjusted)
     }
     assert report.summary()["n_families"] == 2
     assert adjusted == pytest.approx({"a1": 0.02, "a2": 0.04, "b1": 0.03})
@@ -673,7 +686,7 @@ def test_resume_report_is_not_reingested_and_duplicate_evidence_is_deduped(
 
 
 def test_resume_uses_only_latest_step_evidence_and_versions_o22_report(ra, tmp_path):
-    from easyicu.research_agent.pipeline_package import (
+    from easyicu.research_agent.orchestration.finalize import (
         _active_step_evidence_ids,
         _register_multiple_testing_outputs,
     )
@@ -755,13 +768,19 @@ def test_resume_uses_only_latest_step_evidence_and_versions_o22_report(ra, tmp_p
     resumed_md_record = store.get(resumed_md_id)
     assert resumed_csv_record is not None
     assert resumed_md_record is not None
-    assert (run_dir / resumed_csv_record.relative_path).read_bytes() == csv_path.read_bytes()
-    assert (run_dir / resumed_md_record.relative_path).read_bytes() == markdown_path.read_bytes()
+    assert (
+        run_dir / resumed_csv_record.relative_path
+    ).read_bytes() == csv_path.read_bytes()
+    assert (
+        run_dir / resumed_md_record.relative_path
+    ).read_bytes() == markdown_path.read_bytes()
 
 
 def test_package_scopes_o22_evidence_to_its_own_current_producer(ra, tmp_path):
-    from easyicu.research_agent import pipeline_package
-    from easyicu.research_agent.runtime_artifacts import current_evidence_records
+    from easyicu.research_agent.orchestration import finalize as pipeline_package
+    from easyicu.research_agent.authority.runtime_artifacts import (
+        current_evidence_records,
+    )
 
     run_dir = tmp_path / "run"
     evidence_dir = run_dir / "evidence"
@@ -799,9 +818,7 @@ def test_package_scopes_o22_evidence_to_its_own_current_producer(ra, tmp_path):
     ]
 
     report = ra.build_multiple_testing_report(
-        evidence_records=current_evidence_records(
-            evidence_records, per_step_records
-        ),
+        evidence_records=current_evidence_records(evidence_records, per_step_records),
         run_dir=run_dir,
         active_evidence_ids=pipeline_package._active_step_evidence_ids(
             per_step_records
@@ -827,7 +844,8 @@ def test_no_pvalues_produces_note(ra, tmp_path):
         )
     ]
     report = ra.build_multiple_testing_report(
-        evidence_records=recs, run_dir=run_dir,
+        evidence_records=recs,
+        run_dir=run_dir,
     )
     assert report.n_tests == 0
     assert any("No p-values" in n for n in report.notes)
@@ -935,7 +953,9 @@ def test_pipeline_writes_multiple_testing_report_by_default(
     # O22 always records that the audit ran. If the mock emits only an untyped
     # coefficient dump, the finding truthfully reports zero defensibly scoped
     # tests instead of inventing a run-wide family.
-    mt_findings = [f for f in manifest["findings"] if f["validator"] == "multiple_testing"]
+    mt_findings = [
+        f for f in manifest["findings"] if f["validator"] == "multiple_testing"
+    ]
     assert len(mt_findings) >= 1
     assert mt_findings[-1]["detail"]["n_tests"] >= 0
 

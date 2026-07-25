@@ -8,6 +8,7 @@ def _association_step(ra, step_id: str = "04_adjusted_association"):
         step_id=step_id,
         method="adjusted_logistic_regression",
         intent="Estimate the adjusted association between SOFA-2 and mortality.",
+        planned_analysis_role="primary",
         expected_outputs=[
             "model:logistic_regression_sofa_death",
             "statistic:adjusted_odds_ratio",
@@ -75,7 +76,7 @@ def test_accepts_generic_primary_statistic_value_with_ci(ra):
     assert _errors(findings) == []
 
 
-def test_prior_successful_primary_effect_satisfies_later_primary_requirement(ra):
+def test_primary_step_cannot_borrow_a_sibling_effect_estimate(ra):
     from easyicu.research_agent.pipeline import _step_contract_findings
 
     findings = _step_contract_findings(
@@ -104,12 +105,10 @@ def test_prior_successful_primary_effect_satisfies_later_primary_requirement(ra)
         ],
     )
 
-    assert _errors(findings) == []
-    assert any(
-        finding.severity == "warning"
-        and finding.detail["fallback_step_id"] == "03b_event_count_check"
-        for finding in findings
-    )
+    errors = _errors(findings)
+    assert errors
+    assert "primary association estimate" in errors[0].message
+    assert not any("fallback_step_id" in finding.detail for finding in findings)
 
 
 def test_missing_exposure_or_outcome_count_is_not_primary_or(ra):
@@ -287,7 +286,9 @@ def test_feature_freeze_prep_step_not_subject_to_clustering_contract(ra):
     assert _errors(findings) == []
 
 
-def _clustering_figure_step(ra, step_id: str = "02_primary_phenotype_clustering_figure"):
+def _clustering_figure_step(
+    ra, step_id: str = "02_primary_phenotype_clustering_figure"
+):
     return ra.AnalysisStep(
         step_id=step_id,
         method="clustering",

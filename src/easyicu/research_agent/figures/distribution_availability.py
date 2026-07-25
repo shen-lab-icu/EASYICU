@@ -19,20 +19,28 @@ from typing import Any, Collection, Mapping, Optional
 
 import pandas as pd
 
-from ..declared_product_contract import (
+from ..authority.parent_artifact import (
+    _resolve_upstream_manifest_step,
+    _verified_direct_parent_artifact_digests,
+)
+from ..contracts.declared_product import (
     read_digest_bound_artifact_snapshot,
     typed_product,
 )
-from ..publication_figures import (
+from ..schema import AnalysisStep
+from .publication import (
     add_panel_label,
     apply_publication_style,
     make_figure_contract,
     save_publication_figure,
 )
 
-
 REPAIR_ID = "distribution_availability_publication_bundle_from_parent_outputs_v1"
-CONTROLLED_METHOD = "exposure_distribution_and_missingness_audit"
+from ..planning.method_vocabulary import (
+    EXPOSURE_DISTRIBUTION_AND_MISSINGNESS_AUDIT,
+)
+
+CONTROLLED_METHOD = EXPOSURE_DISTRIBUTION_AND_MISSINGNESS_AUDIT
 _DISTRIBUTION_COLUMNS = {
     "row_type",
     "variable",
@@ -58,6 +66,117 @@ _MEASUREMENT_COLUMNS = {
     "fraction",
 }
 _METRICS = ("median", "q25", "q75", "min", "max")
+
+
+def _distribution_availability_parent_digest_seal(
+    run_dir: Path,
+    figure_step_id: str,
+) -> Optional[dict[str, str]]:
+    """Seal only the three parent files selected by the closed renderer contract.
+
+    A parent may legitimately publish other tables or parquet products.  They
+    are neither renderer inputs nor CSVs, so including them in the child seal
+    would make an unrelated artifact capable of disabling this renderer.
+    """
+
+    request_step = _resolve_upstream_manifest_step(run_dir, figure_step_id)
+    if not isinstance(request_step, Mapping):
+        return None
+    if str(request_step.get("method") or "").strip().lower() != CONTROLLED_METHOD:
+        return None
+
+    digests = _verified_direct_parent_artifact_digests(run_dir, figure_step_id)
+    if not digests or "step_summary.json" not in digests:
+        return None
+    parent_step_id = str(figure_step_id or "").removesuffix("_figure")
+    parent_out = Path(run_dir) / "steps" / parent_step_id / "outputs"
+    try:
+        snapshot = read_digest_bound_artifact_snapshot(
+            parent_out=parent_out,
+            artifact_digests=digests,
+        )
+        parent_summary = json.loads(snapshot["step_summary.json"].decode("utf-8"))
+    except (KeyError, UnicodeDecodeError, json.JSONDecodeError, ValueError):
+        return None
+    if not isinstance(parent_summary, Mapping):
+        return None
+    distribution_contract = parent_summary.get("distribution")
+    measurement_contract = parent_summary.get("measurement_audit")
+    if not isinstance(distribution_contract, Mapping) or not isinstance(
+        measurement_contract, Mapping
+    ):
+        return None
+    selected_names = {
+        str(distribution_contract.get("table") or "").strip(),
+        str(measurement_contract.get("table") or "").strip(),
+    }
+    if (
+        len(selected_names) != 2
+        or any(
+            Path(name).name != name or not name.endswith(".csv")
+            for name in selected_names
+        )
+        or not selected_names <= set(snapshot)
+    ):
+        return None
+    selected_table_bytes = {name: snapshot[name] for name in selected_names}
+    prepared = prepare_distribution_availability_inputs(
+        parent_out=parent_out,
+        parent_summary=parent_summary,
+        verified_table_names=set(selected_table_bytes),
+        preverified_table_bytes=selected_table_bytes,
+    )
+    if prepared is None:
+        return None
+    declared_tables, distribution_roles, availability_roles = (
+        distribution_availability_planner_table_roles(
+            request_step.get("expected_outputs") or []
+        )
+    )
+    if len(distribution_roles) != 1 or len(availability_roles) != 1:
+        return None
+    required_table_products = {
+        prepared.distribution_path.stem,
+        prepared.measurement_path.stem,
+    }
+    if (
+        required_table_products != distribution_roles | availability_roles
+        or not required_table_products <= declared_tables
+    ):
+        return None
+    required_names = {
+        "step_summary.json",
+        prepared.distribution_path.name,
+        prepared.measurement_path.name,
+    }
+    if not required_names <= set(digests):
+        return None
+    return {name: digests[name] for name in sorted(required_names)}
+
+
+def _distribution_availability_figure_step_matches_parent(
+    run_dir: Path,
+    step: AnalysisStep,
+) -> bool:
+    """Require a Planner-owned typed edge to the sealed parent tables."""
+
+    seal = _distribution_availability_parent_digest_seal(run_dir, step.step_id)
+    request_step = _resolve_upstream_manifest_step(run_dir, step.step_id)
+    if seal is None or not isinstance(request_step, Mapping):
+        return False
+    required_inputs = {
+        ("table", Path(name).stem) for name in seal if name != "step_summary.json"
+    }
+    child_typed_inputs = {
+        parsed
+        for raw in (step.inputs or [])
+        if (parsed := typed_product(raw)) is not None
+    }
+    if required_inputs <= child_typed_inputs:
+        return True
+    return str(step.method or "").strip().lower() == CONTROLLED_METHOD and tuple(
+        str(value) for value in (step.inputs or [])
+    ) == tuple(str(value) for value in (request_step.get("inputs") or []))
 
 
 def _normalise(value: Any) -> str:
@@ -803,8 +922,6 @@ def render_distribution_availability_bundle_from_prior_outputs(
         }
         verified = set(preverified_table_bytes)
     elif preverified_parent_digests is None:
-        from ..pipeline import _distribution_availability_parent_digest_seal
-
         host_seal = _distribution_availability_parent_digest_seal(
             Path(run_dir), current_step_id
         )
@@ -1002,6 +1119,7 @@ def render_distribution_availability_bundle_from_prior_outputs(
 __all__ = [
     "CONTROLLED_METHOD",
     "REPAIR_ID",
+    "_distribution_availability_figure_step_matches_parent",
     "distribution_availability_parent_contract_issue",
     "distribution_availability_planner_table_roles",
     "prepare_distribution_availability_inputs",

@@ -40,7 +40,7 @@ import re
 from dataclasses import dataclass
 from typing import Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
-from ..ordered_stratified_contract import ordered_stratified_script_findings
+from ..contracts.ordered_stratified import ordered_stratified_script_findings
 from ..schema import (
     AnalysisStep,
     ConceptDescriptor,
@@ -48,12 +48,11 @@ from ..schema import (
     ValidationFinding,
     VariableRole,
 )
-from ..trajectory_contract import (
+from ..trajectory.contract import (
     is_continuous_trajectory_representation,
     selected_trajectory_variables,
     trajectory_script_findings,
 )
-
 
 # ---------------------------------------------------------------------------
 # Pattern table — names of (sklearn / scipy / numpy) call sites we react to
@@ -117,6 +116,13 @@ _SCALERS = (
     "Normalizer",
 )
 
+_IMPUTERS = (
+    "SimpleImputer",
+    "KNNImputer",
+    "IterativeImputer",
+    "MissingIndicator",
+)
+
 _SPLITTERS = (
     "train_test_split",
     "KFold",
@@ -127,7 +133,13 @@ _SPLITTERS = (
     "StratifiedShuffleSplit",
 )
 
-_ASSOCIATION_ESTIMATORS = {"Logit", "OLS", "GLM", "LogisticRegression", "LinearRegression"}
+_ASSOCIATION_ESTIMATORS = {
+    "Logit",
+    "OLS",
+    "GLM",
+    "LogisticRegression",
+    "LinearRegression",
+}
 
 _SURVIVAL_FAMILIES = (
     "CoxPHFitter",
@@ -161,9 +173,7 @@ def _string_literals_anywhere(tree: ast.AST) -> List[str]:
     return out
 
 
-def _columns_in_call(
-    node: ast.Call, alias_map: Dict[str, Set[str]]
-) -> Set[str]:
+def _columns_in_call(node: ast.Call, alias_map: Dict[str, Set[str]]) -> Set[str]:
     """Return the set of column names referenced by a call's args / kwargs."""
     cols: Set[str] = set()
     for arg in list(node.args) + [kw.value for kw in node.keywords]:
@@ -171,9 +181,7 @@ def _columns_in_call(
     return cols
 
 
-def _columns_in_expr(
-    node: ast.AST, alias_map: Dict[str, Set[str]]
-) -> Set[str]:
+def _columns_in_expr(node: ast.AST, alias_map: Dict[str, Set[str]]) -> Set[str]:
     """Conservative column extraction: literal strings + alias lookups."""
     cols: Set[str] = set()
     if isinstance(node, ast.Constant) and isinstance(node.value, str):
@@ -189,6 +197,8 @@ def _columns_in_expr(
         elif isinstance(sl, (ast.List, ast.Tuple)):
             for elt in sl.elts:
                 cols |= _columns_in_expr(elt, alias_map)
+        elif isinstance(sl, ast.Name):
+            cols |= alias_map.get(sl.id, set())
     elif isinstance(node, ast.Name):
         if node.id in alias_map:
             cols |= alias_map[node.id]
@@ -410,6 +420,50 @@ class AnalysisPatternAuditor:
                 script_text=script_text,
             )
         )
+        if step is not None and step.planned_analysis_role == "primary":
+            protected = {
+                str(value).strip()
+                for value in (context.primary_exposure, context.target_outcome)
+                if str(value or "").strip()
+            }
+            imputed: Dict[str, Set[str]] = {}
+            for node in ast.walk(tree):
+                if not isinstance(node, ast.Call) or not isinstance(
+                    node.func, ast.Attribute
+                ):
+                    continue
+                method = node.func.attr.lower()
+                if method not in {
+                    "fillna",
+                    "ffill",
+                    "bfill",
+                    "backfill",
+                    "interpolate",
+                }:
+                    continue
+                for column in _columns_in_expr(node.func.value, alias_map) & protected:
+                    imputed.setdefault(column, set()).add(method)
+            if imputed:
+                findings.append(
+                    ValidationFinding(
+                        validator=self.name,
+                        severity="error",
+                        message=(
+                            "The primary result script imputes its declared exposure "
+                            "or outcome. Preserve that missingness or exclude rows "
+                            "under the declared analysis set; any alternative belongs "
+                            "in a separately declared sensitivity analysis."
+                        ),
+                        detail={
+                            "kind": "primary_estimand_imputation",
+                            "step_id": step.step_id,
+                            "columns": {
+                                column: sorted(methods)
+                                for column, methods in sorted(imputed.items())
+                            },
+                        },
+                    )
+                )
 
         # ------------------------------------------------------------
         # 1) Distance-based estimators on ordinal / composite scores
@@ -508,7 +562,15 @@ class AnalysisPatternAuditor:
                     continue
                 # Report only when this alias also looks like a feature
                 # matrix: heuristic = capital ``X`` or ``features`` / ``feats``
-                if alias not in {"X", "x", "features", "feats", "design", "Xtrain", "X_train"}:
+                if alias not in {
+                    "X",
+                    "x",
+                    "features",
+                    "feats",
+                    "design",
+                    "Xtrain",
+                    "X_train",
+                }:
                     continue
                 findings.append(
                     ValidationFinding(
@@ -530,7 +592,15 @@ class AnalysisPatternAuditor:
         # 4) ID / time leakage as a feature
         # ------------------------------------------------------------
         for alias, cols in alias_map.items():
-            if alias not in {"X", "x", "features", "feats", "design", "Xtrain", "X_train"}:
+            if alias not in {
+                "X",
+                "x",
+                "features",
+                "feats",
+                "design",
+                "Xtrain",
+                "X_train",
+            }:
                 continue
             id_cols = _id_or_time_columns_in(cols, var_by_name)
             if id_cols:
@@ -553,11 +623,58 @@ class AnalysisPatternAuditor:
         # ------------------------------------------------------------
         # 5) Supervised estimator without train/test split
         # ------------------------------------------------------------
-        supervised_estimator_names = sorted({n for n, _ in inspection.supervised_estimators})
+        supervised_estimator_names = sorted(
+            {n for n, _ in inspection.supervised_estimators}
+        )
         non_association_estimators = [
-            name for name in supervised_estimator_names if name not in _ASSOCIATION_ESTIMATORS
+            name
+            for name in supervised_estimator_names
+            if name not in _ASSOCIATION_ESTIMATORS
         ]
         prediction_like = _prediction_or_performance_context(context=context, step=step)
+        if prediction_like and inspection.splitters:
+            first_split_line = min(
+                getattr(node, "lineno", 10**9) for _, node in inspection.splitters
+            )
+            pre_split_transforms: List[Dict[str, object]] = []
+            for node in ast.walk(tree):
+                if not isinstance(node, ast.Call):
+                    continue
+                line = getattr(node, "lineno", 10**9)
+                if line >= first_split_line:
+                    continue
+                name = _call_target_name(node)
+                if name in {"fillna", "ffill", "bfill", "backfill", "interpolate"}:
+                    pre_split_transforms.append({"method": name, "line": line})
+                    continue
+                if name != "fit_transform" or not isinstance(node.func, ast.Attribute):
+                    continue
+                receiver = node.func.value
+                if not isinstance(receiver, ast.Call):
+                    continue
+                transformer = _call_target_name(receiver)
+                if transformer in {*_IMPUTERS, *_SCALERS}:
+                    pre_split_transforms.append(
+                        {"method": f"{transformer}.fit_transform", "line": line}
+                    )
+            if pre_split_transforms:
+                findings.append(
+                    ValidationFinding(
+                        validator=self.name,
+                        severity="error",
+                        message=(
+                            "Prediction preprocessing is fitted/applied before the "
+                            "train/test split. Split by the declared unit first and "
+                            "fit every imputer/scaler on X_train or inside each "
+                            "training fold so held-out information cannot leak."
+                        ),
+                        detail={
+                            "kind": "pre_split_preprocessing_leakage",
+                            "first_split_line": first_split_line,
+                            "transforms": pre_split_transforms,
+                        },
+                    )
+                )
         if (
             inspection.supervised_estimators
             and not inspection.splitters
@@ -591,10 +708,14 @@ class AnalysisPatternAuditor:
                     continue
                 for kw in node.keywords:
                     if kw.arg in {"duration_col", "duration"}:
-                        if isinstance(kw.value, ast.Constant) and isinstance(kw.value.value, str):
+                        if isinstance(kw.value, ast.Constant) and isinstance(
+                            kw.value.value, str
+                        ):
                             duration_col = kw.value.value
                     if kw.arg in {"event_col", "event"}:
-                        if isinstance(kw.value, ast.Constant) and isinstance(kw.value.value, str):
+                        if isinstance(kw.value, ast.Constant) and isinstance(
+                            kw.value.value, str
+                        ):
                             event_col = kw.value.value
             if duration_col and duration_col in var_by_name:
                 v = var_by_name[duration_col]
@@ -641,14 +762,14 @@ class AnalysisPatternAuditor:
         #    deterministic seeds — flag missing random_state= when an
         #    estimator that supports it is constructed.
         # ------------------------------------------------------------
-        for est_name, call in inspection.distance_estimators + inspection.supervised_estimators:
+        for est_name, call in (
+            inspection.distance_estimators + inspection.supervised_estimators
+        ):
             if est_name in {"OLS", "GLM", "Logit"}:  # statsmodels: deterministic
                 continue
             if not prediction_like and est_name in _ASSOCIATION_ESTIMATORS:
                 continue
-            has_random_state = any(
-                kw.arg == "random_state" for kw in call.keywords
-            )
+            has_random_state = any(kw.arg == "random_state" for kw in call.keywords)
             if not has_random_state:
                 findings.append(
                     ValidationFinding(

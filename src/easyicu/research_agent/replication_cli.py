@@ -150,10 +150,22 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             raise SystemExit("--paper mode requires --cohort and --database.")
         if args.llm is None:
             raise SystemExit("Choose an explicit --llm backend (`mock` or `openai`) for --paper mode.")
-        from .llm import MockLLMClient, OpenAIClient
+        from .providers.factory import build_provider_client
+        from .providers.llm import OpenAIClient
+        from .providers.mocks import MockLLMClient
         from .pipeline import ResearchAgentPipeline
 
-        llm = OpenAIClient(model=args.openai_model) if args.llm == "openai" else MockLLMClient()
+        llm = (
+            build_provider_client(
+                provider="openai",
+                model=args.openai_model,
+                request_timeout=120.0,
+                title="EasyICU research replication",
+                client_cls=OpenAIClient,
+            )
+            if args.llm == "openai"
+            else MockLLMClient()
+        )
         pipeline = ResearchAgentPipeline(
             workdir=args.output,
             llm=llm,

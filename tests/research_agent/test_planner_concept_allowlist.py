@@ -8,11 +8,11 @@ contract that prevents that failure mode from coming back.
 from __future__ import annotations
 
 from easyicu.research_agent import schema
-from easyicu.research_agent.agents import (
+from easyicu.research_agent.agents.core import (
     PLANNER_MAX_RETRIES,
     _build_planner_user_prompt,
 )
-from easyicu.research_agent.cohort_schema import ALLOWED_CTAS_AGGREGATIONS
+from easyicu.research_agent.cohort.schema import ALLOWED_CTAS_AGGREGATIONS
 
 
 def _context(
@@ -74,6 +74,15 @@ def test_planner_prompt_forbids_concept_id_synthesis() -> None:
     assert '"sofa2_admission"' not in prompt
     assert '"kdigo_aki_max"' not in prompt
     assert '"sepsis_onset_window"' not in prompt
+
+
+def test_planner_prompt_keeps_literature_eligibility_data_bound() -> None:
+    prompt = _build_planner_user_prompt(_context())
+
+    assert "design candidates, not automatic authority" in prompt
+    assert "unverifiable literature criterion" in prompt
+    assert "Never claim first admission, one stay per patient" in prompt
+    assert "patient identifier" in prompt
 
 
 def test_planner_prompt_has_non_null_cohort_override_example() -> None:

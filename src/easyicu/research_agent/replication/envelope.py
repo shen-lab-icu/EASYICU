@@ -46,13 +46,13 @@ import json
 import os
 import platform
 import sys
+import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
 
-
-ENVELOPE_SCHEMA_VERSION = "easyicu.reproducibility_envelope/2"
+ENVELOPE_SCHEMA_VERSION = "easyicu.reproducibility_envelope/3"
 
 
 # ---------------------------------------------------------------------------
@@ -154,6 +154,8 @@ class ReproCallRecord:
     response_sha256: str
     prompt_chars: int
     response_chars: int
+    reasoning_effort: Optional[str] = None
+    elapsed_ms: Optional[float] = None
     # Envelope schema /2: requested_top_p records the top_p value the
     # caller asked for. ``None`` means the caller did not set top_p and
     # the provider's default applies (typically 1.0 for OpenAI-compatible
@@ -177,6 +179,8 @@ class ReproCallRecord:
             "response_sha256": self.response_sha256,
             "prompt_chars": self.prompt_chars,
             "response_chars": self.response_chars,
+            "reasoning_effort": self.reasoning_effort,
+            "elapsed_ms": self.elapsed_ms,
         }
         if self.prompt_preview is not None:
             payload["prompt_preview"] = self.prompt_preview
@@ -219,6 +223,8 @@ class ReproEnvelope:
         messages: Sequence[Any],
         response: str,
         requested_top_p: Optional[float] = None,
+        reasoning_effort: Optional[str] = None,
+        elapsed_ms: Optional[float] = None,
     ) -> ReproCallRecord:
         prompt_canonical = _canonical_messages(messages)
         prompt_preview: Optional[str] = None
@@ -234,11 +240,15 @@ class ReproEnvelope:
             temperature=float(temperature),
             max_tokens=int(max_tokens),
             requested_seed=int(requested_seed) if requested_seed is not None else None,
-            requested_top_p=float(requested_top_p) if requested_top_p is not None else None,
+            requested_top_p=(
+                float(requested_top_p) if requested_top_p is not None else None
+            ),
             prompt_sha256=sha256_text(prompt_canonical),
             response_sha256=sha256_text(response or ""),
             prompt_chars=len(prompt_canonical),
             response_chars=len(response or ""),
+            reasoning_effort=reasoning_effort,
+            elapsed_ms=(float(elapsed_ms) if elapsed_ms is not None else None),
             prompt_preview=prompt_preview,
             response_preview=response_preview,
         )
@@ -257,6 +267,8 @@ class ReproEnvelope:
         seeds = set()
         top_ps = set()
         top_p_was_unset = False
+        reasoning_efforts = set()
+        elapsed_ms_total = 0.0
         for r in self.calls:
             role_key = r.role or "unrouted"
             rb = by_role.setdefault(
@@ -274,6 +286,10 @@ class ReproEnvelope:
                 top_p_was_unset = True
             else:
                 top_ps.add(r.requested_top_p)
+            if r.reasoning_effort is not None:
+                reasoning_efforts.add(r.reasoning_effort)
+            if r.elapsed_ms is not None:
+                elapsed_ms_total += r.elapsed_ms
         summary = {
             "schema_version": ENVELOPE_SCHEMA_VERSION,
             "run_id": self.run_id,
@@ -282,11 +298,11 @@ class ReproEnvelope:
             "prompt_sha256s": [r.prompt_sha256 for r in self.calls],
             "response_sha256s": [r.response_sha256 for r in self.calls],
             "temperatures": sorted(t for t in temperatures if t is not None),
-            "requested_seeds": sorted(
-                [s for s in seeds if s is not None]
-            ) or [],
+            "requested_seeds": sorted([s for s in seeds if s is not None]) or [],
             "requested_top_ps": sorted(top_ps),
             "top_p_used_provider_default": top_p_was_unset,
+            "reasoning_efforts": sorted(reasoning_efforts),
+            "recorded_elapsed_ms_total": round(elapsed_ms_total, 3),
             "by_role": by_role,
             "by_model": by_model,
             "env_snapshot": dict(self.env_snapshot),
@@ -316,9 +332,10 @@ class ReproRecordingClient:
     """Wraps any :class:`LLMClient` so each ``complete`` is fingerprinted.
 
     Preserves the ``LLMClient`` protocol: agents that already accept an
-    ``LLMClient`` keep working unchanged. Token-usage attributes set by
-    the inner client (``last_usage``, ``last_finish_reason``) are
-    passed through so this can be composed with :class:`MeteredClient`.
+    ``LLMClient`` keep working unchanged. When the inner client exposes
+    call-scoped usage through ``complete_with_usage``, that usage is returned
+    with the same response so :class:`MeteredClient` never has to read shared
+    mutable ``last_usage`` state.
 
     ``seed`` is forwarded to the inner client's ``complete`` via the
     kwarg of the same name *only* when the inner client's signature
@@ -341,11 +358,20 @@ class ReproRecordingClient:
         self._envelope = envelope
         self._seed = seed
         self._model_override = model_override
+        from ..providers.factory import _register_provider_wrapper
+
+        _register_provider_wrapper(self, children_getter=lambda: (self._inner,))
 
     # Protocol attribute some callers read.
     @property
     def name(self) -> str:
         return getattr(self._inner, "name", "recording")
+
+    @property
+    def model(self) -> str:
+        """Expose the model identity already recorded by this wrapper."""
+
+        return self._resolve_model()
 
     def _resolve_model(self) -> str:
         if self._model_override:
@@ -355,6 +381,16 @@ class ReproRecordingClient:
             if isinstance(val, str) and val:
                 return val
         return "unknown"
+
+    def _resolve_reasoning_effort(self) -> Optional[str]:
+        extra_body = getattr(self._inner, "_extra_body", None)
+        if not isinstance(extra_body, dict):
+            return None
+        reasoning = extra_body.get("reasoning")
+        if not isinstance(reasoning, dict):
+            return None
+        effort = reasoning.get("effort")
+        return str(effort) if effort is not None else None
 
     def _forward_complete(
         self,
@@ -390,15 +426,56 @@ class ReproRecordingClient:
         temperature: float = 0.2,
         top_p: Optional[float] = None,
     ) -> str:
-        # Allow the inner client to reset its own last_usage so
-        # composition with ``MeteredClient`` stays accurate.
-        try:
-            self._inner.last_usage = None  # type: ignore[attr-defined]
-        except Exception:
-            pass
-        response = self._forward_complete(
+        response, _usage = self.complete_with_usage(
             messages, max_tokens=max_tokens, temperature=temperature, top_p=top_p
         )
+        return response
+
+    def complete_with_usage(
+        self,
+        messages,
+        *,
+        max_tokens: int = 2048,
+        temperature: float = 0.2,
+        top_p: Optional[float] = None,
+    ) -> tuple[str, Optional[Dict[str, int]]]:
+        """Record one response and return usage owned by that exact call."""
+        import inspect
+
+        complete_with_usage = getattr(self._inner, "complete_with_usage", None)
+        usage: Optional[Dict[str, int]] = None
+        started = time.monotonic()
+        if callable(complete_with_usage):
+            try:
+                params = inspect.signature(complete_with_usage).parameters
+                accepts_seed = "seed" in params
+                accepts_top_p = "top_p" in params
+            except (TypeError, ValueError):
+                accepts_seed = False
+                accepts_top_p = False
+            kwargs: Dict[str, Any] = {
+                "max_tokens": max_tokens,
+                "temperature": temperature,
+            }
+            if accepts_seed and self._seed is not None:
+                kwargs["seed"] = self._seed
+            if accepts_top_p and top_p is not None:
+                kwargs["top_p"] = top_p
+            response, raw_usage = complete_with_usage(messages, **kwargs)
+            if isinstance(raw_usage, dict):
+                usage = {
+                    str(key): int(value)
+                    for key, value in raw_usage.items()
+                    if isinstance(value, (int, float))
+                }
+        else:
+            response = self._forward_complete(
+                messages,
+                max_tokens=max_tokens,
+                temperature=temperature,
+                top_p=top_p,
+            )
+        elapsed_ms = (time.monotonic() - started) * 1000.0
         self._envelope.record(
             role=self._role,
             client_name=getattr(self._inner, "name", type(self._inner).__name__),
@@ -409,15 +486,18 @@ class ReproRecordingClient:
             requested_top_p=top_p,
             messages=messages,
             response=response,
+            reasoning_effort=self._resolve_reasoning_effort(),
+            elapsed_ms=elapsed_ms,
         )
-        # Mirror attributes the metering layer may read.
-        for attr in ("last_usage", "last_finish_reason"):
-            if hasattr(self._inner, attr):
-                try:
-                    setattr(self, attr, getattr(self._inner, attr))
-                except Exception:
-                    pass
-        return response
+        # Compatibility only. Cost attribution uses the returned call-scoped
+        # value above and never reads this shared attribute.
+        self.last_usage = dict(usage) if usage is not None else None
+        if hasattr(self._inner, "last_finish_reason"):
+            try:
+                self.last_finish_reason = getattr(self._inner, "last_finish_reason")
+            except Exception:
+                pass
+        return response, usage
 
     # LLMRouter compatibility: if someone wraps a router, still route.
     def for_role(self, role: str):
@@ -443,10 +523,12 @@ class ReproRecordingClient:
 # ---------------------------------------------------------------------------
 
 
-def envelope_role_resolver(llm: Any, envelope: ReproEnvelope, *, seed: Optional[int] = None):
+def envelope_role_resolver(
+    llm: Any, envelope: ReproEnvelope, *, seed: Optional[int] = None
+):
     """Return a ``role_resolver(role)`` that wraps each per-role client.
 
-    Designed to be composable with :func:`easyicu.research_agent.cost.metered_role_resolver`.
+    Designed to be composable with :func:`easyicu.research_agent.providers.cost.metered_role_resolver`.
     The typical composition used in the pipeline is::
 
         resolver = envelope_role_resolver(llm, envelope, seed=seed)
@@ -456,12 +538,15 @@ def envelope_role_resolver(llm: Any, envelope: ReproEnvelope, *, seed: Optional[
     The order matters: recording must see the exact prompt / response
     strings, so it sits closest to the inner client.
     """
-    from ..llm import resolve_role_client
+    from ..providers.llm import resolve_role_client
 
     def _resolve(role: str):
         inner = resolve_role_client(llm, role)
         return ReproRecordingClient(
-            inner, role=role, envelope=envelope, seed=seed,
+            inner,
+            role=role,
+            envelope=envelope,
+            seed=seed,
         )
 
     return _resolve

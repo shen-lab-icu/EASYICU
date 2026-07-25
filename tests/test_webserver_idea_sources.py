@@ -8,7 +8,7 @@ from types import SimpleNamespace
 import pytest
 from fastapi.testclient import TestClient
 
-from easyicu.research_agent.discovery_handoff import (
+from easyicu.research_agent.discovery.discovery_handoff import (
     DiscoveryHandoffPacket,
     build_handoff_from_row,
 )

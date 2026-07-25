@@ -89,6 +89,7 @@ output
 audit_reports/
 research_output/
 task_logs/
+research_output/_packages/
 # Generated concept coverage matrices (snapshots from private data runs)
 docs/concept_coverage_matrix_*.csv
 recycle_*/
@@ -154,6 +155,7 @@ pilot_runs/
 !docs/capability_matrix.md
 !docs/analysis_method_suite.md
 !benchmarks/meta_generalization/README.md
+!benchmarks/agent_experiments/README.md
 # Internal audit dumps — kept locally, not part of the public docs tree.
 # The public docs/ tree is markdown-only; keep audit JSON/TXT dumps out.
 docs/_internal/

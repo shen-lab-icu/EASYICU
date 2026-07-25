@@ -11,6 +11,8 @@ from __future__ import annotations
 import hashlib
 import importlib.util
 import json
+import math
+import numbers
 import re
 from pathlib import Path
 from types import ModuleType
@@ -19,7 +21,6 @@ from typing import Any, Mapping
 import numpy as np
 import pandas as pd
 import pytest
-
 
 _VOLATILE_FIELD_ALLOWLIST = frozenset(
     {
@@ -51,6 +52,7 @@ _FINDING_FIELDS = (
     "figure_source_findings",
     "llm_concept_findings",
 )
+_BACKEND_OPAQUE_DIGEST_COLUMNS = frozenset({"parameter_sha256"})
 
 
 def _canonical_sha256(value: Any) -> str:
@@ -62,6 +64,63 @@ def _canonical_sha256(value: Any) -> str:
         default=str,
     ).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
+
+
+def _canonical_table_value(value: Any, *, column: str) -> Any:
+    """Normalize tabular scalars without trusting platform-specific float bytes."""
+
+    if value is None or pd.isna(value):
+        return None
+    if column in _BACKEND_OPAQUE_DIGEST_COLUMNS:
+        digest = str(value).strip().lower()
+        if len(digest) == 64 and all(char in "0123456789abcdef" for char in digest):
+            return "valid_backend_sha256"
+        return f"invalid_backend_sha256:{digest}"
+    if isinstance(value, (bool, np.bool_)):
+        return bool(value)
+    if isinstance(value, numbers.Integral):
+        return f"number:{int(value)}"
+    if isinstance(value, numbers.Real):
+        numeric = float(value)
+        if not math.isfinite(numeric):
+            return f"number:{numeric}"
+        # LAPACK implementations may differ in the final floating-point bits.
+        # Ten significant digits retain scientific drift while excluding the
+        # final floating-point bits from this cross-version oracle.
+        return f"number:{numeric:.10g}"
+    return str(value)
+
+
+def _stable_file_sha256(path: Path) -> str:
+    """Hash table semantics for data files and exact bytes for everything else."""
+
+    suffix = path.suffix.lower()
+    if suffix == ".csv":
+        frame = pd.read_csv(path)
+    elif suffix == ".parquet":
+        frame = pd.read_parquet(path)
+    elif suffix == ".feather":
+        frame = pd.read_feather(path)
+    else:
+        return hashlib.sha256(path.read_bytes()).hexdigest()
+    payload = {
+        "columns": [str(column) for column in frame.columns],
+        "rows": [
+            [
+                _canonical_table_value(value, column=str(column))
+                for column, value in zip(frame.columns, row)
+            ]
+            for row in frame.itertuples(index=False, name=None)
+        ],
+    }
+    return _canonical_sha256(payload)
+
+
+def _evidence_path(run_dir: Path, relative_path: str) -> Path:
+    relative = Path(relative_path)
+    if relative.parts and relative.parts[0] == "evidence":
+        return run_dir / relative
+    return run_dir / "evidence" / relative
 
 
 def _normalize(value: Any) -> Any:
@@ -104,8 +163,8 @@ def _step_id_from_output_path(path: Any) -> str | None:
 def _install_authority_order_observer(monkeypatch: pytest.MonkeyPatch):
     """Observe, without replacing, the current validate/seal/register order."""
 
-    from easyicu.research_agent import pipeline_execute
-    from easyicu.research_agent.evidence import EvidenceStore
+    from easyicu.research_agent.execution import phase as pipeline_execute
+    from easyicu.research_agent.authority.evidence_store import EvidenceStore
 
     events: list[tuple[str, str]] = []
 
@@ -287,7 +346,10 @@ def _finding_bundle(
                 str(key).lower() in {"reason_code", "repair_reason_code", "issue_code"}
                 for key in detail
             ),
-            "owner_result_seal_sha256": owner_seals.get(step_id),
+            # The exact seal digest includes run-local evidence identifiers.
+            # Characterize the required owner join, not a temp-path-dependent
+            # digest; deterministic table/code bytes are locked separately.
+            "owner_result_seal_bound": owner_seals.get(step_id) is not None,
         }
         normalized[_canonical_sha256(identity)] = _normalize(identity)
     return sorted(
@@ -319,7 +381,7 @@ def _stable_product_shas(
             path = run_dir / "steps" / step_id / "outputs" / str(filename)
             if path.suffix.lower() not in {".csv", ".parquet", ".feather"}:
                 continue
-            shas[f"{step_id}:{product}"] = hashlib.sha256(path.read_bytes()).hexdigest()
+            shas[f"{step_id}:{product}"] = _stable_file_sha256(path)
     return shas
 
 
@@ -384,8 +446,8 @@ def _readiness_bundle(run_dir: Path) -> dict[str, Any]:
 
 
 def _build_bundle(*, run_dir: Path, observed_events: list[tuple[str, str]]):
-    from easyicu.research_agent.evidence import EvidenceStore
-    from easyicu.research_agent.runtime_artifacts import (
+    from easyicu.research_agent.authority.evidence_store import EvidenceStore
+    from easyicu.research_agent.authority.runtime_artifacts import (
         current_step_records,
         load_run_artifact_authority,
     )
@@ -393,6 +455,11 @@ def _build_bundle(*, run_dir: Path, observed_events: list[tuple[str, str]]):
     authority = load_run_artifact_authority(run_dir)
     assert authority is not None
     ledger = list(authority["per_step_records"])
+    partial = json.loads(
+        (run_dir / "manifest_partial.json").read_text(encoding="utf-8")
+    )
+    attempt_history = list(partial["step_attempt_history"])
+    assert all(record in attempt_history for record in partial["per_step_records"])
     current = [dict(record) for record in current_step_records(ledger)]
     current.sort(key=lambda record: str(record.get("step_id") or ""))
     plan = json.loads((run_dir / "analysis_plan.json").read_text(encoding="utf-8"))
@@ -403,24 +470,67 @@ def _build_bundle(*, run_dir: Path, observed_events: list[tuple[str, str]]):
         for record in current_evidence
         if str(record.produced_by_step or "") in _PLAN_STEP_IDS
     ]
-    current_ids = {record.evidence_id for record in step_current_evidence}
-    aliases = {
-        alias: evidence_id
-        for alias, evidence_id in sorted(store.aliases().items())
+    current_by_id = {record.evidence_id: record for record in step_current_evidence}
+    current_ids = set(current_by_id)
+    raw_aliases = {
+        str(alias): str(evidence_id)
+        for alias, evidence_id in store.aliases().items()
         if evidence_id in current_ids
+    }
+    # EvidenceStore publishes every record id as a compatibility self-alias.
+    # Those ids are content-derived (for example analyzer prose is allowed to
+    # vary while its semantic owner stays fixed), so hashing the raw self-alias
+    # names makes this characterization oracle environment-sensitive.  The
+    # current-evidence bundle above already locks every selected record.  Keep
+    # the self-alias invariant as a count and hash only user/product semantic
+    # aliases here.
+    aliases = {
+        alias: {
+            "kind": current_by_id[evidence_id].kind,
+            "produced_by_step": current_by_id[evidence_id].produced_by_step,
+            "description": current_by_id[evidence_id].description,
+            "stable_content_sha256": (
+                _stable_file_sha256(
+                    _evidence_path(
+                        run_dir,
+                        current_by_id[evidence_id].relative_path,
+                    )
+                )
+                if current_by_id[evidence_id].kind == "table"
+                else current_by_id[evidence_id].sha256
+                if current_by_id[evidence_id].kind == "code"
+                else None
+            ),
+        }
+        for alias, evidence_id in sorted(raw_aliases.items())
+        if alias != evidence_id
     }
     claims = store.authoritative_numeric_claims(ledger)
     evidence_authority = sorted(
         [
             {
-                "evidence_id": record.evidence_id,
                 "kind": record.kind,
                 "produced_by_step": record.produced_by_step,
-                "sha256": record.sha256,
+                "description": record.description,
+                "producer": record.producer,
+                "generation_mode": record.generation_mode,
+                "stable_content_sha256": (
+                    _stable_file_sha256(
+                        _evidence_path(run_dir, record.relative_path)
+                    )
+                    if record.kind == "table"
+                    else record.sha256
+                    if record.kind == "code"
+                    else None
+                ),
             }
             for record in step_current_evidence
         ],
-        key=lambda item: (item["produced_by_step"], item["evidence_id"]),
+        key=lambda item: (
+            item["produced_by_step"],
+            item["kind"],
+            item["description"],
+        ),
     )
     claim_authority = sorted(
         [
@@ -452,7 +562,7 @@ def _build_bundle(*, run_dir: Path, observed_events: list[tuple[str, str]]):
     }
     return _normalize(
         {
-            "schema": "easyicu.freeze_char_golden/1",
+            "schema": "easyicu.freeze_char_golden/4",
             "volatile_field_allowlist": sorted(_VOLATILE_FIELD_ALLOWLIST),
             "step_statuses": [
                 {
@@ -478,6 +588,11 @@ def _build_bundle(*, run_dir: Path, observed_events: list[tuple[str, str]]):
             "current_aliases": {
                 "count": len(aliases),
                 "mapping_sha256": _canonical_sha256(aliases),
+            },
+            "current_self_aliases": {
+                "count": sum(
+                    alias == evidence_id for alias, evidence_id in raw_aliases.items()
+                ),
             },
             "authoritative_numeric_claims": {
                 "count": len(claim_authority),
@@ -505,7 +620,7 @@ def _build_bundle(*, run_dir: Path, observed_events: list[tuple[str, str]]):
                     for finding in finding_authority
                 ),
                 "owner_result_seal_join_used": any(
-                    finding["owner_result_seal_sha256"] is not None
+                    finding["owner_result_seal_bound"]
                     and not finding["finding_detail_has_artifact_digest"]
                     for finding in finding_authority
                 ),
@@ -539,6 +654,34 @@ def test_normalizer_removes_only_explicitly_allowed_volatile_fields():
     }
 
 
+def test_table_semantic_digest_ignores_float_tail_but_detects_numeric_drift(
+    tmp_path: Path,
+):
+    baseline = tmp_path / "baseline.csv"
+    float_tail = tmp_path / "float_tail.csv"
+    material_drift = tmp_path / "material_drift.csv"
+    baseline.write_text("id,value\n1,0.1234567890123\n", encoding="utf-8")
+    float_tail.write_text("id,value\n1,0.1234567890124\n", encoding="utf-8")
+    material_drift.write_text("id,value\n1,0.1234667890123\n", encoding="utf-8")
+
+    assert _stable_file_sha256(baseline) == _stable_file_sha256(float_tail)
+    assert _stable_file_sha256(baseline) != _stable_file_sha256(material_drift)
+
+
+def test_table_semantic_digest_validates_but_does_not_bind_backend_parameter_sha(
+    tmp_path: Path,
+):
+    first = tmp_path / "first.csv"
+    second = tmp_path / "second.csv"
+    malformed = tmp_path / "malformed.csv"
+    first.write_text(f"value,parameter_sha256\n1,{'a' * 64}\n", encoding="utf-8")
+    second.write_text(f"value,parameter_sha256\n1,{'b' * 64}\n", encoding="utf-8")
+    malformed.write_text("value,parameter_sha256\n1,not-a-sha\n", encoding="utf-8")
+
+    assert _stable_file_sha256(first) == _stable_file_sha256(second)
+    assert _stable_file_sha256(first) != _stable_file_sha256(malformed)
+
+
 def test_minimal_typed_pipeline_matches_normalized_golden_bundle(
     ra,
     tmp_path: Path,
@@ -548,9 +691,15 @@ def test_minimal_typed_pipeline_matches_normalized_golden_bundle(
     fixture._disable_unrelated_audits(monkeypatch)
     observed_events = _install_authority_order_observer(monkeypatch)
     llm = fixture._PlanAndCoderLLM()
+    runners_by_timeout: dict[float, object] = {}
 
-    def runner_factory(*, workdir, **_kwargs):
-        return fixture._HybridTrajectoryRunner(workdir=Path(workdir))
+    def runner_factory(*, workdir, timeout_seconds, **_kwargs):
+        timeout = float(timeout_seconds)
+        runner = runners_by_timeout.get(timeout)
+        if runner is None:
+            runner = fixture._HybridTrajectoryRunner(workdir=Path(workdir))
+            runners_by_timeout[timeout] = runner
+        return runner
 
     pipeline = ra.ResearchAgentPipeline(
         workdir=tmp_path,
@@ -592,3 +741,101 @@ def test_minimal_typed_pipeline_matches_normalized_golden_bundle(
     expected = json.loads(_GOLDEN_PATH.read_text(encoding="utf-8"))
 
     assert actual == expected, json.dumps(actual, indent=2, sort_keys=True)
+
+
+def test_numeric_authority_failure_prevents_current_alias_publication(
+    ra,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """A broken numeric ledger must fail the step before aliases become current."""
+
+    from easyicu.research_agent.authority.evidence_store import EvidenceStore
+    from easyicu.research_agent.authority.runtime_artifacts import (
+        current_step_records,
+        load_run_artifact_authority,
+    )
+
+    fixture = _load_typed_pipeline_fixture()
+    fixture._disable_unrelated_audits(monkeypatch)
+    numeric_calls = 0
+    original_numeric_registration = EvidenceStore.register_step_summary_numerics
+
+    def fail_numeric_registration(self, *args, **kwargs):
+        nonlocal numeric_calls
+        if str(kwargs.get("step_id") or "") != "01_representation":
+            return original_numeric_registration(self, *args, **kwargs)
+        numeric_calls += 1
+        raise OSError("injected numeric authority failure")
+
+    monkeypatch.setattr(
+        EvidenceStore,
+        "register_step_summary_numerics",
+        fail_numeric_registration,
+    )
+    runners_by_timeout: dict[float, object] = {}
+
+    def runner_factory(*, workdir, timeout_seconds, **_kwargs):
+        timeout = float(timeout_seconds)
+        runner = runners_by_timeout.get(timeout)
+        if runner is None:
+            runner = fixture._HybridTrajectoryRunner(workdir=Path(workdir))
+            runners_by_timeout[timeout] = runner
+        return runner
+
+    pipeline = ra.ResearchAgentPipeline(
+        workdir=tmp_path,
+        llm=fixture._PlanAndCoderLLM(),
+        timeout_seconds=17.0,
+        standard_executor_timeout_seconds=1_234.0,
+        runner_factory=runner_factory,
+        enable_literature=False,
+        enable_visual_qa=False,
+        enable_latex=False,
+        enable_llm_concept_audit=False,
+        enable_replanning=False,
+        enable_deterministic_code_fallback=True,
+        enable_deterministic_runner_repair=False,
+        max_code_repair_attempts=2,
+    )
+    cohort = pd.DataFrame(
+        {
+            "stay_id": list(range(1, 25)),
+            "marker_h0_6": np.linspace(-1.0, 1.0, 24),
+            "marker_h6_12": np.linspace(-0.5, 1.5, 24),
+            "death": [0, 1] * 12,
+        }
+    )
+    result = pipeline.run(
+        question="Assess fixed-window trajectory phenotypes.",
+        cohort=cohort,
+        cohort_name="trajectory_stability_failure",
+        database="synthetic",
+        target_outcome="death",
+        stop_after_step_id="01_representation",
+        stop_after_analysis=True,
+    )
+
+    run_dir = Path(result.workdir)
+    authority = load_run_artifact_authority(run_dir)
+    assert authority is not None
+    current = current_step_records(authority["per_step_records"])
+    failed = next(
+        record for record in current if record.get("step_id") == "01_representation"
+    )
+    assert failed["status"] == "contract_failed"
+    evidence_findings = [
+        finding
+        for finding in failed.get("contract_findings", [])
+        if finding.get("validator") == "result_evidence_authority"
+    ]
+    assert len(evidence_findings) == 1
+    assert evidence_findings[0]["detail"]["evidence_store_write_suppressed"] is True
+
+    store = EvidenceStore(run_dir)
+    unpublished_result_ids = set(failed.get("evidence_ids", [])) - {
+        str(failed.get("script_evidence_id") or "")
+    }
+    assert unpublished_result_ids
+    assert not unpublished_result_ids.intersection(store.aliases().values())
+    assert numeric_calls == 1

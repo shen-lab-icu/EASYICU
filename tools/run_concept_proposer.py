@@ -27,16 +27,16 @@ for p in (str(REPO_ROOT / "src"), str(REPO_ROOT / "tools")):
     if p not in sys.path:
         sys.path.insert(0, p)
 
-from easyicu.research_agent.concept_proposal import (  # noqa: E402
+from easyicu.research_agent.discovery.concept_proposal import (  # noqa: E402
     DistributionStat,
     gather_candidate_rows,
     propose_concept_selection,
     validate_concept_proposal,
 )
-from easyicu.research_agent.idea_mining_feasibility_tier import (  # noqa: E402
+from easyicu.research_agent.discovery.idea_mining_feasibility_tier import (  # noqa: E402
     SourceItemIndex,
 )
-from easyicu.research_agent.llm import LLMMessage  # noqa: E402
+from easyicu.research_agent.providers.protocol import LLMMessage  # noqa: E402
 
 DEFAULT_DB = Path("/Volumes/外置硬盘/databases/mimiciv")
 DEFAULT_CATALOG = REPO_ROOT / "benchmark" / "source_item_catalog_miiv.json"
@@ -153,8 +153,11 @@ def main() -> None:
 
     client = _make_llm(provider="openai", model=args.model, request_timeout=600.0)
 
+    from easyicu.research_agent.providers.factory import authorized_complete
+
     def complete(system: str, user: str) -> str:
-        return client.complete(
+        return authorized_complete(
+            client,
             [
                 LLMMessage(role="system", content=system),
                 LLMMessage(role="user", content=user),

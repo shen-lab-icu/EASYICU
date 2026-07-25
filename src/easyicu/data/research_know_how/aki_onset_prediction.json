@@ -1,0 +1,71 @@
+{
+  "schema_version": "easyicu.research_know_how/2",
+  "card_id": "aki_onset_prediction",
+  "version": "1.0.0",
+  "title": "Acute kidney injury onset prediction",
+  "summary": "Candidate design coordinates for predicting incident AKI from longitudinal ICU data. Confirm baseline kidney status, measurement cadence, prediction horizon, and whether both creatinine and urine-output definitions are observable before adopting the card.",
+  "clinical_topics": ["acute kidney injury", "AKI", "creatinine", "urine output", "renal outcome", "onset prediction"],
+  "topic_aliases": ["acute kidney injury", "acute kidney injury prediction", "AKI prediction", "AKI onset", "renal injury prediction", "急性肾损伤", "急性肾损伤预测", "急性肾损伤预警", "AKI预警"],
+  "study_families": ["prediction"],
+  "applicable_databases": ["miiv", "mimic_iv", "mimic_iii", "eicu", "hirid", "aumc", "sicdb"],
+  "design_candidates": {
+    "population": "Adult ICU stays at risk for a new AKI event; pre-existing renal dysfunction and renal-replacement therapy require explicit, question-specific handling rather than automatic exclusion.",
+    "time_zero": "A clinically observable landmark such as ICU admission or a rolling prediction landmark, fixed before the prediction window.",
+    "observation_window": "Use only measurements available before each landmark; document baseline creatinine ascertainment and urine-output completeness.",
+    "prediction_or_followup_window": "Choose and justify a clinically useful near-term horizon; prevent overlap between feature and outcome windows.",
+    "eligibility_candidates": ["Define adult and first-stay handling", "Confirm patients are event-free at the landmark", "Report availability of baseline creatinine and urine output separately"],
+    "exposure": "A prespecified predictor set measured before the landmark, not a post-outcome proxy.",
+    "outcome": "Incident AKI stage derived from an explicitly implementable KDIGO-aligned creatinine and/or urine-output rule.",
+    "estimand": "Risk of a new AKI event within the declared horizon among patients event-free and observable at the landmark.",
+    "recommended_methods": ["Patient-level temporal split or external validation", "Calibration and discrimination with uncertainty", "Preprocessing fitted within each training fold"],
+    "sensitivity_analyses": ["Creatinine-only versus urine-output-capable definitions", "Alternative baseline-creatinine assumptions", "Competing discharge or death handling" ]
+  },
+  "required_concepts": ["creatinine", "urine_output", "icu_admission_time", "death", "discharge"],
+  "stop_conditions": ["AKI onset cannot be temporally separated from predictors", "Neither creatinine nor urine output supports an implementable outcome", "Patient-level split identifiers are unavailable"],
+  "requires_confirmation": ["Confirm whether pre-existing kidney disease or renal-replacement therapy changes eligibility", "Confirm the AKI definition components and prediction horizon before planning"],
+  "citations": [
+    {
+      "citation_id": "kdigo_aki_2012",
+      "title": "KDIGO Clinical Practice Guideline for Acute Kidney Injury",
+      "year": 2012,
+      "source_type": "guideline",
+      "url": "https://kdigo.org/wp-content/uploads/2016/10/KDIGO-2012-AKI-Guideline-English.pdf",
+      "supports": ["AKI definition candidates", "creatinine and urine-output criteria"]
+    },
+    {
+      "citation_id": "tripod_ai_2024",
+      "title": "TRIPOD+AI statement: updated guidance for reporting clinical prediction models",
+      "year": 2024,
+      "source_type": "reporting_standard",
+      "url": "https://pubmed.ncbi.nlm.nih.gov/38626948/",
+      "doi": "10.1136/bmj-2023-078378",
+      "supports": ["prediction design", "validation and reporting"]
+    }
+  ],
+  "claims": [
+    {"claim_id":"target_population","field":"population","text":"Adult ICU stays at risk for a new AKI event; pre-existing renal dysfunction and renal-replacement therapy require explicit, question-specific handling rather than automatic exclusion.","citation_ids":["kdigo_aki_2012","tripod_ai_2024"],"evidence_scope":"expert_consensus"},
+    {"claim_id":"prediction_landmark","field":"time_zero","text":"A clinically observable landmark such as ICU admission or a rolling prediction landmark, fixed before the prediction window.","citation_ids":["tripod_ai_2024"],"evidence_scope":"reporting_standard"},
+    {"claim_id":"pre_landmark_measurements","field":"observation_window","text":"Use only measurements available before each landmark; document baseline creatinine ascertainment and urine-output completeness.","citation_ids":["kdigo_aki_2012","tripod_ai_2024"],"evidence_scope":"guideline"},
+    {"claim_id":"prediction_horizon","field":"followup_window","text":"Choose and justify a clinically useful near-term horizon; prevent overlap between feature and outcome windows.","citation_ids":["tripod_ai_2024"],"evidence_scope":"reporting_standard"},
+    {"claim_id":"adult_first_stay_handling","field":"eligibility","text":"Define adult and first-stay handling","citation_ids":["tripod_ai_2024"],"evidence_scope":"reporting_standard"},
+    {"claim_id":"event_free_landmark","field":"eligibility","text":"Confirm patients are event-free at the landmark","citation_ids":["tripod_ai_2024"],"evidence_scope":"reporting_standard"},
+    {"claim_id":"definition_component_availability","field":"eligibility","text":"Report availability of baseline creatinine and urine output separately","citation_ids":["kdigo_aki_2012"],"evidence_scope":"guideline"},
+    {"claim_id":"predictor_temporality","field":"exposure","text":"A prespecified predictor set measured before the landmark, not a post-outcome proxy.","citation_ids":["tripod_ai_2024"],"evidence_scope":"reporting_standard"},
+    {"claim_id":"incident_aki_outcome","field":"outcome","text":"Incident AKI stage derived from an explicitly implementable KDIGO-aligned creatinine and/or urine-output rule.","citation_ids":["kdigo_aki_2012"],"evidence_scope":"guideline"},
+    {"claim_id":"incident_aki_risk_estimand","field":"estimand","text":"Risk of a new AKI event within the declared horizon among patients event-free and observable at the landmark.","citation_ids":["tripod_ai_2024"],"evidence_scope":"reporting_standard"},
+    {"claim_id":"patient_level_validation","field":"method","text":"Patient-level temporal split or external validation","citation_ids":["tripod_ai_2024"],"evidence_scope":"reporting_standard"},
+    {"claim_id":"calibration_discrimination","field":"method","text":"Calibration and discrimination with uncertainty","citation_ids":["tripod_ai_2024"],"evidence_scope":"reporting_standard"},
+    {"claim_id":"fold_local_preprocessing","field":"method","text":"Preprocessing fitted within each training fold","citation_ids":["tripod_ai_2024"],"evidence_scope":"reporting_standard"},
+    {"claim_id":"definition_component_sensitivity","field":"sensitivity","text":"Creatinine-only versus urine-output-capable definitions","citation_ids":["kdigo_aki_2012"],"evidence_scope":"guideline"},
+    {"claim_id":"baseline_creatinine_sensitivity","field":"sensitivity","text":"Alternative baseline-creatinine assumptions","citation_ids":["kdigo_aki_2012"],"evidence_scope":"guideline"},
+    {"claim_id":"competing_event_sensitivity","field":"sensitivity","text":"Competing discharge or death handling","citation_ids":["tripod_ai_2024"],"evidence_scope":"reporting_standard"},
+    {"claim_id":"stop_temporal_separation","field":"stop_condition","text":"AKI onset cannot be temporally separated from predictors","citation_ids":["tripod_ai_2024"],"evidence_scope":"reporting_standard"},
+    {"claim_id":"stop_no_implementable_definition","field":"stop_condition","text":"Neither creatinine nor urine output supports an implementable outcome","citation_ids":["kdigo_aki_2012"],"evidence_scope":"guideline"},
+    {"claim_id":"stop_no_patient_split","field":"stop_condition","text":"Patient-level split identifiers are unavailable","citation_ids":["tripod_ai_2024"],"evidence_scope":"reporting_standard"},
+    {"claim_id":"confirm_preexisting_kidney_status","field":"requires_confirmation","text":"Confirm whether pre-existing kidney disease or renal-replacement therapy changes eligibility","citation_ids":["kdigo_aki_2012"],"evidence_scope":"guideline"},
+    {"claim_id":"confirm_definition_and_horizon","field":"requires_confirmation","text":"Confirm the AKI definition components and prediction horizon before planning","citation_ids":["kdigo_aki_2012","tripod_ai_2024"],"evidence_scope":"expert_consensus"}
+  ],
+  "trust_level": "built_in_reviewed",
+  "review_status": "curated_mvp",
+  "review_attestation": null
+}

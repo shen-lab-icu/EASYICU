@@ -5,22 +5,55 @@ from __future__ import annotations
 from pathlib import Path
 
 
+def test_legacy_memory_failure_cannot_overturn_successful_run(
+    ra,
+    synthetic_cohort,
+    tmp_path: Path,
+    monkeypatch,
+):
+    pipeline = ra.ResearchAgentPipeline(
+        workdir=tmp_path,
+        llm=ra.MockLLMClient(),
+        enable_literature=False,
+        enable_visual_qa=False,
+        enable_latex=False,
+        enable_memory=True,
+        runner_kind="subprocess",
+    )
+
+    def fail_record(**_kwargs):
+        raise OSError("memory volume unavailable")
+
+    monkeypatch.setattr(pipeline._memory, "record", fail_record)
+    result = pipeline.run(
+        skill="association_analysis",
+        cohort=synthetic_cohort,
+        database="synthetic",
+    )
+
+    assert Path(result.manifest_path).is_file()
+    assert Path(result.report_path).is_file()
+
+
 def test_record_and_digest_round_trip(ra, tmp_path: Path):
     schema = ra.schema
     mem = ra.RunMemory(root=tmp_path)
 
     f1 = schema.ValidationFinding(
-        validator="statistical_validator", severity="warning",
+        validator="statistical_validator",
+        severity="warning",
         message="ordinal SOFA strata: check component completeness before strata-outcome claims.",
     )
     f2 = schema.ValidationFinding(
-        validator="cohort_auditor", severity="error",
+        validator="cohort_auditor",
+        severity="error",
         message="Row count mismatch.",
     )
     rec = mem.record(
         run_id="run_test_001",
         research_question="Is admission SOFA-2 associated with ICU mortality?",
-        database="miiv", target_outcome="death",
+        database="miiv",
+        target_outcome="death",
         findings=[f1, f2],
         workdir=tmp_path,
     )
@@ -30,7 +63,8 @@ def test_record_and_digest_round_trip(ra, tmp_path: Path):
 
     digest = mem.digest_for_prompt(
         research_question="Is admission SOFA-2 associated with ICU mortality?",
-        database="miiv", target_outcome="death",
+        database="miiv",
+        target_outcome="death",
     )
     assert "run_test_001" in digest
     assert "sofa2" in digest.lower() or "sofa-2" in digest.lower()
@@ -39,7 +73,9 @@ def test_record_and_digest_round_trip(ra, tmp_path: Path):
 def test_no_runs_returns_friendly_digest(ra, tmp_path: Path):
     mem = ra.RunMemory(root=tmp_path)
     digest = mem.digest_for_prompt(
-        research_question="any", database="miiv", target_outcome="death",
+        research_question="any",
+        database="miiv",
+        target_outcome="death",
     )
     assert "no prior runs" in digest.lower()
 
@@ -47,16 +83,25 @@ def test_no_runs_returns_friendly_digest(ra, tmp_path: Path):
 def test_relevance_ranking_prefers_same_database(ra, tmp_path: Path):
     mem = ra.RunMemory(root=tmp_path)
     mem.record(
-        run_id="run_eicu_a", research_question="Does sofa predict mortality?",
-        database="eicu", target_outcome="death", findings=[], workdir=tmp_path,
+        run_id="run_eicu_a",
+        research_question="Does sofa predict mortality?",
+        database="eicu",
+        target_outcome="death",
+        findings=[],
+        workdir=tmp_path,
     )
     mem.record(
-        run_id="run_miiv_a", research_question="Does sofa predict mortality?",
-        database="miiv", target_outcome="death", findings=[], workdir=tmp_path,
+        run_id="run_miiv_a",
+        research_question="Does sofa predict mortality?",
+        database="miiv",
+        target_outcome="death",
+        findings=[],
+        workdir=tmp_path,
     )
     ranked = mem.relevant_to(
         research_question="Does sofa predict mortality in MIMIC-IV?",
-        database="miiv", target_outcome="death",
+        database="miiv",
+        target_outcome="death",
     )
     assert ranked[0].run_id == "run_miiv_a"
 
@@ -130,8 +175,10 @@ def test_run_memory_distills_strategy_cards(ra, tmp_path: Path):
     assert "databases: miiv" in digest
 
 
-def test_strategy_cards_hide_blocked_concept_dependencies(ra, tmp_path: Path, monkeypatch):
-    from easyicu.research_agent import memory as memory_module
+def test_strategy_cards_hide_blocked_concept_dependencies(
+    ra, tmp_path: Path, monkeypatch
+):
+    from easyicu.research_agent.learning import memory as memory_module
 
     mem = ra.RunMemory(root=tmp_path)
     now = "2026-01-01T00:00:00+00:00"

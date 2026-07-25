@@ -74,6 +74,8 @@ def _patient_filter_values(patient_ids):
     else:
         values = patient_ids
     return list(values)
+
+
 def _expand_public_numeric_win_tbl_output(
     result: pd.DataFrame,
     concept_name: str,
@@ -82,33 +84,55 @@ def _expand_public_numeric_win_tbl_output(
     """Expand single-concept numeric win_tbl output to ricu-compatible rows."""
     if not isinstance(result, pd.DataFrame) or result.empty:
         return result
-    if concept_name not in result.columns or 'dur_var' not in result.columns:
+    if concept_name not in result.columns or "dur_var" not in result.columns:
         return result
 
-    numeric_values = pd.to_numeric(result[concept_name], errors='coerce')
+    numeric_values = pd.to_numeric(result[concept_name], errors="coerce")
     if numeric_values.notna().sum() == 0:
         return result
 
     index_candidates = [
-        'charttime', 'starttime', 'start', 'datetime', 'measuredat', 'measuredat_minutes',
-        'givenat', 'infusionoffset', 'observationoffset', 'labresultoffset',
+        "charttime",
+        "starttime",
+        "start",
+        "datetime",
+        "measuredat",
+        "measuredat_minutes",
+        "givenat",
+        "infusionoffset",
+        "observationoffset",
+        "labresultoffset",
     ]
-    index_column = next((col for col in index_candidates if col in result.columns), None)
+    index_column = next(
+        (col for col in index_candidates if col in result.columns), None
+    )
     if index_column is None:
         return result
 
-    id_priority = ['stay_id', 'icustay_id', 'patientunitstayid', 'admissionid', 'patientid', 'CaseID', 'subject_id']
+    id_priority = [
+        "stay_id",
+        "icustay_id",
+        "patientunitstayid",
+        "admissionid",
+        "patientid",
+        "CaseID",
+        "subject_id",
+    ]
     id_columns = [col for col in id_priority if col in result.columns]
     if not id_columns:
-        id_columns = [col for col in result.columns if col.lower().endswith('id') and col not in {index_column, 'dur_var'}]
+        id_columns = [
+            col
+            for col in result.columns
+            if col.lower().endswith("id") and col not in {index_column, "dur_var"}
+        ]
     if not id_columns:
         return result
 
-    interval_td = pd.to_timedelta(interval or '1h')
+    interval_td = pd.to_timedelta(interval or "1h")
     if pd.isna(interval_td) or interval_td <= pd.Timedelta(0):
         interval_td = pd.Timedelta(hours=1)
 
-    work = result[id_columns + [index_column, 'dur_var', concept_name]].copy()
+    work = result[id_columns + [index_column, "dur_var", concept_name]].copy()
     work[concept_name] = numeric_values
     work = work.dropna(subset=[index_column, concept_name])
     if work.empty:
@@ -118,15 +142,15 @@ def _expand_public_numeric_win_tbl_output(
     is_datetime_index = pd.api.types.is_datetime64_any_dtype(work[index_column])
 
     if is_datetime_index:
-        work[index_column] = pd.to_datetime(work[index_column], errors='coerce')
+        work[index_column] = pd.to_datetime(work[index_column], errors="coerce")
         # 🔧 FIX: dur_var may already be pd.Timedelta (set by ts_to_win_tbl for datetime indices).
         # pd.to_numeric on Timedelta returns nanoseconds, so pd.to_timedelta(..., unit='m')
         # would treat those nanoseconds as minutes → duration of ~114,000 years → infinite loop.
-        if pd.api.types.is_timedelta64_dtype(work['dur_var']):
-            duration_values = work['dur_var'].fillna(pd.Timedelta(0))
+        if pd.api.types.is_timedelta64_dtype(work["dur_var"]):
+            duration_values = work["dur_var"].fillna(pd.Timedelta(0))
         else:
-            dur_numeric = pd.to_numeric(work['dur_var'], errors='coerce').fillna(0.0)
-            duration_values = pd.to_timedelta(dur_numeric, unit='m')
+            dur_numeric = pd.to_numeric(work["dur_var"], errors="coerce").fillna(0.0)
+            duration_values = pd.to_timedelta(dur_numeric, unit="m")
         epsilon = pd.Timedelta(microseconds=1)
 
         for row, duration in zip(work.itertuples(index=False), duration_values):
@@ -137,14 +161,16 @@ def _expand_public_numeric_win_tbl_output(
             end = start + duration
             current = start
             while current <= end + epsilon:
-                expanded_rows.append({
-                    **{col: row_dict[col] for col in id_columns},
-                    index_column: current,
-                    concept_name: row_dict[concept_name],
-                })
+                expanded_rows.append(
+                    {
+                        **{col: row_dict[col] for col in id_columns},
+                        index_column: current,
+                        concept_name: row_dict[concept_name],
+                    }
+                )
                 current = current + interval_td
     else:
-        work[index_column] = pd.to_numeric(work[index_column], errors='coerce')
+        work[index_column] = pd.to_numeric(work[index_column], errors="coerce")
         work = work.dropna(subset=[index_column])
         if work.empty:
             return result
@@ -152,11 +178,11 @@ def _expand_public_numeric_win_tbl_output(
         # 🔧 FIX: dur_var may be pd.Timedelta (set by ts_to_win_tbl for datetime indices).
         # After time alignment, the index becomes numeric (hours) but dur_var stays as Timedelta.
         # pd.to_numeric on Timedelta returns nanoseconds → wildly wrong duration → infinite loop.
-        if pd.api.types.is_timedelta64_dtype(work['dur_var']):
+        if pd.api.types.is_timedelta64_dtype(work["dur_var"]):
             # Convert Timedelta to minutes (the standard ricu unit for dur_var)
-            dur_numeric = work['dur_var'].dt.total_seconds().div(60.0).fillna(0.0)
+            dur_numeric = work["dur_var"].dt.total_seconds().div(60.0).fillna(0.0)
         else:
-            dur_numeric = pd.to_numeric(work['dur_var'], errors='coerce').fillna(0.0)
+            dur_numeric = pd.to_numeric(work["dur_var"], errors="coerce").fillna(0.0)
         interval_hours = interval_td.total_seconds() / 3600.0
         if interval_hours <= 0:
             interval_hours = 1.0
@@ -170,7 +196,11 @@ def _expand_public_numeric_win_tbl_output(
             median = float(dur_sample.median())
             duration_is_hours = q95 <= 48.0 and median <= 24.0
 
-        duration_hours = dur_numeric.loc[work.index] if duration_is_hours else (dur_numeric.loc[work.index] / 60.0)
+        duration_hours = (
+            dur_numeric.loc[work.index]
+            if duration_is_hours
+            else (dur_numeric.loc[work.index] / 60.0)
+        )
         epsilon = 1e-9
 
         for row, duration_hour in zip(work.itertuples(index=False), duration_hours):
@@ -181,11 +211,13 @@ def _expand_public_numeric_win_tbl_output(
             end = start + max(float(duration_hour), 0.0)
             current = float(start)
             while current <= end + epsilon:
-                expanded_rows.append({
-                    **{col: row_dict[col] for col in id_columns},
-                    index_column: current,
-                    concept_name: row_dict[concept_name],
-                })
+                expanded_rows.append(
+                    {
+                        **{col: row_dict[col] for col in id_columns},
+                        index_column: current,
+                        concept_name: row_dict[concept_name],
+                    }
+                )
                 current += interval_hours
 
     if not expanded_rows:
@@ -193,19 +225,18 @@ def _expand_public_numeric_win_tbl_output(
 
     expanded = pd.DataFrame(expanded_rows)
     expanded = (
-        expanded
-        .groupby(id_columns + [index_column], as_index=False)[concept_name]
+        expanded.groupby(id_columns + [index_column], as_index=False)[concept_name]
         .median()
-        .sort_values(id_columns + [index_column], kind='mergesort')
+        .sort_values(id_columns + [index_column], kind="mergesort")
         .reset_index(drop=True)
     )
     return expanded
 
 
-def _build_fast_scan_expr(loader: 'BaseICULoader', table_name: str) -> Optional[str]:
+def _build_fast_scan_expr(loader: "BaseICULoader", table_name: str) -> Optional[str]:
     """Build a DuckDB scan expression for a table without materializing it in pandas."""
-    data_source = getattr(loader, 'datasource', None)
-    if data_source is None or not hasattr(data_source, '_resolve_loader_from_disk'):
+    data_source = getattr(loader, "datasource", None)
+    if data_source is None or not hasattr(data_source, "_resolve_loader_from_disk"):
         return None
 
     source = data_source._resolve_loader_from_disk(table_name)
@@ -213,7 +244,7 @@ def _build_fast_scan_expr(loader: 'BaseICULoader', table_name: str) -> Optional[
         return None
 
     def _escape(path: str) -> str:
-        return path.replace("'", "''").replace('\\', '/')
+        return path.replace("'", "''").replace("\\", "/")
 
     if source.is_dir():
         # 显式文件列表，过滤 AppleDouble (._*.parquet) — 见 datasource._enumerate_bucket_parquet_files
@@ -224,36 +255,40 @@ def _build_fast_scan_expr(loader: 'BaseICULoader', table_name: str) -> Optional[
         if _enum is not None:
             files = _enum(source)
             if files:
-                files_sql = '[' + ', '.join(f"'{_escape(f)}'" for f in files) + ']'
+                files_sql = "[" + ", ".join(f"'{_escape(f)}'" for f in files) + "]"
                 return f"read_parquet({files_sql}, union_by_name=true)"
         # Fallback: 旧的 glob 路径（仅在 helper 不可用或空目录时）
-        bucket_dirs = list(source.glob('bucket_id=*'))
+        bucket_dirs = list(source.glob("bucket_id=*"))
         if bucket_dirs:
-            pattern = str(source / 'bucket_id=*' / '*.parquet').replace('\\', '/')
+            pattern = str(source / "bucket_id=*" / "*.parquet").replace("\\", "/")
         else:
-            parquet_files = list(source.glob('*.parquet')) + list(source.glob('*.pq'))
+            parquet_files = list(source.glob("*.parquet")) + list(source.glob("*.pq"))
             if not parquet_files:
                 return None
-            pattern = (str(source / '*.parquet') if list(source.glob('*.parquet')) else str(source / '*.pq')).replace('\\', '/')
+            pattern = (
+                str(source / "*.parquet")
+                if list(source.glob("*.parquet"))
+                else str(source / "*.pq")
+            ).replace("\\", "/")
         return f"read_parquet('{_escape(pattern)}', union_by_name=true)"
 
     suffixes = [s.lower() for s in source.suffixes]
     source_str = _escape(str(source))
-    if source.suffix.lower() in {'.parquet', '.pq'}:
+    if source.suffix.lower() in {".parquet", ".pq"}:
         return f"read_parquet('{source_str}', union_by_name=true)"
-    if '.csv' in suffixes or source.suffix.lower() == '.csv':
+    if ".csv" in suffixes or source.suffix.lower() == ".csv":
         return f"read_csv_auto('{source_str}')"
     return None
 
 
 def _query_patient_ids_fast(
-    loader: 'BaseICULoader',
+    loader: "BaseICULoader",
     table_name: str,
     id_col: str,
     *,
     limit: Optional[int] = None,
     offset: Optional[int] = None,
-    sample_strategy: str = 'sorted',
+    sample_strategy: str = "sorted",
 ) -> Optional[List]:
     """Fetch distinct patient IDs via DuckDB, avoiding full-table pandas loads."""
     scan_expr = _build_fast_scan_expr(loader, table_name)
@@ -266,16 +301,16 @@ def _query_patient_ids_fast(
         return None
 
     order_expr = f'"{id_col}"'
-    if sample_strategy == 'random':
+    if sample_strategy == "random":
         order_expr = f'hash("{id_col}")'
 
-    limit_clause = f' LIMIT {int(limit)}' if limit and limit > 0 else ''
-    offset_clause = f' OFFSET {int(offset)}' if offset and offset > 0 else ''
+    limit_clause = f" LIMIT {int(limit)}" if limit and limit > 0 else ""
+    offset_clause = f" OFFSET {int(offset)}" if offset and offset > 0 else ""
     query = (
         f'SELECT DISTINCT "{id_col}" AS patient_id '
-        f'FROM {scan_expr} '
+        f"FROM {scan_expr} "
         f'WHERE "{id_col}" IS NOT NULL '
-        f'ORDER BY {order_expr}{limit_clause}{offset_clause}'
+        f"ORDER BY {order_expr}{limit_clause}{offset_clause}"
     )
 
     conn = duckdb.connect()
@@ -284,12 +319,14 @@ def _query_patient_ids_fast(
         conn.execute("SET enable_progress_bar = false")
         conn.execute("SET enable_progress_bar_print = false")
         conn.execute("SET memory_limit = '2GB'")
-        return conn.execute(query).fetchnumpy()['patient_id'].tolist()
+        return conn.execute(query).fetchnumpy()["patient_id"].tolist()
     finally:
         conn.close()
 
 
-def _count_patient_ids_fast(loader: 'BaseICULoader', table_name: str, id_col: str) -> Optional[int]:
+def _count_patient_ids_fast(
+    loader: "BaseICULoader", table_name: str, id_col: str
+) -> Optional[int]:
     """Count distinct patient IDs via DuckDB without loading the ID table into pandas."""
     scan_expr = _build_fast_scan_expr(loader, table_name)
     if not scan_expr:
@@ -302,7 +339,7 @@ def _count_patient_ids_fast(loader: 'BaseICULoader', table_name: str, id_col: st
 
     query = (
         f'SELECT COUNT(DISTINCT "{id_col}") AS n '
-        f'FROM {scan_expr} '
+        f"FROM {scan_expr} "
         f'WHERE "{id_col}" IS NOT NULL'
     )
 
@@ -317,19 +354,20 @@ def _count_patient_ids_fast(loader: 'BaseICULoader', table_name: str, id_col: st
     finally:
         conn.close()
 
+
 def clear_global_loader():
     """清除全局加载器，强制下一次调用重新创建"""
     global _global_loader, _loader_config
     if _global_loader is not None:
-        if hasattr(_global_loader, 'clear_cache'):
+        if hasattr(_global_loader, "clear_cache"):
             _global_loader.clear_cache()
         else:
             # 清理加载器内部缓存
-            if hasattr(_global_loader, 'concept_resolver'):
+            if hasattr(_global_loader, "concept_resolver"):
                 _global_loader.concept_resolver.clear()
-            for attr in ('datasource', 'data_source'):
+            for attr in ("datasource", "data_source"):
                 data_source = getattr(_global_loader, attr, None)
-                if data_source is not None and hasattr(data_source, 'clear'):
+                if data_source is not None and hasattr(data_source, "clear"):
                     data_source.clear()
     _global_loader = None
     _loader_config = None
@@ -337,41 +375,55 @@ def clear_global_loader():
 
 from contextlib import contextmanager
 
+
 @contextmanager
-def keep_cache(database=None, data_path=None, dict_path=None, use_sofa2=False, verbose=False):
+def keep_cache(
+    database=None, data_path=None, dict_path=None, use_sofa2=False, verbose=False
+):
     """Context manager: keep raw/table cache between sequential load_concepts calls.
-    
+
     Usage::
-    
+
         with keep_cache(database='miiv'):
             df1 = load_concepts(['hr', 'sbp'], database='miiv', max_patients=1000)
             df2 = load_concepts(['sofa'], database='miiv', max_patients=1000)
             # sofa reuses cached hr/sbp/map/etc. from df1's sub-concept loads
     """
-    loader = _get_global_loader(database=database, data_path=data_path,
-                                dict_path=dict_path, use_sofa2=use_sofa2, verbose=verbose)
+    loader = _get_global_loader(
+        database=database,
+        data_path=data_path,
+        dict_path=dict_path,
+        use_sofa2=use_sofa2,
+        verbose=verbose,
+    )
     resolver = loader.concept_resolver
     resolver._keep_cache_between_calls = True
     try:
         yield loader
     finally:
         resolver._keep_cache_between_calls = False
-        if hasattr(resolver, 'drop_source_caches'):
+        if hasattr(resolver, "drop_source_caches"):
             resolver.drop_source_caches()
         else:  # pragma: no cover - legacy resolver without cache accounting
             with resolver._cache_lock:
                 resolver._raw_concept_cache.clear()
                 resolver._table_cache.clear()
 
+
 import numpy as np
 
-def _sample_patient_ids(loader: 'BaseICULoader', max_patients: int, verbose: bool = False,
-                        sample_strategy: str = 'sorted') -> List:
+
+def _sample_patient_ids(
+    loader: "BaseICULoader",
+    max_patients: int,
+    verbose: bool = False,
+    sample_strategy: str = "sorted",
+) -> List:
     """
     从数据库中采样患者ID（用于 max_patients 参数）
-    
+
     根据数据库类型，从对应的住院/ICU表中获取患者ID。
-    
+
     Args:
         loader: BaseICULoader 实例
         max_patients: 最大患者数量
@@ -386,17 +438,17 @@ def _sample_patient_ids(loader: 'BaseICULoader', max_patients: int, verbose: boo
     """
     profile = _database_profile_or_default(loader.database)
     table_name, id_col = profile.stay_table, profile.stay_id_col
-    
+
     try:
         fast_ids = _query_patient_ids_fast(
             loader,
             table_name,
             id_col,
-            limit=max_patients if sample_strategy != 'random' else max_patients,
+            limit=max_patients if sample_strategy != "random" else max_patients,
             sample_strategy=sample_strategy,
         )
         if fast_ids is not None:
-            if sample_strategy == 'random':
+            if sample_strategy == "random":
                 sampled_ids = sorted(fast_ids[:max_patients])
                 strategy_label = "随机采样"
             else:
@@ -404,27 +456,36 @@ def _sample_patient_ids(loader: 'BaseICULoader', max_patients: int, verbose: boo
                 strategy_label = "已排序"
 
             if verbose:
-                print(f"🎯 max_patients={max_patients}: DuckDB 快速采样 {len(sampled_ids)} 个患者 ({strategy_label})")
+                print(
+                    f"🎯 max_patients={max_patients}: DuckDB 快速采样 {len(sampled_ids)} 个患者 ({strategy_label})"
+                )
             return sampled_ids
 
         # 只加载ID列，限制行数
-        id_table = loader.datasource.load_table(table_name, columns=[id_col], verbose=False)
+        id_table = loader.datasource.load_table(
+            table_name, columns=[id_col], verbose=False
+        )
         all_ids = id_table.data[id_col].dropna().unique()
-        
-        if sample_strategy == 'random' and len(all_ids) > max_patients:
+
+        if sample_strategy == "random" and len(all_ids) > max_patients:
             import numpy as np
+
             rng = np.random.default_rng(seed=42)  # 固定种子保证可复现
-            sampled_ids = sorted(rng.choice(all_ids, size=max_patients, replace=False).tolist())
+            sampled_ids = sorted(
+                rng.choice(all_ids, size=max_patients, replace=False).tolist()
+            )
             strategy_label = "随机采样"
         else:
             # 🔧 按ID排序后再采样，确保与 RICU 金标准生成脚本一致
             all_ids = sorted(all_ids)
             sampled_ids = list(all_ids[:max_patients])
             strategy_label = "已排序"
-        
+
         if verbose:
-            print(f"🎯 max_patients={max_patients}: 从 {table_name}.{id_col} 采样 {len(sampled_ids)} 个患者 ({strategy_label})")
-        
+            print(
+                f"🎯 max_patients={max_patients}: 从 {table_name}.{id_col} 采样 {len(sampled_ids)} 个患者 ({strategy_label})"
+            )
+
         return sampled_ids
     except Exception as e:
         if verbose:
@@ -432,18 +493,18 @@ def _sample_patient_ids(loader: 'BaseICULoader', max_patients: int, verbose: boo
         return None
 
 
-def _get_patient_id_source(loader: 'BaseICULoader') -> tuple[str, str]:
+def _get_patient_id_source(loader: "BaseICULoader") -> tuple[str, str]:
     """Return the canonical (table_name, id_col) pair for a database."""
     profile = _database_profile_or_default(loader.database)
     return profile.stay_table, profile.stay_id_col
 
 
 def _iter_patient_id_batches(
-    loader: 'BaseICULoader',
+    loader: "BaseICULoader",
     batch_size: int,
     *,
     total_patients: Optional[int] = None,
-    sample_strategy: str = 'sorted',
+    sample_strategy: str = "sorted",
 ):
     """Yield patient-id batches directly from storage without materializing the full ID list."""
     table_name, id_col = _get_patient_id_source(loader)
@@ -462,11 +523,16 @@ def _iter_patient_id_batches(
         )
 
         if batch_ids is None:
-            all_ids = _sample_patient_ids(loader, total_patients or 999999999, verbose=False, sample_strategy=sample_strategy)
+            all_ids = _sample_patient_ids(
+                loader,
+                total_patients or 999999999,
+                verbose=False,
+                sample_strategy=sample_strategy,
+            )
             if not all_ids:
                 return
             for start in range(0, len(all_ids), batch_size):
-                yield {id_col: all_ids[start:start + batch_size]}
+                yield {id_col: all_ids[start : start + batch_size]}
             return
 
         if not batch_ids:
@@ -478,19 +544,21 @@ def _iter_patient_id_batches(
             remaining -= len(batch_ids)
 
 
-def _get_total_patient_count(loader: 'BaseICULoader') -> Optional[int]:
+def _get_total_patient_count(loader: "BaseICULoader") -> Optional[int]:
     """
     快速获取数据库中的总患者数（用于自动分批决策）。
     使用 DuckDB COUNT(DISTINCT) 避免加载全部数据。
     """
     profile = _database_profile_or_default(loader.database)
     table_name, id_col = profile.stay_table, profile.stay_id_col
-    
+
     try:
         fast_count = _count_patient_ids_fast(loader, table_name, id_col)
         if fast_count is not None:
             return fast_count
-        id_table = loader.datasource.load_table(table_name, columns=[id_col], verbose=False)
+        id_table = loader.datasource.load_table(
+            table_name, columns=[id_col], verbose=False
+        )
         return id_table.data[id_col].nunique()
     except Exception:
         return None
@@ -499,33 +567,35 @@ def _get_total_patient_count(loader: 'BaseICULoader') -> Optional[int]:
 def _compress_dtypes(df: pd.DataFrame, verbose: bool = False) -> pd.DataFrame:
     """
     压缩 DataFrame 的数据类型以减少内存使用
-    
+
     - int64 -> int32 (如果值范围允许)
     - float64 -> float32 (对于非精确值)
     - 保持 datetime64 不变
-    
+
     可以节省约 50-60% 的内存
     """
-    if hasattr(df, 'data') and isinstance(getattr(df, 'data'), pd.DataFrame):
+    if hasattr(df, "data") and isinstance(getattr(df, "data"), pd.DataFrame):
         df.data = _compress_dtypes(df.data, verbose=verbose)
         return df
 
     if not isinstance(df, pd.DataFrame) or df.empty:
         return df
-    
+
     original_mem = df.memory_usage(deep=True).sum()
-    
+
     for col in df.columns:
         col_type = df[col].dtype
-        
+
         # 整数类型压缩
         if col_type == np.int64:
             col_min, col_max = df[col].min(), df[col].max()
             if col_min >= np.iinfo(np.int32).min and col_max <= np.iinfo(np.int32).max:
                 df[col] = df[col].astype(np.int32)
-            elif col_min >= np.iinfo(np.int16).min and col_max <= np.iinfo(np.int16).max:
+            elif (
+                col_min >= np.iinfo(np.int16).min and col_max <= np.iinfo(np.int16).max
+            ):
                 df[col] = df[col].astype(np.int16)
-        
+
         # 浮点类型压缩 - SOFA 分数等小整数可以用 int8
         elif col_type == np.float64:
             # 检查是否都是整数值
@@ -533,18 +603,24 @@ def _compress_dtypes(df: pd.DataFrame, verbose: bool = False) -> pd.DataFrame:
                 col_min, col_max = df[col].min(), df[col].max()
                 if not np.isnan(col_min) and col_min >= -128 and col_max <= 127:
                     # 小整数用 Int8 (可空整数)
-                    df[col] = df[col].astype('Int8')
-                elif not np.isnan(col_min) and col_min >= np.iinfo(np.int16).min and col_max <= np.iinfo(np.int16).max:
-                    df[col] = df[col].astype('Int16')
+                    df[col] = df[col].astype("Int8")
+                elif (
+                    not np.isnan(col_min)
+                    and col_min >= np.iinfo(np.int16).min
+                    and col_max <= np.iinfo(np.int16).max
+                ):
+                    df[col] = df[col].astype("Int16")
             else:
                 # 一般浮点数用 float32
                 df[col] = df[col].astype(np.float32)
-    
+
     if verbose:
         new_mem = df.memory_usage(deep=True).sum()
         saved = (original_mem - new_mem) / original_mem * 100
-        print(f"💾 内存压缩: {original_mem/1024/1024:.1f}MB → {new_mem/1024/1024:.1f}MB (节省 {saved:.0f}%)")
-    
+        print(
+            f"💾 内存压缩: {original_mem/1024/1024:.1f}MB → {new_mem/1024/1024:.1f}MB (节省 {saved:.0f}%)"
+        )
+
     return df
 
 
@@ -566,8 +642,13 @@ def _get_global_loader(
 
     # 🚀 只比较影响加载器初始化的关键参数，忽略运行时参数（如 verbose）
     # 这允许在多次调用之间复用加载器，共享缓存
-    config_kwargs = {k: v for k, v in kwargs.items() if k in ('use_sofa2',)}
-    current_config = (database, str(data_path) if data_path else None, dict_key, frozenset(config_kwargs.items()))
+    config_kwargs = {k: v for k, v in kwargs.items() if k in ("use_sofa2",)}
+    current_config = (
+        database,
+        str(data_path) if data_path else None,
+        dict_key,
+        frozenset(config_kwargs.items()),
+    )
 
     if _global_loader is None or _loader_config != current_config:
         _global_loader = BaseICULoader(
@@ -580,23 +661,24 @@ def _get_global_loader(
 
     return _global_loader
 
+
 def _get_smart_workers(num_concepts: int, num_patients: Optional[int] = None) -> tuple:
     """
     智能计算最佳并行配置
-    
+
     使用 parallel_config 模块根据系统资源自动调整。
-    
+
     Args:
         num_concepts: 要加载的概念数量
         num_patients: 患者数量（如果已知）
-    
+
     Returns:
         (concept_workers, parallel_workers): 概念并行数和患者批次并行数
     """
     # 检查是否禁用自动优化
-    if os.getenv('EASYICU_NO_AUTO_PARALLEL'):
+    if os.getenv("EASYICU_NO_AUTO_PARALLEL"):
         return 1, None
-    
+
     from .runtime.parallel_config import get_global_config, get_runtime_load_strategy
 
     strategy = get_runtime_load_strategy(
@@ -617,7 +699,7 @@ def _is_low_memory_chunk_candidate(
     batch_size: Optional[int],
 ) -> bool:
     """Whether the request should prefer the validated low-memory chunk path."""
-    if os.getenv('EASYICU_DISABLE_AUTO_CHUNK'):
+    if os.getenv("EASYICU_DISABLE_AUTO_CHUNK"):
         return False
     if not merge:
         return False
@@ -626,12 +708,12 @@ def _is_low_memory_chunk_candidate(
 
     normalized = {str(name).lower() for name in concepts_list}
     heavy_concepts = {
-        'sofa',
-        'sofa2',
-        'kdigo_aki',
-        'aki',
-        'sep3',
-        'sep3_sofa2',
+        "sofa",
+        "sofa2",
+        "kdigo_aki",
+        "aki",
+        "sep3",
+        "sep3_sofa2",
     }
     return bool(normalized.intersection(heavy_concepts))
 
@@ -671,12 +753,12 @@ def _get_auto_chunk_strategy(
     available_memory_mb = get_available_memory_mb()
     normalized = {str(name).lower() for name in concepts_list}
 
-    sepsis_heavy_concepts = {'sep3', 'sep3_sofa2'}
-    renal_heavy_concepts = {'kdigo_aki', 'aki'}
-    sofa_heavy_concepts = {'sofa', 'sofa2'}
+    sepsis_heavy_concepts = {"sep3", "sep3_sofa2"}
+    renal_heavy_concepts = {"kdigo_aki", "aki"}
+    sofa_heavy_concepts = {"sofa", "sofa2"}
 
-    if 'EASYICU_AUTO_CHUNK_SIZE' in os.environ:
-        auto_chunk_size = max(250, int(os.getenv('EASYICU_AUTO_CHUNK_SIZE', '1000')))
+    if "EASYICU_AUTO_CHUNK_SIZE" in os.environ:
+        auto_chunk_size = max(250, int(os.getenv("EASYICU_AUTO_CHUNK_SIZE", "1000")))
         if normalized.intersection(sofa_heavy_concepts) and auto_chunk_size > 2000:
             logger.warning(
                 "Capping SOFA auto chunk size at 2000 because larger chunks can "
@@ -723,33 +805,49 @@ def _get_auto_chunk_strategy(
         requested_parallel_workers=parallel_workers,
         config=config,
     )
-    tuned_parallel_workers = min(int(runtime_strategy['parallel_workers']), batches)
-    tuned_concept_workers = int(runtime_strategy['concept_workers'])
+    tuned_parallel_workers = min(int(runtime_strategy["parallel_workers"]), batches)
+    tuned_concept_workers = int(runtime_strategy["concept_workers"])
 
     return {
-        'chunk_size': auto_chunk_size,
-        'parallel_workers': max(1, tuned_parallel_workers),
-        'concept_workers': max(1, tuned_concept_workers),
+        "chunk_size": auto_chunk_size,
+        "parallel_workers": max(1, tuned_parallel_workers),
+        "concept_workers": max(1, tuned_concept_workers),
     }
 
 
 # SOFA2 相关概念集合（需要加载 sofa2-dict）。load_concepts 的自动检测和
 # extract_database 的分组 worker 共用这一份定义，保证两边判定一致。
-_SOFA2_TRIGGER_CONCEPTS = frozenset({
-    'sofa2', 'sofa2_resp', 'sofa2_coag', 'sofa2_liver',
-    'sofa2_cardio', 'sofa2_cns', 'sofa2_renal',
-    'uo_6h', 'uo_12h', 'uo_24h', 'rrt_criteria', 'rrt',
-    'adv_resp', 'ecmo', 'ecmo_indication', 'sedated_gcs',
-    'mech_circ_support', 'other_vaso', 'delirium_tx',
-    'motor_response', 'delirium_positive',
-})
+_SOFA2_TRIGGER_CONCEPTS = frozenset(
+    {
+        "sofa2",
+        "sofa2_resp",
+        "sofa2_coag",
+        "sofa2_liver",
+        "sofa2_cardio",
+        "sofa2_cns",
+        "sofa2_renal",
+        "uo_6h",
+        "uo_12h",
+        "uo_24h",
+        "rrt_criteria",
+        "rrt",
+        "adv_resp",
+        "ecmo",
+        "ecmo_indication",
+        "sedated_gcs",
+        "mech_circ_support",
+        "other_vaso",
+        "delirium_tx",
+        "motor_response",
+        "delirium_positive",
+    }
+)
 
 
 def _concepts_need_sofa2(concepts) -> bool:
     """True when any concept requires the sofa2-dict overlay."""
     return any(
-        c in _SOFA2_TRIGGER_CONCEPTS or 'sofa2' in str(c).lower()
-        for c in concepts
+        c in _SOFA2_TRIGGER_CONCEPTS or "sofa2" in str(c).lower() for c in concepts
     )
 
 
@@ -760,7 +858,7 @@ def load_concepts(
     database: Optional[str] = None,
     data_path: Optional[Union[str, Path]] = None,
     # 时间参数 - 默认与ricu一致 (interval=hours(1L))
-    interval: Optional[Union[str, pd.Timedelta]] = '1h',  # ricu默认: hours(1L)
+    interval: Optional[Union[str, pd.Timedelta]] = "1h",  # ricu默认: hours(1L)
     win_length: Optional[Union[str, pd.Timedelta]] = None,
     # 聚合参数
     aggregate: Optional[Union[str, Dict]] = None,
@@ -769,17 +867,17 @@ def load_concepts(
     # 其他
     verbose: bool = False,
     use_sofa2: bool = False,  # 新增：是否使用SOFA2字典
-    merge: bool = True,       # 新增：是否合并结果
+    merge: bool = True,  # 新增：是否合并结果
     r_compatible: bool = True,  # 默认启用ricu.R兼容格式
     dict_path: Optional[Union[str, Path, List[Union[str, Path]]]] = None,
     chunk_size: Optional[int] = None,
     progress: bool = False,
     parallel_workers: Optional[int] = None,
     concept_workers: Optional[int] = None,  # 改为Optional，支持自动检测
-    parallel_backend: str = 'auto',
+    parallel_backend: str = "auto",
     max_patients: Optional[int] = None,  # 限制加载的患者数量（自动采样）
     limit: Optional[int] = None,  # max_patients 的别名（兼容 extract_sofa_data.py）
-    sample_strategy: str = 'random',  # 采样策略: 'random'=seeded 随机(默认,代表性);'sorted'=按ID排序前N个(ricu-parity 用)
+    sample_strategy: str = "random",  # 采样策略: 'random'=seeded 随机(默认,代表性);'sorted'=按ID排序前N个(ricu-parity 用)
     batch_size: Optional[int] = None,  # 🆕 分批处理大小（默认30000，适合12GB内存）
     memory_efficient: bool = False,  # 🆕 内存优化模式（压缩数据类型）
     require_bounded_sample: bool = False,
@@ -901,29 +999,47 @@ def load_concepts(
     # forcing API users to know about the side-channel modules. Detect
     # them up front, peel them off, run the standard path on the rest,
     # then re-attach the special results.
-    _KDIGO_OUTPUTS = {'aki', 'aki_stage', 'aki_stage_creat', 'aki_stage_uo',
-                      'aki_stage_rrt', 'uo_rt_6hr', 'uo_rt_12hr', 'uo_rt_24hr',
-                      'creat_low_past_48hr', 'creat_low_past_7day'}
-    _CIRC_OUTPUTS = {'circ_failure', 'circ_event'}
+    _KDIGO_OUTPUTS = {
+        "aki",
+        "aki_stage",
+        "aki_stage_creat",
+        "aki_stage_uo",
+        "aki_stage_rrt",
+        "uo_rt_6hr",
+        "uo_rt_12hr",
+        "uo_rt_24hr",
+        "creat_low_past_48hr",
+        "creat_low_past_7day",
+    }
+    _CIRC_OUTPUTS = {"circ_failure", "circ_event"}
     # Comorbidity indices live in comorbidity.py (ICD code-set matching over
     # the diagnosis table), not concept-dict.json — route like kdigo/circ.
-    _COMORB_OUTPUTS = {'charlson', 'elixhauser'}
+    _COMORB_OUTPUTS = {"charlson", "elixhauser"}
     # Composite outcome endpoints (outcomes.py) — fixed-horizon mortality etc.
-    _OUTCOME_OUTPUTS = {'mort_28d', 'mort_90d', 'mort_365d',
-                        'icu_free_days_28', 'icu_readmission',
-                        'vent_free_days_28'}
+    _OUTCOME_OUTPUTS = {
+        "mort_28d",
+        "mort_90d",
+        "mort_365d",
+        "icu_free_days_28",
+        "icu_readmission",
+        "vent_free_days_28",
+    }
     # Microbiology culture-positivity (microbiology.py).
-    _MICRO_OUTPUTS = {'culture_positive', 'bld_culture_positive'}
+    _MICRO_OUTPUTS = {"culture_positive", "bld_culture_positive"}
     _requested = set(concepts_list)
     _need_kdigo = _requested & _KDIGO_OUTPUTS
     _need_circ = _requested & _CIRC_OUTPUTS
     _need_comorb = _requested & _COMORB_OUTPUTS
     _need_outcome = _requested & _OUTCOME_OUTPUTS
     _need_micro = _requested & _MICRO_OUTPUTS
-    _special = (_need_kdigo | _need_circ | _need_comorb
-                | _need_outcome | _need_micro)
+    _special = _need_kdigo | _need_circ | _need_comorb | _need_outcome | _need_micro
+    # Keep the FULL requested list (incl. special concepts) for the batched path.
+    # When batching triggers, the code returns before the special re-attach (~L1480),
+    # so the batch loader must receive the specials and re-run their loaders per batch
+    # (each patient-id batch carries complete per-patient histories -> baselines compute).
+    _concepts_all = list(concepts_list)
     if _special:
-        # Pull special concepts out of the list passed to the resolver.
+        # Pull special concepts out of the list passed to the standard resolver.
         concepts_list = [c for c in concepts_list if c not in _special]
 
     # 防御性检查: 检测常见的位置参数误用 (load_concepts(['hr'], 'miiv') 应为 database='miiv')
@@ -939,7 +1055,8 @@ def load_concepts(
             else:
                 raise TypeError(
                     f"patient_ids 收到字符串 '{patient_ids}'，看起来是数据库名。"
-                    f"请使用关键字参数: load_concepts(concepts, database='{patient_ids}')")
+                    f"请使用关键字参数: load_concepts(concepts, database='{patient_ids}')"
+                )
 
     if patient_ids is None:
         id_kwargs = [
@@ -971,13 +1088,13 @@ def load_concepts(
         data_path=data_path,
         dict_path=dict_path,
         use_sofa2=use_sofa2,
-        verbose=verbose
+        verbose=verbose,
     )
 
     # 🚀 从 kwargs 中提取患者 ID（支持通过 patientunitstayid=, admissionid=, stay_id= 等传入）
 
     # 🚀 处理患者数量别名（兼容旧测试/benchmark）
-    n_patients_alias = kwargs.pop('n_patients', None)
+    n_patients_alias = kwargs.pop("n_patients", None)
     if (
         n_patients_alias is not None
         and max_patients is not None
@@ -994,8 +1111,7 @@ def load_concepts(
         and max_patients is None
     ):
         raise ValueError(
-            f"收到冲突的患者上限参数: n_patients={n_patients_alias}, "
-            f"limit={limit}"
+            f"收到冲突的患者上限参数: n_patients={n_patients_alias}, " f"limit={limit}"
         )
 
     # 🚀 处理 limit 别名（兼容性）
@@ -1011,11 +1127,10 @@ def load_concepts(
             return pd.DataFrame()
         return {name: pd.DataFrame() for name in requested_concepts}
     if effective_max_patients is not None and patient_ids is None:
-        patient_ids = _sample_patient_ids(loader, effective_max_patients, verbose,
-                                          sample_strategy=sample_strategy)
-        if require_bounded_sample and (
-            patient_ids is None or len(patient_ids) == 0
-        ):
+        patient_ids = _sample_patient_ids(
+            loader, effective_max_patients, verbose, sample_strategy=sample_strategy
+        )
+        if require_bounded_sample and (patient_ids is None or len(patient_ids) == 0):
             raise RuntimeError(
                 "Unable to build the required bounded patient sample; refusing "
                 "to fall back to an unbounded database load."
@@ -1044,18 +1159,25 @@ def load_concepts(
         batch_size=batch_size,
     )
     inferred_total_patients = num_patients
-    if inferred_total_patients is None and patient_ids is None and prefer_low_memory_chunk:
+    if (
+        inferred_total_patients is None
+        and patient_ids is None
+        and prefer_low_memory_chunk
+    ):
         try:
             inferred_total_patients = _get_total_patient_count(loader)
         except Exception as e:
             logger.debug(f"低内存 chunk 总患者数检测失败: {e}")
-    
+
     # 只有当用户没有指定时才使用智能配置
     effective_concept_workers = concept_workers
     effective_parallel_workers = parallel_workers
-    
+
     if concept_workers is None or parallel_workers is None:
-        from .runtime.parallel_config import get_global_config, get_runtime_load_strategy
+        from .runtime.parallel_config import (
+            get_global_config,
+            get_runtime_load_strategy,
+        )
 
         runtime_strategy = get_runtime_load_strategy(
             concepts_list,
@@ -1063,18 +1185,20 @@ def load_concepts(
             chunk_size=chunk_size,
             requested_concept_workers=concept_workers,
             requested_parallel_workers=parallel_workers,
-            requested_backend=parallel_backend if parallel_backend != 'auto' else None,
+            requested_backend=parallel_backend if parallel_backend != "auto" else None,
             config=get_global_config(),
         )
         if concept_workers is None:
-            effective_concept_workers = int(runtime_strategy['concept_workers'])
+            effective_concept_workers = int(runtime_strategy["concept_workers"])
         if parallel_workers is None:
-            auto_parallel = int(runtime_strategy['parallel_workers'])
+            auto_parallel = int(runtime_strategy["parallel_workers"])
             effective_parallel_workers = auto_parallel if auto_parallel > 1 else None
-        
+
         if verbose and (effective_concept_workers > 1 or effective_parallel_workers):
-            print(f"   ⚡ 智能优化: concept_workers={effective_concept_workers}, "
-                  f"parallel_workers={effective_parallel_workers or '不分批'}")
+            print(
+                f"   ⚡ 智能优化: concept_workers={effective_concept_workers}, "
+                f"parallel_workers={effective_parallel_workers or '不分批'}"
+            )
 
     effective_chunk_size = chunk_size
     auto_chunk_strategy = _get_auto_chunk_strategy(
@@ -1087,9 +1211,9 @@ def load_concepts(
         concept_workers=concept_workers,
     )
     if auto_chunk_strategy:
-        effective_chunk_size = auto_chunk_strategy['chunk_size']
-        effective_parallel_workers = auto_chunk_strategy['parallel_workers']
-        effective_concept_workers = auto_chunk_strategy['concept_workers']
+        effective_chunk_size = auto_chunk_strategy["chunk_size"]
+        effective_parallel_workers = auto_chunk_strategy["parallel_workers"]
+        effective_concept_workers = auto_chunk_strategy["concept_workers"]
         if verbose:
             print(
                 f"   🚀 大样本复合概念优先使用平衡分块: chunk_size={effective_chunk_size}, "
@@ -1102,10 +1226,12 @@ def load_concepts(
                 loader,
                 inferred_total_patients,
                 verbose=verbose,
-                sample_strategy='sorted',
+                sample_strategy="sorted",
             )
             if patient_ids is not None and not isinstance(patient_ids, dict):
-                patient_ids = _normalize_patient_ids_for_db(loader.database, patient_ids)
+                patient_ids = _normalize_patient_ids_for_db(
+                    loader.database, patient_ids
+                )
             if isinstance(patient_ids, dict):
                 for v in patient_ids.values():
                     if isinstance(v, (list, tuple)):
@@ -1130,17 +1256,20 @@ def load_concepts(
     # 5. 可用内存 < 16GB → 使用子进程隔离（内存完全归还）
     # 6. 可用内存 >= 16GB → 进程内分批 + malloc_trim（更快）
     # ====================================================================
-    
+
     from .runtime.memory_manager import (
-        auto_batch_size, estimate_memory_mb,
-        get_available_memory_mb, inprocess_batch_load,
-        inprocess_batch_load_streaming, subprocess_batch_load,
+        auto_batch_size,
+        estimate_memory_mb,
+        get_available_memory_mb,
+        inprocess_batch_load,
+        inprocess_batch_load_streaming,
+        subprocess_batch_load,
     )
-    
+
     effective_batch_size = batch_size
     use_subprocess = False
     use_streaming_patient_batches = False
-    
+
     # 提取患者ID信息
     _id_col = None
     _all_ids = None
@@ -1152,7 +1281,7 @@ def load_concepts(
         _total_patients = len(patient_ids)
     else:
         _total_patients = None
-    
+
     # 🔧 2026-05-11: 默认不分批，追求合理内存下的最优速度。
     # 实测（MIMIC-IV 94k 患者 167 特征）：单模块 peak ≤ 8 GB（vitals 最高 ~5GB，
     # sofa/sep3 系列 peak 几乎不随 N 增长——DuckDB 内部 hash 工作集主导）。
@@ -1161,15 +1290,22 @@ def load_concepts(
     #   2. 估算峰值 > 可用内存（否则一次跑完最快）
     # 12 GB+ 系统：默认全跑，速度最优。
     LOW_MEM_THRESHOLD_MB = 6 * 1024
-    
+
     # 自动检测全量加载场景
-    if (not auto_chunk_strategy) and _total_patients is None and patient_ids is None and effective_batch_size is None:
+    if (
+        (not auto_chunk_strategy)
+        and _total_patients is None
+        and patient_ids is None
+        and effective_batch_size is None
+    ):
         # 全量加载：查询总患者数来决定是否需要分批
         try:
             _total_patients_in_db = _get_total_patient_count(loader)
             if _total_patients_in_db and _total_patients_in_db > 1000:
                 # 估算内存需求
-                est_mem = estimate_memory_mb(concepts_list, loader.database, _total_patients_in_db)
+                est_mem = estimate_memory_mb(
+                    concepts_list, loader.database, _total_patients_in_db
+                )
                 avail_mem = get_available_memory_mb()
 
                 # 🚀 稳定预算分批判定（16GB 可用性 + 确定性）：用**物理总内存**这个稳定值
@@ -1180,38 +1316,47 @@ def load_concepts(
                 # (medications/chemistry)在大队列分批，其余 17 个模块保持一次性(最快)。
                 # EASYICU_ONESHOT_BUDGET_MB 可覆盖每模块一次性内存上限(MB)。
                 try:
-                    _env_b = os.environ.get('EASYICU_ONESHOT_BUDGET_MB')
+                    _env_b = os.environ.get("EASYICU_ONESHOT_BUDGET_MB")
                     if _env_b:
                         _oneshot_budget_mb = float(_env_b)
                     else:
                         import psutil as _psb
-                        _oneshot_budget_mb = (_psb.virtual_memory().total / (1024 * 1024)) * 0.6
+
+                        _oneshot_budget_mb = (
+                            _psb.virtual_memory().total / (1024 * 1024)
+                        ) * 0.6
                 except Exception:
                     _oneshot_budget_mb = 9830.0  # 16GB*0.6 回退
                 if est_mem > _oneshot_budget_mb:
                     _total_patients = _total_patients_in_db
                     effective_batch_size = auto_batch_size(
-                        concepts_list, loader.database, _total_patients,
+                        concepts_list,
+                        loader.database,
+                        _total_patients,
                         available_memory_mb=_oneshot_budget_mb / 0.6,
                     )
 
                     if verbose and effective_batch_size:
-                        print(f"⚠️  稳定预算分批 (估算 {est_mem:.0f}MB > 预算 {_oneshot_budget_mb:.0f}MB), "
-                              f"全量加载 {_total_patients} patients 分批 (batch_size={effective_batch_size})")
+                        print(
+                            f"⚠️  稳定预算分批 (估算 {est_mem:.0f}MB > 预算 {_oneshot_budget_mb:.0f}MB), "
+                            f"全量加载 {_total_patients} patients 分批 (batch_size={effective_batch_size})"
+                        )
 
                     # 分批时仍用子进程隔离；进程内路径优先走流式 patient batch
                     use_subprocess = True
                     use_streaming_patient_batches = effective_batch_size is not None
                 elif verbose:
-                    print(f"🚀 全量加载 {_total_patients_in_db} patients, "
-                          f"估算 {est_mem:.0f}MB ≤ 预算 {_oneshot_budget_mb:.0f}MB, 不分批（最优速度）")
+                    print(
+                        f"🚀 全量加载 {_total_patients_in_db} patients, "
+                        f"估算 {est_mem:.0f}MB ≤ 预算 {_oneshot_budget_mb:.0f}MB, 不分批（最优速度）"
+                    )
         except Exception as e:
             logger.debug(f"自动分批检测失败: {e}")
-    
+
     # 用户显式指定了 batch_size
     if effective_batch_size is None and batch_size is not None:
         effective_batch_size = batch_size
-    
+
     # 🔧 FIX: 当 batch_size 已指定但 _id_col/_all_ids 未设置时（patient_ids=None 全量加载），
     # 从数据库查询所有患者 ID 以启用分批。之前 batch_size 在此场景下被静默忽略，
     # 导致 34K HiRID 患者在单次 DuckDB 查询中加载，32GB PC 上 OOM。
@@ -1219,16 +1364,23 @@ def load_concepts(
         try:
             _total_patients_in_db = _get_total_patient_count(loader)
             if _total_patients_in_db and _total_patients_in_db > effective_batch_size:
-                _fetched_ids = _sample_patient_ids(loader, _total_patients_in_db, verbose=False, sample_strategy='sorted')
+                _fetched_ids = _sample_patient_ids(
+                    loader,
+                    _total_patients_in_db,
+                    verbose=False,
+                    sample_strategy="sorted",
+                )
                 if _fetched_ids:
                     _id_col = _database_profile_or_default(loader.database).stay_id_col
                     _all_ids = list(_fetched_ids)
                     _total_patients = len(_all_ids)
                     if verbose:
-                        print(f"📊 分批启用: 获取 {_total_patients} 患者ID, batch_size={effective_batch_size}")
+                        print(
+                            f"📊 分批启用: 获取 {_total_patients} 患者ID, batch_size={effective_batch_size}"
+                        )
         except Exception as e:
             logger.debug(f"获取患者ID以启用分批失败: {e}")
-    
+
     # 自动检测：用户指定了 patient_ids 但未指定 batch_size
     # 🔧 2026-05-11: 同样默认不分批，仅低内存系统才触发
     if (
@@ -1245,27 +1397,32 @@ def load_concepts(
         # 宽模块分批（medications/chemistry），窄模块保持一次性(快)；空闲机也不会因
         # "avail 大"而漏判导致宽模块一次性→静默截断。EASYICU_ONESHOT_BUDGET_MB 可覆盖。
         try:
-            _env_b = os.environ.get('EASYICU_ONESHOT_BUDGET_MB')
+            _env_b = os.environ.get("EASYICU_ONESHOT_BUDGET_MB")
             if _env_b:
                 _oneshot_budget_mb = float(_env_b)
             else:
                 import psutil as _psb
+
                 _oneshot_budget_mb = (_psb.virtual_memory().total / (1024 * 1024)) * 0.6
         except Exception:
             _oneshot_budget_mb = 9830.0
         if est_mem > _oneshot_budget_mb:
             effective_batch_size = auto_batch_size(
-                concepts_list, loader.database, _total_patients,
+                concepts_list,
+                loader.database,
+                _total_patients,
                 available_memory_mb=_oneshot_budget_mb / 0.6,
             )
             if verbose and effective_batch_size:
-                print(f"⚠️  稳定预算分批 (估算 {est_mem:.0f}MB > 预算 {_oneshot_budget_mb:.0f}MB): "
-                      f"{_total_patients} patients, batch_size={effective_batch_size}")
+                print(
+                    f"⚠️  稳定预算分批 (估算 {est_mem:.0f}MB > 预算 {_oneshot_budget_mb:.0f}MB): "
+                    f"{_total_patients} patients, batch_size={effective_batch_size}"
+                )
             use_subprocess = True
 
     if auto_chunk_strategy and verbose and effective_batch_size is None:
         print("   🧠 已跳过自动 batch 分批，优先采用已验证的平衡 chunk 路径")
-    
+
     # 大量患者时自动启用子进程隔离，避免 Python pymalloc 内存碎片
     # inprocess_batch_load 每批次泄漏 0.5-1.5GB 碎片（pymalloc arena 不归还 OS），
     # N 批次后 RSS = N * 碎片 + 结果数据。MIIV 94K patients: 15G RSS for 1.4G data.
@@ -1282,23 +1439,28 @@ def load_concepts(
     # 显式覆盖：EASYICU_FORCE_INPROCESS_BATCH=1 强制 inprocess；
     #          EASYICU_FORCE_SUBPROCESS_BATCH=1 强制 subprocess。
     if not use_subprocess and effective_batch_size is not None:
-        if os.environ.get('EASYICU_FORCE_INPROCESS_BATCH'):
+        if os.environ.get("EASYICU_FORCE_INPROCESS_BATCH"):
             pass  # 用户显式禁用 subprocess，保持 inprocess
-        elif os.environ.get('EASYICU_FORCE_SUBPROCESS_BATCH'):
+        elif os.environ.get("EASYICU_FORCE_SUBPROCESS_BATCH"):
             use_subprocess = True
         else:
             try:
                 import psutil
+
                 _total_mb = psutil.virtual_memory().total / (1024 * 1024)
             except Exception:
                 _total_mb = get_available_memory_mb()  # 降级
             if _total_mb < 12 * 1024:
                 use_subprocess = True
-            elif _total_mb < 32 * 1024 and _total_patients is not None and _total_patients > 60000:
+            elif (
+                _total_mb < 32 * 1024
+                and _total_patients is not None
+                and _total_patients > 60000
+            ):
                 use_subprocess = True
             elif _total_patients is not None and _total_patients > 120000:
                 use_subprocess = True
-    
+
     # 🔧 FIX Bug 54/63: daemon 子进程的分批隔离
     # Webapp 用 daemon=True 启动模块子进程以隔离内存碎片。
     # subprocess_batch_load 已支持三种隔离方式：
@@ -1306,9 +1468,22 @@ def load_concepts(
     #   - Windows daemon: subprocess.Popen（_popen_and_run，CreateProcess 不受 daemon 限制）
     #   - 非 daemon: multiprocessing.Process
     # 因此不再需要在 Windows daemon 中禁用 subprocess 模式。
-    
+
+    # 🔧 FIX: special concepts (KDIGO/circ/comorb/outcome/micro) were stripped from
+    # concepts_list above and are only re-attached on the non-batched path (~L1480).
+    # When batching triggers we route through subprocess_batch_load with the FULL list
+    # (_concepts_all) so each per-batch api.load_concepts re-runs the special loaders.
+    # inprocess_batch_load calls the *base* loader (no special routing), so specials
+    # MUST take the subprocess path here.
+    if _special and effective_batch_size is not None:
+        use_subprocess = True
+
     # 执行分批处理
-    if effective_batch_size is not None and _id_col is not None and _all_ids is not None:
+    if (
+        effective_batch_size is not None
+        and _id_col is not None
+        and _all_ids is not None
+    ):
         if _total_patients > effective_batch_size:
             load_kwargs = dict(
                 interval=interval,
@@ -1324,20 +1499,24 @@ def load_concepts(
                 parallel_backend=parallel_backend,
                 **kwargs,
             )
-            
+
             if use_subprocess:
                 # 子进程隔离（内存 < 16GB 或患者数 > 30K — 避免 pymalloc 碎片）
                 if verbose:
                     print(f"🔒 使用子进程隔离模式 ({_total_patients} patients)")
                 # 排除已显式传递的参数，避免重复
-                _explicit_keys = {'merge', 'r_compatible', 'verbose'}
-                subprocess_kwargs = {k: v for k, v in load_kwargs.items() if k not in _explicit_keys}
+                _explicit_keys = {"merge", "r_compatible", "verbose"}
+                subprocess_kwargs = {
+                    k: v for k, v in load_kwargs.items() if k not in _explicit_keys
+                }
                 final_result = subprocess_batch_load(
-                    concepts=concepts_list,
+                    concepts=(_concepts_all if _special else concepts_list),
                     database=loader.database,
                     all_patient_ids={_id_col: _all_ids},
                     batch_size=effective_batch_size,
-                    data_path=str(loader.data_path) if hasattr(loader, 'data_path') else None,
+                    data_path=(
+                        str(loader.data_path) if hasattr(loader, "data_path") else None
+                    ),
                     verbose=verbose,
                     merge=merge,
                     r_compatible=r_compatible,
@@ -1356,10 +1535,10 @@ def load_concepts(
                     memory_efficient=memory_efficient,
                     **load_kwargs,
                 )
-            
+
             if memory_efficient and isinstance(final_result, pd.DataFrame):
                 final_result = _compress_dtypes(final_result, verbose=verbose)
-            
+
             return final_result
 
     if (
@@ -1383,17 +1562,23 @@ def load_concepts(
             **kwargs,
         )
         if use_subprocess:
-            patient_ids = _sample_patient_ids(loader, _total_patients, verbose, sample_strategy='sorted')
+            patient_ids = _sample_patient_ids(
+                loader, _total_patients, verbose, sample_strategy="sorted"
+            )
             if patient_ids is not None:
-                patient_ids = _normalize_patient_ids_for_db(loader.database, patient_ids)
+                patient_ids = _normalize_patient_ids_for_db(
+                    loader.database, patient_ids
+                )
                 _id_col = list(patient_ids.keys())[0]
                 _all_ids = list(patient_ids.values())[0]
                 return subprocess_batch_load(
-                    concepts=concepts_list,
+                    concepts=(_concepts_all if _special else concepts_list),
                     database=loader.database,
                     all_patient_ids={_id_col: _all_ids},
                     batch_size=effective_batch_size,
-                    data_path=str(loader.data_path) if hasattr(loader, 'data_path') else None,
+                    data_path=(
+                        str(loader.data_path) if hasattr(loader, "data_path") else None
+                    ),
                     verbose=verbose,
                     merge=merge,
                     r_compatible=r_compatible,
@@ -1401,21 +1586,29 @@ def load_concepts(
                     use_sofa2=use_sofa2,
                     **load_kwargs,
                 )
-        return inprocess_batch_load_streaming(
-            loader=loader,
-            concepts=concepts_list,
-            patient_batches=_iter_patient_id_batches(
-                loader,
-                effective_batch_size,
+        # inprocess_batch_load_streaming calls the *base* loader with the STRIPPED
+        # concepts_list (no special routing). If specials were requested but we reached
+        # here (use_subprocess was set yet _sample_patient_ids returned None, so the
+        # subprocess path above was skipped), returning here would silently drop the
+        # whole special group — the exact class of bug this fix closes. Fall through to
+        # the non-batched loader path instead, which re-attaches specials (~L1480).
+        # Trade the memory of a non-batched full load for correctness over silent loss.
+        if not _special:
+            return inprocess_batch_load_streaming(
+                loader=loader,
+                concepts=concepts_list,
+                patient_batches=_iter_patient_id_batches(
+                    loader,
+                    effective_batch_size,
+                    total_patients=_total_patients,
+                    sample_strategy="sorted",
+                ),
                 total_patients=_total_patients,
-                sample_strategy='sorted',
-            ),
-            total_patients=_total_patients,
-            batch_size=effective_batch_size,
-            verbose=verbose,
-            memory_efficient=memory_efficient,
-            **load_kwargs,
-        )
+                batch_size=effective_batch_size,
+                verbose=verbose,
+                memory_efficient=memory_efficient,
+                **load_kwargs,
+            )
 
     # 使用统一加载器加载概念
     if concepts_list:
@@ -1433,7 +1626,7 @@ def load_concepts(
             parallel_workers=effective_parallel_workers,
             concept_workers=effective_concept_workers,
             parallel_backend=parallel_backend,
-            **kwargs
+            **kwargs,
         )
     else:
         # All requested concepts were special; standard loader has nothing to do.
@@ -1688,27 +1881,38 @@ def load_concepts(
         if isinstance(result, pd.DataFrame):
             result = _compress_dtypes(result, verbose=verbose)
         elif isinstance(result, dict):
-            result = {k: _compress_dtypes(v, verbose=verbose) for k, v in result.items()}
+            result = {
+                k: _compress_dtypes(v, verbose=verbose) for k, v in result.items()
+            }
 
-    if r_compatible and merge and len(concepts_list) == 1 and isinstance(result, pd.DataFrame):
-        result = _expand_public_numeric_win_tbl_output(result, concepts_list[0], interval)
-    
+    if (
+        r_compatible
+        and merge
+        and len(concepts_list) == 1
+        and isinstance(result, pd.DataFrame)
+    ):
+        result = _expand_public_numeric_win_tbl_output(
+            result, concepts_list[0], interval
+        )
+
     return result
+
 
 # 为了兼容旧代码，保留旧的函数名
 def load_concept(*args, **kwargs):
     """load_concepts的别名（向后兼容）"""
     return load_concepts(*args, **kwargs)
 
+
 def load_sofa(
     patient_ids: Optional[Union[List, Dict]] = None,
     database: Optional[str] = None,
     data_path: Optional[Union[str, Path]] = None,
-    interval: Union[str, pd.Timedelta] = '1h',
-    win_length: Union[str, pd.Timedelta] = '24h',
+    interval: Union[str, pd.Timedelta] = "1h",
+    win_length: Union[str, pd.Timedelta] = "24h",
     keep_components: bool = True,
     verbose: bool = False,
-    **kwargs  # 允许传递额外参数如align_to_admission
+    **kwargs,  # 允许传递额外参数如align_to_admission
 ) -> pd.DataFrame:
     """
     加载SOFA评分（便捷函数）- 重构版本
@@ -1743,7 +1947,7 @@ def load_sofa(
         print("🏥 加载SOFA评分...")
 
     return load_concepts(
-        'sofa',
+        "sofa",
         patient_ids=patient_ids,
         database=database,
         data_path=data_path,
@@ -1751,18 +1955,19 @@ def load_sofa(
         win_length=win_length,
         keep_components=keep_components,
         verbose=verbose,
-        **kwargs  # 传递额外参数
+        **kwargs,  # 传递额外参数
     )
+
 
 def load_sofa2(
     patient_ids: Optional[Union[List, Dict]] = None,
     database: Optional[str] = None,
     data_path: Optional[Union[str, Path]] = None,
-    interval: Union[str, pd.Timedelta] = '1h',
-    win_length: Union[str, pd.Timedelta] = '24h',
+    interval: Union[str, pd.Timedelta] = "1h",
+    win_length: Union[str, pd.Timedelta] = "24h",
     keep_components: bool = True,
     verbose: bool = False,
-    **kwargs  # 允许传递额外参数如align_to_admission
+    **kwargs,  # 允许传递额外参数如align_to_admission
 ) -> pd.DataFrame:
     """
     加载SOFA-2评分（2025年新标准）- 重构版本
@@ -1792,7 +1997,7 @@ def load_sofa2(
         print("🏥 加载SOFA-2评分（2025标准）...")
 
     return load_concepts(
-        'sofa2',
+        "sofa2",
         patient_ids=patient_ids,
         database=database,
         data_path=data_path,
@@ -1801,14 +2006,15 @@ def load_sofa2(
         keep_components=keep_components,
         verbose=verbose,
         use_sofa2=True,  # 强制使用SOFA2字典
-        **kwargs  # 传递额外参数
+        **kwargs,  # 传递额外参数
     )
+
 
 def load_sepsis3(
     patient_ids: Optional[Union[List, Dict]] = None,
     database: Optional[str] = None,
     data_path: Optional[Union[str, Path]] = None,
-    interval: Union[str, pd.Timedelta] = '1h',
+    interval: Union[str, pd.Timedelta] = "1h",
     verbose: bool = False,
 ) -> pd.DataFrame:
     """
@@ -1840,19 +2046,20 @@ def load_sepsis3(
     # 只加载sep3概念，它已经包含了所有必需的诊断信息
     # 如果需要详细的组件（SOFA, abx等），用户可以分别加载
     return load_concepts(
-        'sep3',
+        "sep3",
         patient_ids=patient_ids,
         database=database,
         data_path=data_path,
         interval=interval,
-        verbose=verbose
+        verbose=verbose,
     )
+
 
 def load_vitals(
     patient_ids: Optional[Union[List, Dict]] = None,
     database: Optional[str] = None,
     data_path: Optional[Union[str, Path]] = None,
-    interval: Union[str, pd.Timedelta] = '1h',
+    interval: Union[str, pd.Timedelta] = "1h",
     verbose: bool = False,
 ) -> pd.DataFrame:
     """
@@ -1879,7 +2086,7 @@ def load_vitals(
         ...                      database='miiv', data_path='/data/miiv',
         ...                      interval='30m')
     """
-    vital_concepts = ['hr', 'sbp', 'dbp', 'temp', 'resp', 'spo2']
+    vital_concepts = ["hr", "sbp", "dbp", "temp", "resp", "spo2"]
 
     if verbose:
         print("❤️  加载生命体征...")
@@ -1890,14 +2097,15 @@ def load_vitals(
         database=database,
         data_path=data_path,
         interval=interval,
-        verbose=verbose
+        verbose=verbose,
     )
+
 
 def load_labs(
     patient_ids: Optional[Union[List, Dict]] = None,
     database: Optional[str] = None,
     data_path: Optional[Union[str, Path]] = None,
-    interval: Union[str, pd.Timedelta] = '6h',
+    interval: Union[str, pd.Timedelta] = "6h",
     verbose: bool = False,
 ) -> pd.DataFrame:
     """
@@ -1924,7 +2132,7 @@ def load_labs(
         ...                   database='miiv', data_path='/data/miiv',
         ...                   interval='12h')
     """
-    lab_concepts = ['wbc', 'plt', 'crea', 'bili', 'lact', 'ph']
+    lab_concepts = ["wbc", "plt", "crea", "bili", "lact", "ph"]
 
     if verbose:
         print("🔬 加载实验室检查...")
@@ -1935,39 +2143,41 @@ def load_labs(
         database=database,
         data_path=data_path,
         interval=interval,
-        verbose=verbose
+        verbose=verbose,
     )
+
 
 def list_available_concepts(source: Optional[str] = None) -> List[str]:
     """
     列出可用的概念
-    
+
     Args:
         source: 如果指定，只列出该数据源支持的概念
-        
+
     Returns:
         概念名称列表
-        
+
     Examples:
         >>> # 列出所有概念
         >>> all_concepts = list_available_concepts()
-        >>> 
+        >>>
         >>> # 列出MIMIC支持的概念
         >>> mimic_concepts = list_available_concepts('mimic')
     """
     dict_obj = load_dictionary()
-    
+
     if source is None:
         # 返回所有概念 (使用 _concepts 属性)
         return list(dict_obj._concepts.keys())
-    
+
     # 返回特定数据源支持的概念
     supported = []
     for name, concept in dict_obj._concepts.items():
-        if hasattr(concept, 'sources') and source in concept.sources:
+        if hasattr(concept, "sources") and source in concept.sources:
             supported.append(name)
-    
+
     return sorted(supported)
+
 
 def list_available_sources(use_user_config: bool = False) -> List[str]:
     """
@@ -1976,28 +2186,31 @@ def list_available_sources(use_user_config: bool = False) -> List[str]:
     Args:
         use_user_config: If True, read the legacy user configuration registry.
             By default this reports packaged sources shipped with EasyICU.
-    
+
     Returns:
         数据源名称列表
-        
+
     Examples:
         >>> sources = list_available_sources()
         >>> print(sources)
         ['mimic', 'hirid', 'eicu', 'aumc']
     """
-    registry = load_user_data_sources() if use_user_config else load_packaged_data_sources()
+    registry = (
+        load_user_data_sources() if use_user_config else load_packaged_data_sources()
+    )
     return [cfg.name for cfg in registry]
+
 
 def get_concept_info(concept_name: str) -> Dict:
     """
     获取概念的详细信息
-    
+
     Args:
         concept_name: 概念名称
-        
+
     Returns:
         包含概念信息的字典
-        
+
     Examples:
         >>> info = get_concept_info('hr')
         >>> print(info['description'])
@@ -2009,25 +2222,27 @@ def get_concept_info(concept_name: str) -> Dict:
     if concept is None:
         raise ValueError(f"未知概念: {concept_name}")
 
-    units = list(getattr(concept, 'units', None) or [])
-    sources = getattr(concept, 'sources', {}) or {}
+    units = list(getattr(concept, "units", None) or [])
+    sources = getattr(concept, "sources", {}) or {}
 
     info = {
-        'name': concept_name,
-        'description': getattr(concept, 'description', ''),
-        'category': getattr(concept, 'category', ''),
-        'units': units,
-        'unit': units[0] if units else '',
-        'sources': sorted(sources.keys()),
-        'class_name': getattr(concept, 'class_name', None),
-        'callback': getattr(concept, 'callback', None),
-        'sub_concepts': list(getattr(concept, 'sub_concepts', None) or []),
-        'depends_on': list(getattr(concept, 'depends_on', None) or []),
+        "name": concept_name,
+        "description": getattr(concept, "description", ""),
+        "category": getattr(concept, "category", ""),
+        "units": units,
+        "unit": units[0] if units else "",
+        "sources": sorted(sources.keys()),
+        "class_name": getattr(concept, "class_name", None),
+        "callback": getattr(concept, "callback", None),
+        "sub_concepts": list(getattr(concept, "sub_concepts", None) or []),
+        "depends_on": list(getattr(concept, "depends_on", None) or []),
     }
-    
+
     return info
 
+
 # === 新增模块函数（参考ricu.R） ===
+
 
 def _validate_concepts(concepts: List[str], verbose: bool = False) -> List[str]:
     """
@@ -2054,12 +2269,13 @@ def _validate_concepts(concepts: List[str], verbose: bool = False) -> List[str]:
     except Exception:
         return concepts  # 如果验证失败，返回原列表
 
+
 def load_demographics(
     patient_ids: Optional[Union[List, Dict]] = None,
     database: Optional[str] = None,
     data_path: Optional[Union[str, Path]] = None,
-    interval: Union[str, pd.Timedelta] = '1h',
-    win_length: Union[str, pd.Timedelta] = '24h',
+    interval: Union[str, pd.Timedelta] = "1h",
+    win_length: Union[str, pd.Timedelta] = "24h",
     verbose: bool = False,
 ) -> pd.DataFrame:
     """
@@ -2084,7 +2300,7 @@ def load_demographics(
     if verbose:
         print("👥 加载基础人口统计学数据...")
 
-    demo_concepts = ['age', 'bmi', 'height', 'sex', 'weight']
+    demo_concepts = ["age", "bmi", "height", "sex", "weight"]
 
     try:
         result = load_concepts(
@@ -2093,7 +2309,7 @@ def load_demographics(
             database=database,
             data_path=data_path,
             merge=True,
-            verbose=verbose
+            verbose=verbose,
         )
         if result is None:
             return pd.DataFrame()
@@ -2104,12 +2320,13 @@ def load_demographics(
             print(f"  ❌ 人口统计学数据加载失败: {e}")
         return pd.DataFrame()
 
+
 def load_outcomes(
     patient_ids: Optional[Union[List, Dict]] = None,
     database: Optional[str] = None,
     data_path: Optional[Union[str, Path]] = None,
-    interval: Union[str, pd.Timedelta] = '1h',
-    win_length: Union[str, pd.Timedelta] = '24h',
+    interval: Union[str, pd.Timedelta] = "1h",
+    win_length: Union[str, pd.Timedelta] = "24h",
     keep_components: bool = True,
     verbose: bool = False,
 ) -> pd.DataFrame:
@@ -2136,7 +2353,7 @@ def load_outcomes(
     if verbose:
         print("📊 加载结局指标数据...")
 
-    concepts = ['death', 'los_icu', 'qsofa', 'sirs']
+    concepts = ["death", "los_icu", "qsofa", "sirs"]
     available_concepts = _validate_concepts(concepts, verbose)
 
     if not available_concepts:
@@ -2153,15 +2370,16 @@ def load_outcomes(
         win_length=win_length,
         keep_components=keep_components,
         merge=True,
-        verbose=verbose
+        verbose=verbose,
     )
+
 
 def load_vitals_detailed(
     patient_ids: Optional[Union[List, Dict]] = None,
     database: Optional[str] = None,
     data_path: Optional[Union[str, Path]] = None,
-    interval: Union[str, pd.Timedelta] = '1h',
-    win_length: Union[str, pd.Timedelta] = '24h',
+    interval: Union[str, pd.Timedelta] = "1h",
+    win_length: Union[str, pd.Timedelta] = "24h",
     verbose: bool = False,
 ) -> pd.DataFrame:
     """
@@ -2186,7 +2404,7 @@ def load_vitals_detailed(
     if verbose:
         print("❤️ 加载详细生命体征数据...")
 
-    concepts = ['dbp', 'etco2', 'hr', 'map', 'sbp', 'temp']
+    concepts = ["dbp", "etco2", "hr", "map", "sbp", "temp"]
     available_concepts = _validate_concepts(concepts, verbose)
 
     if not available_concepts:
@@ -2202,15 +2420,16 @@ def load_vitals_detailed(
         interval=interval,
         win_length=win_length,
         merge=True,
-        verbose=verbose
+        verbose=verbose,
     )
+
 
 def load_neurological(
     patient_ids: Optional[Union[List, Dict]] = None,
     database: Optional[str] = None,
     data_path: Optional[Union[str, Path]] = None,
-    interval: Union[str, pd.Timedelta] = '1h',
-    win_length: Union[str, pd.Timedelta] = '24h',
+    interval: Union[str, pd.Timedelta] = "1h",
+    win_length: Union[str, pd.Timedelta] = "24h",
     verbose: bool = False,
 ) -> pd.DataFrame:
     """
@@ -2235,7 +2454,7 @@ def load_neurological(
     if verbose:
         print("🧠 加载神经系统评估数据...")
 
-    concepts = ['avpu', 'egcs', 'gcs', 'mgcs', 'rass', 'vgcs']
+    concepts = ["avpu", "egcs", "gcs", "mgcs", "rass", "vgcs"]
     available_concepts = _validate_concepts(concepts, verbose)
 
     if not available_concepts:
@@ -2251,15 +2470,16 @@ def load_neurological(
         interval=interval,
         win_length=win_length,
         merge=True,
-        verbose=verbose
+        verbose=verbose,
     )
+
 
 def load_output(
     patient_ids: Optional[Union[List, Dict]] = None,
     database: Optional[str] = None,
     data_path: Optional[Union[str, Path]] = None,
-    interval: Union[str, pd.Timedelta] = '1h',
-    win_length: Union[str, pd.Timedelta] = '24h',
+    interval: Union[str, pd.Timedelta] = "1h",
+    win_length: Union[str, pd.Timedelta] = "24h",
     verbose: bool = False,
 ) -> pd.DataFrame:
     """
@@ -2284,8 +2504,13 @@ def load_output(
     if verbose:
         print("💧 加载输出量数据...")
 
-    concepts = ['urine', 'urine24', 'total_input_ml',
-                'fluid_balance', 'fluid_balance_cumulative']
+    concepts = [
+        "urine",
+        "urine24",
+        "total_input_ml",
+        "fluid_balance",
+        "fluid_balance_cumulative",
+    ]
     available_concepts = _validate_concepts(concepts, verbose)
 
     if not available_concepts:
@@ -2301,15 +2526,16 @@ def load_output(
         interval=interval,
         win_length=win_length,
         merge=True,
-        verbose=verbose
+        verbose=verbose,
     )
+
 
 def load_respiratory(
     patient_ids: Optional[Union[List, Dict]] = None,
     database: Optional[str] = None,
     data_path: Optional[Union[str, Path]] = None,
-    interval: Union[str, pd.Timedelta] = '1h',
-    win_length: Union[str, pd.Timedelta] = '24h',
+    interval: Union[str, pd.Timedelta] = "1h",
+    win_length: Union[str, pd.Timedelta] = "24h",
     verbose: bool = False,
 ) -> pd.DataFrame:
     """
@@ -2334,7 +2560,17 @@ def load_respiratory(
     if verbose:
         print("🫁 加载呼吸系统数据...")
 
-    concepts = ['ett_gcs', 'mech_vent', 'o2sat', 'sao2', 'pafi', 'resp', 'safi', 'supp_o2', 'vent_ind']
+    concepts = [
+        "ett_gcs",
+        "mech_vent",
+        "o2sat",
+        "sao2",
+        "pafi",
+        "resp",
+        "safi",
+        "supp_o2",
+        "vent_ind",
+    ]
     available_concepts = _validate_concepts(concepts, verbose)
 
     if not available_concepts:
@@ -2350,15 +2586,16 @@ def load_respiratory(
         interval=interval,
         win_length=win_length,
         merge=True,
-        verbose=verbose
+        verbose=verbose,
     )
+
 
 def load_lab_comprehensive(
     patient_ids: Optional[Union[List, Dict]] = None,
     database: Optional[str] = None,
     data_path: Optional[Union[str, Path]] = None,
-    interval: Union[str, pd.Timedelta] = '1h',
-    win_length: Union[str, pd.Timedelta] = '24h',
+    interval: Union[str, pd.Timedelta] = "1h",
+    win_length: Union[str, pd.Timedelta] = "24h",
     verbose: bool = False,
 ) -> pd.DataFrame:
     """
@@ -2384,8 +2621,28 @@ def load_lab_comprehensive(
     if verbose:
         print("🧪 加载全面的实验室检查数据...")
 
-    concepts = ['alb', 'alp', 'alt', 'ast', 'bicar', 'bili', 'bili_dir', 'bun',
-               'ca', 'ck', 'ckmb', 'cl', 'crea', 'crp', 'glu', 'k', 'mg', 'na', 'phos', 'tnt']
+    concepts = [
+        "alb",
+        "alp",
+        "alt",
+        "ast",
+        "bicar",
+        "bili",
+        "bili_dir",
+        "bun",
+        "ca",
+        "ck",
+        "ckmb",
+        "cl",
+        "crea",
+        "crp",
+        "glu",
+        "k",
+        "mg",
+        "na",
+        "phos",
+        "tnt",
+    ]
     available_concepts = _validate_concepts(concepts, verbose)
 
     if not available_concepts:
@@ -2401,15 +2658,16 @@ def load_lab_comprehensive(
         interval=interval,
         win_length=win_length,
         merge=True,
-        verbose=verbose
+        verbose=verbose,
     )
+
 
 def load_blood_gas(
     patient_ids: Optional[Union[List, Dict]] = None,
     database: Optional[str] = None,
     data_path: Optional[Union[str, Path]] = None,
-    interval: Union[str, pd.Timedelta] = '1h',
-    win_length: Union[str, pd.Timedelta] = '24h',
+    interval: Union[str, pd.Timedelta] = "1h",
+    win_length: Union[str, pd.Timedelta] = "24h",
     verbose: bool = False,
 ) -> pd.DataFrame:
     """
@@ -2434,7 +2692,18 @@ def load_blood_gas(
     if verbose:
         print("🩸 加载血气分析数据...")
 
-    concepts = ['be', 'cai', 'fio2', 'hbco', 'lact', 'methb', 'pco2', 'ph', 'po2', 'tco2']
+    concepts = [
+        "be",
+        "cai",
+        "fio2",
+        "hbco",
+        "lact",
+        "methb",
+        "pco2",
+        "ph",
+        "po2",
+        "tco2",
+    ]
     available_concepts = _validate_concepts(concepts, verbose)
 
     if not available_concepts:
@@ -2455,46 +2724,61 @@ def load_blood_gas(
                 interval=interval,
                 win_length=win_length,
                 merge=True,
-                verbose=False
+                verbose=False,
             )
             if df is not None and not df.empty:
                 results.append(df)
                 loaded_concepts.append(concept)
         except Exception:
             pass  # 跳过无法加载的概念
-    
+
     if not results:
         if verbose:
             print("  ❌ 没有成功加载的概念")
         return pd.DataFrame()
-    
+
     if verbose:
         print(f"  ✅ 成功加载 {len(loaded_concepts)} 个概念: {loaded_concepts}")
-    
+
     # 合并结果
     if len(results) == 1:
         return results[0]
-    
+
     # 多个结果需要合并
     merged = results[0]
     for df in results[1:]:
         # 找到共同的 ID 和时间列进行合并
-        id_cols = [c for c in merged.columns if 'id' in c.lower() or c in ['stay_id', 'subject_id', 'patientunitstayid', 'admissionid', 'patientid']]
-        time_cols = [c for c in merged.columns if 'time' in c.lower() or c == 'charttime']
+        id_cols = [
+            c
+            for c in merged.columns
+            if "id" in c.lower()
+            or c
+            in [
+                "stay_id",
+                "subject_id",
+                "patientunitstayid",
+                "admissionid",
+                "patientid",
+            ]
+        ]
+        time_cols = [
+            c for c in merged.columns if "time" in c.lower() or c == "charttime"
+        ]
         merge_cols = list(set(id_cols + time_cols) & set(df.columns))
         if merge_cols:
-            merged = pd.merge(merged, df, on=merge_cols, how='outer')
+            merged = pd.merge(merged, df, on=merge_cols, how="outer")
         else:
             merged = pd.concat([merged, df], ignore_index=True)
-    
+
     return merged
+
 
 def load_hematology(
     patient_ids: Optional[Union[List, Dict]] = None,
     database: Optional[str] = None,
     data_path: Optional[Union[str, Path]] = None,
-    interval: Union[str, pd.Timedelta] = '1h',
-    win_length: Union[str, pd.Timedelta] = '24h',
+    interval: Union[str, pd.Timedelta] = "1h",
+    win_length: Union[str, pd.Timedelta] = "24h",
     verbose: bool = False,
 ) -> pd.DataFrame:
     """
@@ -2519,8 +2803,21 @@ def load_hematology(
     if verbose:
         print("🩸 加载血液学检查数据...")
 
-    concepts = ['bnd', 'esr', 'fgn', 'hgb', 'inr_pt', 'lymph', 'mch', 'mchc',
-               'mcv', 'neut', 'plt', 'ptt', 'wbc']
+    concepts = [
+        "bnd",
+        "esr",
+        "fgn",
+        "hgb",
+        "inr_pt",
+        "lymph",
+        "mch",
+        "mchc",
+        "mcv",
+        "neut",
+        "plt",
+        "ptt",
+        "wbc",
+    ]
     available_concepts = _validate_concepts(concepts, verbose)
 
     if not available_concepts:
@@ -2536,15 +2833,16 @@ def load_hematology(
         interval=interval,
         win_length=win_length,
         merge=True,
-        verbose=verbose
+        verbose=verbose,
     )
+
 
 def load_medications(
     patient_ids: Optional[Union[List, Dict]] = None,
     database: Optional[str] = None,
     data_path: Optional[Union[str, Path]] = None,
-    interval: Union[str, pd.Timedelta] = '1h',
-    win_length: Union[str, pd.Timedelta] = '24h',
+    interval: Union[str, pd.Timedelta] = "1h",
+    win_length: Union[str, pd.Timedelta] = "24h",
     verbose: bool = False,
     groups: Optional[Union[str, List[str]]] = None,
     include_new: bool = True,
@@ -2612,45 +2910,73 @@ def load_medications(
 
     # 药理学分组 - single source of truth
     MEDICATION_GROUPS = {
-        'vasopressors': [
-            'adh_rate', 'dobu_dur', 'dobu_rate', 'dobu60',
-            'dopa_dur', 'dopa_rate', 'epi_dur', 'epi_rate',
-            'norepi_dur', 'norepi_equiv', 'norepi_rate',
-            'phn_rate', 'vaso_ind',
+        "vasopressors": [
+            "adh_rate",
+            "dobu_dur",
+            "dobu_rate",
+            "dobu60",
+            "dopa_dur",
+            "dopa_rate",
+            "epi_dur",
+            "epi_rate",
+            "norepi_dur",
+            "norepi_equiv",
+            "norepi_rate",
+            "phn_rate",
+            "vaso_ind",
         ],
-        'sedation': [
-            'propofol', 'propofol_rate',
-            'midazolam', 'midazolam_rate',
-            'dexmedetomidine', 'lorazepam', 'ketamine',
+        "sedation": [
+            "propofol",
+            "propofol_rate",
+            "midazolam",
+            "midazolam_rate",
+            "dexmedetomidine",
+            "lorazepam",
+            "ketamine",
         ],
-        'analgesia': [
-            'fentanyl', 'fentanyl_rate', 'morphine',
+        "analgesia": [
+            "fentanyl",
+            "fentanyl_rate",
+            "morphine",
         ],
-        'neuromuscular': [
-            'rocuronium', 'vecuronium', 'cisatracurium',
+        "neuromuscular": [
+            "rocuronium",
+            "vecuronium",
+            "cisatracurium",
         ],
-        'antibiotics': ['abx', 'vancomycin', 'meropenem'],
-        'cardiac': ['amiodarone', 'milrinone'],
-        'diuretics': ['furosemide', 'mannitol'],
-        'anticoagulation': ['heparin', 'warfarin', 'apixaban', 'enoxaparin'],
-        'antiplatelet': ['aspirin'],
-        'endocrine': ['cort', 'ins', 'insulin'],
-        'vasodilators': ['nitroglycerin'],
-        'gi_prophylaxis': ['pantoprazole'],
-        'electrolytes': ['calcium_iv', 'potassium_iv', 'magnesium_iv', 'bicarbonate'],
-        'colloids_blood': ['albumin_iv', 'packed_rbc', 'ffp', 'platelets'],
-        'neurology': ['levetiracetam'],
-        'gi': ['octreotide'],
-        'reversal': ['neostigmine'],
-        'corticosteroids': ['cort', 'dexamethasone'],
-        'other': ['dex', 'dextrose50'],  # dextrose as fluid/med
+        "antibiotics": ["abx", "vancomycin", "meropenem"],
+        "cardiac": ["amiodarone", "milrinone"],
+        "diuretics": ["furosemide", "mannitol"],
+        "anticoagulation": ["heparin", "warfarin", "apixaban", "enoxaparin"],
+        "antiplatelet": ["aspirin"],
+        "endocrine": ["cort", "ins", "insulin"],
+        "vasodilators": ["nitroglycerin"],
+        "gi_prophylaxis": ["pantoprazole"],
+        "electrolytes": ["calcium_iv", "potassium_iv", "magnesium_iv", "bicarbonate"],
+        "colloids_blood": ["albumin_iv", "packed_rbc", "ffp", "platelets"],
+        "neurology": ["levetiracetam"],
+        "gi": ["octreotide"],
+        "reversal": ["neostigmine"],
+        "corticosteroids": ["cort", "dexamethasone"],
+        "other": ["dex", "dextrose50"],  # dextrose as fluid/med
     }
 
     # 构建目标概念列表
     legacy_concepts = [
-        'abx', 'adh_rate', 'cort', 'dex', 'dobu_dur', 'dobu_rate', 'dobu60',
-        'epi_dur', 'epi_rate', 'ins', 'norepi_dur', 'norepi_equiv',
-        'norepi_rate', 'vaso_ind',
+        "abx",
+        "adh_rate",
+        "cort",
+        "dex",
+        "dobu_dur",
+        "dobu_rate",
+        "dobu60",
+        "epi_dur",
+        "epi_rate",
+        "ins",
+        "norepi_dur",
+        "norepi_equiv",
+        "norepi_rate",
+        "vaso_ind",
     ]
 
     if groups is not None:
@@ -2703,78 +3029,88 @@ def load_medications(
                 interval=interval,
                 win_length=win_length,
                 merge=True,
-                verbose=False
+                verbose=False,
             )
             if df is not None and not df.empty:
                 results.append(df)
                 loaded_concepts.append(concept)
         except Exception:
             pass  # 跳过无法加载的概念
-    
+
     if not results:
         if verbose:
             print("  ❌ 没有成功加载的概念")
         return pd.DataFrame()
-    
+
     if verbose:
         print(f"  ✅ 成功加载 {len(loaded_concepts)} 个概念: {loaded_concepts}")
-    
+
     # 合并结果
     if len(results) == 1:
         return results[0]
-    
+
     # 多个结果需要合并
     merged = results[0]
     for df in results[1:]:
         # 找到共同的 ID 和时间列进行合并
-        id_cols = [c for c in merged.columns if 'id' in c.lower() or c in ['stay_id', 'subject_id', 'patientunitstayid', 'admissionid', 'patientid']]
-        time_cols = [c for c in merged.columns if 'time' in c.lower() or c == 'charttime']
+        id_cols = [
+            c
+            for c in merged.columns
+            if "id" in c.lower()
+            or c
+            in [
+                "stay_id",
+                "subject_id",
+                "patientunitstayid",
+                "admissionid",
+                "patientid",
+            ]
+        ]
+        time_cols = [
+            c for c in merged.columns if "time" in c.lower() or c == "charttime"
+        ]
         merge_cols = list(set(id_cols + time_cols) & set(df.columns))
         if merge_cols:
-            merged = pd.merge(merged, df, on=merge_cols, how='outer')
+            merged = pd.merge(merged, df, on=merge_cols, how="outer")
         else:
             merged = pd.concat([merged, df], ignore_index=True)
-    
+
     return merged
+
 
 # 为了兼容性，也导出原始的类和函数
 __all__ = [
     # 主要API
-    'load_concepts',      # 主API（智能默认值）
-    'load_concept',       # 别名（向后兼容）
-
+    "load_concepts",  # 主API（智能默认值）
+    "load_concept",  # 别名（向后兼容）
     # Easy API（便捷函数）
-    'load_sofa',
-    'load_sofa2',
-    'load_sepsis3',
-    'load_vitals',
-    'load_labs',
-
+    "load_sofa",
+    "load_sofa2",
+    "load_sepsis3",
+    "load_vitals",
+    "load_labs",
     # 新增模块函数（参考ricu.R）
-    'load_demographics',     # 基础人口统计学
-    'load_outcomes',         # 结局指标
-    'load_vitals_detailed',   # 详细生命体征
-    'load_neurological',     # 神经系统评估
-    'load_output',           # 输出量
-    'load_respiratory',      # 呼吸系统
-    'load_lab_comprehensive', # 全面实验室检查
-    'load_blood_gas',        # 血气分析
-    'load_hematology',       # 血液学检查
-    'load_medications',      # 药物治疗
-
+    "load_demographics",  # 基础人口统计学
+    "load_outcomes",  # 结局指标
+    "load_vitals_detailed",  # 详细生命体征
+    "load_neurological",  # 神经系统评估
+    "load_output",  # 输出量
+    "load_respiratory",  # 呼吸系统
+    "load_lab_comprehensive",  # 全面实验室检查
+    "load_blood_gas",  # 血气分析
+    "load_hematology",  # 血液学检查
+    "load_medications",  # 药物治疗
     # 工具函数
-    'list_available_concepts',
-    'list_available_sources',
-    'get_concept_info',
-    
+    "list_available_concepts",
+    "list_available_sources",
+    "get_concept_info",
     # 缓存管理
-    'keep_cache',
-    'clear_global_loader',
-    
+    "keep_cache",
+    "clear_global_loader",
     # 增强功能（从api_enhanced.py合并）
-    'load_concept_cached',
-    'align_to_icu_admission',
-    'load_sofa_with_score',
+    "load_concept_cached",
+    "align_to_icu_admission",
+    "load_sofa_with_score",
 ]
 
 
@@ -2786,6 +3122,8 @@ import pickle
 import hashlib
 
 import json
+
+
 def _get_cache_key(concepts: List[str], source: str, **kwargs) -> str:
     """Generate cache key from parameters."""
     payload = {
@@ -2795,6 +3133,7 @@ def _get_cache_key(concepts: List[str], source: str, **kwargs) -> str:
     }
     key_str = json.dumps(payload, sort_keys=True, default=str, separators=(",", ":"))
     return hashlib.sha256(key_str.encode()).hexdigest()
+
 
 def _data_path_fingerprint(
     data_path: Union[str, Path],
@@ -2825,6 +3164,8 @@ def _data_path_fingerprint(
         rel = path.relative_to(root)
         digest.update(f"{rel}:{stat.st_size}:{stat.st_mtime_ns}\n".encode())
     return digest.hexdigest()
+
+
 def load_concept_cached(
     concepts: Union[str, List[str]],
     source: str,
@@ -2864,13 +3205,13 @@ def load_concept_cached(
         cache_dir = Path(data_path) / "cache"
     cache_dir = Path(cache_dir)
     cache_dir.mkdir(parents=True, exist_ok=True)
-    
+
     # Prepare concept list
     if isinstance(concepts, str):
         concept_list = [concepts]
     else:
         concept_list = list(concepts)
-    
+
     # Generate cache key
     cache_params = {
         "merge": merge,
@@ -2882,23 +3223,23 @@ def load_concept_cached(
         **kwargs,
     }
     cache_key = _get_cache_key(concept_list, source, **cache_params)
-    cache_ext = 'pkl' if use_pickle else 'csv'
+    cache_ext = "pkl" if use_pickle else "csv"
     cache_file = (
         cache_dir
         / f"{source}_{'_'.join(concept_list[:3])}_{cache_key[:32]}.{cache_ext}"
     )
-    
+
     # Try to load from cache
     if not force_reload and cache_file.exists():
         if verbose:
             print(f"📦 从缓存加载: {cache_file.name}")
         try:
             if use_pickle:
-                with open(cache_file, 'rb') as f:
+                with open(cache_file, "rb") as f:
                     result = pickle.load(f)
             else:
-                result = pd.read_csv(cache_file, parse_dates=['charttime'])
-            
+                result = pd.read_csv(cache_file, parse_dates=["charttime"])
+
             if verbose:
                 if isinstance(result, pd.DataFrame):
                     print(f"✅ 成功加载 {len(result):,} 行缓存数据")
@@ -2908,7 +3249,7 @@ def load_concept_cached(
         except Exception as e:
             if verbose:
                 print(f"⚠️  缓存加载失败: {e}，重新提取...")
-    
+
     # Load from source using load_concepts
     result = load_concepts(
         concepts=concept_list,
@@ -2920,7 +3261,7 @@ def load_concept_cached(
         n_patients=n_patients,
         **kwargs,
     )
-    
+
     # Save to cache
     if align_time:
         result = align_to_icu_admission(
@@ -2931,7 +3272,7 @@ def load_concept_cached(
         )
     try:
         if use_pickle:
-            with open(cache_file, 'wb') as f:
+            with open(cache_file, "wb") as f:
                 pickle.dump(result, f)
         else:
             if isinstance(result, pd.DataFrame):
@@ -2941,15 +3282,16 @@ def load_concept_cached(
     except Exception as e:
         if verbose:
             print(f"⚠️  缓存保存失败: {e}")
-    
+
     return result
+
 
 def align_to_icu_admission(
     data: Union[pd.DataFrame, Dict[str, pd.DataFrame]],
     database: Optional[str] = None,
     data_path: Optional[Union[str, Path]] = None,
     aggregate_hourly: bool = True,
-    agg_func: str = 'median',
+    agg_func: str = "median",
     filter_icu_window: bool = True,
     before_icu_hours: int = 0,
     after_icu_hours: int = 0,
@@ -2958,7 +3300,7 @@ def align_to_icu_admission(
     """
     Align charttime to ICU admission time and aggregate to hourly intervals.
     根据ricu的stay_windows逻辑，默认只保留ICU住院期间的数据。
-    
+
     Args:
         data: Concept data with charttime
         database: Database name ('miiv', 'eicu', etc.)
@@ -2969,38 +3311,48 @@ def align_to_icu_admission(
         before_icu_hours: Hours before ICU admission to include (default: 0)
         after_icu_hours: Hours after ICU discharge to include (default: 0)
         verbose: Show progress
-        
+
     Returns:
         Data with charttime as integer hours since ICU admission, one row per hour
     """
     if verbose:
         print("⏰ 对齐时间到ICU入院时间...")
-    
+
     # Handle dict of DataFrames
     if isinstance(data, dict):
         return {
-            name: align_to_icu_admission(df, database, data_path, aggregate_hourly, agg_func, 
-                                        filter_icu_window, before_icu_hours, after_icu_hours, verbose=False)
+            name: align_to_icu_admission(
+                df,
+                database,
+                data_path,
+                aggregate_hourly,
+                agg_func,
+                filter_icu_window,
+                before_icu_hours,
+                after_icu_hours,
+                verbose=False,
+            )
             for name, df in data.items()
         }
-    
+
     # Simplified implementation - users can extend with full logic from api_enhanced.py if needed
     if verbose:
         print("⚠️  完整的时间对齐功能需要从load_concepts返回的数据包含charttime列")
-    
+
     return data
+
 
 def load_sofa_with_score(
     patient_ids: Optional[List] = None,
     database: Optional[str] = None,
     data_path: Optional[Union[str, Path]] = None,
-    interval: str = '1h',
+    interval: str = "1h",
     verbose: bool = True,
-    **kwargs
+    **kwargs,
 ) -> pd.DataFrame:
     """
     Load SOFA score with all components in a single DataFrame.
-    
+
     Args:
         patient_ids: Patient ID filter
         database: Database name
@@ -3008,13 +3360,20 @@ def load_sofa_with_score(
         interval: Time interval
         verbose: Show progress
         **kwargs: Additional parameters
-        
+
     Returns:
         DataFrame with SOFA scores and components
     """
-    sofa_concepts = ['sofa', 'sofa_resp', 'sofa_coag', 'sofa_liver', 
-                     'sofa_cardio', 'sofa_cns', 'sofa_renal']
-    
+    sofa_concepts = [
+        "sofa",
+        "sofa_resp",
+        "sofa_coag",
+        "sofa_liver",
+        "sofa_cardio",
+        "sofa_cns",
+        "sofa_renal",
+    ]
+
     result = load_concepts(
         concepts=sofa_concepts,
         patient_ids=patient_ids,
@@ -3023,15 +3382,16 @@ def load_sofa_with_score(
         interval=interval,
         merge=True,
         verbose=verbose,
-        **kwargs
+        **kwargs,
     )
-    
+
     return result
 
 
 # ==============================================================================
 # 患者队列筛选 API
 # ==============================================================================
+
 
 def filter_patients(
     database: Optional[str] = None,
@@ -3051,7 +3411,7 @@ def filter_patients(
 ) -> Union[List[int], pd.DataFrame]:
     """
     根据人口统计学和临床条件筛选ICU患者队列
-    
+
     支持的筛选条件:
     - 年龄范围 (age_min, age_max)
     - 是否首次入ICU (first_icu_stay)
@@ -3059,7 +3419,7 @@ def filter_patients(
     - 性别 (gender: 'M' 或 'F')
     - 是否存活出院 (survived)
     - 是否有Sepsis诊断 (has_sepsis)
-    
+
     Args:
         database: 数据库类型 ('miiv', 'eicu', 'aumc', 'hirid')
         data_path: 数据路径
@@ -3073,10 +3433,10 @@ def filter_patients(
         has_sepsis: 是否有Sepsis诊断
         return_dataframe: 是否返回完整DataFrame（包含人口统计学信息）
         verbose: 显示详细信息
-    
+
     Returns:
         患者ID列表，或人口统计学DataFrame（如果return_dataframe=True）
-    
+
     Examples:
         >>> # 筛选18-80岁首次入ICU的成人患者
         >>> adult_first_icu = filter_patients(
@@ -3104,22 +3464,25 @@ def filter_patients(
         ... )
     """
     from .patient_filter import PatientFilter
-    
+
     # 自动检测数据库和路径
     if database is None:
         database = detect_database_type(data_path)
     if data_path is None:
         data_path = get_default_data_path(database)
-    
+
     pf = PatientFilter(database=database, data_path=data_path, verbose=verbose)
-    
+
     return pf.filter(
-        age_min=age_min, age_max=age_max,
+        age_min=age_min,
+        age_max=age_max,
         first_icu_stay=first_icu_stay,
-        los_min=los_min, los_max=los_max,
-        gender=gender, survived=survived,
+        los_min=los_min,
+        los_max=los_max,
+        gender=gender,
+        survived=survived,
         has_sepsis=has_sepsis,
-        return_dataframe=return_dataframe
+        return_dataframe=return_dataframe,
     )
 
 
@@ -3137,23 +3500,23 @@ def load_concepts_filtered(
     # 其他load_concepts参数
     database: Optional[str] = None,
     data_path: Optional[Union[str, Path]] = None,
-    interval: Optional[Union[str, pd.Timedelta]] = '1h',
+    interval: Optional[Union[str, pd.Timedelta]] = "1h",
     win_length: Optional[Union[str, pd.Timedelta]] = None,
     aggregate: Optional[Union[str, Dict]] = None,
     keep_components: bool = False,
     verbose: bool = False,
-    **kwargs
+    **kwargs,
 ) -> pd.DataFrame:
     """
     根据患者筛选条件加载概念数据 - 整合患者筛选和数据加载
-    
+
     这是一个便捷函数，将患者队列筛选和概念加载整合为一步操作：
     1. 先根据人口统计学条件筛选患者
     2. 然后加载这些患者的概念数据
-    
+
     Args:
         concepts: 要加载的概念名称或列表
-        
+
         # === 患者筛选条件 ===
         age_min: 最小年龄
         age_max: 最大年龄
@@ -3163,7 +3526,7 @@ def load_concepts_filtered(
         gender: 性别 ('M' 或 'F')
         survived: 是否存活出院
         has_sepsis: 是否有Sepsis诊断
-        
+
         # === 数据加载参数 ===
         database: 数据库类型
         data_path: 数据路径
@@ -3173,10 +3536,10 @@ def load_concepts_filtered(
         keep_components: 是否保留组件
         verbose: 显示详细信息
         **kwargs: 其他参数传递给load_concepts
-    
+
     Returns:
         筛选后患者的概念数据DataFrame
-    
+
     Examples:
         >>> # 加载成人首次入ICU患者的SOFA评分
         >>> sofa = load_concepts_filtered(
@@ -3201,45 +3564,53 @@ def load_concepts_filtered(
         database = detect_database_type(data_path)
     if data_path is None:
         data_path = get_default_data_path(database)
-    
+
     # 第1步：筛选患者
-    has_filter = any([
-        age_min is not None, age_max is not None,
-        first_icu_stay is not None,
-        los_min is not None, los_max is not None,
-        gender is not None, survived is not None,
-        has_sepsis is not None
-    ])
-    
+    has_filter = any(
+        [
+            age_min is not None,
+            age_max is not None,
+            first_icu_stay is not None,
+            los_min is not None,
+            los_max is not None,
+            gender is not None,
+            survived is not None,
+            has_sepsis is not None,
+        ]
+    )
+
     if has_filter:
         if verbose:
             print("🔍 第1步：筛选患者队列...")
-        
+
         patient_ids = filter_patients(
             database=database,
             data_path=data_path,
-            age_min=age_min, age_max=age_max,
+            age_min=age_min,
+            age_max=age_max,
             first_icu_stay=first_icu_stay,
-            los_min=los_min, los_max=los_max,
-            gender=gender, survived=survived,
+            los_min=los_min,
+            los_max=los_max,
+            gender=gender,
+            survived=survived,
             has_sepsis=has_sepsis,
-            verbose=verbose
+            verbose=verbose,
         )
-        
+
         if verbose:
             print(f"   ✓ 筛选到 {len(patient_ids)} 名患者")
-        
+
         if len(patient_ids) == 0:
             if verbose:
                 print("   ❌ 没有符合条件的患者")
             return pd.DataFrame()
     else:
         patient_ids = None
-    
+
     # 第2步：加载概念数据
     if verbose:
         print("📊 第2步：加载概念数据...")
-    
+
     return load_concepts(
         concepts=concepts,
         patient_ids=patient_ids,
@@ -3250,7 +3621,7 @@ def load_concepts_filtered(
         aggregate=aggregate,
         keep_components=keep_components,
         verbose=verbose,
-        **kwargs
+        **kwargs,
     )
 
 
@@ -3258,19 +3629,19 @@ def get_cohort_comparison(
     patient_ids: Optional[List[int]] = None,
     database: Optional[str] = None,
     data_path: Optional[Union[str, Path]] = None,
-    group_by: str = 'survived',
+    group_by: str = "survived",
     custom_groups: Optional[Dict[str, List[int]]] = None,
     verbose: bool = False,
 ) -> pd.DataFrame:
     """
     获取患者队列的分组对比统计
-    
+
     可以按以下维度进行分组对比：
     - survived: 存活 vs 死亡
     - gender: 男性 vs 女性
     - first_icu_stay: 首次入ICU vs 再入ICU
     - 或提供自定义分组
-    
+
     Args:
         patient_ids: 患者ID列表（None=所有患者）
         database: 数据库类型
@@ -3278,10 +3649,10 @@ def get_cohort_comparison(
         group_by: 分组依据 ('survived', 'gender', 'first_icu_stay')
         custom_groups: 自定义分组 {组名: [患者ID列表]}
         verbose: 显示详细信息
-    
+
     Returns:
         分组统计DataFrame
-    
+
     Examples:
         >>> # 按存活状态对比
         >>> comparison = get_cohort_comparison(
@@ -3301,22 +3672,24 @@ def get_cohort_comparison(
         ... )
     """
     from .patient_filter import PatientFilter
-    
+
     # 自动检测
     if database is None:
         database = detect_database_type(data_path)
     if data_path is None:
         data_path = get_default_data_path(database)
-    
+
     pf = PatientFilter(database=database, data_path=data_path, verbose=verbose)
-    
+
     # 如果提供了patient_ids，先筛选
     if patient_ids is not None:
         pf.filter(return_dataframe=True)  # 加载数据
-        pf._last_result = pf._last_result[pf._last_result['patient_id'].isin(patient_ids)]
+        pf._last_result = pf._last_result[
+            pf._last_result["patient_id"].isin(patient_ids)
+        ]
     else:
         pf.filter(return_dataframe=True)  # 加载所有患者
-    
+
     return pf.get_cohort_comparison(group_by=group_by, custom_groups=custom_groups)
 
 
@@ -3327,15 +3700,15 @@ def get_cohort_stats(
 ) -> Dict:
     """
     获取患者队列的统计摘要
-    
+
     Args:
         patient_ids: 患者ID列表
         database: 数据库类型
         data_path: 数据路径
-    
+
     Returns:
         统计信息字典
-    
+
     Examples:
         >>> ids = filter_patients(age_min=18, first_icu_stay=True, ...)
         >>> stats = get_cohort_stats(ids, database='miiv', data_path='/path/to/data')
@@ -3343,12 +3716,12 @@ def get_cohort_stats(
         >>> print(f"年龄: {stats['年龄']['均值']} ± {stats['年龄']['标准差']}")
     """
     from .patient_filter import get_cohort_stats as _get_cohort_stats
-    
+
     if database is None:
         database = detect_database_type(data_path)
     if data_path is None:
         data_path = get_default_data_path(database)
-    
+
     return _get_cohort_stats(patient_ids, database=database, data_path=data_path)
 
 
@@ -3356,36 +3729,37 @@ def get_cohort_stats(
 # 工具函数导出 - 供 webapp 和外部使用
 # =============================================================================
 
+
 def get_id_col_for_database(database: str) -> str:
     """获取指定数据库的患者ID列名
-    
+
     Args:
         database: 数据库类型 ('miiv', 'eicu', 'aumc', 'hirid' 等)
-    
+
     Returns:
         ID 列名，如 'stay_id', 'patientunitstayid' 等
-    
+
     Examples:
         >>> get_id_col_for_database('miiv')
         'stay_id'
         >>> get_id_col_for_database('eicu')
         'patientunitstayid'
     """
-    config = DATABASE_ID_CONFIG.get(database, DATABASE_ID_CONFIG['miiv'])
-    return config['id_col']
+    config = DATABASE_ID_CONFIG.get(database, DATABASE_ID_CONFIG["miiv"])
+    return config["id_col"]
 
 
 def get_patient_table_for_database(database: str) -> str:
     """获取指定数据库的患者表名
-    
+
     Args:
         database: 数据库类型
-    
+
     Returns:
         表名，如 'icustays', 'patient', 'admissions' 等
     """
-    config = DATABASE_ID_CONFIG.get(database, DATABASE_ID_CONFIG['miiv'])
-    return config['table']
+    config = DATABASE_ID_CONFIG.get(database, DATABASE_ID_CONFIG["miiv"])
+    return config["table"]
 
 
 def get_all_patient_ids(
@@ -3394,32 +3768,32 @@ def get_all_patient_ids(
     max_patients: Optional[int] = None,
 ) -> tuple:
     """获取数据库中所有（或部分）患者ID
-    
+
     这是统一的患者ID获取接口，供 webapp 和其他模块使用。
-    
+
     Args:
         data_path: 数据路径
         database: 数据库类型（可自动检测）
         max_patients: 限制返回的患者数量（None = 全部）
-    
+
     Returns:
         (patient_ids_list, id_column_name)
-    
+
     Examples:
         >>> ids, id_col = get_all_patient_ids('/path/to/miiv')
         >>> print(f"共 {len(ids)} 个患者, ID列: {id_col}")
     """
     if database is None:
         database = detect_database_type(data_path)
-    
+
     id_col = get_id_col_for_database(database)
     table_name = get_patient_table_for_database(database)
-    
+
     data_path = Path(data_path)
 
     # 患者表的备用文件名（部分数据库导出的 parquet 文件名与表名不同）
     _table_filename_aliases = {
-        'general': ['general', 'general_table'],  # HiRID
+        "general": ["general", "general_table"],  # HiRID
     }
     _name_candidates = _table_filename_aliases.get(table_name, [table_name])
 
@@ -3431,12 +3805,12 @@ def get_all_patient_ids(
         # 找不到就退回慢速 BaseICULoader 全库扫描——在慢速挂载上后者要十几分钟。
         parquet_file = None
         for _name in _name_candidates:
-            flat = data_path / f'{_name}.parquet'
+            flat = data_path / f"{_name}.parquet"
             if flat.exists():
                 parquet_file = flat
                 break
             # 一级子目录搜索（MIMIC-IV 的表位于 icu/ 或 hosp/ 下）
-            for sub in sorted(data_path.glob(f'*/{_name}.parquet')):
+            for sub in sorted(data_path.glob(f"*/{_name}.parquet")):
                 parquet_file = sub
                 break
             if parquet_file is not None:
@@ -3449,8 +3823,8 @@ def get_all_patient_ids(
                 logger.warning(f"读取患者表 parquet 失败，尝试 CSV 回退: {e}")
 
         if all_ids is None:
-            for suffix in ('.csv', '.csv.gz'):
-                csv_file = data_path / f'{table_name}{suffix}'
+            for suffix in (".csv", ".csv.gz"):
+                csv_file = data_path / f"{table_name}{suffix}"
                 if not csv_file.exists():
                     continue
                 try:
@@ -3465,22 +3839,26 @@ def get_all_patient_ids(
             shard_dir = data_path / table_name
             if shard_dir.exists() and shard_dir.is_dir():
                 all_ids = []
-                for sf in sorted(shard_dir.glob('*.parquet')):
+                for sf in sorted(shard_dir.glob("*.parquet")):
                     shard_df = pd.read_parquet(sf, columns=[id_col])
                     all_ids.extend(shard_df[id_col].dropna().unique().tolist())
                 all_ids = list(set(all_ids))
             else:
                 # 最后尝试使用 BaseICULoader
-                loader = BaseICULoader(database=database, data_path=data_path, verbose=False)
-                sampled = _sample_patient_ids(loader, max_patients or 999999999, verbose=False)
+                loader = BaseICULoader(
+                    database=database, data_path=data_path, verbose=False
+                )
+                sampled = _sample_patient_ids(
+                    loader, max_patients or 999999999, verbose=False
+                )
                 return (sampled or [], id_col)
-        
+
         # 限制患者数量
         if max_patients and len(all_ids) > max_patients:
             all_ids = all_ids[:max_patients]
-        
+
         return (all_ids, id_col)
-    
+
     except Exception as e:
         logger.warning(f"获取患者ID失败: {e}")
         return ([], id_col)
@@ -3491,16 +3869,16 @@ def get_smart_parallel_config(
     num_patients: Optional[int] = None,
 ) -> tuple:
     """智能计算最佳并行配置
-    
+
     根据概念数量和患者数量自动选择最优的并行策略。
-    
+
     Args:
         num_concepts: 要加载的概念数量
         num_patients: 患者数量（如果已知）
-    
+
     Returns:
         (concept_workers, parallel_workers): 概念并行数和患者批次并行数
-    
+
     Examples:
         >>> concept_workers, parallel_workers = get_smart_parallel_config(5, 10000)
         >>> print(f"概念并行: {concept_workers}, 患者批次并行: {parallel_workers}")
@@ -3515,34 +3893,46 @@ def get_smart_parallel_config(
 # Module definitions are derived from the shared web/export catalog so the
 # public extract_database() API cannot drift from the 19-module full export.
 EXTRACT_MODULES: Dict[str, List[str]] = {
-    module: list(concepts)
-    for module, concepts in CONCEPT_GROUPS_INTERNAL.items()
+    module: list(concepts) for module, concepts in CONCEPT_GROUPS_INTERNAL.items()
 }
 
 # Fast-to-slow preferred order. Unknown future modules are appended below.
 _PREFERRED_EXTRACT_MODULE_ORDER: List[str] = [
-    'vitals', 'demographics', 'outcome',
-    'blood_gas', 'chemistry', 'hematology',
-    'ventilator', 'respiratory', 'vasopressors',
-    'medications', 'neurological', 'renal',
-    'circulatory', 'other_scores', 'sepsis_shared',
-    'sofa1_score', 'sofa2_score',
-    'sepsis3_sofa1', 'sepsis3_sofa2',
+    "vitals",
+    "demographics",
+    "outcome",
+    "blood_gas",
+    "chemistry",
+    "hematology",
+    "ventilator",
+    "respiratory",
+    "vasopressors",
+    "medications",
+    "neurological",
+    "renal",
+    "circulatory",
+    "other_scores",
+    "sepsis_shared",
+    "sofa1_score",
+    "sofa2_score",
+    "sepsis3_sofa1",
+    "sepsis3_sofa2",
 ]
 EXTRACT_MODULE_ORDER: List[str] = [
-    module for module in _PREFERRED_EXTRACT_MODULE_ORDER
-    if module in EXTRACT_MODULES
+    module for module in _PREFERRED_EXTRACT_MODULE_ORDER if module in EXTRACT_MODULES
 ] + [
-    module for module in EXTRACT_MODULES
+    module
+    for module in EXTRACT_MODULES
     if module not in _PREFERRED_EXTRACT_MODULE_ORDER
 ]
 
 # 特殊概念 — 需要专用加载函数而非 load_concepts
-_SPECIAL_CONCEPT_MODULES = {'sepsis3_sofa1', 'sepsis3_sofa2'}
+_SPECIAL_CONCEPT_MODULES = {"sepsis3_sofa1", "sepsis3_sofa2"}
 
 # 已知数据库路径映射（可被 data_paths 参数或环境变量 EASYICU_DATA_PATH 覆盖）
 # 默认使用环境变量中的数据根目录
 _DEFAULT_DB_PATH_CACHE: Dict[str, str] = {}
+
 
 def _get_default_db_path(database: str) -> Optional[str]:
     """惰性解析单个数据库的默认路径（按需，带缓存）。
@@ -3553,28 +3943,30 @@ def _get_default_db_path(database: str) -> Optional[str]:
     """
     if database in _DEFAULT_DB_PATH_CACHE:
         return _DEFAULT_DB_PATH_CACHE[database]
-    _root = os.environ.get('EASYICU_DATA_PATH', '')
+    _root = os.environ.get("EASYICU_DATA_PATH", "")
     if not _root:
         return None
     try:
         from easyicu.io.data_paths import find_database_path
+
         path = find_database_path(_root, database)
     except ImportError:
         path = os.path.join(_root, database)
     _DEFAULT_DB_PATH_CACHE[database] = path
     return path
 
+
 def _build_default_db_paths() -> Dict[str, str]:
     """解析全部 6 个数据库的默认路径（仅 extract_all_databases 使用）。"""
     return {
         db: p
-        for db in ['sic', 'aumc', 'hirid', 'mimic', 'miiv', 'eicu']
+        for db in ["sic", "aumc", "hirid", "mimic", "miiv", "eicu"]
         if (p := _get_default_db_path(db)) is not None
     }
 
 
 # 特殊模块（Sepsis-3）在分组临时目录下的输出子目录名
-_SPECIAL_OUTPUT_DIRNAME = '_special'
+_SPECIAL_OUTPUT_DIRNAME = "_special"
 
 
 def _extract_worker_env_setup(data_path: str) -> None:
@@ -3586,8 +3978,9 @@ def _extract_worker_env_setup(data_path: str) -> None:
     慢的根源。强制 in-process，让模块内单次扫表。
     """
     import os, sys
-    os.environ.setdefault('EASYICU_DATA_PATH', data_path)
-    os.environ.setdefault('EASYICU_FORCE_INPROCESS_BATCH', '1')
+
+    os.environ.setdefault("EASYICU_DATA_PATH", data_path)
+    os.environ.setdefault("EASYICU_FORCE_INPROCESS_BATCH", "1")
     _src_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     if _src_dir not in sys.path:
         sys.path.insert(0, _src_dir)
@@ -3631,6 +4024,8 @@ _BOUNDS_METADATA_KEYS = (
     "bounds_skipped",
     "bounds_status",
 )
+
+
 def _load_concept_bounds_map():
     """Return ``{concept_name: (min, max)}`` from the active concept dictionary.
 
@@ -3643,6 +4038,7 @@ def _load_concept_bounds_map():
         return _CONCEPT_BOUNDS_CACHE
     import os as _os
     import json as _json
+
     bounds = {}
     data_dir = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "data")
     dict_paths = [
@@ -3697,6 +4093,8 @@ def _concept_result_info(path, info):
     out = {"path": path, "rows": info.get("rows", 0)}
     out.update(_bounds_metadata_from_manifest_info(info))
     return out
+
+
 def _enforce_concept_bounds(df, concept_name):
     """Drop rows whose numeric value for ``concept_name`` is outside its declared
     [min, max]. The per-concept extraction DataFrame holds the value in a column
@@ -3704,6 +4102,7 @@ def _enforce_concept_bounds(df, concept_name):
     preserved. Returns ``(df, n_dropped)``.
     """
     import pandas as _pd
+
     if not isinstance(df, _pd.DataFrame) or concept_name not in df.columns:
         return df, 0
     bnd = _load_concept_bounds_map().get(concept_name)
@@ -3718,7 +4117,7 @@ def _enforce_concept_bounds(df, concept_name):
         # so retain those recovered values and surface the existing -1 signal.
         return df, -1
     mn, mx = bnd
-    v = _pd.to_numeric(df[concept_name], errors='coerce')
+    v = _pd.to_numeric(df[concept_name], errors="coerce")
     numeric = v.notna()
     # UNIT-SAFETY GUARD: if a concept has BOTH bounds and its central value (median)
     # falls outside [min,max], the values are almost certainly in the wrong unit for
@@ -3731,12 +4130,15 @@ def _enforce_concept_bounds(df, concept_name):
     if mn is not None and mx is not None and int(numeric.sum()) >= 100:
         med = float(v[numeric].median())
         if med < mn or med > mx:
-            return df, -1  # sentinel: enforcement SKIPPED (unit-suspect), nothing dropped
+            return (
+                df,
+                -1,
+            )  # sentinel: enforcement SKIPPED (unit-suspect), nothing dropped
     in_range = _pd.Series(True, index=df.index)
     if mn is not None:
-        in_range &= (v >= mn)
+        in_range &= v >= mn
     if mx is not None:
-        in_range &= (v <= mx)
+        in_range &= v <= mx
     # keep non-numeric/missing rows (NaN is "missing", not "out of range") and
     # numeric rows that are within [min, max]; drop only genuine out-of-range values.
     keep = (~numeric) | in_range
@@ -3744,6 +4146,116 @@ def _enforce_concept_bounds(df, concept_name):
     if n_drop == 0:
         return df, 0
     return df.loc[keep].reset_index(drop=True), n_drop
+
+
+def _normalise_module_frame_for_parquet(result, concepts):
+    """Return one module frame in a stable, parquet-writable representation."""
+    import pandas as pd
+
+    if not isinstance(result, pd.DataFrame) or result.empty:
+        return None
+    result = result.copy()
+    # Indicator concepts can arrive as bool/float/NA object columns.  Arrow
+    # cannot write that mixed representation, while genuine text columns must
+    # stay text.
+    for column in result.columns:
+        if result[column].dtype == object:
+            numeric = pd.to_numeric(result[column], errors="coerce")
+            if bool((numeric.notna() | result[column].isna()).all()):
+                result[column] = numeric
+    return result
+
+
+def _stream_module_batches_to_parquet(
+    module_name: str,
+    concepts: List[str],
+    load_kwargs: Dict,
+    patient_ids_filter: Dict,
+    batch_size: int,
+    output_dir: str,
+    *,
+    loader=None,
+) -> Optional[Dict]:
+    """Append bounded patient batches directly to one module parquet file.
+
+    This is the constrained-host export path.  It deliberately trades repeated
+    source scans for a hard resident-memory boundary: no full module DataFrame
+    and no final ``concat`` are materialised in the worker.  The temporary
+    partial file lives beside the eventual module output, so callers that put
+    their output on an external disk never use the system volume for it.
+    """
+    import gc
+    import os
+    from pathlib import Path
+
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+    from easyicu import load_concepts as _lc
+
+    if not patient_ids_filter or len(patient_ids_filter) != 1:
+        raise ValueError("streamed module export requires one patient-id filter")
+    id_col, all_ids = next(iter(patient_ids_filter.items()))
+    all_ids = list(all_ids)
+    if batch_size < 1:
+        raise ValueError("streamed module export batch_size must be positive")
+
+    destination = Path(output_dir) / f"{module_name}.parquet"
+    partial = destination.with_name(f".{module_name}.partial.parquet")
+    if partial.exists() or partial.is_symlink():
+        raise ValueError(f"refusing stale streamed module partial: {partial}")
+
+    writer = None
+    schema = None
+    columns = None
+    rows = 0
+    batch_load_kwargs = dict(load_kwargs)
+    batch_load_kwargs.pop("patient_ids", None)
+    try:
+        for start in range(0, len(all_ids), batch_size):
+            batch = _lc(
+                **batch_load_kwargs,
+                patient_ids={id_col: all_ids[start : start + batch_size]},
+            )
+            frame = _normalise_module_frame_for_parquet(batch, concepts)
+            if frame is not None:
+                if columns is None:
+                    columns = list(frame.columns)
+                else:
+                    # A sparse batch may omit an optional column; preserve the
+                    # first-batch public schema rather than silently changing
+                    # the parquet contract mid-file.
+                    frame = frame.reindex(columns=columns)
+                table = pa.Table.from_pandas(frame, preserve_index=False, schema=schema)
+                if writer is None:
+                    schema = table.schema
+                    writer = pq.ParquetWriter(partial, schema, compression="snappy")
+                writer.write_table(table)
+                rows += len(frame)
+            del batch, frame
+            if loader is not None:
+                try:
+                    loader.clear_cache()
+                except Exception:
+                    resolver = getattr(loader, "concept_resolver", None)
+                    if resolver is not None and hasattr(resolver, "drop_source_caches"):
+                        resolver.drop_source_caches()
+            gc.collect()
+        if writer is None:
+            return None
+        writer.close()
+        writer = None
+        os.replace(partial, destination)
+    except Exception:
+        if writer is not None:
+            writer.close()
+        partial.unlink(missing_ok=True)
+        raise
+
+    return {
+        "path": str(destination),
+        "rows": rows,
+        "concepts": [name for name in concepts if name in (columns or [])],
+    }
 
 
 def _run_module_extraction(
@@ -3756,6 +4268,7 @@ def _run_module_extraction(
     output_dir: str,
     use_sofa2: bool = False,
     loader=None,
+    stream_output_batches: bool = False,
 ) -> None:
     """加载一个模块的所有概念并写入 parquet + _manifest.json。
 
@@ -3775,180 +4288,152 @@ def _run_module_extraction(
     # 避免 sofa2 自动检测切换字典时重建 loader、丢掉组内共享缓存。
     warnings = []
     kwargs = dict(
-        data_path=data_path, database=database,
-        concepts=concepts, verbose=False, merge=False,
-        concept_workers=1, use_sofa2=use_sofa2,
+        data_path=data_path,
+        database=database,
+        concepts=concepts,
+        verbose=False,
+        merge=True,
+        concept_workers=1,
+        use_sofa2=use_sofa2,
     )
     if patient_ids_filter:
-        kwargs['patient_ids'] = patient_ids_filter
+        kwargs["patient_ids"] = patient_ids_filter
 
-    # 🚀 内存兜底（16GB 机器可用性）：一次性(one-shot)加载对"宽模块×大队列"会
-    # 超内存并**静默返回空概念**——放不下的概念被下方 `len(df) > 0` 过滤悄悄丢弃，
-    # 既不报错也不触发 MemoryError 回退。实测 mimic `medications` 49 概念 × 61,532
-    # 患者：一次性只存了 6 个概念（估算峰值 11.5GB > 可用），而 3k 患者却能存 45 个
-    # ——"患者越多概念越少"正是静默截断。这里用 EasyICU 自带的 auto_batch_size
-    # 内存估算兜底：调用方要求一次性(batch_size 为 None 或覆盖全队列)且估算放不下时，
-    # 自动降级为有界分批(MIN_BATCH=10000，最多几批，re-scan 开销可控)。窄模块 /
-    # 小队列 / 大内存机器估算能放下 → auto_batch_size 返回 None → 保持一次性(最快)。
-    # 机器自适应：64GB 上预算大→几乎不分批；16GB 上只对真正放不下的宽模块分批。
+    # ── 一个模块一次 load、合并成一个宽表、写一个 {module}.parquet（不重复 io）──
+    # load_concepts 一次拿到该模块**所有概念**（chartevents/labevents 等共享源表只扫
+    # 一次；内部若按患者分批也由它自己 concat，对外仍是一次调用、一次扫描）。
+    #
+    # 分批策略：**除超大队列外一律一次性**。只有患者数 > ONESHOT_MAX_PATIENTS（15万，
+    # 实际只有 eICU ~20万命中）才让 auto_batch_size 以 ≤ MAX_EXTRACT_CHUNKS（默认 3）份
+    # 启用。实测最重非 eICU 模块 miiv medications（49 概念 × 9.4万患者）merge=True 一次性
+    # 峰值仅 5.44GB，远低于预算；旧内存估算器约 3-5× 高估会把这类模块误判成要分批（见
+    # web 端 dataio.py:1657 的同款观察），故对 ≤15万 的库直接跳过估算、强制一次性。
+    ONESHOT_MAX_PATIENTS = 150_000
     _n_ids = 0
     if patient_ids_filter:
         try:
             _n_ids = len(next(iter(patient_ids_filter.values())))
         except Exception:
             _n_ids = 0
-    if _n_ids and (not batch_size or batch_size >= _n_ids):
+    if _n_ids > ONESHOT_MAX_PATIENTS and (not batch_size or batch_size >= _n_ids):
         try:
             from easyicu.runtime.memory_manager import auto_batch_size as _auto_bs
-            # 稳定预算：默认用**物理总内存**判定，而不是波动的"当前可用"——否则后台
-            # 程序临时吃内存会把本来能一次性的 vitals 等误判成分批(过度分批变慢)。
-            # auto_batch_size 内部 budget = avail*0.6，故传 total_ram 使每模块一次性
-            # 上限≈0.6*total(16GB→~9.8GB)，实测只有 49-概念宽模块(medications/chemistry)
-            # 在大队列时超过→确定性分批必得全量概念；其余 17 个模块保持一次性(最快)。
-            # EASYICU_ONESHOT_BUDGET_MB 可直接指定该上限(MB)。
+
+            # 稳定预算：用物理总内存判定（而非波动的当前可用），避免后台程序临时吃内存
+            # 把本可一次性的模块误判成分批。EASYICU_ONESHOT_BUDGET_MB 可覆盖此上限(MB)。
             _stable_avail_mb = None
-            _env_budget = os.environ.get('EASYICU_ONESHOT_BUDGET_MB')
+            _env_budget = os.environ.get("EASYICU_ONESHOT_BUDGET_MB")
             if _env_budget:
                 _stable_avail_mb = float(_env_budget) / 0.6
             else:
                 try:
                     import psutil as _ps
+
                     _stable_avail_mb = _ps.virtual_memory().total / (1024 * 1024)
                 except Exception:
                     _stable_avail_mb = None
-            _safe_bs = _auto_bs(list(concepts), database, _n_ids,
-                                available_memory_mb=_stable_avail_mb)
+            _safe_bs = _auto_bs(
+                list(concepts), database, _n_ids, available_memory_mb=_stable_avail_mb
+            )
             if _safe_bs and _safe_bs < _n_ids:
                 batch_size = _safe_bs
         except Exception:
             pass
 
     if batch_size:
-        kwargs['batch_size'] = batch_size
+        kwargs["batch_size"] = batch_size
 
+    streamed = False
+    result = None
     try:
-        result = _lc(**kwargs)
-    except MemoryError:
-        # 一次性加载内存不足(仅可能在极小内存机器上的最大队列发生)：
-        # 降级为有界 in-process 分批。会每批重读源表(较慢)，但保证不 OOM。
-        traceback.print_exc()
-        if loader is not None:
-            # 先释放组内共享缓存，给分批重试腾出内存
-            try:
-                loader.concept_resolver.clear_table_cache()
-            except Exception:
-                pass
-        _n = 0
-        try:
-            _n = len(next(iter(patient_ids_filter.values()))) if patient_ids_filter else 0
-        except Exception:
-            _n = 0
-        fallback_bs = max(10000, _n // 8) if _n else 10000
-        errors.append(
-            f"{module_name}: one-shot OOM, retrying batched (batch_size={fallback_bs})"
-        )
-        kwargs['batch_size'] = fallback_bs
-        try:
+        if stream_output_batches:
+            if not patient_ids_filter or not batch_size:
+                raise ValueError(
+                    "streamed module export requires patient_ids and batch_size"
+                )
+            streamed = True
+            stream_info = _stream_module_batches_to_parquet(
+                module_name,
+                concepts,
+                kwargs,
+                patient_ids_filter,
+                int(batch_size),
+                output_dir,
+                loader=loader,
+            )
+            if stream_info is not None:
+                saved[module_name] = stream_info
+        else:
             result = _lc(**kwargs)
-        except Exception as e:
-            traceback.print_exc()
-            errors.append(f"load_concepts({module_name}) batched: {e}")
+    except MemoryError:
+        traceback.print_exc()
+        if streamed:
+            errors.append(f"streamed module export exhausted memory: {module_name}")
             result = {}
+        else:
+            if loader is not None:
+                try:
+                    loader.concept_resolver.clear_table_cache()
+                except Exception:
+                    pass
+            _n = 0
+            try:
+                _n = (
+                    len(next(iter(patient_ids_filter.values())))
+                    if patient_ids_filter
+                    else 0
+                )
+            except Exception:
+                _n = 0
+            from easyicu.runtime.memory_manager import (
+                MAX_EXTRACT_CHUNKS as _MAX_CH,
+                _ceil_div as _cdiv,
+            )
+
+            fallback_bs = max(10000, _cdiv(_n, _MAX_CH)) if _n else 10000
+            errors.append(
+                f"{module_name}: one-shot OOM, retrying batched (batch_size={fallback_bs})"
+            )
+            kwargs["batch_size"] = fallback_bs
+            try:
+                result = _lc(**kwargs)
+            except Exception as e:
+                traceback.print_exc()
+                errors.append(f"load_concepts({module_name}) batched: {e}")
+                result = {}
     except Exception as e:
         traceback.print_exc()
-        errors.append(f"load_concepts({module_name}): {e}")
+        errors.append(
+            f"{'streamed export' if streamed else 'load_concepts'}({module_name}): {e}"
+        )
         result = {}
 
-    # 将结果写入 parquet 文件
-    if isinstance(result, dict):
-        for c, df in result.items():
-            try:
-                if hasattr(df, "data") and isinstance(df.data, pd.DataFrame):
-                    df = df.data
-                elif hasattr(df, "to_pandas"):
-                    df = df.to_pandas()
-                # 🔧 Post-aggregation concept-bounds enforcement (the missing
-                # ricu-style filter_bounds): drop physiologically-impossible values
-                # that survive the DuckDB aggregation path. See _enforce_concept_bounds.
-                _n_oob = 0
-                _rows_before = len(df) if isinstance(df, pd.DataFrame) else None
-                _has_bounds = c in _load_concept_bounds_map()
-                _bounds_skipped = False
-                _loader_bounds = {}
-                if isinstance(df, pd.DataFrame):
-                    candidate = df.attrs.get("easyicu_bounds_loader", {})
-                    if isinstance(candidate, dict):
-                        _loader_bounds = {
-                            key: candidate[key]
-                            for key in _BOUNDS_METADATA_KEYS
-                            if key in candidate
-                        }
-                    df, _n_oob = _enforce_concept_bounds(df, c)
-                if _n_oob == -1:
-                    # unit-safety guard tripped: bounds NOT enforced for this concept
-                    # (median out of range → wrong unit for this DB). Surface loudly.
-                    warnings.append(
-                        f"{c}: BOUNDS SKIPPED (unit-suspect: median outside declared range)"
-                    )
-                    _bounds_skipped = True
-                    _n_oob = 0
-                if isinstance(df, pd.DataFrame) and len(df) > 0:
-                    path = os.path.join(output_dir, f"{c}.parquet")
-                    df.to_parquet(path, index=False, engine="pyarrow")
-                    if not _has_bounds:
-                        _bounds_status = "not_declared"
-                    elif _bounds_skipped:
-                        _bounds_status = "skipped_unit_suspect"
-                    else:
-                        _bounds_status = "enforced"
-                    _raw_non_null = _loader_bounds.get(
-                        "bounds_raw_transformed_non_null"
-                    )
-                    _bounded_non_null = _loader_bounds.get(
-                        "bounds_bounded_transformed_non_null"
-                    )
-                    if _bounds_skipped:
-                        _bounds_dropped = None
-                        _bounds_count_status = "skipped_unit_suspect"
-                    elif _raw_non_null is not None and _bounded_non_null is not None:
-                        _bounds_dropped = max(
-                            0, int(_raw_non_null) - int(_bounded_non_null)
-                        )
-                        _bounds_count_status = "pre_aggregation_exact"
-                    else:
-                        _bounds_dropped = None if _has_bounds else 0
-                        _bounds_count_status = (
-                            "pre_aggregation_count_unavailable"
-                            if _has_bounds
-                            else "not_applicable"
-                        )
-                    saved[c] = {
-                        "path": path,
-                        "rows": len(df),
-                        "rows_before": _rows_before,
-                        # Fast SQL paths enforce bounds before aggregation but
-                        # do not materialise rejected raw rows. Never report
-                        # the post-aggregation guard count as the total.
-                        "bounds_dropped": _bounds_dropped,
-                        "bounds_dropped_post_aggregation": _n_oob,
-                        "bounds_count_status": _bounds_count_status,
-                        "bounds_skipped": _bounds_skipped,
-                        "bounds_status": _bounds_status,
-                        **_loader_bounds,
-                    }
-            except Exception as e:
-                errors.append(f"{c}: {e}")
+    # 写出：load_concepts(merge=True) 直接返回该模块宽表（id + time + 每概念一列），
+    # 与 web 端(dataio.py)完全一致的成熟路径。**不再自造合并**——避免 endtime 列冲突、
+    # 递归概念(oxygenation_index/adv_resp/ecmo…)一次性 load 爆内存、以及把含 numpy 的
+    # 逐概念元数据塞进 manifest 导致 json.dump 崩溃等"手写合并"问题。生理边界在
+    # load_concepts 内部按 filter_bounds 预聚合强制（与 web 端同一套）。
+    if streamed:
+        pass
     elif isinstance(result, pd.DataFrame) and len(result) > 0:
-        # NOTE: merge=True (wide) path — not used by the per-concept export.
-        # Row-drop bounds enforcement is unsafe on a wide frame (one row spans many
-        # concepts); a wide clamp would need per-cell NaN. The export uses merge=False
-        # (dict branch above), which IS bounds-enforced. Left unchanged intentionally.
-        for c in concepts:
-            if c in result.columns:
-                path = os.path.join(output_dir, f"{c}.parquet")
-                result.to_parquet(path, index=False, engine="pyarrow")
-                saved[c] = {"path": path, "rows": len(result)}
-                break
+        try:
+            result = _normalise_module_frame_for_parquet(result, concepts)
+            _cols = [c for c in concepts if c in result.columns]
+            path = os.path.join(output_dir, f"{module_name}.parquet")
+            result.to_parquet(path, index=False, engine="pyarrow")
+            saved[module_name] = {
+                "path": path,
+                "rows": len(result),
+                "concepts": _cols,
+            }
+        except Exception as e:
+            traceback.print_exc()
+            errors.append(f"write({module_name}): {e}")
+    elif isinstance(result, dict) and result:
+        # merge=True 应始终返回 DataFrame；若意外返回 dict，大声记错而不静默丢数据。
+        errors.append(
+            f"{module_name}: merge=True returned a dict ({len(result)} concepts) unexpectedly; not written"
+        )
 
     elapsed = time.time() - t0
     manifest = {
@@ -3958,7 +4443,7 @@ def _run_module_extraction(
         "warnings": warnings,
         "elapsed_sec": round(elapsed, 1),
     }
-    with open(os.path.join(output_dir, '_manifest.json'), 'w') as f:
+    with open(os.path.join(output_dir, "_manifest.json"), "w") as f:
         json.dump(manifest, f)
 
 
@@ -3968,8 +4453,8 @@ def _extract_module_worker(
     data_path: str,
     patient_ids_filter: Optional[Dict] = None,
     batch_size: Optional[int] = None,
-    output_dir: str = '',
-    module_name: str = '',
+    output_dir: str = "",
+    module_name: str = "",
 ):
     """（兼容包装）单模块子进程入口。
 
@@ -3978,9 +4463,159 @@ def _extract_module_worker(
     """
     _extract_worker_env_setup(data_path)
     _run_module_extraction(
-        module_name, concepts, database, data_path,
-        patient_ids_filter, batch_size, output_dir,
+        module_name,
+        concepts,
+        database,
+        data_path,
+        patient_ids_filter,
+        batch_size,
+        output_dir,
     )
+
+
+def _stream_special_extraction_batches(
+    special_modules: List[str],
+    database: str,
+    data_path: str,
+    patient_ids_filter: Dict,
+    batch_size: int,
+    output_dir: str,
+    *,
+    use_sofa2: bool,
+    published_output_dir: str,
+) -> None:
+    """Derive Sepsis labels from already-streamed dependency module artifacts.
+
+    The old path asked ``load_concepts`` to merge ``susp_inf``, ``sofa`` and
+    ``sofa2`` together, which can form a huge time-indexed intermediate even
+    for a tiny requested cohort.  In constrained mode the three dependency
+    modules have already been published one at a time.  Filter each parquet to
+    one patient batch, derive the patient-local labels, and append them.
+    """
+    import json
+    import os
+    import time
+
+    import pyarrow.dataset as ds
+    import pyarrow.parquet as pq
+
+    if not patient_ids_filter or len(patient_ids_filter) != 1:
+        raise ValueError("streamed special export requires one patient-id filter")
+    id_col, all_ids = next(iter(patient_ids_filter.items()))
+    all_ids = list(all_ids)
+    # SOFA dependencies can be wider than the ordinary vitals module.  Keep
+    # their individual workset especially small on a 16 GB consumer machine.
+    safe_batch_size = min(int(batch_size), 2_000)
+    concepts = [
+        concept
+        for module_name in special_modules
+        for concept in EXTRACT_MODULES.get(module_name, [])
+    ]
+    writers = {}
+    partials = {}
+    rows = {concept: 0 for concept in concepts}
+    errors = []
+    started = time.time()
+    source_root = Path(published_output_dir)
+
+    def _read_dependency(module_name: str, ids: List) -> "pd.DataFrame":
+        source = source_root / f"{module_name}.parquet"
+        if not source.is_file():
+            raise FileNotFoundError(f"missing streamed dependency module: {source}")
+        return (
+            ds.dataset(source, format="parquet")
+            .to_table(filter=ds.field(id_col).isin(ids))
+            .to_pandas()
+        )
+
+    def _append_frame(concept: str, frame) -> None:
+        if frame is None or frame.empty:
+            return
+        table = __import__("pyarrow").Table.from_pandas(frame, preserve_index=False)
+        if concept not in writers:
+            partial = Path(output_dir) / f".{concept}.partial.parquet"
+            partials[concept] = partial
+            writers[concept] = pq.ParquetWriter(
+                partial, table.schema, compression="snappy"
+            )
+        writers[concept].write_table(table)
+        rows[concept] += len(frame)
+
+    try:
+        for start in range(0, len(all_ids), safe_batch_size):
+            ids = all_ids[start : start + safe_batch_size]
+            susp = _read_dependency("sepsis_shared", ids)
+            sofa1 = _read_dependency("sofa1_score", ids)
+            sofa2 = _read_dependency("sofa2_score", ids)
+            time_col = next(
+                (
+                    name
+                    for name in (
+                        "charttime",
+                        "time",
+                        "starttime",
+                        "datetime",
+                        "Offset",
+                        "measuredat_minutes",
+                        "measuredat",
+                    )
+                    if name in susp.columns
+                    and name in sofa1.columns
+                    and name in sofa2.columns
+                ),
+                None,
+            )
+            if time_col is None or "susp_inf" not in susp.columns:
+                errors.append(
+                    "streamed Sepsis dependencies lack a shared time index or susp_inf"
+                )
+                continue
+            if "sep3_sofa1" in concepts and "sofa" in sofa1.columns:
+                from .scores.sepsis import sep3 as _sep3
+
+                frame = _sep3(
+                    sofa1[[id_col, time_col, "sofa"]],
+                    susp[[id_col, time_col, "susp_inf"]],
+                    id_cols=[id_col],
+                    index_col=time_col,
+                ).rename(columns={"sep3": "sep3_sofa1"})
+                if "sep3_sofa1" in frame.columns:
+                    frame["sep3_sofa1"] = frame["sep3_sofa1"].fillna(0).astype(int)
+                _append_frame("sep3_sofa1", frame)
+            if "sep3_sofa2" in concepts and "sofa2" in sofa2.columns:
+                from .scores.sepsis_sofa2 import sep3_sofa2 as _sep3_sofa2
+
+                frame = _sep3_sofa2(
+                    sofa2[[id_col, time_col, "sofa2"]],
+                    susp[[id_col, time_col, "susp_inf"]],
+                    id_cols=[id_col],
+                    index_col=time_col,
+                )
+                if "sep3_sofa2" in frame.columns:
+                    frame["sep3_sofa2"] = frame["sep3_sofa2"].fillna(0).astype(int)
+                _append_frame("sep3_sofa2", frame)
+
+        saved = {}
+        for concept, writer in writers.items():
+            writer.close()
+            destination = Path(output_dir) / f"{concept}.parquet"
+            os.replace(partials[concept], destination)
+            saved[concept] = {"path": str(destination), "rows": rows[concept]}
+    except Exception:
+        for writer in writers.values():
+            writer.close()
+        for partial in partials.values():
+            partial.unlink(missing_ok=True)
+        raise
+
+    manifest = {
+        "module": "special_concepts",
+        "saved": saved,
+        "errors": errors,
+        "elapsed_sec": round(time.time() - started, 1),
+    }
+    with open(os.path.join(output_dir, "_manifest.json"), "w") as handle:
+        json.dump(manifest, handle)
 
 
 def _run_special_extraction(
@@ -3991,6 +4626,8 @@ def _run_special_extraction(
     batch_size: Optional[int],
     output_dir: str,
     use_sofa2: bool = False,
+    stream_output_batches: bool = False,
+    published_output_dir: Optional[str] = None,
 ) -> None:
     """加载特殊概念（Sepsis-3 等）并写入 parquet + _manifest.json。
 
@@ -4002,34 +4639,60 @@ def _run_special_extraction(
     import pandas as pd
     from easyicu import load_concepts as _lc
 
+    if stream_output_batches:
+        if not patient_ids_filter or not batch_size:
+            raise ValueError(
+                "streamed special export requires patient_ids and batch_size"
+            )
+        _stream_special_extraction_batches(
+            special_modules,
+            database,
+            data_path,
+            patient_ids_filter,
+            int(batch_size),
+            output_dir,
+            use_sofa2=use_sofa2,
+            published_output_dir=published_output_dir or output_dir,
+        )
+        return
+
     t0 = time.time()
     saved = {}
     errors = []
 
     # 构建公共加载参数（use_sofa2 显式传入以保持组内 loader 配置一致）
-    load_kw = dict(data_path=data_path, database=database, verbose=False, merge=True,
-                   use_sofa2=use_sofa2)
+    load_kw = dict(
+        data_path=data_path,
+        database=database,
+        verbose=False,
+        merge=True,
+        use_sofa2=use_sofa2,
+    )
     if patient_ids_filter:
-        load_kw['patient_ids'] = patient_ids_filter
+        load_kw["patient_ids"] = patient_ids_filter
     if batch_size:
-        load_kw['batch_size'] = batch_size
+        load_kw["batch_size"] = batch_size
 
     # 收集需要的概念: sep3_sofa1 需要 sofa, sep3_sofa2 需要 sofa2
-    need_sofa1 = any('sep3_sofa1' in EXTRACT_MODULES.get(m, []) for m in special_modules)
-    need_sofa2 = any('sep3_sofa2' in EXTRACT_MODULES.get(m, []) for m in special_modules)
+    need_sofa1 = any(
+        "sep3_sofa1" in EXTRACT_MODULES.get(m, []) for m in special_modules
+    )
+    need_sofa2 = any(
+        "sep3_sofa2" in EXTRACT_MODULES.get(m, []) for m in special_modules
+    )
 
-    deps = ['susp_inf']
+    deps = ["susp_inf"]
     if need_sofa1:
-        deps.append('sofa')
+        deps.append("sofa")
     if need_sofa2:
-        deps.append('sofa2')
+        deps.append("sofa2")
 
     try:
         merged = _lc(concepts=deps, **load_kw)
     except Exception:
         # sofa2 可能不可用，回退到仅 sofa
         try:
-            merged = _lc(concepts=['susp_inf', 'sofa'], **load_kw)
+            merged = _lc(concepts=["susp_inf", "sofa"], **load_kw)
             need_sofa2 = False
         except Exception as e:
             traceback.print_exc()
@@ -4038,68 +4701,102 @@ def _run_special_extraction(
 
     if isinstance(merged, pd.DataFrame) and not merged.empty:
         # 检测 ID 和时间列
-        id_col = next((c for c in ['stay_id', 'patientunitstayid', 'admissionid',
-                                    'patientid', 'icustay_id', 'CaseID']
-                       if c in merged.columns), None)
-        time_col = next((c for c in ['charttime', 'time', 'starttime', 'datetime',
-                                      'Offset', 'measuredat_minutes', 'measuredat']
-                        if c in merged.columns), None)
+        id_col = next(
+            (
+                c
+                for c in [
+                    "stay_id",
+                    "patientunitstayid",
+                    "admissionid",
+                    "patientid",
+                    "icustay_id",
+                    "CaseID",
+                ]
+                if c in merged.columns
+            ),
+            None,
+        )
+        time_col = next(
+            (
+                c
+                for c in [
+                    "charttime",
+                    "time",
+                    "starttime",
+                    "datetime",
+                    "Offset",
+                    "measuredat_minutes",
+                    "measuredat",
+                ]
+                if c in merged.columns
+            ),
+            None,
+        )
 
-        if id_col and time_col and 'susp_inf' in merged.columns:
-            susp = merged['susp_inf'].fillna(0).astype(bool)
+        if id_col and time_col and "susp_inf" in merged.columns:
+            susp = merged["susp_inf"].fillna(0).astype(bool)
 
             # Sepsis-3 = a >=2-point SOFA increase WITHIN the suspected-infection
             # window (delta rule, R ricu sep3), NOT an absolute SOFA>=2. Use the
             # shared sep3()/sep3_sofa2() so both labels match load_sepsis3 and the
             # module export (unified to delta 2026-06-22).
-            if need_sofa1 and 'sofa' in merged.columns:
+            if need_sofa1 and "sofa" in merged.columns:
                 from .scores.sepsis import sep3 as _sep3
-                result = _sep3(
-                    merged[[id_col, time_col, 'sofa']],
-                    merged[[id_col, time_col, 'susp_inf']],
-                    id_cols=[id_col], index_col=time_col,
-                ).rename(columns={'sep3': 'sep3_sofa1'})
-                if 'sep3_sofa1' in result.columns:
-                    result['sep3_sofa1'] = result['sep3_sofa1'].fillna(0).astype(int)
-                if len(result) > 0:
-                    path = os.path.join(output_dir, 'sep3_sofa1.parquet')
-                    result.to_parquet(path, index=False, engine='pyarrow')
-                    saved['sep3_sofa1'] = {'path': path, 'rows': len(result)}
 
-            if need_sofa2 and 'sofa2' in merged.columns:
-                from .scores.sepsis_sofa2 import sep3_sofa2 as _sep3_sofa2
-                result = _sep3_sofa2(
-                    merged[[id_col, time_col, 'sofa2']],
-                    merged[[id_col, time_col, 'susp_inf']],
-                    id_cols=[id_col], index_col=time_col,
-                )
-                if 'sep3_sofa2' in result.columns:
-                    result['sep3_sofa2'] = result['sep3_sofa2'].fillna(0).astype(int)
+                result = _sep3(
+                    merged[[id_col, time_col, "sofa"]],
+                    merged[[id_col, time_col, "susp_inf"]],
+                    id_cols=[id_col],
+                    index_col=time_col,
+                ).rename(columns={"sep3": "sep3_sofa1"})
+                if "sep3_sofa1" in result.columns:
+                    result["sep3_sofa1"] = result["sep3_sofa1"].fillna(0).astype(int)
                 if len(result) > 0:
-                    path = os.path.join(output_dir, 'sep3_sofa2.parquet')
-                    result.to_parquet(path, index=False, engine='pyarrow')
-                    saved['sep3_sofa2'] = {'path': path, 'rows': len(result)}
+                    path = os.path.join(output_dir, "sep3_sofa1.parquet")
+                    result.to_parquet(path, index=False, engine="pyarrow")
+                    saved["sep3_sofa1"] = {"path": path, "rows": len(result)}
+
+            if need_sofa2 and "sofa2" in merged.columns:
+                from .scores.sepsis_sofa2 import sep3_sofa2 as _sep3_sofa2
+
+                result = _sep3_sofa2(
+                    merged[[id_col, time_col, "sofa2"]],
+                    merged[[id_col, time_col, "susp_inf"]],
+                    id_cols=[id_col],
+                    index_col=time_col,
+                )
+                if "sep3_sofa2" in result.columns:
+                    result["sep3_sofa2"] = result["sep3_sofa2"].fillna(0).astype(int)
+                if len(result) > 0:
+                    path = os.path.join(output_dir, "sep3_sofa2.parquet")
+                    result.to_parquet(path, index=False, engine="pyarrow")
+                    saved["sep3_sofa2"] = {"path": path, "rows": len(result)}
         else:
             missing = []
-            if not id_col: missing.append('id_col')
-            if not time_col: missing.append('time_col')
-            if 'susp_inf' not in merged.columns: missing.append('susp_inf')
+            if not id_col:
+                missing.append("id_col")
+            if not time_col:
+                missing.append("time_col")
+            if "susp_inf" not in merged.columns:
+                missing.append("susp_inf")
             # 🔧 FIX 2026-05-11: 对于 sic/hirid 等不支持 susp_inf 的数据库，
             # sep3_sofa1/sep3_sofa2 无法计算属正常情况，不应记为错误。
             # 只有当 id/time 列也缺失时才认为是真正的错误。
-            if missing == ['susp_inf']:
+            if missing == ["susp_inf"]:
                 pass  # 静默跳过：数据库不支持 susp_inf，sep3 概念不适用
             else:
-                errors.append(f"Missing columns: {missing}, available: {list(merged.columns)[:10]}")
+                errors.append(
+                    f"Missing columns: {missing}, available: {list(merged.columns)[:10]}"
+                )
 
     elapsed = time.time() - t0
     manifest = {
-        'module': 'special_concepts',
-        'saved': saved,
-        'errors': errors,
-        'elapsed_sec': round(elapsed, 1),
+        "module": "special_concepts",
+        "saved": saved,
+        "errors": errors,
+        "elapsed_sec": round(elapsed, 1),
     }
-    with open(os.path.join(output_dir, '_manifest.json'), 'w') as f:
+    with open(os.path.join(output_dir, "_manifest.json"), "w") as f:
         json.dump(manifest, f)
 
 
@@ -4109,13 +4806,17 @@ def _extract_special_worker(
     data_path: str,
     patient_ids_filter: Optional[Dict] = None,
     batch_size: Optional[int] = None,
-    output_dir: str = '',
+    output_dir: str = "",
 ):
     """（兼容包装）特殊概念子进程入口 — 参见 _extract_module_group_worker。"""
     _extract_worker_env_setup(data_path)
     _run_special_extraction(
-        special_modules, database, data_path,
-        patient_ids_filter, batch_size, output_dir,
+        special_modules,
+        database,
+        data_path,
+        patient_ids_filter,
+        batch_size,
+        output_dir,
     )
 
 
@@ -4128,6 +4829,8 @@ def _extract_module_group_worker(
     batch_size: Optional[int],
     output_root: str,
     use_sofa2: bool,
+    stream_output_batches: bool = False,
+    published_output_dir: Optional[str] = None,
 ):
     """在一个子进程中顺序提取一组共享源表的模块。
 
@@ -4140,18 +4843,28 @@ def _extract_module_group_worker(
     ``output_root/<module_name>/``；特殊模块写 ``output_root/_special/``。
     """
     import os, traceback
+
     _extract_worker_env_setup(data_path)
     from easyicu.api import keep_cache as _keep_cache
 
-    with _keep_cache(database=database, data_path=data_path, use_sofa2=use_sofa2) as _loader:
+    with _keep_cache(
+        database=database, data_path=data_path, use_sofa2=use_sofa2
+    ) as _loader:
         for module_name, concepts in module_specs:
             out_dir = os.path.join(output_root, module_name)
             os.makedirs(out_dir, exist_ok=True)
             try:
                 _run_module_extraction(
-                    module_name, concepts, database, data_path,
-                    patient_ids_filter, batch_size, out_dir,
-                    use_sofa2=use_sofa2, loader=_loader,
+                    module_name,
+                    concepts,
+                    database,
+                    data_path,
+                    patient_ids_filter,
+                    batch_size,
+                    out_dir,
+                    use_sofa2=use_sofa2,
+                    loader=_loader,
+                    stream_output_batches=stream_output_batches,
                 )
             except Exception:
                 # _run_module_extraction 已内部捕获常规异常并写 manifest；
@@ -4162,9 +4875,15 @@ def _extract_module_group_worker(
             os.makedirs(sp_dir, exist_ok=True)
             try:
                 _run_special_extraction(
-                    special_modules, database, data_path,
-                    patient_ids_filter, batch_size, sp_dir,
+                    special_modules,
+                    database,
+                    data_path,
+                    patient_ids_filter,
+                    batch_size,
+                    sp_dir,
                     use_sofa2=use_sofa2,
+                    stream_output_batches=stream_output_batches,
+                    published_output_dir=published_output_dir,
                 )
             except Exception:
                 traceback.print_exc()
@@ -4175,15 +4894,15 @@ def _extract_module_group_worker(
 # keep_cache”，不改变模块内容、输出布局或模块顺序语义。
 _EXTRACT_MODULE_GROUP_AFFINITY: List[List[str]] = [
     # chartevents / nursecharting 家族
-    ['vitals', 'neurological', 'respiratory', 'ventilator'],
+    ["vitals", "neurological", "respiratory", "ventilator"],
     # 入科级小表（icustays/admissions/patients）
-    ['demographics', 'outcome'],
+    ["demographics", "outcome"],
     # labevents 家族
-    ['blood_gas', 'chemistry', 'hematology', 'renal'],
+    ["blood_gas", "chemistry", "hematology", "renal"],
     # inputevents / prescriptions 家族
-    ['vasopressors', 'medications', 'circulatory'],
+    ["vasopressors", "medications", "circulatory"],
     # 评分闭包：SOFA 组件被 sofa1/sofa2 共享，sep3_* 复用 susp_inf+sofa/sofa2
-    ['other_scores', 'sepsis_shared', 'sofa1_score', 'sofa2_score'],
+    ["other_scores", "sepsis_shared", "sofa1_score", "sofa2_score"],
 ]
 
 
@@ -4201,10 +4920,10 @@ def _group_modules_for_extraction(
     """
     if not group_modules:
         groups: List[Dict[str, List[str]]] = [
-            {'modules': [m], 'special': []} for m in normal_modules
+            {"modules": [m], "special": []} for m in normal_modules
         ]
         if special_modules:
-            groups.append({'modules': [], 'special': list(special_modules)})
+            groups.append({"modules": [], "special": list(special_modules)})
         return groups
 
     groups = []
@@ -4212,24 +4931,236 @@ def _group_modules_for_extraction(
     for affinity in _EXTRACT_MODULE_GROUP_AFFINITY:
         members = [m for m in normal_modules if m in affinity]
         if members:
-            groups.append({'modules': members, 'special': []})
+            groups.append({"modules": members, "special": []})
             assigned.update(members)
     for m in normal_modules:
         if m not in assigned:
-            groups.append({'modules': [m], 'special': []})
+            groups.append({"modules": [m], "special": []})
 
     if special_modules:
         target = next(
-            (g for g in groups
-             if any(m in ('sofa1_score', 'sofa2_score', 'sepsis_shared')
-                    for m in g['modules'])),
+            (
+                g
+                for g in groups
+                if any(
+                    m in ("sofa1_score", "sofa2_score", "sepsis_shared")
+                    for m in g["modules"]
+                )
+            ),
             None,
         )
         if target is None:
-            groups.append({'modules': [], 'special': list(special_modules)})
+            groups.append({"modules": [], "special": list(special_modules)})
         else:
-            target['special'] = list(special_modules)
+            target["special"] = list(special_modules)
     return groups
+
+
+_NATIVE_EXPORT_SCHEMA_V2 = "easyicu_native_export_v2"
+
+
+def _publish_native_export_v2(
+    *,
+    database: str,
+    data_path: str,
+    output_dir: str,
+    modules: List[str],
+    max_patients: Optional[int],
+    result: Dict,
+) -> Dict[str, object]:
+    """Seal completed grouped-module files as one native-v2 package.
+
+    The raw database has already been consumed by the grouped workers. This
+    finalization reads only the newly written parquet files once, to validate
+    their physical values and bind each column to producer-owned metadata. A
+    partial extraction never gets a root native manifest.
+    """
+    import json
+    import time
+
+    from .concept.export_metadata import (
+        ExportMetadataError,
+        build_export_file_metadata_binding,
+        missing_primary_metadata_concepts,
+    )
+    from .concept.metadata_sidecar import (
+        EXPORT_PHYSICAL_SCOPE,
+        ColumnMetadataSidecar,
+        write_content_addressed_sidecar,
+    )
+    from .config import load_src_cfg
+
+    output_root = Path(output_dir)
+    root_manifest = output_root / "_manifest.json"
+    if root_manifest.exists() or root_manifest.is_symlink():
+        raise ValueError(
+            "native_export_v2 refuses an existing root _manifest.json; "
+            "use a fresh output directory"
+        )
+
+    failures = {
+        module: list((result.get("modules", {}).get(module) or {}).get("errors") or [])
+        for module in modules
+        if list((result.get("modules", {}).get(module) or {}).get("errors") or [])
+    }
+    missing_module_results = [
+        module for module in modules if module not in result.get("modules", {})
+    ]
+    if failures or missing_module_results:
+        raise ValueError(
+            "native_export_v2 requires every requested module to finish before "
+            f"publication (failures={sorted(failures)}, "
+            f"missing_results={missing_module_results})"
+        )
+
+    # Structural non-availability (for example, a database without a Sepsis-3
+    # source) is not an extraction failure. It has no physical file and must not
+    # be silently given a typed binding; record it separately and select only
+    # the files the producer actually materialized.
+    unavailable_modules = [
+        {
+            "module": module,
+            "reason": "producer_returned_no_physical_output",
+            "concept_ids": list(EXTRACT_MODULES[module]),
+        }
+        for module in modules
+        if not (output_root / f"{module}.parquet").is_file()
+    ]
+    published_modules = [
+        module for module in modules if (output_root / f"{module}.parquet").is_file()
+    ]
+    if not published_modules:
+        raise ValueError("native_export_v2 has no physical module output to seal")
+
+    normalized_database = str(database).strip().lower()
+    dictionary = load_dictionary(include_sofa2=True)
+    source_config = load_src_cfg(normalized_database)
+    class_prefixes = tuple(
+        str(value).strip().lower()
+        for value in source_config.class_prefix
+        if str(value).strip()
+    )
+    requested_concept_plan = {
+        module: list(EXTRACT_MODULES[module]) for module in published_modules
+    }
+    concept_plan: Dict[str, List[str]] = {}
+    unavailable_concepts: List[Dict[str, str]] = []
+    files: List[Dict[str, object]] = []
+    file_bindings = []
+
+    for module in published_modules:
+        relative_path = f"{module}.parquet"
+        # This is an output validation pass, not a second scan of any raw table.
+        frame = pd.read_parquet(output_root / relative_path)
+        produced_concepts: Optional[set[str]] = None
+        module_manifest_path = output_root / f"{module}.manifest.json"
+        if module_manifest_path.is_file() and not module_manifest_path.is_symlink():
+            module_manifest = json.loads(
+                module_manifest_path.read_text(encoding="utf-8")
+            )
+            saved = module_manifest.get("saved")
+            if isinstance(saved, dict):
+                produced_concepts = set()
+                for saved_name, record in saved.items():
+                    if isinstance(saved_name, str):
+                        produced_concepts.add(saved_name)
+                    if isinstance(record, dict):
+                        produced_concepts.update(
+                            concept
+                            for concept in (record.get("concepts") or [])
+                            if isinstance(concept, str)
+                        )
+        structurally_unavailable = {
+            concept
+            for concept in requested_concept_plan[module]
+            if produced_concepts is not None and concept not in produced_concepts
+        }
+        concept_plan[module] = [
+            concept
+            for concept in requested_concept_plan[module]
+            if concept not in structurally_unavailable
+        ]
+        unavailable_concepts.extend(
+            {
+                "module": module,
+                "concept": concept,
+                "reason": "producer_returned_no_physical_column",
+            }
+            for concept in requested_concept_plan[module]
+            if concept in structurally_unavailable
+        )
+        try:
+            binding = build_export_file_metadata_binding(
+                relative_path=relative_path,
+                module=module,
+                frame=frame,
+                concept_ids=concept_plan[module],
+                database=normalized_database,
+                database_class_prefixes=class_prefixes,
+                dictionary=dictionary,
+            )
+        except ExportMetadataError as exc:
+            raise ValueError(
+                f"native_export_v2 cannot seal {relative_path}: {exc.error}"
+            ) from exc
+        file_bindings.append(binding)
+        files.append(
+            {
+                "file": relative_path,
+                "module": module,
+                "concepts": len(concept_plan[module]),
+                "concept_ids": concept_plan[module],
+                "rows": int(frame.shape[0]),
+                "column_metadata_columns": list(binding.columns),
+            }
+        )
+
+    missing_primary = missing_primary_metadata_concepts(
+        concept_plan=concept_plan,
+        file_bindings=file_bindings,
+    )
+    if missing_primary:
+        raise ValueError(
+            "native_export_v2 cannot seal selected concepts without a primary "
+            f"physical binding: {missing_primary}"
+        )
+
+    sidecar = ColumnMetadataSidecar(
+        source_database=normalized_database,
+        source_database_class_prefixes=class_prefixes,
+        scope=EXPORT_PHYSICAL_SCOPE,
+        files=tuple(file_bindings),
+    )
+    sidecar_ref = write_content_addressed_sidecar(output_root, sidecar)
+    manifest = {
+        "schema_version": _NATIVE_EXPORT_SCHEMA_V2,
+        "database": normalized_database,
+        "data_path": str(data_path),
+        "format": "parquet",
+        "max_patients": max_patients,
+        "generated": time.strftime("%Y-%m-%dT%H:%M:%S"),
+        "export_kind": "grouped_module_extraction",
+        "unavailable_modules": unavailable_modules,
+        "unavailable_concepts": unavailable_concepts,
+        "concept_selection": {
+            "mode": "all_in_selected_modules",
+            "modules": concept_plan,
+        },
+        "files": files,
+        "feature_definitions": {"included": False},
+        "column_metadata": sidecar_ref.to_dict(),
+    }
+    temporary_manifest = output_root / ".native-export-v2-manifest.tmp"
+    temporary_manifest.write_text(
+        json.dumps(manifest, indent=2, ensure_ascii=False), encoding="utf-8"
+    )
+    os.replace(temporary_manifest, root_manifest)
+    return {
+        "manifest": str(root_manifest),
+        "column_metadata": sidecar_ref.file,
+        "column_metadata_sha256": sidecar_ref.sha256,
+        "output_validation_reads": len(files),
+    }
 
 
 def extract_database(
@@ -4241,6 +5172,8 @@ def extract_database(
     max_patients: Optional[int] = None,
     batch_size: Optional[int] = None,
     group_modules: bool = True,
+    native_export_v2: bool = False,
+    stream_output_batches: bool = False,
     verbose: bool = True,
 ) -> Dict:
     """按 19 个模块分组、子进程隔离地提取整个数据库的全部特征。
@@ -4278,6 +5211,12 @@ def extract_database(
             加载(推荐，最快)。仅在极小内存机器上想强制限制峰值内存时才显式传值。
         group_modules: True(默认) = 共享源表的模块合并为分组子进程并复用
             keep_cache 缓存；False = 每模块一个子进程（旧行为）。
+        native_export_v2: True 时，在所有模块成功后基于刚写出的 parquet
+            文件建立 native-v2 typed metadata sidecar；不会重读原始表。若任何
+            模块或 metadata 绑定失败，不会发布根 ``_manifest.json``。
+        stream_output_batches: 将显式患者批次直接追加写入模块 parquet，不在
+            worker 内合并整模块 DataFrame。用于本地磁盘/内存受限且输出位于
+            外置盘的完整导出；会牺牲部分源表复用以换取稳定的峰值内存。
         verbose: 是否打印进度
 
     Returns:
@@ -4315,11 +5254,37 @@ def extract_database(
             data_path = get_default_data_path()
     data_path = str(data_path)
 
+    # 磁盘溢写 / 批处理中间文件的默认落点：**输出目录旁的 .easyicu_spill/**，而不是
+    # 系统临时目录（常在快满的系统盘上）。输出目录通常在用户为数据特意选的大盘上，
+    # 这样零配置即安全，调用方无需每次手设 TMPDIR / EASYICU_DUCKDB_TEMP_DIR。放在
+    # 最前，确保后续所有 DuckDB 连接与 fork 出的 worker 子进程都继承此设置。
+    # opt-out：显式把 EASYICU_DUCKDB_TEMP_DIR 指向别处（非 .easyicu_spill）则完全尊重。
+    # 多库循环：每库各自重指向本库输出旁，故用 basename 判定"是否用户自定义"。
+    if output_dir is not None:
+        _cur_spill = os.environ.get("EASYICU_DUCKDB_TEMP_DIR")
+        _user_spill = (
+            _cur_spill is not None
+            and os.path.basename(os.path.normpath(_cur_spill)) != ".easyicu_spill"
+        )
+        if not _user_spill:
+            _spill_root = os.path.join(
+                os.path.abspath(str(output_dir)), ".easyicu_spill"
+            )
+            try:
+                os.makedirs(_spill_root, exist_ok=True)
+                os.environ["EASYICU_DUCKDB_TEMP_DIR"] = _spill_root
+                os.environ["TMPDIR"] = _spill_root
+                tempfile.tempdir = _spill_root
+            except Exception:
+                pass
+
     # 获取患者 ID
     if patient_ids is None:
         all_ids, id_col = get_all_patient_ids(data_path, database, max_patients)
         if not all_ids:
-            raise ValueError(f"无法获取 {database} 的患者ID，请检查 data_path: {data_path}")
+            raise ValueError(
+                f"无法获取 {database} 的患者ID，请检查 data_path: {data_path}"
+            )
         patient_ids_filter = {id_col: all_ids}
     else:
         patient_ids_filter = _normalize_patient_ids_for_db(database, patient_ids)
@@ -4335,7 +5300,13 @@ def extract_database(
     # 主动分批只会让 load_concepts 每批重读共享源表(chartevents/labevents…)，
     # 数倍变慢——这是用户“怎么这么慢”的根因。故默认用大于任意队列的哨兵值，
     # 让模块内单次扫表完成。仅在极端机器上由用户显式传 batch_size 覆盖。
-    if batch_size is None:
+    if stream_output_batches:
+        # The bounded writer needs real batches.  10K stays keeps the largest
+        # MIMIC-IV chart-event module below the host-memory/swap cliff while
+        # still avoiding tiny, pathological per-patient reads.
+        batch_size = int(batch_size or min(10_000, num_patients))
+        _auto_one_shot = False
+    elif batch_size is None:
         batch_size = max(num_patients + 1, 2_000_000)
         _auto_one_shot = True
     else:
@@ -4348,47 +5319,62 @@ def extract_database(
         # 保持用户指定顺序，但验证模块名
         for m in modules:
             if m not in EXTRACT_MODULES:
-                raise ValueError(f"未知模块 '{m}'，可选: {list(EXTRACT_MODULES.keys())}")
+                raise ValueError(
+                    f"未知模块 '{m}'，可选: {list(EXTRACT_MODULES.keys())}"
+                )
 
     # 创建输出目录
     if output_dir is not None:
         output_dir = str(output_dir)
         os.makedirs(output_dir, exist_ok=True)
+    if native_export_v2 and output_dir is None:
+        raise ValueError("native_export_v2 requires output_dir")
+    if native_export_v2 and output_dir is not None:
+        native_manifest = Path(output_dir) / "_manifest.json"
+        if native_manifest.exists() or native_manifest.is_symlink():
+            raise ValueError(
+                "native_export_v2 refuses an existing root _manifest.json; "
+                "use a fresh output directory"
+            )
 
     if verbose:
         rss = get_rss_mb()
         print(f"{'='*60}")
         print(f"📊 extract_database: {database}")
         print(f"   患者数: {num_patients:,}, 模块数: {len(modules)}")
-        print(f"   批策略: {'一次性 in-process (推荐)' if _auto_one_shot else f'batch_size={batch_size}'}")
+        print(
+            f"   批策略: {'一次性 in-process (推荐)' if _auto_one_shot else f'batch_size={batch_size}'}"
+        )
         print(f"   RSS: {rss:.0f}MB, 输出: {output_dir or '仅内存'}")
         print(f"{'='*60}")
 
     result = {
-        'database': database,
-        'num_patients': num_patients,
-        'modules': {},
-        'total_elapsed': 0,
-        'output_dir': output_dir,
+        "database": database,
+        "num_patients": num_patients,
+        "modules": {},
+        "total_elapsed": 0,
+        "output_dir": output_dir,
     }
 
     # 分离普通模块和特殊模块
     normal_modules = [m for m in modules if m not in _SPECIAL_CONCEPT_MODULES]
     special_modules = [m for m in modules if m in _SPECIAL_CONCEPT_MODULES]
 
-    mp_ctx = mp.get_context('fork' if os.name != 'nt' else 'spawn')
+    mp_ctx = mp.get_context("fork" if os.name != "nt" else "spawn")
 
     # ---- 模块分组：组内共享源表扫描（keep_cache），组间子进程隔离 ----
-    group_flag = group_modules
-    _env_grouping = os.environ.get('EASYICU_EXTRACT_GROUPING', '').strip().lower()
-    if _env_grouping in ('0', 'off', 'false', 'no'):
+    group_flag = group_modules and not stream_output_batches
+    _env_grouping = os.environ.get("EASYICU_EXTRACT_GROUPING", "").strip().lower()
+    if _env_grouping in ("0", "off", "false", "no"):
         group_flag = False
 
     groups = _group_modules_for_extraction(normal_modules, special_modules, group_flag)
 
     if verbose and group_flag:
-        print(f"   分组: {len(groups)} 组（组内共享源表扫描；"
-              f"EASYICU_EXTRACT_GROUPING=0 或 group_modules=False 关闭）")
+        print(
+            f"   分组: {len(groups)} 组（组内共享源表扫描；"
+            f"EASYICU_EXTRACT_GROUPING=0 或 group_modules=False 关闭）"
+        )
 
     n_units_total = len(normal_modules) + len(special_modules)
     units_done = 0
@@ -4402,17 +5388,17 @@ def extract_database(
             "warnings": [],
             "bounds": {},
         }
-        manifest_path = os.path.join(tmp_mod_dir, '_manifest.json')
+        manifest_path = os.path.join(tmp_mod_dir, "_manifest.json")
         if not os.path.exists(manifest_path):
-            mod_result['errors'] = [
+            mod_result["errors"] = [
                 f"{mod_name}: worker produced no manifest (process may have died)"
             ]
             return mod_result
         with open(manifest_path) as f:
             manifest = json.load(f)
-        mod_result['errors'] = manifest.get('errors', [])
+        mod_result["errors"] = manifest.get("errors", [])
         mod_result["warnings"] = manifest.get("warnings", [])
-        mod_result['elapsed'] = manifest.get('elapsed_sec', 0.0)
+        mod_result["elapsed"] = manifest.get("elapsed_sec", 0.0)
         output_manifest = {
             "module": mod_name,
             "saved": {},
@@ -4421,40 +5407,54 @@ def extract_database(
             "bounds": mod_result["bounds"],
             "elapsed_sec": mod_result["elapsed"],
         }
-        for c_name, info in manifest.get("saved", {}).items():
-            pq_path = info["path"]
-            if os.path.exists(pq_path):
-                rows = info.get("rows", 0)
-                meta = _bounds_metadata_from_manifest_info(info)
-                if meta:
-                    mod_result["bounds"][c_name] = meta
-                if output_dir is not None:
-                    # 流式写盘：move 文件到输出目录，不读回内存
-                    mod_out = os.path.join(output_dir, mod_name)
-                    os.makedirs(mod_out, exist_ok=True)
-                    dst = os.path.join(mod_out, f"{c_name}.parquet")
-                    shutil.move(pq_path, dst)
-                    concept_info = _concept_result_info(dst, info)
-                    concept_info["rows"] = rows
-                    mod_result["concepts"][c_name] = concept_info
-                    output_manifest["saved"][c_name] = concept_info
-                else:
-                    # 无输出目录：读回 DataFrame 到内存
-                    df = pd.read_parquet(pq_path)
-                    _attach_bounds_metadata(df, info)
-                    mod_result["concepts"][c_name] = df
+        # 每个模块一个宽表 parquet：manifest["saved"] 只有一条（键=模块名），
+        # info 里带 concepts（列名清单）+ concept_meta（逐概念 rows/bounds provenance）。
+        for _saved_key, info in manifest.get("saved", {}).items():
+            pq_path = info.get("path")
+            if not pq_path or not os.path.exists(pq_path):
+                continue
+            module_rows = info.get("rows", 0)
+            concept_meta = info.get("concept_meta", {}) or {}
+            concept_names = info.get("concepts") or list(concept_meta.keys())
+            # 逐概念 bounds 元数据（provenance）
+            for cn, cmeta in concept_meta.items():
+                bmeta = _bounds_metadata_from_manifest_info(cmeta)
+                if bmeta:
+                    mod_result["bounds"][cn] = bmeta
+            if output_dir is not None:
+                # flat：一个模块一个文件 output_dir/{module}.parquet（不重复 io）
+                os.makedirs(output_dir, exist_ok=True)
+                dst = os.path.join(output_dir, f"{mod_name}.parquet")
+                shutil.move(pq_path, dst)
+                module_info = {
+                    "path": dst,
+                    "rows": module_rows,
+                    "concepts": concept_names,
+                    "merge_keys": info.get("merge_keys", []),
+                    "concept_meta": concept_meta,
+                }
+                output_manifest["saved"][mod_name] = module_info
+                # 逐概念一条（path 都指向该模块宽表），供 summary CSV 保留每概念行数。
+                for cn in concept_names:
+                    cmeta = concept_meta.get(cn, {})
+                    concept_info = {"path": dst, "rows": cmeta.get("rows", module_rows)}
+                    for k, v in cmeta.items():
+                        if k != "rows":
+                            concept_info[k] = v
+                    mod_result["concepts"][cn] = concept_info
+            else:
+                # 无输出目录：读回宽表 DataFrame 到内存（键=模块名）
+                mod_result["concepts"][mod_name] = pd.read_parquet(pq_path)
         if output_dir is not None:
-            mod_out = os.path.join(output_dir, mod_name)
-            os.makedirs(mod_out, exist_ok=True)
-            with open(os.path.join(mod_out, "_manifest.json"), "w") as f:
+            with open(os.path.join(output_dir, f"{mod_name}.manifest.json"), "w") as f:
                 json.dump(output_manifest, f)
         return mod_result
 
     def _count_rows(mod_result: Dict) -> int:
         n_rows = 0
-        for v in mod_result['concepts'].values():
+        for v in mod_result["concepts"].values():
             if isinstance(v, dict):
-                n_rows += v.get('rows', 0)
+                n_rows += v.get("rows", 0)
             elif isinstance(v, pd.DataFrame):
                 n_rows += len(v)
         return n_rows
@@ -4463,11 +5463,11 @@ def extract_database(
         """读回特殊模块（Sepsis-3）worker 输出到 result['modules']。"""
         nonlocal units_done
         manifest = None
-        manifest_path = os.path.join(tmp_sp_dir, '_manifest.json')
+        manifest_path = os.path.join(tmp_sp_dir, "_manifest.json")
         if os.path.exists(manifest_path):
             with open(manifest_path) as f:
                 manifest = json.load(f)
-        sp_elapsed = (manifest or {}).get('elapsed_sec', 0.0)
+        sp_elapsed = (manifest or {}).get("elapsed_sec", 0.0)
         for mod_name in sp_modules:
             concepts = EXTRACT_MODULES.get(mod_name, [])
             if manifest is None:
@@ -4504,9 +5504,12 @@ def extract_database(
                         if meta:
                             mod_result["bounds"][c_name] = meta
                         if output_dir is not None:
-                            mod_out = os.path.join(output_dir, mod_name)
-                            os.makedirs(mod_out, exist_ok=True)
-                            dst = os.path.join(mod_out, f"{c_name}.parquet")
+                            # flat：派生模块（sepsis3_*）每模块单概念，与普通模块
+                            # 统一写 output_dir/{module}.parquet，不再嵌套
+                            # {module}/{concept}.parquet（否则 17 扁平 + 2 嵌套的
+                            # 混合布局违反"每模块一个宽表"契约）。
+                            os.makedirs(output_dir, exist_ok=True)
+                            dst = os.path.join(output_dir, f"{mod_name}.parquet")
                             shutil.move(info["path"], dst)
                             concept_info = _concept_result_info(dst, info)
                             concept_info["rows"] = rows
@@ -4517,9 +5520,9 @@ def extract_database(
                             _attach_bounds_metadata(df, info)
                             mod_result["concepts"][c_name] = df
                 if output_dir is not None:
-                    mod_out = os.path.join(output_dir, mod_name)
-                    os.makedirs(mod_out, exist_ok=True)
-                    with open(os.path.join(mod_out, "_manifest.json"), "w") as f:
+                    with open(
+                        os.path.join(output_dir, f"{mod_name}.manifest.json"), "w"
+                    ) as f:
                         json.dump(output_manifest, f)
             result["modules"][mod_name] = mod_result
             units_done += 1
@@ -4533,6 +5536,7 @@ def extract_database(
 
     # ---- 逐组在子进程中加载 ----
     from collections import deque
+
     pending_groups = deque(groups)
     while pending_groups:
         group = pending_groups.popleft()
@@ -4563,6 +5567,8 @@ def extract_database(
                 batch_size,
                 tmp_root,
                 group_use_sofa2,
+                stream_output_batches,
+                output_dir,
             ),
             daemon=True,
         )
@@ -4629,8 +5635,19 @@ def extract_database(
         # 清理临时目录
         shutil.rmtree(tmp_root, ignore_errors=True)
 
+    if native_export_v2:
+        assert output_dir is not None
+        result["native_export_v2"] = _publish_native_export_v2(
+            database=database,
+            data_path=data_path,
+            output_dir=output_dir,
+            modules=modules,
+            max_patients=max_patients,
+            result=result,
+        )
+
     total_elapsed = time.time() - t_start
-    result['total_elapsed'] = round(total_elapsed, 1)
+    result["total_elapsed"] = round(total_elapsed, 1)
 
     if verbose:
         rss = get_rss_mb()
@@ -4670,6 +5687,7 @@ def extract_all_databases(
     modules: Optional[List[str]] = None,
     max_patients: Optional[int] = None,
     batch_size: Optional[int] = None,
+    native_export_v2: bool = False,
     verbose: bool = True,
 ) -> Dict:
     """逐库逐模块子进程隔离提取所有数据库的全部特征。
@@ -4684,6 +5702,7 @@ def extract_all_databases(
         modules: 要提取的模块列表（None = 全部）
         max_patients: 每个库的患者数量限制
         batch_size: 子进程内患者分批大小
+        native_export_v2: 为每个完整数据库输出发布 native-v2 typed package
         verbose: 是否打印进度
 
     Returns:
@@ -4697,7 +5716,7 @@ def extract_all_databases(
     import time
 
     if databases is None:
-        databases = ['sic', 'aumc', 'hirid', 'mimic', 'miiv', 'eicu']
+        databases = ["sic", "aumc", "hirid", "mimic", "miiv", "eicu"]
 
     merged_paths = _build_default_db_paths()
     if data_paths:
@@ -4742,13 +5761,14 @@ def extract_all_databases(
                 modules=modules,
                 max_patients=max_patients,
                 batch_size=batch_size,
+                native_export_v2=native_export_v2,
                 verbose=verbose,
             )
             results[db] = r
         except Exception as e:
             if verbose:
                 print(f"  ❌ {db} 失败: {e}")
-            results[db] = {'error': str(e)}
+            results[db] = {"error": str(e)}
 
     total = time.time() - t_start
 
@@ -4756,19 +5776,21 @@ def extract_all_databases(
         print(f"\n{'#'*60}")
         print(f"# 全部完成: {total:.1f}s")
         for db, r in results.items():
-            if 'error' in r:
+            if "error" in r:
                 print(f"#   {db}: ❌ {r['error']}")
             else:
-                nc = sum(len(m['concepts']) for m in r['modules'].values())
+                nc = sum(len(m["concepts"]) for m in r["modules"].values())
                 nr = 0
-                for m in r['modules'].values():
-                    for v in m['concepts'].values():
+                for m in r["modules"].values():
+                    for v in m["concepts"].values():
                         if isinstance(v, dict):
-                            nr += v.get('rows', 0)
-                        elif hasattr(v, '__len__'):
+                            nr += v.get("rows", 0)
+                        elif hasattr(v, "__len__"):
                             nr += len(v)
-                print(f"#   {db}: {r['num_patients']:,} patients, "
-                      f"{nc} concepts, {nr:,} rows, {r['total_elapsed']:.0f}s")
+                print(
+                    f"#   {db}: {r['num_patients']:,} patients, "
+                    f"{nc} concepts, {nr:,} rows, {r['total_elapsed']:.0f}s"
+                )
         print(f"{'#'*60}")
 
     return results

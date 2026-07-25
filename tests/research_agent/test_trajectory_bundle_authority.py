@@ -7,8 +7,8 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
-import easyicu.research_agent.trajectory_bundle as trajectory_bundle
-from easyicu.research_agent.evidence import EvidenceStore
+import easyicu.research_agent.trajectory.bundle as trajectory_bundle
+from easyicu.research_agent.authority.evidence_store import EvidenceStore
 from easyicu.research_agent.schema import (
     AnalysisPlan,
     AnalysisStep,
@@ -18,7 +18,7 @@ from easyicu.research_agent.schema import (
     ValidationFinding,
     VariableRole,
 )
-from easyicu.research_agent.trajectory_contract import (
+from easyicu.research_agent.trajectory.contract import (
     infer_fixed_window_trajectory_metadata,
 )
 

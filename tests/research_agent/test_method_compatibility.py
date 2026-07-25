@@ -16,7 +16,7 @@ from easyicu.research_agent.schema import (
     ResearchContext,
     VariableRole,
 )
-from easyicu.research_agent.method_compatibility import (
+from easyicu.research_agent.gates.method_compatibility import (
     FORBIDDEN_METHOD_BY_KIND,
     _variable_kind,
     render_variable_constraints,
@@ -64,13 +64,23 @@ def test_int_0_1_range_is_binary_kind():
     assert _variable_kind(v) == "binary"
 
 
-def test_sum_aggregation_is_count_kind():
+def test_integer_outcome_with_sum_aggregation_is_count_kind():
     v = ConceptDescriptor(
         name="n_episodes",
         dtype="int64",
+        role=VariableRole.OUTCOME,
         allowed_aggregations=[AggregationRule.SUM],
     )
     assert _variable_kind(v) == "count"
+
+
+def test_sum_aggregation_alone_does_not_make_a_covariate_count_outcome():
+    v = ConceptDescriptor(
+        name="measurement_n",
+        dtype="int64",
+        allowed_aggregations=[AggregationRule.SUM],
+    )
+    assert _variable_kind(v) is None
 
 
 def test_lab_named_lactate_is_right_skewed_kind():
@@ -107,8 +117,17 @@ def test_matrix_keys_are_variable_kinds_not_concept_names():
     # Must be a subset of allowed kinds — extending the matrix with new
     # kinds is fine, leaking concept names is not.
     forbidden_substrings = (
-        "gcs", "sofa", "kdigo", "vaso", "shock", "hepato", "renal",
-        "mimic", "eicu", "hirid", "sicdb",
+        "gcs",
+        "sofa",
+        "kdigo",
+        "vaso",
+        "shock",
+        "hepato",
+        "renal",
+        "mimic",
+        "eicu",
+        "hirid",
+        "sicdb",
     )
     for key in actual_keys:
         assert not any(s in key.lower() for s in forbidden_substrings), (
@@ -137,20 +156,30 @@ def test_matrix_entries_have_required_fields():
 
 def test_render_returns_empty_when_no_constraints_match():
     """A continuous-only cohort produces no constraint block."""
-    ctx = _make_context([
-        ConceptDescriptor(name="hr", dtype="float64", role=VariableRole.VITAL),
-        ConceptDescriptor(name="map", dtype="float64", role=VariableRole.VITAL),
-    ])
+    ctx = _make_context(
+        [
+            ConceptDescriptor(name="hr", dtype="float64", role=VariableRole.VITAL),
+            ConceptDescriptor(name="map", dtype="float64", role=VariableRole.VITAL),
+        ]
+    )
     assert render_variable_constraints(ctx) == ""
 
 
 def test_render_lists_one_line_per_constrained_variable():
-    ctx = _make_context([
-        ConceptDescriptor(name="gcs", dtype="int64", role=VariableRole.ORDINAL_SCORE),
-        ConceptDescriptor(name="lactate", dtype="float64", role=VariableRole.LAB),
-        ConceptDescriptor(name="mech_vent", dtype="bool"),
-        ConceptDescriptor(name="hr", dtype="float64", role=VariableRole.VITAL),
-    ])
+    ctx = _make_context(
+        [
+            ConceptDescriptor(
+                name="gcs", dtype="int64", role=VariableRole.ORDINAL_SCORE
+            ),
+            ConceptDescriptor(name="lactate", dtype="float64", role=VariableRole.LAB),
+            ConceptDescriptor(
+                name="mech_vent",
+                dtype="bool",
+                role=VariableRole.OUTCOME,
+            ),
+            ConceptDescriptor(name="hr", dtype="float64", role=VariableRole.VITAL),
+        ]
+    )
     block = render_variable_constraints(ctx)
     # Three constrained variables → three "  - `<name>`" lines.
     bullet_count = block.count("  - `")
@@ -162,6 +191,20 @@ def test_render_lists_one_line_per_constrained_variable():
     assert "`hr`" not in block
 
 
+def test_render_does_not_apply_outcome_family_rules_to_binary_covariates():
+    ctx = _make_context(
+        [
+            ConceptDescriptor(name="death", dtype="bool", role=VariableRole.OUTCOME),
+            ConceptDescriptor(
+                name="treatment", dtype="bool", role=VariableRole.INTERVENTION
+            ),
+        ]
+    )
+    block = render_variable_constraints(ctx)
+    assert "`death`" in block
+    assert "`treatment`" not in block
+
+
 def test_render_includes_machine_readable_kind_label():
     """The LLM sees the kind label so it can reason generically.
 
@@ -169,9 +212,13 @@ def test_render_includes_machine_readable_kind_label():
     a clinical concept name. A reviewer can audit by greping for these
     four strings in any envelope.
     """
-    ctx = _make_context([
-        ConceptDescriptor(name="kdigo_stage", dtype="int64", role=VariableRole.ORDINAL_SCORE),
-    ])
+    ctx = _make_context(
+        [
+            ConceptDescriptor(
+                name="kdigo_stage", dtype="int64", role=VariableRole.ORDINAL_SCORE
+            ),
+        ]
+    )
     block = render_variable_constraints(ctx)
     assert "(kind: ordinal)" in block
     assert "DO NOT use" in block
@@ -184,9 +231,11 @@ def test_machine_readable_constraints_for_ordinal_block_kmeans():
     Locks the policy that motivated Patch B in the first place: the
     rep1/rep2 shock_discordance halt was caused by KMeans-on-ordinal.
     """
-    ctx = _make_context([
-        ConceptDescriptor(name="any_ordinal", dtype="int64", is_ordinal=True),
-    ])
+    ctx = _make_context(
+        [
+            ConceptDescriptor(name="any_ordinal", dtype="int64", is_ordinal=True),
+        ]
+    )
     rules = variable_kind_constraints(ctx.variables)
     assert len(rules) == 1
     patterns = [p.lower() for p in rules[0]["forbidden_patterns"]]

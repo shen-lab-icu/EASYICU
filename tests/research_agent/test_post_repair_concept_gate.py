@@ -6,6 +6,9 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
+from easyicu.research_agent.providers.mocks import PatternScriptedMockLLMClient
+from easyicu.research_agent.repairs.patch import PATCH_FORMAT
+
 _SAFE_CODE = """
 import json
 import os
@@ -13,7 +16,11 @@ import pandas as pd
 
 df = pd.read_parquet(os.environ["COHORT_PARQUET"])
 out = os.environ["STEP_OUT_DIR"]
-summary = {"n": int(len(df)), "phase": "initial"}
+summary = {
+    "n": int(len(df)),
+    "phase": "initial",
+    "output_files": {"table:cohort_summary": "cohort_summary.csv"},
+}
 pd.DataFrame([summary]).to_csv(os.path.join(out, "cohort_summary.csv"), index=False)
 with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as f:
     json.dump(summary, f)
@@ -36,21 +43,6 @@ with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as f:
     json.dump(summary, f)
 """
 
-
-_SELF_MUTATING_CODE = """
-import json
-import os
-from pathlib import Path
-import pandas as pd
-
-df = pd.read_parquet(os.environ["COHORT_PARQUET"])
-out = os.environ["STEP_OUT_DIR"]
-summary = {"n": int(len(df)), "phase": "initial"}
-with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as f:
-    json.dump(summary, f)
-script = Path(__file__)
-script.write_text(script.read_text(encoding="utf-8") + "\\n# SELF_MUTATED\\n", encoding="utf-8")
-"""
 
 _INITIAL_CONCEPT_ERROR_CODE = _SAFE_CODE + "\n# INITIAL_CONCEPT_ERROR\n"
 _LATER_CONTRACT_ERROR_CODE = (
@@ -75,109 +67,105 @@ with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as f:
 """
 
 _RECOVERED_REPAIR_CODE = _SAFE_CODE.replace(
-    'summary = {"n": int(len(df)), "phase": "initial"}',
-    'summary = {"n": int(len(df)), "phase": "repaired", "output_files": '
-    '[{"kind": "table", "name": "cohort_summary", '
-    '"path": "cohort_summary.csv"}]}',
+    '"phase": "initial"',
+    '"phase": "repaired"',
+)
+
+_UNSAFE_REPAIR_CODE_AGAIN = _UNSAFE_REPAIR_CODE.replace(
+    '"phase": "repaired"',
+    '"phase": "repaired_again"',
 )
 
 
-class _RepairGateLLM:
-    name = "post-repair-concept-gate-llm"
-
-    def __init__(self, *, interrupt_repair: bool = False) -> None:
-        self.interrupt_repair = interrupt_repair
-        self.write_calls = 0
-        self.repair_calls = 0
-
-    def complete(self, messages, *, max_tokens=2048, temperature=0.2):
-        del max_tokens, temperature
-        user = next((m.content for m in reversed(messages) if m.role == "user"), "")
-        upper = user.upper()
-        if "ICU-AWARE RESEARCH PLAN" in upper:
-            return json.dumps(
+def _script_patch(old: str, new: str) -> str:
+    return json.dumps(
+        {
+            "format": PATCH_FORMAT,
+            "edits": [
                 {
-                    "research_question": "Summarize the cohort.",
-                    "steps": [
-                        {
-                            "step_id": "01_summary",
-                            "intent": "Produce a descriptive cohort summary.",
-                            "inputs": ["stay_id", "value"],
-                            "expected_outputs": ["table:cohort_summary"],
-                            "method": "descriptive_summary",
-                            "icu_rule_refs": [],
-                        }
-                    ],
-                    "rationale": "post-repair concept-gate regression",
+                    "old": old.strip(),
+                    "new": new.strip(),
+                    "expected_count": 1,
                 }
-            )
-        if "REPAIR THE PYTHON CODE" in upper:
-            self.repair_calls += 1
-            if self.interrupt_repair:
-                raise KeyboardInterrupt("simulated operator interruption")
-            return _UNSAFE_REPAIR_CODE
-        if "WRITE THE PYTHON CODE" in upper:
-            self.write_calls += 1
-            return _SAFE_CODE
-        if "INTERPRET THE RESULTS" in upper:
-            return "Summary {evidence:cohort_summary}."
-        if "MANUSCRIPT SCAFFOLD" in upper:
-            return "# Title\n\n## Results\n\nSummary {evidence:cohort_summary}."
-        return "{}"
+            ],
+        }
+    )
 
 
-class _SelfMutatingLLM(_RepairGateLLM):
-    def complete(self, messages, *, max_tokens=2048, temperature=0.2):
-        user = next((m.content for m in reversed(messages) if m.role == "user"), "")
-        if "WRITE THE PYTHON CODE" in user.upper():
-            self.write_calls += 1
-            return _SELF_MUTATING_CODE
-        return super().complete(
-            messages,
-            max_tokens=max_tokens,
-            temperature=temperature,
-        )
+_PLAN_RESPONSE = json.dumps(
+    {
+        "research_question": "Summarize the cohort.",
+        "steps": [
+            {
+                "step_id": "01_summary",
+                "planned_analysis_role": "auxiliary",
+                "intent": "Produce a descriptive cohort summary.",
+                "inputs": ["stay_id", "value"],
+                "expected_outputs": ["table:cohort_summary"],
+                "method": "descriptive_summary",
+                "icu_rule_refs": [],
+            }
+        ],
+        "rationale": "post-repair concept-gate regression",
+    }
+)
 
 
-class _SequentialRepairLLM(_RepairGateLLM):
-    def complete(self, messages, *, max_tokens=2048, temperature=0.2):
-        user = next((m.content for m in reversed(messages) if m.role == "user"), "")
-        upper = user.upper()
-        if "WRITE THE PYTHON CODE" in upper:
-            self.write_calls += 1
-            return _INITIAL_CONCEPT_ERROR_CODE
-        if "REPAIR THE PYTHON CODE" in upper:
-            self.repair_calls += 1
-            if self.repair_calls == 1:
-                return _SAFE_CODE
-            return _LATER_CONTRACT_ERROR_CODE
-        return super().complete(
-            messages,
-            max_tokens=max_tokens,
-            temperature=temperature,
-        )
+def _scripted_llm(
+    *,
+    initial_code: str = _SAFE_CODE,
+    repair_responses: list[str | BaseException] | None = None,
+) -> PatternScriptedMockLLMClient:
+    return PatternScriptedMockLLMClient(
+        [
+            ("Produce an ICU-AWARE RESEARCH PLAN as JSON", [_PLAN_RESPONSE]),
+            ("WRITE THE PYTHON CODE", [initial_code]),
+            (
+                "REPAIR THE PYTHON CODE",
+                repair_responses
+                or [
+                    _script_patch(_SAFE_CODE, _UNSAFE_REPAIR_CODE),
+                    _script_patch(
+                        _UNSAFE_REPAIR_CODE,
+                        _UNSAFE_REPAIR_CODE_AGAIN,
+                    ),
+                ],
+            ),
+            ("INTERPRET THE RESULTS", ["Summary {evidence:cohort_summary}."]),
+            (
+                "MANUSCRIPT SCAFFOLD",
+                ["# Title\n\n## Results\n\nSummary {evidence:cohort_summary}."],
+            ),
+        ]
+    )
 
 
-class _MechanicalRecoveryLLM(_RepairGateLLM):
-    def complete(self, messages, *, max_tokens=2048, temperature=0.2):
-        user = next((m.content for m in reversed(messages) if m.role == "user"), "")
-        upper = user.upper()
-        if "WRITE THE PYTHON CODE" in upper:
-            self.write_calls += 1
-            return _SAFE_CODE
-        if "REPAIR THE PYTHON CODE" in upper:
-            self.repair_calls += 1
-            if self.repair_calls == 1:
-                return _INVALID_HELPER_REPAIR_CODE
-            return _RECOVERED_REPAIR_CODE
-        return super().complete(
-            messages,
-            max_tokens=max_tokens,
-            temperature=temperature,
-        )
+def _prompt_call_count(
+    llm: PatternScriptedMockLLMClient,
+    marker: str,
+) -> int:
+    return sum(
+        marker.casefold()
+        in "\n".join(str(message.content or "") for message in messages).casefold()
+        for messages, _kwargs in llm.calls
+    )
 
 
-def _pipeline(ra, tmp_path: Path, llm: _RepairGateLLM):
+def _pipeline(
+    ra,
+    tmp_path: Path,
+    llm: PatternScriptedMockLLMClient,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from easyicu.research_agent.agents.core import PlannerAgent
+
+    original_run = PlannerAgent.run
+
+    def run_without_article_contract(self, context, **kwargs):
+        kwargs["enforce_article_contract"] = False
+        return original_run(self, context, **kwargs)
+
+    monkeypatch.setattr(PlannerAgent, "run", run_without_article_contract)
     return ra.ResearchAgentPipeline(
         workdir=tmp_path,
         llm=llm,
@@ -210,7 +198,7 @@ def test_contract_repair_reenters_concept_gate_before_runner(
         ConceptUsageAuditor,
         PrimaryModelContractValidator,
     )
-    from easyicu.research_agent.contracts import ValidationFinding
+    from easyicu.research_agent.contracts.runtime import ValidationFinding
 
     audited_scripts: list[str] = []
 
@@ -244,9 +232,9 @@ def test_contract_repair_reenters_concept_gate_before_runner(
     monkeypatch.setattr(ConceptUsageAuditor, "audit", concept_audit)
     monkeypatch.setattr(PrimaryModelContractValidator, "audit", contract_audit)
 
-    llm = _RepairGateLLM()
+    llm = _scripted_llm()
     result = _run(
-        _pipeline(ra, tmp_path, llm),
+        _pipeline(ra, tmp_path, llm, monkeypatch),
         pd.DataFrame(
             {"stay_id": [1, 2, 3], "value": [1.0, None, 3.0], "death": [0, 1, 0]}
         ),
@@ -259,9 +247,19 @@ def test_contract_repair_reenters_concept_gate_before_runner(
         item for item in partial["per_step_records"] if item["step_id"] == "01_summary"
     )
 
-    assert llm.repair_calls == 2
+    assert _prompt_call_count(llm, "REPAIR THE PYTHON CODE") == 2
     assert any("UNSAFE_POST_REPAIR" in script for script in audited_scripts)
     assert record["status"] == "blocked_by_concept_audit"
+    assert record["step_llm_repair_attempts"] == 2
+    assert record["step_llm_repair_classes"] == [
+        "contract",
+        "post_mutation_concept",
+    ]
+    assert record["step_provider_call_categories"] == [
+        "initial_generation",
+        "contract_repair_patch",
+        "post_mutation_concept_repair_patch",
+    ]
     assert not (
         run_dir / "steps" / "01_summary" / "outputs" / "unsafe_executed.txt"
     ).exists()
@@ -272,7 +270,7 @@ def test_contract_repair_mechanical_error_uses_remaining_step_budget(
     ra, tmp_path: Path, monkeypatch
 ) -> None:
     from easyicu.research_agent.audits.validators import PrimaryModelContractValidator
-    from easyicu.research_agent.contracts import ValidationFinding
+    from easyicu.research_agent.contracts.runtime import ValidationFinding
 
     def contract_audit(self, *, step, step_summary, **kwargs):
         del self, kwargs
@@ -288,9 +286,17 @@ def test_contract_repair_mechanical_error_uses_remaining_step_budget(
         ]
 
     monkeypatch.setattr(PrimaryModelContractValidator, "audit", contract_audit)
-    llm = _MechanicalRecoveryLLM()
+    llm = _scripted_llm(
+        repair_responses=[
+            _script_patch(_SAFE_CODE, _INVALID_HELPER_REPAIR_CODE),
+            _script_patch(
+                _INVALID_HELPER_REPAIR_CODE,
+                _RECOVERED_REPAIR_CODE,
+            ),
+        ]
+    )
     result = _run(
-        _pipeline(ra, tmp_path, llm),
+        _pipeline(ra, tmp_path, llm, monkeypatch),
         pd.DataFrame(
             {"stay_id": [1, 2, 3], "value": [1.0, 2.0, 3.0], "death": [0, 1, 0]}
         ),
@@ -302,12 +308,18 @@ def test_contract_repair_mechanical_error_uses_remaining_step_budget(
         item for item in partial["per_step_records"] if item["step_id"] == "01_summary"
     )
 
-    assert llm.repair_calls == 2
+    assert _prompt_call_count(llm, "REPAIR THE PYTHON CODE") == 2
     assert record["status"] == "ok"
     assert record["step_llm_repair_attempts"] == 2
     assert record["step_llm_repair_classes"] == [
         "contract",
         "post_mutation_concept",
+    ]
+    assert record["step_provider_call_categories"] == [
+        "initial_generation",
+        "contract_repair_patch",
+        "post_mutation_concept_repair_patch",
+        "analyzer",
     ]
 
 
@@ -318,8 +330,10 @@ def test_quarantine_persists_repaired_constraints_across_later_repairs(
         ConceptUsageAuditor,
         PrimaryModelContractValidator,
     )
-    from easyicu.research_agent.contracts import ValidationFinding
-    from easyicu.research_agent.pipeline_resume import load_quarantined_concept_draft
+    from easyicu.research_agent.contracts.runtime import ValidationFinding
+    from easyicu.research_agent.orchestration.resume import (
+        load_quarantined_concept_draft,
+    )
 
     def concept_audit(self, *, context, script_text, step):
         del self, context
@@ -360,9 +374,15 @@ def test_quarantine_persists_repaired_constraints_across_later_repairs(
     monkeypatch.setattr(ConceptUsageAuditor, "audit", concept_audit)
     monkeypatch.setattr(PrimaryModelContractValidator, "audit", contract_audit)
 
-    llm = _SequentialRepairLLM()
+    llm = _scripted_llm(
+        initial_code=_INITIAL_CONCEPT_ERROR_CODE,
+        repair_responses=[
+            _script_patch(_INITIAL_CONCEPT_ERROR_CODE, _SAFE_CODE),
+            _script_patch(_SAFE_CODE, _LATER_CONTRACT_ERROR_CODE),
+        ],
+    )
     result = _run(
-        _pipeline(ra, tmp_path, llm),
+        _pipeline(ra, tmp_path, llm, monkeypatch),
         pd.DataFrame(
             {"stay_id": [1, 2, 3], "value": [1.0, None, 3.0], "death": [0, 1, 0]}
         ),
@@ -378,7 +398,7 @@ def test_quarantine_persists_repaired_constraints_across_later_repairs(
         item for item in partial["per_step_records"] if item["step_id"] == "01_summary"
     )
 
-    assert llm.repair_calls == 2
+    assert _prompt_call_count(llm, "REPAIR THE PYTHON CODE") == 2
     assert checkpoint is not None
     expected_messages = [
         "Earlier repaired constraint must remain binding.",
@@ -388,10 +408,17 @@ def test_quarantine_persists_repaired_constraints_across_later_repairs(
     assert [
         finding["message"] for finding in record["monotonic_concept_constraints"]
     ] == expected_messages
+    assert record["step_llm_repair_attempts"] == 2
+    assert record["step_llm_repair_classes"] == ["concept", "contract"]
+    assert record["step_provider_call_categories"] == [
+        "initial_generation",
+        "concept_repair_patch",
+        "contract_repair_patch",
+    ]
 
 
 def test_unfinished_step_record_restores_only_binding_concept_errors() -> None:
-    from easyicu.research_agent.pipeline_execute import (
+    from easyicu.research_agent.execution.phase import (
         _persisted_monotonic_concept_constraints,
     )
 
@@ -425,8 +452,8 @@ def test_unfinished_step_record_restores_only_binding_concept_errors() -> None:
 
 
 def test_monotonic_constraints_keep_distinct_locals_and_refresh_line_numbers() -> None:
-    from easyicu.research_agent.contracts import ValidationFinding
-    from easyicu.research_agent.pipeline_execute import (
+    from easyicu.research_agent.contracts.runtime import ValidationFinding
+    from easyicu.research_agent.execution.phase import (
         _merge_monotonic_concept_constraints,
     )
 
@@ -462,8 +489,8 @@ def test_monotonic_constraints_keep_distinct_locals_and_refresh_line_numbers() -
 
 
 def test_monotonic_constraints_preserve_existing_warning_history() -> None:
-    from easyicu.research_agent.contracts import ValidationFinding
-    from easyicu.research_agent.pipeline_execute import (
+    from easyicu.research_agent.contracts.runtime import ValidationFinding
+    from easyicu.research_agent.execution.phase import (
         _merge_monotonic_concept_constraints,
     )
 
@@ -480,8 +507,8 @@ def test_monotonic_constraints_preserve_existing_warning_history() -> None:
 
 
 def test_monotonic_constraints_keep_same_local_from_distinct_scopes(ra) -> None:
-    from easyicu.research_agent.code_preflight import audit_mechanical_code_contracts
-    from easyicu.research_agent.pipeline_execute import (
+    from easyicu.research_agent.gates.preflight import audit_mechanical_code_contracts
+    from easyicu.research_agent.execution.phase import (
         _merge_monotonic_concept_constraints,
     )
 
@@ -520,8 +547,8 @@ def second():
 
 
 def test_branch_local_occurrence_ids_distinguish_identical_sibling_tries(ra) -> None:
-    from easyicu.research_agent.code_preflight import audit_mechanical_code_contracts
-    from easyicu.research_agent.pipeline_execute import (
+    from easyicu.research_agent.gates.preflight import audit_mechanical_code_contracts
+    from easyicu.research_agent.execution.phase import (
         _merge_monotonic_concept_constraints,
     )
 
@@ -558,7 +585,7 @@ def analyze():
 
 
 def test_branch_local_occurrence_id_survives_body_edit(ra) -> None:
-    from easyicu.research_agent.code_preflight import audit_mechanical_code_contracts
+    from easyicu.research_agent.gates.preflight import audit_mechanical_code_contracts
 
     step = ra.AnalysisStep(
         step_id="body_edit_scope_check",
@@ -589,8 +616,8 @@ def analyze():
 
 
 def test_monotonic_constraint_identity_ignores_changing_audit_counts() -> None:
-    from easyicu.research_agent.contracts import ValidationFinding
-    from easyicu.research_agent.pipeline_execute import (
+    from easyicu.research_agent.contracts.runtime import ValidationFinding
+    from easyicu.research_agent.execution.phase import (
         _merge_monotonic_concept_constraints,
     )
 
@@ -613,8 +640,8 @@ def test_monotonic_constraint_identity_ignores_changing_audit_counts() -> None:
 
 
 def test_monotonic_constraint_identity_unions_changing_evidence_support() -> None:
-    from easyicu.research_agent.contracts import ValidationFinding
-    from easyicu.research_agent.pipeline_execute import (
+    from easyicu.research_agent.contracts.runtime import ValidationFinding
+    from easyicu.research_agent.execution.phase import (
         _merge_monotonic_concept_constraints,
     )
 
@@ -640,11 +667,29 @@ def test_monotonic_constraint_identity_unions_changing_evidence_support() -> Non
 
 
 def test_executed_script_digest_mismatch_blocks_outputs_before_evidence(
-    ra, tmp_path: Path
+    ra, tmp_path: Path, monkeypatch
 ) -> None:
-    llm = _SelfMutatingLLM()
+    from easyicu.research_agent.execution.runner import CodeRunner, DockerRunner
+
+    def patch_runner(runner_type):
+        original_run = runner_type.run
+
+        def run_then_tamper(self, **kwargs):
+            result = original_run(self, **kwargs)
+            result.script_path.write_text(
+                result.script_path.read_text(encoding="utf-8")
+                + "\n# HOST_TAMPERED\n",
+                encoding="utf-8",
+            )
+            return result
+
+        monkeypatch.setattr(runner_type, "run", run_then_tamper)
+
+    patch_runner(DockerRunner)
+    patch_runner(CodeRunner)
+    llm = _scripted_llm()
     result = _run(
-        _pipeline(ra, tmp_path, llm),
+        _pipeline(ra, tmp_path, llm, monkeypatch),
         pd.DataFrame(
             {"stay_id": [1, 2, 3], "value": [1.0, 2.0, 3.0], "death": [0, 1, 0]}
         ),
@@ -670,8 +715,10 @@ def test_keyboard_interrupt_during_concept_repair_saves_draft_and_reraises(
     ra, tmp_path: Path, monkeypatch
 ) -> None:
     from easyicu.research_agent.audits.validators import ConceptUsageAuditor
-    from easyicu.research_agent.contracts import ValidationFinding
-    from easyicu.research_agent.pipeline_resume import load_quarantined_concept_draft
+    from easyicu.research_agent.contracts.runtime import ValidationFinding
+    from easyicu.research_agent.orchestration.resume import (
+        load_quarantined_concept_draft,
+    )
 
     def reject_draft(self, *, context, script_text, step):
         del self, context, script_text
@@ -685,11 +732,15 @@ def test_keyboard_interrupt_during_concept_repair_saves_draft_and_reraises(
         ]
 
     monkeypatch.setattr(ConceptUsageAuditor, "audit", reject_draft)
-    llm = _RepairGateLLM(interrupt_repair=True)
+    llm = _scripted_llm(
+        repair_responses=[
+            KeyboardInterrupt("simulated operator interruption"),
+        ]
+    )
 
     with pytest.raises(KeyboardInterrupt, match="operator interruption"):
         _run(
-            _pipeline(ra, tmp_path, llm),
+            _pipeline(ra, tmp_path, llm, monkeypatch),
             pd.DataFrame(
                 {
                     "stay_id": [1, 2, 3],
@@ -704,7 +755,7 @@ def test_keyboard_interrupt_during_concept_repair_saves_draft_and_reraises(
         run_dir=run_dir,
         step_id="01_summary",
     )
-    assert llm.repair_calls == 1
+    assert _prompt_call_count(llm, "REPAIR THE PYTHON CODE") == 1
     assert checkpoint is not None
     assert checkpoint.code.strip() == _SAFE_CODE.strip()
     assert (

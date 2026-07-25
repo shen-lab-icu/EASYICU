@@ -15,6 +15,8 @@ from easyicu.datasource import (
 from easyicu.resources import load_dictionary
 from easyicu.concept.catalog import (
     COMPOSITE_CONCEPT_OUTPUT_SOURCES,
+    CONCEPT_DB_COVERAGE,
+    CONCEPT_DESCRIPTIONS,
     CONCEPT_DICTIONARY,
     CONCEPT_GROUP_NAMES,
     CONCEPT_GROUPS_INTERNAL,
@@ -25,6 +27,9 @@ from easyicu.concept.catalog import (
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DATA_DIR = REPO_ROOT / "src" / "easyicu" / "data"
 BENCHMARK_DIR = REPO_ROOT / "benchmark"
+STATIC_DATA_CATALOG_JS = (
+    REPO_ROOT / "src" / "easyicu" / "webserver" / "static" / "js" / "data-catalog.js"
+)
 SOURCE_FIELD_KEYS = {
     "amount_var",
     "auom_var",
@@ -120,10 +125,75 @@ def test_web_catalog_groups_are_unique_and_complete() -> None:
     grouped = [concept for concepts in CONCEPT_GROUPS_INTERNAL.values() for concept in concepts]
 
     assert len(CONCEPT_GROUPS_INTERNAL) == 19
-    assert len(CONCEPT_DICTIONARY) == 277
+    # 2026-07-17: +vent_mode, +vent_breath_seq (harmonised ventilator-mode concepts,
+    # grouped under 'ventilator'). 277 -> 279.
+    # 2026-07-17: +cvp into the 'vitals' group (was only in concept-dict.json /
+    # pulled by a separate cvp_extraction; central venous pressure is a measured
+    # vital and now extracts with the vitals module). 280 -> 281.
+    assert len(CONCEPT_DICTIONARY) == 281
     assert set(CONCEPT_GROUP_NAMES) >= set(CONCEPT_GROUPS_INTERNAL)
     assert len(grouped) == len(set(grouped))
     assert set(grouped) == set(CONCEPT_DICTIONARY)
+
+
+def _parse_js_object_block(source: str, var: str) -> dict[str, str]:
+    """Extract ``const <var> = { key: <value>, ... };`` -> {key: raw_value_text}.
+
+    Independent of the generator so a generator bug can't hide drift. Assumes the
+    block bodies contain no nested ``{}`` (true for groupConcepts/dict/cov/desc).
+    """
+    marker = f"const {var} = {{"
+    start = source.index(marker) + len(marker)
+    depth = 1
+    i = start
+    while i < len(source) and depth:
+        if source[i] == "{":
+            depth += 1
+        elif source[i] == "}":
+            depth -= 1
+        i += 1
+    body = source[start : i - 1]
+    out: dict[str, str] = {}
+    for key, value in re.findall(r"(\w+)\s*:\s*(\[[^\]]*\]|\d+)", body):
+        out[key] = value
+    return out
+
+
+def _js_list_items(raw: str) -> list[str]:
+    return re.findall(r"""['"]([^'"]*)['"]""", raw)
+
+
+def test_static_data_catalog_js_matches_python_catalog() -> None:
+    """The static bootstrap (data-catalog.js) must carry the SAME feature set as
+    the Python SSOT that /api/catalog serves. Regenerate with
+    ``python tools/generate_static_catalog.py`` when this fails."""
+    js = STATIC_DATA_CATALOG_JS.read_text(encoding="utf-8")
+
+    web_group_concepts = {
+        module: _js_list_items(raw)
+        for module, raw in _parse_js_object_block(js, "groupConcepts").items()
+    }
+    web_dict = set(_parse_js_object_block(js, "dict"))
+    web_cov = set(_parse_js_object_block(js, "cov"))
+    web_desc = set(_parse_js_object_block(js, "desc"))
+
+    hint = "run: python tools/generate_static_catalog.py"
+
+    # groupConcepts: exact module -> ordered-members parity with the catalog.
+    assert web_group_concepts == {
+        module: list(concepts)
+        for module, concepts in CONCEPT_GROUPS_INTERNAL.items()
+    }, hint
+
+    # dict / cov / desc: same key sets as their Python sources.
+    assert web_dict == set(CONCEPT_DICTIONARY), hint
+    assert web_cov == set(CONCEPT_DB_COVERAGE), hint
+    assert web_desc == set(CONCEPT_DESCRIPTIONS), hint
+
+    # web internal consistency: every grouped concept has a label; no orphan label.
+    grouped = [c for members in web_group_concepts.values() for c in members]
+    assert set(grouped) == web_dict, hint
+    assert len(grouped) == len(set(grouped)), "duplicate concept in web groupConcepts"
 
 
 def test_extract_database_modules_use_the_shared_catalog() -> None:
@@ -542,7 +612,21 @@ def test_urine_output_excludes_enteral_residuals_and_keeps_perioperative_urine()
 
         assert 227510 not in urine_ids
         assert 227511 not in urine_ids
-        assert {226627, 226631}.issubset(urine_ids)
+        # 2026-07-17 REVERSED. This previously asserted that OR/PACU urine
+        # (226627/226631) must be KEPT -- a deliberate call, made to stop the
+        # perioperative window reading as anuric. Three lines of evidence overturned it:
+        #   1. Official mimic-code measurement/urine_output.sql uses
+        #      226559/226560/226561/226584/226563/226564/226565/226567/226557/226558
+        #      + 227488/227489 -- and NOT 226627/226631.
+        #   2. The raw data shows why: OR Urine is 1.16 rows/stay (median 400 mL,
+        #      p95 2,250) and PACU Urine 1.05 rows/stay (median 625 mL, p95 3,980),
+        #      versus Foley's 54.33 rows/stay at a median of 80 mL. They are single
+        #      BULK totals for an entire perioperative period, not hourly measurements.
+        #   3. `urine` is an hourly concept feeding kdigo_uo's mL/kg/h rate. Dropping a
+        #      3,980 mL bulk onto one timestamp invents a massive one-hour diuresis and
+        #      still leaves the surrounding OR hours empty -- it does not fix the false
+        #      anuria it was added for, it adds a second artefact on top of it.
+        assert {226627, 226631}.isdisjoint(urine_ids)
         assert {43348, 43365, 43372, 43638, 227489}.isdisjoint(urine_ids)
 
     for dataset in ("mimic", "mimic_demo"):
@@ -645,7 +729,20 @@ def test_rrt_uses_active_treatment_evidence_not_access_placement() -> None:
         miiv_only_active_setting_ids = {229247, 229248, 230083, 230084, 230085, 230177}
 
         assert 224270 not in procedure_ids
-        assert {225436, 225441, 225802, 225803, 225805, 225809, 225955}.issubset(
+        # 2026-07-17 REVERSED for 225436 (CRRT Filter Change). Official mimic-code
+        # treatment/rrt.sql does list 225436, but its CASE marks it `dialysis_active = 0`
+        # -- the same treatment it gives 224270 (Dialysis Catheter), which this test
+        # already excludes on the line above. A filter change is a procedural event, not
+        # an active treatment session. `rrt` is a boolean with no active/inactive axis,
+        # so dropping the id is the faithful mapping of `dialysis_active = 0`.
+        # This test's own AUMC half already applies exactly this rule -- it asserts
+        # "Filter CVVH wisselen" (Dutch for 'change CVVH filter') must NOT match. So the
+        # old MIIV assertion contradicted both the official code and this test's own
+        # stated principle ("active treatment evidence, not access placement").
+        # Cost of the change, measured: of the 240 MIMIC-IV stays with a filter change,
+        # 239 already carry a core dialysis id -- exactly 1 stay is affected.
+        assert 225436 not in procedure_ids
+        assert {225441, 225802, 225803, 225805, 225809, 225955}.issubset(
             procedure_ids
         )
         assert 227290 in chartevent_ids
@@ -680,7 +777,10 @@ def test_rrt_uses_active_treatment_evidence_not_access_placement() -> None:
             if source.get("table") == "procedureevents_mv"
             for source_id in source["ids"]
         )
-        assert {225436, 225441, 225802, 225803, 225805, 225809, 225955}.issubset(
+        # 225436 excluded here for the same reason as the miiv block above
+        # (official rrt.sql marks CRRT Filter Change dialysis_active = 0).
+        assert 225436 not in mimic_procedure_ids
+        assert {225441, 225802, 225803, 225805, 225809, 225955}.issubset(
             mimic_procedure_ids
         )
         mimic_chartevent_ids = set(

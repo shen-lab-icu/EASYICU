@@ -11,40 +11,21 @@ agent.
 from __future__ import annotations
 
 import json
-from typing import List, Literal
+from typing import Literal
 
 import pytest
 from pydantic import BaseModel
 
-from easyicu.research_agent.llm import LLMMessage
-from easyicu.research_agent.structured_retry import (
+from easyicu.research_agent.providers.llm import LLMMessage
+from easyicu.research_agent.providers.mocks import ScriptedMockLLMClient
+from easyicu.research_agent.providers.structured_retry import (
     StructuredResponseFailure,
     call_llm_with_structured_retry,
 )
 
 
-class _ScriptedClient:
-    """Returns a scripted sequence of strings and records each call."""
-
-    name = "scripted"
-
-    def __init__(self, replies: List[str]) -> None:
-        self.replies = list(replies)
-        self.calls: List[List[LLMMessage]] = []
-
-    def complete(self, messages, *, max_tokens=2048, temperature=0.2):
-        # Deep-copy the messages so the test can inspect what the
-        # wrapper actually sent on each retry.
-        self.calls.append(
-            [LLMMessage(role=m.role, content=m.content) for m in messages]
-        )
-        if not self.replies:
-            raise RuntimeError("scripted client ran out of replies")
-        return self.replies.pop(0)
-
-
 def test_structured_retry_returns_first_success_without_retrying():
-    client = _ScriptedClient(['{"value": 42}'])
+    client = ScriptedMockLLMClient(['{"value": 42}'])
     out = call_llm_with_structured_retry(
         client,
         [LLMMessage(role="user", content="give json")],
@@ -59,7 +40,7 @@ def test_structured_retry_returns_first_success_without_retrying():
 def test_structured_retry_feeds_error_back_and_succeeds_on_second_attempt():
     bad = "{ not valid json"
     good = '{"value": 7}'
-    client = _ScriptedClient([bad, good])
+    client = ScriptedMockLLMClient([bad, good])
 
     out = call_llm_with_structured_retry(
         client,
@@ -74,7 +55,7 @@ def test_structured_retry_feeds_error_back_and_succeeds_on_second_attempt():
     assert len(client.calls) == 2
     # The retry conversation must include the original user message, the
     # failed assistant turn (verbatim), and a new user-feedback message.
-    retry_msgs = client.calls[1]
+    retry_msgs = client.calls[1][0]
     roles = [m.role for m in retry_msgs]
     assert roles[0] == "user"
     assert roles[-2] == "assistant"
@@ -88,7 +69,7 @@ def test_structured_retry_feeds_error_back_and_succeeds_on_second_attempt():
 
 
 def test_structured_retry_raises_after_exhausting_retries():
-    client = _ScriptedClient(["bad-1", "bad-2", "bad-3"])
+    client = ScriptedMockLLMClient(["bad-1", "bad-2", "bad-3"])
     with pytest.raises(StructuredResponseFailure) as ctx:
         call_llm_with_structured_retry(
             client,
@@ -107,7 +88,7 @@ def test_structured_retry_raises_after_exhausting_retries():
 
 
 def test_structured_retry_max_retries_zero_means_single_call():
-    client = _ScriptedClient(["nope"])
+    client = ScriptedMockLLMClient(["nope"])
     with pytest.raises(StructuredResponseFailure):
         call_llm_with_structured_retry(
             client,
@@ -120,7 +101,7 @@ def test_structured_retry_max_retries_zero_means_single_call():
 
 
 def test_structured_retry_four_retries_means_five_total_attempts():
-    client = _ScriptedClient(["bad-1", "bad-2", "bad-3", "bad-4", "bad-5"])
+    client = ScriptedMockLLMClient(["bad-1", "bad-2", "bad-3", "bad-4", "bad-5"])
     with pytest.raises(StructuredResponseFailure):
         call_llm_with_structured_retry(
             client,
@@ -141,7 +122,7 @@ def test_structured_retry_handles_value_error_from_parser():
             raise ValueError("missing required_key")
         return data
 
-    client = _ScriptedClient(['{"other_key": 1}', '{"required_key": "ok"}'])
+    client = ScriptedMockLLMClient(['{"other_key": 1}', '{"required_key": "ok"}'])
     out = call_llm_with_structured_retry(
         client,
         [LLMMessage(role="user", content="x")],
@@ -151,7 +132,7 @@ def test_structured_retry_handles_value_error_from_parser():
     )
     assert out == {"required_key": "ok"}
     assert len(client.calls) == 2
-    feedback = client.calls[1][-1].content
+    feedback = client.calls[1][0][-1].content
     assert "ValueError" in feedback
     assert "missing required_key" in feedback
 
@@ -162,7 +143,7 @@ def test_structured_retry_feedback_includes_validation_error_detail():
     class Payload(BaseModel):
         concept_id: Literal["sofa"]
 
-    client = _ScriptedClient(
+    client = ScriptedMockLLMClient(
         ['{"concept_id": "sofa2_admission"}', '{"concept_id": "sofa"}']
     )
     out = call_llm_with_structured_retry(
@@ -174,7 +155,7 @@ def test_structured_retry_feedback_includes_validation_error_detail():
     )
     assert out.concept_id == "sofa"
     assert len(client.calls) == 2
-    feedback = client.calls[1][-1].content
+    feedback = client.calls[1][0][-1].content
     assert "ValidationError" in feedback
     assert "concept_id" in feedback
     assert "sofa2_admission" in feedback
@@ -183,7 +164,7 @@ def test_structured_retry_feedback_includes_validation_error_detail():
 def test_structured_retry_does_not_mutate_original_messages():
     """The caller's messages list must be untouched by the retry loop."""
     original = [LLMMessage(role="user", content="x")]
-    client = _ScriptedClient(["bad", '{"ok": true}'])
+    client = ScriptedMockLLMClient(["bad", '{"ok": true}'])
     call_llm_with_structured_retry(
         client,
         original,
@@ -193,3 +174,25 @@ def test_structured_retry_does_not_mutate_original_messages():
     )
     assert original == [LLMMessage(role="user", content="x")]
     assert len(original) == 1
+
+
+def test_structured_retry_keeps_only_latest_failed_response() -> None:
+    client = ScriptedMockLLMClient(["bad-1", "bad-2", '{"ok": true}'])
+
+    result = call_llm_with_structured_retry(
+        client,
+        [LLMMessage(role="user", content="base")],
+        parser=lambda raw: json.loads(raw),
+        role="planner",
+        max_retries=2,
+    )
+
+    assert result == {"ok": True}
+    third_messages = client.calls[2][0]
+    assert [message.role for message in third_messages] == [
+        "user",
+        "assistant",
+        "user",
+    ]
+    assert third_messages[-2].content == "bad-2"
+    assert all(message.content != "bad-1" for message in third_messages)

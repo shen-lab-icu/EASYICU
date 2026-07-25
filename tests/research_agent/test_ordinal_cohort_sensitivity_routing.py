@@ -16,7 +16,7 @@ the actual alternative-definition signal instead.
 
 from __future__ import annotations
 
-from easyicu.research_agent.pipeline_execute import (
+from easyicu.research_agent.execution.phase import (
     _is_cohort_definition_sensitivity_step,
     _ordinal_dose_response_step_matches,
 )

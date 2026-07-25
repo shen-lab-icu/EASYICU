@@ -1,46 +1,89 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
+import hashlib
 import json
 from pathlib import Path
+import sys
 from types import SimpleNamespace
 
 import pandas as pd
 import pytest
 
 from easyicu.research_agent.audits.validators import LLMConceptAuditor
-from easyicu.research_agent.provider_budget import (
+from easyicu.research_agent.repairs.patch import PATCH_FORMAT
+from easyicu.research_agent.authority.provider_budget import (
     PROVIDER_CALL_BUDGET_RECEIPT_SCHEMA_VERSION,
     ProviderCallBudgetExhausted,
     ProviderCallBudgetReceiptError,
     StepProviderCallBudget,
     complete_with_provider_budget,
-    consume_active_transport_attempt,
     load_provider_call_budget_receipt,
+    load_provider_call_budget_state,
     provider_call_budget_receipt_path,
 )
-from easyicu.research_agent.pipeline_execute import (
+from easyicu.research_agent.execution.phase import (
     _HOST_COHORT_TRANSLATION_BUDGET_STEP_ID,
     _cohort_translation_budget_owner_step_id,
     _extract_cohort_definition_with_provider_budget,
 )
-from easyicu.research_agent.pipeline_config import PipelineConfig
+from easyicu.research_agent.orchestration.config import PipelineConfig
 from easyicu.research_agent.schema import (
     AnalysisStep,
     CohortDescriptor,
     ResearchContext,
 )
+from easyicu.research_agent.providers.mocks import (
+    BudgetAwareScriptedMockLLMClient,
+    PatternScriptedMockLLMClient,
+    ScriptedMockLLMClient,
+)
+from easyicu.research_agent.providers.protocol import LLMMessage
 
 
-class _AuditLLM:
-    name = "audit-budget-test"
+def _canonical_digest(payload: dict) -> str:
+    return hashlib.sha256(
+        json.dumps(
+            payload,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
 
-    def __init__(self) -> None:
-        self.calls = 0
 
-    def complete(self, messages, **kwargs):  # noqa: ANN001, ANN003
-        self.calls += 1
-        return '{"findings":[]}'
+def _category_digest(categories: list[str]) -> str:
+    return _canonical_digest({"categories": categories})
+
+
+def _payload_digest_without_sha(payload: dict) -> str:
+    return _canonical_digest(
+        {key: value for key, value in payload.items() if key != "sha256"}
+    )
+
+
+def _audit_llm() -> ScriptedMockLLMClient:
+    return ScriptedMockLLMClient(['{"findings":[]}'], repeat_last=True)
+
+
+def test_pattern_scripted_mock_prefers_later_specific_overlapping_marker() -> None:
+    client = PatternScriptedMockLLMClient(
+        [
+            ("ICU-AWARE RESEARCH PLAN", ["generic-plan"]),
+            ("REPAIR THE PYTHON CODE", ["repair"]),
+        ]
+    )
+
+    response = client.complete(
+        [
+            LLMMessage(
+                role="user",
+                content=("REPAIR THE PYTHON CODE using this ICU-AWARE RESEARCH PLAN"),
+            )
+        ]
+    )
+
+    assert response == "repair"
 
 
 def _context() -> ResearchContext:
@@ -57,24 +100,18 @@ def _context() -> ResearchContext:
 
 
 def test_pre_step_cohort_translation_has_durable_shared_provider_budget(tmp_path):
-    class _CohortTranslationLLM:
-        name = "cohort-translation-budget-test"
-
-        def __init__(self) -> None:
-            self.calls = 0
-
-        def complete(self, messages, **kwargs):  # noqa: ANN001, ANN003
-            del messages, kwargs
-            self.calls += 1
-            return json.dumps(
+    owner_step_id = "01_cohort_definition"
+    llm = ScriptedMockLLMClient(
+        [
+            json.dumps(
                 {
                     "inclusion": [{"concept_id": "age", "op": ">=", "value": 18}],
                     "exclusion": [],
                 }
             )
-
-    owner_step_id = "01_cohort_definition"
-    llm = _CohortTranslationLLM()
+        ],
+        repeat_last=True,
+    )
     first, first_snapshot = _extract_cohort_definition_with_provider_budget(
         run_dir=tmp_path,
         budget_owner_step_id=owner_step_id,
@@ -136,7 +173,7 @@ def test_pre_step_cohort_translation_has_durable_shared_provider_budget(tmp_path
             llm=llm,
             name="adult_icu",
         )
-    assert llm.calls == 2
+    assert len(llm.calls) == 2
 
     receipt_path.write_text("{}\n", encoding="utf-8")
     with pytest.raises(ProviderCallBudgetReceiptError):
@@ -149,7 +186,87 @@ def test_pre_step_cohort_translation_has_durable_shared_provider_budget(tmp_path
             llm=llm,
             name="adult_icu",
         )
-    assert llm.calls == 2
+    assert len(llm.calls) == 2
+
+
+def test_cohort_translation_preserves_existing_single_ledger_state(tmp_path):
+    owner_step_id = "01_cohort_definition"
+    receipt_path = provider_call_budget_receipt_path(
+        tmp_path,
+        step_id=owner_step_id,
+    )
+    seed = StepProviderCallBudget(
+        5,
+        step_id=owner_step_id,
+        receipt_path=receipt_path,
+        reserved_final_category="concept_audit",
+    )
+    initial_transport_id = seed.reserve_initial_generation(
+        {"schema_version": "easyicu.initial_generation_authority/1"}
+    )
+    seed.consume("initial_generation")
+    seed.complete_initial_generation_transport(
+        provider_transport_id=initial_transport_id,
+        after_code_sha256="b" * 64,
+        after_code_size_bytes=7,
+    )
+    assert seed.reserve_logical_repair("runtime", max_repairs=2) == 1
+    seed.consume("runtime_repair_patch")
+    seed.complete_logical_repair_transport(
+        attempt_id=1,
+        mode="minimal_patch",
+        after_code_sha256="a" * 64,
+    )
+
+    definition, _snapshot = _extract_cohort_definition_with_provider_budget(
+        run_dir=tmp_path,
+        budget_owner_step_id=owner_step_id,
+        configured_limit=5,
+        cohort_prose="Include adults age 18 years or older.",
+        universe_columns=["stay_id", "age"],
+        llm=ScriptedMockLLMClient(
+            [
+                json.dumps(
+                    {
+                        "inclusion": [{"concept_id": "age", "op": ">=", "value": 18}],
+                        "exclusion": [],
+                    }
+                )
+            ]
+        ),
+        name="adult_icu",
+        reserved_final_category="concept_audit",
+    )
+
+    assert definition is not None
+    state = load_provider_call_budget_state(
+        receipt_path,
+        step_id=owner_step_id,
+        expected_reserved_final_category="concept_audit",
+    )
+    assert state.categories == (
+        "initial_generation",
+        "runtime_repair_patch",
+        "cohort_definition_translation",
+    )
+    assert state.initial_generation is not None
+    assert state.initial_generation["transport"] == {
+        "state": "completed",
+        "after_code_sha256": "b" * 64,
+        "after_code_size_bytes": 7,
+        "provider_history_len": 1,
+        "provider_history_sha256": hashlib.sha256(
+            json.dumps(
+                {"categories": ["initial_generation"]},
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest(),
+        "provider_calls": 1,
+    }
+    assert len(state.logical_repairs) == 1
+    assert state.logical_repairs[0]["transport"]["state"] == "completed"
 
 
 def test_cohort_translation_budget_owner_is_structural_not_prose_routed():
@@ -168,6 +285,18 @@ def test_cohort_translation_budget_owner_is_structural_not_prose_routed():
             SimpleNamespace(steps=[cohort_only, model])
         )
         == "01_cohort"
+    )
+
+    host_cohort_with_flow = SimpleNamespace(
+        step_id="01_host_cohort_with_flow",
+        expected_outputs=["artifact:analysis_cohort", "table:cohort_flow"],
+        intent="Materialize the selected cohort and exact attrition ledger.",
+    )
+    assert (
+        _cohort_translation_budget_owner_step_id(
+            SimpleNamespace(steps=[host_cohort_with_flow, model])
+        )
+        == "01_host_cohort_with_flow"
     )
 
     mixed = SimpleNamespace(
@@ -343,6 +472,101 @@ def test_resume_history_with_old_audit_does_not_release_slot_for_new_code(tmp_pa
     assert resumed.can_consume("concept_audit") is True
 
 
+def test_final_audit_phase_roundtrips_in_the_single_provider_receipt(tmp_path):
+    path = provider_call_budget_receipt_path(tmp_path, step_id="audit_roundtrip")
+    first = StepProviderCallBudget(
+        3,
+        step_id="audit_roundtrip",
+        receipt_path=path,
+        reserved_final_category="concept_audit",
+    )
+    first.bind_reserved_category("concept_audit", token="audit-authority")
+    assert (
+        first.reservation_status("concept_audit", token="audit-authority")
+        == "bound_unpaid"
+    )
+    first.consume("concept_audit")
+    assert (
+        first.reservation_status("concept_audit", token="audit-authority")
+        == "attempted_incomplete"
+    )
+
+    pending = load_provider_call_budget_state(
+        path,
+        step_id="audit_roundtrip",
+        expected_reserved_final_category="concept_audit",
+    )
+    assert pending.required_reservation_token == "audit-authority"
+    assert pending.reservation_bound_provider_history_len == 0
+    assert pending.completed_reservation_token is None
+    assert pending.reservation_released is False
+
+    first.complete_reserved_category("concept_audit", token="audit-authority")
+    completed = load_provider_call_budget_state(
+        path,
+        step_id="audit_roundtrip",
+        expected_reserved_final_category="concept_audit",
+    )
+    resumed = StepProviderCallBudget(
+        completed.limit,
+        step_id="audit_roundtrip",
+        consumed_categories=completed.categories,
+        logical_repair_entries=completed.logical_repairs,
+        receipt_path=path,
+        reserved_final_category="concept_audit",
+        required_reservation_token=completed.required_reservation_token,
+        reservation_bound_provider_history_len=(
+            completed.reservation_bound_provider_history_len
+        ),
+        completed_reservation_token=completed.completed_reservation_token,
+        reservation_released=completed.reservation_released,
+    )
+    assert (
+        resumed.reservation_status("concept_audit", token="audit-authority")
+        == "completed"
+    )
+    resumed.release_reserved_category("concept_audit", token="audit-authority")
+
+    released = load_provider_call_budget_state(
+        path,
+        step_id="audit_roundtrip",
+        expected_reserved_final_category="concept_audit",
+    )
+    assert released.reservation_released is True
+
+
+def test_final_audit_state_tamper_fails_with_recomputed_outer_digest(tmp_path):
+    path = provider_call_budget_receipt_path(tmp_path, step_id="audit_tamper")
+    budget = StepProviderCallBudget(
+        3,
+        step_id="audit_tamper",
+        receipt_path=path,
+        reserved_final_category="concept_audit",
+    )
+    budget.bind_reserved_category("concept_audit", token="audit-authority")
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload.pop("sha256")
+    payload["final_reservation_state"]["bound_provider_history_len"] = 2
+    canonical = json.dumps(
+        payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    payload["sha256"] = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+    path.write_text(
+        json.dumps(payload, ensure_ascii=False, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ProviderCallBudgetReceiptError, match="reservation state"):
+        load_provider_call_budget_state(
+            path,
+            step_id="audit_tamper",
+            expected_reserved_final_category="concept_audit",
+        )
+
+
 def test_receipt_rejects_final_audit_policy_drift(tmp_path):
     path = provider_call_budget_receipt_path(tmp_path, step_id="01_model")
     budget = StepProviderCallBudget(
@@ -362,7 +586,7 @@ def test_receipt_rejects_final_audit_policy_drift(tmp_path):
 
 
 def test_llm_concept_auditor_charges_shared_budget_and_fails_closed_when_empty():
-    llm = _AuditLLM()
+    llm = _audit_llm()
     auditor = LLMConceptAuditor(llm)
     budget = StepProviderCallBudget(1, step_id="audit")
 
@@ -373,7 +597,7 @@ def test_llm_concept_auditor_charges_shared_budget_and_fails_closed_when_empty()
     )
 
     assert findings == []
-    assert llm.calls == 1
+    assert len(llm.calls) == 1
     assert budget.categories == ("concept_audit",)
 
     with pytest.raises(ProviderCallBudgetExhausted) as exc_info:
@@ -384,13 +608,13 @@ def test_llm_concept_auditor_charges_shared_budget_and_fails_closed_when_empty()
         )
 
     assert exc_info.value.category == "concept_audit"
-    assert llm.calls == 1
+    assert len(llm.calls) == 1
 
 
 def test_analyzer_charges_the_same_step_budget_and_stops_when_exhausted():
-    from easyicu.research_agent.agents import AnalyzerAgent
+    from easyicu.research_agent.agents.core import AnalyzerAgent
 
-    llm = _AuditLLM()
+    llm = _audit_llm()
     analyzer = AnalyzerAgent(llm)
     budget = StepProviderCallBudget(1, step_id="analysis")
     step = AnalysisStep(step_id="03_model", intent="Interpret the fitted model.")
@@ -403,7 +627,7 @@ def test_analyzer_charges_the_same_step_budget_and_stops_when_exhausted():
         provider_budget=budget,
     )
 
-    assert llm.calls == 1
+    assert len(llm.calls) == 1
     assert budget.categories == ("analyzer",)
     with pytest.raises(ProviderCallBudgetExhausted) as exc_info:
         analyzer.run(
@@ -414,11 +638,11 @@ def test_analyzer_charges_the_same_step_budget_and_stops_when_exhausted():
             provider_budget=budget,
         )
     assert exc_info.value.category == "analyzer"
-    assert llm.calls == 1
+    assert len(llm.calls) == 1
 
 
 def test_openai_transport_retries_consume_the_same_provider_budget(monkeypatch):
-    from easyicu.research_agent.llm import LLMMessage, OpenAIClient
+    from easyicu.research_agent.providers.llm import LLMMessage, OpenAIClient
 
     class _Completions:
         def __init__(self) -> None:
@@ -435,13 +659,19 @@ def test_openai_transport_retries_consume_the_same_provider_budget(monkeypatch):
             )
 
     completions = _Completions()
-    client = OpenAIClient.__new__(OpenAIClient)
-    client._client = SimpleNamespace(chat=SimpleNamespace(completions=completions))
-    client._model = "gpt-test"
-    client._timeout = 1.0
-    client._extra_body = {}
-    client._local_noauth_mode = False
-    client._max_retries = 2
+    transport = SimpleNamespace(chat=SimpleNamespace(completions=completions))
+    monkeypatch.setitem(
+        sys.modules,
+        "openai",
+        SimpleNamespace(OpenAI=lambda **_kwargs: transport),
+    )
+    client = OpenAIClient(
+        model="gpt-test",
+        api_key="non-secret-test-key",
+        base_url="http://127.0.0.1:8317/v1",
+        request_timeout=1.0,
+        max_retries=2,
+    )
     monkeypatch.setattr("time.sleep", lambda _seconds: None)
     budget = StepProviderCallBudget(2, step_id="transport")
 
@@ -457,7 +687,7 @@ def test_openai_transport_retries_consume_the_same_provider_budget(monkeypatch):
 
 
 def test_openai_transport_retry_stops_before_exceeding_budget(monkeypatch):
-    from easyicu.research_agent.llm import LLMMessage, OpenAIClient
+    from easyicu.research_agent.providers.llm import LLMMessage, OpenAIClient
 
     class _Completions:
         def __init__(self) -> None:
@@ -468,13 +698,19 @@ def test_openai_transport_retry_stops_before_exceeding_budget(monkeypatch):
             return SimpleNamespace(choices=[], usage=None)
 
     completions = _Completions()
-    client = OpenAIClient.__new__(OpenAIClient)
-    client._client = SimpleNamespace(chat=SimpleNamespace(completions=completions))
-    client._model = "gpt-test"
-    client._timeout = 1.0
-    client._extra_body = {}
-    client._local_noauth_mode = False
-    client._max_retries = 3
+    transport = SimpleNamespace(chat=SimpleNamespace(completions=completions))
+    monkeypatch.setitem(
+        sys.modules,
+        "openai",
+        SimpleNamespace(OpenAI=lambda **_kwargs: transport),
+    )
+    client = OpenAIClient(
+        model="gpt-test",
+        api_key="non-secret-test-key",
+        base_url="http://127.0.0.1:8317/v1",
+        request_timeout=1.0,
+        max_retries=3,
+    )
     sleeps = []
     monkeypatch.setattr("time.sleep", sleeps.append)
     budget = StepProviderCallBudget(1, step_id="transport")
@@ -523,6 +759,606 @@ def test_budget_receipt_is_atomic_restorable_and_survives_lower_limit(tmp_path):
         restored.consume("must_not_run")
 
 
+def test_logical_repair_reservation_is_durable_before_provider_call(tmp_path):
+    path = provider_call_budget_receipt_path(tmp_path, step_id="07_balance")
+    budget = StepProviderCallBudget(
+        5,
+        step_id="07_balance",
+        receipt_path=path,
+        reserved_final_category="concept_audit",
+    )
+
+    assert budget.reserve_logical_repair("contract", max_repairs=3) == 1
+    assert budget.categories == ()
+    assert budget.logical_repair_classes == ("contract",)
+
+    state = load_provider_call_budget_state(
+        path,
+        step_id="07_balance",
+        expected_reserved_final_category="concept_audit",
+    )
+    assert state.categories == ()
+    assert [entry["repair_class"] for entry in state.logical_repairs] == ["contract"]
+    assert state.logical_repairs[0]["provider_history_len"] == 0
+
+    restored = StepProviderCallBudget(
+        state.limit,
+        step_id="07_balance",
+        consumed_categories=state.categories,
+        logical_repair_entries=state.logical_repairs,
+        receipt_path=path,
+        reserved_final_category="concept_audit",
+    )
+    assert restored.logical_repair_classes == ("contract",)
+    assert restored.next_logical_repair_attempt_id() == 1
+    assert restored.reserve_logical_repair("contract", max_repairs=1) == 1
+    with pytest.raises(ProviderCallBudgetReceiptError, match="different authority"):
+        restored.reserve_logical_repair("runtime", max_repairs=1)
+
+
+def test_logical_repair_transport_success_binds_after_code_and_provider_history(
+    tmp_path,
+):
+    path = provider_call_budget_receipt_path(tmp_path, step_id="bound_transport")
+    budget = StepProviderCallBudget(
+        5,
+        step_id="bound_transport",
+        receipt_path=path,
+        reserved_final_category="concept_audit",
+    )
+    assert budget.reserve_logical_repair("contract", max_repairs=2) == 1
+    budget.consume("contract_repair_patch")
+    after_code = "print('repaired')\n"
+    budget.complete_logical_repair_transport(
+        attempt_id=1,
+        mode="minimal_patch",
+        after_code_sha256=hashlib.sha256(after_code.encode("utf-8")).hexdigest(),
+    )
+
+    state = load_provider_call_budget_state(
+        path,
+        step_id="bound_transport",
+        expected_reserved_final_category="concept_audit",
+    )
+    transport = state.logical_repairs[0]["transport"]
+    assert transport == {
+        "state": "completed",
+        "mode": "minimal_patch",
+        "after_code_sha256": hashlib.sha256(after_code.encode("utf-8")).hexdigest(),
+        "provider_history_len": 1,
+        "provider_history_sha256": _category_digest(["contract_repair_patch"]),
+        "provider_calls": 1,
+        "result_persistence": "untracked",
+    }
+
+
+def test_paid_pending_logical_repair_fails_closed_without_duplicate_call(tmp_path):
+    path = provider_call_budget_receipt_path(tmp_path, step_id="paid_pending")
+    budget = StepProviderCallBudget(
+        5,
+        step_id="paid_pending",
+        receipt_path=path,
+        reserved_final_category="concept_audit",
+    )
+    assert budget.reserve_logical_repair("runtime", max_repairs=2) == 1
+    budget.consume("runtime_repair_patch")
+
+    with pytest.raises(ProviderCallBudgetReceiptError, match="paid provider calls"):
+        budget.next_logical_repair_attempt_id()
+    with pytest.raises(ProviderCallBudgetReceiptError, match="duplicate repair"):
+        budget.reserve_logical_repair("runtime", max_repairs=2)
+    assert budget.categories == ("runtime_repair_patch",)
+
+
+def test_unrelated_call_does_not_mark_authority_bound_pending_repair_paid(tmp_path):
+    path = provider_call_budget_receipt_path(tmp_path, step_id="unpaid_pending")
+    budget = StepProviderCallBudget(
+        5,
+        step_id="unpaid_pending",
+        receipt_path=path,
+        reserved_final_category="concept_audit",
+    )
+    binding = {
+        "schema_version": "easyicu.repair_authority_binding/2",
+        "provider_category": "runtime_repair",
+    }
+    assert (
+        budget.reserve_logical_repair(
+            "runtime",
+            max_repairs=2,
+            binding=binding,
+        )
+        == 1
+    )
+
+    budget.consume("concept_audit")
+    budget.consume("runtime_repair_patch_extra")
+
+    assert budget.next_logical_repair_attempt_id() == 1
+    assert (
+        budget.reserve_logical_repair(
+            "runtime",
+            max_repairs=2,
+            binding=binding,
+        )
+        == 1
+    )
+
+
+def test_authority_bound_pending_detects_only_its_own_paid_transport(tmp_path):
+    path = provider_call_budget_receipt_path(tmp_path, step_id="owned_pending")
+    budget = StepProviderCallBudget(
+        5,
+        step_id="owned_pending",
+        receipt_path=path,
+        reserved_final_category="concept_audit",
+    )
+    binding = {
+        "schema_version": "easyicu.repair_authority_binding/2",
+        "provider_category": "runtime_repair",
+    }
+    assert (
+        budget.reserve_logical_repair(
+            "runtime",
+            max_repairs=2,
+            binding=binding,
+        )
+        == 1
+    )
+    budget.consume("concept_audit")
+    budget.consume("runtime_repair_patch")
+
+    with pytest.raises(ProviderCallBudgetReceiptError, match="paid provider calls"):
+        budget.next_logical_repair_attempt_id()
+
+
+def test_legacy_pending_keeps_conservative_any_later_call_rule(tmp_path):
+    path = provider_call_budget_receipt_path(tmp_path, step_id="legacy_pending")
+    budget = StepProviderCallBudget(
+        5,
+        step_id="legacy_pending",
+        receipt_path=path,
+        reserved_final_category="concept_audit",
+    )
+    assert (
+        budget.reserve_logical_repair(
+            "runtime",
+            max_repairs=2,
+            binding={"schema_version": "easyicu.repair_authority_binding/1"},
+        )
+        == 1
+    )
+    budget.consume("concept_audit")
+
+    with pytest.raises(ProviderCallBudgetReceiptError, match="paid provider calls"):
+        budget.next_logical_repair_attempt_id()
+
+
+def test_transport_counts_only_attempt_owned_provider_calls(tmp_path):
+    path = provider_call_budget_receipt_path(tmp_path, step_id="owned_transport")
+    budget = StepProviderCallBudget(
+        5,
+        step_id="owned_transport",
+        receipt_path=path,
+        reserved_final_category="concept_audit",
+    )
+    assert (
+        budget.reserve_logical_repair(
+            "runtime",
+            max_repairs=2,
+            binding={
+                "schema_version": "easyicu.repair_authority_binding/2",
+                "provider_category": "runtime_repair",
+            },
+        )
+        == 1
+    )
+    budget.consume("concept_audit")
+    budget.consume("runtime_repair_patch")
+    budget.complete_logical_repair_transport(
+        attempt_id=1,
+        mode="minimal_patch",
+        after_code_sha256="a" * 64,
+    )
+
+    state = load_provider_call_budget_state(path, step_id="owned_transport")
+    transport = state.logical_repairs[0]["transport"]
+    assert transport["provider_history_len"] == 2
+    assert transport["provider_calls"] == 1
+
+
+def test_transport_counts_repeated_attempt_owned_retry_calls(tmp_path):
+    path = provider_call_budget_receipt_path(tmp_path, step_id="owned_retries")
+    budget = StepProviderCallBudget(
+        5,
+        step_id="owned_retries",
+        receipt_path=path,
+        reserved_final_category="concept_audit",
+    )
+    assert (
+        budget.reserve_logical_repair(
+            "runtime",
+            max_repairs=2,
+            binding={
+                "schema_version": "easyicu.repair_authority_binding/2",
+                "provider_category": "runtime_repair",
+            },
+        )
+        == 1
+    )
+    budget.consume("runtime_repair_patch")
+    budget.consume("runtime_repair_patch")
+    budget.complete_logical_repair_transport(
+        attempt_id=1,
+        mode="minimal_patch",
+        after_code_sha256="a" * 64,
+    )
+
+    state = load_provider_call_budget_state(path, step_id="owned_retries")
+    assert state.logical_repairs[0]["transport"]["provider_calls"] == 2
+
+
+def test_failed_logical_repair_transport_is_terminal_and_allows_next_attempt(
+    tmp_path,
+):
+    path = provider_call_budget_receipt_path(tmp_path, step_id="failed_transport")
+    budget = StepProviderCallBudget(
+        5,
+        step_id="failed_transport",
+        receipt_path=path,
+        reserved_final_category="concept_audit",
+    )
+    assert budget.reserve_logical_repair("runtime", max_repairs=2) == 1
+    budget.consume("runtime_repair_patch")
+    budget.fail_logical_repair_transport(
+        attempt_id=1,
+        error_type="JSONDecodeError",
+    )
+
+    assert budget.logical_repair_transport_states == ("failed",)
+    assert budget.next_logical_repair_attempt_id() == 2
+    assert budget.reserve_logical_repair("runtime", max_repairs=2) == 2
+
+
+def test_schema_v5_transport_tamper_fails_closed_with_recomputed_outer_digest(
+    tmp_path,
+):
+    path = provider_call_budget_receipt_path(tmp_path, step_id="tampered_transport")
+    budget = StepProviderCallBudget(
+        5,
+        step_id="tampered_transport",
+        receipt_path=path,
+        reserved_final_category="concept_audit",
+    )
+    assert budget.reserve_logical_repair("runtime", max_repairs=2) == 1
+    budget.consume("runtime_repair_patch")
+    budget.complete_logical_repair_transport(
+        attempt_id=1,
+        mode="minimal_patch",
+        after_code_sha256="a" * 64,
+    )
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["logical_repairs"][0]["transport"]["after_code_sha256"] = "b" * 63
+    payload["sha256"] = _payload_digest_without_sha(payload)
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(
+        ProviderCallBudgetReceiptError,
+        match="completed repair transport",
+    ):
+        load_provider_call_budget_state(path, step_id="tampered_transport")
+
+
+def test_pending_logical_repair_must_be_the_final_ledger_entry(tmp_path):
+    path = provider_call_budget_receipt_path(tmp_path, step_id="pending_not_final")
+    budget = StepProviderCallBudget(
+        5,
+        step_id="pending_not_final",
+        receipt_path=path,
+        reserved_final_category="concept_audit",
+    )
+    assert budget.reserve_logical_repair("runtime", max_repairs=2) == 1
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    second = dict(payload["logical_repairs"][0])
+    second["attempt_id"] = 2
+    second["repair_class"] = "contract"
+    payload["logical_repairs"].append(second)
+    payload["sha256"] = _payload_digest_without_sha(payload)
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(ProviderCallBudgetReceiptError, match="pending.*final"):
+        load_provider_call_budget_state(path, step_id="pending_not_final")
+
+
+def test_invalid_reservation_history_is_rejected_before_transport_validation(
+    tmp_path,
+):
+    path = provider_call_budget_receipt_path(tmp_path, step_id="invalid_history")
+    budget = StepProviderCallBudget(
+        5,
+        step_id="invalid_history",
+        receipt_path=path,
+        reserved_final_category="concept_audit",
+    )
+    assert budget.reserve_logical_repair("runtime", max_repairs=2) == 1
+    budget.consume("runtime_repair_patch")
+    budget.complete_logical_repair_transport(
+        attempt_id=1,
+        mode="minimal_patch",
+        after_code_sha256="a" * 64,
+    )
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["logical_repairs"][0]["provider_history_len"] = "0"
+    payload["sha256"] = _payload_digest_without_sha(payload)
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(
+        ProviderCallBudgetReceiptError,
+        match="logical repair history",
+    ):
+        load_provider_call_budget_state(path, step_id="invalid_history")
+
+
+def test_logical_repair_binding_payload_and_digest_are_consistent(tmp_path):
+    path = provider_call_budget_receipt_path(tmp_path, step_id="bound_repair")
+    budget = StepProviderCallBudget(
+        5,
+        step_id="bound_repair",
+        receipt_path=path,
+        reserved_final_category="concept_audit",
+    )
+    binding = {
+        "schema_version": "easyicu.repair_authority_binding/1",
+        "step_id": "bound_repair",
+        "attempt_id": 1,
+    }
+
+    assert (
+        budget.reserve_logical_repair(
+            "contract",
+            max_repairs=3,
+            binding=binding,
+        )
+        == 1
+    )
+    state = load_provider_call_budget_state(
+        path,
+        step_id="bound_repair",
+        expected_reserved_final_category="concept_audit",
+    )
+    assert state.logical_repairs[0]["binding"] == binding
+    assert len(str(state.logical_repairs[0]["binding_sha256"])) == 64
+
+
+@pytest.mark.parametrize(
+    "binding",
+    [
+        {"schema_version": "easyicu.repair_authority_binding/2"},
+        {
+            "schema_version": "easyicu.repair_authority_binding/1",
+            "provider_category": "runtime_repair",
+        },
+    ],
+)
+def test_repair_authority_provider_category_schema_is_strict(tmp_path, binding):
+    budget = StepProviderCallBudget(
+        5,
+        step_id="strict_binding",
+        receipt_path=provider_call_budget_receipt_path(
+            tmp_path,
+            step_id="strict_binding",
+        ),
+        reserved_final_category="concept_audit",
+    )
+
+    with pytest.raises(ProviderCallBudgetReceiptError, match="provider category"):
+        budget.reserve_logical_repair(
+            "runtime",
+            max_repairs=2,
+            binding=binding,
+        )
+    assert budget.logical_repair_classes == ()
+
+
+def test_logical_repair_binding_tamper_fails_with_recomputed_outer_digest(tmp_path):
+    path = provider_call_budget_receipt_path(tmp_path, step_id="bound_tamper")
+    budget = StepProviderCallBudget(
+        5,
+        step_id="bound_tamper",
+        receipt_path=path,
+        reserved_final_category="concept_audit",
+    )
+    assert (
+        budget.reserve_logical_repair(
+            "runtime",
+            max_repairs=3,
+            binding={"step_id": "bound_tamper", "attempt_id": 1},
+        )
+        == 1
+    )
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload.pop("sha256")
+    payload["logical_repairs"][0]["binding"]["attempt_id"] = 2
+    canonical = json.dumps(
+        payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    payload["sha256"] = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+    path.write_text(
+        json.dumps(payload, ensure_ascii=False, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ProviderCallBudgetReceiptError, match="inconsistent"):
+        load_provider_call_budget_state(
+            path,
+            step_id="bound_tamper",
+            expected_reserved_final_category="concept_audit",
+        )
+
+
+def test_legacy_logical_repair_history_migrates_once_into_same_receipt(tmp_path):
+    path = provider_call_budget_receipt_path(tmp_path, step_id="legacy")
+    budget = StepProviderCallBudget(
+        7,
+        step_id="legacy",
+        receipt_path=path,
+        reserved_final_category="concept_audit",
+    )
+    budget.consume("initial_generation")
+    budget.consume("concept_repair_patch")
+
+    budget.migrate_logical_repairs(("concept", "contract"))
+    budget.migrate_logical_repairs(("concept", "contract"))
+
+    state = load_provider_call_budget_state(
+        path,
+        step_id="legacy",
+        expected_reserved_final_category="concept_audit",
+    )
+    assert [entry["attempt_id"] for entry in state.logical_repairs] == [1, 2]
+    assert all(
+        entry.get("migrated_from_step_snapshot") is True
+        for entry in state.logical_repairs
+    )
+    with pytest.raises(
+        ProviderCallBudgetReceiptError,
+        match="conflicts",
+    ):
+        budget.migrate_logical_repairs(("runtime",))
+
+
+def test_schema_v2_receipt_loads_without_inventing_logical_repairs(tmp_path):
+    path = provider_call_budget_receipt_path(tmp_path, step_id="legacy_v2")
+    budget = StepProviderCallBudget(
+        4,
+        step_id="legacy_v2",
+        receipt_path=path,
+        reserved_final_category="concept_audit",
+    )
+    budget.consume("initial_generation")
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload.pop("sha256")
+    payload["schema_version"] = 2
+    payload.pop("logical_repairs")
+    payload.pop("final_reservation_state")
+    canonical = json.dumps(
+        payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    payload["sha256"] = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+    path.write_text(
+        json.dumps(payload, ensure_ascii=False, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    state = load_provider_call_budget_state(
+        path,
+        step_id="legacy_v2",
+        expected_reserved_final_category="concept_audit",
+    )
+
+    assert state.schema_version == 2
+    assert state.categories == ("initial_generation",)
+    assert state.logical_repairs == ()
+
+
+def test_schema_v3_receipt_keeps_logical_repairs_without_audit_phase(tmp_path):
+    path = provider_call_budget_receipt_path(tmp_path, step_id="legacy_v3")
+    budget = StepProviderCallBudget(
+        4,
+        step_id="legacy_v3",
+        receipt_path=path,
+        reserved_final_category="concept_audit",
+    )
+    assert budget.reserve_logical_repair("concept", max_repairs=2) == 1
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload.pop("sha256")
+    payload["schema_version"] = 3
+    payload.pop("final_reservation_state")
+    canonical = json.dumps(
+        payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    payload["sha256"] = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+    path.write_text(
+        json.dumps(payload, ensure_ascii=False, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    state = load_provider_call_budget_state(
+        path,
+        step_id="legacy_v3",
+        expected_reserved_final_category="concept_audit",
+    )
+    assert state.schema_version == 3
+    assert [entry["repair_class"] for entry in state.logical_repairs] == ["concept"]
+    assert state.required_reservation_token is None
+    assert state.reservation_released is False
+
+
+def test_logical_repair_persistence_failure_rolls_back_reservation(
+    monkeypatch,
+    tmp_path,
+):
+    path = provider_call_budget_receipt_path(tmp_path, step_id="repair")
+    budget = StepProviderCallBudget(3, step_id="repair", receipt_path=path)
+
+    def fail_replace(*_args):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(
+        "easyicu.research_agent.authority.provider_budget.os.replace",
+        fail_replace,
+    )
+    with pytest.raises(ProviderCallBudgetReceiptError, match="persist"):
+        budget.reserve_logical_repair("runtime", max_repairs=2)
+
+    assert budget.logical_repair_classes == ()
+    assert budget.categories == ()
+    assert not path.exists()
+
+
+def test_logical_repair_history_fails_closed_even_with_recomputed_outer_digest(
+    tmp_path,
+):
+    path = provider_call_budget_receipt_path(tmp_path, step_id="repair_tamper")
+    budget = StepProviderCallBudget(
+        3,
+        step_id="repair_tamper",
+        receipt_path=path,
+        reserved_final_category="concept_audit",
+    )
+    assert budget.reserve_logical_repair("runtime", max_repairs=2) == 1
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload.pop("sha256")
+    payload["logical_repairs"][0]["provider_history_len"] = 99
+    canonical = json.dumps(
+        payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    payload["sha256"] = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+    path.write_text(
+        json.dumps(payload, ensure_ascii=False, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ProviderCallBudgetReceiptError, match="inconsistent"):
+        load_provider_call_budget_state(
+            path,
+            step_id="repair_tamper",
+            expected_reserved_final_category="concept_audit",
+        )
+
+
 def test_receipt_persistence_failure_prevents_provider_call(monkeypatch, tmp_path):
     path = provider_call_budget_receipt_path(tmp_path, step_id="audit")
     budget = StepProviderCallBudget(1, step_id="audit", receipt_path=path)
@@ -532,7 +1368,7 @@ def test_receipt_persistence_failure_prevents_provider_call(monkeypatch, tmp_pat
         raise OSError("disk full")
 
     monkeypatch.setattr(
-        "easyicu.research_agent.provider_budget.os.replace",
+        "easyicu.research_agent.authority.provider_budget.os.replace",
         fail_replace,
     )
 
@@ -551,13 +1387,13 @@ def test_receipt_persistence_failure_prevents_provider_call(monkeypatch, tmp_pat
 def test_concept_auditor_does_not_downgrade_receipt_failure(monkeypatch, tmp_path):
     path = provider_call_budget_receipt_path(tmp_path, step_id="audit")
     budget = StepProviderCallBudget(1, step_id="audit", receipt_path=path)
-    llm = _AuditLLM()
+    llm = _audit_llm()
 
     def fail_replace(*_args):
         raise OSError("read-only filesystem")
 
     monkeypatch.setattr(
-        "easyicu.research_agent.provider_budget.os.replace",
+        "easyicu.research_agent.authority.provider_budget.os.replace",
         fail_replace,
     )
 
@@ -568,26 +1404,14 @@ def test_concept_auditor_does_not_downgrade_receipt_failure(monkeypatch, tmp_pat
             provider_budget=budget,
         )
 
-    assert llm.calls == 0
+    assert len(llm.calls) == 0
 
 
 def test_fallback_children_each_consume_a_real_provider_attempt():
-    from easyicu.research_agent.llm import FallbackLLMClient, LLMMessage
+    from easyicu.research_agent.providers.llm import FallbackLLMClient, LLMMessage
 
-    class _Child:
-        def __init__(self, result=None, error=None):
-            self.result = result
-            self.error = error
-            self.calls = 0
-
-        def complete(self, messages, **kwargs):  # noqa: ANN001, ANN003
-            self.calls += 1
-            if self.error is not None:
-                raise self.error
-            return self.result
-
-    first = _Child(error=RuntimeError("429 rate limit"))
-    second = _Child(result="ok")
+    first = ScriptedMockLLMClient([RuntimeError("429 rate limit")])
+    second = ScriptedMockLLMClient(["ok"])
     client = FallbackLLMClient(first, second)
     budget = StepProviderCallBudget(2, step_id="fallback")
 
@@ -598,29 +1422,27 @@ def test_fallback_children_each_consume_a_real_provider_attempt():
     )
 
     assert result == "ok"
-    assert first.calls == 1
-    assert second.calls == 1
+    assert len(first.calls) == 1
+    assert len(second.calls) == 1
     assert budget.categories == ("repair_patch", "repair_patch")
 
 
 def test_fallback_does_not_double_charge_transparent_transport_aware_wrapper():
-    from easyicu.research_agent.llm import FallbackLLMClient, LLMMessage
-
-    class _AwareClient:
-        provider_attempt_budget_aware = True
-
-        def complete(self, messages, **kwargs):  # noqa: ANN001, ANN003
-            consume_active_transport_attempt()
-            return "ok"
+    from easyicu.research_agent.providers.llm import FallbackLLMClient, LLMMessage
 
     class _Wrapper:
         def __init__(self, inner):
+            from easyicu.research_agent.providers.factory import (
+                _register_provider_wrapper,
+            )
+
             self._inner = inner
+            _register_provider_wrapper(self, children_getter=lambda: (self._inner,))
 
         def complete(self, messages, **kwargs):  # noqa: ANN001, ANN003
             return self._inner.complete(messages, **kwargs)
 
-    client = FallbackLLMClient(_Wrapper(_AwareClient()))
+    client = FallbackLLMClient(_Wrapper(BudgetAwareScriptedMockLLMClient(["ok"])))
     budget = StepProviderCallBudget(1, step_id="wrapped")
 
     result = complete_with_provider_budget(
@@ -646,83 +1468,97 @@ df = pd.read_parquet(os.environ["COHORT_PARQUET"])
 out = os.environ["STEP_OUT_DIR"]
 summary = {
     "n": int(len(df)),
-    "output_files": [
-        {"kind": "table", "name": "cohort_summary", "path": "cohort_summary.csv"}
-    ],
+    "output_files": {
+        "table:baseline_characteristics": "baseline_characteristics.csv",
+        "table:exposure_outcome_distribution": "exposure_outcome_distribution.csv",
+    },
 }
-pd.DataFrame([summary]).to_csv(os.path.join(out, "cohort_summary.csv"), index=False)
+pd.DataFrame({"n": [len(df)]}).to_csv(
+    os.path.join(out, "baseline_characteristics.csv"), index=False
+)
+pd.DataFrame({"n": [len(df)]}).to_csv(
+    os.path.join(out, "exposure_outcome_distribution.csv"), index=False
+)
 with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as handle:
     json.dump(summary, handle)
 """
 
-    class _BudgetedPipelineLLM:
-        name = "provider-budget-pipeline-test"
+    plan_response = json.dumps(
+        {
+            "research_question": "Summarize the ICU cohort.",
+            "steps": [
+                {
+                    "step_id": "01_summary",
+                    "planned_analysis_role": "primary",
+                    "intent": "Produce a descriptive cohort summary.",
+                    "inputs": ["stay_id"],
+                    "expected_outputs": [
+                        "table:baseline_characteristics",
+                        "table:exposure_outcome_distribution",
+                    ],
+                    "method": "descriptive_summary",
+                    "icu_rule_refs": [],
+                },
+                {
+                    "step_id": "02_cohort_flow",
+                    "planned_analysis_role": "auxiliary",
+                    "intent": "Report cohort accounting.",
+                    "inputs": ["stay_id"],
+                    "expected_outputs": ["table:cohort_flow"],
+                    "method": "descriptive_summary",
+                    "icu_rule_refs": [],
+                },
+                {
+                    "step_id": "03_distribution",
+                    "planned_analysis_role": "auxiliary",
+                    "intent": "Render the descriptive distribution.",
+                    "inputs": ["stay_id"],
+                    "expected_outputs": ["figure:distribution_plot"],
+                    "method": "visualization",
+                    "icu_rule_refs": [],
+                },
+                {
+                    "step_id": "04_missingness",
+                    "planned_analysis_role": "auxiliary",
+                    "intent": "Report data quality and missingness.",
+                    "inputs": ["stay_id"],
+                    "expected_outputs": ["table:missingness_table"],
+                    "method": "data_quality_audit",
+                    "icu_rule_refs": [],
+                },
+            ],
+            "rationale": "provider budget resume regression",
+        }
+    )
+    audit_response = json.dumps(
+        {
+            "findings": [
+                {
+                    "severity": "error",
+                    "message": "A binding concept error requires repair.",
+                    "detail": {"issue_code": "provider_budget_resume_test"},
+                }
+            ]
+        }
+    )
 
-        def __init__(self) -> None:
-            self.plan_calls = 0
-            self.write_calls = 0
-            self.audit_calls = 0
-            self.repair_calls = 0
-
-        def complete(self, messages, *, max_tokens=2048, temperature=0.2):
-            del max_tokens, temperature
-            system = "\n".join(
-                str(message.content or "")
-                for message in messages
-                if message.role == "system"
-            )
-            user = next(
-                (
-                    str(message.content or "")
-                    for message in reversed(messages)
-                    if message.role == "user"
-                ),
-                "",
-            )
-            upper = user.upper()
-            if "ICU-AWARE RESEARCH PLAN" in upper:
-                self.plan_calls += 1
-                return json.dumps(
-                    {
-                        "research_question": "Summarize the ICU cohort.",
-                        "steps": [
-                            {
-                                "step_id": "01_summary",
-                                "intent": "Produce a descriptive cohort summary.",
-                                "inputs": ["stay_id"],
-                                "expected_outputs": ["table:cohort_summary"],
-                                "method": "descriptive_summary",
-                                "icu_rule_refs": [],
-                            }
-                        ],
-                        "rationale": "provider budget resume regression",
-                    }
-                )
-            if "WRITE THE PYTHON CODE" in upper:
-                self.write_calls += 1
-                return draft_code
-            if "CONSERVATIVE ICU CONCEPT-USE AUDITOR" in system.upper():
-                self.audit_calls += 1
-                return json.dumps(
-                    {
-                        "findings": [
-                            {
-                                "severity": "error",
-                                "message": "A binding concept error requires repair.",
-                                "detail": {
-                                    "issue_code": "provider_budget_resume_test",
-                                },
-                            }
-                        ]
-                    }
-                )
-            if "REPAIR" in upper:
-                self.repair_calls += 1
-                return draft_code.replace('"n": int(len(df))', '"n": int(len(df))')
-            return "{}"
+    def count_calls(llm: ScriptedMockLLMClient, marker: str) -> int:
+        folded_marker = marker.casefold()
+        return sum(
+            folded_marker
+            in "\n".join(str(message.content or "") for message in messages).casefold()
+            for messages, _kwargs in llm.calls
+        )
 
     cohort = pd.DataFrame({"stay_id": [1, 2, 3], "death": [0, 1, 0]})
-    first_llm = _BudgetedPipelineLLM()
+    first_llm = PatternScriptedMockLLMClient(
+        [
+            ("ICU-AWARE RESEARCH PLAN", [plan_response]),
+            ("WRITE THE PYTHON CODE", [draft_code]),
+            ("CONSERVATIVE ICU CONCEPT-USE AUDITOR", [audit_response]),
+            ("REPAIR THE PYTHON CODE", [draft_code]),
+        ]
+    )
     first_pipeline = ra.ResearchAgentPipeline(
         workdir=tmp_path,
         llm=first_llm,
@@ -732,6 +1568,9 @@ with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as hand
         enable_llm_concept_audit=True,
         enable_deterministic_code_fallback=False,
         enable_deterministic_runner_repair=False,
+        enable_probe_step=False,
+        enable_replanning=False,
+        runner_kind="subprocess",
         max_step_provider_calls=2,
     )
     first = first_pipeline.run(
@@ -752,11 +1591,13 @@ with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as hand
 
     assert stored_limit == 2
     assert stored_categories == ("initial_generation", "concept_audit")
-    assert first_llm.write_calls == 1
-    assert first_llm.audit_calls == 1
-    assert first_llm.repair_calls == 0
+    assert count_calls(first_llm, "WRITE THE PYTHON CODE") == 1
+    assert count_calls(first_llm, "CONSERVATIVE ICU CONCEPT-USE AUDITOR") == 1
+    assert count_calls(first_llm, "REPAIR THE PYTHON CODE") == 0
 
-    resumed_llm = _BudgetedPipelineLLM()
+    resumed_llm = PatternScriptedMockLLMClient(
+        [("ICU-AWARE RESEARCH PLAN", [plan_response])]
+    )
     resumed_pipeline = ra.ResearchAgentPipeline(
         workdir=tmp_path,
         llm=resumed_llm,
@@ -766,6 +1607,9 @@ with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as hand
         enable_llm_concept_audit=True,
         enable_deterministic_code_fallback=False,
         enable_deterministic_runner_repair=False,
+        enable_probe_step=False,
+        enable_replanning=False,
+        runner_kind="subprocess",
         max_step_provider_calls=2,
     )
     resumed_pipeline.run(
@@ -797,9 +1641,9 @@ with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as hand
     ]
     assert latest.get("step_llm_repair_attempts", 0) == 0
     assert latest["step_provider_call_repair_unavailable"] is True
-    assert resumed_llm.write_calls == 0
-    assert resumed_llm.audit_calls == 0
-    assert resumed_llm.repair_calls == 0
+    assert count_calls(resumed_llm, "WRITE THE PYTHON CODE") == 0
+    assert count_calls(resumed_llm, "CONSERVATIVE ICU CONCEPT-USE AUDITOR") == 0
+    assert count_calls(resumed_llm, "REPAIR THE PYTHON CODE") == 0
 
 
 def test_pipeline_default_budget_executes_two_semantic_repairs_and_final_audit(
@@ -807,7 +1651,7 @@ def test_pipeline_default_budget_executes_two_semantic_repairs_and_final_audit(
     tmp_path: Path,
 ):
     def script(marker: str) -> str:
-        return f'''\
+        return f"""\
 import json
 import os
 import pandas as pd
@@ -817,97 +1661,128 @@ df = pd.read_parquet(os.environ["COHORT_PARQUET"])
 out = os.environ["STEP_OUT_DIR"]
 summary = {{
     "n": int(len(df)),
-    "output_files": [
-        {{"kind": "table", "name": "cohort_summary", "path": "cohort_summary.csv"}}
-    ],
+    "output_files": {{
+        "table:baseline_characteristics": "baseline_characteristics.csv",
+        "table:exposure_outcome_distribution": "exposure_outcome_distribution.csv",
+    }},
 }}
-pd.DataFrame([summary]).to_csv(os.path.join(out, "cohort_summary.csv"), index=False)
+pd.DataFrame({{"n": [len(df)]}}).to_csv(
+    os.path.join(out, "baseline_characteristics.csv"), index=False
+)
+pd.DataFrame({{"n": [len(df)]}}).to_csv(
+    os.path.join(out, "exposure_outcome_distribution.csv"), index=False
+)
 with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as handle:
     json.dump(summary, handle)
-'''
+"""
 
-    class _TwoRepairLLM:
-        name = "two-semantic-repair-budget-test"
+    plan_response = json.dumps(
+        {
+            "research_question": "Summarize the ICU cohort.",
+            "steps": [
+                {
+                    "step_id": "01_summary",
+                    "planned_analysis_role": "primary",
+                    "intent": "Produce a descriptive cohort summary.",
+                    "inputs": ["stay_id"],
+                    "expected_outputs": [
+                        "table:baseline_characteristics",
+                        "table:exposure_outcome_distribution",
+                    ],
+                    "method": "descriptive_summary",
+                    "icu_rule_refs": [],
+                },
+                {
+                    "step_id": "02_cohort_flow",
+                    "planned_analysis_role": "auxiliary",
+                    "intent": "Report cohort accounting.",
+                    "inputs": ["stay_id"],
+                    "expected_outputs": ["table:cohort_flow"],
+                    "method": "descriptive_summary",
+                    "icu_rule_refs": [],
+                },
+                {
+                    "step_id": "03_distribution",
+                    "planned_analysis_role": "auxiliary",
+                    "intent": "Render the descriptive distribution.",
+                    "inputs": ["stay_id"],
+                    "expected_outputs": ["figure:distribution_plot"],
+                    "method": "visualization",
+                    "icu_rule_refs": [],
+                },
+                {
+                    "step_id": "04_missingness",
+                    "planned_analysis_role": "auxiliary",
+                    "intent": "Report data quality and missingness.",
+                    "inputs": ["stay_id"],
+                    "expected_outputs": ["table:missingness_table"],
+                    "method": "data_quality_audit",
+                    "icu_rule_refs": [],
+                },
+            ],
+            "rationale": "two semantic repair budget regression",
+        }
+    )
 
-        def __init__(self) -> None:
-            self.audit_calls = 0
-            self.repair_calls = 0
+    def audit_response(marker: str | None) -> str:
+        return json.dumps(
+            {
+                "findings": (
+                    [
+                        {
+                            "severity": "error",
+                            "message": f"{marker} requires one repair.",
+                            "detail": {"issue_code": "other"},
+                        }
+                    ]
+                    if marker
+                    else []
+                )
+            }
+        )
 
-        def complete(self, messages, *, max_tokens=2048, temperature=0.2):
-            del max_tokens, temperature
-            system = "\n".join(
-                str(message.content or "")
-                for message in messages
-                if message.role == "system"
-            )
-            user = next(
-                (
-                    str(message.content or "")
-                    for message in reversed(messages)
-                    if message.role == "user"
-                ),
-                "",
-            )
-            upper = user.upper()
-            if "ICU-AWARE RESEARCH PLAN" in upper:
-                return json.dumps(
+    def patch(old_marker: str, new_marker: str) -> str:
+        return json.dumps(
+            {
+                "format": PATCH_FORMAT,
+                "edits": [
                     {
-                        "research_question": "Summarize the ICU cohort.",
-                        "steps": [
-                            {
-                                "step_id": "01_summary",
-                                "intent": "Produce a descriptive cohort summary.",
-                                "inputs": ["stay_id"],
-                                "expected_outputs": ["table:cohort_summary"],
-                                "method": "descriptive_summary",
-                                "icu_rule_refs": [],
-                            }
-                        ],
-                        "rationale": "two semantic repair budget regression",
+                        "old": f"# {old_marker}",
+                        "new": f"# {new_marker}",
+                        "expected_count": 1,
                     }
-                )
-            if "WRITE THE PYTHON CODE" in upper:
-                return script("SEMANTIC_REPAIR_ROUND_1")
-            if "CONSERVATIVE ICU CONCEPT-USE AUDITOR" in system.upper():
-                self.audit_calls += 1
-                marker = next(
-                    (
-                        value
-                        for value in (
-                            "SEMANTIC_REPAIR_ROUND_1",
-                            "SEMANTIC_REPAIR_ROUND_2",
-                        )
-                        if value in user
-                    ),
-                    None,
-                )
-                return json.dumps(
-                    {
-                        "findings": (
-                            [
-                                {
-                                    "severity": "error",
-                                    "message": f"{marker} requires one repair.",
-                                    "detail": {"issue_code": "other"},
-                                }
-                            ]
-                            if marker
-                            else []
-                        )
-                    }
-                )
-            if "REPAIR THE PYTHON CODE" in upper:
-                self.repair_calls += 1
-                return script(
-                    "SEMANTIC_REPAIR_ROUND_2"
-                    if self.repair_calls == 1
-                    else "SEMANTIC_AUDIT_SAFE"
-                )
-            if "INTERPRET THE RESULTS" in upper:
-                return "Cohort summary completed {evidence:cohort_summary}."
-            return "{}"
+                ],
+            }
+        )
 
-    llm = _TwoRepairLLM()
+    llm = PatternScriptedMockLLMClient(
+        [
+            ("ICU-AWARE RESEARCH PLAN", [plan_response]),
+            ("WRITE THE PYTHON CODE", [script("SEMANTIC_REPAIR_ROUND_1")]),
+            (
+                "CONSERVATIVE ICU CONCEPT-USE AUDITOR",
+                [
+                    audit_response("SEMANTIC_REPAIR_ROUND_1"),
+                    audit_response("SEMANTIC_REPAIR_ROUND_2"),
+                    audit_response(None),
+                ],
+            ),
+            (
+                "REPAIR THE PYTHON CODE",
+                [
+                    patch("SEMANTIC_REPAIR_ROUND_1", "SEMANTIC_REPAIR_ROUND_2"),
+                    patch("SEMANTIC_REPAIR_ROUND_2", "SEMANTIC_AUDIT_SAFE"),
+                ],
+            ),
+            (
+                "INTERPRET THE RESULTS",
+                [
+                    "Cohort summary completed "
+                    "{evidence:baseline_characteristics}."
+                ],
+            ),
+        ]
+    )
     pipeline = ra.ResearchAgentPipeline(
         workdir=tmp_path,
         llm=llm,
@@ -917,6 +1792,9 @@ with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as hand
         enable_llm_concept_audit=True,
         enable_deterministic_code_fallback=False,
         enable_deterministic_runner_repair=False,
+        enable_probe_step=False,
+        enable_replanning=False,
+        runner_kind="subprocess",
     )
     result = pipeline.run(
         question="Summarize the ICU cohort.",
@@ -937,8 +1815,19 @@ with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as hand
     ][-1]
 
     assert record["status"] == "ok"
-    assert llm.repair_calls == 2
-    assert llm.audit_calls == 3
+    prompt_texts = [
+        "\n".join(str(message.content or "") for message in messages)
+        for messages, _kwargs in llm.calls
+    ]
+    folded_prompts = [prompt.casefold() for prompt in prompt_texts]
+    assert sum("repair the python code" in prompt for prompt in folded_prompts) == 2
+    assert (
+        sum(
+            "conservative icu concept-use auditor" in prompt
+            for prompt in folded_prompts
+        )
+        == 3
+    )
     assert record["step_llm_repair_attempts"] == 2
     assert record["step_provider_call_categories"] == [
         "initial_generation",
@@ -949,3 +1838,17 @@ with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as hand
         "concept_audit",
         "analyzer",
     ]
+    receipt_state = load_provider_call_budget_state(
+        provider_call_budget_receipt_path(
+            Path(result.workdir),
+            step_id="01_summary",
+        ),
+        step_id="01_summary",
+        expected_reserved_final_category="concept_audit",
+    )
+    assert len(receipt_state.logical_repairs) == 2
+    assert all(
+        entry.get("binding", {}).get("step_id") == "01_summary"
+        and entry.get("binding_sha256")
+        for entry in receipt_state.logical_repairs
+    )

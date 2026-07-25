@@ -7,7 +7,23 @@ from easyicu.research_agent.plan_utils import (
     _cap_plan_preserving_figure_steps,
     _typed_plan_dag_findings,
 )
-from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep
+from easyicu.research_agent.pipeline import (
+    _defer_typed_plan_dag_findings_until_probe,
+)
+from easyicu.research_agent.planning.replan_gate import (
+    partition_replan_candidate_findings,
+    replan_candidate_contract_findings,
+    replan_candidate_rejection_finding,
+)
+from easyicu.research_agent.schema import (
+    AnalysisPlan,
+    AnalysisStep,
+    CohortDescriptor,
+    ConceptDescriptor,
+    ResearchContext,
+    VariableRole,
+    ValidationFinding,
+)
 
 
 def _step(
@@ -73,7 +89,9 @@ def test_under_cap_plan_is_stably_topologically_ordered():
     plan = AnalysisPlan(
         research_question="Generic product chain",
         steps=[
-            _step("01_consumer", inputs=["artifact:prepared"], outputs=["table:result"]),
+            _step(
+                "01_consumer", inputs=["artifact:prepared"], outputs=["table:result"]
+            ),
             _step("02_unrelated", outputs=["table:notes"]),
             _step("03_producer", outputs=["artifact:prepared"]),
         ],
@@ -87,8 +105,7 @@ def test_under_cap_plan_is_stably_topologically_ordered():
         "01_consumer",
     ]
     assert any(
-        (finding.detail or {}).get("reason")
-        == "typed_dependency_topological_reorder"
+        (finding.detail or {}).get("reason") == "typed_dependency_topological_reorder"
         for finding in findings
     )
     assert _typed_plan_dag_findings(normalized) == []
@@ -114,6 +131,111 @@ def test_missing_typed_producer_remains_fail_closed():
         (finding.detail or {}).get("reason") == "typed_input_producer_missing"
         for finding in dag_findings
     )
+
+
+def test_replan_candidate_contract_rejects_ambiguous_producer():
+    plan = AnalysisPlan(
+        research_question="Audit a measured exposure.",
+        steps=[
+            _step("01_audit", outputs=["table:quality_audit"]),
+            _step("02_validate", outputs=["table:quality_audit"]),
+            _step(
+                "03_figure",
+                inputs=["table:quality_audit"],
+                outputs=["figure:quality_audit"],
+                method="visualization",
+            ),
+        ],
+        revision=2,
+    )
+    context = ResearchContext(
+        research_question="Audit a measured exposure.",
+        cohort=CohortDescriptor(
+            cohort_name="cohort", database="synthetic", n_patients=10, n_stays=10
+        ),
+        variables=[
+            ConceptDescriptor(name="exposure", role=VariableRole.LAB, dtype="float64")
+        ],
+    )
+
+    findings = replan_candidate_contract_findings(plan=plan, context=context)
+
+    assert any(
+        finding.severity == "error"
+        and (finding.detail or {}).get("reason") == "typed_input_producer_ambiguous"
+        for finding in findings
+    )
+
+
+def test_rejected_replan_candidate_errors_remain_diagnostic_only():
+    normalization_error = ValidationFinding(
+        validator="replanner",
+        severity="error",
+        message="Candidate output kind is not materializable.",
+        detail={
+            "reason": "typed_output_kind_not_materializable",
+            "typed_product": "protocol:robustness",
+        },
+    )
+    normalization_warning = ValidationFinding(
+        validator="replanner",
+        severity="warning",
+        message="Immutable scope was restored.",
+        detail={"reason": "completed_step_snapshot_immutable"},
+    )
+    duplicate_contract_error = normalization_error.model_copy(
+        update={"validator": "replanner"}
+    )
+
+    active, errors = partition_replan_candidate_findings(
+        normalization_findings=[normalization_warning, normalization_error],
+        contract_findings=[duplicate_contract_error],
+    )
+    rejection = replan_candidate_rejection_finding(
+        contract_errors=errors,
+        trigger="probe_summary",
+        candidate_revision=3,
+    )
+
+    assert active == [normalization_warning]
+    assert len(errors) == 1
+    assert rejection.severity == "warning"
+    assert rejection.detail["contract_findings"][0]["detail"] == {
+        "reason": "typed_output_kind_not_materializable",
+        "typed_product": "protocol:robustness",
+    }
+
+
+def test_preprobe_typed_error_becomes_pending_but_unrelated_error_stays_current():
+    initial = [
+        ValidationFinding(
+            validator="plan_typed_dag",
+            severity="error",
+            message="Multiple declared producers require planner repair.",
+            detail={
+                "reason": "typed_input_producer_ambiguous",
+                "typed_product": "table:result",
+            },
+        ),
+        ValidationFinding(
+            validator="planner",
+            severity="error",
+            message="The plan cap cannot preserve all protected steps.",
+            detail={"reason": "typed_dependency_closure_exceeds_cap"},
+        ),
+    ]
+
+    deferred = _defer_typed_plan_dag_findings_until_probe(initial)
+
+    assert deferred[0].validator == "plan_contract_pending"
+    assert deferred[0].severity == "warning"
+    assert deferred[0].detail == {
+        "reason": "typed_input_producer_ambiguous",
+        "typed_product": "table:result",
+        "pending_probe_replan": True,
+        "original_validator": "plan_typed_dag",
+    }
+    assert deferred[1] == initial[1]
 
 
 @pytest.mark.parametrize("kind", ["feature", "qc"])

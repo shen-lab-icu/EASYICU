@@ -22,7 +22,6 @@ from pathlib import Path
 
 import pytest
 
-
 # ---------------------------------------------------------------------------
 # EvidenceStore stress test
 # ---------------------------------------------------------------------------
@@ -30,7 +29,7 @@ import pytest
 
 def test_evidence_store_concurrent_registers_preserve_every_record(ra, tmp_path):
     """Hammer ``register_file`` from N threads; expect every record to land."""
-    from easyicu.research_agent.evidence import EvidenceStore
+    from easyicu.research_agent.authority.evidence_store import EvidenceStore
 
     store = EvidenceStore(root=tmp_path)
     n_threads = 8
@@ -175,6 +174,45 @@ def test_concurrent_pipeline_records_sorted_by_plan_order(
     seen = {r["step_id"] for r in partial.get("per_step_records", [])}
     assert set(plan_step_ids) <= seen
     assert seen - set(plan_step_ids) <= {"00_probe"}
+
+
+def test_replanning_forces_sequential_even_when_concurrency_requested(
+    ra, synthetic_cohort, tmp_path
+):
+    """B3 safety gate: a run with replanning enabled MUST execute sequentially
+    even when ``max_concurrent_steps > 1``, emitting an explicit
+    ``forced to sequential`` finding. This is why B3 (bounded step concurrency)
+    does not accelerate canonical E3/H2/E2 — those enable replanning and are
+    therefore correctly serial-gated, not unoptimized. Raising the cap must never
+    silently reorder a replanning run.
+    """
+    pipeline = ra.ResearchAgentPipeline(
+        workdir=str(tmp_path),
+        llm=ra.MockLLMClient(),
+        max_concurrent_steps=2,
+        enable_replanning=True,
+        enable_literature=False,
+        enable_visual_qa=False,
+        enable_memory=False,
+        enable_latex=False,
+    )
+    result = pipeline.run(
+        skill="association_analysis", cohort=synthetic_cohort, database="synthetic"
+    )
+
+    data = json.loads(Path(result.manifest_path).read_text(encoding="utf-8"))
+    sequential_gate = [
+        f
+        for f in data.get("findings", [])
+        if f.get("validator") == "replanner"
+        and "forced to sequential" in f.get("message", "")
+    ]
+    assert sequential_gate, (
+        "replanning must force sequential execution when concurrency is "
+        "requested, but the safety-gate finding was not emitted"
+    )
+    # The cap was accepted (2) but deliberately gated off by replanning.
+    assert pipeline._max_concurrent_steps == 2
 
 
 def test_concurrent_default_one_worker_keeps_sequential_path(

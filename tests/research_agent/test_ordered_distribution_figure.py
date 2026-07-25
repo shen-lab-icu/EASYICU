@@ -16,8 +16,8 @@ from easyicu.research_agent.audits.validators import (
 from easyicu.research_agent.figures.ordered_distribution import (
     render_ordered_distribution_bundle_from_prior_outputs,
 )
-from easyicu.research_agent.evidence import EvidenceStore
-from easyicu.research_agent.declared_product_contract import (
+from easyicu.research_agent.authority.evidence_store import EvidenceStore
+from easyicu.research_agent.contracts.declared_product import (
     bind_declared_figure_products,
 )
 from easyicu.research_agent.pipeline import (
@@ -519,7 +519,7 @@ def test_ordered_sealed_renderer_requires_structural_child_edge(tmp_path: Path) 
 
 def test_renderer_and_prompt_remain_case_neutral() -> None:
     import easyicu.research_agent.figures.ordered_distribution as module
-    from easyicu.research_agent.prompts import load_prompt_pack
+    from easyicu.research_agent.providers.prompts import load_prompt_pack
 
     source = Path(module.__file__).read_text(encoding="utf-8").lower()
     assert "kdigo" not in source

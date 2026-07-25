@@ -51,7 +51,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 logger = logging.getLogger(__name__)
 
-from .agents import (
+from .agents.core import (
     AnalyzerAgent,
     ClinicalSemanticsAgent,
     CoderAgent,
@@ -59,27 +59,42 @@ from .agents import (
     DataExtractionAgent,
     ManuscriptAgent,
     PlannerAgent,
+    PlannerArticleContractError,
     ReplannerAgent,
     RuntimeSupervisor,
     StatisticalAnalysisAgent,
     VisualizationAgent,
 )
 from .architecture import architecture_profile_markdown, default_architecture_profile
-from .cost import CostMeter, metered_role_resolver
+from .authority.parent_artifact import (
+    _resolve_upstream_manifest_analysis_request,
+    _resolve_upstream_manifest_step,
+    _verified_direct_parent_artifact_digests,
+    _verified_direct_parent_table_names,
+)
+from .authority.figure_renderer import (
+    _ordered_distribution_availability_parent_digest_seal,
+    _sealed_renderer_figure_step_matches_parent,
+)
+from .providers.cost import CostMeter, metered_role_resolver
+from .figures.distribution_availability import (
+    _distribution_availability_figure_step_matches_parent,
+)
+from .figures.sealed_registry import sealed_renderer_adapter
 from .replication.envelope import (
     ENVELOPE_SCHEMA_VERSION,
     ReproEnvelope,
     envelope_role_resolver,
 )
 from .methods.multiple_testing import build_multiple_testing_report
-from .causal_audit import run_causal_audit
-from .reporting_checklist import (
+from .review.causal_audit import run_causal_audit
+from .reporting.reporting_checklist import (
     build_strobe_checklist,
     build_tripod_ai_checklist,
     choose_checklist,
 )
-from .reviewer import run_reviewer_round
-from .provenance import (
+from .reporting.reviewer import run_reviewer_round
+from .authority.provenance import (
     ProvenanceBundle,
     SourceFileRecord,
     build_provenance_bundle,
@@ -111,51 +126,94 @@ from .replication.notebook import (
     build_requirements_lockfile,
     write_notebook,
 )
-from .hypothesis_generator import generate_hypotheses
-from .pdf_render import render_pdf_for_run
-from .context import (
+from .discovery.hypothesis_generator import generate_hypotheses
+from .reporting.pdf_render import render_pdf_for_run
+from .research_context.builder import (
     build_naive_research_context,
     build_research_context,
     build_retrieved_research_context,
 )
-from .context_numeric import register_context_numeric_claims
-from . import pipeline_cache as _pipeline_cache
-from .analysis_blueprint import (
+from .research_context.typed import parse_research_context_json
+from .gates.preplan import preplan_data_failure_reason, preplan_data_findings
+from .authority.context_numeric_claims import register_context_numeric_claims
+from .authority.table_one_binding import (
+    bind_table_one_execution_spec,
+    restore_table_one_private_checkpoint,
+    write_table_one_private_checkpoint,
+)
+from .authority.plan_scope import (
+    _serializable_plan_scientific_scope_signature,
+    completed_step_record_matches_plan,
+    verified_plan_scientific_scope_count,
+    verified_plan_evidence_rank,
+)
+from .authority import pipeline_cache as _pipeline_cache
+from .planning.analysis_blueprint import (
     build_analysis_blueprint,
     render_analysis_blueprint_for_prompt,
     validate_plan_against_analysis_blueprint,
 )
-from .article_contract import (
+from .reporting.article_contract import (
     build_article_analysis_contract,
     validate_plan_against_article_contract,
 )
-from .figure_strategy import build_article_figure_strategy
-from .pipeline_config import PipelineConfig
-from .contracts import _ExecutePhaseResult, _PlanPhaseResult, _WritePhaseResult
+from .planning.figure_strategy import build_article_figure_strategy
+from .orchestration.config import PipelineConfig
+from .resources.capability_runtime import CapabilityWorkflowRuntime
+from .contracts.runtime import (
+    RunResult,
+    _ExecutePhaseResult,
+    _PlanPhaseResult,
+    _WritePhaseResult,
+)
+from .execution.host_services import (
+    ExecutePhaseServices,
+    PublicationFigureAuthorityServices,
+)
+from .execution.output_files import _clear_output_dir, _has_figure_exports
 from .concept_dict_audit import (
     assert_dict_matches as assert_concept_dict_matches,
+    verify_recorded_dict_match,
     write_concept_dict_fingerprint,
 )
-from .cohort_schema import (
+from .cohort.schema import (
+    COHORT_LOCK_FILENAME,
+    _load_locked_cohort_definition,
     ensure_cohort_definition,
     materialize_locked_analysis_cohort,
     write_locked_cohort_definition,
 )
-from .robustness_panel import (
+from .planning.cohort_contract import cohort_definition_sha
+from .intake.materialized_metadata import (
+    MaterializedCohortAuthorityRef,
+    MaterializedMetadataError,
+    implementation_bundle_sha256 as materialized_implementation_bundle_sha256,
+    load_verified_materialized_cohort_authority,
+    materialized_provenance_path,
+    stage_materialized_cohort_authority,
+)
+from .intake.materialized_trajectory import (
+    MaterializedTrajectoryAuthorityRef,
+    MaterializedTrajectoryError,
+    StagedTrajectoryBinding,
+    VerifiedLegacyTrajectoryCapsuleReceipt,
+    VerifiedMaterializedTrajectoryAuthority,
+    load_verified_materialized_trajectory_authority,
+    stage_legacy_trajectory_exact,
+    stage_materialized_trajectory_authority,
+)
+from .robustness.panel import (
     ensure_robustness_specs,
     load_locked_robustness_specs,
     robustness_specs_sha,
     write_locked_robustness_specs,
 )
-from .trajectory_plan_contract import (
-    STABILITY_EXECUTOR_INPUTS,
-    STABILITY_EXECUTOR_OUTPUTS,
-    TRAJECTORY_STABILITY_METHOD_HEAD,
+from .trajectory.plan_contract import (
     augment_trajectory_plan_products,
     trajectory_plan_dag_findings,
     trajectory_step_roles,
 )
-from .pipeline_report import (
+from .reporting.readiness import (
     execution_gate_status,
     render_report,
     write_readiness_artifacts,
@@ -163,8 +221,8 @@ from .pipeline_report import (
 
 # Back-compat aliases. Tests (and any downstream code) that imported the
 # leading-underscore names from this module before the readiness/report
-# helpers were moved to ``pipeline_report`` keep working unchanged.
-from .pipeline_report import (
+# helpers were moved to ``reporting.readiness`` keep working unchanged.
+from .reporting.readiness import (
     _publication_figure_bundle_ready,  # noqa: F401
     _compute_readiness_gates,  # noqa: F401
     _count_missing_evidence_markers,  # noqa: F401
@@ -182,21 +240,24 @@ from .audits.manuscript_claims import (  # noqa: E402,F401
     _extract_percent_claims_near,
 )
 
-_audit_manuscript_numeric_claims = audit_manuscript_numeric_claims  # noqa: F841 (legacy alias)
+_audit_manuscript_numeric_claims = (
+    audit_manuscript_numeric_claims  # noqa: F841 (legacy alias)
+)
 
-from .evidence import (
+from .authority.evidence_store import (
     EvidenceEnforcementError,
     EvidenceEnforcementMode,
     EvidenceStore,
     _coerce_enforcement_mode,
     sha256_of_file,
 )
-from .experience import (
+from .authority.evidence_snapshot import load_current_evidence_snapshot
+from .learning.experience import (
     ExperienceBank,
     ExperienceRecord,
     mine_experience_from_run,
 )
-from .manuscript_post import (
+from .reporting.manuscript_post import (
     bind_numeric_values,
     _demote_unresolved_evidence_placeholders,
     _first_resolvable_name,
@@ -204,13 +265,13 @@ from .manuscript_post import (
     _repair_common_writer_citation_omissions,
     _repair_common_writer_placeholders,
 )
-from .summary_repair import (
+from .repairs.summary import (
     _extract_last_json_object,
     _salvage_minimal_contract_step_summary,
     _salvage_named_json_step_summary,
     _salvage_stdout_json_step_summary,
 )
-from .code_repair import (
+from .repairs.source import (
     _KEYERROR_NOT_IN_INDEX_RE,
     _NAME_ERROR_HELPER_RE,
     _deterministic_runner_repair,
@@ -228,7 +289,7 @@ from .scalar_utils import (
     _first_present_scalar,
     _flatten_scalar_dict,
 )
-from .pipeline_cross_db import (
+from .replication.report import (
     _build_replication_notes,
     _extract_cross_database_run_summary,
     _literature_provenance_note,
@@ -236,12 +297,12 @@ from .pipeline_cross_db import (
     _render_cross_database_summary_markdown,
     _render_cross_database_validation_report,
 )
-from .pipeline_primary_effect import (
+from .robustness.primary_effect import (
     _extract_primary_effect_row,
     _infer_primary_predictor_from_run_dir,
     _primary_effect_candidate_score,
 )
-from .pipeline_writer_aux import (
+from .reporting.writer_evidence import (
     _preferred_writer_evidence_names,
     _render_writer_evidence_digest,
     _render_writer_evidence_digest_v2,
@@ -262,11 +323,11 @@ from .plan_utils import (
     _enforce_advanced_plan_contract,
     _plan_expects_analysis_cohort,
     _infer_primary_predictor_from_context,
+    _migrate_render_step_contract,
     _parent_step_id_for_figure_step,
     _prediction_contract_applies,
     _predictor_tokens,
     _preserve_figure_steps_after_replan,
-    _question_primary_predictor_is_vasopressor_or_unknown,
     _research_question_implies_figure,
     _render_only_figure_step_intent,
     _split_table_and_figure_outputs_in_plan,
@@ -276,28 +337,42 @@ from .plan_utils import (
     _step_produces_figure,
     effect_output_authorized,
 )
-from .experiment_spec import ExperimentSpec, dump_experiment_spec
-from .figure_skill import PublicationFigureSkill
-from .bibtex import render_bibtex
-from .latex import scaffold_to_latex
+from .orchestration.experiment_spec import ExperimentSpec, dump_experiment_spec
+from .figures.skill import PublicationFigureSkill
+from .reporting.bibtex import render_bibtex
+from .reporting.latex import scaffold_to_latex
 from .literature import (
     HypothesisBlueprintAgent,
     LiteratureAgent,
     LiteratureBundle,
     render_hypothesis_blueprint_for_prompt,
 )
-from .llm import (
-    LLMClient,
-    LLMMessage,
+from .planning.preplan_literature import prepare_preplan_literature
+from .planning.preplan_know_how import (
+    PlannerKnowHowBinding,
+    prepare_preplan_know_how,
+)
+from .providers.llm import (
     LLMRouter,
-    MockLLMClient,
     llm_is_mockish,
     llm_supports_vision,
     resolve_role_client,
 )
-from .memory import RunMemory
-from .prompts import PROMPT_PACK_VERSION, prompt_pack_files
-from .runner import CodeRunner, DockerRunner, RunResult, select_safe_runner_kind
+from .providers.mocks import MockLLMClient
+from .providers.protocol import LLMClient, LLMMessage
+from .learning.memory import RunMemory
+from .learning.runtime import ReviewedMemoryRuntime
+from .learning.store import FileSystemMemoryStore
+from .providers.prompts import PROMPT_PACK_VERSION, prompt_pack_files
+from .execution.runner import (
+    HOST_OWNED_RUNNER_ENV_KEYS,
+    CodeRunner,
+    DockerRunner,
+    reject_reserved_runner_env,
+    select_safe_runner_kind,
+)
+from .execution.method_capabilities import set_runtime_capability_snapshot_provider
+from .concept_availability import normalize_database_name
 from .schema import (
     AgentRuntimeState,
     AnalysisManifest,
@@ -314,7 +389,6 @@ from .schema import (
     ResearchContext,
     ReplicationDeviationReport,
     TimeWindow,
-    TrajectoryStabilitySpec,
     ValidationFinding,
     VariableRole,
     ADJUSTED_ASSOCIATION_BINARY_METHOD_FAMILIES,
@@ -324,12 +398,12 @@ from .schema import (
     PLANNED_MODEL_REQUIREMENTS_STEP_METHOD,
     PlannedModelRequirement,
 )
-from .study_design import (
+from .planning.study_design import (
     build_study_design_brief,
     validate_plan_against_study_design_brief,
 )
 from .skills import ClinicalSkill, get_skill, list_skills
-from .runtime_artifacts import (
+from .authority.runtime_artifacts import (
     AuditLogger,
     build_execution_replay,
     build_workflow_graph,
@@ -340,7 +414,7 @@ from .runtime_artifacts import (
     verified_run_evidence_path,
     write_json_artifact,
 )
-from .run_input_capsule import (
+from .authority.run_input import (
     RUN_INPUT_CAPSULE_EVIDENCE_ID,
     RUN_INPUT_CAPSULE_FILENAME,
     RunInputIdentityError,
@@ -348,11 +422,11 @@ from .run_input_capsule import (
     build_scientific_identity,
     prepare_existing_resume_input,
     seal_run_input_capsule,
+    verify_legacy_trajectory_capsule_receipt,
 )
-from .run_lock import current_locked_run_id, exclusive_run_execution
+from .authority.run_lock import current_locked_run_id, exclusive_run_execution
 from .audits.validators import (
     ClinicalConstraintValidator,
-    CohortAuditor,
     ConceptUsageAuditor,
     LLMConceptAuditor,
     PublicationClaimAuditor,
@@ -362,13 +436,47 @@ from .audits.validators import (
     StatisticalValidator,
     dedupe_findings,
 )
-from .visual_qa import VLMVisualQAAdapter, VisualQAAuditor
+from .gates.visual_qa import VLMVisualQAAdapter, VisualQAAuditor
 
 
-from .pipeline_package import (
+from .orchestration.finalize import (
     _concept_dictionary_manifest_fields,  # noqa: F401
     _render_cost_summary,  # noqa: F401
 )
+
+
+def _defer_typed_plan_dag_findings_until_probe(
+    candidate_findings: Sequence[ValidationFinding],
+) -> List[ValidationFinding]:
+    """Mark pre-probe typed-DAG errors as pending, never as current errors.
+
+    Plan shaping happens before the probe-aware replanner gets its one focused
+    chance to repair missing or ambiguous typed edges. Retaining those initial
+    errors after a successful replan makes a repaired plan look blocked. Only
+    ``plan_typed_dag`` errors are deferred; cap failures and every unrelated
+    planner error keep their original severity. The execute phase recomputes
+    the final typed DAG and emits current errors before any Coder call.
+    """
+
+    deferred: List[ValidationFinding] = []
+    for finding in candidate_findings:
+        if finding.validator != "plan_typed_dag" or finding.severity != "error":
+            deferred.append(finding)
+            continue
+        deferred.append(
+            finding.model_copy(
+                update={
+                    "validator": "plan_contract_pending",
+                    "severity": "warning",
+                    "detail": {
+                        **dict(finding.detail or {}),
+                        "pending_probe_replan": True,
+                        "original_validator": "plan_typed_dag",
+                    },
+                }
+            )
+        )
+    return deferred
 
 
 def _resume_plan_candidate_paths(
@@ -385,31 +493,15 @@ def _resume_plan_candidate_paths(
     """
 
     del resume_state  # Evidence authority supersedes a mutable manifest path.
-    index_path = run_dir / "evidence" / "evidence_index.json"
-    if not index_path.is_file() or index_path.is_symlink():
-        return []
-    try:
-        records = json.loads(index_path.read_text(encoding="utf-8"))
-    except Exception:
-        return []
-    if not isinstance(records, list):
-        return []
+    records = list(load_current_evidence_snapshot(run_dir).records)
 
     ranked: List[tuple[int, int, Path]] = []
     for index, record in enumerate(records):
         if not isinstance(record, dict):
             continue
-        evidence_id = str(record.get("evidence_id") or "").strip()
-        if evidence_id == "analysis_plan":
-            revision = -1
-        else:
-            match = re.fullmatch(
-                r"analysis_plan_revision_(\d+)(?:_[0-9a-f]{8})?",
-                evidence_id,
-            )
-            if match is None:
-                continue
-            revision = int(match.group(1))
+        revision = verified_plan_evidence_rank(record)
+        if revision is None:
+            continue
         verified_path = verified_run_evidence_path(run_dir, record)
         if verified_path is not None:
             ranked.append((revision, index, verified_path))
@@ -433,26 +525,56 @@ def _load_compatible_resume_plan(
     resume_state: Optional[Dict[str, Any]],
 ) -> tuple[Optional[AnalysisPlan], Optional[Path]]:
     """Load the newest saved plan compatible with completed resume steps."""
-    completed_step_ids = {
-        str(record.get("step_id"))
+    locked_cohort_sha256: Optional[str] = None
+    if (run_dir / COHORT_LOCK_FILENAME).exists():
+        locked_cohort_sha256 = cohort_definition_sha(
+            _load_locked_cohort_definition(run_dir)
+        )
+    completed_records = [
+        record
         for record in current_successful_step_records(
             (resume_state or {}).get("per_step_records") or []
         )
-        if record.get("step_id")
-        and record.get("step_id") != "00_probe"
-    }
-    for candidate in _resume_plan_candidate_paths(
+        if record.get("step_id") and record.get("step_id") != "00_probe"
+    ]
+    completed_step_ids = {str(record.get("step_id")) for record in completed_records}
+    candidates = _resume_plan_candidate_paths(
         run_dir=run_dir,
         resume_state=resume_state,
-    ):
+    )
+    plan_scope_count = verified_plan_scientific_scope_count(candidates)
+    for candidate in candidates:
         try:
             plan = AnalysisPlan.model_validate(
                 json.loads(candidate.read_text(encoding="utf-8"))
             )
         except Exception:
             continue
-        step_ids = {step.step_id for step in plan.steps}
-        if plan.steps and completed_step_ids <= step_ids:
+        if locked_cohort_sha256 is not None and (
+            plan.cohort is None
+            or cohort_definition_sha(plan.cohort) != locked_cohort_sha256
+        ):
+            # Plan revisions are allowed to change unfinished steps, never the
+            # already sealed cohort authority.  Skip an incomplete/drifted
+            # revision and try the next digest-verified ancestor.
+            continue
+        step_by_id = {step.step_id: step for step in plan.steps}
+        if not plan.steps or not completed_step_ids <= set(step_by_id):
+            continue
+        compatible = True
+        expected_plan_scope = _serializable_plan_scientific_scope_signature(plan)
+        for record in completed_records:
+            step_id = str(record.get("step_id") or "")
+            if not completed_step_record_matches_plan(
+                record,
+                step=step_by_id[step_id],
+                expected_plan_scope=expected_plan_scope,
+                plan_scope_count=plan_scope_count,
+                completed_records=completed_records,
+            ):
+                compatible = False
+                break
+        if compatible:
             return plan, candidate
     return None, None
 
@@ -718,7 +840,7 @@ def _migrate_legacy_resume_figure_render_edges(
     fail-closed for the Planner.
     """
 
-    from .declared_product_contract import (
+    from .contracts.declared_product import (
         effect_bearing_product,
         typed_product,
     )
@@ -753,9 +875,7 @@ def _migrate_legacy_resume_figure_render_edges(
         for output in producer_step.expected_outputs or []:
             parsed = typed_product(output)
             if parsed is not None and parsed[0] in {"statistic", "table"}:
-                producer_ids.setdefault(parsed, set()).add(
-                    str(producer_step.step_id)
-                )
+                producer_ids.setdefault(parsed, set()).add(str(producer_step.step_id))
                 producer_tokens.setdefault(parsed, []).append(
                     (str(producer_step.step_id), str(output))
                 )
@@ -817,15 +937,15 @@ def _migrate_legacy_resume_figure_render_edges(
 
     revised_steps = list(plan.steps)
     migrated_step_ids: List[str] = []
+
     for index in range(1, len(plan.steps)):
         parent = plan.steps[index - 1]
         child = plan.steps[index]
         parent_id = str(parent.step_id)
         child_id = str(child.step_id)
         child_is_in_resume_window = cut_index is None or index >= cut_index
-        parent_is_available_or_scheduled = (
-            parent_id in completed_step_ids
-            or (cut_index is not None and index - 1 >= cut_index)
+        parent_is_available_or_scheduled = parent_id in completed_step_ids or (
+            cut_index is not None and index - 1 >= cut_index
         )
         if (
             not child_is_in_resume_window
@@ -912,11 +1032,8 @@ def _migrate_legacy_resume_figure_render_edges(
         ):
             continue
 
-        revised_steps[index] = child.model_copy(
-            update={
-                "inputs": source_tokens,
-                "method": "visualization",
-            }
+        revised_steps[index] = _migrate_render_step_contract(
+            child, source_tokens, method="visualization"
         )
         migrated_step_ids.append(child_id)
 
@@ -980,11 +1097,12 @@ def _migrate_legacy_resume_figure_render_edges(
             source_step_id=source_step_id,
             figure_outputs=figure_outputs,
         )
-        if list(child.inputs) == source_tokens and child.intent == intended:
-            continue
-        revised_steps[index] = child.model_copy(
-            update={"inputs": source_tokens, "intent": intended}
+        migrated_child = _migrate_render_step_contract(
+            child, source_tokens, intent=intended
         )
+        if child == migrated_child:
+            continue
+        revised_steps[index] = migrated_child
         if child_id not in migrated_step_ids:
             migrated_step_ids.append(child_id)
 
@@ -1207,7 +1325,7 @@ def _migrate_legacy_resume_model_requirements(
         ),
     ]
     try:
-        from .structured_retry import call_llm_with_structured_retry
+        from .providers.structured_retry import call_llm_with_structured_retry
 
         packet = call_llm_with_structured_retry(
             role_resolver("planner"),
@@ -1262,492 +1380,35 @@ def _migrate_legacy_resume_model_requirements(
     return revised, revision_path, target_step_ids
 
 
-class _LegacyTrajectoryStabilityStepPacket(BaseModel):
-    """Narrow PlannerAgent packet for a previously untyped stability design."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    step_id: str = Field(min_length=1)
-    method: str = Field(min_length=1)
-    inputs: List[str]
-    expected_outputs: List[str]
-    trajectory_stability_spec: TrajectoryStabilitySpec
-
-
-class _LegacyTrajectoryStabilityPacket(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    steps: List[_LegacyTrajectoryStabilityStepPacket]
-
-
-def _verified_legacy_stability_migration_profile(
-    *,
-    plan: AnalysisPlan,
-    resume_state: Optional[Dict[str, Any]],
-    evidence: EvidenceStore,
-    run_dir: Path,
-) -> Optional[Dict[str, Any]]:
-    """Return a sanitized supported fit profile from current verified evidence."""
-
-    candidate_steps = [
-        step
-        for step in plan.steps
-        if "candidate_selection" in trajectory_step_roles(step)
-    ]
-    if len(candidate_steps) != 1:
-        return None
-    candidate_step_id = candidate_steps[0].step_id
-    current_records = current_step_records(
-        [
-            record
-            for record in ((resume_state or {}).get("per_step_records") or [])
-            if isinstance(record, dict) and record.get("step_id")
-        ]
-    )
-    candidate_records = [
-        record
-        for record in current_records
-        if str(record.get("step_id") or "") == candidate_step_id
-        and record.get("status") == "ok"
-    ]
-    if len(candidate_records) != 1:
-        return None
-    candidate_record = candidate_records[0]
-    candidate_schema_record = None
-    candidate_schema_path = None
-    for evidence_id in candidate_record.get("evidence_ids") or []:
-        record = evidence.get(str(evidence_id))
-        if record is None or not str(record.relative_path).endswith(
-            "candidate_cluster_solution_schema.json"
-        ):
-            continue
-        path = verified_run_evidence_path(run_dir, record)
-        if path is None:
-            continue
-        if candidate_schema_record is not None:
-            return None
-        candidate_schema_record = record
-        candidate_schema_path = path
-    if candidate_schema_record is None or candidate_schema_path is None:
-        return None
-    try:
-        candidate_schema = json.loads(candidate_schema_path.read_text(encoding="utf-8"))
-    except Exception:
-        return None
-    if (
-        not isinstance(candidate_schema, dict)
-        or candidate_schema.get("schema_version")
-        != "easyicu.candidate_cluster_solution_schema/2"
-    ):
-        return None
-    if (
-        _normalise_plan_contract_token(candidate_schema.get("model_family"))
-        != "latent_class_diagonal_gaussian_mixture"
-        or _normalise_plan_contract_token(candidate_schema.get("fit_method"))
-        != "observed_data_em_diagonal_gaussian_mixture"
-        or _normalise_plan_contract_token(candidate_schema.get("covariance_type"))
-        != "diag"
-    ):
-        return None
-
-    current_candidate_evidence_ids = {
-        str(value) for value in candidate_record.get("evidence_ids") or []
-    }
-    candidate_assignments_evidence_id = str(
-        candidate_schema.get("candidate_assignments_evidence_id") or ""
-    )
-    if candidate_assignments_evidence_id not in current_candidate_evidence_ids:
-        return None
-    candidate_assignments_record = evidence.get(candidate_assignments_evidence_id)
-    candidate_assignments_path = (
-        verified_run_evidence_path(run_dir, candidate_assignments_record)
-        if candidate_assignments_record is not None
-        else None
-    )
-    if (
-        candidate_assignments_record is None
-        or not str(candidate_assignments_record.relative_path).endswith(
-            "candidate_cluster_assignments.csv"
-        )
-        or candidate_assignments_path is None
-    ):
-        return None
-
-    representation_schema_evidence_id = str(
-        candidate_schema.get("representation_schema_evidence_id") or ""
-    )
-    representation_schema_record = evidence.get(representation_schema_evidence_id)
-    if representation_schema_record is None or not str(
-        representation_schema_record.relative_path
-    ).endswith("trajectory_representation_schema.json"):
-        return None
-    representation_schema_path = verified_run_evidence_path(
-        run_dir,
-        representation_schema_record,
-    )
-    if representation_schema_path is None:
-        return None
-    try:
-        representation_schema = json.loads(
-            representation_schema_path.read_text(encoding="utf-8")
-        )
-    except Exception:
-        return None
-    if (
-        not isinstance(representation_schema, dict)
-        or representation_schema.get("schema_version")
-        != "easyicu.trajectory_representation_schema/1"
-    ):
-        return None
-    representation_evidence_id = str(
-        representation_schema.get("representation_evidence_id") or ""
-    )
-    representation_record = evidence.get(representation_evidence_id)
-    if representation_record is None or not str(
-        representation_record.relative_path
-    ).endswith(("trajectory_representation.parquet", "trajectory_representation.csv")):
-        return None
-    representation_path = verified_run_evidence_path(run_dir, representation_record)
-    if representation_path is None:
-        return None
-    if (
-        str(representation_schema.get("representation_sha256") or "").lower()
-        != str(representation_record.sha256 or "").lower()
-    ):
-        return None
-    try:
-        from .trajectory_stability_executor import (
-            validate_trajectory_stability_schema_pair,
-            validate_trajectory_stability_upstream,
-        )
-
-        (
-            id_column,
-            _assignment_column,
-            representation_columns,
-            frozen_population_n,
-            selected_n_clusters,
-        ) = validate_trajectory_stability_schema_pair(
-            representation_schema=representation_schema,
-            solution_schema=candidate_schema,
-        )
-        representation_table = (
-            pd.read_parquet(representation_path)
-            if representation_path.suffix.lower() == ".parquet"
-            else pd.read_csv(representation_path)
-        )
-        assignment_table = pd.read_csv(candidate_assignments_path)
-        validate_trajectory_stability_upstream(
-            representation=representation_table,
-            assignments=assignment_table,
-            representation_schema=representation_schema,
-            solution_schema=candidate_schema,
-        )
-    except Exception:
-        return None
-    return {
-        "candidate_schema_evidence_id": candidate_schema_record.evidence_id,
-        "candidate_schema_sha256": candidate_schema_record.sha256,
-        "representation_schema_evidence_id": (representation_schema_record.evidence_id),
-        "representation_schema_sha256": representation_schema_record.sha256,
-        "representation_evidence_id": representation_record.evidence_id,
-        "representation_sha256": representation_record.sha256,
-        "candidate_assignments_evidence_id": (candidate_assignments_record.evidence_id),
-        "candidate_assignments_sha256": candidate_assignments_record.sha256,
-        "frozen_population_n": frozen_population_n,
-        "selected_n_clusters": selected_n_clusters,
-        "id_column": id_column,
-        "representation_coordinate_count": len(representation_columns),
-        "model_family": candidate_schema.get("model_family"),
-        "fit_method": candidate_schema.get("fit_method"),
-        "covariance_type": candidate_schema.get("covariance_type"),
-        "trailing_na_policy": representation_schema.get("trailing_na_policy"),
-    }
-
-
-def _legacy_resume_trajectory_stability_targets(
-    *,
-    plan: AnalysisPlan,
-    completed_step_ids: set[str],
-) -> tuple[str, ...]:
-    """Select one remaining dedicated stability owner; never infer a design."""
-
-    candidate_steps = [
-        step
-        for step in plan.steps
-        if "candidate_selection" in trajectory_step_roles(step)
-    ]
-    stability_steps = [
-        step for step in plan.steps if "stability_freeze" in trajectory_step_roles(step)
-    ]
-    if len(candidate_steps) != 1 or len(stability_steps) != 1:
-        return ()
-    candidate = candidate_steps[0]
-    stability = stability_steps[0]
-    order = {step.step_id: index for index, step in enumerate(plan.steps)}
-    if (
-        candidate.step_id == stability.step_id
-        or order[candidate.step_id] >= order[stability.step_id]
-        or candidate.step_id not in completed_step_ids
-        or stability.step_id in completed_step_ids
-        or stability.trajectory_stability_spec is not None
-    ):
-        return ()
-    return (stability.step_id,)
-
-
-def _parse_legacy_trajectory_stability_packet(
-    raw: str,
-    *,
-    target_step_ids: tuple[str, ...],
-) -> _LegacyTrajectoryStabilityPacket:
-    packet = _LegacyTrajectoryStabilityPacket.model_validate(json.loads(raw.strip()))
-    if not packet.steps:
-        return packet
-    if [step.step_id for step in packet.steps] != list(target_step_ids):
-        raise ValueError(
-            "stability packet steps must exactly match the ordered targets"
-        )
-    required_inputs = sorted(STABILITY_EXECUTOR_INPUTS)
-    required_outputs = sorted(STABILITY_EXECUTOR_OUTPUTS)
-    for step in packet.steps:
-        if (
-            _normalise_plan_contract_token(step.method)
-            != TRAJECTORY_STABILITY_METHOD_HEAD
-        ):
-            raise ValueError(
-                "standard stability packet method must be exactly "
-                f"{TRAJECTORY_STABILITY_METHOD_HEAD!r}"
-            )
-        if step.inputs != required_inputs:
-            raise ValueError(
-                "standard stability packet inputs must exactly match the closed "
-                "typed-input contract"
-            )
-        if step.expected_outputs != required_outputs:
-            raise ValueError(
-                "standard stability packet outputs must exactly match the closed "
-                "typed-output contract"
-            )
-    return packet
-
-
-def _project_legacy_trajectory_stability_packet(
-    *,
-    plan: AnalysisPlan,
-    packet: _LegacyTrajectoryStabilityPacket,
-) -> AnalysisPlan:
-    """Project only the Planner-owned stability packet onto the saved plan."""
-
-    updates = {step.step_id: step for step in packet.steps}
-    revised_steps: List[AnalysisStep] = []
-    for step in plan.steps:
-        update = updates.get(step.step_id)
-        if update is None:
-            revised_steps.append(step)
-            continue
-        revised_steps.append(
-            step.model_copy(
-                update={
-                    "method": update.method,
-                    "inputs": list(update.inputs),
-                    "expected_outputs": list(update.expected_outputs),
-                    "trajectory_stability_spec": update.trajectory_stability_spec,
-                }
-            )
-        )
-    return plan.model_copy(update={"steps": revised_steps})
-
-
-def _migrate_legacy_resume_trajectory_stability_spec(
-    *,
-    plan: AnalysisPlan,
-    run_dir: Path,
-    resume_state: Optional[Dict[str, Any]],
-    resume_from_step_id: Optional[str],
-    role_resolver: Callable[[str], Any],
-    evidence: EvidenceStore,
-    prompt_version: str,
-    llm_signature: str,
-) -> tuple[AnalysisPlan, Optional[Path], tuple[str, ...]]:
-    """Ask PlannerAgent for the missing stability science; never default it.
-
-    This migration is intentionally retrospective and is used only for a
-    development checkpoint whose remaining dedicated stability step predates
-    the typed packet. Final benchmark runs must carry the packet in their fresh
-    initial plan.
-    """
-
-    completed_records = _resume_completed_records_for_plan_migration(
-        plan=plan,
-        resume_state=resume_state,
-        resume_from_step_id=resume_from_step_id,
-    )
-    target_step_ids = _legacy_resume_trajectory_stability_targets(
-        plan=plan,
-        completed_step_ids={str(record.get("step_id")) for record in completed_records},
-    )
-    if not target_step_ids:
-        return plan, None, ()
-    fit_profile = _verified_legacy_stability_migration_profile(
-        plan=plan,
-        resume_state=resume_state,
-        evidence=evidence,
-        run_dir=run_dir,
-    )
-    if fit_profile is None:
-        # No default and no prose inference: unsupported or unverifiable legacy
-        # fits retain their original agent-coded path.
-        return plan, None, ()
-
-    target_steps = [
-        {
-            "step_id": step.step_id,
-            "intent": step.intent,
-            "method": step.method,
-            "inputs": list(step.inputs),
-            "expected_outputs": list(step.expected_outputs),
-            "icu_rule_refs": list(step.icu_rule_refs),
-        }
-        for step in plan.steps
-        if step.step_id in set(target_step_ids)
-    ]
-    required_inputs = sorted(STABILITY_EXECUTOR_INPUTS)
-    required_outputs = sorted(STABILITY_EXECUTOR_OUTPUTS)
-    spec_fields = list(TrajectoryStabilitySpec.model_fields)
-    spec_json_schema = TrajectoryStabilitySpec.model_json_schema()
-    format_reminder = (
-        'Return exactly one JSON object {"steps": [{"step_id": <target>, '
-        f'"method": "{TRAJECTORY_STABILITY_METHOD_HEAD}", '
-        '"inputs": <exact supplied list>, "expected_outputs": <exact supplied '
-        'list>, "trajectory_stability_spec": <complete object>}]}. If the '
-        "standard calculator is scientifically inappropriate, return exactly "
-        '{"steps": []}. The spec must contain exactly these fields: '
-        f"{spec_fields!r}. Every JSON-Schema const value must be copied exactly, "
-        "and every enum value must be selected exactly from its listed choices; "
-        "do not replace protocol tokens with synonyms. The complete spec schema is: "
-        f"{json.dumps(spec_json_schema, sort_keys=True)}"
-    )
-    messages = [
-        LLMMessage(
-            role="system",
-            content=(
-                "You are the PlannerAgent's typed trajectory-stability design "
-                "worker. You, not the execution framework, choose every value in "
-                "the stability design. Return JSON only. Use the canonical method "
-                f"{TRAJECTORY_STABILITY_METHOD_HEAD!r} when opting in. Do not rewrite any other "
-                "plan field, choose a new k, inspect outcomes, or invent a fallback "
-                "when the supported refit family is scientifically inappropriate; "
-                "return an empty steps list instead."
-            ),
-        ),
-        LLMMessage(
-            role="user",
-            content=(
-                "Design the remaining trajectory-cluster stability assessment. "
-                "This is a retrospective development-checkpoint migration, not "
-                "evidence that the design was present in the original plan. The "
-                "upstream candidate-solution and representation schemas remain "
-                "authoritative for population, coordinates, selected k, model "
-                "family, fit method, covariance, missing-data likelihood, and "
-                "reference labels. Do not repeat or change those choices. The "
-                "available standard executor supports only a no-imputation "
-                "observed-data diagonal Gaussian-mixture refit; if that is not the "
-                "planned family, do not substitute a nearby estimator. Choose the "
-                "subsample count/size, seed, convergence controls, report-only or "
-                "threshold-gate decision, and threshold when applicable. Every "
-                "planned refit must succeed; a failed refit is recorded once with "
-                "no replacement seed. A failed threshold must fail closed and "
-                "request a new planner revision, never select another k. The refit controls you "
-                "choose are a new stability-refit contract, not a claim that a "
-                "legacy candidate artifact recorded identical implementation "
-                "controls.\n\n"
-                f"REQUIRED INPUTS (return in this exact order):\n{json.dumps(required_inputs)}\n\n"
-                f"REQUIRED OUTPUTS (return in this exact order):\n{json.dumps(required_outputs)}\n\n"
-                f"REQUIRED JSON SHAPE:\n{format_reminder}\n\n"
-                "TARGET STEP (verbatim saved plan):\n"
-                f"{json.dumps(target_steps, indent=2, ensure_ascii=False)}\n\n"
-                "SANITIZED VERIFIED FIT PROFILE (no outcomes or raw variables):\n"
-                f"{json.dumps(fit_profile, indent=2, ensure_ascii=False)}"
-            ),
-        ),
-    ]
-    try:
-        from .structured_retry import call_llm_with_structured_retry
-
-        packet = call_llm_with_structured_retry(
-            role_resolver("planner"),
-            messages,
-            parser=lambda raw: _parse_legacy_trajectory_stability_packet(
-                raw,
-                target_step_ids=target_step_ids,
-            ),
-            role="legacy_trajectory_stability_spec_migration",
-            max_retries=2,
-            max_tokens=3072,
-            temperature=0.1,
-            format_reminder=format_reminder,
-        )
-    except Exception as exc:
-        logger.warning(
-            "Planner declined or failed the optional retrospective trajectory "
-            "stability migration; preserving the original agent-coded path: %s",
-            exc,
-        )
-        return plan, None, ()
-
-    if not packet.steps:
-        return plan, None, ()
-
-    revised = _project_legacy_trajectory_stability_packet(
-        plan=plan,
-        packet=packet,
-    )
-    revision = _next_analysis_plan_revision(
-        run_dir=run_dir,
-        plan=plan,
-        evidence=evidence,
-    )
-    revised = revised.model_copy(update={"revision": revision})
-    revision_path = run_dir / f"analysis_plan_revision_{revision}.json"
-    if revision_path.exists():
-        raise LegacyResumePlanMigrationError(
-            f"refusing to overwrite existing plan revision {revision_path.name}"
-        )
-    revision_path.write_text(revised.model_dump_json(indent=2), encoding="utf-8")
-    evidence.register_file(
-        kind="log",
-        description=(
-            "Planner-owned retrospective trajectory stability design for a "
-            "remaining development-checkpoint step."
-        ),
-        source_path=revision_path,
-        evidence_id=f"analysis_plan_revision_{revision}",
-        producer="planner",
-        generation_mode="llm",
-        prompt_pack_version=prompt_version,
-        metadata={
-            "reason": "legacy_missing_trajectory_stability_spec",
-            "retrospective_development_migration": True,
-            "target_step_ids": list(target_step_ids),
-            "llm_signature": llm_signature,
-        },
-    )
-    return revised, revision_path, target_step_ids
-
-
 def _load_resume_state(run_dir: Path) -> Optional[Dict[str, Any]]:
-    partial = run_dir / "manifest_partial.json"
-    checkpoint = partial if partial.exists() else run_dir / "manifest.json"
-    if not checkpoint.exists():
-        return None
     try:
-        loaded = json.loads(checkpoint.read_text(encoding="utf-8"))
+        loaded = load_run_artifact_authority(run_dir)
     except Exception as exc:
-        raise ValueError(f"Cannot resume from corrupt checkpoint: {checkpoint}") from exc
-    if not isinstance(loaded, dict):
+        raise ValueError(
+            f"Cannot resume from corrupt checkpoint authority: {run_dir}"
+        ) from exc
+    if loaded is not None:
+        return dict(loaded)
+    # ``None`` is the explicit legacy signal: no checkpoint in this run has a
+    # per-step ledger. Preserve read-only legacy adoption without weakening the
+    # modern monotonic selector above.
+    legacy_candidates = [
+        path
+        for path in (run_dir / "manifest_partial.json", run_dir / "manifest.json")
+        if path.is_file()
+    ]
+    if not legacy_candidates:
+        return None
+    checkpoint = max(legacy_candidates, key=lambda path: path.stat().st_mtime_ns)
+    try:
+        legacy = json.loads(checkpoint.read_text(encoding="utf-8"))
+    except Exception as exc:
+        raise ValueError(
+            f"Cannot resume from corrupt checkpoint: {checkpoint}"
+        ) from exc
+    if not isinstance(legacy, dict):
         raise ValueError(f"Cannot resume from non-object checkpoint: {checkpoint}")
-    return loaded
+    return legacy
 
 
 class ResearchAgentPipeline:
@@ -1794,7 +1455,6 @@ class ResearchAgentPipeline:
         enable_deterministic_code_fallback: bool = False,
         enable_deterministic_planner_fallback: bool = False,
         enable_deterministic_runner_repair: bool = True,
-        enable_retrospective_trajectory_stability_design: bool = False,
         enable_pubmed: bool = False,
         pubmed_email: Optional[str] = None,
         pubmed_api_key: Optional[str] = None,
@@ -1809,6 +1469,8 @@ class ResearchAgentPipeline:
         cost_price_table: Optional[Dict[str, Any]] = None,
         enable_reproducibility_envelope: bool = False,
         llm_seed: Optional[int] = None,
+        execution_data_seed: Optional[int] = None,
+        execution_input_authority_sha256: Optional[str] = None,
         envelope_include_previews: bool = False,
         submission_profile_name: Optional[str] = None,
         submission_profile_version: Optional[str] = None,
@@ -1827,6 +1489,9 @@ class ResearchAgentPipeline:
         hypothesis_generator_top_k: int = 5,
         enable_pdf_render: bool = False,
         max_concurrent_steps: int = 1,
+        development_sample_size: Optional[int] = None,
+        development_sample_seed: int = 20260719,
+        development_diagnostic: bool = False,
         enable_probe_step: bool = True,
         enable_replanning: bool = True,
         max_total_steps: int = 12,
@@ -1840,9 +1505,22 @@ class ResearchAgentPipeline:
         experience_bank_path: Optional[Union[str, Path]] = None,
         experience_bank_top_k: int = 5,
         experience_bank_min_similarity: float = 0.2,
+        enable_know_how: bool = False,
+        enable_coder_resources: bool = False,
+        enable_reviewed_memory: bool = False,
+        reviewed_memory_namespaces: Sequence[str] = (),
+        enable_capability_workflow: bool = False,
+        expected_runner_image_digest: Optional[str] = None,
+        capability_request: Optional[Mapping[str, object]] = None,
+        capability_approval: Optional[Mapping[str, object]] = None,
+        capability_activation: Optional[Mapping[str, object]] = None,
+        know_how_paths: Sequence[Union[str, Path]] = (),
+        know_how_top_k: int = 3,
+        know_how_min_score: float = 0.15,
         runner_kind: str = "auto",
         runner_image: Optional[str] = None,
         runner_network: str = "none",
+        host_runner_authorized: bool = False,
         runner_factory: Optional[Callable[..., Any]] = None,
         runner_kwargs: Optional[Dict[str, Any]] = None,
         case_plugin_registry: Optional[Any] = None,
@@ -1900,15 +1578,16 @@ class ResearchAgentPipeline:
             evidence_enforcement_mode
         )
         # T1.4 — when set, the pipeline strips the ICU rules out of the
-        # context that drives planning, coding and validation. This is
-        # the "naive" arm of the hero ablation: a generic data agent
-        # sees only column names + dtypes + ANY-aggregation.
+        # context that drives planning, coding and validation. This is the
+        # historical *untyped* naive ablation: a generic data agent sees only
+        # column names + dtypes + ANY-aggregation. Typed export authority is
+        # deliberately rejected at run entry because exposing its V2 physical
+        # facts would contaminate that ablation, while sealing it as V1 would
+        # discard the authority contract.
         self._disable_icu_context = bool(disable_icu_context)
         self._context_top_k = int(context_top_k) if context_top_k else None
         self._max_code_repair_attempts = max(0, int(max_code_repair_attempts))
-        self._max_step_llm_repair_attempts = max(
-            0, int(max_step_llm_repair_attempts)
-        )
+        self._max_step_llm_repair_attempts = max(0, int(max_step_llm_repair_attempts))
         self._max_step_provider_calls = max(0, int(max_step_provider_calls))
         self._enable_deterministic_code_fallback = bool(
             enable_deterministic_code_fallback
@@ -1918,9 +1597,6 @@ class ResearchAgentPipeline:
         )
         self._enable_deterministic_runner_repair = bool(
             enable_deterministic_runner_repair
-        )
-        self._enable_retrospective_trajectory_stability_design = bool(
-            enable_retrospective_trajectory_stability_design
         )
         # T2.2 — opt-in PubMed live search. Off by default so CI and
         # the offline demo stay deterministic; the LiteratureAgent
@@ -1970,6 +1646,9 @@ class ResearchAgentPipeline:
         self._envelope_include_previews = bool(envelope_include_previews)
         self._submission_profile_name = submission_profile_name
         self._submission_profile_version = submission_profile_version
+        self._submission_profile_ref = (
+            f"{submission_profile_name}/{submission_profile_version}"
+        )
         self._submission_profile_locked_at = submission_profile_locked_at
         self._expected_concept_dict_sha = expected_concept_dict_sha
         self._expected_sofa2_dict_sha = expected_sofa2_dict_sha
@@ -2023,14 +1702,39 @@ class ResearchAgentPipeline:
         # in. EvidenceStore guards its mutators with an RLock so a
         # higher value is safe.
         self._max_concurrent_steps = max(1, int(max_concurrent_steps))
+        self._development_sample_size = (
+            int(development_sample_size)
+            if development_sample_size is not None
+            else None
+        )
+        if (
+            self._development_sample_size is not None
+            and self._development_sample_size <= 0
+        ):
+            raise ValueError("development_sample_size must be positive")
+        self._development_sample_seed = int(development_sample_seed)
+        self._development_diagnostic = bool(development_diagnostic)
+        if (
+            self._development_sample_size is not None
+            and submission_profile_name is not None
+        ):
+            raise ValueError(
+                "development cohort sampling is non-paper authority and cannot "
+                "be combined with a submission profile"
+            )
+        if self._development_diagnostic and submission_profile_name is not None:
+            raise ValueError(
+                "development diagnostics are non-paper authority and cannot "
+                "be combined with a submission profile"
+            )
         self._enable_probe_step = bool(enable_probe_step)
         self._enable_replanning = bool(enable_replanning)
         # 0 / None means "no cap". Anything positive enforces the cap in
-        # the replanner overflow guard (see pipeline_execute.py).
+        # the replanner overflow guard (see execution/phase.py).
         self._max_total_steps = (
             int(max_total_steps) if max_total_steps and max_total_steps > 0 else 0
         )
-        # Replan convergence guards (see pipeline_config / pipeline_execute).
+        # Replan convergence guards (see pipeline_config / execution.phase).
         # 0 disables the guard.
         self._max_consecutive_noop_replans = (
             int(max_consecutive_noop_replans)
@@ -2055,23 +1759,63 @@ class ResearchAgentPipeline:
         # numbers" block enumerating NumericClaim entries outside the
         # ``WRITER_DIGEST_PREFERRED_KEYS`` primary subset. The binder
         # already accepts these; the flag controls only what the
-        # writer SEES. See pipeline_writer_aux._render_writer_evidence_digest_v2.
+        # writer SEES. See reporting.writer_evidence._render_writer_evidence_digest_v2.
         self._writer_digest_widened = bool(writer_digest_widened)
         self._writer_digest_secondary_cap_per_step = max(
             0, int(writer_digest_secondary_cap_per_step)
         )
-        # Phase-1 cross-run experience bank (default off). When True,
-        # the planner sees retrieved hints in its context block and
-        # the post-run reflector mines + writes back records via the
-        # deterministic helper in experience.py. The bank is read in
-        # ``_retrieve_experience_hints`` and written in
-        # ``_reflect_and_persist_experience``.
+        # Legacy cross-run stores are write-only compatibility sources.
+        # Their free-text records are never injected into Planner context.
+        # Run-derived records are additionally mirrored into the v2
+        # permissioned quarantine store during finalization.
         self._enable_experience_bank = bool(enable_experience_bank)
         self._experience_bank_path: Optional[Path] = (
             Path(experience_bank_path) if experience_bank_path else None
         )
         self._experience_bank_top_k = max(0, int(experience_bank_top_k))
         self._experience_bank_min_similarity = float(experience_bank_min_similarity)
+        self._enable_know_how = bool(enable_know_how)
+        self._enable_coder_resources = bool(enable_coder_resources)
+        self._enable_reviewed_memory = bool(enable_reviewed_memory)
+        self._reviewed_memory_namespaces = tuple(reviewed_memory_namespaces)
+        self._capability_runtime = CapabilityWorkflowRuntime.create(
+            enabled=enable_capability_workflow,
+            profile_name=submission_profile_name,
+            profile_version=submission_profile_version,
+            expected_image_digest=expected_runner_image_digest,
+            request=capability_request,
+            approval=capability_approval,
+            activation=capability_activation,
+        )
+        self._know_how_paths = tuple(Path(path) for path in know_how_paths)
+        self._know_how_top_k = int(know_how_top_k)
+        self._know_how_min_score = float(know_how_min_score)
+        if not 0 <= self._know_how_top_k <= 5:
+            raise ValueError("know_how_top_k must be between 0 and 5")
+        if not 0.0 <= self._know_how_min_score <= 1.0:
+            raise ValueError("know_how_min_score must be between 0 and 1")
+        from .orchestration.profiles import require_profile_know_how_setting
+
+        require_profile_know_how_setting(
+            name=submission_profile_name,
+            version=submission_profile_version,
+            enabled=self._enable_know_how,
+        )
+        from .orchestration.profiles import require_profile_coder_resource_setting
+
+        require_profile_coder_resource_setting(
+            name=submission_profile_name,
+            version=submission_profile_version,
+            enabled=self._enable_coder_resources,
+        )
+        from .orchestration.profiles import require_profile_reviewed_memory_setting
+
+        require_profile_reviewed_memory_setting(
+            name=submission_profile_name,
+            version=submission_profile_version,
+            enabled=self._enable_reviewed_memory,
+            namespaces=self._reviewed_memory_namespaces,
+        )
         # T3.1 — runner backend selection. ``auto`` prefers a probed Docker
         # image and uses macOS sandbox-exec only when Docker is unavailable;
         # ``docker`` explicitly selects :class:`DockerRunner`
@@ -2096,9 +1840,23 @@ class ResearchAgentPipeline:
             )
         self._runner_image = runner_image
         self._runner_network = runner_network
+        self._expected_runner_image_digest = expected_runner_image_digest
+        self._host_runner_authorized = bool(host_runner_authorized)
         self._runner_factory = runner_factory
         self._runner_kwargs = dict(runner_kwargs or {})
+        self._validated_runtime_capabilities: Optional[Tuple[str, ...]] = None
+        self._validated_runtime_bundle: Optional[Dict[str, object]] = None
         self._memory = RunMemory(self.workdir) if enable_memory else None
+        self._permissioned_memory_store = (
+            FileSystemMemoryStore(self.workdir / ".memory_v2")
+            if enable_memory or enable_experience_bank or enable_reviewed_memory
+            else None
+        )
+        self._reviewed_memory_runtime = ReviewedMemoryRuntime(
+            enabled=self._enable_reviewed_memory,
+            store=self._permissioned_memory_store,
+            allowed_namespaces=self._reviewed_memory_namespaces,
+        )
 
     def _build_runner(
         self,
@@ -2107,6 +1865,13 @@ class ResearchAgentPipeline:
         cohort_path: Path,
         target_outcome: Optional[str] = None,
         universe_path: Optional[Path] = None,
+        universe_is_typed: bool = False,
+        universe_authority_ref: Optional[MaterializedCohortAuthorityRef] = None,
+        trajectory_path: Optional[Path] = None,
+        trajectory_authority_ref: Optional[MaterializedTrajectoryAuthorityRef] = None,
+        trajectory_legacy_capsule_receipt: Optional[
+            VerifiedLegacyTrajectoryCapsuleReceipt
+        ] = None,
         timeout_seconds: Optional[float] = None,
     ):
         """Return the configured runner backend for a single ``run()``.
@@ -2120,29 +1885,88 @@ class ResearchAgentPipeline:
         ``EASYICU_UNIVERSE_PARQUET`` so explicit robustness steps can reach the
         pre-纳排 universe without re-running extraction.
         """
+        # Runner capability discovery is scoped to the backend selected for
+        # this build.  Clear a Docker snapshot left in the current ContextVar
+        # before a custom factory (which need not instantiate CodeRunner) can
+        # inherit it.  DockerRunner installs its own provider below.
+        set_runtime_capability_snapshot_provider(None)
         runner_kwargs = dict(self._runner_kwargs)
         extra_env = dict(runner_kwargs.pop("extra_env", {}) or {})
+        trajectory_aliases = (
+            "TRAJECTORY_PARQUET",
+            "EASYICU_TRAJECTORY_PARQUET",
+            "COHORT_TRAJECTORY_PARQUET",
+        )
+        pipeline_owned_env = {
+            *HOST_OWNED_RUNNER_ENV_KEYS,
+            "OUTCOME_COL",
+            "EASYICU_UNIVERSE_PARQUET",
+            *trajectory_aliases,
+        }
+        reject_reserved_runner_env(
+            extra_env,
+            reserved=tuple(pipeline_owned_env),
+            owner="ResearchAgentPipeline",
+        )
         if target_outcome:
-            extra_env.setdefault("OUTCOME_COL", target_outcome)
+            extra_env["OUTCOME_COL"] = target_outcome
         if universe_path is not None:
-            extra_env.setdefault("EASYICU_UNIVERSE_PARQUET", str(universe_path))
-            # Auto-discover the optional long-format trajectory written next to
-            # the universe (``<universe_stem>_trajectory.parquet``). When present
-            # it is exposed as ``TRAJECTORY_PARQUET`` so a step can construct
-            # threshold-crossing onsets, incident-after-exposure endpoints, and
-            # landmark / time-varying designs that the wide per-stay summary
-            # cannot express. Keyed by stay_id, so it is valid regardless of any
-            # later cohort 纳排 re-pointing of COHORT_PARQUET.
-            trajectory_path = Path(universe_path).with_name(
-                f"{Path(universe_path).stem}_trajectory.parquet"
+            extra_env["EASYICU_UNIVERSE_PARQUET"] = str(universe_path)
+        if trajectory_path is not None:
+            candidate = Path(trajectory_path).expanduser()
+            if (
+                candidate.is_symlink()
+                or not candidate.is_file()
+                or candidate.suffix.lower() not in {".parquet", ".pq"}
+            ):
+                raise MaterializedTrajectoryError(
+                    "staged trajectory must be a regular parquet file"
+                )
+            selected_trajectory_path = candidate.resolve(strict=True)
+            if universe_is_typed:
+                if universe_authority_ref is None:
+                    raise MaterializedTrajectoryError(
+                        "typed cohort trajectory lost its cohort authority"
+                    )
+                if trajectory_authority_ref is not None:
+                    verified_trajectory = (
+                        load_verified_materialized_trajectory_authority(
+                            selected_trajectory_path,
+                            expected_authority=trajectory_authority_ref,
+                            expected_universe_authority=universe_authority_ref,
+                        )
+                    )
+                    if verified_trajectory is None:  # pragma: no cover - exact ref
+                        raise MaterializedTrajectoryError(
+                            "typed trajectory authority is missing"
+                        )
+                elif trajectory_legacy_capsule_receipt is not None:
+                    verify_legacy_trajectory_capsule_receipt(
+                        run_dir=run_dir,
+                        trajectory_path=selected_trajectory_path,
+                        receipt=trajectory_legacy_capsule_receipt,
+                        expected_universe_authority=universe_authority_ref,
+                    )
+                else:
+                    raise MaterializedTrajectoryError(
+                        "typed cohort trajectory requires an exact sealed authority"
+                    )
+            elif (
+                trajectory_authority_ref is not None
+                or trajectory_legacy_capsule_receipt is not None
+            ):
+                raise MaterializedTrajectoryError(
+                    "typed or legacy capsule trajectory authority requires a typed universe"
+                )
+            for traj_alias in trajectory_aliases:
+                extra_env[traj_alias] = str(selected_trajectory_path)
+        elif (
+            trajectory_authority_ref is not None
+            or trajectory_legacy_capsule_receipt is not None
+        ):
+            raise MaterializedTrajectoryError(
+                "trajectory authority cannot be supplied without a staged trajectory"
             )
-            if trajectory_path.exists():
-                for traj_alias in (
-                    "TRAJECTORY_PARQUET",
-                    "EASYICU_TRAJECTORY_PARQUET",
-                    "COHORT_TRAJECTORY_PARQUET",
-                ):
-                    extra_env.setdefault(traj_alias, str(trajectory_path))
         effective_timeout_seconds = (
             self._timeout_seconds if timeout_seconds is None else float(timeout_seconds)
         )
@@ -2150,37 +1974,107 @@ class ResearchAgentPipeline:
             # A user-supplied factory (OpenHands, firecracker, ...) also needs
             # the run's outcome column so deterministic repairs resolve it from
             # OUTCOME_COL rather than guessing a column name.
-            return self._runner_factory(
+            runner = self._runner_factory(
                 workdir=run_dir,
                 cohort_parquet=cohort_path,
                 timeout_seconds=effective_timeout_seconds,
                 extra_env=extra_env,
                 **runner_kwargs,
             )
-        runner_kind = self._runner_kind
-        if runner_kind == "auto":
-            runner_kind = select_safe_runner_kind(
-                image=self._runner_image,
-                docker_executable=runner_kwargs.get("docker_executable"),
-            )
-        if runner_kind == "docker":
-            return DockerRunner(
-                workdir=run_dir,
-                cohort_parquet=cohort_path,
-                timeout_seconds=effective_timeout_seconds,
-                image=self._runner_image,
-                network=self._runner_network,
-                extra_env=extra_env,
-                **runner_kwargs,
-            )
-        return CodeRunner(
-            workdir=run_dir,
-            cohort_parquet=cohort_path,
-            timeout_seconds=effective_timeout_seconds,
-            python_executable=self._python_executable,
-            extra_env=extra_env,
-            **runner_kwargs,
+        else:
+            runner_kind = self._runner_kind
+            if runner_kind == "auto":
+                runner_kind = select_safe_runner_kind(
+                    image=self._runner_image,
+                    docker_executable=runner_kwargs.get("docker_executable"),
+                )
+            if runner_kind == "docker":
+                runner = DockerRunner(
+                    workdir=run_dir,
+                    cohort_parquet=cohort_path,
+                    timeout_seconds=effective_timeout_seconds,
+                    image=self._runner_image,
+                    network=self._runner_network,
+                    extra_env=extra_env,
+                    **runner_kwargs,
+                )
+            else:
+                runner = CodeRunner(
+                    workdir=run_dir,
+                    cohort_parquet=cohort_path,
+                    timeout_seconds=effective_timeout_seconds,
+                    python_executable=self._python_executable,
+                    extra_env=extra_env,
+                    **runner_kwargs,
+                )
+        # ``_build_runner`` intentionally clears any previous ContextVar at
+        # entry.  After the pre-plan probe, every later runner rebuild (for
+        # example after cohort materialization) must restore that exact
+        # verified snapshot before the Coder prompt is rendered.  Otherwise a
+        # host CodeRunner would silently fall back to probing the Codex process
+        # rather than the configured execution interpreter.
+        if self._validated_runtime_bundle is not None:
+            adopt_runtime = getattr(runner, "adopt_validated_runtime_bundle", None)
+            if not callable(adopt_runtime):
+                raise RuntimeError(
+                    "Execution runner changed after runtime preflight and cannot "
+                    "adopt the verified environment receipt."
+                )
+            adopt_runtime(self._validated_runtime_bundle)
+        if self._validated_runtime_capabilities is not None:
+            frozen_snapshot = self._validated_runtime_capabilities
+            set_runtime_capability_snapshot_provider(lambda: frozen_snapshot)
+        return runner
+
+    def _preflight_execution_runtime(
+        self,
+        *,
+        run_dir: Path,
+        cohort_path: Path,
+        target_outcome: Optional[str],
+    ) -> Tuple[str, ...]:
+        """Validate the real execution environment before Planner spend.
+
+        A stale Docker tag or incomplete custom backend used to be discovered
+        only after planning. Built-in and custom runners now expose one small
+        capability contract so that failure happens before the first planning
+        provider call and the Coder sees the exact sandbox allow-list.
+        """
+
+        runner = self._build_runner(
+            run_dir=run_dir,
+            cohort_path=cohort_path,
+            target_outcome=target_outcome,
+            universe_path=cohort_path,
         )
+        validate = getattr(runner, "validate_runtime_capabilities", None)
+        if not callable(validate):
+            raise RuntimeError(
+                "Custom research-agent runners must implement "
+                "validate_runtime_capabilities() and return the import names "
+                "available in their immutable execution environment."
+            )
+        raw_snapshot = validate()
+        if isinstance(raw_snapshot, (str, bytes)):
+            raise RuntimeError(
+                "Runner validate_runtime_capabilities() must return a collection "
+                "of import names, not a string."
+            )
+        snapshot = tuple(
+            sorted({str(name).strip() for name in raw_snapshot if str(name).strip()})
+        )
+        if not snapshot:
+            raise RuntimeError(
+                "Runner capability validation returned an empty package snapshot."
+            )
+        frozen_snapshot = tuple(snapshot)
+        self._validated_runtime_capabilities = frozen_snapshot
+        export_runtime = getattr(runner, "export_validated_runtime_bundle", None)
+        self._validated_runtime_bundle = (
+            dict(export_runtime()) if callable(export_runtime) else None
+        )
+        set_runtime_capability_snapshot_provider(lambda: frozen_snapshot)
+        return frozen_snapshot
 
     def _run_plan_phase(
         self,
@@ -2209,6 +2103,7 @@ class ResearchAgentPipeline:
         experiment_spec_path: Optional[Path],
         resume_state: Optional[Dict[str, Any]],
         resume_context_evidence_path: Optional[Path],
+        trajectory_binding: Optional[StagedTrajectoryBinding],
         run_scientific_identity: Dict[str, Any],
         run_environment_identity: Dict[str, Any],
         resume_from_step_id: Optional[str],
@@ -2223,14 +2118,12 @@ class ResearchAgentPipeline:
             # write. Restore a stale mutable working copy only from that sealed
             # authority; do not reserialize it (timestamps/provenance paths are
             # part of the original evidence bytes).
-            context = ResearchContext.model_validate_json(
+            context = parse_research_context_json(
                 resume_context_evidence_path.read_text(encoding="utf-8")
             )
-            if (
-                not context_path.is_file()
-                or sha256_of_file(context_path)
-                != sha256_of_file(resume_context_evidence_path)
-            ):
+            if not context_path.is_file() or sha256_of_file(
+                context_path
+            ) != sha256_of_file(resume_context_evidence_path):
                 shutil.copy2(resume_context_evidence_path, context_path)
         else:
             builder = (
@@ -2238,7 +2131,7 @@ class ResearchAgentPipeline:
                 if self._disable_icu_context
                 else build_research_context
             )
-            context = builder(
+            context_kwargs = dict(
                 research_question=question,
                 cohort=cohort_path,
                 cohort_name=cohort_name,
@@ -2256,6 +2149,9 @@ class ResearchAgentPipeline:
                 user_preferences=user_preferences,
                 notes=notes,
             )
+            if builder is build_research_context:
+                context_kwargs["trajectory_binding"] = trajectory_binding
+            context = builder(**context_kwargs)
             context_path.write_text(
                 context.model_dump_json(indent=2),
                 encoding="utf-8",
@@ -2283,6 +2179,16 @@ class ResearchAgentPipeline:
                 generation_mode="system",
             )
         register_context_numeric_claims(evidence, context=context)
+        capability_finding = self._capability_runtime.prepare(
+            run_dir=run_dir,
+            evidence=evidence,
+            runtime_import_names=self._validated_runtime_capabilities or (),
+            runtime_bundle=self._validated_runtime_bundle,
+            is_resume=resume_state is not None,
+        )
+        self._approved_capability_resources = (
+            self._capability_runtime.approved_resources
+        )
         concept_fingerprint_path = run_dir / "concept_dict_fingerprint.json"
         concept_fingerprint = write_concept_dict_fingerprint(concept_fingerprint_path)
         assert_concept_dict_matches(
@@ -2350,12 +2256,20 @@ class ResearchAgentPipeline:
                 generation_mode="system",
             )
 
-        findings: List[ValidationFinding] = []
-        findings += CohortAuditor().audit(context=context, cohort_path=cohort_path)
+        findings = (
+            [capability_finding]
+            if capability_finding is not None
+            else preplan_data_findings(context=context, cohort_path=cohort_path)
+        )
         if any(f.severity == "error" for f in findings):
+            capability_blocked = capability_finding is not None
             emit_progress(
-                "audit",
-                "Cohort audit failed; aborting run.",
+                "capability" if capability_blocked else "audit",
+                (
+                    "Capability review is required before provider execution."
+                    if capability_blocked
+                    else "Pre-plan data gate failed; aborting before provider execution."
+                ),
                 status="error",
                 run_id=run_id,
             )
@@ -2366,7 +2280,11 @@ class ResearchAgentPipeline:
                 context_path=context_path,
                 evidence=evidence,
                 findings=findings,
-                reason="cohort_audit_failed",
+                reason=(
+                    "capability_review_required"
+                    if capability_blocked
+                    else preplan_data_failure_reason(findings)
+                ),
             )
             return _PlanPhaseResult(
                 context=context,
@@ -2397,102 +2315,7 @@ class ResearchAgentPipeline:
             findings=len(findings),
         )
 
-        memory_digest_text: Optional[str] = None
-        if self._memory is not None:
-            digest = self._memory.digest_for_prompt(
-                research_question=question,
-                database=database,
-                target_outcome=target_outcome,
-            )
-            memory_digest_text = digest
-            if skill_obj is None:
-                try:
-                    meta_digest = self._memory.meta_planner_digest(
-                        skill_keys=[s.key for s in list_skills()],
-                        research_question=question,
-                        database=database,
-                        target_outcome=target_outcome,
-                    )
-                    memory_digest_text = digest + "\n\n" + meta_digest
-                except Exception:
-                    pass
-            digest_path = run_dir / "memory_digest.md"
-            digest_path.write_text(memory_digest_text, encoding="utf-8")
-            if evidence.get("memory_digest") is None:
-                evidence.register_file(
-                    kind="log",
-                    description="Cross-run memory digest fed to the planner.",
-                    source_path=digest_path,
-                    evidence_id="memory_digest",
-                    producer="memory",
-                    generation_mode="system",
-                )
-
-        experience_digest_text: Optional[str] = None
-        experience_hits = self.retrieve_experience_hints(
-            research_question=question,
-            database=database,
-        )
-        if experience_hits:
-            bank = self._experience_bank()
-            bank_record_count = (
-                len(bank.records()) if bank is not None else len(experience_hits)
-            )
-            retired_count = max(0, bank_record_count - len(experience_hits))
-            lines = [
-                "# Experience Hints",
-                "",
-                "Only deterministic, audit-safe experience buckets are shown: "
-                "concept_usage_hint and failure_counter_example. These are hints, "
-                "not ICU rules; cohort definitions and clinical rules still come "
-                "from the concept dictionary and validators.",
-                "",
-                f"Selected {len(experience_hits)} card(s); withheld/retired "
-                f"{retired_count} card(s) below the retrieval threshold or top-k.",
-            ]
-            for idx, (record, score) in enumerate(experience_hits, start=1):
-                lines.extend(
-                    [
-                        "",
-                        f"## Card {idx}: {record.kind}",
-                        f"- score: {score:.3f}",
-                        f"- database: {record.database}",
-                        f"- cohort: {record.cohort_name}",
-                        f"- produced_by: {record.producer_run_id or 'unknown'}",
-                        f"- reason: lexical overlap with the current question"
-                        + (
-                            " plus same-database boost"
-                            if database and record.database == database
-                            else ""
-                        ),
-                        f"- summary: {record.summary}",
-                    ]
-                )
-            experience_digest_text = "\n".join(lines) + "\n"
-            experience_path = run_dir / "experience_hints.md"
-            experience_path.write_text(experience_digest_text, encoding="utf-8")
-            if evidence.get("experience_hints") is None:
-                evidence.register_file(
-                    kind="log",
-                    description="Audit log of cross-run experience cards fed to the planner.",
-                    source_path=experience_path,
-                    evidence_id="experience_hints",
-                    producer="experience_bank",
-                    generation_mode="system",
-                )
-
         agent_context = context
-        planner_notes: List[str] = []
-        if memory_digest_text:
-            planner_notes.append("RunMemory digest for planner:\n" + memory_digest_text)
-        if experience_digest_text:
-            planner_notes.append(
-                "Experience hints for planner:\n" + experience_digest_text
-            )
-        if planner_notes:
-            note = "\n\n".join(planner_notes)
-            agent_notes = f"{context.notes}\n\n{note}" if context.notes else note
-            agent_context = agent_context.model_copy(update={"notes": agent_notes})
         if self._context_top_k and skill_obj is None:
             agent_context = build_retrieved_research_context(
                 agent_context,
@@ -2521,24 +2344,18 @@ class ResearchAgentPipeline:
                     "Building pre-plan literature and hypothesis blueprint.",
                     run_id=run_id,
                 )
-                preplan_literature = LiteratureAgent(None).run(agent_context)
-                preplan_lit_path = run_dir / "preplan_literature_bundle.json"
-                preplan_lit_path.write_text(
-                    preplan_literature.model_dump_json(indent=2),
-                    encoding="utf-8",
+                preplan_literature = prepare_preplan_literature(
+                    context=agent_context,
+                    run_dir=run_dir,
+                    evidence=evidence,
+                    enable_pubmed=self._enable_pubmed,
+                    pubmed_email=self._pubmed_email,
+                    pubmed_api_key=self._pubmed_api_key,
+                    enable_tavily=self._enable_tavily,
+                    tavily_api_key=self._tavily_api_key,
+                    tavily_retmax=self._tavily_retmax,
+                    tavily_include_domains=self._tavily_include_domains,
                 )
-                if evidence.get("preplan_literature_bundle") is None:
-                    evidence.register_file(
-                        kind="log",
-                        description=(
-                            "Pre-plan LiteratureBundle used to shape the hypothesis "
-                            "blueprint before planner execution."
-                        ),
-                        source_path=preplan_lit_path,
-                        evidence_id="preplan_literature_bundle",
-                        producer="hypothesis_blueprint",
-                        generation_mode="deterministic_skill",
-                    )
                 # O17 — Front-door hypothesis generation. Opt-in; writes
                 # ``hypothesis_candidates.json`` + ``.md`` so the paper
                 # Methods section can quote "Out of N candidates we
@@ -2673,7 +2490,10 @@ class ResearchAgentPipeline:
                         resume_state=resume_state,
                         aborted_result=aborted,
                     )
-                note = render_hypothesis_blueprint_for_prompt(blueprint)
+                note = render_hypothesis_blueprint_for_prompt(
+                    blueprint,
+                    literature=preplan_literature,
+                )
                 agent_notes = (
                     f"{agent_context.notes}\n\n{note}" if agent_context.notes else note
                 )
@@ -2689,6 +2509,23 @@ class ResearchAgentPipeline:
                         ),
                     )
                 )
+
+        planner_prompt_metrics: Optional[Dict[str, Any]] = None
+        know_how_binding = PlannerKnowHowBinding()
+        if self._enable_know_how and skill_obj is None:
+            prepared_know_how = prepare_preplan_know_how(
+                context=agent_context,
+                run_dir=run_dir,
+                evidence=evidence,
+                database=database,
+                paths=self._know_how_paths,
+                top_k=self._know_how_top_k,
+                min_score=self._know_how_min_score,
+                allow_curated_mvp=(
+                    self._submission_profile_name == "npj_dm_know_how_dev"
+                ),
+            )
+            know_how_binding = PlannerKnowHowBinding.from_prepared(prepared_know_how)
 
         study_design_brief = None
         article_contract = None
@@ -2819,14 +2656,15 @@ class ResearchAgentPipeline:
                     price_table=(
                         dict(self._cost_price_table) if self._cost_price_table else None
                     ),
+                    runtime_dir=run_dir / ".runtime",
                 )
                 if self._cost_price_table is not None
-                else CostMeter()
+                else CostMeter(runtime_dir=run_dir / ".runtime")
             )
             # Order: envelope wraps the innermost client so prompt /
             # response hashes are computed on the exact strings the
-            # agent sent / received; the metered layer then observes
-            # ``last_usage`` the envelope passes through.
+            # agent sent / received; the metered layer then receives usage
+            # owned by that same response through ``complete_with_usage``.
             if repro_envelope is not None:
                 env_resolver = envelope_role_resolver(
                     llm,
@@ -2890,6 +2728,15 @@ class ResearchAgentPipeline:
                 resume_state=resume_state,
             )
             if plan is not None and plan.steps:
+                restore_table_one_private_checkpoint(
+                    run_dir=run_dir,
+                    plan=plan,
+                    context=agent_context,
+                )
+                know_how_binding.verify_resume(
+                    plan.know_how_decisions,
+                    enabled=self._enable_know_how,
+                )
                 reused_prior_plan = True
                 reused_plan_path = _prior_plan_path
                 plan_generation_mode = "resumed"
@@ -3040,46 +2887,6 @@ class ResearchAgentPipeline:
                         },
                     )
                 )
-            stability_spec_migration_path = None
-            stability_spec_step_ids: tuple[str, ...] = ()
-            if (
-                self._enable_retrospective_trajectory_stability_design
-                and resume_from_step_id is not None
-            ):
-                (
-                    plan,
-                    stability_spec_migration_path,
-                    stability_spec_step_ids,
-                ) = _migrate_legacy_resume_trajectory_stability_spec(
-                    plan=plan,
-                    run_dir=run_dir,
-                    resume_state=resume_state,
-                    resume_from_step_id=resume_from_step_id,
-                    role_resolver=role_resolver,
-                    evidence=evidence,
-                    prompt_version=prompt_version,
-                    llm_signature=llm_signature,
-                )
-            if stability_spec_migration_path is not None:
-                migrated_plan_path = stability_spec_migration_path
-                plan_generation_mode = "resumed_planner_migration"
-                findings.append(
-                    ValidationFinding(
-                        validator="planner_schema_migration",
-                        severity="warning",
-                        message=(
-                            "Planner supplied the missing typed trajectory "
-                            "stability design for a remaining development step."
-                        ),
-                        detail={
-                            "kind": "retrospective_trajectory_stability_design",
-                            "target_step_ids": list(stability_spec_step_ids),
-                            "plan_path": str(
-                                stability_spec_migration_path.relative_to(run_dir)
-                            ),
-                        },
-                    )
-                )
         elif skill_obj is not None:
             plan_generation_mode = "deterministic_skill"
             issues = skill_obj.validate_against(pd.read_parquet(cohort_path))
@@ -3096,7 +2903,16 @@ class ResearchAgentPipeline:
             plan_generation_mode = "llm"
             planner = PlannerAgent(role_resolver("planner"))
             try:
-                plan = planner.run(agent_context)
+                plan = planner.run(
+                    agent_context,
+                    **know_how_binding.planner_kwargs,
+                    enforce_article_contract=True,
+                )
+                planner_prompt_metrics = know_how_binding.prompt_metrics(
+                    planner, agent_context
+                )
+            except PlannerArticleContractError:
+                raise
             except Exception as exc:
                 if not self._enable_deterministic_planner_fallback:
                     raise
@@ -3112,7 +2928,8 @@ class ResearchAgentPipeline:
                     )
                 )
                 plan = PlannerAgent(MockLLMClient(context=agent_context)).run(
-                    agent_context
+                    agent_context,
+                    **know_how_binding.planner_kwargs,
                 )
                 used_mock_llm = True
                 plan_generation_mode = "fallback"
@@ -3140,7 +2957,11 @@ class ResearchAgentPipeline:
             if not plan.steps and self._enable_deterministic_planner_fallback:
                 retry_plan = None
                 try:
-                    retry_plan = planner.run(agent_context)
+                    retry_plan = planner.run(
+                        agent_context,
+                        **know_how_binding.planner_kwargs,
+                        enforce_article_contract=True,
+                    )
                 except Exception:
                     retry_plan = None
                 if retry_plan is not None and retry_plan.steps:
@@ -3166,7 +2987,8 @@ class ResearchAgentPipeline:
                         )
                     )
                     plan = PlannerAgent(MockLLMClient(context=agent_context)).run(
-                        agent_context
+                        agent_context,
+                        **know_how_binding.planner_kwargs,
                     )
                     used_mock_llm = True
                     plan_generation_mode = "fallback"
@@ -3182,7 +3004,11 @@ class ResearchAgentPipeline:
             ):
                 cohort_retry = None
                 try:
-                    cohort_retry = planner.run(agent_context)
+                    cohort_retry = planner.run(
+                        agent_context,
+                        **know_how_binding.planner_kwargs,
+                        enforce_article_contract=True,
+                    )
                 except Exception:
                     cohort_retry = None
                 if (
@@ -3240,7 +3066,7 @@ class ResearchAgentPipeline:
 
             cap = self._max_total_steps
             plan, cap_findings = _cap_plan_preserving_figure_steps(plan=plan, cap=cap)
-            findings.extend(cap_findings)
+            findings.extend(_defer_typed_plan_dag_findings_until_probe(cap_findings))
             plan, trajectory_product_findings = augment_trajectory_plan_products(
                 plan=plan,
                 context=context,
@@ -3273,6 +3099,78 @@ class ResearchAgentPipeline:
             # running the analysis on the full universe.
             findings.extend(_cohort_definition_contract_findings(plan))
         if study_design_brief is not None:
+            if (
+                plan.analysis_type
+                and article_contract is not None
+                and plan.analysis_type != article_contract.source_analysis_type
+            ):
+                # The pre-plan contract is a prompt profile.  Once the Planner
+                # has selected a valid analysis type, seal a separate final
+                # contract instead of letting provisional inference retain
+                # scientific headline authority.
+                final_brief = build_study_design_brief(
+                    agent_context,
+                    analysis_type=plan.analysis_type,
+                )
+                final_contract = build_article_analysis_contract(
+                    agent_context,
+                    brief=final_brief,
+                    analysis_type=plan.analysis_type,
+                )
+                final_strategy = build_article_figure_strategy(
+                    agent_context,
+                    analysis_family=final_brief.analysis_family,
+                )
+                final_blueprint = build_analysis_blueprint(
+                    agent_context,
+                    brief=final_brief,
+                    contract=final_contract,
+                    figure_strategy=final_strategy,
+                )
+                final_payloads = (
+                    (
+                        "study_design_brief_final",
+                        "study_design_brief.final.json",
+                        final_brief,
+                    ),
+                    (
+                        "article_analysis_contract_final",
+                        "article_analysis_contract.final.json",
+                        final_contract,
+                    ),
+                    (
+                        "article_figure_strategy_final",
+                        "article_figure_strategy.final.json",
+                        final_strategy,
+                    ),
+                    (
+                        "analysis_blueprint_final",
+                        "analysis_blueprint.final.json",
+                        final_blueprint,
+                    ),
+                )
+                for evidence_id, filename, payload in final_payloads:
+                    final_path = run_dir / filename
+                    final_path.write_text(
+                        payload.model_dump_json(indent=2),
+                        encoding="utf-8",
+                    )
+                    if evidence.get(evidence_id) is None:
+                        evidence.register_file(
+                            kind="log",
+                            description=(
+                                "Planner-final article design authority bound to "
+                                f"analysis_type={plan.analysis_type}."
+                            ),
+                            source_path=final_path,
+                            evidence_id=evidence_id,
+                            producer="planner_contract_finalizer",
+                            generation_mode="deterministic_skill",
+                        )
+                study_design_brief = final_brief
+                article_contract = final_contract
+                article_figure_strategy = final_strategy
+                analysis_blueprint = final_blueprint
             findings.extend(
                 validate_plan_against_study_design_brief(
                     plan=plan,
@@ -3296,6 +3194,9 @@ class ResearchAgentPipeline:
         plan_path = (
             migrated_plan_path or reused_plan_path or (run_dir / "analysis_plan.json")
         )
+        for planned_step in plan.steps:
+            bind_table_one_execution_spec(planned_step, agent_context)
+        write_table_one_private_checkpoint(run_dir=run_dir, plan=plan)
         if not reused_prior_plan:
             plan_path.write_text(plan.model_dump_json(indent=2), encoding="utf-8")
         if evidence.get("analysis_plan") is None:
@@ -3316,6 +3217,11 @@ class ResearchAgentPipeline:
                     "used_mock_llm": used_mock_llm,
                 },
             )
+        know_how_binding.persist_prompt_metrics(
+            planner_prompt_metrics,
+            run_dir=run_dir,
+            evidence=evidence,
+        )
         write_locked_cohort_definition(
             run_dir=run_dir,
             plan=plan,
@@ -3358,6 +3264,12 @@ class ResearchAgentPipeline:
                         detail={
                             "n_universe": analysis_cohort["n_universe"],
                             "n_analysis_cohort": analysis_cohort["n_cohort"],
+                            "cohort_definition_sha256": analysis_cohort[
+                                "cohort_definition_sha256"
+                            ],
+                            "materialized_cohort_authority_ref": analysis_cohort[
+                                "authority_ref"
+                            ],
                         },
                     )
                 )
@@ -3407,11 +3319,42 @@ class ResearchAgentPipeline:
             resume_state=resume_state,
         )
 
+    def _execute_phase_services(self) -> ExecutePhaseServices:
+        """Build a fresh dependency snapshot for one execute-phase call."""
+
+        return ExecutePhaseServices(
+            build_probe_summary=_build_probe_summary,
+            deterministic_figure_family_supported_for_upstream=(
+                deterministic_figure_family_supported_for_upstream
+            ),
+            promote_prior_publication_bundle=_promote_prior_publication_bundle,
+            promote_sibling_figure_exports=_promote_sibling_figure_exports,
+            render_publication_bundle_from_prior_outputs_for_step=(
+                _render_publication_bundle_from_prior_outputs_for_step
+            ),
+            semantic_aliases_for=_semantic_aliases_for,
+            publication_figure_authority=PublicationFigureAuthorityServices(
+                distribution_availability_step_matches_parent=(
+                    _distribution_availability_figure_step_matches_parent
+                ),
+                sealed_renderer_step_matches_parent=(
+                    _sealed_renderer_figure_step_matches_parent
+                ),
+                sealed_renderer_parent_digest_seal=(
+                    _sealed_renderer_parent_digest_seal
+                ),
+                deterministic_repair_id_for_upstream=(
+                    deterministic_figure_repair_id_for_upstream
+                ),
+            ),
+        )
+
     def _run_execute_phase(
         self,
         *,
         plan_result: _PlanPhaseResult,
         cohort_path: Path,
+        trajectory_binding: Optional[StagedTrajectoryBinding],
         run_dir: Path,
         run_id: str,
         skill_obj: Optional[ClinicalSkill],
@@ -3420,19 +3363,20 @@ class ResearchAgentPipeline:
         resume_from_step_id: Optional[str] = None,
         stop_after_step_id: Optional[str] = None,
     ) -> "_ExecutePhaseResult":
-        """Delegate to :mod:`pipeline_execute`.
+        """Delegate to :mod:`execution.phase`.
 
-        The 1500-line loop body is in :mod:`pipeline_execute` so this
+        The execute loop body is in :mod:`execution.phase` so this
         file does not have to host both the orchestration shell and the
         execute-phase guts. Late-imported to keep ``import pipeline``
         free of a cycle.
         """
-        from .pipeline_execute import run_execute_phase
+        from .execution.phase import run_execute_phase
 
         return run_execute_phase(
             self,
             plan_result=plan_result,
             cohort_path=cohort_path,
+            trajectory_binding=trajectory_binding,
             run_dir=run_dir,
             run_id=run_id,
             skill_obj=skill_obj,
@@ -3456,8 +3400,8 @@ class ResearchAgentPipeline:
         emit_progress: Callable[..., None],
         force_writer_probe: bool = False,
     ) -> _WritePhaseResult:
-        """Delegate to :mod:`pipeline_write`."""
-        from .pipeline_write import run_write_phase
+        """Delegate to :mod:`reporting.write_phase`."""
+        from .reporting.write_phase import run_write_phase
 
         return run_write_phase(
             self,
@@ -3487,12 +3431,13 @@ class ResearchAgentPipeline:
         target_outcome: Optional[str],
         stop_after_analysis: bool,
         cache_key: Optional[str],
+        scientific_identity: Mapping[str, Any],
         experiment_spec_path: Optional[Path],
         audit_logger: Optional[AuditLogger],
         emit_progress: Callable[..., None],
     ) -> PipelineResult:
-        """Delegate to :mod:`pipeline_package`."""
-        from .pipeline_package import finalise_success
+        """Delegate to :mod:`orchestration.finalize`."""
+        from .orchestration.finalize import finalise_success
 
         return finalise_success(
             self,
@@ -3507,6 +3452,7 @@ class ResearchAgentPipeline:
             target_outcome=target_outcome,
             stop_after_analysis=stop_after_analysis,
             cache_key=cache_key,
+            scientific_identity=scientific_identity,
             experiment_spec_path=experiment_spec_path,
             audit_logger=audit_logger,
             emit_progress=emit_progress,
@@ -3560,12 +3506,14 @@ class ResearchAgentPipeline:
         database: str,
         cohort_name: str,
     ) -> List[ExperienceRecord]:
-        """Mine experience records from a completed run and write them back.
+        """Mine legacy records and mirror them into permissioned quarantine.
 
         Reads ``run_status.json`` from ``run_dir`` for the gates +
         findings + superseded-error partition. Returns the records
-        that were registered (after dedup against the existing bank);
-        an empty list when the feature is disabled or the run dir
+        that were registered (after dedup against the existing bank); finalization
+        mirrors these records into ``run_lessons/quarantine`` and never injects
+        them into Planner context. Returns an empty list when the feature is
+        disabled or the run dir
         does not yet have a run_status.
 
         Idempotent on ``(kind, summary)``: re-running over the same
@@ -3626,6 +3574,15 @@ class ResearchAgentPipeline:
         *,
         question: Optional[str] = None,
         cohort: Union[str, Path, pd.DataFrame],
+        cohort_authority_path: Optional[Union[str, Path]] = None,
+        cohort_authority_ref: Optional[
+            Union[MaterializedCohortAuthorityRef, Mapping[str, object]]
+        ] = None,
+        trajectory_path: Optional[Union[str, Path]] = None,
+        trajectory_authority_path: Optional[Union[str, Path]] = None,
+        trajectory_authority_ref: Optional[
+            Union[MaterializedTrajectoryAuthorityRef, Mapping[str, object]]
+        ] = None,
         cohort_name: str = "cohort",
         database: str = "miiv",
         target_outcome: Optional[str] = None,
@@ -3652,15 +3609,11 @@ class ResearchAgentPipeline:
         source_files: Optional[Sequence[Any]] = None,
         progress_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
         force_writer_probe: bool = False,
-        _use_graph: bool = False,
     ) -> PipelineResult:
         """Run the explicit Plan → Execute → Write phases for one cohort.
 
-        Pass ``_use_graph=True`` (or call :meth:`run_with_graph`) to
-        dispatch the phases through the opt-in langgraph wrapper in
-        :mod:`easyicu.research_agent.graph`. Behaviour is identical
-        either way; the graph path is a PoC for future branching /
-        checkpointing work.
+        LangGraph dispatches the phases while EasyICU's receipt, capsule,
+        evidence, and checkpoint remain the sole scientific authority.
         """
         skill_obj: Optional[ClinicalSkill] = None
         if skill is not None:
@@ -3680,6 +3633,189 @@ class ResearchAgentPipeline:
                 "ResearchAgentPipeline.run() now requires an explicit `llm=` "
                 "client. Pass MockLLMClient() only for tests or deterministic "
                 "demo runs; the pipeline no longer falls back to mock silently."
+            )
+        if resume_run_id and self._capability_runtime.activation is not None:
+            raise ValueError(
+                "Approved capability activation requires a new run; resume is forbidden"
+            )
+        verified_source_authority = None
+        authority_declared = (
+            cohort_authority_path is not None or cohort_authority_ref is not None
+        )
+        if authority_declared and (
+            cohort_authority_path is None or cohort_authority_ref is None
+        ):
+            raise MaterializedMetadataError(
+                "cohort authority path and reference must be declared together"
+            )
+        expected_cohort_authority: Optional[MaterializedCohortAuthorityRef] = None
+        if authority_declared:
+            if not isinstance(cohort, (str, Path)):
+                raise MaterializedMetadataError(
+                    "materialized cohort authority requires a parquet path input"
+                )
+            source_cohort_path = Path(cohort).expanduser()
+            if source_cohort_path.suffix.lower() not in {".parquet", ".pq"}:
+                raise MaterializedMetadataError(
+                    "materialized cohort authority requires a parquet path input"
+                )
+            expected_cohort_authority = (
+                cohort_authority_ref
+                if isinstance(cohort_authority_ref, MaterializedCohortAuthorityRef)
+                else MaterializedCohortAuthorityRef.from_dict(cohort_authority_ref)
+            )
+            declared_authority_path = Path(cohort_authority_path).expanduser()
+            expected_authority_path = (
+                source_cohort_path.parent / expected_cohort_authority.file
+            )
+            if (
+                declared_authority_path.is_symlink()
+                or declared_authority_path.resolve()
+                != expected_authority_path.resolve()
+            ):
+                raise MaterializedMetadataError(
+                    "cohort authority path does not match the declared reference"
+                )
+            verified_source_authority = load_verified_materialized_cohort_authority(
+                source_cohort_path,
+                expected_authority=expected_cohort_authority,
+            )
+            if verified_source_authority is None:  # pragma: no cover - exact ref
+                raise MaterializedMetadataError(
+                    "declared typed cohort lost its selected authority"
+                )
+        elif isinstance(cohort, (str, Path)):
+            source_cohort_path = Path(cohort).expanduser()
+            if source_cohort_path.suffix.lower() in {".parquet", ".pq"}:
+                # Classify and bind typed inputs before scientific identity,
+                # cache lookup, resume comparison, or any run-directory write.
+                # This keeps the direct Python API safe without requiring every
+                # caller to manually rediscover the sibling selector.
+                verified_source_authority = load_verified_materialized_cohort_authority(
+                    source_cohort_path
+                )
+                if verified_source_authority is not None:
+                    expected_cohort_authority = verified_source_authority.reference
+        if verified_source_authority is not None and self._disable_icu_context:
+            raise MaterializedMetadataError(
+                "Typed materialized cohorts require ICU-aware ResearchContext v2; "
+                "disable_icu_context=True is reserved for untyped historical "
+                "ablation inputs. Use ICU-aware context/--arms aware, or supply "
+                "an untyped DataFrame or legacy parquet for the naive arm."
+            )
+        if verified_source_authority is not None:
+            normalized_database = normalize_database_name(database)
+            if verified_source_authority.sidecar.source_database != normalized_database:
+                raise MaterializedMetadataError(
+                    "declared database does not match typed cohort authority"
+                )
+            from easyicu.config import load_src_cfg
+
+            expected_prefixes = tuple(
+                str(value).strip().lower()
+                for value in load_src_cfg(normalized_database).class_prefix
+                if str(value).strip()
+            )
+            if (
+                verified_source_authority.sidecar.source_database_class_prefixes
+                != expected_prefixes
+            ):
+                raise MaterializedMetadataError(
+                    "typed cohort source class policy does not match host registry"
+                )
+            # Typed authority owns the actual source database. Preserve the
+            # public API's accepted aliases (for example ``mimiciv``) while
+            # passing one canonical coordinate into scientific identity,
+            # ResearchContext v2, cache, and resume authority.
+            database = normalized_database
+        verified_source_trajectory: Optional[
+            VerifiedMaterializedTrajectoryAuthority
+        ] = None
+        expected_trajectory_authority: Optional[MaterializedTrajectoryAuthorityRef] = (
+            None
+        )
+        selected_trajectory_path: Optional[Path] = None
+        trajectory_authority_declared = (
+            trajectory_authority_path is not None
+            or trajectory_authority_ref is not None
+        )
+        if trajectory_authority_declared and (
+            trajectory_authority_path is None
+            or trajectory_authority_ref is None
+            or trajectory_path is None
+        ):
+            raise MaterializedTrajectoryError(
+                "trajectory path, authority path, and authority reference must be "
+                "declared together"
+            )
+        raw_trajectory_path: Optional[Path] = None
+        if trajectory_path is not None:
+            raw_trajectory_path = Path(trajectory_path).expanduser()
+        elif isinstance(cohort, (str, Path)):
+            raw_cohort_path = Path(cohort).expanduser()
+            candidate = raw_cohort_path.with_name(
+                f"{raw_cohort_path.stem}_trajectory.parquet"
+            )
+            if candidate.exists():
+                raw_trajectory_path = candidate
+        if raw_trajectory_path is not None:
+            if (
+                raw_trajectory_path.is_symlink()
+                or not raw_trajectory_path.is_file()
+                or raw_trajectory_path.suffix.lower() not in {".parquet", ".pq"}
+            ):
+                raise MaterializedTrajectoryError(
+                    "trajectory input must be a regular parquet file"
+                )
+            selected_trajectory_path = raw_trajectory_path.resolve(strict=True)
+        if trajectory_authority_declared:
+            if verified_source_authority is None:
+                raise MaterializedTrajectoryError(
+                    "typed trajectory authority requires a typed cohort authority"
+                )
+            expected_trajectory_authority = (
+                trajectory_authority_ref
+                if isinstance(
+                    trajectory_authority_ref, MaterializedTrajectoryAuthorityRef
+                )
+                else MaterializedTrajectoryAuthorityRef.from_dict(
+                    trajectory_authority_ref
+                )
+            )
+            assert selected_trajectory_path is not None
+            declared_trajectory_authority_path = Path(
+                trajectory_authority_path
+            ).expanduser()
+            expected_trajectory_authority_path = (
+                selected_trajectory_path.parent / expected_trajectory_authority.file
+            )
+            if (
+                declared_trajectory_authority_path.is_symlink()
+                or declared_trajectory_authority_path.resolve()
+                != expected_trajectory_authority_path.resolve()
+            ):
+                raise MaterializedTrajectoryError(
+                    "trajectory authority path does not match the declared reference"
+                )
+        if (
+            selected_trajectory_path is not None
+            and verified_source_authority is not None
+        ):
+            verified_source_trajectory = (
+                load_verified_materialized_trajectory_authority(
+                    selected_trajectory_path,
+                    expected_authority=expected_trajectory_authority,
+                    expected_universe_authority=verified_source_authority.reference,
+                )
+            )
+            if verified_source_trajectory is None:
+                raise MaterializedTrajectoryError(
+                    "typed cohort trajectory requires a sealed trajectory authority"
+                )
+            expected_trajectory_authority = verified_source_trajectory.reference
+        elif expected_trajectory_authority is not None:
+            raise MaterializedTrajectoryError(
+                "typed trajectory authority requires a typed cohort authority"
             )
         run_language = self._normalise_manuscript_language(
             manuscript_language or self._manuscript_language
@@ -3751,6 +3887,35 @@ class ResearchAgentPipeline:
             experiment_spec=spec_obj,
             source_files=source_files,
             disable_icu_context=self._disable_icu_context,
+            development_sampling=(
+                {
+                    "schema": "easyicu.development_execution_sample/1",
+                    "paper_authority": False,
+                    "stage": "after_locked_cohort_materialization_and_qc",
+                    "algorithm": "sha256_identity_rank_v1",
+                    "target_rows": self._development_sample_size,
+                    "seed": self._development_sample_seed,
+                }
+                if self._development_sample_size is not None
+                else None
+            ),
+            materialized_cohort_authority_ref=(
+                expected_cohort_authority.to_dict()
+                if expected_cohort_authority is not None
+                else None
+            ),
+            trajectory_path=(
+                selected_trajectory_path
+                if trajectory_path is not None
+                or expected_trajectory_authority is not None
+                else None
+            ),
+            materialized_trajectory_authority_ref=(
+                expected_trajectory_authority.to_dict()
+                if expected_trajectory_authority is not None
+                else None
+            ),
+            capability_workflow=self._capability_runtime.scientific_coordinate(),
         )
         run_environment_identity = build_environment_identity(
             llm_signature=self._llm_signature(llm)
@@ -3759,6 +3924,7 @@ class ResearchAgentPipeline:
         resume_state: Optional[Dict[str, Any]] = None
         resume_context_evidence_path: Optional[Path] = None
         resume_input_verified = False
+        resume_trajectory_binding: Optional[StagedTrajectoryBinding] = None
         experiment_spec_path: Optional[Path] = None
         run_id = current_locked_run_id()
         if resume_run_id:
@@ -3771,6 +3937,58 @@ class ResearchAgentPipeline:
                         "non-empty but has no readable checkpoint."
                     )
                 if resume_state is not None:
+                    if expected_cohort_authority is not None:
+                        staged_authority = load_verified_materialized_cohort_authority(
+                            run_dir / "cohort.parquet"
+                        )
+                        if (
+                            staged_authority is None
+                            or staged_authority.authority.parent_authority_sha256
+                            != expected_cohort_authority.sha256
+                        ):
+                            raise MaterializedMetadataError(
+                                "resume cohort no longer descends from the declared "
+                                "source authority"
+                            )
+                        source_authority = verified_source_authority
+                        if (
+                            source_authority is None
+                        ):  # pragma: no cover - declared above
+                            raise MaterializedMetadataError(
+                                "declared source authority was not verified"
+                            )
+                        staged_binding = staged_authority.sidecar.files[0]
+                        source_binding = source_authority.sidecar.files[0]
+                        if (
+                            staged_authority.authority.cohort_sha256
+                            != source_authority.authority.cohort_sha256
+                            or staged_authority.authority.cohort_size
+                            != source_authority.authority.cohort_size
+                            or staged_authority.authority.cohort_rows
+                            != source_authority.authority.cohort_rows
+                            or staged_authority.authority.cohort_columns
+                            != source_authority.authority.cohort_columns
+                            or staged_authority.authority.cohort_schema_sha256
+                            != source_authority.authority.cohort_schema_sha256
+                            or staged_authority.authority.row_identity_sha256
+                            != source_authority.authority.row_identity_sha256
+                            or staged_binding.identity_column
+                            != source_binding.identity_column
+                            or staged_binding.time_coordinates
+                            != source_binding.time_coordinates
+                            or staged_binding.columns != source_binding.columns
+                        ):
+                            raise MaterializedMetadataError(
+                                "resume cohort is not an exact typed copy of the "
+                                "declared source authority"
+                            )
+                    # Dictionary identity is part of the interrupted run's
+                    # provenance authority.  Check the checkpoint-selected
+                    # manifest before prepare_existing_resume_input writes a
+                    # resume receipt or the plan phase refreshes the mutable
+                    # root fingerprint file.  Historical manifests that
+                    # predate dictionary fingerprints remain compatible.
+                    verify_recorded_dict_match(resume_state, mode="strict")
                     prepared_resume = prepare_existing_resume_input(
                         run_dir=run_dir,
                         resume_state=resume_state,
@@ -3784,9 +4002,8 @@ class ResearchAgentPipeline:
                     )
                     resume_state = prepared_resume.resume_state
                     resume_input_verified = prepared_resume.input_verified
-                    resume_context_evidence_path = (
-                        prepared_resume.context_evidence_path
-                    )
+                    resume_context_evidence_path = prepared_resume.context_evidence_path
+                    resume_trajectory_binding = prepared_resume.trajectory_binding
                     experiment_spec_path = prepared_resume.experiment_spec_path
                     if prepared_resume.cohort_path is not None:
                         cohort_path = prepared_resume.cohort_path
@@ -3802,14 +4019,53 @@ class ResearchAgentPipeline:
             )
 
         if not resume_input_verified:
-            cohort_path = self._materialise_cohort(cohort, run_dir)
+            cohort_path = self._materialise_cohort(
+                cohort,
+                run_dir,
+                expected_source_authority=expected_cohort_authority,
+            )
             _emit_progress(
                 "cohort",
                 "Cohort materialised to parquet.",
                 run_id=run_id,
                 path=str(cohort_path),
             )
+            staged_trajectory_binding: Optional[StagedTrajectoryBinding] = None
+            if selected_trajectory_path is not None:
+                trajectory_identity = run_scientific_identity.get("trajectory")
+                if not isinstance(trajectory_identity, Mapping):
+                    cohort_identity = run_scientific_identity.get("cohort")
+                    trajectory_identity = (
+                        cohort_identity.get("trajectory")
+                        if isinstance(cohort_identity, Mapping)
+                        else None
+                    )
+                if not isinstance(trajectory_identity, Mapping):
+                    raise MaterializedTrajectoryError(
+                        "trajectory scientific identity is missing"
+                    )
+                staged_trajectory_binding = self._materialise_trajectory(
+                    source_path=selected_trajectory_path,
+                    target_path=run_dir / "cohort_trajectory.parquet",
+                    source_cohort_path=(
+                        Path(cohort).expanduser().resolve()
+                        if verified_source_trajectory is not None
+                        and isinstance(cohort, (str, Path))
+                        else None
+                    ),
+                    target_cohort_path=cohort_path,
+                    source_authority=verified_source_trajectory,
+                    expected_sha256=str(trajectory_identity.get("sha256") or ""),
+                    expected_size=int(trajectory_identity.get("size_bytes") or -1),
+                )
+                _emit_progress(
+                    "cohort",
+                    "Trajectory staged with exact input authority.",
+                    run_id=run_id,
+                    path=str(staged_trajectory_binding.path),
+                )
         else:
+            staged_trajectory_binding = resume_trajectory_binding
             _emit_progress(
                 "cohort",
                 "Verified immutable staged cohort for resume.",
@@ -3832,7 +4088,10 @@ class ResearchAgentPipeline:
                 flags=self._cache_flag_payload(),
                 science_inputs=run_scientific_identity,
             )
-            cached = self._cache.lookup(cache_key)
+            cached = self._cache.lookup(
+                cache_key,
+                scientific_identity=run_scientific_identity,
+            )
             if cached is not None:
                 shutil.rmtree(run_dir, ignore_errors=True)
                 _emit_progress(
@@ -3842,6 +4101,18 @@ class ResearchAgentPipeline:
                     run_id=cached.run_id,
                 )
                 return cached
+
+        runtime_capabilities = self._preflight_execution_runtime(
+            run_dir=run_dir,
+            cohort_path=cohort_path,
+            target_outcome=target_outcome,
+        )
+        _emit_progress(
+            "runtime",
+            "Execution runtime validated before planning.",
+            run_id=run_id,
+            method_capabilities=list(runtime_capabilities),
+        )
 
         def _plan_invoker():
             return self._run_plan_phase(
@@ -3869,11 +4140,21 @@ class ResearchAgentPipeline:
                 experiment_spec_path=experiment_spec_path,
                 resume_state=resume_state,
                 resume_context_evidence_path=resume_context_evidence_path,
+                trajectory_binding=staged_trajectory_binding,
                 run_scientific_identity=run_scientific_identity,
                 run_environment_identity=run_environment_identity,
                 resume_from_step_id=resume_from_step_id,
                 emit_progress=_emit_progress,
             )
+
+        from .graph import orchestration_runtime_receipt
+
+        orchestration_receipt = orchestration_runtime_receipt()
+        orchestration_receipt_path = run_dir / "orchestration_runtime.json"
+        orchestration_receipt_path.write_text(
+            orchestration_receipt.model_dump_json(indent=2) + "\n",
+            encoding="utf-8",
+        )
 
         def _provenance_hook(plan_result):
             # O27 — Raw EHR provenance. Hash the cohort parquet and any
@@ -3912,11 +4193,24 @@ class ResearchAgentPipeline:
                         ),
                     )
                 )
+            if plan_result.evidence.get("orchestration_runtime") is None:
+                plan_result.evidence.register_file(
+                    kind="log",
+                    description=(
+                        "Non-scientific phase-dispatch runtime identity; EasyICU "
+                        "receipts/capsules/checkpoints remain authoritative."
+                    ),
+                    source_path=orchestration_receipt_path,
+                    evidence_id="orchestration_runtime",
+                    producer="pipeline",
+                    generation_mode="system",
+                )
 
         def _execute_invoker(plan_result):
             return self._run_execute_phase(
                 plan_result=plan_result,
                 cohort_path=cohort_path,
+                trajectory_binding=staged_trajectory_binding,
                 run_dir=run_dir,
                 run_id=run_id,
                 skill_obj=skill_obj,
@@ -3985,31 +4279,23 @@ class ResearchAgentPipeline:
                 target_outcome=target_outcome,
                 stop_after_analysis=stop_after_analysis,
                 cache_key=cache_key,
+                scientific_identity=run_scientific_identity,
                 experiment_spec_path=experiment_spec_path,
                 audit_logger=audit_logger,
                 emit_progress=_emit_progress,
             )
 
-        if _use_graph:
-            from .graph import build_pipeline_graph
+        from .graph import build_pipeline_graph
 
-            graph = build_pipeline_graph(
-                plan_invoker=_plan_invoker,
-                execute_invoker=_execute_invoker,
-                write_invoker=_write_invoker,
-                finalise_invoker=_finalise_invoker,
-                provenance_hook=_provenance_hook,
-            )
-            final_state = graph.invoke({})
-            return final_state["final_result"]
-
-        plan_result = _plan_invoker()
-        if plan_result.aborted_result is not None:
-            return plan_result.aborted_result
-        _provenance_hook(plan_result)
-        execute_result = _execute_invoker(plan_result)
-        write_result = _write_invoker(plan_result, execute_result)
-        return _finalise_invoker(plan_result, execute_result, write_result)
+        graph = build_pipeline_graph(
+            plan_invoker=_plan_invoker,
+            execute_invoker=_execute_invoker,
+            write_invoker=_write_invoker,
+            finalise_invoker=_finalise_invoker,
+            provenance_hook=_provenance_hook,
+        )
+        final_state = graph.invoke({})
+        return final_state["final_result"]
 
     def run_from_spec(
         self,
@@ -4033,14 +4319,8 @@ class ResearchAgentPipeline:
         return await asyncio.to_thread(self.run, **kwargs)
 
     def run_with_graph(self, **kwargs: Any) -> PipelineResult:
-        """Opt-in PoC: dispatch the phases through a langgraph StateGraph.
-
-        Requires the ``agentic`` extra (``pip install easyicu[agentic]``).
-        Behaviour is identical to :meth:`run`; see
-        :mod:`easyicu.research_agent.graph` for the wrapper design.
-        """
-        kwargs.pop("_use_graph", None)
-        return self.run(_use_graph=True, **kwargs)
+        """Backward-compatible alias for the sole LangGraph runtime."""
+        return self.run(**kwargs)
 
     def replicate(
         self,
@@ -4305,6 +4585,8 @@ class ResearchAgentPipeline:
         self,
         cohort: Union[str, Path, pd.DataFrame],
         run_dir: Path,
+        *,
+        expected_source_authority: Optional[MaterializedCohortAuthorityRef] = None,
     ) -> Path:
         if isinstance(cohort, (str, Path)):
             src = Path(cohort).resolve()
@@ -4312,21 +4594,42 @@ class ResearchAgentPipeline:
                 raise FileNotFoundError(f"Cohort path not found: {src}")
             target = run_dir / "cohort.parquet"
             if src.suffix.lower() in {".parquet", ".pq"}:
-                if src.resolve() != target.resolve():
-                    df = pd.read_parquet(src)
-                    df.to_parquet(target, index=False)
-                # Carry the optional long-format trajectory written next to the
-                # source universe (``<src_stem>_trajectory.parquet``) alongside
-                # the staged cohort as ``cohort_trajectory.parquet`` so the
-                # runner's sibling auto-discovery exposes TRAJECTORY_PARQUET.
-                # Without this the trajectory is stranded in the universe dir and
-                # timing/onset/incident steps cannot reach the row-level series.
-                src_trajectory = src.with_name(f"{src.stem}_trajectory.parquet")
-                if src_trajectory.exists():
-                    traj_target = run_dir / "cohort_trajectory.parquet"
-                    if src_trajectory.resolve() != traj_target.resolve():
-                        shutil.copy2(src_trajectory, traj_target)
+                typed_source = load_verified_materialized_cohort_authority(
+                    src,
+                    expected_authority=expected_source_authority,
+                )
+                staged = stage_materialized_cohort_authority(
+                    src,
+                    target,
+                    producer_implementation_sha256=(
+                        materialized_implementation_bundle_sha256(
+                            (
+                                Path(__file__),
+                                Path(__file__).resolve().parent
+                                / "intake"
+                                / "materialized_metadata.py",
+                            )
+                        )
+                    ),
+                    expected_source_authority=expected_source_authority,
+                )
+                if staged is None and src.resolve() != target.resolve():
+                    # Legacy materializations bind provenance to the exact
+                    # Parquet bytes. Re-serializing an otherwise identical
+                    # frame changes that file authority and needlessly loads
+                    # the full cohort into memory, so stage it byte-for-byte.
+                    shutil.copy2(src, target)
+                    source_provenance = materialized_provenance_path(src)
+                    if source_provenance.is_file():
+                        shutil.copy2(
+                            source_provenance,
+                            materialized_provenance_path(target),
+                        )
             elif src.suffix.lower() in {".csv", ".tsv"}:
+                if expected_source_authority is not None:
+                    raise MaterializedMetadataError(
+                        "materialized cohort authority cannot bind CSV/TSV input"
+                    )
                 sep = "\t" if src.suffix.lower() == ".tsv" else ","
                 df = pd.read_csv(src, sep=sep)
                 df.to_parquet(target, index=False)
@@ -4337,10 +4640,73 @@ class ResearchAgentPipeline:
                 )
             return target
         if isinstance(cohort, pd.DataFrame):
+            if expected_source_authority is not None:
+                raise MaterializedMetadataError(
+                    "materialized cohort authority cannot bind DataFrame input"
+                )
             target = run_dir / "cohort.parquet"
             cohort.to_parquet(target, index=False)
             return target
         raise TypeError("cohort must be a path or a pandas DataFrame")
+
+    def _materialise_trajectory(
+        self,
+        *,
+        source_path: Path,
+        target_path: Path,
+        source_cohort_path: Optional[Path],
+        target_cohort_path: Path,
+        source_authority: Optional[VerifiedMaterializedTrajectoryAuthority],
+        expected_sha256: str,
+        expected_size: int,
+    ) -> StagedTrajectoryBinding:
+        """Stage a trajectory exactly; typed inputs also rebind cohort lineage."""
+
+        if source_authority is None:
+            staged_path = stage_legacy_trajectory_exact(
+                source_path,
+                target_path,
+                expected_sha256=expected_sha256,
+                expected_size=expected_size,
+            )
+            return StagedTrajectoryBinding(
+                path=staged_path,
+                sha256=expected_sha256,
+                size=expected_size,
+            )
+        if source_cohort_path is None:
+            raise MaterializedTrajectoryError(
+                "typed trajectory requires its source cohort path"
+            )
+        target_cohort = load_verified_materialized_cohort_authority(target_cohort_path)
+        if target_cohort is None:
+            raise MaterializedTrajectoryError(
+                "typed trajectory target cohort lost its authority"
+            )
+        staged = stage_materialized_trajectory_authority(
+            source_path,
+            target_path,
+            source_universe_path=source_cohort_path,
+            target_universe_path=target_cohort_path,
+            expected_source_authority=source_authority.reference,
+            expected_target_universe_authority=target_cohort.reference,
+            producer_implementation_sha256=(
+                materialized_implementation_bundle_sha256(
+                    (
+                        Path(__file__),
+                        Path(__file__).resolve().parent
+                        / "intake"
+                        / "materialized_trajectory.py",
+                    )
+                )
+            ),
+        )
+        return StagedTrajectoryBinding(
+            path=target_path,
+            sha256=staged.authority.trajectory_sha256,
+            size=staged.authority.trajectory_size,
+            authority_ref=staged.reference,
+        )
 
     def _postprocess_paper_replication(
         self,
@@ -4387,7 +4753,7 @@ class ResearchAgentPipeline:
         )
 
     # ------------------------------------------------------------------
-    # T3.5 — cohort cache (delegates; real logic in pipeline_cache.py)
+    # T3.5 — cohort cache (delegates; real logic in authority/pipeline_cache.py)
     # ------------------------------------------------------------------
 
     @staticmethod
@@ -4423,9 +4789,6 @@ class ResearchAgentPipeline:
             "enable_deterministic_runner_repair": bool(
                 self._enable_deterministic_runner_repair
             ),
-            "enable_retrospective_trajectory_stability_design": bool(
-                self._enable_retrospective_trajectory_stability_design
-            ),
             "latex_venue_template": self._latex_venue_template,
         }
 
@@ -4440,8 +4803,8 @@ class ResearchAgentPipeline:
         findings: List[ValidationFinding],
         reason: str,
     ) -> PipelineResult:
-        """Delegate to :mod:`pipeline_package`."""
-        from .pipeline_package import finalise_aborted
+        """Delegate to :mod:`orchestration.finalize`."""
+        from .orchestration.finalize import finalise_aborted
 
         return finalise_aborted(
             self,
@@ -4533,14 +4896,6 @@ def _build_probe_summary(
     )
     files.append(summary_path)
     return summary, files
-
-
-def _has_figure_exports(out_dir: Path) -> bool:
-    figure_suffixes = {".png", ".svg", ".pdf", ".tiff", ".tif", ".pptx"}
-    return any(
-        path.is_file() and path.suffix.lower() in figure_suffixes
-        for path in out_dir.iterdir()
-    )
 
 
 def _promote_sibling_figure_exports(*, out_dir: Path) -> Optional[str]:
@@ -4921,7 +5276,7 @@ def _render_prediction_publication_bundle_from_prior_outputs(
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
-    from easyicu.research_agent.publication_figures import (
+    from easyicu.research_agent.figures.publication import (
         add_panel_label,
         apply_publication_style,
         make_figure_contract,
@@ -5180,7 +5535,7 @@ def _render_cohort_overlap_publication_bundle_from_prior_outputs(
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
-    from easyicu.research_agent.publication_figures import (
+    from easyicu.research_agent.figures.publication import (
         add_panel_label,
         apply_publication_style,
         make_figure_contract,
@@ -5206,9 +5561,11 @@ def _render_cohort_overlap_publication_bundle_from_prior_outputs(
     ax_heat = fig.add_subplot(grid[:, 1])
 
     colors = [
-        palette.get("blue", "#0F4D92")
-        if str(row.get("definition_type", "")).lower() == "primary"
-        else palette.get("teal", "#42949E")
+        (
+            palette.get("blue", "#0F4D92")
+            if str(row.get("definition_type", "")).lower() == "primary"
+            else palette.get("teal", "#42949E")
+        )
         for row in plot_df.to_dict(orient="records")
     ]
     ax_n.barh(y, plot_df["n_included"].astype(float), color=colors, height=0.58)
@@ -5374,9 +5731,9 @@ def _render_cohort_overlap_publication_bundle_from_prior_outputs(
             "source_step_id": parent_step_id,
             "source_attrition_table": str(attrition_path),
             "source_overlap_table": str(overlap_path),
-            "source_equivalence_audit": str(audit_path)
-            if audit_path.exists()
-            else None,
+            "source_equivalence_audit": (
+                str(audit_path) if audit_path.exists() else None
+            ),
             "source_data_files": [
                 source_attrition_path.name,
                 source_overlap_path.name,
@@ -5520,7 +5877,7 @@ def _render_cohort_flow_publication_bundle_from_prior_outputs(
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
-    from easyicu.research_agent.publication_figures import (
+    from easyicu.research_agent.figures.publication import (
         add_panel_label,
         apply_publication_style,
         make_figure_contract,
@@ -5961,23 +6318,29 @@ def _render_missingness_publication_bundle_from_prior_outputs(
     missing_pct = (
         100.0 * missing_n / total
         if total_col is not None and missing_n_col is not None
-        else pd.to_numeric(source[missing_pct_col], errors="coerce")
-        if missing_pct_col is not None
-        else pd.Series(pd.NA, index=source.index, dtype="Float64")
+        else (
+            pd.to_numeric(source[missing_pct_col], errors="coerce")
+            if missing_pct_col is not None
+            else pd.Series(pd.NA, index=source.index, dtype="Float64")
+        )
     )
     unavailable_pct = (
         100.0 * unavailable_n / total
         if total_col is not None and unavailable_n_col is not None
-        else pd.to_numeric(source[unavailable_pct_col], errors="coerce")
-        if unavailable_pct_col is not None
-        else pd.Series(pd.NA, index=source.index, dtype="Float64")
+        else (
+            pd.to_numeric(source[unavailable_pct_col], errors="coerce")
+            if unavailable_pct_col is not None
+            else pd.Series(pd.NA, index=source.index, dtype="Float64")
+        )
     )
     measured_pct = (
         100.0 * measured_n / total
         if total_col is not None and measured_n.notna().any()
-        else pd.to_numeric(source[measured_pct_col], errors="coerce")
-        if measured_pct_col is not None
-        else 100.0 - missing_pct
+        else (
+            pd.to_numeric(source[measured_pct_col], errors="coerce")
+            if measured_pct_col is not None
+            else 100.0 - missing_pct
+        )
     )
     labels = source[label_col].astype(str)
     display_labels = (
@@ -6171,7 +6534,7 @@ def _render_missingness_publication_bundle_from_prior_outputs(
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
-    from easyicu.research_agent.publication_figures import (
+    from easyicu.research_agent.figures.publication import (
         add_panel_label,
         apply_publication_style,
         make_figure_contract,
@@ -6648,7 +7011,7 @@ def _render_phenotype_publication_bundle_from_prior_outputs(
     import matplotlib.pyplot as plt
     import numpy as np
 
-    from easyicu.research_agent.publication_figures import (
+    from easyicu.research_agent.figures.publication import (
         add_panel_label,
         apply_publication_style,
         make_figure_contract,
@@ -6913,9 +7276,9 @@ def _render_descriptive_publication_bundle_from_prior_outputs(
                 "row_category": cat,
                 "display_label": display,
                 "is_continuous": bool(is_cont),
-                "overall_median": float(median_v)
-                if pd.notna(median_v)
-                else float("nan"),
+                "overall_median": (
+                    float(median_v) if pd.notna(median_v) else float("nan")
+                ),
                 "overall_percentage": float(pct_v) if pd.notna(pct_v) else float("nan"),
                 "source_table": table_path.name,
                 "source_transform": "table_one_baseline_summary_v1",
@@ -6940,7 +7303,7 @@ def _render_descriptive_publication_bundle_from_prior_outputs(
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
-    from easyicu.research_agent.publication_figures import (
+    from easyicu.research_agent.figures.publication import (
         add_panel_label,
         apply_publication_style,
         make_figure_contract,
@@ -7339,9 +7702,9 @@ def _association_descriptive_context(
                             _find_column(frame, exact=("ci_high_pct", "upper_pct"))
                             or _find_column(frame, exact=("ci_high", "upper")),
                         ),
-                        "plot_denominator": row.get(denominator_col)
-                        if denominator_col
-                        else None,
+                        "plot_denominator": (
+                            row.get(denominator_col) if denominator_col else None
+                        ),
                         "plot_event_n": row.get(event_col) if event_col else None,
                         "source_table": table_path.name,
                         "source_row_index": int(idx),
@@ -7436,9 +7799,9 @@ def _association_descriptive_context(
                                 ),
                             ),
                         ),
-                        "plot_denominator": row.get(denominator_col)
-                        if denominator_col
-                        else None,
+                        "plot_denominator": (
+                            row.get(denominator_col) if denominator_col else None
+                        ),
                         "plot_event_n": row.get(event_col) if event_col else None,
                         "source_table": table_path.name,
                         "source_row_index": int(idx),
@@ -7615,7 +7978,7 @@ def _render_absolute_risk_publication_bundle_from_prior_outputs(
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
-    from easyicu.research_agent.publication_figures import (
+    from easyicu.research_agent.figures.publication import (
         add_panel_label,
         apply_publication_style,
         make_figure_contract,
@@ -7706,9 +8069,11 @@ def _render_absolute_risk_publication_bundle_from_prior_outputs(
     risk_x = [
         _as_percent(
             row,
-            "outcome_risk_pct"
-            if "outcome_risk_pct" in frame.columns
-            else "outcome_risk",
+            (
+                "outcome_risk_pct"
+                if "outcome_risk_pct" in frame.columns
+                else "outcome_risk"
+            ),
         )
         for _, row in risk.iterrows()
     ]
@@ -7971,9 +8336,7 @@ def _render_association_publication_bundle_from_prior_outputs(
             return or_c, lo_c, hi_c
         return None
 
-    sealed_repair_id = (
-        "association_publication_bundle_from_planned_model_contract_v1"
-    )
+    sealed_repair_id = "association_publication_bundle_from_planned_model_contract_v1"
     parent: Optional[tuple[Path, pd.DataFrame, tuple[str, str, str]]] = None
     if preverified_parent_artifacts is not None:
         if authorized_repair_id != sealed_repair_id:
@@ -7981,9 +8344,7 @@ def _render_association_publication_bundle_from_prior_outputs(
         try:
             candidate_frame = pd.read_csv(
                 io.BytesIO(
-                    preverified_parent_artifacts[
-                        "adjusted_association_estimates.csv"
-                    ]
+                    preverified_parent_artifacts["adjusted_association_estimates.csv"]
                 )
             )
         except (KeyError, OSError, ValueError):
@@ -8117,8 +8478,7 @@ def _render_association_publication_bundle_from_prior_outputs(
             for contract in model_contracts
             if isinstance(contract, dict)
             and primary_exposure
-            and str(contract.get("exposure_source") or "").strip()
-            == primary_exposure
+            and str(contract.get("exposure_source") or "").strip() == primary_exposure
             and str(contract.get("exposure_role") or "primary").lower() == "primary"
             and str(contract.get("analysis_role") or "").lower()
             in {"primary", "sensitivity"}
@@ -8212,7 +8572,7 @@ def _render_association_publication_bundle_from_prior_outputs(
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
-    from easyicu.research_agent.publication_figures import (
+    from easyicu.research_agent.figures.publication import (
         add_panel_label,
         apply_publication_style,
         make_figure_contract,
@@ -8558,9 +8918,11 @@ def _render_association_publication_bundle_from_prior_outputs(
     observed_repair_id = (
         sealed_repair_id
         if authorized_repair_id == sealed_repair_id
-        else "association_publication_bundle_from_parent_outputs_v3"
-        if descriptive_rows
-        else "association_publication_bundle_from_parent_outputs_v2"
+        else (
+            "association_publication_bundle_from_parent_outputs_v3"
+            if descriptive_rows
+            else "association_publication_bundle_from_parent_outputs_v2"
+        )
     )
     existing_summary.update(
         {
@@ -8833,7 +9195,7 @@ def _render_sensitivity_publication_bundle_from_prior_outputs(
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
-    from easyicu.research_agent.publication_figures import (
+    from easyicu.research_agent.figures.publication import (
         add_panel_label,
         apply_publication_style,
         make_figure_contract,
@@ -9035,9 +9397,11 @@ def _render_sensitivity_publication_bundle_from_prior_outputs(
         n_plot = n_plot.reset_index(drop=True)
         y_n = list(range(len(n_plot)))
         colors = [
-            palette.get("blue", "#0F4D92")
-            if _truthy_figure_value(value)
-            else palette.get("neutral_light", "#D8D8D8")
+            (
+                palette.get("blue", "#0F4D92")
+                if _truthy_figure_value(value)
+                else palette.get("neutral_light", "#D8D8D8")
+            )
             for value in n_plot["converged"].fillna(False)
         ]
         ax_n.barh(
@@ -9279,48 +9643,6 @@ def _resolve_upstream_analysis_family(
     return str(fam).strip().lower() if fam else None
 
 
-def _resolve_upstream_manifest_analysis_request(
-    run_dir: Path, current_step_id: str
-) -> Optional[Dict[str, Any]]:
-    """Return the host-recorded direct-parent planning request.
-
-    This checkpoint object is written by the supervisor before the parent code
-    executes.  It is therefore the authority for sealed-renderer method and
-    family selection; a coder-authored ``step_summary.json`` may only confirm,
-    never replace, this request.
-    """
-
-    parent = str(current_step_id or "").removesuffix("_figure")
-    if not parent or parent == str(current_step_id):
-        return None
-    manifest = load_run_artifact_authority(run_dir)
-    if not isinstance(manifest, Mapping):
-        return None
-    records = manifest.get("per_step_records") if isinstance(manifest, dict) else None
-    if not isinstance(records, list):
-        return None
-    current = {
-        str(record.get("step_id") or ""): record
-        for record in current_step_records(records)
-        if isinstance(record, Mapping)
-    }
-    record = current.get(parent)
-    if not isinstance(record, Mapping):
-        return None
-    request = record.get("analysis_request")
-    return dict(request) if isinstance(request, Mapping) else None
-
-
-def _resolve_upstream_manifest_step(
-    run_dir: Path, current_step_id: str
-) -> Optional[Dict[str, Any]]:
-    """Return the direct parent's structured AnalysisStep from the checkpoint."""
-
-    request = _resolve_upstream_manifest_analysis_request(run_dir, current_step_id)
-    request_step = request.get("step") if isinstance(request, Mapping) else None
-    return dict(request_step) if isinstance(request_step, Mapping) else None
-
-
 def _resolve_upstream_analysis_method(
     run_dir: Path, current_step_id: str
 ) -> Optional[str]:
@@ -9473,194 +9795,6 @@ def _renderer_for_upstream_figure_data_family(family: Optional[str]):
     return None
 
 
-def _verified_direct_parent_artifact_digests(
-    run_dir: Path,
-    figure_step_id: str,
-) -> Optional[dict[str, str]]:
-    """Return digest-bound direct-parent tables and summary from the checkpoint.
-
-    ``None`` means the figure does not have one exact ``*_figure`` parent or
-    the modern outer ledger cannot prove that parent is currently successful.
-    Both the immutable evidence copy and the mutable step-output copy must
-    match the registered digest before an automatic renderer may read it.
-    """
-
-    parent_step_id = str(figure_step_id or "").removesuffix("_figure")
-    if not parent_step_id or parent_step_id == str(figure_step_id or ""):
-        return None
-    authority = load_run_artifact_authority(run_dir)
-    if authority is None:
-        return None
-    raw_records = authority.get("per_step_records")
-    if not isinstance(raw_records, list):
-        return None
-    current = {
-        str(record.get("step_id") or ""): record
-        for record in current_step_records(raw_records)
-    }
-    parent_record = current.get(parent_step_id)
-    if (
-        not isinstance(parent_record, Mapping)
-        or str(parent_record.get("status") or "").strip().lower() != "ok"
-    ):
-        return None
-    active_ids = {
-        str(evidence_id)
-        for evidence_id in (parent_record.get("evidence_ids") or [])
-        if str(evidence_id).strip()
-    }
-    raw_evidence = authority.get("evidence")
-    evidence_by_id = {
-        str(record.get("evidence_id") or ""): record
-        for record in (raw_evidence if isinstance(raw_evidence, list) else [])
-        if isinstance(record, Mapping) and str(record.get("evidence_id") or "")
-    }
-    verified_digests: dict[str, str] = {}
-    verified_summary = False
-    for evidence_id in active_ids:
-        record = evidence_by_id.get(evidence_id)
-        if (
-            not isinstance(record, Mapping)
-            or str(record.get("produced_by_step") or "") != parent_step_id
-        ):
-            continue
-        evidence_path = verified_run_evidence_path(run_dir, record)
-        if evidence_path is None:
-            continue
-        evidence_name = evidence_path.name
-        logical_name = (
-            evidence_name.split("__", 1)[1] if "__" in evidence_name else evidence_name
-        )
-        output_path = (
-            Path(run_dir) / "steps" / parent_step_id / "outputs" / logical_name
-        )
-        try:
-            if output_path.is_symlink() or not output_path.is_file():
-                continue
-            output_path.resolve(strict=True).relative_to(Path(run_dir).resolve())
-        except (OSError, ValueError):
-            continue
-        if sha256_of_file(output_path) != str(record.get("sha256") or ""):
-            continue
-        kind = str(record.get("kind") or "").strip().lower()
-        if kind == "table":
-            verified_digests[logical_name] = str(record.get("sha256") or "")
-        elif (
-            kind == "statistic"
-            and logical_name == "step_summary.json"
-            and evidence_id == str(parent_record.get("step_summary_evidence_id") or "")
-        ):
-            verified_summary = True
-            verified_digests[logical_name] = str(record.get("sha256") or "")
-    return verified_digests if verified_summary else None
-
-
-def _verified_direct_parent_table_names(
-    run_dir: Path,
-    figure_step_id: str,
-) -> Optional[set[str]]:
-    """Return the verified table-name projection of the parent digest seal."""
-
-    digests = _verified_direct_parent_artifact_digests(run_dir, figure_step_id)
-    if digests is None:
-        return None
-    return {name for name in digests if name != "step_summary.json"}
-
-
-def _distribution_availability_parent_digest_seal(
-    run_dir: Path,
-    figure_step_id: str,
-) -> Optional[dict[str, str]]:
-    """Seal only the three parent files selected by the closed renderer contract.
-
-    A parent may legitimately publish other tables or parquet products.  They
-    are neither renderer inputs nor CSVs, so including them in the child seal
-    would make an unrelated artifact capable of disabling this renderer.
-    """
-
-    request_step = _resolve_upstream_manifest_step(run_dir, figure_step_id)
-    if not isinstance(request_step, Mapping):
-        return None
-    from .figures.distribution_availability import (
-        CONTROLLED_METHOD,
-        distribution_availability_planner_table_roles,
-        prepare_distribution_availability_inputs,
-    )
-
-    if str(request_step.get("method") or "").strip().lower() != CONTROLLED_METHOD:
-        return None
-
-    digests = _verified_direct_parent_artifact_digests(run_dir, figure_step_id)
-    if not digests or "step_summary.json" not in digests:
-        return None
-    parent_step_id = str(figure_step_id or "").removesuffix("_figure")
-    parent_out = Path(run_dir) / "steps" / parent_step_id / "outputs"
-    try:
-        from .declared_product_contract import read_digest_bound_artifact_snapshot
-
-        snapshot = read_digest_bound_artifact_snapshot(
-            parent_out=parent_out,
-            artifact_digests=digests,
-        )
-        parent_summary = json.loads(snapshot["step_summary.json"].decode("utf-8"))
-    except (KeyError, UnicodeDecodeError, json.JSONDecodeError, ValueError):
-        return None
-    if not isinstance(parent_summary, Mapping):
-        return None
-    distribution_contract = parent_summary.get("distribution")
-    measurement_contract = parent_summary.get("measurement_audit")
-    if not isinstance(distribution_contract, Mapping) or not isinstance(
-        measurement_contract, Mapping
-    ):
-        return None
-    selected_names = {
-        str(distribution_contract.get("table") or "").strip(),
-        str(measurement_contract.get("table") or "").strip(),
-    }
-    if (
-        len(selected_names) != 2
-        or any(
-            Path(name).name != name or not name.endswith(".csv")
-            for name in selected_names
-        )
-        or not selected_names <= set(snapshot)
-    ):
-        return None
-    selected_table_bytes = {name: snapshot[name] for name in selected_names}
-    prepared = prepare_distribution_availability_inputs(
-        parent_out=parent_out,
-        parent_summary=parent_summary,
-        verified_table_names=set(selected_table_bytes),
-        preverified_table_bytes=selected_table_bytes,
-    )
-    if prepared is None:
-        return None
-    declared_tables, distribution_roles, availability_roles = (
-        distribution_availability_planner_table_roles(
-            request_step.get("expected_outputs") or []
-        )
-    )
-    if len(distribution_roles) != 1 or len(availability_roles) != 1:
-        return None
-    required_table_products = {
-        prepared.distribution_path.stem,
-        prepared.measurement_path.stem,
-    }
-    if (
-        required_table_products != distribution_roles | availability_roles
-        or not required_table_products <= declared_tables
-    ):
-        return None
-    required_names = {
-        "step_summary.json",
-        prepared.distribution_path.name,
-        prepared.measurement_path.name,
-    }
-    if not required_names <= set(digests):
-        return None
-    return {name: digests[name] for name in sorted(required_names)}
-
-
 def _absolute_risk_parent_digest_seal(
     run_dir: Path,
     figure_step_id: str,
@@ -9678,7 +9812,7 @@ def _absolute_risk_parent_digest_seal(
     request_step = _resolve_upstream_manifest_step(run_dir, figure_step_id)
     if not isinstance(request_step, Mapping):
         return None
-    from .declared_product_contract import (
+    from .contracts.declared_product import (
         read_digest_bound_artifact_snapshot,
         typed_product,
     )
@@ -9783,11 +9917,8 @@ def _sealed_renderer_parent_digest_seal(
 ) -> Optional[dict[str, str]]:
     """Return the exact evidence digests one sealed renderer may consume."""
 
-    distribution_id = (
-        "distribution_availability_publication_bundle_from_parent_outputs_v1"
-    )
-    if repair_id == distribution_id:
-        return _distribution_availability_parent_digest_seal(run_dir, figure_step_id)
+    if adapter := sealed_renderer_adapter(repair_id):
+        return adapter.seal(run_dir, figure_step_id)
     if repair_id == "absolute_risk_incidence_prevalence_publication_bundle_v1":
         return _absolute_risk_parent_digest_seal(run_dir, figure_step_id)
     digests = _verified_direct_parent_artifact_digests(run_dir, figure_step_id)
@@ -9806,9 +9937,7 @@ def _sealed_renderer_parent_digest_seal(
         }
     elif repair_id == "sensitivity_publication_bundle_from_locked_summary_v1":
         required_names = {"step_summary.json", "robustness_summary.csv"}
-    elif repair_id == (
-        "association_publication_bundle_from_planned_model_contract_v1"
-    ):
+    elif repair_id == ("association_publication_bundle_from_planned_model_contract_v1"):
         required_names = {
             "step_summary.json",
             "adjusted_association_estimates.csv",
@@ -9828,14 +9957,16 @@ def _sealed_renderer_parent_digest_seal(
     parent_step_id = str(figure_step_id or "").removesuffix("_figure")
     parent_out = Path(run_dir) / "steps" / parent_step_id / "outputs"
     try:
-        from .declared_product_contract import read_digest_bound_artifact_snapshot
+        from .contracts.declared_product import read_digest_bound_artifact_snapshot
 
         snapshot = read_digest_bound_artifact_snapshot(
             parent_out=parent_out,
             artifact_digests=sealed,
         )
         summary = json.loads(snapshot["step_summary.json"].decode("utf-8"))
-        estimates = pd.read_csv(io.BytesIO(snapshot["adjusted_association_estimates.csv"]))
+        estimates = pd.read_csv(
+            io.BytesIO(snapshot["adjusted_association_estimates.csv"])
+        )
     except (OSError, KeyError, UnicodeDecodeError, json.JSONDecodeError, ValueError):
         return None
     if not isinstance(summary, Mapping):
@@ -9877,7 +10008,7 @@ def _render_authorized_sealed_publication_bundle(
     direct parent's registered method/family and evidence digests.
     """
 
-    from .declared_product_contract import read_digest_bound_artifact_snapshot
+    from .contracts.declared_product import read_digest_bound_artifact_snapshot
 
     parent_step_id = str(current_step_id or "").removesuffix("_figure")
     if not parent_step_id or parent_step_id == str(current_step_id or ""):
@@ -9893,25 +10024,15 @@ def _render_authorized_sealed_publication_bundle(
     if "step_summary.json" not in snapshot:
         return None
 
-    if repair_id == "absolute_risk_incidence_prevalence_publication_bundle_v1":
+    adapter = sealed_renderer_adapter(repair_id)
+    if adapter:
+        observed = adapter.render(run_dir, current_step_id, out_dir, snapshot)
+    elif repair_id == "absolute_risk_incidence_prevalence_publication_bundle_v1":
         from .figures.absolute_risk import (
             render_absolute_risk_bundle_from_prior_outputs,
         )
 
         observed = render_absolute_risk_bundle_from_prior_outputs(
-            run_dir=run_dir,
-            current_step_id=current_step_id,
-            out_dir=out_dir,
-            preverified_parent_artifacts=snapshot,
-        )
-    elif repair_id == (
-        "distribution_availability_publication_bundle_from_parent_outputs_v1"
-    ):
-        from .figures.distribution_availability import (
-            render_distribution_availability_bundle_from_prior_outputs,
-        )
-
-        observed = render_distribution_availability_bundle_from_prior_outputs(
             run_dir=run_dir,
             current_step_id=current_step_id,
             out_dir=out_dir,
@@ -9943,9 +10064,7 @@ def _render_authorized_sealed_publication_bundle(
             preverified_parent_artifacts=snapshot,
             authorized_repair_id=repair_id,
         )
-    elif repair_id == (
-        "association_publication_bundle_from_planned_model_contract_v1"
-    ):
+    elif repair_id == ("association_publication_bundle_from_planned_model_contract_v1"):
         observed = _render_association_publication_bundle_from_prior_outputs(
             run_dir=run_dir,
             current_step_id=current_step_id,
@@ -9956,98 +10075,6 @@ def _render_authorized_sealed_publication_bundle(
     else:
         return None
     return observed if observed == repair_id else None
-
-
-def _distribution_availability_figure_step_matches_parent(
-    run_dir: Path,
-    step: AnalysisStep,
-) -> bool:
-    """Require a structural child edge before the automatic renderer runs.
-
-    Modern plans bind the two parent tables as typed inputs.  Older planner
-    packets represented a split analysis/figure pair by repeating the exact
-    controlled method and inputs on the ``*_figure`` child.  Either structure
-    is evidence of planner ownership; prose and step-name keywords are not.
-    """
-
-    seal = _distribution_availability_parent_digest_seal(run_dir, step.step_id)
-    request_step = _resolve_upstream_manifest_step(run_dir, step.step_id)
-    if seal is None or not isinstance(request_step, Mapping):
-        return False
-    from .declared_product_contract import typed_product
-    from .figures.distribution_availability import CONTROLLED_METHOD
-
-    required_inputs = {
-        ("table", Path(name).stem) for name in seal if name != "step_summary.json"
-    }
-    child_typed_inputs = {
-        parsed
-        for raw in (step.inputs or [])
-        if (parsed := typed_product(raw)) is not None
-    }
-    if required_inputs <= child_typed_inputs:
-        return True
-    return str(step.method or "").strip().lower() == CONTROLLED_METHOD and tuple(
-        str(value) for value in (step.inputs or [])
-    ) == tuple(str(value) for value in (request_step.get("inputs") or []))
-
-
-def _sealed_renderer_figure_step_matches_parent(
-    run_dir: Path,
-    step: AnalysisStep,
-    renderer_repair_id: str,
-) -> bool:
-    """Require a Planner-owned structural edge for every sealed renderer.
-
-    Modern split steps consume the exact logical parent products required by
-    the renderer registry.  Legacy split steps repeat the parent method and
-    inputs exactly.  Merely using a ``*_figure`` sibling name is never enough.
-    """
-
-    from .declared_product_contract import typed_product
-    from .repair_registry import is_sealed_renderer_repair, repair_metadata_for
-
-    if not is_sealed_renderer_repair(renderer_repair_id):
-        return False
-    metadata = repair_metadata_for(renderer_repair_id)
-    request_step = _resolve_upstream_manifest_step(run_dir, step.step_id)
-    if not isinstance(request_step, Mapping):
-        return False
-    planner_method = str(request_step.get("method") or "").strip().lower()
-    if planner_method not in metadata.planner_methods:
-        return False
-
-    parent_products = {
-        parsed
-        for raw in (request_step.get("expected_outputs") or [])
-        if (parsed := typed_product(raw)) is not None
-        and parsed[0] in {"table", "artifact", "dataset"}
-    }
-    required_products: set[tuple[str, str]] = set()
-    for role_alternatives in metadata.planner_parent_output_role_groups:
-        matches = {
-            product
-            for product in parent_products
-            if any(
-                len(product[1].split("_")) >= len(suffix)
-                and tuple(product[1].split("_")[-len(suffix) :]) == tuple(suffix)
-                for suffix in role_alternatives
-            )
-        }
-        if not matches:
-            return False
-        required_products.update(matches)
-
-    child_typed_inputs = {
-        parsed
-        for raw in (step.inputs or [])
-        if (parsed := typed_product(raw)) is not None
-    }
-    if required_products <= child_typed_inputs:
-        return True
-    return str(step.method or "").strip().lower() == planner_method and tuple(
-        str(value) for value in (step.inputs or [])
-    ) == tuple(str(value) for value in (request_step.get("inputs") or []))
 
 
 def deterministic_figure_repair_id_for_upstream(
@@ -10069,7 +10096,7 @@ def deterministic_figure_repair_id_for_upstream(
     request_step = request.get("step") if isinstance(request, Mapping) else None
     if not isinstance(request_step, Mapping):
         return None
-    from .declared_product_contract import typed_product
+    from .contracts.declared_product import typed_product
 
     planner_table_tokens = {
         tuple(part for part in parsed[1].split("_") if part)
@@ -10102,18 +10129,20 @@ def deterministic_figure_repair_id_for_upstream(
             for role_alternatives in metadata.planner_parent_output_role_groups
         )
     ]
+    if not candidates:
+        structural_v2 = (
+            "ordered_category_distribution_availability_publication_bundle_v2"
+        )
+        if (
+            _ordered_distribution_availability_parent_digest_seal(run_dir, step_id)
+            is not None
+        ):
+            return structural_v2
     if len(candidates) != 1:
         return None
     repair_id = candidates[0].repair_id
-    if repair_id == (
-        "distribution_availability_publication_bundle_from_parent_outputs_v1"
-    ):
-        return (
-            repair_id
-            if _distribution_availability_parent_digest_seal(run_dir, step_id)
-            is not None
-            else None
-        )
+    if adapter := sealed_renderer_adapter(repair_id):
+        return repair_id if adapter.seal(run_dir, step_id) is not None else None
     if repair_id == "absolute_risk_incidence_prevalence_publication_bundle_v1":
         required_tables = {"outcome_incidence.csv", "exposure_prevalence.csv"}
         return (
@@ -10122,9 +10151,7 @@ def deterministic_figure_repair_id_for_upstream(
             and _absolute_risk_parent_digest_seal(run_dir, step_id) is not None
             else None
         )
-    if repair_id == (
-        "association_publication_bundle_from_planned_model_contract_v1"
-    ):
+    if repair_id == ("association_publication_bundle_from_planned_model_contract_v1"):
         return (
             repair_id
             if "adjusted_association_estimates.csv" in verified_tables
@@ -10704,23 +10731,6 @@ def _step_summary_has_any_key(path: Path, keys: Sequence[str]) -> bool:
     if not isinstance(payload, dict):
         return False
     return any(key in payload for key in keys)
-
-
-def _clear_output_dir(out_dir: Path) -> None:
-    """Recreate a step output directory without following untrusted symlinks."""
-
-    # Generated code may replace the output leaf itself with a symlink.  Using
-    # ``exists``/``iterdir`` first would follow that link and could delete an
-    # arbitrary host directory during repair.  Remove any non-directory leaf
-    # lexically, then create the expected directory in its place.
-    if out_dir.is_symlink() or (out_dir.exists() and not out_dir.is_dir()):
-        out_dir.unlink()
-    out_dir.mkdir(parents=True, exist_ok=True)
-    for child in out_dir.iterdir():
-        if child.is_symlink() or not child.is_dir():
-            child.unlink(missing_ok=True)
-        else:
-            shutil.rmtree(child)
 
 
 __all__ = ["ResearchAgentPipeline"]

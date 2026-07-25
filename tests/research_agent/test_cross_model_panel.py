@@ -7,19 +7,19 @@ import subprocess
 import sys
 from pathlib import Path
 
-from easyicu.research_agent.cohort_schema import (
+from easyicu.research_agent.cohort.schema import (
     CohortDefinition,
     ConceptPredicate,
     TimeWindow,
 )
-from easyicu.research_agent.cross_model_panel import (
+from easyicu.research_agent.evaluation.cross_model_panel import (
     BackendIdentity,
     FieldDisagreement,
     compare_panel_primaries,
     compare_plans,
     write_cross_model_report,
 )
-from easyicu.research_agent.robustness_panel import (
+from easyicu.research_agent.robustness.panel import (
     PRIMARY_SPEC_ID,
     RobustnessPanel,
     RobustnessPanelRow,

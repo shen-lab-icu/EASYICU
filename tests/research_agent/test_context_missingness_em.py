@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from easyicu.research_agent.context import _estimate_mvn_with_em
+from easyicu.research_agent.research_context.builder import _estimate_mvn_with_em
 
 
 def _uncached_reference(

@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from easyicu.research_agent.idea_scope import (
+from easyicu.research_agent.discovery.idea_scope import (
     JOURNAL_PRESETS,
     LiteratureScopeSpec,
     build_pubmed_query_from_scope,

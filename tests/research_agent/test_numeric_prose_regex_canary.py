@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import pytest
 
-from easyicu.research_agent.evidence import _NUMERIC_IN_PROSE_RE
+from easyicu.research_agent.authority.evidence_store import _NUMERIC_IN_PROSE_RE
 
 
 def _matches(text: str) -> list[str]:

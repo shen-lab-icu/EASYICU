@@ -1,6 +1,6 @@
 # EasyICU research-agent analysis-method suite
 
-_Generated from `easyicu.research_agent.analysis_method_suite`. Do not edit by hand — edit the registry and regenerate._
+_Generated from `easyicu.research_agent.planning.analysis_method_suite`. Do not edit by hand — edit the registry and regenerate._
 
 `capability_registry` declares the ONE primary estimand per family. This matrix declares the **full standard method suite** a reviewer expects for each family, and how each method is produced:
 

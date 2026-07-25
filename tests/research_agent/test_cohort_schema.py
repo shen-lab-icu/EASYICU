@@ -11,9 +11,11 @@ from types import SimpleNamespace
 import pandas as pd
 import pytest
 
+from easyicu.research_agent.planning import cohort_contract
+
 
 def _age_predicate(start: float, end: float):
-    from easyicu.research_agent.cohort_schema import ConceptPredicate, TimeWindow
+    from easyicu.research_agent.cohort.schema import ConceptPredicate, TimeWindow
 
     return ConceptPredicate(
         concept_id="age",
@@ -29,14 +31,16 @@ def _age_predicate(start: float, end: float):
 
 
 def test_concept_predicate_rejects_missing_time_window() -> None:
-    from easyicu.research_agent.cohort_schema import ConceptPredicate, CohortSchemaError
+    from easyicu.research_agent.cohort.schema import ConceptPredicate, CohortSchemaError
 
     with pytest.raises(CohortSchemaError, match="time_window"):
-        ConceptPredicate.from_dict({"concept_id": "age", "aggregation": "max", "op": ">="})
+        ConceptPredicate.from_dict(
+            {"concept_id": "age", "aggregation": "max", "op": ">="}
+        )
 
 
 def test_concept_predicate_rejects_missing_aggregation() -> None:
-    from easyicu.research_agent.cohort_schema import ConceptPredicate, CohortSchemaError
+    from easyicu.research_agent.cohort.schema import ConceptPredicate, CohortSchemaError
 
     with pytest.raises(CohortSchemaError, match="aggregation"):
         ConceptPredicate.from_dict(
@@ -53,7 +57,7 @@ def test_concept_predicate_rejects_missing_aggregation() -> None:
 
 
 def test_aggregation_op_incompatibility_rejected() -> None:
-    from easyicu.research_agent.cohort_schema import (
+    from easyicu.research_agent.cohort.schema import (
         CohortSchemaError,
         ConceptPredicate,
         TimeWindow,
@@ -70,7 +74,7 @@ def test_aggregation_op_incompatibility_rejected() -> None:
 
 
 def test_unknown_concept_id_rejected() -> None:
-    from easyicu.research_agent.cohort_schema import (
+    from easyicu.research_agent.cohort.schema import (
         CohortSchemaError,
         ConceptPredicate,
         TimeWindow,
@@ -87,7 +91,7 @@ def test_unknown_concept_id_rejected() -> None:
 
 
 def test_time_window_accepts_case_owned_anchor_string() -> None:
-    from easyicu.research_agent.cohort_schema import TimeWindow, UNIVERSAL_ANCHORS
+    from easyicu.research_agent.cohort.schema import TimeWindow, UNIVERSAL_ANCHORS
 
     window = TimeWindow("delirium_onset", 0, 24)
 
@@ -96,7 +100,7 @@ def test_time_window_accepts_case_owned_anchor_string() -> None:
 
 
 def test_registered_pattern_expansion_is_deterministic() -> None:
-    from easyicu.research_agent.cohort_schema import (
+    from easyicu.research_agent.cohort.schema import (
         CohortDefinition,
         expand_named_cohort,
         register_pattern,
@@ -119,7 +123,7 @@ def test_registered_pattern_expansion_is_deterministic() -> None:
 
 
 def test_two_registered_patterns_with_different_windows_have_different_hash() -> None:
-    from easyicu.research_agent.cohort_schema import (
+    from easyicu.research_agent.cohort.schema import (
         CohortDefinition,
         cohort_definition_sha,
         expand_named_cohort,
@@ -131,12 +135,16 @@ def test_two_registered_patterns_with_different_windows_have_different_hash() ->
     try:
         register_pattern(
             "adult_first_day",
-            CohortDefinition(name="adult_first_day", inclusion=(_age_predicate(0, 24),)),
+            CohortDefinition(
+                name="adult_first_day", inclusion=(_age_predicate(0, 24),)
+            ),
             provenance="test fixture",
         )
         register_pattern(
             "adult_first_hour",
-            CohortDefinition(name="adult_first_hour", inclusion=(_age_predicate(0, 1),)),
+            CohortDefinition(
+                name="adult_first_hour", inclusion=(_age_predicate(0, 1),)
+            ),
             provenance="test fixture",
         )
         assert cohort_definition_sha(
@@ -147,7 +155,7 @@ def test_two_registered_patterns_with_different_windows_have_different_hash() ->
 
 
 def test_unknown_named_pattern_rejected() -> None:
-    from easyicu.research_agent.cohort_schema import reset_pattern_registry
+    from easyicu.research_agent.cohort.schema import reset_pattern_registry
 
     from easyicu.research_agent.schema import AnalysisPlan
 
@@ -172,7 +180,7 @@ def test_planner_string_cohort_rejected() -> None:
 
 
 def test_planner_named_cohort_accepted_and_expanded() -> None:
-    from easyicu.research_agent.cohort_schema import (
+    from easyicu.research_agent.cohort.schema import (
         CohortDefinition,
         register_pattern,
         reset_pattern_registry,
@@ -199,8 +207,8 @@ def test_planner_named_cohort_accepted_and_expanded() -> None:
 
 
 def test_robustness_spec_cohort_override_schema_validated() -> None:
-    from easyicu.research_agent.cohort_schema import CohortSchemaError
-    from easyicu.research_agent.robustness_panel import RobustnessSpec
+    from easyicu.research_agent.cohort.schema import CohortSchemaError
+    from easyicu.research_agent.robustness.panel import RobustnessSpec
 
     with pytest.raises(CohortSchemaError, match="unknown concept_id"):
         RobustnessSpec.from_dict(
@@ -230,7 +238,7 @@ def test_robustness_spec_cohort_override_schema_validated() -> None:
 
 
 def test_cohort_locked_recorded_in_manifest(ra, tmp_path: Path) -> None:
-    from easyicu.research_agent.cohort_schema import (
+    from easyicu.research_agent.cohort.schema import (
         CohortDefinition,
         COHORT_LOCK_FILENAME,
         write_locked_cohort_definition,
@@ -264,7 +272,7 @@ def test_cohort_locked_recorded_in_manifest(ra, tmp_path: Path) -> None:
 
 
 def test_cohort_lock_reuses_existing_bytes_on_resume(ra, tmp_path: Path) -> None:
-    from easyicu.research_agent.cohort_schema import (
+    from easyicu.research_agent.cohort.schema import (
         CohortDefinition,
         write_locked_cohort_definition,
     )
@@ -297,12 +305,13 @@ def test_cohort_lock_reuses_existing_bytes_on_resume(ra, tmp_path: Path) -> None
     assert path.read_bytes() == before
 
 
-def test_cohort_lock_resume_rehydrates_only_legacy_timestamp_drift(
+def test_cohort_lock_resume_rejects_timestamp_drift(
     ra,
     tmp_path: Path,
 ) -> None:
-    from easyicu.research_agent.cohort_schema import (
+    from easyicu.research_agent.cohort.schema import (
         CohortDefinition,
+        CohortSchemaError,
         write_locked_cohort_definition,
     )
     from easyicu.research_agent.schema import AnalysisPlan
@@ -320,30 +329,71 @@ def test_cohort_lock_resume_rehydrates_only_legacy_timestamp_drift(
         prompt_pack_version="test",
         llm_signature="mock",
     )
-    anchored = path.read_bytes()
     payload = json.loads(path.read_text(encoding="utf-8"))
     payload["locked_at"] = "2099-01-01T00:00:00+00:00"
     path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    mutated = path.read_bytes()
 
-    write_locked_cohort_definition(
+    with pytest.raises(CohortSchemaError, match="plan-time evidence anchor"):
+        write_locked_cohort_definition(
+            run_dir=tmp_path,
+            plan=plan,
+            evidence=evidence,
+            prompt_pack_version="test",
+            llm_signature="mock",
+        )
+
+    assert path.read_bytes() == mutated
+    assert evidence.get("cohort_lock_resume_rehydration") is None
+
+
+def test_cohort_lock_rejects_precanonical_raw_payload_hash(
+    ra,
+    tmp_path: Path,
+) -> None:
+    from easyicu.research_agent.cohort.schema import (
+        CohortDefinition,
+        CohortSchemaError,
+        _load_locked_cohort_definition,
+        write_locked_cohort_definition,
+    )
+    from easyicu.research_agent.schema import AnalysisPlan
+
+    plan = AnalysisPlan(
+        research_question="Does a predictor associate with an outcome?",
+        cohort=CohortDefinition(name="primary", inclusion=(_age_predicate(0, 24),)),
+        steps=[],
+    )
+    path = write_locked_cohort_definition(
         run_dir=tmp_path,
         plan=plan,
-        evidence=evidence,
+        evidence=ra.EvidenceStore(tmp_path),
         prompt_pack_version="test",
         llm_signature="mock",
     )
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    window = payload["cohort"]["inclusion"][0]["time_window"]
+    window["start_offset_hours"] = 0
+    window["end_offset_hours"] = 24
+    payload["cohort_sha256"] = hashlib.sha256(
+        json.dumps(
+            payload["cohort"],
+            sort_keys=True,
+            ensure_ascii=False,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+    path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
-    assert path.read_bytes() == anchored
-    repair = evidence.get("cohort_lock_resume_rehydration")
-    assert repair is not None
-    assert repair.metadata["llm_signature"] == "mock"
+    with pytest.raises(CohortSchemaError, match="lock hash mismatch"):
+        _load_locked_cohort_definition(tmp_path)
 
 
 def test_cohort_lock_resume_does_not_rehydrate_scientific_drift(
     ra,
     tmp_path: Path,
 ) -> None:
-    from easyicu.research_agent.cohort_schema import (
+    from easyicu.research_agent.cohort.schema import (
         CohortDefinition,
         CohortSchemaError,
         coerce_cohort_definition,
@@ -380,16 +430,17 @@ def test_cohort_lock_resume_does_not_rehydrate_scientific_drift(
             prompt_pack_version="test",
             llm_signature="mock",
         )
-    assert json.loads(path.read_text(encoding="utf-8"))["cohort"]["inclusion"][0][
-        "value"
-    ] == 65
+    assert (
+        json.loads(path.read_text(encoding="utf-8"))["cohort"]["inclusion"][0]["value"]
+        == 65
+    )
 
 
 def test_assert_cohort_definition_locked_catches_post_lock_mutation(
     ra,
     tmp_path: Path,
 ) -> None:
-    from easyicu.research_agent.cohort_schema import (
+    from easyicu.research_agent.cohort.schema import (
         CohortDefinition,
         CohortSchemaError,
         assert_cohort_definition_locked,
@@ -424,7 +475,7 @@ def test_assert_cohort_definition_locked_catches_post_lock_mutation(
 
 
 def test_builder_rejects_unknown_aggregation_with_not_implemented() -> None:
-    from easyicu.research_agent.cohort_schema import (
+    from easyicu.research_agent.cohort.schema import (
         CohortDefinition,
         ConceptPredicate,
         TimeWindow,
@@ -448,7 +499,7 @@ def test_builder_rejects_unknown_aggregation_with_not_implemented() -> None:
 
 
 def test_builder_missing_materialised_column_is_data_error() -> None:
-    from easyicu.research_agent.cohort_schema import (
+    from easyicu.research_agent.cohort.schema import (
         CohortDataError,
         CohortDefinition,
         build_cohort,
@@ -471,7 +522,7 @@ def _plan_with_cohort(definition):
 def test_materialize_locked_analysis_cohort_applies_inclusion(tmp_path: Path) -> None:
     """The locked definition must be materialised into a filtered analysis
     cohort parquet — the bridge that enforces 纳排 on the data steps read."""
-    from easyicu.research_agent.cohort_schema import (
+    from easyicu.research_agent.cohort.schema import (
         CohortDefinition,
         materialize_locked_analysis_cohort,
     )
@@ -485,7 +536,9 @@ def test_materialize_locked_analysis_cohort_applies_inclusion(tmp_path: Path) ->
         inclusion=(_age_predicate(0, 24),),  # age >= 18 (max)
     )
     result = materialize_locked_analysis_cohort(
-        run_dir=tmp_path, plan=_plan_with_cohort(definition), universe_path=universe_path
+        run_dir=tmp_path,
+        plan=_plan_with_cohort(definition),
+        universe_path=universe_path,
     )
     assert result["status"] == "applied"
     assert result["n_universe"] == 4
@@ -494,10 +547,144 @@ def test_materialize_locked_analysis_cohort_applies_inclusion(tmp_path: Path) ->
     assert out.exists()
     assert len(pd.read_parquet(out)) == 3
     assert (tmp_path / "cohort_analysis_provenance.json").exists()
+    flow_path = tmp_path / "cohort_analysis_flow.csv"
+    assert result["flow_path"] == flow_path
+    flow = pd.read_csv(flow_path)
+    assert flow[["n_before", "n_excluded", "n_remaining"]].to_dict("records") == [
+        {"n_before": 4, "n_excluded": 0, "n_remaining": 4},
+        {"n_before": 4, "n_excluded": 1, "n_remaining": 3},
+    ]
+    provenance = json.loads(
+        (tmp_path / "cohort_analysis_provenance.json").read_text(encoding="utf-8")
+    )
+    assert provenance["cohort_flow"][-1]["n_remaining"] == 3
+
+
+def test_load_materialized_analysis_cohort_result_reopens_closed_outputs(
+    tmp_path: Path,
+) -> None:
+    from easyicu.research_agent.cohort.schema import (
+        CohortDefinition,
+        load_materialized_analysis_cohort_result,
+        materialize_locked_analysis_cohort,
+    )
+
+    universe_path = tmp_path / "cohort.parquet"
+    pd.DataFrame({"age": [10, 18, 40, 70]}).to_parquet(universe_path, index=False)
+    plan = _plan_with_cohort(
+        CohortDefinition(name="adult", inclusion=(_age_predicate(0, 24),))
+    )
+    materialize_locked_analysis_cohort(
+        run_dir=tmp_path,
+        plan=plan,
+        universe_path=universe_path,
+    )
+
+    recovered = load_materialized_analysis_cohort_result(
+        run_dir=tmp_path,
+        plan=plan,
+    )
+
+    assert recovered is not None
+    assert recovered["n_universe"] == 4
+    assert recovered["n_cohort"] == 3
+    assert recovered["path"] == tmp_path / "cohort_analysis.parquet"
+    assert recovered["flow_path"] == tmp_path / "cohort_analysis_flow.csv"
+
+
+def test_load_materialized_analysis_cohort_result_rejects_flow_tampering(
+    tmp_path: Path,
+) -> None:
+    from easyicu.research_agent.cohort.schema import (
+        CohortDefinition,
+        load_materialized_analysis_cohort_result,
+        materialize_locked_analysis_cohort,
+    )
+
+    universe_path = tmp_path / "cohort.parquet"
+    pd.DataFrame({"age": [10, 18, 40, 70]}).to_parquet(universe_path, index=False)
+    plan = _plan_with_cohort(
+        CohortDefinition(name="adult", inclusion=(_age_predicate(0, 24),))
+    )
+    materialize_locked_analysis_cohort(
+        run_dir=tmp_path,
+        plan=plan,
+        universe_path=universe_path,
+    )
+    flow_path = tmp_path / "cohort_analysis_flow.csv"
+    flow = pd.read_csv(flow_path)
+    flow.loc[1, "n_excluded"] = 999
+    flow.to_csv(flow_path, index=False)
+
+    assert load_materialized_analysis_cohort_result(run_dir=tmp_path, plan=plan) is None
+
+
+def test_load_materialized_analysis_cohort_result_rejects_parquet_tampering(
+    tmp_path: Path,
+) -> None:
+    """Same-row-count content drift must refuse adoption via the ledger digest."""
+    from easyicu.research_agent.cohort.schema import (
+        CohortDefinition,
+        load_materialized_analysis_cohort_result,
+        materialize_locked_analysis_cohort,
+    )
+
+    universe_path = tmp_path / "cohort.parquet"
+    pd.DataFrame({"age": [10, 18, 40, 70]}).to_parquet(universe_path, index=False)
+    plan = _plan_with_cohort(
+        CohortDefinition(name="adult", inclusion=(_age_predicate(0, 24),))
+    )
+    materialize_locked_analysis_cohort(
+        run_dir=tmp_path,
+        plan=plan,
+        universe_path=universe_path,
+    )
+    provenance = json.loads(
+        (tmp_path / "cohort_analysis_provenance.json").read_text(encoding="utf-8")
+    )
+    assert provenance["cohort_parquet_sha256"]
+
+    cohort_path = tmp_path / "cohort_analysis.parquet"
+    tampered = pd.read_parquet(cohort_path)
+    tampered.loc[tampered.index[0], "age"] = 999
+    tampered.to_parquet(cohort_path, index=False)
+    assert len(pd.read_parquet(cohort_path)) == provenance["n_analysis_cohort"]
+
+    assert load_materialized_analysis_cohort_result(run_dir=tmp_path, plan=plan) is None
+
+
+def test_load_materialized_analysis_cohort_result_rejects_pre_digest_ledger(
+    tmp_path: Path,
+) -> None:
+    """A pre-digest ledger cannot prove the original parquet content."""
+    from easyicu.research_agent.cohort.schema import (
+        CohortDefinition,
+        load_materialized_analysis_cohort_result,
+        materialize_locked_analysis_cohort,
+    )
+
+    universe_path = tmp_path / "cohort.parquet"
+    pd.DataFrame({"age": [10, 18, 40, 70]}).to_parquet(universe_path, index=False)
+    plan = _plan_with_cohort(
+        CohortDefinition(name="adult", inclusion=(_age_predicate(0, 24),))
+    )
+    materialize_locked_analysis_cohort(
+        run_dir=tmp_path,
+        plan=plan,
+        universe_path=universe_path,
+    )
+    provenance_path = tmp_path / "cohort_analysis_provenance.json"
+    provenance = json.loads(provenance_path.read_text(encoding="utf-8"))
+    del provenance["cohort_parquet_sha256"]
+    provenance_path.write_text(
+        json.dumps(provenance, indent=2, ensure_ascii=False), encoding="utf-8"
+    )
+
+    assert load_materialized_analysis_cohort_result(run_dir=tmp_path, plan=plan) is None
 
 
 def test_materialize_no_definition_returns_no_file(tmp_path: Path) -> None:
-    from easyicu.research_agent.cohort_schema import (
+    from easyicu.research_agent.cohort.schema import (
         CohortDefinition,
         materialize_locked_analysis_cohort,
     )
@@ -518,7 +705,7 @@ def test_materialize_no_definition_returns_no_file(tmp_path: Path) -> None:
 def test_materialize_missing_column_falls_back_without_breaking(tmp_path: Path) -> None:
     """A predicate the universe cannot satisfy must not break the run: status
     'error', no parquet, caller falls back to the universe."""
-    from easyicu.research_agent.cohort_schema import (
+    from easyicu.research_agent.cohort.schema import (
         CohortDefinition,
         materialize_locked_analysis_cohort,
     )
@@ -543,7 +730,7 @@ def _kdigo_predicate():
     """A predicate referencing the dictionary concept_id `kdigo_aki` — whose
     EasyICU output column is `aki_stage`, so it appears in a wide universe as
     `aki_stage_<agg>`, never as `kdigo_aki`."""
-    from easyicu.research_agent.cohort_schema import ConceptPredicate, TimeWindow
+    from easyicu.research_agent.cohort.schema import ConceptPredicate, TimeWindow
 
     return ConceptPredicate(
         concept_id="kdigo_aki",
@@ -557,7 +744,7 @@ def _kdigo_predicate():
 
 
 def test_resolve_predicate_column_bare_and_aggregated_and_alias() -> None:
-    from easyicu.research_agent.cohort_schema import _resolve_predicate_column
+    from easyicu.research_agent.cohort.schema import _resolve_predicate_column
 
     cols = ["age", "aki_stage_max", "aki_stage_first", "los_icu", "death"]
     # bare id-level column
@@ -575,12 +762,40 @@ def test_resolve_predicate_column_bare_and_aggregated_and_alias() -> None:
     assert _resolve_predicate_column(["aki_stage_first"], "kdigo_aki", "max") is None
 
 
+def test_catalog_output_resolution_requires_unique_candidate(monkeypatch) -> None:
+    from easyicu.concept.catalog import COMPOSITE_CONCEPT_OUTPUT_SOURCES
+    from easyicu.research_agent.cohort.schema import _resolve_predicate_column
+
+    monkeypatch.setitem(
+        COMPOSITE_CONCEPT_OUTPUT_SOURCES,
+        "synthetic_output_a",
+        "synthetic_loader",
+    )
+    monkeypatch.setitem(
+        COMPOSITE_CONCEPT_OUTPUT_SOURCES,
+        "synthetic_output_b",
+        "synthetic_loader",
+    )
+    columns = ["synthetic_output_a_max", "synthetic_output_b_max"]
+
+    assert _resolve_predicate_column(columns, "synthetic_loader", "max") is None
+    assert (
+        _resolve_predicate_column(
+            columns,
+            "synthetic_loader",
+            "max",
+            column_bindings={"synthetic_loader": "synthetic_output_b_max"},
+        )
+        == "synthetic_output_b_max"
+    )
+
+
 def test_materialize_resolves_kdigo_alias_to_aki_stage_column(tmp_path: Path) -> None:
     """E3 regression: the locked cohort references concept_id `kdigo_aki`, but the
     universe materialised the concept as `aki_stage_*`. The materializer must
     bridge the concept-id -> output-column gap so the 纳排 is enforced centrally
     (cohort_analysis.parquet written) instead of silently running on the universe."""
-    from easyicu.research_agent.cohort_schema import (
+    from easyicu.research_agent.cohort.schema import (
         CohortDefinition,
         materialize_locked_analysis_cohort,
     )
@@ -619,7 +834,7 @@ def _synthetic_source_predicate(
     start_offset_hours=0.0,
     end_offset_hours=24.0,
 ):
-    from easyicu.research_agent.cohort_schema import ConceptPredicate, TimeWindow
+    from easyicu.research_agent.cohort.schema import ConceptPredicate, TimeWindow
 
     return ConceptPredicate(
         concept_id="canonical_signal",
@@ -634,7 +849,12 @@ def _synthetic_source_predicate(
     )
 
 
-def _synthetic_binding_plan(definition, inputs):
+def _synthetic_binding_plan(
+    definition,
+    inputs,
+    *,
+    cohort_output="artifact:analysis_cohort",
+):
     return SimpleNamespace(
         cohort=definition,
         steps=[
@@ -642,7 +862,7 @@ def _synthetic_binding_plan(definition, inputs):
                 inputs=list(inputs),
                 expected_outputs=[
                     "table:cohort_attrition",
-                    "artifact:analysis_cohort",
+                    cohort_output,
                 ],
             )
         ],
@@ -662,12 +882,15 @@ def _synthetic_binding_context(
 
 
 def test_descriptor_window_match_requires_explicit_matching_anchor() -> None:
-    from easyicu.research_agent import cohort_schema
+    from easyicu.research_agent.cohort import schema as cohort_schema
 
     window = cohort_schema.TimeWindow("hospital_admit", 0, 24)
 
     assert cohort_schema._descriptor_window_matches_predicate(
         "hospital_admit_0_24h", window
+    )
+    assert cohort_schema._descriptor_window_matches_predicate(
+        "hospital_admission[0,24]h", window
     )
     assert not cohort_schema._descriptor_window_matches_predicate("0_24h", window)
     assert not cohort_schema._descriptor_window_matches_predicate(
@@ -682,10 +905,10 @@ def test_materialize_binds_unique_planner_input_by_source_concept(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    from easyicu.research_agent import cohort_schema
+    from easyicu.research_agent.cohort import schema as cohort_schema
 
     monkeypatch.setattr(
-        cohort_schema,
+        cohort_contract,
         "_EXTRA_COHORT_CONCEPT_IDS",
         {"canonical_signal"},
     )
@@ -745,7 +968,7 @@ def test_materialize_binds_unique_planner_input_by_source_concept(
         {
             "concept_id": "canonical_signal",
             "column": "exported_signal_any",
-            "basis": "planner_declared_operational_output_source_concept",
+            "basis": "planner_declared_context_input_source_concept",
             "predicate_contracts": [
                 {
                     "aggregation": "any",
@@ -760,16 +983,168 @@ def test_materialize_binds_unique_planner_input_by_source_concept(
     ]
 
 
+def test_cohort_namespace_product_preserves_planner_column_binding(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """A supported cohort namespace binds like analysis_cohort aliases."""
+
+    from easyicu.research_agent.cohort import schema as cohort_schema
+
+    monkeypatch.setattr(
+        cohort_contract,
+        "_EXTRA_COHORT_CONCEPT_IDS",
+        {"canonical_signal"},
+    )
+    definition = cohort_schema.CohortDefinition(
+        name="primary",
+        inclusion=(_synthetic_source_predicate(),),
+    )
+    universe_path = tmp_path / "cohort.parquet"
+    pd.DataFrame(
+        {
+            "stay_id": [1, 2, 3],
+            "exported_signal_any": [0.0, None, 2.0],
+        }
+    ).to_parquet(universe_path, index=False)
+    context = _synthetic_binding_context(
+        SimpleNamespace(
+            name="exported_signal_any",
+            source_concept="canonical_signal",
+            role="other",
+            analysis_window="icu_admit_0_24h",
+        )
+    )
+
+    result = cohort_schema.materialize_locked_analysis_cohort(
+        run_dir=tmp_path,
+        plan=_synthetic_binding_plan(
+            definition,
+            ["stay_id", "exported_signal_any"],
+            cohort_output="cohort:analysis_set",
+        ),
+        universe_path=universe_path,
+        context=context,
+    )
+
+    assert result["status"] == "applied"
+    assert result["n_cohort"] == 2
+
+
+def test_materialize_binds_unique_non_primary_qc_input_for_any_missingness(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    from easyicu.research_agent.cohort import schema as cohort_schema
+
+    monkeypatch.setattr(
+        cohort_contract,
+        "_EXTRA_COHORT_CONCEPT_IDS",
+        {"canonical_signal"},
+    )
+    definition = cohort_schema.CohortDefinition(
+        name="primary",
+        inclusion=(_synthetic_source_predicate(),),
+    )
+    universe_path = tmp_path / "cohort.parquet"
+    pd.DataFrame(
+        {
+            "stay_id": [1, 2, 3],
+            "selected_qc_value_max": [0.0, None, 2.0],
+            "unrelated_exposure": [4.0, 5.0, 6.0],
+        }
+    ).to_parquet(universe_path, index=False)
+    context = _synthetic_binding_context(
+        SimpleNamespace(
+            name="selected_qc_value_max",
+            source_concept="canonical_signal",
+            role="other",
+            analysis_window="icu_admission[0,24]h",
+        ),
+        SimpleNamespace(
+            name="unrelated_exposure",
+            source_concept="other_signal",
+            role="exposure",
+        ),
+        primary_exposure="unrelated_exposure",
+    )
+
+    result = cohort_schema.materialize_locked_analysis_cohort(
+        run_dir=tmp_path,
+        plan=_synthetic_binding_plan(
+            definition,
+            ["stay_id", "selected_qc_value_max", "unrelated_exposure"],
+        ),
+        universe_path=universe_path,
+        context=context,
+    )
+
+    assert result["status"] == "applied"
+    assert pd.read_parquet(tmp_path / "cohort_analysis.parquet")[
+        "stay_id"
+    ].tolist() == [1, 3]
+
+
+def test_materialize_rejects_ambiguous_any_missingness_inputs(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    from easyicu.research_agent.cohort import schema as cohort_schema
+
+    monkeypatch.setattr(
+        cohort_contract,
+        "_EXTRA_COHORT_CONCEPT_IDS",
+        {"canonical_signal"},
+    )
+    definition = cohort_schema.CohortDefinition(
+        name="primary",
+        inclusion=(_synthetic_source_predicate(),),
+    )
+    universe_path = tmp_path / "cohort.parquet"
+    pd.DataFrame(
+        {
+            "selected_qc_value_first": [0.0, None],
+            "selected_qc_value_max": [0.0, 2.0],
+        }
+    ).to_parquet(universe_path, index=False)
+    context = _synthetic_binding_context(
+        *(
+            SimpleNamespace(
+                name=name,
+                source_concept="canonical_signal",
+                role="other",
+                analysis_window="icu_admission[0,24]h",
+            )
+            for name in ("selected_qc_value_first", "selected_qc_value_max")
+        ),
+        primary_exposure="selected_qc_value_max",
+    )
+
+    result = cohort_schema.materialize_locked_analysis_cohort(
+        run_dir=tmp_path,
+        plan=_synthetic_binding_plan(
+            definition,
+            ["selected_qc_value_first", "selected_qc_value_max"],
+        ),
+        universe_path=universe_path,
+        context=context,
+    )
+
+    assert result["status"] == "error"
+    assert "ambiguous" in result["error"]
+    assert not (tmp_path / "cohort_analysis.parquet").exists()
+
+
 @pytest.mark.parametrize("exact_column", ["canonical_signal", "canonical_signal_any"])
 def test_materialize_exact_column_precedes_context_binding(
     tmp_path: Path,
     monkeypatch,
     exact_column: str,
 ) -> None:
-    from easyicu.research_agent import cohort_schema
+    from easyicu.research_agent.cohort import schema as cohort_schema
 
     monkeypatch.setattr(
-        cohort_schema,
+        cohort_contract,
         "_EXTRA_COHORT_CONCEPT_IDS",
         {"canonical_signal"},
     )
@@ -819,10 +1194,10 @@ def test_materialize_rejects_cross_name_aggregation_or_window_drift(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    from easyicu.research_agent import cohort_schema
+    from easyicu.research_agent.cohort import schema as cohort_schema
 
     monkeypatch.setattr(
-        cohort_schema,
+        cohort_contract,
         "_EXTRA_COHORT_CONCEPT_IDS",
         {"canonical_signal"},
     )
@@ -867,18 +1242,16 @@ def test_materialize_rejects_cross_name_window_without_anchor(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    from easyicu.research_agent import cohort_schema
+    from easyicu.research_agent.cohort import schema as cohort_schema
 
     monkeypatch.setattr(
-        cohort_schema,
+        cohort_contract,
         "_EXTRA_COHORT_CONCEPT_IDS",
         {"canonical_signal"},
     )
     definition = cohort_schema.CohortDefinition(
         name="primary",
-        inclusion=(
-            _synthetic_source_predicate(anchor="hospital_admit"),
-        ),
+        inclusion=(_synthetic_source_predicate(anchor="hospital_admit"),),
     )
     universe_path = tmp_path / "cohort.parquet"
     pd.DataFrame({"exported_signal_any": [0.0, 1.0]}).to_parquet(
@@ -910,10 +1283,10 @@ def test_materialize_rejects_ambiguous_source_concept_bindings(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    from easyicu.research_agent import cohort_schema
+    from easyicu.research_agent.cohort import schema as cohort_schema
 
     monkeypatch.setattr(
-        cohort_schema,
+        cohort_contract,
         "_EXTRA_COHORT_CONCEPT_IDS",
         {"canonical_signal"},
     )
@@ -959,14 +1332,14 @@ def test_materialize_rejects_ambiguous_source_concept_bindings(
     assert not (tmp_path / "cohort_analysis.parquet").exists()
 
 
-def test_materialize_does_not_bind_non_operational_loader_sibling(
+def test_materialize_does_not_bind_unwindowed_loader_sibling(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    from easyicu.research_agent import cohort_schema
+    from easyicu.research_agent.cohort import schema as cohort_schema
 
     monkeypatch.setattr(
-        cohort_schema,
+        cohort_contract,
         "_EXTRA_COHORT_CONCEPT_IDS",
         {"canonical_signal"},
     )
@@ -1003,5 +1376,6 @@ def test_materialize_does_not_bind_non_operational_loader_sibling(
     )
 
     assert result["status"] == "error"
-    assert "missing concept column 'canonical_signal'" in result["error"]
+    assert "no Planner-declared" in result["error"]
+    assert "matching aggregation and time window" in result["error"]
     assert not (tmp_path / "cohort_analysis.parquet").exists()

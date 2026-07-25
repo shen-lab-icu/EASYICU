@@ -58,12 +58,6 @@ not break the rest.
 
 from __future__ import annotations
 
-import os
-
-from .step_summary import step_summary
-
-os_environ = os.environ
-
 __all__ = [
     # Schemas
     "ResearchContext",
@@ -74,6 +68,7 @@ __all__ = [
     "CohortDescriptor",
     "TimeWindow",
     "TemporalConstraint",
+    "PlannedAnalysisRole",
     "AnalysisStep",
     "AnalysisPlan",
     "EvidenceRef",
@@ -101,6 +96,11 @@ __all__ = [
     "ReplicationDeviationReport",
     "ProbeSummary",
     "StepRecord",
+    "KnowHowCard",
+    "KnowHowCitation",
+    "KnowHowHit",
+    "KnowHowRegistry",
+    "KnowHowIntegrityError",
     # Context builder
     "build_research_context",
     "build_naive_research_context",
@@ -433,15 +433,20 @@ __all__ = [
     "NPJ_DM_2026_05",
     "NPJ_DM_2026_06",
     "NPJ_DM_2026_07",
+    "NPJ_DM_2026_07_16",
+    "NPJ_DM_2026_07_17",
+    "NPJ_DM_2026_07_18",
+    "NPJ_DM_2026_07_19",
+    "NPJ_DM_2026_07_21_KNOW_HOW",
+    "NPJ_DM_2026_07_22_FRAMEWORK_V2_DEV",
+    "NPJ_DM_2026_07_22_FRAMEWORK_V2_MEMORY_DEV",
+    "NPJ_DM_2026_07_22_FRAMEWORK_V2_CAPABILITY_DEV",
     "DEFAULT_SUBMISSION_PROFILE_REF",
     "SUBMISSION_PROFILE_REGISTRY",
     "get_submission_profile",
     # Prompt pack provenance
     "PROMPT_PACK_VERSION",
     "prompt_pack_files",
-    # Compatibility exports used by generated scripts
-    "step_summary",
-    "os_environ",
 ]
 
 # Schemas are dependency-free, safe to import eagerly.
@@ -454,6 +459,7 @@ from .schema import (
     CohortDescriptor,
     TimeWindow,
     TemporalConstraint,
+    PlannedAnalysisRole,
     AnalysisStep,
     AnalysisPlan,
     EvidenceRef,
@@ -508,6 +514,16 @@ def __getattr__(name: str):
     optional LLM SDKs unless the user actually uses them.
     """
     if name in {
+        "KnowHowCard",
+        "KnowHowCitation",
+        "KnowHowHit",
+        "KnowHowRegistry",
+        "KnowHowIntegrityError",
+    }:
+        from . import know_how as _know_how
+
+        return getattr(_know_how, name)
+    if name in {
         "SystemLayer",
         "AgentRole",
         "ArchitectureProfile",
@@ -524,7 +540,7 @@ def __getattr__(name: str):
         "EpisodeResolution",
         "TimeWindowSemanticParser",
     }:
-        from . import temporal_semantics as _temporal
+        from .research_context import temporal_semantics as _temporal
 
         return getattr(_temporal, name)
     if name in {
@@ -548,7 +564,7 @@ def __getattr__(name: str):
         "IdeaRegistryError",
         "SelectionStatus",
     }:
-        from . import idea_registry as _idea_registry
+        from .discovery import idea_registry as _idea_registry
 
         return getattr(_idea_registry, name)
     if name in {
@@ -589,7 +605,7 @@ def __getattr__(name: str):
         "render_discovery_report",
         "run_idea_mining_dry_run",
     }:
-        from . import idea_mining as _idea_mining
+        from .discovery import idea_mining as _idea_mining
 
         return getattr(_idea_mining, name)
     if name in {
@@ -599,7 +615,7 @@ def __getattr__(name: str):
         "resolve_journals",
         "resolve_year_range",
     }:
-        from . import idea_scope as _idea_scope
+        from .discovery import idea_scope as _idea_scope
 
         return getattr(_idea_scope, name)
     if name in {
@@ -611,7 +627,7 @@ def __getattr__(name: str):
         "fetch_literature_funnel_corpus",
         "fetch_literature_funnel_source_materials",
     }:
-        from . import idea_mining_funnel as _idea_mining_funnel
+        from .discovery import idea_mining_funnel as _idea_mining_funnel
 
         return getattr(_idea_mining_funnel, name)
     if name in {
@@ -626,7 +642,7 @@ def __getattr__(name: str):
         "score_idea_quality_predictions",
         "summarize_idea_quality_eval_set",
     }:
-        from . import idea_mining_eval as _idea_mining_eval
+        from .discovery import idea_mining_eval as _idea_mining_eval
 
         return getattr(_idea_mining_eval, name)
     if name in {
@@ -637,7 +653,7 @@ def __getattr__(name: str):
         "select_discovery_row",
         "write_handoff_packet",
     }:
-        from . import discovery_handoff as _discovery_handoff
+        from .discovery import discovery_handoff as _discovery_handoff
 
         return getattr(_discovery_handoff, name)
     if name in {
@@ -647,11 +663,11 @@ def __getattr__(name: str):
         "validate_discovery_manuscript_package",
         "write_discovery_package_assessment",
     }:
-        from . import discovery_package as _discovery_package
+        from .discovery import discovery_package as _discovery_package
 
         return getattr(_discovery_package, name)
     if name in {"render_discovery_story_figure"}:
-        from . import discovery_story_figure as _discovery_story_figure
+        from .discovery import discovery_story_figure as _discovery_story_figure
 
         return getattr(_discovery_story_figure, name)
     if name in {
@@ -662,7 +678,7 @@ def __getattr__(name: str):
         "dump_experiment_spec",
         "build_pipeline_from_spec",
     }:
-        from . import experiment_spec as _spec
+        from .orchestration import experiment_spec as _spec
 
         return getattr(_spec, name)
     if name in {
@@ -671,7 +687,7 @@ def __getattr__(name: str):
         "retrieve_context_variables",
         "build_retrieved_research_context",
     }:
-        from . import context as _context
+        from .research_context import builder as _context
 
         return getattr(_context, name)
     if name in {
@@ -680,14 +696,24 @@ def __getattr__(name: str):
         "context_information_summary",
         "write_research_context",
     }:
-        from . import case_contexts as _case_contexts
+        from .case_plugins import contexts as _case_contexts
 
         return getattr(_case_contexts, name)
+    if name == "LLMClient":
+        from .providers import protocol as _protocol
+
+        return getattr(_protocol, name)
+    if name == "MockLLMClient":
+        from .providers import mocks as _mocks
+
+        return getattr(_mocks, name)
     if name in {
-        "LLMClient", "MockLLMClient", "OpenAIClient", "CLIAgentLLMClient",
-        "LLMRouter", "build_llm_client",
+        "OpenAIClient",
+        "CLIAgentLLMClient",
+        "LLMRouter",
+        "build_llm_client",
     }:
-        from . import llm as _llm
+        from .providers import llm as _llm
 
         return getattr(_llm, name)
     if name in {
@@ -708,7 +734,7 @@ def __getattr__(name: str):
 
         return getattr(_agents, name)
     if name in {"PROMPT_PACK_VERSION", "prompt_pack_files"}:
-        from . import prompts as _prompts
+        from .providers import prompts as _prompts
 
         return getattr(_prompts, name)
     if name in {"LiteratureAgent", "HypothesisBlueprintAgent"}:
@@ -725,8 +751,12 @@ def __getattr__(name: str):
         from . import literature as _lit
 
         return getattr(_lit, name)
-    if name in {"CodeRunner", "DockerRunner", "RunResult"}:
-        from . import runner as _runner
+    if name == "RunResult":
+        from .contracts.runtime import RunResult
+
+        return RunResult
+    if name in {"CodeRunner", "DockerRunner"}:
+        from .execution import runner as _runner
 
         return getattr(_runner, name)
     if name in {
@@ -756,15 +786,15 @@ def __getattr__(name: str):
         "render_workflow_graph_mermaid",
         "build_execution_replay",
     }:
-        from . import runtime_artifacts as _runtime_artifacts
+        from .authority import runtime_artifacts as _runtime_artifacts
 
         return getattr(_runtime_artifacts, name)
     if name in {"VisualQAAuditor", "VLMVisualQAAdapter"}:
-        from . import visual_qa as _visual_qa
+        from .gates import visual_qa as _visual_qa
 
         return getattr(_visual_qa, name)
     if name in {"PublicationFigureSkill", "PublicationFigureSkillResult"}:
-        from . import figure_skill as _figure_skill
+        from .figures import skill as _figure_skill
 
         return getattr(_figure_skill, name)
     if name in {
@@ -776,11 +806,11 @@ def __getattr__(name: str):
         "save_publication_figure",
         "audit_publication_exports",
     }:
-        from . import publication_figures as _pubfig
+        from .figures import publication as _pubfig
 
         return getattr(_pubfig, name)
     if name in {"EvidenceStore", "EvidenceEnforcementMode", "EvidenceEnforcementError"}:
-        from . import evidence as _evidence
+        from .authority import evidence_store as _evidence
 
         return getattr(_evidence, name)
     if name in {
@@ -789,7 +819,7 @@ def __getattr__(name: str):
         "read_exported_concept",
         "build_lactate_map_vaso_cohort_from_export",
     }:
-        from . import easyicu_case_builder as _case_builder
+        from .case_plugins import builder as _case_builder
 
         return getattr(_case_builder, name)
     if name in {
@@ -832,7 +862,7 @@ def __getattr__(name: str):
         "planner_analysis_type_guide",
         "analysis_type_catalog_markdown",
     }:
-        from . import analysis_types as _analysis_types
+        from .planning import analysis_types as _analysis_types
 
         return getattr(_analysis_types, name)
     if name in {
@@ -861,19 +891,19 @@ def __getattr__(name: str):
         "MemoryScoreBreakdown",
         "MemoryRetrievalAuditEntry",
     }:
-        from . import memory as _memory
+        from .learning import memory as _memory
 
         return getattr(_memory, name)
     if name in {"scaffold_to_latex", "latex_template_preamble"}:
-        from . import latex as _latex
+        from .reporting import latex as _latex
 
         return getattr(_latex, name)
     if name in {"render_bibtex", "render_thebibliography_block"}:
-        from . import bibtex as _bibtex
+        from .reporting import bibtex as _bibtex
 
         return getattr(_bibtex, name)
     if name in {"CostMeter", "MeteredClient"}:
-        from . import cost as _cost
+        from .providers import cost as _cost
 
         return getattr(_cost, name)
     if name in {
@@ -901,7 +931,7 @@ def __getattr__(name: str):
         "run_causal_audit",
         "scan_manuscript_for_causal_language",
     }:
-        from . import causal_audit as _ca
+        from .review import causal_audit as _ca
 
         return getattr(_ca, name)
     if name in {
@@ -913,7 +943,7 @@ def __getattr__(name: str):
         "choose_checklist",
         "checklist_names_for_kind",
     }:
-        from . import reporting_checklist as _rc
+        from .reporting import reporting_checklist as _rc
 
         return getattr(_rc, name)
     if name in {
@@ -922,7 +952,7 @@ def __getattr__(name: str):
         "ReviewerReport",
         "run_reviewer_round",
     }:
-        from . import reviewer as _rv
+        from .reporting import reviewer as _rv
 
         return getattr(_rv, name)
     if name in {
@@ -931,7 +961,7 @@ def __getattr__(name: str):
         "build_provenance_bundle",
         "hash_sources",
     }:
-        from . import provenance as _prov
+        from .authority import provenance as _prov
 
         return getattr(_prov, name)
     if name in {
@@ -985,7 +1015,7 @@ def __getattr__(name: str):
         "LITERATURE_SATURATION_SIGNAL_STATEMENT",
         "generate_hypotheses",
     }:
-        from . import hypothesis_generator as _hg
+        from .discovery import hypothesis_generator as _hg
 
         return getattr(_hg, name)
     if name == "AnalysisPatternAuditor":
@@ -993,7 +1023,7 @@ def __getattr__(name: str):
 
         return AnalysisPatternAuditor
     if name in {"PDFRenderResult", "render_pdf_for_run"}:
-        from . import pdf_render as _pdf
+        from .reporting import pdf_render as _pdf
 
         return getattr(_pdf, name)
     if name in {"mcp_dispatch", "MCP_TOOLS", "MCP_TOOL_SCHEMAS"}:
@@ -1010,7 +1040,7 @@ def __getattr__(name: str):
 
         return ResearchAgentPipeline
     if name == "PipelineConfig":
-        from .pipeline_config import PipelineConfig
+        from .orchestration.config import PipelineConfig
 
         return PipelineConfig
     if name in {
@@ -1018,19 +1048,19 @@ def __getattr__(name: str):
         "NPJ_DM_2026_05",
         "NPJ_DM_2026_06",
         "NPJ_DM_2026_07",
+        "NPJ_DM_2026_07_16",
+        "NPJ_DM_2026_07_17",
+        "NPJ_DM_2026_07_18",
+        "NPJ_DM_2026_07_19",
+        "NPJ_DM_2026_07_21_KNOW_HOW",
+        "NPJ_DM_2026_07_22_FRAMEWORK_V2_DEV",
+        "NPJ_DM_2026_07_22_FRAMEWORK_V2_MEMORY_DEV",
+        "NPJ_DM_2026_07_22_FRAMEWORK_V2_CAPABILITY_DEV",
         "DEFAULT_SUBMISSION_PROFILE_REF",
         "SUBMISSION_PROFILE_REGISTRY",
         "get_submission_profile",
     }:
-        from . import pipeline_profiles as _profiles
+        from .orchestration import profiles as _profiles
 
         return getattr(_profiles, name)
-    if name in {"PlanPhaseState", "ExecutePhaseState", "WritePhaseState"}:
-        from . import pipeline_state as _ps
-
-        return getattr(_ps, name)
-    if name in {"PlanPhaseRunner", "ExecutePhaseRunner", "WritePhaseRunner"}:
-        from . import pipeline_phases as _pp
-
-        return getattr(_pp, name)
     raise AttributeError(f"module 'easyicu.research_agent' has no attribute {name!r}")

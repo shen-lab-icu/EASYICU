@@ -37,6 +37,23 @@ def test_strict_numeric_input_preserves_index_missingness_and_audit() -> None:
     }
 
 
+def test_strict_numeric_input_accepts_diagnostic_name_or_column() -> None:
+    source = pd.Series([0.0, 1.0], name="binary_exposure")
+
+    named = strict_numeric_input(source, name="binary_exposure")
+    column_labeled = strict_numeric_input(source, column="binary_exposure")
+
+    pd.testing.assert_series_equal(named.values, source)
+    pd.testing.assert_series_equal(column_labeled.values, source)
+
+
+def test_strict_numeric_input_rejects_conflicting_diagnostic_labels() -> None:
+    source = pd.Series([0.0, 1.0], name="binary_exposure")
+
+    with pytest.raises(ValueError, match="diagnostic labels disagree"):
+        strict_numeric_input(source, name="binary_exposure", column="outcome")
+
+
 @pytest.mark.parametrize(
     ("source", "field"),
     [

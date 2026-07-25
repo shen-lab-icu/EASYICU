@@ -22,6 +22,13 @@ def _adapter_records(df: pd.DataFrame):
         {
             "step_id": "01_model",
             "status": "ok",
+            "planned_analysis_role": "primary",
+            "analysis_request": {
+                "step": {
+                    "step_id": "01_model",
+                    "planned_analysis_role": "primary",
+                }
+            },
             "step_summary_evidence_id": "stat_model",
             "step_summary": {
                 "primary_predictor": "x",
@@ -39,14 +46,14 @@ def _adapter_records(df: pd.DataFrame):
                         "author_defined_outcome_1": "y_alt_1",
                         "author_defined_outcome_2": "y_alt_2",
                     },
-                }
+                },
             },
         }
     ]
 
 
 def test_logistic_estimator_recovers_known_odds_ratio() -> None:
-    from easyicu.research_agent.estimators import fit_estimator
+    from easyicu.research_agent.robustness.estimators import fit_estimator
 
     df = _synthetic_binary_frame(n=5000, seed=10)
     result = fit_estimator(cohort=None, X=df[["x"]], y=df["y"], kind="logistic")
@@ -57,7 +64,7 @@ def test_logistic_estimator_recovers_known_odds_ratio() -> None:
 
 
 def test_complete_case_and_mean_imputation_can_differ() -> None:
-    from easyicu.research_agent.estimators import fit_estimator
+    from easyicu.research_agent.robustness.estimators import fit_estimator
     from easyicu.research_agent.methods.missing import apply_missing_strategy
 
     df = _synthetic_binary_frame(n=300, seed=4)
@@ -79,7 +86,7 @@ def test_complete_case_and_mean_imputation_can_differ() -> None:
 
 
 def test_non_convergence_is_captured_not_raised() -> None:
-    from easyicu.research_agent.estimators import fit_estimator
+    from easyicu.research_agent.robustness.estimators import fit_estimator
 
     X = pd.DataFrame({f"x{i}": [0, 1, 0, 1, 0] for i in range(10)})
     y = pd.Series([0, 1, 0, 1, 0])
@@ -93,8 +100,10 @@ def test_adapter_builds_full_eight_row_panel_and_registers_claims(ra, tmp_path) 
     import json
     from types import SimpleNamespace
 
-    from easyicu.research_agent.estimators import fit_robustness_rows_from_records
-    from easyicu.research_agent.robustness_panel import (
+    from easyicu.research_agent.robustness.estimators import (
+        fit_robustness_rows_from_records,
+    )
+    from easyicu.research_agent.robustness.panel import (
         build_robustness_panel_from_records,
         default_robustness_specs,
         write_locked_robustness_specs,
@@ -154,8 +163,10 @@ def test_adapter_builds_full_eight_row_panel_and_registers_claims(ra, tmp_path) 
 
 
 def test_step_owned_rows_prevent_adapter_refit_with_warning() -> None:
-    from easyicu.research_agent.estimators import fit_robustness_rows_from_records
-    from easyicu.research_agent.robustness_panel import (
+    from easyicu.research_agent.robustness.estimators import (
+        fit_robustness_rows_from_records,
+    )
+    from easyicu.research_agent.robustness.panel import (
         build_robustness_panel_from_records,
         default_robustness_specs,
     )
@@ -199,7 +210,7 @@ def test_step_owned_rows_prevent_adapter_refit_with_warning() -> None:
 
 
 def test_fit_estimator_blocks_rank_deficient_locked_design():
-    from easyicu.research_agent.estimators import fit_estimator
+    from easyicu.research_agent.robustness.estimators import fit_estimator
 
     rng = np.random.default_rng(0)
     n = 1500
@@ -234,7 +245,7 @@ def test_fit_estimator_blocks_rank_deficient_locked_design():
 
 
 def test_fit_estimator_preserves_rows_after_filtered_nonconsecutive_index():
-    from easyicu.research_agent.estimators import fit_estimator
+    from easyicu.research_agent.robustness.estimators import fit_estimator
 
     rng = np.random.default_rng(20260711)
     n = 240
@@ -252,7 +263,7 @@ def test_fit_estimator_preserves_rows_after_filtered_nonconsecutive_index():
 
 
 def test_robust_design_keeps_exposure_and_const():
-    from easyicu.research_agent.estimators import _robust_design
+    from easyicu.research_agent.robustness.estimators import _robust_design
 
     x = pd.DataFrame(
         {

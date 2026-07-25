@@ -1,23 +1,120 @@
 from __future__ import annotations
 
-from easyicu.research_agent.agentic_coder import AgenticCoderAgent
-from easyicu.research_agent.agents import CoderAgent
-from easyicu.research_agent.llm import LLMMessage
-from easyicu.research_agent.pipeline_execute import (
-    _coder_context_with_typed_parent_schema_receipts,
+import json
+
+from easyicu.research_agent.agents.agentic_coder import AgenticCoderAgent
+from easyicu.research_agent.agents.core import CoderAgent as _ProductionCoderAgent
+from easyicu.research_agent.authority.coder_authority import HostCoderAuthority
+from easyicu.research_agent.providers.llm import LLMMessage
+from easyicu.research_agent.authority.typed_binding import (
+    _coder_authority_with_typed_parent_schema_receipts,
     _typed_parent_schema_context_block,
 )
 from easyicu.research_agent.plan_utils import effect_output_authorized
+from easyicu.research_agent.repairs.reasons import RepairPromptAuthority, RepairRoute
 from easyicu.research_agent.schema import AnalysisStep, PlannedModelRequirement
 
 
-class _RecordingLLM:
-    def __init__(self) -> None:
-        self.messages: list[LLMMessage] = []
+def _RecordingLLM():
+    from easyicu.research_agent.providers.mocks import ScriptedMockLLMClient
 
-    def complete(self, messages, **kwargs):  # noqa: ANN001, ANN003
-        self.messages = list(messages)
-        return "import os\n"
+    return ScriptedMockLLMClient(["import os\n"], repeat_last=True)
+
+
+def _test_host_repair_authority(run_log: str) -> RepairPromptAuthority:
+    """Turn explicit test-host diagnostics into the production side-channel."""
+
+    text = str(run_log or "")
+    ticket: list[dict[str, object]] = [
+        {
+            "validator": "mechanical_code_preflight",
+            "message": text,
+            "detail": {},
+        }
+    ]
+    decoder = json.JSONDecoder()
+    for marker in (
+        "TYPED REPAIR TICKET (authoritative routing):",
+        "DETAIL:",
+    ):
+        cursor = 0
+        while True:
+            marker_index = text.find(marker, cursor)
+            if marker_index < 0:
+                break
+            fragment = text[marker_index + len(marker) :].lstrip()
+            try:
+                payload, consumed = decoder.raw_decode(fragment)
+            except json.JSONDecodeError:
+                cursor = marker_index + len(marker)
+                continue
+            if isinstance(payload, list):
+                for item in payload:
+                    if not isinstance(item, dict):
+                        continue
+                    trusted_item = dict(item)
+                    trusted_item.setdefault("validator", "mechanical_code_preflight")
+                    ticket.append(trusted_item)
+            elif isinstance(payload, dict):
+                trusted_item = dict(payload)
+                trusted_item.setdefault("validator", "mechanical_code_preflight")
+                ticket.append(trusted_item)
+            cursor = marker_index + len(marker) + consumed
+    normalized = text.lower()
+    route_codes = []
+    phrase_routes = {
+        RepairRoute.SPARSE_EVENT: (
+            "binary event",
+            "reconcile_binary_event_presence",
+        ),
+        RepairRoute.PROVENANCE_VALUE_SELECTION: (
+            "provenance",
+            "gated on measured",
+        ),
+        RepairRoute.PRIMARY_EXPOSURE_BINDING: (
+            "authoritative_primary_exposure",
+            "authoritative primary exposure",
+        ),
+        RepairRoute.TABULAR_EXPOSURE_BINDING: (
+            "exposure table",
+            "exposure-table",
+            "exposure artifact",
+            "primary_exposure_definition",
+            "assignment model artifact",
+            "typed dataframe artifact",
+        ),
+        RepairRoute.ASSIGNMENT_COMPLETION: ("assignment_model_unfitted",),
+        RepairRoute.ASSIGNMENT_BINDING: ("registered propensity",),
+        RepairRoute.UNDEFINED_HELPER: ("undefined_helper", "undefined helper"),
+        RepairRoute.FIGURE_SOURCE_TRACE: ("not verified against",),
+        RepairRoute.STRUCTURAL_ACCOUNTING: ("partial cohort flow",),
+        RepairRoute.ARBITRARY_COLUMN: ("column discovery",),
+        RepairRoute.ORDINAL_COVARIATE: ("ordinal",),
+    }
+    for route, phrases in phrase_routes.items():
+        if any(phrase in normalized for phrase in phrases):
+            route_codes.append(route)
+    if "reconcile_binary_event_presence" in normalized:
+        route_codes = [
+            route
+            for route in route_codes
+            if route is not RepairRoute.PROVENANCE_VALUE_SELECTION
+        ]
+    return RepairPromptAuthority.create(
+        typed_ticket=ticket,
+        route_codes=route_codes,
+    )
+
+
+class CoderAgent(_ProductionCoderAgent):
+    """Test adapter that marks legacy test diagnostics as host-owned input."""
+
+    def repair(self, **kwargs):  # noqa: ANN003, ANN201
+        kwargs.setdefault(
+            "repair_authority",
+            _test_host_repair_authority(str(kwargs.get("run_log") or "")),
+        )
+        return super().repair(**kwargs)
 
 
 def _context(ra):
@@ -65,22 +162,47 @@ def test_coder_prompt_allows_only_declared_figure_products(ra):
     assert "declares no figure product" not in prompt
 
 
+def test_coder_prompt_recognises_fig_typed_alias_as_figure_product(ra):
+    llm = _RecordingLLM()
+    step = ra.AnalysisStep(
+        step_id="render_alias",
+        intent="Render the declared figure alias.",
+        inputs=["table:summary"],
+        expected_outputs=["fig:summary"],
+        method="visualization",
+    )
+
+    CoderAgent(llm).run(context=_context(ra), step=step)
+
+    prompt = llm.messages[-1].content
+    assert "Figure rendering is allowed only for the explicitly declared" in prompt
+    assert "declares no figure product" not in prompt
+
+
 def test_initial_and_repair_coder_receive_the_same_typed_parent_schema(ra):
     bindings = {
         "table:display_summary": {
             "product_contract": {
-                "schema_version": "easyicu.host_typed_product.v2",
+                "schema_version": "easyicu.host_typed_product.v3",
                 "tabular_format": "csv",
                 "column_count": 4,
                 "columns": ["band", "point", "lower", "upper"],
+                "column_dtypes": {
+                    "band": "object",
+                    "point": "float64",
+                    "lower": "float64",
+                    "upper": "float64",
+                },
+                "numeric_columns": ["point", "lower", "upper"],
             }
         }
     }
     schema_block = _typed_parent_schema_context_block(bindings)
-    context = _coder_context_with_typed_parent_schema_receipts(
-        context=_context(ra),
+    authority = _coder_authority_with_typed_parent_schema_receipts(
+        authority=HostCoderAuthority(),
         bindings=bindings,
     )
+    context = _context(ra)
     step = ra.AnalysisStep(
         step_id="render",
         intent="Render the declared typed table product.",
@@ -91,23 +213,28 @@ def test_initial_and_repair_coder_receive_the_same_typed_parent_schema(ra):
     llm = _RecordingLLM()
     coder = CoderAgent(llm)
 
-    coder.run(context=context, step=step)
-    initial_prompt = llm.messages[-1].content
+    coder.run(context=context, step=step, host_authority=authority)
+    initial_prompt = "\n".join(message.content for message in llm.messages)
     coder.repair(
         context=context,
         step=step,
+        host_authority=authority,
         code="import os\n",
         run_log="A requested column is absent from the bound parent table.",
     )
-    repair_prompt = llm.messages[-1].content
+    repair_prompt = "\n".join(message.content for message in llm.messages)
 
     assert schema_block in initial_prompt
     assert schema_block in repair_prompt
     assert '"columns":["band","point","lower","upper"]' in initial_prompt
     assert '"column_count":4' in initial_prompt
     assert '"tabular_format":"csv"' in initial_prompt
+    assert '"band":"object"' in initial_prompt
+    assert '"numeric_columns":["point","lower","upper"]' in initial_prompt
     assert '"column_count":4' in repair_prompt
     assert '"tabular_format":"csv"' in repair_prompt
+    assert '"band":"object"' in repair_prompt
+    assert '"numeric_columns":["point","lower","upper"]' in repair_prompt
     assert "first-numeric" in initial_prompt
     assert "first-numeric" in repair_prompt
 
@@ -147,10 +274,10 @@ def test_coder_context_exposes_registered_source_concept_metadata(ra):
     CoderAgent(llm).run(context=context, step=step)
 
     prompt = llm.messages[-1].content
-    assert "source_concept=treatment_event" in prompt
-    assert "description='Registered treatment event indicator'" in prompt
-    assert "role=intervention" in prompt
-    assert "observed=CONSTANT(single value; no variation to model)" in prompt
+    assert '"source_concept":"treatment_event"' in prompt
+    assert '"role":"intervention"' in prompt
+    assert '"shape":"constant"' in prompt
+    assert "Registered treatment event indicator" not in prompt
 
 
 def test_coder_repair_requires_standard_helper_after_sparse_event_diagnosis(ra):
@@ -236,7 +363,7 @@ def test_coder_sparse_event_repair_surfaces_referenced_context_metadata(ra):
     assert '"name": "treatment_first"' in metadata_line
     assert '"source_concept": "treatment_event"' in metadata_line
     assert '"role": "intervention"' in metadata_line
-    assert '"description": "Registered treatment event indicator"' in metadata_line
+    assert "Registered treatment event indicator" not in metadata_line
     assert "unreferenced_first" not in metadata_line
 
 
@@ -264,7 +391,7 @@ def test_coder_repair_preserves_standard_helper_across_later_traceback(ra):
         run_log="TypeError: cannot convert the series to int",
     )
 
-    prompt = llm.messages[-1].content
+    prompt = "\n".join(message.content for message in llm.messages)
     assert "DIAGNOSED SPARSE-EVENT REPAIR (binding)" in prompt
     assert "Do not replace those columns" in prompt
     assert "`BinaryEventPresenceResult` dataclass, NOT a dictionary" in prompt
@@ -430,6 +557,39 @@ def test_coder_repair_keeps_nonprovenance_host_helper_out_of_provenance_route(ra
     assert "measurement_provenance_receipt" not in prompt
 
 
+def test_coder_repair_removes_raw_provenance_from_render_only_figure(ra):
+    llm = _RecordingLLM()
+    step = ra.AnalysisStep(
+        step_id="measurement_figure",
+        intent="Render two registered aggregate audit products.",
+        inputs=[
+            "table:missingness_measurement_audit",
+            "table:measurement_process_audit",
+        ],
+        expected_outputs=["figure:measurement_audit"],
+        method="visualization",
+    )
+
+    CoderAgent(llm).repair(
+        context=_context(ra),
+        step=step,
+        code=(
+            "receipt = measurement_provenance_receipt("
+            "aggregate, measured_column='measured', count_column='count')\n"
+        ),
+        run_log=(
+            'DETAIL: {"reason":"render_only_raw_provenance_helper",'
+            '"helper_name":"measurement_provenance_receipt","line":1}'
+        ),
+    )
+
+    prompt = llm.messages[-1].content
+    assert "DIAGNOSED RENDER-ONLY INPUT-BOUNDARY REPAIR" in prompt
+    assert "remove the reported `measurement_provenance_receipt` call" in prompt
+    assert "Keep the exact typed-input digest and product-schema checks" in prompt
+    assert "do not reconstruct a cohort" in prompt
+
+
 def test_coder_repair_keeps_sparse_event_helper_in_its_own_route(ra):
     llm = _RecordingLLM()
     step = ra.AnalysisStep(
@@ -501,6 +661,7 @@ def test_coder_repair_replaces_unverifiable_module_provenance_scanner(ra):
         "measured_column=measured_column, count_column=count_column)"
     ) in prompt
     assert "Keep each returned receipt mapping unchanged" in prompt
+    assert '{"source": "COHORT_PARQUET", "checks": receipts}' in prompt
     assert "pd.DataFrame.from_records(receipts)" in prompt
     assert "do not unpack, copy, relabel, or re-emit" in prompt
     assert "may not change values, rows, denominators" in prompt
@@ -548,8 +709,10 @@ TYPED REPAIR TICKET (authoritative routing):
 
 
 def test_coder_guide_separates_model_failure_from_host_validation_failure() -> None:
-    from easyicu.research_agent.agents import _CODER_GUIDE
-    from easyicu.research_agent.coder_context import coder_guide_for_step
+    from easyicu.research_agent.agents.core import _CODER_GUIDE
+    from easyicu.research_agent.research_context.prompt_scope import (
+        coder_guide_for_step,
+    )
 
     assert "Run every host-owned input-validation or provenance helper" in _CODER_GUIDE
     assert "model/plot `try/except`" in _CODER_GUIDE
@@ -874,9 +1037,9 @@ def test_coder_repair_removes_untraceable_figure_audit_columns(ra):
         ),
     )
 
-    prompt = llm.messages[-1].content
+    prompt = "\n".join(message.content for message in llm.messages)
     assert "DIAGNOSED FIGURE SOURCE-DATA TRACE REPAIR" in prompt
-    assert "remove unplotted derived numeric/boolean audit fields" in prompt
+    assert "Remove unplotted derived numeric/boolean audit fields" in prompt
     assert "Keep such checks internal" in prompt
 
 
@@ -1123,7 +1286,7 @@ def test_coder_repair_prompt_forbids_helper_result_name_shadowing(ra):
 
 
 def test_coder_prompt_distinguishes_design_term_from_raw_source_variable(ra):
-    from easyicu.research_agent.agents import _CODER_GUIDE
+    from easyicu.research_agent.agents.core import _CODER_GUIDE
 
     assert "`term` must be the actual encoded or transformed design-matrix term" in (
         _CODER_GUIDE
@@ -1152,6 +1315,7 @@ def test_coder_prompt_binds_typed_inputs_to_resolved_manifest(ra):
         assert "producer product's semantics" in prompt
         assert "only eligible raw-variable or column coordinates" in prompt
         assert "Do not discover them by scanning the full ResearchContext" in prompt
+        assert "manifest['raw_input_contracts']['contracts']" not in prompt
         assert "manifest['context']" in prompt
         assert "immutable Agent-produced ResearchContext" in prompt
         assert "do not copy prompt literals" in prompt
@@ -1211,6 +1375,9 @@ def test_coder_prompts_bind_untyped_only_inputs_to_planner_scope(ra):
         assert "TYPED INPUT BINDING (binding)" in prompt
         assert "applies even when the step declares only untyped" in prompt
         assert "manifest['planner_declared_inputs']" in prompt
+        assert "manifest['raw_input_contracts']['contracts']" in prompt
+        assert "allowed_values" in prompt
+        assert "analysis_plausibility_range + plausibility_policy" in prompt
         assert "['selected_first', 'selected_measured']" in prompt
         assert "Exact typed inputs for this step: []" in prompt
 

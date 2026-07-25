@@ -1,9 +1,12 @@
 from __future__ import annotations
 
-from easyicu.research_agent.declared_product_contract import (
+import json
+from pathlib import Path
+
+from easyicu.research_agent.contracts.declared_product import (
     declared_product_contract_findings,
 )
-from easyicu.research_agent.method_compatibility import (
+from easyicu.research_agent.gates.method_compatibility import (
     detect_forbidden_pattern_usage,
 )
 from easyicu.research_agent.schema import (
@@ -11,7 +14,7 @@ from easyicu.research_agent.schema import (
     CohortDescriptor,
     ResearchContext,
 )
-from easyicu.research_agent.trajectory_plan_contract import (
+from easyicu.research_agent.trajectory.plan_contract import (
     trajectory_role_code_contract,
 )
 
@@ -209,8 +212,118 @@ def test_candidate_code_contract_consumes_one_upstream_coordinate_layer():
     assert "cluster_selection.selected_model_id" in contract
     assert "clustering_method/model_family" in contract
     assert "candidate_cluster_solution_schema.json" in contract
+    assert "easyicu.candidate_cluster_solution_schema/2" in contract
+    assert "observed_data_em_diagonal_gaussian_mixture" in contract
+    assert "median/zero imputation" in contract
     assert "do not run bootstrap" in contract
     assert "do not write cluster profiles" in contract
+
+
+def test_representation_role_rejects_unversioned_prose_schema(tmp_path: Path):
+    step = _representation_step().model_copy(
+        update={
+            "expected_outputs": [
+                "artifact:trajectory_representation",
+                "table:trajectory_membership",
+                "manifest:trajectory_representation_schema",
+            ]
+        }
+    )
+    (tmp_path / "trajectory_representation_schema.json").write_text(
+        json.dumps(
+            {
+                "id_column": "encounter_key",
+                "observation_family": "organ_state",
+                "observation_columns": ["state_t0", "state_t1"],
+                "profile_columns": ["state_t0", "state_t1"],
+                "representation_columns": ["state_t0", "state_t1"],
+                "frozen_population_n": 10,
+                "representation_sha256": "a" * 64,
+                "anchor_provenance": "fixed columns from cohort",
+                "trailing_na_policy": "preserve missingness",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    findings = declared_product_contract_findings(
+        step=step,
+        step_summary={"status": "ok"},
+        effect_method_authorized=False,
+        out_dir=tmp_path,
+    )
+
+    finding = next(
+        item
+        for item in findings
+        if item.detail.get("kind") == "trajectory_representation_schema_incomplete"
+    )
+    assert "schema_version is missing or unsupported" in finding.detail["issues"]
+    assert any("trailing_na_policy" in issue for issue in finding.detail["issues"])
+
+
+def test_candidate_role_rejects_imputed_sklearn_schema_for_observed_data_method(
+    tmp_path: Path,
+):
+    step = AnalysisStep(
+        step_id="candidate_selection",
+        intent="Fit a prespecified candidate family.",
+        method="observed_data_diagonal_gaussian_mixture_candidate_selection",
+        inputs=["artifact:trajectory_representation"],
+        expected_outputs=[
+            "artifact:candidate_cluster_assignments",
+            "manifest:cluster_selection",
+            "manifest:candidate_cluster_solution_schema",
+        ],
+    )
+    (tmp_path / "candidate_cluster_solution_schema.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "easyicu.candidate_cluster_solution_schema/2",
+                "id_column": "encounter_key",
+                "representation_columns": ["state_t0", "state_t1"],
+                "model_family": "diagonal_gaussian_mixture",
+                "fit_method": "GaussianMixture",
+                "covariance_type": "diag",
+                "selected_n_clusters": 2,
+                "selected_model_id": "candidate_2",
+                "assignment_column": "cluster",
+                "criterion": "BIC",
+                "selection_rule": "minimum",
+                "direction": "minimize",
+                "selected_criterion_value": 10.0,
+                "representation_schema_sha256": "a" * 64,
+                "candidate_assignments_sha256": "b" * 64,
+            }
+        ),
+        encoding="utf-8",
+    )
+    selection = {
+        "criterion": "BIC",
+        "selection_rule": "minimum",
+        "direction": "minimize",
+        "selected_n_clusters": 2,
+        "candidates": [
+            {"n_clusters": 2, "criterion_value": 10.0},
+            {"n_clusters": 3, "criterion_value": 12.0},
+        ],
+        "rationale": "Minimum finite BIC.",
+    }
+
+    findings = declared_product_contract_findings(
+        step=step,
+        step_summary={"status": "ok", "cluster_selection": selection},
+        effect_method_authorized=False,
+        out_dir=tmp_path,
+    )
+
+    finding = next(
+        item
+        for item in findings
+        if item.detail.get("kind") == "trajectory_candidate_schema_incomplete"
+    )
+    assert any("model_family" in issue for issue in finding.detail["issues"])
+    assert any("fit_method" in issue for issue in finding.detail["issues"])
 
 
 def test_stability_code_contract_reuses_frozen_candidate_solution_only():

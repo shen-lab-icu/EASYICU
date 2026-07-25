@@ -12,16 +12,16 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from easyicu.research_agent.cohort_schema import (
+from easyicu.research_agent.cohort.schema import (
     CohortDefinition,
     ConceptPredicate,
     TimeWindow,
     cohort_definition_sha,
 )
-from easyicu.research_agent.deterministic_robustness import (
+from easyicu.research_agent.execution.runners.deterministic_robustness import (
     robustness_sensitivity_preflight_code,
 )
-from easyicu.research_agent.robustness_panel import (
+from easyicu.research_agent.robustness.panel import (
     RobustnessSpec,
     robustness_specs_sha,
 )
@@ -173,6 +173,13 @@ def _prepare_run(tmp_path: Path, *, include_primary: bool) -> tuple[Path, Path, 
             {
                 "step_id": "07_primary_model",
                 "status": "ok",
+                "planned_analysis_role": "primary",
+                "analysis_request": {
+                    "step": {
+                        "step_id": "07_primary_model",
+                        "planned_analysis_role": "primary",
+                    }
+                },
                 "step_summary_evidence_id": "stat_primary",
                 "step_summary": {
                     "primary_predictor": "exposure",
@@ -200,7 +207,7 @@ def _run_generated(
     universe_path: Path,
     tamper_snapshot: bool = False,
 ) -> None:
-    from easyicu.research_agent.runner import (
+    from easyicu.research_agent.execution.runner import (
         _capture_run_artifact_authority_snapshot,
     )
 
@@ -303,10 +310,7 @@ def test_preflight_emits_renderer_contract_and_nonindependent_scalar_outcomes(
     summary = json.loads((out_dir / "step_summary.json").read_text())
     assert summary["status"] == "blocked"
     assert "did not emit verifiable estimates" in summary["blocking_reason"]
-    assert (
-        summary["aliases"]["sensitivity_comparison"]
-        == "sensitivity_comparison.csv"
-    )
+    assert summary["aliases"]["sensitivity_comparison"] == "sensitivity_comparison.csv"
     assert (
         summary["aliases"]["cohort_overlap_and_attrition"]
         == "cohort_overlap_and_attrition.csv"
@@ -539,25 +543,23 @@ def test_preflight_blocks_unsupported_locked_missing_strategy(
     summary = json.loads((out_dir / "step_summary.json").read_text())
     assert summary["status"] == "blocked"
     assert "missing_unimplemented" in summary["blocking_reason"]
-    assert "not executable under the registered analysis contract" in summary[
-        "blocking_reason"
-    ]
+    assert (
+        "not executable under the registered analysis contract"
+        in summary["blocking_reason"]
+    )
 
 
 def test_structured_preflight_replays_exact_primary_code_and_emits_spec_by_model_evidence(
     tmp_path: Path, monkeypatch
 ) -> None:
-    out_dir, cohort_path, universe_path = _prepare_run(
-        tmp_path, include_primary=False
-    )
+    out_dir, cohort_path, universe_path = _prepare_run(tmp_path, include_primary=False)
     run_dir = out_dir.parents[2]
     source_step = run_dir / "steps" / "07_primary_model"
     source_outputs = source_step / "outputs"
     source_outputs.mkdir(parents=True)
     source_script = source_step / "analysis.py"
     source_script.write_text(
-        textwrap.dedent(
-            """
+        textwrap.dedent("""
             import json, math, os
             from pathlib import Path
             import pandas as pd
@@ -647,8 +649,7 @@ def test_structured_preflight_replays_exact_primary_code_and_emits_spec_by_model
                 },
             }
             (out / "step_summary.json").write_text(json.dumps(summary))
-            """
-        ),
+            """),
         encoding="utf-8",
     )
     base_env = os.environ.copy()
@@ -690,6 +691,13 @@ def test_structured_preflight_replays_exact_primary_code_and_emits_spec_by_model
                     {
                         "step_id": "07_primary_model",
                         "status": "ok",
+                        "planned_analysis_role": "primary",
+                        "analysis_request": {
+                            "step": {
+                                "step_id": "07_primary_model",
+                                "planned_analysis_role": "primary",
+                            }
+                        },
                         "executed_code_sha256": script_sha,
                         "evidence_ids": [
                             "code_primary_analysis",
@@ -704,9 +712,7 @@ def test_structured_preflight_replays_exact_primary_code_and_emits_spec_by_model
                     {
                         "evidence_id": "code_primary_analysis",
                         "kind": "code",
-                        "relative_path": str(
-                            code_evidence_path.relative_to(run_dir)
-                        ),
+                        "relative_path": str(code_evidence_path.relative_to(run_dir)),
                         "sha256": script_sha,
                         "produced_by_step": "07_primary_model",
                     },
@@ -740,9 +746,7 @@ def test_structured_preflight_replays_exact_primary_code_and_emits_spec_by_model
             spec_id="missing_source_aware",
             axis="missing",
             description="Reuse the registered source-aware model.",
-            missing_override={
-                "strategy": "source_aware_categories_no_imputation"
-            },
+            missing_override={"strategy": "source_aware_categories_no_imputation"},
         )
     )
     (run_dir / "robustness_specs_locked.json").write_text(
@@ -768,16 +772,11 @@ def test_structured_preflight_replays_exact_primary_code_and_emits_spec_by_model
     assert summary["primary_model_replay"]["mode"] == (
         "exact_registered_primary_model_code"
     )
-    assert summary["model_contracts"][0]["exposure_expression"] == (
-        "log1p(exposure)"
-    )
+    assert summary["model_contracts"][0]["exposure_expression"] == ("log1p(exposure)")
     assert summary["complete_case_n"] == source_summary["model_contracts"][2]["n"]
     contracts = summary["robustness_model_contracts"]
     assert len(contracts) == 16
-    assert {
-        (contract["spec_id"], contract["model_id"])
-        for contract in contracts
-    } == {
+    assert {(contract["spec_id"], contract["model_id"]) for contract in contracts} == {
         (spec_id, model_id)
         for spec_id in (
             "adult_any_los",
@@ -835,9 +834,10 @@ def test_structured_preflight_replays_exact_primary_code_and_emits_spec_by_model
     coefficients = pd.read_csv(out_dir / "robustness_variant_coefficients.csv")
     assert coefficients[["spec_id", "model_id"]].drop_duplicates().shape[0] == 16
     replay_index = json.loads((out_dir / "model_replay_index.json").read_text())
-    assert replay_index["source_script_sha256"] == summary["primary_model_replay"][
-        "source_script_sha256"
-    ]
+    assert (
+        replay_index["source_script_sha256"]
+        == summary["primary_model_replay"]["source_script_sha256"]
+    )
     assert all(item["status"] == "ok" for item in replay_index["variants"])
 
 
@@ -919,6 +919,13 @@ def _write_structured_source_authority(run_dir: Path):
     record = {
         "step_id": step_id,
         "status": "ok",
+        "planned_analysis_role": "primary",
+        "analysis_request": {
+            "step": {
+                "step_id": step_id,
+                "planned_analysis_role": "primary",
+            }
+        },
         "executed_code_sha256": script_sha,
         "evidence_ids": ["code_primary", "table_coefficients", "stat_primary"],
         "step_summary_evidence_id": "stat_primary",
@@ -930,7 +937,7 @@ def _write_structured_source_authority(run_dir: Path):
 def test_structured_source_uses_latest_step_record_and_registered_code_sha(
     tmp_path: Path,
 ) -> None:
-    from easyicu.research_agent.deterministic_robustness import (
+    from easyicu.research_agent.execution.runners.deterministic_robustness import (
         _find_structured_primary_model_source,
     )
 
@@ -983,7 +990,7 @@ def test_structured_source_uses_latest_step_record_and_registered_code_sha(
 
 
 def test_structured_source_rejects_symlinked_analysis_script(tmp_path: Path) -> None:
-    from easyicu.research_agent.deterministic_robustness import (
+    from easyicu.research_agent.execution.runners.deterministic_robustness import (
         _find_structured_primary_model_source,
     )
 
@@ -1003,14 +1010,68 @@ def test_structured_source_rejects_symlinked_analysis_script(tmp_path: Path) -> 
     )
 
 
+def test_structured_source_rejects_sensitivity_role_self_claim(
+    tmp_path: Path,
+) -> None:
+    from easyicu.research_agent.execution.runners.deterministic_robustness import (
+        _find_structured_primary_model_source,
+    )
+
+    run_dir = tmp_path / "run"
+    record, evidence, _script_path = _write_structured_source_authority(run_dir)
+    record["planned_analysis_role"] = "sensitivity"
+    record["analysis_request"]["step"]["planned_analysis_role"] = "sensitivity"
+
+    assert (
+        _find_structured_primary_model_source(
+            records=[record],
+            run_dir=run_dir,
+            evidence_records=evidence,
+        )
+        is None
+    )
+
+
+def test_structured_source_rejects_duplicate_verified_primary_records(
+    tmp_path: Path,
+) -> None:
+    from easyicu.research_agent.execution.runners.deterministic_robustness import (
+        _find_structured_primary_model_source,
+    )
+
+    run_dir = tmp_path / "run"
+    record, evidence, _script_path = _write_structured_source_authority(run_dir)
+    decoy = {
+        "step_id": "02_other_primary",
+        "status": "ok",
+        "planned_analysis_role": "primary",
+        "analysis_request": {
+            "step": {
+                "step_id": "02_other_primary",
+                "planned_analysis_role": "primary",
+            }
+        },
+        "step_summary": {},
+    }
+
+    assert (
+        _find_structured_primary_model_source(
+            records=[decoy, record],
+            run_dir=run_dir,
+            evidence_records=evidence,
+        )
+        is None
+    )
+
+
 def test_structured_primary_headline_blocks_manifest_scalar_forgery(
     tmp_path: Path,
 ) -> None:
-    from easyicu.research_agent.deterministic_robustness import (
+    from easyicu.research_agent.execution.runners.deterministic_robustness import (
         _find_structured_primary_model_source,
         _structured_primary_effect_payload,
     )
-    from easyicu.research_agent.pipeline_primary_effect import (
+    from easyicu.research_agent.robustness.primary_effect import (
         _extract_primary_effect_payload_from_records,
     )
 
@@ -1052,7 +1113,7 @@ def test_structured_primary_headline_blocks_manifest_scalar_forgery(
 
 
 def test_exact_replay_does_not_advertise_unimplemented_variants() -> None:
-    from easyicu.research_agent.deterministic_robustness import (
+    from easyicu.research_agent.execution.runners.deterministic_robustness import (
         _missing_strategy_audit,
         _outcome_executability_audit,
         _unexecutable_locked_spec_ids,
@@ -1111,7 +1172,7 @@ def test_exact_replay_does_not_advertise_unimplemented_variants() -> None:
 
 
 def test_same_scalar_outcome_is_disclosed_without_becoming_blocking() -> None:
-    from easyicu.research_agent.deterministic_robustness import (
+    from easyicu.research_agent.execution.runners.deterministic_robustness import (
         _outcome_executability_audit,
         _unexecutable_locked_spec_ids,
     )
@@ -1131,12 +1192,15 @@ def test_same_scalar_outcome_is_disclosed_without_becoming_blocking() -> None:
 
     assert audits[0]["outcome_executable"] is True
     assert audits[0]["independent_variant"] is False
-    assert _unexecutable_locked_spec_ids(
-        specs=[duplicate],
-        membership_rows=[],
-        missing_rows=[],
-        outcome_rows=audits,
-    ) == []
+    assert (
+        _unexecutable_locked_spec_ids(
+            specs=[duplicate],
+            membership_rows=[],
+            missing_rows=[],
+            outcome_rows=audits,
+        )
+        == []
+    )
 
 
 def test_exact_replay_blocks_script_that_ignores_locked_cohort_membership(
@@ -1144,7 +1208,7 @@ def test_exact_replay_blocks_script_that_ignores_locked_cohort_membership(
 ) -> None:
     from types import SimpleNamespace
 
-    from easyicu.research_agent.deterministic_robustness import (
+    from easyicu.research_agent.execution.runners.deterministic_robustness import (
         _replay_primary_model_for_cohort,
     )
 
@@ -1153,8 +1217,7 @@ def test_exact_replay_blocks_script_that_ignores_locked_cohort_membership(
     source_outputs.mkdir(parents=True)
     source_script = source_dir / "analysis.py"
     source_script.write_text(
-        textwrap.dedent(
-            """
+        textwrap.dedent("""
             import json, os
             from pathlib import Path
             import pandas as pd
@@ -1189,8 +1252,7 @@ def test_exact_replay_blocks_script_that_ignores_locked_cohort_membership(
                 "primary_model_id": "primary",
                 "model_contracts": [contract],
             }))
-            """
-        ),
+            """),
         encoding="utf-8",
     )
     primary_contract = {

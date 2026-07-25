@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from easyicu.research_agent.idea_registry import (
+from easyicu.research_agent.discovery.idea_registry import (
     CandidateAlreadyRegisteredError,
     CandidateNotExecutableError,
     CandidateNotRegisteredError,

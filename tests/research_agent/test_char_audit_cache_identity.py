@@ -9,7 +9,7 @@ def test_concept_audit_cache_is_environment_auditor_and_run_scoped(
     ra,
     tmp_path: Path,
 ):
-    from easyicu.research_agent.concept_audit_cache import LLMConceptAuditCache
+    from easyicu.research_agent.execution.concept_audit_cache import LLMConceptAuditCache
 
     context = ra.schema.ResearchContext(
         research_question="Does exposure associate with outcome?",

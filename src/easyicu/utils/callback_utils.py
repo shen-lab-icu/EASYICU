@@ -4943,30 +4943,51 @@ def hirid_urine(
     concept_name: str,
     val_col: str,
     unit_col: Optional[str] = None,
+    max_gap_hours: float = 4.0,
+    default_interval_hours: float = 1.0,
 ) -> pd.DataFrame:
     """
-    HiRID urine callback - converts cumulative urine output to incremental values.
-    
-    Implements R ricu's hirid_urine:
-    1. Group by patient ID
-    2. Calculate diff of cumulative values
-    3. Set negative diffs to 0 (cumulative can't decrease)
-    4. Set unit to "mL"
-    
+    HiRID urine callback - integrate an hourly-urine RATE into incremental VOLUME.
+
+    Source variable is HiRID 10020000 "Hourly urine volume" (unit ml/h), a RATE
+    charted intermittently (median ~2 h spacing, p75 ~4 h). To make it consistent
+    with the `urine` concept in every other database (which emits *voided volume*
+    per charting event, later summed into uo_6h/12h/24h windows), each rate reading
+    is integrated over the interval until the next reading:
+
+        volume_ml = rate_mlph * interval_h
+
+    where interval_h is the time to the next record within the same patient
+    (forward step-function), capped at ``max_gap_hours`` so a single reading before
+    a long charting gap does not over-integrate, and the last reading of a stay uses
+    ``default_interval_hours``.
+
+    HISTORY (2026-07-17 FIX): this callback previously consumed variable 30005110
+    "Fluid balance" (cumulative NET fluid balance incl. intake and non-urine output)
+    and took a cumulative-diff. That is not urine output at all - it inflated apparent
+    urine and drove HiRID UO-based KDIGO staging to an artefact. Corrected to 10020000
+    (official hirid_variable_reference: "Hourly urine volume", ml/h) with rate->volume
+    integration. Validated on raw HiRID: daily urine ~2180 ml/day (p25 1371, p75 3317),
+    physiologically plausible for ICU.
+
     Args:
-        frame: DataFrame with urine data
-        concept_name: Name of the output column
-        val_col: Name of the value column (cumulative urine)
-        unit_col: Name of the unit column
-        
+        frame: DataFrame with the rate reading (columns include patientid, datetime,
+            value).
+        concept_name: Name of the output column.
+        val_col: Name of the value column (rate in ml/h).
+        unit_col: Name of the unit column (set to "mL" on output).
+        max_gap_hours: Cap on the integration interval (charting-gap guard).
+        default_interval_hours: Interval assigned to the last reading of a stay
+            (and to any reading when no time column is available).
+
     Returns:
-        DataFrame with incremental urine values
+        DataFrame with incremental urine volume (mL) per timestamp.
     """
     if frame.empty:
         return frame
-    
+
     df = frame.copy()
-    
+
     # Handle case where val_col was renamed to concept_name before callback
     actual_val_col = val_col
     if val_col not in df.columns:
@@ -4974,53 +4995,74 @@ def hirid_urine(
             actual_val_col = concept_name
         else:
             return df
-    
+
     # Identify patient ID column
     id_col = None
     for cand in ['patientid', 'stay_id', 'admissionid', 'patientunitstayid', 'subject_id']:
         if cand in df.columns:
             id_col = cand
             break
-    
+
     if id_col is None:
-        # No ID column, can't do diff per patient
+        # No ID column, can't integrate per patient
         return df
-    
-    # Convert to numeric
+
+    # Convert rate to numeric
     df[actual_val_col] = pd.to_numeric(df[actual_val_col], errors='coerce')
-    
-    # Sort by patient and time
+
+    # Identify time column
     time_col = None
     for cand in ['datetime', 'charttime', 'time', 'givenat']:
         if cand in df.columns:
             time_col = cand
             break
-    
+
     if time_col:
-        df = df.sort_values([id_col, time_col])
+        # The time column may be either a real timestamp (raw source table) or an
+        # already-normalized numeric ICU-relative time in HOURS (EasyICU pipeline
+        # passes hours-since-admission as a float). Detect and handle both so the
+        # interval is computed in hours either way.
+        raw_t = df[time_col]
+        if pd.api.types.is_numeric_dtype(raw_t):
+            df['_t'] = pd.to_numeric(raw_t, errors='coerce')
+            df = df.sort_values([id_col, '_t'])
+            df['_t_prev'] = df.groupby(id_col, sort=False)['_t'].shift(1)
+            interval_h = df['_t'] - df['_t_prev']  # BACKWARD gap, already in hours
+        else:
+            df['_t'] = pd.to_datetime(raw_t, errors='coerce')
+            df = df.sort_values([id_col, '_t'])
+            df['_t_prev'] = df.groupby(id_col, sort=False)['_t'].shift(1)
+            interval_h = (df['_t'] - df['_t_prev']).dt.total_seconds() / 3600.0
+        # 🔧 FIX 2026-07-17c: use the BACKWARD interval (time since the PREVIOUS reading), NOT the
+        # forward gap, and DO NOT cap it. Rationale: the KDIGO UO engine
+        # (scores/kdigo_aki._calculate_uo_rates_simple) normalizes uo_rt by the summed
+        # `hours_since_previous_row` (backward, uncapped). If this callback bakes volume from the
+        # FORWARD gap and caps it at 4h, the numerator (volume) and denominator (covered hours) go
+        # out of sync in gappy windows -> uo_rt biased LOW -> false oliguria (HiRID charts urine as a
+        # sparse RATE; ~28% of inter-reading gaps exceed 4h and ~35% of reconstructed volume came
+        # from the capped tail). Backward + uncapped makes vol_i = rate_i * gap_from_prev_i, so a
+        # window's Σvol / (wt·Σgap) = the time-weighted mean rate exactly — even an isolated reading
+        # across a large gap yields rate/wt (correct) instead of an artefact. First reading of a stay
+        # -> default (1h), matching the KDIGO engine's hours_prev[0]=1.0.
+        interval_h = interval_h.fillna(default_interval_hours)
+        interval_h = interval_h.clip(lower=0.0)
+        interval_h = interval_h.where(interval_h > 0, default_interval_hours)
+        # rate (ml/h) * backward interval (h) = volume (ml) voided since the previous reading
+        df[actual_val_col] = df[actual_val_col] * interval_h
+        df = df.drop(columns=['_t', '_t_prev'])
     else:
+        # No time information: treat each ml/h reading as one hour of volume
         df = df.sort_values([id_col])
-    
-    # Calculate diff per patient
-    def do_diff(x):
-        """Calculate diff and set negative values to 0."""
-        if len(x) == 0:
-            return x
-        result = x.diff()
-        result.iloc[0] = x.iloc[0]  # First value is the first cumulative
-        result = result.clip(lower=0)  # Negative diffs become 0
-        return result
-    
-    df[actual_val_col] = df.groupby(id_col)[actual_val_col].transform(do_diff)
-    
+        df[actual_val_col] = df[actual_val_col] * default_interval_hours
+
     # Set unit to mL
     if unit_col and unit_col in df.columns:
         df[unit_col] = 'mL'
-    
+
     # Rename to concept_name if needed
     if actual_val_col != concept_name:
         df = df.rename(columns={actual_val_col: concept_name})
-    
+
     return df
 
 

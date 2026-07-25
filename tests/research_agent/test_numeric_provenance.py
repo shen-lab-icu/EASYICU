@@ -125,7 +125,7 @@ def test_find_claim_for_value_supports_percent_and_rounding(ra, tmp_path: Path):
 
 
 def test_near_zero_literal_does_not_match_zero_claim(ra, tmp_path: Path):
-    from easyicu.research_agent.manuscript_post import bind_numeric_values
+    from easyicu.research_agent.reporting.manuscript_post import bind_numeric_values
 
     store = _store(ra, tmp_path)
     store.register_numeric_claim(
@@ -157,11 +157,11 @@ def test_near_zero_literal_does_not_match_zero_claim(ra, tmp_path: Path):
 def test_numeric_binder_rejects_claim_from_latest_failed_attempt(
     ra, tmp_path: Path
 ) -> None:
-    from easyicu.research_agent.evidence import (
+    from easyicu.research_agent.authority.evidence_store import (
         EvidenceEnforcementError,
         EvidenceEnforcementMode,
     )
-    from easyicu.research_agent.manuscript_post import bind_numeric_values
+    from easyicu.research_agent.reporting.manuscript_post import bind_numeric_values
 
     store = _store(ra, tmp_path)
     store.register_numeric_claim(
@@ -232,11 +232,11 @@ def test_manuscript_numeric_audit_ignores_retired_summary(ra, tmp_path: Path) ->
 def test_numeric_binder_keeps_registered_run_level_context_claim(
     ra, tmp_path: Path
 ) -> None:
-    from easyicu.research_agent.evidence import (
+    from easyicu.research_agent.authority.evidence_store import (
         EvidenceEnforcementError,
         EvidenceEnforcementMode,
     )
-    from easyicu.research_agent.manuscript_post import bind_numeric_values
+    from easyicu.research_agent.reporting.manuscript_post import bind_numeric_values
 
     context_path = tmp_path / "research_context.json"
     context_path.write_text('{"n_stays": 94458}', encoding="utf-8")
@@ -285,11 +285,11 @@ def test_numeric_binder_keeps_registered_run_level_context_claim(
 def test_numeric_binder_rejects_tampered_current_evidence_blob(
     ra, tmp_path: Path
 ) -> None:
-    from easyicu.research_agent.evidence import (
+    from easyicu.research_agent.authority.evidence_store import (
         EvidenceEnforcementError,
         EvidenceEnforcementMode,
     )
-    from easyicu.research_agent.manuscript_post import bind_numeric_values
+    from easyicu.research_agent.reporting.manuscript_post import bind_numeric_values
 
     summary_path = tmp_path / "step_summary.json"
     summary_path.write_text('{"auroc": 0.81}', encoding="utf-8")
@@ -332,11 +332,11 @@ def test_numeric_binder_rejects_tampered_current_evidence_blob(
 def test_numeric_binder_rejects_arbitrary_run_level_self_owner(
     ra, tmp_path: Path
 ) -> None:
-    from easyicu.research_agent.evidence import (
+    from easyicu.research_agent.authority.evidence_store import (
         EvidenceEnforcementError,
         EvidenceEnforcementMode,
     )
-    from easyicu.research_agent.manuscript_post import bind_numeric_values
+    from easyicu.research_agent.reporting.manuscript_post import bind_numeric_values
 
     source = tmp_path / "fabricated.json"
     source.write_text('{"value": 777}', encoding="utf-8")
@@ -366,8 +366,8 @@ def test_numeric_binder_rejects_arbitrary_run_level_self_owner(
 
 
 def test_context_numeric_claims_cover_source_counts_and_missingness(ra, tmp_path: Path):
-    from easyicu.research_agent.context_numeric import register_context_numeric_claims
-    from easyicu.research_agent.manuscript_post import bind_numeric_values
+    from easyicu.research_agent.authority.context_numeric_claims import register_context_numeric_claims
+    from easyicu.research_agent.reporting.manuscript_post import bind_numeric_values
 
     schema = ra.schema
     context = schema.ResearchContext(
@@ -447,7 +447,7 @@ def test_context_numeric_claims_cover_source_counts_and_missingness(ra, tmp_path
 
 
 def test_bind_numeric_values_attaches_footnotes(ra, tmp_path: Path):
-    from easyicu.research_agent.manuscript_post import bind_numeric_values
+    from easyicu.research_agent.reporting.manuscript_post import bind_numeric_values
 
     store = _store(ra, tmp_path)
     store.register_step_summary_numerics(
@@ -485,7 +485,7 @@ def test_bind_numeric_values_attaches_footnotes(ra, tmp_path: Path):
 
 
 def test_bind_numeric_values_handles_percent_and_rounding(ra, tmp_path: Path):
-    from easyicu.research_agent.manuscript_post import bind_numeric_values
+    from easyicu.research_agent.reporting.manuscript_post import bind_numeric_values
 
     store = _store(ra, tmp_path)
     store.register_step_summary_numerics(
@@ -507,7 +507,7 @@ def test_bind_numeric_values_handles_percent_and_rounding(ra, tmp_path: Path):
 
 
 def test_bind_numeric_values_footnote_exposes_derived_provenance(ra, tmp_path: Path):
-    from easyicu.research_agent.manuscript_post import bind_numeric_values
+    from easyicu.research_agent.reporting.manuscript_post import bind_numeric_values
 
     store = _store(ra, tmp_path)
     store.register_numeric_claim(
@@ -545,7 +545,7 @@ def test_bind_numeric_values_footnote_exposes_derived_provenance(ra, tmp_path: P
 
 
 def test_bind_numeric_values_strict_raises_on_untraced(ra, tmp_path: Path):
-    from easyicu.research_agent.manuscript_post import bind_numeric_values
+    from easyicu.research_agent.reporting.manuscript_post import bind_numeric_values
 
     store = _store(
         ra,
@@ -575,8 +575,47 @@ def test_bind_numeric_values_strict_raises_on_untraced(ra, tmp_path: Path):
     assert "999" in exc_info.value.detail["untraced"]
 
 
+def test_numeric_heading_claims_are_bound_but_outline_ordinals_are_not(
+    ra, tmp_path: Path
+):
+    from easyicu.research_agent.reporting.manuscript_post import bind_numeric_values
+
+    store = _store(ra, tmp_path)
+    store.register_numeric_claim(
+        value="0.124",
+        canonical=0.124,
+        evidence_id="evid_outcome",
+        step_id="outcome",
+        source_field="absolute_risk_reduction",
+    )
+
+    bound, binding_map, untraced = bind_numeric_values(
+        "## 2. Sensitivity analyses\n"
+        "## Primary outcome: 12.4% absolute risk reduction\n",
+        evidence=store,
+        enforcement_mode=ra.EvidenceEnforcementMode.STRICT,
+    )
+
+    assert untraced == []
+    assert "12.4%[^claim_1]" in bound
+    assert set(binding_map) == {"claim_1"}
+
+
+def test_untraced_numeric_heading_fails_strict_binding(ra, tmp_path: Path):
+    from easyicu.research_agent.reporting.manuscript_post import bind_numeric_values
+
+    with pytest.raises(ra.EvidenceEnforcementError) as exc_info:
+        bind_numeric_values(
+            "## Primary outcome: 12.4% absolute risk reduction\n",
+            evidence=_store(ra, tmp_path),
+            enforcement_mode=ra.EvidenceEnforcementMode.STRICT,
+        )
+
+    assert exc_info.value.detail["untraced"] == ["12.4%"]
+
+
 def test_bind_numeric_values_skips_bibliographic_years(ra, tmp_path: Path):
-    from easyicu.research_agent.manuscript_post import bind_numeric_values
+    from easyicu.research_agent.reporting.manuscript_post import bind_numeric_values
 
     store = _store(ra, tmp_path)
     manuscript = (
@@ -597,7 +636,7 @@ def test_bind_numeric_values_skips_bibliographic_years(ra, tmp_path: Path):
 
 
 def test_bind_numeric_values_does_not_skip_result_years(ra, tmp_path: Path):
-    from easyicu.research_agent.manuscript_post import bind_numeric_values
+    from easyicu.research_agent.reporting.manuscript_post import bind_numeric_values
 
     store = _store(ra, tmp_path)
 
@@ -615,7 +654,7 @@ def test_bind_numeric_values_skips_existing_evidence_placeholders(
     ra,
     tmp_path: Path,
 ):
-    from easyicu.research_agent.manuscript_post import bind_numeric_values
+    from easyicu.research_agent.reporting.manuscript_post import bind_numeric_values
 
     store = _store(ra, tmp_path)
     store.register_step_summary_numerics(
@@ -641,7 +680,7 @@ def test_bind_numeric_values_skips_sha256_in_link_targets(ra, tmp_path: Path):
     the numeric regex's exponent branch and emit ``UNTRACED:273e4341``.
     The Markdown link target must be in the skip-span set.
     """
-    from easyicu.research_agent.manuscript_post import bind_numeric_values
+    from easyicu.research_agent.reporting.manuscript_post import bind_numeric_values
 
     store = ra.EvidenceStore(tmp_path)
     store.register_step_summary_numerics(
@@ -662,7 +701,7 @@ def test_bind_numeric_values_skips_sha256_in_link_targets(ra, tmp_path: Path):
 
 
 def test_bind_numeric_values_skips_sha256_in_prose(ra, tmp_path: Path):
-    from easyicu.research_agent.manuscript_post import bind_numeric_values
+    from easyicu.research_agent.reporting.manuscript_post import bind_numeric_values
 
     store = _store(ra, tmp_path)
     store.register_step_summary_numerics(

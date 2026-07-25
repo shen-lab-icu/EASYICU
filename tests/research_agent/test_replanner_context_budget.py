@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import json
 
-from easyicu.research_agent.agents import (
+from easyicu.research_agent.agents.core import (
     _REPLANNER_STEP_SUMMARY_CHAR_BUDGET,
     _REPLANNER_TOTAL_RECORDS_CHAR_BUDGET,
     _clip_json,

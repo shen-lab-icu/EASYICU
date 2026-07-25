@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from easyicu.research_agent.pipeline_write import (
+from easyicu.research_agent.reporting.write_phase import (
     _persist_manuscript_critique,
     _review_manuscript_with_fail_safe,
 )

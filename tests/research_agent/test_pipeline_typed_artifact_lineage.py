@@ -6,13 +6,17 @@ from pathlib import Path
 
 import pytest
 
-from easyicu.research_agent.cohort_schema import CohortDefinition
-from easyicu.research_agent.declared_product_contract import (
+import easyicu.research_agent.contracts.typed_schema as typed_schema_contracts
+from easyicu.research_agent.cohort.schema import CohortDefinition
+from easyicu.research_agent.contracts.declared_product import (
     typed_product,
     typed_product_schema_receipt,
 )
-from easyicu.research_agent.evidence import EvidenceStore, sha256_of_file
-from easyicu.research_agent.pipeline_execute import (
+from easyicu.research_agent.authority.evidence_store import (
+    EvidenceStore,
+    sha256_of_file,
+)
+from easyicu.research_agent.execution.phase import (
     _failed_contract_code_can_be_reused_before_coder,
     _plan_scientific_scope_signature,
     _plan_signature,
@@ -116,6 +120,7 @@ def test_replan_restores_completed_execution_snapshot() -> None:
             {
                 "step_id": "producer",
                 "status": "ok",
+                "planned_analysis_role": current.steps[0].planned_analysis_role,
                 "analysis_request": {"step": current.steps[0].model_dump(mode="json")},
             }
         ],
@@ -143,6 +148,7 @@ def test_replan_restores_plan_scientific_scope_after_completed_step() -> None:
         update={
             "analysis_type": "adjusted_association",
             "cohort": CohortDefinition(name="adult_primary"),
+            "display_labels": {"death": "In-hospital mortality"},
             "rationale": "Estimate the prespecified primary association.",
         }
     )
@@ -151,6 +157,7 @@ def test_replan_restores_plan_scientific_scope_after_completed_step() -> None:
             "research_question": "Estimate an unrelated outcome.",
             "analysis_type": "prediction_model",
             "cohort": CohortDefinition(name="different_population"),
+            "display_labels": {"death": "28-day mortality"},
             "rationale": "Replace the original estimand.",
             "revision": current.revision + 1,
         }
@@ -163,6 +170,7 @@ def test_replan_restores_plan_scientific_scope_after_completed_step() -> None:
             {
                 "step_id": "producer",
                 "status": "ok",
+                "planned_analysis_role": current.steps[0].planned_analysis_role,
                 "analysis_request": {"step": current.steps[0].model_dump(mode="json")},
             }
         ],
@@ -172,6 +180,7 @@ def test_replan_restores_plan_scientific_scope_after_completed_step() -> None:
     assert preserved.analysis_type == current.analysis_type
     assert preserved.cohort == current.cohort
     assert preserved.robustness_specs == current.robustness_specs
+    assert preserved.display_labels == current.display_labels
     assert preserved.rationale == current.rationale
     assert preserved.revision == revised.revision
     assert findings[0].detail["restored_plan_scope"] is True
@@ -179,8 +188,29 @@ def test_replan_restores_plan_scientific_scope_after_completed_step() -> None:
         "research_question",
         "analysis_type",
         "cohort",
+        "display_labels",
         "rationale",
     }
+
+
+def test_replan_restores_plan_scientific_scope_before_first_completed_step() -> None:
+    current = _plan().model_copy(
+        update={"cohort": CohortDefinition(name="locked_primary_cohort")}
+    )
+    revised = current.model_copy(
+        update={"cohort": None, "revision": current.revision + 1}
+    )
+
+    preserved, findings = _preserve_completed_step_snapshots_after_replan(
+        current_plan=current,
+        revised_plan=revised,
+        completed_records=[],
+    )
+
+    assert preserved.cohort == current.cohort
+    assert preserved.revision == revised.revision
+    assert findings[0].detail["restored_plan_scope"] is True
+    assert findings[0].detail["restored_plan_scope_fields"] == ["cohort"]
 
 
 def _resolve(
@@ -690,7 +720,7 @@ def test_typed_table_uses_current_resume_authority_and_writes_exact_manifest(
     assert binding["product_contract"]["value_column"] == "x"
     assert binding["product_contract"]["scale"] == "standardized"
     assert binding["product_contract"]["schema_version"] == (
-        "easyicu.host_typed_product.v2"
+        "easyicu.host_typed_product.v4"
     )
     assert binding["product_contract"]["identity_row"] == binding["identity_row"]
     assert binding["identity_row"]["input_key"] == "table:scaling_summary"
@@ -822,6 +852,42 @@ def test_resolved_inputs_manifest_keeps_untyped_inputs_out_of_bindings(
     assert payload["inputs"] == {}
 
 
+def test_resolved_inputs_manifest_rejects_tampered_raw_input_contract(
+    tmp_path: Path,
+) -> None:
+    raw_contract = {
+        "schema_version": "easyicu.resolved_raw_input_contracts/1",
+        "authority_scope": (
+            "host_verified_physical_representation_and_domain_constraints"
+        ),
+        "scientific_ownership": "Planner retains scientific decisions",
+        "contracts": {
+            "selected_first": {
+                "column": "selected_first",
+                "allowed_values": [0, 1],
+            }
+        },
+    }
+    encoded = json.dumps(
+        raw_contract,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    ).encode("utf-8")
+    raw_contract["contracts_sha256"] = hashlib.sha256(encoded).hexdigest()
+    raw_contract["contracts"]["selected_first"]["allowed_values"] = [0, 1, 2]
+
+    with pytest.raises(ValueError, match="raw input contract digest mismatch"):
+        _write_resolved_inputs_manifest(
+            run_dir=tmp_path,
+            step_id="consumer",
+            planner_declared_inputs=["selected_first"],
+            bindings={},
+            raw_input_contracts=raw_contract,
+        )
+
+
 def test_resolved_inputs_manifest_rejects_undeclared_binding(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="exact Planner-declared typed inputs"):
         _write_resolved_inputs_manifest(
@@ -901,7 +967,7 @@ def test_generic_artifact_backed_by_table_gets_host_schema_contract(
 
     assert binding is not None
     assert binding["product_contract"]["schema_version"] == (
-        "easyicu.host_typed_product.v2"
+        "easyicu.host_typed_product.v4"
     )
     assert binding["product_contract"]["columns"] == ["row_id", "value"]
     assert binding["product_contract"]["column_count"] == 2
@@ -965,7 +1031,7 @@ def test_dataset_aliases_backed_by_tables_get_host_schema_contract(
     assert binding["declared_kind"] == "dataset"
     assert binding["evidence_kind"] == "table"
     contract = binding["product_contract"]
-    assert contract["schema_version"] == "easyicu.host_typed_product.v2"
+    assert contract["schema_version"] == "easyicu.host_typed_product.v4"
     assert contract["columns"] == ["stay_id", "value"]
     assert contract["column_count"] == 2
     assert contract["tabular_format"] == expected_format
@@ -1039,6 +1105,8 @@ def test_typed_parent_table_receipt_exposes_host_schema_without_guessing_roles(
                     "display_summary": {
                         "columns": ["forged"],
                         "semantic_roles": {"estimate": "forged"},
+                        "column_dtypes": {"forged": "float64"},
+                        "numeric_columns": ["forged"],
                     }
                 },
             }
@@ -1050,8 +1118,15 @@ def test_typed_parent_table_receipt_exposes_host_schema_without_guessing_roles(
     assert contract["columns"] == ["band", "point", "lower", "upper"]
     assert contract["column_count"] == 4
     assert contract["tabular_format"] == "csv"
+    assert contract["column_dtypes"] == {
+        "band": "object",
+        "point": "float64",
+        "lower": "float64",
+        "upper": "float64",
+    }
+    assert contract["numeric_columns"] == ["point", "lower", "upper"]
     assert "semantic_roles" not in contract
-    assert contract["schema_version"] == "easyicu.host_typed_product.v2"
+    assert contract["schema_version"] == "easyicu.host_typed_product.v4"
 
     context_block = _typed_parent_schema_context_block(
         {"table:display_summary": binding}
@@ -1059,8 +1134,81 @@ def test_typed_parent_table_receipt_exposes_host_schema_without_guessing_roles(
     assert '"columns":["band","point","lower","upper"]' in context_block
     assert '"column_count":4' in context_block
     assert '"tabular_format":"csv"' in context_block
+    assert '"band":"object"' in context_block
+    assert '"numeric_columns":["point","lower","upper"]' in context_block
     assert "semantic_roles" not in context_block
     assert str(source) not in context_block
+
+
+def test_typed_parent_schema_distinguishes_numeric_from_text_denominator(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "outcome_incidence.csv"
+    source.write_text(
+        "group,n_stays,deaths,risk_denominator\n"
+        "low,236,18,all stays in this mutually exclusive group\n",
+        encoding="utf-8",
+    )
+
+    receipt = typed_product_schema_receipt(
+        artifact_path=source,
+        expected_sha256=sha256_of_file(source),
+    )
+
+    assert receipt is not None
+    assert receipt["column_dtypes"] == {
+        "group": "object",
+        "n_stays": "int64",
+        "deaths": "int64",
+        "risk_denominator": "object",
+    }
+    assert receipt["numeric_columns"] == ["n_stays", "deaths"]
+
+
+def test_optional_dtype_profile_falls_back_to_base_schema(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "large_for_profile_limit.csv"
+    source.write_text("label,value\nA,1\n", encoding="utf-8")
+    monkeypatch.setattr(
+        typed_schema_contracts,
+        "_MAX_TYPED_TABLE_DTYPE_PROFILE_BYTES",
+        1,
+    )
+
+    receipt = typed_product_schema_receipt(
+        artifact_path=source,
+        expected_sha256=sha256_of_file(source),
+    )
+
+    assert receipt == {
+        "tabular_format": "csv",
+        "column_count": 2,
+        "row_count": 1,
+        "columns": ["label", "value"],
+    }
+
+
+def test_v2_contract_never_surfaces_unsealed_dtype_claims() -> None:
+    context_block = _typed_parent_schema_context_block(
+        {
+            "table:summary": {
+                "product_contract": {
+                    "schema_version": "easyicu.host_typed_product.v2",
+                    "tabular_format": "csv",
+                    "column_count": 2,
+                    "columns": ["label", "value"],
+                    "column_dtypes": {"value": "forged"},
+                    "numeric_columns": ["value"],
+                }
+            }
+        }
+    )
+
+    assert '"columns":["label","value"]' in context_block
+    assert "column_dtypes" not in context_block.split("\n", 2)[1]
+    assert "numeric_columns" not in context_block.split("\n", 2)[1]
 
 
 @pytest.mark.parametrize(
@@ -1286,6 +1434,144 @@ def test_typed_statistic_binds_current_verified_step_summary(tmp_path: Path) -> 
     assert failure is None
     assert ref is not None
     assert ref.evidence_id == summary.evidence_id
+
+
+@pytest.mark.parametrize(
+    ("product_name", "payload"),
+    [
+        (
+            "complete_case_n",
+            {"name": "complete_case_n", "value": 94425},
+        ),
+        (
+            "robustness_summary",
+            {
+                "name": "robustness_summary",
+                "primary_analysis_n": 94425,
+                "complete_case_analysis_n": 94425,
+            },
+        ),
+    ],
+)
+def test_typed_statistic_binds_exact_declared_json_sidecar(
+    tmp_path: Path,
+    product_name: str,
+    payload: dict[str, object],
+) -> None:
+    store = EvidenceStore(tmp_path)
+    sidecar = _register(
+        store,
+        tmp_path,
+        suffix=".json",
+        payload=json.dumps(payload),
+        evidence_id=f"{product_name}_statistic",
+        kind="statistic",
+        source_stem=product_name,
+    )
+    declared_product = f"statistic:{product_name}"
+    plan = _plan_for_typed_product(declared_product)
+
+    ref, failure = _resolve_typed_input_evidence(
+        input_name=declared_product,
+        plan=plan,
+        evidence_records=store.records(),
+        per_step_records=[
+            {
+                "step_id": "producer",
+                "status": "ok",
+                "evidence_ids": [sidecar.evidence_id],
+                "step_summary": {
+                    "output_files": {
+                        declared_product: f"{product_name}.json",
+                    }
+                },
+                "analysis_request": {"step": plan.steps[0].model_dump(mode="json")},
+                "plan_scientific_signature": _scope_signature(plan),
+            }
+        ],
+        run_dir=tmp_path,
+    )
+
+    assert failure is None
+    assert ref is not None
+    assert ref.evidence_id == sidecar.evidence_id
+    assert ref.kind == "statistic"
+
+
+@pytest.mark.parametrize(
+    ("payload", "evidence_kind", "step_summary_value", "reason"),
+    [
+        (
+            {"name": "different_statistic", "value": 94425},
+            "statistic",
+            None,
+            "statistic_evidence_value_missing",
+        ),
+        (
+            {"name": "complete_case_n", "status": "complete"},
+            "statistic",
+            None,
+            "statistic_evidence_value_missing",
+        ),
+        (
+            {"name": "complete_case_n", "value": 94425},
+            "log",
+            None,
+            "evidence_kind_mismatch",
+        ),
+        (
+            {"name": "complete_case_n", "value": 94425},
+            "statistic",
+            94424,
+            "statistic_evidence_payload_mismatch",
+        ),
+    ],
+)
+def test_typed_statistic_declared_json_sidecar_fails_closed(
+    tmp_path: Path,
+    payload: dict[str, object],
+    evidence_kind: str,
+    step_summary_value: int | None,
+    reason: str,
+) -> None:
+    store = EvidenceStore(tmp_path)
+    sidecar = _register(
+        store,
+        tmp_path,
+        suffix=".json",
+        payload=json.dumps(payload),
+        evidence_id="complete_case_n_statistic",
+        kind=evidence_kind,
+        source_stem="complete_case_n",
+    )
+    declared_product = "statistic:complete_case_n"
+    plan = _plan_for_typed_product(declared_product)
+    step_summary: dict[str, object] = {
+        "output_files": {declared_product: "complete_case_n.json"}
+    }
+    if step_summary_value is not None:
+        step_summary["complete_case_n"] = step_summary_value
+
+    ref, failure = _resolve_typed_input_evidence(
+        input_name=declared_product,
+        plan=plan,
+        evidence_records=store.records(),
+        per_step_records=[
+            {
+                "step_id": "producer",
+                "status": "ok",
+                "evidence_ids": [sidecar.evidence_id],
+                "step_summary": step_summary,
+                "analysis_request": {"step": plan.steps[0].model_dump(mode="json")},
+                "plan_scientific_signature": _scope_signature(plan),
+            }
+        ],
+        run_dir=tmp_path,
+    )
+
+    assert ref is None
+    assert failure is not None
+    assert failure["reason"] == reason
 
 
 @pytest.mark.parametrize(

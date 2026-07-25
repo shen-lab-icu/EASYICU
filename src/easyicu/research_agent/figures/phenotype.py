@@ -20,7 +20,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import pandas as pd
 
-from ..evidence import EvidenceStore
+from ..authority.evidence_store import EvidenceStore
 from ..schema import AnalysisPlan, EvidenceRecord, ResearchContext
 from .base import (
     RenderedFigure,
@@ -286,7 +286,7 @@ def render_phenotype_figure(
     import matplotlib.pyplot as plt
     import numpy as np
 
-    from ..publication_figures import add_panel_label, apply_publication_style
+    from .publication import add_panel_label, apply_publication_style
 
     palette = apply_publication_style()
     # Height 82 -> 96mm and wider inter-panel gaps give the 40-degree rotated

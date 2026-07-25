@@ -7,7 +7,7 @@ from pathlib import Path
 
 
 def test_idea_mining_priorart_entrypoints_are_importable() -> None:
-    from easyicu.research_agent.idea_mining_priorart import (
+    from easyicu.research_agent.discovery.idea_mining_priorart import (
         _escape_md_cell,
         _saturation_for_novelty_label,
     )
@@ -21,7 +21,7 @@ def test_idea_mining_priorart_entrypoints_are_importable() -> None:
 def test_idea_mining_reexports_priorart_by_identity() -> None:
     """The split must be behavior-preserving: idea_mining keeps exposing the
     same function objects so existing internal references resolve unchanged."""
-    from easyicu.research_agent import idea_mining, idea_mining_priorart
+    from easyicu.research_agent.discovery import idea_mining, idea_mining_priorart
 
     for name in (
         "build_prior_art_queries",
@@ -44,10 +44,11 @@ def test_idea_mining_priorart_is_a_leaf_module() -> None:
         / "src"
         / "easyicu"
         / "research_agent"
+        / "discovery"
         / "idea_mining_priorart.py"
     )
     tree = ast.parse(path.read_text(encoding="utf-8"))
-    forbidden = {"idea_mining", "easyicu.research_agent.idea_mining"}
+    forbidden = {"idea_mining", "easyicu.research_agent.discovery.idea_mining"}
     assert not any(
         isinstance(node, ast.ImportFrom) and node.module in forbidden
         for node in tree.body

@@ -19,11 +19,14 @@ Where possible the tests use tiny synthetic fixtures so they run quickly
 without `--run-real`. Tests that genuinely need a working eicu install carry
 the `needs_real_data` marker and are skipped by default.
 """
+
 from __future__ import annotations
 
 import gzip
 import os
+import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pandas as pd
 import pyarrow as pa
@@ -31,6 +34,37 @@ import pyarrow.parquet as pq
 import pytest
 
 needs_real_data = pytest.mark.needs_real_data
+
+
+def _authorized_local_openai_client(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    completions: object,
+    max_retries: int,
+):
+    """Construct the real adapter through the reviewed local-provider factory."""
+
+    from easyicu.research_agent.providers.factory import build_provider_client
+    from easyicu.research_agent.providers.llm import OpenAIClient
+
+    transport = SimpleNamespace(
+        chat=SimpleNamespace(completions=completions),
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "openai",
+        SimpleNamespace(OpenAI=lambda **_kwargs: transport),
+    )
+    monkeypatch.setenv("EASYICU_ALLOW_EXTERNAL_LLM", "1")
+    monkeypatch.setenv("EASYICU_LLM_MAX_RETRIES", str(max_retries))
+    return build_provider_client(
+        provider="openai",
+        model="stub",
+        base_url_override="http://127.0.0.1:8787/v1",
+        request_timeout=1.0,
+        title="EasyICU local retry regression",
+        client_cls=OpenAIClient,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -88,17 +122,24 @@ def test_mimic_chartevents_value_stays_varchar(tmp_path):
     converter = DataConverter(str(tmp_path), database="mimic", verbose=False)
     result = converter.convert_all()["CHARTEVENTS.csv.gz"]
     assert result["status"] == ConversionStatus.COMPLETED, result.get("error")
-    assert result["row_count"] == 111, "all rows including the text-value row must be kept"
+    assert (
+        result["row_count"] == 111
+    ), "all rows including the text-value row must be kept"
 
     # Schema sanity: VALUE must be VARCHAR, the text value preserved.
     import duckdb
+
     out = tmp_path / "chartevents.parquet"
     con = duckdb.connect()
-    types = {r[0]: r[1] for r in con.execute(
-        f"DESCRIBE SELECT value FROM read_parquet('{out}') LIMIT 0"
-    ).fetchall()}
-    assert types["value"].upper().startswith("VARCHAR"), \
-        f"value column must stay VARCHAR, got {types['value']}"
+    types = {
+        r[0]: r[1]
+        for r in con.execute(
+            f"DESCRIBE SELECT value FROM read_parquet('{out}') LIMIT 0"
+        ).fetchall()
+    }
+    assert (
+        types["value"].upper().startswith("VARCHAR")
+    ), f"value column must stay VARCHAR, got {types['value']}"
     rows = con.execute(
         f"SELECT value FROM read_parquet('{out}') WHERE value LIKE '%Spontaneously%'"
     ).fetchall()
@@ -151,16 +192,18 @@ def test_expand_tolerates_mixed_numeric_and_datetime():
     """
     from easyicu.io.ts_utils import expand
 
-    df = pd.DataFrame({
-        "stay_id": [1, 1, 2],
-        # numeric hours since admission
-        "charttime": [2.0, 5.0, 1.0],
-        # datetime end — incompatible type, used to crash the comparison
-        "endtime": pd.to_datetime([
-            "2020-01-01 02:00", "2020-01-01 05:00", "2020-01-02 01:00"
-        ]),
-        "delirium_tx": [True, True, True],
-    })
+    df = pd.DataFrame(
+        {
+            "stay_id": [1, 1, 2],
+            # numeric hours since admission
+            "charttime": [2.0, 5.0, 1.0],
+            # datetime end — incompatible type, used to crash the comparison
+            "endtime": pd.to_datetime(
+                ["2020-01-01 02:00", "2020-01-01 05:00", "2020-01-02 01:00"]
+            ),
+            "delirium_tx": [True, True, True],
+        }
+    )
 
     # Should not raise; should return a frame (may be empty after fallback).
     out = expand(
@@ -178,12 +221,12 @@ def test_expand_tolerates_mixed_numeric_and_datetime():
 # Bug #6 (agent layer) — execution gate must count the deterministic 00_probe
 # ---------------------------------------------------------------------------
 def test_execution_gate_counts_deterministic_probe():
-    """Pre-fix: ``pipeline_report.execution_gate_status`` filtered ``00_probe``
+    """Pre-fix: ``reporting.readiness.execution_gate_status`` filtered ``00_probe``
     out of ``status_by_step`` while still keeping it in ``required_step_ids``,
     so the deterministic probe was always reported as a missing required step
     and ``execution_complete`` was forced to False. Pilot
     run_20260516T123840_cc32d5 surfaced this as `00_probe missing`."""
-    from easyicu.research_agent.pipeline_report import execution_gate_status
+    from easyicu.research_agent.reporting.readiness import execution_gate_status
     from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep
 
     plan = AnalysisPlan(
@@ -213,7 +256,7 @@ def test_openai_client_retries_json_decode_error(monkeypatch):
     repair path, killing the whole step. After the fix the LLM client retries
     transient parse errors with short backoff."""
     import json
-    from easyicu.research_agent.llm import LLMMessage, OpenAIClient
+    from easyicu.research_agent.providers.llm import LLMMessage
 
     calls = {"n": 0}
 
@@ -227,37 +270,35 @@ def test_openai_client_retries_json_decode_error(monkeypatch):
             # Third call succeeds — return a minimal openai-shaped response
             class _Msg:
                 content = "ok"
+
                 def model_dump(self):
                     return {"role": "assistant", "content": "ok"}
+
             class _Choice:
                 message = _Msg()
                 finish_reason = "stop"
+
             class _Resp:
                 choices = [_Choice()]
                 usage = None
+
             return _Resp()
 
-    class _StubChat:
-        completions = _StubCreate()
-    class _StubClient:
-        chat = _StubChat()
-
-    # Build an OpenAIClient without invoking the real openai SDK
-    client = OpenAIClient.__new__(OpenAIClient)
-    client._client = _StubClient()
-    client._model = "stub"
-    client._timeout = 1.0
-    client._extra_body = None
-    client.last_usage = None
-    client.last_finish_reason = None
+    client = _authorized_local_openai_client(
+        monkeypatch,
+        completions=_StubCreate(),
+        max_retries=3,
+    )
 
     # Monkeypatch time.sleep so the retries are instant in the test
     import time
+
     monkeypatch.setattr(time, "sleep", lambda *_a, **_k: None)
 
     out = client.complete(
         [LLMMessage(role="user", content="hi")],
-        max_tokens=8, temperature=0.0,
+        max_tokens=8,
+        temperature=0.0,
     )
     assert out == "ok"
     assert calls["n"] == 3, f"expected 2 retries + 1 success, got {calls['n']} calls"
@@ -288,12 +329,13 @@ def test_step_contract_accepts_skipped_figure_step():
     }
     findings = _step_contract_findings(step=step, step_summary=skipped_summary)
     figure_errors = [
-        f for f in findings
+        f
+        for f in findings
         if "figure" in (f.message or "").lower() and f.severity == "error"
     ]
-    assert not figure_errors, (
-        f"figure-only step that reported `skipped` must not be flagged; got {figure_errors}"
-    )
+    assert (
+        not figure_errors
+    ), f"figure-only step that reported `skipped` must not be flagged; got {figure_errors}"
 
 
 # ---------------------------------------------------------------------------
@@ -304,12 +346,13 @@ def test_openai_client_retries_null_choices(monkeypatch):
     failure; `resp.choices[0]` then raised the cryptic
     `'NoneType' object is not subscriptable` and killed the step. After the
     fix the LLM client treats null-choices/null-message as transient."""
-    from easyicu.research_agent.llm import LLMMessage, OpenAIClient
+    from easyicu.research_agent.providers.llm import LLMMessage
 
     calls = {"n": 0}
 
     class _Msg:
         content = "ok"
+
         def model_dump(self):
             return {"role": "assistant", "content": "ok"}
 
@@ -333,25 +376,20 @@ def test_openai_client_retries_null_choices(monkeypatch):
                 return _NullChoicesResp()
             return _GoodResp()
 
-    class _StubChat:
-        completions = _StubCreate()
-    class _StubClient:
-        chat = _StubChat()
-
-    client = OpenAIClient.__new__(OpenAIClient)
-    client._client = _StubClient()
-    client._model = "stub"
-    client._timeout = 1.0
-    client._extra_body = None
-    client.last_usage = None
-    client.last_finish_reason = None
+    client = _authorized_local_openai_client(
+        monkeypatch,
+        completions=_StubCreate(),
+        max_retries=2,
+    )
 
     import time
+
     monkeypatch.setattr(time, "sleep", lambda *_a, **_k: None)
 
     out = client.complete(
         [LLMMessage(role="user", content="hi")],
-        max_tokens=8, temperature=0.0,
+        max_tokens=8,
+        temperature=0.0,
     )
     assert out == "ok"
     assert calls["n"] == 2, f"expected 1 retry + 1 success, got {calls['n']} calls"
@@ -369,7 +407,7 @@ def test_runner_repair_strips_fake_easyicu_import():
     03 to exactly this. The runner repair now strips such imports and
     stubs the name with a clear NotImplementedError so the next repair
     attempt sees an actionable error."""
-    from easyicu.research_agent.code_repair import _deterministic_runner_repair
+    from easyicu.research_agent.repairs.source import _deterministic_runner_repair
 
     bad_code = (
         "import pandas as pd\n"
@@ -390,6 +428,7 @@ def test_runner_repair_strips_fake_easyicu_import():
     # The original `from ... import ...` line must be gone (only the comment
     # marker referencing the module path remains for traceability).
     import re as _re
+
     assert not _re.search(
         r"^from\s+easyicu\.research_agent\.rcs\s+import",
         repaired,

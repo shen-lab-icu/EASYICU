@@ -8,7 +8,7 @@ from typing import Any
 import pytest
 
 from easyicu.research_agent.pipeline import ResearchAgentPipeline
-from easyicu.research_agent.run_lock import (
+from easyicu.research_agent.authority.run_lock import (
     RunExecutionLockError,
     acquire_run_execution_lock,
 )

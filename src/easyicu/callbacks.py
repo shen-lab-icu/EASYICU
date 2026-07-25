@@ -2799,7 +2799,25 @@ def driving_pressure(
     
     if not id_cols:
         raise ValueError("No ID column found in input DataFrames")
-    
+
+    # merge_asof is strict: the on-key (time) and by-keys (id) must share a dtype
+    # on BOTH sides or it raises "incompatible merge keys [1] float32 and float64"
+    # and the whole ventilator module is dropped. AUMC hit this because plateau and
+    # peep came back with different numeric time dtypes. Minute/second ICU times are
+    # exact in float64, so unify the join keys up front (leave datetime time as-is —
+    # it already matches and goes down the datetime branch below). plateau/peep_df
+    # are freshly sliced+renamed frames, so this does not touch the caller's inputs.
+    if not pd.api.types.is_datetime64_any_dtype(plateau[time_col]):
+        for _k in id_cols + [time_col]:
+            if _k in plateau.columns and _k in peep_df.columns:
+                _la, _ra = plateau[_k].dtype, peep_df[_k].dtype
+                if (_la != _ra and pd.api.types.is_numeric_dtype(_la)
+                        and pd.api.types.is_numeric_dtype(_ra)):
+                    _t = ('int64' if pd.api.types.is_integer_dtype(_la)
+                          and pd.api.types.is_integer_dtype(_ra) else 'float64')
+                    plateau[_k] = plateau[_k].astype(_t)
+                    peep_df[_k] = peep_df[_k].astype(_t)
+
     # Merge on nearest time within window
     results = []
     
