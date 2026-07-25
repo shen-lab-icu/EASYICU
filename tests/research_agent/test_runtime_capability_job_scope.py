@@ -19,6 +19,7 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
 from contextvars import copy_context
+from pathlib import Path
 
 import pytest
 
@@ -182,19 +183,41 @@ def test_the_submit_helper_the_pipeline_uses_propagates_the_context() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_the_public_entry_points_are_scoped() -> None:
-    """``run`` and ``resume_human_review`` are the job boundary.
+def test_run_clears_on_entry_and_restores_the_caller_publication(
+    tmp_path, monkeypatch
+) -> None:
+    """``run`` is the job boundary, observed rather than asserted structurally.
 
-    ``_build_runner`` is not: the published value has to survive until the
-    coder prompt is rendered and the step executes, both of which happen after
-    the runner is built.
+    Checking ``hasattr(run, "__wrapped__")`` would pass on
+    ``@exclusive_run_execution`` alone and prove nothing about this scope. So
+    publish from outside, look at what the inside sees, and look at what
+    survives: entry must show ``None`` (the outer publication is not inherited)
+    and exit must restore the outer value rather than clearing it.
     """
 
+    import easyicu.research_agent.pipeline as pipeline_module
     from easyicu.research_agent.pipeline import ResearchAgentPipeline
 
-    for name in ("run", "resume_human_review"):
-        method = getattr(ResearchAgentPipeline, name)
-        assert hasattr(method, "__wrapped__"), f"{name} is not scoped"
+    seen_inside: list[object] = []
+
+    def _probe(_name: str):
+        seen_inside.append(runtime_capability_snapshot())
+        _publish(HOST_PACKAGES)
+        raise RuntimeError("stop here — the scope is what is under test")
+
+    monkeypatch.setattr(pipeline_module, "get_skill", _probe)
+    pipeline = ResearchAgentPipeline(workdir=tmp_path)
+
+    with runtime_capability_job_scope():
+        _publish(DOCKER_PACKAGES)
+
+        with pytest.raises(RuntimeError):
+            pipeline.run(skill="anything", cohort=tmp_path / "cohort.parquet")
+
+        assert seen_inside == [None], "run inherited the caller's publication"
+        assert (
+            runtime_capability_snapshot() == DOCKER_PACKAGES
+        ), "run reset to None instead of restoring what the caller published"
 
 
 def test_scoping_run_keeps_its_signature_introspectable() -> None:
@@ -209,12 +232,65 @@ def test_scoping_run_keeps_its_signature_introspectable() -> None:
         assert expected in parameters
 
 
-def test_resume_republishes_the_validated_snapshot_after_the_pause() -> None:
-    """The pause ends the scope, so resume cannot rely on ambient state.
+def test_resume_uses_the_paused_runs_snapshot_not_the_instances_latest(
+    tmp_path,
+) -> None:
+    """A later run must not change the environment an approved review resumes into.
 
-    It republishes from ``_validated_runtime_capabilities`` — an immutable
-    tuple of import names kept on the instance — rather than from a provider
-    callable captured by the paused job.
+    ``run`` returns when it pauses, so its writer lease is released and a second
+    run can start on the same pipeline. That second run's preflight overwrites
+    ``_validated_runtime_capabilities``. Reading the instance field at resume
+    would finish run A's analysis under run B's image allow-list — an
+    environment the reviewer never approved. The snapshot is therefore captured
+    into the pending state at the pause.
+
+    Driving this with a stub graph rather than a real LLM run: what is under
+    test is which snapshot resume publishes, and the graph only has to record
+    what it saw.
+    """
+
+    from easyicu.research_agent.pipeline import ResearchAgentPipeline
+
+    observed: list[object] = []
+
+    class _RecordingGraph:
+        def invoke(self, *_args, **_kwargs):
+            observed.append(runtime_capability_snapshot())
+            return {"final_result": "done"}
+
+    class _Pending:
+        run_id = "20260725T120000_abcdef"
+        run_dir = str(tmp_path / "run")
+        resumable_here = True
+
+    pipeline = ResearchAgentPipeline(workdir=tmp_path)
+    Path(_Pending.run_dir).mkdir(parents=True, exist_ok=True)
+
+    paused_snapshot = ("shap", "xgboost")
+    pipeline._pending_human_review = {
+        "graph": _RecordingGraph(),
+        "invoke_config": None,
+        "pending": _Pending(),
+        "runtime_capabilities": paused_snapshot,
+        "runtime_bundle": None,
+    }
+    # A second run happened while the reviewer was deciding.
+    pipeline._validated_runtime_capabilities = ("lifelines",)
+    pipeline._pipeline_result_or_pending = lambda final_state, **_kwargs: final_state
+
+    pipeline.resume_human_review([])
+
+    assert observed == [
+        frozenset(paused_snapshot)
+    ], "resume published the instance's current snapshot, not the paused run's"
+    assert runtime_capability_snapshot() is None, "resume leaked its own scope"
+
+
+def test_resume_takes_the_writer_lease_for_the_paused_run() -> None:
+    """``run`` released its lease when it paused, so resume needs its own.
+
+    Without it, an approval could be replayed into a run directory another
+    call is writing to.
     """
 
     import inspect
@@ -222,5 +298,5 @@ def test_resume_republishes_the_validated_snapshot_after_the_pause() -> None:
     from easyicu.research_agent.pipeline import ResearchAgentPipeline
 
     source = inspect.getsource(ResearchAgentPipeline.resume_human_review)
-    assert "_validated_runtime_capabilities" in source
-    assert "set_runtime_capability_snapshot_provider" in source
+    assert "acquire_run_execution_lock" in source
+    assert "run_id=pending.run_id" in source
