@@ -109,6 +109,32 @@ one owned package at a time, beginning with new or already-clean modules, and
 archive the classified Vulture report before deleting any dynamically
 registered symbol.
 
+### Shared primitives and deliberate trust boundaries
+
+Exact canonical JSON and SHA-256 behavior is centralized in
+`research_agent/canonical_json.py`. Authority modules supply any
+schema-specific normalization first; protocol owners must request a trailing
+newline explicitly. Golden byte/digest tests prevent a cleanup from silently
+changing evidence identities.
+
+Path and cache helpers are intentionally not collapsed merely because their
+names look similar:
+
+- `authority.filesystem.AnchoredDirectory` is a symlink-resistant,
+  descriptor-anchored write boundary; MCP path resolution additionally owns
+  process scopes and operator-configured disclosure roots.
+- `api.cache` fingerprints source datasets for extraction reuse;
+  `authority.pipeline_cache` validates content-addressed research-run
+  authority. Sharing storage or invalidation rules would mix two trust
+  domains.
+
+Pydantic Settings and Tenacity remain evaluated, not adopted dependencies.
+Environment reads stay at explicit runtime/CLI adapters so importing the
+library does not create hidden configuration state. Model retries continue to
+use the structured retry path because every attempt and parse failure is
+scientific provenance; a generic retry wrapper may be introduced later only
+for stateless transport calls that do not own attempt accounting.
+
 ### Package initialization
 
 This pass removes global warning suppression, stdout printing, and dead flags.

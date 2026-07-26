@@ -18,6 +18,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from ..canonical_json import canonical_json as _canonical_json
 from ..methods.table_one import table_one_spec_sha256
 from ..research_context.prompt_variables import opaque_level_tokens
 from ..schema import AnalysisPlan, AnalysisStep, ResearchContext, TableOneSpec
@@ -27,16 +28,6 @@ TABLE_ONE_PRIVATE_CHECKPOINT_SCHEMA = "easyicu.table_one_private_checkpoint/1"
 TABLE_ONE_PRIVATE_CHECKPOINT_RELATIVE_PATH = Path(
     ".runtime/table_one_private_checkpoint.json"
 )
-
-
-def _canonical_json(value: Any) -> str:
-    return json.dumps(
-        value,
-        ensure_ascii=False,
-        sort_keys=True,
-        separators=(",", ":"),
-        allow_nan=False,
-    )
 
 
 class TableOneExecutionBinding(BaseModel):

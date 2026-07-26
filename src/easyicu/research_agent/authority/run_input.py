@@ -29,12 +29,7 @@ from typing import Any, Callable, Dict, Literal, Mapping, Optional, Sequence, Un
 import pandas as pd
 from pydantic import BaseModel, ConfigDict, Field
 
-from .filesystem import AnchoredDirectory, AuthorityFilesystemError
-from .evidence_store import EvidenceStore, sha256_of_file
-from .evidence_snapshot import (
-    EvidenceAuthorityIntegrityError,
-    load_current_evidence_snapshot,
-)
+from ..canonical_json import canonical_json_bytes
 from ..intake.materialized_metadata import (
     MaterializedCohortAuthorityRef,
     MaterializedMetadataError,
@@ -53,6 +48,12 @@ from ..intake.materialized_trajectory import (
 )
 from ..providers.prompts import PROMPT_PACK_VERSION, prompt_pack_files
 from ..research_context.implementation_identity import metadata_implementation_identity
+from .evidence_snapshot import (
+    EvidenceAuthorityIntegrityError,
+    load_current_evidence_snapshot,
+)
+from .filesystem import AnchoredDirectory, AuthorityFilesystemError
+from .evidence_store import EvidenceStore, sha256_of_file
 from .runtime_artifacts import (
     current_successful_step_records,
     current_step_records,
@@ -298,18 +299,12 @@ def _jsonable(value: Any) -> Any:
     return str(value)
 
 
-def _canonical_json_bytes(value: Any) -> bytes:
-    return json.dumps(
-        _jsonable(value),
-        sort_keys=True,
-        separators=(",", ":"),
-        ensure_ascii=False,
-        allow_nan=False,
-    ).encode("utf-8")
+def _normalized_canonical_json_bytes(value: Any) -> bytes:
+    return canonical_json_bytes(_jsonable(value))
 
 
 def canonical_sha256(value: Any) -> str:
-    return hashlib.sha256(_canonical_json_bytes(value)).hexdigest()
+    return hashlib.sha256(_normalized_canonical_json_bytes(value)).hexdigest()
 
 
 def _scientific_trajectory_envelope(
@@ -363,7 +358,7 @@ def _dataframe_content_sha256(frame: pd.DataFrame) -> str:
         "dtypes": [str(dtype) for dtype in frame.dtypes],
         "n_rows": int(len(frame)),
     }
-    digest.update(_canonical_json_bytes(schema))
+    digest.update(_normalized_canonical_json_bytes(schema))
     try:
         hashed = pd.util.hash_pandas_object(
             frame,

@@ -30,9 +30,10 @@ from pydantic import (
     model_validator,
 )
 
+from ..canonical_json import canonical_json_bytes as _canonical_json_bytes
+from ..schema import ValidationFinding
 from .filesystem import AnchoredDirectory, AuthorityFilesystemError
 from .run_input import canonical_sha256
-from ..schema import ValidationFinding
 
 TYPED_INPUT_CONSUMPTION_RECEIPT_SCHEMA = "easyicu.typed_input_consumption_receipt/1"
 _RESOLVED_INPUTS_SCHEMA = "2.1"
@@ -117,16 +118,6 @@ class StepTypedInputReceiptVerification:
 
     findings: tuple[ValidationFinding, ...]
     verified_inputs: Mapping[str, TypedInputConsumptionReceipt]
-
-
-def _canonical_json_bytes(value: object) -> bytes:
-    return json.dumps(
-        value,
-        ensure_ascii=False,
-        sort_keys=True,
-        separators=(",", ":"),
-        allow_nan=False,
-    ).encode("utf-8")
 
 
 def typed_input_receipt_sha256(
