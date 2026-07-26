@@ -244,8 +244,8 @@ def test_resume_uses_the_paused_runs_snapshot_not_the_instances_latest(
     environment the reviewer never approved. The snapshot is therefore captured
     into the pending state at the pause.
 
-    Driving this with a stub graph rather than a real LLM run: what is under
-    test is which snapshot resume publishes, and the graph only has to record
+    Driving this with a stub workflow rather than a real LLM run: what is under
+    test is which snapshot resume publishes, and the workflow only records
     what it saw.
     """
 
@@ -253,10 +253,10 @@ def test_resume_uses_the_paused_runs_snapshot_not_the_instances_latest(
 
     observed: list[object] = []
 
-    class _RecordingGraph:
-        def invoke(self, *_args, **_kwargs):
+    class _RecordingWorkflow:
+        def resume(self, *_args, **_kwargs):
             observed.append(runtime_capability_snapshot())
-            return {"final_result": "done"}
+            return "done"
 
     class _Pending:
         run_id = "20260725T120000_abcdef"
@@ -268,15 +268,14 @@ def test_resume_uses_the_paused_runs_snapshot_not_the_instances_latest(
 
     paused_snapshot = ("shap", "xgboost")
     pipeline._pending_human_review = {
-        "graph": _RecordingGraph(),
-        "invoke_config": None,
+        "workflow": _RecordingWorkflow(),
         "pending": _Pending(),
         "runtime_capabilities": paused_snapshot,
         "runtime_bundle": None,
     }
     # A second run happened while the reviewer was deciding.
     pipeline._validated_runtime_capabilities = ("lifelines",)
-    pipeline._pipeline_result_or_pending = lambda final_state, **_kwargs: final_state
+    pipeline._pipeline_result_or_pending = lambda outcome, **_kwargs: outcome
 
     pipeline.resume_human_review([])
 

@@ -416,7 +416,9 @@ def test_p1_7_anonymous_loopback_cannot_start_a_run_or_write(monkeypatch):
 
 
 def test_p0_2_plan_findings_become_typed_review_requests():
-    from easyicu.research_agent.graph import human_review_requests_for_plan
+    from easyicu.research_agent.orchestration.workflow import (
+        human_review_requests_for_plan,
+    )
     from easyicu.research_agent.schema import ValidationFinding
 
     requests = human_review_requests_for_plan(
@@ -444,7 +446,9 @@ def test_p0_2_plan_findings_become_typed_review_requests():
 
 
 def test_p0_2_run_stops_when_a_review_is_due_and_no_gate_is_configured(tmp_path):
-    from easyicu.research_agent.graph import build_pipeline_graph
+    from easyicu.research_agent.orchestration.workflow import (
+        build_pipeline_workflow,
+    )
     from easyicu.research_agent.schema import ValidationFinding
 
     blocking = ValidationFinding(
@@ -463,7 +467,9 @@ def test_p0_2_run_stops_when_a_review_is_due_and_no_gate_is_configured(tmp_path)
         )
 
     def _human_review_invoker(plan_result):
-        from easyicu.research_agent.graph import human_review_requests_for_plan
+        from easyicu.research_agent.orchestration.workflow import (
+            human_review_requests_for_plan,
+        )
 
         requests = human_review_requests_for_plan(
             findings=plan_result.findings, plan=plan_result.plan
@@ -472,7 +478,7 @@ def test_p0_2_run_stops_when_a_review_is_due_and_no_gate_is_configured(tmp_path)
             raise RuntimeError("no human_review_gate is configured")
         return requests
 
-    graph = build_pipeline_graph(
+    workflow = build_pipeline_workflow(
         plan_invoker=_plan_invoker,
         execute_invoker=lambda plan: executed.append("execute"),
         write_invoker=lambda plan, ex: None,
@@ -481,16 +487,16 @@ def test_p0_2_run_stops_when_a_review_is_due_and_no_gate_is_configured(tmp_path)
     )
 
     with pytest.raises(RuntimeError, match="human_review_gate"):
-        graph.invoke({})
+        workflow.start()
 
     assert executed == []
 
 
-def test_p0_2_pipeline_run_passes_a_recorder_to_the_graph(monkeypatch, tmp_path):
+def test_p0_2_pipeline_run_passes_a_recorder_to_the_workflow(monkeypatch, tmp_path):
     """The production entrypoint must supply the recorder, not just accept one.
 
     Asserted through ``ResearchAgentPipeline.run()`` rather than by calling
-    ``build_pipeline_graph`` directly: the previous round proved the primitive
+    ``build_pipeline_workflow`` directly: the previous round proved the primitive
     worked while ``run()`` still passed ``human_review_recorder=None``.
     """
 
@@ -500,14 +506,14 @@ def test_p0_2_pipeline_run_passes_a_recorder_to_the_graph(monkeypatch, tmp_path)
 
     def _fake_build(**kwargs):
         captured.update(kwargs)
-        raise RuntimeError("stop after graph construction")
+        raise RuntimeError("stop after workflow construction")
 
     monkeypatch.setattr(
-        pipeline_module, "build_pipeline_graph", _fake_build, raising=False
+        pipeline_module, "build_pipeline_workflow", _fake_build, raising=False
     )
-    import easyicu.research_agent.graph as graph_module
+    import easyicu.research_agent.orchestration.workflow as workflow_module
 
-    monkeypatch.setattr(graph_module, "build_pipeline_graph", _fake_build)
+    monkeypatch.setattr(workflow_module, "build_pipeline_workflow", _fake_build)
 
     frame = pd.DataFrame(
         {
@@ -522,7 +528,7 @@ def test_p0_2_pipeline_run_passes_a_recorder_to_the_graph(monkeypatch, tmp_path)
     agent = pipeline_module.ResearchAgentPipeline(
         workdir=tmp_path / "wd", llm=MockLLMClient()
     )
-    with pytest.raises(RuntimeError, match="stop after graph construction"):
+    with pytest.raises(RuntimeError, match="stop after workflow construction"):
         agent.run(question="Does SOFA-2 predict death?", cohort=cohort)
 
     assert captured["human_review_invoker"] is not None
@@ -1170,7 +1176,7 @@ def test_p0_2_the_wired_recorder_binds_the_decision_into_run_evidence(
     ``run_id`` and evidence store the closure captured.
     """
 
-    import easyicu.research_agent.graph as graph_module
+    import easyicu.research_agent.orchestration.workflow as workflow_module
     from easyicu.research_agent import pipeline as pipeline_module
     from easyicu.research_agent.authority.evidence_store import EvidenceStore
 
@@ -1178,9 +1184,9 @@ def test_p0_2_the_wired_recorder_binds_the_decision_into_run_evidence(
 
     def _fake_build(**kwargs):
         captured.update(kwargs)
-        raise RuntimeError("stop after graph construction")
+        raise RuntimeError("stop after workflow construction")
 
-    monkeypatch.setattr(graph_module, "build_pipeline_graph", _fake_build)
+    monkeypatch.setattr(workflow_module, "build_pipeline_workflow", _fake_build)
 
     frame = pd.DataFrame(
         {
@@ -1195,7 +1201,7 @@ def test_p0_2_the_wired_recorder_binds_the_decision_into_run_evidence(
     agent = pipeline_module.ResearchAgentPipeline(
         workdir=tmp_path / "wd", llm=MockLLMClient()
     )
-    with pytest.raises(RuntimeError, match="stop after graph construction"):
+    with pytest.raises(RuntimeError, match="stop after workflow construction"):
         agent.run(question="Does SOFA-2 predict death?", cohort=cohort)
 
     run_dir = next((tmp_path / "wd").glob("run_*"))
@@ -1224,7 +1230,7 @@ def test_p0_2_the_wired_recorder_binds_the_decision_into_run_evidence(
 
 
 def test_p0_2_paper_profile_rejects_a_client_claimed_reviewer(monkeypatch, tmp_path):
-    import easyicu.research_agent.graph as graph_module
+    import easyicu.research_agent.orchestration.workflow as workflow_module
     from easyicu.research_agent import pipeline as pipeline_module
     from easyicu.research_agent.authority.evidence_store import EvidenceStore
 
@@ -1232,9 +1238,9 @@ def test_p0_2_paper_profile_rejects_a_client_claimed_reviewer(monkeypatch, tmp_p
 
     def _fake_build(**kwargs):
         captured.update(kwargs)
-        raise RuntimeError("stop after graph construction")
+        raise RuntimeError("stop after workflow construction")
 
-    monkeypatch.setattr(graph_module, "build_pipeline_graph", _fake_build)
+    monkeypatch.setattr(workflow_module, "build_pipeline_workflow", _fake_build)
 
     frame = pd.DataFrame(
         {
@@ -1252,7 +1258,7 @@ def test_p0_2_paper_profile_rejects_a_client_claimed_reviewer(monkeypatch, tmp_p
         submission_profile_version="20260527",
         llm=MockLLMClient(),
     )
-    with pytest.raises(RuntimeError, match="stop after graph construction"):
+    with pytest.raises(RuntimeError, match="stop after workflow construction"):
         agent.run(question="Does SOFA-2 predict death?", cohort=cohort)
 
     run_dir = next((tmp_path / "paper").glob("run_*"))
@@ -1286,7 +1292,9 @@ def test_p0_2_a_warning_with_the_same_reason_does_not_halt_a_run():
     alone, that warning would stop every such run waiting for a signature.
     """
 
-    from easyicu.research_agent.graph import human_review_requests_for_plan
+    from easyicu.research_agent.orchestration.workflow import (
+        human_review_requests_for_plan,
+    )
     from easyicu.research_agent.schema import ValidationFinding
 
     plan = SimpleNamespace(steps=())

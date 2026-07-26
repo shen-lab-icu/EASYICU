@@ -4,9 +4,11 @@
 日期：2026-07-22
 适用范围：Research Agent；不得改变患者数据、EvidenceStore、provider receipt、capsule 或 paper authority。
 
-## 1. 决策
+> **2026-07-26 架构复核后的取代说明：** 本文关于“LangGraph 已完成”的结论已被撤回。实际 graph state 没有只保存可重建的 authority reference；它用进程内 `phase_results` 字典保存带锁的 `EvidenceStore` 和 live phase handoff，因此 checkpointer 不能跨进程恢复。按本文自己“不能长期维持两套实现”的原则，生产编排已改为 `orchestration.workflow.PipelineWorkflow` 单一显式状态机，移除 `langgraph` 核心依赖。下文保留 2026-07-22 的历史计划背景；以本说明和 `docs/deprecation_policy.md` 为当前架构决策。
 
-EasyICU 复用 LangChain/LangGraph 的通用运行原语，但不把科研权威交给通用 Agent 框架。
+## 1. 决策（2026-07-22 历史，已由上方说明取代）
+
+当时决定复用 LangChain/LangGraph 的通用运行原语，但不把科研权威交给通用 Agent 框架。
 
 用户最新决定：**九题实验全部暂停，先完成本文件定义的架构优化与离线发布门。** 不以“已有 PoC”或“已经能跑”为完成标准。
 
@@ -16,10 +18,10 @@ EasyICU 复用 LangChain/LangGraph 的通用运行原语，但不把科研权威
 2. Host-owned Resource Scheduler 与 bounded context。
 3. 分层长期记忆及经验晋升机制。
 4. Action/software/data 能力目录与受控 CapabilityRequest。
-5. LangGraph 默认编排迁移及 HITL/persistence 接线。
+5. 默认编排迁移及 HITL/persistence 接线。
 6. 旧路径退役、减法清理和无 API 的九题离线发布验收。
 
-不把 `ResearchAgentPipeline` 改造成自由 ReAct Agent，也不允许运行中联网安装软件。LangGraph 只编排现有职责节点，不接管 EasyICU 科学/证据 authority。新路径验收后必须删除或退役等价旧路径，不能长期维持两套实现。
+不把 `ResearchAgentPipeline` 改造成自由 ReAct Agent，也不允许运行中联网安装软件。编排器不接管 EasyICU 科学/证据 authority。新路径验收后必须删除或退役等价旧路径，不能长期维持两套实现。
 
 ### 1.1 2026-07-22 实施结果
 
@@ -29,23 +31,23 @@ EasyICU 复用 LangChain/LangGraph 的通用运行原语，但不把科研权威
 | 1 统一资源与上下文 | phase1 done | `4fe8fea`、`c91b027`；ProtocolCard 已接 Planner；通用 Action/Software/Data 尚未接 Coder |
 | 2 安全长期记忆 | phase1 done | `447049b`、`dfcfcdd`；旧经验只进 quarantine；reviewed memory 的生产读取尚未接线 |
 | 3 能力与新方法入口 | phase1 done | `a34f7f7`；request/approval/image schema 已有；实际 capability-gap 发单尚未接线 |
-| 4 LangGraph 默认 runtime | done | `404710b`、`01cd41e`、`667b6dc`；唯一默认 phase runtime、digest-bound HITL、重复 ID fail-close |
+| 4 LangGraph 默认 runtime | superseded | 2026-07-26 复核确认 checkpointer 依赖进程内 live handoff；改为单一显式状态机，保留 digest-bound HITL 与重复 ID fail-close |
 | 5 Phase 1 离线发布门 | done | `8c6ea46`；`task_logs/20260722_framework_v2_phase1_release.json` |
 
 Phase 1 离线发布门最终结果：resource/context、architecture、module graph、framework tests **4/4 通过**；框架专项 **89 passed**。报告绑定 clean Git commit `8c6ea461c25fea7ddc823bd1430b3e15f31781c8`。命令面由静态 allowlist 保证不包含在线 benchmark/API/患者数据入口，但没有做 OS 级网络或文件访问监测，因此不再宣称“观测到 0 provider/0 patient reads”。这是安全底座和核心 runtime 的 Phase 1，不是完整资源/记忆/新方法生产链，也不是 Canonical9 或论文结果完成。
 
 ## 2. 当前实现
 
-- `langgraph>=1.0` 已成为基础 runtime 依赖；旧 `agentic` extra 保留为空的兼容入口。
-- `research_agent/graph.py` 是唯一默认 `plan → execute → write → finalise` phase runtime；公共 `run_with_graph()` 仅为同一路径别名，不再保留直线 dispatch 分支。
-- Graph 提供 digest-bound `HumanReviewRequest/Decision`、interrupt/resume 与可选 checkpointer。EasyICU 自有 checkpoint/receipt/capsule 仍是完整 pipeline 的持久连续性和科学权威；LangGraph checkpointer 不建立第二套 current/evidence authority。
+- `orchestration/workflow.py` 是唯一默认 `plan → human_review → execute → write → finalise` runtime；`run_with_graph()` 仅为带弃用警告的 1.x 兼容别名。
+- Workflow 提供 digest-bound `HumanReviewRequest/Decision` 与同进程 pause/resume。暂停对象明确写出 `resume_scope="same_process"`，不再用不可序列化的进程内对象伪装 durable checkpoint。
+- EasyICU 自有 checkpoint/receipt/capsule 仍是完整 pipeline 的持久连续性和科学权威。
 - `planning/capability_registry.py` 已是分析族能力单一真相，但粒度是 family，不是逐步 Action/软件资源目录。
 - Know-How v2 已有确定性检索、claim/citation、信任状态、Prompt 预算和 receipt；默认关闭。
 - `resources/scheduler.py` 与 bounded context assembler 已提供 protocol/action/software/data 的统一 schema 和确定性选择；**生产默认链目前只接入 Planner ProtocolCard**。Action/Software/Data 仍是可测底座，尚无 Coder 生产调用点。
 - `learning/store.py` 已建立 permissioned memory。旧 `RunMemory`/`ExperienceBank` 只作为兼容写源，产出镜像到 `run_lessons/quarantine`，不再直接进入 Planner；reviewed/promoted 对象必须有 profile、SHA 与 promotion/review receipt。**reviewed memory 尚未接入生产 context selection。**
 - `resources/capability.py` 已建立软件/新方法申请、人工批准、验证证据与不可变 image digest 的数据模型；**尚未由真实 capability gap 自动产生申请或注入已批准软件资源。**它不执行安装。
 - Protocol Scheduler 默认只接受 `clinical_reviewed`；唯一 development profile `npj_dm_know_how_dev/20260721` 可显式使用 `curated_mvp`。当前 9 张内置卡均为 `curated_mvp`，因此不能进入未来 paper profile。
-- EasyICU 的 checkpoint、receipt、capsule、EvidenceStore 和 sandbox 是已验证权威，不迁入或复制到 LangGraph Store。
+- EasyICU 的 checkpoint、receipt、capsule、EvidenceStore 和 sandbox 是已验证权威，不迁入或复制到通用编排框架。
 
 ## 3. 目标结构
 
@@ -198,19 +200,20 @@ requester and approval
 
 实验前完成 CapabilityRequest、批准状态、版本/镜像绑定和 fail-closed 响应；不要求在实验前扩充大量包或数据库。框架必须证明用户申请一个新方法时有明确入口，而不是让 Coder 临时安装。
 
-## 9. Work package R5：LangGraph 默认运行迁移（已完成）
+## 9. Work package R5：LangGraph 默认运行迁移（已撤回并取代）
 
-迁移方式不是重写业务逻辑，而是把现有 phase 作为节点：
+2026-07-22 的目标图为：
 
 ```text
 Plan → Acquire → ExecuteStep → Gate → Repair/Continue → Seal → Review → Finalise
 ```
 
-- Graph state 只保存不可变 authority reference，不保存第二份 Evidence/current selector。
-- LangGraph checkpointer 可用于可序列化的 HITL 流；完整研究运行继续由 EasyICU checkpoint 提供持久连续性，receipt/capsule 决定是否允许重放或付费。
-- digest-bound interrupt 原语覆盖 ProtocolCard、CapabilityRequest 和科学 stop condition 的人工确认类型；尚未审核的资源不会因缺少 UI 自动确认而进入 canonical 计划。
-- 默认 phase graph 已通过录制 golden；旧 `_use_graph` 分叉和直线 dispatch 已删除。
-- 公共 CLI/API 只保留一个默认运行面，并写入 `orchestration_runtime.json`。生产 UI 对各类审核请求的展示属于后续产品接线，不是新的科学 authority。
+复核发现实现没有达到第一条：live phase result 被放入进程内 registry，checkpoint 只保存同名句柄。当前取代方案：
+
+- `PipelineWorkflow` 直接调度既有 phase，不保留第二份 graph state/registry。
+- digest-bound 人工审核、精确 request/decision 集合、身份与服务器时间记录继续保留。
+- `orchestration_runtime.json` 写入 `explicit_state_machine`。
+- 跨进程审核恢复必须等 phase handoff 有完整 artifact-rehydration contract 后再声明支持。
 
 ## 10. Work package R6：减法清理与 Phase 1 离线发布门（已完成）
 
@@ -261,10 +264,9 @@ Plan → Acquire → ExecuteStep → Gate → Repair/Continue → Seal → Revie
 - 2 个提交：Action/software/data descriptors → CapabilityRequest/approval/image binding。
 - 不大规模增加工具；完成“已有能力按需暴露、缺失能力可申请”的通用路径。
 
-### Bundle 4：LangGraph 默认 runtime（R5）
+### Bundle 4：默认 runtime（R5，已由显式状态机取代）
 
-- 2–3 个提交：显式 phase/step graph → checkpoint/interrupt → shadow equivalence → 默认切换并删旧重复 dispatch。
-- Graph state 只持 authority references。
+- 当前唯一 dispatcher 为显式状态机；不再维护 graph/checkpointer shadow state。
 
 ### Bundle 5：减法与离线发布（R6）
 

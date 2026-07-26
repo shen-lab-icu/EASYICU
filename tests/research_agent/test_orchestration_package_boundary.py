@@ -15,6 +15,7 @@ import pytest
 ORCHESTRATION_MODULES = (
     "orchestration.config",
     "orchestration.services",
+    "orchestration.workflow",
     "orchestration.profiles",
     "orchestration.experiment_spec",
     "orchestration.resume",

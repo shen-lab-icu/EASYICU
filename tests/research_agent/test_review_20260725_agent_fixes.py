@@ -686,7 +686,7 @@ def test_p1_1_defaults_apply_when_the_caller_says_nothing(tmp_path, monkeypatch)
 
 
 def test_p1_2_decision_record_binds_authority_and_stamps_server_time():
-    from easyicu.research_agent.graph import (
+    from easyicu.research_agent.orchestration.workflow import (
         HumanReviewDecision,
         HumanReviewRequest,
         _human_review_decision_record,
@@ -727,14 +727,14 @@ def test_p1_2_decision_record_binds_authority_and_stamps_server_time():
     assert authenticated["reviewer_identity_source"] == "authenticated"
 
 
-def test_p1_2_graph_hands_decisions_to_the_recorder():
-    """Drive the real interrupt/resume cycle, not just the record builder."""
+def test_p1_2_workflow_hands_decisions_to_the_recorder():
+    """Drive the real pause/resume cycle, not just the record builder."""
 
-    pytest.importorskip("langgraph")
-    from langgraph.checkpoint.memory import MemorySaver
-    from langgraph.types import Command
-
-    from easyicu.research_agent.graph import HumanReviewRequest, build_pipeline_graph
+    from easyicu.research_agent.orchestration.workflow import (
+        HumanReviewRequest,
+        WorkflowPaused,
+        build_pipeline_workflow,
+    )
 
     digest = "b" * 64
     request = HumanReviewRequest.create(
@@ -745,7 +745,7 @@ def test_p1_2_graph_hands_decisions_to_the_recorder():
     )
     recorded: list = []
 
-    graph = build_pipeline_graph(
+    workflow = build_pipeline_workflow(
         plan_invoker=lambda: {"aborted_result": None},
         execute_invoker=lambda plan: {"ok": True},
         write_invoker=lambda plan, execute: {"ok": True},
@@ -753,32 +753,25 @@ def test_p1_2_graph_hands_decisions_to_the_recorder():
         human_review_invoker=lambda plan: [request],
         human_review_recorder=recorded.extend,
         reviewer_identity_resolver=lambda: "alex@hospital",
-        checkpointer=MemorySaver(),
     )
-    config = {"configurable": {"thread_id": "review-test"}}
 
-    paused = graph.invoke({}, config)
-    assert "__interrupt__" in paused
+    paused = workflow.start()
+    assert isinstance(paused, WorkflowPaused)
     assert not recorded, "nothing may be recorded before the operator decides"
 
-    final = graph.invoke(
-        Command(
-            resume={
-                "decisions": [
-                    {
-                        "review_id": request.review_id,
-                        "authority_sha256": digest,
-                        "decision": "approved",
-                        "reviewer": "typed-by-client",
-                        "decided_at": "1999-01-01T00:00:00Z",
-                    }
-                ]
+    final = workflow.resume(
+        [
+            {
+                "review_id": request.review_id,
+                "authority_sha256": digest,
+                "decision": "approved",
+                "reviewer": "typed-by-client",
+                "decided_at": "1999-01-01T00:00:00Z",
             }
-        ),
-        config,
+        ]
     )
 
-    assert final["final_result"] == {"final": True}
+    assert final.final_result == {"final": True}
     assert len(recorded) == 1
     record = recorded[0]
     assert record["review_id"] == request.review_id
@@ -791,11 +784,10 @@ def test_p1_2_graph_hands_decisions_to_the_recorder():
 
 
 def test_p1_2_a_mismatched_authority_digest_is_rejected():
-    pytest.importorskip("langgraph")
-    from langgraph.checkpoint.memory import MemorySaver
-    from langgraph.types import Command
-
-    from easyicu.research_agent.graph import HumanReviewRequest, build_pipeline_graph
+    from easyicu.research_agent.orchestration.workflow import (
+        HumanReviewRequest,
+        build_pipeline_workflow,
+    )
 
     request = HumanReviewRequest.create(
         kind="protocol_claim",
@@ -804,34 +796,27 @@ def test_p1_2_a_mismatched_authority_digest_is_rejected():
         payload={"step": "01_primary"},
     )
     recorded: list = []
-    graph = build_pipeline_graph(
+    workflow = build_pipeline_workflow(
         plan_invoker=lambda: {"aborted_result": None},
         execute_invoker=lambda plan: {"ok": True},
         write_invoker=lambda plan, execute: {"ok": True},
         finalise_invoker=lambda plan, execute, write: {"final": True},
         human_review_invoker=lambda plan: [request],
         human_review_recorder=recorded.extend,
-        checkpointer=MemorySaver(),
     )
-    config = {"configurable": {"thread_id": "review-mismatch"}}
-    graph.invoke({}, config)
+    workflow.start()
 
     with pytest.raises(ValueError, match="authority digest mismatch"):
-        graph.invoke(
-            Command(
-                resume={
-                    "decisions": [
-                        {
-                            "review_id": request.review_id,
-                            "authority_sha256": "d" * 64,
-                            "decision": "approved",
-                            "reviewer": "r",
-                            "decided_at": "2026-07-25T00:00:00Z",
-                        }
-                    ]
+        workflow.resume(
+            [
+                {
+                    "review_id": request.review_id,
+                    "authority_sha256": "d" * 64,
+                    "decision": "approved",
+                    "reviewer": "r",
+                    "decided_at": "2026-07-25T00:00:00Z",
                 }
-            ),
-            config,
+            ]
         )
     assert not recorded
 

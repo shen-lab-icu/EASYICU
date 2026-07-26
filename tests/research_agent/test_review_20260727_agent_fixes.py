@@ -6,8 +6,8 @@ primitive directly cannot detect that nobody calls it — and this round's own
 review found the sequel to that: a test which hand-builds an input the producer
 never emits cannot detect that the consumer reads the wrong field.
 
-So the human-review tests here run the real graph, take the real interrupt,
-resume through the real ``Command`` channel and let the *graph's own*
+So the human-review tests here run the real workflow, take the real pause,
+resume through its public channel and let the workflow's
 ``_human_review_decision_record`` reach the *pipeline's own* recorder closure.
 """
 
@@ -49,16 +49,16 @@ def _plan_result_with_review(evidence, run_dir):
 
 
 def test_p0_graph_record_is_flat_and_the_recorder_reads_it(tmp_path):
-    """The record the graph emits must be the record the recorder consumes.
+    """The record the workflow emits must be the record the recorder consumes.
 
-    The previous recorder read ``record["request"]["review_id"]``. The graph
+    The previous recorder read ``record["request"]["review_id"]``. The workflow
     emits a flat record with a top-level ``review_id``, so every real
     unauthenticated decision under a paper profile raised ``KeyError`` instead
     of the intended controlled refusal. A test that hand-built a nested record
     could not see it.
     """
 
-    from easyicu.research_agent.graph import (
+    from easyicu.research_agent.orchestration.workflow import (
         HumanReviewDecision,
         HumanReviewRequest,
         _human_review_decision_record,
@@ -91,7 +91,7 @@ def test_p0_paper_profile_refuses_an_unauthenticated_decision(tmp_path):
     """Drive the production recorder with the production record shape."""
 
     from easyicu.research_agent import pipeline as pipeline_module
-    from easyicu.research_agent.graph import (
+    from easyicu.research_agent.orchestration.workflow import (
         HumanReviewDecision,
         HumanReviewRequest,
         _human_review_decision_record,
@@ -124,7 +124,7 @@ def test_p0_paper_profile_refuses_an_unauthenticated_decision(tmp_path):
     with pytest.raises(RuntimeError, match="authenticated reviewer identity"):
         recorder([record])
     # The refusal must name the review it refused, which is only possible if it
-    # read the field the graph actually writes.
+    # read the field the workflow actually writes.
     try:
         recorder([record])
     except RuntimeError as exc:
@@ -136,7 +136,7 @@ def _capture_production_recorder(
 ):
     """Return ``run()``'s own recorder closure, without running a pipeline.
 
-    ``run()`` builds the recorder inline and hands it to ``build_pipeline_graph``,
+    ``run()`` builds the recorder inline and hands it to ``build_pipeline_workflow``,
     so the only way to test *the closure the production path installs* is to
     intercept it at that boundary.
     """
@@ -152,10 +152,10 @@ def _capture_production_recorder(
     class _StopBuilding(Exception):
         pass
 
-    import easyicu.research_agent.graph as graph_module
+    import easyicu.research_agent.orchestration.workflow as workflow_module
 
-    real_build = graph_module.build_pipeline_graph
-    graph_module.build_pipeline_graph = _fake_build
+    real_build = workflow_module.build_pipeline_workflow
+    workflow_module.build_pipeline_workflow = _fake_build
     try:
         frame = pd.DataFrame(
             {
@@ -180,7 +180,7 @@ def _capture_production_recorder(
             if "human_review_recorder" not in captured:
                 raise
     finally:
-        graph_module.build_pipeline_graph = real_build
+        workflow_module.build_pipeline_workflow = real_build
     assert "human_review_recorder" in captured, "run() no longer wires a recorder"
     return captured["human_review_recorder"]
 
@@ -192,7 +192,9 @@ def test_p0_authority_digest_binds_the_plan_and_its_evidence(tmp_path):
     authorised any plan that raised the same finding.
     """
 
-    from easyicu.research_agent.graph import human_review_requests_for_plan
+    from easyicu.research_agent.orchestration.workflow import (
+        human_review_requests_for_plan,
+    )
     from easyicu.research_agent.schema import ValidationFinding
 
     finding = ValidationFinding(
@@ -227,9 +229,13 @@ def test_p0_authority_digest_binds_the_plan_and_its_evidence(tmp_path):
 
 
 def test_p0_run_returns_a_typed_pause_not_a_keyerror():
-    """An interrupted graph has no ``final_result``; the old code indexed it."""
+    """A paused workflow has no result, and returns a typed pause."""
 
-    from easyicu.research_agent.graph import HumanReviewPending, HumanReviewRequest
+    from easyicu.research_agent.orchestration.workflow import (
+        HumanReviewPending,
+        HumanReviewRequest,
+        WorkflowPaused,
+    )
     from easyicu.research_agent.pipeline import ResearchAgentPipeline
 
     request = HumanReviewRequest.create(
@@ -238,23 +244,13 @@ def test_p0_run_returns_a_typed_pause_not_a_keyerror():
         authority_sha256="c" * 64,
         payload={},
     )
-    interrupted_state = {
-        "__interrupt__": (
-            SimpleNamespace(
-                value={
-                    "schema_version": "easyicu.human_review_interrupt/1",
-                    "requests": [request.model_dump(mode="json")],
-                }
-            ),
-        )
-    }
+    paused_outcome = WorkflowPaused(requests=(request,))
 
     agent = ResearchAgentPipeline.__new__(ResearchAgentPipeline)
     agent._pending_human_review = None
     pending = agent._pipeline_result_or_pending(
-        interrupted_state,
-        graph=object(),
-        invoke_config={"configurable": {"thread_id": "run-xyz"}},
+        paused_outcome,
+        workflow=object(),
         run_id="run-xyz",
         run_dir=Path("/tmp/run-xyz"),
     )
@@ -265,18 +261,17 @@ def test_p0_run_returns_a_typed_pause_not_a_keyerror():
     assert agent._pending_human_review is not None
 
 
-def test_p0_a_graph_that_finishes_without_a_result_is_an_error():
-    """Absence of both a result and an interrupt is a bug, not a pause."""
+def test_p0_an_unknown_workflow_outcome_is_an_error():
+    """Absence of both completion and a pause is an orchestration bug."""
 
     from easyicu.research_agent.pipeline import ResearchAgentPipeline
 
     agent = ResearchAgentPipeline.__new__(ResearchAgentPipeline)
     agent._pending_human_review = None
-    with pytest.raises(RuntimeError, match="orchestration bug"):
+    with pytest.raises(RuntimeError, match="neither a completed result"):
         agent._pipeline_result_or_pending(
-            {"plan_result": object()},
-            graph=object(),
-            invoke_config=None,
+            object(),
+            workflow=object(),
             run_id="run-1",
             run_dir=Path("/tmp/run-1"),
         )
@@ -291,21 +286,19 @@ def test_p0_resume_without_a_pause_is_refused():
         agent.resume_human_review([])
 
 
-def test_p0_full_pause_and_resume_through_the_real_graph(tmp_path):
-    """plan → interrupt → Command(resume) → real record → recorder → evidence.
+def test_p0_full_pause_and_resume_through_the_real_workflow(tmp_path):
+    """plan → pause → resume → real record → recorder → evidence.
 
     This is the contract the previous round could not have caught: the record
     that reaches the recorder is produced by ``_human_review_decision_record``,
     not by the test.
     """
 
-    from langgraph.checkpoint.memory import MemorySaver
-    from langgraph.types import Command
-
     from easyicu.research_agent.authority.evidence_store import EvidenceStore
-    from easyicu.research_agent.graph import (
+    from easyicu.research_agent.orchestration.workflow import (
         HumanReviewDecision,
-        build_pipeline_graph,
+        WorkflowPaused,
+        build_pipeline_workflow,
         human_review_requests_for_plan,
     )
 
@@ -315,7 +308,7 @@ def test_p0_full_pause_and_resume_through_the_real_graph(tmp_path):
     plan_result = _plan_result_with_review(evidence, run_dir)
     recorded: list = []
 
-    graph = build_pipeline_graph(
+    workflow = build_pipeline_workflow(
         plan_invoker=lambda: plan_result,
         execute_invoker=lambda plan: SimpleNamespace(plan=plan),
         write_invoker=lambda plan, execute: SimpleNamespace(),
@@ -325,44 +318,31 @@ def test_p0_full_pause_and_resume_through_the_real_graph(tmp_path):
         ),
         human_review_recorder=recorded.extend,
         reviewer_identity_resolver=lambda: "sso:reviewer@hospital",
-        checkpointer=MemorySaver(),
     )
-    config = {"configurable": {"thread_id": "t-1"}}
 
-    paused = graph.invoke({}, config=config)
-    assert "final_result" not in paused
-    requests = [
-        item
-        for entry in paused["__interrupt__"]
-        for item in entry.value["requests"]
-    ]
-    assert len(requests) == 1
+    paused = workflow.start()
+    assert isinstance(paused, WorkflowPaused)
+    assert len(paused.requests) == 1
+    request = paused.requests[0]
 
     decision = HumanReviewDecision(
-        review_id=requests[0]["review_id"],
-        authority_sha256=requests[0]["authority_sha256"],
+        review_id=request.review_id,
+        authority_sha256=request.authority_sha256,
         decision="approved",
         reviewer="Dr Reviewer",
         decided_at="2026-07-27T09:00:00Z",
     )
-    final = graph.invoke(
-        Command(resume={"decisions": [decision.model_dump(mode="json")]}),
-        config=config,
-    )
+    final = workflow.resume([decision])
 
-    assert final["final_result"] == {"ok": True}
+    assert final.final_result == {"ok": True}
     assert len(recorded) == 1
-    assert recorded[0]["review_id"] == requests[0]["review_id"]
+    assert recorded[0]["review_id"] == request.review_id
     assert recorded[0]["reviewer_identity"] == "sso:reviewer@hospital"
     assert recorded[0]["reviewer_identity_source"] == "authenticated"
 
 
-def test_p0_recorder_resolves_evidence_without_the_process_local_list(tmp_path):
-    """The recorder must survive a resume in which the plan node did not re-run.
-
-    It captured ``reviewed_plan[-1]``, so a resumed graph — where the plan node
-    is restored from the checkpoint rather than executed — hit ``IndexError``.
-    """
+def test_p0_recorder_reopens_evidence_for_direct_diagnostics(tmp_path):
+    """A directly exercised recorder must not index an absent live handoff."""
 
     from easyicu.research_agent import pipeline as pipeline_module
 

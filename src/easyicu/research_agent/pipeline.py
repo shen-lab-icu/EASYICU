@@ -1807,15 +1807,14 @@ class ResearchAgentPipeline:
             approval=config.capability_approval,
             activation=config.capability_activation,
         )
-        # Operator-supplied control plane for the LangGraph review interrupt.
-        # Any object exposing ``checkpointer`` and, optionally,
-        # ``reviewer_identity_resolver`` / ``invoke_config``. Left ``None`` a
-        # run cannot answer an interrupt, so a plan that raises one fails
-        # closed rather than continuing unattended.
+        # Operator-supplied control plane for the human-review pause. The
+        # optional ``reviewer_identity_resolver`` supplies authenticated
+        # identity. Left ``None`` a run cannot answer a pause, so a plan that
+        # raises one fails closed rather than continuing unattended.
         self._human_review_gate = services.human_review_gate
-        # Set by ``run()`` when the graph pauses; consumed by
-        # ``resume_human_review()``. Holds the compiled graph because its
-        # nodes close over this run's evidence store and phase invokers.
+        # Set by ``run()`` when the workflow pauses; consumed by
+        # ``resume_human_review()``. Holds the state machine because its phase
+        # invokers close over this run's evidence store and services.
         self._pending_human_review: Optional[Dict[str, Any]] = None
         self._know_how_paths = tuple(Path(path) for path in config.know_how_paths)
         self._know_how_top_k = int(config.know_how_top_k)
@@ -3689,11 +3688,7 @@ class ResearchAgentPipeline:
         progress_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
         force_writer_probe: bool = False,
     ) -> PipelineResult:
-        """Run the explicit Plan → Execute → Write phases for one cohort.
-
-        LangGraph dispatches the phases while EasyICU's receipt, capsule,
-        evidence, and checkpoint remain the sole scientific authority.
-        """
+        """Run the explicit Plan → Review → Execute → Write workflow."""
         skill_obj: Optional[ClinicalSkill] = None
         if skill is not None:
             skill_obj = get_skill(skill) if isinstance(skill, str) else skill
@@ -4226,7 +4221,7 @@ class ResearchAgentPipeline:
                 emit_progress=_emit_progress,
             )
 
-        from .graph import orchestration_runtime_receipt
+        from .orchestration.workflow import orchestration_runtime_receipt
 
         orchestration_receipt = orchestration_runtime_receipt()
         orchestration_receipt_path = run_dir / "orchestration_runtime.json"
@@ -4383,12 +4378,10 @@ class ResearchAgentPipeline:
             )
 
         # The recorder needs this run's own EvidenceStore, which lives on the
-        # plan result rather than in ``run()``'s locals. In a single-process
-        # pause-and-resume the review node calls the invoker and the recorder
-        # in that order, so this list holds the live store. When the graph is
-        # resumed from a checkpoint the plan node does not re-run and the list
-        # stays empty, so the recorder re-opens the store from ``run_dir``
-        # instead of indexing an empty list.
+        # plan result rather than in ``run()``'s locals. Keep the live handoff
+        # for the supported same-process resume; the defensive reopen also
+        # makes direct recorder diagnostics fail closed instead of indexing an
+        # empty list.
         reviewed_plan: List[Any] = []
 
         def _review_evidence_store():
@@ -4399,7 +4392,7 @@ class ResearchAgentPipeline:
             )
 
         def _human_review_invoker(plan_result):
-            from .graph import human_review_requests_for_plan
+            from .orchestration.workflow import human_review_requests_for_plan
 
             reviewed_plan.append(plan_result)
             requests = human_review_requests_for_plan(
@@ -4408,11 +4401,9 @@ class ResearchAgentPipeline:
                 evidence=getattr(plan_result, "evidence", None),
             )
             if requests and self._human_review_gate is None:
-                # The graph primitive can pause, but only a caller that owns a
-                # checkpointer and a resume channel can answer. Proceeding
-                # unattended past a state that was classified as needing human
-                # sign-off is exactly the failure the interrupt exists to
-                # prevent, so an unconfigured run stops here instead.
+                # Only a caller that supplies an operator control plane can
+                # answer. Proceeding unattended past a state classified as
+                # needing sign-off is exactly the failure this pause prevents.
                 raise RuntimeError(
                     "this run reached "
                     f"{len(requests)} state(s) that require human review "
@@ -4428,7 +4419,7 @@ class ResearchAgentPipeline:
             from .orchestration.profiles import is_paper_facing_profile
 
             if is_paper_facing_profile(self._submission_profile_name):
-                # Field names follow ``graph._human_review_decision_record``,
+                # Field names follow the workflow decision record,
                 # which emits a flat record. Reading a nested ``request`` key
                 # here raised KeyError on every real decision and turned the
                 # authentication check into a crash.
@@ -4459,7 +4450,7 @@ class ResearchAgentPipeline:
                 encoding="utf-8",
             )
             # Registering into this run's own store is what puts the decision
-            # into the final manifest: graph state is discarded at exit, so an
+            # into the final manifest: workflow state is discarded at exit, so an
             # unregistered approval leaves the run unable to answer who
             # authorised it, against which digest, and when.
             _review_evidence_store().register_file(
@@ -4476,10 +4467,9 @@ class ResearchAgentPipeline:
             )
 
         gate = self._human_review_gate
-        from .graph import build_pipeline_graph
+        from .orchestration.workflow import build_pipeline_workflow
 
-        checkpointer = getattr(gate, "checkpointer", None) if gate is not None else None
-        graph = build_pipeline_graph(
+        workflow = build_pipeline_workflow(
             plan_invoker=_plan_invoker,
             execute_invoker=_execute_invoker,
             write_invoker=_write_invoker,
@@ -4492,81 +4482,54 @@ class ResearchAgentPipeline:
                 if gate is not None
                 else None
             ),
-            checkpointer=checkpointer,
         )
-        invoke_config = (
-            getattr(gate, "invoke_config", None) if gate is not None else None
-        )
-        # ``interrupt()`` needs a thread to suspend against. A gate that
-        # supplies a checkpointer but no config gets the run id as its thread,
-        # so configuring the gate is one object rather than two.
-        if checkpointer is not None and not invoke_config:
-            invoke_config = {"configurable": {"thread_id": run_id}}
-        final_state = graph.invoke(
-            {}, **({"config": invoke_config} if invoke_config else {})
-        )
+        outcome = workflow.start()
         return self._pipeline_result_or_pending(
-            final_state,
-            graph=graph,
-            invoke_config=invoke_config,
+            outcome,
+            workflow=workflow,
             run_id=run_id,
             run_dir=run_dir,
         )
 
     def _pipeline_result_or_pending(
         self,
-        final_state: Mapping[str, Any],
+        outcome: Any,
         *,
-        graph: Any,
-        invoke_config: Optional[Mapping[str, Any]],
+        workflow: Any,
         run_id: str,
         run_dir: Path,
     ) -> Any:
         """Return the run's result, or the typed pause that replaced it.
 
-        A run that stopped inside the human-review node has no
-        ``final_result``: nothing downstream of the interrupt executed. The
-        old code indexed the key regardless and raised ``KeyError`` on exactly
-        the state the gate exists to produce.
+        A run that stopped for human review has no ``PipelineResult`` because
+        nothing downstream of the pause executed.
         """
 
-        from .graph import HumanReviewPending, HumanReviewRequest
-
-        if "final_result" in final_state:
-            self._pending_human_review = None
-            return final_state["final_result"]
-
-        interrupts = final_state.get("__interrupt__") or ()
-        raw_requests: List[Any] = []
-        for item in interrupts:
-            value = getattr(item, "value", item)
-            if isinstance(value, Mapping):
-                raw_requests.extend(value.get("requests") or ())
-        if not raw_requests:
-            raise RuntimeError(
-                "the pipeline graph finished without a final result and "
-                "without a human-review interrupt; this is an orchestration "
-                f"bug, not a reviewable state (state keys: {sorted(final_state)})"
-            )
-        thread_id = str(
-            dict((invoke_config or {}).get("configurable") or {}).get("thread_id")
-            or run_id
+        from .orchestration.workflow import (
+            HumanReviewPending,
+            WorkflowCompleted,
+            WorkflowPaused,
         )
+
+        if isinstance(outcome, WorkflowCompleted):
+            self._pending_human_review = None
+            return outcome.final_result
+
+        if not isinstance(outcome, WorkflowPaused):
+            raise RuntimeError(
+                "the pipeline workflow returned neither a completed result nor "
+                f"a human-review pause (outcome={type(outcome).__name__})"
+            )
         pending = HumanReviewPending(
             run_id=run_id,
-            thread_id=thread_id,
+            thread_id=run_id,
             run_dir=str(run_dir),
-            requests=tuple(
-                HumanReviewRequest.model_validate(item) for item in raw_requests
-            ),
+            requests=outcome.requests,
         )
-        # Held so ``resume_human_review`` can drive the *same* compiled graph:
-        # its nodes close over this run's evidence store, run dir and phase
-        # invokers, none of which are reconstructible from the checkpoint
-        # alone.
+        # Held so ``resume_human_review`` can drive the same state machine: its
+        # invokers close over this run's evidence store, run dir and services.
         self._pending_human_review = {
-            "graph": graph,
-            "invoke_config": invoke_config,
+            "workflow": workflow,
             "pending": pending,
             # Captured here, not read off the instance at resume time. A second
             # run on the same pipeline overwrites
@@ -4597,17 +4560,17 @@ class ResearchAgentPipeline:
         """Answer the review that paused :meth:`run` and finish the run.
 
         ``decisions`` must contain exactly one entry per paused request, each
-        carrying the request's own ``authority_sha256`` — the graph rejects a
-        decision that does not bind the request it claims to answer, so an
+        carrying the request's own ``authority_sha256`` — the workflow rejects
+        a decision that does not bind the request it claims to answer, so an
         approval cannot be replayed against a different pause.
 
         Resume is ``same_process`` only (see
-        :data:`~easyicu.research_agent.graph.HUMAN_REVIEW_RESUME_SCOPE`); the
-        pause object states that in ``resume_scope``/``resume_pid`` so a caller
-        can check before asking a human for a decision it cannot deliver.
+        :data:`~easyicu.research_agent.orchestration.workflow.HUMAN_REVIEW_RESUME_SCOPE`);
+        the pause object states that in ``resume_scope``/``resume_pid`` so a
+        caller can check before asking a human for a decision it cannot deliver.
         """
 
-        from .graph import HUMAN_REVIEW_RESUME_SCOPE
+        from .orchestration.workflow import HUMAN_REVIEW_RESUME_SCOPE
 
         pending_state = self._pending_human_review
         if not pending_state:
@@ -4646,8 +4609,6 @@ class ResearchAgentPipeline:
             item if isinstance(item, Mapping) else item.model_dump(mode="json")
             for item in decisions
         ]
-        from langgraph.types import Command
-
         # Same writer lease ``run`` holds, bound to the paused run's own id
         # rather than a fresh one: resuming writes into that run's directory
         # and evidence store, so it must not proceed while another call is
@@ -4656,18 +4617,10 @@ class ResearchAgentPipeline:
         with acquire_run_execution_lock(
             workdir=Path(self.workdir), run_id=pending.run_id
         ):
-            final_state = pending_state["graph"].invoke(
-                Command(resume={"decisions": payload}),
-                **(
-                    {"config": pending_state["invoke_config"]}
-                    if pending_state["invoke_config"]
-                    else {}
-                ),
-            )
+            outcome = pending_state["workflow"].resume(payload)
         return self._pipeline_result_or_pending(
-            final_state,
-            graph=pending_state["graph"],
-            invoke_config=pending_state["invoke_config"],
+            outcome,
+            workflow=pending_state["workflow"],
             run_id=pending.run_id,
             run_dir=Path(pending.run_dir),
         )
@@ -4694,7 +4647,13 @@ class ResearchAgentPipeline:
         return await asyncio.to_thread(self.run, **kwargs)
 
     def run_with_graph(self, **kwargs: Any) -> PipelineResult:
-        """Backward-compatible alias for the sole LangGraph runtime."""
+        """Deprecated alias retained for EasyICU 1.x callers."""
+        warnings.warn(
+            "run_with_graph() is deprecated; run() uses the sole explicit "
+            "EasyICU workflow.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         return self.run(**kwargs)
 
     def replicate(
