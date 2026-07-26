@@ -12,6 +12,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Callable, Optional, Sequence
 
+from ..icu_rules import companion_count_column_for_measured
 from ..research_context.prompt_scope import normalised_method_head
 from ..schema import AnalysisStep, ValidationFinding
 from .ast_semantics import (
@@ -6934,6 +6935,7 @@ _HOST_HELPER_CALL_CONTRACTS: dict[tuple[str, str], dict[str, object]] = {
 
 def _host_helper_call_signature_findings(
     tree: ast.Module,
+    step: AnalysisStep,
 ) -> list[ValidationFinding]:
     """Validate calls to imported, stable host helpers before execution.
 
@@ -7083,6 +7085,7 @@ def _host_helper_call_signature_findings(
         allowed_keywords = set(contract["allowed_keywords"])
         keyword_names = [keyword.arg for keyword in node.keywords]
         violations: list[str] = []
+        detail_additions: dict[str, object] = {}
         if any(isinstance(argument, ast.Starred) for argument in node.args):
             violations.append("starred_positional_arguments_unverifiable")
         if len(node.args) > max_positional:
@@ -7100,6 +7103,88 @@ def _host_helper_call_signature_findings(
             violations.append(f"{positional_parameter}_argument_missing")
         if not set(required_keywords) <= set(explicit_keywords):
             violations.append("required_keyword_only_argument_missing")
+        if helper_name == "measurement_provenance_receipt":
+            keyword_values = {
+                str(keyword.arg): keyword.value
+                for keyword in node.keywords
+                if keyword.arg is not None
+            }
+            measured_node = keyword_values.get("measured_column")
+            count_node = keyword_values.get("count_column")
+            measured_column = (
+                str(measured_node.value)
+                if isinstance(measured_node, ast.Constant)
+                and isinstance(measured_node.value, str)
+                else None
+            )
+            count_column = (
+                str(count_node.value)
+                if isinstance(count_node, ast.Constant)
+                and isinstance(count_node.value, str)
+                else None
+            )
+            declared_inputs = {
+                str(value).strip()
+                for value in step.inputs
+                if ":" not in str(value) and str(value).strip()
+            }
+            expected_count = (
+                companion_count_column_for_measured(measured_column)
+                if measured_column is not None
+                else None
+            )
+            measured_candidates = sorted(
+                value
+                for value in declared_inputs
+                if count_column is not None
+                and companion_count_column_for_measured(value) == count_column
+            )
+            role_contract_relevant = bool(
+                (measured_column is not None and measured_column in declared_inputs)
+                or (count_column is not None and count_column in declared_inputs)
+                or (expected_count is not None and expected_count in declared_inputs)
+                or measured_candidates
+            )
+            if (
+                role_contract_relevant
+                and measured_column is not None
+                and expected_count is None
+            ):
+                violations.append("measured_column_role_invalid")
+                detail_additions["observed_measured_column"] = measured_column
+                if len(measured_candidates) == 1:
+                    detail_additions["expected_measured_column"] = measured_candidates[
+                        0
+                    ]
+            if (
+                role_contract_relevant
+                and count_column is not None
+                and not measured_candidates
+            ):
+                violations.append("count_column_role_invalid")
+                detail_additions["observed_count_column"] = count_column
+                if expected_count is not None and expected_count in declared_inputs:
+                    detail_additions["expected_count_column"] = expected_count
+            if (
+                role_contract_relevant
+                and measured_column is not None
+                and count_column is not None
+                and expected_count is not None
+                and expected_count != count_column
+            ):
+                violations.append("measurement_companion_columns_mismatch")
+                detail_additions.setdefault(
+                    "observed_measured_column",
+                    measured_column,
+                )
+                detail_additions.setdefault("observed_count_column", count_column)
+                if expected_count in declared_inputs:
+                    detail_additions.setdefault("expected_count_column", expected_count)
+                if len(measured_candidates) == 1:
+                    detail_additions.setdefault(
+                        "expected_measured_column",
+                        measured_candidates[0],
+                    )
         if not violations:
             continue
         findings.append(
@@ -7117,6 +7202,7 @@ def _host_helper_call_signature_findings(
                     "max_positional": max_positional,
                     "required_keywords": list(required_keywords),
                     "violations": sorted(set(violations)),
+                    **detail_additions,
                 },
             )
         )
@@ -8315,7 +8401,7 @@ def audit_mechanical_code_contracts(
     findings.extend(_ordinal_rounding_findings(tree))
     findings.extend(_scalar_cast_before_reduction_findings(tree))
     findings.extend(_first_time_companion_findings(tree))
-    findings.extend(_host_helper_call_signature_findings(tree))
+    findings.extend(_host_helper_call_signature_findings(tree, step))
     findings.extend(host_helper_result_findings(tree, step))
     findings.extend(table_one_spec_binding_findings(tree, step))
     findings.extend(_boolean_reduction_identity_findings(tree))
