@@ -106,6 +106,7 @@ Swap the extra in brackets for what you actually need:
 | Plotly / Kaleido figure export | `easyicu[viz]` |
 | Host the LLM proxy for the research-agent | `easyicu[llmserver]` |
 | Research-agent HTTP/PDF/image helpers | `easyicu[agentic]` |
+| Official MCP SDK server transports | `easyicu[mcp]` |
 | Current active extras above | `easyicu[all]` |
 
 The **core install (`easyicu`) already bundles the research-agent's analytical

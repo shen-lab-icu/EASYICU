@@ -3,59 +3,13 @@
 from __future__ import annotations
 
 import base64
-import http.client
-import http.server
 import json
-import threading
-from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
 from easyicu.research_agent.mcp_policy import MCP_ALLOWED_ROOTS_ENV, MCP_SCOPES_ENV
-
-
-@contextmanager
-def _mcp_http_server(*, bearer_token=None, max_body_bytes=1024 * 1024):
-    import easyicu.research_agent.mcp_server as mcp
-
-    handler = mcp._make_sse_handler(
-        bind_host="127.0.0.1",
-        port=0,
-        bearer_token=bearer_token,
-        allowed_origins=["http://127.0.0.1"],
-        max_body_bytes=max_body_bytes,
-    )
-    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    try:
-        yield server.server_port
-    finally:
-        server.shutdown()
-        server.server_close()
-        thread.join(timeout=2)
-
-
-def _http_request(
-    port: int, *, method="POST", path="/jsonrpc", body=b"{}", headers=None
-):
-    connection = http.client.HTTPConnection("127.0.0.1", port, timeout=2)
-    request_headers = dict(headers or {})
-    if method == "POST":
-        request_headers.setdefault("Content-Type", "application/json")
-    connection.request(method, path, body=body, headers=request_headers)
-    response = connection.getresponse()
-    payload = response.read()
-    connection.close()
-    return response.status, payload
-
-
-def _initialize_body() -> bytes:
-    return json.dumps(
-        {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}}
-    ).encode("utf-8")
 
 
 def test_mcp_loopback_environment_url_never_forwards_provider_secrets(
@@ -105,90 +59,6 @@ def test_mcp_loopback_environment_url_never_forwards_provider_secrets(
     assert seen["base_url"] == "http://127.0.0.1:8787/v1"
     assert seen["api_key"] == "easyicu-local-noauth"
     assert seen["api_key"] not in {"paid-openai-secret", "paid-openrouter-secret"}
-
-
-def test_mcp_http_originless_loopback_json_is_allowed():
-    with _mcp_http_server() as port:
-        status, payload = _http_request(port, body=_initialize_body())
-
-    assert status == 200
-    assert json.loads(payload)["result"]["serverInfo"]["name"] == (
-        "easyicu-research-agent"
-    )
-
-
-@pytest.mark.parametrize("origin", ["https://evil.example", "null"])
-def test_mcp_http_rejects_malicious_origin(origin):
-    with _mcp_http_server() as port:
-        status, _ = _http_request(
-            port,
-            body=_initialize_body(),
-            headers={"Origin": origin},
-        )
-
-    assert status == 403
-
-
-def test_mcp_http_rejects_simple_text_plain_post():
-    with _mcp_http_server() as port:
-        status, _ = _http_request(
-            port,
-            body=_initialize_body(),
-            headers={"Content-Type": "text/plain"},
-        )
-
-    assert status == 415
-
-
-@pytest.mark.parametrize("host", ["evil.example", "127.0.0.1:65535"])
-def test_mcp_http_rejects_untrusted_host_or_wrong_port(host):
-    with _mcp_http_server() as port:
-        status, _ = _http_request(
-            port,
-            body=_initialize_body(),
-            headers={"Host": host},
-        )
-
-    assert status == 400
-
-
-def test_mcp_http_rejects_oversized_json_before_reading_body():
-    with _mcp_http_server(max_body_bytes=8) as port:
-        status, _ = _http_request(port, body=_initialize_body())
-
-    assert status == 413
-
-
-def test_mcp_http_bearer_auth_covers_jsonrpc_and_sse():
-    token = "independent-mcp-token"
-    with _mcp_http_server(bearer_token=token) as port:
-        post_missing, _ = _http_request(port, body=_initialize_body())
-        sse_missing, _ = _http_request(port, method="GET", path="/sse", body=None)
-        post_ok, _ = _http_request(
-            port,
-            body=_initialize_body(),
-            headers={"Authorization": f"Bearer {token}"},
-        )
-
-    assert post_missing == 401
-    assert sse_missing == 401
-    assert post_ok == 200
-
-
-def test_mcp_remote_bind_requires_independent_token(monkeypatch):
-    import easyicu.research_agent.mcp_server as mcp
-
-    monkeypatch.setenv("OPENAI_API_KEY", "provider-secret")
-    monkeypatch.setenv("OPENROUTER_API_KEY", "router-secret")
-
-    with pytest.raises(ValueError, match="non-loopback"):
-        mcp._validate_sse_server_config("0.0.0.0", None)
-    with pytest.raises(ValueError, match="must not reuse OPENAI_API_KEY"):
-        mcp._validate_sse_server_config("0.0.0.0", "provider-secret")
-    assert (
-        mcp._validate_sse_server_config("0.0.0.0", "independent-mcp-token")
-        == "independent-mcp-token"
-    )
 
 
 def test_discovery_launcher_loopback_never_forwards_provider_secrets(monkeypatch):

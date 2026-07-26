@@ -14,8 +14,6 @@ from __future__ import annotations
 
 import dataclasses
 import json
-import os
-import queue
 import subprocess
 import sys
 import textwrap
@@ -262,27 +260,6 @@ def test_p0_1_run_pipeline_scope_can_be_withheld(roots, monkeypatch):
         {"question": "q", "cohort_path": str(roots / "c.parquet")},
     )
     assert result["error_code"] == "scope_not_granted"
-
-
-def test_p0_1_sse_patient_data_needs_its_own_token_even_on_loopback():
-    """A loopback bind does not authenticate; the separate token does."""
-
-    from easyicu.research_agent import mcp_server
-
-    handler_cls = mcp_server._make_sse_handler(bind_host="127.0.0.1", port=8765)
-    probe = handler_cls.__new__(handler_cls)
-
-    probe.headers = {}
-    assert probe._patient_data_authorized() is False
-
-    os.environ[mcp_server.MCP_PATIENT_DATA_TOKEN_ENV] = "s3cret"
-    try:
-        probe.headers = {"X-EasyICU-Patient-Data": "wrong"}
-        assert probe._patient_data_authorized() is False
-        probe.headers = {"X-EasyICU-Patient-Data": "s3cret"}
-        assert probe._patient_data_authorized() is True
-    finally:
-        del os.environ[mcp_server.MCP_PATIENT_DATA_TOKEN_ENV]
 
 
 # ---------------------------------------------------------------------------
@@ -927,72 +904,6 @@ def test_p1_3_mutation_refuses_to_rewrite_over_unparseable_lines(tmp_path):
         bank.add(_record(2))
     # The unparseable line is still on disk, not silently dropped.
     assert "this is not JSON" in bank_path.read_text(encoding="utf-8")
-
-
-# ---------------------------------------------------------------------------
-# P1.4 — SSE sessions and queues were unbounded
-# ---------------------------------------------------------------------------
-
-
-def test_p1_4_sse_sessions_are_capped_and_released():
-    from easyicu.research_agent import mcp_server
-
-    opened = []
-    try:
-        for _ in range(mcp_server.MAX_SSE_SESSIONS):
-            got = mcp_server._open_sse_session()
-            assert got is not None
-            opened.append(got[0])
-        assert mcp_server._open_sse_session() is None
-    finally:
-        for session_id in opened:
-            mcp_server._close_sse_session(session_id)
-
-    assert mcp_server._open_sse_session() is not None
-    for session_id in list(mcp_server._SSE_SESSIONS):
-        mcp_server._close_sse_session(session_id)
-
-
-def test_p1_4_sse_queue_is_bounded():
-    from easyicu.research_agent import mcp_server
-
-    session = mcp_server._SSESession()
-    assert session.queue.maxsize == mcp_server.SSE_QUEUE_MAXSIZE
-
-    for i in range(mcp_server.SSE_QUEUE_MAXSIZE):
-        session.queue.put_nowait({"i": i})
-    with pytest.raises(queue.Full):
-        session.queue.put_nowait({"overflow": True})
-
-
-def test_p1_4_session_table_is_lock_guarded_under_threads():
-    from easyicu.research_agent import mcp_server
-
-    for session_id in list(mcp_server._SSE_SESSIONS):
-        mcp_server._close_sse_session(session_id)
-
-    created: list[str] = []
-    lock = threading.Lock()
-
-    def _worker():
-        got = mcp_server._open_sse_session()
-        if got is not None:
-            with lock:
-                created.append(got[0])
-
-    threads = [threading.Thread(target=_worker) for _ in range(64)]
-    for t in threads:
-        t.start()
-    for t in threads:
-        t.join()
-
-    try:
-        # The cap holds even when 64 threads race for it.
-        assert len(created) == mcp_server.MAX_SSE_SESSIONS
-        assert len(set(created)) == len(created)
-    finally:
-        for session_id in list(mcp_server._SSE_SESSIONS):
-            mcp_server._close_sse_session(session_id)
 
 
 # ---------------------------------------------------------------------------

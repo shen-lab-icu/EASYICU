@@ -441,6 +441,12 @@ print(result.manifest_path)
 
 ### MCP server (for Claude Desktop / Continue / Cursor / etc.)
 
+Install the official MCP SDK extra:
+
+```bash
+pip install "easyicu[mcp]"
+```
+
 ```bash
 python -m easyicu.research_agent.mcp_server --transport stdio
 ```
@@ -458,8 +464,8 @@ mcp_dispatch("research_agent.run", {
 })
 ```
 
-The server answers MCP JSON-RPC methods `initialize`, `tools/list` and
-`tools/call` over stdio. In addition to the end-to-end
+The server delegates protocol negotiation, JSON-RPC validation and stdio
+framing to the official MCP Python SDK. In addition to the end-to-end
 `research_agent.run`, it exposes atomic tools for external agents:
 `build_context`, `list_concepts`, `describe_concept`, `load_concepts`,
 `audit_cohort`, `run_validator`, `cross_database_concept_availability`,
@@ -469,12 +475,25 @@ tools, not raw SQL tools: external agents can call EasyICU's existing
 therapies, outcomes, scores, sepsis definitions, SOFA/SOFA-2 components,
 etc.), check cross-database derivability before extraction, and register
 the resulting table/figure/log outputs into the SHA-256 EvidenceStore for
-downstream manuscript binding. A minimal legacy SSE bridge is also
-available:
+downstream manuscript binding. For remote clients, use the SDK's stateless
+JSON Streamable HTTP transport:
 
 ```bash
-python -m easyicu.research_agent.mcp_server --transport sse --port 8765
+EASYICU_MCP_BEARER_TOKEN=... \
+python -m easyicu.research_agent.mcp_server \
+  --transport streamable-http \
+  --port 8765
 ```
+
+The endpoint is `/mcp`. Non-loopback binding requires an independent MCP
+bearer token; patient-row disclosure additionally requires the separate
+`EASYICU_MCP_PATIENT_DATA_TOKEN` credential and the
+`read_patient_data` scope.
+
+`--tool-timeout-seconds` is an optional request-wait ceiling, not a hard
+process kill: a synchronous tool that already started remains inside the
+bounded worker pool and is allowed to finish. Pipeline-level runner timeouts
+remain the authority for stopping managed analysis subprocesses.
 
 ### Testing / CI
 

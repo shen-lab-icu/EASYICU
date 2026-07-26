@@ -1,0 +1,465 @@
+"""Official MCP SDK protocol and transport integration tests."""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import os
+import sys
+import threading
+import time
+from pathlib import Path
+
+import httpx
+import mcp.types as mcp_types
+import pytest
+from mcp import ClientSession, StdioServerParameters
+from mcp.client.stdio import stdio_client
+from mcp.shared.memory import create_connected_server_and_client_session
+from starlette.applications import Starlette
+
+from easyicu.research_agent.mcp_policy import (
+    MCP_ALLOWED_ROOTS_ENV,
+    MCP_PATIENT_DATA_TOKEN_ENV,
+    MCP_SCOPES_ENV,
+    granted_scopes,
+)
+from easyicu.research_agent.mcp_transport import (
+    create_mcp_server,
+    create_streamable_http_app,
+    validate_http_server_config,
+)
+
+
+@pytest.fixture
+def anyio_backend():
+    return "asyncio"
+
+
+@pytest.fixture(autouse=True)
+def _mcp_policy(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv(MCP_ALLOWED_ROOTS_ENV, str(tmp_path))
+    monkeypatch.setenv(
+        MCP_SCOPES_ENV,
+        "metadata,run_pipeline,write_artifacts,bind_evidence",
+    )
+
+
+@pytest.mark.anyio
+async def test_official_client_initializes_lists_and_calls_tools() -> None:
+    server = create_mcp_server()
+
+    async with create_connected_server_and_client_session(
+        server,
+        raise_exceptions=True,
+    ) as session:
+        initialized = await session.initialize()
+        listed = await session.list_tools()
+        result = await session.call_tool("research_agent.list_skills", {})
+
+    assert initialized.serverInfo.name == "easyicu-research-agent"
+    names = {tool.name for tool in listed.tools}
+    assert {
+        "research_agent.run",
+        "research_agent.list_skills",
+        "research_agent.read_manifest",
+        "research_agent.bind_evidence",
+    } <= names
+    assert result.isError is False
+    assert result.structuredContent is not None
+    keys = {item["key"] for item in result.structuredContent["skills"]}
+    assert {"association_analysis", "prediction_model", "data_quality_audit"} <= keys
+
+
+@pytest.mark.anyio
+async def test_sdk_validates_input_schema_before_dispatch() -> None:
+    calls: list[tuple[str, dict]] = []
+    server = create_mcp_server(
+        dispatcher=lambda name, arguments: (
+            calls.append((name, arguments or {})) or {"unexpected": True}
+        )
+    )
+
+    async with create_connected_server_and_client_session(
+        server,
+        raise_exceptions=True,
+    ) as session:
+        await session.initialize()
+        result = await session.call_tool("research_agent.run", {})
+
+    assert result.isError is True
+    assert "Input validation error" in result.content[0].text
+    assert calls == []
+
+
+@pytest.mark.anyio
+async def test_sdk_preserves_structured_error_contract() -> None:
+    server = create_mcp_server(
+        dispatcher=lambda _name, _arguments: {
+            "error": "scope not granted",
+            "error_code": "scope_not_granted",
+        }
+    )
+
+    async with create_connected_server_and_client_session(
+        server,
+        raise_exceptions=True,
+    ) as session:
+        await session.initialize()
+        result = await session.call_tool("research_agent.list_skills", {})
+
+    assert result.isError is True
+    assert result.structuredContent == {
+        "error": "scope not granted",
+        "error_code": "scope_not_granted",
+    }
+    assert json.loads(result.content[0].text) == result.structuredContent
+
+
+@pytest.mark.anyio
+async def test_tool_timeout_returns_error_and_server_remains_usable() -> None:
+    release = threading.Event()
+    calls = 0
+
+    def dispatcher(_name: str, _arguments: dict | None) -> dict:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            release.wait(timeout=2)
+        return {"call": calls}
+
+    server = create_mcp_server(
+        dispatcher=dispatcher,
+        tool_timeout_seconds=0.05,
+    )
+    async with create_connected_server_and_client_session(
+        server,
+        raise_exceptions=True,
+    ) as session:
+        await session.initialize()
+        timed_out = await session.call_tool("research_agent.list_skills", {})
+        release.set()
+        await asyncio.sleep(0.05)
+        completed = await session.call_tool("research_agent.list_skills", {})
+
+    assert timed_out.isError is True
+    assert timed_out.structuredContent["error_code"] == "tool_timeout"
+    assert completed.isError is False
+
+
+@pytest.mark.anyio
+async def test_tool_limiter_bounds_concurrent_dispatch() -> None:
+    lock = threading.Lock()
+    active = 0
+    maximum = 0
+
+    def dispatcher(_name: str, _arguments: dict | None) -> dict:
+        nonlocal active, maximum
+        with lock:
+            active += 1
+            maximum = max(maximum, active)
+        try:
+            time.sleep(0.08)
+            return {"ok": True}
+        finally:
+            with lock:
+                active -= 1
+
+    server = create_mcp_server(
+        dispatcher=dispatcher,
+        max_concurrent_tool_calls=2,
+    )
+    async with create_connected_server_and_client_session(
+        server,
+        raise_exceptions=True,
+    ) as session:
+        await session.initialize()
+        results = await asyncio.gather(
+            *[
+                session.call_tool("research_agent.list_skills", {})
+                for _ in range(6)
+            ]
+        )
+
+    assert all(result.isError is False for result in results)
+    assert maximum == 2
+
+
+@pytest.mark.anyio
+async def test_client_cancellation_does_not_poison_later_calls() -> None:
+    started = threading.Event()
+    release = threading.Event()
+    calls = 0
+
+    def dispatcher(_name: str, _arguments: dict | None) -> dict:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            started.set()
+            release.wait(timeout=2)
+        return {"call": calls}
+
+    server = create_mcp_server(dispatcher=dispatcher)
+    async with create_connected_server_and_client_session(
+        server,
+        raise_exceptions=True,
+    ) as session:
+        await session.initialize()
+        pending = asyncio.create_task(
+            session.call_tool("research_agent.list_skills", {})
+        )
+        assert await asyncio.to_thread(started.wait, 1)
+        pending.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await pending
+        release.set()
+        await asyncio.sleep(0.05)
+        completed = await session.call_tool("research_agent.list_skills", {})
+
+    assert completed.isError is False
+
+
+@pytest.mark.anyio
+async def test_real_stdio_transport_uses_official_client(tmp_path: Path) -> None:
+    env = os.environ.copy()
+    env[MCP_ALLOWED_ROOTS_ENV] = str(tmp_path)
+    env[MCP_SCOPES_ENV] = "metadata"
+    parameters = StdioServerParameters(
+        command=sys.executable,
+        args=[
+            "-m",
+            "easyicu.research_agent.mcp_server",
+            "--transport",
+            "stdio",
+        ],
+        cwd=str(Path(__file__).resolve().parents[2]),
+        env=env,
+    )
+
+    async with stdio_client(parameters) as (read_stream, write_stream):
+        async with ClientSession(read_stream, write_stream) as session:
+            initialized = await session.initialize()
+            listed = await session.list_tools()
+
+    assert initialized.serverInfo.name == "easyicu-research-agent"
+    assert "research_agent.list_skills" in {tool.name for tool in listed.tools}
+
+
+def _initialize_payload() -> dict:
+    return {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "initialize",
+        "params": {
+            "protocolVersion": mcp_types.LATEST_PROTOCOL_VERSION,
+            "capabilities": {},
+            "clientInfo": {"name": "easyicu-test", "version": "1"},
+        },
+    }
+
+
+def _http_client(app: Starlette) -> httpx.AsyncClient:
+    return httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="http://testserver",
+    )
+
+
+def _http_app(
+    *,
+    server=None,
+    bearer_token: str | None = None,
+    max_body_bytes: int = 1024 * 1024,
+):
+    return create_streamable_http_app(
+        server=server,
+        host="127.0.0.1",
+        port=80,
+        bearer_token=bearer_token,
+        allowed_hosts=["testserver"],
+        allowed_origins=["http://trusted.example"],
+        max_body_bytes=max_body_bytes,
+    )
+
+
+@pytest.mark.anyio
+async def test_streamable_http_initializes_without_custom_jsonrpc_parser() -> None:
+    app = _http_app()
+    async with app.router.lifespan_context(app):
+        async with _http_client(app) as client:
+            response = await client.post(
+                "/mcp",
+                headers={
+                    "Accept": "application/json, text/event-stream",
+                    "Content-Type": "application/json",
+                },
+                json=_initialize_payload(),
+            )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["result"]["serverInfo"]["name"] == "easyicu-research-agent"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("headers", "expected_status"),
+    [
+        ({"Origin": "https://evil.example"}, 403),
+        ({"Origin": "null"}, 403),
+        ({"Host": "evil.example"}, 421),
+        ({"Content-Type": "text/plain"}, 400),
+    ],
+)
+async def test_streamable_http_sdk_rejects_unsafe_headers(
+    headers: dict[str, str],
+    expected_status: int,
+) -> None:
+    app = _http_app()
+    request_headers = {
+        "Accept": "application/json, text/event-stream",
+        "Content-Type": "application/json",
+        **headers,
+    }
+    async with app.router.lifespan_context(app):
+        async with _http_client(app) as client:
+            response = await client.post(
+                "/mcp",
+                headers=request_headers,
+                content=json.dumps(_initialize_payload()),
+            )
+
+    assert response.status_code == expected_status
+
+
+@pytest.mark.anyio
+async def test_streamable_http_rejects_malformed_and_oversized_messages() -> None:
+    app = _http_app(max_body_bytes=8)
+    headers = {
+        "Accept": "application/json, text/event-stream",
+        "Content-Type": "application/json",
+    }
+    async with app.router.lifespan_context(app):
+        async with _http_client(app) as client:
+            oversized = await client.post("/mcp", headers=headers, content=b"x" * 9)
+
+    assert oversized.status_code == 413
+
+    app = _http_app()
+    async with app.router.lifespan_context(app):
+        async with _http_client(app) as client:
+            malformed = await client.post("/mcp", headers=headers, content=b"{")
+
+    assert malformed.status_code == 400
+
+
+@pytest.mark.anyio
+async def test_streamable_http_enforces_bearer_and_patient_credentials(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(MCP_SCOPES_ENV, "metadata,read_patient_data")
+    monkeypatch.setenv(MCP_PATIENT_DATA_TOKEN_ENV, "patient-token")
+
+    def projected_scopes(_name: str, _arguments: dict | None) -> dict:
+        return {"scopes": sorted(granted_scopes())}
+
+    server = create_mcp_server(dispatcher=projected_scopes)
+    app = _http_app(server=server, bearer_token="mcp-token")
+    headers = {
+        "Accept": "application/json, text/event-stream",
+        "Content-Type": "application/json",
+    }
+    call = {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "tools/call",
+        "params": {
+            "name": "research_agent.list_skills",
+            "arguments": {},
+        },
+    }
+    async with app.router.lifespan_context(app):
+        async with _http_client(app) as client:
+            missing = await client.post("/mcp", headers=headers, json=call)
+            authorized = await client.post(
+                "/mcp",
+                headers={**headers, "Authorization": "Bearer mcp-token"},
+                json=call,
+            )
+            patient_authorized = await client.post(
+                "/mcp",
+                headers={
+                    **headers,
+                    "Authorization": "Bearer mcp-token",
+                    "X-EasyICU-Patient-Data": "patient-token",
+                },
+                json=call,
+            )
+
+    assert missing.status_code == 401
+    assert authorized.status_code == 200
+    assert authorized.json()["result"]["structuredContent"]["scopes"] == ["metadata"]
+    assert patient_authorized.json()["result"]["structuredContent"]["scopes"] == [
+        "metadata",
+        "read_patient_data",
+    ]
+
+
+@pytest.mark.anyio
+async def test_anonymous_loopback_http_cannot_start_pipeline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import easyicu.research_agent.mcp_server as tool_server
+
+    started: list[bool] = []
+
+    class _NeverRuns:
+        def __init__(self, **_kwargs):
+            started.append(True)
+
+    monkeypatch.setattr(tool_server, "ResearchAgentPipeline", _NeverRuns)
+    app = _http_app()
+    call = {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "tools/call",
+        "params": {
+            "name": "research_agent.run",
+            "arguments": {
+                "question": "q",
+                "cohort_path": "cohort.parquet",
+                "model": "local-model",
+            },
+        },
+    }
+    async with app.router.lifespan_context(app):
+        async with _http_client(app) as client:
+            response = await client.post(
+                "/mcp",
+                headers={
+                    "Accept": "application/json, text/event-stream",
+                    "Content-Type": "application/json",
+                },
+                json=call,
+            )
+
+    assert response.status_code == 200
+    result = response.json()["result"]
+    assert result["isError"] is True
+    assert result["structuredContent"]["error_code"] == "scope_not_granted"
+    assert started == []
+
+
+def test_remote_http_bind_requires_an_independent_token(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "provider-secret")
+
+    with pytest.raises(ValueError, match="non-loopback"):
+        validate_http_server_config("0.0.0.0", None)
+    with pytest.raises(ValueError, match="must not reuse OPENAI_API_KEY"):
+        validate_http_server_config("0.0.0.0", "provider-secret")
+    assert (
+        validate_http_server_config("0.0.0.0", "independent-mcp-token")
+        == "independent-mcp-token"
+    )
