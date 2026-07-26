@@ -288,6 +288,36 @@ def test_p0_resume_without_a_pause_is_refused():
         agent.resume_human_review([])
 
 
+def test_rejected_workflow_clears_the_pipeline_pause(tmp_path):
+    """The public pipeline must not keep offering a terminal pause to callers."""
+
+    from easyicu.research_agent.orchestration.workflow import HumanReviewRejected
+    from easyicu.research_agent.pipeline import ResearchAgentPipeline
+
+    class _RejectingWorkflow:
+        def resume(self, *_args, **_kwargs):
+            raise HumanReviewRejected(("review-0123456789abcdef",))
+
+    class _Pending:
+        run_id = "20260726T110000_abcdef"
+        run_dir = str(tmp_path / "run")
+        resumable_here = True
+
+    Path(_Pending.run_dir).mkdir(parents=True)
+    agent = ResearchAgentPipeline(workdir=tmp_path / "wd")
+    agent._pending_human_review = {
+        "workflow": _RejectingWorkflow(),
+        "pending": _Pending(),
+        "runtime_capabilities": (),
+        "runtime_bundle": None,
+    }
+
+    with pytest.raises(HumanReviewRejected):
+        agent.resume_human_review([])
+
+    assert agent._pending_human_review is None
+
+
 def test_p0_full_pause_and_resume_through_the_real_workflow(tmp_path):
     """plan → pause → resume → real record → recorder → evidence.
 

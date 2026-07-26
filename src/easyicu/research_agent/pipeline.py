@@ -4570,7 +4570,10 @@ class ResearchAgentPipeline:
         caller can check before asking a human for a decision it cannot deliver.
         """
 
-        from .orchestration.workflow import HUMAN_REVIEW_RESUME_SCOPE
+        from .orchestration.workflow import (
+            HUMAN_REVIEW_RESUME_SCOPE,
+            HumanReviewRejected,
+        )
 
         pending_state = self._pending_human_review
         if not pending_state:
@@ -4614,10 +4617,17 @@ class ResearchAgentPipeline:
         # and evidence store, so it must not proceed while another call is
         # writing there. ``run`` returns when it pauses, releasing its lease,
         # which is exactly why resume has to take one of its own.
-        with acquire_run_execution_lock(
-            workdir=Path(self.workdir), run_id=pending.run_id
-        ):
-            outcome = pending_state["workflow"].resume(payload)
+        try:
+            with acquire_run_execution_lock(
+                workdir=Path(self.workdir), run_id=pending.run_id
+            ):
+                outcome = pending_state["workflow"].resume(payload)
+        except HumanReviewRejected:
+            # The workflow has recorded the rejection and discarded its live
+            # handoff. Do not keep presenting the public pipeline pause as
+            # answerable or allow a later approval attempt against it.
+            self._pending_human_review = None
+            raise
         return self._pipeline_result_or_pending(
             outcome,
             workflow=pending_state["workflow"],

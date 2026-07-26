@@ -26,8 +26,6 @@ handoffs have a complete artifact-rehydration contract.
 
 from __future__ import annotations
 
-import hashlib
-import json
 import os
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -36,6 +34,7 @@ from typing import Any, Callable, Literal, Optional, Protocol, runtime_checkable
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from ..canonical_json import canonical_sha256
 from ..contracts.runtime import (
     _ExecutePhaseResult,
     _PlanPhaseResult,
@@ -50,6 +49,7 @@ __all__ = [
     "HumanReviewAuthorityError",
     "HumanReviewDecision",
     "HumanReviewPending",
+    "HumanReviewRejected",
     "HumanReviewRequest",
     "OrchestrationRuntimeReceipt",
     "PipelineWorkflow",
@@ -84,11 +84,20 @@ class HumanReviewAuthorityError(RuntimeError):
     """
 
 
+class HumanReviewRejected(RuntimeError):
+    """Terminal operator rejection of one or more paused review requests."""
+
+    def __init__(self, review_ids: Sequence[str]) -> None:
+        self.review_ids = tuple(str(item) for item in review_ids)
+        super().__init__(
+            "human review rejected request(s): " + ", ".join(self.review_ids)
+        )
+
+
 def _review_digest(payload: Mapping[str, Any]) -> str:
-    encoded = json.dumps(
-        dict(payload), sort_keys=True, separators=(",", ":"), ensure_ascii=False
-    ).encode("utf-8")
-    return hashlib.sha256(encoded).hexdigest()
+    """Hash a JSON-compatible review payload with the shared canonical owner."""
+
+    return canonical_sha256(dict(payload))
 
 
 class HumanReviewRequest(BaseModel):
@@ -298,7 +307,7 @@ def _human_review_decision_record(
     decision: HumanReviewDecision,
     reviewer_identity: Optional[str],
 ) -> dict[str, Any]:
-    """Build the auditable record for one approved human review.
+    """Build the auditable record for one human-review decision.
 
     ``reviewer`` and ``decided_at`` arrive in the resume payload, so they are
     whatever the client typed. They are kept for context but are not the
@@ -323,15 +332,10 @@ def _human_review_decision_record(
         ),
         "server_decided_at": datetime.now(timezone.utc).isoformat(),
         "note": decision.note,
-        "request_sha256": _canonical_sha256(request_payload),
-        "decision_sha256": _canonical_sha256(decision_payload),
+        "request_sha256": canonical_sha256(request_payload),
+        "decision_sha256": canonical_sha256(decision_payload),
     }
     return record
-
-
-def _canonical_sha256(payload: Mapping[str, Any]) -> str:
-    rendered = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
-    return hashlib.sha256(rendered.encode("utf-8")).hexdigest()
 
 
 class OrchestrationRuntimeReceipt(BaseModel):
@@ -400,7 +404,11 @@ class WorkflowEngine(Protocol):
         self,
         decisions: Sequence[HumanReviewDecision | Mapping[str, Any]],
     ) -> WorkflowCompleted:
-        """Validate decisions for the active pause and continue the run."""
+        """Validate the active pause, continuing only when every item is approved.
+
+        A valid rejection raises :class:`HumanReviewRejected` after its
+        evidence record is persisted and permanently terminalizes the engine.
+        """
 
 
 class PipelineWorkflow:
@@ -508,12 +516,14 @@ class PipelineWorkflow:
             raise ValueError("human review decisions must cover exact paused requests")
 
         records: list[dict[str, Any]] = []
-        for review_id, decision in observed.items():
-            request = expected[review_id]
+        rejected_ids: list[str] = []
+        # Request order is the host-owned order. Client map/list ordering must
+        # not change evidence record order or downstream manifest digests.
+        for request in self._requests:
+            review_id = request.review_id
+            decision = observed[review_id]
             if decision.authority_sha256 != request.authority_sha256:
                 raise ValueError("human review decision authority digest mismatch")
-            if decision.decision != "approved":
-                raise RuntimeError(f"human review rejected request {review_id}")
             records.append(
                 _human_review_decision_record(
                     request=request,
@@ -525,13 +535,33 @@ class PipelineWorkflow:
                     ),
                 )
             )
-        if self._human_review_recorder is not None:
-            self._human_review_recorder(tuple(records))
+            if decision.decision == "rejected":
+                rejected_ids.append(review_id)
+
+        if rejected_ids:
+            try:
+                if self._human_review_recorder is not None:
+                    self._human_review_recorder(tuple(records))
+            except Exception:
+                self._discard_live_pause(state="failed")
+                raise
+            self._discard_live_pause(state="rejected")
+            raise HumanReviewRejected(rejected_ids)
+
         try:
+            if self._human_review_recorder is not None:
+                self._human_review_recorder(tuple(records))
             return self._finish(tuple(records))
         except Exception:
-            self._state = "failed"
+            self._discard_live_pause(state="failed")
             raise
+
+    def _discard_live_pause(self, *, state: str) -> None:
+        """Terminalize the engine and release non-rehydratable live handoffs."""
+
+        self._state = state
+        self._requests = ()
+        self._plan_result = None
 
     def _finish(
         self,
@@ -546,11 +576,12 @@ class PipelineWorkflow:
             execute_result,
             write_result,
         )
-        self._state = "completed"
-        return WorkflowCompleted(
+        completed = WorkflowCompleted(
             final_result=final_result,
             human_review_decisions=decisions,
         )
+        self._discard_live_pause(state="completed")
+        return completed
 
 
 def build_pipeline_workflow(
