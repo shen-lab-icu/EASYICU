@@ -204,6 +204,26 @@ def _compute_missingness_test_metadata(df: pd.DataFrame) -> Dict[str, Any]:
             "note": "insufficient_complete_support",
         }
     panel = numeric[cols[: min(len(cols), 8)]]
+    # Little's test is invariant to an affine rescaling of each variable.
+    # Standardising here prevents a nearly singular or mixed-scale ICU panel
+    # from making the EM covariance iteration overflow.  Columns with no
+    # observed variance carry no information for this screen and are omitted.
+    means = panel.mean(skipna=True)
+    scales = panel.std(skipna=True, ddof=0)
+    stable_columns = [
+        column
+        for column in panel.columns
+        if np.isfinite(means[column])
+        and np.isfinite(scales[column])
+        and float(scales[column]) > np.finfo(float).eps
+    ]
+    panel = (panel[stable_columns] - means[stable_columns]) / scales[stable_columns]
+    if panel.shape[1] < 2:
+        return {
+            "name": "not_run",
+            "p_value": None,
+            "note": "fewer_than_two_nonconstant_incomplete_numeric_variables",
+        }
     complete = panel.dropna()
     if len(complete) < max(10, panel.shape[1] + 2):
         return {
@@ -216,7 +236,20 @@ def _compute_missingness_test_metadata(df: pd.DataFrame) -> Dict[str, Any]:
     except Exception:
         return {"name": "not_run", "p_value": None, "note": "scipy_unavailable"}
 
-    mu, cov = _estimate_mvn_with_em(panel.to_numpy(dtype=float))
+    try:
+        mu, cov = _estimate_mvn_with_em(panel.to_numpy(dtype=float))
+    except (FloatingPointError, np.linalg.LinAlgError, ValueError):
+        return {
+            "name": "not_run",
+            "p_value": None,
+            "note": "numerically_unstable_mcar_screen",
+        }
+    if not np.isfinite(mu).all() or not np.isfinite(cov).all():
+        return {
+            "name": "not_run",
+            "p_value": None,
+            "note": "nonfinite_mcar_estimate",
+        }
 
     pattern_df = panel.isna().astype(int)
     patterns = pattern_df.astype(str).agg("".join, axis=1)
@@ -287,35 +320,42 @@ def _estimate_mvn_with_em(
     for _ in range(max_iter):
         expected_sum = np.zeros(p, dtype=float)
         second_sum = np.zeros((p, p), dtype=float)
-        for obs, mis, rows in pattern_groups:
-            group_n = len(rows)
-            if len(mis) == 0:
-                expected = rows.astype(float, copy=False)
-                expected_sum += expected.sum(axis=0)
-                second_sum += expected.T @ expected
-            elif len(obs) == 0:
-                expected_sum += group_n * mu
-                second_sum += group_n * (cov + np.outer(mu, mu))
-            else:
-                sigma_oo = cov[np.ix_(obs, obs)] + np.eye(len(obs)) * 1e-8
-                sigma_mo = cov[np.ix_(mis, obs)]
-                sigma_om = cov[np.ix_(obs, mis)]
-                sigma_mm = cov[np.ix_(mis, mis)]
-                inv_oo = np.linalg.pinv(sigma_oo)
-                conditional_weights = sigma_mo @ inv_oo
-                cond_cov = sigma_mm - conditional_weights @ sigma_om
+        with np.errstate(over="raise", invalid="raise", divide="raise"):
+            for obs, mis, rows in pattern_groups:
+                group_n = len(rows)
+                if len(mis) == 0:
+                    expected = rows.astype(float, copy=False)
+                    expected_sum += expected.sum(axis=0)
+                    second_sum += expected.T @ expected
+                elif len(obs) == 0:
+                    expected_sum += group_n * mu
+                    second_sum += group_n * (cov + np.outer(mu, mu))
+                else:
+                    sigma_oo = cov[np.ix_(obs, obs)] + np.eye(len(obs)) * 1e-8
+                    sigma_mo = cov[np.ix_(mis, obs)]
+                    sigma_om = cov[np.ix_(obs, mis)]
+                    sigma_mm = cov[np.ix_(mis, mis)]
+                    inv_oo = np.linalg.pinv(sigma_oo)
+                    conditional_weights = sigma_mo @ inv_oo
+                    cond_cov = sigma_mm - conditional_weights @ sigma_om
 
-                expected = rows.copy().astype(float)
-                expected[:, mis] = (
-                    mu[mis] + (rows[:, obs] - mu[obs]) @ conditional_weights.T
-                )
-                expected_sum += expected.sum(axis=0)
-                second_sum += expected.T @ expected
-                second_sum[np.ix_(mis, mis)] += group_n * cond_cov
+                    expected = rows.copy().astype(float)
+                    expected[:, mis] = (
+                        mu[mis]
+                        + (rows[:, obs] - mu[obs]) @ conditional_weights.T
+                    )
+                    expected_sum += expected.sum(axis=0)
+                    second_sum += expected.T @ expected
+                    second_sum[np.ix_(mis, mis)] += group_n * cond_cov
 
-        mu_new = expected_sum / n
-        cov_new = second_sum / n - np.outer(mu_new, mu_new)
+            mu_new = expected_sum / n
+            cov_new = second_sum / n - np.outer(mu_new, mu_new)
         cov_new = (cov_new + cov_new.T) / 2.0
+        eigenvalues, eigenvectors = np.linalg.eigh(cov_new)
+        covariance_floor = 1e-8
+        cov_new = (eigenvectors * np.maximum(eigenvalues, covariance_floor)) @ (
+            eigenvectors.T
+        )
         cov_new += np.eye(p) * 1e-6
 
         if np.max(np.abs(mu_new - mu)) < tol and np.max(np.abs(cov_new - cov)) < tol:

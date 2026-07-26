@@ -224,6 +224,40 @@ def test_missingness_test_is_not_run_when_panel_is_too_small(ra):
     assert lact.missingness.missingness_test == "not_run"
 
 
+def test_missingness_screen_stabilizes_collinear_mixed_scale_panel(ra):
+    rows = 80
+    base = np.arange(rows, dtype=float)
+    first = base.copy()
+    second = base * 1_000_000_000.0
+    constant = np.ones(rows, dtype=float)
+    first[::7] = np.nan
+    second[::9] = np.nan
+    constant[::5] = np.nan
+    df = pd.DataFrame(
+        {
+            "stay_id": np.arange(rows),
+            "first": first,
+            "second": second,
+            "constant_when_observed": constant,
+        }
+    )
+
+    import warnings
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", RuntimeWarning)
+        ctx = ra.build_research_context(
+            research_question="Audit a mixed-scale missingness panel.",
+            cohort=df,
+            cohort_name="c",
+            database="synthetic",
+        )
+
+    profile = ctx.variable("first").missingness
+    assert profile is not None
+    assert profile.missingness_test in {"little_mcar_em", "not_run"}
+
+
 def test_context_marks_generic_count_and_measurement_companions_as_audit_metadata(ra):
     df = pd.DataFrame(
         {

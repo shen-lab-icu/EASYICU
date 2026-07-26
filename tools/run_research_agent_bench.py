@@ -1124,6 +1124,10 @@ def _run_one_arm(
     from easyicu.research_agent.reporting.reporting_checklist import (
         checklist_names_for_kind,
     )
+    from benchmarks.figure2_canonical9.protocol_prompt import (
+        task_protocol_note_for_item,
+        task_protocol_preferences_for_item,
+    )
 
     # The provided cohort is already materialised; let the planner reference any
     # of its columns in a CTAS predicate without tripping the static dictionary
@@ -1207,7 +1211,8 @@ def _run_one_arm(
         concept_descriptions=concept_descriptions,
         inclusion_criteria=item.inclusion_criteria,
         id_columns=(getattr(item, "id_columns", None) or None),
-        notes=getattr(item, "notes", None),
+        user_preferences=task_protocol_preferences_for_item(item),
+        notes=task_protocol_note_for_item(item),
         resume_run_id=resolved_resume_run_id,
         resume_from_step_id=resume_from_step_id,
         stop_after_step_id=stop_after_step_id,
