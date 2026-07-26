@@ -426,6 +426,38 @@ def test_coder_repair_separates_provenance_audit_from_value_selection(ra):
     assert "fail the entire completed step" in prompt
 
 
+def test_coder_repair_removes_undeclared_provenance_scope(ra):
+    llm = _RecordingLLM()
+    step = ra.AnalysisStep(
+        step_id="cohort",
+        intent="Apply the host-bound cohort predicates.",
+        inputs=[],
+        expected_outputs=["artifact:analysis_cohort", "table:cohort_flow"],
+        method="cohort_definition_and_attrition",
+    )
+    code = (
+        "receipt = measurement_provenance_receipt("
+        "frame, measured_column='signal_measured', count_column='signal_n')\n"
+    )
+
+    CoderAgent(llm).repair(
+        context=_context(ra),
+        step=step,
+        code=code,
+        run_log=(
+            'DETAIL: {"reason":"measurement_provenance_pair_undeclared",'
+            '"helper_name":"measurement_provenance_receipt","line":1,'
+            '"declared_pairs":[]}'
+        ),
+    )
+
+    prompt = llm.messages[-1].content
+    assert "DIAGNOSED UNDECLARED PROVENANCE-SCOPE REPAIR" in prompt
+    assert "remove every reported `measurement_provenance_receipt` call" in prompt
+    assert "Do not add raw inputs" in prompt
+    assert "only those exact predicate coordinates" in prompt
+
+
 def test_coder_repair_fail_closes_nonterminating_provenance_audit(ra):
     llm = _RecordingLLM()
     step = ra.AnalysisStep(

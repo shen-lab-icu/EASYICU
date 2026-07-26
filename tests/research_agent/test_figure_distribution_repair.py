@@ -142,6 +142,23 @@ def test_relocates_measurement_provenance_helper_import() -> None:
     )
 
 
+def test_relocates_measurement_provenance_helper_from_package_root() -> None:
+    code = (
+        "from easyicu.research_agent.methods "
+        "import measurement_provenance_receipt\n"
+    )
+    repaired = patch_known_host_helper_import(
+        code,
+        "ImportError: cannot import name 'measurement_provenance_receipt' "
+        "from 'easyicu.research_agent.methods'",
+    )
+
+    assert repaired == (
+        "from easyicu.research_agent.methods.descriptive_inputs "
+        "import measurement_provenance_receipt\n"
+    )
+
+
 def test_known_host_helper_relocation_rejects_unclosed_helpers() -> None:
     code = "from easyicu.research_agent.methods.validation import fit_model\n"
     assert (

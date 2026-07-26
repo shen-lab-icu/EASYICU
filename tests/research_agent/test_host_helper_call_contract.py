@@ -67,6 +67,15 @@ def _signature_findings(script: str, ra):
     ]
 
 
+def _provenance_scope_findings(script: str, step):
+    return [
+        finding
+        for finding in audit_mechanical_code_contracts(script, step)
+        if (finding.detail or {}).get("reason")
+        == "measurement_provenance_pair_undeclared"
+    ]
+
+
 def _unpack_findings(script: str, ra):
     return [
         finding
@@ -186,6 +195,93 @@ receipt = measurement_provenance_receipt(
 """
 
     assert _signature_findings(script, ra) == []
+
+
+def test_measurement_receipt_requires_exact_planner_declared_pair(ra):
+    step = ra.AnalysisStep(
+        step_id="cohort",
+        intent="Apply host-bound cohort predicates.",
+        inputs=[],
+        expected_outputs=["artifact:analysis_cohort", "table:cohort_flow"],
+        method="cohort_definition_and_attrition",
+    )
+    script = """
+from easyicu.research_agent.methods import measurement_provenance_receipt
+receipt = measurement_provenance_receipt(
+    frame,
+    measured_column="signal_measured",
+    count_column="signal_n",
+)
+"""
+
+    findings = _provenance_scope_findings(script, step)
+
+    assert len(findings) == 1
+    assert findings[0].detail == {
+        "reason": "measurement_provenance_pair_undeclared",
+        "helper_name": "measurement_provenance_receipt",
+        "line": 3,
+        "declared_pairs": [],
+        "observed_pair": ["signal_measured", "signal_n"],
+    }
+
+
+def test_measurement_receipt_rejects_different_literal_pair(ra):
+    script = """
+from easyicu.research_agent.methods.descriptive_inputs import measurement_provenance_receipt
+receipt = measurement_provenance_receipt(
+    frame,
+    measured_column="other_measured",
+    count_column="other_n",
+)
+"""
+
+    findings = _provenance_scope_findings(script, _step(ra))
+
+    assert len(findings) == 1
+    assert findings[0].detail["declared_pairs"] == [
+        ["value_measured", "value_n"]
+    ]
+    assert findings[0].detail["observed_pair"] == [
+        "other_measured",
+        "other_n",
+    ]
+
+
+def test_measurement_receipt_dynamic_call_passes_with_declared_pair(ra):
+    script = """
+from easyicu.research_agent.methods.descriptive_inputs import measurement_provenance_receipt
+receipt = measurement_provenance_receipt(
+    frame,
+    measured_column=measured_column,
+    count_column=count_column,
+)
+"""
+
+    assert _provenance_scope_findings(script, _step(ra)) == []
+
+
+def test_measurement_receipt_runtime_introspection_is_blocked(ra):
+    script = """
+import inspect
+from easyicu.research_agent.methods.descriptive_inputs import measurement_provenance_receipt
+signature = inspect.signature(measurement_provenance_receipt)
+receipt = measurement_provenance_receipt(
+    frame,
+    measured_column="value_measured",
+    count_column="value_n",
+)
+"""
+
+    findings = [
+        finding
+        for finding in audit_mechanical_code_contracts(script, _step(ra))
+        if (finding.detail or {}).get("reason")
+        == "host_helper_runtime_introspection"
+    ]
+
+    assert len(findings) == 1
+    assert findings[0].detail["helper_name"] == "measurement_provenance_receipt"
 
 
 def test_literal_measurement_receipt_columns_must_match_declared_companion_roles(ra):

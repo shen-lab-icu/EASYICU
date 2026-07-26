@@ -6933,6 +6933,87 @@ _HOST_HELPER_CALL_CONTRACTS: dict[tuple[str, str], dict[str, object]] = {
 }
 
 
+def _measurement_provenance_scope_findings(
+    tree: ast.Module,
+    step: AnalysisStep,
+) -> list[ValidationFinding]:
+    """Reject provenance calls that widen the Planner's raw-input scope.
+
+    ResearchContext may describe related provenance coordinates for semantic
+    interpretation, while executable measured/count pairs remain owned by the
+    step's exact inputs.  A host cohort-execution receipt can separately bind
+    predicate columns, but it never grants sibling-column access.
+    """
+
+    declared_inputs = {
+        str(value).strip()
+        for value in step.inputs
+        if ":" not in str(value) and str(value).strip()
+    }
+    declared_pairs = {
+        (measured_column, count_column)
+        for measured_column in declared_inputs
+        if (
+            count_column := companion_count_column_for_measured(measured_column)
+        )
+        and count_column in declared_inputs
+    }
+    findings: list[ValidationFinding] = []
+    for node in ast.walk(tree):
+        if not (
+            isinstance(node, ast.Call)
+            and _call_name(node.func).rsplit(".", 1)[-1]
+            == "measurement_provenance_receipt"
+        ):
+            continue
+        keyword_values = {
+            str(keyword.arg): keyword.value
+            for keyword in node.keywords
+            if keyword.arg is not None
+        }
+        measured_node = keyword_values.get("measured_column")
+        count_node = keyword_values.get("count_column")
+        observed_pair = (
+            (
+                str(measured_node.value),
+                str(count_node.value),
+            )
+            if isinstance(measured_node, ast.Constant)
+            and isinstance(measured_node.value, str)
+            and isinstance(count_node, ast.Constant)
+            and isinstance(count_node.value, str)
+            else None
+        )
+        if declared_pairs and (
+            observed_pair is None or observed_pair in declared_pairs
+        ):
+            continue
+        findings.append(
+            ValidationFinding(
+                validator="mechanical_code_preflight",
+                severity="error",
+                message=(
+                    "Generated code invokes measurement provenance outside an "
+                    "exact Planner-declared measured/count input pair."
+                ),
+                detail={
+                    "reason": "measurement_provenance_pair_undeclared",
+                    "helper_name": "measurement_provenance_receipt",
+                    "line": int(node.lineno),
+                    "declared_pairs": [
+                        list(pair) for pair in sorted(declared_pairs)
+                    ],
+                    **(
+                        {"observed_pair": list(observed_pair)}
+                        if observed_pair is not None
+                        else {}
+                    ),
+                },
+            )
+        )
+    return findings
+
+
 def _host_helper_call_signature_findings(
     tree: ast.Module,
     step: AnalysisStep,
@@ -7772,11 +7853,18 @@ def _host_helper_runtime_introspection_findings(
                         "save_publication_figure"
                     )
                 elif (
-                    alias.name == "easyicu.research_agent.methods.descriptive_inputs"
-                    and alias.asname
+                    alias.asname
+                    and any(
+                        module == alias.name
+                        for module, _symbol in _HOST_HELPER_CALL_CONTRACTS
+                    )
                 ):
-                    helper_references[f"{alias.asname}.closed_categorical_counts"] = (
-                        "closed_categorical_counts"
+                    helper_references.update(
+                        {
+                            f"{alias.asname}.{symbol}": symbol
+                            for module, symbol in _HOST_HELPER_CALL_CONTRACTS
+                            if module == alias.name
+                        }
                     )
         elif isinstance(node, ast.ImportFrom) and node.level == 0:
             if node.module == "inspect":
@@ -7793,12 +7881,15 @@ def _host_helper_runtime_introspection_findings(
                         if alias.name == "save_publication_figure"
                     }
                 )
-            elif node.module == "easyicu.research_agent.methods.descriptive_inputs":
+            elif any(
+                module == node.module
+                for module, _symbol in _HOST_HELPER_CALL_CONTRACTS
+            ):
                 helper_references.update(
                     {
-                        alias.asname or alias.name: "closed_categorical_counts"
+                        alias.asname or alias.name: alias.name
                         for alias in node.names
-                        if alias.name == "closed_categorical_counts"
+                        if (node.module, alias.name) in _HOST_HELPER_CALL_CONTRACTS
                     }
                 )
     if not helper_references:
@@ -8492,6 +8583,7 @@ def audit_mechanical_code_contracts(
     findings.extend(_ordinal_rounding_findings(tree))
     findings.extend(_scalar_cast_before_reduction_findings(tree))
     findings.extend(_first_time_companion_findings(tree))
+    findings.extend(_measurement_provenance_scope_findings(tree, step))
     findings.extend(_host_helper_call_signature_findings(tree, step))
     findings.extend(_count_companion_closed_domain_findings(tree, step))
     findings.extend(host_helper_result_findings(tree, step))
