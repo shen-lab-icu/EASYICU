@@ -70,13 +70,23 @@ def _case(root: Path, task_id: str, index: int) -> preflight.ResourceCase:
     )
 
 
-def _probe_payload(case: preflight.ResourceCase) -> dict[str, object]:
+def _probe_payload(
+    case: preflight.ResourceCase,
+    *,
+    h3_sample_stays: int | None = None,
+) -> dict[str, object]:
     trajectory = None
     if case.trajectory_binding is not None:
+        sampled = h3_sample_stays is not None
         trajectory = {
             "compressed_size_bytes": case.trajectory_binding.size,
-            "rows": case.trajectory_rows,
-            "columns": len(case.trajectory_columns),
+            "authority_rows": case.trajectory_rows,
+            "authority_columns": len(case.trajectory_columns),
+            "loaded_rows": 20 if sampled else case.trajectory_rows,
+            "loaded_columns": 3 if sampled else len(case.trajectory_columns),
+            "load_mode": "development_sample" if sampled else "full",
+            "sample_stays_requested": h3_sample_stays,
+            "loaded_stays": min(h3_sample_stays, 10) if sampled else None,
             "load_seconds": 0.25,
             "aggregated_rows": 12,
             "authority_sha256": case.trajectory_binding.authority_ref.sha256,
@@ -88,6 +98,7 @@ def _probe_payload(case: preflight.ResourceCase) -> dict[str, object]:
         "paper_authorized": False,
         "provider_calls": 0,
         "task_id": case.task_id,
+        "full_input_resource_qualified": h3_sample_stays is None,
         "family": preflight._FAMILY_BY_TASK[case.task_id],
         "family_executor": {
             "name": "fake_family",
@@ -186,6 +197,30 @@ def test_probe_source_compiles_and_contains_complete_zero_provider_contract(
     assert "EvidenceStore" in source
     assert 'provider_calls": 0' in source
     assert "OpenAI" not in source
+
+
+def test_h3_sample_probe_is_explicit_bounded_and_not_full_input_qualified(
+    tmp_path: Path,
+) -> None:
+    case = _case(tmp_path, "h3_trajectory_clustering", 8)
+    source = preflight._probe_code(case, h3_sample_stays=512)
+    payload = _probe_payload(case, h3_sample_stays=512)
+
+    compile(source, "<resource-probe>", "exec")
+    assert "TRAJECTORY_SAMPLE_STAYS = 512" in source
+    assert "SEMI JOIN selected_stays" in source
+    assert "pd.read_parquet(TRAJECTORY_PATH)" not in source
+    preflight._validate_probe(case, payload, h3_sample_stays=512)
+    assert payload["full_input_resource_qualified"] is False
+
+
+def test_h3_sample_probe_rejects_false_full_input_claim(tmp_path: Path) -> None:
+    case = _case(tmp_path, "h3_trajectory_clustering", 8)
+    payload = _probe_payload(case, h3_sample_stays=512)
+    payload["full_input_resource_qualified"] = True
+
+    with pytest.raises(preflight.ResourcePreflightError, match="changed"):
+        preflight._validate_probe(case, payload, h3_sample_stays=512)
 
 
 def test_probe_validation_fails_closed_on_authority_dimension_drift(

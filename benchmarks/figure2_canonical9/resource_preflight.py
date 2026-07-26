@@ -40,8 +40,8 @@ from benchmarks.figure2_canonical9.prompt_preflight import (
     _strict_rows,
 )
 
-RESOURCE_PREFLIGHT_SCHEMA_VERSION = "easyicu.canonical9_resource_preflight/1"
-RESOURCE_PROBE_SCHEMA_VERSION = "easyicu.canonical9_resource_probe/1"
+RESOURCE_PREFLIGHT_SCHEMA_VERSION = "easyicu.canonical9_resource_preflight/2"
+RESOURCE_PROBE_SCHEMA_VERSION = "easyicu.canonical9_resource_probe/2"
 RESOURCE_REPORT_FILENAME = "canonical9_resource_preflight.json"
 
 _CONTAINER_SOURCE_ROOT = "/easyicu-extra/canonical-source"
@@ -231,10 +231,25 @@ def _source_inventory(
     ]
 
 
-def _probe_code(case: ResourceCase) -> str:
+def _probe_code(
+    case: ResourceCase,
+    *,
+    h3_sample_stays: int | None = None,
+) -> str:
+    if h3_sample_stays is not None and (
+        case.task_id != "h3_trajectory_clustering"
+        or isinstance(h3_sample_stays, bool)
+        or int(h3_sample_stays) <= 0
+    ):
+        raise ResourcePreflightError(
+            "h3_sample_stays must be a positive integer used only for H3"
+        )
     task_id = json.dumps(case.task_id)
     family = json.dumps(_FAMILY_BY_TASK[case.task_id])
     has_trajectory = repr(case.trajectory_binding is not None)
+    trajectory_sample_stays = repr(
+        int(h3_sample_stays) if h3_sample_stays is not None else None
+    )
     required_imports = json.dumps(list(_REQUIRED_IMPORTS))
     return f'''
 import gc
@@ -264,6 +279,7 @@ SCHEMA_VERSION = {RESOURCE_PROBE_SCHEMA_VERSION!r}
 TASK_ID = {task_id}
 FAMILY = {family}
 HAS_TRAJECTORY = {has_trajectory}
+TRAJECTORY_SAMPLE_STAYS = {trajectory_sample_stays}
 REQUIRED_IMPORTS = {required_imports}
 SOURCE_ROOT = Path({_CONTAINER_SOURCE_ROOT!r})
 COHORT_PATH = SOURCE_ROOT / "cohort.parquet"
@@ -467,6 +483,41 @@ def _load_parquet(path):
     return frame, time.monotonic() - started
 
 
+def _load_trajectory(path):
+    if TRAJECTORY_SAMPLE_STAYS is None:
+        frame, elapsed = _load_parquet(path)
+        return frame, elapsed, "full", None
+    import duckdb
+
+    started = time.monotonic()
+    connection = duckdb.connect(database=":memory:")
+    try:
+        connection.execute(
+            """
+            CREATE TEMP TABLE selected_stays AS
+            SELECT DISTINCT stay_id
+            FROM read_parquet(?)
+            ORDER BY stay_id
+            LIMIT ?
+            """,
+            [str(path), int(TRAJECTORY_SAMPLE_STAYS)],
+        )
+        frame = connection.execute(
+            """
+            SELECT trajectory.stay_id, trajectory.concept, trajectory.value_num
+            FROM read_parquet(?) AS trajectory
+            SEMI JOIN selected_stays USING (stay_id)
+            """,
+            [str(path)],
+        ).fetch_df()
+    finally:
+        connection.close()
+    loaded_stays = int(frame["stay_id"].nunique(dropna=True))
+    if loaded_stays <= 0 or loaded_stays > int(TRAJECTORY_SAMPLE_STAYS):
+        raise RuntimeError("trajectory development sample has invalid stay count")
+    return frame, time.monotonic() - started, "development_sample", loaded_stays
+
+
 source_options = _mount_options(SOURCE_ROOT)
 cohort_options = _mount_options(Path(os.environ["COHORT_PARQUET"]))
 output_options = _mount_options(OUT_DIR)
@@ -522,13 +573,33 @@ if HAS_TRAJECTORY:
     )
     if verified_trajectory is None:
         raise RuntimeError("trajectory authority verification returned None")
-    trajectory_frame, trajectory_load_seconds = _load_parquet(TRAJECTORY_PATH)
-    if len(trajectory_frame) != verified_trajectory.authority.trajectory_rows:
+    (
+        trajectory_frame,
+        trajectory_load_seconds,
+        trajectory_load_mode,
+        trajectory_loaded_stays,
+    ) = _load_trajectory(TRAJECTORY_PATH)
+    if (
+        TRAJECTORY_SAMPLE_STAYS is None
+        and len(trajectory_frame) != verified_trajectory.authority.trajectory_rows
+    ):
         raise RuntimeError("loaded trajectory row count disagrees with authority")
-    if tuple(str(column) for column in trajectory_frame.columns) != tuple(
-        verified_trajectory.authority.trajectory_columns
+    expected_trajectory_columns = tuple(
+        str(column) for column in verified_trajectory.authority.trajectory_columns
+    )
+    loaded_trajectory_columns = tuple(
+        str(column) for column in trajectory_frame.columns
+    )
+    if TRAJECTORY_SAMPLE_STAYS is None and (
+        loaded_trajectory_columns != expected_trajectory_columns
     ):
         raise RuntimeError("loaded trajectory columns disagree with authority")
+    if TRAJECTORY_SAMPLE_STAYS is not None and loaded_trajectory_columns != (
+        "stay_id",
+        "concept",
+        "value_num",
+    ):
+        raise RuntimeError("trajectory development sample projection changed")
     aggregated = (
         trajectory_frame.groupby(
             ["stay_id", "concept"],
@@ -558,8 +629,13 @@ if HAS_TRAJECTORY:
         family_rows = int(len(matrix))
     trajectory_metrics = {{
         "compressed_size_bytes": int(TRAJECTORY_PATH.stat().st_size),
-        "rows": int(len(trajectory_frame)),
-        "columns": int(len(trajectory_frame.columns)),
+        "authority_rows": int(verified_trajectory.authority.trajectory_rows),
+        "authority_columns": len(expected_trajectory_columns),
+        "loaded_rows": int(len(trajectory_frame)),
+        "loaded_columns": len(loaded_trajectory_columns),
+        "load_mode": trajectory_load_mode,
+        "sample_stays_requested": TRAJECTORY_SAMPLE_STAYS,
+        "loaded_stays": trajectory_loaded_stays,
         "load_seconds": float(trajectory_load_seconds),
         "aggregated_rows": int(len(aggregated)),
         "authority_sha256": verified_trajectory.reference.sha256,
@@ -579,6 +655,7 @@ payload = {{
     "paper_authorized": False,
     "provider_calls": 0,
     "task_id": TASK_ID,
+    "full_input_resource_qualified": TRAJECTORY_SAMPLE_STAYS is None,
     "family": FAMILY,
     "family_executor": {{
         "name": family_executor,
@@ -651,7 +728,12 @@ print(
 '''.strip()
 
 
-def _validate_probe(case: ResourceCase, payload: Mapping[str, Any]) -> None:
+def _validate_probe(
+    case: ResourceCase,
+    payload: Mapping[str, Any],
+    *,
+    h3_sample_stays: int | None = None,
+) -> None:
     if payload.get("schema_version") != RESOURCE_PROBE_SCHEMA_VERSION:
         raise ResourcePreflightError(
             f"task {case.task_id} resource probe schema mismatch"
@@ -662,6 +744,7 @@ def _validate_probe(case: ResourceCase, payload: Mapping[str, Any]) -> None:
         "paper_authorized": False,
         "provider_calls": 0,
         "task_id": case.task_id,
+        "full_input_resource_qualified": h3_sample_stays is None,
     }
     for key, expected in fixed.items():
         if payload.get(key) != expected:
@@ -691,13 +774,47 @@ def _validate_probe(case: ResourceCase, payload: Mapping[str, Any]) -> None:
                 f"task {case.task_id} has no trajectory metrics"
             )
         if (
-            trajectory.get("rows") != case.trajectory_rows
-            or trajectory.get("columns") != len(case.trajectory_columns)
+            trajectory.get("authority_rows") != case.trajectory_rows
+            or trajectory.get("authority_columns") != len(case.trajectory_columns)
             or trajectory.get("authority_sha256")
             != case.trajectory_binding.authority_ref.sha256
         ):
             raise ResourcePreflightError(
                 f"task {case.task_id} trajectory metrics disagree with authority"
+            )
+        expected_mode = "development_sample" if h3_sample_stays else "full"
+        if trajectory.get("load_mode") != expected_mode:
+            raise ResourcePreflightError(
+                f"task {case.task_id} trajectory load mode disagrees with request"
+            )
+        loaded_rows = trajectory.get("loaded_rows")
+        if (
+            isinstance(loaded_rows, bool)
+            or not isinstance(loaded_rows, int)
+            or loaded_rows <= 0
+        ):
+            raise ResourcePreflightError(
+                f"task {case.task_id} trajectory loaded no rows"
+            )
+        if h3_sample_stays is None:
+            if (
+                loaded_rows != case.trajectory_rows
+                or trajectory.get("loaded_columns") != len(case.trajectory_columns)
+                or trajectory.get("sample_stays_requested") is not None
+                or trajectory.get("loaded_stays") is not None
+            ):
+                raise ResourcePreflightError(
+                    f"task {case.task_id} full trajectory load is incomplete"
+                )
+        elif (
+            trajectory.get("sample_stays_requested") != h3_sample_stays
+            or not isinstance(trajectory.get("loaded_stays"), int)
+            or int(trajectory["loaded_stays"]) <= 0
+            or int(trajectory["loaded_stays"]) > h3_sample_stays
+            or trajectory.get("loaded_columns") != 3
+        ):
+            raise ResourcePreflightError(
+                f"task {case.task_id} development sample is not bounded"
             )
     packages = payload.get("packages")
     if not isinstance(packages, Mapping) or set(packages) != set(_REQUIRED_IMPORTS):
@@ -834,8 +951,16 @@ def run_canonical9_resource_preflight(
     docker_executable: str = "docker",
     runner_factory: Callable[..., Any] = DockerRunner,
     require_clean_git: bool = True,
+    h3_sample_stays: int | None = None,
 ) -> dict[str, Any]:
-    """Run the complete-input, zero-Provider acceptance sequentially."""
+    """Run the zero-Provider acceptance sequentially.
+
+    By default every trajectory is loaded in full.  ``h3_sample_stays`` is an
+    explicitly development-only exception: E1--H2 retain complete-input
+    qualification while H3 scans the authoritative file through DuckDB and
+    materializes only a bounded stay sample.  A sampled report cannot qualify
+    H3 or the complete Canonical9 batch for formal execution.
+    """
 
     source_candidate = Path(jsonl_path).expanduser()
     if source_candidate.is_symlink():
@@ -856,6 +981,10 @@ def run_canonical9_resource_preflight(
         raise ResourcePreflightError("an explicit final Docker image is required")
     if not math.isfinite(float(timeout_seconds)) or float(timeout_seconds) <= 0:
         raise ResourcePreflightError("timeout_seconds must be finite and positive")
+    if h3_sample_stays is not None and (
+        isinstance(h3_sample_stays, bool) or int(h3_sample_stays) <= 0
+    ):
+        raise ResourcePreflightError("h3_sample_stays must be a positive integer")
 
     cases = _load_cases(source_jsonl)
     source_paths = [source_jsonl]
@@ -891,7 +1020,15 @@ def run_canonical9_resource_preflight(
             )
             result = runner.run(
                 step_id=f"resource_{case.task_id}",
-                code=_probe_code(case),
+                code=_probe_code(
+                    case,
+                    h3_sample_stays=(
+                        int(h3_sample_stays)
+                        if case.task_id == "h3_trajectory_clustering"
+                        and h3_sample_stays is not None
+                        else None
+                    ),
+                ),
             )
             if not result.succeeded:
                 raise ResourcePreflightError(
@@ -907,7 +1044,16 @@ def run_canonical9_resource_preflight(
             registration_path = result.out_dir / "resource_probe_registration.json"
             probe = _strict_json(probe_path)
             registration = _strict_json(registration_path)
-            _validate_probe(case, probe)
+            _validate_probe(
+                case,
+                probe,
+                h3_sample_stays=(
+                    int(h3_sample_stays)
+                    if case.task_id == "h3_trajectory_clustering"
+                    and h3_sample_stays is not None
+                    else None
+                ),
+            )
             evidence_id = str(registration.get("evidence_id") or "")
             reopened = EvidenceStore(
                 result.out_dir / "temporary_evidence_store"
@@ -964,6 +1110,16 @@ def run_canonical9_resource_preflight(
         )
 
     peak = max(int(task["peak_rss_bytes"]) for task in task_reports)
+    full_input_qualified_task_ids = [
+        str(task["task_id"])
+        for task in task_reports
+        if task.get("full_input_resource_qualified") is True
+    ]
+    development_sample_task_ids = [
+        str(task["task_id"])
+        for task in task_reports
+        if task.get("full_input_resource_qualified") is not True
+    ]
     report: dict[str, Any] = {
         "schema_version": RESOURCE_PREFLIGHT_SCHEMA_VERSION,
         "status": "passed",
@@ -978,6 +1134,10 @@ def run_canonical9_resource_preflight(
         "source_zero_write_verified": True,
         "container_cleanup_verified": True,
         "sequential_execution": True,
+        "full_input_resource_qualified": not development_sample_task_ids,
+        "full_input_qualified_task_ids": full_input_qualified_task_ids,
+        "development_sample_task_ids": development_sample_task_ids,
+        "h3_sample_stays": h3_sample_stays,
         "task_order": [case.task_id for case in cases],
         "task_count": len(task_reports),
         "peak_rss_bytes": peak,
