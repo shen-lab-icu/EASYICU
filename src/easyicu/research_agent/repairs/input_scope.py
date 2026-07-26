@@ -3,12 +3,17 @@
 from __future__ import annotations
 
 import ast
+import re
 from typing import Optional
 
 _PHYSICAL_SCOPE_ERROR = (
     "locked cohort columns do not match the exact declared input scope"
 )
 _RAW_CONTRACT_MAPPING_ERROR = "attributeerror: 'str' object has no attribute 'get'"
+_MISSING_RAW_CONTRACT_ERROR = re.compile(
+    r"missing raw input contract for [A-Za-z_][A-Za-z0-9_]*",
+    re.IGNORECASE,
+)
 
 
 def _physical_columns_owner(node: ast.AST) -> Optional[ast.AST]:
@@ -205,7 +210,87 @@ def patch_raw_contract_mapping_iteration(code: str, run_log: str) -> str:
     return repaired
 
 
+def patch_raw_contract_document_fallback(code: str, run_log: str) -> str:
+    """Preserve an unwrapped resolved-input document as its own manifest.
+
+    Resolved-input schema 2.1 is emitted directly at the document root, while
+    archived manifests may still be wrapped under ``manifest``. Generated code
+    sometimes uses ``document.get("manifest", {})`` and thereby discards every
+    host-issued raw contract in the current unwrapped shape. Only the exact
+    missing-contract failure and one unambiguous three-level contract lookup
+    authorize replacing that empty fallback with the parsed document itself.
+    """
+
+    if _MISSING_RAW_CONTRACT_ERROR.search(str(run_log or "")) is None:
+        return code
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return code
+
+    candidates: list[tuple[ast.Dict, str]] = []
+    for assignment in ast.walk(tree):
+        if not (
+            isinstance(assignment, ast.Assign)
+            and len(assignment.targets) == 1
+            and isinstance(assignment.targets[0], ast.Name)
+        ):
+            continue
+        lookup_keys = {
+            str(call.args[0].value)
+            for call in ast.walk(assignment.value)
+            if isinstance(call, ast.Call)
+            and isinstance(call.func, ast.Attribute)
+            and call.func.attr == "get"
+            and call.args
+            and isinstance(call.args[0], ast.Constant)
+            and isinstance(call.args[0].value, str)
+        }
+        if not {"manifest", "raw_input_contracts", "contracts"} <= lookup_keys:
+            continue
+        for call in ast.walk(assignment.value):
+            if not (
+                isinstance(call, ast.Call)
+                and isinstance(call.func, ast.Attribute)
+                and call.func.attr == "get"
+                and isinstance(call.func.value, ast.Name)
+                and len(call.args) == 2
+                and not call.keywords
+                and isinstance(call.args[0], ast.Constant)
+                and call.args[0].value == "manifest"
+                and isinstance(call.args[1], ast.Dict)
+                and not call.args[1].keys
+            ):
+                continue
+            candidates.append((call.args[1], call.func.value.id))
+    if len(candidates) != 1:
+        return code
+
+    fallback, document_name = candidates[0]
+    lines = code.splitlines(keepends=True)
+    line_starts: list[int] = []
+    offset = 0
+    for line in lines:
+        line_starts.append(offset)
+        offset += len(line)
+
+    def _absolute_offset(lineno: int, utf8_col: int) -> int:
+        line = lines[lineno - 1]
+        char_col = len(line.encode("utf-8")[:utf8_col].decode("utf-8"))
+        return line_starts[lineno - 1] + char_col
+
+    start = _absolute_offset(fallback.lineno, fallback.col_offset)
+    end = _absolute_offset(fallback.end_lineno, fallback.end_col_offset)
+    repaired = code[:start] + document_name + code[end:]
+    try:
+        ast.parse(repaired)
+    except SyntaxError:
+        return code
+    return repaired
+
+
 __all__ = [
+    "patch_raw_contract_document_fallback",
     "patch_raw_contract_mapping_iteration",
     "patch_raw_input_physical_superset_guard",
 ]

@@ -131,6 +131,8 @@ def test_primary_cohort_role_binds_resolved_predicate_receipt() -> None:
     assert "not ordinary Planner step inputs" in text
     assert "`contracts.get(resolved_column)`" in text
     assert "rather than iterating it as a list" in text
+    assert "`manifest = document.get('manifest', document)`" in text
+    assert "never use an empty-object fallback" in text
     assert "Do not read or audit related measured/count/status/timing siblings" in text
     assert "`manifest['host_verified_cohort_execution_receipt']`" in text
     assert "do not expect an alias or reconstruct the receipt" in text

@@ -107,6 +107,7 @@ from .import_repair import (
     patch_known_host_helper_import,
 )
 from .input_scope import (
+    patch_raw_contract_document_fallback,
     patch_raw_contract_mapping_iteration,
     patch_raw_input_physical_superset_guard,
 )
@@ -6141,6 +6142,12 @@ def _deterministic_runner_repair(
         repaired = patch_raw_contract_mapping_iteration(code, run_log)
         if repaired != code:
             return raw_contract_mapping_repair, repaired
+
+    raw_contract_document_repair = "raw_contract_document_fallback_v1"
+    if previous_repair != raw_contract_document_repair:
+        repaired = patch_raw_contract_document_fallback(code, run_log)
+        if repaired != code:
+            return raw_contract_document_repair, repaired
 
     plausibility_schema_repair = "plausibility_range_schema_keys_v1"
     if previous_repair != plausibility_schema_repair:

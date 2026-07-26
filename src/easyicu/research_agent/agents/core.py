@@ -2188,7 +2188,10 @@ def _typed_input_scope_contract(step: AnalysisStep) -> str:
         "TYPED INPUT BINDING (binding):\n"
         "- EASYICU_RESOLVED_INPUTS_JSON is a filesystem path to a JSON document; "
         "read the file, then parse its contents. This applies even when the step "
-        "declares only untyped raw-variable inputs. "
+        "declares only untyped raw-variable inputs. The current schema may be "
+        "unwrapped while archived inputs may contain a `manifest` wrapper: "
+        "normalize exactly as `manifest = document.get('manifest', document)`; "
+        "never use an empty-object fallback that discards unwrapped authority. "
         "manifest['planner_declared_inputs'] is the exact Planner-owned consumer "
         "scope: kind:name entries are products and all others are the only eligible "
         "raw-variable or column coordinates.\n"
@@ -2304,7 +2307,10 @@ def _compact_repair_scope_contract(step: AnalysisStep) -> str:
         "TYPED INPUT BINDING (binding): minimal patch",
         "- EASYICU_RESOLVED_INPUTS_JSON is a filesystem path to a JSON document; "
         "read the file, then parse its contents. This applies even when the step "
-        "declares only untyped raw-variable inputs.",
+        "declares only untyped raw-variable inputs. Normalize current unwrapped "
+        "and archived wrapped forms exactly as "
+        "`manifest = document.get('manifest', document)`; never use an "
+        "empty-object fallback that discards unwrapped authority.",
         "- manifest['planner_declared_inputs'] is the exact Planner-owned "
         "consumer scope and the only eligible raw-variable or column coordinates. "
         "manifest['inputs'] contains only host-bound typed products.",
