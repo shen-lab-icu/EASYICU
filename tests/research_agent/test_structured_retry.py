@@ -223,3 +223,28 @@ def test_structured_retry_can_regenerate_without_replaying_large_failed_response
     assert retry_messages[0].content == "immutable base"
     assert failed not in {message.content for message in retry_messages}
     assert "replace the invalid field" in retry_messages[-1].content
+
+
+def test_structured_retry_can_project_failed_response_for_bounded_memory() -> None:
+    failed = '{"large_prose":"' + ("x" * 20_000) + '","keep":"coordinate"}'
+    client = ScriptedMockLLMClient([failed, '{"ok": true}'])
+
+    def require_ok(raw: str) -> dict:
+        parsed = json.loads(raw)
+        if "ok" not in parsed:
+            raise ValueError("repair the coordinate")
+        return parsed
+
+    result = call_llm_with_structured_retry(
+        client,
+        [LLMMessage(role="user", content="immutable base")],
+        parser=require_ok,
+        role="planner",
+        max_retries=1,
+        failed_response_transform=lambda _raw: '{"keep":"coordinate"}',
+    )
+
+    assert result == {"ok": True}
+    retry_messages = client.calls[1][0]
+    assert retry_messages[-2].content == '{"keep":"coordinate"}'
+    assert failed not in {message.content for message in retry_messages}

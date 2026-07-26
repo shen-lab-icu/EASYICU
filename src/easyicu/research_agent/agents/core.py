@@ -737,6 +737,7 @@ def _validate_table_one_observed_levels(
 
 
 _PLANNER_PROMPT_BYTE_LIMIT = 80_000
+_PLANNER_RETRY_PROJECTION_BYTE_LIMIT = 9_000
 
 
 class PlannerPromptBudgetError(RuntimeError):
@@ -745,6 +746,119 @@ class PlannerPromptBudgetError(RuntimeError):
 
 class PlannerArticleContractError(ValueError):
     """The parsed Planner response omits a required article-level role."""
+
+
+def _planner_retry_response_projection(raw: str) -> str:
+    """Keep prior Planner structure without replaying its long prose."""
+
+    text = str(raw or "").strip()
+    if "```" in text:
+        text = _strip_code_fence(text)
+    try:
+        payload = json.loads(text)
+    except json.JSONDecodeError:
+        match = _first_json_block(text)
+        if match is None:
+            return ""
+        try:
+            payload = json.loads(match)
+        except json.JSONDecodeError:
+            return ""
+    if not isinstance(payload, dict):
+        return ""
+
+    step_keys = (
+        "step_id",
+        "planned_analysis_role",
+        "inputs",
+        "expected_outputs",
+        "method",
+        "icu_rule_refs",
+        "model_requirements",
+        "input_consumption_contracts",
+        "table_one_spec",
+        "trajectory_stability_spec",
+    )
+    raw_steps = payload.get("steps")
+    steps = raw_steps if isinstance(raw_steps, list) else []
+    raw_robustness_specs = payload.get("robustness_specs")
+    robustness_specs = (
+        raw_robustness_specs if isinstance(raw_robustness_specs, list) else []
+    )
+    projected_steps = [
+        {key: step[key] for key in step_keys if key in step}
+        for step in steps
+        if isinstance(step, dict)
+    ]
+    projection = {
+        "analysis_type": payload.get("analysis_type"),
+        "cohort": payload.get("cohort"),
+        "steps": projected_steps,
+        "robustness_specs": robustness_specs,
+    }
+
+    def render(value: object) -> str:
+        return json.dumps(
+            value,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+
+    rendered = render(projection)
+    if len(rendered.encode("utf-8")) <= _PLANNER_RETRY_PROJECTION_BYTE_LIMIT:
+        return rendered
+
+    minimal_step_keys = (
+        "step_id",
+        "planned_analysis_role",
+        "inputs",
+        "expected_outputs",
+        "method",
+        "model_requirements",
+    )
+    projection["steps"] = [
+        {key: step[key] for key in minimal_step_keys if key in step}
+        for step in projected_steps
+    ]
+    robustness_keys = (
+        "spec_id",
+        "axis",
+        "cohort_override",
+        "missing_override",
+        "outcome_override",
+    )
+    projection["robustness_specs"] = [
+        {key: spec[key] for key in robustness_keys if key in spec}
+        for spec in robustness_specs
+        if isinstance(spec, dict)
+    ]
+    rendered = render(projection)
+    if len(rendered.encode("utf-8")) <= _PLANNER_RETRY_PROJECTION_BYTE_LIMIT:
+        return rendered
+
+    compact_step_keys = (
+        "step_id",
+        "planned_analysis_role",
+        "inputs",
+        "expected_outputs",
+        "method",
+    )
+    projection["steps"] = [
+        {key: step[key] for key in compact_step_keys if key in step}
+        for step in projected_steps
+    ]
+    projection["robustness_specs"] = [
+        {key: spec[key] for key in ("spec_id", "axis") if key in spec}
+        for spec in robustness_specs
+        if isinstance(spec, dict)
+    ]
+    rendered = render(projection)
+    if len(rendered.encode("utf-8")) > _PLANNER_RETRY_PROJECTION_BYTE_LIMIT:
+        raise PlannerPromptBudgetError(
+            "Planner retry structure exceeds its bounded projection envelope"
+        )
+    return rendered
 
 
 class PlannerAgent:
@@ -871,7 +985,7 @@ class PlannerAgent:
             max_retries=PLANNER_MAX_RETRIES,
             max_tokens=4096,
             temperature=0.2,
-            include_failed_response_on_retry=False,
+            failed_response_transform=_planner_retry_response_projection,
             format_reminder=(
                 "The JSON must be a single object with keys: "
                 "research_question (string), optional analysis_type (string), "
