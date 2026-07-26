@@ -5,6 +5,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from ...schema import AnalysisPlan, AnalysisStep
+from .cohort_summary_executor import (
+    cohort_summary_executor_code,
+    cohort_summary_executor_owns_step,
+)
 from .deterministic_missingness import (
     is_compact_missingness_measurement_contract,
     missingness_audit_cohort_input_key,
@@ -40,6 +44,20 @@ def select_standard_executor(
 ) -> StandardExecutorSelection | None:
     """Select by exact typed contract, never by prose or benchmark identity."""
 
+    if cohort_summary_executor_owns_step(step):
+        typed_cohort_inputs = tuple(
+            str(value or "").strip()
+            for value in step.inputs
+            if str(value or "").strip().startswith("cohort:")
+            or str(value or "").strip() == "artifact:analysis_cohort"
+        )
+        return StandardExecutorSelection(
+            analysis_kind="descriptive_cohort_summary",
+            selection_reason="cohort_summary_contract_preflight",
+            progress_message="Using planner-scoped cohort summary executor",
+            code=cohort_summary_executor_code(step),
+            consumed_input_keys=typed_cohort_inputs,
+        )
     if table_one_executor_owns_step(step):
         typed_cohort_inputs = tuple(
             str(value or "").strip()
