@@ -65,8 +65,7 @@ jobs:
             "pyyaml>=6.0" \
             "scikit-learn>=1.3" \
             "statsmodels>=0.14" \
-            "openai>=1.0" \
-            "langgraph==1.1.2"
+            "openai>=1.0"
           # Editable install of the easyicu package without extras so
           # import easyicu.research_agent succeeds.
           pip install --no-deps -e .
