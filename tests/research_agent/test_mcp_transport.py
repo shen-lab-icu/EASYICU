@@ -158,7 +158,75 @@ async def test_tool_timeout_returns_error_and_server_remains_usable() -> None:
 
     assert timed_out.isError is True
     assert timed_out.structuredContent["error_code"] == "tool_timeout"
+    assert timed_out.structuredContent["dispatch_started"] is True
+    assert timed_out.structuredContent["execution_may_continue"] is True
     assert completed.isError is False
+
+
+@pytest.mark.anyio
+async def test_timed_out_dispatchers_hold_slots_until_workers_finish() -> None:
+    """Sequential timeouts must not turn a capacity of two into many threads.
+
+    A purely concurrent burst did not expose the bug because requests waiting
+    for a slot timed out together. Repeated calls did: each timeout released
+    AnyIO's limiter token while its abandoned worker kept running.
+    """
+
+    lock = threading.Lock()
+    release = threading.Event()
+    active = 0
+    maximum = 0
+    calls = 0
+
+    def dispatcher(_name: str, _arguments: dict | None) -> dict:
+        nonlocal active, maximum, calls
+        with lock:
+            calls += 1
+            active += 1
+            maximum = max(maximum, active)
+        try:
+            release.wait(timeout=2)
+            return {"ok": True}
+        finally:
+            with lock:
+                active -= 1
+
+    server = _server(
+        dispatcher=dispatcher,
+        max_concurrent_tool_calls=2,
+        tool_timeout_seconds=0.03,
+    )
+    try:
+        async with create_connected_server_and_client_session(
+            server,
+            raise_exceptions=True,
+        ) as session:
+            await session.initialize()
+            timed_out = [
+                await session.call_tool("research_agent.list_skills", {})
+                for _ in range(8)
+            ]
+
+            assert all(result.isError for result in timed_out)
+            assert maximum == 2
+            assert calls == 2
+            assert sum(
+                bool(result.structuredContent["dispatch_started"])
+                for result in timed_out
+            ) == 2
+
+            release.set()
+            await asyncio.sleep(0.1)
+            completed = await session.call_tool(
+                "research_agent.list_skills",
+                {},
+            )
+    finally:
+        release.set()
+
+    assert completed.isError is False
+    assert calls == 3
+    assert maximum == 2
 
 
 @pytest.mark.anyio
