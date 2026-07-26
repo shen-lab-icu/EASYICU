@@ -2939,6 +2939,10 @@ def _cap_plan_preserving_figure_steps(
         {
             "step_id": str(step.step_id).strip(),
             "planned_analysis_role": str(step.planned_analysis_role).strip(),
+            # Recorded so recovery can be judged on the scientific approach and
+            # not only on the step's shell: the same id, role and output name
+            # can come back carrying an entirely different method.
+            "method": str(getattr(step, "method", "") or "").strip(),
             "expected_outputs": sorted(
                 {
                     str(output).strip()

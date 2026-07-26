@@ -408,6 +408,66 @@ def test_reusing_a_step_id_for_another_scientific_role_does_not_clear_the_block(
     assert status["plan_truncated_dropped_outputs"] == ["table:product_4"]
 
 
+def test_restoring_the_step_shell_with_another_method_does_not_clear_the_block() -> (
+    None
+):
+    """Same id, same role, same output name — different science.
+
+    A dropped PH diagnostic (``schoenfeld_residual_test``) reappearing as a
+    ``descriptive_summary`` satisfies every part of the step's shell while the
+    diagnostic itself never came back. Method is what distinguishes them.
+    """
+
+    from easyicu.research_agent.reporting.readiness import _plan_truncation_status
+
+    over_cap = _plan_with_products(4)
+    over_cap.steps[3] = over_cap.steps[3].model_copy(
+        update={"method": "schoenfeld_residual_test"}
+    )
+    _capped, findings = _cap_plan_preserving_figure_steps(plan=over_cap, cap=3)
+
+    final_plan = _plan_with_products(4)
+    final_plan.steps[3] = final_plan.steps[3].model_copy(
+        update={"method": "descriptive_summary"}
+    )
+
+    status = _plan_truncation_status(findings, plan=final_plan)
+
+    assert status["plan_truncated"] is True
+    assert status["plan_truncated_dropped_step_ids"] == ["04_step"]
+    assert _authorized(plan_not_truncated=not status["plan_truncated"]) is False
+
+
+def test_restoring_the_same_method_does_clear_the_block() -> None:
+    """Negative control: the method check must not block genuine recovery.
+
+    Recovery is not tamper detection — the replanner is expected to author a
+    fresh step — so matching method, id, role and outputs is enough.
+    """
+
+    from easyicu.research_agent.reporting.readiness import _plan_truncation_status
+
+    over_cap = _plan_with_products(4)
+    over_cap.steps[3] = over_cap.steps[3].model_copy(
+        update={"method": "schoenfeld_residual_test"}
+    )
+    _capped, findings = _cap_plan_preserving_figure_steps(plan=over_cap, cap=3)
+
+    final_plan = _plan_with_products(4)
+    final_plan.steps[3] = final_plan.steps[3].model_copy(
+        update={
+            "method": "schoenfeld_residual_test",
+            "intent": "Reworded intent that means the same thing.",
+        }
+    )
+
+    status = _plan_truncation_status(findings, plan=final_plan)
+
+    assert status["plan_truncated"] is False
+    assert status["plan_truncation_recorded"] is True
+    assert _authorized(plan_not_truncated=not status["plan_truncated"]) is True
+
+
 def test_a_final_plan_that_never_regained_the_products_stays_blocked(
     tmp_path: Path,
 ) -> None:

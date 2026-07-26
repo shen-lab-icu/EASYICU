@@ -131,3 +131,99 @@ def test_explicit_development_lane_forces_diagnostic_only(tmp_path: Path):
     assert gates["forced_diagnostic_only"] is True
     assert status["forced_diagnostic_only"] is True
     assert status["status"] == "diagnostic_only"
+
+
+def _readiness_with_all_content_gates_passing(
+    tmp_path: Path, *, monkeypatch, extra_gates: dict, **kwargs
+) -> dict:
+    """Run the real artifact writer over a run whose content gates all pass.
+
+    The demotions under test are orthogonal to content, so the interesting
+    case is a run that *would* have been publishable. Reaching that state
+    through the real gate computation needs a full successful pipeline; here
+    we substitute the content verdict and exercise the demotion logic itself.
+    """
+    import easyicu.research_agent.reporting.readiness as readiness_mod
+
+    class _Gates(dict):
+        def __missing__(self, key: str):
+            return 0 if "count" in key else ([] if key.endswith("s") else True)
+
+    base = {
+        "paper_authorized": True,
+        "publication_ready": True,
+        "manuscript_ready": True,
+        "execution_complete": True,
+        "replan_budget_exhausted": False,
+        "plan_truncated": False,
+    }
+    monkeypatch.setattr(
+        readiness_mod,
+        "_compute_readiness_gates",
+        lambda **_kw: _Gates({**base, **extra_gates}),
+    )
+
+    context = ResearchContext(
+        research_question="Is a treatment exposure associated with mortality?",
+        cohort=CohortDescriptor(
+            cohort_name="synthetic", database="synthetic", n_patients=10, n_stays=10
+        ),
+        variables=[],
+    )
+    manuscript = tmp_path / "manuscript.md"
+    manuscript.write_text("Publishable-looking manuscript.\n", encoding="utf-8")
+
+    write_readiness_artifacts(
+        context=context,
+        plan=_plan(),
+        findings=[],
+        per_step_records=[],
+        evidence=EvidenceStore(tmp_path),
+        run_dir=tmp_path,
+        manuscript_path=manuscript,
+        stop_after_analysis=True,
+        **kwargs,
+    )
+    return json.loads((tmp_path / "run_status.json").read_text(encoding="utf-8"))
+
+
+def test_a_development_lane_run_is_not_paper_authorized(tmp_path: Path, monkeypatch):
+    """A demotion `status` honours must also bind `paper_authorized`.
+
+    These are the same question asked twice. When they were computed
+    independently the file could state `diagnostic_only` and
+    `paper_authorized: true` at once, and an external reader keying on the
+    boolean would read the opposite of the status string next to it.
+    """
+    status = _readiness_with_all_content_gates_passing(
+        tmp_path, monkeypatch=monkeypatch, extra_gates={}, force_diagnostic_only=True
+    )
+
+    assert status["status"] == "diagnostic_only"
+    assert status["gates"]["paper_authorized"] is False
+
+
+def test_an_exhausted_replan_budget_is_not_paper_authorized(
+    tmp_path: Path, monkeypatch
+):
+    """The replan-budget floor demotes `status`; it must demote authority too."""
+    status = _readiness_with_all_content_gates_passing(
+        tmp_path,
+        monkeypatch=monkeypatch,
+        extra_gates={"replan_budget_exhausted": True},
+    )
+
+    assert status["status"] == "diagnostic_only"
+    assert status["gates"]["paper_authorized"] is False
+
+
+def test_an_undemoted_publishable_run_keeps_paper_authorization(
+    tmp_path: Path, monkeypatch
+):
+    """Negative control: the binding must not demote everything it touches."""
+    status = _readiness_with_all_content_gates_passing(
+        tmp_path, monkeypatch=monkeypatch, extra_gates={}
+    )
+
+    assert status["status"] == "publication_ready"
+    assert status["gates"]["paper_authorized"] is True
