@@ -196,3 +196,30 @@ def test_structured_retry_keeps_only_latest_failed_response() -> None:
     ]
     assert third_messages[-2].content == "bad-2"
     assert all(message.content != "bad-1" for message in third_messages)
+
+
+def test_structured_retry_can_regenerate_without_replaying_large_failed_response() -> None:
+    failed = '{"large_payload":"' + ("x" * 20_000) + '"}'
+    client = ScriptedMockLLMClient([failed, '{"ok": true}'])
+
+    def require_ok(raw: str) -> dict:
+        parsed = json.loads(raw)
+        if "ok" not in parsed:
+            raise ValueError("replace the invalid field")
+        return parsed
+
+    result = call_llm_with_structured_retry(
+        client,
+        [LLMMessage(role="user", content="immutable base")],
+        parser=require_ok,
+        role="planner",
+        max_retries=1,
+        include_failed_response_on_retry=False,
+    )
+
+    assert result == {"ok": True}
+    retry_messages = client.calls[1][0]
+    assert [message.role for message in retry_messages] == ["user", "user"]
+    assert retry_messages[0].content == "immutable base"
+    assert failed not in {message.content for message in retry_messages}
+    assert "replace the invalid field" in retry_messages[-1].content
