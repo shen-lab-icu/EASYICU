@@ -268,7 +268,7 @@ async def test_tool_limiter_bounds_concurrent_dispatch() -> None:
 
 
 @pytest.mark.anyio
-async def test_client_cancellation_does_not_poison_later_calls() -> None:
+async def test_client_cancellation_retains_slot_until_worker_finishes() -> None:
     started = threading.Event()
     release = threading.Event()
     calls = 0
@@ -281,24 +281,35 @@ async def test_client_cancellation_does_not_poison_later_calls() -> None:
             release.wait(timeout=2)
         return {"call": calls}
 
-    server = _server(dispatcher=dispatcher)
-    async with create_connected_server_and_client_session(
-        server,
-        raise_exceptions=True,
-    ) as session:
-        await session.initialize()
-        pending = asyncio.create_task(
-            session.call_tool("research_agent.list_skills", {})
-        )
-        assert await asyncio.to_thread(started.wait, 1)
-        pending.cancel()
-        with pytest.raises(asyncio.CancelledError):
-            await pending
+    server = _server(dispatcher=dispatcher, max_concurrent_tool_calls=1)
+    try:
+        async with create_connected_server_and_client_session(
+            server,
+            raise_exceptions=True,
+        ) as session:
+            await session.initialize()
+            pending = asyncio.create_task(
+                session.call_tool("research_agent.list_skills", {})
+            )
+            assert await asyncio.to_thread(started.wait, 1)
+            pending.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await pending
+
+            waiting = asyncio.create_task(
+                session.call_tool("research_agent.list_skills", {})
+            )
+            await asyncio.sleep(0.05)
+            assert calls == 1
+            assert waiting.done() is False
+
+            release.set()
+            completed = await waiting
+    finally:
         release.set()
-        await asyncio.sleep(0.05)
-        completed = await session.call_tool("research_agent.list_skills", {})
 
     assert completed.isError is False
+    assert calls == 2
 
 
 @pytest.mark.anyio
