@@ -710,6 +710,76 @@ step_summary = {
     )
 
 
+def test_contract_repair_empties_unverifiable_raw_input_receipts() -> None:
+    code = """
+step_summary = {
+    "status": "completed",
+    "input_bindings": [
+        {
+            "input_key": "raw:age",
+            "evidence_id": None,
+            "sha256": None,
+            "loaded": True,
+            "row_count": n_rows,
+        }
+    ],
+    "n_rows": n_rows,
+}
+"""
+    finding = {
+        "validator": "step_summary_integrity",
+        "severity": "error",
+        "detail": {
+            "issue": "input_binding_key_unresolved",
+            "input_key": "raw:age",
+            "resolved_input_keys": [],
+        },
+    }
+
+    repair = deterministic_contract_repair(code=code, findings=[finding])
+
+    assert repair is not None
+    repair_id, repaired = repair
+    assert repair_id == "unresolved_input_binding_receipts_v1"
+    tree = ast.parse(repaired)
+    summary = next(
+        node.value
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Assign)
+        and isinstance(node.targets[0], ast.Name)
+        and node.targets[0].id == "step_summary"
+    )
+    receipt_list = summary.values[
+        next(
+            index
+            for index, key in enumerate(summary.keys)
+            if isinstance(key, ast.Constant) and key.value == "input_bindings"
+        )
+    ]
+    assert isinstance(receipt_list, ast.List)
+    assert receipt_list.elts == []
+    assert '"n_rows": n_rows' in repaired
+
+
+def test_contract_repair_keeps_receipts_when_host_has_typed_inputs() -> None:
+    code = """
+step_summary = {
+    "input_bindings": [{"input_key": "raw:age", "loaded": True}],
+}
+"""
+    finding = {
+        "validator": "step_summary_integrity",
+        "severity": "error",
+        "detail": {
+            "issue": "input_binding_key_unresolved",
+            "input_key": "raw:age",
+            "resolved_input_keys": ["artifact:analysis_cohort"],
+        },
+    }
+
+    assert deterministic_contract_repair(code=code, findings=[finding]) is None
+
+
 def _attrition_identity_finding(
     *,
     expected: list[object] | None = None,

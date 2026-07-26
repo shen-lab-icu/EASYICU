@@ -2204,7 +2204,11 @@ def _typed_input_scope_contract(step: AnalysisStep) -> str:
         "or reconstruct a declared upstream product from COHORT_PARQUET.\n"
         "- In step_summary.json, record one input_bindings row per typed input "
         "consumed with exact input_key/evidence_id/sha256, loaded, and for each "
-        "loaded tabular input, its row_count.\n"
+        "loaded tabular input, its row_count. This receipt list is exclusively "
+        "for exact keys in manifest['inputs']; raw Planner columns are already "
+        "bound by the execution-cohort and raw-input contracts, so never invent "
+        "a `raw:<column>` input_key. When the exact typed-input list is empty, "
+        "omit input_bindings or write an empty list.\n"
         "- If a block claims status='checked' for a subset reconciliation between "
         "typed tables, name both input keys, key_columns, and every shared non-key "
         "column checked; set value_mismatch_n=0 only after comparison. The host "
@@ -2290,9 +2294,12 @@ def _compact_repair_scope_contract(step: AnalysisStep) -> str:
         "another executable input contract.",
         "- Record one input_bindings row per typed input attempted; it must be "
         "truthful and include exact input_key/evidence_id/sha256, loaded, and, for each "
-        "loaded tabular input, its row_count. Any checked subset reconciliation "
-        "must name artifacts, keys, every shared non-key column actually compared, "
-        "and zero mismatches. The host repeats that key-and-value comparison.",
+        "loaded tabular input, its row_count. This list may contain only exact keys "
+        "from manifest['inputs']; never invent a `raw:<column>` input_key. When the "
+        "exact typed-input list is empty, omit input_bindings or write an empty list. "
+        "Any checked subset reconciliation must name artifacts, keys, every shared "
+        "non-key column actually compared, and zero mismatches. The host repeats "
+        "that key-and-value comparison.",
         "- Numeric coercion is fail-closed: count original nonmissing values "
         "newly coerced to missing and raise when positive before any domain "
         "check or output.",

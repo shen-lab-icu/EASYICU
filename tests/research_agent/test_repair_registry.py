@@ -256,6 +256,17 @@ def test_attrition_rule_id_canonicalization_is_syntactic_and_automatic() -> None
     assert automatic_repair_allowed(metadata.repair_id)
 
 
+def test_unresolved_input_receipt_cleanup_is_syntactic_and_automatic() -> None:
+    metadata = repair_metadata_for("unresolved_input_binding_receipts_v1")
+
+    assert metadata.classification_source == "exact"
+    assert metadata.repair_class is RepairClass.SYNTACTIC
+    assert metadata.invariants == ()
+    assert metadata.introduces_numbers is False
+    assert metadata.requires_disclosure is False
+    assert automatic_repair_allowed(metadata.repair_id)
+
+
 def test_measurement_provenance_summary_mapping_is_structural_and_automatic() -> None:
     for repair_id in (
         "measurement_provenance_summary_mapping_v1",

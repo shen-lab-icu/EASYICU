@@ -4836,6 +4836,22 @@ def _step_contract_repair_guidance(
         if isinstance(assignment_contract, Mapping)
         else None
     )
+    if isinstance(input_bindings, Mapping):
+        exact_input_keys = sorted(str(key) for key in input_bindings)
+        if exact_input_keys:
+            guidance.append(
+                "Every step_summary.input_bindings receipt must use one of these "
+                "exact host-resolved typed input keys, with no aliases or raw-column "
+                "receipts: "
+                + json.dumps(exact_input_keys, ensure_ascii=False)
+            )
+        else:
+            guidance.append(
+                "This step has no host-resolved typed inputs. Omit "
+                "step_summary.input_bindings or write an empty list; raw Planner "
+                "columns are bound separately and must not be reported as "
+                "`raw:<column>` receipts."
+            )
     if isinstance(assignment_models, list) and len(assignment_models) > 1:
         roster = [
             {

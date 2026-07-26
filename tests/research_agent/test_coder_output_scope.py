@@ -1325,6 +1325,8 @@ def test_coder_prompt_binds_typed_inputs_to_resolved_manifest(ra):
         assert "Do not glob EASYICU_EVIDENCE_DIR" in prompt
         assert "reconstruct a declared upstream product" in prompt
         assert "one input_bindings row per typed input" in prompt
+        assert "never invent a `raw:<column>` input_key" in prompt
+        assert "omit input_bindings or write an empty list" in prompt
         assert "for each loaded tabular input, its row_count" in prompt
         assert "every shared non-key column" in prompt
         assert "The host repeats that key-and-value comparison" in prompt
@@ -1380,6 +1382,8 @@ def test_coder_prompts_bind_untyped_only_inputs_to_planner_scope(ra):
         assert "analysis_plausibility_range + plausibility_policy" in prompt
         assert "['selected_first', 'selected_measured']" in prompt
         assert "Exact typed inputs for this step: []" in prompt
+        assert "never invent a `raw:<column>` input_key" in prompt
+        assert "omit input_bindings or write an empty list" in prompt
 
 
 def test_runtime_only_builds_visualization_request_for_figure_step(ra):
