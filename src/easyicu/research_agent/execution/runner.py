@@ -647,6 +647,21 @@ def _as_text(stream: object) -> str:
     return str(stream)
 
 
+def macos_sandbox_permission_denied(stderr: object) -> bool:
+    """Return whether macOS refused the sandbox profile or its target exec.
+
+    A nested application sandbox can reject either ``sandbox_apply`` itself or
+    the subsequent ``execvp`` of a project virtualenv interpreter.  Require the
+    exact sandbox marker together with ``Operation not permitted`` so ordinary
+    generated-code failures never activate the development-only host fallback.
+    """
+
+    detail = _as_text(stderr).lower()
+    return "operation not permitted" in detail and (
+        "sandbox_apply" in detail or "sandbox-exec: execvp()" in detail
+    )
+
+
 class CodeRunner:
     """Run agent-generated Python in a fresh per-step directory."""
 
@@ -1192,8 +1207,7 @@ class CodeRunner:
                 and original_cmd
                 and Path(original_cmd[0]).name == "sandbox-exec"
                 and sys.platform == "darwin"
-                and "sandbox_apply" in stderr.lower()
-                and "operation not permitted" in stderr.lower()
+                and macos_sandbox_permission_denied(stderr)
             ):
                 retry_cmd = [self.python_executable, str(script_path)]
                 retry_timeout = max(

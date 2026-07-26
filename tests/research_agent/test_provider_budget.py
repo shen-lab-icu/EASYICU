@@ -1575,6 +1575,10 @@ with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as hand
         enable_probe_step=False,
         enable_replanning=False,
         runner_kind="subprocess",
+        # This unit test exercises provider-budget persistence, not host
+        # isolation.  Explicitly opt into the documented development-only
+        # fallback so nested macOS app sandboxes cannot change its semantics.
+        runner_kwargs={"allow_unsafe_host_fallback": True},
         # Two calls cannot fund 1 generation + 3 code repairs + 2 LLM repairs +
         # the reserved audit. That is the point: this test drives the step into
         # exhaustion to check the budget survives a resume. Declaring the
@@ -1619,6 +1623,7 @@ with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as hand
         enable_probe_step=False,
         enable_replanning=False,
         runner_kind="subprocess",
+        runner_kwargs={"allow_unsafe_host_fallback": True},
         # Two calls cannot fund 1 generation + 3 code repairs + 2 LLM repairs +
         # the reserved audit. That is the point: this test drives the step into
         # exhaustion to check the budget survives a resume. Declaring the
@@ -1806,6 +1811,9 @@ with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as hand
         enable_probe_step=False,
         enable_replanning=False,
         runner_kind="subprocess",
+        # The isolation boundary has dedicated tests; keep this budget test
+        # deterministic when pytest itself runs inside a macOS app sandbox.
+        runner_kwargs={"allow_unsafe_host_fallback": True},
     )
     result = pipeline.run(
         question="Summarize the ICU cohort.",
