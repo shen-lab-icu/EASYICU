@@ -71,6 +71,7 @@ from .rendering_summary import patch_render_only_effect_echo
 from .plausibility import patch_flag_only_plausibility_range_rejection
 from .provenance_summary import (
     patch_audit_only_companion_value_selector,
+    patch_closed_provenance_envelope_alias,
     patch_custom_measurement_provenance_receipts,
     patch_direct_host_receipt_source_guard,
     patch_late_measurement_provenance_receipt,
@@ -5686,6 +5687,22 @@ def deterministic_contract_repair(
         ):
             provenance_source_findings.append(finding)
     provenance_repair_name = "measurement_provenance_summary_mapping_v2"
+    provenance_alias_repair_name = "measurement_provenance_envelope_alias_v1"
+    if (
+        any(
+            (
+                finding.get("detail")
+                if isinstance(finding, dict)
+                else getattr(finding, "detail", {})
+            ).get("issue")
+            == "measurement_provenance_source_invalid"
+            for finding in provenance_source_findings
+        )
+        and previous_repair != provenance_alias_repair_name
+    ):
+        repaired = patch_closed_provenance_envelope_alias(code)
+        if repaired != code:
+            return provenance_alias_repair_name, repaired
     if provenance_source_findings and previous_repair != provenance_repair_name:
         repaired = patch_measurement_provenance_contract(code, findings=findings)
         if repaired != code:

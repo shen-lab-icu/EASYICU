@@ -1144,6 +1144,168 @@ step_summary = {
     )
 
 
+def test_contract_repair_canonicalizes_closed_provenance_envelope_alias():
+    code = """
+from easyicu.research_agent.methods.descriptive_inputs import (
+    measurement_provenance_receipt,
+)
+
+def main():
+    receipts = [
+        measurement_provenance_receipt(
+            frame,
+            measured_column="marker_measured",
+            count_column="marker_n",
+        )
+    ]
+    receipts_payload = {
+        "source": "COHORT_PARQUET",
+        "checks": receipts,
+    }
+    step_summary = {
+        "measurement_provenance": receipts_payload,
+    }
+""".lstrip()
+    finding = {
+        "validator": "step_summary_integrity",
+        "severity": "error",
+        "detail": {
+            "issue": "measurement_provenance_source_invalid",
+        },
+    }
+
+    repaired = deterministic_contract_repair(code=code, findings=[finding])
+
+    assert repaired is not None
+    name, patched = repaired
+    assert name == "measurement_provenance_envelope_alias_v1"
+    assert '"measurement_provenance_audit": receipts_payload' in patched
+    assert '"measurement_provenance": receipts_payload' not in patched
+    assert "def measurement_provenance_receipt" not in patched
+    assert patched.count("measurement_provenance_receipt(") == 1
+    assert (
+        deterministic_contract_repair(
+            code=patched,
+            findings=[finding],
+            previous_repair=name,
+        )
+        is None
+    )
+
+
+def test_contract_repair_does_not_rename_unproven_provenance_alias():
+    code = """
+step_summary = {
+    "measurement_provenance": {"source": "other", "checks": []},
+}
+""".lstrip()
+    finding = {
+        "validator": "step_summary_integrity",
+        "severity": "error",
+        "detail": {
+            "issue": "measurement_provenance_check_missing",
+            "measured_column": "marker_measured",
+            "expected_count_column": "marker_n",
+        },
+    }
+
+    assert deterministic_contract_repair(code=code, findings=[finding]) is None
+
+
+def test_contract_repair_removes_only_validator_rejected_receipt_spec_after_alias():
+    code = """
+from easyicu.research_agent.methods.descriptive_inputs import (
+    measurement_provenance_receipt,
+)
+
+def main(frame):
+    receipt_specs = [
+        ("marker_measured", "marker_n"),
+        ("signal_measured", "signal_n"),
+        ("extra_measured", "extra_n"),
+    ]
+    receipts = []
+    for measured_column, count_column in receipt_specs:
+        receipt = measurement_provenance_receipt(
+            frame,
+            measured_column=measured_column,
+            count_column=count_column,
+        )
+        receipts.append(receipt)
+    receipts_payload = {
+        "source": "COHORT_PARQUET",
+        "checks": receipts,
+    }
+    step_summary = {
+        "measurement_provenance": receipts_payload,
+    }
+""".lstrip()
+    source_finding = {
+        "validator": "step_summary_integrity",
+        "severity": "error",
+        "detail": {"issue": "measurement_provenance_source_invalid"},
+    }
+    alias_repair = deterministic_contract_repair(
+        code=code,
+        findings=[source_finding],
+    )
+
+    assert alias_repair is not None
+    alias_name, canonical = alias_repair
+    assert alias_name == "measurement_provenance_envelope_alias_v1"
+
+    mismatched_path_finding = {
+        "validator": "step_summary_integrity",
+        "severity": "error",
+        "detail": {
+            "issue": "measurement_provenance_check_unplanned",
+            "measured_column": "extra_measured",
+            "summary_path": "measurement_provenance_audit.checks.1",
+            "planned_measured_columns": ["marker_measured", "signal_measured"],
+        },
+    }
+    assert (
+        deterministic_contract_repair(
+            code=canonical,
+            findings=[mismatched_path_finding],
+            previous_repair=alias_name,
+        )
+        is None
+    )
+
+    unplanned_finding = {
+        "validator": "step_summary_integrity",
+        "severity": "error",
+        "detail": {
+            "issue": "measurement_provenance_check_unplanned",
+            "measured_column": "extra_measured",
+            "summary_path": "measurement_provenance_audit.checks.2",
+            "planned_measured_columns": ["marker_measured", "signal_measured"],
+        },
+    }
+    spec_repair = deterministic_contract_repair(
+        code=canonical,
+        findings=[unplanned_finding],
+        previous_repair=alias_name,
+    )
+
+    assert spec_repair is not None
+    spec_name, patched = spec_repair
+    assert spec_name == "measurement_provenance_summary_mapping_v2"
+    assert '("extra_measured", "extra_n")' not in patched
+    assert "('marker_measured', 'marker_n')" in patched
+    assert "('signal_measured', 'signal_n')" in patched
+    assert patched.count("measurement_provenance_receipt(") == 1
+    assert (
+        deterministic_contract_repair(
+            code=patched,
+            findings=[unplanned_finding],
+            previous_repair=spec_name,
+        )
+        is None
+    )
+
+
 def test_contract_repair_replaces_static_custom_measurement_receipts_and_adds_missing_pair():
     code = """import pandas as pd
 
