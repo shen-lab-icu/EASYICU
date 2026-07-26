@@ -1206,6 +1206,15 @@ def _validated_primary_cohort_execution_receipt(
         before = _row_count(row.get("n_before"), field="n_before")
         excluded = _row_count(row.get("n_excluded"), field="n_excluded")
         remaining = _row_count(row.get("n_remaining"), field="n_remaining")
+        resolved_column = row.get("resolved_column")
+        if resolved_column is not None and not (
+            isinstance(resolved_column, str)
+            and resolved_column.strip()
+            and ":" not in resolved_column
+        ):
+            raise ValueError(
+                "host cohort execution receipt resolved_column is invalid"
+            )
         if row.get("step_order") != index:
             raise ValueError("host cohort execution receipt step order is invalid")
         if before != excluded + remaining:
@@ -1274,30 +1283,40 @@ def _write_resolved_inputs_manifest(
         "planner_declared_inputs": declared_inputs,
         "inputs": {key: dict(value) for key, value in bindings.items()},
     }
+    validated_cohort_receipt: Optional[Dict[str, Any]] = None
+    receipt_raw_inputs: Set[str] = set()
+    if host_verified_cohort_execution_receipt is not None:
+        validated_cohort_receipt = _validated_primary_cohort_execution_receipt(
+            host_verified_cohort_execution_receipt
+        )
+        receipt_raw_inputs = {
+            str(row["resolved_column"])
+            for row in validated_cohort_receipt["ordered_predicate_flow"]
+            if row.get("resolved_column") is not None
+        }
     if raw_input_contracts is not None:
         raw_payload = dict(raw_input_contracts)
         contracts = raw_payload.get("contracts")
-        declared_raw_inputs = {item for item in declared_inputs if ":" not in item}
+        authorized_raw_inputs = {
+            item for item in declared_inputs if ":" not in item
+        } | receipt_raw_inputs
         if (
             raw_payload.get("schema_version")
             != "easyicu.resolved_raw_input_contracts/1"
             or not isinstance(contracts, Mapping)
-            or set(contracts) != declared_raw_inputs
+            or set(contracts) != authorized_raw_inputs
         ):
             raise ValueError(
-                "raw input contracts must exactly match Planner-declared raw inputs"
+                "raw input contracts must exactly match Planner-declared or "
+                "host-receipt raw inputs"
             )
         declared_digest = str(raw_payload.pop("contracts_sha256", "") or "")
         if declared_digest != canonical_sha256(raw_payload):
             raise ValueError("raw input contract digest mismatch")
         raw_payload["contracts_sha256"] = declared_digest
         payload["raw_input_contracts"] = raw_payload
-    if host_verified_cohort_execution_receipt is not None:
-        payload["host_verified_cohort_execution_receipt"] = (
-            _validated_primary_cohort_execution_receipt(
-                host_verified_cohort_execution_receipt
-            )
-        )
+    if validated_cohort_receipt is not None:
+        payload["host_verified_cohort_execution_receipt"] = validated_cohort_receipt
     if context_path is not None:
         resolved_context = Path(context_path).resolve()
         run_root = Path(run_dir).resolve()
