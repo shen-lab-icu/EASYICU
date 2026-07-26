@@ -30,6 +30,19 @@ jobs:
       - name: Run lint gate
         run: ruff check src tests
 
+      - name: Enforce architecture and dependency boundaries
+        run: |
+          lint-imports --no-cache
+          python -m deptry src/easyicu --no-ansi
+
+      - name: Report high-confidence dead-code candidates
+        run: |
+          # Vulture exit code 3 means it found reportable candidates. This is
+          # intentionally report-only until each dynamic registration is
+          # reviewed; configuration/runtime failures still fail the job.
+          python -m vulture src/easyicu --min-confidence 100 --sort-by-size \
+            || test "$?" -eq 3
+
       - name: Run test suite
         run: |
           # Exercise fail-closed backend selection without development overrides.

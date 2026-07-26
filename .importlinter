@@ -1,0 +1,45 @@
+[importlinter]
+root_package = easyicu
+include_external_packages = True
+
+[importlinter:contract:reporting-does-not-depend-on-pipeline]
+name = Reporting must not import the orchestration pipeline
+type = forbidden
+source_modules =
+    easyicu.research_agent.reporting
+forbidden_modules =
+    easyicu.research_agent.pipeline
+
+[importlinter:contract:authority-does-not-depend-on-agents]
+name = Authority must not import agent implementations
+type = forbidden
+source_modules =
+    easyicu.research_agent.authority
+forbidden_modules =
+    easyicu.research_agent.agents
+
+[importlinter:contract:data-does-not-depend-on-web]
+name = Core data modules must not import the webserver
+type = forbidden
+source_modules =
+    easyicu.api
+    easyicu.callbacks
+    easyicu.config
+    easyicu.datasource
+    easyicu.concept
+    easyicu.databases
+    easyicu.io
+    easyicu.resources
+    easyicu.runtime
+    easyicu.scores
+    easyicu.table
+forbidden_modules =
+    easyicu.webserver
+
+[importlinter:contract:production-does-not-depend-on-benchmarks]
+name = Production package must not import benchmark fixtures
+type = forbidden
+source_modules =
+    easyicu
+forbidden_modules =
+    benchmarks
