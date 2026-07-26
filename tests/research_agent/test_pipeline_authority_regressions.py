@@ -249,7 +249,15 @@ def test_p1_1_audit_is_written_without_a_caller_supplied_workdir(tmp_path, monke
 
     audit_root = tmp_path / "audit" / ".easyicu_mcp_audit"
     records = EvidenceStore(audit_root).records()
-    assert [r for r in records if "mcp_patient_data_access" in str(r.relative_path)]
+    payloads = [
+        json.loads((audit_root / record.relative_path).read_text())
+        for record in records
+        if "mcp_patient_data_access" in str(record.relative_path)
+    ]
+    assert {payload["event"] for payload in payloads} == {
+        "patient_access_requested",
+        "patient_access_completed",
+    }
 
 
 def test_p1_1_rows_are_withheld_when_the_audit_cannot_be_written(tmp_path, monkeypatch):
@@ -260,7 +268,16 @@ def test_p1_1_rows_are_withheld_when_the_audit_cannot_be_written(tmp_path, monke
     blocker.write_text("not a directory", encoding="utf-8")
     monkeypatch.setenv(MCP_AUDIT_ROOT_ENV, str(blocker))
 
-    _patch_load_concepts(monkeypatch, pd.DataFrame({"sofa2": range(30)}))
+    called = False
+
+    def _load(**kwargs):
+        nonlocal called
+        called = True
+        return pd.DataFrame({"sofa2": range(30)})
+
+    import easyicu
+
+    monkeypatch.setattr(easyicu, "load_concepts", _load, raising=False)
 
     result = dispatch(
         "research_agent.load_concepts",
@@ -275,6 +292,37 @@ def test_p1_1_rows_are_withheld_when_the_audit_cannot_be_written(tmp_path, monke
     assert result.get("error_code") == "scope_not_granted"
     assert "audit" in result["error"]
     assert "summary" not in result
+    assert called is False
+
+
+def test_p1_1_access_intent_exists_before_the_loader_runs(tmp_path, monkeypatch):
+    from easyicu.research_agent.authority.evidence_store import EvidenceStore
+
+    audit_root = tmp_path / "audit" / ".easyicu_mcp_audit"
+
+    def _load(**kwargs):
+        store = EvidenceStore(audit_root)
+        payloads = [
+            json.loads((store.root / record.relative_path).read_text())
+            for record in store.records()
+        ]
+        assert [item["event"] for item in payloads] == ["patient_access_requested"]
+        return pd.DataFrame({"sofa2": range(30)})
+
+    import easyicu
+
+    monkeypatch.setattr(easyicu, "load_concepts", _load, raising=False)
+
+    result = dispatch(
+        "research_agent.load_concepts",
+        {
+            "concepts": ["sofa2"],
+            "database": "miiv",
+            "data_path": str(tmp_path / "miiv"),
+        },
+    )
+
+    assert result["api"] == "easyicu.load_concepts"
 
 
 def test_p1_1_audit_records_rows_actually_returned_not_the_cap(tmp_path, monkeypatch):
@@ -295,7 +343,9 @@ def test_p1_1_audit_records_rows_actually_returned_not_the_cap(tmp_path, monkeyp
 
     store = EvidenceStore(tmp_path / "audit" / ".easyicu_mcp_audit")
     record = next(
-        r for r in store.records() if "mcp_patient_data_access" in str(r.relative_path)
+        r
+        for r in store.records()
+        if "patient_access_completed" in str(r.relative_path)
     )
     payload = json.loads(
         (store.root / record.relative_path).read_text(encoding="utf-8")

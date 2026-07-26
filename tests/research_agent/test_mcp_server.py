@@ -9,7 +9,11 @@ import pandas as pd
 import pytest
 
 from easyicu.concept.availability_signal import ConceptAvailabilityRecord
-from easyicu.research_agent.mcp_policy import MCP_ALLOWED_ROOTS_ENV, MCP_SCOPES_ENV
+from easyicu.research_agent.mcp_policy import (
+    MCP_ALLOWED_ROOTS_ENV,
+    MCP_SCOPES_ENV,
+    SCOPE_READ_PATIENT_DATA,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -140,6 +144,10 @@ def test_mcp_load_concepts_calls_standardized_easyicu_api(ra, tmp_path, monkeypa
         )
 
     monkeypatch.setattr(easyicu, "load_concepts", fake_load_concepts, raising=False)
+    monkeypatch.setenv(
+        MCP_SCOPES_ENV,
+        f"metadata,write_artifacts,bind_evidence,{SCOPE_READ_PATIENT_DATA}",
+    )
     out_path = tmp_path / "vitals.parquet"
     workdir = tmp_path / "run"
     result = dispatch(
@@ -222,6 +230,10 @@ def test_mcp_extract_concept_registers_evidence_by_default(ra, tmp_path, monkeyp
         )
 
     monkeypatch.setattr(easyicu, "load_concepts", fake_load_concepts, raising=False)
+    monkeypatch.setenv(
+        MCP_SCOPES_ENV,
+        f"metadata,write_artifacts,bind_evidence,{SCOPE_READ_PATIENT_DATA}",
+    )
     workdir = tmp_path / "run"
     result = dispatch(
         "research_agent.extract_concept",
