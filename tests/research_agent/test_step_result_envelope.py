@@ -748,6 +748,48 @@ def test_registered_tables_compile_typed_population_missingness_and_estimate(
     ]
 
 
+def test_registered_missingness_prefers_complete_partition_over_summary_denominator(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "summary.csv").write_text(
+        "variable,role,denominator_n,n_nonmissing,missing_n,missing_pct\n"
+        "los_icu,adjustment,94442,94442,14,0.014822\n",
+        encoding="utf-8",
+    )
+
+    envelope = normalize_step_result_shadow(
+        step_id="mixed-denominator-semantics",
+        step_summary={"output_files": {"table:summary": "summary.csv"}},
+        output_dir=tmp_path,
+    )
+
+    assert envelope.missing_data is not None
+    missing = envelope.missing_data.variables[0]
+    assert missing.denominator_n == 94456
+    assert missing.nonmissing_n == 94442
+    assert missing.missing_n == 14
+    assert not [
+        issue for issue in envelope.normalization_issues if issue.severity == "error"
+    ]
+
+
+def test_registered_missingness_rejects_explicit_full_partition_disagreement(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "summary.csv").write_text(
+        "variable,n_full,n_nonmissing,missing_n,missing_pct\nlos_icu,100,90,9,9.0\n",
+        encoding="utf-8",
+    )
+
+    envelope = normalize_step_result_shadow(
+        step_id="invalid-missingness-partition",
+        step_summary={"output_files": {"table:summary": "summary.csv"}},
+        output_dir=tmp_path,
+    )
+
+    assert "inconsistent_registered_missingness_partition" in _issue_codes(envelope)
+
+
 @pytest.mark.parametrize(
     ("limit_name", "limit_value", "payload", "issue_code"),
     (
@@ -789,9 +831,7 @@ def test_opaque_data_artifact_profile_overflow_does_not_block_fraction_shadow(
         status="ok",
     )
     issues = [
-        issue
-        for issue in envelope.normalization_issues
-        if issue.code == issue_code
+        issue for issue in envelope.normalization_issues if issue.code == issue_code
     ]
     findings = StepSummaryFractionEnvelopeDualReader().audit(
         step=step,
@@ -850,9 +890,7 @@ def test_result_table_profile_overflow_remains_fail_closed(
         status="ok",
     )
     issues = [
-        issue
-        for issue in envelope.normalization_issues
-        if issue.code == issue_code
+        issue for issue in envelope.normalization_issues if issue.code == issue_code
     ]
     findings = StepSummaryFractionEnvelopeDualReader().audit(
         step=step,
@@ -914,7 +952,7 @@ def test_registered_table_parser_fails_closed_on_header_numeric_and_fraction_con
         encoding="utf-8",
     )
     (tmp_path / "conflict.csv").write_text(
-        "variable,missing_n,n_full,fraction_missing,missing_pct\n" "x,1,10,0.1,50\n",
+        "variable,missing_n,n_full,fraction_missing,missing_pct\nx,1,10,0.1,50\n",
         encoding="utf-8",
     )
     (tmp_path / "nonfinite.csv").write_text(

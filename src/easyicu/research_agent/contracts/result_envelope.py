@@ -18,6 +18,7 @@ import os
 import re
 import tempfile
 from dataclasses import dataclass, field
+from decimal import Decimal, InvalidOperation
 from pathlib import Path, PurePosixPath
 from typing import Any, Literal, Mapping, Sequence, Union
 
@@ -1373,6 +1374,34 @@ def _normalized_fraction(
     return first
 
 
+def _reported_fraction_rounding_tolerance(
+    row: Mapping[str, str],
+    *,
+    fraction_keys: Sequence[str],
+    percent_keys: Sequence[str],
+) -> float:
+    """Return half of the coarsest reported unit on the fraction scale."""
+
+    tolerance = 1e-12
+    for keys, scale in ((fraction_keys, Decimal(1)), (percent_keys, Decimal(100))):
+        for key in keys:
+            raw = str(row.get(key) or "").strip()
+            if not raw:
+                continue
+            try:
+                value = Decimal(raw)
+            except InvalidOperation:
+                continue
+            if not value.is_finite():
+                continue
+            quantum = Decimal(1).scaleb(value.as_tuple().exponent)
+            tolerance = max(
+                tolerance,
+                float(abs(quantum) / (Decimal(2) * scale)),
+            )
+    return tolerance
+
+
 def _compile_registered_table(
     *,
     artifact: StepArtifactRef,
@@ -1485,16 +1514,16 @@ def _compile_registered_table(
                 issues=issues,
             )
             if variable is not None and missing_n is not None:
-                denominator_n = None
-                for key in ("n_full", "n_total", "cohort_n", "denominator_n"):
-                    denominator_n = _csv_count(
+                explicit_full_n = None
+                for key in ("n_full", "n_total", "cohort_n"):
+                    explicit_full_n = _csv_count(
                         row,
                         key,
                         product_id=artifact.product_id,
                         row_index=row_index,
                         issues=issues,
                     )
-                    if denominator_n is not None:
+                    if explicit_full_n is not None:
                         break
                 nonmissing_n = None
                 for key in ("n_nonmissing", "nonmissing_n"):
@@ -1507,6 +1536,42 @@ def _compile_registered_table(
                     )
                     if nonmissing_n is not None:
                         break
+                partition_full_n = (
+                    nonmissing_n + missing_n if nonmissing_n is not None else None
+                )
+                if (
+                    explicit_full_n is not None
+                    and partition_full_n is not None
+                    and explicit_full_n != partition_full_n
+                ):
+                    issues.append(
+                        NormalizationIssue(
+                            severity="error",
+                            code="inconsistent_registered_missingness_partition",
+                            message=(
+                                "Explicit full denominator disagreed with the "
+                                "non-missing plus missing partition."
+                            ),
+                            field_path=f"row[{row_index}]",
+                            product_id=artifact.product_id,
+                        )
+                    )
+                denominator_n = (
+                    explicit_full_n if explicit_full_n is not None else partition_full_n
+                )
+                if denominator_n is None:
+                    # ``denominator_n`` is intentionally last: descriptive rows
+                    # often use it for the non-missing summary denominator while
+                    # reporting missingness against the full cohort.  An explicit
+                    # full-cohort field or the complete nonmissing/missing
+                    # partition is therefore stronger authority.
+                    denominator_n = _csv_count(
+                        row,
+                        "denominator_n",
+                        product_id=artifact.product_id,
+                        row_index=row_index,
+                        issues=issues,
+                    )
                 missing_fraction = _normalized_fraction(
                     row,
                     fraction_keys=("fraction_missing",),
@@ -1525,7 +1590,11 @@ def _compile_registered_table(
                         missing_n / denominator_n,
                         missing_fraction,
                         rel_tol=1e-8,
-                        abs_tol=1e-12,
+                        abs_tol=_reported_fraction_rounding_tolerance(
+                            row,
+                            fraction_keys=("fraction_missing",),
+                            percent_keys=("missing_pct", "missing_percent"),
+                        ),
                     )
                 ):
                     issues.append(
