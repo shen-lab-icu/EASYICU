@@ -902,6 +902,80 @@ def test_resolved_inputs_manifest_binds_host_cohort_execution_receipt(
     assert payload["host_verified_cohort_execution_receipt"] == receipt
 
 
+def _raw_input_contract(*names: str) -> dict[str, object]:
+    payload: dict[str, object] = {
+        "schema_version": "easyicu.resolved_raw_input_contracts/1",
+        "authority_scope": (
+            "host_verified_physical_representation_and_domain_constraints"
+        ),
+        "scientific_ownership": "Planner retains scientific decisions",
+        "contracts": {
+            name: {
+                "column": name,
+                "allowed_values": [0, 1],
+            }
+            for name in names
+        },
+    }
+    encoded = json.dumps(
+        payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    ).encode("utf-8")
+    payload["contracts_sha256"] = hashlib.sha256(encoded).hexdigest()
+    return payload
+
+
+def test_resolved_inputs_manifest_binds_receipt_only_raw_contract(
+    tmp_path: Path,
+) -> None:
+    receipt = _host_verified_cohort_execution_receipt()
+    raw_contract = _raw_input_contract("eligibility_flag")
+
+    manifest_path = _write_resolved_inputs_manifest(
+        run_dir=tmp_path,
+        step_id="01_cohort",
+        planner_declared_inputs=[],
+        bindings={},
+        raw_input_contracts=raw_contract,
+        host_verified_cohort_execution_receipt=receipt,
+    )
+
+    payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert payload["planner_declared_inputs"] == []
+    assert payload["raw_input_contracts"] == raw_contract
+    assert payload["host_verified_cohort_execution_receipt"] == receipt
+
+
+@pytest.mark.parametrize(
+    "contract_names",
+    [
+        (),
+        ("eligibility_flag", "unrelated_column"),
+    ],
+)
+def test_resolved_inputs_manifest_requires_exact_receipt_raw_contracts(
+    tmp_path: Path,
+    contract_names: tuple[str, ...],
+) -> None:
+    with pytest.raises(
+        ValueError,
+        match="Planner-declared or host-receipt raw inputs",
+    ):
+        _write_resolved_inputs_manifest(
+            run_dir=tmp_path,
+            step_id="01_cohort",
+            planner_declared_inputs=[],
+            bindings={},
+            raw_input_contracts=_raw_input_contract(*contract_names),
+            host_verified_cohort_execution_receipt=(
+                _host_verified_cohort_execution_receipt()
+            ),
+        )
+
+
 @pytest.mark.parametrize(
     ("mutate", "message"),
     [
@@ -914,6 +988,12 @@ def test_resolved_inputs_manifest_binds_host_cohort_execution_receipt(
                 {"n_before": 9, "n_excluded": 1}
             ),
             "flow is discontinuous",
+        ),
+        (
+            lambda receipt: receipt["ordered_predicate_flow"][1].update(
+                {"resolved_column": "table:not_raw"}
+            ),
+            "resolved_column is invalid",
         ),
     ],
 )
