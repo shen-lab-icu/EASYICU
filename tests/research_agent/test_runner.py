@@ -25,6 +25,22 @@ def _is_python_executable(command: str) -> bool:
     return Path(command).name.startswith("python")
 
 
+def _skip_if_outer_macos_sandbox_denied(result) -> None:
+    from easyicu.research_agent.execution.runner import (
+        macos_sandbox_permission_denied,
+    )
+
+    if (
+        result.effective_isolation == "macos_sandbox_exec"
+        and not result.succeeded
+        and macos_sandbox_permission_denied(result.stderr)
+    ):
+        pytest.skip(
+            "isolation_backend_unavailable: outer macOS sandbox denied "
+            "CodeRunner target execution"
+        )
+
+
 def test_output_cleanup_never_follows_untrusted_symlinks(tmp_path: Path):
     from easyicu.research_agent.pipeline import _clear_output_dir
 
@@ -493,6 +509,7 @@ def test_code_runner_scrubs_secrets_and_reports_filesystem_degradation(
         assert result.returncode == 126
         assert not (result.out_dir / "probe.json").exists()
         return
+    _skip_if_outer_macos_sandbox_denied(result)
     assert result.succeeded
     payload = json.loads((result.out_dir / "probe.json").read_text(encoding="utf-8"))
     assert payload["api_key"] is None
@@ -590,6 +607,7 @@ def test_macos_sandbox_executes_resolved_python_symlink(ra, tmp_path: Path):
         ),
     )
 
+    _skip_if_outer_macos_sandbox_denied(result)
     assert result.succeeded, result.stderr
     assert result.effective_isolation == "macos_sandbox_exec"
     assert (result.out_dir / "ok.txt").read_text(encoding="utf-8") == "ok"
@@ -636,6 +654,7 @@ def test_macos_sandbox_imports_pandas_and_easyicu_but_confines_files(
         ),
     )
 
+    _skip_if_outer_macos_sandbox_denied(result)
     assert result.succeeded, result.stderr
     assert result.effective_isolation == "macos_sandbox_exec"
     payload = json.loads((result.out_dir / "probe.json").read_text(encoding="utf-8"))
@@ -1040,6 +1059,63 @@ def test_runner_retries_without_macos_sandbox_when_profile_apply_is_denied(
     assert result.isolation_degraded is True
     assert result.effective_isolation == "host_subprocess"
     assert "profile application" in (result.isolation_degradation_reason or "")
+
+
+def test_runner_retries_without_macos_sandbox_when_target_exec_is_denied(
+    ra,
+    tmp_path: Path,
+    monkeypatch,
+):
+    """Explicit development fallback also covers nested-sandbox execvp denial."""
+
+    import easyicu.research_agent.execution.runner as runner_mod
+
+    cohort_path = tmp_path / "cohort.parquet"
+    pd.DataFrame({"stay_id": [1], "death": [0]}).to_parquet(cohort_path, index=False)
+    runner = ra.CodeRunner(
+        workdir=tmp_path / "run",
+        cohort_parquet=cohort_path,
+        timeout_seconds=10,
+        allow_unsafe_host_fallback=True,
+    )
+    calls: list[list[str]] = []
+
+    def _fake_run(cmd, *, cwd, env, timeout):
+        calls.append(list(cmd))
+        if cmd[0] == "sandbox-exec":
+            return SimpleNamespace(
+                stdout="",
+                stderr=(
+                    "sandbox-exec: execvp() of '/tmp/.venv/bin/python' failed: "
+                    "Operation not permitted"
+                ),
+                returncode=71,
+            )
+        Path(env["STEP_OUT_DIR"], "ok.txt").write_text("ok", encoding="utf-8")
+        return SimpleNamespace(stdout="ok\n", stderr="", returncode=0)
+
+    monkeypatch.setattr(
+        runner,
+        "build_command",
+        lambda *, script_path: [
+            "sandbox-exec",
+            "-p",
+            "(deny network*)",
+            "python",
+            str(script_path),
+        ],
+    )
+    monkeypatch.setattr(runner_mod.sys, "platform", "darwin")
+    monkeypatch.setattr(runner_mod, "_run_capturing_with_descendant_reaping", _fake_run)
+
+    result = runner.run(step_id="macos_execvp_fallback", code="print('ok')\n")
+
+    assert result.succeeded
+    assert len(calls) == 2
+    assert calls[0][0] == "sandbox-exec"
+    assert result.isolation_degraded is True
+    assert result.effective_isolation == "host_subprocess"
+    assert "could not apply its profile" in result.stderr
 
 
 def test_runner_retries_without_macos_sandbox_when_stdio_is_blocked(

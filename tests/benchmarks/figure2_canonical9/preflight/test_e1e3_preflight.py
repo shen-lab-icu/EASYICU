@@ -30,6 +30,7 @@ import copy
 import json
 import os
 from dataclasses import replace
+from types import SimpleNamespace
 
 import pytest
 
@@ -415,6 +416,48 @@ def test_linux_probe_matches_code_runner_filesystem_fail_closed(
     assert "filesystem isolation" in capability.detail
 
 
+def test_macos_probe_exercises_exact_code_runner_boundary(monkeypatch) -> None:
+    """The capability probe must not substitute ``/usr/bin/true`` for Python."""
+
+    observed: dict[str, object] = {}
+
+    class _ProbeRunner:
+        def __init__(self, **kwargs) -> None:
+            observed["init"] = kwargs
+
+        def run(self, **kwargs):
+            observed["run"] = kwargs
+            return SimpleNamespace(
+                succeeded=False,
+                effective_isolation="macos_sandbox_exec",
+                isolation_degraded=False,
+                returncode=71,
+                stderr=(
+                    "sandbox-exec: execvp() of '/tmp/.venv/bin/python' failed: "
+                    "Operation not permitted"
+                ),
+            )
+
+    monkeypatch.setattr(rt.sys, "platform", "darwin")
+    monkeypatch.setattr(rt.shutil, "which", lambda name: "/usr/bin/sandbox-exec")
+    monkeypatch.setattr(rt, "CodeRunner", _ProbeRunner)
+
+    capability = rt.probe_isolation_backend()
+
+    assert capability.available is False
+    assert capability.returncode == 71
+    assert "execvp()" in capability.detail
+    init = observed["init"]
+    assert isinstance(init, dict)
+    assert init["python_executable"] == rt.sys.executable
+    assert init["network_policy"] == "none"
+    assert init["allow_unsafe_host_fallback"] is False
+    assert observed["run"] == {
+        "step_id": "isolation_capability_probe",
+        "code": "pass\n",
+    }
+
+
 def test_step_isolation_positive_nested_sandbox_denial() -> None:
     record = {
         "returncode": 71,
@@ -424,6 +467,32 @@ def test_step_isolation_positive_nested_sandbox_denial() -> None:
     reason = rt.step_isolation_unavailable(record, _macos_capability(available=False))
     assert reason is not None
     assert "sandbox_apply" in reason
+
+
+def test_step_isolation_positive_execvp_denial() -> None:
+    record = {
+        "returncode": 71,
+        "timed_out": False,
+        "stderr": (
+            "sandbox-exec: execvp() of '/tmp/.venv/bin/python' failed: "
+            "Operation not permitted"
+        ),
+    }
+    reason = rt.step_isolation_unavailable(record, _macos_capability(available=False))
+    assert reason is not None
+    assert "execvp()" in reason
+
+
+def test_step_isolation_negative_execvp_without_permission_denial() -> None:
+    record = {
+        "returncode": 71,
+        "timed_out": False,
+        "stderr": "sandbox-exec: execvp() of '/tmp/missing-python' failed: No such file",
+    }
+    assert (
+        rt.step_isolation_unavailable(record, _macos_capability(available=False))
+        is None
+    )
 
 
 def test_step_isolation_negative_plain_exit_71_is_execution_failure() -> None:

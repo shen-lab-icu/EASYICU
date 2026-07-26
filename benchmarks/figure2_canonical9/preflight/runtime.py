@@ -22,13 +22,19 @@ This module therefore records:
 from __future__ import annotations
 
 import json
+import shutil
 import subprocess
 import sys
+import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional
 
 import easyicu
+from easyicu.research_agent.execution.runner import (
+    CodeRunner,
+    macos_sandbox_permission_denied,
+)
 
 # The dependency surface whose version drift would change real-stats behaviour.
 AUDITED_PACKAGES = (
@@ -42,10 +48,6 @@ AUDITED_PACKAGES = (
 # Mirror the CodeRunner's step interpreter: env["PYTHONPATH"] is the src root
 # that owns the loaded research_agent package (runner.py sets parents[3]).
 _WORKTREE_SRC = str(Path(easyicu.__file__).resolve().parents[1])
-
-# Minimal profile mirroring the shape the CodeRunner passes to sandbox-exec.
-_SANDBOX_PROBE_PROFILE = "(version 1)(allow default)"
-
 
 def _package_versions() -> Dict[str, str]:
     import importlib.metadata as md
@@ -139,17 +141,18 @@ class IsolationCapability:
 def probe_isolation_backend() -> IsolationCapability:
     """Probe the host isolation backend the subprocess runner would use.
 
-    On macOS the CodeRunner confines every step with ``sandbox-exec``.  We run a
-    trivial command under a minimal profile: a nested/denied sandbox returns
-    non-zero with ``sandbox_apply: Operation not permitted`` (the supervisor's
-    ``returncode=71``).  On Linux, ``unshare -n`` isolates only the network
-    namespace, not the host filesystem; :class:`CodeRunner` therefore rejects
-    both it and a plain host subprocess when unsafe fallback is disabled.
-    Report that boundary as unavailable instead of claiming the integration
-    gate can run and later misclassifying the expected fail-close as bad code.
+    On macOS, run a harmless script through the real :class:`CodeRunner`.
+    Probing ``/usr/bin/true`` under an allow-all profile is insufficient: an
+    outer application sandbox can permit that system binary while denying the
+    project virtualenv interpreter with ``sandbox-exec: execvp() ... Operation
+    not permitted``.  The real runner probe exercises the exact interpreter,
+    generated sandbox profile, cwd, and scrubbed environment used by analysis
+    steps.  On Linux, ``unshare -n`` isolates only the network namespace, not
+    the host filesystem; :class:`CodeRunner` therefore rejects both it and a
+    plain host subprocess when unsafe fallback is disabled.  Report that
+    boundary as unavailable instead of claiming the integration gate can run
+    and later misclassifying the expected fail-close as bad code.
     """
-
-    import shutil
 
     if sys.platform.startswith("linux"):
         backend = (
@@ -182,37 +185,50 @@ def probe_isolation_backend() -> IsolationCapability:
             detail="sandbox-exec not found on PATH",
         )
     try:
-        proc = subprocess.run(  # noqa: S603 - fixed argv, no shell
-            [sandbox_exec, "-p", _SANDBOX_PROBE_PROFILE, "/usr/bin/true"],
-            capture_output=True,
-            text=True,
-            timeout=30.0,
-            encoding="utf-8",
-            errors="replace",
-        )
+        with tempfile.TemporaryDirectory(
+            prefix="easyicu-isolation-capability-"
+        ) as raw_temp_dir:
+            temp_dir = Path(raw_temp_dir)
+            cohort_path = temp_dir / "probe_cohort.parquet"
+            # CodeRunner only needs the authority path to exist for this
+            # zero-data ``pass`` probe.  No patient data is read or written.
+            cohort_path.touch()
+            runner = CodeRunner(
+                workdir=temp_dir / "run",
+                cohort_parquet=cohort_path,
+                timeout_seconds=30.0,
+                python_executable=sys.executable,
+                network_policy="none",
+                allow_unsafe_host_fallback=False,
+            )
+            result = runner.run(
+                step_id="isolation_capability_probe",
+                code="pass\n",
+            )
     except Exception as exc:  # noqa: BLE001
         return IsolationCapability(
             backend="macos_sandbox_exec",
             available=False,
             detail=f"{type(exc).__name__}: {exc}",
         )
-    if proc.returncode == 0:
+    if (
+        result.succeeded
+        and result.effective_isolation == "macos_sandbox_exec"
+        and not result.isolation_degraded
+    ):
         return IsolationCapability(
             backend="macos_sandbox_exec", available=True, returncode=0
         )
     return IsolationCapability(
         backend="macos_sandbox_exec",
         available=False,
-        returncode=proc.returncode,
-        detail=(proc.stderr or "").strip() or "sandbox-exec returned non-zero",
+        returncode=result.returncode,
+        detail=(result.stderr or "").strip()
+        or (
+            "CodeRunner isolation probe did not complete under "
+            "macos_sandbox_exec"
+        ),
     )
-
-
-# Signature of a nested-sandbox denial in a CodeRunner step record.
-_SANDBOX_DENIED_MARKERS = (
-    "sandbox_apply: operation not permitted",
-    "sandbox-exec: sandbox_apply",
-)
 
 
 def step_isolation_unavailable(
@@ -244,7 +260,7 @@ def step_isolation_unavailable(
     if step_record.get("timed_out"):
         return None
     stderr = str(step_record.get("stderr") or "").lower()
-    if any(marker in stderr for marker in _SANDBOX_DENIED_MARKERS):
+    if macos_sandbox_permission_denied(stderr):
         return stderr.strip()[:400]
     return None
 
