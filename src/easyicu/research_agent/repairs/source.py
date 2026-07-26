@@ -5403,6 +5403,119 @@ def _patch_direct_bound_figure_source_materialization(code: str) -> str:
     )
 
 
+def _patch_unresolved_input_binding_receipts(
+    code: str,
+    *,
+    findings: Sequence[Any],
+) -> str:
+    """Empty a literal typed-input receipt list when the host bound no typed inputs.
+
+    Raw Planner columns are authorized through the execution cohort and
+    ``raw_input_contracts``. They are deliberately absent from the typed
+    ``manifest['inputs']`` namespace, so generated ``raw:<column>`` receipts are
+    both unverifiable and unnecessary. This repair is intentionally narrow: it
+    runs only when every reported unresolved key came from a validator receipt
+    proving that the exact host-resolved key set was empty, and only when one
+    literal ``input_bindings`` list contains exactly those keys.
+    """
+
+    unresolved_details: list[Mapping[str, Any]] = []
+    for finding in findings:
+        validator = getattr(finding, "validator", None)
+        detail = getattr(finding, "detail", None)
+        if isinstance(finding, dict):
+            validator = finding.get("validator")
+            detail = finding.get("detail")
+        if (
+            validator == "step_summary_integrity"
+            and isinstance(detail, dict)
+            and detail.get("issue") == "input_binding_key_unresolved"
+        ):
+            unresolved_details.append(detail)
+    if not unresolved_details or any(
+        detail.get("resolved_input_keys") != []
+        or not isinstance(detail.get("input_key"), str)
+        for detail in unresolved_details
+    ):
+        return code
+    unresolved_keys = [str(detail["input_key"]) for detail in unresolved_details]
+
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return code
+
+    expected_keys = sorted(unresolved_keys)
+    candidates: list[ast.List] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Dict):
+            continue
+        for key, value in zip(node.keys, node.values, strict=True):
+            if not (
+                isinstance(key, ast.Constant)
+                and key.value == "input_bindings"
+                and isinstance(value, ast.List)
+                and value.elts
+            ):
+                continue
+            literal_keys: list[str] = []
+            valid_literal = True
+            for item in value.elts:
+                if not isinstance(item, ast.Dict):
+                    valid_literal = False
+                    break
+                item_key: Optional[str] = None
+                for item_field, item_value in zip(
+                    item.keys, item.values, strict=True
+                ):
+                    if (
+                        isinstance(item_field, ast.Constant)
+                        and item_field.value == "input_key"
+                        and isinstance(item_value, ast.Constant)
+                        and isinstance(item_value.value, str)
+                    ):
+                        item_key = item_value.value
+                        break
+                if item_key is None:
+                    valid_literal = False
+                    break
+                literal_keys.append(item_key)
+            if valid_literal and sorted(literal_keys) == expected_keys:
+                candidates.append(value)
+    if len(candidates) != 1:
+        return code
+
+    candidate = candidates[0]
+    if candidate.end_lineno is None or candidate.end_col_offset is None:
+        return code
+    lines = code.splitlines(keepends=True)
+    if not lines:
+        return code
+    line_starts: list[int] = []
+    offset = 0
+    for line in lines:
+        line_starts.append(offset)
+        offset += len(line)
+
+    def _absolute_offset(lineno: int, utf8_col: int) -> int:
+        line = lines[lineno - 1]
+        char_col = len(line.encode("utf-8")[:utf8_col].decode("utf-8"))
+        return line_starts[lineno - 1] + char_col
+
+    repaired = (
+        code[: _absolute_offset(candidate.lineno, candidate.col_offset)]
+        + "[]"
+        + code[
+            _absolute_offset(candidate.end_lineno, candidate.end_col_offset) :
+        ]
+    )
+    try:
+        ast.parse(repaired)
+    except SyntaxError:
+        return code
+    return repaired
+
+
 def deterministic_contract_repair(
     *,
     code: str,
@@ -5410,6 +5523,12 @@ def deterministic_contract_repair(
     previous_repair: Optional[str] = None,
 ) -> Optional[tuple[str, str]]:
     """Patch objective contract/audit failures before asking the LLM to repair."""
+
+    unresolved_receipt_repair_name = "unresolved_input_binding_receipts_v1"
+    if previous_repair != unresolved_receipt_repair_name:
+        repaired = _patch_unresolved_input_binding_receipts(code, findings=findings)
+        if repaired != code:
+            return unresolved_receipt_repair_name, repaired
 
     render_echo_repair_name = "render_only_effect_echo_suppression_v1"
     if previous_repair != render_echo_repair_name:

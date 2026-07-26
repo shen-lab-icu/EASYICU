@@ -321,3 +321,23 @@ def test_primary_cohort_schema_guidance_does_not_leak_to_other_products(
     )
     assert "n_final_analysis_cohort" not in guidance
     assert "normalized_concept_id" not in guidance
+
+
+def test_contract_repair_guidance_forbids_raw_receipts_without_typed_inputs() -> None:
+    step = AnalysisStep(
+        step_id="define_analysis_cohort",
+        intent="Materialize the analysis cohort.",
+        inputs=["age"],
+        expected_outputs=["artifact:analysis_cohort", "table:cohort_flow"],
+        method="cohort_definition_and_attrition",
+    )
+
+    guidance = _step_contract_repair_guidance(
+        step=step,
+        step_summary={"input_bindings": [{"input_key": "raw:age"}]},
+        code="",
+        input_bindings={},
+    )
+
+    assert "no host-resolved typed inputs" in guidance
+    assert "`raw:<column>` receipts" in guidance
