@@ -33,6 +33,10 @@ from easyicu.research_agent.intake.materialized_trajectory import (
     load_verified_materialized_trajectory_authority,
 )
 from easyicu.research_agent.planning.analysis_types import infer_analysis_type
+from easyicu.research_agent.planning.analysis_blueprint import (
+    build_analysis_blueprint,
+    render_analysis_blueprint_for_prompt,
+)
 from easyicu.research_agent.providers.mocks import PatternScriptedMockLLMClient
 from easyicu.research_agent.repairs.reasons import RepairPromptAuthority
 from easyicu.research_agent.research_context.builder import build_research_context
@@ -56,6 +60,8 @@ _ANALYZER_LIMIT_BYTES = 48_000
 _WRITER_LIMIT_BYTES = 64_000
 _REPAIR_LIMIT_BYTES = 30_000
 _PROMPT_KINDS = ("planner", "coder", "analyzer", "writer", "repair")
+
+
 class PromptPreflightError(RuntimeError):
     """A Canonical9 prompt cannot be rendered losslessly and offline."""
 
@@ -125,9 +131,7 @@ def _authority_ref(
     MaterializedCohortAuthorityRef,
     StagedTrajectoryBinding | None,
 ]:
-    cohort_path = _regular_absolute_file(
-        row.get("cohort_path"), label="cohort_path"
-    )
+    cohort_path = _regular_absolute_file(row.get("cohort_path"), label="cohort_path")
     raw_cohort_ref = row.get("cohort_authority_ref")
     if not isinstance(raw_cohort_ref, Mapping):
         raise PromptPreflightError("cohort_authority_ref is missing")
@@ -149,17 +153,13 @@ def _authority_ref(
 
     raw_trajectory = row.get("trajectory_path")
     if not raw_trajectory:
-        if row.get("trajectory_authority_ref") or row.get(
-            "trajectory_authority_path"
-        ):
+        if row.get("trajectory_authority_ref") or row.get("trajectory_authority_path"):
             raise PromptPreflightError(
                 "trajectory authority was declared without a trajectory artifact"
             )
         return cohort_path, cohort_ref, None
 
-    trajectory_path = _regular_absolute_file(
-        raw_trajectory, label="trajectory_path"
-    )
+    trajectory_path = _regular_absolute_file(raw_trajectory, label="trajectory_path")
     raw_trajectory_ref = row.get("trajectory_authority_ref")
     if not isinstance(raw_trajectory_ref, Mapping):
         raise PromptPreflightError("trajectory_authority_ref is missing")
@@ -198,18 +198,16 @@ def _canary(task_id: str, section: str) -> str:
 def _string_list(value: object) -> list[str]:
     if not isinstance(value, (list, tuple)):
         return []
-    return [
-        text
-        for item in value
-        if (text := str(item or "").strip())
-    ]
+    return [text for item in value if (text := str(item or "").strip())]
 
 
 def _build_context(
     row: Mapping[str, Any],
     *,
     canaries: Mapping[str, str],
-) -> tuple[ResearchContext, MaterializedCohortAuthorityRef, StagedTrajectoryBinding | None]:
+) -> tuple[
+    ResearchContext, MaterializedCohortAuthorityRef, StagedTrajectoryBinding | None
+]:
     cohort_path, cohort_ref, trajectory_binding = _authority_ref(row)
     task_id = str(row["key"])
     protocol_note = render_task_protocol_note(
@@ -541,12 +539,19 @@ def render_task_prompt_audit(row: Mapping[str, Any]) -> dict[str, object]:
         if trajectory_binding is not None
         else ""
     )
-    host_authority = HostCoderAuthority.from_values(
-        (trajectory_authority_note,)
-    )
+    host_authority = HostCoderAuthority.from_values((trajectory_authority_note,))
 
-    planner_messages = PlannerAgent.request_messages(context)
-    planner_metrics = PlannerAgent.request_metrics(context)
+    planning_contract_context = render_analysis_blueprint_for_prompt(
+        build_analysis_blueprint(context)
+    )
+    planner_messages = PlannerAgent.request_messages(
+        context,
+        planning_contract_context=planning_contract_context,
+    )
+    planner_metrics = PlannerAgent.request_metrics(
+        context,
+        planning_contract_context=planning_contract_context,
+    )
     coder_messages = _capture_coder_messages(
         context=context,
         step=step,
@@ -581,7 +586,7 @@ def render_task_prompt_audit(row: Mapping[str, Any]) -> dict[str, object]:
         "planner": _prompt_record(
             prompt_kind="planner",
             messages=planner_messages,
-            required_strings=protocol_strings,
+            required_strings=[*protocol_strings, planning_contract_context],
             limit_bytes=_PLANNER_LIMIT_BYTES,
             stage_mode="exact_pre_execution",
         ),
@@ -624,9 +629,14 @@ def render_task_prompt_audit(row: Mapping[str, Any]) -> dict[str, object]:
     if int(planner_metrics["total_bytes"]) > _PLANNER_LIMIT_BYTES:
         planner_record["within_budget"] = False
     planner_record["production_request_metrics"] = planner_metrics
+    planner_record["planning_contract_bytes"] = len(
+        planning_contract_context.encode("utf-8")
+    )
+    planner_record["planning_contract_sha256"] = hashlib.sha256(
+        planning_contract_context.encode("utf-8")
+    ).hexdigest()
     prompt_ok = all(
-        bool(record["within_budget"])
-        and not bool(record["silent_truncation_detected"])
+        bool(record["within_budget"]) and not bool(record["silent_truncation_detected"])
         for record in records.values()
     )
     return {
