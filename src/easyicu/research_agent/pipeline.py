@@ -44,6 +44,7 @@ import re
 import shutil
 import textwrap
 import threading
+import warnings
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from pathlib import Path
@@ -165,6 +166,7 @@ from .orchestration.config import (
     PipelineConfig,
     assert_step_provider_budget_funds_its_repairs,
 )
+from .orchestration.services import PipelineServices
 from .resources.capability_runtime import CapabilityWorkflowRuntime
 from .contracts.runtime import (
     RunResult,
@@ -1453,174 +1455,103 @@ class ResearchAgentPipeline:
     """One-shot orchestration. Construct, call :meth:`run`, read the result."""
 
     @classmethod
-    def from_config(cls, config: PipelineConfig) -> "ResearchAgentPipeline":
-        """Construct a pipeline from a :class:`PipelineConfig` object.
-
-        The legacy keyword-argument form of ``__init__`` continues to
-        work; this classmethod is the recommended new-code entry point
-        because the config object is typed, copyable
-        (``config.with_overrides(...)``) and serialisable
-        (``config.as_kwargs()``).
-        """
-        return cls(**config.as_kwargs())
+    def from_config(
+        cls,
+        config: PipelineConfig,
+        services: Optional[PipelineServices] = None,
+    ) -> "ResearchAgentPipeline":
+        """Construct from the canonical configuration and service objects."""
+        return cls(config=config, services=services)
 
     def __init__(
         self,
         *,
-        workdir: Union[str, Path],
-        llm: Optional[LLMClient] = None,
-        timeout_seconds: float = 900.0,
-        standard_executor_timeout_seconds: float = 3_600.0,
-        python_executable: Optional[str] = None,
-        enable_literature: bool = True,
-        enable_visual_qa: bool = True,
-        enable_publication_figure_skill: bool = True,
-        enable_vlm_visual_qa: Optional[bool] = None,
-        vlm_client: Optional[LLMClient] = None,
-        visual_qa_adapter: Optional[VLMVisualQAAdapter] = None,
-        allow_external_figure_upload: bool = False,
-        enable_llm_concept_audit: Optional[bool] = None,
-        llm_concept_auditor_client: Optional[LLMClient] = None,
-        enable_memory: bool = True,
-        enable_latex: bool = True,
-        latex_venue_template: str = "article",
-        manuscript_language: str = "en",
-        evidence_enforcement_mode: str = "soft",
-        disable_icu_context: bool = False,
-        context_top_k: Optional[int] = None,
-        max_code_repair_attempts: int = 3,
-        max_step_llm_repair_attempts: int = 2,
-        max_step_provider_calls: int = 9,
-        allow_underfunded_step_provider_calls: bool = False,
-        enable_deterministic_code_fallback: bool = False,
-        enable_deterministic_planner_fallback: bool = False,
-        enable_deterministic_runner_repair: bool = True,
-        enable_pubmed: bool = False,
-        pubmed_email: Optional[str] = None,
-        pubmed_api_key: Optional[str] = None,
-        enable_tavily: bool = False,
-        tavily_api_key: Optional[str] = None,
-        tavily_retmax: int = 5,
-        tavily_include_domains: Optional[Sequence[str]] = None,
-        tavily_exclude_domains: Optional[Sequence[str]] = None,
-        enable_cache: bool = False,
-        cache_dir: Optional[Union[str, Path]] = None,
-        enable_cost_tracking: bool = False,
-        cost_price_table: Optional[Dict[str, Any]] = None,
-        enable_reproducibility_envelope: bool = False,
-        llm_seed: Optional[int] = None,
-        execution_data_seed: Optional[int] = None,
-        execution_input_authority_sha256: Optional[str] = None,
-        envelope_include_previews: bool = False,
-        submission_profile_name: Optional[str] = None,
-        submission_profile_version: Optional[str] = None,
-        submission_profile_locked_at: Optional[str] = None,
-        expected_concept_dict_sha: Optional[str] = None,
-        expected_sofa2_dict_sha: Optional[str] = None,
-        enable_multiple_testing_correction: bool = True,
-        multiple_testing_alpha: float = 0.05,
-        enable_causal_audit: bool = True,
-        enable_reporting_checklist: bool = True,
-        reporting_checklist_names: Optional[Sequence[str]] = None,
-        task_kind: Optional[str] = None,
-        enable_reviewer_round: bool = True,
-        enable_fairness_subgroups: bool = True,
-        enable_hypothesis_generator: bool = False,
-        hypothesis_generator_top_k: int = 5,
-        enable_pdf_render: bool = False,
-        max_concurrent_steps: int = 1,
-        development_sample_size: Optional[int] = None,
-        development_sample_seed: int = 20260719,
-        development_diagnostic: bool = False,
-        enable_probe_step: bool = True,
-        enable_replanning: bool = True,
-        max_total_steps: int = 16,
-        max_consecutive_noop_replans: int = 2,
-        max_replans: int = 6,
-        stabilization_mode: bool = False,
-        max_numeric_claims_per_step: int = 100,
-        writer_digest_widened: bool = False,
-        writer_digest_secondary_cap_per_step: int = 20,
-        enable_experience_bank: bool = False,
-        experience_bank_path: Optional[Union[str, Path]] = None,
-        experience_bank_top_k: int = 5,
-        experience_bank_min_similarity: float = 0.2,
-        enable_know_how: bool = False,
-        enable_coder_resources: bool = False,
-        enable_reviewed_memory: bool = False,
-        reviewed_memory_namespaces: Sequence[str] = (),
-        enable_capability_workflow: bool = False,
-        expected_runner_image_digest: Optional[str] = None,
-        capability_request: Optional[Mapping[str, object]] = None,
-        capability_approval: Optional[Mapping[str, object]] = None,
-        capability_activation: Optional[Mapping[str, object]] = None,
-        human_review_gate: Optional[Any] = None,
-        know_how_paths: Sequence[Union[str, Path]] = (),
-        know_how_top_k: int = 3,
-        know_how_min_score: float = 0.15,
-        runner_kind: str = "auto",
-        runner_image: Optional[str] = None,
-        runner_network: str = "none",
-        host_runner_authorized: bool = False,
-        runner_factory: Optional[Callable[..., Any]] = None,
-        runner_kwargs: Optional[Dict[str, Any]] = None,
-        case_plugin_registry: Optional[Any] = None,
+        config: Optional[PipelineConfig] = None,
+        services: Optional[PipelineServices] = None,
+        **legacy_options: Any,
     ) -> None:
-        # Snapshot the construction kwargs into a typed config object for
-        # introspection / replay / serialisation. The body below still reads
-        # from local variables directly (so the legacy ``__init__(**kwargs)``
-        # signature stays unchanged); ``self._config`` is purely a view onto
-        # what we were given.
-        self._config: PipelineConfig = PipelineConfig.from_kwargs(
-            **{k: v for k, v in locals().items() if k != "self"}
-        )
+        """Construct a pipeline from declarative settings and live services.
+
+        The flat keyword form is retained as an EasyICU 1.x compatibility
+        adapter. New code should pass config=PipelineConfig(...) and, when
+        needed, services=PipelineServices(...).
+        """
+        if config is not None and legacy_options:
+            names = ", ".join(sorted(legacy_options))
+            raise TypeError(
+                "config= is the complete declarative source; do not combine it "
+                f"with legacy option(s): {names}"
+            )
+        if config is None:
+            warnings.warn(
+                "Flat ResearchAgentPipeline keyword construction is deprecated; "
+                "pass config=PipelineConfig(...) and services=PipelineServices(...).",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+            services, config_options = PipelineServices.split_legacy_kwargs(
+                legacy_options,
+                services=services,
+            )
+            config = PipelineConfig.from_kwargs(**config_options)
+        else:
+            services = services or PipelineServices()
+
+        self._config = config
+        self._services = services
         # Lazy import to avoid pulling the plugin registry module if no
         # plugins are configured (the default).
         from .fallback import CasePluginRegistry as _CasePluginRegistry
 
-        self._case_plugin_registry = case_plugin_registry or _CasePluginRegistry()
-        self.workdir = Path(workdir).resolve()
+        self._case_plugin_registry = (
+            services.case_plugin_registry or _CasePluginRegistry()
+        )
+        self.workdir = Path(config.workdir).resolve()
         self.workdir.mkdir(parents=True, exist_ok=True)
-        self._llm = llm
-        self._timeout_seconds = timeout_seconds
-        self._standard_executor_timeout_seconds = standard_executor_timeout_seconds
-        self._python_executable = python_executable
-        self._enable_literature = enable_literature
-        self._enable_visual_qa = enable_visual_qa
-        self._enable_publication_figure_skill = bool(enable_publication_figure_skill)
-        self._vlm_client = vlm_client
-        self._visual_qa_adapter = visual_qa_adapter
+        self._llm = services.llm
+        self._timeout_seconds = config.timeout_seconds
+        self._standard_executor_timeout_seconds = (
+            config.standard_executor_timeout_seconds
+        )
+        self._python_executable = config.python_executable
+        self._enable_literature = config.enable_literature
+        self._enable_visual_qa = config.enable_visual_qa
+        self._enable_publication_figure_skill = bool(
+            config.enable_publication_figure_skill
+        )
+        self._vlm_client = services.vlm_client
+        self._visual_qa_adapter = services.visual_qa_adapter
         # Deny-by-default: a rendered figure is not covered by the text
         # outbound projection, so uploading its bytes to an external VLM is a
         # separate decision from authorizing the provider.
-        self._allow_external_figure_upload = bool(allow_external_figure_upload)
-        self._llm_concept_auditor_client = llm_concept_auditor_client
-        if enable_vlm_visual_qa is None:
+        self._allow_external_figure_upload = bool(config.allow_external_figure_upload)
+        self._llm_concept_auditor_client = services.llm_concept_auditor_client
+        if config.enable_vlm_visual_qa is None:
             self._enable_vlm_visual_qa = bool(
-                visual_qa_adapter is not None
-                or llm_supports_vision(vlm_client)
-                or llm_supports_vision(llm)
+                services.visual_qa_adapter is not None
+                or llm_supports_vision(services.vlm_client)
+                or llm_supports_vision(services.llm)
             )
         else:
-            self._enable_vlm_visual_qa = bool(enable_vlm_visual_qa)
-        if enable_llm_concept_audit is None:
-            concept_client = llm_concept_auditor_client or llm
+            self._enable_vlm_visual_qa = bool(config.enable_vlm_visual_qa)
+        if config.enable_llm_concept_audit is None:
+            concept_client = services.llm_concept_auditor_client or services.llm
             self._enable_llm_concept_audit = bool(
                 concept_client is not None and not llm_is_mockish(concept_client)
             )
         else:
-            self._enable_llm_concept_audit = bool(enable_llm_concept_audit)
-        self._enable_memory = enable_memory
-        self._enable_latex = enable_latex
-        self._latex_venue_template = latex_venue_template or "article"
-        lang = (manuscript_language or "en").lower()
+            self._enable_llm_concept_audit = bool(config.enable_llm_concept_audit)
+        self._enable_memory = config.enable_memory
+        self._enable_latex = config.enable_latex
+        self._latex_venue_template = config.latex_venue_template or "article"
+        lang = (config.manuscript_language or "en").lower()
         self._manuscript_language = (
             "zh" if lang.startswith(("zh", "cn", "chinese")) else "en"
         )
         # Stored as the canonical Enum so downstream code can compare
         # against EvidenceEnforcementMode.STRICT without string casing.
         self._evidence_enforcement_mode = _coerce_enforcement_mode(
-            evidence_enforcement_mode
+            config.evidence_enforcement_mode
         )
         # T1.4 — when set, the pipeline strips the ICU rules out of the
         # context that drives planning, coding and validation. This is the
@@ -1629,57 +1560,60 @@ class ResearchAgentPipeline:
         # deliberately rejected at run entry because exposing its V2 physical
         # facts would contaminate that ablation, while sealing it as V1 would
         # discard the authority contract.
-        self._disable_icu_context = bool(disable_icu_context)
-        self._context_top_k = int(context_top_k) if context_top_k else None
-        self._max_code_repair_attempts = max(0, int(max_code_repair_attempts))
-        self._max_step_llm_repair_attempts = max(0, int(max_step_llm_repair_attempts))
-        self._max_step_provider_calls = max(0, int(max_step_provider_calls))
-        # Checked here rather than only in PipelineConfig: this constructor is
-        # the path every caller in the tree actually takes, and it never builds
-        # a PipelineConfig, so a check that lived only there would guard the
-        # entry point nobody uses. `_enable_llm_concept_audit` is resolved
-        # above, so the reserved audit call is counted only when it is real.
+        self._disable_icu_context = bool(config.disable_icu_context)
+        self._context_top_k = (
+            int(config.context_top_k) if config.context_top_k else None
+        )
+        self._max_code_repair_attempts = max(0, int(config.max_code_repair_attempts))
+        self._max_step_llm_repair_attempts = max(
+            0, int(config.max_step_llm_repair_attempts)
+        )
+        self._max_step_provider_calls = max(0, int(config.max_step_provider_calls))
+        # Re-check after resolving the optional service-dependent concept-audit
+        # flag. PipelineConfig cannot know whether an injected client makes an
+        # ``enable_llm_concept_audit=None`` decision true, so only this layer
+        # can count the reserved audit call exactly.
         assert_step_provider_budget_funds_its_repairs(
             max_step_provider_calls=self._max_step_provider_calls,
             max_code_repair_attempts=self._max_code_repair_attempts,
             max_step_llm_repair_attempts=self._max_step_llm_repair_attempts,
             llm_concept_audit_enabled=bool(self._enable_llm_concept_audit),
-            allow_underfunded=bool(allow_underfunded_step_provider_calls),
+            allow_underfunded=bool(config.allow_underfunded_step_provider_calls),
         )
         self._enable_deterministic_code_fallback = bool(
-            enable_deterministic_code_fallback
+            config.enable_deterministic_code_fallback
         )
         self._enable_deterministic_planner_fallback = bool(
-            enable_deterministic_planner_fallback
+            config.enable_deterministic_planner_fallback
         )
         self._enable_deterministic_runner_repair = bool(
-            enable_deterministic_runner_repair
+            config.enable_deterministic_runner_repair
         )
         # T2.2 — opt-in PubMed live search. Off by default so CI and
         # the offline demo stay deterministic; the LiteratureAgent
         # handles network failure gracefully (empty list → curated
         # registry only).
-        self._enable_pubmed = bool(enable_pubmed)
-        self._pubmed_email = pubmed_email
-        self._pubmed_api_key = pubmed_api_key
+        self._enable_pubmed = bool(config.enable_pubmed)
+        self._pubmed_email = config.pubmed_email
+        self._pubmed_api_key = config.pubmed_api_key
         # O5 — opt-in Tavily web search for preprints/guidelines/trial
         # registries that PubMed may not index. Off by default so CI
         # and offline demos remain deterministic.
-        self._enable_tavily = bool(enable_tavily)
-        self._tavily_api_key = tavily_api_key
-        self._tavily_retmax = int(tavily_retmax)
-        self._tavily_include_domains = list(tavily_include_domains or [])
-        self._tavily_exclude_domains = list(tavily_exclude_domains or [])
+        self._enable_tavily = bool(config.enable_tavily)
+        self._tavily_api_key = config.tavily_api_key
+        self._tavily_retmax = int(config.tavily_retmax)
+        self._tavily_include_domains = list(config.tavily_include_domains or [])
+        self._tavily_exclude_domains = list(config.tavily_exclude_domains or [])
         # T3.5 — cohort cache. When enabled, identical re-runs (same
         # cohort hash + same skill/question/llm signature) short-circuit
         # to the prior run_dir's PipelineResult instead of repeating
         # the entire pipeline. Off by default so production users opt
         # in deliberately and tests that *want* full pipeline
         # execution every time keep their existing semantics.
-        self._enable_cache = bool(enable_cache)
+        self._enable_cache = bool(config.enable_cache)
         self._cache_dir = (
-            Path(cache_dir).resolve()
-            if cache_dir is not None
+            Path(config.cache_dir).resolve()
+            if config.cache_dir is not None
             else self.workdir / ".cache"
         )
         self._cache = _pipeline_cache.PipelineCache(self._cache_dir)
@@ -1690,67 +1624,71 @@ class ResearchAgentPipeline:
         # ``manifest.cost_records`` plus ``cost_summary.md`` and
         # ``cost_records.json`` artefacts. Off by default so the
         # default pipeline behaviour stays bit-identical.
-        self._enable_cost_tracking = bool(enable_cost_tracking)
-        self._cost_price_table = cost_price_table
+        self._enable_cost_tracking = bool(config.enable_cost_tracking)
+        self._cost_price_table = config.cost_price_table
         # O20 — Reproducibility envelope. Records prompt/response
         # sha256, requested seed, temperature, provider/model, and a
         # PHI-safe environment snapshot for every LLM call the pipeline
         # makes. Off by default so the base pipeline behaviour stays
         # bit-identical; turn on when a paper reviewer asks for an
         # auditable replay bundle.
-        self._enable_reproducibility_envelope = bool(enable_reproducibility_envelope)
-        self._llm_seed = int(llm_seed) if llm_seed is not None else None
-        self._envelope_include_previews = bool(envelope_include_previews)
-        self._submission_profile_name = submission_profile_name
-        self._submission_profile_version = submission_profile_version
-        self._submission_profile_ref = (
-            f"{submission_profile_name}/{submission_profile_version}"
+        self._enable_reproducibility_envelope = bool(
+            config.enable_reproducibility_envelope
         )
-        self._submission_profile_locked_at = submission_profile_locked_at
-        self._expected_concept_dict_sha = expected_concept_dict_sha
-        self._expected_sofa2_dict_sha = expected_sofa2_dict_sha
+        self._llm_seed = int(config.llm_seed) if config.llm_seed is not None else None
+        self._envelope_include_previews = bool(config.envelope_include_previews)
+        self._submission_profile_name = config.submission_profile_name
+        self._submission_profile_version = config.submission_profile_version
+        self._submission_profile_ref = (
+            f"{config.submission_profile_name}/{config.submission_profile_version}"
+        )
+        self._submission_profile_locked_at = config.submission_profile_locked_at
+        self._expected_concept_dict_sha = config.expected_concept_dict_sha
+        self._expected_sofa2_dict_sha = config.expected_sofa2_dict_sha
         # O22 — family-aware multiple-testing correction. Defaults to ON
         # because reviewers of a research-agent paper will always ask
         # for it; the correction is cheap to compute and does not
         # rewrite existing artefacts.
         self._enable_multiple_testing_correction = bool(
-            enable_multiple_testing_correction
+            config.enable_multiple_testing_correction
         )
-        self._multiple_testing_alpha = float(multiple_testing_alpha)
+        self._multiple_testing_alpha = float(config.multiple_testing_alpha)
         # O18 — Causal audit. Deterministic: labels every primary
         # effect as associational vs causal, scans bound manuscript
         # for causal language over associational effects, emits
         # warnings/errors. Default ON because the cost of a paper
         # that silently sells an OR as causal is high.
-        self._enable_causal_audit = bool(enable_causal_audit)
+        self._enable_causal_audit = bool(config.enable_causal_audit)
         # O16 — Reporting-guideline checklist. STROBE always; TRIPOD+AI
         # when the analysis looks like a prediction model. Default ON
         # because ICU journals routinely require the checklist.
-        self._enable_reporting_checklist = bool(enable_reporting_checklist)
+        self._enable_reporting_checklist = bool(config.enable_reporting_checklist)
         self._reporting_checklist_names = (
-            tuple(reporting_checklist_names) if reporting_checklist_names else None
+            tuple(config.reporting_checklist_names)
+            if config.reporting_checklist_names
+            else None
         )
         # Authoritative benchmark task kind (e.g. "subphenotype_clustering"),
         # used to decide kind-specific reporting-checklist applicability rather
         # than relying on fragile manuscript wording. Optional outside the bench.
-        self._benchmark_task_kind = task_kind
+        self._benchmark_task_kind = config.task_kind
         # O15 — Three-role reviewer round (statistician / clinician /
         # methodologist) driven off already-computed evidence and
         # findings. Deterministic; no extra LLM calls. Default ON.
-        self._enable_reviewer_round = bool(enable_reviewer_round)
+        self._enable_reviewer_round = bool(config.enable_reviewer_round)
         # O24 — Fairness / subgroup analysis for the primary effect.
         # Deterministic (pure numpy); runs after E-values.
-        self._enable_fairness_subgroups = bool(enable_fairness_subgroups)
+        self._enable_fairness_subgroups = bool(config.enable_fairness_subgroups)
         # O17 — Front-door hypothesis generator. Runs early (plan phase)
         # to emit a ranked candidate list; does not change the
         # downstream plan unless the user reassigns ``question``.
-        self._enable_hypothesis_generator = bool(enable_hypothesis_generator)
-        self._hypothesis_generator_top_k = int(hypothesis_generator_top_k)
+        self._enable_hypothesis_generator = bool(config.enable_hypothesis_generator)
+        self._hypothesis_generator_top_k = int(config.hypothesis_generator_top_k)
         # PDF rendering (TexLive optional). Off by default because not
         # every CI environment has a LaTeX install; turn on when the
         # user actually wants ``manuscript_scaffold.pdf`` next to the
         # ``.tex`` and ``.bib``.
-        self._enable_pdf_render = bool(enable_pdf_render)
+        self._enable_pdf_render = bool(config.enable_pdf_render)
         # T3.3 — concurrent step execution. The canonical AnalysisPlan
         # has independent steps (each step reads the cohort and writes
         # to its own out_dir), so a small thread pool can shrink the
@@ -1758,10 +1696,10 @@ class ResearchAgentPipeline:
         # bit-identical sequential behaviour for users who don't opt
         # in. EvidenceStore guards its mutators with an RLock so a
         # higher value is safe.
-        self._max_concurrent_steps = max(1, int(max_concurrent_steps))
+        self._max_concurrent_steps = max(1, int(config.max_concurrent_steps))
         self._development_sample_size = (
-            int(development_sample_size)
-            if development_sample_size is not None
+            int(config.development_sample_size)
+            if config.development_sample_size is not None
             else None
         )
         if (
@@ -1769,25 +1707,25 @@ class ResearchAgentPipeline:
             and self._development_sample_size <= 0
         ):
             raise ValueError("development_sample_size must be positive")
-        self._development_sample_seed = int(development_sample_seed)
-        self._development_diagnostic = bool(development_diagnostic)
+        self._development_sample_seed = int(config.development_sample_seed)
+        self._development_diagnostic = bool(config.development_diagnostic)
         if (
             self._development_sample_size is not None
-            and submission_profile_name is not None
+            and config.submission_profile_name is not None
         ):
             raise ValueError(
                 "development cohort sampling is non-paper authority and cannot "
                 "be combined with a submission profile"
             )
-        if self._development_diagnostic and submission_profile_name is not None:
+        if self._development_diagnostic and config.submission_profile_name is not None:
             raise ValueError(
                 "development diagnostics are non-paper authority and cannot "
                 "be combined with a submission profile"
             )
         from .orchestration.profiles import is_paper_facing_profile
 
-        if allow_underfunded_step_provider_calls and is_paper_facing_profile(
-            submission_profile_name
+        if config.allow_underfunded_step_provider_calls and is_paper_facing_profile(
+            config.submission_profile_name
         ):
             # Declaring the shortfall makes it visible; it does not make it
             # paper authority. A submission run whose steps could exhaust their
@@ -1799,31 +1737,39 @@ class ResearchAgentPipeline:
                 "an under-funded provider budget is non-paper authority and "
                 "cannot be combined with a paper-facing submission profile"
             )
-        self._enable_probe_step = bool(enable_probe_step)
-        self._enable_replanning = bool(enable_replanning)
+        self._enable_probe_step = bool(config.enable_probe_step)
+        self._enable_replanning = bool(config.enable_replanning)
         # 0 / None means "no cap". Anything positive enforces the cap in
         # the replanner overflow guard (see execution/phase.py).
         self._max_total_steps = (
-            int(max_total_steps) if max_total_steps and max_total_steps > 0 else 0
+            int(config.max_total_steps)
+            if config.max_total_steps and config.max_total_steps > 0
+            else 0
         )
         # Replan convergence guards (see pipeline_config / execution.phase).
         # 0 disables the guard.
         self._max_consecutive_noop_replans = (
-            int(max_consecutive_noop_replans)
-            if max_consecutive_noop_replans and max_consecutive_noop_replans > 0
+            int(config.max_consecutive_noop_replans)
+            if config.max_consecutive_noop_replans
+            and config.max_consecutive_noop_replans > 0
             else 0
         )
-        self._max_replans = int(max_replans) if max_replans and max_replans > 0 else 0
+        self._max_replans = (
+            int(config.max_replans)
+            if config.max_replans and config.max_replans > 0
+            else 0
+        )
         # Stabilization / primary-only iterations tighten the replan budget so a
         # non-converging run fails closed fast (~3 revisions) instead of burning
         # the full-run budget of 6. A caller that already set a smaller positive
         # cap keeps it; a disabled cap (0) is re-armed to 3 under stabilization.
-        self._stabilization_mode = bool(stabilization_mode)
+        self._stabilization_mode = bool(config.stabilization_mode)
         if self._stabilization_mode:
             self._max_replans = min(self._max_replans, 3) if self._max_replans else 3
         self._max_numeric_claims_per_step = (
-            int(max_numeric_claims_per_step)
-            if max_numeric_claims_per_step and max_numeric_claims_per_step > 0
+            int(config.max_numeric_claims_per_step)
+            if config.max_numeric_claims_per_step
+            and config.max_numeric_claims_per_step > 0
             else 0
         )
         # Phase-1 writer-digest widening (default off). When True, the
@@ -1832,46 +1778,48 @@ class ResearchAgentPipeline:
         # ``WRITER_DIGEST_PREFERRED_KEYS`` primary subset. The binder
         # already accepts these; the flag controls only what the
         # writer SEES. See reporting.writer_evidence._render_writer_evidence_digest_v2.
-        self._writer_digest_widened = bool(writer_digest_widened)
+        self._writer_digest_widened = bool(config.writer_digest_widened)
         self._writer_digest_secondary_cap_per_step = max(
-            0, int(writer_digest_secondary_cap_per_step)
+            0, int(config.writer_digest_secondary_cap_per_step)
         )
         # Legacy cross-run stores are write-only compatibility sources.
         # Their free-text records are never injected into Planner context.
         # Run-derived records are additionally mirrored into the v2
         # permissioned quarantine store during finalization.
-        self._enable_experience_bank = bool(enable_experience_bank)
+        self._enable_experience_bank = bool(config.enable_experience_bank)
         self._experience_bank_path: Optional[Path] = (
-            Path(experience_bank_path) if experience_bank_path else None
+            Path(config.experience_bank_path) if config.experience_bank_path else None
         )
-        self._experience_bank_top_k = max(0, int(experience_bank_top_k))
-        self._experience_bank_min_similarity = float(experience_bank_min_similarity)
-        self._enable_know_how = bool(enable_know_how)
-        self._enable_coder_resources = bool(enable_coder_resources)
-        self._enable_reviewed_memory = bool(enable_reviewed_memory)
-        self._reviewed_memory_namespaces = tuple(reviewed_memory_namespaces)
+        self._experience_bank_top_k = max(0, int(config.experience_bank_top_k))
+        self._experience_bank_min_similarity = float(
+            config.experience_bank_min_similarity
+        )
+        self._enable_know_how = bool(config.enable_know_how)
+        self._enable_coder_resources = bool(config.enable_coder_resources)
+        self._enable_reviewed_memory = bool(config.enable_reviewed_memory)
+        self._reviewed_memory_namespaces = tuple(config.reviewed_memory_namespaces)
         self._capability_runtime = CapabilityWorkflowRuntime.create(
-            enabled=enable_capability_workflow,
-            profile_name=submission_profile_name,
-            profile_version=submission_profile_version,
-            expected_image_digest=expected_runner_image_digest,
-            request=capability_request,
-            approval=capability_approval,
-            activation=capability_activation,
+            enabled=config.enable_capability_workflow,
+            profile_name=config.submission_profile_name,
+            profile_version=config.submission_profile_version,
+            expected_image_digest=config.expected_runner_image_digest,
+            request=config.capability_request,
+            approval=config.capability_approval,
+            activation=config.capability_activation,
         )
         # Operator-supplied control plane for the LangGraph review interrupt.
         # Any object exposing ``checkpointer`` and, optionally,
         # ``reviewer_identity_resolver`` / ``invoke_config``. Left ``None`` a
         # run cannot answer an interrupt, so a plan that raises one fails
         # closed rather than continuing unattended.
-        self._human_review_gate = human_review_gate
+        self._human_review_gate = services.human_review_gate
         # Set by ``run()`` when the graph pauses; consumed by
         # ``resume_human_review()``. Holds the compiled graph because its
         # nodes close over this run's evidence store and phase invokers.
         self._pending_human_review: Optional[Dict[str, Any]] = None
-        self._know_how_paths = tuple(Path(path) for path in know_how_paths)
-        self._know_how_top_k = int(know_how_top_k)
-        self._know_how_min_score = float(know_how_min_score)
+        self._know_how_paths = tuple(Path(path) for path in config.know_how_paths)
+        self._know_how_top_k = int(config.know_how_top_k)
+        self._know_how_min_score = float(config.know_how_min_score)
         if not 0 <= self._know_how_top_k <= 5:
             raise ValueError("know_how_top_k must be between 0 and 5")
         if not 0.0 <= self._know_how_min_score <= 1.0:
@@ -1879,22 +1827,22 @@ class ResearchAgentPipeline:
         from .orchestration.profiles import require_profile_know_how_setting
 
         require_profile_know_how_setting(
-            name=submission_profile_name,
-            version=submission_profile_version,
+            name=config.submission_profile_name,
+            version=config.submission_profile_version,
             enabled=self._enable_know_how,
         )
         from .orchestration.profiles import require_profile_coder_resource_setting
 
         require_profile_coder_resource_setting(
-            name=submission_profile_name,
-            version=submission_profile_version,
+            name=config.submission_profile_name,
+            version=config.submission_profile_version,
             enabled=self._enable_coder_resources,
         )
         from .orchestration.profiles import require_profile_reviewed_memory_setting
 
         require_profile_reviewed_memory_setting(
-            name=submission_profile_name,
-            version=submission_profile_version,
+            name=config.submission_profile_name,
+            version=config.submission_profile_version,
             enabled=self._enable_reviewed_memory,
             namespaces=self._reviewed_memory_namespaces,
         )
@@ -1906,8 +1854,8 @@ class ResearchAgentPipeline:
         # (e.g. OpenHands) can pass an arbitrary ``runner_factory``
         # that accepts ``workdir=, cohort_parquet=, timeout_seconds=``
         # and returns a runner with a ``run(step_id, code)`` method.
-        kind = (runner_kind or "auto").lower()
-        if runner_factory is not None:
+        kind = (config.runner_kind or "auto").lower()
+        if services.runner_factory is not None:
             self._runner_kind = "custom"
         elif kind in {"auto", "default"}:
             self._runner_kind = "auto"
@@ -1917,21 +1865,23 @@ class ResearchAgentPipeline:
             self._runner_kind = "docker"
         else:
             raise ValueError(
-                f"Unknown runner_kind {runner_kind!r}; "
+                f"Unknown runner_kind {config.runner_kind!r}; "
                 "expected 'auto', 'subprocess', 'docker', or pass a runner_factory."
             )
-        self._runner_image = runner_image
-        self._runner_network = runner_network
-        self._expected_runner_image_digest = expected_runner_image_digest
-        self._host_runner_authorized = bool(host_runner_authorized)
-        self._runner_factory = runner_factory
-        self._runner_kwargs = dict(runner_kwargs or {})
+        self._runner_image = config.runner_image
+        self._runner_network = config.runner_network
+        self._expected_runner_image_digest = config.expected_runner_image_digest
+        self._host_runner_authorized = bool(config.host_runner_authorized)
+        self._runner_factory = services.runner_factory
+        self._runner_kwargs = dict(config.runner_kwargs or {})
         self._validated_runtime_capabilities: Optional[Tuple[str, ...]] = None
         self._validated_runtime_bundle: Optional[Dict[str, object]] = None
-        self._memory = RunMemory(self.workdir) if enable_memory else None
+        self._memory = RunMemory(self.workdir) if config.enable_memory else None
         self._permissioned_memory_store = (
             FileSystemMemoryStore(self.workdir / ".memory_v2")
-            if enable_memory or enable_experience_bank or enable_reviewed_memory
+            if config.enable_memory
+            or config.enable_experience_bank
+            or config.enable_reviewed_memory
             else None
         )
         self._reviewed_memory_runtime = ReviewedMemoryRuntime(

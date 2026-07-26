@@ -1,12 +1,6 @@
-"""Typed configuration object for :class:`ResearchAgentPipeline`.
+"""Typed, immutable configuration for :class:`ResearchAgentPipeline`.
 
-The pipeline's ``__init__`` takes ~60 keyword arguments. They have
-grown organically and are documented by way of the function signature
-alone, which means downstream tooling cannot reason about the
-configuration surface without parsing source code.
-
-:class:`PipelineConfig` mirrors that signature as a frozen-ish
-dataclass so:
+``PipelineConfig`` is the sole declarative source for pipeline behavior:
 
 * IDEs and type-checkers can autocomplete / validate construction;
 * tests can build a baseline config and override only what they care
@@ -14,20 +8,12 @@ dataclass so:
 * configuration can be loaded from YAML / TOML via
   :meth:`PipelineConfig.from_kwargs`, with unknown or misspelled keys
   rejected instead of silently ignored;
-* future refactors that group flags (literature, runner, audits, ...)
-  can add nested config objects without breaking ``__init__``.
+* live collaborators stay out of serialization and are injected separately
+  through :class:`~easyicu.research_agent.orchestration.services.PipelineServices`.
 
-This module is **additive**. The existing ``ResearchAgentPipeline.__init__``
-keyword form continues to work; ``PipelineConfig`` is the recommended
-new-code path. Call ``ResearchAgentPipeline.from_config(config)`` to
-construct a pipeline from a config object, or call
-``config.as_kwargs()`` to feed it back into the legacy ``__init__``.
-
-Why a dataclass and not pydantic? ``schema.py`` already imports
-pydantic for runtime-validated payloads. The pipeline-construction
-surface is consumed by Python code (not by serialised pipelines)
-and benefits more from being a lightweight dataclass that mirrors
-``__init__`` 1:1 than from another validation layer.
+The historical flat ``ResearchAgentPipeline(workdir=..., ...)`` call remains
+as a deprecation adapter. New code should construct ``PipelineConfig`` and
+``PipelineServices`` explicitly.
 """
 
 from __future__ import annotations
@@ -38,7 +24,7 @@ import re
 from dataclasses import dataclass, fields, replace
 from pathlib import Path
 from types import MappingProxyType
-from typing import Any, Callable, Dict, Mapping, Optional, Sequence, Union
+from typing import Any, Dict, Mapping, Optional, Sequence, Union
 
 
 #: Field/key names whose *value* must never appear in run provenance. Matched
@@ -143,11 +129,10 @@ def _deep_freeze(value: Any) -> Any:
 
 @dataclass(frozen=True)
 class PipelineConfig:
-    """Immutable mirror of ``ResearchAgentPipeline.__init__`` keyword args.
+    """Immutable declarative settings for one pipeline.
 
-    Defaults intentionally match ``__init__`` so
-    ``PipelineConfig(workdir=...)`` and the bare-kwargs form produce
-    identical pipelines.
+    Defaults intentionally match the legacy keyword adapter so both
+    construction paths produce identical behavior.
 
     The dataclass is frozen: the config is shared across the planner,
     execution and reporting layers and is hashed into the run's authority
@@ -160,16 +145,15 @@ class PipelineConfig:
     holding the same ``runner_kwargs`` dict could still mutate the config after
     it was hashed into the run authority. :meth:`__post_init__` therefore also
     freezes the plain data containers: every ``dict`` becomes a read-only
-    mapping and every ``list``/``set`` a tuple/frozenset, recursively. Live
-    objects (clients, factories, adapters, checkpointers) are left exactly as
-    passed — they are the run's collaborators, not its configuration values.
+    mapping and every ``list``/``set`` a tuple/frozenset, recursively.
+    Provider clients, factories, adapters, checkpointers, and plugin
+    registries belong in ``PipelineServices`` instead.
     """
 
     # --- required -------------------------------------------------------
     workdir: Union[str, Path]
 
-    # --- core LLM / runtime ---------------------------------------------
-    llm: Optional[Any] = None
+    # --- core runtime ---------------------------------------------------
     # One generated-code attempt. The former 300 s was below the honest cost of
     # the analyses this agent is asked to run — a Cox fit plus PH diagnostics on
     # a six-figure cohort, a bootstrap stability sweep, a propensity match — so
@@ -192,14 +176,11 @@ class PipelineConfig:
     enable_visual_qa: bool = True
     enable_publication_figure_skill: bool = True
     enable_vlm_visual_qa: Optional[bool] = None
-    vlm_client: Optional[Any] = None
-    visual_qa_adapter: Optional[Any] = None
     # Uploading a rendered figure is a separate decision from authorizing the
     # provider: the image can carry per-patient marks, small-cell strata or
     # local paths that the text outbound projection would have stripped.
     allow_external_figure_upload: bool = False
     enable_llm_concept_audit: Optional[bool] = None
-    llm_concept_auditor_client: Optional[Any] = None
     enable_memory: bool = True
     enable_latex: bool = True
 
@@ -416,9 +397,6 @@ class PipelineConfig:
     enable_capability_workflow: bool = False
     expected_runner_image_digest: Optional[str] = None
     capability_request: Optional[Dict[str, Any]] = None
-    # Operator-supplied control plane for the human-review interrupt. A live
-    # object (it owns a checkpointer), so it must never be deep-copied.
-    human_review_gate: Optional[Any] = None
     capability_approval: Optional[Dict[str, Any]] = None
     capability_activation: Optional[Dict[str, Any]] = None
     know_how_paths: Sequence[Union[str, Path]] = ()
@@ -430,16 +408,7 @@ class PipelineConfig:
     runner_image: Optional[str] = None
     runner_network: str = "none"
     host_runner_authorized: bool = False
-    runner_factory: Optional[Callable[..., Any]] = None
     runner_kwargs: Optional[Dict[str, Any]] = None
-
-    # --- case plugins ---------------------------------------------------
-    # Opt-in deterministic-fallback plugins for specific research designs.
-    # Default is empty: a pipeline constructed without case plugins carries
-    # no bias toward any particular paper's column names or fallback scripts.
-    # See ``easyicu.research_agent.fallback.CasePluginRegistry``. No
-    # case-specific plugins are bundled; users supply their own.
-    case_plugin_registry: Optional[Any] = None
 
     # ------------------------------------------------------------------
     # Construction helpers
@@ -481,30 +450,18 @@ class PipelineConfig:
     def _field_values(self) -> Dict[str, Any]:
         """Return every field by *reference*.
 
-        Deliberately not :func:`dataclasses.asdict`, which recursively
-        ``copy.deepcopy``s anything that is not a dataclass or a builtin
-        container. Several fields hold live objects — a provider client with an
-        open ``httpx`` connection pool, a runner factory, a visual-QA adapter, a
-        human-review checkpointer. Deep-copying those either raises
-        (``TypeError: cannot pickle '_thread.lock' object``) or, worse,
-        succeeds and hands the pipeline a *clone*, so the object the provider
-        factory authorised is not the object that makes the calls.
+        Deliberately not :func:`dataclasses.asdict`, which recursively copies
+        values and needlessly changes immutable mapping wrappers.
         """
 
         return {f.name: getattr(self, f.name) for f in fields(self)}
 
     def as_kwargs(self) -> Dict[str, Any]:
-        """Return a plain-dict view suitable for the legacy
-        ``ResearchAgentPipeline(**config.as_kwargs())`` form.
-        """
+        """Return the flat declarative settings as a plain dictionary."""
         return self._field_values()
 
     def canonical_payload(self) -> Dict[str, Any]:
         """Return a JSON-safe rendering of every field.
-
-        Live objects (an ``llm`` client, a ``runner_factory``) are rendered by
-        type rather than value: what matters for provenance is which kind of
-        component was configured, not its memory address.
 
         Secret-bearing string fields are replaced by a digest: the payload is
         written into run provenance, and an API key in a manifest is a leak

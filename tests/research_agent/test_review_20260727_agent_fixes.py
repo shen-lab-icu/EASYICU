@@ -899,17 +899,20 @@ def test_config_still_expands_as_kwargs(tmp_path):
 
 
 def test_config_leaves_live_objects_alone(tmp_path):
-    """Freezing is for data, not for the run's collaborators."""
+    """Live collaborators are frozen by reference outside run configuration."""
 
     import threading
 
     from easyicu.research_agent.orchestration.config import PipelineConfig
+    from easyicu.research_agent.orchestration.services import PipelineServices
 
     client = SimpleNamespace(lock=threading.Lock())
-    config = PipelineConfig(workdir=tmp_path, llm=client)
+    config = PipelineConfig(workdir=tmp_path)
+    services = PipelineServices(llm=client)
 
-    assert config.llm is client
-    assert config.as_kwargs()["llm"] is client
+    assert "llm" not in config.as_kwargs()
+    assert services.llm is client
+    assert services.canonical_payload()["llm"] == "types.SimpleNamespace"
 
 
 # ---------------------------------------------------------------------------
