@@ -2228,6 +2228,58 @@ def _provider_hard_stop_limits(
     )
 
 
+def _bind_benchmark_cost_price_table(
+    pipeline_options: Optional[Mapping[str, Any]],
+    *,
+    provider: str,
+    model: str,
+) -> Dict[str, Any]:
+    """Bind the benchmark's reviewed token prices to its selected model.
+
+    Provider hard-stop accounting already uses the two explicit per-million
+    rates.  CostMeter needs the same rates keyed by model; otherwise an
+    unlisted gateway alias records exact tokens but silently reports ``$0``.
+    Mock runs remain unpriced, and an explicit conflicting table fails closed.
+    """
+
+    options = dict(pipeline_options or {})
+    if not bool(options.get("enable_cost_tracking")) or provider == "mock":
+        return options
+    input_price = options.get("provider_input_cost_usd_per_million_tokens")
+    output_price = options.get("provider_output_cost_usd_per_million_tokens")
+    if input_price is None and output_price is None:
+        return options
+    if input_price is None or output_price is None:
+        raise ValueError("Benchmark cost tracking requires both Provider prices")
+    selected_model = str(model or "").strip()
+    if not selected_model:
+        raise ValueError("Benchmark cost tracking requires a selected model")
+    selected_prices = (float(input_price), float(output_price))
+    raw_table = options.get("cost_price_table")
+    if raw_table is None:
+        price_table: Dict[str, Any] = {}
+    elif isinstance(raw_table, Mapping):
+        price_table = dict(raw_table)
+    else:
+        raise ValueError("cost_price_table must be a model-to-price mapping")
+    existing = price_table.get(selected_model)
+    if existing is not None:
+        try:
+            existing_prices = tuple(float(value) for value in existing)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                f"Invalid cost_price_table entry for {selected_model!r}"
+            ) from exc
+        if existing_prices != selected_prices:
+            raise ValueError(
+                "CostMeter prices conflict with Provider hard-stop prices for "
+                f"{selected_model!r}"
+            )
+    price_table[selected_model] = selected_prices
+    options["cost_price_table"] = price_table
+    return options
+
+
 def _benchmark_pipeline_options(
     *,
     max_total_steps: Optional[int],
@@ -2521,6 +2573,11 @@ def _run_suite(
     provider_environment: Optional[Mapping[str, str]] = None,
     provider_base_url: Optional[str] = None,
 ) -> Dict[str, Any]:
+    pipeline_options = _bind_benchmark_cost_price_table(
+        pipeline_options,
+        provider=provider,
+        model=model,
+    )
     selected_arms = _normalize_arms(arms)
     _enforce_mock_aware_provider(
         selected_arms,
@@ -4380,6 +4437,11 @@ def _run_ehrflowbench_jsonl(
     """Run an external EHRFlowBench-style JSONL export when available."""
     import pandas as pd
 
+    pipeline_options = _bind_benchmark_cost_price_table(
+        pipeline_options,
+        provider=provider,
+        model=model,
+    )
     # An authorized real-run batch carries its per-task frozen input map + identity.
     frozen_input_authority_by_task: Optional[Mapping[str, str]] = (
         batch_binding.frozen_input_by_task if batch_binding is not None else None
@@ -5058,6 +5120,11 @@ def _run_one_item_from_cohort(
 ) -> Dict[str, Any]:
     item_root = out_root / item.key
     selected = set(_normalize_arms(arms))
+    pipeline_options = _bind_benchmark_cost_price_table(
+        pipeline_options,
+        provider=provider,
+        model=model,
+    )
     bound_pipeline_options = _bind_benchmark_execution_input(
         pipeline_options,
         cohort=cohort,
