@@ -1,4 +1,4 @@
-"""E1-E3 typed ``AnalysisPlan`` fixtures + minimal synthetic cohorts.
+"""Canonical9 typed ``AnalysisPlan`` fixtures + minimal synthetic cohorts.
 
 Each fixture is derived **live** from the corresponding formal task protocol in
 :func:`benchmarks.figure2_canonical9.evaluator.suite.easyicu_evaluation_protocol_suite`
@@ -6,8 +6,11 @@ Each fixture is derived **live** from the corresponding formal task protocol in
 they cannot silently drift) and is **diagnostic-only** (no paper authority; see
 the package docstring).
 
-Unlike the batch-1 fixtures, E1/E2/E3 are **genuinely distinct**, not one shared
-two-step logistic skeleton:
+Unlike the batch-1 fixtures, each case is **genuinely distinct**, not one shared
+two-step logistic skeleton.  E1-E3 cover the basic association families; the
+complex-family registry additionally exercises M2 prediction, H1 survival, H2
+causal emulation, and H3 trajectory clustering without a Provider or patient
+data.
 
 * **E1** (sepsis_onset) carries an explicit *cohort-definition* step (derived
   Sepsis-3 = suspected-infection timing + SOFA, never an ICD proxy; visible
@@ -42,6 +45,11 @@ from easyicu.research_agent.schema import (
     AnalysisStep,
     TableOneSpec,
     TableOneVariableSpec,
+    TrajectoryStabilitySpec,
+)
+from easyicu.research_agent.trajectory.plan_contract import (
+    STABILITY_EXECUTOR_INPUTS,
+    STABILITY_EXECUTOR_OUTPUTS,
 )
 
 from benchmarks.figure2_canonical9.evaluator.suite import (
@@ -133,7 +141,7 @@ class ProductMapping:
 
 @dataclass(frozen=True)
 class PreflightCase:
-    """One diagnostic-only E-series preflight case bound to a suite task."""
+    """One diagnostic-only preflight case bound to a live suite task."""
 
     task_id: str
     title: str
@@ -147,6 +155,13 @@ class PreflightCase:
     primary_step_id: str
     _build_plan: Callable[[], AnalysisPlan]
     _build_cohort: Callable[[int], pd.DataFrame]
+    primary_code_kind: str = "association"
+    required_imports: Tuple[str, ...] = (
+        "numpy",
+        "pandas",
+        "scipy",
+        "statsmodels",
+    )
     guardrail_checks: Tuple[GuardrailCheck, ...] = ()
     product_map: Tuple[ProductMapping, ...] = ()
     # A minimal synthetic dev fixture intentionally does not satisfy the full
@@ -352,6 +367,42 @@ def _ordinal(name: str) -> TableOneVariableSpec:
         variable_kind="ordinal",
         summary="median_iqr",
         test="mann_whitney_or_kruskal",
+    )
+
+
+# ---------------------------------------------------------------------------
+# Complex family helpers
+# ---------------------------------------------------------------------------
+
+
+def _trajectory_stability_spec() -> TrajectoryStabilitySpec:
+    """Small, closed Planner-owned stability design for the zero-API fixture."""
+
+    return TrajectoryStabilitySpec(
+        resampling_method="subsample_without_replacement",
+        n_resamples=3,
+        sample_fraction=0.8,
+        sample_fraction_rounding="floor",
+        base_seed=1729,
+        seed_derivation="numpy_seedsequence_spawn_uint32_v1",
+        cross_resample_membership="distinct_membership_required",
+        stability_metric="adjusted_rand_index",
+        stability_aggregation="mean",
+        metric_label_source="raw_refit_labels_label_invariant",
+        evaluation_scope="sampled_overlap",
+        label_alignment="hungarian_maximum_overlap",
+        label_alignment_reference="frozen_candidate_assignments",
+        label_alignment_tie_break="minimum_rank_distance_then_lexicographic_v1",
+        final_assignment_policy="copy_selected_candidate_labels",
+        minimum_successful_resamples=3,
+        failed_refit_policy="record_once_no_retry",
+        refit_engine="easyicu_observed_data_diag_gmm_v1",
+        refit_initialization="random_balanced_assignments",
+        refit_max_iter=60,
+        refit_tolerance=1e-4,
+        refit_regularization=1e-6,
+        decision_mode="report_only",
+        threshold_failure_action="fail_closed_require_planner_revision",
     )
 
 
@@ -720,6 +771,656 @@ _E3_CHECKS: Tuple[GuardrailCheck, ...] = (
 
 
 # ---------------------------------------------------------------------------
+# M2 — patient-grouped mortality prediction
+# ---------------------------------------------------------------------------
+
+_M2_TABLE_ONE = "01_table_one"
+_M2_PRIMARY = "04_prediction_model_analysis"
+
+
+def _m2_plan() -> AnalysisPlan:
+    return AnalysisPlan(
+        research_question=M2.question,
+        analysis_type="prediction_model",
+        steps=[
+            _aux_step(
+                step_id="00_modelling_cohort_flow",
+                method="prediction_cohort_accounting",
+                inputs=["patient_stay_id", "death"],
+                expected_outputs=["table:modelling_cohort_flow"],
+                intent=(
+                    "Report eligible patients, stays, outcome-complete rows, and "
+                    "the final modelling denominator before any split."
+                ),
+            ),
+            _table_one_step(
+                step_id=_M2_TABLE_ONE,
+                group_by="death",
+                group_levels=[0, 1],
+                variables=[
+                    _continuous("age"),
+                    _continuous("lact"),
+                    _continuous("sofa2"),
+                ],
+                intent="Baseline Table 1 grouped by in-hospital mortality.",
+            ),
+            _aux_step(
+                step_id="02_patient_split_contract",
+                method="patient_level_split_leakage_audit",
+                inputs=["patient_stay_id", "death"],
+                expected_outputs=["table:leakage_audit"],
+                intent=(
+                    "Derive the patient group from patient_stay_id before ':s'; "
+                    "split those patient groups with zero train/test overlap and "
+                    "fit preprocessing on the training partition only."
+                ),
+            ),
+            _aux_step(
+                step_id="02b_validation_design",
+                method="patient_grouped_validation_design",
+                inputs=["patient_stay_id", "death"],
+                expected_outputs=["table:validation_design"],
+                intent=(
+                    "Register the patient-grouped holdout design, split seed, "
+                    "training-only preprocessing rule, and leakage assertion."
+                ),
+            ),
+            _aux_step(
+                step_id="03_missingness_audit",
+                method="missingness_measurement_audit",
+                inputs=["age", "hr", "map", "lact", "sofa2", "death"],
+                expected_outputs=["table:missingness_profile"],
+                intent=(
+                    "Audit first-24h predictor availability without using any "
+                    "post-outcome variable."
+                ),
+            ),
+            AnalysisStep(
+                step_id=_M2_PRIMARY,
+                planned_analysis_role="primary",
+                intent=(
+                    "Fit a first-24h mortality model on a patient-grouped split; "
+                    "report held-out AUROC, average precision, recall, F1, Brier "
+                    "score, calibration, and decision-curve net benefit with "
+                    "registered numeric source tables."
+                ),
+                inputs=[
+                    "patient_stay_id",
+                    "age",
+                    "hr",
+                    "map",
+                    "lact",
+                    "sofa2",
+                    "death",
+                ],
+                expected_outputs=[
+                    "table:model_performance_train_test",
+                    "table:model_coefficients",
+                    "table:risk_predictions_test",
+                    "table:roc_curve",
+                    "table:calibration",
+                    "table:calibration_curve",
+                    "table:decision_curve",
+                    "table:split_definition",
+                    "figure:roc_curve",
+                    "figure:calibration_curve",
+                    "statistic:auc",
+                ],
+                method="prediction_model_analysis",
+            ),
+        ],
+        rationale=(
+            "M2 zero-Provider preflight: bind the patient-level split and "
+            "anti-leakage contract before exercising the prediction Coder path."
+        ),
+    )
+
+
+def _m2_cohort(n: int = 160) -> pd.DataFrame:
+    rng = np.random.RandomState(404)
+    patient = np.arange(n) // 2
+    age = rng.randint(40, 89, n).astype(float)
+    sofa2 = rng.poisson(3.0, n).astype(float)
+    lact = rng.gamma(2.0, 1.1, n)
+    hr = rng.normal(94.0, 14.0, n)
+    map_value = rng.normal(72.0, 10.0, n)
+    logit = (
+        -3.2
+        + 0.035 * (age - 60.0)
+        + 0.26 * sofa2
+        + 0.22 * (lact - 2.0)
+        - 0.018 * (map_value - 70.0)
+    )
+    death = rng.binomial(1, 1.0 / (1.0 + np.exp(-logit)))
+    return pd.DataFrame(
+        {
+            "stay_id": np.arange(1, n + 1),
+            "subject_id": patient + 1,
+            "patient_stay_id": [
+                f"p{subject:04d}:s{stay}" for subject, stay in zip(patient, np.arange(n) % 2)
+            ],
+            "age": age,
+            "sex": rng.choice(["M", "F"], n),
+            "hr": hr,
+            "map": map_value,
+            "lact": lact,
+            "sofa2": sofa2,
+            "death": death,
+        }
+    )
+
+
+_M2_CHECKS: Tuple[GuardrailCheck, ...] = (
+    GuardrailCheck(
+        0,
+        "patient_grouped_split",
+        lambda c: "patient_stay_id"
+        in next(
+            step.inputs
+            for step in c.build_plan().steps
+            if step.step_id == c.primary_step_id
+        )
+        and "before ':s'"
+        in next(
+            step.intent
+            for step in c.build_plan().steps
+            if step.step_id == "02_patient_split_contract"
+        ),
+    ),
+    GuardrailCheck(
+        1,
+        "no_post_outcome_features",
+        lambda c: not any(
+            token in input_name.casefold()
+            for step in c.build_plan().steps
+            for input_name in step.inputs
+            for token in ("post_outcome", "discharge_disposition", "death_time")
+        ),
+    ),
+    GuardrailCheck(
+        2,
+        "imbalance_and_calibration",
+        lambda c: {
+            "table:model_performance_train_test",
+            "table:calibration_curve",
+        }.issubset(set(c.plan_expected_outputs()))
+        and all(
+            token in next(
+                step.intent
+                for step in c.build_plan().steps
+                if step.step_id == c.primary_step_id
+            )
+            for token in ("average precision", "recall", "F1")
+        ),
+    ),
+    GuardrailCheck(
+        3,
+        "numeric_metric_binding",
+        lambda c: {
+            "table:risk_predictions_test",
+            "table:roc_curve",
+            "statistic:auc",
+        }.issubset(set(c.plan_expected_outputs())),
+    ),
+)
+
+
+# ---------------------------------------------------------------------------
+# H1 — aligned incident-exposure survival analysis
+# ---------------------------------------------------------------------------
+
+_H1_TABLE_ONE = "02_table_one"
+_H1_PRIMARY = "04_survival_analysis"
+
+
+def _h1_plan() -> AnalysisPlan:
+    return AnalysisPlan(
+        research_question=H1.question,
+        analysis_type="survival",
+        steps=[
+            _aux_step(
+                step_id="01_incident_alignment",
+                method="incident_landmark_eligibility",
+                inputs=[
+                    "vent_24h_any",
+                    "vent_start_hours",
+                    "followup_days",
+                    "event_28d",
+                ],
+                expected_outputs=[
+                    "table:incident_eligibility",
+                    "table:risk_set_flow",
+                    "table:time_zero_alignment",
+                ],
+                intent=(
+                    "Fix a 24-hour landmark, exclude ventilation prevalent "
+                    "before cohort entry, and start follow-up only after exposure "
+                    "classification so future exposure cannot create immortal time."
+                ),
+            ),
+            _table_one_step(
+                step_id=_H1_TABLE_ONE,
+                group_by="vent_24h_any",
+                group_levels=[0, 1],
+                variables=[_continuous("age"), _continuous("sofa2")],
+                intent="Baseline Table 1 at the fixed survival-analysis landmark.",
+            ),
+            _aux_step(
+                step_id="03_event_censoring_audit",
+                method="event_censoring_audit",
+                inputs=["followup_days", "event_28d"],
+                expected_outputs=[
+                    "table:event_censoring_audit",
+                    "table:measurement_process_audit",
+                ],
+                intent="Audit 28-day event and censoring definitions.",
+            ),
+            AnalysisStep(
+                step_id=_H1_PRIMARY,
+                planned_analysis_role="primary",
+                intent=(
+                    "Estimate Kaplan-Meier survival and an adjusted Cox model "
+                    "from the fixed landmark, then register proportional-hazards "
+                    "diagnostics before interpreting a single hazard ratio."
+                ),
+                inputs=[
+                    "vent_24h_any",
+                    "followup_days",
+                    "event_28d",
+                    "age",
+                    "sofa2",
+                ],
+                expected_outputs=[
+                    "table:survival_curve",
+                    "table:cox_summary",
+                    "table:survival_diagnostics",
+                    "table:ph_diagnostics",
+                    "statistic:hazard_ratio",
+                ],
+                method="cox_proportional_hazards",
+            ),
+        ],
+        rationale=(
+            "H1 zero-Provider preflight freezes time zero, incident eligibility, "
+            "censoring, and PH diagnostics before the survival Coder path."
+        ),
+    )
+
+
+def _h1_cohort(n: int = 140) -> pd.DataFrame:
+    rng = np.random.RandomState(505)
+    age = rng.randint(40, 90, n).astype(float)
+    sofa2 = rng.poisson(3.2, n).astype(float)
+    vent = rng.binomial(1, 0.42, n)
+    event_rate = np.exp(-3.4 + 0.55 * vent + 0.03 * (age - 60) + 0.14 * sofa2)
+    latent_event = rng.exponential(1.0 / np.maximum(event_rate, 1e-4))
+    followup = np.minimum(latent_event, 28.0)
+    event = (latent_event <= 28.0).astype(int)
+    return pd.DataFrame(
+        {
+            "stay_id": np.arange(1, n + 1),
+            "subject_id": np.arange(1, n + 1),
+            "age": age,
+            "sofa2": sofa2,
+            "vent_24h_any": vent,
+            "vent_start_hours": np.where(vent == 1, rng.uniform(1.0, 23.0, n), np.nan),
+            "followup_days": followup,
+            "event_28d": event,
+            "death": event,
+        }
+    )
+
+
+_H1_CHECKS: Tuple[GuardrailCheck, ...] = (
+    GuardrailCheck(
+        0,
+        "fixed_landmark_no_future_classification",
+        lambda c: "24-hour landmark"
+        in next(
+            step.intent
+            for step in c.build_plan().steps
+            if step.step_id == "01_incident_alignment"
+        ),
+    ),
+    GuardrailCheck(
+        1,
+        "incident_only",
+        lambda c: "exclude ventilation prevalent"
+        in next(
+            step.intent
+            for step in c.build_plan().steps
+            if step.step_id == "01_incident_alignment"
+        ),
+    ),
+    GuardrailCheck(
+        2,
+        "ph_diagnostics",
+        lambda c: "table:ph_diagnostics" in c.plan_expected_outputs(),
+    ),
+)
+
+
+# ---------------------------------------------------------------------------
+# H2 — causal emulation with exposure capture, balance, and positivity
+# ---------------------------------------------------------------------------
+
+_H2_TABLE_ONE = "02_table_one"
+_H2_PRIMARY = "04_causal_emulation"
+
+
+def _h2_plan() -> AnalysisPlan:
+    return AnalysisPlan(
+        research_question=H2.question,
+        analysis_type="causal_inference",
+        steps=[
+            _aux_step(
+                step_id="01_exposure_contract",
+                method="exposure_capture_authority_audit",
+                inputs=["vasopressor", "vasopressor_capture_available"],
+                expected_outputs=[
+                    "table:causal_cohort_flow",
+                    "table:exposure_capture_audit",
+                ],
+                intent=(
+                    "Treat an absent vasopressor record as no exposure only when "
+                    "the source-specific capture flag is true; otherwise mark the "
+                    "exposure unavailable and stop."
+                ),
+            ),
+            _table_one_step(
+                step_id=_H2_TABLE_ONE,
+                group_by="vasopressor",
+                group_levels=[0, 1],
+                variables=[
+                    _continuous("age"),
+                    _continuous("sofa2"),
+                    _continuous("lact"),
+                ],
+                intent="Baseline Table 1 by early vasopressor exposure.",
+            ),
+            _aux_step(
+                step_id="03_target_trial_protocol",
+                method="target_trial_protocol",
+                inputs=["vasopressor", "death", "age", "sofa2", "lact", "map"],
+                expected_outputs=[
+                    "table:target_trial_protocol",
+                    "artifact:target_trial_protocol",
+                ],
+                intent=(
+                    "Freeze eligibility, time zero, 0-24h treatment strategies, "
+                    "28-day outcome, confounding set, and ATE estimand before fitting."
+                ),
+            ),
+            AnalysisStep(
+                step_id=_H2_PRIMARY,
+                planned_analysis_role="primary",
+                intent=(
+                    "Estimate a stabilized IPTW ATE-style risk difference while "
+                    "making confounding by indication explicit; register weighted "
+                    "balance and positivity diagnostics and bound conclusions to "
+                    "the observational target-trial assumptions."
+                ),
+                inputs=["vasopressor", "death", "age", "sofa2", "lact", "map"],
+                expected_outputs=[
+                    "table:primary_causal_contrast",
+                    "table:causal_effect",
+                    "table:baseline_balance",
+                    "table:covariate_balance",
+                    "table:positivity_diagnostics",
+                    "artifact:assignment_model",
+                    "statistic:risk_difference",
+                ],
+                method="causal_emulation",
+            ),
+            _aux_step(
+                step_id="05_causal_sensitivity",
+                method="robustness_sensitivity",
+                inputs=["table:primary_causal_contrast"],
+                expected_outputs=[
+                    "table:causal_sensitivity",
+                    "table:robustness_matrix",
+                    "statistic:robustness_summary",
+                ],
+                intent=(
+                    "Repeat the declared causal contrast under the pre-specified "
+                    "baseline-covariate missingness strategy without changing "
+                    "exposure, outcome, time zero, or estimand."
+                ),
+            ),
+        ],
+        robustness_specs=_baseline_missingness_robustness_spec(),
+        rationale=(
+            "H2 zero-Provider preflight binds exposure capture and the target-"
+            "trial estimand before exercising propensity/balance control flow."
+        ),
+    )
+
+
+def _h2_cohort(n: int = 180) -> pd.DataFrame:
+    rng = np.random.RandomState(606)
+    age = rng.randint(40, 90, n).astype(float)
+    sofa2 = rng.poisson(3.0, n).astype(float)
+    lact = rng.gamma(2.0, 1.0, n)
+    map_value = rng.normal(70.0, 10.0, n)
+    treatment_logit = -1.0 + 0.32 * sofa2 + 0.22 * (lact - 2.0) - 0.03 * (
+        map_value - 70.0
+    )
+    vasopressor = rng.binomial(1, 1.0 / (1.0 + np.exp(-treatment_logit)))
+    outcome_logit = (
+        -3.0
+        + 0.45 * vasopressor
+        + 0.28 * sofa2
+        + 0.18 * (lact - 2.0)
+        + 0.02 * (age - 60.0)
+    )
+    death = rng.binomial(1, 1.0 / (1.0 + np.exp(-outcome_logit)))
+    return pd.DataFrame(
+        {
+            "stay_id": np.arange(1, n + 1),
+            "subject_id": np.arange(1, n + 1),
+            "age": age,
+            "sofa2": sofa2,
+            "lact": lact,
+            "map": map_value,
+            "vasopressor": vasopressor,
+            "vasopressor_capture_available": np.ones(n, dtype=int),
+            "death": death,
+        }
+    )
+
+
+_H2_CHECKS: Tuple[GuardrailCheck, ...] = (
+    GuardrailCheck(
+        0,
+        "confounding_balance_positivity",
+        lambda c: {
+            "table:covariate_balance",
+            "table:positivity_diagnostics",
+        }.issubset(set(c.plan_expected_outputs()))
+        and "confounding by indication"
+        in next(
+            step.intent
+            for step in c.build_plan().steps
+            if step.step_id == c.primary_step_id
+        ),
+    ),
+    GuardrailCheck(
+        1,
+        "bounded_causal_claim",
+        lambda c: "observational target-trial assumptions"
+        in next(
+            step.intent
+            for step in c.build_plan().steps
+            if step.step_id == c.primary_step_id
+        ),
+    ),
+)
+
+
+# ---------------------------------------------------------------------------
+# H3 — fixed-anchor trajectory clustering with independent stability owner
+# ---------------------------------------------------------------------------
+
+_H3_TABLE_ONE = "01_table_one"
+_H3_PRIMARY = "03_candidate_selection"
+
+
+def _h3_plan() -> AnalysisPlan:
+    return AnalysisPlan(
+        research_question=H3.question,
+        analysis_type="trajectory_clustering",
+        steps=[
+            _table_one_step(
+                step_id=_H3_TABLE_ONE,
+                group_by="death",
+                group_levels=[0, 1],
+                variables=[_continuous("age"), _continuous("lact_h0_6")],
+                intent="Baseline Table 1 before trajectory representation.",
+            ),
+            _aux_step(
+                step_id="02_representation",
+                method="missingness_aware_trajectory_representation",
+                inputs=[
+                    "lact_h0_6",
+                    "lact_h6_12",
+                    "lact_h12_18",
+                    "lact_h18_24",
+                    "map_h0_6",
+                    "map_h6_12",
+                    "map_h12_18",
+                    "map_h18_24",
+                ],
+                expected_outputs=[
+                    "artifact:trajectory_representation",
+                    "manifest:trajectory_representation_schema",
+                    "table:feature_availability_flow",
+                    "table:feature_quality_scaling",
+                    "table:trajectory_membership",
+                ],
+                intent=(
+                    "Align all trajectories to ICU admission with fixed 0-6, "
+                    "6-12, 12-18, and 18-24h windows; retain the same eligible "
+                    "population instead of selecting longer observed stays."
+                ),
+            ),
+            AnalysisStep(
+                step_id=_H3_PRIMARY,
+                planned_analysis_role="primary",
+                intent=(
+                    "Compare pre-specified candidate cluster counts on the "
+                    "fixed representation, freeze one selection manifest, and "
+                    "describe classes without treating them as causal groups."
+                ),
+                inputs=[
+                    "artifact:trajectory_representation",
+                    "manifest:trajectory_representation_schema",
+                ],
+                expected_outputs=[
+                    "artifact:candidate_cluster_models",
+                    "artifact:candidate_cluster_assignments",
+                    "manifest:cluster_selection",
+                    "manifest:candidate_cluster_solution_schema",
+                ],
+                method="model_based_clustering",
+            ),
+            AnalysisStep(
+                step_id="04_stability_freeze",
+                planned_analysis_role="auxiliary",
+                intent=(
+                    "Execute the independent Planner-owned stability design and "
+                    "report its fixed decision without changing seed, k, or threshold."
+                ),
+                inputs=sorted(STABILITY_EXECUTOR_INPUTS),
+                expected_outputs=sorted(STABILITY_EXECUTOR_OUTPUTS),
+                method="trajectory_cluster_stability",
+                trajectory_stability_spec=_trajectory_stability_spec(),
+            ),
+            _aux_step(
+                step_id="05_characterization",
+                method="descriptive_cluster_characterization",
+                inputs=["artifact:cluster_assignments"],
+                expected_outputs=[
+                    "table:phenotype_profiles",
+                    "table:trajectory_cluster_profiles",
+                    "table:outcome_by_trajectory_class",
+                ],
+                intent=(
+                    "Describe the frozen trajectory classes and outcomes without "
+                    "causal interpretation."
+                ),
+            ),
+        ],
+        rationale=(
+            "H3 zero-Provider preflight separates fixed-anchor representation, "
+            "candidate selection, deterministic stability, and characterization."
+        ),
+    )
+
+
+def _h3_cohort(n: int = 150) -> pd.DataFrame:
+    rng = np.random.RandomState(707)
+    latent = rng.choice([0, 1, 2], n, p=[0.4, 0.35, 0.25])
+    data: Dict[str, object] = {
+        "stay_id": np.arange(1, n + 1),
+        "subject_id": np.arange(1, n + 1),
+        "age": rng.randint(40, 90, n).astype(float),
+    }
+    windows = ((0, 6), (6, 12), (12, 18), (18, 24))
+    for index, (start, end) in enumerate(windows):
+        data[f"lact_h{start}_{end}"] = (
+            1.5
+            + 0.8 * latent
+            + 0.22 * latent * float(index)
+            + rng.normal(0, 0.25, n)
+        )
+        data[f"map_h{start}_{end}"] = (
+            78.0
+            - 6.0 * latent
+            - 1.8 * latent * float(index)
+            + rng.normal(0, 2.0, n)
+        )
+    outcome_logit = -3.0 + 0.9 * latent
+    data["death"] = rng.binomial(1, 1.0 / (1.0 + np.exp(-outcome_logit)))
+    return pd.DataFrame(data)
+
+
+_H3_CHECKS: Tuple[GuardrailCheck, ...] = (
+    GuardrailCheck(
+        0,
+        "fixed_anchor_no_length_bias",
+        lambda c: "fixed 0-6"
+        in next(
+            step.intent
+            for step in c.build_plan().steps
+            if step.step_id == "02_representation"
+        )
+        and "instead of selecting longer observed stays"
+        in next(
+            step.intent
+            for step in c.build_plan().steps
+            if step.step_id == "02_representation"
+        ),
+    ),
+    GuardrailCheck(
+        1,
+        "fixed_cluster_selection_noncausal",
+        lambda c: "pre-specified candidate cluster counts"
+        in next(
+            step.intent
+            for step in c.build_plan().steps
+            if step.step_id == c.primary_step_id
+        )
+        and "without treating them as causal groups"
+        in next(
+            step.intent
+            for step in c.build_plan().steps
+            if step.step_id == c.primary_step_id
+        ),
+    ),
+)
+
+
+# ---------------------------------------------------------------------------
 # Formal-output scope maps
 #
 # The offline preflight proves orchestration paths.  It deliberately does not
@@ -762,6 +1463,49 @@ _E3_PRODUCTS: Tuple[ProductMapping, ...] = (
     ),
     ProductMapping(1, None, FULFILLMENT_NOT_PRODUCED_OFFLINE),
     ProductMapping(2, "03_ordinal_trend", FULFILLMENT_PLANNED_ONLY),
+)
+
+_M2_PRODUCTS: Tuple[ProductMapping, ...] = (
+    ProductMapping(
+        0,
+        _M2_TABLE_ONE,
+        FULFILLMENT_PRODUCED,
+        artifact_evidence_prefix="table_step_artifact_",
+    ),
+    ProductMapping(1, _M2_PRIMARY, FULFILLMENT_PLANNED_ONLY),
+    ProductMapping(2, _M2_PRIMARY, FULFILLMENT_PLANNED_ONLY),
+    ProductMapping(3, _M2_PRIMARY, FULFILLMENT_PLANNED_ONLY),
+)
+
+_H1_PRODUCTS: Tuple[ProductMapping, ...] = (
+    ProductMapping(
+        0,
+        _H1_TABLE_ONE,
+        FULFILLMENT_PRODUCED,
+        artifact_evidence_prefix="table_step_artifact_",
+    ),
+    ProductMapping(1, _H1_PRIMARY, FULFILLMENT_PLANNED_ONLY),
+    ProductMapping(2, _H1_PRIMARY, FULFILLMENT_PLANNED_ONLY),
+    ProductMapping(3, "01_incident_alignment", FULFILLMENT_PLANNED_ONLY),
+)
+
+_H2_PRODUCTS: Tuple[ProductMapping, ...] = (
+    ProductMapping(
+        0,
+        _H2_TABLE_ONE,
+        FULFILLMENT_PRODUCED,
+        artifact_evidence_prefix="table_step_artifact_",
+    ),
+    ProductMapping(1, _H2_PRIMARY, FULFILLMENT_PLANNED_ONLY),
+    ProductMapping(2, _H2_PRIMARY, FULFILLMENT_PLANNED_ONLY),
+    ProductMapping(3, _H2_PRIMARY, FULFILLMENT_PLANNED_ONLY),
+)
+
+_H3_PRODUCTS: Tuple[ProductMapping, ...] = (
+    ProductMapping(0, "05_characterization", FULFILLMENT_PLANNED_ONLY),
+    ProductMapping(1, None, FULFILLMENT_NOT_PRODUCED_OFFLINE),
+    ProductMapping(2, None, FULFILLMENT_NOT_PRODUCED_OFFLINE),
+    ProductMapping(3, "04_stability_freeze", FULFILLMENT_PLANNED_ONLY),
 )
 
 
@@ -843,7 +1587,117 @@ E3 = PreflightCase(
     product_map=_E3_PRODUCTS,
 )
 
+M2 = PreflightCase(
+    task_id="m2_mortality_prediction",
+    title="First-24h vitals+labs mortality prediction with calibration",
+    analysis_type="prediction_model",
+    question=(
+        "Build and evaluate a first-24h in-hospital mortality prediction model "
+        "with patient-grouped splitting, calibration, and clinical utility."
+    ),
+    database="miiv",
+    primary_exposure="",
+    target_outcome="death",
+    concept_descriptions={
+        "patient_stay_id": "Patient-grouped stay identifier: patient prefix before ':s'.",
+        "death": "In-hospital mortality (0/1).",
+        "lact": "First-24h peak lactate (mmol/L).",
+    },
+    deterministic_step_id=_M2_TABLE_ONE,
+    primary_step_id=_M2_PRIMARY,
+    _build_plan=_m2_plan,
+    _build_cohort=_m2_cohort,
+    primary_code_kind="prediction",
+    required_imports=("numpy", "pandas", "scipy", "statsmodels", "sklearn"),
+    guardrail_checks=_M2_CHECKS,
+    product_map=_M2_PRODUCTS,
+)
+
+H1 = PreflightCase(
+    task_id="h1_ventilation_survival",
+    title="Mechanical ventilation duration/status vs 28-day mortality",
+    analysis_type="survival",
+    question=(
+        "Estimate aligned incident ventilation exposure and 28-day mortality "
+        "using Kaplan-Meier and Cox methods with PH diagnostics."
+    ),
+    database="miiv",
+    primary_exposure="vent_24h_any",
+    target_outcome="event_28d",
+    concept_descriptions={
+        "vent_24h_any": "Ventilation exposure classified within the fixed 24h landmark.",
+        "followup_days": "Event/censoring time from the landmark (days).",
+        "event_28d": "28-day mortality event indicator (0/1).",
+    },
+    deterministic_step_id=_H1_TABLE_ONE,
+    primary_step_id=_H1_PRIMARY,
+    _build_plan=_h1_plan,
+    _build_cohort=_h1_cohort,
+    primary_code_kind="survival",
+    required_imports=("numpy", "pandas", "scipy", "statsmodels"),
+    guardrail_checks=_H1_CHECKS,
+    product_map=_H1_PRODUCTS,
+)
+
+H2 = PreflightCase(
+    task_id="h2_vasopressor_causal",
+    title="Early vasopressor exposure vs mortality",
+    analysis_type="causal_inference",
+    question=(
+        "Emulate the effect of early vasopressor exposure on mortality with a "
+        "frozen target-trial protocol, balance, and positivity diagnostics."
+    ),
+    database="miiv",
+    primary_exposure="vasopressor",
+    target_outcome="death",
+    concept_descriptions={
+        "vasopressor": "Recorded early vasopressor exposure (0/1) under a source capture contract.",
+        "death": "28-day mortality (0/1).",
+    },
+    deterministic_step_id=_H2_TABLE_ONE,
+    primary_step_id=_H2_PRIMARY,
+    _build_plan=_h2_plan,
+    _build_cohort=_h2_cohort,
+    primary_code_kind="causal",
+    required_imports=("numpy", "pandas", "scipy", "statsmodels"),
+    guardrail_checks=_H2_CHECKS,
+    product_map=_H2_PRODUCTS,
+)
+
+H3 = PreflightCase(
+    task_id="h3_trajectory_clustering",
+    title="Organ-dysfunction trajectory clustering",
+    analysis_type="trajectory_clustering",
+    question=(
+        "Cluster fixed-window organ-dysfunction trajectories, freeze cluster "
+        "selection through an independent stability design, and describe outcomes."
+    ),
+    database="miiv",
+    primary_exposure="",
+    target_outcome="death",
+    concept_descriptions={
+        "lact_h0_6": "Lactate in fixed ICU 0-6h window (mmol/L).",
+        "map_h0_6": "MAP in fixed ICU 0-6h window (mmHg).",
+        "death": "In-hospital mortality (0/1).",
+    },
+    deterministic_step_id=_H3_TABLE_ONE,
+    primary_step_id=_H3_PRIMARY,
+    _build_plan=_h3_plan,
+    _build_cohort=_h3_cohort,
+    primary_code_kind="trajectory",
+    required_imports=("numpy", "pandas", "scipy", "sklearn"),
+    guardrail_checks=_H3_CHECKS,
+    product_map=_H3_PRODUCTS,
+)
+
 E1E3_CASES: Dict[str, PreflightCase] = {case.task_id: case for case in (E1, E2, E3)}
+COMPLEX_CASES: Dict[str, PreflightCase] = {
+    case.task_id: case for case in (M2, H1, H2, H3)
+}
+PREFLIGHT_CASES: Dict[str, PreflightCase] = {
+    **E1E3_CASES,
+    **COMPLEX_CASES,
+}
 
 __all__ = [
     "GuardrailCheck",
@@ -855,5 +1709,11 @@ __all__ = [
     "E1",
     "E2",
     "E3",
+    "M2",
+    "H1",
+    "H2",
+    "H3",
     "E1E3_CASES",
+    "COMPLEX_CASES",
+    "PREFLIGHT_CASES",
 ]

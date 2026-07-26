@@ -787,6 +787,7 @@ class PlannerAgent:
         allowed_know_how_decisions: Optional[Mapping[str, Mapping[str, Any]]] = None,
         know_how_context: str = "",
         enforce_article_contract: bool = False,
+        article_contract_context: Optional[ResearchContext] = None,
     ) -> AnalysisPlan:
         if bool(allowed_know_how_decisions) != bool(know_how_context):
             raise ValueError(
@@ -819,6 +820,7 @@ class PlannerAgent:
                 context,
                 allowed_know_how_decisions=allowed_know_how_decisions,
                 enforce_article_contract=enforce_article_contract,
+                article_contract_context=article_contract_context,
             ),
             role="planner",
             max_retries=PLANNER_MAX_RETRIES,
@@ -848,6 +850,7 @@ class PlannerAgent:
         *,
         allowed_know_how_decisions: Optional[Mapping[str, Mapping[str, Any]]] = None,
         enforce_article_contract: bool = False,
+        article_contract_context: Optional[ResearchContext] = None,
     ) -> AnalysisPlan:
         text = raw.strip()
         # Strip a fenced block anywhere in the response (already
@@ -903,7 +906,7 @@ class PlannerAgent:
             )
 
             contract = build_article_analysis_contract(
-                context,
+                article_contract_context or context,
                 analysis_type=plan.analysis_type,
             )
             contract_findings = validate_plan_against_article_contract(
