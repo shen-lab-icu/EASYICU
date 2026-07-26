@@ -3086,6 +3086,78 @@ def test_llm_concept_auditor_trusts_exact_step_input_metadata_binding(ra):
     )
 
 
+def test_llm_concept_auditor_binds_planner_science_and_derived_concepts(ra):
+    context = ra.ResearchContext(
+        research_question="Estimate one adjusted ICU association.",
+        cohort=ra.CohortDescriptor(
+            cohort_name="c",
+            database="synthetic",
+            n_stays=3,
+            n_patients=3,
+        ),
+        variables=[
+            ra.ConceptDescriptor(
+                name="derived_exposure",
+                dtype="int64",
+                source_concept="derived_exposure",
+                derived_from_concepts=["component_a", "component_b"],
+            ),
+            ra.ConceptDescriptor(
+                name="derived_exposure_measured",
+                dtype="int64",
+                role="meta",
+            ),
+            ra.ConceptDescriptor(name="component_a", dtype="float64"),
+            ra.ConceptDescriptor(name="component_b", dtype="float64"),
+            ra.ConceptDescriptor(name="death", dtype="int64", role="outcome"),
+        ],
+        primary_exposure="derived_exposure",
+        target_outcome="death",
+    )
+    step = ra.AnalysisStep(
+        step_id="adjusted_model",
+        planned_analysis_role="primary",
+        intent="Fit the Planner-owned adjusted model.",
+        inputs=["derived_exposure", "death"],
+        expected_outputs=["table:adjusted_association_estimates"],
+        method="adjusted_association_models",
+        icu_rule_refs=[
+            "Do not use measurement or source-status flags as adjustment covariates."
+        ],
+        model_requirements=[
+            {
+                "requirement_id": "primary_model",
+                "outcome": "death",
+                "outcome_type": "binary",
+                "method_family": "logistic_regression",
+                "exposure_source": "derived_exposure",
+                "analysis_role": "primary",
+                "analysis_set": "source_aware",
+                "required_for_step_success": True,
+            }
+        ],
+    )
+
+    prompt = ra.LLMConceptAuditor(ra.MockLLMClient())._prompt(
+        context=context,
+        script_text=(
+            "X = frame[['derived_exposure', 'derived_exposure_measured']]\n"
+            "model.fit(X, frame['death'])"
+        ),
+        step=step,
+    )
+
+    assert "Planner-declared step contract below is binding scientific authority" in prompt
+    assert '"method":"adjusted_association_models"' in prompt
+    assert '"requirement_id":"primary_model"' in prompt
+    assert "Do not use measurement or source-status flags" in prompt
+    assert '"derived_from_concepts":["component_a","component_b"]' in prompt
+    assert "do not require the generated script to load or filter on each raw component" in prompt
+    assert "not automatic adjustment covariates" in prompt
+    assert "deterministic missing-indicator complement" in prompt
+    assert "`>= 0` retains both zero and one" in prompt
+
+
 def test_llm_concept_auditor_downgrades_finalized_exposure_rederivation_demand(ra):
     class _FalseReconciliationDemandLLM:
         def complete(self, messages, *, max_tokens=1024, temperature=0.0):

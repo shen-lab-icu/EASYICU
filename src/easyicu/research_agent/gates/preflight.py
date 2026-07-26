@@ -7209,6 +7209,97 @@ def _host_helper_call_signature_findings(
     return findings
 
 
+_COUNT_COMPANION_CLOSED_DOMAIN_HELPERS = frozenset(
+    {"allowed_values_for", "closed_categorical_counts", "require_binary"}
+)
+
+
+def _count_companion_closed_domain_findings(
+    tree: ast.Module,
+    step: AnalysisStep,
+) -> list[ValidationFinding]:
+    """Reject treating a declared measurement count as binary/categorical."""
+
+    declared_inputs = {
+        str(value).strip()
+        for value in step.inputs
+        if ":" not in str(value) and str(value).strip()
+    }
+    count_columns = {
+        count_column
+        for measured_column in declared_inputs
+        if (count_column := companion_count_column_for_measured(measured_column))
+        and count_column in declared_inputs
+    }
+    if not count_columns:
+        return []
+
+    def _call_tail(call: ast.Call) -> str:
+        return _call_name(call.func).rsplit(".", 1)[-1]
+
+    def _literal_count_columns(call: ast.Call) -> set[str]:
+        return {
+            str(node.value)
+            for argument in (*call.args, *(item.value for item in call.keywords))
+            for node in ast.walk(argument)
+            if isinstance(node, ast.Constant)
+            and isinstance(node.value, str)
+            and str(node.value) in count_columns
+        }
+
+    closed_level_bindings: dict[str, str] = {}
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.Assign, ast.AnnAssign)):
+            continue
+        value = node.value
+        if not isinstance(value, ast.Call) or _call_tail(value) != "allowed_values_for":
+            continue
+        literal_columns = _literal_count_columns(value)
+        if len(literal_columns) != 1:
+            continue
+        count_column = next(iter(literal_columns))
+        targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+        for target in targets:
+            if isinstance(target, ast.Name):
+                closed_level_bindings[target.id] = count_column
+
+    findings: list[ValidationFinding] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        helper_name = _call_tail(node)
+        if helper_name not in _COUNT_COMPANION_CLOSED_DOMAIN_HELPERS:
+            continue
+        implicated = _literal_count_columns(node)
+        for argument in (*node.args, *(item.value for item in node.keywords)):
+            implicated.update(
+                closed_level_bindings[nested.id]
+                for nested in ast.walk(argument)
+                if isinstance(nested, ast.Name)
+                and nested.id in closed_level_bindings
+            )
+        for count_column in sorted(implicated):
+            findings.append(
+                ValidationFinding(
+                    validator="mechanical_code_preflight",
+                    severity="error",
+                    message=(
+                        "A declared measurement-count companion is a non-negative "
+                        "observation count, not a binary or closed categorical domain."
+                    ),
+                    detail={
+                        "reason": "count_companion_closed_domain_invalid",
+                        "helper_name": helper_name,
+                        "line": int(node.lineno),
+                        "column": count_column,
+                        "role": "audit_only_count_companion",
+                        "failure_mode": "closed_domain_assumption",
+                    },
+                )
+            )
+    return findings
+
+
 _BOOLEAN_REDUCTION_METHODS = frozenset({"all", "any"})
 _PANDAS_SERIES_METHODS = frozenset(
     {
@@ -8402,6 +8493,7 @@ def audit_mechanical_code_contracts(
     findings.extend(_scalar_cast_before_reduction_findings(tree))
     findings.extend(_first_time_companion_findings(tree))
     findings.extend(_host_helper_call_signature_findings(tree, step))
+    findings.extend(_count_companion_closed_domain_findings(tree, step))
     findings.extend(host_helper_result_findings(tree, step))
     findings.extend(table_one_spec_binding_findings(tree, step))
     findings.extend(_boolean_reduction_identity_findings(tree))

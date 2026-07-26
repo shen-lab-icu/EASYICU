@@ -692,7 +692,12 @@ CLINICAL SCORE AND MISSINGNESS SEMANTICS:
   `step_summary["measurement_provenance_audit"]["source"]`=`"COHORT_PARQUET"`,
   including `invalid_pair_n` and `role="audit_only"`. Validate the flag even
   when the companion count is absent; boolean, datetime, or timedelta count
-  values are invalid. Discordance is a fail-closed provenance error. The host
+  values are invalid. A `*_n` companion is a non-negative observation count
+  and ordinarily has no closed `allowed_values`: never pass it to
+  `allowed_values_for`, binary-domain validation, or closed categorical
+  enumeration. Validate only its finite, non-negative, integer-like count
+  semantics; use the paired `*_measured` field for binary provenance
+  consistency. Discordance is a fail-closed provenance error. The host
   will reject omitted measured families, convenient subsets, or checks omitted
   from the planner's declared inputs. This audit is provenance only: never make
   it a physiological value, adjustment covariate, or new cohort rule.

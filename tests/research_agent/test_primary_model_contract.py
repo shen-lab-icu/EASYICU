@@ -1526,6 +1526,30 @@ def test_primary_model_contract_blocks_invalid_fitted_term_interval(
     assert "fitted_term_missing_or_invalid_interval" in _issue_types(findings)
 
 
+def test_primary_model_contract_blocks_interval_method_label_mismatch(
+    tmp_path: Path,
+):
+    cohort_path, out_dir = _write_inputs(tmp_path)
+    table_path = out_dir / "model_coefficients.csv"
+    table = pd.read_csv(table_path)
+    table.loc[
+        table["model_id"].eq("lab_source_aware"),
+        "interval_method",
+    ] = "wald_95_percent"
+    table.to_csv(table_path, index=False)
+
+    findings = PrimaryModelContractValidator().audit(
+        step=_step(),
+        step_summary={"model_contracts": _contracts()},
+        context=_context(),
+        completed_step_records=_prior_records(),
+        out_dir=out_dir,
+        cohort_path=cohort_path,
+    )
+
+    assert "interval_method_contract_mismatch" in _issue_types(findings)
+
+
 def test_primary_model_contract_allows_explicit_reference_row_without_interval(
     tmp_path: Path,
 ):
@@ -1949,6 +1973,7 @@ def test_coder_prompt_declares_primary_model_canonical_enums() -> None:
     assert 'keep `exposure_role="primary"`' in prompt
     assert "use and report `alpha <= 1/n`" in prompt
     assert "planner-owned `model_requirements`" in prompt
+    assert "`*_n` companion is a non-negative observation count" in prompt
     assert "matching `requirement_id`" in prompt
     assert "`fit_failure_reason`" in prompt
     assert "not a generic contract for" in prompt

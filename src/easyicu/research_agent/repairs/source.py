@@ -138,6 +138,26 @@ _NULL_PRIMARY_EFFECT_MARKERS = (
 )
 
 
+def _structured_primary_singular_failure(step_summary: Dict[str, Any]) -> bool:
+    """Return whether the declared primary model failed from singularity."""
+
+    contracts = step_summary.get("model_contracts")
+    if isinstance(contracts, dict):
+        candidates = [contracts]
+    elif isinstance(contracts, list):
+        candidates = [item for item in contracts if isinstance(item, dict)]
+    else:
+        candidates = []
+    for contract in candidates:
+        if str(contract.get("analysis_role") or "").strip().lower() != "primary":
+            continue
+        fit_status = str(contract.get("fit_status") or "").strip().lower()
+        failure_reason = str(contract.get("fit_failure_reason") or "").strip().lower()
+        if fit_status != "fitted" and "singular matrix" in failure_reason:
+            return True
+    return False
+
+
 def _patch_rank_safe_statsmodels_design(code: str) -> Optional[str]:
     """Insert a rank-safe design-matrix reducer before statsmodels binary fits.
 
@@ -234,30 +254,80 @@ def _patch_rank_safe_statsmodels_design(code: str) -> Optional[str]:
         r"(?P<y>[^,\n)]+?)\s*,\s*(?P<X>[A-Za-z_]\w*)"
         r"(?P<kwargs>,\s*[^)\n]+)?\)\s*$"
     )
+    direct_fit_call = re.compile(
+        r"(?m)^(?P<indent>\s*)(?P<lhs>[A-Za-z_]\w*)\s*=\s*sm\.Logit\("
+        r"(?P<y>[^,\n)]+?)\s*,\s*(?P<X>[A-Za-z_]\w*)"
+        r"(?P<kwargs>,\s*[^)\n]+)?\)\.fit\((?P<fit_args>[^)\n]*)\)\s*$"
+    )
 
-    def _rewrite(match: re.Match[str]) -> str:
+    def _keep_expression(x_expr: str) -> str:
+        return (
+            "[c for c in ["
+            "'const', "
+            "locals().get('exposure_col'), "
+            "locals().get('predictor_col'), "
+            "locals().get('primary_predictor'), "
+            "locals().get('PRIMARY_EXPOSURE'), "
+            "globals().get('PRIMARY_EXPOSURE')"
+            f"] if c is not None and hasattr({x_expr}, 'columns') and c in {x_expr}.columns]"
+        )
+
+    def _rank_reduction_line(match: re.Match[str]) -> str:
+        x_expr = match.group("X").strip()
+        return (
+            f"{match.group('indent')}{x_expr}, _easyicu_dropped_rank_cols_v1 = "
+            f"_easyicu_rank_safe_design_v1({x_expr}, "
+            f"keep={_keep_expression(x_expr)})"
+        )
+
+    def _rewrite_model(match: re.Match[str]) -> str:
         indent = match.group("indent")
         x_expr = match.group("X").strip()
         y_expr = match.group("y").strip()
         kwargs = match.group("kwargs") or ""
         lhs = match.group("lhs")
-        keep_expr = (
-            "[c for c in ["
-            "'const', "
-            "locals().get('exposure_col'), "
-            "locals().get('predictor_col'), "
-            "locals().get('primary_predictor')"
-            f"] if c is not None and hasattr({x_expr}, 'columns') and c in {x_expr}.columns]"
-        )
         return (
-            f"{indent}{x_expr}, _easyicu_dropped_rank_cols_v1 = "
-            f"_easyicu_rank_safe_design_v1({x_expr}, keep={keep_expr})\n"
+            f"{_rank_reduction_line(match)}\n"
             f"{indent}{lhs} = sm.GLM({y_expr}, {x_expr}, family=sm.families.Binomial(){kwargs})"
         )
 
-    repaired = model_call.sub(_rewrite, code, count=1)
+    def _rewrite_direct_fit(match: re.Match[str]) -> str:
+        indent = match.group("indent")
+        x_expr = match.group("X").strip()
+        y_expr = match.group("y").strip()
+        kwargs = match.group("kwargs") or ""
+        fit_args = match.group("fit_args")
+        lhs = match.group("lhs")
+        return (
+            f"{_rank_reduction_line(match)}\n"
+            f"{indent}{lhs} = sm.GLM("
+            f"{y_expr}, {x_expr}, family=sm.families.Binomial(){kwargs}"
+            f").fit({fit_args})"
+        )
+
+    repaired = direct_fit_call.sub(_rewrite_direct_fit, code, count=1)
+    if repaired == code:
+        repaired = model_call.sub(_rewrite_model, code, count=1)
     if repaired == code:
         return None
+    repaired = re.sub(
+        r"(?P<quote>['\"])statsmodels_logit_mle(?P=quote)",
+        lambda match: (
+            f"{match.group('quote')}statsmodels_glm_binomial_irls_rank_safe"
+            f"{match.group('quote')}"
+        ),
+        repaired,
+        count=1,
+    )
+    if "wald_95_percent" in repaired and re.search(r"\b1\.96\s*\*", repaired):
+        repaired = re.sub(
+            r"(?P<quote>['\"])profile_normal(?P=quote)",
+            lambda match: (
+                f"{match.group('quote')}wald_95_percent{match.group('quote')}"
+            ),
+            repaired,
+            count=1,
+        )
     repaired = re.sub(
         r"float\(math\.exp\((?P<expr>[^()\n]+)\)\)",
         lambda match: f"_easyicu_safe_exp_v1({match.group('expr').strip()})",
@@ -4340,11 +4410,12 @@ def _deterministic_summary_repair(
         or (predictor_match.group(1) if predictor_match else "")
         or ""
     ).strip()
+    structured_primary_singular = _structured_primary_singular_failure(step_summary)
     estimate = _first_present_scalar(
         step_summary,
         ("estimate", "primary_or", "odds_ratio", "adjusted_or", "or"),
     )
-    if estimate is not None:
+    if estimate is not None and not structured_primary_singular:
         return None
     error_text = str(
         step_summary.get("error")
@@ -4484,10 +4555,11 @@ def _deterministic_summary_repair(
                 if repaired != code:
                     return repair_name, repaired
         nested_primary_singular = (
-            null_model_summary
+            (null_model_summary or structured_primary_singular)
             and "singular matrix" in summary_text
             and (
-                '"primary_model"' in summary_text
+                structured_primary_singular
+                or '"primary_model"' in summary_text
                 or "primary association" in summary_text
                 or "primary estimand" in summary_text
                 or "primary_exposure" in summary_text
