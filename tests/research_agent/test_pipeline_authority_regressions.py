@@ -1173,7 +1173,6 @@ def test_p0_2_the_wired_recorder_binds_the_decision_into_run_evidence(
     agent = pipeline_module.ResearchAgentPipeline(
         workdir=tmp_path / "wd",
         llm=MockLLMClient(),
-        human_review_gate=lambda *_args, **_kwargs: None,
     )
     with pytest.raises(RuntimeError, match="stop after workflow construction"):
         agent.run(question="Does SOFA-2 predict death?", cohort=cohort)

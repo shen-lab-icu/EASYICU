@@ -29,10 +29,14 @@ authority.
 
 from __future__ import annotations
 
+import hashlib
 import json
+import os
 import re
 import sys
+import tempfile
 import uuid
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence
 
@@ -89,6 +93,10 @@ def _server_version() -> str:
 
 
 SERVER_INFO = {"name": "easyicu-research-agent", "version": _server_version()}
+
+
+class MCPOutputExistsError(RuntimeError):
+    """Raised when an MCP write would replace an existing filesystem entry."""
 
 
 def _provider_configuration_error_payload(
@@ -200,6 +208,24 @@ def _tool_run(args: Dict[str, Any]) -> Dict[str, Any]:
             "error_code": "llm_configuration_invalid",
         }
     result = pipeline.run(cohort=cohort, **args)
+    from .orchestration.workflow import HumanReviewPending
+
+    if isinstance(result, HumanReviewPending):
+        payload = result.model_dump(mode="json")
+        payload.update(
+            {
+                "status": "human_review_pending",
+                "terminal": False,
+                "external_resume_supported": False,
+                "resumable_via_mcp": False,
+                "message": (
+                    "This pause supports same-process resume only. "
+                    "research_agent.run does not retain the Pipeline instance "
+                    "or expose a resume tool after this MCP call returns."
+                ),
+            }
+        )
+        return payload
     return result.model_dump()
 
 
@@ -737,13 +763,13 @@ def _tool_load_concepts(args: Dict[str, Any]) -> Dict[str, Any]:
         policy=policy,
         fail_closed=True,
     )
-    output_paths = _write_concept_result_if_requested(
+    concept_outputs = _write_concept_result_if_requested(
         result=result,
         args=args,
         concepts=[str(c) for c in concepts],
     )
     evidence_records = _register_concept_outputs_if_requested(
-        output_paths=output_paths,
+        concept_outputs=concept_outputs,
         args=args,
         concepts=[str(c) for c in concepts],
     )
@@ -762,7 +788,15 @@ def _tool_load_concepts(args: Dict[str, Any]) -> Dict[str, Any]:
             ).model_dump(mode="json")
             for concept, record in availability_sink.items()
         },
-        "output_paths": [str(path) for path in output_paths],
+        "output_paths": [str(output.path) for output in concept_outputs],
+        "outputs": [
+            {
+                "logical_concept_names": list(output.logical_concept_names),
+                "physical_filename": output.path.name,
+                "path": str(output.path),
+            }
+            for output in concept_outputs
+        ],
         "evidence": evidence_records,
     }
 
@@ -957,12 +991,24 @@ def _record_patient_data_access(
             ) from exc
 
 
+@dataclass(frozen=True)
+class _ConceptOutput:
+    logical_concept_names: tuple[str, ...]
+    path: Path
+
+
+def _concept_output_filename(logical_name: str) -> str:
+    slug = _safe_filename(logical_name)[:80].strip("_-") or "concept"
+    digest = hashlib.sha256(logical_name.encode("utf-8")).hexdigest()[:12]
+    return f"{slug}--{digest}.parquet"
+
+
 def _write_concept_result_if_requested(
     *,
     result: Any,
     args: Dict[str, Any],
     concepts: List[str],
-) -> List[Path]:
+) -> List[_ConceptOutput]:
     should_write = bool(args.get("output_path") or args.get("register_evidence"))
     if not should_write:
         return []
@@ -981,39 +1027,69 @@ def _write_concept_result_if_requested(
 
     if isinstance(result, dict):
         out_dir = base if not base.suffix else base.with_suffix("")
+        result_items = list(result.items())
+        outputs = [
+            _ConceptOutput(
+                logical_concept_names=(str(name),),
+                path=out_dir / _concept_output_filename(str(name)),
+            )
+            for name, _frame in result_items
+        ]
+        destinations: Dict[Path, tuple[str, ...]] = {}
+        for output in outputs:
+            prior = destinations.get(output.path)
+            if prior is not None and prior != output.logical_concept_names:
+                raise ValueError(
+                    "concept output filename collision before write: "
+                    f"{prior!r} and {output.logical_concept_names!r} both map "
+                    f"to {output.path.name!r}"
+                )
+            destinations[output.path] = output.logical_concept_names
+            _assert_output_absent(output.path)
         out_dir.mkdir(parents=True, exist_ok=True)
-        paths: List[Path] = []
-        for name, frame in result.items():
-            path = out_dir / f"{_safe_filename(str(name)) or 'concept'}.parquet"
-            _write_frame(frame, path)
-            paths.append(path)
-        return paths
+        written: List[_ConceptOutput] = []
+        for output, (_name, frame) in zip(outputs, result_items):
+            _write_frame_no_clobber(frame, output.path)
+            written.append(output)
+        return written
 
     path = base if base.suffix else base.with_suffix(".parquet")
-    _write_frame(result, path)
-    return [path]
+    _write_frame_no_clobber(result, path)
+    return [
+        _ConceptOutput(
+            logical_concept_names=tuple(concepts),
+            path=path,
+        )
+    ]
 
 
 def _register_concept_outputs_if_requested(
     *,
-    output_paths: List[Path],
+    concept_outputs: List[_ConceptOutput],
     args: Dict[str, Any],
     concepts: List[str],
 ) -> List[Dict[str, Any]]:
     if not args.get("register_evidence"):
         return []
     require_scope(SCOPE_BIND_EVIDENCE, tool="research_agent.load_concepts")
-    if not output_paths:
+    if not concept_outputs:
         return [{"error": "register_evidence requires writable concept output"}]
     workdir = resolve_within_roots(
         args.get("workdir") or "./research_output", field="workdir"
     )
     store = EvidenceStore(workdir)
     records = []
-    for index, path in enumerate(output_paths):
+    for index, output in enumerate(concept_outputs):
+        path = output.path
         evidence_id = args.get("evidence_id")
-        if evidence_id and len(output_paths) > 1:
+        if evidence_id and len(concept_outputs) > 1:
             evidence_id = f"{evidence_id}_{index + 1}"
+        logical_metadata: Dict[str, Any] = {
+            "logical_concept_names": list(output.logical_concept_names),
+            "physical_filename": path.name,
+        }
+        if len(output.logical_concept_names) == 1:
+            logical_metadata["logical_concept_name"] = output.logical_concept_names[0]
         record = store.register_file(
             kind="table",
             description=str(
@@ -1026,29 +1102,58 @@ def _register_concept_outputs_if_requested(
             producer="easyicu.load_concepts",
             generation_mode="deterministic_extraction",
             metadata={
+                **dict(args.get("metadata") or {}),
                 "concepts": concepts,
                 "database": args.get("database"),
                 "data_path_sha256": _path_digest(args.get("data_path")),
                 "interval": args.get("interval"),
                 "win_length": args.get("win_length"),
                 "aggregate": args.get("aggregate"),
-                **dict(args.get("metadata") or {}),
+                **logical_metadata,
             },
         )
         records.append(record.model_dump(mode="json"))
     return records
 
 
-def _write_frame(frame: Any, path: Path) -> None:
+def _assert_output_absent(path: Path) -> None:
+    if path.exists() or path.is_symlink():
+        raise MCPOutputExistsError(
+            "concept output already exists; choose a new output_path"
+        )
+
+
+def _write_frame_no_clobber(frame: Any, path: Path) -> None:
     if not hasattr(frame, "to_parquet"):
         raise TypeError(
             f"Cannot write non-DataFrame concept result: {type(frame).__name__}"
         )
     path.parent.mkdir(parents=True, exist_ok=True)
-    if path.suffix.lower() == ".csv":
-        frame.to_csv(path, index=False)
-    else:
-        frame.to_parquet(path, index=False)
+    _assert_output_absent(path)
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix=f".{path.stem}-",
+        suffix=path.suffix or ".tmp",
+        dir=path.parent,
+    )
+    os.close(descriptor)
+    temporary = Path(temporary_name)
+    try:
+        if path.suffix.lower() == ".csv":
+            frame.to_csv(temporary, index=False)
+        else:
+            frame.to_parquet(temporary, index=False)
+        temporary.chmod(0o600)
+        _assert_output_absent(path)
+        try:
+            # A hard link publishes the complete temporary file atomically and
+            # fails with EEXIST instead of replacing a path created by a race.
+            os.link(temporary, path)
+        except FileExistsError as exc:
+            raise MCPOutputExistsError(
+                "concept output already exists; choose a new output_path"
+            ) from exc
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 def _safe_filename(value: str) -> str:
@@ -1459,6 +1564,8 @@ def dispatch(
         return {"error": str(exc), "error_code": "scope_not_granted"}
     except MCPPathError as exc:
         return {"error": str(exc), "error_code": "path_not_allowed"}
+    except MCPOutputExistsError as exc:
+        return {"error": str(exc), "error_code": "output_exists"}
     except ValueError as exc:
         # Argument-shape problems are the caller's to fix, so the message is
         # useful to them and does not describe server internals.
