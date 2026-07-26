@@ -75,6 +75,7 @@ try:
         load_medications,      # 药物治疗
         MedicationLoadError,
         MedicationMergeError,
+        PatientIdDiscoveryError,
         # 工具函数
         list_available_concepts,
         list_available_sources,
@@ -723,6 +724,7 @@ __all__ = [
     "load_medications",      # 药物治疗
     "MedicationLoadError",
     "MedicationMergeError",
+    "PatientIdDiscoveryError",
     # 工具函数
     "list_available_concepts",
     "list_available_sources",

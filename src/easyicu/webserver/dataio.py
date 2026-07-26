@@ -24,6 +24,7 @@ import csv
 import hashlib
 import json
 import re
+import sys
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence, Set, Tuple
 
@@ -964,7 +965,11 @@ def _feature_definition_payload(
     )
 
     project_path = Path(__file__).resolve().parents[3]
-    callback_source = Path(getattr(api_module, "__file__", "")).resolve()
+    callback = getattr(api_module, "load_concepts", None)
+    callback_module = sys.modules.get(getattr(callback, "__module__", ""))
+    callback_source = Path(
+        getattr(callback_module, "__file__", getattr(api_module, "__file__", ""))
+    ).resolve()
     data_source_ref = _shareable_path_reference(data_path)
     export_ref = _shareable_path_reference(export_path)
     callback_source_ref = _shareable_path_reference(

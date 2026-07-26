@@ -278,7 +278,9 @@ def test_p0_4_concurrent_loader_requests_never_cross_databases(monkeypatch):
         def clear_cache(self):
             pass
 
-    monkeypatch.setattr(api, "BaseICULoader", _FakeLoader)
+    from easyicu.api import concepts as concept_api
+
+    monkeypatch.setattr(concept_api, "BaseICULoader", _FakeLoader)
     api.clear_global_loader()
 
     requests = [("miiv", "/data/mimiciv"), ("eicu", "/data/eicu")] * 40
@@ -594,7 +596,9 @@ def test_r2_loader_is_not_torn_down_while_another_thread_uses_it(monkeypatch):
         def clear_cache(self):
             cleared.append(self.database)
 
-    monkeypatch.setattr(api, "BaseICULoader", _FakeLoader)
+    from easyicu.api import concepts as concept_api
+
+    monkeypatch.setattr(concept_api, "BaseICULoader", _FakeLoader)
     api.clear_global_loader()
     cleared.clear()
 
@@ -636,7 +640,9 @@ def test_r2_loader_cache_returns_the_same_instance_per_config(monkeypatch):
         def clear_cache(self):
             pass
 
-    monkeypatch.setattr(api, "BaseICULoader", _FakeLoader)
+    from easyicu.api import concepts as concept_api
+
+    monkeypatch.setattr(concept_api, "BaseICULoader", _FakeLoader)
     api.clear_global_loader()
 
     first = api._get_global_loader(database="miiv", data_path=Path("/data/mimiciv"))

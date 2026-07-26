@@ -20,12 +20,12 @@ Run without ``--run-real``.
 """
 from __future__ import annotations
 
-from easyicu.api import (
+from easyicu.api.extraction import (
     EXTRACT_MODULE_ORDER,
     _SPECIAL_CONCEPT_MODULES,
-    _concepts_need_sofa2,
     _group_modules_for_extraction,
 )
+from easyicu.api.concepts import _concepts_need_sofa2
 
 
 def _split(modules):

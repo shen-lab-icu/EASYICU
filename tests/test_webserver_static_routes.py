@@ -1866,7 +1866,7 @@ def test_native_extraction_feature_definition_manifest_records_callback_provenan
     assert age["source"]["data_source_ref"]["absolute_path_omitted"] is True
     assert age["source"]["export_ref"]["absolute_path_omitted"] is True
     assert age["callback"]["import_path"] == "easyicu.api.load_concepts"
-    assert age["callback"]["source_module_file"] == "src/easyicu/api.py"
+    assert age["callback"]["source_module_file"] == "src/easyicu/api/concepts.py"
     assert age["callback"]["source_file_ref"]["absolute_path_omitted"] is True
     assert age["callback"]["project_ref"]["hint"] == "EASYICU"
 

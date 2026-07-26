@@ -9,6 +9,8 @@ import pandas as pd
 import pytest
 
 from easyicu import api
+from easyicu.api import concepts as concept_api
+from easyicu.api import extraction as extraction_api
 from easyicu.datasource import load_bucketed_table_aggregated
 from easyicu.io.data_converter import ConversionStatus, DataConverter
 from easyicu.table import ICUTable
@@ -28,7 +30,7 @@ def test_align_to_icu_admission_fails_instead_of_returning_input_unchanged():
 
 def test_explicit_empty_cohort_returns_all_requested_special_outputs(monkeypatch):
     monkeypatch.setattr(
-        api,
+        concept_api,
         "_get_global_loader",
         lambda **kwargs: pytest.fail("empty cohort must not construct a loader"),
     )
@@ -50,7 +52,7 @@ def test_special_loaders_receive_resolved_source_and_patient_filter(
     resolved_path = tmp_path / "resolved"
     resolved_path.mkdir()
     loader = SimpleNamespace(database="miiv", data_path=resolved_path)
-    monkeypatch.setattr(api, "_get_global_loader", lambda **kwargs: loader)
+    monkeypatch.setattr(concept_api, "_get_global_loader", lambda **kwargs: loader)
 
     calls = {}
 
@@ -128,7 +130,7 @@ def test_batched_load_routes_special_concepts_through_subprocess_with_full_list(
     import easyicu.runtime.memory_manager as mm
 
     loader = SimpleNamespace(database="miiv", data_path=tmp_path)
-    monkeypatch.setattr(api, "_get_global_loader", lambda **kwargs: loader)
+    monkeypatch.setattr(concept_api, "_get_global_loader", lambda **kwargs: loader)
 
     captured = {}
 
@@ -470,8 +472,8 @@ def test_untransformed_bounds_keep_empty_non_unit_suspect_batch(tmp_path):
 
 
 def test_sofa2_overlay_bounds_are_included(monkeypatch):
-    monkeypatch.setattr(api, "_CONCEPT_BOUNDS_CACHE", None)
-    assert api._load_concept_bounds_map()["motor_response"] == (1.0, 6.0)
+    monkeypatch.setattr(extraction_api, "_CONCEPT_BOUNDS_CACHE", None)
+    assert extraction_api._load_concept_bounds_map()["motor_response"] == (1.0, 6.0)
 
 
 def test_converter_rejects_partial_shards_after_interrupted_status(tmp_path):
