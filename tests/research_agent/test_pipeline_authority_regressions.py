@@ -1093,9 +1093,13 @@ def test_p1_5_debug_dump_is_owner_only_on_disk(tmp_path, monkeypatch):
     monkeypatch.setenv("EASYICU_LLM_DEBUG", "1")
     monkeypatch.setenv("EASYICU_LLM_DEBUG_DIR", str(debug_dir))
 
+    raw_answer = (
+        "postgresql://db-user:db-password@db.example/easyicu "
+        "Authorization: Bearer response-secret-123456"
+    )
     message = SimpleNamespace(
-        content="the model answer",
-        model_dump_json=lambda: json.dumps({"content": "the model answer"}),
+        content=raw_answer,
+        model_dump_json=lambda: json.dumps({"content": raw_answer}),
     )
     response = SimpleNamespace(
         choices=[SimpleNamespace(message=message, finish_reason="stop")],
@@ -1117,7 +1121,17 @@ def test_p1_5_debug_dump_is_owner_only_on_disk(tmp_path, monkeypatch):
         OpenAIClient, "_require_outbound_authorization", lambda self: None
     )
 
-    client.complete([LLMMessage(role="user", content="a" * 20_000)])
+    client.complete(
+        [
+            LLMMessage(
+                role="user",
+                content=(
+                    "Cookie: session=prompt-cookie-secret\n"
+                    "Authorization: Bearer prompt-secret-123456\n" + ("a" * 20_000)
+                ),
+            )
+        ]
+    )
 
     dumps = list(debug_dir.glob("*.json"))
     assert dumps, "the debug dump did not run"
@@ -1127,6 +1141,12 @@ def test_p1_5_debug_dump_is_owner_only_on_disk(tmp_path, monkeypatch):
     payload = json.loads(dumps[0].read_text(encoding="utf-8"))
     assert "raw_message" not in payload
     assert len(json.dumps(payload["prompt_messages"])) < 20_000
+    encoded = json.dumps(payload)
+    assert "db-password" not in encoded
+    assert "response-secret" not in encoded
+    assert "prompt-cookie-secret" not in encoded
+    assert "prompt-secret" not in encoded
+    assert "[REDACTED]" in encoded
 
 
 if sys.version_info < (3, 10):  # pragma: no cover - repo targets 3.10+
