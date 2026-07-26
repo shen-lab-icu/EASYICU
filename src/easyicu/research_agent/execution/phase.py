@@ -168,6 +168,7 @@ from ..research_context.typed import resolved_raw_input_contracts
 from ..contracts.runtime import ValidationFinding, _ExecutePhaseResult, _PlanPhaseResult
 from .runners.deterministic_descriptive import absolute_risk_context_code
 from .runners.deterministic_missingness import (
+    missingness_audit_input_scope_supported,
     missingness_measurement_audit_code,
 )
 from .runners.deterministic_robustness import (
@@ -6572,6 +6573,8 @@ def run_execute_phase(
             """
             if _step_expects_figure(step):
                 return False
+            if not missingness_audit_input_scope_supported(step):
+                return False
             return _simple_missingness_audit_runner_owns_step(
                 str(step.method or ""),
                 str(step.step_id or ""),
@@ -6606,7 +6609,7 @@ def run_execute_phase(
                 total_steps=total_steps,
                 fallback_reason=reason,
             )
-            return missingness_measurement_audit_code()
+            return missingness_measurement_audit_code(step)
 
         # ``--resume-from-step-id`` means the selected step is intentionally
         # rerun. Completed predecessors stay checkpointed. A previously

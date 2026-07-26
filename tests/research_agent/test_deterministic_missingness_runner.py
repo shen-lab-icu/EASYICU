@@ -17,6 +17,7 @@ from measurement missingness, and blocks gracefully on an empty cohort.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -344,6 +345,95 @@ def test_structured_availability_executor_accepts_implicit_locked_cohort_scope()
     assert selection is not None
     assert selection.analysis_kind == "missingness_source_availability_audit"
     assert audit_mechanical_code_contracts(selection.code, step) == []
+
+
+def test_compact_missingness_executor_consumes_declared_cohort_product():
+    step = AnalysisStep(
+        step_id="03_missingness_and_measurement_audit",
+        intent="Audit missingness and measurement availability.",
+        inputs=[
+            "cohort:analysis_set",
+            "lactate",
+            "lactate_measured",
+            "lactate_n",
+        ],
+        expected_outputs=["table:missingness_measurement_audit"],
+        method="missingness_measurement_audit",
+    )
+    plan = AnalysisPlan(research_question="Test", steps=[step])
+
+    selection = select_standard_executor(step, plan=plan)
+
+    assert selection is not None
+    assert selection.analysis_kind == "missingness_measurement_audit"
+    assert selection.consumed_input_keys == ("cohort:analysis_set",)
+    assert audit_mechanical_code_contracts(selection.code, step) == []
+
+
+def test_compact_missingness_executor_reads_exact_bound_cohort(
+    tmp_path: Path,
+    monkeypatch,
+):
+    step = AnalysisStep(
+        step_id="03_missingness_and_measurement_audit",
+        intent="Audit missingness and measurement availability.",
+        inputs=[
+            "cohort:analysis_set",
+            "lactate",
+            "lactate_measured",
+            "lactate_n",
+        ],
+        expected_outputs=["table:missingness_measurement_audit"],
+        method="missingness_measurement_audit",
+    )
+    plan = AnalysisPlan(research_question="Test", steps=[step])
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    bound = _cohort(n=50, seed=41)
+    raw = _cohort(n=100, seed=42)
+    bound_path = run_dir / "bound.parquet"
+    raw_path = run_dir / "raw.parquet"
+    bound.to_parquet(bound_path, index=False)
+    raw.to_parquet(raw_path, index=False)
+    (run_dir / "research_context.json").write_text("{}", encoding="utf-8")
+    (run_dir / "analysis_plan.json").write_text(
+        plan.model_dump_json(),
+        encoding="utf-8",
+    )
+    resolved_path = run_dir / "resolved_inputs.json"
+    resolved_path.write_text(
+        json.dumps(
+            {
+                "inputs": {
+                    "cohort:analysis_set": {
+                        "relative_path": bound_path.name,
+                        "sha256": hashlib.sha256(bound_path.read_bytes()).hexdigest(),
+                        "product_contract": {
+                            "columns": list(bound.columns),
+                            "row_count": len(bound),
+                        },
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    out_dir = run_dir / "outputs"
+    monkeypatch.setenv("EASYICU_RUN_DIR", str(run_dir))
+    monkeypatch.setenv("EASYICU_STEP_ID", step.step_id)
+    monkeypatch.setenv("EASYICU_RESOLVED_INPUTS_JSON", str(resolved_path))
+    monkeypatch.setenv("COHORT_PARQUET", str(raw_path))
+    monkeypatch.setenv("STEP_OUT_DIR", str(out_dir))
+    selection = select_standard_executor(step, plan=plan)
+    assert selection is not None
+
+    exec(compile(selection.code, "<missingness-executor>", "exec"), {})
+
+    summary = json.loads((out_dir / "step_summary.json").read_text(encoding="utf-8"))
+    assert summary["status"] == "ok"
+    assert summary["cohort_input_key"] == "cohort:analysis_set"
+    assert summary["n_total"] == len(bound)
+    assert summary["measurement_provenance_audit"]["checks"][0]["status"] == "checked"
 
 
 def test_missingness_audit_counts_from_measured_indicator(tmp_path: Path):

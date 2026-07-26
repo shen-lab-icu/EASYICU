@@ -43,12 +43,16 @@ import re
 import textwrap
 from collections.abc import Sequence
 
+from ...icu_rules import companion_count_column_for_measured
 from ...schema import AnalysisStep
 
 __all__ = [
+    "is_compact_missingness_measurement_contract",
     "is_missingness_complete_case_contract",
     "is_missingness_measurement_availability_contract",
+    "missingness_audit_cohort_input_key",
     "missingness_audit_executor_owns_step",
+    "missingness_audit_input_scope_supported",
     "missingness_measurement_audit_code",
     "source_availability_audit_executor_owns_step",
 ]
@@ -76,6 +80,9 @@ _MEASUREMENT_AVAILABILITY_PRODUCT_TOKENS = frozenset(
 )
 _MISSINGNESS_COMPLETE_CASE_METHOD_TOKENS = frozenset(
     {"and", "audit", "case", "complete", "missingness"}
+)
+_COMPACT_MISSINGNESS_MEASUREMENT_TOKENS = frozenset(
+    {"audit", "measurement", "missingness"}
 )
 
 
@@ -150,28 +157,75 @@ def is_missingness_complete_case_contract(
     }
 
 
-def missingness_audit_executor_owns_step(step: AnalysisStep) -> bool:
-    """Own a closed, auxiliary count-only missingness contract."""
+def is_compact_missingness_measurement_contract(
+    method: object,
+    expected_outputs: Sequence[object],
+) -> bool:
+    """Classify one closed per-concept missingness/measurement audit."""
+
+    method_tokens = _contract_tokens(method)
+    outputs = [str(value or "").strip().casefold() for value in expected_outputs]
+    return bool(
+        method_tokens == _COMPACT_MISSINGNESS_MEASUREMENT_TOKENS
+        and outputs == ["table:missingness_measurement_audit"]
+    )
+
+
+def _cohort_input_scope(step: AnalysisStep) -> tuple[bool, str | None]:
+    """Resolve an optional single typed row-membership authority."""
 
     typed_inputs = {
         str(value or "").strip()
         for value in step.inputs
-        if str(value or "").strip().startswith(("artifact:", "table:", "dataset:"))
+        if ":" in str(value or "").strip()
     }
+    if not typed_inputs:
+        return True, None
+    if len(typed_inputs) != 1:
+        return False, None
+    input_key = next(iter(typed_inputs))
+    kind, separator, product = input_key.partition(":")
+    if separator and product and (
+        kind == "cohort" or input_key == "artifact:analysis_cohort"
+    ):
+        return True, input_key
+    return False, None
+
+
+def missingness_audit_input_scope_supported(step: AnalysisStep) -> bool:
+    """Return whether the runner can consume every declared typed input."""
+
+    supported, _ = _cohort_input_scope(step)
+    return supported
+
+
+def missingness_audit_cohort_input_key(step: AnalysisStep) -> str | None:
+    """Return the exact typed cohort key, after scope validation."""
+
+    supported, input_key = _cohort_input_scope(step)
+    return input_key if supported else None
+
+
+def missingness_audit_executor_owns_step(step: AnalysisStep) -> bool:
+    """Own a closed, auxiliary count-only missingness contract."""
+
     contract_is_supported = is_missingness_measurement_availability_contract(
         step.method,
         step.expected_outputs,
     ) or is_missingness_complete_case_contract(
         step.method,
         step.expected_outputs,
+    ) or is_compact_missingness_measurement_contract(
+        step.method,
+        step.expected_outputs,
     )
     return bool(
         contract_is_supported
         # AnalysisStep bare columns are evaluated against the orchestrator's
-        # already-locked COHORT_PARQUET by construction. Any other typed source
-        # still rejects ownership; the standard runner must never reconcile an
-        # upstream table or dataset on the Planner's behalf.
-        and (not typed_inputs or typed_inputs == {"artifact:analysis_cohort"})
+        # already-locked COHORT_PARQUET by construction. One explicit cohort
+        # product is loaded and digest-verified; every other typed source
+        # rejects ownership.
+        and missingness_audit_input_scope_supported(step)
     )
 
 
@@ -187,9 +241,86 @@ def source_availability_audit_executor_owns_step(step: AnalysisStep) -> bool:
     )
 
 
-def missingness_measurement_audit_code() -> str:
+def _measurement_provenance_code(step: AnalysisStep | None) -> str:
+    """Render provenance checks within the exact declared pair scope."""
+
+    if step is None:
+        loop_header = textwrap.dedent(
+            """
+            for measured_column in requested_inputs:
+                count_column = companion_count_column_for_measured(measured_column)
+                if count_column is None:
+                    continue
+            """
+        ).rstrip()
+    else:
+        declared_inputs = {
+            str(value).strip()
+            for value in step.inputs
+            if str(value).strip() and ":" not in str(value)
+        }
+        declared_pairs = sorted(
+            (measured_column, count_column)
+            for measured_column in declared_inputs
+            if (count_column := companion_count_column_for_measured(measured_column))
+            is not None
+            and count_column in declared_inputs
+        )
+        if not declared_pairs:
+            return "measurement_checks = []"
+        loop_header = f"for measured_column, count_column in {declared_pairs!r}:"
+    loop_body = textwrap.dedent(
+        """
+        if measured_column not in df.columns:
+            # The declared-input denominator check below will block this
+            # step. Do not fabricate a receipt for a missing flag.
+            continue
+        resolved_count_column = (
+            count_column
+            if count_column in df.columns
+            else low.get(count_column.lower())
+        )
+        if resolved_count_column is None:
+            measurement_checks.append(
+                {
+                    "measured_column": measured_column,
+                    "count_column": count_column,
+                    "status": "unavailable",
+                    "comparison_n": None,
+                    "invalid_pair_n": None,
+                    "discordant_n": None,
+                    "role": "audit_only",
+                    "reason": "Declared structural count companion is absent.",
+                }
+            )
+            continue
+        measurement_checks.append(
+            measurement_provenance_receipt(
+                df,
+                measured_column=measured_column,
+                count_column=resolved_count_column,
+            )
+        )
+        """
+    ).strip()
+    return "measurement_checks = []\n" + loop_header + "\n" + textwrap.indent(
+        loop_body,
+        "    ",
+    )
+
+
+def missingness_measurement_audit_code(
+    step: AnalysisStep | None = None,
+) -> str:
     """Return a runner script that computes the per-concept missingness audit."""
-    return textwrap.dedent(r"""
+
+    if step is not None and not missingness_audit_input_scope_supported(step):
+        raise ValueError("missingness runner cannot consume the declared typed inputs")
+    typed_cohort_input = (
+        missingness_audit_cohort_input_key(step) if step is not None else None
+    )
+    template = textwrap.dedent(r"""
+        import hashlib
         import json
         import os
         from pathlib import Path
@@ -208,9 +339,88 @@ def missingness_measurement_audit_code() -> str:
         out_dir.mkdir(parents=True, exist_ok=True)
         run_dir = Path(os.environ.get("EASYICU_RUN_DIR") or out_dir.parents[2])
         current_step_id = os.environ.get("EASYICU_STEP_ID") or out_dir.parent.name
-        cohort_path = Path(os.environ["COHORT_PARQUET"])
 
-        df = pd.read_parquet(cohort_path).copy()
+        def sha256_file(path):
+            digest = hashlib.sha256()
+            with path.open("rb") as handle:
+                for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                    digest.update(chunk)
+            return digest.hexdigest()
+
+        def load_typed_cohort(input_key):
+            resolved_run_dir = run_dir.resolve()
+            manifest_path = Path(
+                os.environ["EASYICU_RESOLVED_INPUTS_JSON"]
+            ).resolve()
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            inputs = manifest.get("inputs")
+            if not isinstance(inputs, dict) or input_key not in inputs:
+                raise RuntimeError(
+                    "Missing exact typed cohort binding: %s" % input_key
+                )
+            binding = inputs[input_key]
+            relative_path = binding.get("relative_path")
+            expected_sha256 = binding.get("sha256")
+            contract = binding.get("product_contract")
+            if (
+                not isinstance(relative_path, str)
+                or not relative_path
+                or not isinstance(expected_sha256, str)
+                or len(expected_sha256) != 64
+                or not isinstance(contract, dict)
+            ):
+                raise RuntimeError("Typed cohort binding is incomplete")
+            cohort_path = (resolved_run_dir / relative_path).resolve()
+            try:
+                cohort_path.relative_to(resolved_run_dir)
+            except ValueError as exc:
+                raise RuntimeError(
+                    "Typed cohort binding escapes EASYICU_RUN_DIR"
+                ) from exc
+            if not cohort_path.is_file():
+                raise RuntimeError("Typed cohort binding does not name a file")
+            if sha256_file(cohort_path) != expected_sha256:
+                raise RuntimeError("Typed cohort digest verification failed")
+            columns = contract.get("columns")
+            row_count = contract.get("row_count")
+            if (
+                not isinstance(columns, list)
+                or not columns
+                or not all(isinstance(value, str) and value for value in columns)
+                or len(set(columns)) != len(columns)
+                or not isinstance(row_count, int)
+                or isinstance(row_count, bool)
+                or row_count < 0
+            ):
+                raise RuntimeError(
+                    "Typed cohort product_contract is incomplete"
+                )
+            suffix = cohort_path.suffix.lower()
+            if suffix in {".parquet", ".pq"}:
+                frame = pd.read_parquet(cohort_path)
+            elif suffix == ".csv":
+                frame = pd.read_csv(cohort_path)
+            elif suffix == ".tsv":
+                frame = pd.read_csv(cohort_path, sep="\t")
+            else:
+                raise RuntimeError("Typed cohort table format is unsupported")
+            if list(frame.columns) != columns:
+                raise RuntimeError(
+                    "Typed cohort columns do not match product_contract"
+                )
+            if len(frame) != row_count:
+                raise RuntimeError(
+                    "Typed cohort row count does not match product_contract"
+                )
+            return frame, cohort_path
+
+        typed_cohort_input = __EASYICU_TYPED_COHORT_INPUT__
+        if typed_cohort_input is None:
+            cohort_path = Path(os.environ["COHORT_PARQUET"])
+            df = pd.read_parquet(cohort_path).copy()
+        else:
+            df, cohort_path = load_typed_cohort(typed_cohort_input)
+            df = df.copy()
         n_total = int(len(df))
 
         # --- research context: optional explicit concept list ------------------
@@ -285,41 +495,7 @@ def missingness_measurement_audit_code() -> str:
         # discordant.  A genuinely unavailable count is recorded explicitly;
         # the summary never invents a count column or silently omits a planned
         # measurement flag.
-        measurement_checks = []
-        for measured_column in requested_inputs:
-            count_column = companion_count_column_for_measured(measured_column)
-            if count_column is None:
-                continue
-            if measured_column not in df.columns:
-                # The declared-input denominator check below will block this
-                # step.  Do not fabricate a receipt for a missing flag.
-                continue
-            resolved_count_column = (
-                count_column
-                if count_column in df.columns
-                else low.get(count_column.lower())
-            )
-            if resolved_count_column is None:
-                measurement_checks.append(
-                    {
-                        "measured_column": measured_column,
-                        "count_column": count_column,
-                        "status": "unavailable",
-                        "comparison_n": None,
-                        "invalid_pair_n": None,
-                        "discordant_n": None,
-                        "role": "audit_only",
-                        "reason": "Declared structural count companion is absent.",
-                    }
-                )
-                continue
-            measurement_checks.append(
-                measurement_provenance_receipt(
-                    df,
-                    measured_column=measured_column,
-                    count_column=resolved_count_column,
-                )
-            )
+        __EASYICU_MEASUREMENT_PROVENANCE_SCOPE__
 
         # IDs are never audit variables. Demographics and outcomes are excluded
         # only from broad discovery; if the current step explicitly declares
@@ -762,6 +938,7 @@ def missingness_measurement_audit_code() -> str:
                 "measurement-missing distinguished via the '_measured' indicator)."
             ),
             "adjusted_effect": None,
+            "cohort_input_key": typed_cohort_input or "COHORT_PARQUET",
             "n_total": n_total,
             "n_concepts_audited": int(len(audit)),
             "n_structural_no_source": n_structural,
@@ -804,3 +981,11 @@ def missingness_measurement_audit_code() -> str:
             )
         )
         """).strip()
+    template = template.replace(
+        "__EASYICU_TYPED_COHORT_INPUT__",
+        repr(typed_cohort_input),
+    )
+    return template.replace(
+        "__EASYICU_MEASUREMENT_PROVENANCE_SCOPE__",
+        _measurement_provenance_code(step),
+    )
