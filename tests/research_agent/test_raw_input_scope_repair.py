@@ -168,3 +168,71 @@ for more_contract in more_contracts:
 """
     )
     assert _deterministic_runner_repair(code=ambiguous, run_log=error) is None
+
+
+def test_runner_repair_preserves_unwrapped_raw_contract_document() -> None:
+    code = """
+resolved_inputs = DOCUMENT
+contracts = (
+    resolved_inputs.get("manifest", {})
+    .get("raw_input_contracts", {})
+    .get("contracts", {})
+)
+resolved_column = "eligibility_max"
+contract = contracts.get(resolved_column)
+if contract is None:
+    raise RuntimeError(f"Missing raw input contract for {resolved_column}")
+"""
+    run_log = "RuntimeError: Missing raw input contract for eligibility_max"
+
+    repair = _deterministic_runner_repair(code=code, run_log=run_log)
+
+    assert repair is not None
+    repair_id, repaired = repair
+    assert repair_id == "raw_contract_document_fallback_v1"
+    assert 'resolved_inputs.get("manifest", resolved_inputs)' in repaired
+    namespace = {
+        "DOCUMENT": {
+            "raw_input_contracts": {
+                "contracts": {
+                    "eligibility_max": {
+                        "column": "eligibility_max",
+                        "allowed_values": [0, 1],
+                    }
+                }
+            }
+        }
+    }
+    exec(repaired, namespace)  # noqa: S102 - generated-code regression
+    assert namespace["contract"]["allowed_values"] == [0, 1]
+    metadata = repair_metadata_for(repair_id)
+    assert metadata.repair_class is RepairClass.SYNTACTIC
+    assert _untrusted_runtime_repair_allowed(
+        repair_id=repair_id,
+        source="deterministic_runner_repair",
+    )
+
+
+def test_raw_contract_document_repair_is_failure_and_shape_bound() -> None:
+    code = """
+contracts = (
+    document.get("manifest", {})
+    .get("raw_input_contracts", {})
+    .get("contracts", {})
+)
+"""
+    error = "RuntimeError: Missing raw input contract for eligibility_max"
+
+    assert _deterministic_runner_repair(code=code, run_log="unrelated") is None
+    assert (
+        _deterministic_runner_repair(
+            code=code.replace('.get("contracts", {})', '.get("other", {})'),
+            run_log=error,
+        )
+        is None
+    )
+    ambiguous = code + code.replace("contracts =", "other_contracts =")
+    assert _deterministic_runner_repair(
+        code=ambiguous,
+        run_log=error,
+    ) is None
