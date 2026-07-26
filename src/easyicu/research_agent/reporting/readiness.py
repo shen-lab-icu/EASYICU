@@ -1879,10 +1879,11 @@ def _plan_truncation_status(
     """
 
     declared: set[str] = set()
-    declared_by_step: dict[str, tuple[str, set[str]]] = {}
+    declared_by_step: dict[str, tuple[str, str, set[str]]] = {}
     for step in (plan.steps if plan is not None else None) or ():
         step_id = str(getattr(step, "step_id", "") or "").strip()
         role = str(getattr(step, "planned_analysis_role", "") or "").strip()
+        method = str(getattr(step, "method", "") or "").strip()
         outputs: set[str] = set()
         for output in getattr(step, "expected_outputs", None) or ():
             text = str(output).strip()
@@ -1890,7 +1891,7 @@ def _plan_truncation_status(
                 declared.add(text)
                 outputs.add(text)
         if step_id:
-            declared_by_step[step_id] = (role, outputs)
+            declared_by_step[step_id] = (role, method, outputs)
 
     unresolved: list[str] = []
     unresolved_step_ids: list[str] = []
@@ -1909,6 +1910,22 @@ def _plan_truncation_status(
                     continue
                 step_id = str(contract.get("step_id") or "").strip()
                 role = str(contract.get("planned_analysis_role") or "").strip()
+                # The step id, role and output names are the step's shell. A
+                # replanner can restore all three while replacing the science:
+                # a dropped ``schoenfeld_residual_test`` returning as a
+                # ``descriptive_summary`` under the same id, role and output
+                # name is not the PH diagnostic coming back. Method is the
+                # field that carries the approach, so it joins the identity.
+                #
+                # Deliberately NOT the full ``_step_scientific_signature``:
+                # that fingerprint includes ``intent`` prose and is built to
+                # detect tampering with an already-sealed step, where any edit
+                # is suspect. Recovery is the opposite situation — the
+                # replanner is *expected* to author a fresh step — so
+                # demanding identical prose would fail-close on legitimate
+                # rewording. An absent method (findings written before this
+                # contract existed) stays permissive, as role already does.
+                method = str(contract.get("method") or "").strip()
                 expected = [
                     str(output).strip()
                     for output in contract.get("expected_outputs") or ()
@@ -1918,9 +1935,12 @@ def _plan_truncation_status(
                 role_matches = current is not None and (
                     not role or current[0] == role
                 )
+                method_matches = current is not None and (
+                    not method or current[1] == method
+                )
                 if not step_id or not expected:
                     unnamed = True
-                if not role_matches:
+                if not role_matches or not method_matches:
                     if step_id and step_id not in unresolved_step_ids:
                         unresolved_step_ids.append(step_id)
                     for text in expected:
@@ -1928,7 +1948,7 @@ def _plan_truncation_status(
                             unresolved.append(text)
                     continue
                 for text in expected:
-                    if text not in current[1] and text not in unresolved:
+                    if text not in current[2] and text not in unresolved:
                         unresolved.append(text)
             continue
 
@@ -2358,6 +2378,25 @@ def write_readiness_artifacts(
                 )
             )
         )
+    )
+
+    # ``status`` honours two fail-closed demotions the content conjunction
+    # cannot see: an explicit development lane and an exhausted replan budget.
+    # ``paper_authorized`` is the field external readers key on (Web UI, MCP
+    # clients, scorecards), and it was computed from content alone — so a
+    # demoted run wrote ``"status": "diagnostic_only"`` and
+    # ``"paper_authorized": true`` into the same file. Derive it from
+    # ``status`` so there is one answer rather than two that can disagree.
+    #
+    # This does NOT make it an authority check: readiness cannot see the
+    # submission profile or the execution identity, so a run that is
+    # ``paper_eligible=False`` for want of a frozen profile, Docker runner or
+    # bound input authority can still reach ``paper_authorized`` here. Binding
+    # those in needs plumbing readiness does not have; ``_paper_eligible`` in
+    # ``authority/execution_identity.py`` remains the check that answers it.
+
+    gates["paper_authorized"] = bool(gates.get("paper_authorized")) and (
+        status == "publication_ready"
     )
 
     artifact_paths: Dict[str, str] = {}
