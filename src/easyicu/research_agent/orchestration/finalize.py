@@ -813,6 +813,7 @@ def finalise_success(
     # detail. Keeps the manifest, the bound report, and the reviewer
     # prompt readable without losing audit information.
     findings = dedupe_findings(findings)
+    execution_identity = execution_identity_for_pipeline(pipeline)
 
     readiness, artifact_paths = write_readiness_artifacts(
         context=context,
@@ -826,6 +827,7 @@ def finalise_success(
         writer_probe_mode=write_result.writer_probe_mode,
         writer_probe_failed_steps=write_result.writer_probe_failed_steps,
         force_diagnostic_only=bool(getattr(pipeline, "_development_diagnostic", False)),
+        execution_paper_eligible=execution_identity.paper_eligible,
     )
 
     report_path.write_text(
@@ -854,9 +856,7 @@ def finalise_success(
         cost_records=cost_records_for_manifest,
         reproducibility=reproducibility_summary,
         provider_authorization=provider_authorization_manifest(pipeline._llm),
-        execution_identity=execution_identity_for_pipeline(pipeline).model_dump(
-            mode="json"
-        ),
+        execution_identity=execution_identity.model_dump(mode="json"),
         submission_profile_name=pipeline._submission_profile_name,
         submission_profile_version=pipeline._submission_profile_version,
         submission_profile_locked_at=pipeline._submission_profile_locked_at,
@@ -1014,6 +1014,7 @@ def finalise_aborted(
         f"# Manuscript scaffold not generated\n\nPipeline aborted: {reason}.\n",
         encoding="utf-8",
     )
+    execution_identity = execution_identity_for_pipeline(pipeline)
     readiness, artifact_paths = write_readiness_artifacts(
         context=context,
         plan=None,
@@ -1023,6 +1024,7 @@ def finalise_aborted(
         run_dir=run_dir,
         manuscript_path=bound_path,
         stop_after_analysis=False,
+        execution_paper_eligible=execution_identity.paper_eligible,
     )
     report_path.write_text(
         render_report(
@@ -1045,9 +1047,7 @@ def finalise_aborted(
         evidence=evidence.records(),
         findings=findings,
         provider_authorization=provider_authorization_manifest(pipeline._llm),
-        execution_identity=execution_identity_for_pipeline(pipeline).model_dump(
-            mode="json"
-        ),
+        execution_identity=execution_identity.model_dump(mode="json"),
         submission_profile_name=pipeline._submission_profile_name,
         submission_profile_version=pipeline._submission_profile_version,
         submission_profile_locked_at=pipeline._submission_profile_locked_at,
