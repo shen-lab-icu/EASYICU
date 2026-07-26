@@ -263,6 +263,20 @@ def _build_context(
         notes=protocol_note,
         trajectory_binding=trajectory_binding,
     )
+    executable_columns = set(
+        getattr(
+            getattr(context.materialized_inputs, "cohort", None),
+            "column_bindings",
+            {},
+        )
+    )
+    if operational_exposure and operational_exposure not in executable_columns:
+        raise PromptPreflightError(
+            "declared operational exposure must be an exact sealed cohort "
+            f"column: task={task_id!r}, value={operational_exposure!r}. "
+            "Keep the conceptual label in primary_predictor and bind "
+            "operational_exposure to the executable raw column."
+        )
     return context, cohort_ref, trajectory_binding
 
 

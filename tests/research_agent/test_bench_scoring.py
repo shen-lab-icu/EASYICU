@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from tools.run_research_agent_bench import _artifact_substring_hits, _primary_or
 
 
@@ -287,6 +289,26 @@ def test_external_protocol_adapter_keeps_old_jsonl_runnable_with_visible_default
     assert ("database", "missing_defaulted") in defaults
     assert ("operational_exposure", "missing_defaulted") in defaults
     assert ("expected_finding_substrings", "coerced_scalar_to_list") in defaults
+
+
+def test_external_protocol_adapter_rejects_declared_non_column_before_provider():
+    from tools.run_research_agent_bench import _external_item_from_row
+
+    with pytest.raises(
+        ValueError,
+        match="declared operational exposure must be an exact sealed cohort column",
+    ):
+        _external_item_from_row(
+            row={
+                "primary_predictor": "scientific_concept",
+                "operational_exposure": "human_facing_alias",
+            },
+            key="structured_task",
+            question="Estimate the declared association.",
+            target="event",
+            cohort_columns=["executable_exposure_max", "event"],
+            cohort_size=12,
+        )
 
 
 def test_five_dim_scoring_uses_concept_key_and_activates_explicit_frozen_gold(

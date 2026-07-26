@@ -4181,6 +4181,14 @@ def _external_item_from_row(
                 "source_field": operational_source,
             }
         )
+        if operational_source is not None:
+            raise ValueError(
+                "declared operational exposure must be an exact sealed cohort "
+                f"column before Provider launch: task={key!r}, "
+                f"field={operational_source!r}, value={operational_exposure!r}. "
+                "Keep a conceptual/scoring label in primary_predictor and put "
+                "the executable raw column in operational_exposure."
+            )
 
     try:
         expected_direction = int(row.get("expected_or_direction") or 0)
