@@ -12,7 +12,7 @@ import textwrap
 
 from ...authority.table_one_binding import table_one_execution_spec
 from ...icu_rules import companion_count_column_for_measured
-from ...schema import AnalysisStep
+from ...schema import AnalysisStep, TABLE_ONE_CLOSED_OUTPUTS
 
 __all__ = ["table_one_executor_code", "table_one_executor_owns_step"]
 
@@ -47,7 +47,7 @@ def table_one_executor_owns_step(step: AnalysisStep) -> bool:
         step.table_one_spec is not None
         and "table:table_one" in outputs
         and not any(value.startswith("figure:") for value in outputs)
-        and outputs == {"table:table_one"}
+        and outputs.issubset(TABLE_ONE_CLOSED_OUTPUTS)
         # No typed input means COHORT_PARQUET is the row authority.  Otherwise
         # the executor supports exactly one explicitly cohort-scoped product
         # (plus the historical artifact:analysis_cohort spelling) and loads
@@ -65,6 +65,13 @@ def table_one_executor_code(step: AnalysisStep) -> str:
     assert specification_model is not None
     specification = specification_model.model_dump(mode="python")
     typed_cohort_input = _typed_cohort_input(step)
+    declared_outputs = {
+        str(value or "").strip() for value in step.expected_outputs
+    }
+    emit_cohort_flow = "table:cohort_flow" in declared_outputs
+    emit_source_reconciliation = (
+        "log:source_row_count_reconciliation" in declared_outputs
+    )
     declared_inputs = {
         str(value).strip()
         for value in step.inputs
@@ -84,6 +91,7 @@ def table_one_executor_code(step: AnalysisStep) -> str:
         from pathlib import Path
 
         import pandas as pd
+        import pyarrow.parquet as pq
 
         from easyicu.research_agent.methods.table_one import (
             build_grouped_table_one,
@@ -96,6 +104,8 @@ def table_one_executor_code(step: AnalysisStep) -> str:
         table_one_spec = {specification!r}
         measurement_pairs = {measurement_pairs!r}
         typed_cohort_input = {typed_cohort_input!r}
+        emit_cohort_flow = {emit_cohort_flow!r}
+        emit_source_reconciliation = {emit_source_reconciliation!r}
         out_dir = Path(os.environ["STEP_OUT_DIR"])
         out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -183,6 +193,80 @@ def table_one_executor_code(step: AnalysisStep) -> str:
         table_path = out_dir / "table_one.csv"
         table_one.to_csv(table_path, index=False)
 
+        raw_cohort_path = Path(os.environ["COHORT_PARQUET"])
+        source_row_count = int(pq.ParquetFile(raw_cohort_path).metadata.num_rows)
+        analyzed_row_count = int(len(frame))
+        output_files = {{"table:table_one": table_path.name}}
+
+        if emit_cohort_flow:
+            stages = [
+                {{
+                    "stage": "COHORT_PARQUET rows",
+                    "count": source_row_count,
+                    "denominator": source_row_count,
+                    "percentage": 100.0 if source_row_count else None,
+                    "interpretation": "Host-bound source frame",
+                }}
+            ]
+            if typed_cohort_input is not None:
+                stages.append(
+                    {{
+                        "stage": "Typed cohort rows",
+                        "count": analyzed_row_count,
+                        "denominator": source_row_count,
+                        "percentage": (
+                            100.0 * analyzed_row_count / source_row_count
+                            if source_row_count
+                            else None
+                        ),
+                        "interpretation": (
+                            "Digest-verified typed cohort membership; no "
+                            "eligibility rule was added by the Table 1 executor"
+                        ),
+                    }}
+                )
+            stages.append(
+                {{
+                    "stage": "Table 1 analyzed rows",
+                    "count": analyzed_row_count,
+                    "denominator": analyzed_row_count,
+                    "percentage": 100.0 if analyzed_row_count else None,
+                    "interpretation": (
+                        "All rows in the bound Table 1 frame; no rows were "
+                        "added or removed by the executor"
+                    ),
+                }}
+            )
+            flow_path = out_dir / "cohort_flow.csv"
+            pd.DataFrame(stages).to_csv(flow_path, index=False)
+            output_files["table:cohort_flow"] = flow_path.name
+
+        if emit_source_reconciliation:
+            reconciliation_path = out_dir / "source_row_count_reconciliation.json"
+            reconciliation = {{
+                "schema_version": "easyicu.source_row_count_reconciliation/1",
+                "source": "COHORT_PARQUET",
+                "source_rows": source_row_count,
+                "typed_cohort_input": typed_cohort_input,
+                "typed_cohort_rows": analyzed_row_count,
+                "final_analyzed_rows": analyzed_row_count,
+                "typed_minus_source": analyzed_row_count - source_row_count,
+                "final_minus_typed": 0,
+                "table_one_filtering_performed": False,
+                "denominator_policy": (
+                    "All rows in the digest-verified typed cohort"
+                    if typed_cohort_input is not None
+                    else "All rows in COHORT_PARQUET"
+                ),
+            }}
+            reconciliation_path.write_text(
+                json.dumps(reconciliation, indent=2, ensure_ascii=False),
+                encoding="utf-8",
+            )
+            output_files[
+                "log:source_row_count_reconciliation"
+            ] = reconciliation_path.name
+
         measurement_checks = [
             measurement_provenance_receipt(
                 frame,
@@ -208,7 +292,12 @@ def table_one_executor_code(step: AnalysisStep) -> str:
             "table_one_result_rows": int(len(table_one)),
             "table_one_path": table_path.name,
             "adjusted_effect": None,
-            "output_files": {{"table:table_one": table_path.name}},
+            "source_row_count_reconciliation": {{
+                "source_rows": source_row_count,
+                "analyzed_rows": analyzed_row_count,
+                "table_one_filtering_performed": False,
+            }},
+            "output_files": output_files,
             "measurement_provenance_audit": {{
                 "source": "COHORT_PARQUET",
                 "checks": measurement_checks,

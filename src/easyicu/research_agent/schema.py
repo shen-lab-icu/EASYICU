@@ -66,6 +66,13 @@ TableOneTest = Literal[
     "mann_whitney_or_kruskal",
     "chi_square_with_fisher_exact_for_sparse_2x2",
 ]
+TABLE_ONE_CLOSED_OUTPUTS = frozenset(
+    {
+        "table:table_one",
+        "table:cohort_flow",
+        "log:source_row_count_reconciliation",
+    }
+)
 
 
 def _closed_table_one_levels(values: List[Any], *, label: str) -> List[Any]:
@@ -979,6 +986,19 @@ class AnalysisStep(BaseModel):
             if "table:table_one" not in self.expected_outputs:
                 raise ValueError(
                     "table_one_spec requires expected output 'table:table_one'"
+                )
+            declared_outputs = {
+                str(value or "").strip() for value in self.expected_outputs
+            }
+            unsupported_outputs = sorted(
+                declared_outputs - TABLE_ONE_CLOSED_OUTPUTS
+            )
+            if unsupported_outputs:
+                raise ValueError(
+                    "table_one_spec supports only the closed host-executable "
+                    "outputs 'table:table_one', optional 'table:cohort_flow', "
+                    "and optional 'log:source_row_count_reconciliation'; "
+                    f"unsupported {unsupported_outputs!r}"
                 )
             required_inputs = {
                 self.table_one_spec.group_by,
