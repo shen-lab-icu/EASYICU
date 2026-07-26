@@ -435,6 +435,7 @@ def test_cache_rejects_mutated_selected_evidence(
     ("status", "notes", "step_status", "final_sequence", "partial_sequence"),
     [
         ("analysis_only", "complete", "ok", 2, 1),
+        ("human_review_rejected", "complete", "ok", 2, 1),
         ("manuscript_ready", "paused_after_analysis", "ok", 2, 1),
         ("manuscript_ready", "complete", "contract_failed", 2, 1),
         ("manuscript_ready", "complete", "ok", 1, 2),

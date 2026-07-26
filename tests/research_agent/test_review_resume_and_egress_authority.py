@@ -318,6 +318,103 @@ def test_rejected_workflow_clears_the_pipeline_pause(tmp_path):
     assert agent._pending_human_review is None
 
 
+def test_failed_resume_clears_the_pipeline_pause(tmp_path):
+    """A post-approval execution failure leaves no resumable live handoff."""
+
+    from easyicu.research_agent.orchestration.workflow import (
+        HumanReviewDecision,
+        HumanReviewRequest,
+        WorkflowPaused,
+        build_pipeline_workflow,
+    )
+    from easyicu.research_agent.pipeline import ResearchAgentPipeline
+
+    request = HumanReviewRequest.create(
+        kind="capability_request",
+        summary="Approve the execution environment",
+        authority_sha256="f" * 64,
+        payload={},
+    )
+
+    def _fail_execute(_plan):
+        raise RuntimeError("execute failed after approval")
+
+    workflow = build_pipeline_workflow(
+        plan_invoker=lambda: SimpleNamespace(aborted_result=None),
+        execute_invoker=_fail_execute,
+        write_invoker=lambda _plan, _execute: pytest.fail(
+            "execution failure reached writing"
+        ),
+        finalise_invoker=lambda _plan, _execute, _write: pytest.fail(
+            "execution failure reached finalisation"
+        ),
+        human_review_invoker=lambda _plan: (request,),
+    )
+    assert isinstance(workflow.start(), WorkflowPaused)
+
+    class _Pending:
+        run_id = "20260726T111000_abcdef"
+        run_dir = str(tmp_path / "run")
+        resumable_here = True
+
+    Path(_Pending.run_dir).mkdir(parents=True)
+    agent = ResearchAgentPipeline(workdir=tmp_path / "wd")
+    agent._pending_human_review = {
+        "workflow": workflow,
+        "pending": _Pending(),
+        "runtime_capabilities": (),
+        "runtime_bundle": None,
+    }
+
+    with pytest.raises(RuntimeError, match="execute failed after approval"):
+        agent.resume_human_review(
+            [
+                HumanReviewDecision(
+                    review_id=request.review_id,
+                    authority_sha256=request.authority_sha256,
+                    decision="approved",
+                    reviewer="reviewer",
+                    decided_at="2026-07-27T09:40:00Z",
+                )
+            ]
+        )
+
+    assert workflow.state == "failed"
+    assert agent._pending_human_review is None
+
+
+def test_correctable_resume_error_keeps_the_pipeline_pause(tmp_path):
+    """Bad decision input remains retryable while the workflow stays paused."""
+
+    from easyicu.research_agent.pipeline import ResearchAgentPipeline
+
+    class _PausedWorkflow:
+        state = "paused"
+
+        def resume(self, *_args, **_kwargs):
+            raise ValueError("human review decision authority digest mismatch")
+
+    class _Pending:
+        run_id = "20260726T112000_abcdef"
+        run_dir = str(tmp_path / "run")
+        resumable_here = True
+
+    Path(_Pending.run_dir).mkdir(parents=True)
+    agent = ResearchAgentPipeline(workdir=tmp_path / "wd")
+    pending_state = {
+        "workflow": _PausedWorkflow(),
+        "pending": _Pending(),
+        "runtime_capabilities": (),
+        "runtime_bundle": None,
+    }
+    agent._pending_human_review = pending_state
+
+    with pytest.raises(ValueError, match="authority digest mismatch"):
+        agent.resume_human_review([])
+
+    assert agent._pending_human_review is pending_state
+
+
 def test_p0_full_pause_and_resume_through_the_real_workflow(tmp_path):
     """plan → pause → resume → real record → recorder → evidence.
 
@@ -399,6 +496,75 @@ def test_p0_recorder_reopens_evidence_for_direct_diagnostics(tmp_path):
     assert run_dirs, "the recorder wrote no decisions file"
     payload = json.loads(run_dirs[0].read_text(encoding="utf-8"))
     assert payload["decisions"][0]["review_id"] == "review-0123456789abcdef"
+    assert not list((tmp_path / "wd").glob("*/run_status.json"))
+
+
+def test_rejected_review_persists_a_run_level_terminal_status(tmp_path):
+    """A restarted process can identify rejection without live workflow state."""
+
+    from easyicu.research_agent import pipeline as pipeline_module
+    from easyicu.research_agent.authority.evidence_store import EvidenceStore
+    from easyicu.research_agent.orchestration.workflow import (
+        HumanReviewDecision,
+        HumanReviewRejected,
+        HumanReviewRequest,
+        WorkflowPaused,
+        build_pipeline_workflow,
+    )
+
+    recorder = _capture_production_recorder(
+        pipeline_module,
+        tmp_path,
+    )
+    request = HumanReviewRequest.create(
+        kind="scientific_stop",
+        summary="Reject an unresolved scientific stop",
+        authority_sha256="e" * 64,
+        payload={"finding": "positivity_not_established"},
+    )
+    workflow = build_pipeline_workflow(
+        plan_invoker=lambda: SimpleNamespace(aborted_result=None),
+        execute_invoker=lambda _plan: pytest.fail("rejection reached execution"),
+        write_invoker=lambda _plan, _execute: pytest.fail("rejection reached writing"),
+        finalise_invoker=lambda _plan, _execute, _write: pytest.fail(
+            "rejection reached finalisation"
+        ),
+        human_review_invoker=lambda _plan: (request,),
+        human_review_recorder=recorder,
+        reviewer_identity_resolver=lambda: "sso:reviewer",
+    )
+    assert isinstance(workflow.start(), WorkflowPaused)
+    with pytest.raises(HumanReviewRejected):
+        workflow.resume(
+            [
+                HumanReviewDecision(
+                    review_id=request.review_id,
+                    authority_sha256=request.authority_sha256,
+                    decision="rejected",
+                    reviewer="reviewer",
+                    decided_at="2026-07-27T09:30:00Z",
+                )
+            ]
+        )
+    assert workflow.state == "rejected"
+
+    status_paths = list((tmp_path / "wd").glob("*/run_status.json"))
+    assert len(status_paths) == 1
+    status_path = status_paths[0]
+    payload = json.loads(status_path.read_text(encoding="utf-8"))
+    assert payload["status"] == "human_review_rejected"
+    assert payload["terminal_reason"] == "operator_rejected"
+    assert payload["rejected_review_ids"] == [request.review_id]
+    assert payload["gates"]["paper_authorized"] is False
+    assert payload["canonical_outputs"]["human_review_decisions"] == (
+        "human_review_decisions.json"
+    )
+
+    evidence = EvidenceStore(status_path.parent)
+    status_record = evidence.get("run_status")
+    assert status_record is not None
+    assert status_record.generation_mode == "system"
+    assert evidence.get("human_review_decisions") is not None
 
 
 # ---------------------------------------------------------------------------
